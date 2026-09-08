@@ -13,3 +13,4 @@ __pycache__/
 .hermes/
 data/
 !docker/data/.gitkeep
+services/**/.venv/
