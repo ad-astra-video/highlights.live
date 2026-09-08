@@ -1,0 +1,21 @@
+{
+  "name": "@highlights/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@highlights/livepeer-session": "0.1.0",
+    "@highlights/events": "0.1.0",
+    "fastify": "^4.28.0",
+    "@fastify/cors": "^9.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0",
+    "tsx": "^4.19.0"
+  }
+}
