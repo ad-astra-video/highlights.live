@@ -75,6 +75,7 @@ services:
       - ADMIN_EMAIL=admin@highlights.local
       - ADMIN_PASSWORD=admin
       - FREE_HIGHLIGHTS=3
+      - BILLING_WIREFRAME=1
       - DATABASE_PATH=/data/highlights.db
     ports:
       - "3000:3000"

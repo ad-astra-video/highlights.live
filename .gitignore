@@ -16,3 +16,4 @@ data/
 services/**/.venv/
 docker/keystore/
 docker/*-keystore/
+webapp/dist

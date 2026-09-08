@@ -11,6 +11,9 @@ import { createRequire } from "node:module";
 // (which vite-node rewrites to a bare broken id).
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
+// Type-only import (erased at runtime) so we can annotate the field without a
+// runtime ESM dependency that vite-node would try to resolve.
+import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 
 export interface User {
   id: string;
@@ -32,7 +35,7 @@ export interface Subscription {
 }
 
 export class SqlDb {
-  private db: DatabaseSync;
+  private db: DatabaseSyncType;
 
   constructor(file: string) {
     if (file !== ":memory:") mkdirSync(path.dirname(file), { recursive: true });
@@ -127,6 +130,10 @@ export class SqlDb {
   /** Counts usage in the last `period` of a given user's subscription period. */
   recordUsage(userId: string, eventType = "highlight", extra?: string): void {
     this.db.prepare("INSERT INTO usage_events (user_id,event_type,recorded_at,extra) VALUES (?,?,?,?)").run(userId, eventType, new Date().toISOString(), extra ?? null);
+  }
+
+  resetUsage(userId: string, eventType = "highlight"): void {
+    this.db.prepare("DELETE FROM usage_events WHERE user_id = ? AND event_type = ?").run(userId, eventType);
   }
 }
 

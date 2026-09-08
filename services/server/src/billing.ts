@@ -52,6 +52,11 @@ export class BillingService {
 
   /** Create a Stripe Checkout session for the Pro subscription. */
   async createCheckout(user: User, returnPath: string): Promise<{ url: string }> {
+    // Dev wireframe: no Stripe on the wire; the caller completes the "payment"
+    // by hitting a simulated webhook/activate endpoint. Returns a local URL.
+    if (this.cfg.billingWireframe && !this.enabled) {
+      return { url: `${this.cfg.publicBaseUrl}/billing?wireframe=checkout=success` };
+    }
     if (!this.enabled) throw new Error("billing not configured");
     const customer = await this.ensureCustomer(user);
     const line_items: any[] = [{ price: this.cfg.stripePricePro, quantity: 1 }];
@@ -71,6 +76,9 @@ export class BillingService {
 
   /** Open the Stripe Customer portal for managing the subscription. */
   async portal(user: User, returnPath: string): Promise<{ url: string }> {
+    if (this.cfg.billingWireframe && !this.enabled) {
+      return { url: `${this.cfg.publicBaseUrl}/billing?wireframe=portal` };
+    }
     if (!this.enabled) throw new Error("billing not configured");
     const customer = await this.ensureCustomer(user);
     const s = await this.stripe.billingPortal.sessions.create({
