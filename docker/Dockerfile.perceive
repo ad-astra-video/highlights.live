@@ -2,8 +2,21 @@ FROM python:3.11-slim
 WORKDIR /srv
 COPY services/requirements.txt /srv/requirements.txt
 RUN pip install --no-cache-dir -r /srv/requirements.txt
+
+# Florence-2 runtime baked into the image so PERCEIVE_MODE=florence works out
+# of the box. CPU torch so it runs inside any Linux container (DirectML /
+# Intel Arc iGPU is Windows-only and cannot run inside a Linux container — it
+# is still selected via PERCEIVE_DEVICE=directml and would fail the boot gate).
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir "transformers==4.49.0" einops timm
+
 COPY services/perceive /srv/perceive
+COPY docker/perceive-entrypoint.sh /srv/perceive-entrypoint.sh
+RUN chmod +x /srv/perceive-entrypoint.sh
 WORKDIR /srv/perceive
 EXPOSE 8080
-ENV PERCEIVE_CAPACITY=2
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
+ENV PERCEIVE_CAPACITY=2 \
+    PERCEIVE_MODE=stub \
+    PERCEIVE_DEVICE=cpu \
+    PERCEIVE_MIN_FPS=1.0
+ENTRYPOINT ["/srv/perceive-entrypoint.sh"]

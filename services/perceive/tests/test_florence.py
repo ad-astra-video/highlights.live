@@ -1,4 +1,7 @@
 """Unit tests for Florence-2 OD output parsing (real <loc_> token format)."""
+import time
+
+from app import florence
 from app.florence import FlorenceDetector
 
 
@@ -26,3 +29,45 @@ def test_parse_multiple_objects():
 
 def test_parse_empty():
     assert FlorenceDetector._parse("<s></s>") == []
+
+
+def test_gate_stub_mode(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_MODE", "stub")
+    ok, fps, _ = florence.gate_1fps()
+    assert ok is True
+    assert fps == float("inf")
+
+
+class _FakeDetector:
+    device_label = "fake"
+
+    def __init__(self, secs):
+        self._secs = secs
+
+    def load(self):
+        pass
+
+    def detect(self, frame):
+        time.sleep(self._secs)
+
+
+def test_gate_fails_when_below_required_fps(monkeypatch):
+    monkeypatch.setattr(florence, "get_detector", lambda: _FakeDetector(1.2))
+    ok, fps, detail = florence.gate_1fps(min_fps=1.0, samples=2)
+    assert ok is False
+    assert fps < 1.0
+
+
+def test_gate_passes_when_above_required_fps(monkeypatch):
+    monkeypatch.setattr(florence, "get_detector", lambda: _FakeDetector(0.01))
+    ok, fps, _ = florence.gate_1fps(min_fps=1.0, samples=2)
+    assert ok is True
+    assert fps >= 1.0
+
+
+def test_bootcheck_stub_exits_zero(monkeypatch, capsys):
+    import bootcheck
+
+    monkeypatch.setenv("PERCEIVE_MODE", "stub")
+    assert bootcheck.main() == 0
+    assert "no device gate" in capsys.readouterr().out

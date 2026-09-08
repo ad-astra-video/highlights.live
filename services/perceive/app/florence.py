@@ -143,3 +143,41 @@ def detector_label() -> str:
     d = get_detector()
     d.load()
     return f"florence-2@{d.device_label}"
+
+
+def _gate_frame() -> "np.ndarray":
+    """A representative real frame for the fps gate. A uniform gray frame makes
+    Florence-2 ramble (many output tokens), inflating measured latency, so we
+    benchmark on a real object image shipped with the package instead. Falls
+    back to a neutral frame if the asset is missing."""
+    import os as _os
+    from PIL import Image
+    here = _os.path.dirname(_os.path.abspath(__file__))
+    path = _os.path.join(here, "_gate_frame.jpg")
+    if _os.path.exists(path):
+        return np.asarray(Image.open(path).convert("RGB"))
+    return np.full((384, 384, 3), 128, np.uint8)
+
+
+def gate_1fps(min_fps: float = 1.0, samples: int = 3, warm: int = 1) -> tuple[bool, float, str]:
+    """Load the configured Florence-2 device and verify it sustains `min_fps`
+    on a representative frame. Returns (ok, measured_fps, detail). Run at
+    container boot so the worker refuses to register when its device can't keep
+    up (PERCEIVE_MIN_FPS). Stub mode always passes (nothing to gate)."""
+    import time
+
+    d = get_detector()
+    if d is None:
+        return True, float("inf"), "stub mode — no gate"
+    d.load()
+    frame = _gate_frame()
+    for _ in range(max(1, warm)):
+        d.detect(frame)
+    t0 = time.time()
+    count = max(1, samples)
+    for _ in range(count):
+        d.detect(frame)
+    elapsed = time.time() - t0
+    fps = count / elapsed if elapsed > 0 else float("inf")
+    ok = fps >= min_fps
+    return ok, fps, f"{d.device_label} ~{fps:.2f} fps (need >= {min_fps:.2f})"
