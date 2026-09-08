@@ -35,6 +35,13 @@ export interface DiscoveredRunner {
   metadata?: string;
 }
 
+/** Signature + payment material the signer returns for a live payment. */
+export interface LivePayment {
+  payment: string;
+  segCreds: string;
+  signerState: unknown;
+}
+
 export interface SignerClient {
   /** Signer GET /discover-orchestrators?caps=... */
   discover(caps: string[]): Promise<{ address: string; runners: DiscoveredRunner[] }[]>;
@@ -102,6 +109,44 @@ export interface ReserveResult {
   sessionId: string;
   appUrl: string;
   controlUrl: string;
+}
+
+/**
+ * Talks to a go-livepeer REMOTE SIGNER (`livepeer -remoteSigner`) over its
+ * HTTP API. The signer is the only process that holds the ETH keystore; the
+ * server calls it (via internal routing on Railway) to obtain signed
+ * orchestrator info and live-payment ticket material.
+ */
+export class HttpSignerClient implements SignerClient {
+  constructor(
+    public readonly base: string,
+    private transport: Transport = new HttpTransport(base)
+  ) {}
+
+  async discover(caps: string[]): Promise<{ address: string; runners: DiscoveredRunner[] }[]> {
+    const qs = caps.map((c) => `caps=${encodeURIComponent(c)}`).join("&");
+    const res = await this.transport.request("GET", `/discover-orchestrators${qs ? `?${qs}` : ""}`, {});
+    if (res.status !== 200) throw new Error(`signer discover failed: HTTP ${res.status}`);
+    return (await res.json()) as { address: string; runners: DiscoveredRunner[] }[];
+  }
+
+  async signOrchInfo(address: string): Promise<unknown> {
+    const res = await this.transport.request("POST", "/sign-orchestrator-info", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orchestrator: address }),
+    });
+    if (res.status !== 200) throw new Error(`signer signOrchInfo failed: HTTP ${res.status}`);
+    return res.json();
+  }
+
+  async generateLivePayment(orchInfo: unknown, prevState: unknown): Promise<LivePayment> {
+    const res = await this.transport.request("POST", "/generate-live-payment", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orchInfo, prevState }),
+    });
+    if (res.status !== 200) throw new Error(`signer generateLivePayment failed: HTTP ${res.status}`);
+    return (await res.json()) as LivePayment;
+  }
 }
 
 export class LivepeerClient {

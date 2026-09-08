@@ -80,6 +80,30 @@ services:
         condition: service_healthy
     networks: [hl]
 
+  # go-livepeer REMOTE SIGNER (on-chain path only). Holds the ETH keystore.
+  # - `profiles: [signer]` -> NOT started by the default offchain `up`.
+  # - NO `ports:` -> reachable only on the private `hl` network (== no external
+  #   access). On Railway this service gets no public domain; the server reaches
+  #   it via internal routing instead.
+  # - Requires ARBITRUM_RPC + a funded wallet; cannot run on offchain.
+  signer:
+    build:
+      context: ..
+      dockerfile: services/signer/Dockerfile
+    container_name: highlights-signer
+    profiles: ["signer"]
+    environment:
+      # Runtime-validated by the entrypoint (signer needs RPC to start).
+      - ARBITRUM_RPC=${ARBITRUM_RPC:-}
+      - ETH_PASSWORD=${SIGNER_PASSWORD:-testbroadcaster}
+      - SIGNER_AUTH_TOKEN=${SIGNER_AUTH_TOKEN:-}
+      - MAX_PRICE_PER_UNIT=${MAX_PRICE_PER_UNIT:-}
+    volumes:
+      # Copy the go-livepeer keystore 'wallet' file (from the app-pipelines
+      # reference) into docker/keystore/ to run the signer locally.
+      - ./keystore:/keystore:ro
+    networks: [hl]
+
 networks:
   hl:
     name: highlights-live

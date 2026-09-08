@@ -5,6 +5,8 @@ export interface ServerConfig {
   /** When set, bypass the orchestrator and call runners directly (dev). */
   perceiveUrl?: string;
   decideUrl?: string;
+  /** go-livepeer remote signer base URL (on-chain). Internal-only on Railway. */
+  signerUrl?: string;
   /** Where VOD sources + clips live. */
   dataDir: string;
   ffmpegPath: string;
@@ -19,6 +21,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     orchestratorUrl: env.ORCHESTRATOR_URL ?? "http://127.0.0.1:8935",
     perceiveUrl: env.PERCEIVE_URL,
     decideUrl: env.DECIDE_URL,
+    signerUrl: env.SIGNER_URL,
     dataDir: env.DATA_DIR ?? "data",
     ffmpegPath: env.FFMPEG_PATH ?? "ffmpeg",
     gameHintDefault: env.GAME_HINT ?? "unspecified",
