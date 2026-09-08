@@ -158,7 +158,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       store.patchJob(job.id, { status: "active" });
       try {
         const frameDir = path.join(cfg.dataDir, "frames", job.id);
-        await extractFrames(cfg.ffmpegPath, videoPath, frameDir);
+        // Tune frame sampling to the perceive card's measured capability: one
+        // frame every sample_interval_s seconds (from the runner when reachable
+        // directly, else the SAMPLE_INTERVAL_SEC config).
+        let sampleFps = 1 / Math.max(0.2, cfg.sampleIntervalSec);
+        if (cfg.perceiveUrl) {
+          try {
+            const h = (await (await fetch(`${cfg.perceiveUrl}/health`)).json()) as any;
+            if (h && h.sample_interval_s > 0.2) sampleFps = Math.min(1.0, 1 / h.sample_interval_s);
+          } catch {
+            /* fall back to config interval */
+          }
+        }
+        await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps);
         const clipDir = path.join(cfg.dataDir, "clips");
         const cut = async (ts: number) => {
           const clipId = randomUUID();
@@ -166,7 +178,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           await cutClip(cfg.ffmpegPath, videoPath, out, Math.max(0, ts - cfg.clipBeforeS), cfg.clipBeforeS + cfg.clipAfterS);
           return { clipId, clipUri: `/clips/${clipId}.mp4` };
         };
-        const iter = buildAnalyzeFrames(frameDir)();
+        const iter = buildAnalyzeFrames(frameDir, sampleFps)();
         const outcome = await analyzeJob(adapter, iter, cut, {
           jobId: job.id,
           clipBeforeS: cfg.clipBeforeS,

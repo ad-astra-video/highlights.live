@@ -5,15 +5,18 @@ import { LivepeerClient } from "@highlights/livepeer-session";
 import type { ServerConfig } from "./config";
 import type { DecisionResult, ObservationResult, PipelineClient, ReserveResult } from "./analyzer";
 
-export function buildAnalyzeFrames(frameDir: string) {
-  // Frames are extracted by extractFrames(). This iterates them in order.
+export function buildAnalyzeFrames(frameDir: string, sampleFps = 1) {
+  // Frames are extracted by extractFrames() at `sampleFps`. This iterates them
+  // in order, stamping the real time position (seq / sampleFps) so clip cutting
+  // and decide land on accurate timestamps even when sampling is adaptively
+  // slowed to match the card.
   return async function* (): AsyncGenerator<{ seq: number; timestamp: number; imageB64: string }> {
     const { readdir } = await import("node:fs/promises");
     const files = (await readdir(frameDir)).filter((f) => f.startsWith("frame_")).sort();
     let seq = 0;
     for (const f of files) {
       const b64 = (await readFile(`${frameDir}/${f}`)).toString("base64");
-      yield { seq, timestamp: seq, imageB64: b64 }; // 1fps -> timestamp == seq
+      yield { seq, timestamp: seq / sampleFps, imageB64: b64 };
       seq++;
     }
   };

@@ -71,3 +71,29 @@ def test_bootcheck_stub_exits_zero(monkeypatch, capsys):
     monkeypatch.setenv("PERCEIVE_MODE", "stub")
     assert bootcheck.main() == 0
     assert "no device gate" in capsys.readouterr().out
+
+
+def test_capability_stub_is_one_fps(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_MODE", "stub")
+    c = florence.capability()
+    assert c["sample_interval_s"] == 1.0
+    assert c["max_fps"] == 1.0
+
+
+def test_capability_tracks_measured_fps(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_MODE", "florence")
+    for _ in range(10):
+        florence.record_analyze(1.0)  # 1.0s/frame -> 1.0 fps
+    c = florence.capability()
+    assert abs(c["max_fps"] - 1.0) < 0.2
+    assert c["sample_interval_s"] >= 1.0
+    assert c["sample_interval_s"] <= 1.0 / 0.8 + 0.01
+
+
+def test_capability_slows_down_for_slow_card(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_MODE", "florence")
+    for _ in range(5):
+        florence.record_analyze(2.5)  # 0.4 fps
+    c = florence.capability()
+    assert c["max_fps"] < 0.6
+    assert c["sample_interval_s"] > 1.5

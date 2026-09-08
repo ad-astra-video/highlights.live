@@ -15,7 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
-from .florence import get_detector
+from .florence import capability, get_detector, record_analyze
 
 
 class AnalyzeRequest(BaseModel):
@@ -47,7 +47,13 @@ def create_app() -> FastAPI:
         # Healthy when the perceive process + tracker are up. Do NOT tie to the
         # decide GPU's state — an unhealthy check would release live sessions.
         mode = os.environ.get("PERCEIVE_MODE", "stub")
-        return {"status": "ok", "model": "florence-2" if mode == "florence" else "stub-iou", "slots": MAX_TRACKS}
+        cap = capability()
+        return {
+            "status": "ok",
+            "model": "florence-2" if mode == "florence" else "stub-iou",
+            "slots": MAX_TRACKS,
+            **cap,
+        }
 
     @router.post("/analyze")
     async def analyze(
@@ -67,7 +73,11 @@ def create_app() -> FastAPI:
             # those into the tracker (instead of background-diff blobs).
             rgb = _decode_rgb(req.image)
             try:
+                import time as _t
+
+                _s = _t.monotonic()
                 objects = detector.detect(rgb)
+                record_analyze(_t.monotonic() - _s)
             except Exception as e:  # keep the pipeline alive if the GPU hiccups
                 objects = [{"label": "error", "confidence": 0.0, "bbox": [0, 0, 0.001, 0.001]}]
                 state.last_florence_error = str(e)

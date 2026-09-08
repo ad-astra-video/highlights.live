@@ -13,6 +13,10 @@ export interface ServerConfig {
   gameHintDefault: string;
   clipBeforeS: number;
   clipAfterS: number;
+  /** Seconds between frames when the perceive runner's capability can't be
+   * queried (orchestrator mode); with PERCEIVE_URL set the runner's measured
+   * sample_interval_s is used instead. */
+  sampleIntervalSec: number;
   /** Auth + billing */
   jwtSecret: string;
   /** Seeded dev admin account (email + password). Override in prod. */
@@ -47,6 +51,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     gameHintDefault: env.GAME_HINT ?? "unspecified",
     clipBeforeS: Number(env.CLIP_BEFORE_S ?? 4),
     clipAfterS: Number(env.CLIP_AFTER_S ?? 4),
+    sampleIntervalSec: Number(env.SAMPLE_INTERVAL_SEC ?? 1.0),
     jwtSecret: env.JWT_SECRET ?? "dev-insecure-secret-change-me",
     adminEmail: env.ADMIN_EMAIL ?? "admin@highlights.local",
     adminPassword: env.ADMIN_PASSWORD ?? "admin",

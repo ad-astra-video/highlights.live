@@ -246,6 +246,7 @@ def gate_1fps(min_fps: float = 1.0, samples: int = 3, warm: int = 1) -> tuple[bo
     up (PERCEIVE_MIN_FPS). Stub mode always passes (nothing to gate)."""
     import time
 
+    global _gate_fps
     d = get_detector()
     if d is None:
         return True, float("inf"), "stub mode — no gate"
@@ -260,4 +261,33 @@ def gate_1fps(min_fps: float = 1.0, samples: int = 3, warm: int = 1) -> tuple[bo
     elapsed = time.time() - t0
     fps = count / elapsed if elapsed > 0 else float("inf")
     ok = fps >= min_fps
+    _gate_fps = fps
     return ok, fps, f"{d.device_label} ~{fps:.2f} fps (need >= {min_fps:.2f})"
+
+
+# --- runtime-measured sampling capability --------------------------------
+_measured_fps: float | None = None
+_gate_fps: float | None = None
+
+
+def record_analyze(elapsed: float) -> None:
+    """Feed a real per-frame wall time so the tuned sample interval tracks the
+    device's steady-state capability (EMA of instantaneous fps)."""
+    global _measured_fps
+    if not elapsed or elapsed <= 0:
+        return
+    inst = 1.0 / elapsed
+    _measured_fps = inst if _measured_fps is None else 0.7 * _measured_fps + 0.3 * inst
+
+
+def capability() -> dict:
+    """Tuned framing for the ingest side: emit one frame every
+    `sample_interval_s` seconds so the card isn't over- or under-fed. Drawn from
+    the measured fps (boot gate + running average); stub mode is 1 fps."""
+    if os.environ.get("PERCEIVE_MODE", "stub") != "florence":
+        return {"max_fps": 1.0, "sample_interval_s": 1.0, "device": "stub-iou"}
+    fps = _measured_fps or _gate_fps
+    if fps is None:
+        return {"max_fps": 1.0, "sample_interval_s": 1.0, "device": "florence-2(not yet measured)"}
+    interval = min(5.0, max(0.2, 1.0 / fps))
+    return {"max_fps": round(fps, 3), "sample_interval_s": round(interval, 3), "device": "florence-2"}
