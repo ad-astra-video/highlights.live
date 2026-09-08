@@ -1,0 +1,85 @@
+name: highlights-live
+
+# Local OFFCHAIN lab stack. The go-livepeer orchestrator reverse-proxies the
+# two highlight live-runners (persistent perceive + single-shot decide). No
+# remote signer here — offchain skips payments. Add `profiles: [signer]` service
+# for the on-chain path (see infra/railway).
+#
+#   docker compose -f docker/docker-compose.yml up -d --build
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.e2e.yml run e2e
+services:
+  orchestrator:
+    image: livepeer/go-livepeer:v0.9.2
+    container_name: highlights-orchestrator
+    command:
+      - -orchestrator
+      - -useLiveRunners
+      - -liveRunnerConfig=/config/runners.json
+      - -serviceAddr=https://orchestrator:8935
+      - -httpAddr=0.0.0.0:8935
+      - -liveRunnerAddr=https://orchestrator:8935
+      - -orchSecret=${ORCHESTRATOR_SECRET:-highlights-secret}
+      - -network=offchain
+      - -monitor=false
+      - -v=6
+    ports:
+      - "8935:8935"
+    volumes:
+      - ./runners.json:/config/runners.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "openssl s_client -connect 127.0.0.1:8935 </dev/null 2>/dev/null | grep -q CONNECTED"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+    networks: [hl]
+
+  perceive:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.perceive
+    container_name: highlights-perceive
+    expose: ["8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks: [hl]
+
+  decide:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.decide
+    container_name: highlights-decide
+    expose: ["8081"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8081/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks: [hl]
+
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    container_name: highlights-server
+    environment:
+      - PORT=3000
+      - ORCHESTRATOR_URL=https://orchestrator:8935
+      - DATA_DIR=/data
+      - FFMPEG_PATH=ffmpeg
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks: [hl]
+
+networks:
+  hl:
+    name: highlights-live

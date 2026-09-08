@@ -1,0 +1,34 @@
+{
+  "runners": [
+    {
+      "label": "highlights-perceive",
+      "routing": "label",
+      "runner_url": "http://perceive:8080",
+      "health_url": "/health",
+      "healthy_status_code": 200,
+      "app": "highlights-live/perceive",
+      "version": "0.1.0",
+      "metadata": "{\"maxTracks\":2,\"models\":\"stub-iou\"}",
+      "mode": "persistent",
+      "capacity": 1,
+      "proxy": true,
+      "gpu": { "id": "0", "name": "stub", "vram_mb": 0 },
+      "price_info": { "price": 0.0, "currency": "usd", "unit": "hour" }
+    },
+    {
+      "label": "highlights-decide",
+      "routing": "label",
+      "runner_url": "http://decide:8081",
+      "health_url": "/health",
+      "healthy_status_code": 200,
+      "app": "highlights-live/decide",
+      "version": "0.1.0",
+      "metadata": "{\"model\":\"stub-rule\"}",
+      "mode": "single-shot",
+      "capacity": 1,
+      "proxy": true,
+      "gpu": { "id": "1", "name": "stub", "vram_mb": 0 },
+      "price_info": { "price": 0.0, "currency": "usd", "unit": "fixed" }
+    }
+  ]
+}

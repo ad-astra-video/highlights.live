@@ -64,8 +64,13 @@ def test_analyze_tracks_a_moving_blob_across_one_session():
 
 
 def test_events_route_registered():
-    paths = {getattr(r, "path", None) for r in app.routes}
-    assert "/app/events" in paths
+    # Canonical (root) is what the go-livepeer proxy forwards to; the /app/*
+    # aliases live under the mounted sub-app. Both must answer.
+    assert client.get("/health").status_code == 200                 # root (proxy)
+    assert client.get("/app/health").status_code == 200             # alias (direct)
+    # events without a session id -> 400 (route reached, mounted)
+    assert client.get("/events").status_code == 400
+    assert client.get("/app/events").status_code == 400
 
 
 def test_analyze_enqueues_onto_subscriber_queues():

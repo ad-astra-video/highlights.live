@@ -5,16 +5,15 @@ import base64
 import io
 import json
 import os
-import time
 
 import numpy as np
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import APIRouter, FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from .session import SessionRegistry, SessionState
+from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
 
 
@@ -29,26 +28,26 @@ class SessionCloseResponse(BaseModel):
     closed: str | None = None
 
 
+def _read_session_id(
+    livepeer_session_id: str | None = Header(default=None),
+    x_session_id: str | None = Header(default=None),
+) -> str:
+    # Behind the orchestrator the Livepeer header is injected; direct (dev)
+    # calls use X-Session-Id. Neither present -> refuse (no guessing).
+    return livepeer_session_id or x_session_id
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="highlights-perceive", version="0.1.0")
     registry = SessionRegistry(max_sessions=int(os.environ.get("PERCEIVE_CAPACITY", "1")))
-    app.state.registry = registry  # exposed for tests / admin tooling
+    router = APIRouter()
 
-    def _read_session_id(
-        livepeer_session_id: str | None = Header(default=None),
-        x_session_id: str | None = Header(default=None),
-    ) -> str:
-        # Behind the orchestrator the Livepeer header is injected; direct (dev)
-        # calls use X-Session-Id. Neither present -> refuse (no guessing).
-        return livepeer_session_id or x_session_id
-
-    @app.get("/health")
+    @router.get("/health")
     async def health():
         # Healthy when the perceive process + tracker are up. Do NOT tie to the
         # decide GPU's state — an unhealthy check would release live sessions.
         return {"status": "ok", "model": "stub-iou", "slots": MAX_TRACKS}
 
-    @app.post("/app/analyze")
+    @router.post("/analyze")
     async def analyze(
         req: AnalyzeRequest,
         livepeer_session_id: str | None = Header(default=None),
@@ -106,7 +105,7 @@ def create_app() -> FastAPI:
             return {"candidate": events[0], "observation": obs}
         return obs
 
-    @app.get("/app/events")
+    @router.get("/events")
     async def events(
         livepeer_session_id: str | None = Header(default=None),
         x_session_id: str | None = Header(default=None),
@@ -132,7 +131,7 @@ def create_app() -> FastAPI:
 
         return EventSourceResponse(gen())
 
-    @app.get("/session/stats")
+    @router.get("/session/stats")
     async def stats(
         livepeer_session_id: str | None = Header(default=None),
         x_session_id: str | None = Header(default=None),
@@ -148,7 +147,7 @@ def create_app() -> FastAPI:
             "activeSessions": registry.count(),
         }
 
-    @app.post("/app/session/close")
+    @router.post("/session/close")
     async def close(
         livepeer_session_id: str | None = Header(default=None),
         x_session_id: str | None = Header(default=None),
@@ -157,6 +156,17 @@ def create_app() -> FastAPI:
         if sid:
             registry.drop(sid)
         return {"closed": sid}
+
+    app = FastAPI(title="highlights-perceive", version="0.1.0")
+    app.state.registry = registry  # exposed for tests / admin tooling
+
+    # Canonical paths at root: go-livepeer strips the `/app` prefix when it
+    # proxies `/apps/<runner>/session/<id>/app/<path>` -> forwards `/<path>`.
+    app.include_router(router)
+    # `/app/*` aliases: direct (non-orchestrator) calls use the `/app` prefix.
+    sub = FastAPI()
+    sub.include_router(router)
+    app.mount("/app", sub)
 
     return app
 
