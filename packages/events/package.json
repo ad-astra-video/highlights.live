@@ -4,6 +4,12 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
   "scripts": {
     "test": "vitest run",
     "schema": "tsx scripts/gen-json-schema.ts"

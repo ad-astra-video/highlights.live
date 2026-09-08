@@ -32,6 +32,7 @@ class Track:
     prev_center: Optional[Tuple[float, float]] = None
     moved_frames: int = 0
     moved: float = 0.0  # accumulated matched-frame displacement (normalized units)
+    last_step_disp: float = 0.0  # |dx|+|dy| of the most recent matched step
 
 
 @dataclass
@@ -94,7 +95,11 @@ def foreground_blobs(gray: np.ndarray, prev: Optional[np.ndarray], thresh: float
 
 
 class IoUTracker:
-    def __init__(self, jump_velocity: float = 0.25, lost_before_evict: int = 8, cooldown_s: float = 3.0):
+    # A fast single-step move (normalized |dx|+|dy|) reads as a high-value
+    # action/combat moment -> KILL-tier candidate. Slower drift -> MOVE.
+    FAST_STEP = 0.15
+
+    def __init__(self, jump_velocity: float = 0.2, lost_before_evict: int = 8, cooldown_s: float = 2.0):
         self.tracks: List[Track] = []
         self.jump_velocity = jump_velocity
         self.lost_before_evict = lost_before_evict
@@ -102,45 +107,61 @@ class IoUTracker:
         self.last_candidate: float = -1e9
 
     def step(self, boxes: List[BBox], ts: float) -> List[Track]:
-        """Match new boxes to existing tracks by IoU; create/evict as needed."""
+        """Match new boxes to existing tracks: IoU if they overlap, else nearest
+        centroid within a distance gate (so a fast-moving blob stays ONE track).
+        Create/evict as needed; accumulate per-frame displacement."""
         unmatched = list(boxes)
-        assigned_slots = set()
+        matched_tracks: set[int] = set()
         for tr in list(self.tracks):
-            best_i, best_score = None, 0.0
+            best_i, best_score, best_type = None, 0.0, None
             for i, b in enumerate(unmatched):
-                s = _iou(tr.bbox, b)
-                if s > best_score:
-                    best_i, best_score = i, s
-            if best_i is not None and best_score >= 0.05:
+                iou = _iou(tr.bbox, b)
+                if iou >= 0.05 and iou > best_score:
+                    best_i, best_score, best_type = i, iou, "iou"
+                else:
+                    cd = self._centroid_gate(tr.bbox, b)
+                    if cd is not None and cd > best_score:
+                        best_i, best_score, best_type = i, cd, "gate"
+            if best_i is not None:
                 new_bbox = unmatched.pop(best_i)
                 new_center = ((new_bbox[0] + new_bbox[2]) / 2, (new_bbox[1] + new_bbox[3]) / 2)
                 if tr.prev_center is not None:
-                    tr.moved += abs(new_center[0] - tr.prev_center[0]) + abs(new_center[1] - tr.prev_center[1])
+                    disp = abs(new_center[0] - tr.prev_center[0]) + abs(new_center[1] - tr.prev_center[1])
+                    tr.moved += disp
+                    tr.last_step_disp = disp
                 tr.prev_center = new_center
                 tr.bbox = new_bbox
                 tr.lost_frames = 0
                 tr.last_seen = ts
-                assigned_slots.add(tr.slot)
+                matched_tracks.add(id(tr))
             else:
                 tr.lost_frames += 1
                 if tr.lost_frames > self.lost_before_evict:
                     self.tracks.remove(tr)
-                else:
-                    assigned_slots.add(tr.slot)
 
-        # create tracks for remaining unmatched boxes into free slots
-        free_slots = [s for s in (0, 1) if s not in assigned_slots]
+        # create tracks for remaining unmatched boxes into free slots (0,1)
+        used = {t.slot for t in self.tracks}
+        free_slots = [s for s in (0, 1) if s not in used]
         for b in unmatched:
             if not free_slots:
                 break
             slot = free_slots.pop(0)
             tr = Track(track_id=f"t{int(time.time()*1000)}-{slot}", slot=slot, bbox=b, kind="unknown", last_seen=ts)
             self.tracks.append(tr)
-            assigned_slots.add(slot)
+            used.add(slot)
 
-        # loss order slot stability
         self.tracks.sort(key=lambda t: t.slot)
         return list(self.tracks)
+
+    @staticmethod
+    def _centroid_gate(a: BBox, b: BBox, gate: float = 0.20) -> float | None:
+        """Return a match confidence from centroid proximity, or None if too far."""
+        ca = ((a[0] + a[2]) / 2, (a[1] + a[3]) / 2)
+        cb = ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+        d = abs(ca[0] - cb[0]) + abs(ca[1] - cb[1])
+        if d >= gate:
+            return None
+        return gate - d  # closer == higher score (max 0.14)
 
     def candidate(self, ts: float) -> Optional[CandidateEvent]:
         """Emit a candidate on a sharp track move, rate-limited by cooldown."""
@@ -148,7 +169,9 @@ class IoUTracker:
             return None
         for tr in self.tracks:
             if tr.moved >= self.jump_velocity:
+                event_type = "KILL" if tr.last_step_disp >= self.FAST_STEP else "MOVE"
                 tr.moved = 0.0
+                tr.last_step_disp = 0.0
                 self.last_candidate = ts
-                return CandidateEvent(event_type="MOVE", timestamp=ts, track_id=tr.track_id)
+                return CandidateEvent(event_type=event_type, timestamp=ts, track_id=tr.track_id)
         return None
