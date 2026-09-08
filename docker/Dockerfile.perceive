@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir -r /srv/requirements.txt
 # Intel Arc iGPU is Windows-only and cannot run inside a Linux container — it
 # is still selected via PERCEIVE_DEVICE=directml and would fail the boot gate).
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
- && pip install --no-cache-dir "transformers==4.49.0" einops timm
+ && pip install --no-cache-dir "transformers==4.49.0" einops timm \
+ && pip install --no-cache-dir openvino
 
 COPY services/perceive /srv/perceive
 COPY docker/perceive-entrypoint.sh /srv/perceive-entrypoint.sh
