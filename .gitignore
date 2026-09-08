@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+*.log
+.tmp/
+coverage/
+.env
+.env.local
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.hermes/
+data/
+!docker/data/.gitkeep
