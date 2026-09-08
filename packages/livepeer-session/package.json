@@ -1,0 +1,15 @@
+{
+  "name": "@highlights/livepeer-session",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@highlights/events": "0.1.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}
