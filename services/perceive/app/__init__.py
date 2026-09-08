@@ -15,6 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
+from .florence import get_detector
 
 
 class AnalyzeRequest(BaseModel):
@@ -45,7 +46,8 @@ def create_app() -> FastAPI:
     async def health():
         # Healthy when the perceive process + tracker are up. Do NOT tie to the
         # decide GPU's state — an unhealthy check would release live sessions.
-        return {"status": "ok", "model": "stub-iou", "slots": MAX_TRACKS}
+        mode = os.environ.get("PERCEIVE_MODE", "stub")
+        return {"status": "ok", "model": "florence-2" if mode == "florence" else "stub-iou", "slots": MAX_TRACKS}
 
     @router.post("/analyze")
     async def analyze(
@@ -58,9 +60,23 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="missing session id (Livepeer-Session-Id or X-Session-Id)")
         state = registry.get_or_create(sid, req.stream_id)
 
-        gray = _decode_gray(req.image)
-        boxes = foreground_blobs(gray, state.prev_gray)
-        state.prev_gray = gray
+        objects: list[dict] = []
+        detector = get_detector()
+        if detector is not None:
+            # Real Florence-2: identify objects + bboxes on the frame and feed
+            # those into the tracker (instead of background-diff blobs).
+            rgb = _decode_rgb(req.image)
+            try:
+                objects = detector.detect(rgb)
+            except Exception as e:  # keep the pipeline alive if the GPU hiccups
+                objects = [{"label": "error", "confidence": 0.0, "bbox": [0, 0, 0.001, 0.001]}]
+                state.last_florence_error = str(e)
+            boxes = [_norm_bbox(o["bbox"]) for o in objects if o.get("bbox")]
+        else:
+            gray = _decode_gray(req.image)
+            boxes = foreground_blobs(gray, state.prev_gray)
+            state.prev_gray = gray
+            objects = []
 
         tracks = state.tracker.step(boxes, ts=req.timestamp)
         state.seq = req.seq
@@ -81,7 +97,7 @@ def create_app() -> FastAPI:
                 }
                 for t in tracks
             ],
-            "objects": [],
+            "objects": objects,
             "ocr": [],
         }
         state.recent_frames.append({"seq": req.seq, "timestamp": req.timestamp, "tracks": obs["tracks"]})
@@ -169,6 +185,32 @@ def create_app() -> FastAPI:
     app.mount("/app", sub)
 
     return app
+
+
+def _decode_rgb(b64: str) -> np.ndarray:
+    if not b64:
+        raise HTTPException(status_code=400, detail="empty image")
+    try:
+        raw = base64.b64decode(b64.split(",")[-1])
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        return np.asarray(img, dtype=np.uint8)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"bad image: {e}") from e
+
+
+def _norm_bbox(b: list) -> list:
+    """Florence-2 bboxes come as 0-999 coordinates; normalize to 0..1 and clamp."""
+    try:
+        v = [float(x) for x in b][:4]
+    except Exception:
+        return [0, 0, 0.001, 0.001]
+    scale = 1000.0 if max(v) > 1 else 1.0
+    out = [min(max(x / scale, 0.0), 1.0) for x in v]
+    if out[2] - out[0] < 0.005 or out[3] - out[1] < 0.005:
+        # degenerate box -> keep a tiny positive area so the tracker can match
+        out[2] = min(out[0] + 0.01, 1.0)
+        out[3] = min(out[1] + 0.01, 1.0)
+    return out
 
 
 def _decode_gray(b64: str) -> np.ndarray:
