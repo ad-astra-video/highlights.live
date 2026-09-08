@@ -71,6 +71,11 @@ services:
       - DATA_DIR=/data
       - FFMPEG_PATH=ffmpeg
       - NODE_TLS_REJECT_UNAUTHORIZED=0
+      - JWT_SECRET=dev-secret
+      - ADMIN_EMAIL=admin@highlights.local
+      - ADMIN_PASSWORD=admin
+      - FREE_HIGHLIGHTS=3
+      - DATABASE_PATH=/data/highlights.db
     ports:
       - "3000:3000"
     volumes:

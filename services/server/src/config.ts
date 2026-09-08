@@ -13,6 +13,24 @@ export interface ServerConfig {
   gameHintDefault: string;
   clipBeforeS: number;
   clipAfterS: number;
+  /** Auth + billing */
+  jwtSecret: string;
+  /** Seeded dev admin account (email + password). Override in prod. */
+  adminEmail: string;
+  adminPassword: string;
+  /** SQLite database file path. */
+  databasePath: string;
+  /** Stripe */
+  stripeSecretKey?: string;
+  stripeWebhookSecret?: string;
+  /** Stripe Price ID for the Pro subscription (fixed monthly base). */
+  stripePricePro?: string;
+  /** Stripe Price ID for the metered (usage-based) overage line. */
+  stripePriceUsage?: string;
+  /** Public base URL (for Stripe return URLs). */
+  publicBaseUrl: string;
+  /** Free plan included-highlights cap (0 blocks free farming). */
+  freeHighlights: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -27,5 +45,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     gameHintDefault: env.GAME_HINT ?? "unspecified",
     clipBeforeS: Number(env.CLIP_BEFORE_S ?? 4),
     clipAfterS: Number(env.CLIP_AFTER_S ?? 4),
+    jwtSecret: env.JWT_SECRET ?? "dev-insecure-secret-change-me",
+    adminEmail: env.ADMIN_EMAIL ?? "admin@highlights.local",
+    adminPassword: env.ADMIN_PASSWORD ?? "admin",
+    databasePath: env.DATABASE_PATH ?? "data/highlights.db",
+    stripeSecretKey: env.STRIPE_SECRET_KEY,
+    stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
+    stripePricePro: env.STRIPE_PRICE_PRO,
+    stripePriceUsage: env.STRIPE_PRICE_USAGE,
+    publicBaseUrl: env.PUBLIC_BASE_URL ?? "http://127.0.0.1:3000",
+    freeHighlights: Number(env.FREE_HIGHLIGHTS ?? 3),
   };
 }

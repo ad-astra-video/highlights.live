@@ -170,6 +170,7 @@ export type RunnerSession = z.infer<typeof RunnerSessionSchema>;
 
 export const JobSchema = z.object({
   id: z.string(),
+  ownerId: z.string().optional(),
   source: z.enum(["file", "rtmp", "webrtc", "screenshare"]),
   sourceUrl: z.string().optional(),
   gameHint: z.string().optional(),
@@ -182,6 +183,7 @@ export type Job = z.infer<typeof JobSchema>;
 
 export const HighlightRecordSchema = z.object({
   id: z.string(),
+  ownerId: z.string().optional(),
   jobId: z.string(),
   clipUri: z.string(),
   start: z.number(),

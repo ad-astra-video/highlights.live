@@ -68,7 +68,7 @@ export class NotAuthorizedError extends Error {
 // --- Transport ---------------------------------------------------------------
 
 export interface Transport {
-  request(method: string, url: string, init?: { headers?: Record<string, string>; body?: BodyInit }): Promise<{
+  request(method: string, url: string, init?: { headers?: Record<string, string>; body?: any }): Promise<{
     status: number;
     headers: Headers;
     json(): Promise<unknown>;
@@ -81,14 +81,12 @@ export class HttpTransport implements Transport {
   constructor(private base: string, opts?: { rejectUnauthorized?: boolean }) {
     this.tlsReject = opts?.rejectUnauthorized ?? true;
   }
-  async request(method: string, url: string, init: { headers?: Record<string, string>; body?: BodyInit } = {}) {
+  async request(method: string, url: string, init: { headers?: Record<string, string>; body?: any } = {}) {
     const headers = { ...(init.headers || {}) };
     const res = await fetch(new URL(url, this.base).toString(), {
       method,
       headers,
       body: init.body,
-      // @ts-expect-error node-specific
-      ...(process.env.NODE_ENV === "test" ? {} : { dispatcher: undefined }),
     });
     return {
       status: res.status,
@@ -178,7 +176,7 @@ export class LivepeerClient {
   async appCall<T>(
     sessionId: string,
     path: string,
-    init: { method?: string; headers?: Record<string, string>; body?: BodyInit } = {}
+    init: { method?: string; headers?: Record<string, string>; body?: any } = {}
   ): Promise<{ status: number; data: T }> {
     const method = init.method || "GET";
     const res = await this.transport.request(method, `/apps/${ROUTES.perceive}/session/${sessionId}/app/${path}`, {

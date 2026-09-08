@@ -12,5 +12,8 @@ export default defineConfig({
     include: ["packages/*/test/**/*.test.ts", "services/server/test/**/*.test.ts", "webapp/src/**/*.test.ts?(x)"],
     environment: "node",
     testTimeout: 30000,
+    // node:sqlite (and other experimental builtins) are not in Vite's
+    // default external list — load them from Node at runtime, not via Vite.
+    server: { deps: { external: [/^node:/] } },
   },
 });

@@ -8,10 +8,11 @@ export class Store {
   private highlights = new Map<string, HighlightRecord>();
   private byJob = new Map<string, string[]>();
 
-  createJob(input: { source: "file" | "rtmp" | "webrtc" | "screenshare"; sourceUrl?: string; gameHint?: string; preferLabels?: string[] }): Job {
+  createJob(input: { ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare"; sourceUrl?: string; gameHint?: string; preferLabels?: string[] }): Job {
     const id = randomUUID();
     const job: Job = JobSchema.parse({
       id,
+      ownerId: input.ownerId,
       source: input.source,
       sourceUrl: input.sourceUrl,
       gameHint: input.gameHint,

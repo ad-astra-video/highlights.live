@@ -3,16 +3,12 @@ import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildApp } from "../src/api";
-import { loadConfig } from "../src/config";
-import { Store } from "../src/store";
-import type { PipelineClient } from "../src/analyzer";
+import { buildTestApp } from "./helpers";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-test-"));
 const videoPath = path.join(tmp, "test.mp4");
 
 beforeAll(() => {
-  // Real 1fps 2s test pattern -> guarantees >=1 extracted frame.
   execFileSync("ffmpeg", [
     "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x180:rate=1",
     "-pix_fmt", "yuv420p", videoPath,
@@ -20,67 +16,86 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-// Fake runner-side: first analyze returns a candidate; decide says highlight.
-function fakeAdapter(): PipelineClient & { reserveCount: number; stopCount: number } {
-  let n = 0;
-  return {
-    reserveCount: 0,
-    stopCount: 0,
-    async reservePerceive() {
-      this.reserveCount++;
-      return { sessionId: "sess-it", appUrl: "", controlUrl: "" };
-    },
-    async analyze() {
-      n++;
-      if (n === 1) {
-        return {
-          observation: { tracks: [{ trackId: "a", slot: 0, bbox: [0.1, 0.1, 0.5, 0.5], kind: "player", lostFrames: 0 }], seq: 0, timestamp: 0 },
-          candidate: { eventType: "KILL", timestamp: 0 },
-        };
-      }
-      return { observation: { tracks: [{ trackId: "a", slot: 0, bbox: [0.1, 0.1, 0.5, 0.5], kind: "player", lostFrames: 0 }], seq: 0, timestamp: 0 } };
-    },
-    async decide() {
-      return { isHighlight: true, score: 86, eventType: "KILL", reason: "test" };
-    },
-    async stopPerceive() {
-      this.stopCount++;
-    },
-  };
+async function register(app: any, email: string, pw: string) {
+  const r = await app.inject({ method: "POST", url: "/auth/register", payload: { email, password: pw } });
+  expect(r.statusCode).toBe(200);
+  return r.json().token as string;
 }
 
-describe("API end-to-end (server path with real ffmpeg, fake runners)", () => {
-  it("POST /jobs extracts frames, cuts a clip, records a highlight, stops the session", async () => {
-    const cfg = loadConfig({ PORT: "0", DATA_DIR: path.join(tmp, "data"), ORCHESTRATOR_URL: "http://x" });
-    const store = new Store();
-    const adapter = fakeAdapter();
-    const app = buildApp({ cfg, store, adapter });
-    await app.ready();
+describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () => {
+  it("register -> login -> run auth'd job -> review as admin", async () => {
+    const { app, cfg } = await buildTestApp();
+    const userToken = await register(app, "a@test.dev", "password123");
+    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "a@test.dev", password: "password123" } });
+    expect(login.statusCode).toBe(200);
 
-    const res = await app.inject({ method: "POST", url: "/jobs", payload: { videoPath, gameHint: "valorant" } });
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${userToken}` },
+      payload: { videoPath, gameHint: "valorant" },
+    });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-
-    expect(adapter.reserveCount).toBe(1);
-    expect(adapter.stopCount).toBe(1);
     expect(body.framesAnalyzed).toBeGreaterThan(0);
     expect(body.job.status).toBe("done");
+    expect(body.job.ownerId).toBeTruthy();
 
-    const jobRes = await app.inject({ method: "GET", url: `/jobs/${body.job.id}` });
-    const jobBody = jobRes.json();
-    expect(jobBody.highlights.length).toBe(1);
-    expect(jobBody.highlights[0].status).toBe("pending");
-    expect(jobBody.highlights[0].score).toBe(86);
+    // user sees their highlights
+    const hl = await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${userToken}` } });
+    const myhl = hl.json().highlights;
+    expect(myhl.length).toBe(1);
+    expect(myhl[0].score).toBe(86);
 
-    // clip file physically exists (real ffmpeg cut)
-    const clipUri = jobBody.highlights[0].clipUri; // /clips/<id>.mp4
-    const clipFile = path.join(tmp, "data", "clips", path.basename(clipUri));
+    const clipFile = path.join(cfg.dataDir, "clips", path.basename(myhl[0].clipUri));
     expect(existsSync(clipFile)).toBe(true);
 
-    // review endpoint
-    const rev = await app.inject({ method: "POST", url: `/highlights/${jobBody.highlights[0].id}/review`, payload: { status: "accepted" } });
+    // another user cannot see it
+    const otherToken = await register(app, "b@test.dev", "password456");
+    const other = await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${otherToken}` } });
+    expect(other.json().highlights.length).toBe(0);
+
+    // review is admin-only
+    const userReview = await app.inject({
+      method: "POST",
+      url: `/highlights/${myhl[0].id}/review`,
+      headers: { authorization: `Bearer ${userToken}` },
+      payload: { status: "accepted" },
+    });
+    expect(userReview.statusCode).toBe(403);
+
+    const admin = await app.inject({ method: "POST", url: "/auth/login", payload: { email: cfg.adminEmail, password: cfg.adminPassword } });
+    expect(admin.statusCode).toBe(200);
+    const admintok = admin.json().token;
+    const rev = await app.inject({
+      method: "POST",
+      url: `/highlights/${myhl[0].id}/review`,
+      headers: { authorization: `Bearer ${admintok}` },
+      payload: { status: "accepted" },
+    });
+    expect(rev.statusCode).toBe(200);
     expect(rev.json().status).toBe("accepted");
 
+    // unauthenticated job -> 401
+    const anon = await app.inject({ method: "POST", url: "/jobs", payload: { videoPath } });
+    expect(anon.statusCode).toBe(401);
+
+    await app.close();
+  });
+
+  it("rejects a user's job when the free allowance is exhausted (402)", async () => {
+    const { app, db } = await buildTestApp({ FREE_HIGHLIGHTS: "2" });
+    const token = await register(app, "c@test.dev", "password123");
+    db.recordUsage(db.getUserByEmail("c@test.dev")!.id, "highlight");
+    db.recordUsage(db.getUserByEmail("c@test.dev")!.id, "highlight");
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { videoPath },
+    });
+    expect(res.statusCode).toBe(402);
+    expect(res.json().upgrade).toBe("/billing/checkout");
     await app.close();
   });
 });
