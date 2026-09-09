@@ -68,11 +68,22 @@ export interface AnalyzeOutcome {
   framesAnalyzed: number;
 }
 
+/** Live-console event: pushed to SSE subscribers for a job as analysis runs. */
+export interface AnalyzeEvent {
+  seq: number;
+  timestamp: number;
+  type: "observation" | "candidate" | "highlight";
+  observation?: { tracks: TrackObservation[] };
+  candidate?: { eventType: string; timestamp: number };
+  highlight?: HighlightRecord;
+}
+
 export async function analyzeJob(
   client: PipelineClient,
   iterFrames: AsyncIterable<{ seq: number; timestamp: number; imageB64: string }>,
   cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
-  cfg: AnalyzerConfig
+  cfg: AnalyzerConfig,
+  onEvent?: (ev: AnalyzeEvent) => void
 ): Promise<AnalyzeOutcome> {
   const { sessionId } = await client.reservePerceive();
   const evidence = new EvidenceTracker();
@@ -83,7 +94,10 @@ export async function analyzeJob(
       framesAnalyzed++;
       const res = await client.analyze(sessionId, frame);
       evidence.step(res.observation);
+      onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "observation", observation: res.observation });
       if (res.candidate) {
+        onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "candidate", candidate: res.candidate });
+
         // Send the ACTUAL candidate frame so the Gemma vision decide runner can
         // see the moment, plus the game hint. Evidence remains as context.
         const decision = await client.decide(
@@ -97,7 +111,7 @@ export async function analyzeJob(
         );
         if (decision.isHighlight) {
           const { clipId, clipUri } = await cut(res.candidate.timestamp);
-          highlights.push({
+          const rec: HighlightRecord = {
             id: randomUUID(),
             jobId: cfg.jobId,
             clipUri,
@@ -108,7 +122,9 @@ export async function analyzeJob(
             reason: decision.reason,
             status: "pending",
             createdAt: new Date().toISOString(),
-          });
+          };
+          highlights.push(rec);
+          onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "highlight", highlight: rec });
         }
       }
     }
