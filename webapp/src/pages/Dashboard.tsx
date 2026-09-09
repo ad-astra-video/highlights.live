@@ -3,6 +3,7 @@ import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X } from "
 import { api, type Highlight } from "../lib/api";
 import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
+import { BrowserCapture } from "../components/BrowserCapture";
 
 const SOURCES = [
   { id: "file", label: "Upload / file", icon: Upload },
@@ -146,11 +147,6 @@ export function Dashboard() {
           ))}
         </div>
 
-        {source === "screenshare" && (
-          <div className="mb-4 rounded-lg border border-mut/30 bg-mut/5 px-3 py-2 text-sm text-mut">
-            Screen capture runs on the server host (gdigrab) — this needs a display attached to the server.
-          </div>
-        )}
         {sourceInputLabel && (
           <>
             <label className="mb-2 block text-xs uppercase tracking-wide text-mut">{sourceInputLabel}</label>
@@ -185,22 +181,28 @@ export function Dashboard() {
         <label className="mb-2 mt-5 block text-xs uppercase tracking-wide text-mut">What to look for</label>
         <input className="input-neon" value={lookFor} onChange={(e) => setLookFor(e.target.value)} />
 
-        {liveJob && (
-          <div className="mt-6 flex flex-wrap items-center gap-3">
-            <div className="text-sm">
-              Live ingesting — status <span className="font-mono uppercase text-yellow">{liveStatus || "…"}</span>
-            </div>
-            <button className="btn-neon btn-pink" onClick={stopLive} disabled={!liveJob}>
-              <Square className="mr-2 inline h-4 w-4" /> Stop detection
-            </button>
-          </div>
-        )}
-        {liveJob && liveStatus !== "done" && liveStatus !== "failed" && <LiveConsole jobId={liveJob} />}
-        {!liveJob && (
-          <button className="btn-neon mt-6" onClick={run} disabled={busy}>
-            {busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <Zap className="mr-2 inline h-4 w-4" />}
-            {busy ? "Starting…" : isLive ? "Start live detection" : "Run detection"}
-          </button>
+        {source === "screenshare" ? (
+          <BrowserCapture gameHint={gameHint} onDone={() => refreshHighlights().catch(() => {})} />
+        ) : (
+          <>
+            {liveJob && (
+              <div className="mt-6 flex flex-wrap items-center gap-3">
+                <div className="text-sm">
+                  Live ingesting — status <span className="font-mono uppercase text-yellow">{liveStatus || "…"}</span>
+                </div>
+                <button className="btn-neon btn-pink" onClick={stopLive} disabled={!liveJob}>
+                  <Square className="mr-2 inline h-4 w-4" /> Stop detection
+                </button>
+              </div>
+            )}
+            {liveJob && liveStatus !== "done" && liveStatus !== "failed" && <LiveConsole jobId={liveJob} />}
+            {!liveJob && (
+              <button className="btn-neon mt-6" onClick={run} disabled={busy}>
+                {busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <Zap className="mr-2 inline h-4 w-4" />}
+                {busy ? "Starting…" : isLive ? "Start live detection" : "Run detection"}
+              </button>
+            )}
+          </>
         )}
         {error && <div className="mt-4 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{error}</div>}
         {job && !isLive && (
