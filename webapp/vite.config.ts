@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 
 // Dev: the API server runs on :3000. Proxy all its routes so the SPA can use
 // relative URLs (same origin) — no CORS, no hard-coded host.
-const apiProxies = ["/auth", "/billing", "/jobs", "/highlights", "/clips", "/stripe", "/dev", "/health"];
+const apiProxies = ["/auth", "/billing", "/jobs", "/highlights", "/clips", "/stripe", "/dev", "/health", "/feed"];
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
