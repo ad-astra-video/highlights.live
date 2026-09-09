@@ -40,12 +40,17 @@ export class OrchestratorAdapter implements PipelineClient {
     if (status >= 400) throw new Error(`analyze failed: HTTP ${status}`);
     return normalizeObservation(data);
   }
-  async decide(evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number }): Promise<DecisionResult> {
+  async decide(
+    evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
+    opts?: { gameHint?: string; imageB64?: string }
+  ): Promise<DecisionResult> {
     const { status, data } = await this.client.decide("highlight", {
       sessionId: "job",
       eventType: evidence.eventType,
       timestamp: 0,
+      gameHint: opts?.gameHint || "",
       evidence,
+      images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
     });
     if (status >= 400) throw new Error(`decide failed: HTTP ${status}`);
     return data as DecisionResult;
@@ -70,11 +75,21 @@ export class DirectAdapter implements PipelineClient {
     if (!r.ok) throw new Error(`analyze failed: HTTP ${r.status}`);
     return normalizeObservation(await r.json());
   }
-  async decide(evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number }): Promise<DecisionResult> {
+  async decide(
+    evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
+    opts?: { gameHint?: string; imageB64?: string }
+  ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: this.fakeSession, eventType: evidence.eventType, timestamp: 0, evidence }),
+      body: JSON.stringify({
+        sessionId: this.fakeSession,
+        eventType: evidence.eventType,
+        timestamp: 0,
+        gameHint: opts?.gameHint || "",
+        evidence,
+        images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
+      }),
     });
     if (!r.ok) throw new Error(`decide failed: HTTP ${r.status}`);
     return (await r.json()) as DecisionResult;

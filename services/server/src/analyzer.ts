@@ -22,7 +22,15 @@ export interface DecisionResult {
 export interface PipelineClient {
   reservePerceive(): Promise<ReserveResult>;
   analyze(sessionId: string, frame: { seq: number; timestamp: number; imageB64: string }): Promise<ObservationResult>;
-  decide(evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number }): Promise<DecisionResult>;
+  /**
+   * Decide whether a candidate is a highlight. `imageB64` is the candidate
+   * frame so the Gemma 12B QAT decide runner sees the actual moment (vision),
+   * not just scalar evidence. Adapt the call site to forward it.
+   */
+  decide(
+    evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
+    opts?: { gameHint?: string; imageB64?: string }
+  ): Promise<DecisionResult>;
   stopPerceive(sessionId: string): Promise<void>;
 }
 
@@ -30,6 +38,7 @@ export interface AnalyzerConfig {
   clipBeforeS: number;
   clipAfterS: number;
   jobId: string;
+  gameHint: string;
 }
 
 /** Compute per-job evidence from the observation stream. */
@@ -75,12 +84,17 @@ export async function analyzeJob(
       const res = await client.analyze(sessionId, frame);
       evidence.step(res.observation);
       if (res.candidate) {
-        const decision = await client.decide({
-          eventType: res.candidate.eventType,
-          trackCount: evidence.trackCount,
-          maxVelocity: evidence.maxVelocity,
-          ocrHits: 0,
-        });
+        // Send the ACTUAL candidate frame so the Gemma vision decide runner can
+        // see the moment, plus the game hint. Evidence remains as context.
+        const decision = await client.decide(
+          {
+            eventType: res.candidate.eventType,
+            trackCount: evidence.trackCount,
+            maxVelocity: evidence.maxVelocity,
+            ocrHits: 0,
+          },
+          { gameHint: cfg.gameHint, imageB64: frame.imageB64 }
+        );
         if (decision.isHighlight) {
           const { clipId, clipUri } = await cut(res.candidate.timestamp);
           highlights.push({

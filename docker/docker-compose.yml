@@ -53,6 +53,13 @@ services:
       dockerfile: docker/Dockerfile.decide
     container_name: highlights-decide
     expose: ["8081"]
+    # Real Gemma 4 12B QAT via an external llama.cpp llama-server (see
+    # docs/plan/03-decide-runner.md). DECIDE_MODE=rule falls back to the stub.
+    environment:
+      - DECIDE_MODE=${DECIDE_MODE:-rule}
+      - GEMMA_URL=${GEMMA_URL:-http://host.docker.internal:8088}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8081/health')"]
       interval: 5s
