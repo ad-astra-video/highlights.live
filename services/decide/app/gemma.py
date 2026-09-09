@@ -76,7 +76,8 @@ def build_prompt(event_type: str, evidence: dict, game_hint: str = "") -> str:
         "(and track-crop images) from the moment of a detected candidate event.\n"
         "Decide whether this is a real highlight worth clipping.\n"
         "Context:\n- " + "\n- ".join(meta) + "\n\n"
-        'Reply with ONLY one JSON object, no markdown, exactly: '
+        "Do NOT provide any reasoning or thinking. Answer immediately with ONLY one "
+        "JSON object, no markdown, no preamble, exactly: "
         '{"isHighlight": true|false, "score": 0..100, "eventType": "<type>", "reason": "<short reason>"}'
     )
 
@@ -87,7 +88,7 @@ def ask(
     evidence: dict,
     game_hint: str = "",
     images: list | None = None,
-    timeout_s: float = 60.0,
+    timeout_s: float = 180.0,
 ) -> dict | None:
     """Call llama-server multimodal completion. Returns a parsed/validated
     HighlightDecision dict, or None on any transport/parse failure."""
@@ -105,12 +106,21 @@ def ask(
             }
         )
 
+    # Generous budget + timeout: a thinking-capable model on CPU may burn tokens
+    # on a short chain of thought before the JSON, and CPU is slow. Undersizing
+    # this makes the call return empty (finish_reason=length) and forces the rule
+    # fallback on every evaluate — worse than a slower real decision.
     payload = {
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.0,
-        "max_tokens": 400,
+        "max_tokens": 1200,
         "stream": False,
     }
+    # llama-server is fine without "model"; OpenAI-compatible servers (Ollama)
+    # require it. Only send it when the caller declares one (GEMMA_MODEL).
+    model = os.environ.get("GEMMA_MODEL")
+    if model:
+        payload["model"] = model
     try:
         resp = httpx.post(url.rstrip("/") + "/v1/chat/completions", json=payload, timeout=timeout_s)
         resp.raise_for_status()
