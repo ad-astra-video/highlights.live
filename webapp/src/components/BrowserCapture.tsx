@@ -39,7 +39,9 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     setBusy(true);
     setError(null);
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      // audio:true carries tab sound so clips + (future) audio analysis get real
+      // audio. Chrome only yields audio when sharing a TAB (screen/window have none).
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
