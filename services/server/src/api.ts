@@ -4,7 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "./config";
 import type { Store } from "./store";
-import { analyzeJob, type AnalyzeEvent, type PipelineClient } from "./analyzer";
+import { analyzeJob, EvidenceTracker, type AnalyzeEvent, type PipelineClient } from "./analyzer";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { LiveIngest, type LiveKind } from "./live";
@@ -60,6 +60,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // live job can be stopped explicitly; ends the frame iterator -> analyzeJob
   // returns -> the job is marked done.
   const liveSessions = new Map<string, LiveIngest>();
+  // Browser-capture (client-side screen share / element capture) jobs: the
+  // CLIENT streams sampled frames in via POST /jobs/:id/ingest and a recording
+  // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
+  // session.
+  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string }>();
+  function browserRecordingPath(jobId: string): string {
+    return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));
+  }
   // Per-job live-console event fans (SSE subscribers); a job inactive for too
   // long is cleaned from the registry on job completion.
   const jobEvents = new Map<string, Set<(ev: AnalyzeEvent) => void>>();
@@ -228,7 +236,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       }
       const videoPath = req.body?.videoPath;
       const live = !!req.body.source && req.body.source !== "file";
-      if (!videoPath && !(live && req.body.source === "screen"))
+      if (!videoPath && !(live && (req.body.source === "screen" || req.body.source === "browser")))
         return reply.code(400).send({ error: "videoPath required for this source" });
       const job = store.createJob({
         ownerId: user.id,
@@ -238,6 +246,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         preferLabels: req.body.preferLabels ?? [],
       });
       store.patchJob(job.id, { status: "active" });
+      if (req.body.source === "browser") {
+        // Client-side capture (screen share / element capture): the client posts
+        // sampled frames to /jobs/:id/ingest and a recording to
+        // /jobs/:id/recording. Nothing to pull server-side.
+        browserJobs.set(job.id, { evidence: new EvidenceTracker() });
+        return { job: store.getJob(job.id), status: "ready" };
+      }
       if (live) {
         // Live ingest: capture/pull the stream, record it to disk, and sample
         // frames into the analyzer rail. Runs in the background; the job is
@@ -319,10 +334,126 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (job.ownerId !== req.user.id && req.user.role !== "admin")
       return reply.code(403).send({ error: "forbidden" });
     const ing = liveSessions.get(job.id);
-    if (!ing) return reply.code(409).send({ error: "job is not a live ingest" });
-    ing.stop();
-    return reply.send({ ok: true, job: store.getJob(job.id) });
+    if (ing) {
+      ing.stop();
+      liveSessions.delete(job.id);
+      return reply.send({ ok: true, job: store.getJob(job.id) });
+    }
+    // Browser capture job: release the perceive session, then cut clips for any
+    // recorded highlights from the assembled client recording.
+    if (job.source === "browser" && browserJobs.has(job.id)) {
+      const bj = browserJobs.get(job.id)!;
+      if (bj.sessionId) await adapter.stopPerceive(bj.sessionId).catch(() => {});
+      const { existsSync } = require("node:fs") as typeof import("node:fs");
+      const recPath = browserRecordingPath(job.id);
+      if (existsSync(recPath)) {
+        const { mkdir } = await import("node:fs/promises");
+        const outDir = path.join(cfg.dataDir, "clips");
+        await mkdir(outDir, { recursive: true });
+        for (const h of store.highlightsForJob(job.id)) {
+          if (h.clipUri) continue;
+          try {
+            const name = `${job.id}-${Math.round(h.start * 10)}`;
+            const out = path.join(outDir, `${name}.mp4`);
+            await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), cfg.clipBeforeS + cfg.clipAfterS);
+            store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4` });
+          } catch (e: any) {
+            console.error(`[browser:${job.id}] clip cut failed:`, String(e?.message || e));
+          }
+        }
+      }
+      browserJobs.delete(job.id);
+      store.patchJob(job.id, { status: "done" });
+      emitJobEvent(job.id, { seq: -1, timestamp: -1, type: "observation", observation: { tracks: [] } }); // wake SSE
+      return reply.send({ ok: true, job: store.getJob(job.id) });
+    }
+    return reply.code(409).send({ error: "job is not a live ingest or browser capture" });
   });
+
+  // Browser-capture rail: client posts a sampled frame; run it through the
+  // perceive -> decide pipeline inline (lazy persistent perceive session).
+  app.post<{ Params: { id: string }; Body: { seq?: number; timestamp?: number; image?: string } }>(
+    "/jobs/:id/ingest",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "no job" });
+      const bj = browserJobs.get(req.params.id);
+      if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
+      const { seq = 0, timestamp = 0, image } = req.body ?? {};
+      if (!image) return reply.code(400).send({ error: "image required" });
+      try {
+        if (!bj.sessionId) {
+          const r = await adapter.reservePerceive();
+          bj.sessionId = r.sessionId;
+        }
+        const res = await adapter.analyze(bj.sessionId, { seq, timestamp, imageB64: image });
+        bj.evidence.step(res.observation);
+        emitJobEvent(req.params.id, { seq, timestamp, type: "observation", observation: res.observation });
+        let highlight: any = null;
+        if (res.candidate) {
+          emitJobEvent(req.params.id, { seq, timestamp, type: "candidate", candidate: res.candidate });
+          const d = await adapter.decide(
+            {
+              eventType: res.candidate.eventType,
+              trackCount: bj.evidence.trackCount,
+              maxVelocity: bj.evidence.maxVelocity,
+              ocrHits: 0,
+            },
+            { gameHint: job.gameHint || cfg.gameHintDefault, imageB64: image }
+          );
+          if (d.isHighlight) {
+            highlight = {
+              id: randomUUID(),
+              jobId: job.id,
+              ownerId: job.ownerId,
+              clipUri: "",
+              start: Math.max(0, timestamp - cfg.clipBeforeS),
+              end: timestamp + cfg.clipAfterS,
+              eventType: d.eventType,
+              score: d.score,
+              reason: d.reason,
+              status: "pending",
+              createdAt: new Date().toISOString(),
+            };
+            store.addHighlight(highlight);
+            emitJobEvent(req.params.id, { seq, timestamp, type: "highlight", highlight });
+          }
+        }
+        return { ok: true, highlight, trackCount: bj.evidence.trackCount };
+      } catch (e: any) {
+        return reply.code(500).send({ error: String(e?.message || e) });
+      }
+    }
+  );
+
+  // Browser-capture rail: client appends a chunk of the recorded capture (base64)
+  // so the server can cut highlight clips from it at stop.
+  app.post<{ Params: { id: string }; Body: { base64?: string; mime?: string } }>(
+    "/jobs/:id/recording",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "no job" });
+      const bj = browserJobs.get(req.params.id);
+      if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
+      const { base64, mime } = req.body ?? {};
+      if (!base64) return reply.code(400).send({ error: "base64 required" });
+      try {
+        const { mkdir, writeFile, appendFile, stat } = await import("node:fs/promises");
+        const { existsSync } = require("node:fs") as typeof import("node:fs");
+        if (mime && !bj.recordingExt) bj.recordingExt = mime.includes("mp4") ? ".mp4" : ".webm";
+        const p = browserRecordingPath(req.params.id);
+        await mkdir(path.dirname(p), { recursive: true });
+        const buf = Buffer.from(base64, "base64");
+        if (existsSync(p) && (await stat(p)).size > 0) await appendFile(p, buf);
+        else await writeFile(p, buf);
+        return { ok: true, bytes: buf.length };
+      } catch (e: any) {
+        return reply.code(500).send({ error: String(e?.message || e) });
+      }
+    }
+  );
 
   // Frame debugger: expose the sampled frames a job actually saw + the perceive
   // observations (boxes) so the console can overlay Florence/SAM boxes on any past
