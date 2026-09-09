@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X } from "lucide-react";
 import { api, type Highlight } from "../lib/api";
 import { LiveConsole } from "../components/LiveConsole";
+import { FrameDebugger } from "../components/FrameDebugger";
 
 const SOURCES = [
   { id: "file", label: "Upload / file", icon: Upload },
@@ -46,6 +47,7 @@ export function Dashboard() {
   // live ingest state
   const [liveJob, setLiveJob] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
+  const [debugJob, setDebugJob] = useState<string | null>(null);
 
   const isLive = source !== "file";
 
@@ -74,6 +76,7 @@ export function Dashboard() {
         setLiveStatus(r.job?.status || "active");
         if (r.job?.status === "done" || r.job?.status === "failed") {
           clearInterval(iv);
+          setDebugJob(liveJob);
           setLiveJob(null);
           setLiveStatus(null);
           refreshHighlights().catch(() => {});
@@ -102,8 +105,10 @@ export function Dashboard() {
       if (isLive) {
         setLiveJob(r.job.id);
         setLiveStatus(r.status || "ingesting");
+        setDebugJob(null);
       } else {
         setJob(r.job);
+        setDebugJob(r.job.id);
       }
     } catch (e: any) {
       setError(e.status === 402 ? `${e.message} — subscribe on Billing to continue.` : e.message);
@@ -204,6 +209,8 @@ export function Dashboard() {
           </div>
         )}
       </div>
+
+      {debugJob && <FrameDebugger jobId={debugJob} />}
 
       <h2 className="mt-10 text-2xl font-black">Your highlights</h2>
       <div className="mt-4 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
