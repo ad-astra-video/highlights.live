@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square } from "lucide-react";
+import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X } from "lucide-react";
 import { api, type Highlight } from "../lib/api";
 
 const SOURCES = [
@@ -51,6 +51,14 @@ export function Dashboard() {
   async function refreshHighlights() {
     const r = await api<{ highlights: Highlight[] }>("/highlights");
     setHighlights(r.highlights);
+  }
+  async function review(id: string, status: "accepted" | "rejected") {
+    try {
+      await api(`/highlights/${id}/review`, { body: { status } });
+      refreshHighlights().catch(() => {});
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
   useEffect(() => {
     refreshHighlights().catch(() => {});
@@ -210,6 +218,22 @@ export function Dashboard() {
               <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
               <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
               <div className="text-xs text-mut">T+{Math.round(h.start)}s → T+{Math.round(h.end)}s</div>
+              <div className="mt-3 flex gap-2">
+                <button
+                  className="btn-neon flex-1"
+                  disabled={h.status === "accepted"}
+                  onClick={() => review(h.id, "accepted")}
+                >
+                  <Check className="mr-1 inline h-4 w-4" /> Accept
+                </button>
+                <button
+                  className="btn-neon btn-pink flex-1"
+                  disabled={h.status === "rejected"}
+                  onClick={() => review(h.id, "rejected")}
+                >
+                  <X className="mr-1 inline h-4 w-4" /> Reject
+                </button>
+              </div>
             </div>
           </div>
         ))}
