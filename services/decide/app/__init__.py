@@ -6,6 +6,7 @@ from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, Field
 
 from .decider import decide
+from .gemma import decide_with_gemma
 
 HIGH_VALUE_EVENTS = {"KILL", "GOAL", "DUNK", "CLUTCH", "ACE", "PENTAKILL"}
 
@@ -16,13 +17,24 @@ class Evidence(BaseModel):
     ocrHits: int = Field(default=0, ge=0)
 
 
+class ImageRef(BaseModel):
+    role: str = "full"  # full | track0 | track1 | confirm
+    base64: str = ""
+
+
 class HighlightRequest(BaseModel):
     sessionId: str
     eventType: str
     timestamp: float
+    gameHint: str = ""
     evidence: Evidence = Field(default_factory=Evidence)
-    # up to 4 JPEGs passed out-of-band (multipart) in production; stub ignores.
-    images: list = Field(default_factory=list)
+    # JPEGs passed as base64 (full frame + track crops) so the Gemma vision
+    # projector can actually see the moment (plan §3.7). Rule mode ignores them.
+    images: list[ImageRef] = Field(default_factory=list)
+
+
+def _is_gemma_mode() -> bool:
+    return os.environ.get("DECIDE_MODE", "rule") == "gemma"
 
 
 def create_app() -> FastAPI:
@@ -30,12 +42,24 @@ def create_app() -> FastAPI:
 
     @router.get("/health")
     async def health():
-        # For the local stub we're always ready. On GPU the llama-server health
-        # gates this. Never tie whether the box can answer to the perceive GPU.
-        return {"status": "ok", "model": os.environ.get("DECIDE_MODEL", "stub-rule")}
+        # Ready when the process is up. On GPU the llama-server is a separate
+        # process (GEMMA_URL); an unhealthy Gemma must not take this runner
+        # down/flap — the worker falls back to the rule (plan §3.1 health rule).
+        return {
+            "status": "ok",
+            "model": "gemma-4-12b-it-qat-q4_0" if _is_gemma_mode() else "stub-rule",
+        }
 
     @router.post("/highlight")
     async def highlight(req: HighlightRequest):
+        if _is_gemma_mode():
+            return decide_with_gemma(
+                event_type=req.eventType,
+                evidence=req.evidence.model_dump(),
+                game_hint=req.gameHint,
+                images=[img.model_dump() for img in req.images],
+                url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
+            )
         d = decide(
             event_type=req.eventType,
             track_count=req.evidence.trackCount,
@@ -47,6 +71,7 @@ def create_app() -> FastAPI:
             "score": d.score,
             "eventType": req.eventType,
             "reason": d.reason,
+            "source": "rule",
         }
 
     app = FastAPI(title="highlights-decide", version="0.1.0")
