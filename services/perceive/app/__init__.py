@@ -17,6 +17,7 @@ from sse_starlette.sse import EventSourceResponse
 from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
 from .florence import capability, get_detector, record_analyze
+from .sam_tracker import HybridTracker
 
 
 class AnalyzeRequest(BaseModel):
@@ -66,7 +67,13 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         boxes = foreground_blobs(gray, state.prev_gray)
         state.prev_gray = gray
 
-    tracks = state.tracker.step(boxes, ts=timestamp)
+    if isinstance(state.tracker, HybridTracker) and state.last_rgb is not None:
+        if state.tracker._detect is None:
+            _d = detector
+            state.tracker._detect = lambda rgb, _d=_d: [_norm_bbox(o["bbox"]) for o in (_d.detect(rgb) if _d else []) if o.get("bbox")]
+        tracks = state.tracker.step_frame(state.last_rgb, timestamp, boxes)
+    else:
+        tracks = state.tracker.step(boxes, timestamp)
     state.seq = seq
 
     obs = {

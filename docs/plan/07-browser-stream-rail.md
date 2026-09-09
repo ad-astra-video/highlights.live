@@ -90,6 +90,13 @@ the main server). Control path = Fastify + Orchestrator
 - SessionRegistry/SessionState already model one-session-per-stream; `/app/analyze`
   and trickle `video-in` share `session.step(frame)` (§3.5). Add the trickle
   video-in front door consuming ~5fps.
+- Tracking: HybridTracker (app/sam_tracker.py) = Florence(detect) + SAM 3.1(track).
+  Florence-2-base/230M is the DETECTOR (its labels are unreliable on untrained
+  game-UI content — proven live: minimap->"mobile phone", timer->"digital clock").
+  SAM 3.1 propagates masks between Florence passes; Florence re-detects only on
+  SAM loss (no mask) or target change / re-detect cadence. Handoff logic unit-tested
+  with a stub backend. Enabled via PERCEIVE_TRACKER=florence_sam; without a real
+  SAM backend it degrades to Florence->IoU (current default, unchanged).
 - TODO: audio-burst feature — spectral/energy detector on the audio segments
   (crowd/announcer spike) → scalar evidence the decide stage can weigh.
 
