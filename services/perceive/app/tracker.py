@@ -105,6 +105,39 @@ class IoUTracker:
         self.lost_before_evict = lost_before_evict
         self.cooldown_s = cooldown_s
         self.last_candidate: float = -1e9
+        # Slots that refuse automatic eviction (control `lock`). A locked slot
+        # that loses its object keeps its last bbox instead of being dropped.
+        self.locked: set[int] = set()
+
+    # --- operator control (§3.4) -------------------------------------------
+    def seed(self, bbox: BBox, kind: str = "unknown", label: str = "", slot: int | None = None, ts: float = 0.0) -> Track:
+        """Force a track into a slot from an operator-provided box. Replaces any
+        existing occupant of that slot. Returns the created Track."""
+        # normalize bbox to 0..1
+        b = tuple(min(max(float(x), 0.0), 1.0) for x in bbox)
+        if slot is not None:
+            slot = int(slot)
+        else:
+            used = {t.slot for t in self.tracks}
+            slot = next((s for s in (0, 1) if s not in used), 0)
+        # evict any current occupant of the slot
+        self.tracks = [t for t in self.tracks if t.slot != slot]
+        tr = Track(track_id=f"seed-{int(time.time()*1000)}-{slot}", slot=slot, bbox=b, kind=kind, label=label, last_seen=ts)
+        self.tracks.append(tr)
+        self.tracks.sort(key=lambda t: t.slot)
+        return tr
+
+    def evict(self, slot: int) -> bool:
+        """Drop a specific slot (operator `evict`, or auto after lost frames when
+        the slot is not locked). Returns True if a slot was removed."""
+        before = len(self.tracks)
+        self.tracks = [t for t in self.tracks if t.slot != int(slot)]
+        self.locked.discard(int(slot))
+        return len(self.tracks) < before
+
+    def lock(self, slot: int) -> None:
+        """Prevent automatic eviction of a slot (operator `lock`)."""
+        self.locked.add(int(slot))
 
     def step(self, boxes: List[BBox], ts: float) -> List[Track]:
         """Match new boxes to existing tracks: IoU if they overlap, else nearest
@@ -136,7 +169,8 @@ class IoUTracker:
                 matched_tracks.add(id(tr))
             else:
                 tr.lost_frames += 1
-                if tr.lost_frames > self.lost_before_evict:
+                # Locked slots survive repeated lost frames (operator pinned them).
+                if tr.lost_frames > self.lost_before_evict and tr.slot not in self.locked:
                     self.tracks.remove(tr)
 
         # create tracks for remaining unmatched boxes into free slots (0,1)

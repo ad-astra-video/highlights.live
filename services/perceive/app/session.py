@@ -30,6 +30,10 @@ class SessionState:
     health_ts: float = field(default_factory=time.time)
     recent_frames: Deque[dict] = field(default_factory=lambda: deque(maxlen=RECENT_FRAMES))
     subscribers: List[asyncio.Queue] = field(default_factory=list)
+    # Raw RGB of the most recent sampled frame + its image b64, so a control
+    # `analyze-still` can force a fresh Florence+SAM3 pass on the current frame.
+    last_rgb: Optional[np.ndarray] = None
+    last_image_b64: str = ""
     game_hint: str = ""
     prefer_labels: List[str] = field(default_factory=list)
     sample_fps: float = 1.0

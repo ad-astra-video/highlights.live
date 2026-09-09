@@ -5,9 +5,10 @@ import base64
 import io
 import json
 import os
+from time import monotonic
 
 import numpy as np
-from fastapi import APIRouter, FastAPI, Header, HTTPException
+from fastapi import APIRouter, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -38,6 +39,123 @@ def _read_session_id(
     return livepeer_session_id or x_session_id
 
 
+def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[dict, dict | None]:
+    """Run one sampled frame through the shared perceive pipeline: Florence or
+    background-diff detection -> tracker.step -> observation (+ candidate).
+
+    The SAME function backs HTTP /analyze, control `analyze-still`, and (future)
+    trickle `video-in` — one `session.step(frame)` per front door (plan §3.5).
+    Returns (observation_dict, candidate_dict|None). Enqueues both onto any SSE
+    subscribers bound to the session.
+    """
+    objects: list[dict] = []
+    detector = get_detector()
+    if detector is not None:
+        # Real Florence-2: identify objects + bboxes and feed them to the tracker.
+        try:
+            _s = monotonic()
+            objects = detector.detect(state.last_rgb)
+            record_analyze(monotonic() - _s)
+        except Exception as e:  # keep the pipeline alive if the GPU hiccups
+            objects = [{"label": "error", "confidence": 0.0, "bbox": [0, 0, 0.001, 0.001]}]
+            state.last_florence_error = str(e)
+        boxes = [_norm_bbox(o["bbox"]) for o in objects if o.get("bbox")]
+    else:
+        # stub path: background-diff blobs from the grayscale frame
+        gray = _decode_gray(image_b64)
+        boxes = foreground_blobs(gray, state.prev_gray)
+        state.prev_gray = gray
+
+    tracks = state.tracker.step(boxes, ts=timestamp)
+    state.seq = seq
+
+    obs = {
+        "type": "observation",
+        "sessionId": state.session_id,
+        "streamId": state.stream_id,
+        "seq": seq,
+        "timestamp": timestamp,
+        "tracks": [
+            {
+                "trackId": t.track_id,
+                "slot": t.slot,
+                "bbox": list(t.bbox),
+                "kind": t.kind,
+                "lostFrames": t.lost_frames,
+            }
+            for t in tracks
+        ],
+        "objects": objects,
+        "ocr": [],
+    }
+    state.recent_frames.append({"seq": seq, "timestamp": timestamp, "tracks": obs["tracks"]})
+
+    events: list[dict] = [obs]
+    cand = state.tracker.candidate(ts=timestamp)
+    if cand is not None:
+        events.append(
+            {"type": "candidate", "sessionId": state.session_id, "eventType": cand.event_type, "timestamp": cand.timestamp, "seq": seq}
+        )
+    for q in state.subscribers:
+        for e in events:
+            try:
+                q.put_nowait(e)
+            except Exception:
+                pass
+    return obs, cand
+
+
+def handle_control(state, msg: dict) -> dict:
+    """Apply a ControlMessage (shared schema, plan §3.4) and return an ack
+    object. Shared by the WebSocket control channel and (future) trickle control."""
+    ctype = msg.get("type")
+    if ctype == "ping":
+        return {"type": "ack", "ok": True, "cmd": "ping", "pong": True}
+    if ctype == "configure":
+        if "preferLabels" in msg:
+            state.prefer_labels = list(msg["preferLabels"])
+        if "sampleFps" in msg and msg.get("sampleFps", 0) > 0:
+            state.sample_fps = float(msg["sampleFps"])
+        if msg.get("gameHint") is not None:
+            state.game_hint = str(msg["gameHint"])
+        return {"type": "ack", "ok": True, "cmd": "configure", "preferLabels": state.prefer_labels, "sampleFps": state.sample_fps}
+    if ctype == "seed":
+        bbox = msg.get("bbox")
+        if not bbox or len(bbox) != 4:
+            return {"type": "ack", "ok": False, "cmd": "seed", "error": "bbox required (4 numbers)"}
+        slot = msg.get("slot")
+        kind = msg.get("kind") or "unknown"
+        label = msg.get("label") or ""
+        tr = state.tracker.seed(tuple(bbox), kind=kind, label=label, slot=slot)
+        return {"type": "ack", "ok": True, "cmd": "seed", "slot": tr.slot, "trackId": tr.track_id}
+    if ctype == "evict":
+        slot = msg.get("slot")
+        if slot not in (0, 1):
+            return {"type": "ack", "ok": False, "cmd": "evict", "error": "slot must be 0|1"}
+        removed = state.tracker.evict(slot)
+        return {"type": "ack", "ok": True, "cmd": "evict", "slot": slot, "removed": removed}
+    if ctype == "lock":
+        slot = msg.get("slot")
+        if slot not in (0, 1):
+            return {"type": "ack", "ok": False, "cmd": "lock", "error": "slot must be 0|1"}
+        state.tracker.lock(slot)
+        return {"type": "ack", "ok": True, "cmd": "lock", "slot": slot}
+    if ctype == "analyze-still":
+        if state.last_image_b64 and state.last_rgb is not None:
+            obs, cand = process_frame(state, state.seq + 1, float(msg.get("timestamp", 0.0)), state.last_image_b64)
+            return {"type": "ack", "ok": True, "cmd": "analyze-still", "observation": obs, "candidate": cand}
+        return {"type": "ack", "ok": False, "cmd": "analyze-still", "error": "no frame sampled yet"}
+    if ctype == "confirm":
+        # Server-side confirm window (extract T±pre/post at 8fps). The runner
+        # acknowledges; the worker decides when to request it. Full 8fps
+        # confirm extraction is a worker-side concern (plan §0.3/§3.3).
+        return {"type": "ack", "ok": True, "cmd": "confirm", "timestamp": msg.get("timestamp"), "pre": msg.get("pre"), "post": msg.get("post")}
+    if ctype == "clip":
+        # Clip cutting is CPU/worker-side (server ffmpeg); runner just acks.
+        return {"type": "ack", "ok": True, "cmd": "clip", "start": msg.get("start"), "end": msg.get("end")}
+    return {"type": "ack", "ok": False, "cmd": ctype or "?", "error": "unknown control type"}
+
+
 def create_app() -> FastAPI:
     registry = SessionRegistry(max_sessions=int(os.environ.get("PERCEIVE_CAPACITY", "1")))
     router = APIRouter()
@@ -65,70 +183,17 @@ def create_app() -> FastAPI:
         if not sid:
             raise HTTPException(status_code=400, detail="missing session id (Livepeer-Session-Id or X-Session-Id)")
         state = registry.get_or_create(sid, req.stream_id)
+        state.stream_id = req.stream_id or state.stream_id
 
-        objects: list[dict] = []
-        detector = get_detector()
-        if detector is not None:
-            # Real Florence-2: identify objects + bboxes on the frame and feed
-            # those into the tracker (instead of background-diff blobs).
-            rgb = _decode_rgb(req.image)
-            try:
-                import time as _t
+        # Keep the latest raw frame so control `analyze-still` and any future
+        # trickle video-in can re-run the exact same step() on it.
+        if req.image:
+            state.last_rgb = _decode_rgb(req.image)
+            state.last_image_b64 = req.image
 
-                _s = _t.monotonic()
-                objects = detector.detect(rgb)
-                record_analyze(_t.monotonic() - _s)
-            except Exception as e:  # keep the pipeline alive if the GPU hiccups
-                objects = [{"label": "error", "confidence": 0.0, "bbox": [0, 0, 0.001, 0.001]}]
-                state.last_florence_error = str(e)
-            boxes = [_norm_bbox(o["bbox"]) for o in objects if o.get("bbox")]
-        else:
-            gray = _decode_gray(req.image)
-            boxes = foreground_blobs(gray, state.prev_gray)
-            state.prev_gray = gray
-            objects = []
-
-        tracks = state.tracker.step(boxes, ts=req.timestamp)
-        state.seq = req.seq
-
-        obs = {
-            "type": "observation",
-            "sessionId": sid,
-            "streamId": req.stream_id or state.stream_id,
-            "seq": req.seq,
-            "timestamp": req.timestamp,
-            "tracks": [
-                {
-                    "trackId": t.track_id,
-                    "slot": t.slot,
-                    "bbox": list(t.bbox),
-                    "kind": t.kind,
-                    "lostFrames": t.lost_frames,
-                }
-                for t in tracks
-            ],
-            "objects": objects,
-            "ocr": [],
-        }
-        state.recent_frames.append({"seq": req.seq, "timestamp": req.timestamp, "tracks": obs["tracks"]})
-
-        events: list[dict] = [obs]
-
-        cand = state.tracker.candidate(ts=req.timestamp)
+        obs, cand = process_frame(state, req.seq, req.timestamp, req.image)
         if cand is not None:
-            events.append(
-                {"type": "candidate", "sessionId": sid, "eventType": cand.event_type, "timestamp": cand.timestamp, "seq": req.seq}
-            )
-
-        for q in state.subscribers:
-            for e in events:
-                try:
-                    q.put_nowait(e)
-                except Exception:
-                    pass
-        if cand is not None:
-            events = [e for e in events if e["type"] != "observation"]
-            return {"candidate": events[0], "observation": obs}
+            return {"candidate": {"type": "candidate", "sessionId": sid, "eventType": cand["eventType"], "timestamp": cand["timestamp"], "seq": req.seq}, "observation": obs}
         return obs
 
     @router.get("/events")
@@ -156,6 +221,36 @@ def create_app() -> FastAPI:
                     state.subscribers.remove(q)
 
         return EventSourceResponse(gen())
+
+    @router.websocket("/ws")
+    async def ws(websocket: WebSocket):
+        # Bind to an EXISTING session (Livepeer-Session-Id injected by the
+        # orchestrator proxy; X-Session-Id / ?session_id= for direct dev).
+        # Per §3.9 reject a WS that tries to create a new session: an operator
+        # console attaches to a session the worker already reserved.
+        sid = (
+            websocket.headers.get("livepeer-session-id")
+            or websocket.headers.get("x-session-id")
+            or websocket.query_params.get("session_id")
+            or ""
+        )
+        if not sid or registry.get(sid) is None:
+            await websocket.close(code=4001, reason="no such session (bind to a reserved perceive session)")
+            return
+        state = registry.get(sid)
+        await websocket.accept()
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except Exception:
+                    await websocket.send_text(json.dumps({"type": "ack", "ok": False, "cmd": "?", "error": "invalid json"}))
+                    continue
+                ack = handle_control(state, msg)
+                await websocket.send_text(json.dumps(ack))
+        except WebSocketDisconnect:
+            pass
 
     @router.get("/session/stats")
     async def stats(
