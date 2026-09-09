@@ -14,14 +14,27 @@ This departs from the plan's intended trickle design (§0.2, §3.2/3.5) and the
 `SessionRule`: "One persistent perceive session per stream... trickle video-in —
 one session.step(frame) per front door."
 
-## Target architecture (user-proposed)
-    browser webrtc (audio+video)
-        -> server:
-             WHIP/WebRTC ingest end
-        -> Orchestrator (go-livepeer): AnalyzeSession, trickle broker
-        -> perceive runner: consumes the FULL STREAM at ~5fps + audio
-           via session.step() on ONE persistent session
-        -> decide: fuses audio bursts + visual evidence
+## Target architecture (user-proposed, locked)
+EVERYTHING goes through the Orchestrator. No media leg bypasses it. MediaMTX is
+the orchestrator's media ingress (exactly Livepeer's own AI pipeline layout:
+"components = MediaMTX + Trickle Server"). The main Fastify server is control
+plane ONLY — it never carries media bytes.
+
+    browser (getDisplayMedia, audio+video)
+        --WHIP--> MediaMTX (orchestrator's media ingress; per-stream URL)
+        --trickle video-in--> [Orchestrator: ticket auth + relay]
+        --> perceive RUNNER: consumes the FULL STREAM at ~5fps + audio
+             via session.step() on ONE persistent session, events-out back through orchestrator
+        --> decide: fuses audio bursts + visual evidence
+
+Client side speaks the Livepeer trickle protocol via the `livepeer_gateway`
+Python SDK (LiveVideoJob: video-in / events-out / control / audio channels; all
+terminate at and relay through the Orchestrator). Fastify only PROVISIONS the
+per-stream WHIP URL + AnalyzeSession; it is not a hop in the media path.
+
+Media hot path = MediaMTX replicas, horizontally scalable independently of the
+main server. Control path = Fastify + Orchestrator (ticket/session), unaffected
+by media load.
 
 ## Clip-fidelity model (default: Option 1 — recommended)
 - ANALYSIS consumes the full stream (5fps frames + audio) via trickle.
