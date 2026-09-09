@@ -14,33 +14,40 @@ This departs from the plan's intended trickle design (§0.2, §3.2/3.5) and the
 `SessionRule`: "One persistent perceive session per stream... trickle video-in —
 one session.step(frame) per front door."
 
-## Target architecture (user-proposed, locked — corrected)
-MediaMTX is NOT in the Orchestrator. MediaMTX lives SERVER-side, run by the
-gateway, and is the only thing that terminates WebRTC/WHIP. The Orchestrator's
-media role is only to create live-runner CHANNELS that proxy data to the
-live-runner (trickle video-in / control / events-out). Everything still goes
-THROUGH the Orchestrator; the gateway pushes to it.
+## Target architecture (user-proposed, locked — corrected, no MediaMTX)
+The Orchestrator has no media server — it only creates live-runner CHANNELS that
+proxy data to the live-runner (trickle video-in / control / events-out). The
+gateway process does PYTHON WebRTC passthrough: it terminates the browser WHIP
+in-process (aiortc) and forwards frames + audio to the Orchestrator over trickle.
+No MediaMTX binary. Everything still goes THROUGH the Orchestrator.
 
     browser (getDisplayMedia, audio+video)
-        --WHIP--> MediaMTX  (server-side media server, run by the gateway;
-                             per-stream WHIP URLs; the ONLY WebRTC terminator)
-        --> livepeer_gateway process (server side; reads MediaMTX media,
-                             opens trickle video-in to the Orchestrator,
-                             pushes frames + audio, listens events-out)
+        --WHIP--> livepeer_gateway process (server side; PYTHON WebRTC
+                             termination via aiortc — terminates SRTP/DTLS,
+                             decodes frames + audio, then opens trickle
+                             video-in to the Orchestrator and pushes them,
+                             subscribes events-out)
         --> Orchestrator (creates live-runner CHANNELS that proxy data
-                             to the live-runner; ticket auth; no MediaMTX)
+                             to the live-runner; ticket auth; no media server)
         --> perceive LIVE-RUNNER (consumes full stream ~5fps + audio via
                                   session.step(), events-out back through
                                   orchestrator channels)
         --> decide: fuses audio bursts + visual evidence
 
+Why pure-Python passthrough is enough here: the gateway only feeds the ANALYSIS
+path (frames + audio, ~5fps). Clips come from the browser's separate
+high-fidelity recording — so the WebRTC hop is NOT a full-res media transcoder
+and doesn't need MediaMTX-class C++ throughput.
+
 Fastify (main server) is control plane only: it PROVISIONS the per-stream WHIP
 URL, asks the gateway to start the job, and receives final results. It never
 carries media bytes.
 
-Media hot path = MediaMTX replicas + gateway processes, horizontally scalable
-independently of the main server. Control path = Fastify + Orchestrator
-(ticket/session/live-runner channels), unaffected by media load.
+Media hot path = the gateway processes themselves, horizontally scalable
+independently of the main server (no separate media server). Control path =
+Fastify + Orchestrator (ticket/session/live-runner channels), unaffected by
+media load. If load profiling later shows Python WebRTC termination is the
+bottleneck, add MediaMTX then — not speculatively now.
 
 ## Clip-fidelity model (default: Option 1 — recommended)
 - ANALYSIS consumes the full stream (5fps frames + audio) via trickle.
@@ -63,26 +70,25 @@ faithful to "runner gets the stream", heaviest server work).
   RTCPeerConnection (WHIP) to the server carrying realtime audio+video.
 - KEEP: the local MediaRecorder as the high-fidelity clip source (stop upload).
 
-### 2. Media server (server-side, run by the gateway) — MediaMTX
-- Accepts the browser WHIP ingest (single WebRTC terminator), per-stream WHIP URL.
-- Publishes RTSP/HLS/WebRTC out; horizontally scalable replicas = the media hot
-  path, scaled independently of the main server.
+### 2. Server gateway process (livepeer_gateway) — Python WebRTC passthrough
+- A process on the SERVER that terminates the browser WHIP in-process using
+  Python WebRTC (aiortc): per-stream WHIP URL, terminates SRTP/DTLS, decodes
+  frames (video) + audio(~1s segments). No MediaMTX.
+- It then sends the media to the Orchestrator: opens trickle video-in, pushes
+  frames + audio (~5fps) continuously, subscribes events-out. Uses
+  `livepeer_gateway` (LiveVideoJob + Orchestrator/PaymentSession).
+- Replicas of this process ARE the media hot path, scaled independently of the
+  main server. Fastify stays control plane: provisions the per-stream WHIP URL,
+  asks the gateway to start the job, receives results. Fastify never handles
+  media bytes.
 
-### 3. Server gateway process (livepeer_gateway)
-- A process on the SERVER that reads the received media from MediaMTX and sends
-  it to the Orchestrator: opens trickle video-in, pushes frames + audio
-  (~5fps), subscribes events-out. Uses `livepeer_gateway` (LiveVideoJob +
-  Orchestrator/PaymentSession) against the Orchestrator.
-- Fastify stays control plane: provisions per-stream WHIP URL, asks the gateway
-  to start the job, receives results. Fastify never handles media.
-
-### 4. Orchestrator (go-livepeer)
+### 3. Orchestrator (go-livepeer)
 - NOT a media server: no MediaMTX. Its media role = create live-runner CHANNELS
   that proxy data to the live-runner (video-in / control / events-out), plus
   ticket auth/session lifecycle. The gateway pushes through these channels; the
   runner's output comes back through them.
 
-### 5. Perceive runner
+### 4. Perceive runner
 - SessionRegistry/SessionState already model one-session-per-stream; `/app/analyze`
   and trickle `video-in` share `session.step(frame)` (§3.5). Add the trickle
   video-in front door consuming ~5fps.
@@ -96,13 +102,13 @@ faithful to "runner gets the stream", heaviest server work).
 ## Constraints / honest notes
 - Chrome yields audio ONLY when sharing a TAB (screen/window capture has no
   audio) → audio analysis effectively requires tab / in-page element capture.
-- WebRTC-to-server transport is net-new (no WHIP/webrtc dep in the server today).
-- go-livepeer's media path: confirmed HTTP app-call / trickle, not raw SRTP à la
-  a media server (Mediamtx/Antmedia) — if we need true low-latency media into the
-  runner, that bypasses the orchestrator and is a separate rail.
+- WebRTC-to-gateway transport is net-new: Python WHIP termination via aiortc
+  (no webrtc dep in the repo today). aiortc is the default WebRTC stack.
+- The gateway terminates WebRTC in Python; if load profiling later shows that is
+  the bottleneck (GIL / SRTP throughput), swap to MediaMTX then — not now.
 - clip-vs-analyzed-stream frame-lock: acceptable skew for clips.
 
 ## Risks
-Session≠socket (unhealthy checks release sessions); trickle seq gaps; WHIP stack
-maturity in the chosen framework; audio analysis is brand-new (not in the stack);
+Session≠socket (unhealthy checks release sessions); trickle seq gaps; aiortc
+WHIP maturity at concurrency; audio analysis is brand-new (not in the stack);
 re-encode quality if clip fidelity model changes.
