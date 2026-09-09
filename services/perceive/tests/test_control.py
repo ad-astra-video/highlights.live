@@ -113,17 +113,35 @@ def test_ws_analyze_still_runs_on_last_frame():
         assert "observation" in ack
 
 
-def test_control_worker_contract():
-    """The /analyze response still carries the same contract after the shared
-    process_frame refactor (observation with tracks, or candidate+observation)."""
+def _moving_frames(n=5, dx=12):
+    """Yield a bright box translating across a dark field -> enough cumulative
+    displacement to fire the tracker's KILL candidate."""
+    for i in range(n):
+        g = np.zeros((60, 80), dtype=np.float32)
+        x = 4 + i * dx
+        g[10:26, x : x + 16] = 255.0
+        yield g
+
+
+def test_control_worker_contract_with_candidate():
+    """The /analyze response keeps its contract AND stays JSON-serializable when
+    a candidate fires (regression: CandidateEvent dataclass was returned and
+    subscripted as a dict, crashing the analysis rail at frame 2+)."""
     sid = _uuid_sid()
-    g = np.zeros((60, 80), dtype=np.float32)
-    g[10:26, 10:26] = 255.0
-    r = client.post("/app/analyze", json={"seq": 0, "timestamp": 0.0, "image": _frame_jpeg(g)}, headers={"X-Session-Id": sid})
-    assert r.status_code == 200
-    body = r.json()
-    # either plain observation or {candidate, observation}
-    if "observation" in body:
-        assert body["observation"]["sessionId"] == sid
-    else:
-        assert body["tracks"] is not None or "tracks" in body
+    last = None
+    fired = False
+    for i, g in enumerate(_moving_frames(5, dx=12)):
+        r = client.post("/app/analyze", json={"seq": i, "timestamp": float(i), "image": _frame_jpeg(g)}, headers={"X-Session-Id": sid})
+        assert r.status_code == 200
+        body = r.json()
+        if "candidate" in body:
+            fired = True
+            assert body["candidate"]["eventType"] == "KILL"
+            assert isinstance(body["candidate"]["timestamp"], (int, float))
+            assert body["observation"]["sessionId"] == sid
+        last = body
+    assert fired, "expected a KILL candidate from the moving box"
+    # response must be JSON-serializable end-to-end
+    import json as _json
+
+    _json.dumps(last)  # must not raise

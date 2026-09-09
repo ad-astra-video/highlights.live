@@ -92,17 +92,19 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
 
     events: list[dict] = [obs]
     cand = state.tracker.candidate(ts=timestamp)
+    cand_dict = None
     if cand is not None:
-        events.append(
-            {"type": "candidate", "sessionId": state.session_id, "eventType": cand.event_type, "timestamp": cand.timestamp, "seq": seq}
-        )
+        # Return a plain dict (JSON-serializable) so callers can embed it in a
+        # response/ack without reaching into the dataclass.
+        cand_dict = {"eventType": cand.event_type, "timestamp": cand.timestamp, "trackId": cand.track_id}
+        events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
     for q in state.subscribers:
         for e in events:
             try:
                 q.put_nowait(e)
             except Exception:
                 pass
-    return obs, cand
+    return obs, cand_dict
 
 
 def handle_control(state, msg: dict) -> dict:
