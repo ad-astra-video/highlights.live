@@ -71,7 +71,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         adapter,
         ingest.frames(),
         (ts) => ingest.cut(ts),
-        { jobId: job.id, clipBeforeS: cfg.clipBeforeS, clipAfterS: cfg.clipAfterS }
+        { jobId: job.id, clipBeforeS: cfg.clipBeforeS, clipAfterS: cfg.clipAfterS, gameHint: job.gameHint || cfg.gameHintDefault }
       );
       for (const h of outcome.highlights) {
         store.addHighlight({ ...h, ownerId: user.id });
@@ -248,6 +248,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           jobId: job.id,
           clipBeforeS: cfg.clipBeforeS,
           clipAfterS: cfg.clipAfterS,
+          gameHint: job.gameHint || cfg.gameHintDefault,
         });
         for (const h of outcome.highlights) {
           store.addHighlight({ ...h, ownerId: user.id });
