@@ -78,6 +78,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   function emitJobEvent(jobId: string, ev: AnalyzeEvent) {
     for (const fn of jobEvents.get(jobId) ?? []) fn(ev);
   }
+  // Shared analyze hook: fans to SSE subscribers AND persists observations so
+  // the frame debugger can overlay boxes on any past frame (VOD + live).
+  function jobEventHook(jobId: string) {
+    return (ev: AnalyzeEvent) => {
+      emitJobEvent(jobId, ev);
+      if (ev.type === "observation" && ev.observation) {
+        store.recordObservation(jobId, {
+          seq: ev.seq,
+          timestamp: ev.timestamp,
+          tracks: ev.observation.tracks,
+        });
+      }
+    };
+  }
   async function runLiveJob(
     ingest: LiveIngest,
     job: { id: string },
@@ -90,7 +104,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         ingest.frames(),
         (ts) => ingest.cut(ts),
         { jobId: job.id, clipBeforeS: cfg.clipBeforeS, clipAfterS: cfg.clipAfterS, gameHint: job.gameHint || cfg.gameHintDefault },
-        (ev) => emitJobEvent(job.id, ev)
+        jobEventHook(job.id)
       );
       for (const h of outcome.highlights) {
         store.addHighlight({ ...h, ownerId: user.id });
@@ -268,7 +282,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           clipBeforeS: cfg.clipBeforeS,
           clipAfterS: cfg.clipAfterS,
           gameHint: job.gameHint || cfg.gameHintDefault,
-        });
+        },
+        jobEventHook(job.id)
+        );
         for (const h of outcome.highlights) {
           store.addHighlight({ ...h, ownerId: user.id });
           await billing.onHighlightCreated(user, sub);
@@ -299,6 +315,48 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!ing) return reply.code(409).send({ error: "job is not a live ingest" });
     ing.stop();
     return reply.send({ ok: true, job: store.getJob(job.id) });
+  });
+
+  // Frame debugger: expose the sampled frames a job actually saw + the perceive
+  // observations (boxes) so the console can overlay Florence/SAM boxes on any past
+  // frame. Frames live under dataDir/frames/<jobId> (VOD) or dataDir/live/<jobId>/frames (live).
+  function jobFrameDir(jobId: string): string | null {
+    const { existsSync } = require("node:fs") as typeof import("node:fs");
+    const live = path.join(cfg.dataDir, "live", jobId, "frames");
+    if (existsSync(live)) return live;
+    const vod = path.join(cfg.dataDir, "frames", jobId);
+    if (existsSync(vod)) return vod;
+    return null;
+  }
+
+  app.get<{ Params: { id: string } }>("/jobs/:id/observations", { preHandler: authReq }, async (req: any, reply) => {
+    if (!store.getJob(req.params.id)) return reply.code(404).send({ error: "no job" });
+    return { observations: store.observationsForJob(req.params.id) };
+  });
+
+  app.get<{ Params: { id: string } }>("/jobs/:id/frames", { preHandler: authReq }, async (req: any, reply) => {
+    const dir = jobFrameDir(req.params.id);
+    if (!dir) return reply.code(404).send({ error: "no frames for job" });
+    const { readdirSync } = require("node:fs") as typeof import("node:fs");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".jpg")).sort();
+    const tsBySeq = new Map(store.observationsForJob(req.params.id).map((o) => [o.seq, o.timestamp]));
+    return {
+      frames: files.map((f, i) => ({ seq: i, uri: `/jobs/${req.params.id}/frames/${i}`, timestamp: tsBySeq.get(i) ?? null })),
+    };
+  });
+
+  app.get<{ Params: { id: string; seq: string } }>("/jobs/:id/frames/:seq", { preHandler: authReq }, async (req: any, reply) => {
+    const dir = jobFrameDir(req.params.id);
+    if (!dir) return reply.code(404).send({ error: "no frames for job" });
+    const { readdirSync } = require("node:fs") as typeof import("node:fs");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".jpg")).sort();
+    const idx = parseInt(req.params.seq, 10);
+    const f = files[idx];
+    if (!f) return reply.code(404).send({ error: "no such frame" });
+    const { createReadStream, existsSync } = require("node:fs") as typeof import("node:fs");
+    const abs = path.join(dir, f);
+    if (!existsSync(abs)) return reply.code(404).send({ error: "not found" });
+    return reply.type("image/jpeg").send(createReadStream(abs));
   });
 
   // Live-console overlay: Server-Sent Events stream of observations / candidates

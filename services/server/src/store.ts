@@ -3,10 +3,17 @@
 import { createHash, randomUUID } from "node:crypto";
 import { HighlightRecordSchema, JobSchema, type HighlightRecord, type Job } from "@highlights/events";
 
+export interface StoredObservation {
+  seq: number;
+  timestamp: number;
+  tracks: { trackId: string; slot: number; bbox: number[]; kind: string; lostFrames: number }[];
+}
+
 export class Store {
   private jobs = new Map<string, Job>();
   private highlights = new Map<string, HighlightRecord>();
   private byJob = new Map<string, string[]>();
+  private observations = new Map<string, StoredObservation[]>();
 
   createJob(input: { ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare"; sourceUrl?: string; gameHint?: string; preferLabels?: string[] }): Job {
     const id = randomUUID();
@@ -68,6 +75,16 @@ export class Store {
     return [...this.highlights.values()]
       .filter((h) => h.status === "accepted")
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }
+
+  recordObservation(jobId: string, obs: StoredObservation): void {
+    const list = this.observations.get(jobId) ?? [];
+    list.push(obs);
+    this.observations.set(jobId, list);
+  }
+
+  observationsForJob(jobId: string): StoredObservation[] {
+    return this.observations.get(jobId) ?? [];
   }
 }
 

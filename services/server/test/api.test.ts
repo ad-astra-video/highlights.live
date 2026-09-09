@@ -144,6 +144,43 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     await app.close();
   });
 
+  it("exposes observations + frames for the frame debugger after a VOD job", async () => {
+    const { app } = await buildTestApp();
+    const token = await register(app, "dbg@test.dev", "password123");
+    const job = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { videoPath },
+    });
+    const jobId = job.json().job.id;
+
+    const obs = await app.inject({ method: "GET", url: `/jobs/${jobId}/observations`, headers: { authorization: `Bearer ${token}` } });
+    expect(obs.statusCode).toBe(200);
+    const observations = obs.json().observations;
+    expect(observations.length).toBeGreaterThan(1);
+    expect(observations[0]).toHaveProperty("seq");
+    expect(observations[0]).toHaveProperty("tracks");
+
+    const frames = await app.inject({ method: "GET", url: `/jobs/${jobId}/frames`, headers: { authorization: `Bearer ${token}` } });
+    expect(frames.statusCode).toBe(200);
+    const frameList = frames.json().frames;
+    expect(frameList.length).toBeGreaterThan(0);
+    expect(frameList[0].seq).toBe(0);
+    expect(frameList[0].uri).toContain("/frames/0");
+
+    // first frame image actually serves
+    const img = await app.inject({ method: "GET", url: `/jobs/${jobId}/frames/0`, headers: { authorization: `Bearer ${token}` } });
+    expect(img.statusCode).toBe(200);
+    expect(img.headers["content-type"]).toContain("image/jpeg");
+    expect(img.rawPayload.length).toBeGreaterThan(100);
+
+    // out of range frame -> 404
+    const missing = await app.inject({ method: "GET", url: `/jobs/${jobId}/frames/99999`, headers: { authorization: `Bearer ${token}` } });
+    expect(missing.statusCode).toBe(404);
+    await app.close();
+  });
+
   it("rejects a user's job when the free allowance is exhausted (402)", async () => {
     const { app, db } = await buildTestApp({ FREE_HIGHLIGHTS: "2" });
     const token = await register(app, "c@test.dev", "password123");
