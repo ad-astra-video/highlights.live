@@ -14,27 +14,33 @@ This departs from the plan's intended trickle design (§0.2, §3.2/3.5) and the
 `SessionRule`: "One persistent perceive session per stream... trickle video-in —
 one session.step(frame) per front door."
 
-## Target architecture (user-proposed, locked)
-EVERYTHING goes through the Orchestrator. No media leg bypasses it. MediaMTX is
-the orchestrator's media ingress (exactly Livepeer's own AI pipeline layout:
-"components = MediaMTX + Trickle Server"). The main Fastify server is control
-plane ONLY — it never carries media bytes.
+## Target architecture (user-proposed, locked — corrected)
+MediaMTX is NOT in the Orchestrator. MediaMTX lives SERVER-side, run by the
+gateway, and is the only thing that terminates WebRTC/WHIP. The Orchestrator's
+media role is only to create live-runner CHANNELS that proxy data to the
+live-runner (trickle video-in / control / events-out). Everything still goes
+THROUGH the Orchestrator; the gateway pushes to it.
 
     browser (getDisplayMedia, audio+video)
-        --WHIP--> MediaMTX (orchestrator's media ingress; per-stream URL)
-        --trickle video-in--> [Orchestrator: ticket auth + relay]
-        --> perceive RUNNER: consumes the FULL STREAM at ~5fps + audio
-             via session.step() on ONE persistent session, events-out back through orchestrator
+        --WHIP--> MediaMTX  (server-side media server, run by the gateway;
+                             per-stream WHIP URLs; the ONLY WebRTC terminator)
+        --> livepeer_gateway process (server side; reads MediaMTX media,
+                             opens trickle video-in to the Orchestrator,
+                             pushes frames + audio, listens events-out)
+        --> Orchestrator (creates live-runner CHANNELS that proxy data
+                             to the live-runner; ticket auth; no MediaMTX)
+        --> perceive LIVE-RUNNER (consumes full stream ~5fps + audio via
+                                  session.step(), events-out back through
+                                  orchestrator channels)
         --> decide: fuses audio bursts + visual evidence
 
-Client side speaks the Livepeer trickle protocol via the `livepeer_gateway`
-Python SDK (LiveVideoJob: video-in / events-out / control / audio channels; all
-terminate at and relay through the Orchestrator). Fastify only PROVISIONS the
-per-stream WHIP URL + AnalyzeSession; it is not a hop in the media path.
+Fastify (main server) is control plane only: it PROVISIONS the per-stream WHIP
+URL, asks the gateway to start the job, and receives final results. It never
+carries media bytes.
 
-Media hot path = MediaMTX replicas, horizontally scalable independently of the
-main server. Control path = Fastify + Orchestrator (ticket/session), unaffected
-by media load.
+Media hot path = MediaMTX replicas + gateway processes, horizontally scalable
+independently of the main server. Control path = Fastify + Orchestrator
+(ticket/session/live-runner channels), unaffected by media load.
 
 ## Clip-fidelity model (default: Option 1 — recommended)
 - ANALYSIS consumes the full stream (5fps frames + audio) via trickle.
@@ -57,27 +63,33 @@ faithful to "runner gets the stream", heaviest server work).
   RTCPeerConnection (WHIP) to the server carrying realtime audio+video.
 - KEEP: the local MediaRecorder as the high-fidelity clip source (stop upload).
 
-### 2. Server
-- TODO: WHIP/WebRTC ingest endpoint (net-new transport; aiortc / node-wrtc /
-  libdatachannel sidecar). Receives SRTP, demuxes to 5fps JPEG frames + audio
-  segments (1s, opus/pcm) with timestamps.
-- TODO: hold ONE AnalyzeSession for the job; push frames via trickle video-in
-  into the orchestrator (continuous, ordered, timestamped) — reinstate the
-  stream-id keyed app-call/trickle the per-frame request path bypassed.
+### 2. Media server (server-side, run by the gateway) — MediaMTX
+- Accepts the browser WHIP ingest (single WebRTC terminator), per-stream WHIP URL.
+- Publishes RTSP/HLS/WebRTC out; horizontally scalable replicas = the media hot
+  path, scaled independently of the main server.
 
-### 3. Orchestrator (go-livepeer)
-- Already the runner registry + reverse-proxy + trickle broker per the plan.
-- NOTE: app-call/trickle is HTTP-request-ish; a true low-latency SRTP media leg to
-  the runner would bypass the orchestrator and is a bigger change — not assumed.
+### 3. Server gateway process (livepeer_gateway)
+- A process on the SERVER that reads the received media from MediaMTX and sends
+  it to the Orchestrator: opens trickle video-in, pushes frames + audio
+  (~5fps), subscribes events-out. Uses `livepeer_gateway` (LiveVideoJob +
+  Orchestrator/PaymentSession) against the Orchestrator.
+- Fastify stays control plane: provisions per-stream WHIP URL, asks the gateway
+  to start the job, receives results. Fastify never handles media.
 
-### 4. Perceive runner
+### 4. Orchestrator (go-livepeer)
+- NOT a media server: no MediaMTX. Its media role = create live-runner CHANNELS
+  that proxy data to the live-runner (video-in / control / events-out), plus
+  ticket auth/session lifecycle. The gateway pushes through these channels; the
+  runner's output comes back through them.
+
+### 5. Perceive runner
 - SessionRegistry/SessionState already model one-session-per-stream; `/app/analyze`
   and trickle `video-in` share `session.step(frame)` (§3.5). Add the trickle
   video-in front door consuming ~5fps.
 - TODO: audio-burst feature — spectral/energy detector on the audio segments
   (crowd/announcer spike) → scalar evidence the decide stage can weigh.
 
-### 5. Decide
+### 6. Decide
 - TODO: fuse audio-burst + visual evidence (track count/velocity/ocrHits) into the
   `HighlightDecision`.
 
