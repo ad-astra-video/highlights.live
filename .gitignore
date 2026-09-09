@@ -9,8 +9,17 @@ coverage/
 __pycache__/
 *.pyc
 .venv/
+**/.venv*/
 .pytest_cache/
 .hermes/
+# dev probe / benchmark scratch (not app source)
+docker/cpu_fps.py
+docker/fps_motion.py
+docker/fps_test.py
+docker/fps_warm.py
+docker/florence_raw.py
+docker/ov_florence2_helper.py
+docker/tree.json
 data/
 !docker/data/.gitkeep
 services/**/.venv/
