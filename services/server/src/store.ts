@@ -15,7 +15,7 @@ export class Store {
   private byJob = new Map<string, string[]>();
   private observations = new Map<string, StoredObservation[]>();
 
-  createJob(input: { ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare"; sourceUrl?: string; gameHint?: string; preferLabels?: string[] }): Job {
+  createJob(input: { ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare" | "browser"; sourceUrl?: string; gameHint?: string; preferLabels?: string[] }): Job {
     const id = randomUUID();
     const job: Job = JobSchema.parse({
       id,
@@ -59,6 +59,14 @@ export class Store {
     const h = this.highlights.get(id);
     if (!h) throw new Error(`no highlight ${id}`);
     const next = HighlightRecordSchema.parse({ ...h, status });
+    this.highlights.set(id, next);
+    return next;
+  }
+
+  patchHighlight(id: string, patch: Partial<Pick<HighlightRecord, "clipUri" | "start" | "end">>): HighlightRecord {
+    const h = this.highlights.get(id);
+    if (!h) throw new Error(`no highlight ${id}`);
+    const next = HighlightRecordSchema.parse({ ...h, ...patch });
     this.highlights.set(id, next);
     return next;
   }

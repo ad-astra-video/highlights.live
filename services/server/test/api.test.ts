@@ -181,6 +181,58 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     await app.close();
   });
 
+  it("browser capture: ingest frames -> highlight, recording -> stop cuts the clip", async () => {
+    const { app, cfg } = await buildTestApp();
+    const token = await register(app, "bz@test.dev", "password123");
+
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser", gameHint: "Esports" },
+    });
+    expect(jr.statusCode).toBe(200);
+    expect(jr.json().status).toBe("ready");
+    const jobId = jr.json().job.id;
+    expect(jr.json().job.status).toBe("active");
+
+    // first ingest triggers a candidate + highlight (fake pipeline)
+    const ing = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/ingest`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { seq: 0, timestamp: 0, image: "aGVsbG8=" },
+    });
+    expect(ing.statusCode).toBe(200);
+    const hl = ing.json().highlight;
+    expect(hl).toBeTruthy();
+    expect(hl.id).toBeTruthy();
+    expect(hl.clipUri).toBe(""); // clip cut deferred until stop
+
+    // upload a recording (the test mp4) so clips can be cut at stop
+    const { readFileSync } = await import("node:fs");
+    const recordingB64 = readFileSync(videoPath).toString("base64");
+    const rec = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/recording`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { base64: recordingB64, mime: "video/mp4" },
+    });
+    expect(rec.statusCode).toBe(200);
+
+    // stop -> finalize: cut clip from recording
+    const st = await app.inject({ method: "POST", url: `/jobs/${jobId}/stop`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(st.statusCode).toBe(200);
+    expect(st.json().job.status).toBe("done");
+
+    const hlList = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
+    expect(hlList.length).toBe(1);
+    expect(hlList[0].clipUri).toMatch(/^\/clips\//);
+    const clipFile = path.join(cfg.dataDir, "clips", path.basename(hlList[0].clipUri));
+    expect(existsSync(clipFile)).toBe(true);
+    await app.close();
+  });
+
   it("rejects a user's job when the free allowance is exhausted (402)", async () => {
     const { app, db } = await buildTestApp({ FREE_HIGHLIGHTS: "2" });
     const token = await register(app, "c@test.dev", "password123");
