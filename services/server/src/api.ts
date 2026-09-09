@@ -293,7 +293,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         return { job: store.getJob(job.id), framesAnalyzed: outcome.framesAnalyzed };
       } catch (e: any) {
         store.patchJob(job.id, { status: "failed" });
-        return reply.code(500).send({ error: String(e?.message || e) });
+        const raw = String(e?.message || e);
+        // A remote URL source that ffmpeg can't fetch (404/403/406, unreachable,
+        // hotlink-protected, or not a directly downloadable file) gets a human
+        // message; the ffmpeg detail stays in `detail` for diagnosis.
+        if (/^https?:\/\//i.test(req.body?.videoPath || "") && /^ffmpeg:/i.test(raw)) {
+          return reply.code(422).send({ error: "Video not available for download", detail: raw });
+        }
+        return reply.code(500).send({ error: raw });
       }
     }
   );
