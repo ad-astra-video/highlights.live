@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { existsSync, readdirSync, createReadStream } from "node:fs";
 import type { ServerConfig } from "./config";
 import type { Store } from "./store";
 import { analyzeJob, EvidenceTracker, type AnalyzeEvent, type PipelineClient } from "./analyzer";
@@ -344,7 +345,6 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (job.source === "browser" && browserJobs.has(job.id)) {
       const bj = browserJobs.get(job.id)!;
       if (bj.sessionId) await adapter.stopPerceive(bj.sessionId).catch(() => {});
-      const { existsSync } = require("node:fs") as typeof import("node:fs");
       const recPath = browserRecordingPath(job.id);
       if (existsSync(recPath)) {
         const { mkdir } = await import("node:fs/promises");
@@ -441,7 +441,6 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       if (!base64) return reply.code(400).send({ error: "base64 required" });
       try {
         const { mkdir, writeFile, appendFile, stat } = await import("node:fs/promises");
-        const { existsSync } = require("node:fs") as typeof import("node:fs");
         if (mime && !bj.recordingExt) bj.recordingExt = mime.includes("mp4") ? ".mp4" : ".webm";
         const p = browserRecordingPath(req.params.id);
         await mkdir(path.dirname(p), { recursive: true });
@@ -459,7 +458,6 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // observations (boxes) so the console can overlay Florence/SAM boxes on any past
   // frame. Frames live under dataDir/frames/<jobId> (VOD) or dataDir/live/<jobId>/frames (live).
   function jobFrameDir(jobId: string): string | null {
-    const { existsSync } = require("node:fs") as typeof import("node:fs");
     const live = path.join(cfg.dataDir, "live", jobId, "frames");
     if (existsSync(live)) return live;
     const vod = path.join(cfg.dataDir, "frames", jobId);
@@ -475,7 +473,6 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   app.get<{ Params: { id: string } }>("/jobs/:id/frames", { preHandler: authReq }, async (req: any, reply) => {
     const dir = jobFrameDir(req.params.id);
     if (!dir) return reply.code(404).send({ error: "no frames for job" });
-    const { readdirSync } = require("node:fs") as typeof import("node:fs");
     const files = readdirSync(dir).filter((f) => f.endsWith(".jpg")).sort();
     const tsBySeq = new Map(store.observationsForJob(req.params.id).map((o) => [o.seq, o.timestamp]));
     return {
@@ -486,12 +483,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   app.get<{ Params: { id: string; seq: string } }>("/jobs/:id/frames/:seq", { preHandler: authReq }, async (req: any, reply) => {
     const dir = jobFrameDir(req.params.id);
     if (!dir) return reply.code(404).send({ error: "no frames for job" });
-    const { readdirSync } = require("node:fs") as typeof import("node:fs");
     const files = readdirSync(dir).filter((f) => f.endsWith(".jpg")).sort();
     const idx = parseInt(req.params.seq, 10);
     const f = files[idx];
     if (!f) return reply.code(404).send({ error: "no such frame" });
-    const { createReadStream, existsSync } = require("node:fs") as typeof import("node:fs");
     const abs = path.join(dir, f);
     if (!existsSync(abs)) return reply.code(404).send({ error: "not found" });
     return reply.type("image/jpeg").send(createReadStream(abs));
