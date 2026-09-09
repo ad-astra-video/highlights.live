@@ -270,6 +270,13 @@ _measured_fps: float | None = None
 _gate_fps: float | None = None
 
 
+def device_is_cpu() -> bool:
+    """True when the runner is CPU-bound (PERCEIVE_DEVICE=cpu/CPU). CPU cannot
+    sustain live-stream rates or dense-tracking cadence, so the runner is
+    VOD-only and capped at 1 fps there."""
+    return os.environ.get("PERCEIVE_DEVICE", "auto") in ("cpu", "CPU")
+
+
 def record_analyze(elapsed: float) -> None:
     """Feed a real per-frame wall time so the tuned sample interval tracks the
     device's steady-state capability (EMA of instantaneous fps)."""
@@ -285,9 +292,20 @@ def capability() -> dict:
     `sample_interval_s` seconds so the card isn't over- or under-fed. Drawn from
     the measured fps (boot gate + running average); stub mode is 1 fps."""
     if os.environ.get("PERCEIVE_MODE", "stub") != "florence":
-        return {"max_fps": 1.0, "sample_interval_s": 1.0, "device": "stub-iou"}
+        return {"max_fps": 1.0, "sample_interval_s": 1.0, "device": "stub-iou", "live": True, "mode": "live+vod"}
     fps = _measured_fps or _gate_fps
     if fps is None:
-        return {"max_fps": 1.0, "sample_interval_s": 1.0, "device": "florence-2(not yet measured)"}
-    interval = min(5.0, max(0.2, 1.0 / fps))
-    return {"max_fps": round(fps, 3), "sample_interval_s": round(interval, 3), "device": "florence-2"}
+        return {"max_fps": 1.0, "sample_interval_s": 1.0, "device": "florence-2(not yet measured)", "live": not device_is_cpu(), "mode": "vod-only" if device_is_cpu() else "live+vod"}
+    # On CPU the runner only accepts VOD-style per-frame work and never exceeds
+    # 1 fps — it cannot sustain live-stream or dense-tracking rates.
+    live_ok = not device_is_cpu()
+    if not live_ok:
+        fps = min(fps, 1.0)  # hard ceiling: 1 fps on CPU
+    interval = round(min(5.0, max(1.0 if not live_ok else 0.2, 1.0 / fps)), 3)
+    return {
+        "max_fps": round(fps, 3),
+        "sample_interval_s": interval,
+        "device": "florence-2",
+        "live": live_ok,
+        "mode": "live+vod" if live_ok else "vod-only",
+    }
