@@ -112,6 +112,38 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     await app.close();
   });
 
+  it("acks operator control intents on a job and 401s without auth", async () => {
+    const { app } = await buildTestApp();
+    const token = await register(app, "ctl@test.dev", "password123");
+    const job = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { videoPath },
+    });
+    const jobId = job.json().job.id;
+
+    const ctl = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/control`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { type: "preferLabels", args: { labels: ["headshot", "clutch"] } },
+    });
+    expect(ctl.statusCode).toBe(200);
+    expect(ctl.json().ok).toBe(true);
+    expect(ctl.json().control.type).toBe("preferLabels");
+    expect(ctl.json().control.args.labels).toEqual(["headshot", "clutch"]);
+
+    // unauthenticated control -> 401
+    const anon = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/control`,
+      payload: { type: "lock", args: { trackId: "a" } },
+    });
+    expect(anon.statusCode).toBe(401);
+    await app.close();
+  });
+
   it("rejects a user's job when the free allowance is exhausted (402)", async () => {
     const { app, db } = await buildTestApp({ FREE_HIGHLIGHTS: "2" });
     const token = await register(app, "c@test.dev", "password123");

@@ -69,6 +69,33 @@ describe("analyzeJob", () => {
     expect(outcome.highlights[0].clipUri).toBe("/clips/c2.mp4");
   });
 
+  it("fires onEvent for every observation, candidate, and highlight (live-console feed)", async () => {
+    let call = 0;
+    const { client } = fakeClient({
+      analyze: async () => {
+        call++;
+        if (call === 2) {
+          return { observation: { tracks: [{ trackId: "a", slot: 0, bbox: [0,0,0.2,0.2], kind: "player", lostFrames: 0 }], seq: 1, timestamp: 1 }, candidate: { eventType: "KILL", timestamp: 1 } };
+        }
+        return { observation: { tracks: [], seq: call - 1, timestamp: call - 1 } };
+      },
+    });
+    const events: any[] = [];
+    await analyzeJob(
+      client,
+      frames(3),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
+      (ev) => events.push(ev)
+    );
+    const types = events.map((e) => e.type);
+    expect(types).toEqual(["observation", "observation", "candidate", "highlight", "observation"]);
+    const cand = events.find((e) => e.type === "candidate");
+    expect(cand.candidate).toEqual({ eventType: "KILL", timestamp: 1 });
+    const hl = events.find((e) => e.type === "highlight");
+    expect(hl.highlight.score).toBe(80);
+  });
+
   it("does NOT cut when decide returns isHighlight=false", async () => {
     const { client } = fakeClient({
       analyze: async () => ({ observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "MOVE", timestamp: 0 } }),

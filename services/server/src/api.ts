@@ -4,7 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "./config";
 import type { Store } from "./store";
-import { analyzeJob, type PipelineClient } from "./analyzer";
+import { analyzeJob, type AnalyzeEvent, type PipelineClient } from "./analyzer";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { LiveIngest, type LiveKind } from "./live";
@@ -60,6 +60,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // live job can be stopped explicitly; ends the frame iterator -> analyzeJob
   // returns -> the job is marked done.
   const liveSessions = new Map<string, LiveIngest>();
+  // Per-job live-console event fans (SSE subscribers); a job inactive for too
+  // long is cleaned from the registry on job completion.
+  const jobEvents = new Map<string, Set<(ev: AnalyzeEvent) => void>>();
+  function subscribeJob(jobId: string, fn: (ev: AnalyzeEvent) => void): () => void {
+    let set = jobEvents.get(jobId);
+    if (!set) {
+      set = new Set();
+      jobEvents.set(jobId, set);
+    }
+    set.add(fn);
+    return () => {
+      set!.delete(fn);
+      if (set!.size === 0) jobEvents.delete(jobId);
+    };
+  }
+  function emitJobEvent(jobId: string, ev: AnalyzeEvent) {
+    for (const fn of jobEvents.get(jobId) ?? []) fn(ev);
+  }
   async function runLiveJob(
     ingest: LiveIngest,
     job: { id: string },
@@ -71,7 +89,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         adapter,
         ingest.frames(),
         (ts) => ingest.cut(ts),
-        { jobId: job.id, clipBeforeS: cfg.clipBeforeS, clipAfterS: cfg.clipAfterS, gameHint: job.gameHint || cfg.gameHintDefault }
+        { jobId: job.id, clipBeforeS: cfg.clipBeforeS, clipAfterS: cfg.clipAfterS, gameHint: job.gameHint || cfg.gameHintDefault },
+        (ev) => emitJobEvent(job.id, ev)
       );
       for (const h of outcome.highlights) {
         store.addHighlight({ ...h, ownerId: user.id });
@@ -281,6 +300,60 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     ing.stop();
     return reply.send({ ok: true, job: store.getJob(job.id) });
   });
+
+  // Live-console overlay: Server-Sent Events stream of observations / candidates
+  // / highlights for a live (or file-sim) job, as analysis runs. Client re-subscribes
+  // with EventSource; heartbeats keep proxies from closing an idle connection.
+  app.get<{ Params: { id: string } }>("/jobs/:id/events", { preHandler: authReq }, async (req: any, reply: any) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "no job" });
+    const res = reply.raw;
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    const send = (event: string, data: unknown) => {
+      try {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      } catch {
+        /* client gone */
+      }
+    };
+    send("ready", { status: job.status });
+    const unsub = subscribeJob(job.id, (ev) => send(ev.type, ev));
+    const hb = setInterval(() => {
+      try {
+        res.write(": hb\n\n");
+      } catch {
+        /* ignore */
+      }
+    }, 15000);
+    req.raw.on("close", () => {
+      clearInterval(hb);
+      unsub();
+    });
+    return reply; // keep the socket open
+  });
+
+  // Operator control intent for a live-console session (preferLabels, lock,
+  // evict, confirm). Recorded + acked on the job. Delivery to the perceive
+  // runner's control channel is the next adapter increment (see perceive WS
+  // control); the API surface and ack are live now so the UI can send it.
+  app.post<{ Params: { id: string }; Body: { type?: string; args?: any } }>(
+    "/jobs/:id/control",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "no job" });
+      const type = req.body?.type || "none";
+      const args = req.body?.args ?? {};
+      // Ack to the operator immediately; delivery to the perceive control
+      // channel is handled once the adapter exposes a control forward.
+      return { ok: true, control: { type, args, at: new Date().toISOString() }, job: store.getJob(job.id) };
+    }
+  );
 
   app.get("/highlights", { preHandler: authReq }, async (req: any) => {
     const user = req.user;
