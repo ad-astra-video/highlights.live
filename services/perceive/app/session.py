@@ -16,6 +16,7 @@ from typing import Deque, List, Optional
 import numpy as np
 
 from .tracker import IoUTracker, MAX_TRACKS
+from .sam_tracker import make_tracker
 
 RECENT_FRAMES = 30  # ~30 sampled frames kept for clip/confirm
 
@@ -24,7 +25,7 @@ RECENT_FRAMES = 30  # ~30 sampled frames kept for clip/confirm
 class SessionState:
     session_id: str
     stream_id: str = ""
-    tracker: IoUTracker = field(default_factory=IoUTracker)
+    tracker: IoUTracker = field(default_factory=make_tracker)
     prev_gray: Optional[np.ndarray] = None
     seq: int = 0
     health_ts: float = field(default_factory=time.time)

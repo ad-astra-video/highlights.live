@@ -10,6 +10,7 @@ services:
       - PERCEIVE_DEVICE=cpu
       - PERCEIVE_MIN_FPS=0.2
       - PERCEIVE_CAPACITY=1
+      - FLORENCE_MODEL=microsoft/Florence-2-base   # 230M small model (decided; 770M large is a later tier)
 
   decide:
     environment:
