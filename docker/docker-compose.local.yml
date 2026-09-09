@@ -1,0 +1,22 @@
+# Local CPU bring-up overrides — no GPU. perceive runs baked-in Florence-2 on
+# CPU (gate lowered below 1fps since CPU can't sustain the target), decide uses
+# the host's Ollama gemma4:12b (OpenAI /v1) as its Gemma backend.
+#
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.local.yml up -d --build
+services:
+  perceive:
+    environment:
+      - PERCEIVE_MODE=florence
+      - PERCEIVE_DEVICE=cpu
+      - PERCEIVE_MIN_FPS=0.2
+      - PERCEIVE_CAPACITY=1
+
+  decide:
+    environment:
+      - DECIDE_MODE=gemma
+      - GEMMA_URL=http://host.docker.internal:11434
+      - GEMMA_MODEL=gemma4:12b
+
+  server:
+    environment:
+      - FREE_HIGHLIGHTS=${FREE_HIGHLIGHTS:-5}
