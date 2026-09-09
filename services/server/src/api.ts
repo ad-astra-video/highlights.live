@@ -300,6 +300,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
   );
 
+  // Public feed — accepted clips only, no auth (public beta finish line).
+  app.get("/feed", async () => ({ highlights: store.acceptedHighlights() }));
+
   app.get("/clips/*", async (req: any, reply) => {
     const fileParts = (req.params as any)["*"];
     const f = path.join(cfg.dataDir, "clips", fileParts);

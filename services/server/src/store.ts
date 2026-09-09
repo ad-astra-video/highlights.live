@@ -63,6 +63,12 @@ export class Store {
   allHighlights(): HighlightRecord[] {
     return [...this.highlights.values()];
   }
+
+  acceptedHighlights(): HighlightRecord[] {
+    return [...this.highlights.values()]
+      .filter((h) => h.status === "accepted")
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }
 }
 
 export function stableId(seed: string): string {
