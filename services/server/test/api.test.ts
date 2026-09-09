@@ -83,6 +83,35 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     await app.close();
   });
 
+  it("public /feed returns only accepted highlights, newest first, no auth", async () => {
+    const { app, store } = await buildTestApp();
+    const mkHl = (id: string, status: string, creator: string) =>
+      store.addHighlight({
+        id,
+        ownerId: "u1",
+        jobId: "j1",
+        clipUri: `/clips/${id}.mp4`,
+        start: 1,
+        end: 5,
+        eventType: "KILL",
+        score: 90,
+        reason: creator,
+        status: status as any,
+        createdAt: creator,
+      });
+    mkHl("hl-new", "pending", "2026-09-09T00:00:03Z");
+    mkHl("hl-old", "accepted", "2026-09-09T00:00:01Z");
+    mkHl("hl-pass", "accepted", "2026-09-09T00:00:02Z");
+    mkHl("hl-rej", "rejected", "2026-09-09T00:00:04Z");
+
+    // no auth header — public
+    const res = await app.inject({ method: "GET", url: "/feed" });
+    expect(res.statusCode).toBe(200);
+    const hl = res.json().highlights;
+    expect(hl.map((h: any) => h.id)).toEqual(["hl-pass", "hl-old"]); // accepted only
+    await app.close();
+  });
+
   it("rejects a user's job when the free allowance is exhausted (402)", async () => {
     const { app, db } = await buildTestApp({ FREE_HIGHLIGHTS: "2" });
     const token = await register(app, "c@test.dev", "password123");

@@ -78,6 +78,7 @@ export interface TestApp {
   db: SqlDb;
   auth: AuthService;
   billing: BillingService;
+  store: Store;
   stripeCalls: any[];
 }
 
@@ -92,7 +93,7 @@ export async function buildTestApp(over: Record<string, string> = {}): Promise<T
   const adapter = fakePipeline();
   const app = buildApp({ cfg, store, adapter, db, auth, billing });
   await app.ready();
-  return { app, cfg, db, auth, billing, stripeCalls };
+  return { app, cfg, db, auth, billing, store, stripeCalls };
 }
 
 export function fakePipeline(): any {

@@ -1,12 +1,24 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Zap, Clapperboard, TrendingUp, CreditCard } from "lucide-react";
+import { Zap, Clapperboard, TrendingUp, CreditCard, Flame } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import { api, type Highlight } from "../lib/api";
 
 export function Landing() {
   const { token } = useAuth();
+  const [feed, setFeed] = useState<Highlight[]>([]);
+  const [feedLoaded, setFeedLoaded] = useState(false);
+
+  useEffect(() => {
+    api<{ highlights: Highlight[] }>("/feed", { auth: false })
+      .then((r) => setFeed(r.highlights))
+      .catch(() => setFeed([]))
+      .finally(() => setFeedLoaded(true));
+  }, []);
+
   return (
-    <div className="grid min-h-full place-items-center px-6">
-      <div className="max-w-3xl text-center">
+    <div className="mx-auto max-w-5xl px-6 py-12">
+      <div className="text-center">
         <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-neon/50 px-4 py-1.5 text-sm text-neon">
           <Zap className="h-4 w-4" /> AI highlight extraction for sports &amp; gaming
         </div>
@@ -36,6 +48,32 @@ export function Landing() {
             </Link>
           )}
         </div>
+      </div>
+
+      <h2 className="mt-14 flex items-center gap-2 text-2xl font-black">
+        <Flame className="h-6 w-6 text-pink" /> Latest clips
+      </h2>
+      <p className="mb-5 text-sm text-mut">Operator-accepted highlights — nothing below the bar.</p>
+      {feedLoaded && feed.length === 0 && (
+        <div className="rounded-lg border border-mut/30 px-4 py-6 text-center text-mut">
+          No clips published yet. Run a detection in the console and accept a highlight to see it here.
+        </div>
+      )}
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {feed.map((h) => (
+          <div key={h.id} className="card card-hover overflow-hidden">
+            <video src={h.clipUri} controls playsInline className="aspect-video w-full bg-black" />
+            <div className="p-4">
+              <div className="flex items-center justify-between">
+                <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">
+                  {h.eventType || "EVENT"}
+                </span>
+                <span className="text-xs text-mut">T+{Math.round(h.start)}s → T+{Math.round(h.end)}s</span>
+              </div>
+              <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
