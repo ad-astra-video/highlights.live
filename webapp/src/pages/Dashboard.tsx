@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X } from "lucide-react";
 import { api, type Highlight } from "../lib/api";
+import { LiveConsole } from "../components/LiveConsole";
 
 const SOURCES = [
   { id: "file", label: "Upload / file", icon: Upload },
@@ -179,7 +180,7 @@ export function Dashboard() {
         <label className="mb-2 mt-5 block text-xs uppercase tracking-wide text-mut">What to look for</label>
         <input className="input-neon" value={lookFor} onChange={(e) => setLookFor(e.target.value)} />
 
-        {liveJob ? (
+        {liveJob && (
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <div className="text-sm">
               Live ingesting — status <span className="font-mono uppercase text-yellow">{liveStatus || "…"}</span>
@@ -188,7 +189,9 @@ export function Dashboard() {
               <Square className="mr-2 inline h-4 w-4" /> Stop detection
             </button>
           </div>
-        ) : (
+        )}
+        {liveJob && liveStatus !== "done" && liveStatus !== "failed" && <LiveConsole jobId={liveJob} />}
+        {!liveJob && (
           <button className="btn-neon mt-6" onClick={run} disabled={busy}>
             {busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <Zap className="mr-2 inline h-4 w-4" />}
             {busy ? "Starting…" : isLive ? "Start live detection" : "Run detection"}
