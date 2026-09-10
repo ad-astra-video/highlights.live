@@ -32,6 +32,10 @@ services:
       - ${HF_CACHE_DIR:-/home/brad/.cache/huggingface}:/models/hf-cache
       # VOD clips the SAM backend tracks across frames (PERCEIVE_SAM_CLIP).
       - ${CLIPS_DIR:-./clips}:/clips:ro
+      # Shared with the server: perceive sees the server's dataDir at /data so
+      # the per-JOB recorded stream (cfg.perceiveClipRoot=/data) is readable and
+      # the persistent session SAM-tracker can open THAT job's clip.
+      - ${DATA_DIR:-./data}:/data:ro
     deploy:
       resources:
         reservations:
@@ -39,3 +43,9 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # Server: point it at the shared dataDir mount so it hands perceive the job's
+  # recorded stream as an in-container path (perceive mounts ./data at /data).
+  server:
+    environment:
+      - PERCEIVE_CLIP_ROOT=${PERCEIVE_CLIP_ROOT:-/data}

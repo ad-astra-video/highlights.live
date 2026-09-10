@@ -9,6 +9,11 @@ export interface ServerConfig {
   signerUrl?: string;
   /** Where VOD sources + clips live. */
   dataDir: string;
+  /** In-container path prefix at which the perceive runner sees this server's
+   * dataDir (shared volume). Used to hand perceive the per-JOB recorded stream
+   * so its persistent session SAM-tracker opens THAT clip (tracking across the
+   * whole stream), rather than a server-side path perceive can't read. */
+  perceiveClipRoot: string;
   ffmpegPath: string;
   gameHintDefault: string;
   clipBeforeS: number;
@@ -47,6 +52,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     decideUrl: env.DECIDE_URL,
     signerUrl: env.SIGNER_URL,
     dataDir: env.DATA_DIR ?? "data",
+    perceiveClipRoot: env.PERCEIVE_CLIP_ROOT ?? "/data",
     ffmpegPath: env.FFMPEG_PATH ?? "ffmpeg",
     gameHintDefault: env.GAME_HINT ?? "unspecified",
     clipBeforeS: Number(env.CLIP_BEFORE_S ?? 4),

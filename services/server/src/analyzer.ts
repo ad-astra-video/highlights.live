@@ -21,7 +21,7 @@ export interface DecisionResult {
 }
 export interface PipelineClient {
   reservePerceive(): Promise<ReserveResult>;
-  analyze(sessionId: string, frame: { seq: number; timestamp: number; imageB64: string }): Promise<ObservationResult>;
+  analyze(sessionId: string, frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string }): Promise<ObservationResult>;
   /**
    * Decide whether a candidate is a highlight. `imageB64` is the candidate
    * frame so the Gemma 12B QAT decide runner sees the actual moment (vision),

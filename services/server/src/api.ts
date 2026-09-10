@@ -69,6 +69,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));
   }
+  // The same recording as the perceive runner sees it (shared volume): the
+  // perceive container mounts this server's dataDir at cfg.perceiveClipRoot, so
+  // hand perceive the in-container path and it SAM-tracks THAT stream in the
+  // persistent session (not a server-side path it can't read).
+  function browserClipInPerceive(jobId: string): string {
+    const ext = browserJobs.get(jobId)?.recordingExt || ".webm";
+    return `${cfg.perceiveClipRoot}/live/${jobId}/capture${ext}`;
+  }
   // Per-job live-console event fans (SSE subscribers); a job inactive for too
   // long is cleaned from the registry on job completion.
   const jobEvents = new Map<string, Set<(ev: AnalyzeEvent) => void>>();
@@ -387,7 +395,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           const r = await adapter.reservePerceive();
           bj.sessionId = r.sessionId;
         }
-        const res = await adapter.analyze(bj.sessionId, { seq, timestamp, imageB64: image });
+        // Hand perceive the full recorded stream (shared-volume in-container path)
+        // so the persistent session's SAM tracker tracks THIS job's whole stream.
+        const res = await adapter.analyze(bj.sessionId, {
+          seq,
+          timestamp,
+          imageB64: image,
+          clipPath: browserClipInPerceive(req.params.id),
+        });
         bj.evidence.step(res.observation);
         emitJobEvent(req.params.id, { seq, timestamp, type: "observation", observation: res.observation });
         let highlight: any = null;

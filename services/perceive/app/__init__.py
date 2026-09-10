@@ -25,6 +25,8 @@ class AnalyzeRequest(BaseModel):
     timestamp: float = 0.0
     image: str = ""  # base64 JPEG
     stream_id: str = ""
+    # Per-JOB full recorded stream this session should track against (SAM).
+    clip_path: str = ""
 
 
 class SessionCloseResponse(BaseModel):
@@ -191,7 +193,7 @@ def create_app() -> FastAPI:
         sid = _read_session_id(livepeer_session_id, x_session_id)
         if not sid:
             raise HTTPException(status_code=400, detail="missing session id (Livepeer-Session-Id or X-Session-Id)")
-        state = registry.get_or_create(sid, req.stream_id)
+        state = registry.get_or_create(sid, req.stream_id, req.clip_path)
         state.stream_id = req.stream_id or state.stream_id
 
         # Keep the latest raw frame so control `analyze-still` and any future

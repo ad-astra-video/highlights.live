@@ -16,7 +16,7 @@ from typing import Deque, List, Optional
 import numpy as np
 
 from .tracker import IoUTracker, MAX_TRACKS
-from .sam_tracker import make_tracker
+from .sam_tracker import HybridTracker, make_tracker
 
 RECENT_FRAMES = 30  # ~30 sampled frames kept for clip/confirm
 
@@ -26,6 +26,10 @@ class SessionState:
     session_id: str
     stream_id: str = ""
     tracker: IoUTracker = field(default_factory=make_tracker)
+    # Full recorded stream (per-JOB) this session tracks against. When SAM is
+    # enabled this binds a Sam3Backend to the session's own clip (not a global
+    # env), so the persistent perceive session tracks across the whole stream.
+    clip_path: str = ""
     prev_gray: Optional[np.ndarray] = None
     seq: int = 0
     health_ts: float = field(default_factory=time.time)
@@ -50,15 +54,21 @@ class SessionRegistry:
         self._sessions: dict[str, SessionState] = {}
         self.max_sessions = max_sessions
 
-    def get_or_create(self, session_id: str, stream_id: str = "") -> SessionState:
+    def get_or_create(self, session_id: str, stream_id: str = "", clip_path: str = "") -> SessionState:
         s = self._sessions.get(session_id)
         if s is None:
             if len(self._sessions) >= self.max_sessions:
                 # evict nothing automatically; capacity handled by orchestrator.
                 # But avoid unbounded growth: drop a single expired session.
                 self._evict_expired()
-            s = SessionState(session_id=session_id, stream_id=stream_id)
+            s = SessionState(session_id=session_id, stream_id=stream_id, clip_path=clip_path)
+            s.tracker = make_tracker(clip_path or None)  # bind SAM to this job's clip
             self._sessions[session_id] = s
+        elif clip_path and clip_path != s.clip_path:
+            # A (new) clip was declared for an existing session -> (re)bind SAM
+            # so the persistent session tracks THIS stream, not a stale/global one.
+            s.clip_path = clip_path
+            s.tracker = make_tracker(clip_path or None)
         s.health_ts = time.time()
         return s
 
