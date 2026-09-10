@@ -1,21 +1,19 @@
-"""In-process trickle broker + FastAPI channel server (plan §3.10 dev stand-in).
+"""In-process trickle broker + FastAPI channel server (plan §3.10 dev stand-in),
+implementing the SAME contract as the go-livepeer live-runner orchestrator the
+rail is verified against on .6.
 
-go-livepeer's orchestrator is the real trickle broker in staging/prod. For
-offline development, round-trip integration tests, and CI, this module stands
-in for it: it implements the SAME channel contract as app/trickle.py documents
-(open -> subscribe -> publish -> close) over an in-process ASGI app, so the
-perceive runner's trickle rail is exercised against a real HTTP broker without
-a running orchestrator.
+Endpoints (mirror go-livepeer live-runner callbacks + trickle protocol):
 
-The hub is deliberately broker-shaped: channels are named per session, a
-publisher writes (seq, payload) and a subscriber long-polls the live edge for
-the next seq greater than the one it already consumed. The FastAPI app exposes
-the documented endpoints:
+    POST   /runner/{route}/session/{sid}/channels       body {"channels":[{name,mime_type},...]}
+                                                          -> {"channels":[{name,url,mime_type},...]}  (descriptors, idempotent)
+    DELETE /runner/{route}/session/{sid}/channels       body {"channels":[name,...]} -> {"channels":[name,...]}
+    POST   {channel_url}/{seq}                          publish (body = payload bytes)
+    GET    {channel_url}/-1                             subscribe live edge -> Lp-Trickle-Seq header; 404 if none
+    GET    {channel_url}/{seq}                          subscribe specific segment (long-poll for next)
 
-    POST {control}/channels                     -> {video_in, events_out, control}
-    POST {control}/channels/close               -> {closed: true}
-    POST {channel}/{seq}                        -> publish   (200 {ok: seq})
-    GET  {channel}/-1  [X-Livepeer-Last-Seq]    -> subscribe (200 + X-Livepeer-Seq; 204 when nothing new)
+The publisher writes (seq, payload, ts); a subscriber long-polls for the next
+seq greater than the one it already consumed. Runs over httpx ASGITransport in
+tests (real HTTP semantics, no sockets) — the offchain dev stand-in per §3.10.
 """
 from __future__ import annotations
 
@@ -25,13 +23,7 @@ from typing import Optional
 
 from fastapi import APIRouter, FastAPI, Header, Request, Response
 
-from .trickle import (
-    HDR_LAST_SEQ,
-    HDR_SESSION_ID,
-    HDR_SEQ,
-    HDR_TIMESTAMP,
-    SUB_LIVE_EDGE,
-)
+from .trickle import HDR_SEQ, HDR_TIMESTAMP, SUB_LIVE_EDGE
 
 SUBSCRIBE_POLL_S = 0.03  # hub polls for new data; real broker blocks on the socket
 
@@ -43,64 +35,54 @@ class Channel:
         self._latest_seq = 0
         self._last_ts = 0.0
 
-    @property
-    def latest_seq(self) -> int:
-        return self._latest_seq
-
-    @property
-    def latest(self) -> Optional[bytes]:
-        return self._latest
-
     def publish(self, seq: int, payload: bytes, ts: float) -> None:
         self._latest = payload
         self._latest_seq = seq
         self._last_ts = ts
 
-    async def subscribe(self, last_seq: int, timeout_s: float = 5.0) -> tuple[Optional[bytes], int, float]:
-        """Return (payload, seq, ts) when a payload newer than last_seq lands,
-        else (None, last_seq, 0.0) after the timeout."""
+    async def subscribe_at(self, seq_target: int, timeout_s: float = 5.0) -> tuple[Optional[bytes], int, float]:
+        """-1 = live edge (latest if any, else none). Positive seq = wait until
+        a publish with seq >= seq_target lands (the rail follows seq+1)."""
+        if seq_target == -1:
+            if self._latest is None or self._latest_seq == 0:
+                return None, 0, 0.0
+            return self._latest, self._latest_seq, self._last_ts
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if self._latest_seq > last_seq:
+            if self._latest_seq >= seq_target:
                 return self._latest, self._latest_seq, self._last_ts
             await asyncio.sleep(SUBSCRIBE_POLL_S)
-        return None, last_seq, 0.0
+        return None, seq_target, 0.0
 
 
 class TrickleHub:
     def __init__(self, max_channels: int = 64) -> None:
         self._channels: dict[str, Channel] = {}
         self.max_channels = max_channels
-        self.sessions: dict[str, dict] = {}  # session_id -> opened channel names
+        self.sessions: dict[str, dict] = {}  # route/sid -> {name: url}
 
     def channel(self, name: str) -> Channel:
         c = self._channels.get(name)
         if c is None:
             if len(self._channels) >= self.max_channels:
-                # drop the oldest channel to bound growth
-                oldest = next(iter(self._channels))
-                self._channels.pop(oldest)
+                self._channels.pop(next(iter(self._channels)))
             c = Channel(name)
             self._channels[name] = c
         return c
 
-    def endpoint(self, session_id: str, name: str) -> str:
-        return f"/hub/{session_id}/{name}"
+    def endpoint(self, sid: str, name: str) -> str:
+        return f"/hub/{sid}/{name}"
 
-    def open_session(self, session_id: str) -> dict:
-        names = [f"{session_id}/video-in", f"{session_id}/events-out", f"{session_id}/control"]
-        self.sessions[session_id] = names
-        return {
-            "video_in": self.endpoint(session_id, "video-in"),
-            "events_out": self.endpoint(session_id, "events-out"),
-            "control": self.endpoint(session_id, "control"),
-        }
+    def open_session(self, sid: str, names: list[str]) -> dict:
+        urls = {n: self.endpoint(sid, n) for n in names}
+        self.sessions[sid] = urls
+        return {"channels": [{"name": n, "url": u, "mime_type": "application/octet-stream"} for n, u in urls.items()]}
 
-    def close_session(self, session_id: str) -> bool:
-        names = self.sessions.pop(session_id, [])
-        for n in names:
-            self._channels.pop(f"{session_id}/{n.split('/')[-1]}", None)
-        return bool(names)
+    def close_session(self, route: str, sid: str) -> bool:
+        urls = self.sessions.pop(sid, {})
+        for u in urls.values():
+            self._channels.pop(u.rstrip("/").split("/")[-1], None)
+        return bool(urls)
 
 
 def make_hub_app(secret_token: str = "") -> FastAPI:
@@ -110,39 +92,39 @@ def make_hub_app(secret_token: str = "") -> FastAPI:
     def _authed(request: Request) -> bool:
         return not secret_token or request.headers.get("Livepeer-Session-Token") == secret_token
 
-    @router.post("/channels")
-    async def channels(request: Request):
+    @router.post("/runner/{route}/session/{sid}/channels")
+    async def channels_create(route: str, sid: str, request: Request):
         if not _authed(request):
             return Response(status_code=401)
-        sid = request.headers.get(HDR_SESSION_ID) or "local-dev"
-        return hub.open_session(sid)
+        body = await request.json()
+        names = [c.get("name") for c in body.get("channels", []) if c.get("name")]
+        return hub.open_session(sid, names)
 
-    @router.post("/channels/close")
-    async def channels_close(request: Request):
+    @router.delete("/runner/{route}/session/{sid}/channels")
+    async def channels_delete(route: str, sid: str, request: Request):
         if not _authed(request):
             return Response(status_code=401)
-        sid = request.headers.get(HDR_SESSION_ID) or "local-dev"
-        return {"closed": hub.close_session(sid)}
+        body = await request.json()
+        names = body.get("channels", [])
+        urls = hub.sessions.pop(sid, {})
+        for n in names:
+            hub._channels.pop(urls.get(n, "").rstrip("/").split("/")[-1], None) if n in urls else None
+        return {"channels": names}
 
-    @router.post("/hub/{session_id}/{name}/{seq}")
-    async def publish(session_id: str, name: str, seq: int, request: Request):
+    @router.post("/hub/{sid}/{name}/{seq}")
+    async def publish(sid: str, name: str, seq: int, request: Request):
         body = await request.body()
         ts = request.headers.get(HDR_TIMESTAMP)
-        hub.channel(f"{session_id}/{name}").publish(seq, body, float(ts) if ts else 0.0)
+        hub.channel(f"{sid}/{name}").publish(seq, body, float(ts) if ts else 0.0)
         return {"ok": seq}
 
-    @router.get("/hub/{session_id}/{name}/-1")
-    async def subscribe(
-        session_id: str,
-        name: str,
-        x_livepeer_last_seq: Optional[int] = Header(default=None),
-    ):
-        last = x_livepeer_last_seq if x_livepeer_last_seq is not None else 0
-        payload, seq, ts = await hub.channel(f"{session_id}/{name}").subscribe(last)
+    @router.get("/hub/{sid}/{name}/{seq}")
+    async def subscribe_seq(sid: str, name: str, seq: int):
+        payload, seq2, ts = await hub.channel(f"{sid}/{name}").subscribe_at(seq)
         if payload is None:
-            return Response(status_code=204)
+            return Response(status_code=404)
         resp = Response(content=payload, media_type="application/octet-stream")
-        resp.headers[HDR_SEQ] = str(seq)
+        resp.headers[HDR_SEQ] = str(seq2)
         if ts:
             resp.headers[HDR_TIMESTAMP] = f"{ts:.3f}"
         return resp
