@@ -53,6 +53,8 @@ class SessionRegistry:
     def __init__(self, max_sessions: int = 1):
         self._sessions: dict[str, SessionState] = {}
         self.max_sessions = max_sessions
+        # Optional sync hook fired on drop (e.g. tear down a trickle rail).
+        self.on_drop = None
 
     def get_or_create(self, session_id: str, stream_id: str = "", clip_path: str = "") -> SessionState:
         s = self._sessions.get(session_id)
@@ -86,6 +88,11 @@ class SessionRegistry:
                     q.put_nowait(None)  # close subscriber connection
                 except Exception:
                     pass
+        if s is not None and self.on_drop is not None:
+            try:
+                self.on_drop(session_id)
+            except Exception:
+                pass
         return s is not None
 
     def _evict_expired(self) -> None:

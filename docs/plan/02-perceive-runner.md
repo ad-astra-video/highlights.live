@@ -35,6 +35,6 @@ mode `persistent`, capacity 1, health 200 when Florence loaded (NOT when Gemma i
 - Session map keyed by id: DONE (session.py).
 - Florence-2 real <OD> with device select (CPU/DirectML/CUDA/OpenVINO), fps gate, runtime sampling: DONE (florence.py).
 - /app/analyze → same session.step, SSE /events, /session/stats, /session/close: DONE (app/__init__.py).
-- SAM3 real multiplex: NOT DONE — tracker.py is an IoU-blob CPU stub (plan permits as HF-gate stand-in). SAM3 real = future GPU work.
-- WebSocket /app/ws + control message handlers (seed/evict/lock/confirm/configure): NOT DONE — ControlMessage schema exists (events pkg) but perceive has no WS endpoint and no control handler.
-- Trickle video-in/events-out/control: NOT DONE.
+- SAM3 real multiplex: DONE — app/sam3_backend.py (Sam3Backend, per-frame obj_id-keyed advance) behind HybridTracker (app/sam_tracker.py), box-seeded from Florence; degrades to Florence->IoU when triton/weights absent. Tests: test_sam3_backend.py, test_sam_tracker.py.
+- WebSocket /app/ws + control message handlers (seed/evict/lock/confirm/configure/ping/analyze-still): DONE — handle_control() in app/__init__.py shared by WS and trickle control; rejects WS that creates a new session.
+- Trickle video-in/events-out/control: DONE — app/trickle.py (TrickleRail/TrickleSession) opens the session's channels on first proxied request and feeds video-in frames through the SAME process_frame() as /analyze; publishes observations on events-out; round-trips control acks. app/hub.py is an in-process broker implementing the same channel contract (offline dev stand-in, §3.10). Verified by tests/test_trickle.py over httpx ASGITransport. Real go-livepeer broker wiring is a deploy/transport detail (swap the AsyncClient target).

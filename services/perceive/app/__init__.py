@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import threading
 from time import monotonic
 
 import numpy as np
@@ -18,6 +19,65 @@ from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
 from .florence import capability, get_detector, record_analyze
 from .sam_tracker import HybridTracker
+from .trickle import TrickleError, TrickleRail, TrickleSession
+
+# One live trickle session per perceive session (plan §0.1 session rule).
+_trickle: dict[str, TrickleSession] = {}
+# Serialize detector/SAM passes: the event-loop's HTTP /analyze and the trickle
+# subscriber's worker thread share one Florence detector / SAM backend.
+_gpu_lock = threading.Lock()
+
+
+def _trickle_enabled() -> bool:
+    return os.environ.get("PERCEIVE_TRICKLE", "1").lower() not in ("0", "false", "off")
+
+
+async def _trickle_on_frame(state, seq: int, image_b64: str, timestamp: float) -> dict:
+    """Feed a trickle video-in frame through the SAME session.step() used by
+    HTTP /analyze (plan §3.5 — one front door per frame). Runs off the event
+    loop and serialized on the shared detector so frame bursts don't block the
+    rail's control subscriber nor race the GPU."""
+
+    def _run() -> dict:
+        with _gpu_lock:
+            state.last_rgb = _decode_rgb(image_b64)
+            state.last_image_b64 = image_b64
+            obs, _cand = process_frame(state, seq, timestamp, image_b64)
+        return obs
+
+    return await asyncio.to_thread(_run)
+
+
+async def _ensure_trickle(state, control_url: str, token: str) -> TrickleSession | None:
+    """Open + start this session's trickle rail when it has a control URL and
+    trickle is enabled. Idempotent per session. On failure (e.g. no broker)
+    the session simply stays on its HTTP front door — never fatal."""
+    if not control_url or not _trickle_enabled():
+        return None
+    existing = _trickle.get(state.session_id)
+    if existing is not None:
+        return existing
+    rail = TrickleRail(
+        control_url=control_url, session_id=state.session_id, token=token or ""
+    )
+    sess = TrickleSession(
+        rail,
+        on_frame=lambda seq, b64, ts: _trickle_on_frame(state, seq, b64, ts),
+        on_control=lambda msg: handle_control(state, msg),
+    )
+    try:
+        await sess.start()
+    except TrickleError:
+        await rail.aclose()
+        return None
+    _trickle[state.session_id] = sess
+    return sess
+
+
+async def _stop_trickle(session_id: str) -> None:
+    sess = _trickle.pop(session_id, None)
+    if sess is not None:
+        await sess.close()
 
 
 class AnalyzeRequest(BaseModel):
@@ -189,12 +249,24 @@ def create_app() -> FastAPI:
         req: AnalyzeRequest,
         livepeer_session_id: str | None = Header(default=None),
         x_session_id: str | None = Header(default=None),
+        livepeer_session_control: str | None = Header(default=None),
+        x_session_control: str | None = Header(default=None),
+        livepeer_session_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
     ):
         sid = _read_session_id(livepeer_session_id, x_session_id)
         if not sid:
             raise HTTPException(status_code=400, detail="missing session id (Livepeer-Session-Id or X-Session-Id)")
         state = registry.get_or_create(sid, req.stream_id, req.clip_path)
         state.stream_id = req.stream_id or state.stream_id
+        # Live path: the worker reserved a session with a control URL, so this
+        # first proxied call opens this session's trickle channels and the rail
+        # starts consuming video-in frames (plan §3.2/§3.5).
+        await _ensure_trickle(
+            state,
+            livepeer_session_control or x_session_control or "",
+            livepeer_session_token or x_session_token or "",
+        )
 
         # Keep the latest raw frame so control `analyze-still` and any future
         # trickle video-in can re-run the exact same step() on it.
@@ -211,11 +283,20 @@ def create_app() -> FastAPI:
     async def events(
         livepeer_session_id: str | None = Header(default=None),
         x_session_id: str | None = Header(default=None),
+        livepeer_session_control: str | None = Header(default=None),
+        x_session_control: str | None = Header(default=None),
+        livepeer_session_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
     ):
         sid = _read_session_id(livepeer_session_id, x_session_id)
         if not sid:
             raise HTTPException(status_code=400, detail="missing session id")
         state = registry.get_or_create(sid)
+        await _ensure_trickle(
+            state,
+            livepeer_session_control or x_session_control or "",
+            livepeer_session_token or x_session_token or "",
+        )
         q: asyncio.Queue = asyncio.Queue()
         state.subscribers.append(q)
 
@@ -249,6 +330,13 @@ def create_app() -> FastAPI:
             await websocket.close(code=4001, reason="no such session (bind to a reserved perceive session)")
             return
         state = registry.get(sid)
+        # Live path: an operator console attaching first can still bootstrap the
+        # session's trickle rail if it passes the control URL.
+        await _ensure_trickle(
+            state,
+            websocket.query_params.get("control_url", ""),
+            websocket.query_params.get("token", ""),
+        )
         await websocket.accept()
         try:
             while True:
@@ -287,10 +375,21 @@ def create_app() -> FastAPI:
         sid = _read_session_id(livepeer_session_id, x_session_id)
         if sid:
             registry.drop(sid)
+            await _stop_trickle(sid)
         return {"closed": sid}
 
     app = FastAPI(title="highlights-perceive", version="0.1.0")
     app.state.registry = registry  # exposed for tests / admin tooling
+
+    def _cancel_trickle(session_id: str) -> None:
+        # Sync bridge: registry.drop() runs inside async handlers / eviction;
+        # schedule the async trickle teardown on the running loop.
+        try:
+            asyncio.get_running_loop().create_task(_stop_trickle(session_id))
+        except RuntimeError:
+            pass
+
+    registry.on_drop = _cancel_trickle
 
     # Canonical paths at root: go-livepeer strips the `/app` prefix when it
     # proxies `/apps/<runner>/session/<id>/app/<path>` -> forwards `/<path>`.
