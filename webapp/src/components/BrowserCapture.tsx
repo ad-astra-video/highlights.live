@@ -12,6 +12,7 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 const SAMPLE_FPS = 1; // perceived frames/sec (CPU Florence is slow; 1fps is the plan target)
+const MAX_RECONNECT = 6; // consecutive media-WS reconnect attempts before falling back to /ingest
 
 // Client-side capture: getDisplayMedia (screen / tab / window). The REAL pixels
 // never leave the browser as a big stream — we sample the preview to a small
@@ -29,6 +30,58 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   const ivRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const modeRef = useRef<"ingest" | "ws" | "pending">("pending");
+  // True while we're intentionally stopping (so reconnects never fire on user
+  // stop / unmount). Consecutive reconnect attempts, reset on a successful open.
+  const stoppingRef = useRef(false);
+  const rcRef = useRef(0);
+
+  // Reconnect the media-server WS transparently. On any unexpected close we
+  // re-ask the server for the current / freshly-rerouted wsUrl (the server
+  // reuses the live session from the DB, or re-provisions on a healthy node if
+  // the one serving us went down) and re-open. Seamless — sampling never stops.
+  function openMedia(jobId: string): Promise<void> {
+    return api<{ wsUrl?: string }>(`/jobs/${jobId}/media`, { method: "POST", body: {} })
+      .then((media) => {
+        if (!media?.wsUrl) {
+          modeRef.current = "ingest";
+          return;
+        }
+        modeRef.current = "ws";
+        const ws = new WebSocket(media.wsUrl);
+        wsRef.current = ws;
+        ws.onopen = () => {
+          rcRef.current = 0;
+        };
+        ws.onerror = () => {
+          try { ws.close(); } catch { /* noop */ }
+        };
+        ws.onclose = () => {
+          if (wsRef.current === ws) wsRef.current = null;
+          if (stoppingRef.current || modeRef.current !== "ws") return;
+          scheduleReconnect(jobId);
+        };
+        return new Promise<void>((resolve) => {
+          ws.addEventListener("open", () => resolve(), { once: true });
+          ws.addEventListener("error", () => resolve(), { once: true });
+        });
+      })
+      .catch(() => {
+        modeRef.current = "ingest";
+      });
+  }
+
+  function scheduleReconnect(jobId: string) {
+    if (stoppingRef.current) return;
+    if (rcRef.current >= MAX_RECONNECT) {
+      modeRef.current = "ingest";
+      return;
+    }
+    const delay = Math.min(800 * 2 ** rcRef.current, 5000);
+    rcRef.current += 1;
+    setTimeout(() => {
+      if (!stoppingRef.current) void openMedia(jobId);
+    }, delay);
+  }
 
   useEffect(() => {
     const onUnmount = () => {
@@ -53,24 +106,13 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       const job = await api<{ job: { id: string } }>("/jobs", { body: { source: "browser", gameHint } });
       jobIdRef.current = job.job.id;
 
-      // Media-server handshake (b): try to stream frames over the media-server
-      // WS (browser -> media server -> orchestrator video-in). If the media
-      // server isn't configured, fall back to the HTTP /ingest rail.
-      const media = await api<{ wsUrl?: string }>(`/jobs/${job.job.id}/media`, {
-        method: "POST",
-        body: {},
-      }).catch(() => null);
-      if (media?.wsUrl) {
-        modeRef.current = "ws";
-        const ws = new WebSocket(media.wsUrl);
-        wsRef.current = ws;
-        await new Promise<void>((resolve, reject) => {
-          ws.onopen = () => resolve();
-          ws.onerror = () => { modeRef.current = "ingest"; resolve(); };
-        });
-      } else {
-        modeRef.current = "ingest";
-      }
+      // Media-server handshake: stream frames over the media-server WS
+      // (browser -> media server -> orchestrator video-in), with transparent
+      // reconnect + reroute. If no media server is configured / reachable,
+      // openMedia falls back to the HTTP /ingest rail.
+      stoppingRef.current = false;
+      rcRef.current = 0;
+      await openMedia(job.job.id);
 
       const mime = ["video/mp4;codecs=avc1", "video/webm;codecs=vp9", "video/webm"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
       const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 3_000_000 } : undefined);
@@ -97,9 +139,12 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
         const image = cv.toDataURL("image/jpeg", 0.6).split(",")[1];
         const seq = seqRef.current++;
         const id = jobIdRef.current;
-        if (modeRef.current === "ws" && id && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          // Media path: stream the sampled frame over the media-server WS.
-          wsRef.current.send(JSON.stringify({ seq, timestamp: seq / SAMPLE_FPS, image }));
+        if (modeRef.current === "ws") {
+          // Media path: stream over the media-server WS. While reconnecting
+          // (WS not yet open) drop the frame rather than double-ingest.
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ seq, timestamp: seq / SAMPLE_FPS, image }));
+          }
         } else if (id) {
           // Fallback: HTTP /ingest rail.
           api(`/jobs/${id}/ingest`, {
@@ -121,10 +166,12 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   }
 
   async function stopInternal(andNotify: boolean) {
+    stoppingRef.current = true;
+    rcRef.current = 0;
     if (ivRef.current) clearInterval(ivRef.current);
     ivRef.current = null;
-    // Media path: closing the WS tears the stream down (media server stops
-    // paying + releases the perceive slot). The server /stop is idempotent.
+    // Media path: closing the WS (after a short reconnect grace on the media
+    // server) stops paying + releases the perceive slot; /stop is idempotent.
     try { wsRef.current?.close(); } catch { /* noop */ }
     wsRef.current = null;
     modeRef.current = "pending";

@@ -37,12 +37,23 @@ export interface MediaServerOptions {
   port?: number;
   /** Public origin (LB / Cloudflare front) used for the full WS ingest URL. */
   publicBaseUrl?: string;
+  /**
+   * How long (ms) a session stays open after its last browser disconnects,
+   * before the perceive slot is released. Lets a transient browser blip
+   * reconnect to the SAME session (seamless, no session churn). Default 8000.
+   * <=0 disables the grace (tear down immediately on WS close).
+   */
+  reconnectGraceMs?: number;
 }
+
+const DEFAULT_RECONNECT_GRACE_MS = 8000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class MediaServer {
   private active = new Map<string, ActiveStream>(); // keyed by sessionId
+  // Pending teardowns during the reconnect grace window (keyed by sessionId).
+  private graceTimers = new Map<string, NodeJS.Timeout>();
   private orch: MediaOrchestrator;
   constructor(private opts: MediaServerOptions, orch?: MediaOrchestrator) {
     this.orch =
@@ -99,13 +110,16 @@ export class MediaServer {
         return;
       }
       stream.sockets.add(connection);
+      this.clearGrace(req.params.sid); // a reconnect within the grace window cancels pending teardown
       connection.on("data", (buf: Buffer) => {
         void this.handleFrame(stream, connection, buf).catch((e) => console.error("[media] frame err", e));
       });
       const onClose = () => {
         stream.sockets.delete(connection);
-        // No more browsers on this session -> the stream ended.
-        if (stream.sockets.size === 0) void this.teardown(req.params.sid);
+        // No more browsers on this session -> arm the reconnect grace window:
+        // a transient browser blip can reconnect to the same sid and resume
+        // seamlessly; only after the grace elapses is the slot released.
+        if (stream.sockets.size === 0) this.armGrace(req.params.sid);
       };
       // The Duplex 'close' can lag; the underlying ws socket is the reliable
       // signal. teardown is idempotent, so either firing is fine.
@@ -178,8 +192,35 @@ export class MediaServer {
     }
   }
 
+  /** Start the reconnect grace countdown (replacing any pending one). */
+  private armGrace(sid: string) {
+    this.clearGrace(sid);
+    const ms = this.opts.reconnectGraceMs ?? DEFAULT_RECONNECT_GRACE_MS;
+    if (ms <= 0) {
+      void this.teardown(sid);
+      return;
+    }
+    this.graceTimers.set(
+      sid,
+      setTimeout(() => {
+        this.graceTimers.delete(sid);
+        void this.teardown(sid);
+      }, ms)
+    );
+  }
+
+  /** Cancel a pending reconnect-grace teardown (a browser reconnected). */
+  private clearGrace(sid: string) {
+    const t = this.graceTimers.get(sid);
+    if (t) {
+      clearTimeout(t);
+      this.graceTimers.delete(sid);
+    }
+  }
+
   /** Stop paying + release the perceive slot. Idempotent. */
   private async teardown(sid: string) {
+    this.clearGrace(sid);
     const stream = this.active.get(sid);
     if (!stream || stream.closed) return;
     stream.closed = true;

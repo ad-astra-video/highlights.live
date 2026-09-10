@@ -38,6 +38,25 @@ export interface Subscription {
   updatedAt: string;
 }
 
+/**
+ * A live media-server session tracked by the control plane. Persisted so that
+ * if a media node dies the server can detect the gap and re-route the browser
+ * to a freshly-provisioned session on a healthy node (seamless reconnect).
+ * `wsUrl` is the full LB-routable ingest URL the browser streams over;
+ * `mediaOrigin` is the base used to health-check that node when deciding
+ * whether to reuse vs re-provision.
+ */
+export interface MediaSession {
+  jobId: string;
+  sessionId: string;
+  streamId: string;
+  wsUrl: string;
+  mediaOrigin: string;
+  status: "active" | "closed";
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Async persistence contract shared by the SQLite (dev) and Postgres (prod) backends. */
 export interface Db {
   close(): Promise<void>;
@@ -50,6 +69,9 @@ export interface Db {
   countUsage(userId: string, eventType?: string): Promise<number>;
   recordUsage(userId: string, eventType?: string, extra?: string): Promise<void>;
   resetUsage(userId: string, eventType?: string): Promise<void>;
+  getMediaSession(jobId: string): Promise<MediaSession | undefined>;
+  setMediaSession(ms: MediaSession): Promise<void>;
+  clearMediaSession(jobId: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +148,27 @@ export class SqliteDb implements Db {
 
   async resetUsage(userId: string, eventType = "highlight"): Promise<void> {
     this.db.prepare("DELETE FROM usage_events WHERE user_id = ? AND event_type = ?").run(userId, eventType);
+  }
+
+  async getMediaSession(jobId: string): Promise<MediaSession | undefined> {
+    const r = this.db.prepare("SELECT * FROM media_sessions WHERE job_id = ?").get(jobId);
+    return r ? rowToMediaSession(r) : undefined;
+  }
+
+  async setMediaSession(ms: MediaSession): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO media_sessions (job_id,session_id,stream_id,ws_url,media_origin,status,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?)
+         ON CONFLICT(job_id) DO UPDATE SET session_id=excluded.session_id, stream_id=excluded.stream_id,
+           ws_url=excluded.ws_url, media_origin=excluded.media_origin, status=excluded.status,
+           created_at=excluded.created_at, updated_at=excluded.updated_at`
+      )
+      .run(ms.jobId, ms.sessionId, ms.streamId, ms.wsUrl, ms.mediaOrigin, ms.status, ms.createdAt, ms.updatedAt);
+  }
+
+  async clearMediaSession(jobId: string): Promise<void> {
+    this.db.prepare("DELETE FROM media_sessions WHERE job_id = ?").run(jobId);
   }
 }
 
@@ -213,6 +256,26 @@ export class PgDb implements Db {
   async resetUsage(userId: string, eventType = "highlight"): Promise<void> {
     await this.pool.query("DELETE FROM usage_events WHERE user_id = $1 AND event_type = $2", [userId, eventType]);
   }
+
+  async getMediaSession(jobId: string): Promise<MediaSession | undefined> {
+    const r = await this.pool.query("SELECT * FROM media_sessions WHERE job_id = $1", [jobId]);
+    return r.rows[0] ? rowToMediaSession(r.rows[0]) : undefined;
+  }
+
+  async setMediaSession(ms: MediaSession): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO media_sessions (job_id,session_id,stream_id,ws_url,media_origin,status,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT(job_id) DO UPDATE SET session_id=EXCLUDED.session_id, stream_id=EXCLUDED.stream_id,
+         ws_url=EXCLUDED.ws_url, media_origin=EXCLUDED.media_origin, status=EXCLUDED.status,
+         created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at`,
+      [ms.jobId, ms.sessionId, ms.streamId, ms.wsUrl, ms.mediaOrigin, ms.status, ms.createdAt, ms.updatedAt]
+    );
+  }
+
+  async clearMediaSession(jobId: string): Promise<void> {
+    await this.pool.query("DELETE FROM media_sessions WHERE job_id = $1", [jobId]);
+  }
 }
 
 const SCHEMA_SQLITE = `
@@ -240,6 +303,16 @@ const SCHEMA_SQLITE = `
     recorded_at TEXT NOT NULL,
     extra TEXT
   );
+  CREATE TABLE IF NOT EXISTS media_sessions (
+    job_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    stream_id TEXT NOT NULL,
+    ws_url TEXT NOT NULL,
+    media_origin TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `;
 
 const SCHEMA_PG = `
@@ -266,6 +339,16 @@ const SCHEMA_PG = `
     event_type TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     extra TEXT
+  );
+  CREATE TABLE IF NOT EXISTS media_sessions (
+    job_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    stream_id TEXT NOT NULL,
+    ws_url TEXT NOT NULL,
+    media_origin TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
   );
 `;
 
@@ -298,6 +381,19 @@ function rowToSub(r: any): Subscription {
     stripeSubscriptionId: r.stripe_subscription_id ?? null,
     stripeSubItemId: r.stripe_sub_item_id ?? null,
     currentPeriodEnd: r.current_period_end ?? null,
+    updatedAt: r.updated_at,
+  };
+}
+
+function rowToMediaSession(r: any): MediaSession {
+  return {
+    jobId: r.job_id,
+    sessionId: r.session_id,
+    streamId: r.stream_id,
+    wsUrl: r.ws_url,
+    mediaOrigin: r.media_origin,
+    status: r.status === "closed" ? "closed" : "active",
+    createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
 }

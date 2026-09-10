@@ -28,6 +28,10 @@ class FakeOrch {
   startedPayments: string[] = [];
   stoppedPayments: string[] = [];
 
+  constructor(public sid: string = "sess-fake") {
+    this.provisioned.sessionId = sid;
+  }
+
   async provision(): Promise<ProvisionedSession> {
     return this.provisioned;
   }
@@ -56,7 +60,7 @@ let app: FastifyInstance;
 let base: string;
 
 beforeAll(async () => {
-  const ms = new MediaServer({ orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888" }, fake as any);
+  const ms = new MediaServer({ orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", reconnectGraceMs: 80 }, fake as any);
   app = await ms.build();
   await app.listen({ port: 0, host: "127.0.0.1" });
   base = `http://127.0.0.1:${(app.server.address() as any).port}`;
@@ -107,11 +111,35 @@ describe("media server handshake (b)", () => {
     await new Promise((r) => setTimeout(r, 50));
   });
 
-  it("closes the session on WS close (teardown releases the perceived slot)", async () => {
+  it("closes the session after the reconnect grace window elapses (slot released)", async () => {
     const ws = await wsConnect(`${base.replace("http", "ws")}/stream/sess-fake`);
     ws.close();
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 400)); // > reconnectGraceMs (80)
     expect(fake.closed).toContain("sess-fake");
+  });
+
+  it("does NOT release the slot when the browser reconnects within the grace window", async () => {
+    const g = new FakeOrch("sess-grace");
+    const ms = new MediaServer(
+      { orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", reconnectGraceMs: 500 },
+      g as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-grace" } });
+    // first browser drops, reconnects within the 500ms grace...
+    const ws1 = await wsConnect(`${sBase.replace("http", "ws")}/stream/sess-grace`);
+    ws1.close();
+    await new Promise((r) => setTimeout(r, 150));
+    expect(g.closed).not.toContain("sess-grace"); // slot still held
+    const ws2 = await wsConnect(`${sBase.replace("http", "ws")}/stream/sess-grace`);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(g.closed).not.toContain("sess-grace"); // reconnect cancelled pending teardown
+    ws2.close();
+    await new Promise((r) => setTimeout(r, 900)); // > 500ms grace
+    expect(g.closed).toContain("sess-grace"); // now released
+    await srv.close();
   });
 
   it("pays the orchestrator while the stream is open and stops paying on teardown", async () => {
