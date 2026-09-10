@@ -19,7 +19,7 @@ describe("auth", () => {
 
     const ok = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "u@x.dev", password: "password123" } });
     expect(ok.statusCode).toBe(200);
-    expect(db.getUserByEmail("u@x.dev")!.role).toBe("user");
+    expect((await db.getUserByEmail("u@x.dev"))!.role).toBe("user");
     await app.close();
   });
 

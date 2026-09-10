@@ -10,7 +10,7 @@
 //
 // The server holds NO card/key beyond the Stripe secret; customers are created
 // on demand and billed through Stripe Checkout + the Customer portal.
-import type { SqlDb, Subscription, User } from "./db";
+import type { Db, Subscription, User } from "./db";
 import type { ServerConfig } from "./config";
 
 export interface Plan {
@@ -31,7 +31,7 @@ export class BillingService {
   /** injected stripe-like API (real `stripe` client in prod, stub in tests). */
   constructor(
     private cfg: ServerConfig,
-    private db: SqlDb,
+    private db: Db,
     private stripe: any
   ) {}
 
@@ -46,7 +46,7 @@ export class BillingService {
   async ensureCustomer(user: User): Promise<string> {
     if (user.stripeCustomerId) return user.stripeCustomerId;
     const c = await this.stripe.customers.create({ email: user.email, metadata: { userId: user.id } });
-    this.db.setStripeCustomer(user.id, c.id);
+    await this.db.setStripeCustomer(user.id, c.id);
     return c.id;
   }
 
@@ -92,10 +92,10 @@ export class BillingService {
    * Gate: may this user create a highlight now?
    * Throws a BillingRequiredError (-> HTTP 402 with upgrade intent) when not.
    */
-  canCreateHighlight(user: User, sub: Subscription): void {
+  async canCreateHighlight(user: User, sub: Subscription): Promise<void> {
     if (sub.tier === "pro" && sub.status === "active") return;
     // free (or past_due/canceled pro) -> count toward the free cap
-    const used = this.db.countUsage(user.id, "highlight");
+    const used = await this.db.countUsage(user.id, "highlight");
     if (used < this.cfg.freeHighlights) return;
     throw new BillingRequiredError("free highlight allowance used; subscribe to Pro or add funds");
   }
@@ -105,9 +105,9 @@ export class BillingService {
    * beyond the included quota, posts a Stripe usage record so PAYG is billed.
    */
   async onHighlightCreated(user: User, sub: Subscription): Promise<void> {
-    this.db.recordUsage(user.id, "highlight");
+    await this.db.recordUsage(user.id, "highlight");
     if (sub.tier === "pro" && sub.status === "active" && this.enabled) {
-      const used = this.db.countUsage(user.id, "highlight");
+      const used = await this.db.countUsage(user.id, "highlight");
       const included = PLANS.find((p) => p.id === "pro")?.includedHighlights ?? 0;
       if (used > included && sub.stripeSubItemId) {
         await this.postUsageRecord(sub.stripeSubItemId, used - included);
@@ -135,18 +135,18 @@ export class BillingService {
     switch (event.type) {
       case "checkout.session.completed": {
         const meta = event.data.object.metadata || {};
-        this.activateFromSubscription(meta.userId, event.data.object.subscription);
+        await this.activateFromSubscription(meta.userId, event.data.object.subscription);
         break;
       }
       case "customer.subscription.updated":
       case "customer.subscription.created": {
         const meta = event.data.object.metadata || {};
-        this.activateFromSubscription(meta.userId, event.data.object.id);
+        await this.activateFromSubscription(meta.userId, event.data.object.id);
         break;
       }
       case "customer.subscription.deleted": {
         const meta = event.data.object.metadata || {};
-        if (meta.userId) this.db.setSubscription(meta.userId, { tier: "free", status: "canceled" });
+        if (meta.userId) await this.db.setSubscription(meta.userId, { tier: "free", status: "canceled" });
         break;
       }
       default:
@@ -163,7 +163,7 @@ export class BillingService {
       | { id: string }
       | undefined;
     const status = sub.status === "active" || sub.status === "trialing" ? sub.status : "past_due";
-    this.db.setSubscription(userId, {
+    await this.db.setSubscription(userId, {
       tier: "pro",
       status,
       stripeSubscriptionId: stripeSubId,

@@ -1,6 +1,6 @@
 import type { ServerConfig } from "../src/config";
 import { loadConfig } from "../src/config";
-import { SqlDb } from "../src/db";
+import { SqliteDb, type Db } from "../src/db";
 import { AuthService } from "../src/auth";
 import { BillingService } from "../src/billing";
 import { Store } from "../src/store";
@@ -75,7 +75,7 @@ export function stripeStub(calls: any[] = []) {
 export interface TestApp {
   app: FastifyInstance;
   cfg: ServerConfig;
-  db: SqlDb;
+  db: Db;
   auth: AuthService;
   billing: BillingService;
   store: Store;
@@ -84,9 +84,9 @@ export interface TestApp {
 
 export async function buildTestApp(over: Record<string, string> = {}): Promise<TestApp> {
   const cfg = testCfg(over);
-  const db = new SqlDb(cfg.databasePath);
+  const db = new SqliteDb(cfg.databasePath);
   const auth = new AuthService(db, cfg);
-  auth.bootstrapAdmin();
+  await auth.bootstrapAdmin();
   const stripeCalls: any[] = [];
   const billing = new BillingService(cfg, db, stripeStub(stripeCalls));
   const store = new Store();
