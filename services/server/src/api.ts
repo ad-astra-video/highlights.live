@@ -81,8 +81,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     });
     if (r.status !== 200) throw new Error(`media provision failed: HTTP ${r.status} ${await r.text()}`);
     const body: any = await r.json();
+    // Prefer the media server's own full URL (LB-routable); fall back to
+    // deriving ws:// from MEDIA_SERVER_URL + the returned path.
     const base = cfg.mediaServerUrl.replace(/\/$/, "").replace(/^http/, "ws");
-    return { wsUrl: `${base}${body.wsPath}`, mediaSessionId: body.sessionId };
+    return { wsUrl: body.wsUrl ?? `${base}${body.wsPath}`, mediaSessionId: body.sessionId };
   }
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));

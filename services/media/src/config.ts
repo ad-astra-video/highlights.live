@@ -13,6 +13,15 @@ export interface MediaConfig {
   payerAddress?: string;
   /** Payment refresh interval in ms (default 10_000). */
   paymentIntervalMs?: number;
+  /**
+   * Public origin (scheme, host, optional base) the browser should ingest to —
+   * normally the load-balancer / Cloudflare front, e.g.
+   * `https://highlights-media.dpn.gg`. Used to return the FULL ws ingest URL
+   * from POST /sessions so clients can be routed by the LB rather than assuming
+   * a path on one node. When unset, no wsUrl is returned (clients fall back to
+   * deriving it from the control server's MEDIA_SERVER_URL + wsPath).
+   */
+  publicBaseUrl?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
@@ -24,5 +33,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     signerUrl: env.SIGNER_URL,
     payerAddress: env.PAYER_ADDRESS,
     paymentIntervalMs: env.PAYMENT_INTERVAL_MS ? Number(env.PAYMENT_INTERVAL_MS) : 10_000,
+    publicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,
   };
 }

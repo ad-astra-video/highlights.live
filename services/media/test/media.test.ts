@@ -74,6 +74,21 @@ describe("media server handshake (b)", () => {
     expect(body.sessionId).toBe("sess-fake");
     expect(body.wsPath).toBe("/stream/sess-fake");
     expect(body.jobId).toBe("job-1");
+    expect(body.wsUrl).toBeUndefined(); // no publicBaseUrl -> clients fall back to wsPath
+  });
+
+  it("returns the FULL LB-routable ws ingest URL when publicBaseUrl is set", async () => {
+    const ms = new MediaServer(
+      { orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", publicBaseUrl: "https://media.example.com" },
+      fake as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const res = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-2" } });
+    const body = res.json();
+    expect(body.wsUrl).toBe("wss://media.example.com/stream/sess-fake");
+    expect(body.wsPath).toBe("/stream/sess-fake");
+    await srv.close();
   });
 
   it("streams a frame over WS -> publishes to video-in -> relays the observation", async () => {
