@@ -83,7 +83,9 @@ services:
       - ADMIN_PASSWORD=admin
       - FREE_HIGHLIGHTS=3
       - BILLING_WIREFRAME=1
-      - DATABASE_PATH=/data/highlights.db
+      # Production-shaped stack: server persists to the separate Postgres
+      # container. No DATABASE_URL (plain `npm run dev`, no compose) -> SQLite.
+      - DATABASE_URL=postgres://${POSTGRES_USER:-highlights}:${POSTGRES_PASSWORD:-highlights}@postgres:5432/${POSTGRES_DB:-highlights}
       # Media-path (b): the browser streams frames to the media server instead
       # of the server's HTTP /ingest when this is set.
       - MEDIA_SERVER_URL=${MEDIA_SERVER_URL:-http://media:4070}
@@ -94,6 +96,28 @@ services:
     depends_on:
       orchestrator:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks: [hl]
+
+  # Postgres runs as its OWN container (separate from the server), with a
+  # dedicated named volume for persistence. The server reaches it at
+  # `postgres:5432` over the private hl network. PgDb auto-creates the schema
+  # (CREATE TABLE IF NOT EXISTS) on startup.
+  postgres:
+    image: postgres:16
+    container_name: highlights-postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-highlights}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-highlights}
+      - POSTGRES_DB=${POSTGRES_DB:-highlights}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-highlights} -d ${POSTGRES_DB:-highlights}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     networks: [hl]
 
   # Media server: the payer/broadcaster. The browser streams sampled frames
@@ -149,3 +173,7 @@ services:
 networks:
   hl:
     name: highlights-live
+
+volumes:
+  pgdata:
+    name: highlights-pgdata
