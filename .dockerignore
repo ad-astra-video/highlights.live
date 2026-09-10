@@ -8,7 +8,8 @@ docs
 infra
 infrastructure
 webapp
-packages
+# NOTE: `packages` (workspace deps @highlights/*) must stay in the context —
+# the server image COPYs the whole monorepo and needs them for npm ci.
 *.log
 **/__pycache__
 **/.pytest_cache
