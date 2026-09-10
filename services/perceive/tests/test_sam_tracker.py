@@ -27,6 +27,26 @@ class StubBackend(SamBackend):
         return self._cur.get(slot)
 
 
+class CountingBackend(SamBackend):
+    """Tracks how many SAM advances happen (gating test) and returns boxes."""
+
+    def __init__(self, box_map=None, miss_frames=0):
+        self.box_map = box_map or {}
+        self.miss_frames = miss_frames
+        self._miss_left = miss_frames
+        self.advances = 0
+
+    def ready(self):
+        return True
+
+    def advance(self, prompts):
+        self.advances += 1
+        self._cur = dict(prompts)  # simulate propagation to the same prompts
+
+    def get(self, slot):
+        return self._cur.get(slot)
+
+
 class CountingDetect:
     def __init__(self, detections):
         self.detections = detections
@@ -39,6 +59,38 @@ class CountingDetect:
 
 def _slots(tracks):
     return sorted(t.slot for t in tracks)
+
+
+def test_idle_frame_does_not_run_sam():
+    # Rule: SAM must not run when nothing has been identified for tracking.
+    be = CountingBackend()
+    tr = HybridTracker(detect=None, backend=be)
+    tracks = tr.step_frame(_white(), 0.0, florence_boxes=[])  # no identifications
+    assert be.advances == 0          # SAM never called
+    assert tr._prompts == {}         # nothing seeded
+    assert tracks == []              # no tracks started
+
+
+def test_idle_frames_only_never_engage_sam():
+    be = CountingBackend()
+    tr = HybridTracker(detect=None, backend=be)
+    for ts in range(5):
+        tr.step_frame(_white(), float(ts), florence_boxes=[])
+    assert be.advances == 0          # an empty stream never pays SAM compute
+    assert tr._prompts == {}
+
+
+def test_florence_identification_bootstraps_sam():
+    # Rule: Florence identifies -> seeds SAM, which then tracks (advance runs).
+    be = CountingBackend()
+    tr = HybridTracker(detect=None, backend=be)
+    tr.step_frame(_white(), 0.0, florence_boxes=[(0.2, 0.2, 0.4, 0.4)])
+    assert be.advances == 1          # SAM advanced exactly once for the seed frame
+    assert len(tr._prompts) == 1     # the identification became a tracked prompt
+    assert len(tr.tracks) == 1
+    # subsequent frames with the prompt carried forward keep advancing SAM
+    tr.step_frame(_white(), 1.0, florence_boxes=[(0.2, 0.2, 0.4, 0.4)])
+    assert be.advances == 2
 
 
 def test_no_backend_falls_back_to_florence_boxes():

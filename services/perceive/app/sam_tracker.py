@@ -106,10 +106,11 @@ class HybridTracker:
 
     # --- frame step ---------------------------------------------------------
     def step_frame(self, frame_rgb: np.ndarray, ts: float, florence_boxes: Optional[List[BBox]] = None) -> List[Track]:
-        """Advance one frame. `florence_boxes` come from the caller's Florence
-        pass THIS frame (already computed upstream) and seed the IoU layer when
-        SAM is off or can't be used."""
-        if self._backend is not None and self._backend.ready() and self._prompts:
+        """Advance one frame. `florence_boxes` are the caller's already-computed
+        Florence detections for THIS frame; they seed the IoU layer (and, on a
+        cold SAM start, the SAM prompts) — see `_sam_step` for the gating rule.
+        With no SAM backend this degrades to pure Florence -> IoU."""
+        if self._backend is not None and self._backend.ready():
             boxes = self._sam_step(frame_rgb, florence_boxes)
         else:
             # No SAM: pure Florence -> IoU (unchanged behaviour).
@@ -118,13 +119,28 @@ class HybridTracker:
         return self._iou.step(boxes, ts)
 
     def _sam_step(self, frame_rgb: np.ndarray, florence_boxes: Optional[List[BBox]] = None) -> List[BBox]:
-        """Run SAM one frame ahead for every tracked slot, deciding when to ask
-        Florence to re-detect. Returns the boxes to feed the IoU CD layer.
+        """Run SAM one frame ahead for every tracked slot.
 
-        Re-detect re-prompting uses the caller's already-computed Florence boxes
-        for THIS frame when provided (no redundant model pass); otherwise falls
-        back to calling the injected `detect` callable."""
+        Gating (rule: Florence IDENTIFIES, SAM TRACKS — SAM never runs with
+        nothing to track):
+          - Nothing tracked yet but Florence identified objects this frame:
+            BOOTSTRAP — seed SAM prompts from those detections first, then step.
+          - Nothing tracked AND no new identification this frame: idle frame —
+            do NOT call SAM at all (no `advance()`), just return Florence's
+            (empty) boxes for the IoU/CD layer.
+          - Otherwise advance all prompts (SAM follows what's already been
+            identified); ask Florence to re-detect on cadence / SAM loss /
+            target change. Re-detect uses the caller's Florence boxes for this
+            frame when provided (no redundant model pass), else `detect`.
+        Returns the boxes to feed the IoU CD layer."""
         self._since_detect += 1
+        # Bootstrap / idle gating: only call SAM when there is a target to track.
+        if not self._prompts:
+            if florence_boxes:
+                self._reseed_from(list(florence_boxes))  # Florence identified -> seed SAM
+                self._since_detect = 0
+            else:
+                return florence_boxes or []  # nothing identified -> skip SAM
         need_redetect = self._since_detect >= self.redetect_every
         self._backend.advance(dict(self._prompts))  # one frame's compute for all slots
         sam_boxes: List[BBox] = []
