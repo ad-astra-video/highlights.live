@@ -4,9 +4,12 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import os
 import threading
 from time import monotonic
+
+log = logging.getLogger("highlights.perceive.trickle")
 
 import numpy as np
 from fastapi import APIRouter, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
@@ -48,17 +51,24 @@ async def _trickle_on_frame(state, seq: int, image_b64: str, timestamp: float) -
     return await asyncio.to_thread(_run)
 
 
-async def _ensure_trickle(state, control_url: str, token: str) -> TrickleSession | None:
+async def _ensure_trickle(
+    state, control_url: str, token: str, route: str = ""
+) -> TrickleSession | None:
     """Open + start this session's trickle rail when it has a control URL and
     trickle is enabled. Idempotent per session. On failure (e.g. no broker)
     the session simply stays on its HTTP front door — never fatal."""
     if not control_url or not _trickle_enabled():
+        log.warning("trickle skip control_url=%r enabled=%s", control_url, _trickle_enabled())
         return None
     existing = _trickle.get(state.session_id)
     if existing is not None:
         return existing
+    log.info("trickle open session=%s control=%s route=%r", state.session_id, control_url, route)
     rail = TrickleRail(
-        control_url=control_url, session_id=state.session_id, token=token or ""
+        control_url=control_url,
+        session_id=state.session_id,
+        token=token or "",
+        route=route,
     )
     sess = TrickleSession(
         rail,
@@ -67,8 +77,16 @@ async def _ensure_trickle(state, control_url: str, token: str) -> TrickleSession
     )
     try:
         await sess.start()
-    except TrickleError:
+    except TrickleError as e:
+        log.warning("trickle open failed for session=%s: %s", state.session_id, e)
         await rail.aclose()
+        return None
+    except Exception as e:  # noqa: BLE001
+        log.warning("trickle start threw for session=%s: %r", state.session_id, e)
+        try:
+            await rail.aclose()
+        except Exception:
+            pass
         return None
     _trickle[state.session_id] = sess
     return sess
@@ -253,6 +271,8 @@ def create_app() -> FastAPI:
         x_session_control: str | None = Header(default=None),
         livepeer_session_token: str | None = Header(default=None),
         x_session_token: str | None = Header(default=None),
+        livepeer_runner_route: str | None = Header(default=None),
+        x_runner_route: str | None = Header(default=None),
     ):
         sid = _read_session_id(livepeer_session_id, x_session_id)
         if not sid:
@@ -261,11 +281,13 @@ def create_app() -> FastAPI:
         state.stream_id = req.stream_id or state.stream_id
         # Live path: the worker reserved a session with a control URL, so this
         # first proxied call opens this session's trickle channels and the rail
-        # starts consuming video-in frames (plan §3.2/§3.5).
+        # starts consuming video-in frames (plan §3.2/§3.5). The orchestrator
+        # injects the session control/token/route headers on every proxied call.
         await _ensure_trickle(
             state,
             livepeer_session_control or x_session_control or "",
             livepeer_session_token or x_session_token or "",
+            livepeer_runner_route or x_runner_route or "",
         )
 
         # Keep the latest raw frame so control `analyze-still` and any future
@@ -287,6 +309,8 @@ def create_app() -> FastAPI:
         x_session_control: str | None = Header(default=None),
         livepeer_session_token: str | None = Header(default=None),
         x_session_token: str | None = Header(default=None),
+        livepeer_runner_route: str | None = Header(default=None),
+        x_runner_route: str | None = Header(default=None),
     ):
         sid = _read_session_id(livepeer_session_id, x_session_id)
         if not sid:
@@ -296,6 +320,7 @@ def create_app() -> FastAPI:
             state,
             livepeer_session_control or x_session_control or "",
             livepeer_session_token or x_session_token or "",
+            livepeer_runner_route or x_runner_route or "",
         )
         q: asyncio.Queue = asyncio.Queue()
         state.subscribers.append(q)
@@ -336,6 +361,7 @@ def create_app() -> FastAPI:
             state,
             websocket.query_params.get("control_url", ""),
             websocket.query_params.get("token", ""),
+            websocket.query_params.get("route", ""),
         )
         await websocket.accept()
         try:
@@ -358,6 +384,7 @@ def create_app() -> FastAPI:
     ):
         sid = _read_session_id(livepeer_session_id, x_session_id)
         state = registry.get(sid) if sid else None
+        tr = _trickle.get(sid)
         return {
             "sessionId": sid,
             "active": state is not None,
@@ -365,6 +392,12 @@ def create_app() -> FastAPI:
             "tracks": len(state.tracker.tracks) if state else 0,
             "subscribers": len(state.subscribers) if state else 0,
             "activeSessions": registry.count(),
+            "trickle": {
+                "active": tr is not None,
+                "video_in": (tr.rail.endpoints.video_in if tr and tr.rail.endpoints else None),
+                "events_out": (tr.rail.endpoints.events_out if tr and tr.rail.endpoints else None),
+                "control": (tr.rail.endpoints.control if tr and tr.rail.endpoints else None),
+            },
         }
 
     @router.post("/session/close")
