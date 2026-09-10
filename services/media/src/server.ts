@@ -15,7 +15,6 @@ import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
-import type { StreamLifecycle } from "./payments";
 
 interface ActiveStream {
   streamId: string;
@@ -30,9 +29,11 @@ export interface MediaServerOptions {
   orchBase: string;
   /** Where the Fastify control plane lives, to receive observations back. */
   callbackBase?: string;
-  /** Payment/lifecycle seam ((a)). Defaults to offchain no-op. */
-  lifecycle?: StreamLifecycle;
   seedImageB64?: string;
+  /** On-chain payer (remote signer + advertised payer address). */
+  signer?: import("@highlights/livepeer-session").SignerClient;
+  payerAddress?: string;
+  paymentIntervalMs?: number;
   port?: number;
 }
 
@@ -41,10 +42,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export class MediaServer {
   private active = new Map<string, ActiveStream>(); // keyed by sessionId
   private orch: MediaOrchestrator;
-  private lifecycle: StreamLifecycle;
   constructor(private opts: MediaServerOptions, orch?: MediaOrchestrator) {
-    this.orch = orch ?? new MediaOrchestrator({ orchBase: opts.orchBase, seedImageB64: opts.seedImageB64 });
-    this.lifecycle = opts.lifecycle ?? { startPayment() {}, stopPayment() {} };
+    this.orch =
+      orch ??
+      new MediaOrchestrator({
+        orchBase: opts.orchBase,
+        seedImageB64: opts.seedImageB64,
+        signer: opts.signer,
+        payerAddress: opts.payerAddress,
+        paymentIntervalMs: opts.paymentIntervalMs,
+        // A failed payment refresh closes the stream (release the slot rather
+        // than let the runner work for free).
+        onPaymentFailure: (sessionId, err) => void this.teardown(sessionId).catch(() => {}),
+      });
   }
 
   async build() {
@@ -63,7 +73,8 @@ export class MediaServer {
         closed: false,
       };
       this.active.set(p.sessionId, stream);
-      this.lifecycle.startPayment(stream.streamId);
+      // Pay the orchestrator for as long as the stream is open (no-op offchain).
+      this.orch.startPayment(p);
       return {
         sessionId: p.sessionId,
         wsPath: `/stream/${p.sessionId}`,
@@ -166,8 +177,8 @@ export class MediaServer {
     const stream = this.active.get(sid);
     if (!stream || stream.closed) return;
     stream.closed = true;
-    // 1) stop paying (no more ticket refresh) — (a) wires the real refiller.
-    this.lifecycle.stopPayment(stream.streamId);
+    // 1) stop paying (no more ticket refresh). Idempotent.
+    this.orch.stopPayment(sid);
     // 2) drop remaining sockets.
     for (const s of stream.sockets) {
       try {

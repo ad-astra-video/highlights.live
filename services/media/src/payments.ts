@@ -1,43 +1,77 @@
-// Payment + lifecycle seam for the media server.
+// Payment-refresh primitive for the media server (the payer).
 //
-// (b) builds the transport handshake; payment is the (a) step. This module is
-// the seam the (a) implementation fills in — it already wires the *teardown*
-// contract so every stream-close path stops payment and releases the slot once
-// the real refiller lands.
+// On-chain, a perceived live session must be re-funded on every orchestrator
+// payment interval or it is released. The media server pays the whole time the
+// stream is open and stops the moment it closes (WS drop, explicit stop, or a
+// failed refresh). A FAILED refresh is fatal: we stop paying AND release the
+// session rather than keep the runner working for free — so a pay failure is
+// itself one of the ways a stream closes.
 //
-// Contract (shared with the server's createPaymentRefresher):
-//   - A payment refresher starts when a stream is provisioned/open and is
-//     stopped on ANY close (user stop, WS drop, payment-failure-when-on-chain).
-//   - A FAILED refresh is FATAL: never keep the perceive runner tracking for
-//     free — stop the session. So payment failure both ends the stream and
-//     owes nothing afterward.
-export interface StreamLifecycle {
-  /** Start recurring platform payment for an open stream. Offchain: no-op. */
-  startPayment(streamId: string): void;
-  /** Stop paying. Safe to call many times. */
-  stopPayment(streamId: string): void;
+// Off the on-chain profile (no signer) refresh is a no-op and nothing starts —
+// offchain lab boxes are unpaid.
+
+export interface PaymentRefresher {
+  /** Begin the interval loop. Idempotent. */
+  start(): void;
+  /** Stop the loop. Safe to call multiple times. */
+  stop(): void;
 }
 
-/** Offchain / (b) stub: payments are no-ops until the (a) signer-ticket rail. */
-export function createLifecycle(_opts?: {
-  payment?: { intervalMs?: number; refill?: (streamId: string) => Promise<unknown> };
-}): StreamLifecycle {
-  const timers = new Map<string, ReturnType<typeof setInterval>>();
-  return {
-    startPayment(streamId: string) {
-      const opts = _opts?.payment;
-      if (!opts || !opts.refill) return; // no signer config -> offchain, nothing to pay
-      if (timers.has(streamId)) return;
-      const tick = () => opts.refill!(streamId).catch(() => this.stopPayment(streamId));
-      tick();
-      timers.set(streamId, setInterval(tick, Math.max(50, opts.intervalMs ?? 5000)));
-    },
-    stopPayment(streamId: string) {
-      const t = timers.get(streamId);
-      if (t) {
-        clearInterval(t);
-        timers.delete(streamId);
-      }
-    },
+export interface PaymentRefresherOptions {
+  /** Perform one refresh (e.g. client.refreshPerceivePayment on the controlUrl). */
+  refresh: () => Promise<unknown>;
+  /** Interval between refreshes, in ms. */
+  intervalMs: number;
+  /**
+   * Called when a refresh throws. The loop stops and does NOT auto-resume (a
+   * failed payment release is fatal) — the caller wires this to close the
+   * stream. Default: halt silently for offchain no-op refreshes.
+   */
+  onFailure?: (err: Error) => void;
+  /** External abort (stream end) — same as stop(). */
+  signal?: AbortSignal;
+}
+
+export function createPaymentRefresher(opts: PaymentRefresherOptions): PaymentRefresher {
+  let timer: NodeJS.Timeout | null = null;
+  let stopped = false;
+
+  const halt = () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
   };
+
+  const tick = async () => {
+    try {
+      await opts.refresh();
+    } catch (err) {
+      halt();
+      stopped = true;
+      const e = err instanceof Error ? err : new Error(String(err));
+      if (opts.onFailure) opts.onFailure(e);
+    }
+  };
+
+  const start = () => {
+    if (timer || stopped) return;
+    void tick(); // fire once immediately, then on the interval
+    timer = setInterval(() => void tick(), Math.max(50, opts.intervalMs));
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        stop();
+        return;
+      }
+      opts.signal.addEventListener("abort", stop, { once: true });
+    }
+  };
+
+  const stop = () => {
+    stopped = true;
+    halt();
+    opts.signal?.removeEventListener("abort", stop);
+  };
+
+  return { start, stop };
 }

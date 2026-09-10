@@ -84,6 +84,9 @@ services:
       - FREE_HIGHLIGHTS=3
       - BILLING_WIREFRAME=1
       - DATABASE_PATH=/data/highlights.db
+      # Media-path (b): the browser streams frames to the media server instead
+      # of the server's HTTP /ingest when this is set.
+      - MEDIA_SERVER_URL=${MEDIA_SERVER_URL:-http://media:4070}
     ports:
       - "3000:3000"
     volumes:
@@ -91,6 +94,32 @@ services:
     depends_on:
       orchestrator:
         condition: service_healthy
+    networks: [hl]
+
+  # Media server: the payer/broadcaster. The browser streams sampled frames
+  # over its WS, it publishes them to the orchestrator's video-in rail and POSTs
+  # the runner's observations back to the server at /jobs/:id/observe. Pays the
+  # orchestrator while a stream is open (no-op offchain). NODE_TLS...=0 because
+  # the orchestrator presents a self-signed cert on this lab box.
+  media:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.media
+    container_name: highlights-media
+    environment:
+      - PORT=4070
+      - ORCHESTRATOR_URL=https://orchestrator:8935
+      - CALLBACK_URL=http://server:3000
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+      - SIGNER_URL=${SIGNER_URL:-}
+      - PAYER_ADDRESS=${PAYER_ADDRESS:-}
+    ports:
+      - "4070:4070"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+      server:
+        condition: service_started
     networks: [hl]
 
   # go-livepeer REMOTE SIGNER (on-chain path only). Holds the ETH keystore.
