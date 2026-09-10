@@ -1,9 +1,11 @@
-# Railway deployment — server + remote signer (two services)
+# Railway deployment — server + media + remote signer (three services)
 
-Security model: the server is the only publicly reachable process. The remote
-signer holds the ETH keystore and has NO public domain — the server reaches it
-only over Railway's private network (internal routing). GPU boxes never see the
-key.
+Security model: the server and the media server are the publicly reachable
+processes (server = control plane + UI; media = the browser's WS terminus and
+the payer, so it needs a PUBLIC domain for `ws://.../stream/:sid`). The remote
+signer holds the ETH keystore and has NO public domain — the other services
+reach it only over Railway's private network (internal routing). GPU boxes
+(perceive/decide runners, paid via the media server) never see the key.
 
 ```
 Internet
@@ -25,9 +27,9 @@ Internet
    From the app-pipelines reference keystore, the file is named `wallet`
    (go-livepeer keystore under `<dataDir>/keystore/`).
 
-## Two Railway services (same project)
+## Three Railway services (same project)
 
-Create TWO services from this repo so they share the private network:
+Create THREE services from this repo so they share the private network:
 
 ### Service 1 — server (public)
 - Build: Dockerfile `docker/Dockerfile.server` (build context = repo root).
@@ -38,6 +40,11 @@ Create TWO services from this repo so they share the private network:
 - `SIGNER_URL` -> set it to your signer's private DNS, e.g.
   `http://signer.railway.internal:7936`. Railway exposes the private domain as
   `RAILWAY_PRIVATE_DOMAIN` on each service; the server reads `SIGNER_URL`.
+- `MEDIA_SERVER_URL` -> the MEDIA server's PUBLIC domain (e.g.
+  `https://media.up.railway.app`). The server calls `POST /sessions` there and
+  DERIVES the browser's WS URL from it (`https -> ws`), so it must be the
+  public domain the browser can actually reach — a private `.railway.internal`
+  hostname would hand the browser an unreachable `ws://` URL.
 
 ### Service 2 — remote signer (NO public domain)
 - Build: Dockerfile `services/signer/Dockerfile` (build context = repo root).
@@ -50,6 +57,26 @@ Create TWO services from this repo so they share the private network:
   - `MAX_PRICE_PER_UNIT` = spend cap per unit (wei/sec or 720p-pixel-sec).
 - Secret volume: put the keystore `wallet` JSON at `/keystore/wallet`
   (mounted read-only into the container; entrypoint copies it to `/data/keystore`).
+
+### Service 3 — media server (PUBLIC, browser WS + payer)
+- Build: Dockerfile `docker/Dockerfile.media` (build context = repo root).
+  Config: `infra/railway/media/railway.json`.
+- Deploy: port 4070, PUBLIC domain ON — the browser opens the MediaRecorder/
+  sampled-frame WebSocket against it, so Railway must expose HTTP/2 + upgrade
+  (default on a public domain).
+- Env:
+  - `PORT=4070`
+  - `ORCHESTRATOR_URL` = your orchestrator/gateway public URL (the GPU box the
+    perceive runner lives on). On-chain this is where it pays.
+  - `CALLBACK_URL` = the server's PUBLIC domain (e.g. `https://server.up.railway.app`)
+    so observations POST back to `/jobs/:id/observe`.
+  - `SIGNER_URL` = `http://signer.railway.internal:7936` (private; on-chain only)
+  - `PAYER_ADDRESS` = the payer EVM address advertised on reserve (on-chain)
+  - `PAYMENT_INTERVAL_MS` = refresh cadence (optional, default 10000)
+  - `NODE_TLS_REJECT_UNAUTHORIZED=0` ONLY while the orchestrator uses a
+    self-signed cert (remove for public orchs).
+- GPU runners (perceive/decide) stay on your GPU boxes behind the orchestrator;
+  Railway hosts only the control/broadcast plane (server + media) + signer.
 
 ## Verify the split after deploy
 - `signer` shows Status "running" but has no `*.up.railway.app` / custom public
