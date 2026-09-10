@@ -1,0 +1,41 @@
+# GPU override for the perceive live-runner with SAM 3.1.
+#
+# Pull-based deploy (nothing to build on the host):
+#   docker pull adastravideo/highlights-live:perceive
+#   HF_TOKEN=... docker compose \
+#       -f docker/docker-compose.yml -f docker/docker-compose.gpu.yml up -d
+#
+# Compared to the CPU Dockerfile.perceive, this swaps in the CUDA+triton image
+# (Dockerfile.perceive.gpu) so SAM 3.1 can actually import (it hard-depends on
+# triton), attaches NVIDIA GPUs via the nvidia-container-toolkit, and turns on
+# the florence_sam HybridTracker.
+#
+# Secrets are NOT committed: HF_TOKEN comes from the shell/.env at deploy time
+# (required to pull the gated facebook/sam3.1 weights), and the HF weight cache
+# + VOD clip dir are host paths (HF_CACHE_DIR / CLIPS_DIR, defaulted below).
+services:
+  perceive:
+    image: adastravideo/highlights-live:perceive
+    build: !reset null   # prefer the pulled image; do not build from source
+    environment:
+      - PERCEIVE_MODE=florence
+      - PERCEIVE_DEVICE=cuda
+      - PERCEIVE_MIN_FPS=${PERCEIVE_MIN_FPS:-1.0}
+      - PERCEIVE_TRACKER=florence_sam
+      - PERCEIVE_CAPACITY=${PERCEIVE_CAPACITY:-2}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_HOME=/models/hf-cache
+      - PERCEIVE_SAM_CLIP=/clips
+    volumes:
+      # HF cache (holds both the token and downloaded weights). Defaults to the
+      # deploying host's local HF cache so a warm cache is reused across runs.
+      - ${HF_CACHE_DIR:-/home/brad/.cache/huggingface}:/models/hf-cache
+      # VOD clips the SAM backend tracks across frames (PERCEIVE_SAM_CLIP).
+      - ${CLIPS_DIR:-./clips}:/clips:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
