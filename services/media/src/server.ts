@@ -44,6 +44,13 @@ export interface MediaServerOptions {
    * <=0 disables the grace (tear down immediately on WS close).
    */
   reconnectGraceMs?: number;
+  /**
+   * How long (ms) a freshly-provisioned session may sit with NO browser WS ever
+   * connecting before its perceive slot is released. Prevents a reserved slot
+   * from leaking forever (e.g. the server provisioned but the browser never
+   * opened the WS). Default 60000. <=0 disables.
+   */
+  provisionNoClientMs?: number;
 }
 
 const DEFAULT_RECONNECT_GRACE_MS = 8000;
@@ -54,6 +61,8 @@ export class MediaServer {
   private active = new Map<string, ActiveStream>(); // keyed by sessionId
   // Pending teardowns during the reconnect grace window (keyed by sessionId).
   private graceTimers = new Map<string, NodeJS.Timeout>();
+  // Pending teardowns for provisioned sessions that never got a browser WS.
+  private noClientTimers = new Map<string, NodeJS.Timeout>();
   private orch: MediaOrchestrator;
   constructor(private opts: MediaServerOptions, orch?: MediaOrchestrator) {
     this.orch =
@@ -88,6 +97,18 @@ export class MediaServer {
       this.active.set(p.sessionId, stream);
       // Pay the orchestrator for as long as the stream is open (no-op offchain).
       this.orch.startPayment(p);
+      // Release the slot if the browser never connects (e.g. provision succeeded
+      // but the client vanished) — otherwise a reserved slot leaks forever.
+      const noClientMs = this.opts.provisionNoClientMs ?? 60000;
+      if (noClientMs > 0) {
+        this.noClientTimers.set(
+          p.sessionId,
+          setTimeout(() => {
+            this.noClientTimers.delete(p.sessionId);
+            void this.teardown(p.sessionId);
+          }, noClientMs)
+        );
+      }
       // Full ingest WS URL (LB/public front), when the operator tells us the
       // public origin. Clients that can't route by LB fall back to wsPath.
       const wsBase = (this.opts.publicBaseUrl || "").replace(/\/$/, "").replace(/^http/, "ws");
@@ -111,6 +132,7 @@ export class MediaServer {
       }
       stream.sockets.add(connection);
       this.clearGrace(req.params.sid); // a reconnect within the grace window cancels pending teardown
+      this.clearNoClient(req.params.sid); // a browser connected, so the no-client timeout is moot
       connection.on("data", (buf: Buffer) => {
         void this.handleFrame(stream, connection, buf).catch((e) => console.error("[media] frame err", e));
       });
@@ -218,9 +240,19 @@ export class MediaServer {
     }
   }
 
+  /** Cancel the provisioned-but-no-browser teardown (a browser connected). */
+  private clearNoClient(sid: string) {
+    const t = this.noClientTimers.get(sid);
+    if (t) {
+      clearTimeout(t);
+      this.noClientTimers.delete(sid);
+    }
+  }
+
   /** Stop paying + release the perceive slot. Idempotent. */
   private async teardown(sid: string) {
     this.clearGrace(sid);
+    this.clearNoClient(sid);
     const stream = this.active.get(sid);
     if (!stream || stream.closed) return;
     stream.closed = true;

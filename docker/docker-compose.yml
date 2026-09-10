@@ -141,6 +141,8 @@ services:
       # this as the FULL ws ingest URL on provision so clients can be routed by
       # the load balancer rather than assuming a path on one node.
       - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-https://highlights-media.dpn.gg}
+      # Release a provisioned-but-never-used perceive slot after this long.
+      - MEDIA_PROVISION_NO_CLIENT_MS=${MEDIA_PROVISION_NO_CLIENT_MS:-60000}
     ports:
       - "4070:4070"
     depends_on:

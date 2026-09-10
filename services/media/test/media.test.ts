@@ -142,6 +142,20 @@ describe("media server handshake (b)", () => {
     await srv.close();
   });
 
+  it("releases the slot when a provisioned session never gets a browser (no-client timeout)", async () => {
+    const g = new FakeOrch("sess-nocli");
+    const ms = new MediaServer(
+      { orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", provisionNoClientMs: 100, reconnectGraceMs: 1000 },
+      g as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-nocli" } }); // no WS ever connects
+    await new Promise((r) => setTimeout(r, 300)); // > provisionNoClientMs (100)
+    expect(g.closed).toContain("sess-nocli");
+    await srv.close();
+  });
+
   it("pays the orchestrator while the stream is open and stops paying on teardown", async () => {
     expect(fake.startedPayments).toContain("sess-fake"); // provision started payment
     expect(fake.stoppedPayments).toContain("sess-fake"); // the close above stopped it

@@ -22,6 +22,8 @@ export interface MediaConfig {
    * deriving it from the control server's MEDIA_SERVER_URL + wsPath).
    */
   publicBaseUrl?: string;
+  /** Release a provisioned-but-never-used perceive slot after this many ms. */
+  provisionNoClientMs?: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
@@ -34,5 +36,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     payerAddress: env.PAYER_ADDRESS,
     paymentIntervalMs: env.PAYMENT_INTERVAL_MS ? Number(env.PAYMENT_INTERVAL_MS) : 10_000,
     publicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,
+    provisionNoClientMs: env.MEDIA_PROVISION_NO_CLIENT_MS ? Number(env.MEDIA_PROVISION_NO_CLIENT_MS) : 60_000,
   };
 }

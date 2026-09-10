@@ -17,6 +17,7 @@ async function main() {
       payerAddress: cfg.payerAddress,
       paymentIntervalMs: cfg.paymentIntervalMs,
       publicBaseUrl: cfg.publicBaseUrl,
+      provisionNoClientMs: cfg.provisionNoClientMs,
     },
   );
   const app = await media.build();
