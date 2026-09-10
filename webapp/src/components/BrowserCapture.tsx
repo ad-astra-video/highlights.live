@@ -27,6 +27,8 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   const jobIdRef = useRef<string | null>(null);
   const seqRef = useRef(0);
   const ivRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const modeRef = useRef<"ingest" | "ws" | "pending">("pending");
 
   useEffect(() => {
     const onUnmount = () => {
@@ -50,6 +52,25 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       // create the browser-capture job on the server
       const job = await api<{ job: { id: string } }>("/jobs", { body: { source: "browser", gameHint } });
       jobIdRef.current = job.job.id;
+
+      // Media-server handshake (b): try to stream frames over the media-server
+      // WS (browser -> media server -> orchestrator video-in). If the media
+      // server isn't configured, fall back to the HTTP /ingest rail.
+      const media = await api<{ wsUrl?: string }>(`/jobs/${job.job.id}/media`, {
+        method: "POST",
+        body: {},
+      }).catch(() => null);
+      if (media?.wsUrl) {
+        modeRef.current = "ws";
+        const ws = new WebSocket(media.wsUrl);
+        wsRef.current = ws;
+        await new Promise<void>((resolve, reject) => {
+          ws.onopen = () => resolve();
+          ws.onerror = () => { modeRef.current = "ingest"; resolve(); };
+        });
+      } else {
+        modeRef.current = "ingest";
+      }
 
       const mime = ["video/mp4;codecs=avc1", "video/webm;codecs=vp9", "video/webm"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
       const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 3_000_000 } : undefined);
@@ -75,9 +96,16 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
         ctx.drawImage(v, 0, 0, cv.width, cv.height);
         const image = cv.toDataURL("image/jpeg", 0.6).split(",")[1];
         const seq = seqRef.current++;
-        api(`/jobs/${jobIdRef.current}/ingest`, {
-          body: { seq, timestamp: seq / SAMPLE_FPS, image },
-        }).catch(() => {});
+        const id = jobIdRef.current;
+        if (modeRef.current === "ws" && id && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          // Media path: stream the sampled frame over the media-server WS.
+          wsRef.current.send(JSON.stringify({ seq, timestamp: seq / SAMPLE_FPS, image }));
+        } else if (id) {
+          // Fallback: HTTP /ingest rail.
+          api(`/jobs/${id}/ingest`, {
+            body: { seq, timestamp: seq / SAMPLE_FPS, image },
+          }).catch(() => {});
+        }
       }, 1000 / SAMPLE_FPS);
 
       setSharing(true);
@@ -95,6 +123,11 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   async function stopInternal(andNotify: boolean) {
     if (ivRef.current) clearInterval(ivRef.current);
     ivRef.current = null;
+    // Media path: closing the WS tears the stream down (media server stops
+    // paying + releases the perceive slot). The server /stop is idempotent.
+    try { wsRef.current?.close(); } catch { /* noop */ }
+    wsRef.current = null;
+    modeRef.current = "pending";
     if (recRef.current && recRef.current.state !== "inactive") {
       recRef.current.stop();
     }

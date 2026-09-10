@@ -5,6 +5,7 @@
   "description": "Sport/gaming highlight extraction on go-livepeer live-runners + Gemma 4 12B",
   "workspaces": [
     "packages/*",
+    "services/media",
     "services/server",
     "webapp"
   ],

@@ -65,7 +65,25 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // CLIENT streams sampled frames in via POST /jobs/:id/ingest and a recording
   // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
   // session.
-  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string }>();
+  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string }>();
+
+  // Media-server handshake (b): provision a perceive session on the standalone
+  // media server (the payer/broadcaster) and return the browser's WS path. The
+  // Fastify control plane never carries media bytes — the browser streams
+  // sampled frames over the returned WS to the media server, which publishes
+  // them to the orchestrator's video-in rail.
+  async function provisionMedia(jobId: string): Promise<{ wsUrl: string; mediaSessionId: string }> {
+    if (!cfg.mediaServerUrl) throw new Error("media server not configured (MEDIA_SERVER_URL)");
+    const r = await fetch(`${cfg.mediaServerUrl}/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId }),
+    });
+    if (r.status !== 200) throw new Error(`media provision failed: HTTP ${r.status} ${await r.text()}`);
+    const body: any = await r.json();
+    const base = cfg.mediaServerUrl.replace(/\/$/, "").replace(/^http/, "ws");
+    return { wsUrl: `${base}${body.wsPath}`, mediaSessionId: body.sessionId };
+  }
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));
   }
@@ -353,6 +371,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (job.source === "browser" && browserJobs.has(job.id)) {
       const bj = browserJobs.get(job.id)!;
       if (bj.sessionId) await adapter.stopPerceive(bj.sessionId).catch(() => {});
+      // Media-path session: tell the media server to stop paying + release the
+      // perceive slot (also idempotently triggered by the browser WS closing).
+      if (bj.mediaSessionId && cfg.mediaServerUrl) {
+        await fetch(`${cfg.mediaServerUrl}/sessions/${bj.mediaSessionId}/close`, { method: "POST" }).catch(() => {});
+      }
       const recPath = browserRecordingPath(job.id);
       if (existsSync(recPath)) {
         const { mkdir } = await import("node:fs/promises");
@@ -441,6 +464,45 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       }
     }
   );
+
+  // Media-server handshake (b): reserve a perceive session through the media
+  // server and return the browser's WS endpoint. The browser then streams
+  // sampled frames over that WS (NOT to /ingest) when MEDIA_SERVER_URL is set.
+  app.post<{ Params: { id: string } }>("/jobs/:id/media", { preHandler: authReq }, async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "no job" });
+    if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    const bj = browserJobs.get(req.params.id);
+    if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
+    if (bj.mediaWsUrl) return { wsUrl: bj.mediaWsUrl, mediaSessionId: bj.mediaSessionId };
+    try {
+      const { wsUrl, mediaSessionId } = await provisionMedia(req.params.id);
+      bj.mediaWsUrl = wsUrl;
+      bj.mediaSessionId = mediaSessionId;
+      return { wsUrl, mediaSessionId };
+    } catch (e: any) {
+      return reply.code(500).send({ error: String(e?.message || e) });
+    }
+  });
+
+  // Internal callback from the media server: relay an observation the perceive
+  // runner published to events-out, stepping the per-job evidence and fanning
+  // to the live console. The browser streaming to the media server never touches
+  // the Fastify control plane's frame ingest. (Candidate->decide->highlight
+  // wiring is the next increment — the runner currently publishes observation
+  // without a candidate on events-out.)
+  app.post<{ Params: { id: string } }>("/jobs/:id/observe", async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    const bj = browserJobs.get(req.params.id);
+    if (!job || job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
+    const obs = req.body;
+    if (!obs || typeof obs !== "object") return reply.code(400).send({ error: "observation required" });
+    const seq = typeof obs.seq === "number" ? obs.seq : 0;
+    const timestamp = typeof obs.timestamp === "number" ? obs.timestamp : 0;
+    bj.evidence.step(obs);
+    emitJobEvent(req.params.id, { seq, timestamp, type: "observation", observation: obs });
+    return { ok: true };
+  });
 
   // Browser-capture rail: client appends a chunk of the recorded capture (base64)
   // so the server can cut highlight clips from it at stop.
