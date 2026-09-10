@@ -15,30 +15,30 @@ This departs from the plan's intended trickle design (§0.2, §3.2/3.5) and the
 one session.step(frame) per front door."
 
 ## Target architecture (locked — WebSocket delivery)
-LIVE DELIVERY = WebSocket, not WebRTC. The browser encodes once with
-MediaRecorder (high bitrate, audio included for tab capture) and streams the
-binary chunks over a WebSocket. ONE high-quality stream feeds BOTH the analysis
-path AND the clip source — no separate clip upload, no frame-lock problem.
-
-Media hot path is a separate gateway process (scalable independently of the
-main server). The Orchestrator has no media server — it only creates live-runner
-CHANNELS that proxy data to the live-runner (trickle video-in / control /
-events-out).
+LIVE DELIVERY = WebSocket, end to end. The browser MediaRecorder stream travels
+entirely over WebSockets:
 
     browser (getDisplayMedia, audio+video)
-        --MediaRecorder(high-bitrate)--> WebSocket (to the gateway process)
-        --> gateway process (server side; terminates the WS, demuxes
-                             frames (~5fps) + audio for the ANALYSIS path and
-                             writes the same high-bitrate bytes to disk as the
-                             CLIP source; opens trickle video-in to the
-                             Orchestrator and pushes frames + audio,
-                             subscribes events-out)
-        --> Orchestrator (creates live-runner CHANNELS that proxy data
-                             to the live-runner; ticket auth; no media server)
-        --> perceive LIVE-RUNNER (consumes full stream ~5fps + audio via
-                                  session.step(), events-out back through
-                                  orchestrator channels)
-        --> decide: fuses audio bursts + visual evidence
+       --MediaRecorder(high-bitrate, binary frames)--> [WS]
+       --> MEDIA SERVER (WS terminus; server-side process)
+             - terminates the browser WS
+             - writes the same bytes to disk = the CLIP source
+             - demuxes to frames (~5fps) + audio for the ANALYSIS path
+       --> [WS tunnel] uses livepeer_gateway to proxy/open a WebSocket
+            to the ORCHESTRATOR
+       --> Orchestrator (live-runner CHANNEL: WS proxy to the live-runner)
+       --> perceive LIVE-RUNNER (WS video-in: consumes full stream ~5fps + audio
+                                  via session.step(); events-out back through the
+                                  channel)
+       --> decide: fuses audio bursts + visual evidence
+
+The media server IS the media hot path (horizontally scalable gateway replicas,
+independent of the Fastify control plane). It has NO media-server dependency of
+its own — it is a process that terminates the browser WS and uses
+`livepeer_gateway` to proxy that stream up the WS tunnel to the Orchestrator's
+live-runner channel. Fastify stays control plane (provisions the per-stream WS
+URL + job, asks a gateway to start the Orchestrator session, receives results);
+it never carries media bytes.
 
 Single-stream design: the high-bitrate MediaRecorder stream the WS carries is
 both (a) demuxed to 5fps frames + audio for perception and (b) written to disk
@@ -69,13 +69,15 @@ the main server). Control path = Fastify + Orchestrator
   analysis feed and the clip source). IntervalFrameReader samples ~5fps from the
   same recording for perception; MediaRecorder timeslices feed the clip file.
 
-### 2. Gateway process (livepeer_gateway) — WebSocket media terminus
+### 2. Media server / gateway — WebSocket media terminus (livepeer_gateway)
 - A process on the SERVER that terminates the browser WebSocket, writes the
   received MediaRecorder bytes to disk (the clip source), and demuxes them
   (ffmpeg) to ~5fps frames + ~1s audio segments for the ANALYSIS path.
-- It sends the analysis media to the Orchestrator: opens trickle video-in,
-  pushes frames + audio continuously, subscribes events-out. Uses
-  `livepeer_gateway` (LiveVideoJob + Orchestrator/PaymentSession).
+- **It does not natively reach the Orchestrator.** Each browser WS maps to one
+  `livepeer_gateway` client that proxies the analysis media up a SECOND WebSocket
+  **to the Orchestrator** (the live-runner video-in channel): pushes frames +
+  audio, subscribes events-out. Uses `livepeer_gateway` (LiveVideoJob +
+  Orchestrator/PaymentSession tickets).
 - Replicas of this process ARE the media hot path, scaled independently of the
   main server. Fastify stays control plane (provisions the per-stream WS URL,
   starts the job, receives results) and never handles media bytes.
@@ -97,6 +99,16 @@ the main server). Control path = Fastify + Orchestrator
   SAM loss (no mask) or target change / re-detect cadence. Handoff logic unit-tested
   with a stub backend. Enabled via PERCEIVE_TRACKER=florence_sam; without a real
   SAM backend it degrades to Florence->IoU (current default, unchanged).
+
+  GATING RULE (enforced in `_sam_step`): Florence IDENTIFIES, SAM TRACKS — SAM
+  never runs when there is nothing to track. Nothing tracked yet + Florence
+  identified objects this frame -> BOOTSTRAP (seed SAM prompts from those
+  detections, then step). Nothing tracked + no identification -> IDLE frame, SAM
+  is NOT called at all (no `advance()`, no GPU spend on an empty scene). Once
+  seeded, SAM advances its existing prompts every frame (it follows what was
+  already identified even if a single frame has no fresh detections). New +
+  existing tests (test_sam_tracker.py: idle-frame / bootstrap / carried-forward)
+  lock this in.
 
   SAM 3.1 is per-frame, not whole-video: `propagate_in_video` is a driver loop
   over a per-frame step (`sam3/model/sam3_video_inference.py` `_run_single_frame_inference`,
