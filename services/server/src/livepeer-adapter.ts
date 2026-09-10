@@ -35,7 +35,12 @@ export class OrchestratorAdapter implements PipelineClient {
     const { status, data } = await this.client.appCall<any>(sessionId, "analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ seq: frame.seq, timestamp: frame.timestamp, image: frame.imageB64 }),
+      body: JSON.stringify({
+        seq: frame.seq,
+        timestamp: frame.timestamp,
+        image: frame.imageB64,
+        clip_path: frame.clipPath || "",  // per-JOB recorded stream (SAM persistent session)
+      }),
     });
     if (status >= 400) throw new Error(`analyze failed: HTTP ${status}`);
     return normalizeObservation(data);
@@ -70,7 +75,12 @@ export class DirectAdapter implements PipelineClient {
     const r = await fetch(`${this.cfg.perceiveUrl}/app/analyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Session-Id": this.fakeSession },
-      body: JSON.stringify({ seq: frame.seq, timestamp: frame.timestamp, image: frame.imageB64 }),
+      body: JSON.stringify({
+        seq: frame.seq,
+        timestamp: frame.timestamp,
+        image: frame.imageB64,
+        clip_path: frame.clipPath || "",
+      }),
     });
     if (!r.ok) throw new Error(`analyze failed: HTTP ${r.status}`);
     return normalizeObservation(await r.json());

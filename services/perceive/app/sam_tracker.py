@@ -168,24 +168,31 @@ class HybridTracker:
             self._miss[slot] = 0
 
 
-def _real_sam3_backend() -> Optional[SamBackend]:
+def _real_sam3_backend(clip_path: str | None = None) -> Optional[SamBackend]:
     """Concrete SAM 3.x tracker, lazily imported so CPU hosts stay safe.
-    `clip_path` comes from the environment on GPU/VOD runs."""
+    `clip_path` is the this-job recorded stream (or PERCEIVE_SAM_CLIP on standalone
+    VOD runs)."""
     try:
         from .sam3_backend import Sam3Backend
 
-        return Sam3Backend(clip_path=os.environ.get("PERCEIVE_SAM_CLIP"))
+        return Sam3Backend(clip_path=clip_path)
     except Exception:
         return None
 
 
-def make_tracker() -> "IoUTracker":
+def make_tracker(clip_path: str | None = None) -> "IoUTracker":
     """Construct the tracker per PERCEIVE_TRACKER (default `iou`). `florence_sam`
     opts into the Florence+SAM hybrid; without a real SAM backend it falls back
-    to the exact Florence->IoU behaviour."""
+    to the exact Florence->IoU behaviour.
+
+    `clip_path` (per JOB, takes precedence over the global PERCEIVE_SAM_CLIP)
+    is the full recorded stream for this session: the Sam3Backend opens a SAM
+    session on it and steps one frame per `advance()` as frames arrive, so the
+    persistent session tracks across the whole stream — Florence re-detects only
+    on SAM loss / cadence / target change."""
     mode = os.environ.get("PERCEIVE_TRACKER", "iou")
     if mode == "florence_sam":
-        b = _real_sam3_backend()
+        b = _real_sam3_backend(clip_path or os.environ.get("PERCEIVE_SAM_CLIP"))
         if b is not None:
             return HybridTracker(detect=None, backend=b)
     return IoUTracker()
