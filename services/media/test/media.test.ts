@@ -25,9 +25,17 @@ class FakeOrch {
     control: "http://orch/ai/trickle/sess-fake-control",
   };
   closed: string[] = [];
+  startedPayments: string[] = [];
+  stoppedPayments: string[] = [];
 
   async provision(): Promise<ProvisionedSession> {
     return this.provisioned;
+  }
+  startPayment(p: ProvisionedSession) {
+    this.startedPayments.push(p.sessionId);
+  }
+  stopPayment(sessionId: string) {
+    this.stoppedPayments.push(sessionId);
   }
   async publishFrame(p: ProvisionedSession, seq: number, jpeg: Uint8Array, ts: number) {
     this.publishes.push({ seq, jpeg: Buffer.from(jpeg), ts });
@@ -89,5 +97,10 @@ describe("media server handshake (b)", () => {
     ws.close();
     await new Promise((r) => setTimeout(r, 150));
     expect(fake.closed).toContain("sess-fake");
+  });
+
+  it("pays the orchestrator while the stream is open and stops paying on teardown", async () => {
+    expect(fake.startedPayments).toContain("sess-fake"); // provision started payment
+    expect(fake.stoppedPayments).toContain("sess-fake"); // the close above stopped it
   });
 });

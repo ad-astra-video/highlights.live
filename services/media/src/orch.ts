@@ -15,7 +15,8 @@
 //   5. GET  {events_out}/{seq}                       -> read the observation (specific seq returns
 //                                                       stored data; -1 streams forever)
 //   6. POST /apps/{app}/session/{sid}/stop           -> release the paid slot
-import { LivepeerClient } from "@highlights/livepeer-session";
+import { LivepeerClient, type SignerClient } from "@highlights/livepeer-session";
+import { createPaymentRefresher, type PaymentRefresher } from "./payments";
 
 export interface ProvisionedSession {
   sessionId: string;
@@ -34,6 +35,14 @@ export interface MediaOrchOptions {
   seedImageB64?: string;
   /** TLS reject for self-signed orchestrator (offchain lab boxes). */
   rejectUnauthorized?: boolean;
+  /** Remote signer (on-chain payment). When absent the session is unpaid (offchain lab). */
+  signer?: SignerClient;
+  /** Payer address advertised on reserve (on-chain). */
+  payerAddress?: string;
+  /** Interval between payment refreshes (default 10s). */
+  paymentIntervalMs?: number;
+  /** Called when a payment refresh fails — the payer stops + releases the slot. */
+  onPaymentFailure?: (sessionId: string, err: Error) => void;
 }
 
 /**
@@ -46,6 +55,7 @@ export class MediaOrchestrator {
   private client: LivepeerClient;
   private opts: Required<Pick<MediaOrchOptions, "seedImageB64" | "rejectUnauthorized" | "paymentHeaders">> & MediaOrchOptions;
   private orchBase: string;
+  private payers = new Map<string, PaymentRefresher>();
   private app = "highlights-perceive";
 
   constructor(opts: MediaOrchOptions) {
@@ -78,7 +88,9 @@ export class MediaOrchestrator {
 
   /** Reserve + open the perceive session's trickle channels. */
   async provision(opts?: { seedImageB64?: string }): Promise<ProvisionedSession> {
-    const res = await this.client.reservePerceive();
+    const res = await this.client.reservePerceive(
+      this.opts.payerAddress ? { payerAddress: this.opts.payerAddress } : undefined
+    );
     const { sessionId, appUrl, controlUrl } = res;
     if (!sessionId) throw new Error("reserve returned no session_id");
 
@@ -139,5 +151,39 @@ export class MediaOrchestrator {
   /** Release the paid slot / perceive session. */
   async closeSession(sessionId: string): Promise<void> {
     await this.client.stopPerceive(sessionId).catch(() => {});
+  }
+
+  /**
+   * Pay the orchestrator for the session for as long as it stays open. No-op
+   * offchain (no signer). On-chain it starts an interval refiller on the
+   * session's controlUrl; a failed refresh calls onPaymentFailure (the caller
+   * closes the stream). Idempotent per session.
+   */
+  startPayment(p: ProvisionedSession): void {
+    const signer = this.opts.signer;
+    if (!signer) return; // offchain lab: sessions are unpaid
+    if (this.payers.has(p.sessionId)) return;
+    let signerState: unknown;
+    const refresh = async () => {
+      const next = await this.client.refreshPerceivePayment(p.sessionId, p.controlUrl, signer, signerState);
+      if (next !== undefined && next !== null) signerState = next;
+    };
+    const ref = createPaymentRefresher({
+      refresh,
+      intervalMs: this.opts.paymentIntervalMs ?? 10_000,
+      onFailure: this.opts.onPaymentFailure
+        ? (e) => this.opts.onPaymentFailure!(p.sessionId, e)
+        : undefined,
+    });
+    this.payers.set(p.sessionId, ref);
+    ref.start();
+  }
+
+  /** Stop paying (settle) for a session. Idempotent. */
+  stopPayment(sessionId: string): void {
+    const ref = this.payers.get(sessionId);
+    if (!ref) return;
+    ref.stop();
+    this.payers.delete(sessionId);
   }
 }
