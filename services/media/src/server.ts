@@ -35,6 +35,8 @@ export interface MediaServerOptions {
   payerAddress?: string;
   paymentIntervalMs?: number;
   port?: number;
+  /** Public origin (LB / Cloudflare front) used for the full WS ingest URL. */
+  publicBaseUrl?: string;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -75,9 +77,13 @@ export class MediaServer {
       this.active.set(p.sessionId, stream);
       // Pay the orchestrator for as long as the stream is open (no-op offchain).
       this.orch.startPayment(p);
+      // Full ingest WS URL (LB/public front), when the operator tells us the
+      // public origin. Clients that can't route by LB fall back to wsPath.
+      const wsBase = (this.opts.publicBaseUrl || "").replace(/\/$/, "").replace(/^http/, "ws");
       return {
         sessionId: p.sessionId,
         wsPath: `/stream/${p.sessionId}`,
+        wsUrl: wsBase ? `${wsBase}/stream/${p.sessionId}` : undefined,
         streamId: stream.streamId,
         jobId: stream.jobId,
       };
