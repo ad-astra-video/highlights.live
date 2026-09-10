@@ -137,6 +137,10 @@ services:
       - NODE_TLS_REJECT_UNAUTHORIZED=0
       - SIGNER_URL=${SIGNER_URL:-}
       - PAYER_ADDRESS=${PAYER_ADDRESS:-}
+      # Public LB / Cloudflare front for the media tier. The media server returns
+      # this as the FULL ws ingest URL on provision so clients can be routed by
+      # the load balancer rather than assuming a path on one node.
+      - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-https://highlights-media.dpn.gg}
     ports:
       - "4070:4070"
     depends_on:
