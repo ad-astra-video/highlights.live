@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -248,5 +249,78 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     expect(res.statusCode).toBe(402);
     expect(res.json().upgrade).toBe("/billing/checkout");
     await app.close();
+  });
+});
+
+describe("media session reroute (DB-tracked)", () => {
+  it("provisions once, reuses while the node is healthy, re-provisions + reroutes when media goes down", async () => {
+    // Tiny fake media server: /health (toggleable), /sessions, /sessions/:sid/close.
+    let down = false;
+    let provisions = 0;
+    const srv = createServer((req, res) => {
+      const url = (req.url || "").split("?")[0];
+      if (url === "/health") {
+        res.writeHead(down ? 500 : 200, { "content-type": "application/json" });
+        res.end(down ? "{}" : '{"status":"ok"}');
+        return;
+      }
+      if (url === "/sessions" && req.method === "POST") {
+        provisions += 1;
+        const n = provisions;
+        req.on("data", () => undefined);
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              sessionId: `sess-${n}`,
+              wsPath: `/stream/sess-${n}`,
+              wsUrl: `ws://127.0.0.1:${(srv.address() as any).port}/stream/sess-${n}`,
+              streamId: `st-${n}`,
+            })
+          );
+        });
+        return;
+      }
+      if (req.method === "POST" && url.endsWith("/close")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"ok":true}');
+        return;
+      }
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end('{"error":"nf"}');
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as any).port;
+
+    const { app, db } = await buildTestApp({ MEDIA_SERVER_URL: `http://127.0.0.1:${port}` });
+    const token = await register(app, "m@test.dev", "password123");
+    const jr = await app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token}` }, payload: { source: "browser", gameHint: "x" } });
+    const jobId = jr.json().job.id;
+
+    const m1 = await app.inject({ method: "POST", url: `/jobs/${jobId}/media`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(m1.statusCode).toBe(200);
+    expect(m1.json().wsUrl).toContain("/stream/sess-1");
+    expect(provisions).toBe(1);
+
+    // healthy + already provisioned -> idempotent reuse, no second session
+    const m2 = await app.inject({ method: "POST", url: `/jobs/${jobId}/media`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(m2.statusCode).toBe(200);
+    expect(m2.json().wsUrl).toBe(m1.json().wsUrl);
+    expect(provisions).toBe(1);
+    const rec = await db.getMediaSession(jobId);
+    expect(rec?.sessionId).toBe("sess-1");
+    expect(rec?.status).toBe("active");
+
+    // media node goes DOWN -> next /media transparently re-provisions + reroutes
+    down = true;
+    const m3 = await app.inject({ method: "POST", url: `/jobs/${jobId}/media`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(m3.statusCode).toBe(200);
+    expect(m3.json().wsUrl).toContain("/stream/sess-2");
+    expect(m3.json().wsUrl).not.toBe(m1.json().wsUrl);
+    expect(provisions).toBe(2);
+    expect((await db.getMediaSession(jobId))!.sessionId).toBe("sess-2");
+
+    await app.close();
+    await new Promise<void>((r) => srv.close(() => r()));
   });
 });

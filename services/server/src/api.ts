@@ -9,7 +9,7 @@ import { analyzeJob, EvidenceTracker, type AnalyzeEvent, type PipelineClient } f
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { LiveIngest, type LiveKind } from "./live";
-import type { Db } from "./db";
+import type { Db, MediaSession } from "./db";
 import { AuthService, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError } from "./billing";
 
@@ -67,14 +67,34 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // session.
   const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string }>();
 
-  // Media-server handshake (b): provision a perceive session on the standalone
-  // media server (the payer/broadcaster) and return the browser's WS path. The
+  async function isMediaHealthy(base: string): Promise<boolean> {
+    try {
+      const r = await fetch(`${base.replace(/\/+$/, "")}/health`, { signal: AbortSignal.timeout(1500) });
+      return r.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  // Media-server handshake: provision a perceive session on the standalone
+  // media server (the payer/broadcaster) and return the browser's WS URL. The
   // Fastify control plane never carries media bytes — the browser streams
   // sampled frames over the returned WS to the media server, which publishes
   // them to the orchestrator's video-in rail.
-  async function provisionMedia(jobId: string): Promise<{ wsUrl: string; mediaSessionId: string }> {
+  //
+  // The session is tracked in the DB (media_sessions) so that:
+  //   - repeat /jobs/:id/media calls are idempotent (reuse the live session),
+  //   - if the media node that served the session goes DOWN, isMediaHealthy()
+  //     fails and we re-provision on a healthy node, seamlessly re-routing the
+  //     browser to a fresh wsUrl (no user action needed).
+  async function provisionMedia(jobId: string): Promise<{ wsUrl: string; mediaSessionId: string; mediaOrigin: string }> {
     if (!cfg.mediaServerUrl) throw new Error("media server not configured (MEDIA_SERVER_URL)");
-    const r = await fetch(`${cfg.mediaServerUrl}/sessions`, {
+    const mediaOrigin = cfg.mediaServerUrl.replace(/\/+$/, "");
+    const existing = await db.getMediaSession(jobId);
+    if (existing && existing.status === "active" && (await isMediaHealthy(existing.mediaOrigin))) {
+      return { wsUrl: existing.wsUrl, mediaSessionId: existing.sessionId, mediaOrigin: existing.mediaOrigin };
+    }
+    const r = await fetch(`${mediaOrigin}/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jobId }),
@@ -83,8 +103,26 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const body: any = await r.json();
     // Prefer the media server's own full URL (LB-routable); fall back to
     // deriving ws:// from MEDIA_SERVER_URL + the returned path.
-    const base = cfg.mediaServerUrl.replace(/\/$/, "").replace(/^http/, "ws");
-    return { wsUrl: body.wsUrl ?? `${base}${body.wsPath}`, mediaSessionId: body.sessionId };
+    const base = mediaOrigin.replace(/^http/, "ws");
+    const wsUrl = body.wsUrl ?? `${base}${body.wsPath}`;
+    const now = new Date().toISOString();
+    await db.setMediaSession({
+      jobId,
+      sessionId: body.sessionId,
+      streamId: body.streamId ?? "",
+      wsUrl,
+      mediaOrigin,
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+    // Keep the in-memory browser job pointer current for teardown.
+    const bj = browserJobs.get(jobId);
+    if (bj) {
+      bj.mediaSessionId = body.sessionId;
+      bj.mediaWsUrl = wsUrl;
+    }
+    return { wsUrl, mediaSessionId: body.sessionId, mediaOrigin };
   }
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));
@@ -374,9 +412,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const bj = browserJobs.get(job.id)!;
       if (bj.sessionId) await adapter.stopPerceive(bj.sessionId).catch(() => {});
       // Media-path session: tell the media server to stop paying + release the
-      // perceive slot (also idempotently triggered by the browser WS closing).
+      // perceive slot (also idempotently triggered by the browser WS closing),
+      // and forget the DB record so a fresh session is provisioned next time.
       if (bj.mediaSessionId && cfg.mediaServerUrl) {
         await fetch(`${cfg.mediaServerUrl}/sessions/${bj.mediaSessionId}/close`, { method: "POST" }).catch(() => {});
+        await db.clearMediaSession(job.id).catch(() => {});
       }
       const recPath = browserRecordingPath(job.id);
       if (existsSync(recPath)) {
@@ -476,7 +516,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
     const bj = browserJobs.get(req.params.id);
     if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
-    if (bj.mediaWsUrl) return { wsUrl: bj.mediaWsUrl, mediaSessionId: bj.mediaSessionId };
+    // Always consult the DB-backed provisioner: it reuses the live session,
+    // or — if the media node serving it went down — transparently re-provisions
+    // on a healthy node so the browser's reconnect is seamlessly re-routed.
     try {
       const { wsUrl, mediaSessionId } = await provisionMedia(req.params.id);
       bj.mediaWsUrl = wsUrl;
