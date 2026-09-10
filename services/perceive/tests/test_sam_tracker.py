@@ -10,18 +10,21 @@ def _white(h=64, w=64):
 
 
 class StubBackend(SamBackend):
-    """plan: list of {slot: box|None} rows, indexed by call; last row repeats."""
+    """plan: list of {slot: box|None} rows, indexed by advance call; last repeats."""
     def __init__(self, plan):
         self.plan = plan
-        self.calls = 0
+        self.row = 0
+        self._cur = {}
 
     def ready(self):
         return True
 
-    def propagate(self, frame_rgb, slot, prompt_box):
-        row = self.plan[min(self.calls, len(self.plan) - 1)]
-        self.calls += 1
-        return row.get(slot)
+    def advance(self, prompts):
+        self._cur = self.plan[min(self.row, len(self.plan) - 1)]
+        self.row += 1
+
+    def get(self, slot):
+        return self._cur.get(slot)
 
 
 class CountingDetect:
