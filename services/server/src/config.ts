@@ -31,8 +31,11 @@ export interface ServerConfig {
   /** Seeded dev admin account (email + password). Override in prod. */
   adminEmail: string;
   adminPassword: string;
-  /** SQLite database file path. */
+  /** SQLite database file path (dev; used when `databaseUrl` is unset). */
   databasePath: string;
+  /** Postgres connection string (prod). When set, the server uses Postgres
+   * instead of SQLite; SQLite stays the local/dev default. */
+  databaseUrl?: string;
   /** Stripe */
   stripeSecretKey?: string;
   stripeWebhookSecret?: string;
@@ -67,6 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     adminEmail: env.ADMIN_EMAIL ?? "admin@highlights.local",
     adminPassword: env.ADMIN_PASSWORD ?? "admin",
     databasePath: env.DATABASE_PATH ?? "data/highlights.db",
+    databaseUrl: env.DATABASE_URL,
     stripeSecretKey: env.STRIPE_SECRET_KEY,
     stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
     stripePricePro: env.STRIPE_PRICE_PRO,

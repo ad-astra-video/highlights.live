@@ -9,7 +9,7 @@ import { analyzeJob, EvidenceTracker, type AnalyzeEvent, type PipelineClient } f
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { LiveIngest, type LiveKind } from "./live";
-import type { SqlDb } from "./db";
+import type { Db } from "./db";
 import { AuthService, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError } from "./billing";
 
@@ -32,7 +32,7 @@ export interface ApiDeps {
   cfg: ServerConfig;
   store: Store;
   adapter: PipelineClient;
-  db: SqlDb;
+  db: Db;
   auth: AuthService;
   billing: BillingService;
 }
@@ -160,7 +160,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // --- auth ---
   app.post<{ Body: { email?: string; password?: string } }>("/auth/register", async (req, reply) => {
     try {
-      return auth.register(req.body?.email ?? "", req.body?.password ?? "");
+      return await auth.register(req.body?.email ?? "", req.body?.password ?? "");
     } catch (e: any) {
       return reply.code(400).send({ error: e.message });
     }
@@ -168,7 +168,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   app.post<{ Body: { email?: string; password?: string } }>("/auth/login", async (req, reply) => {
     try {
-      return auth.login(req.body?.email ?? "", req.body?.password ?? "");
+      return await auth.login(req.body?.email ?? "", req.body?.password ?? "");
     } catch (e: any) {
       return reply.code(401).send({ error: e.message });
     }
@@ -195,11 +195,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   app.get("/billing/status", { preHandler: authReq }, async (req) => {
     const user = (req as any).user as { id: string };
-    const sub = db.getSubscription(user.id);
+    const sub = await db.getSubscription(user.id);
     return {
       tier: sub.tier,
       status: sub.status,
-      usedHighlights: db.countUsage(user.id, "highlight"),
+      usedHighlights: await db.countUsage(user.id, "highlight"),
       freeHighlights: cfg.freeHighlights,
     };
   });
@@ -210,13 +210,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const wireframeRoute = (handler: (user: any, body: any, reply: any) => Promise<any>) =>
     async (req: any, reply: any) => {
       if (!cfg.billingWireframe) return reply.code(404).send({ error: "wireframe billing disabled" });
-      const user = auth.verify((req.headers.authorization as string) || "");
+      const user = await auth.verify((req.headers.authorization as string) || "");
       if (!user) return reply.code(401).send({ error: "unauthorized" });
       return handler(user, req.body || {}, reply);
     };
 
   app.post("/dev/billing/activate", { preHandler: authReq }, wireframeRoute(async (user, body, reply) => {
-    const sub = db.setSubscription(user.id, {
+    const sub = await db.setSubscription(user.id, {
       tier: body.plan === "free" ? "free" : "pro",
       status: "active",
       stripeSubscriptionId: body.stripeSubscriptionId || "wireframe_sub",
@@ -226,13 +226,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   }));
 
   app.post("/dev/billing/deactivate", { preHandler: authReq }, wireframeRoute(async (user, _b, reply) => {
-    const sub = db.setSubscription(user.id, { tier: "free", status: "canceled", stripeSubscriptionId: null, stripeSubItemId: null });
+    const sub = await db.setSubscription(user.id, { tier: "free", status: "canceled", stripeSubscriptionId: null, stripeSubItemId: null });
     return reply.send({ ok: true, sub });
   }));
 
   app.post("/dev/billing/reset-usage", { preHandler: authReq }, wireframeRoute(async (user, _b, reply) => {
-    db.resetUsage(user.id, "highlight");
-    return reply.send({ ok: true, usedHighlights: db.countUsage(user.id, "highlight") });
+    await db.resetUsage(user.id, "highlight");
+    return reply.send({ ok: true, usedHighlights: await db.countUsage(user.id, "highlight") });
   }));
 
   app.post("/stripe/webhook", async (req: any, reply) => {
@@ -250,10 +250,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     { preHandler: authReq },
     async (req, reply) => {
       const user = (req as any).user;
-      const sub = db.getSubscription(user.id);
+      const sub = await db.getSubscription(user.id);
       let billingBlocked = false;
       try {
-        billing.canCreateHighlight(user, sub);
+        await billing.canCreateHighlight(user, sub);
       } catch (e) {
         if (e instanceof BillingRequiredError) billingBlocked = true;
         else throw e;

@@ -236,8 +236,9 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
   it("rejects a user's job when the free allowance is exhausted (402)", async () => {
     const { app, db } = await buildTestApp({ FREE_HIGHLIGHTS: "2" });
     const token = await register(app, "c@test.dev", "password123");
-    db.recordUsage(db.getUserByEmail("c@test.dev")!.id, "highlight");
-    db.recordUsage(db.getUserByEmail("c@test.dev")!.id, "highlight");
+    const cid = (await db.getUserByEmail("c@test.dev"))!.id;
+    await db.recordUsage(cid, "highlight");
+    await db.recordUsage(cid, "highlight");
     const res = await app.inject({
       method: "POST",
       url: "/jobs",

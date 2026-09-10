@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { loadConfig } from "./config";
 import { Store } from "./store";
-import { SqlDb } from "./db";
+import { openDb } from "./db";
 import { AuthService } from "./auth";
 import { BillingService } from "./billing";
 import { buildApp } from "./api";
@@ -12,9 +12,10 @@ async function main() {
   const cfg = loadConfig();
   await mkdir(cfg.dataDir, { recursive: true });
   const store = new Store();
-  const db = new SqlDb(cfg.databasePath);
+  // Prod: Postgres when DATABASE_URL is set; dev: SQLite at databasePath.
+  const db = await openDb(cfg);
   const auth = new AuthService(db, cfg);
-  auth.bootstrapAdmin();
+  await auth.bootstrapAdmin();
 
   const stripe = cfg.stripeSecretKey ? new Stripe(cfg.stripeSecretKey) : null;
   const billing = new BillingService(cfg, db, stripe);

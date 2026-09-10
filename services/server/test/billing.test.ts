@@ -44,25 +44,24 @@ describe("billing", () => {
   it("gates on free allowance and lifts with an active pro sub", async () => {
     const { app, db, billing } = await buildTestApp({ FREE_HIGHLIGHTS: "1" });
     await register(app, "g@x.dev");
-    const user = db.getUserByEmail("g@x.dev")!;
-    const sub = db.getSubscription(user.id);
-    expect(() => billing.canCreateHighlight(user, sub)).not.toThrow();
+    const user = (await db.getUserByEmail("g@x.dev"))!;
+    await expect(billing.canCreateHighlight(user, await db.getSubscription(user.id))).resolves.toBeUndefined();
 
-    db.recordUsage(user.id, "highlight"); // now at cap
-    expect(() => billing.canCreateHighlight(user, db.getSubscription(user.id))).toThrow(BillingRequiredError);
+    await db.recordUsage(user.id, "highlight"); // now at cap
+    await expect(billing.canCreateHighlight(user, await db.getSubscription(user.id))).rejects.toBeInstanceOf(BillingRequiredError);
 
-    db.setSubscription(user.id, { tier: "pro", status: "active", stripeSubscriptionId: "sub_1", stripeSubItemId: "si_usage" });
-    expect(() => billing.canCreateHighlight(user, db.getSubscription(user.id))).not.toThrow();
+    await db.setSubscription(user.id, { tier: "pro", status: "active", stripeSubscriptionId: "sub_1", stripeSubItemId: "si_usage" });
+    await expect(billing.canCreateHighlight(user, await db.getSubscription(user.id))).resolves.toBeUndefined();
     await app.close();
   });
 
   it("meters overage to Stripe once past Pro's included quota", async () => {
     const { db, billing, stripeCalls } = await buildTestApp(STRIPE_CFG);
-    const user = db.createUser({ id: "billing-user", email: "meter@x.dev", passwordHash: "h", role: "user", stripeCustomerId: null });
-    db.setSubscription(user.id, { tier: "pro", status: "active", stripeSubscriptionId: "sub_1", stripeSubItemId: "si_usage" });
+    const user = await db.createUser({ id: "billing-user", email: "meter@x.dev", passwordHash: "h", role: "user", stripeCustomerId: null });
+    await db.setSubscription(user.id, { tier: "pro", status: "active", stripeSubscriptionId: "sub_1", stripeSubItemId: "si_usage" });
     // pro includes 25; onHighlightCreated meters overage beyond that
     for (let i = 0; i < 26; i++) {
-      await billing.onHighlightCreated(user, db.getSubscription(user.id));
+      await billing.onHighlightCreated(user, await db.getSubscription(user.id));
     }
     const usage = stripeCalls.filter((c) => c[0] === "usage.create");
     expect(usage.length).toBeGreaterThan(0);
