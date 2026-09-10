@@ -105,7 +105,7 @@ services:
   # `postgres:5432` over the private hl network. PgDb auto-creates the schema
   # (CREATE TABLE IF NOT EXISTS) on startup.
   postgres:
-    image: postgres:16
+    image: postgres:18
     container_name: highlights-postgres
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-highlights}
