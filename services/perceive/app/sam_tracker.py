@@ -2,29 +2,29 @@
 
 Florence-2 is the open-domain DETECTOR (finds objects, gives class labels) but it
 is not a tracker and its labels are unreliable on un-trained content (game UI).
-SAM 3.1 is the SEGMENTATION/TRACKER: given a point/box prompt it propagates a
-precise mask frame-to-frame. We pair them:
+SAM 3.x is the SEGMENTATION/TRACKER: given a prompt it propagates a precise mask
+frame-to-frame AND handles all cross-frame object state. We pair them:
 
-  - Every frame: SAM 3.1 propagates the tracked target from its prompt (masks ->
-    boxes). Precise, consistent, and it does NOT depend on Florence's vocabulary.
+  - Every frame: the SAM backend advances one frame (segmentation tracker
+    propagates every tracked target's mask). No Florence dependence at runtime.
   - Only when needed: Florence-2 re-detects to (re)seed SAM prompts:
       * SAM lost a target (no mask -> that slot needs a fresh detection), or
       * re-detect cadence elapsed, or
       * the user changed the target (control `seed` -> re-prompt that slot).
 
 The class reuses IoUTracker for the box-level candidate/velocity logic so the
-handoff controller stays small and the existing CD behavior (candidate events,
+handoff controller stays small and the existing CD behaviour (candidate events,
 velocity jump -> KILL/MOVE) is unchanged. When no SAM backend is available
 (CPU / not installed) it degrades EXACTLY to today's Florence->IoU path.
 
 The concrete SAM backend is injected (stub for CPU/tests; real SAM 3.1 behind
-PERCEIVE_TRACKER=florence_sam on a GPU host). We do not hard-import the SAM3 SDK
-here so this module always imports on CPU.
+PERCEIVE_TRACKER=florence_sam + SAM3 SDK on a GPU/3.12 host). We do not
+hard-import the SAM3 SDK here so this module always imports on CPU.
 """
 from __future__ import annotations
 
 import os
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -35,25 +35,29 @@ DetectFn = Callable[[np.ndarray], List[dict]]
 
 
 class SamBackend:
-    """Minimal interface a SAM-3.x segmentation tracker must implement.
+    """Per-frame segmentation-tracker backend (SAM 3.x behind HybridTracker).
 
-    `propagate(frame_rgb, prompt_box)` runs SAM on the given frame to continue
-    the object defined by `prompt_box`, returning its new box (normalized) or
-    None if the target is not present / mask lost.
+    `advance(prompts)` runs the tracker forward ONE frame given the current
+    slot->prompt map (re-seeding any slot whose prompt changed, per SAM 3's
+    reset-then-add semantics), then `get(slot)` returns that slot's box (or
+    None when the target is absent this frame). SAM owns all cross-frame state.
     """
 
     def ready(self) -> bool:
         raise NotImplementedError
 
-    def propagate(self, frame_rgb: np.ndarray, slot: int, prompt_box: BBox) -> Optional[BBox]:
+    def advance(self, prompts: Dict[int, BBox]) -> None:
+        raise NotImplementedError
+
+    def get(self, slot: int) -> Optional[BBox]:
         raise NotImplementedError
 
 
 class HybridTracker:
-    """Florence(detect) + SAM3(track) hybrid. Same public surface as IoUTracker.
+    """Florence(detect) + SAM(track) hybrid. Same public surface as IoUTracker.
 
     Pass `detect` (Florence) and `backend` (SAM). With no backend it falls back
-    to IoU over Florence boxes — byte-for-byte the previous behaviour.
+    to IoU over Florence boxes — the previous behaviour exactly.
     """
 
     def __init__(
@@ -71,7 +75,7 @@ class HybridTracker:
         self.redetect_every = redetect_every
         self.lost_before_redetect = lost_before_redetect
         self._iou = IoUTracker(jump_velocity=jump_velocity, lost_before_evict=lost_before_evict, cooldown_s=cooldown_s)
-        # slot -> prompt box SAM is currently tracking; slot -> miss count
+        # slot -> box prompt SAM is currently tracking; slot -> miss count
         self._prompts: Dict[int, BBox] = {}
         self._miss: Dict[int, int] = {}
         self._since_detect = 0
@@ -103,25 +107,29 @@ class HybridTracker:
     # --- frame step ---------------------------------------------------------
     def step_frame(self, frame_rgb: np.ndarray, ts: float, florence_boxes: Optional[List[BBox]] = None) -> List[Track]:
         """Advance one frame. `florence_boxes` come from the caller's Florence
-        pass THIS frame (already computed upstream) and are used as the seed -
-         fallback source when SAM is off or can't be used."""
-        boxes: List[BBox] = []
-        if self._backend is not None and self._backend.ready():
-            boxes = self._sam_step(frame_rgb) if self._prompts else (florence_boxes or [])
+        pass THIS frame (already computed upstream) and seed the IoU layer when
+        SAM is off or can't be used."""
+        if self._backend is not None and self._backend.ready() and self._prompts:
+            boxes = self._sam_step(frame_rgb, florence_boxes)
         else:
             # No SAM: pure Florence -> IoU (unchanged behaviour).
             boxes = florence_boxes or []
             self._since_detect += 1
         return self._iou.step(boxes, ts)
 
-    def _sam_step(self, frame_rgb: np.ndarray) -> List[BBox]:
-        """Run SAM propagation for every tracked slot, deciding when to ask
-        Florence to re-detect. Returns the boxes to feed the IoU CD layer."""
+    def _sam_step(self, frame_rgb: np.ndarray, florence_boxes: Optional[List[BBox]] = None) -> List[BBox]:
+        """Run SAM one frame ahead for every tracked slot, deciding when to ask
+        Florence to re-detect. Returns the boxes to feed the IoU CD layer.
+
+        Re-detect re-prompting uses the caller's already-computed Florence boxes
+        for THIS frame when provided (no redundant model pass); otherwise falls
+        back to calling the injected `detect` callable."""
         self._since_detect += 1
         need_redetect = self._since_detect >= self.redetect_every
+        self._backend.advance(dict(self._prompts))  # one frame's compute for all slots
         sam_boxes: List[BBox] = []
-        for slot, prompt in list(self._prompts.items()):
-            b = self._backend.propagate(frame_rgb, slot, prompt)
+        for slot in list(self._prompts.keys()):
+            b = self._backend.get(slot)
             if b is None:
                 self._miss[slot] = self._miss.get(slot, 0) + 1
                 if self._miss[slot] >= self.lost_before_redetect:
@@ -131,46 +139,44 @@ class HybridTracker:
                 self._prompts[slot] = b  # carry the prompt forward
                 sam_boxes.append(b)
 
-        if need_redetect and self._detect is not None:
-            det = self._detect(frame_rgb) or []
-            boxes = [d["bbox"] for d in det if d.get("bbox")]
-            self._reseed_from(boxes)
+        if need_redetect:
+            if florence_boxes is None and self._detect is not None:
+                det = self._detect(frame_rgb) or []
+                florence_boxes = [d["bbox"] for d in det if d.get("bbox")]
+            self._reseed_from(florence_boxes or [])
             self._since_detect = 0
-            return boxes or sam_boxes
-        # SAM only: keep precisely-tracked boxes, but also keep dropped slots
-        # absent (they'll trigger a re-detect next cycle).
+            return florence_boxes or sam_boxes
         return sam_boxes
 
     def _reseed_from(self, boxes: List[BBox]) -> None:
         """Re-prompt SAM slots from a fresh Florence detection set."""
-        used: set[int] = set()
+        boxes = list(boxes)
         # refresh existing tracked slots with the nearest detected box when possible
         for slot in list(self._prompts.keys()):
-            cur = self._iou.tracks
-            tr = next((t for t in cur if t.slot == slot), None)
+            tr = next((t for t in self._iou.tracks if t.slot == slot), None)
             if tr is not None:
                 best = _nearest_box(tr.bbox, boxes)
                 if best is not None:
                     self._prompts[slot] = best
+                    self._miss[slot] = 0
                     boxes.remove(best)
-                    used.add(slot)
         # seed empty slots from remaining detections
         free = [s for s in range(MAX_TRACKS) if s not in self._prompts]
         for slot, b in zip(free, boxes):
             self._iou.seed(b)
             self._prompts[slot] = b
             self._miss[slot] = 0
-        self._miss = {s: 0 for s in self._prompts}
 
 
 def _real_sam3_backend() -> Optional[SamBackend]:
-    """Concrete SAM 3.x (segment-anything-3) tracker. This is GPU-side work
-    (SDK + device + model weights) that can't run on a CPU-only host, so it
-    returns None here; setting PERCEIVE_TRACKER=florence_sam then degrades
-    safely to the Florence->IoU path. Implement by importing the SAM SDK and
-    wrapping the SAM video-propagation calls behind `SamBackend.propagate`
-    (per-slot point/box prompt -> next-frame mask box, or None when lost)."""
-    return None
+    """Concrete SAM 3.x tracker, lazily imported so CPU hosts stay safe.
+    `clip_path` comes from the environment on GPU/VOD runs."""
+    try:
+        from .sam3_backend import Sam3Backend
+
+        return Sam3Backend(clip_path=os.environ.get("PERCEIVE_SAM_CLIP"))
+    except Exception:
+        return None
 
 
 def make_tracker() -> "IoUTracker":

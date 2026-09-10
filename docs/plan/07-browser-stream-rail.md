@@ -97,6 +97,24 @@ the main server). Control path = Fastify + Orchestrator
   SAM loss (no mask) or target change / re-detect cadence. Handoff logic unit-tested
   with a stub backend. Enabled via PERCEIVE_TRACKER=florence_sam; without a real
   SAM backend it degrades to Florence->IoU (current default, unchanged).
+
+  SAM 3.1 is per-frame, not whole-video: `propagate_in_video` is a driver loop
+  over a per-frame step (`sam3/model/sam3_video_inference.py` `_run_single_frame_inference`,
+  yields `out["obj_id_to_mask"]` per frame), driven one frame at a time via
+  `propagate_in_video(start_frame_idx=f, max_frame_num_to_track=1)`. So the real
+  backend (app/sam3_backend.py, `Sam3Backend`) reuses SAM's OWN session/state and
+  its obj_id-keyed multi-mask tracking instead of reimplementing tracking:
+  slot->obj_id 1:1, box prompt -> single positive center point, per-frame
+  `advance(prompts)` + `get(slot)` (mask->bbox, None when target absent this frame).
+  `advance()` distinguishes SAM DRIFT (prompt == box we last returned; normal,
+  keep seeding) from an EXTERNAL target change (user seed / Florence re-detect;
+  reset + re-add per SAM 3's reset-then-add). All of this — per-frame stepping,
+  multi-slot tracking, drift-vs-change, loss->Florence re-detect — is testable
+  against a fake predictor that mimics handle_request / handle_stream_request
+  / obj_id_to_mask (tests/test_sam3_backend.py), so it runs without triton/weights.
+  `sam3` still hard-imports triton (CUDA), so `ready()` is False on CPU hosts and
+  the hybrid falls back to Florence->IoU; a real run needs the .venv312 host +
+  HF token for facebook/sam3.1 weights + a clip path (PERCEIVE_SAM_CLIP).
 - TODO: audio-burst feature — spectral/energy detector on the audio segments
   (crowd/announcer spike) → scalar evidence the decide stage can weigh.
 
