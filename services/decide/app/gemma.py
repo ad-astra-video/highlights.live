@@ -62,7 +62,13 @@ def parse_decision(text: str) -> dict | None:
     }
 
 
-def build_prompt(event_type: str, evidence: dict, game_hint: str = "") -> str:
+def build_prompt(
+    event_type: str,
+    evidence: dict,
+    game_hint: str = "",
+    n_frames: int = 1,
+    has_audio: bool = False,
+) -> str:
     ev = event_type.upper()
     meta = [
         f"candidate event type: {ev}",
@@ -70,11 +76,18 @@ def build_prompt(event_type: str, evidence: dict, game_hint: str = "") -> str:
         f"track count: {evidence.get('trackCount', 0)}",
         f"max tracked velocity: {evidence.get('maxVelocity', 0):.2f}",
         f"ocr hits: {evidence.get('ocrHits', 0)}",
+        f"frames shown (1 FPS temporal window): {n_frames}",
+        f"audio provided (commentary/crowd): {'yes' if has_audio else 'no'}",
     ]
     return (
-        "You are a sports/esports highlight judge. You are shown the source frame "
-        "(and track-crop images) from the moment of a detected candidate event.\n"
-        "Decide whether this is a real highlight worth clipping.\n"
+        "You are a sports/esports highlight judge. You are shown a temporal "
+        "SEQUENCE of frames (extracted at 1 FPS from the moment of a detected "
+        "candidate event) plus the context images, and, when available, the "
+        "accompanying audio.\n"
+        "Reason across the frame sequence (motion, position, ball/foot/player "
+        "location, scoreboard/OCR) AND the audio (commentary, crowd, whistle) to "
+        "decide whether this is a real highlight worth clipping, and to classify "
+        "the event precisely.\n"
         "Context:\n- " + "\n- ".join(meta) + "\n\n"
         "Do NOT provide any reasoning or thinking. Answer immediately with ONLY one "
         "JSON object, no markdown, no preamble, exactly: "
@@ -88,21 +101,43 @@ def ask(
     evidence: dict,
     game_hint: str = "",
     images: list | None = None,
+    frames: list | None = None,
+    audio_b64: str = "",
+    audio_sample_rate: int = 16000,
     timeout_s: float = 180.0,
 ) -> dict | None:
     """Call llama-server multimodal completion. Returns a parsed/validated
-    HighlightDecision dict, or None on any transport/parse failure."""
+    HighlightDecision dict, or None on any transport/parse failure.
+
+    Follows the Gemma 4 12B video+audio modality-order guidance: all image
+    content (temporal frame sequence + crops) comes BEFORE the text prompt,
+    and any audio comes AFTER the text. Audio is mono 16 kHz float32 (wav)."""
     import httpx
 
-    content: list = [{"type": "text", "text": build_prompt(event_type, evidence, game_hint)}]
-    for img in images or []:
-        b64 = img.get("base64") or img.get("image") or ""
+    frames = frames or []
+    images = images or []
+
+    def _img(part: dict) -> dict | None:
+        b64 = part.get("base64") or part.get("image") or ""
         if not b64:
-            continue
+            return None
+        return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+
+    # 1) frames + images (all image content) BEFORE the text prompt
+    content: list = [i for i in (_img(p) for p in frames + images) if i is not None]
+    # 2) the text prompt, in the middle
+    content.append(
+        {
+            "type": "text",
+            "text": build_prompt(event_type, evidence, game_hint, n_frames=len(frames), has_audio=bool(audio_b64)),
+        }
+    )
+    # 3) audio AFTER the text (modality-order rule)
+    if audio_b64:
         content.append(
             {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                "type": "audio_url",
+                "audio_url": {"url": f"data:audio/wav;base64,{audio_b64}"},
             }
         )
 
@@ -135,12 +170,15 @@ def decide_with_gemma(
     evidence: dict,
     game_hint: str = "",
     images: list | None = None,
+    frames: list | None = None,
+    audio_b64: str = "",
+    audio_sample_rate: int = 16000,
     url: str | None = None,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision."""
     u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
-    g = ask(u, event_type, evidence, game_hint, images)
+    g = ask(u, event_type, evidence, game_hint, images, frames, audio_b64, audio_sample_rate)
     if g is not None:
         return g
     # fallback: deterministic rule

@@ -31,6 +31,14 @@ class HighlightRequest(BaseModel):
     # JPEGs passed as base64 (full frame + track crops) so the Gemma vision
     # projector can actually see the moment (plan §3.7). Rule mode ignores them.
     images: list[ImageRef] = Field(default_factory=list)
+    # Temporal frame window (1 FPS) around the candidate, so Gemma 4 12B reasons
+    # across a SEQUENCE (video understand), not a single still. All images are
+    # placed BEFORE the text prompt per Gemma 4 12B modality-order guidance.
+    frames: list[ImageRef] = Field(default_factory=list)
+    # Accompanying audio (mono 16 kHz float32 WAV, base64; <=30s). Placed AFTER
+    # the text prompt per Gemma 4 12B guidance. 25 tokens/sec of audio.
+    audioB64: str = Field(default="", description="mono 16kHz float32 WAV, base64")
+    audioSampleRate: int = Field(default=16000, ge=8000, le=48000)
 
 
 def _is_gemma_mode() -> bool:
@@ -58,6 +66,9 @@ def create_app() -> FastAPI:
                 evidence=req.evidence.model_dump(),
                 game_hint=req.gameHint,
                 images=[img.model_dump() for img in req.images],
+                frames=[fr.model_dump() for fr in req.frames],
+                audio_b64=req.audioB64,
+                audio_sample_rate=req.audioSampleRate,
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
             )
         d = decide(
