@@ -60,7 +60,7 @@ services:
   # for the card). Operator bind-mounts the already-downloaded GGUF + mmproj at
   # ./models/ (see docs/plan/03-decide-runner.md).
   gemma:
-    image: ghcr.io/ggerganov/llama.cpp:server-cuda
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
     container_name: highlights-gemma
     entrypoint: [""]
     command:
@@ -68,7 +68,7 @@ services:
       - --model
       - /models/gemma-4-12b-it-qat-q4_0.gguf
       - --mmproj
-      - /models/gemma-4-12b-mmproj-f16.gguf
+      - /models/mmproj-gemma-4-12b-it-qat-q4_0.gguf
       - --host
       - 0.0.0.0
       - --port
