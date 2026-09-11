@@ -47,19 +47,60 @@ services:
       retries: 30
     networks: [hl]
 
+  # Gemma 4 12B QAT (google/gemma-4-12B-it-qat-q4_0-gguf) — the DECIDE VLM and
+  # (future) browser-available "context engine". llama.cpp `llama-server`
+  # exposes OpenAI /v1/chat/completions natively (what services/decide's
+  # gemma.py calls), with the mmproj vision projector so it sees the frame
+  # sequence + audio per the Gemma 4 12B video/audio modality-order guidance.
+  # SMALL/dense q4_0 QAT fits an RTX 5060 Ti on .6 with a decent ctx.
+  #
+  # Blackwell (sm_120/121) note: stock llama.cpp CUDA images may lack Blackwell
+  # kernels — if the prebuilt image fails to load, build from source like the
+  # video-creator gemma-worker.Dockerfile (llama-cpp-python, CMAKE_CUDA_ARCHS
+  # for the card). Operator bind-mounts the already-downloaded GGUF + mmproj at
+  # ./models/ (see docs/plan/03-decide-runner.md).
+  gemma:
+    image: ghcr.io/ggerganov/llama.cpp:server-cuda
+    container_name: highlights-gemma
+    entrypoint: [""]
+    command:
+      - llama-server
+      - --model
+      - /models/gemma-4-12b-it-qat-q4_0.gguf
+      - --mmproj
+      - /models/gemma-4-12b-mmproj-f16.gguf
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8088"
+      - --ctx-size
+      - "16384" # q4_0 12B + vision tokens: comfortable room for a frame window + audio
+    volumes:
+      - ./models:/models:ro
+    expose: ["8088"] # only on the private hl network (decide talks to it)
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8088/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks: [hl]
+
   decide:
     build:
       context: ..
       dockerfile: docker/Dockerfile.decide
     container_name: highlights-decide
     expose: ["8081"]
-    # Real Gemma 4 12B QAT via an external llama.cpp llama-server (see
+    # Real Gemma 4 12B QAT via the in-compose gemma llama-server (see
     # docs/plan/03-decide-runner.md). DECIDE_MODE=rule falls back to the stub.
     environment:
-      - DECIDE_MODE=${DECIDE_MODE:-rule}
-      - GEMMA_URL=${GEMMA_URL:-http://host.docker.internal:8088}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - DECIDE_MODE=${DECIDE_MODE:-gemma}
+      - GEMMA_URL=${GEMMA_URL:-http://gemma:8088}
+      - GEMMA_MODEL=${GEMMA_MODEL:-gemma-4-12b-it-qat-q4_0}
+    depends_on:
+      gemma:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8081/health')"]
       interval: 5s
