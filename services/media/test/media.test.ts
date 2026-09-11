@@ -3,6 +3,9 @@ import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
 import { MediaServer } from "../src/server";
 import type { ProvisionedSession } from "../src/orch";
+import { readFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 const wsConnect = (url: string) =>
   new Promise<WebSocket>((res, rej) => {
@@ -153,6 +156,34 @@ describe("media server handshake (b)", () => {
     await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-nocli" } }); // no WS ever connects
     await new Promise((r) => setTimeout(r, 300)); // > provisionNoClientMs (100)
     expect(g.closed).toContain("sess-nocli");
+    await srv.close();
+  });
+
+  it("reassembles muxed (video+audio) MediaRecorder chunks in arrival order", async () => {
+    const g = new FakeOrch("sess-mux");
+    const tmp = mkdtempSync(path.join(tmpdir(), "hl-media-"));
+    const ms = new MediaServer(
+      { orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", reconnectGraceMs: 1000, tmpDir: tmp },
+      g as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    const res = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-mux" } });
+    const sid = res.json().sessionId;
+    const ws = await wsConnect(`${sBase.replace("http", "ws")}/stream/${sid}`);
+    // two muxed chunks, in timeline order (the container PTS is authoritative)
+    ws.send(JSON.stringify({ type: "media", mime: "video/webm", seq: 1, timestamp: 1, data: Buffer.from("AA").toString("base64") }));
+    ws.send(JSON.stringify({ type: "media", mime: "video/webm", seq: 2, timestamp: 2, data: Buffer.from("BB").toString("base64") }));
+    await new Promise((r) => setTimeout(r, 150)); // let them write
+    // muxed chunks must NOT be published as single frames to the vision rail
+    expect(g.publishes.length).toBe(0);
+    // close -> teardown flushes + closes the recording
+    await srv.inject({ method: "POST", url: `/sessions/${sid}/close` });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(readFileSync(path.join(tmp, `${sid}.webm`)).toString()).toBe("AABB");
+    expect(g.closed).toContain(sid);
+    ws.close();
     await srv.close();
   });
 

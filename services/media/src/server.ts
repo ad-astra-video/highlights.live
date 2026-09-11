@@ -12,6 +12,9 @@
 // generation still runs). Any close (WS drop, explicit) tears the stream down:
 // payment stops + the perceive slot is released.
 import { randomUUID } from "node:crypto";
+import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
@@ -22,6 +25,10 @@ interface ActiveStream {
   provisioned: ProvisionedSession;
   sockets: Set<any>;
   closed: boolean;
+  /** Muxed (video+audio) MediaRecorder chunks reassembled in arrival order.
+   *  Lazily created on the first muxed chunk; the container's own PTS is the
+   *  authoritative clock for clip cutting AND for feeding the analysis rails. */
+  recording?: { path: string; mime: string; stream: WriteStream };
 }
 
 export interface MediaServerOptions {
@@ -51,7 +58,11 @@ export interface MediaServerOptions {
    * opened the WS). Default 60000. <=0 disables.
    */
   provisionNoClientMs?: number;
+  /** Directory where per-session muxed recordings are reassembled. Default tmpdir. */
+  tmpDir?: string;
 }
+
+const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
 
 const DEFAULT_RECONNECT_GRACE_MS = 8000;
 
@@ -168,6 +179,15 @@ export class MediaServer {
     } catch {
       return;
     }
+    // Option-A transport: the browser streams muxed (video+audio) MediaRecorder
+    // chunks ({type:"media", data, mime, seq, timestamp}). The container's PTS
+    // is authoritative, so no separate video/audio timestamping is needed. We
+    // reassemble the chunks into the session recording for clip-cutting; the
+    // steer-to-perceive decode is added on top of the same hook.
+    if (msg?.type === "media") {
+      this.handleMediaChunk(stream, msg);
+      return;
+    }
     const { seq, image, timestamp } = msg ?? {};
     if (typeof seq !== "number" || typeof image !== "string" || !image) return;
     const jpeg = Buffer.from(image, "base64");
@@ -199,6 +219,23 @@ export class MediaServer {
         /* skip */
       }
     }
+  }
+
+  /** Append one muxed MediaRecorder chunk (base64) to the session recording,
+   *  in arrival (container timestamp) order. Lazily creates the target file. */
+  private handleMediaChunk(stream: ActiveStream, msg: any) {
+    if (typeof msg.data !== "string" || !msg.data) return;
+    const buf = Buffer.from(msg.data, "base64");
+    if (!buf.length) return;
+    const mime = typeof msg.mime === "string" ? msg.mime : "video/webm";
+    if (!stream.recording) {
+      const dir = this.opts.tmpDir || tmpdir();
+      mkdirSync(dir, { recursive: true });
+      const ext = EXT_BY_MIME[mime] ?? "webm";
+      const recPath = path.join(dir, `${stream.provisioned.sessionId}.${ext}`);
+      stream.recording = { path: recPath, mime, stream: createWriteStream(recPath, { flags: "a" }) };
+    }
+    stream.recording.stream.write(buf);
   }
 
   private async callback(stream: ActiveStream, obs: any) {
@@ -256,6 +293,15 @@ export class MediaServer {
     const stream = this.active.get(sid);
     if (!stream || stream.closed) return;
     stream.closed = true;
+    // Close the reassembled muxed recording (flush pending chunk bytes).
+    if (stream.recording) {
+      try {
+        stream.recording.stream.end();
+      } catch {
+        /* already closed */
+      }
+      stream.recording = undefined;
+    }
     // 1) stop paying (no more ticket refresh). Idempotent.
     this.orch.stopPayment(sid);
     // 2) drop remaining sockets.
