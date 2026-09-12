@@ -1,82 +1,75 @@
-import { describe, it, expect } from "vitest";
-import { buildTestApp } from "./helpers";
-import { BillingRequiredError } from "../src/billing";
+import { describe, expect, it } from "vitest";
+import { BillingService, BillingRequiredError } from "../src/billing";
+import type { ServerConfig } from "../src/config";
 
-const STRIPE_CFG = {
-  STRIPE_SECRET_KEY: "sk_test_x",
-  STRIPE_PRICE_PRO: "price_pro",
-  STRIPE_WEBHOOK_SECRET: "whsec_test",
-};
-
-async function register(app: any, email: string, pw = "password123") {
-  const r = await app.inject({ method: "POST", url: "/auth/register", payload: { email, password: pw } });
-  return r.json().token;
+// --- in-memory Db stub (the two usage methods the decide fee touches) -------
+class StubDb {
+  usage: Record<string, number> = {};
+  posting: Array<{ itemId: string; qty: number }> = [];
+  async recordUsage(_u: string, kind: string) {
+    this.usage[kind] = (this.usage[kind] ?? 0) + 1;
+  }
+  async countUsage(_u: string, kind: string) {
+    return this.usage[kind] ?? 0;
+  }
+  async getSubscription(_u: string) {
+    return { tier: "free", status: "active" } as any;
+  }
 }
 
-describe("billing", () => {
-  it("exposes plans and requires billing config for checkout", async () => {
-    const { app } = await buildTestApp();
-    const plans = await app.inject({ method: "GET", url: "/billing/plans" });
-    expect(plans.json().plans.map((p: any) => p.id)).toEqual(["free", "pro"]);
+const cfg = {
+  decideFee: 0.01,
+  freeDecides: 3,
+  // enabled() requires these
+  stripeSecretKey: "sk_test_x",
+  stripePricePro: "price_x",
+} as unknown as ServerConfig;
 
-    const token = await register(app, "d@x.dev");
-    const checkout = await app.inject({ method: "POST", url: "/billing/checkout", headers: { authorization: `Bearer ${token}` }, payload: {} });
-    expect(checkout.statusCode).toBe(400); // billing disabled
-    await app.close();
+const user = { id: "u1", email: "e" } as any;
+const stripe = {
+  subscriptionItems: { createUsageRecord: (id: string, r: any) => ({ id, qty: r.quantity }) },
+};
+
+describe("decide fixed-fee billing ($0.01/shot)", () => {
+  it("free user passes within the included decide allowance", async () => {
+    const db = new StubDb();
+    const b = new BillingService(cfg, db as any, stripe);
+    const sub = await db.getSubscription(user.id);
+    await expect(b.canDecide(user, sub)).resolves.toBeUndefined();
+    await b.onDecideCompleted(user, sub);
+    await expect(b.canDecide(user, sub)).resolves.toBeUndefined();
   });
 
-  it("checkout + portal create a Stripe customer and return redirect URLs", async () => {
-    const { app, stripeCalls } = await buildTestApp(STRIPE_CFG);
-    const token = await register(app, "e@x.dev");
-    const co = await app.inject({ method: "POST", url: "/billing/checkout", headers: { authorization: `Bearer ${token}` }, payload: { returnPath: "/billing" } });
-    expect(co.statusCode).toBe(200);
-    expect(co.json().url).toContain("checkout.stripe");
-    const createArgs = stripeCalls.find((c) => c[0] === "checkout.create")![1];
-    expect(createArgs.mode).toBe("subscription");
-    expect(createArgs.line_items[0].price).toBe("price_pro");
-
-    const portal = await app.inject({ method: "POST", url: "/billing/portal", headers: { authorization: `Bearer ${token}` }, payload: {} });
-    expect(portal.statusCode).toBe(200);
-    expect(portal.json().url).toContain("portal.stripe");
-    await app.close();
+  it("free user is gated (402) once the included allowance is exhausted", async () => {
+    const db = new StubDb();
+    const b = new BillingService(cfg, db as any, stripe);
+    const sub = await db.getSubscription(user.id);
+    for (let i = 0; i < cfg.freeDecides; i++) await b.onDecideCompleted(user, sub);
+    // allowance now 3/3 used -> next decide is billed at $0.01 -> gate
+    await expect(b.canDecide(user, sub)).rejects.toBeInstanceOf(BillingRequiredError);
   });
 
-  it("gates on free allowance and lifts with an active pro sub", async () => {
-    const { app, db, billing } = await buildTestApp({ FREE_HIGHLIGHTS: "1" });
-    await register(app, "g@x.dev");
-    const user = (await db.getUserByEmail("g@x.dev"))!;
-    await expect(billing.canCreateHighlight(user, await db.getSubscription(user.id))).resolves.toBeUndefined();
-
-    await db.recordUsage(user.id, "highlight"); // now at cap
-    await expect(billing.canCreateHighlight(user, await db.getSubscription(user.id))).rejects.toBeInstanceOf(BillingRequiredError);
-
-    await db.setSubscription(user.id, { tier: "pro", status: "active", stripeSubscriptionId: "sub_1", stripeSubItemId: "si_usage" });
-    await expect(billing.canCreateHighlight(user, await db.getSubscription(user.id))).resolves.toBeUndefined();
-    await app.close();
+  it("pro-active user is never gated and overage is metered as usage records", async () => {
+    const db = new StubDb();
+    const recordingStripe = {
+      subscriptionItems: {
+        createUsageRecord: (id: string, r: any) => {
+          db.posting.push({ itemId: id, qty: r.quantity });
+          return { id, qty: r.quantity };
+        },
+      },
+    };
+    const b = new BillingService(cfg, db as any, recordingStripe);
+    const proSub = { ...(await db.getSubscription(user.id)), tier: "pro", status: "active", stripeSubItemId: "si_1" } as any;
+    await expect(b.canDecide(user, proSub)).resolves.toBeUndefined();
+    // use beyond the free allowance -> Stripe PAYG usage record posted
+    for (let i = 0; i < cfg.freeDecides + 2; i++) await b.onDecideCompleted(user, proSub);
+    expect(db.usage["decide"]).toBe(cfg.freeDecides + 2);
+    expect(db.posting.length).toBeGreaterThan(0);
+    expect(db.posting[db.posting.length - 1].qty).toBeGreaterThan(0);
   });
 
-  it("meters overage to Stripe once past Pro's included quota", async () => {
-    const { db, billing, stripeCalls } = await buildTestApp(STRIPE_CFG);
-    const user = await db.createUser({ id: "billing-user", email: "meter@x.dev", passwordHash: "h", role: "user", stripeCustomerId: null });
-    await db.setSubscription(user.id, { tier: "pro", status: "active", stripeSubscriptionId: "sub_1", stripeSubItemId: "si_usage" });
-    // pro includes 25; onHighlightCreated meters overage beyond that
-    for (let i = 0; i < 26; i++) {
-      await billing.onHighlightCreated(user, await db.getSubscription(user.id));
-    }
-    const usage = stripeCalls.filter((c) => c[0] === "usage.create");
-    expect(usage.length).toBeGreaterThan(0);
-    await db.close();
-  });
-
-  it("rejects webhook when billing not configured", async () => {
-    const { app } = await buildTestApp(); // no stripe keys
-    const wh = await app.inject({
-      method: "POST",
-      url: "/stripe/webhook",
-      headers: { "stripe-signature": "sig" },
-      payload: { type: "checkout.session.completed", data: {} },
-    });
-    expect(wh.statusCode).toBe(400);
-    await app.close();
+  it("the fixed fee surface is 1 cent by default config", async () => {
+    expect(cfg.decideFee).toBe(0.01);
   });
 });

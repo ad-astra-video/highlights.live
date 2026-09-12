@@ -473,6 +473,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         let highlight: any = null;
         if (res.candidate) {
           emitJobEvent(req.params.id, { seq, timestamp, type: "candidate", candidate: res.candidate });
+          // Fixed-fee single-shot decide (Gemma 4 12B): gate + meter at the call.
+          const duser = (req as any).user;
+          const dsub = await db.getSubscription(duser.id);
+          await billing.canDecide(duser, dsub).catch((err: any) => {
+            if (err?.statusCode === 402) {
+              emitJobEvent(req.params.id, { seq, timestamp, type: "candidateBlocked", reason: String(err?.message) });
+            }
+            throw err;
+          });
           const d = await adapter.decide(
             {
               eventType: res.candidate.eventType,
@@ -482,6 +491,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             },
             { gameHint: job.gameHint || cfg.gameHintDefault, imageB64: image }
           );
+          await billing.onDecideCompleted(duser, dsub);
           if (d.isHighlight) {
             highlight = {
               id: randomUUID(),
