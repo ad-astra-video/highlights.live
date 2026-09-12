@@ -41,6 +41,10 @@ export function Dashboard() {
   const [videoPath, setVideoPath] = useState("/data/test_vod.mp4");
   const [gameHint, setGameHint] = useState("Esports");
   const [lookFor, setLookFor] = useState(GAME_DEFAULTS.Esports);
+  // Decider settings. reasoningEffort = Gemma 4 12B thinking level per decision:
+  // "none" (default) returns strict JSON instantly; low/medium/high keep the
+  // chain of thought for harder calls (slower, costs more tokens per decide).
+  const [reasoningEffort, setReasoningEffort] = useState("none");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<any>(null);
@@ -181,8 +185,27 @@ export function Dashboard() {
         <label className="mb-2 mt-5 block text-xs uppercase tracking-wide text-mut">What to look for</label>
         <input className="input-neon" value={lookFor} onChange={(e) => setLookFor(e.target.value)} />
 
+        {/* Decider settings — lives in the settings panel, applies to every decide call */}
+        <label className="mb-2 mt-5 block text-xs uppercase tracking-wide text-mut">Settings</label>
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-xs text-mut">
+            Decide reasoning
+            <select
+              className="rounded border border-neon/40 bg-black/60 px-2 py-1 text-xs text-white"
+              value={reasoningEffort}
+              onChange={(e) => setReasoningEffort(e.target.value)}
+              title="Gemma 4 12B thinking effort per decision. none = instant strict JSON (default)."
+            >
+              <option value="none">none (off)</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </label>
+        </div>
+
         {source === "screenshare" ? (
-          <BrowserCapture gameHint={gameHint} onDone={() => refreshHighlights().catch(() => {})} />
+          <BrowserCapture gameHint={gameHint} reasoningEffort={reasoningEffort} onDone={() => refreshHighlights().catch(() => {})} />
         ) : (
           <>
             {liveJob && (
