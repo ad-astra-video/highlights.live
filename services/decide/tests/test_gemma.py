@@ -69,6 +69,22 @@ class MockLlama:
         self._srv.shutdown()
 
 
+def test_decide_sends_thinking_off():
+    # QAT thinking mode otherwise burns the budget on reasoning_content and returns
+    # empty content -> rule fallback. reasoning_effort="none" disables it (llama.cpp).
+    mock = MockLlama('{"isHighlight":false,"score":10,"eventType":"NONE","reason":"quiet"}')
+    try:
+        decide_with_gemma(
+            "NONE",
+            {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0},
+            url=f"http://127.0.0.1:{mock.port}",
+        )
+    finally:
+        mock.stop()
+    assert mock.requests[0]["reasoning_effort"] == "none"
+    assert mock.requests[0]["temperature"] == 0.0
+
+
 def test_decide_with_gemma_uses_model():
     mock = MockLlama('{"isHighlight":true,"score":90,"eventType":"KILL","reason":"model saw it"}')
     try:

@@ -141,13 +141,16 @@ def ask(
             }
         )
 
-    # Generous budget + timeout: a thinking-capable model on CPU may burn tokens
-    # on a short chain of thought before the JSON, and CPU is slow. Undersizing
-    # this makes the call return empty (finish_reason=length) and forces the rule
-    # fallback on every evaluate — worse than a slower real decision.
+    # reasoning_effort="none" turns OFF the gemma-4 QAT model's thinking mode
+    # (verified on llama.cpp build 10920: it otherwise burns ~1.5K chars of
+    # reasoning_content before the JSON — think=476 tok/5.9s vs off=53 tok/0.8s —
+    # and an empty 'content' until thinking ends forced the rule fallback).
+    # OpenAI's "thinking": {"enabled": false} is NOT honored by llama.cpp; the
+    # OpenRouter-style reasoning_effort param is.
     payload = {
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.0,
+        "reasoning_effort": "none",
         "max_tokens": 1200,
         "stream": False,
     }
