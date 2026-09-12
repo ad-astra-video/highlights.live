@@ -5,6 +5,7 @@ import { Landing } from "./pages/Landing";
 import { AuthPage } from "./pages/AuthPage";
 import { Dashboard } from "./pages/Dashboard";
 import { Billing } from "./pages/Billing";
+import { Settings } from "./pages/Settings";
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { token, ready } = useAuth();
@@ -28,6 +29,7 @@ export default function App() {
       >
         <Route index element={<Dashboard />} />
         <Route path="billing" element={<Billing />} />
+        <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
