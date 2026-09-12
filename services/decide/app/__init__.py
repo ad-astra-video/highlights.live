@@ -39,6 +39,9 @@ class HighlightRequest(BaseModel):
     # the text prompt per Gemma 4 12B guidance. 25 tokens/sec of audio.
     audioB64: str = Field(default="", description="mono 16kHz float32 WAV, base64")
     audioSampleRate: int = Field(default=16000, ge=8000, le=48000)
+    # Frontend-selectable; defaults to "none" (thinking off = fast single-shot
+    # JSON). Other values (low/medium/high) are passed to llama.cpp verbatim.
+    reasoningEffort: str = Field(default="none")
 
 
 def _is_gemma_mode() -> bool:
@@ -69,6 +72,7 @@ def create_app() -> FastAPI:
                 frames=[fr.model_dump() for fr in req.frames],
                 audio_b64=req.audioB64,
                 audio_sample_rate=req.audioSampleRate,
+                reasoning_effort=req.reasoningEffort,
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
             )
         d = decide(

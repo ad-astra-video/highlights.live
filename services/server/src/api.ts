@@ -445,7 +445,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   // Browser-capture rail: client posts a sampled frame; run it through the
   // perceive -> decide pipeline inline (lazy persistent perceive session).
-  app.post<{ Params: { id: string }; Body: { seq?: number; timestamp?: number; image?: string } }>(
+  app.post<{ Params: { id: string }; Body: { seq?: number; timestamp?: number; image?: string; reasoningEffort?: string } }>(
     "/jobs/:id/ingest",
     { preHandler: authReq },
     async (req: any, reply) => {
@@ -489,7 +489,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               maxVelocity: bj.evidence.maxVelocity,
               ocrHits: 0,
             },
-            { gameHint: job.gameHint || cfg.gameHintDefault, imageB64: image }
+            {
+              gameHint: job.gameHint || cfg.gameHintDefault,
+              imageB64: image,
+              // Frontend-selectable; defaults to "none" (thinking off / fast JSON)
+              reasoningEffort: (req.body as any)?.reasoningEffort || "none",
+            }
           );
           await billing.onDecideCompleted(duser, dsub);
           if (d.isHighlight) {

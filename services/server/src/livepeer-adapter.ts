@@ -47,13 +47,14 @@ export class OrchestratorAdapter implements PipelineClient {
   }
   async decide(
     evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
-    opts?: { gameHint?: string; imageB64?: string }
+    opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
   ): Promise<DecisionResult> {
     const { status, data } = await this.client.decide("highlight", {
       sessionId: "job",
       eventType: evidence.eventType,
       timestamp: 0,
       gameHint: opts?.gameHint || "",
+      reasoningEffort: opts?.reasoningEffort || "none",
       evidence,
       images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
     });
@@ -87,7 +88,7 @@ export class DirectAdapter implements PipelineClient {
   }
   async decide(
     evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
-    opts?: { gameHint?: string; imageB64?: string }
+    opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
       method: "POST",
@@ -97,6 +98,7 @@ export class DirectAdapter implements PipelineClient {
         eventType: evidence.eventType,
         timestamp: 0,
         gameHint: opts?.gameHint || "",
+        reasoningEffort: opts?.reasoningEffort || "none",
         evidence,
         images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
       }),

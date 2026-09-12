@@ -29,7 +29,7 @@ export interface PipelineClient {
    */
   decide(
     evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
-    opts?: { gameHint?: string; imageB64?: string }
+    opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
   ): Promise<DecisionResult>;
   stopPerceive(sessionId: string): Promise<void>;
 }
