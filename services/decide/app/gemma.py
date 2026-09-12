@@ -104,6 +104,7 @@ def ask(
     frames: list | None = None,
     audio_b64: str = "",
     audio_sample_rate: int = 16000,
+    reasoning_effort: str = "none",
     timeout_s: float = 180.0,
 ) -> dict | None:
     """Call llama-server multimodal completion. Returns a parsed/validated
@@ -150,7 +151,11 @@ def ask(
     payload = {
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.0,
-        "reasoning_effort": "none",
+        # Frontend-selectable; "none" (the default) turns OFF gemma-4 QAT thinking
+        # so content comes back as the JSON immediately instead of empty until a
+        # long chain of thought ends (see decide tests for the ordering of the
+        # image/text/audio modalities).
+        "reasoning_effort": reasoning_effort,
         "max_tokens": 1200,
         "stream": False,
     }
@@ -176,12 +181,13 @@ def decide_with_gemma(
     frames: list | None = None,
     audio_b64: str = "",
     audio_sample_rate: int = 16000,
+    reasoning_effort: str = "none",
     url: str | None = None,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision."""
     u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
-    g = ask(u, event_type, evidence, game_hint, images, frames, audio_b64, audio_sample_rate)
+    g = ask(u, event_type, evidence, game_hint, images, frames, audio_b64, audio_sample_rate, reasoning_effort=reasoning_effort)
     if g is not None:
         return g
     # fallback: deterministic rule

@@ -22,6 +22,10 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   const [sharing, setSharing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Gemma decide thinking: frontend-selectable, defaults to "none" (off) so the
+  // single-shot decision comes back as fast strict JSON. low/medium/high keep
+  // the model's chain of thought for harder calls.
+  const [reasoningEffort, setReasoningEffort] = useState("none");
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recRef = useRef<MediaRecorder | null>(null);
@@ -143,12 +147,12 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
           // Media path: stream over the media-server WS. While reconnecting
           // (WS not yet open) drop the frame rather than double-ingest.
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ seq, timestamp: seq / SAMPLE_FPS, image }));
+            wsRef.current.send(JSON.stringify({ seq, timestamp: seq / SAMPLE_FPS, image, reasoningEffort }));
           }
         } else if (id) {
           // Fallback: HTTP /ingest rail.
           api(`/jobs/${id}/ingest`, {
-            body: { seq, timestamp: seq / SAMPLE_FPS, image },
+            body: { seq, timestamp: seq / SAMPLE_FPS, image, reasoningEffort },
           }).catch(() => {});
         }
       }, 1000 / SAMPLE_FPS);
@@ -207,6 +211,20 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       <div className="flex flex-col gap-3 sm:flex-row">
         <video ref={videoRef} muted autoPlay playsInline className="aspect-video w-full max-w-md rounded-lg bg-black" />
         <div className="flex flex-col gap-2">
+          <label className="flex items-center gap-2 text-xs text-mut">
+            Decide reasoning
+            <select
+              className="rounded border border-neon/40 bg-black/60 px-2 py-1 text-xs text-white"
+              value={reasoningEffort}
+              onChange={(e) => setReasoningEffort(e.target.value)}
+              title="Gemma 4 12B thinking effort for each decision. none = instant strict JSON (default)."
+            >
+              <option value="none">none (off)</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </label>
           {!sharing ? (
             <button className="btn-neon" onClick={start} disabled={busy}>
               <Play className="mr-2 inline h-4 w-4" /> {busy ? "Starting…" : "Share screen / tab / window"}
