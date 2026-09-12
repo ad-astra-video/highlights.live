@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Square, Play, Share2 } from "lucide-react";
 import { api, getToken } from "../lib/api";
+import { useSettings } from "../lib/settings";
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -18,7 +19,8 @@ const MAX_RECONNECT = 6; // consecutive media-WS reconnect attempts before falli
 // never leave the browser as a big stream — we sample the preview to a small
 // canvas and POST JPEG frames to the server ingest rail (perceive -> decide),
 // and a MediaRecorder recording is chunked up so clips can be cut server-side.
-export function BrowserCapture({ gameHint, reasoningEffort = "none", onDone }: { gameHint: string; reasoningEffort?: string; onDone: () => void }) {
+export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone: () => void }) {
+  const { reasoningEffort } = useSettings();
   const [sharing, setSharing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
