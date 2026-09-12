@@ -73,8 +73,26 @@ services:
       - 0.0.0.0
       - --port
       - "8088"
+      - --n-gpu-layers
+      - "99"
+      # Max-out config for a 16 GB card (RTX 5070 Ti / 5060 Ti) with CONCURRENCY:
+      #   KV/token = 48 layers * 2 * 8 kv-heads * 256 head_dim = 196,608 el (~0.39MB f16)
+      #   Model q4_0 ~7.2GB -> ~7.3GB free for KV.
+      #   **total KV = ctx-size x -np** (each parallel slot holds a full ctx), so the
+      #   two trade off on one card. 16K x 2 slots only fits if KV is quantized, which
+      #   is exactly what --kv-cache-unified + q8 cache type enables (6.4GB vs 12.9GB f16).
+      #   -np 2  = conservative concurrent-decides this card processes at once.
+      # Validate on first load: llama-server prints actual KV memory; if it OOMs,
+      # drop --ctx-size to 8192 or the build's KV type.
       - --ctx-size
-      - "16384" # q4_0 12B + vision tokens: comfortable room for a frame window + audio
+      - "16384"
+      - --parallel
+      - "2"
+      - --kv-cache-unified
+      - --cache-type-k
+      - q8_0
+      - --cache-type-v
+      - q8_0
     volumes:
       - ./models:/models:ro
     expose: ["8088"] # only on the private hl network (decide talks to it)
