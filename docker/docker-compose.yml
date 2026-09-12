@@ -85,12 +85,12 @@ services:
       # Validate on first load: llama-server prints actual KV memory; if it OOMs,
       # drop --ctx-size to 8192 or the build's KV type.
       - --ctx-size
-      - "16384"
+      - "131072"
       - --parallel
       - "2"
       - --kv-unified
       - --kv-unified-per-slot
-      - "16384"
+      - "131072"
       - --cache-type-k
       - q8_0
       - --cache-type-v
