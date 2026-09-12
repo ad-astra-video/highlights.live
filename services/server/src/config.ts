@@ -47,6 +47,10 @@ export interface ServerConfig {
   publicBaseUrl: string;
   /** Free plan included-highlights cap (0 blocks free farming). */
   freeHighlights: number;
+  /** Fixed fee per decide call (single shot, USD). Default $0.01. */
+  decideFee: number;
+  /** Free plan included decide calls before gating (dev-friendly). */
+  freeDecides: number;
   /** Dev-only: wireframe billing (no real Stripe). Enables /dev/billing/*. */
   billingWireframe: boolean;
 }
@@ -77,6 +81,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     stripePriceUsage: env.STRIPE_PRICE_USAGE,
     publicBaseUrl: env.PUBLIC_BASE_URL ?? "http://127.0.0.1:3000",
     freeHighlights: Number(env.FREE_HIGHLIGHTS ?? 3),
+    decideFee: Number(env.DECIDE_FEE ?? 0.01),
+    freeDecides: Number(env.FREE_DECIDES ?? 5),
     billingWireframe: env.BILLING_WIREFRAME === "1" || env.BILLING_WIREFRAME === "true",
   };
 }

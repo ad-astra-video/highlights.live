@@ -101,10 +101,36 @@ export class BillingService {
   }
 
   /**
-   * Meter ONE highlight. Increments the DB counter always; for Pro overage
-   * beyond the included quota, posts a Stripe usage record so PAYG is billed.
-   */
-  async onHighlightCreated(user: User, sub: Subscription): Promise<void> {
+   /**
+    * Gate: may this user run a single-shot decide now? The decide VLM (Gemma 4
+    * 12B) is priced as a FIXED fee per single shot (`cfg.decideFee`, default
+    * $0.01). Pro-active users pass through (billed PAYG via onDecideCompleted);
+    * free users get a small included `freeDecides` allowance, then 402.
+    * Works the same whether or not Stripe is configured (billing disabled).
+    */
+   async canDecide(user: User, sub: Subscription): Promise<void> {
+     if (sub.tier === "pro" && sub.status === "active") return;
+     const used = await this.db.countUsage(user.id, "decide");
+     if (used < this.cfg.freeDecides) return;
+     throw new BillingRequiredError(`one-time decide fee $${this.cfg.decideFee.toFixed(2)}; top up to continue`);
+   }
+
+   /** Meter ONE single-shot decide. Always increments the DB counter; for Pro
+    * overage beyond the included decide allowance, posts a Stripe usage record
+    * so the fixed per-use fee (DECIDE_FEE price) is billed PAYG. */
+   async onDecideCompleted(user: User, sub: Subscription): Promise<void> {
+     await this.db.recordUsage(user.id, "decide");
+     if (sub.tier === "pro" && sub.status === "active" && this.enabled && sub.stripeSubItemId) {
+       const used = await this.db.countUsage(user.id, "decide");
+       const included = this.cfg.freeDecides;
+       if (used > included) await this.postUsageRecord(sub.stripeSubItemId, used - included);
+     }
+   }
+
+   /** Meter ONE highlight. Increments the DB counter always; for Pro overage
+    * beyond the included quota, posts a Stripe usage record so PAYG is billed.
+    */
+   async onHighlightCreated(user: User, sub: Subscription): Promise<void> {
     await this.db.recordUsage(user.id, "highlight");
     if (sub.tier === "pro" && sub.status === "active" && this.enabled) {
       const used = await this.db.countUsage(user.id, "highlight");
