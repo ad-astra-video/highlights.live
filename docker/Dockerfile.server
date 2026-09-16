@@ -4,7 +4,13 @@ WORKDIR /app
 # Whole monorepo; .dockerignore strips .venv/node_modules/data.
 COPY . .
 RUN npm ci
+# Build the webapp so the server can serve the public-beta landing page + SPA
+# over HTTPS (the server's static handler reads webapp/dist). The source is
+# copied above; webapp/dist is gitignored but generated here.
+RUN npm run build -w @highlights/webapp
 ENV NODE_ENV=production
 ENV FFMPEG_PATH=ffmpeg
+# SPA dist the server serves at / (default resolves to /app/webapp/dist).
+ENV WEBAPP_DIST=/app/webapp/dist
 EXPOSE 3000
 CMD ["npx", "tsx", "services/server/src/index.ts"]

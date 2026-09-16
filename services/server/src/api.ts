@@ -1,8 +1,9 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, createReadStream } from "node:fs";
+import { randomUUID, randomBytes } from "node:crypto";
+import { existsSync, statSync, readdirSync, createReadStream } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { ServerConfig } from "./config";
 import type { Store } from "./store";
 import { analyzeJob, EvidenceTracker, type AnalyzeEvent, type PipelineClient } from "./analyzer";
@@ -10,8 +11,9 @@ import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { LiveIngest, type LiveKind } from "./live";
 import type { Db, MediaSession } from "./db";
-import { AuthService, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
+import { AuthService, BetaGateError, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError } from "./billing";
+import { EntitlementsService, QuotaExceededError } from "./entitlements";
 import { FixedWindowLimiter, rateLimit } from "./rate-limit";
 
 /** Resolve the perceive sampling fps from the runner's measured capability
@@ -36,10 +38,11 @@ export interface ApiDeps {
   db: Db;
   auth: AuthService;
   billing: BillingService;
+  entitlements: EntitlementsService;
 }
 
 export function buildApp(deps: ApiDeps): FastifyInstance {
-  const { cfg, store, adapter, db, auth, billing } = deps;
+  const { cfg, store, adapter, db, auth, billing, entitlements } = deps;
   const app = Fastify({ logger: false });
   app.register(cors, { origin: true });
 
@@ -191,6 +194,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       for (const h of outcome.highlights) {
         await store.addHighlight({ ...h, ownerId: user.id });
         await billing.onHighlightCreated(user, sub);
+        // A clip generated successfully debits the quota once.
+        await entitlements.onClipGenerated(user);
       }
       await store.patchJob(job.id, { status: "done", perceiveSessionId: outcome.sessionId });
     } catch (e) {
@@ -205,10 +210,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   app.get("/health", async () => ({ status: "ok", billing: billing.enabled ? "live" : "disabled" }));
 
   // --- auth (public endpoints are rate limited per IP) ---
-  app.post<{ Body: { email?: string; password?: string } }>("/auth/register", { preHandler: limitAuth }, async (req, reply) => {
+  app.post<{ Body: { email?: string; password?: string; inviteCode?: string } }>("/auth/register", { preHandler: limitAuth }, async (req, reply) => {
     try {
-      return await auth.register(req.body?.email ?? "", req.body?.password ?? "");
+      return await auth.register(req.body?.email ?? "", req.body?.password ?? "", req.body?.inviteCode);
     } catch (e: any) {
+      // Invite/beta-gate rejection -> 403 (not a client 400); keeps "you need an
+      // invite" distinct from a malformed request so the UI can route to waitlist.
+      if (e instanceof BetaGateError) return reply.code(403).send({ error: e.message, code: "invite_required" });
       return reply.code(400).send({ error: e.message });
     }
   });
@@ -217,6 +225,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     try {
       return await auth.login(req.body?.email ?? "", req.body?.password ?? "");
     } catch (e: any) {
+      if (e instanceof BetaGateError) return reply.code(403).send({ error: e.message, code: "invite_required" });
       return reply.code(401).send({ error: e.message });
     }
   });
@@ -249,6 +258,91 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return { user: { id: u.id, email: u.email, role: u.role } };
   });
 
+  // --- public waitlist (no auth) ---
+  // "Join the beta" captures an email on the landing page. Public, but with its
+  // own per-IP rate limit so the endpoint can't be used to bloat the list.
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  const waitlistLimiter = new FixedWindowLimiter({ limit: 20, windowMs: 60 * 1000 });
+  const limitWaitlist = rateLimit(waitlistLimiter, "waitlist");
+
+  app.post<{ Body: { email?: string } }>("/waitlist", { preHandler: limitWaitlist }, async (req, reply) => {
+    const raw = (req.body?.email ?? "").trim();
+    const email = raw.toLowerCase();
+    if (!EMAIL_RE.test(email)) return reply.code(400).send({ error: "valid email required" });
+    try {
+      const { registered } = await db.addWaitlistEmail(email);
+      return { ok: true, registered, message: "You're on the list. We'll email your invite." };
+    } catch (e: any) {
+      // A storage failure must not look like a successful signup.
+      return reply.code(500).send({ error: String(e?.message || "waitlist unavailable") });
+    }
+  });
+
+  // Admin inspection + signup-rate counter source (gate X / ADAAAA-27).
+  app.get("/waitlist", { preHandler: adminReq }, async () => ({
+    count: await db.waitlistCount(),
+    emails: await db.listWaitlistEmails(),
+  }));
+
+  // --- invite / beta-gate (admin / cohort-owner tooling) -------------------
+  // The gate has two activation paths: (a) single-use invite codes and
+  // (b) a waitlisted email flipped to invited. Both are cohort-owner/admin-only.
+  app.post<{ Body: { email?: string } }>("/admin/invite-codes", { preHandler: adminReq }, async (req: any, reply) => {
+    const raw = (req.body?.email ?? "").trim().toLowerCase();
+    if (raw && !EMAIL_RE.test(raw)) return reply.code(400).send({ error: "valid email required" });
+    const code = randomBytes(6).toString("hex"); // 12 hex chars, cohort-owner hands out of band
+    await db.createInviteCode({
+      id: randomUUID(),
+      codeHash: AuthService.hashInviteCode(code),
+      email: raw || null,
+      createdBy: req.user.id,
+      createdAt: new Date().toISOString(),
+    });
+    return { code, email: raw || null };
+  });
+
+  app.post<{ Body: { code?: string } }>("/admin/invite-codes/revoke", { preHandler: adminReq }, async (req, reply) => {
+    const code = (req.body?.code ?? "").trim();
+    if (!code) return reply.code(400).send({ error: "code required" });
+    await db.revokeInvite(AuthService.hashInviteCode(code));
+    return { ok: true };
+  });
+
+  app.get("/admin/invite-codes", { preHandler: adminReq }, async () => {
+    const codes = await db.listInvites();
+    return {
+      codes: codes.map((c) => ({
+        id: c.id,
+        email: c.email,
+        createdBy: c.createdBy,
+        createdAt: c.createdAt,
+        used: Boolean(c.usedAt),
+        usedAt: c.usedAt,
+        revoked: Boolean(c.revokedAt),
+        revokedAt: c.revokedAt,
+      })),
+    };
+  });
+
+  // Flip a waitlisted email to invited (give that inbox the ability to activate
+  // an account without a code). Idempotent; also accepts an email that never
+  // signed up (records it directly as invited).
+  app.post<{ Params: { email: string } }>("/admin/waitlist/:email/invite", { preHandler: adminReq }, async (req, reply) => {
+    const email = decodeURIComponent(req.params.email).trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) return reply.code(400).send({ error: "valid email required" });
+    const entry = await db.setWaitlistInvited(email);
+    return { ok: true, email: entry.email, status: entry.status };
+  });
+
+  app.get("/admin/waitlist", { preHandler: adminReq }, async () => ({
+    entries: (await db.listWaitlist()).map((w) => ({
+      email: w.email,
+      status: w.status,
+      invitedAt: w.invitedAt,
+      createdAt: w.createdAt,
+    })),
+  }));
+
   // --- billing ---
   app.get("/billing/plans", async () => ({ plans: billing.plans() }));
 
@@ -276,6 +370,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       status: sub.status,
       usedHighlights: await db.countUsage(user.id, "highlight"),
       freeHighlights: cfg.freeHighlights,
+      // Per-user per-calendar-month clip quota (the entitlement ledger) surfaced
+      // so the UI can show remaining quota and so an exhausted quota is visible
+      // without making a submission.
+      clipQuotaPeriod: entitlements.periodKey(),
+      clipQuotaLimit: entitlements.limit,
+      clipQuotaUsed: await entitlements.used(user.id),
+      clipQuotaRemaining: await entitlements.remaining(user.id),
     };
   });
 
@@ -326,6 +427,23 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     { preHandler: authReq },
     async (req, reply) => {
       const user = (req as any).user;
+      // Budget hard-stop: reject at submission time as soon as the month's clip
+      // quota is exhausted. This runs BEFORE any job is created or any compute
+      // (Livepeer GPU / decide) is scheduled — quota overspend never runs a job.
+      try {
+        await entitlements.canSubmit(user);
+      } catch (e) {
+        if (e instanceof QuotaExceededError) {
+          return reply.code(429).send({
+            error: "monthly clip quota used up — resets at the start of next month",
+            code: "quota_exceeded",
+            clipQuotaPeriod: entitlements.periodKey(),
+            clipQuotaLimit: entitlements.limit,
+            clipQuotaRemaining: 0,
+          });
+        }
+        throw e;
+      }
       const sub = await db.getSubscription(user.id);
       let billingBlocked = false;
       try {
@@ -750,7 +868,83 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
   });
 
+  // Serve the built webapp (SPA) for any unmatched GET; API routes above win.
+  attachSpaServing(app, cfg);
+
   return app;
+}
+
+// ---------------------------------------------------------------------------
+// Static SPA serving
+//
+// The public beta landing page is the built webapp. It ships as static files
+// in `webapp/dist`, and the server serves them over HTTP(S) so the landing
+// (and the rest of the SPA) is reachable on the domain without a separate
+// static host. API routes are registered above and win; anything else on GET
+// falls through here. A non-existent path falls back to index.html so the
+// SPA's client-side routes (/auth, /privacy, …) work on deep links.
+// ---------------------------------------------------------------------------
+
+const SPA_MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript",
+  ".css": "text/css",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".json": "application/json; charset=utf-8",
+  ".woff2": "font/woff2",
+  ".woff": "font/woff",
+  ".ttf": "font/ttf",
+};
+
+/** Resolve the built webapp directory: explicit env, else repo-local dist. */
+function resolveWebappDist(cfg: ServerConfig): string | null {
+  const candidates: string[] = [];
+  if (cfg.webappDist) candidates.push(cfg.webappDist);
+  candidates.push(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../webapp/dist"));
+  for (const c of candidates) {
+    try {
+      if (existsSync(path.join(c, "index.html"))) return c;
+    } catch {
+      /* ignore unreadable candidate */
+    }
+  }
+  return null;
+}
+
+function spaHandler(cfg: ServerConfig) {
+  return async (req: any, reply: any) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return reply.code(404).send({ error: "not found" });
+    const dist = resolveWebappDist(cfg);
+    const url = (req.url.split("?")[0] ?? "/");
+    // API-only mode (no built webapp) or an unknown API route -> JSON 404.
+    if (!dist || url.startsWith("/api/")) return reply.code(404).send({ error: "not found" });
+    let rel: string;
+    try {
+      rel = decodeURIComponent(url).replace(/^\/+/, "") || "index.html";
+    } catch {
+      rel = "index.html";
+    }
+    const distNorm = path.normalize(dist);
+    const filePath = path.normalize(path.join(dist, rel));
+    // Path-traversal guard: resolved path must stay inside dist.
+    if (filePath !== distNorm && !filePath.startsWith(distNorm + path.sep)) {
+      return reply.code(403).send("forbidden");
+    }
+    const abs = existsSync(filePath) && statSync(filePath).isFile() ? filePath : path.join(dist, "index.html");
+    const ext = path.extname(abs).toLowerCase();
+    return reply.type(SPA_MIME[ext] || "application/octet-stream").send(createReadStream(abs));
+  };
+}
+
+// Attach the SPA catch-all. Because every real API route is registered above,
+// only unmatched requests reach this handler.
+function attachSpaServing(app: any, cfg: ServerConfig) {
+  app.setNotFoundHandler(spaHandler(cfg));
 }
 
 export { AuthService };
