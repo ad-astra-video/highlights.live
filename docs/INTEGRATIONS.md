@@ -6,9 +6,48 @@ numbered sections; each ends with an env var to set.
 
 ---
 
+## 0. Persistent storage, migrations & backups
+
+All stateful data — **users**, **entitlements/subscriptions**, usage, media
+sessions, and the pipeline's **jobs + highlight records** — is stored in one
+DB and survives server restarts (`services/server/src/db.ts`, `store.ts`). Two
+backends behind one interface:
+
+- **SQLite (dev)** — Node's built-in `node:sqlite` at `DATABASE_PATH`
+  (default `data/highlights.db`). Zero-setup local/CI default.
+- **PostgreSQL (prod)** — when `DATABASE_URL` is set, the server uses Postgres
+  (`pg`) instead of SQLite. `DATABASE_URL` is a standard
+  `postgres://user:pass@host:5432/dbname` connection string.
+
+| Var | Default | Notes |
+|---|---|---|
+| `DATABASE_PATH` | `data/highlights.db` | SQLite file (used only when `DATABASE_URL` is unset). |
+| `DATABASE_URL` | — | Postgres connection string. When set, overrides SQLite. |
+| `DATABASE_BACKUP_DIR` | `data/backups` | Where `npm run db:backup` writes snapshots. |
+
+**Migrations.** The baseline schema (`CREATE TABLE IF NOT EXISTS`) is applied
+idempotently on every boot; column/row *changes* to existing data run as
+tracked, versioned migrations recorded in `_schema_migrations` (applied once,
+in order). To add a schema change, append a new entry to `MIGRATIONS` in
+`services/server/src/db.ts` rather than scattering one-off `ALTER`s. A restart
+against an older on-disk DB is therefore safe — pending migrations run
+automatically at boot.
+
+**Backups.** `npm run db:backup` (in `services/server`) writes a consistent,
+integrity-checked snapshot to `DATABASE_BACKUP_DIR`:
+- SQLite: `VACUUM INTO` (atomic even mid-write) + `PRAGMA integrity_check`.
+- Postgres: `pg_dump` (must be installed).
+
+Recommended rotation via cron (keep the N most recent yourself):
+```cron
+0 3 * * * cd <repo>/services/server && npm run db:backup --silent
+```
+
+---
+
 ## 1. Auth
 
-Users are stored in SQLite (`DATABASE_PATH`, default `data/highlights.db`). Passwords are
+Users are stored in the DB above (SQLite dev / Postgres prod). Passwords are
 bcrypt-hashed; sessions are JWTs signed with `JWT_SECRET`.
 
 - `POST /auth/register {email, password}` — create a user (password ≥ 8 chars).
@@ -156,8 +195,8 @@ headers → refresh per interval (`packages/livepeer-session`).
 
 ## 6. End-to-end verification
 
-- `npm test` — 37 TS tests (auth, billing w/ Stripe stub, quota gate, real-ffmpeg job,
-  contracts, livepeer-session).
+- `npm test` — TypeScript tests (auth, billing w/ Stripe stub, quota gate,
+  persistence/restart-survival, real-ffmpeg job, contracts, livepeer-session).
 - Python suites: `services/perceive` (11) and `services/decide` (5).
 
 Quick manual auth smoke against a running server:

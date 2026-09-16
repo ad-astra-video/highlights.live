@@ -11,9 +11,13 @@ import Stripe from "stripe";
 async function main() {
   const cfg = loadConfig();
   await mkdir(cfg.dataDir, { recursive: true });
-  const store = new Store();
   // Prod: Postgres when DATABASE_URL is set; dev: SQLite at databasePath.
   const db = await openDb(cfg);
+  // Durable jobs + highlights: the Store write-throughs every mutation to the
+  // Db and hydrates the in-memory working set on boot, so stateful data
+  // (users, jobs, highlights, entitlements) survives restarts.
+  const store = new Store(db);
+  await store.load();
   const auth = new AuthService(db, cfg);
   await auth.bootstrapAdmin();
 

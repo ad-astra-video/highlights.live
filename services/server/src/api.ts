@@ -189,12 +189,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         jobEventHook(job.id)
       );
       for (const h of outcome.highlights) {
-        store.addHighlight({ ...h, ownerId: user.id });
+        await store.addHighlight({ ...h, ownerId: user.id });
         await billing.onHighlightCreated(user, sub);
       }
-      store.patchJob(job.id, { status: "done", perceiveSessionId: outcome.sessionId });
+      await store.patchJob(job.id, { status: "done", perceiveSessionId: outcome.sessionId });
     } catch (e) {
-      store.patchJob(job.id, { status: "failed" });
+      await store.patchJob(job.id, { status: "failed" });
       console.error(`[live:${job.id}]`, e);
     } finally {
       ingest.stop();
@@ -341,14 +341,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const live = !!req.body.source && req.body.source !== "file";
       if (!videoPath && !(live && (req.body.source === "screen" || req.body.source === "browser")))
         return reply.code(400).send({ error: "videoPath required for this source" });
-      const job = store.createJob({
+      const job = await store.createJob({
         ownerId: user.id,
         source: (req.body.source ?? "file") as any,
         sourceUrl: videoPath,
         gameHint: req.body.gameHint || cfg.gameHintDefault,
         preferLabels: req.body.preferLabels ?? [],
       });
-      store.patchJob(job.id, { status: "active" });
+      await store.patchJob(job.id, { status: "active" });
       if (req.body.source === "browser") {
         // Client-side capture (screen share / element capture): the client posts
         // sampled frames to /jobs/:id/ingest and a recording to
@@ -404,13 +404,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         jobEventHook(job.id)
         );
         for (const h of outcome.highlights) {
-          store.addHighlight({ ...h, ownerId: user.id });
+          await store.addHighlight({ ...h, ownerId: user.id });
           await billing.onHighlightCreated(user, sub);
         }
-        store.patchJob(job.id, { status: "done", perceiveSessionId: outcome.sessionId });
+        await store.patchJob(job.id, { status: "done", perceiveSessionId: outcome.sessionId });
         return { job: store.getJob(job.id), framesAnalyzed: outcome.framesAnalyzed };
       } catch (e: any) {
-        store.patchJob(job.id, { status: "failed" });
+        await store.patchJob(job.id, { status: "failed" });
         const raw = String(e?.message || e);
         // A remote URL source that ffmpeg can't fetch (404/403/406, unreachable,
         // hotlink-protected, or not a directly downloadable file) gets a human
@@ -465,14 +465,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             const name = `${job.id}-${Math.round(h.start * 10)}`;
             const out = path.join(outDir, `${name}.mp4`);
             await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), cfg.clipBeforeS + cfg.clipAfterS);
-            store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4` });
+            await store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4` });
           } catch (e: any) {
             console.error(`[browser:${job.id}] clip cut failed:`, String(e?.message || e));
           }
         }
       }
       browserJobs.delete(job.id);
-      store.patchJob(job.id, { status: "done" });
+      await store.patchJob(job.id, { status: "done" });
       emitJobEvent(job.id, { seq: -1, timestamp: -1, type: "observation", observation: { tracks: [] } }); // wake SSE
       return reply.send({ ok: true, job: store.getJob(job.id) });
     }
@@ -547,7 +547,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               status: "pending",
               createdAt: new Date().toISOString(),
             };
-            store.addHighlight(highlight);
+            await store.addHighlight(highlight);
             emitJobEvent(req.params.id, { seq, timestamp, type: "highlight", highlight });
           }
         }
@@ -729,7 +729,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     { preHandler: adminReq },
     async (req, reply) => {
       try {
-        return store.reviewHighlight(req.params.id, req.body?.status || "accepted");
+        return await store.reviewHighlight(req.params.id, req.body?.status || "accepted");
       } catch (e: any) {
         return reply.code(404).send({ error: String(e?.message || e) });
       }

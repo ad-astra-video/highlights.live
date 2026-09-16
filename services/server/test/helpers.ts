@@ -89,7 +89,8 @@ export async function buildTestApp(over: Record<string, string> = {}): Promise<T
   await auth.bootstrapAdmin();
   const stripeCalls: any[] = [];
   const billing = new BillingService(cfg, db, stripeStub(stripeCalls));
-  const store = new Store();
+  const store = new Store(db);
+  await store.load();
   const adapter = fakePipeline();
   const app = buildApp({ cfg, store, adapter, db, auth, billing });
   await app.ready();

@@ -42,6 +42,8 @@ export interface ServerConfig {
   /** Postgres connection string (prod). When set, the server uses Postgres
    * instead of SQLite; SQLite stays the local/dev default. */
   databaseUrl?: string;
+  /** Where `npm run db:backup` writes DB snapshots (default `data/backups`). */
+  databaseBackupDir: string;
   /** Stripe */
   stripeSecretKey?: string;
   stripeWebhookSecret?: string;
@@ -84,6 +86,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     adminPassword: env.ADMIN_PASSWORD ?? "admin",
     databasePath: env.DATABASE_PATH ?? "data/highlights.db",
     databaseUrl: env.DATABASE_URL,
+    databaseBackupDir: env.DATABASE_BACKUP_DIR ?? "data/backups",
     stripeSecretKey: env.STRIPE_SECRET_KEY,
     stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
     stripePricePro: env.STRIPE_PRICE_PRO,

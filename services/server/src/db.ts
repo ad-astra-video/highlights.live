@@ -1,14 +1,14 @@
-// Durable persistence for accounts/billing.
-//
-// Two backends behind one async `Db` interface:
+// Durable persistence behind one async `Db` interface:
 //   - SqliteDb  (dev): Node's built-in `node:sqlite`, no native build step.
 //   - PgDb      (prod): PostgreSQL via node-postgres (`pg`), selected when
 //                      `DATABASE_URL` is set.
-// The in-memory Store keeps jobs + highlight records for the pipeline;
-// accounts/billing data live here.
+// Holds users, entitlements/subscriptions, usage, media sessions, AND the
+// pipeline's jobs + highlight records. The Store (store.ts) is a durable
+// write-through facade over this Db, so stateful data survives restarts.
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import type { Job, HighlightRecord } from "@highlights/events";
 
 // `node:sqlite` is experimental and not in Vite/vitest's builtin external
 // list, so load it via createRequire at runtime instead of a static ESM import
@@ -84,6 +84,14 @@ export interface Db {
   getMediaSession(jobId: string): Promise<MediaSession | undefined>;
   setMediaSession(ms: MediaSession): Promise<void>;
   clearMediaSession(jobId: string): Promise<void>;
+  /** Persist a job record (full JSON upsert by id). */
+  saveJob(job: Job): Promise<void>;
+  getJob(id: string): Promise<Job | undefined>;
+  listJobs(): Promise<Job[]>;
+  /** Persist a highlight record (full JSON upsert by id). */
+  saveHighlight(h: HighlightRecord): Promise<void>;
+  getHighlight(id: string): Promise<HighlightRecord | undefined>;
+  listHighlights(): Promise<HighlightRecord[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,12 +103,23 @@ export class SqliteDb implements Db {
   constructor(file: string) {
     if (file !== ":memory:") mkdirSync(path.dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
+    // Idempotent baseline (CREATE TABLE IF NOT EXISTS). Tracked, versioned
+    // column changes run via migrate() (also called from openDb).
     this.db.exec(SCHEMA_SQLITE);
-    // In-place migration for existing dev DBs created before the reset-token
-    // columns existed (CREATE TABLE IF NOT EXISTS won't add them).
-    const cols = this.db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
-    if (!cols.some((c) => c.name === "reset_token_hash")) this.db.exec("ALTER TABLE users ADD COLUMN reset_token_hash TEXT");
-    if (!cols.some((c) => c.name === "reset_token_expires")) this.db.exec("ALTER TABLE users ADD COLUMN reset_token_expires TEXT");
+  }
+
+  /** Apply pending versioned migrations, recording each in `_schema_migrations`. */
+  async migrate(): Promise<void> {
+    await runMigrations(
+      async (sql) => {
+        this.db.exec(sql);
+      },
+      async (table, col) => (this.db.prepare(`PRAGMA table_info(${quoteIdent(table)})`).all() as { name: string }[]).some((c) => c.name === col),
+      async (version) => (this.db.prepare("SELECT version FROM _schema_migrations WHERE version = ?").get(version) ? true : false),
+      async (version, name) => {
+        this.db.prepare("INSERT INTO _schema_migrations (version, name, applied_at) VALUES (?,?,?)").run(version, name, new Date().toISOString());
+      }
+    );
   }
 
   async close(): Promise<void> {
@@ -204,6 +223,48 @@ export class SqliteDb implements Db {
   async clearMediaSession(jobId: string): Promise<void> {
     this.db.prepare("DELETE FROM media_sessions WHERE job_id = ?").run(jobId);
   }
+
+  async saveJob(job: Job): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO jobs (id, record, owner_id, status, created_at)
+         VALUES (?,?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET record=excluded.record, owner_id=excluded.owner_id,
+           status=excluded.status, created_at=excluded.created_at`
+      )
+      .run(job.id, JSON.stringify(job), job.ownerId ?? null, job.status, job.createdAt);
+  }
+
+  async getJob(id: string): Promise<Job | undefined> {
+    const r = this.db.prepare("SELECT record FROM jobs WHERE id = ?").get(id);
+    return r ? (JSON.parse((r as any).record) as Job) : undefined;
+  }
+
+  async listJobs(): Promise<Job[]> {
+    const rows = this.db.prepare("SELECT record FROM jobs").all() as { record: string }[];
+    return rows.map((r) => JSON.parse(r.record) as Job);
+  }
+
+  async saveHighlight(h: HighlightRecord): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO highlights (id, job_id, record, owner_id, status, created_at)
+         VALUES (?,?,?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET job_id=excluded.job_id, record=excluded.record,
+           owner_id=excluded.owner_id, status=excluded.status, created_at=excluded.created_at`
+      )
+      .run(h.id, h.jobId, JSON.stringify(h), h.ownerId ?? null, h.status, h.createdAt);
+  }
+
+  async getHighlight(id: string): Promise<HighlightRecord | undefined> {
+    const r = this.db.prepare("SELECT record FROM highlights WHERE id = ?").get(id);
+    return r ? (JSON.parse((r as any).record) as HighlightRecord) : undefined;
+  }
+
+  async listHighlights(): Promise<HighlightRecord[]> {
+    const rows = this.db.prepare("SELECT record FROM highlights").all() as { record: string }[];
+    return rows.map((r) => JSON.parse(r.record) as HighlightRecord);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -218,9 +279,25 @@ export class PgDb implements Db {
 
   async init(): Promise<void> {
     await this.pool.query(SCHEMA_PG);
-    // In-place migration for an existing users table without the reset columns.
-    await this.pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_hash TEXT");
-    await this.pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TEXT");
+    await runMigrations(
+      async (sql) => {
+        await this.pool.query(sql);
+      },
+      async (table, col) => {
+        const r = await this.pool.query(
+          `SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
+          [table, col]
+        );
+        return (r.rowCount ?? 0) > 0;
+      },
+      async (version) => {
+        const r = await this.pool.query("SELECT 1 FROM _schema_migrations WHERE version = $1", [version]);
+        return (r.rowCount ?? 0) > 0;
+      },
+      async (version, name) => {
+        await this.pool.query("INSERT INTO _schema_migrations (version, name, applied_at) VALUES ($1,$2,$3)", [version, name, new Date().toISOString()]);
+      }
+    );
   }
 
   async close(): Promise<void> {
@@ -330,6 +407,46 @@ export class PgDb implements Db {
   async clearMediaSession(jobId: string): Promise<void> {
     await this.pool.query("DELETE FROM media_sessions WHERE job_id = $1", [jobId]);
   }
+
+  async saveJob(job: Job): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO jobs (id, record, owner_id, status, created_at)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT(id) DO UPDATE SET record=EXCLUDED.record, owner_id=EXCLUDED.owner_id,
+         status=EXCLUDED.status, created_at=EXCLUDED.created_at`,
+      [job.id, JSON.stringify(job), job.ownerId ?? null, job.status, job.createdAt]
+    );
+  }
+
+  async getJob(id: string): Promise<Job | undefined> {
+    const r = await this.pool.query("SELECT record FROM jobs WHERE id = $1", [id]);
+    return r.rows[0] ? (JSON.parse(r.rows[0].record) as Job) : undefined;
+  }
+
+  async listJobs(): Promise<Job[]> {
+    const r = await this.pool.query("SELECT record FROM jobs");
+    return r.rows.map((row) => JSON.parse(row.record) as Job);
+  }
+
+  async saveHighlight(h: HighlightRecord): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO highlights (id, job_id, record, owner_id, status, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT(id) DO UPDATE SET job_id=EXCLUDED.job_id, record=EXCLUDED.record,
+         owner_id=EXCLUDED.owner_id, status=EXCLUDED.status, created_at=EXCLUDED.created_at`,
+      [h.id, h.jobId, JSON.stringify(h), h.ownerId ?? null, h.status, h.createdAt]
+    );
+  }
+
+  async getHighlight(id: string): Promise<HighlightRecord | undefined> {
+    const r = await this.pool.query("SELECT record FROM highlights WHERE id = $1", [id]);
+    return r.rows[0] ? (JSON.parse(r.rows[0].record) as HighlightRecord) : undefined;
+  }
+
+  async listHighlights(): Promise<HighlightRecord[]> {
+    const r = await this.pool.query("SELECT record FROM highlights");
+    return r.rows.map((row) => JSON.parse(row.record) as HighlightRecord);
+  }
 }
 
 const SCHEMA_SQLITE = `
@@ -368,6 +485,26 @@ const SCHEMA_SQLITE = `
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    status TEXT,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS highlights (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    status TEXT,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS _schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TEXT NOT NULL
   );
 `;
 
@@ -408,6 +545,26 @@ const SCHEMA_PG = `
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    status TEXT,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS highlights (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    status TEXT,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS _schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+  );
 `;
 
 /** Select a backend: Postgres when DATABASE_URL is set, else SQLite (dev). */
@@ -417,7 +574,62 @@ export async function openDb(cfg: { databasePath: string; databaseUrl?: string }
     await db.init();
     return db;
   }
-  return new SqliteDb(cfg.databasePath);
+  const db = new SqliteDb(cfg.databasePath);
+  await db.migrate();
+  return db;
+}
+
+// ---------------------------------------------------------------------------
+// Versioned migrations
+//
+// The baseline (SCHEMA_SQLITE / SCHEMA_PG, CREATE TABLE IF NOT EXISTS) is
+// idempotent and applied on every boot. Anything that CHANGES existing rows
+// or adds columns must be a tracked migration below: applied at most once,
+// in version order, and recorded in `_schema_migrations`. New schema changes
+// get a new entry here instead of a one-off ALTER — this is what makes a
+// restart with an older on-disk DB safe.
+// ---------------------------------------------------------------------------
+
+/** Execute one SQL statement (backend-agnostic). */
+type Exec = (sql: string) => Promise<void>;
+/** Return true if a table already has a named column. */
+type HasColumn = (table: string, column: string) => Promise<boolean>;
+/** Return true if a migration version has already been applied. */
+type Applied = (version: number) => Promise<boolean>;
+/** Record that a migration version has been applied. */
+type MarkApplied = (version: number, name: string) => Promise<void>;
+
+interface Migration {
+  version: number;
+  name: string;
+  up(exec: Exec, hasColumn: HasColumn): Promise<void>;
+}
+
+const MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    name: "add-reset-token-columns",
+    up: async (exec, hasColumn) => {
+      // Pre-existing DBs created before the password-reset feature; the
+      // baseline CREATE already includes these for fresh DBs.
+      if (!(await hasColumn("users", "reset_token_hash"))) await exec("ALTER TABLE users ADD COLUMN reset_token_hash TEXT");
+      if (!(await hasColumn("users", "reset_token_expires"))) await exec("ALTER TABLE users ADD COLUMN reset_token_expires TEXT");
+    },
+  },
+];
+
+async function runMigrations(exec: Exec, hasColumn: HasColumn, applied: Applied, markApplied: MarkApplied): Promise<void> {
+  for (const m of MIGRATIONS) {
+    if (await applied(m.version)) continue;
+    await m.up(exec, hasColumn);
+    await markApplied(m.version, m.name);
+  }
+}
+
+/** Quote an identifier for the PRAGMA table_info helper (defensive; table
+ * names come from our own constant, not user input). */
+function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
 }
 
 function rowToUser(r: any): User {
