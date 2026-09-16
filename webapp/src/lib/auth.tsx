@@ -26,17 +26,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [ready, setReady] = useState(false);
 
-  // On load, if we hold a token we optimistically believe it; refresh billing.
+  // On load, validate the stored token and hydrate the user. A 401 from
+  // /auth/me clears the dead token (and the shared api client redirects to
+  // /auth); otherwise we restore the session and refresh billing.
   useEffect(() => {
-    if (getToken()) {
-      setTok(getToken());
-      api<BillingStatus>("/billing/status")
-        .then(setBilling)
-        .catch(() => {})
-        .finally(() => setReady(true));
-    } else {
+    const t = getToken();
+    if (!t) {
       setReady(true);
+      return;
     }
+    setTok(t);
+    Promise.allSettled([
+      api<{ user: SessionUser }>("/auth/me").then((r) => {
+        if (r?.user) setUser(r.user);
+      }),
+      api<BillingStatus>("/billing/status").then(setBilling),
+    ]).finally(() => setReady(true));
   }, []);
 
   const refreshBilling = async () => {

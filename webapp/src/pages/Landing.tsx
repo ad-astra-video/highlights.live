@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Zap, Clapperboard, TrendingUp, CreditCard, Flame } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { api, type Highlight } from "../lib/api";
+import { VideoClip } from "../components/VideoClip";
 
 export function Landing() {
   const { token } = useAuth();
@@ -62,7 +63,7 @@ export function Landing() {
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {feed.map((h) => (
           <div key={h.id} className="card card-hover overflow-hidden">
-            <video src={h.clipUri} controls playsInline className="aspect-video w-full bg-black" />
+            <VideoClip src={h.clipUri} label={h.eventType} />
             <div className="p-4">
               <div className="flex items-center justify-between">
                 <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">

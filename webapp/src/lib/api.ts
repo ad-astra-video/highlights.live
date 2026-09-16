@@ -16,11 +16,9 @@ export interface ApiError extends Error {
 
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown; auth?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = {};
+  const token = opts.auth !== false ? getToken() : null;
   if (opts.body !== undefined) headers["content-type"] = "application/json";
-  if (opts.auth !== false) {
-    const t = getToken();
-    if (t) headers["authorization"] = `Bearer ${t}`;
-  }
+  if (token) headers["authorization"] = `Bearer ${token}`;
   const res = await fetch(path, {
     method: opts.method || (opts.body !== undefined ? "POST" : "GET"),
     headers,
@@ -32,6 +30,16 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
       body = await res.json();
     } catch {
       body = await res.text();
+    }
+    // A 401 on a call that actually carried a token means the session is stale
+    // or revoked. Clear it and send the user back to sign-in instead of
+    // letting half the app render with a dead session. (Login/register call
+    // with no token yet, so a failed credential attempt never redirects here.)
+    if (res.status === 401 && token) {
+      setToken(null);
+      if (typeof window !== "undefined" && !window.location.pathname.startsWith("/auth")) {
+        window.location.assign("/auth");
+      }
     }
     const err = new Error(body?.error || `HTTP ${res.status}`) as ApiError;
     err.status = res.status;

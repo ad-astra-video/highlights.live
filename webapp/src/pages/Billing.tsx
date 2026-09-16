@@ -128,7 +128,8 @@ export function Billing() {
         })}
       </div>
 
-      {/* dev wireframe controls */}
+      {/* dev wireframe controls (prod builds strip this — never ships) */}
+      {import.meta.env.DEV && (
       <div className="mt-8 rounded-2xl border border-pink/40 bg-pink/5 p-5">
         <div className="flex items-center gap-2 font-bold text-pink">
           <Wrench className="h-4 w-4" /> Wireframe console <span className="text-xs font-normal">(dev only — simulates Stripe)</span>
@@ -145,6 +146,7 @@ export function Billing() {
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 }
