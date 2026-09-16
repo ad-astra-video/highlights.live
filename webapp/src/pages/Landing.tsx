@@ -4,6 +4,7 @@ import { Zap, Clapperboard, TrendingUp, CreditCard, Flame } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { api, type Highlight } from "../lib/api";
 import { VideoClip } from "../components/VideoClip";
+import { Footer } from "../components/Footer";
 
 export function Landing() {
   const { token } = useAuth();
@@ -75,6 +76,10 @@ export function Landing() {
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="mt-16">
+        <Footer />
       </div>
     </div>
   );
