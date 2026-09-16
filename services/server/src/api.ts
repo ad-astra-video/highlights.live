@@ -12,6 +12,7 @@ import { LiveIngest, type LiveKind } from "./live";
 import type { Db, MediaSession } from "./db";
 import { AuthService, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError } from "./billing";
+import { FixedWindowLimiter, rateLimit } from "./rate-limit";
 
 /** Resolve the perceive sampling fps from the runner's measured capability
  * (when reachable directly) else the configured interval. */
@@ -56,6 +57,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   const authReq = authRequired(auth);
   const adminReq = adminRequired(auth);
+
+  // Public auth endpoints share one anti-abuse budget per IP (login, register,
+  // forgot, reset). In-process fixed-window: fine for a single beta instance;
+  // move to a shared store if the server is ever scaled horizontally.
+  const authLimiter = new FixedWindowLimiter({ limit: cfg.authRateLimit, windowMs: cfg.authRateLimitWindowSec * 1000 });
+  const limitAuth = rateLimit(authLimiter, "auth");
 
   // In-memory registry of running live ingest sessions (keyed by job id) so a
   // live job can be stopped explicitly; ends the frame iterator -> analyzeJob
@@ -197,8 +204,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   app.get("/health", async () => ({ status: "ok", billing: billing.enabled ? "live" : "disabled" }));
 
-  // --- auth ---
-  app.post<{ Body: { email?: string; password?: string } }>("/auth/register", async (req, reply) => {
+  // --- auth (public endpoints are rate limited per IP) ---
+  app.post<{ Body: { email?: string; password?: string } }>("/auth/register", { preHandler: limitAuth }, async (req, reply) => {
     try {
       return await auth.register(req.body?.email ?? "", req.body?.password ?? "");
     } catch (e: any) {
@@ -206,11 +213,32 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
   });
 
-  app.post<{ Body: { email?: string; password?: string } }>("/auth/login", async (req, reply) => {
+  app.post<{ Body: { email?: string; password?: string } }>("/auth/login", { preHandler: limitAuth }, async (req, reply) => {
     try {
       return await auth.login(req.body?.email ?? "", req.body?.password ?? "");
     } catch (e: any) {
       return reply.code(401).send({ error: e.message });
+    }
+  });
+
+  // Start a password reset. Returns { ok: true } always (no account enumeration);
+  // in this beta there is no mailer yet, so a real account also returns the
+  // single-use resetToken inline for the viability loop (see AuthService).
+  app.post<{ Body: { email?: string } }>("/auth/forgot", { preHandler: limitAuth }, async (req, reply) => {
+    try {
+      return await auth.requestPasswordReset(req.body?.email ?? "");
+    } catch (e: any) {
+      return reply.code(400).send({ error: e.message });
+    }
+  });
+
+  // Redeem a reset token with a new password. Invalid/expired tokens -> 400.
+  app.post<{ Body: { token?: string; password?: string } }>("/auth/reset", { preHandler: limitAuth }, async (req, reply) => {
+    try {
+      await auth.resetPassword(req.body?.token ?? "", req.body?.password ?? "");
+      return { ok: true };
+    } catch (e: any) {
+      return reply.code(400).send({ error: e.message });
     }
   });
 

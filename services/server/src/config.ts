@@ -28,6 +28,12 @@ export interface ServerConfig {
   sampleIntervalSec: number;
   /** Auth + billing */
   jwtSecret: string;
+  /** Max password-reset token lifetime (seconds) before it expires. */
+  resetTokenTtlSec: number;
+  /** Max auth-endpoint requests (login/register/forgot/reset) per IP per
+   * `authRateLimitWindowSec` — simple in-process anti-abuse for the beta. */
+  authRateLimit: number;
+  authRateLimitWindowSec: number;
   /** Seeded dev admin account (email + password). Override in prod. */
   adminEmail: string;
   adminPassword: string;
@@ -71,6 +77,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     clipAfterS: Number(env.CLIP_AFTER_S ?? 4),
     sampleIntervalSec: Number(env.SAMPLE_INTERVAL_SEC ?? 1.0),
     jwtSecret: env.JWT_SECRET ?? "dev-insecure-secret-change-me",
+    resetTokenTtlSec: Number(env.RESET_TOKEN_TTL_SEC ?? 3600),
+    authRateLimit: Number(env.AUTH_RATE_LIMIT ?? 30),
+    authRateLimitWindowSec: Number(env.AUTH_RATE_LIMIT_WINDOW_SEC ?? 60),
     adminEmail: env.ADMIN_EMAIL ?? "admin@highlights.local",
     adminPassword: env.ADMIN_PASSWORD ?? "admin",
     databasePath: env.DATABASE_PATH ?? "data/highlights.db",

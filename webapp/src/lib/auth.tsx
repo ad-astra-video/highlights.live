@@ -16,6 +16,11 @@ interface AuthCtx {
   register: (email: string, password: string) => Promise<void>;
   logout: () => void;
   refreshBilling: () => Promise<void>;
+  /** Start a password reset. Returns { ok, resetToken } — resetToken is only set
+   * for a real account and only in the beta (no mailer yet; inline delivery). */
+  requestPasswordReset: (email: string) => Promise<{ ok: boolean; resetToken: string | null }>;
+  /** Redeem a reset token with a new password. */
+  resetPassword: (token: string, password: string) => Promise<void>;
 }
 
 const Ctx = createContext<AuthCtx | null>(null);
@@ -76,6 +81,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setBilling(null);
       },
       refreshBilling,
+      requestPasswordReset: (email) =>
+        api<{ ok: boolean; resetToken: string | null }>("/auth/forgot", { body: { email } }),
+      resetPassword: (token, password) =>
+        api<{ ok: boolean }>("/auth/reset", { body: { token, password } }).then(() => undefined),
     }),
     [user, token, billing, ready]
   );
