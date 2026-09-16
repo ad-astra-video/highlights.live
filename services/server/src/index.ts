@@ -4,6 +4,7 @@ import { Store } from "./store";
 import { openDb } from "./db";
 import { AuthService } from "./auth";
 import { BillingService } from "./billing";
+import { EntitlementsService } from "./entitlements";
 import { buildApp } from "./api";
 import { makeAdapter } from "./livepeer-adapter";
 import Stripe from "stripe";
@@ -28,8 +29,13 @@ async function main() {
     console.warn("WARN: billing is DISABLED (set STRIPE_SECRET_KEY + STRIPE_PRICE_PRO) — /jobs gated on free quota only.");
   }
 
+  if (cfg.betaGate) {
+    console.log(`invite/beta-gate: ON (${cfg.betaClipQuota} clips/mo per user)`);
+  }
+
+  const entitlements = new EntitlementsService(db, cfg);
   const adapter = makeAdapter(cfg);
-  const app = buildApp({ cfg, store, adapter, db, auth, billing });
+  const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements });
   await app.listen({ port: cfg.port, host: "0.0.0.0" });
   // eslint-disable-next-line no-console
   console.log(`highlights server on :${cfg.port} (orchestrator=${cfg.orchestratorUrl})`);

@@ -13,7 +13,7 @@ interface AuthCtx {
   billing: BillingStatus | null;
   ready: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, inviteCode?: string) => Promise<void>;
   logout: () => void;
   refreshBilling: () => Promise<void>;
   /** Start a password reset. Returns { ok, resetToken } — resetToken is only set
@@ -67,8 +67,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(r.user);
         await refreshBilling().catch(() => {});
       },
-      async register(email, password) {
-        const r = await api<{ token: string; user: SessionUser }>("/auth/register", { body: { email, password } });
+      async register(email, password, inviteCode) {
+        const r = await api<{ token: string; user: SessionUser }>("/auth/register", {
+          body: inviteCode ? { email, password, inviteCode } : { email, password },
+        });
         setToken(r.token);
         setTok(r.token);
         setUser(r.user);

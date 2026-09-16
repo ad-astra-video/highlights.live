@@ -11,6 +11,16 @@ export interface AuthResult {
   user: { id: string; email: string; role: string };
 }
 
+/** Thrown when registration cannot pass the invite/beta-gate (no valid invite
+ * code and no invited waitlist entry). Maps to HTTP 403 by the route. */
+export class BetaGateError extends Error {
+  readonly statusCode = 403;
+  constructor(message: string) {
+    super(message);
+    this.name = "BetaGateError";
+  }
+}
+
 export class AuthService {
   constructor(private db: Db, private cfg: ServerConfig) {}
 
@@ -28,19 +38,53 @@ export class AuthService {
       passwordHash: AuthService.hash(this.cfg.adminPassword),
       role: "admin",
       stripeCustomerId: null,
+      betaActivatedAt: new Date().toISOString(), // admins are always activated
     });
   }
 
-  async register(email: string, password: string): Promise<AuthResult> {
+  /**
+   * Register a beta user. The invite/beta-gate (when `cfg.betaGate` is on) is
+   * enforced here — the hard gate that keeps non-invited users off the product:
+   *   (a) a valid, unused, un-revoked invite `code` (optionally bound to a
+   *       specific email) — claimed atomically (single-use), OR
+   *   (b) the email's waitlist entry has been flipped to `invited` by the
+   *       cohort owner.
+   * Otherwise registration is rejected with BetaGateError (HTTP 403) and the
+   * visitor keeps the waitlist confirmation instead of reaching the product.
+   */
+  async register(email: string, password: string, inviteCode?: string): Promise<AuthResult> {
     const clean = email.trim().toLowerCase();
     if (await this.db.getUserByEmail(clean)) throw new Error("email already registered");
     if (password.length < 8) throw new Error("password must be at least 8 characters");
+    const id = randomBytes(8).toString("hex");
+    const gateOn = this.cfg.betaGate;
+    if (gateOn) {
+      let activated = false;
+      if (inviteCode) {
+        // Bind check BEFORE the atomic claim so a wrong-email attempt does not
+        // burn (consume) a valid code.
+        const ic = await this.db.getInviteByHash(AuthService.hashInviteCode(inviteCode));
+        if (!ic || ic.usedAt || ic.revokedAt) throw new BetaGateError("invalid, used, or revoked invite code");
+        if (ic.email && ic.email.toLowerCase() !== clean) {
+          throw new BetaGateError("invite code is bound to a different email");
+        }
+        // Atomic single-use claim: race-safe guard against double redemption.
+        const claimed = await this.db.claimInvite(AuthService.hashInviteCode(inviteCode), id);
+        if (!claimed) throw new BetaGateError("invalid, used, or revoked invite code");
+        activated = true;
+      } else {
+        const wl = await this.db.getWaitlist(clean);
+        activated = wl?.status === "invited";
+      }
+      if (!activated) throw new BetaGateError("invite required to create an account");
+    }
     const user = await this.db.createUser({
-      id: randomBytes(8).toString("hex"),
+      id,
       email: clean,
       passwordHash: AuthService.hash(password),
       role: "user",
       stripeCustomerId: null,
+      betaActivatedAt: new Date().toISOString(), // a registered beta user is activated at signup
     });
     return this.issue(user);
   }
@@ -49,6 +93,11 @@ export class AuthService {
     const clean = email.trim().toLowerCase();
     const user = await this.db.getUserByEmail(clean);
     if (!user || !bcrypt.compareSync(password, user.passwordHash)) throw new Error("invalid email or password");
+    // Defense-in-depth: even if an account somehow exists without going through
+    // the gate, a non-admin whose email was never invited cannot sign in.
+    if (this.cfg.betaGate && user.role !== "admin" && !user.betaActivatedAt) {
+      throw new BetaGateError("account not activated — invite required");
+    }
     return this.issue(user);
   }
 
@@ -92,6 +141,12 @@ export class AuthService {
   /** SHA-256 hash of a raw token, so the plaintext token is never persisted. */
   static hashResetToken(token: string): string {
     return createHash("sha256").update(token).digest("hex");
+  }
+
+  /** SHA-256 hash of a raw invite code; the plaintext code is only ever shown
+   * to the cohort owner once at issuance and matched by hash thereafter. */
+  static hashInviteCode(code: string): string {
+    return createHash("sha256").update(code.trim()).digest("hex");
   }
 
   private issue(user: User): AuthResult {

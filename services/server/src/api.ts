@@ -524,6 +524,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         for (const h of outcome.highlights) {
           await store.addHighlight({ ...h, ownerId: user.id });
           await billing.onHighlightCreated(user, sub);
+          // A clip generated successfully debits the quota once.
+          await entitlements.onClipGenerated(user);
         }
         await store.patchJob(job.id, { status: "done", perceiveSessionId: outcome.sessionId });
         return { job: store.getJob(job.id), framesAnalyzed: outcome.framesAnalyzed };
@@ -666,6 +668,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               createdAt: new Date().toISOString(),
             };
             await store.addHighlight(highlight);
+            // A browser-capture highlight generated successfully debits the
+            // quota once (like VOD/live). Board-capture jobs must also count
+            // toward the monthly clip quota.
+            await entitlements.onClipGenerated(duser);
             emitJobEvent(req.params.id, { seq, timestamp, type: "highlight", highlight });
           }
         }

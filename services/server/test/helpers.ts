@@ -3,6 +3,7 @@ import { loadConfig } from "../src/config";
 import { SqliteDb, type Db } from "../src/db";
 import { AuthService } from "../src/auth";
 import { BillingService } from "../src/billing";
+import { EntitlementsService } from "../src/entitlements";
 import { Store } from "../src/store";
 import { buildApp } from "../src/api";
 import { mkdtempSync } from "node:fs";
@@ -22,6 +23,7 @@ export function testCfg(env: Record<string, string> = {}): ServerConfig {
     ADMIN_EMAIL: "admin@test.local",
     ADMIN_PASSWORD: "adminpass",
     FREE_HIGHLIGHTS: "100",
+    BETA_GATE: "0", // off by default so the un-gated loop's tests register freely
     ...env,
   });
 }
@@ -89,10 +91,11 @@ export async function buildTestApp(over: Record<string, string> = {}): Promise<T
   await auth.bootstrapAdmin();
   const stripeCalls: any[] = [];
   const billing = new BillingService(cfg, db, stripeStub(stripeCalls));
+  const entitlements = new EntitlementsService(db, cfg);
   const store = new Store(db);
   await store.load();
   const adapter = fakePipeline();
-  const app = buildApp({ cfg, store, adapter, db, auth, billing });
+  const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements });
   await app.ready();
   return { app, cfg, db, auth, billing, store, stripeCalls };
 }
