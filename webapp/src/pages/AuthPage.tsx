@@ -11,7 +11,9 @@ export function AuthPage() {
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [needInvite, setNeedInvite] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // Forgot-password flow state. In the beta (no mailer yet) the server returns
@@ -25,10 +27,11 @@ export function AuthPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setNeedInvite(false);
     setBusy(true);
     try {
       if (mode === "login") return await login(email, password).then(() => nav("/app"));
-      if (mode === "register") return await register(email, password).then(() => nav("/app"));
+      if (mode === "register") return await register(email, password, inviteCode || undefined).then(() => nav("/app"));
       // forgot: request a reset token
       const res = await requestPasswordReset(email);
       if (res.resetToken) {
@@ -38,6 +41,9 @@ export function AuthPage() {
         setForgotMsg("If an account exists for that email, a reset token was issued.");
       }
     } catch (err: any) {
+      // 403 invite_required means the beta-gate closed registration: surface it
+      // with an invite-code hint + a waitlist path.
+      if (err?.status === 403) setNeedInvite(true);
       setError(err.message || "something went wrong");
     } finally {
       setBusy(false);
@@ -90,7 +96,25 @@ export function AuthPage() {
             <form onSubmit={submit} className="flex flex-col gap-4">
               <input className="input-neon" type="email" required placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
               <input className="input-neon" type="password" required minLength={8} placeholder="Password (8+ chars)" value={password} onChange={(e) => setPassword(e.target.value)} />
+              {mode === "register" && (
+                <input
+                  className="input-neon"
+                  type="text"
+                  placeholder="Invite code (if you have one)"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                />
+              )}
               {error && <div className="rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{error}</div>}
+              {needInvite && (
+                <div className="rounded-lg border border-neon/40 bg-neon/10 px-3 py-2 text-sm text-neon">
+                  This beta is invite-gated. Enter your invite code above, or{" "}
+                  <Link to="/" className="underline">
+                    join the waitlist
+                  </Link>
+                  — we'll email you an invite.
+                </div>
+              )}
               <button className="btn-neon" disabled={busy}>
                 {busy ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
               </button>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X } from "lucide-react";
 import { api, type Highlight } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
 import { BrowserCapture } from "../components/BrowserCapture";
@@ -38,6 +39,7 @@ const GAME_DEFAULTS: Record<string, string> = {
 };
 
 export function Dashboard() {
+  const { billing, refreshBilling } = useAuth();
   const [source, setSource] = useState("file");
   const [videoPath, setVideoPath] = useState("/data/test_vod.mp4");
   const [gameHint, setGameHint] = useState("Esports");
@@ -112,8 +114,19 @@ export function Dashboard() {
         setJob(r.job);
         setDebugJob(r.job.id);
       }
+      // A submitted job may have (or will) consume quota — refresh the billing
+      // snapshot so the remaining-quota banner stays accurate.
+      refreshBilling().catch(() => {});
     } catch (e: any) {
-      setError(e.status === 402 ? `${e.message} — subscribe on Billing to continue.` : e.message);
+      if (e.status === 429) {
+        setError("Monthly clip quota used up — resets at the start of next month.");
+      } else if (e.status === 402) {
+        setError(`${e.message} — subscribe on Billing to continue.`);
+      } else {
+        setError(e.message);
+      }
+      // If the server rejected on quota, reflect the (now-exhausted) status.
+      if (e.status === 429) refreshBilling().catch(() => {});
     } finally {
       setBusy(false);
       if (!isLive) refreshHighlights().catch(() => {});
@@ -135,8 +148,26 @@ export function Dashboard() {
 
   return (
     <div className="mx-auto max-w-5xl">
-      <h1 className="text-3xl font-black">Clip something</h1>
-      <p className="mt-1 text-mut">Choose a source, tell it the sport/game and what to look for.</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-black">Clip something</h1>
+          <p className="mt-1 text-mut">Choose a source, tell it the sport/game and what to look for.</p>
+        </div>
+        {billing && (
+          <div
+            data-quota
+            className={`rounded-lg border px-4 py-2 text-sm ${
+              billing.clipQuotaRemaining > 0
+                ? "border-neon/40 bg-neon/10 text-neon"
+                : "border-red/50 bg-red/10 font-bold text-red"
+            }`}
+          >
+            {billing.clipQuotaRemaining > 0
+              ? `${billing.clipQuotaUsed} / ${billing.clipQuotaLimit} clips this month (${billing.clipQuotaRemaining} left) · resets next month`
+              : `Monthly quota used: ${billing.clipQuotaUsed} / ${billing.clipQuotaLimit} clips — resets at the start of next month`}
+          </div>
+        )}
+      </div>
 
       <div className="card card-accent mt-6 p-6">
         {/* source */}

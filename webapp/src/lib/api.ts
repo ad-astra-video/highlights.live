@@ -55,6 +55,12 @@ export interface BillingStatus {
   status: string;
   usedHighlights: number;
   freeHighlights: number;
+  // Per-user per-calendar-month clip quota (entitlement ledger), surfaced so the
+  // dashboard can show remaining quota without a submission.
+  clipQuotaPeriod: string;
+  clipQuotaLimit: number;
+  clipQuotaUsed: number;
+  clipQuotaRemaining: number;
 }
 export interface Plan {
   id: string;
