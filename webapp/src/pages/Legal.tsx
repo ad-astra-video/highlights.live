@@ -10,7 +10,7 @@ const PRIVACY: Doc = {
   title: "Privacy Policy",
   updated: "September 2026 (public beta)",
   lead:
-    "highlights.live (\"the Service\") is a product operated by Ad Astra Labs (\"we\", \"us\", \"our\"). This policy explains what data we collect, how we use it, how long we keep it, and the choices you have. By using the Service you agree to this policy and our Terms of Service.",
+    "highlights.live (\"the Service\") is a product operated by AV LLC (\"we\", \"us\", \"our\"). This policy explains what data we collect, how we use it, how long we keep it, and the choices you have. By using the Service you agree to this policy and our Terms of Service.",
   blocks: [
     { h: "What we collect", list: [
       "Contact / account information — your email when you join the waitlist or create an account, and hashed authentication credentials.",
@@ -36,7 +36,7 @@ const TERMS: Doc = {
   title: "Terms of Service",
   updated: "September 2026 (public beta)",
   lead:
-    "These Terms govern your access to highlights.live (\"the Service\"), operated by Ad Astra Labs. By using the Service you agree to these Terms and our Privacy Policy.",
+    "These Terms govern your access to highlights.live (\"the Service\"), operated by AV LLC. By using the Service you agree to these Terms and our Privacy Policy.",
   blocks: [
     { h: "1. The Service", p: "highlights.live uses AI to detect and generate highlight clips from sports and esports content — live streams or VODs you connect or upload. The Service is in public beta: it is evolving, features may change or be removed, and we make no guarantee that any output is available or correct at any time." },
     { h: "2. Your account", list: [
@@ -50,7 +50,7 @@ const TERMS: Doc = {
     { h: "5. Generated output", p: "Clips are produced by automated AI analysis. Generative output is provided \"as is\" and is not guaranteed to be accurate, complete, or free of errors — including mis-labelled events or wrong timestamps. You are responsible for reviewing any clip you publish or share." },
     { h: "6. Disclaimers", p: "The Service is provided \"as is\" and \"as available\", without warranties of any kind, including merchantability, fitness for a particular purpose, and non-infringement. We do not warrant uninterrupted, secure, or error-free operation, or that stored video or clips will not be lost. To the maximum extent permitted by law, our aggregate liability will not exceed amounts you paid in the 3 months preceding a claim (zero during the no-charge beta), and we are not liable for indirect, incidental, special, consequential, or punitive damages." },
     { h: "7. Termination", p: "We may suspend or terminate access at any time and for any reason, including a breach of these Terms. Upon termination you may request deletion of your data per the Data Retention note." },
-    { h: "8. Changes & governing law", p: "We may update these Terms; material changes take effect on the posted date. These Terms are governed by the laws of the jurisdiction in which Ad Astra Labs is established. Questions: legal@highlights.live." },
+    { h: "8. Changes & governing law", p: "We may update these Terms; material changes take effect on the posted date. These Terms are governed by the laws of the jurisdiction in which AV LLC is established. Questions: legal@highlights.live." },
   ],
 };
 
@@ -116,7 +116,7 @@ export function Legal({ kind }: { kind: "privacy" | "terms" | "retention" }) {
         <Blocks blocks={doc.blocks} />
       </div>
       <p className="mt-10 border-t border-mut/30 pt-4 text-sm text-mut">
-        {doc.title} © 2026 Ad Astra Labs · highlights.live
+        {doc.title} © 2026 AV LLC · highlights.live
       </p>
     </div>
   );

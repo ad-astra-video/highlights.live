@@ -3,7 +3,7 @@
 *Effective date: public-beta launch. Last updated: September 2026.*
 
 These Terms of Service ("Terms") govern your access to and use of highlights.live
-("the Service"), operated by **Ad Astra Labs** ("we", "us", "our"). By accessing
+("the Service"), operated by **AV LLC** ("we", "us", "our"). By accessing
 or using the Service during the public beta you agree to these Terms and to our
 [Privacy Policy](./privacy-policy.md).
 
@@ -86,7 +86,7 @@ constitutes acceptance.
 
 ## 9. Governing law and general
 
-These Terms are governed by the laws of the jurisdiction in which Ad Astra Labs
+These Terms are governed by the laws of the jurisdiction in which AV LLC
 is established, without regard to conflict-of-law rules. If any provision is held
 unenforceable, the remainder stays in effect. This is the entire agreement
 between you and us regarding the Service.
