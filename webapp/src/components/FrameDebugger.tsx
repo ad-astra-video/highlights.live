@@ -43,6 +43,19 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
   const [sel, setSel] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Track blob object URLs so we can revoke them on unmount (they otherwise
+  // leak — a real bug for a filmstrip that can grow to MAX_THUMBS entries).
+  const createdUrls = useRef<Set<string>>(new Set());
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      createdUrls.current.forEach((u) => URL.revokeObjectURL(u));
+      createdUrls.current = new Set();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,7 +85,13 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
   useEffect(() => {
     for (const fr of frames) {
       if (thumbs[fr.seq] !== undefined) continue;
-      authFetch(fr.uri).then((u) => setThumbs((prev) => (prev[fr.seq] ? prev : { ...prev, [fr.seq]: u }))).catch(() => {});
+      authFetch(fr.uri)
+        .then((u) => {
+          createdUrls.current.add(u);
+          if (!aliveRef.current) return; // unmounted — don't setState
+          setThumbs((prev) => (prev[fr.seq] ? prev : { ...prev, [fr.seq]: u }));
+        })
+        .catch(() => {});
     }
   }, [frames]);
 

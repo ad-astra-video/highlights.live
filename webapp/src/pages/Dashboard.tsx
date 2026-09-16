@@ -4,6 +4,7 @@ import { api, type Highlight } from "../lib/api";
 import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
 import { BrowserCapture } from "../components/BrowserCapture";
+import { VideoClip } from "../components/VideoClip";
 
 const SOURCES = [
   { id: "file", label: "Upload / file", icon: Upload },
@@ -97,7 +98,7 @@ export function Dashboard() {
       const r = await api<any>("/jobs", {
         body: {
           source,
-          videoPath: isLive ? videoPath : videoPath,
+          videoPath,
           gameHint,
           lookFor,
           preferLabels: lookFor.split(",").map((s) => s.trim()).filter(Boolean),
@@ -219,7 +220,7 @@ export function Dashboard() {
         {highlights.length === 0 && <div className="text-mut">Nothing yet — run a detection above.</div>}
         {highlights.map((h) => (
           <div key={h.id} className="card card-hover overflow-hidden">
-            <video src={h.clipUri} controls className="aspect-video w-full bg-black" />
+            <VideoClip src={h.clipUri} label={h.eventType} />
             <div className="p-4">
               <div className="flex items-center justify-between">
                 <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">{h.eventType || "EVENT"}</span>

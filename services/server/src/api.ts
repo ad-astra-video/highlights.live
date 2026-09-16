@@ -214,6 +214,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
   });
 
+  // Session re-hydration: confirm the current token and return the user so the
+  // SPA can restore a logged-in session (and detect a stale/revoked one) on load.
+  app.get("/auth/me", { preHandler: authReq }, async (req: any) => {
+    const u = req.user as { id: string; email: string; role: string };
+    return { user: { id: u.id, email: u.email, role: u.role } };
+  });
+
   // --- billing ---
   app.get("/billing/plans", async () => ({ plans: billing.plans() }));
 
