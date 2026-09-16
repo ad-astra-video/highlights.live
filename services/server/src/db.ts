@@ -26,6 +26,9 @@ export interface User {
   role: "admin" | "user";
   createdAt: string;
   stripeCustomerId: string | null;
+  /** ISO expiry of the current password-reset token (optional — only populated
+   * by the reset-token lookup; normal user fetches leave it unset). */
+  resetTokenExpires?: string | null;
 }
 
 export interface Subscription {
@@ -63,6 +66,15 @@ export interface Db {
   createUser(u: Omit<User, "createdAt"> & { createdAt?: string }): Promise<User>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserById(id: string): Promise<User | undefined>;
+  /** Look up a user by SHA-256 hash of their password-reset token (timing-safe
+   * retrieval is handled by the caller hashing the token before hitting this). */
+  getUserByResetToken(tokenHash: string): Promise<User | undefined>;
+  /** Persist the (hashed) password-reset token + expiry for a user. */
+  setResetToken(userId: string, tokenHash: string, expiresAt: string): Promise<void>;
+  /** Clear the reset token (after a successful reset, or a refresh). */
+  clearResetToken(userId: string): Promise<void>;
+  /** Replace a user's password hash (used by password reset). */
+  updatePassword(userId: string, passwordHash: string): Promise<void>;
   setStripeCustomer(userId: string, customerId: string): Promise<void>;
   getSubscription(userId: string): Promise<Subscription>;
   setSubscription(userId: string, s: Partial<Subscription>): Promise<Subscription>;
@@ -84,6 +96,11 @@ export class SqliteDb implements Db {
     if (file !== ":memory:") mkdirSync(path.dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
     this.db.exec(SCHEMA_SQLITE);
+    // In-place migration for existing dev DBs created before the reset-token
+    // columns existed (CREATE TABLE IF NOT EXISTS won't add them).
+    const cols = this.db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
+    if (!cols.some((c) => c.name === "reset_token_hash")) this.db.exec("ALTER TABLE users ADD COLUMN reset_token_hash TEXT");
+    if (!cols.some((c) => c.name === "reset_token_expires")) this.db.exec("ALTER TABLE users ADD COLUMN reset_token_expires TEXT");
   }
 
   async close(): Promise<void> {
@@ -106,6 +123,23 @@ export class SqliteDb implements Db {
   async getUserById(id: string): Promise<User | undefined> {
     const r = this.db.prepare("SELECT * FROM users WHERE id = ?").get(id);
     return r ? rowToUser(r) : undefined;
+  }
+
+  async getUserByResetToken(tokenHash: string): Promise<User | undefined> {
+    const r = this.db.prepare("SELECT * FROM users WHERE reset_token_hash = ?").get(tokenHash);
+    return r ? rowToUser(r) : undefined;
+  }
+
+  async setResetToken(userId: string, tokenHash: string, expiresAt: string): Promise<void> {
+    this.db.prepare("UPDATE users SET reset_token_hash = ?, reset_token_expires = ? WHERE id = ?").run(tokenHash, expiresAt, userId);
+  }
+
+  async clearResetToken(userId: string): Promise<void> {
+    this.db.prepare("UPDATE users SET reset_token_hash = NULL, reset_token_expires = NULL WHERE id = ?").run(userId);
+  }
+
+  async updatePassword(userId: string, passwordHash: string): Promise<void> {
+    this.db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, userId);
   }
 
   async setStripeCustomer(userId: string, customerId: string): Promise<void> {
@@ -184,6 +218,9 @@ export class PgDb implements Db {
 
   async init(): Promise<void> {
     await this.pool.query(SCHEMA_PG);
+    // In-place migration for an existing users table without the reset columns.
+    await this.pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_hash TEXT");
+    await this.pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TEXT");
   }
 
   async close(): Promise<void> {
@@ -207,6 +244,23 @@ export class PgDb implements Db {
   async getUserById(id: string): Promise<User | undefined> {
     const r = await this.pool.query("SELECT * FROM users WHERE id = $1", [id]);
     return r.rows[0] ? rowToUser(r.rows[0]) : undefined;
+  }
+
+  async getUserByResetToken(tokenHash: string): Promise<User | undefined> {
+    const r = await this.pool.query("SELECT * FROM users WHERE reset_token_hash = $1", [tokenHash]);
+    return r.rows[0] ? rowToUser(r.rows[0]) : undefined;
+  }
+
+  async setResetToken(userId: string, tokenHash: string, expiresAt: string): Promise<void> {
+    await this.pool.query("UPDATE users SET reset_token_hash = $2, reset_token_expires = $3 WHERE id = $1", [userId, tokenHash, expiresAt]);
+  }
+
+  async clearResetToken(userId: string): Promise<void> {
+    await this.pool.query("UPDATE users SET reset_token_hash = NULL, reset_token_expires = NULL WHERE id = $1", [userId]);
+  }
+
+  async updatePassword(userId: string, passwordHash: string): Promise<void> {
+    await this.pool.query("UPDATE users SET password_hash = $2 WHERE id = $1", [userId, passwordHash]);
   }
 
   async setStripeCustomer(userId: string, customerId: string): Promise<void> {
@@ -285,7 +339,9 @@ const SCHEMA_SQLITE = `
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
     created_at TEXT NOT NULL,
-    stripe_customer_id TEXT
+    stripe_customer_id TEXT,
+    reset_token_hash TEXT,
+    reset_token_expires TEXT
   );
   CREATE TABLE IF NOT EXISTS subscriptions (
     user_id TEXT PRIMARY KEY,
@@ -322,7 +378,9 @@ const SCHEMA_PG = `
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
     created_at TEXT NOT NULL,
-    stripe_customer_id TEXT
+    stripe_customer_id TEXT,
+    reset_token_hash TEXT,
+    reset_token_expires TEXT
   );
   CREATE TABLE IF NOT EXISTS subscriptions (
     user_id TEXT PRIMARY KEY,
@@ -370,6 +428,7 @@ function rowToUser(r: any): User {
     role: r.role,
     createdAt: r.created_at,
     stripeCustomerId: r.stripe_customer_id ?? null,
+    resetTokenExpires: r.reset_token_expires ?? null,
   };
 }
 

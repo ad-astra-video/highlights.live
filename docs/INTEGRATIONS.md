@@ -14,9 +14,22 @@ bcrypt-hashed; sessions are JWTs signed with `JWT_SECRET`.
 - `POST /auth/register {email, password}` — create a user (password ≥ 8 chars).
   Returns `{ token, user }`.
 - `POST /auth/login {email, password}` — returns `{ token, user }`.
+- `GET /auth/me` (`Authorization: Bearer …`) — session re-hydration: returns the
+  current user for the token, or 401 if stale/revoked. The SPA calls this on load
+  to restore a logged-in session.
+- `POST /auth/forgot {email}` — starts a password reset. Always returns
+  `{ ok: true }` (no account enumeration). **Beta**: there is no mailer yet, so a
+  real account also returns the single-use `resetToken` inline so the loop can be
+  completed; wire it to an email send before public launch.
+- `POST /auth/reset {token, password}` — redeems the single-use reset token with
+  a new password (≥ 8 chars). Invalid/expired tokens → 400.
 - Attach the token: `Authorization: Bearer <token>`.
 - Roles: `user` (their own data only) and `admin`. The **admin can review highlights**
   (`POST /highlights/:id/review`), users cannot.
+
+Rate limiting: the four public auth endpoints share an in-process fixed-window
+per-IP budget (`AUTH_RATE_LIMIT` requests per `AUTH_RATE_LIMIT_WINDOW_SEC`), so
+credential-stuffing / forgot-spam gets a `429` with a `Retry-After` header.
 
 Env:
 
@@ -25,6 +38,9 @@ Env:
 | `JWT_SECRET` | prod | `dev-insecure-secret-change-me` | **Must change in prod.** |
 | `ADMIN_EMAIL` | no | `admin@highlights.local` | Seeded at startup. |
 | `ADMIN_PASSWORD` | no | `admin` | Seeded admin login (dev). Set a real one in prod. |
+| `RESET_TOKEN_TTL_SEC` | no | `3600` | Password-reset token lifetime (seconds). |
+| `AUTH_RATE_LIMIT` | no | `30` | Max auth requests per IP per window. |
+| `AUTH_RATE_LIMIT_WINDOW_SEC` | no | `60` | Rate-limit window (seconds). |
 
 The dev admin is `admin@highlights.local` / `admin`. Change both via env.
 
