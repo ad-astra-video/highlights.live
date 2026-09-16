@@ -6,6 +6,7 @@ import { AuthPage } from "./pages/AuthPage";
 import { Dashboard } from "./pages/Dashboard";
 import { Billing } from "./pages/Billing";
 import { Settings } from "./pages/Settings";
+import { Legal } from "./pages/Legal";
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { token, ready } = useAuth();
@@ -19,6 +20,9 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/auth" element={<AuthPage />} />
+      <Route path="/privacy" element={<Legal kind="privacy" />} />
+      <Route path="/terms" element={<Legal kind="terms" />} />
+      <Route path="/retention" element={<Legal kind="retention" />} />
       <Route
         path="/app"
         element={
