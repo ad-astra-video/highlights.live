@@ -282,33 +282,34 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // --- dev wireframe billing (BILLING_WIREFRAME=1 only) ---------------------
   // Simulate the side effects the Stripe webhook would normally produce, so the
   // full subscription lifecycle can be exercised locally without real Stripe.
-  const wireframeRoute = (handler: (user: any, body: any, reply: any) => Promise<any>) =>
-    async (req: any, reply: any) => {
-      if (!cfg.billingWireframe) return reply.code(404).send({ error: "wireframe billing disabled" });
-      const user = await auth.verify((req.headers.authorization as string) || "");
-      if (!user) return reply.code(401).send({ error: "unauthorized" });
-      return handler(user, req.body || {}, reply);
-    };
-
-  app.post("/dev/billing/activate", { preHandler: authReq }, wireframeRoute(async (user, body, reply) => {
-    const sub = await db.setSubscription(user.id, {
-      tier: body.plan === "free" ? "free" : "pro",
-      status: "active",
-      stripeSubscriptionId: body.stripeSubscriptionId || "wireframe_sub",
-      stripeSubItemId: (body.noMeter ?? false) ? null : "si_wire_metered",
+  // These routes are MOUNTED ONLY when BILLING_WIREFRAME is set. When the flag
+  // is off (prod), the routes do not exist at all — Fastify answers 404
+  // route-not-found — so the wireframe "free upgrade" surface is never
+  // reachable outside the dev simulator, regardless of auth or client.
+  if (cfg.billingWireframe) {
+    app.post("/dev/billing/activate", { preHandler: authReq }, async (req: any, reply) => {
+      const user = (req as any).user;
+      const sub = await db.setSubscription(user.id, {
+        tier: req.body?.plan === "free" ? "free" : "pro",
+        status: "active",
+        stripeSubscriptionId: req.body?.stripeSubscriptionId || "wireframe_sub",
+        stripeSubItemId: (req.body?.noMeter ?? false) ? null : "si_wire_metered",
+      });
+      return reply.send({ ok: true, sub });
     });
-    return reply.send({ ok: true, sub });
-  }));
 
-  app.post("/dev/billing/deactivate", { preHandler: authReq }, wireframeRoute(async (user, _b, reply) => {
-    const sub = await db.setSubscription(user.id, { tier: "free", status: "canceled", stripeSubscriptionId: null, stripeSubItemId: null });
-    return reply.send({ ok: true, sub });
-  }));
+    app.post("/dev/billing/deactivate", { preHandler: authReq }, async (req: any, reply) => {
+      const user = (req as any).user;
+      const sub = await db.setSubscription(user.id, { tier: "free", status: "canceled", stripeSubscriptionId: null, stripeSubItemId: null });
+      return reply.send({ ok: true, sub });
+    });
 
-  app.post("/dev/billing/reset-usage", { preHandler: authReq }, wireframeRoute(async (user, _b, reply) => {
-    await db.resetUsage(user.id, "highlight");
-    return reply.send({ ok: true, usedHighlights: await db.countUsage(user.id, "highlight") });
-  }));
+    app.post("/dev/billing/reset-usage", { preHandler: authReq }, async (req: any, reply) => {
+      const user = (req as any).user;
+      await db.resetUsage(user.id, "highlight");
+      return reply.send({ ok: true, usedHighlights: await db.countUsage(user.id, "highlight") });
+    });
+  }
 
   app.post("/stripe/webhook", async (req: any, reply) => {
     const sig = req.headers["stripe-signature"];

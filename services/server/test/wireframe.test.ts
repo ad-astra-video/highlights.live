@@ -7,11 +7,21 @@ async function register(app: any, email: string, pw = "password123") {
 }
 
 describe("dev wireframe billing (BILLING_WIREFRAME=1)", () => {
-  it("404s when wireframe is disabled", async () => {
+  // PROD GATE: when the wireframe flag is off (prod default), the /dev/billing/*
+  // routes must not exist at all. Even with a valid token, activate/deactivate/
+  // reset-usage all return 404 route-not-found, so the simulator's "free pro
+  // upgrade" surface is never reachable in production.
+  it("prod gate: /dev/billing/* do not exist when the flag is off, even with auth", async () => {
     const { app } = await buildTestApp(); // no BILLING_WIREFRAME
     const token = await register(app, "w0@x.dev");
-    const r = await app.inject({ method: "POST", url: "/dev/billing/activate", headers: { authorization: `Bearer ${token}` }, payload: {} });
-    expect(r.statusCode).toBe(404);
+    const paths = ["/dev/billing/activate", "/dev/billing/deactivate", "/dev/billing/reset-usage"];
+    for (const url of paths) {
+      const r = await app.inject({ method: "POST", url, headers: { authorization: `Bearer ${token}` }, payload: {} });
+      expect(r.statusCode).toBe(404);
+    }
+    // no one can be silently upgraded to pro in prod
+    const st = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } });
+    expect(st.json().tier).toBe("free");
     await app.close();
   });
 
