@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:backup": "tsx scripts/backup.ts"
   },
   "dependencies": {
     "@highlights/livepeer-session": "0.1.0",
