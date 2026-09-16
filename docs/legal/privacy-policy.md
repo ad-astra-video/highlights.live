@@ -2,7 +2,7 @@
 
 *Effective date: public-beta launch. Last updated: September 2026.*
 
-highlights.live ("the Service") is a product operated by **Ad Astra Labs** ("we",
+highlights.live ("the Service") is a product operated by **AV LLC** ("we",
 "us", "our"). This Privacy Policy explains what data we collect through
 highlights.live, how we use it, how long we keep it, and the choices you have.
 By using the Service during the public beta you agree to this policy along with
