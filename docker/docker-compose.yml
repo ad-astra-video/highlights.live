@@ -173,8 +173,10 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-highlights}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-highlights}
       - POSTGRES_DB=${POSTGRES_DB:-highlights}
+    # postgres:18 changed the layout: mount the named volume at /var/lib/postgresql
+    # (18 uses major-version subdirs, pg_ctlcluster-style), not .../data.
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-highlights} -d ${POSTGRES_DB:-highlights}"]
       interval: 5s
