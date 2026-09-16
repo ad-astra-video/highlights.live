@@ -37,6 +37,11 @@ export interface ServerConfig {
   /** Seeded dev admin account (email + password). Override in prod. */
   adminEmail: string;
   adminPassword: string;
+  /** Built SPA directory to serve over HTTP (static + history fallback). When
+   * set, the server serves the webapp's `dist/` at `/` so the landing page is
+   * reachable over HTTPS. Falls back to the repo-local `webapp/dist` when the
+   * directory exists; empty disables SPA serving (API-only). */
+  webappDist?: string;
   /** SQLite database file path (dev; used when `databaseUrl` is unset). */
   databasePath: string;
   /** Postgres connection string (prod). When set, the server uses Postgres
@@ -61,6 +66,13 @@ export interface ServerConfig {
   freeDecides: number;
   /** Dev-only: wireframe billing (no real Stripe). Enables /dev/billing/*. */
   billingWireframe: boolean;
+  /** Per-user per-calendar-month clip quota during the beta (the entitlement
+   * ledger's hard-stop; no billing during beta). Default 10 clips/month. */
+  betaClipQuota: number;
+  /** Invite/beta-gate: when true, registration + login require the account to
+   * have been activated (a claimed invite code or an invited waitlist email).
+   * Default ON in prod. Tests/off turn it off for the un-gated loop. */
+  betaGate: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -84,6 +96,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     authRateLimitWindowSec: Number(env.AUTH_RATE_LIMIT_WINDOW_SEC ?? 60),
     adminEmail: env.ADMIN_EMAIL ?? "admin@highlights.local",
     adminPassword: env.ADMIN_PASSWORD ?? "admin",
+    webappDist: env.WEBAPP_DIST || "",
     databasePath: env.DATABASE_PATH ?? "data/highlights.db",
     databaseUrl: env.DATABASE_URL,
     databaseBackupDir: env.DATABASE_BACKUP_DIR ?? "data/backups",
@@ -96,5 +109,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     decideFee: Number(env.DECIDE_FEE ?? 0.01),
     freeDecides: Number(env.FREE_DECIDES ?? 5),
     billingWireframe: env.BILLING_WIREFRAME === "1" || env.BILLING_WIREFRAME === "true",
+    betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),
+    betaGate: env.BETA_GATE === "1" || env.BETA_GATE === "true" || !env.BETA_GATE,
   };
 }

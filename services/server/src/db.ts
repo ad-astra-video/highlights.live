@@ -8,6 +8,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { randomUUID } from "node:crypto";
 import type { Job, HighlightRecord } from "@highlights/events";
 
 // `node:sqlite` is experimental and not in Vite/vitest's builtin external
@@ -29,6 +30,36 @@ export interface User {
   /** ISO expiry of the current password-reset token (optional — only populated
    * by the reset-token lookup; normal user fetches leave it unset). */
   resetTokenExpires?: string | null;
+  /** ISO timestamp when the account passed the invite/beta-gate (activated).
+   * `null`/unset means the waitlisted email was never invited or the invite
+   * code never redeemed — such accounts may not reach the product. Admins are
+   * always activated (seeded) and are exempt from the gate. */
+  betaActivatedAt?: string | null;
+}
+
+/** A waitlist signup (public capture). Flipped to `invited` by the cohort
+ * owner to grant account activation for that email (invite path "b"). */
+export interface WaitlistEntry {
+  id: string;
+  email: string;
+  status: "waitlisted" | "invited";
+  invitedAt: string | null;
+  createdAt: string;
+}
+
+/** A single-use invite code issued by the cohort owner (invite path "a").
+ * Stored as a SHA-256 hash; the plaintext code is shown to the owner once at
+ * issuance and handed out of band. */
+export interface InviteCode {
+  id: string;
+  codeHash: string;
+  /** Optional email the code is bound to; a bound code only activates that email. */
+  email: string | null;
+  createdBy: string;
+  createdAt: string;
+  usedBy: string | null;
+  usedAt: string | null;
+  revokedAt: string | null;
 }
 
 export interface Subscription {
@@ -75,6 +106,8 @@ export interface Db {
   clearResetToken(userId: string): Promise<void>;
   /** Replace a user's password hash (used by password reset). */
   updatePassword(userId: string, passwordHash: string): Promise<void>;
+  /** Mark a user's account as having passed the invite/beta-gate (activated). */
+  activateUser(userId: string): Promise<void>;
   setStripeCustomer(userId: string, customerId: string): Promise<void>;
   getSubscription(userId: string): Promise<Subscription>;
   setSubscription(userId: string, s: Partial<Subscription>): Promise<Subscription>;
@@ -92,6 +125,39 @@ export interface Db {
   saveHighlight(h: HighlightRecord): Promise<void>;
   getHighlight(id: string): Promise<HighlightRecord | undefined>;
   listHighlights(): Promise<HighlightRecord[]>;
+  /** Public waitlist: add an email, deduped by the normalized email (UNIQUE
+   * constraint). Returns whether this call actually created a new entry vs the
+   * email already being present (idempotent re-submission). */
+  addWaitlistEmail(email: string): Promise<{ registered: boolean }>;
+  /** All waitlist entries, oldest first (inspection + signup-rate counter). */
+  listWaitlistEmails(): Promise<{ email: string; createdAt: string }[]>;
+  /** Total waitlist sign-ups. */
+  waitlistCount(): Promise<number>;
+  /** Get a waitlist entry by normalized email, or undefined. */
+  getWaitlist(email: string): Promise<WaitlistEntry | undefined>;
+  /** Flip a waitlist email to `invited` (cohort owner granted activation).
+   * Creates the entry if the email never signed up. Returns the entry. */
+  setWaitlistInvited(email: string): Promise<WaitlistEntry>;
+  /** All waitlist entries incl. status, newest first (admin gate inspection). */
+  listWaitlist(): Promise<WaitlistEntry[]>;
+  /** Get an invite code record by SHA-256 hash of the code. */
+  getInviteByHash(codeHash: string): Promise<InviteCode | undefined>;
+  /** Persist a new invite code (unused, unrevolved). */
+  createInviteCode(ic: Omit<InviteCode, "usedBy" | "usedAt" | "revokedAt">): Promise<InviteCode>;
+  /** Atomically claim a single-use invite code for `usedBy`. Returns the
+   * claimed code, or undefined if already used, revoked, or unknown. The
+   * UPDATE-with-guard makes the single-use claim race-free across requests. */
+  claimInvite(codeHash: string, usedBy: string): Promise<InviteCode | undefined>;
+  /** Revoke a (possibly unclaimed) invite code; a revoked code can never claim. */
+  revokeInvite(codeHash: string): Promise<void>;
+  listInvites(): Promise<InviteCode[]>;
+  // --- entitlements (per-user per-calendar-month quota ledger) ---
+  /** Clips used by a user in a period key (e.g. "2026-09"). */
+  getQuota(userId: string, period: string): Promise<number>;
+  /** Atomically increment a user's clip count for a period (idempotent per
+   * successful generation — callers invoke once per clip generated). Returns
+   * the new count. */
+  incrementQuota(userId: string, period: string): Promise<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,9 +195,15 @@ export class SqliteDb implements Db {
   async createUser(u: Omit<User, "createdAt"> & { createdAt?: string }): Promise<User> {
     const createdAt = u.createdAt ?? new Date().toISOString();
     this.db
-      .prepare("INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id) VALUES (?,?,?,?,?,?)")
-      .run(u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null);
-    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null };
+      .prepare(
+        "INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id,beta_activated_at) VALUES (?,?,?,?,?,?,?)"
+      )
+      .run(u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null, u.betaActivatedAt ?? null);
+    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null, betaActivatedAt: u.betaActivatedAt ?? null };
+  }
+
+  async activateUser(userId: string): Promise<void> {
+    this.db.prepare("UPDATE users SET beta_activated_at = ? WHERE id = ?").run(new Date().toISOString(), userId);
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
@@ -265,6 +337,95 @@ export class SqliteDb implements Db {
     const rows = this.db.prepare("SELECT record FROM highlights").all() as { record: string }[];
     return rows.map((r) => JSON.parse(r.record) as HighlightRecord);
   }
+
+  async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
+    const r = this.db
+      .prepare("INSERT INTO waitlist (id,email,created_at) VALUES (?,?,?) ON CONFLICT(email) DO NOTHING")
+      .run(randomUUID(), email, new Date().toISOString());
+    return { registered: (r as any).changes > 0 };
+  }
+
+  async listWaitlistEmails(): Promise<{ email: string; createdAt: string }[]> {
+    const rows = this.db.prepare("SELECT email, created_at AS createdAt FROM waitlist ORDER BY created_at ASC").all() as any[];
+    return rows.map((r) => ({ email: r.email, createdAt: r.createdAt }));
+  }
+
+  async waitlistCount(): Promise<number> {
+    const r = this.db.prepare("SELECT COUNT(*) AS n FROM waitlist").get() as { n: number };
+    return r.n;
+  }
+
+  async getWaitlist(email: string): Promise<WaitlistEntry | undefined> {
+    const r = this.db.prepare("SELECT * FROM waitlist WHERE email = ?").get(email);
+    return r ? rowToWaitlist(r) : undefined;
+  }
+
+  async setWaitlistInvited(email: string): Promise<WaitlistEntry> {
+    const now = new Date().toISOString();
+    const existing = this.db.prepare("SELECT * FROM waitlist WHERE email = ?").get(email) as any;
+    if (existing) {
+      this.db.prepare("UPDATE waitlist SET status = 'invited', invited_at = ? WHERE email = ?").run(now, email);
+    } else {
+      this.db
+        .prepare("INSERT INTO waitlist (id,email,status,invited_at,created_at) VALUES (?,?,?,?,?)")
+        .run(randomUUID(), email, "invited", now, now);
+    }
+    return (await this.getWaitlist(email))!;
+  }
+
+  async listWaitlist(): Promise<WaitlistEntry[]> {
+    const rows = this.db.prepare("SELECT * FROM waitlist ORDER BY created_at DESC").all() as any[];
+    return rows.map(rowToWaitlist);
+  }
+
+  async getInviteByHash(codeHash: string): Promise<InviteCode | undefined> {
+    const r = this.db.prepare("SELECT * FROM invite_codes WHERE code_hash = ?").get(codeHash);
+    return r ? rowToInvite(r) : undefined;
+  }
+
+  async createInviteCode(ic: Omit<InviteCode, "usedBy" | "usedAt" | "revokedAt">): Promise<InviteCode> {
+    const row: InviteCode = { ...ic, usedBy: null, usedAt: null, revokedAt: null };
+    this.db
+      .prepare("INSERT INTO invite_codes (id,code_hash,email,created_by,created_at) VALUES (?,?,?,?,?)")
+      .run(ic.id, ic.codeHash, ic.email ?? null, ic.createdBy, ic.createdAt);
+    return row;
+  }
+
+  async claimInvite(codeHash: string, usedBy: string): Promise<InviteCode | undefined> {
+    // Atomic single-use claim: only a not-yet-used, not-revoked code is claimed.
+    const now = new Date().toISOString();
+    const res = this.db
+      .prepare("UPDATE invite_codes SET used_by = ?, used_at = ? WHERE code_hash = ? AND used_at IS NULL AND revoked_at IS NULL")
+      .run(usedBy, now, codeHash);
+    if ((res as any).changes === 0) return undefined;
+    return this.getInviteByHash(codeHash);
+  }
+
+  async revokeInvite(codeHash: string): Promise<void> {
+    // Only an unused code can be revoked; a used one is already spent.
+    this.db.prepare("UPDATE invite_codes SET revoked_at = ? WHERE code_hash = ? AND used_at IS NULL").run(new Date().toISOString(), codeHash);
+  }
+
+  async listInvites(): Promise<InviteCode[]> {
+    const rows = this.db.prepare("SELECT * FROM invite_codes ORDER BY created_at DESC").all() as any[];
+    return rows.map(rowToInvite);
+  }
+
+  async getQuota(userId: string, period: string): Promise<number> {
+    const r = this.db.prepare("SELECT clips_used FROM quota_ledger WHERE user_id = ? AND period = ?").get(userId, period) as { clips_used: number } | undefined;
+    return r?.clips_used ?? 0;
+  }
+
+  async incrementQuota(userId: string, period: string): Promise<number> {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO quota_ledger (user_id,period,clips_used,updated_at) VALUES (?,?,1,?)
+         ON CONFLICT(user_id,period) DO UPDATE SET clips_used = quota_ledger.clips_used + 1, updated_at = excluded.updated_at`
+      )
+      .run(userId, period, now);
+    return (await this.getQuota(userId, period));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,10 +468,14 @@ export class PgDb implements Db {
   async createUser(u: Omit<User, "createdAt"> & { createdAt?: string }): Promise<User> {
     const createdAt = u.createdAt ?? new Date().toISOString();
     await this.pool.query(
-      "INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id) VALUES ($1,$2,$3,$4,$5,$6)",
-      [u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null]
+      "INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id,beta_activated_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+      [u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null, u.betaActivatedAt ?? null]
     );
-    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null };
+    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null, betaActivatedAt: u.betaActivatedAt ?? null };
+  }
+
+  async activateUser(userId: string): Promise<void> {
+    await this.pool.query("UPDATE users SET beta_activated_at = $2 WHERE id = $1", [userId, new Date().toISOString()]);
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
@@ -447,6 +612,93 @@ export class PgDb implements Db {
     const r = await this.pool.query("SELECT record FROM highlights");
     return r.rows.map((row) => JSON.parse(row.record) as HighlightRecord);
   }
+
+  async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
+    const r = await this.pool.query(
+      "INSERT INTO waitlist (id,email,created_at) VALUES ($1,$2,$3) ON CONFLICT (email) DO NOTHING",
+      [randomUUID(), email, new Date().toISOString()]
+    );
+    return { registered: (r.rowCount ?? 0) > 0 };
+  }
+
+  async listWaitlistEmails(): Promise<{ email: string; createdAt: string }[]> {
+    const r = await this.pool.query("SELECT email, created_at AS \"createdAt\" FROM waitlist ORDER BY created_at ASC");
+    return r.rows.map((row: any) => ({ email: row.email, createdAt: row.createdAt }));
+  }
+
+  async waitlistCount(): Promise<number> {
+    const r = await this.pool.query("SELECT COUNT(*)::int AS n FROM waitlist");
+    return r.rows[0]?.n ?? 0;
+  }
+
+  async getWaitlist(email: string): Promise<WaitlistEntry | undefined> {
+    const r = await this.pool.query("SELECT * FROM waitlist WHERE email = $1", [email]);
+    return r.rows[0] ? rowToWaitlist(r.rows[0]) : undefined;
+  }
+
+  async setWaitlistInvited(email: string): Promise<WaitlistEntry> {
+    const now = new Date().toISOString();
+    await this.pool.query(
+      `INSERT INTO waitlist (id,email,status,invited_at,created_at) VALUES ($1,$2,'invited',$3,$3)
+       ON CONFLICT (email) DO UPDATE SET status = 'invited', invited_at = EXCLUDED.invited_at`,
+      [randomUUID(), email, now]
+    );
+    return (await this.getWaitlist(email))!;
+  }
+
+  async listWaitlist(): Promise<WaitlistEntry[]> {
+    const r = await this.pool.query("SELECT * FROM waitlist ORDER BY created_at DESC");
+    return r.rows.map(rowToWaitlist);
+  }
+
+  async getInviteByHash(codeHash: string): Promise<InviteCode | undefined> {
+    const r = await this.pool.query("SELECT * FROM invite_codes WHERE code_hash = $1", [codeHash]);
+    return r.rows[0] ? rowToInvite(r.rows[0]) : undefined;
+  }
+
+  async createInviteCode(ic: Omit<InviteCode, "usedBy" | "usedAt" | "revokedAt">): Promise<InviteCode> {
+    await this.pool.query(
+      "INSERT INTO invite_codes (id,code_hash,email,created_by,created_at) VALUES ($1,$2,$3,$4,$5)",
+      [ic.id, ic.codeHash, ic.email ?? null, ic.createdBy, ic.createdAt]
+    );
+    return { ...ic, usedBy: null, usedAt: null, revokedAt: null };
+  }
+
+  async claimInvite(codeHash: string, usedBy: string): Promise<InviteCode | undefined> {
+    const r = await this.pool.query(
+      `UPDATE invite_codes SET used_by = $2, used_at = $3
+       WHERE code_hash = $1 AND used_at IS NULL AND revoked_at IS NULL
+       RETURNING *`,
+      [codeHash, usedBy, new Date().toISOString()]
+    );
+    return r.rows[0] ? rowToInvite(r.rows[0]) : undefined;
+  }
+
+  async revokeInvite(codeHash: string): Promise<void> {
+    await this.pool.query(
+      "UPDATE invite_codes SET revoked_at = $2 WHERE code_hash = $1 AND used_at IS NULL",
+      [codeHash, new Date().toISOString()]
+    );
+  }
+
+  async listInvites(): Promise<InviteCode[]> {
+    const r = await this.pool.query("SELECT * FROM invite_codes ORDER BY created_at DESC");
+    return r.rows.map(rowToInvite);
+  }
+
+  async getQuota(userId: string, period: string): Promise<number> {
+    const r = await this.pool.query("SELECT clips_used FROM quota_ledger WHERE user_id = $1 AND period = $2", [userId, period]);
+    return r.rows[0]?.clips_used ?? 0;
+  }
+
+  async incrementQuota(userId: string, period: string): Promise<number> {
+    await this.pool.query(
+      `INSERT INTO quota_ledger (user_id,period,clips_used,updated_at) VALUES ($1,$2,1,$3)
+       ON CONFLICT (user_id,period) DO UPDATE SET clips_used = quota_ledger.clips_used + 1, updated_at = EXCLUDED.updated_at`,
+      [userId, period, new Date().toISOString()]
+    );
+    return this.getQuota(userId, period);
+  }
 }
 
 const SCHEMA_SQLITE = `
@@ -458,7 +710,8 @@ const SCHEMA_SQLITE = `
     created_at TEXT NOT NULL,
     stripe_customer_id TEXT,
     reset_token_hash TEXT,
-    reset_token_expires TEXT
+    reset_token_expires TEXT,
+    beta_activated_at TEXT
   );
   CREATE TABLE IF NOT EXISTS subscriptions (
     user_id TEXT PRIMARY KEY,
@@ -476,6 +729,23 @@ const SCHEMA_SQLITE = `
     recorded_at TEXT NOT NULL,
     extra TEXT
   );
+  CREATE TABLE IF NOT EXISTS invite_codes (
+    id TEXT PRIMARY KEY,
+    code_hash TEXT UNIQUE NOT NULL,
+    email TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    used_by TEXT,
+    used_at TEXT,
+    revoked_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS quota_ledger (
+    user_id TEXT NOT NULL,
+    period TEXT NOT NULL,
+    clips_used INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, period)
+  );
   CREATE TABLE IF NOT EXISTS media_sessions (
     job_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -500,6 +770,13 @@ const SCHEMA_SQLITE = `
     owner_id TEXT,
     status TEXT,
     created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS waitlist (
+    id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'waitlisted',
+    invited_at TEXT,
+    created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS _schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -517,7 +794,8 @@ const SCHEMA_PG = `
     created_at TEXT NOT NULL,
     stripe_customer_id TEXT,
     reset_token_hash TEXT,
-    reset_token_expires TEXT
+    reset_token_expires TEXT,
+    beta_activated_at TEXT
   );
   CREATE TABLE IF NOT EXISTS subscriptions (
     user_id TEXT PRIMARY KEY,
@@ -534,6 +812,23 @@ const SCHEMA_PG = `
     event_type TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     extra TEXT
+  );
+  CREATE TABLE IF NOT EXISTS invite_codes (
+    id TEXT PRIMARY KEY,
+    code_hash TEXT UNIQUE NOT NULL,
+    email TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    used_by TEXT,
+    used_at TEXT,
+    revoked_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS quota_ledger (
+    user_id TEXT NOT NULL,
+    period TEXT NOT NULL,
+    clips_used INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, period)
   );
   CREATE TABLE IF NOT EXISTS media_sessions (
     job_id TEXT PRIMARY KEY,
@@ -559,6 +854,13 @@ const SCHEMA_PG = `
     owner_id TEXT,
     status TEXT,
     created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS waitlist (
+    id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'waitlisted',
+    invited_at TEXT,
+    created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS _schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -616,6 +918,20 @@ const MIGRATIONS: Migration[] = [
       if (!(await hasColumn("users", "reset_token_expires"))) await exec("ALTER TABLE users ADD COLUMN reset_token_expires TEXT");
     },
   },
+  {
+    version: 2,
+    name: "entitlement-and-beta-gate",
+    up: async (exec, hasColumn) => {
+      // Invite/beta-gate + per-user quota ledger (ADAAAA-41). The baseline
+      // CREATE TABLE IF NOT EXISTS covers fresh DBs; these ALTERs bring
+      // pre-existing on-disk DBs up to the same shape (idempotent per column).
+      // users.beta_activated_at marks the account as having passed the gate.
+      if (!(await hasColumn("users", "beta_activated_at"))) await exec("ALTER TABLE users ADD COLUMN beta_activated_at TEXT");
+      // waitlist.status drives invite-path "b": 'waitlisted' → 'invited'.
+      if (!(await hasColumn("waitlist", "status"))) await exec("ALTER TABLE waitlist ADD COLUMN status TEXT NOT NULL DEFAULT 'waitlisted'");
+      if (!(await hasColumn("waitlist", "invited_at"))) await exec("ALTER TABLE waitlist ADD COLUMN invited_at TEXT");
+    },
+  },
 ];
 
 async function runMigrations(exec: Exec, hasColumn: HasColumn, applied: Applied, markApplied: MarkApplied): Promise<void> {
@@ -641,6 +957,30 @@ function rowToUser(r: any): User {
     createdAt: r.created_at,
     stripeCustomerId: r.stripe_customer_id ?? null,
     resetTokenExpires: r.reset_token_expires ?? null,
+    betaActivatedAt: r.beta_activated_at ?? null,
+  };
+}
+
+function rowToWaitlist(r: any): WaitlistEntry {
+  return {
+    id: r.id,
+    email: r.email,
+    status: r.status === "invited" ? "invited" : "waitlisted",
+    invitedAt: r.invited_at ?? null,
+    createdAt: r.created_at,
+  };
+}
+
+function rowToInvite(r: any): InviteCode {
+  return {
+    id: r.id,
+    codeHash: r.code_hash,
+    email: r.email ?? null,
+    createdBy: r.created_by,
+    createdAt: r.created_at,
+    usedBy: r.used_by ?? null,
+    usedAt: r.used_at ?? null,
+    revokedAt: r.revoked_at ?? null,
   };
 }
 

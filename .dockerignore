@@ -7,7 +7,8 @@ dist
 docs
 infra
 infrastructure
-webapp
+# NOTE: `webapp` must STAY in the context — the server image builds and serves
+# the SPA (webapp/dist is excluded by `dist` above; only source is needed).
 # NOTE: `packages` (workspace deps @highlights/*) must stay in the context —
 # the server image COPYs the whole monorepo and needs them for npm ci.
 *.log
