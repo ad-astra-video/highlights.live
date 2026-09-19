@@ -19,9 +19,13 @@ services:
       - -httpAddr=0.0.0.0:8935
       - -liveRunnerAddr=https://orchestrator:8935
       - -orchSecret=${ORCHESTRATOR_SECRET:-highlights-secret}
-      - -network=offchain
+      - -network=arbitrum-one-mainnet
+      - -ethUrl=${ARBITRUM_RPC}
+      - -ethOrchAddr=${ORCHESTRATOR_ETH_ADDR:-0x3b28a7d785356dc67c7970666747e042305bfb79}
       - -monitor=false
       - -v=6
+    environment:
+      - ARBITRUM_RPC=${ARBITRUM_RPC:-}
     ports:
       - "8935:8935"
     volumes:
