@@ -22,10 +22,9 @@ services:
       - -network=arbitrum-one-mainnet
       - -ethUrl=${ARBITRUM_RPC}
       # Orchestrator self-creates its on-chain wallet if none exists (no
-      # pre-funded LPT deposit required to be active in the set). The keystore
-      # lives in a writable volume under ./lpdata-orch so go-livepeer generates
-      # and persists it; no pinned -ethOrchAddr (use the keystore account).
-      - -ethKeystorePath=/root/.lpData/keystore
+      # pre-funded LPT deposit required to be active in the set). go-livepeer
+      # auto-generates a keystore under the writable ./lpdata-orch datadir mount;
+      # no -ethKeystorePath / -ethOrchAddr pinned (use the keystore account).
       - -ethPassword=${ORCHESTRATOR_ETH_PASSWORD:-highlights-orch}
       - -monitor=false
       - -v=6
