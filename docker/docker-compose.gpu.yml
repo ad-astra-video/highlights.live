@@ -44,6 +44,18 @@ services:
               count: all
               capabilities: [gpu]
 
+  # Gemma VLM: same llama.cpp server as the base stack, but attach the GPU so
+  # the DECIDE VLM actually offloads (base compose is CPU-only for local labs).
+  # Matches the production launch: --n-gpu-layers 99, q8_0 KV cache, parallel 2.
+  gemma:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   # Server: point it at the shared dataDir mount so it hands perceive the job's
   # recorded stream as an in-container path (perceive mounts ./data at /data).
   server:
