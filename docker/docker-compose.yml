@@ -203,6 +203,12 @@ services:
       - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Highlights}
       - EMAIL_POLL_INTERVAL_MS=${EMAIL_POLL_INTERVAL_MS:-5000}
       - EMAIL_MAX_ATTEMPTS=${EMAIL_MAX_ATTEMPTS:-3}
+      # Waitlist->invite allocator (ADAAAA-2555): hourly FIFO allocation gated by
+      # the admin allocation flag. APP_PUBLIC_URL builds invite links in mail.
+      - EMAIL_ALLOCATOR_INTERVAL_MS=${EMAIL_ALLOCATOR_INTERVAL_MS:-3600000}
+      - EMAIL_ALLOCATOR_BATCH_SIZE=${EMAIL_ALLOCATOR_BATCH_SIZE:-50}
+      - APP_PUBLIC_URL=${APP_PUBLIC_URL:-}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
       # Security hard gate: only accept enqueue/status requests whose source is
       # inside RFC1918 private space (the compose internal network / localhost) —
       # never from the public internet. Enforced in addition to the bearer token.

@@ -110,9 +110,25 @@ until `EMAIL_MAX_ATTEMPTS`), tracked in the `email_sends` table.
 - `GET /health`.
 
 **Wired paths:**
+- **Waitlist→invite allocator (ADAAAA-2555).** The email sender runs an
+  independent hourly loop (`WaitlistAllocator`) that queries the shared DB for
+  NEW waitlist signups and allocates them in **FIFO order** (oldest signup
+  first). Each allocated signup is flipped to `invited` (so it is never
+  allocated twice) and an invite is enqueued on the same `email_sends` queue →
+  worker retry lifecycle, so delivery is best-effort with retry/failure logging
+  and without any HTTP surface that could reveal whether a signup existed
+  (anti-enumeration preserved). The allocator only runs while the **admin
+  allocation gate** is open; when the server admin sets the gate closed ("no new
+  users currently") allocation is suppressed and polling resumes when reopened.
+  The gate is persisted in the shared DB (`waitlist_gate`) and toggled admin-only:
+  - `GET  /admin/waitlist/gate` (admin) → `{allocationOpen, setBy, updatedAt}`.
+  - `PUT  /admin/waitlist/gate {allocationOpen:boolean}` (admin) → sets + returns the gate.
 - `POST /admin/invite-codes` with an `email` → emails that inbox its invite code (usable at registration).
 - `POST /admin/waitlist/:email/invite` → emails that inbox a working invitation (an invited waitlist email registers without a code).
 - `POST /auth/forgot` for a real account → emails the reset link (`<PUBLIC_BASE_URL>/reset?token=…`). Browsing that link lands on the webapp's `/reset` page to set a new password. The token is never returned inline.
+
+Invite subject/body copy is shared between the API server and the allocator
+(`services/server/src/invites.ts`), so the two never drift.
 
 **Env vars (email-sender container):**
 
@@ -129,6 +145,9 @@ until `EMAIL_MAX_ATTEMPTS`), tracked in the `email_sends` table.
 | `EMAIL_FROM_NAME` | `Highlights` | Display name. |
 | `EMAIL_MAX_ATTEMPTS` | `3` | Retries before a send is marked failed. |
 | `EMAIL_POLL_INTERVAL_MS` | `5000` | Worker poll cadence. |
+| `EMAIL_ALLOCATOR_INTERVAL_MS` | `3600000` | Hourly waitlist→invite allocator poll cadence (1h default). |
+| `EMAIL_ALLOCATOR_BATCH_SIZE` | `50` | Max signups allocated per allocator tick. |
+| `APP_PUBLIC_URL` / `PUBLIC_BASE_URL` | `http://127.0.0.1:3000` | Public base URL used to build invite links in allocated invite mail. |
 | `EMAIL_ALLOW_IPS` | private subnets | Source allow-list (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1` by default): a request whose source address is not on the list is rejected with `403` before any work happens — in addition to the bearer token. |
 | `DATABASE_URL` | — | Same Postgres as the API server. |
 
