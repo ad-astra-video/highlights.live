@@ -113,6 +113,48 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     await app.close();
   });
 
+  it("closed-beta auto-publish: a generated clip shows in /feed with no admin review (default ON)", async () => {
+    const { app } = await buildTestApp(); // AUTO_PUBLISH_HIGHLIGHTS unset -> default true
+    const userToken = await register(app, "ap@test.dev", "password123");
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${userToken}` },
+      payload: { videoPath, gameHint: "valorant" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().job.status).toBe("done");
+
+    // No admin review performed — the clip is already published.
+    const feed = await app.inject({ method: "GET", url: "/feed" });
+    expect(feed.statusCode).toBe(200);
+    const hl = feed.json().highlights;
+    expect(hl.length).toBe(1);
+    expect(hl[0].status).toBe("accepted");
+    expect(hl[0].ownerId).toBeTruthy();
+    await app.close();
+  });
+
+  it("AUTO_PUBLISH_HIGHLIGHTS=0 keeps generated clips pending (not in /feed until admin review)", async () => {
+    const { app } = await buildTestApp({ AUTO_PUBLISH_HIGHLIGHTS: "0" });
+    const userToken = await register(app, "ap0@test.dev", "password123");
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${userToken}` },
+      payload: { videoPath, gameHint: "valorant" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().job.status).toBe("done");
+
+    const feed = await app.inject({ method: "GET", url: "/feed" });
+    expect(feed.json().highlights.length).toBe(0); // not published without review
+
+    const mine = await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${userToken}` } });
+    expect(mine.json().highlights[0].status).toBe("pending");
+    await app.close();
+  });
+
   it("acks operator control intents on a job and 401s without auth", async () => {
     const { app } = await buildTestApp();
     const token = await register(app, "ctl@test.dev", "password123");
