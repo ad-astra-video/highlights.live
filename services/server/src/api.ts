@@ -16,6 +16,7 @@ import { BillingService, BillingRequiredError } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
 import { FixedWindowLimiter, rateLimit } from "./rate-limit";
 import { enqueueBestEffort, type Mailer } from "./mailer";
+import { composeInviteEmail } from "./invites";
 
 /** Resolve the perceive sampling fps from the runner's measured capability
  * (when reachable directly) else the configured interval. */
@@ -345,12 +346,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const entry = await db.setWaitlistInvited(email);
     // Waitlist -> invite delivery: flipping an inbox to `invited` grants it
     // account activation, so email that inbox a working invitation. (An invited
-    // waitlist email can register without a code.)
-    await enqueueBestEffort(mailer, {
-      to: email,
-      subject: "You're invited to highlights.live beta",
-      body: `You're invited! Your highlights.live beta account is ready to activate.\n\nOpen ${cfg.publicBaseUrl}/auth and choose "Create account" to get started.`,
-    });
+    // waitlist email can register without a code.) Copy is shared with the
+    // email-runner allocator (invites.ts) so both send identical invites.
+    const invite = composeInviteEmail(cfg.publicBaseUrl);
+    await enqueueBestEffort(mailer, { to: email, subject: invite.subject, body: invite.body });
     return { ok: true, email: entry.email, status: entry.status };
   });
 
@@ -362,6 +361,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       createdAt: w.createdAt,
     })),
   }));
+
+  // Waitlist->invite allocation gate (ADAAAA-2555). The email-runner allocator
+  // polls the waitlist hourly and allocates new signups in FIFO order ONLY
+  // while the gate is OPEN. The server admin toggles it: allocationOpen=false
+  // means "no new users currently" (allocation suppressed); true (or unset)
+  // resumes polling. Persisted in the shared DB; admin-only toggling.
+  app.get("/admin/waitlist/gate", { preHandler: adminReq }, async () => await db.getWaitlistGate());
+
+  app.put<{ Body: { allocationOpen?: boolean } }>("/admin/waitlist/gate", { preHandler: adminReq }, async (req: any, reply) => {
+    const allocationOpen = req.body?.allocationOpen;
+    if (typeof allocationOpen !== "boolean") return reply.code(400).send({ error: "allocationOpen boolean required" });
+    const gate = await db.setWaitlistGate(allocationOpen, req.user.email);
+    return gate;
+  });
 
   // --- billing ---
   app.get("/billing/plans", async () => ({ plans: billing.plans() }));
