@@ -13,7 +13,7 @@
       "capacity": 1,
       "proxy": true,
       "gpu": { "id": "0", "name": "stub", "vram_mb": 0 },
-      "price_info": { "price": 0.0, "currency": "usd", "unit": "hour" }
+      "price_info": { "price": 0.01, "currency": "usd", "unit": "hour" }
     },
     {
       "label": "highlights-decide",
@@ -28,7 +28,7 @@
       "capacity": 1,
       "proxy": true,
       "gpu": { "id": "1", "name": "stub", "vram_mb": 0 },
-      "price_info": { "price": 0.0, "currency": "usd", "unit": "fixed" }
+      "price_info": { "price": 0.01, "currency": "usd", "unit": "fixed" }
     }
   ]
 }
