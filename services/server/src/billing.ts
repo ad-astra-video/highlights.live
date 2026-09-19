@@ -23,8 +23,8 @@ export interface Plan {
 }
 
 export const PLANS: Plan[] = [
-  { id: "free", name: "Starter", description: "Try it out", currency: "usd", amount: 0, includedHighlights: 3 },
-  { id: "pro", name: "Pro", description: "Unlimited highlights, pay as you go", currency: "usd", amount: 900, includedHighlights: 25 },
+  { id: "free", name: "Starter", description: "Try it out", currency: "usd", amount: 0, includedHighlights: 10 },
+  { id: "pro", name: "Pro", description: "100 highlights/mo included; overage pay as you go", currency: "usd", amount: 900, includedHighlights: 100 },
 ];
 
 export class BillingService {

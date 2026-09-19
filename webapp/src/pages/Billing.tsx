@@ -25,9 +25,11 @@ export function Billing() {
   }, [params, refreshBilling, setParams]);
 
   const isPro = billing?.tier === "pro" && billing.status === "active";
-  const used = billing?.usedHighlights ?? 0;
-  const cap = billing?.freeHighlights ?? 0;
-  const included = 25;
+  const included = 100;
+  // Free tier is a monthly clip quota (the entitlement ledger), the same 10/mo
+  // the dashboard shows; Pro shows the included-highlights allowance.
+  const used = isPro ? (billing?.usedHighlights ?? 0) : (billing?.clipQuotaUsed ?? 0);
+  const cap = isPro ? included : (billing?.clipQuotaLimit ?? 0);
   const pct = isPro ? Math.min(100, Math.round((used / included) * 100)) : Math.min(100, Math.round((used / cap) * 100));
 
   async function subscribe() {
@@ -77,7 +79,7 @@ export function Billing() {
           <div className="mt-3">
             <div className="flex justify-between text-xs text-mut">
               <span>
-                {isPro ? "This period" : "Lifetime allowance"} · {used} / {isPro ? included : cap} highlights
+                {isPro ? "This period" : "This month"} · {used} / {isPro ? included : cap} highlights
               </span>
               <span>{Math.round((isPro ? used / Math.max(included, 1) : used / Math.max(cap, 1)) * 100)}%</span>
             </div>
@@ -96,7 +98,7 @@ export function Billing() {
               <Sparkles className="mr-2 inline h-4 w-4" /> Subscribe to Pro
             </button>
           )}
-          <p className="text-xs text-mut">Pro includes 25 highlights/mo; overage billed pay-as-you-go. Cancel anytime.</p>
+          <p className="text-xs text-mut">Pro includes 100 highlights/mo; overage billed pay-as-you-go. Cancel anytime.</p>
         </div>
       </div>
 
@@ -115,7 +117,7 @@ export function Billing() {
                 <span className="text-sm font-normal text-mut">/mo</span>
               </div>
               <ul className="mt-4 space-y-2 text-sm text-slate-ink">
-                <li>• {p.includedHighlights} included highlight{p.includedHighlights === 1 ? "" : "s"} {p.id === "free" ? "(lifetime)" : "/month"}</li>
+                <li>• {p.includedHighlights} included highlight{p.includedHighlights === 1 ? "" : "s"} /month</li>
                 <li>• {p.id === "free" ? "Pay-as-you-go blocked after allowance" : "Pay-as-you-go overage metered"}</li>
               </ul>
               {p.id === "free" || (
