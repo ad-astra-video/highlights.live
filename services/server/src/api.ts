@@ -194,7 +194,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         jobEventHook(job.id)
       );
       for (const h of outcome.highlights) {
-        await store.addHighlight({ ...h, ownerId: user.id });
+        await store.addHighlight({ ...h, ownerId: user.id, status: cfg.autoPublishHighlights ? "accepted" : "pending" });
         await billing.onHighlightCreated(user, sub);
         // A clip generated successfully debits the quota once.
         await entitlements.onClipGenerated(user);
@@ -542,7 +542,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         jobEventHook(job.id)
         );
         for (const h of outcome.highlights) {
-          await store.addHighlight({ ...h, ownerId: user.id });
+          await store.addHighlight({ ...h, ownerId: user.id, status: cfg.autoPublishHighlights ? "accepted" : "pending" });
           await billing.onHighlightCreated(user, sub);
           // A clip generated successfully debits the quota once.
           await entitlements.onClipGenerated(user);
@@ -684,7 +684,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               eventType: d.eventType,
               score: d.score,
               reason: d.reason,
-              status: "pending",
+              status: cfg.autoPublishHighlights ? "accepted" : "pending",
               createdAt: new Date().toISOString(),
             };
             await store.addHighlight(highlight);

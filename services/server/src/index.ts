@@ -37,6 +37,10 @@ async function main() {
     console.log(`invite/beta-gate: ON (${cfg.betaClipQuota} clips/mo per user)`);
   }
 
+  if (cfg.autoPublishHighlights) {
+    console.log("clip auto-publish: ON — generated clips go straight to the public /feed (admin review off).");
+  }
+
   const entitlements = new EntitlementsService(db, cfg);
   const adapter = makeAdapter(cfg);
   const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements, mailer: mailer ?? undefined });
