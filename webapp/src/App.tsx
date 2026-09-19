@@ -3,6 +3,7 @@ import { useAuth } from "./lib/auth";
 import { Shell } from "./components/Shell";
 import { Landing } from "./pages/Landing";
 import { AuthPage } from "./pages/AuthPage";
+import { ResetPage } from "./pages/ResetPage";
 import { Dashboard } from "./pages/Dashboard";
 import { Billing } from "./pages/Billing";
 import { Settings } from "./pages/Settings";
@@ -20,6 +21,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/auth" element={<AuthPage />} />
+      <Route path="/reset" element={<ResetPage />} />
       <Route path="/privacy" element={<Legal kind="privacy" />} />
       <Route path="/terms" element={<Legal kind="terms" />} />
       <Route path="/retention" element={<Legal kind="retention" />} />

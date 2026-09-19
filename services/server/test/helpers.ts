@@ -6,6 +6,7 @@ import { BillingService } from "../src/billing";
 import { EntitlementsService } from "../src/entitlements";
 import { Store } from "../src/store";
 import { buildApp } from "../src/api";
+import { NoopMailer } from "../src/mailer";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -82,12 +83,14 @@ export interface TestApp {
   billing: BillingService;
   store: Store;
   stripeCalls: any[];
+  mailer: NoopMailer;
 }
 
 export async function buildTestApp(over: Record<string, string> = {}): Promise<TestApp> {
   const cfg = testCfg(over);
   const db = new SqliteDb(cfg.databasePath);
-  const auth = new AuthService(db, cfg);
+  const mailer = new NoopMailer();
+  const auth = new AuthService(db, cfg, mailer);
   await auth.bootstrapAdmin();
   const stripeCalls: any[] = [];
   const billing = new BillingService(cfg, db, stripeStub(stripeCalls));
@@ -95,9 +98,9 @@ export async function buildTestApp(over: Record<string, string> = {}): Promise<T
   const store = new Store(db);
   await store.load();
   const adapter = fakePipeline();
-  const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements });
+  const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements, mailer });
   await app.ready();
-  return { app, cfg, db, auth, billing, store, stripeCalls };
+  return { app, cfg, db, auth, billing, store, stripeCalls, mailer };
 }
 
 export function fakePipeline(): any {

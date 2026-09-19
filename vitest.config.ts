@@ -11,6 +11,7 @@ export default defineConfig({
   test: {
     include: [
       "packages/*/test/**/*.test.ts",
+      "services/email/test/**/*.test.ts",
       "services/server/test/**/*.test.ts",
       "services/media/test/**/*.test.ts",
       "webapp/src/**/*.test.ts?(x)",

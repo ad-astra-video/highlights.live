@@ -62,6 +62,28 @@ export interface InviteCode {
   revokedAt: string | null;
 }
 
+/** A transactional email send in the outbound queue (the email-sender
+ * service). Lifecycle: `queued -> sending -> sent | failed`, with retry on
+ * failure until `attempts >= maxAttempts`, then permanenly `failed`. Stored
+ * here in the shared DB so both the API server (enqueue) and the email-sender
+ * container (worker) operate on the same durable queue. */
+export interface EmailSend {
+  id: string;
+  toEmail: string;
+  subject: string;
+  body: string;
+  status: "queued" | "sending" | "sent" | "failed";
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+  /** ISO timestamp for the earliest retry allowed (set on failure with retries
+   * remaining); null means retry immediately (queued) or never (failed). */
+  nextAttemptAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  sentAt: string | null;
+}
+
 export interface Subscription {
   userId: string;
   tier: "free" | "pro";
@@ -151,6 +173,26 @@ export interface Db {
   /** Revoke a (possibly unclaimed) invite code; a revoked code can never claim. */
   revokeInvite(codeHash: string): Promise<void>;
   listInvites(): Promise<InviteCode[]>;
+  // --- transactional email queue (email-sender service) ---
+  /** Persist a queued send. Returns the stored row (status `queued`). */
+  enqueueEmailSend(e: {
+    id: string;
+    toEmail: string;
+    subject: string;
+    body: string;
+    createdAt: string;
+    maxAttempts: number;
+  }): Promise<EmailSend>;
+  getEmailSend(id: string): Promise<EmailSend | undefined>;
+  /** Atomically claim up to `limit` sends eligible for delivery right now:
+   * status `queued`, or `failed` with `attempts < maxAttempts` and the retry
+   * window (`nextAttemptAt`) reached. Marks them `sending` and returns them. */
+  claimEmailSends(limit: number, now: string): Promise<EmailSend[]>;
+  markEmailSent(id: string, sentAt: string): Promise<void>;
+  /** Record a delivery failure: bump `attempts`, store `lastError`; pass a
+   * future `nextAttemptAt` to keep the send retryable, or null to mark it
+   * permanently `failed`. */
+  markEmailFailed(id: string, attempts: number, lastError: string, nextAttemptAt: string | null): Promise<void>;
   // --- entitlements (per-user per-calendar-month quota ledger) ---
   /** Clips used by a user in a period key (e.g. "2026-09"). */
   getQuota(userId: string, period: string): Promise<number>;
@@ -409,6 +451,48 @@ export class SqliteDb implements Db {
   async listInvites(): Promise<InviteCode[]> {
     const rows = this.db.prepare("SELECT * FROM invite_codes ORDER BY created_at DESC").all() as any[];
     return rows.map(rowToInvite);
+  }
+
+  async enqueueEmailSend(e: { id: string; toEmail: string; subject: string; body: string; createdAt: string; maxAttempts: number }): Promise<EmailSend> {
+    this.db
+      .prepare(
+        "INSERT INTO email_sends (id,to_email,subject,body,status,attempts,max_attempts,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)"
+      )
+      .run(e.id, e.toEmail, e.subject, e.body, e.maxAttempts, e.createdAt, e.createdAt);
+    return (await this.getEmailSend(e.id))!;
+  }
+
+  async getEmailSend(id: string): Promise<EmailSend | undefined> {
+    const r = this.db.prepare("SELECT * FROM email_sends WHERE id = ?").get(id);
+    return r ? rowToEmailSend(r) : undefined;
+  }
+
+  async claimEmailSends(limit: number, now: string): Promise<EmailSend[]> {
+    // Eligible: queued, or failed with retries remaining and the retry window
+    // reached. Atomically flips them to 'sending' (single UPDATE...RETURNING so
+    // two workers can never claim the same row).
+    const rows = this.db
+      .prepare(
+        `UPDATE email_sends SET status='sending', updated_at=?
+         WHERE id IN (
+           SELECT id FROM email_sends
+           WHERE status='queued'
+              OR (status='failed' AND attempts < max_attempts AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?)
+           ORDER BY created_at ASC LIMIT ?
+         ) RETURNING *`
+      )
+      .all(now, now, limit) as any[];
+    return rows.map(rowToEmailSend);
+  }
+
+  async markEmailSent(id: string, sentAt: string): Promise<void> {
+    this.db.prepare("UPDATE email_sends SET status='sent', sent_at=?, updated_at=? WHERE id=?").run(sentAt, sentAt, id);
+  }
+
+  async markEmailFailed(id: string, attempts: number, lastError: string, nextAttemptAt: string | null): Promise<void> {
+    this.db
+      .prepare("UPDATE email_sends SET attempts=?, last_error=?, next_attempt_at=?, status='failed', updated_at=? WHERE id=?")
+      .run(attempts, lastError, nextAttemptAt, new Date().toISOString(), id);
   }
 
   async getQuota(userId: string, period: string): Promise<number> {
@@ -686,6 +770,46 @@ export class PgDb implements Db {
     return r.rows.map(rowToInvite);
   }
 
+  async enqueueEmailSend(e: { id: string; toEmail: string; subject: string; body: string; createdAt: string; maxAttempts: number }): Promise<EmailSend> {
+    const r = await this.pool.query(
+      `INSERT INTO email_sends (id,to_email,subject,body,status,attempts,max_attempts,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,'queued',0,$5,$6,$6) RETURNING *`,
+      [e.id, e.toEmail, e.subject, e.body, e.maxAttempts, e.createdAt]
+    );
+    return rowToEmailSend(r.rows[0]);
+  }
+
+  async getEmailSend(id: string): Promise<EmailSend | undefined> {
+    const r = await this.pool.query("SELECT * FROM email_sends WHERE id = $1", [id]);
+    return r.rows[0] ? rowToEmailSend(r.rows[0]) : undefined;
+  }
+
+  async claimEmailSends(limit: number, now: string): Promise<EmailSend[]> {
+    const r = await this.pool.query(
+      `UPDATE email_sends SET status='sending', updated_at=$1
+       WHERE id IN (
+         SELECT id FROM email_sends
+         WHERE status='queued'
+            OR (status='failed' AND attempts < max_attempts AND next_attempt_at IS NOT NULL AND next_attempt_at <= $1)
+         ORDER BY created_at ASC
+         LIMIT $2
+       ) RETURNING *`,
+      [now, limit]
+    );
+    return r.rows.map(rowToEmailSend);
+  }
+
+  async markEmailSent(id: string, sentAt: string): Promise<void> {
+    await this.pool.query("UPDATE email_sends SET status='sent', sent_at=$2, updated_at=$2 WHERE id=$1", [id, sentAt]);
+  }
+
+  async markEmailFailed(id: string, attempts: number, lastError: string, nextAttemptAt: string | null): Promise<void> {
+    await this.pool.query(
+      "UPDATE email_sends SET attempts=$2, last_error=$3, next_attempt_at=$4, status='failed', updated_at=$5 WHERE id=$1",
+      [id, attempts, lastError, nextAttemptAt, new Date().toISOString()]
+    );
+  }
+
   async getQuota(userId: string, period: string): Promise<number> {
     const r = await this.pool.query("SELECT clips_used FROM quota_ledger WHERE user_id = $1 AND period = $2", [userId, period]);
     return r.rows[0]?.clips_used ?? 0;
@@ -778,6 +902,20 @@ const SCHEMA_SQLITE = `
     invited_at TEXT,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS email_sends (
+    id TEXT PRIMARY KEY,
+    to_email TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    last_error TEXT,
+    next_attempt_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    sent_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS _schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -861,6 +999,20 @@ const SCHEMA_PG = `
     status TEXT NOT NULL DEFAULT 'waitlisted',
     invited_at TEXT,
     created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS email_sends (
+    id TEXT PRIMARY KEY,
+    to_email TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    last_error TEXT,
+    next_attempt_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    sent_at TEXT
   );
   CREATE TABLE IF NOT EXISTS _schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -981,6 +1133,23 @@ function rowToInvite(r: any): InviteCode {
     usedBy: r.used_by ?? null,
     usedAt: r.used_at ?? null,
     revokedAt: r.revoked_at ?? null,
+  };
+}
+
+function rowToEmailSend(r: any): EmailSend {
+  return {
+    id: r.id,
+    toEmail: r.to_email,
+    subject: r.subject,
+    body: r.body,
+    status: r.status,
+    attempts: Number(r.attempts ?? 0),
+    maxAttempts: Number(r.max_attempts ?? 3),
+    lastError: r.last_error ?? null,
+    nextAttemptAt: r.next_attempt_at ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    sentAt: r.sent_at ?? null,
   };
 }
 

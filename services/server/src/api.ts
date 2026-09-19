@@ -15,6 +15,7 @@ import { AuthService, BetaGateError, adminRequired, authRequired, type AuthServi
 import { BillingService, BillingRequiredError } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
 import { FixedWindowLimiter, rateLimit } from "./rate-limit";
+import { enqueueBestEffort, type Mailer } from "./mailer";
 
 /** Resolve the perceive sampling fps from the runner's measured capability
  * (when reachable directly) else the configured interval. */
@@ -39,10 +40,11 @@ export interface ApiDeps {
   auth: AuthService;
   billing: BillingService;
   entitlements: EntitlementsService;
+  mailer?: Mailer;
 }
 
 export function buildApp(deps: ApiDeps): FastifyInstance {
-  const { cfg, store, adapter, db, auth, billing, entitlements } = deps;
+  const { cfg, store, adapter, db, auth, billing, entitlements, mailer } = deps;
   const app = Fastify({ logger: false });
   app.register(cors, { origin: true });
 
@@ -230,9 +232,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
   });
 
-  // Start a password reset. Returns { ok: true } always (no account enumeration);
-  // in this beta there is no mailer yet, so a real account also returns the
-  // single-use resetToken inline for the viability loop (see AuthService).
+  // Start a password reset. Always returns `{ ok: true }` (no account
+  // enumeration). The reset link is delivered by email via the email-sender
+  // container; the single-use token is never returned inline (ADAAAA-2481).
   app.post<{ Body: { email?: string } }>("/auth/forgot", { preHandler: limitAuth }, async (req, reply) => {
     try {
       return await auth.requestPasswordReset(req.body?.email ?? "");
@@ -298,6 +300,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       createdBy: req.user.id,
       createdAt: new Date().toISOString(),
     });
+    // When the code is bound to an email, deliver it there via the email sender
+    // (so the invite is openable and the code is usable at registration). An
+    // unbound code is still handed out of band by the cohort owner.
+    if (raw) {
+      await enqueueBestEffort(mailer, {
+        to: raw,
+        subject: "You're invited to highlights.live — here's your code",
+        body: `You've been invited to the highlights.live beta.\n\nYour invite code is:\n\n${code}\n\nOpen ${cfg.publicBaseUrl}/auth and choose "Create account", entering this code to activate your account.`,
+      });
+    }
     return { code, email: raw || null };
   });
 
@@ -331,6 +343,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const email = decodeURIComponent(req.params.email).trim().toLowerCase();
     if (!EMAIL_RE.test(email)) return reply.code(400).send({ error: "valid email required" });
     const entry = await db.setWaitlistInvited(email);
+    // Waitlist -> invite delivery: flipping an inbox to `invited` grants it
+    // account activation, so email that inbox a working invitation. (An invited
+    // waitlist email can register without a code.)
+    await enqueueBestEffort(mailer, {
+      to: email,
+      subject: "You're invited to highlights.live beta",
+      body: `You're invited! Your highlights.live beta account is ready to activate.\n\nOpen ${cfg.publicBaseUrl}/auth and choose "Create account" to get started.`,
+    });
     return { ok: true, email: entry.email, status: entry.status };
   });
 

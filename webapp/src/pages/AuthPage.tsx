@@ -6,7 +6,7 @@ import { useAuth } from "../lib/auth";
 type Mode = "login" | "register" | "forgot";
 
 export function AuthPage() {
-  const { login, register, requestPasswordReset, resetPassword } = useAuth();
+  const { login, register, requestPasswordReset } = useAuth();
   const nav = useNavigate();
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
@@ -16,13 +16,10 @@ export function AuthPage() {
   const [needInvite, setNeedInvite] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  // Forgot-password flow state. In the beta (no mailer yet) the server returns
-  // a single-use resetToken inline for a real account; we surface it so the
-  // loop can be completed and then discard it once used.
+  // Forgot-password flow state. The reset link is delivered by email (the
+  // email-sender container); the API never returns a token inline, so the
+  // forgot panel only sends the request and tells the user to check their inbox.
   const [forgotMsg, setForgotMsg] = useState<string | null>(null);
-  const [resetToken, setResetToken] = useState<string | null>(null);
-  const [newPassword, setNewPassword] = useState("");
-  const [resetDone, setResetDone] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -32,33 +29,13 @@ export function AuthPage() {
     try {
       if (mode === "login") return await login(email, password).then(() => nav("/app"));
       if (mode === "register") return await register(email, password, inviteCode || undefined).then(() => nav("/app"));
-      // forgot: request a reset token
-      const res = await requestPasswordReset(email);
-      if (res.resetToken) {
-        setResetToken(res.resetToken);
-        setForgotMsg("Reset token issued (beta: no mailer yet, delivered inline).");
-      } else {
-        setForgotMsg("If an account exists for that email, a reset token was issued.");
-      }
+      // forgot: request a reset link (delivered by email)
+      await requestPasswordReset(email);
+      setForgotMsg("If an account exists for that email, we sent a reset link. Check your inbox.");
     } catch (err: any) {
       // 403 invite_required means the beta-gate closed registration: surface it
       // with an invite-code hint + a waitlist path.
       if (err?.status === 403) setNeedInvite(true);
-      setError(err.message || "something went wrong");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function submitReset(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setBusy(true);
-    try {
-      await resetPassword(resetToken!, newPassword);
-      setResetDone(true);
-      setResetToken(null);
-    } catch (err: any) {
       setError(err.message || "something went wrong");
     } finally {
       setBusy(false);
@@ -82,7 +59,6 @@ export function AuthPage() {
                     setMode(m);
                     setError(null);
                     setForgotMsg(null);
-                    setResetDone(false);
                   }}
                   data-active={mode === m}
                   className={`chip text-center ${mode === m ? "" : "chip-pink"}`}
@@ -149,51 +125,16 @@ export function AuthPage() {
           </>
         ) : (
           <>
-            <h2 className="mb-4 text-center text-lg font-bold text-neon">
-              {resetToken ? "Set a new password" : resetDone ? "Password updated" : "Reset your password"}
-            </h2>
+            <h2 className="mb-4 text-center text-lg font-bold text-neon">Reset your password</h2>
 
-            {resetDone ? (
-              <p className="mb-4 text-center text-sm text-mut">
-                Your password was updated.{" "}
-                <button
-                  className="text-neon underline"
-                  onClick={() => {
-                    setMode("login");
-                    setPassword("");
-                    setResetDone(false);
-                  }}
-                >
-                  Sign in
-                </button>
-              </p>
-            ) : resetToken ? (
-              <form onSubmit={submitReset} className="flex flex-col gap-4">
-                <input className="input-neon" readOnly value={resetToken} />
-                <input
-                  className="input-neon"
-                  type="password"
-                  required
-                  minLength={8}
-                  placeholder="New password (8+ chars)"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                />
-                {error && <div className="rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{error}</div>}
-                <button className="btn-neon" disabled={busy}>
-                  {busy ? "Please wait…" : "Update password"}
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={submit} className="flex flex-col gap-4">
-                <input className="input-neon" type="email" required placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-                {forgotMsg && <div className="rounded-lg border border-neon/40 bg-neon/10 px-3 py-2 text-sm text-neon">{forgotMsg}</div>}
-                {error && <div className="rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{error}</div>}
-                <button className="btn-neon" disabled={busy}>
-                  {busy ? "Please wait…" : "Send reset link"}
-                </button>
-              </form>
-            )}
+            <form onSubmit={submit} className="flex flex-col gap-4">
+              <input className="input-neon" type="email" required placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+              {forgotMsg && <div className="rounded-lg border border-neon/40 bg-neon/10 px-3 py-2 text-sm text-neon">{forgotMsg}</div>}
+              {error && <div className="rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{error}</div>}
+              <button className="btn-neon" disabled={busy}>
+                {busy ? "Please wait…" : "Send reset link"}
+              </button>
+            </form>
 
             <p className="mt-5 text-center text-xs text-mut">
               <button
@@ -202,8 +143,6 @@ export function AuthPage() {
                   setMode("login");
                   setError(null);
                   setForgotMsg(null);
-                  setResetToken(null);
-                  setResetDone(false);
                 }}
               >
                 Back to sign in

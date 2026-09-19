@@ -32,19 +32,26 @@ describe("auth", () => {
     await app.close();
   });
 
-  it("password reset: forgot -> single-use token -> new password logs in, old fails", async () => {
-    const { app } = await buildTestApp();
+  it("password reset: forgot -> email with reset link -> new password logs in, old fails", async () => {
+    const { app, mailer } = await buildTestApp();
     await app.inject({ method: "POST", url: "/auth/register", payload: { email: "u@x.dev", password: "password123" } });
 
-    // Unknown email -> ok:true but no token (no account enumeration).
+    // Unknown email -> ok:true, no email sent (no account enumeration).
     const unknown = await app.inject({ method: "POST", url: "/auth/forgot", payload: { email: "nobody@x.dev" } });
     expect(unknown.statusCode).toBe(200);
-    expect(unknown.json()).toEqual({ ok: true, resetToken: null });
+    expect(unknown.json()).toEqual({ ok: true });
+    expect(mailer.sent.length).toBe(0);
 
-    // Known email -> token delivered inline for the beta (no mailer yet).
+    // Known email -> ok:true (token never returned inline). The reset link is
+    // delivered through the mailer (the email-sender container).
     const forgot = await app.inject({ method: "POST", url: "/auth/forgot", payload: { email: "u@x.dev" } });
     expect(forgot.statusCode).toBe(200);
-    const token = forgot.json().resetToken;
+    expect(forgot.json()).toEqual({ ok: true });
+    expect(mailer.sent.length).toBe(1);
+    const resetEmail = mailer.sent[0];
+    expect(resetEmail.to).toBe("u@x.dev");
+    expect(resetEmail.subject).toMatch(/reset/i);
+    const token = /token=([0-9a-f]+)/i.exec(resetEmail.body)?.[1];
     expect(token).toBeTruthy();
 
     // Redeem with a too-short password is rejected.

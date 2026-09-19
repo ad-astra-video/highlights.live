@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Db, User } from "./db";
 import type { ServerConfig } from "./config";
+import { enqueueBestEffort, type Mailer } from "./mailer";
 
 export interface AuthResult {
   token: string;
@@ -22,7 +23,11 @@ export class BetaGateError extends Error {
 }
 
 export class AuthService {
-  constructor(private db: Db, private cfg: ServerConfig) {}
+  constructor(
+    private db: Db,
+    private cfg: ServerConfig,
+    private mailer?: Mailer
+  ) {}
 
   static hash(pw: string): string {
     return bcrypt.hashSync(pw, 10);
@@ -103,22 +108,26 @@ export class AuthService {
 
   /**
    * Start a password reset: mint a single-use token, store its SHA-256 hash +
-   * expiry on the user. Returns the raw token so the caller can deliver it.
-   *
-   * There is no emailer in the repo yet, so delivery is inline for the beta
-   * viability loop: `resetToken` is returned for an EXISTING account and null
-   * for an unknown email (caller always returns an innocuous "ok" so account
-   * existence is not leaked). When a mailer is added, replace the inline return
-   * with an email send and always return null.
+   * expiry on the user, and deliver the reset link by email via the mailer
+   * (the email-sender container). Always returns `{ ok: true }` with no token
+   * so account existence is never leaked — an unknown email simply gets no
+   * email, and the caller's response is identical either way. The inline token
+   * return was removed per the mailer scope (ADAAAA-2481): the token travels
+   * only inside the emailed reset link.
    */
-  async requestPasswordReset(email: string): Promise<{ ok: boolean; resetToken: string | null }> {
+  async requestPasswordReset(email: string): Promise<{ ok: boolean }> {
     const clean = email.trim().toLowerCase();
     const user = await this.db.getUserByEmail(clean);
-    if (!user) return { ok: true, resetToken: null };
+    if (!user) return { ok: true };
     const resetToken = randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + this.cfg.resetTokenTtlSec * 1000).toISOString();
     await this.db.setResetToken(user.id, AuthService.hashResetToken(resetToken), expiresAt);
-    return { ok: true, resetToken };
+    await enqueueBestEffort(this.mailer, {
+      to: clean,
+      subject: "Reset your highlights.live password",
+      body: `Someone requested a password reset for ${clean}. If that was you, open the link below to set a new password (valid for ${Math.round(this.cfg.resetTokenTtlSec / 60)} minutes):\n\n${this.cfg.publicBaseUrl}/reset?token=${resetToken}\n\nIf you didn't request this, you can safely ignore this email.`,
+    });
+    return { ok: true };
   }
 
   /**

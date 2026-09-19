@@ -76,7 +76,13 @@ describe("LiveIngest", () => {
       for await (const _f of ing.frames()) count++;
     })();
 
-    await sleep(900);
+    // Frames are produced asynchronously by the ffmpeg child (which pays an
+    // ~800ms open/encode startup before the first frame is written), so a fixed
+    // sleep races with first-frame production and intermittently yields 0.
+    // Deterministically wait for at least one observed frame (bounded), THEN
+    // stop, so we are testing "the iterator ends on stop" and not timing.
+    const deadline = Date.now() + 20000;
+    while (count === 0 && Date.now() < deadline) await sleep(100);
     await ing.stop();
     await t;
     expect(count).toBeGreaterThanOrEqual(1);

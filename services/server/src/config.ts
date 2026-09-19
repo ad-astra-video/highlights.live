@@ -49,6 +49,12 @@ export interface ServerConfig {
   databaseUrl?: string;
   /** Where `npm run db:backup` writes DB snapshots (default `data/backups`). */
   databaseBackupDir: string;
+  /** Email-sender container base URL (e.g. http://email:3001). When unset,
+   * transactional emails (invites, password reset) are skipped (logged), not
+   * sent — used for local dev without an SMTP backend. */
+  emailSenderUrl?: string;
+  /** Bearer token shared with the email-sender's queue API (secrets-managed). */
+  mailerToken?: string;
   /** Stripe */
   stripeSecretKey?: string;
   stripeWebhookSecret?: string;
@@ -100,6 +106,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     databasePath: env.DATABASE_PATH ?? "data/highlights.db",
     databaseUrl: env.DATABASE_URL,
     databaseBackupDir: env.DATABASE_BACKUP_DIR ?? "data/backups",
+    emailSenderUrl: env.EMAIL_SENDER_URL,
+    mailerToken: env.MAILER_TOKEN || env.EMAIL_QUEUE_TOKEN,
     stripeSecretKey: env.STRIPE_SECRET_KEY,
     stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
     stripePricePro: env.STRIPE_PRICE_PRO,

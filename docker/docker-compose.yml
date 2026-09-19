@@ -21,10 +21,10 @@ services:
       - -orchSecret=${ORCHESTRATOR_SECRET:-highlights-secret}
       - -network=arbitrum-one-mainnet
       - -ethUrl=${ARBITRUM_RPC}
-      # Orchestrator self-creates its on-chain wallet if none exists (no
-      # pre-funded LPT deposit required to be active in the set). go-livepeer
-      # auto-generates a keystore under the writable ./lpdata-orch datadir mount;
-      # no -ethKeystorePath / -ethOrchAddr pinned (use the keystore account).
+      # On-chain orchestrator account pinned per board direction. go-livepeer
+      # holds/unlocks the orchestrator keystore under the writable ./lpdata-orch
+      # datadir mount (account 0x3b28...bf79); -ethOrchAddr selects it.
+      - -ethOrchAddr=0x3b28a7d785356dc67c7970666747e042305bfb79
       - -ethPassword=${ORCHESTRATOR_ETH_PASSWORD:-highlights-orch}
       # On-chain orchestrator requires an explicit price per unit (wei/pixel).
       - -pricePerUnit=${PRICE_PER_UNIT:-0}
@@ -163,6 +163,10 @@ services:
       # Media-path (b): the browser streams frames to the media server instead
       # of the server's HTTP /ingest when this is set.
       - MEDIA_SERVER_URL=${MEDIA_SERVER_URL:-http://media:4070}
+      # Transactional email: the server enqueues invites + password resets to
+      # the email-sender container over its queue API (bearer-token auth).
+      - EMAIL_SENDER_URL=${EMAIL_SENDER_URL:-http://email:3001}
+      - MAILER_TOKEN=${MAILER_TOKEN:-dev-mailer-token}
     ports:
       - "3000:3000"
     volumes:
@@ -170,6 +174,46 @@ services:
     depends_on:
       orchestrator:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks: [hl]
+
+  # Email-sender container: holds the mailbox SMTP credentials and delivers the
+  # transactional queue (invites + password resets) the server enqueues to it.
+  # Uses the SAME Postgres as the server so the send queue lives in one DB.
+  # SMTP creds come from the host .env (SMTP_HOST/PORT/USER/PASS...) — never
+  # committed. Without SMTP_HOST it runs in log mode (devs can still exercise
+  # the queue/API).
+  email:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.email
+    container_name: highlights-email
+    environment:
+      - EMAIL_PORT=3001
+      - DATABASE_URL=postgres://${POSTGRES_USER:-highlights}:${POSTGRES_PASSWORD:-highlights}@postgres:5432/${POSTGRES_DB:-highlights}
+      - EMAIL_QUEUE_TOKEN=${MAILER_TOKEN:-dev-mailer-token}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-0}
+      - SMTP_REQUIRE_TLS=${SMTP_REQUIRE_TLS:-0}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - EMAIL_FROM=${EMAIL_FROM:-onboarding@highlights.live}
+      - EMAIL_REPLY_TO=${EMAIL_REPLY_TO:-onboarding@highlights.live}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Highlights}
+      - EMAIL_POLL_INTERVAL_MS=${EMAIL_POLL_INTERVAL_MS:-5000}
+      - EMAIL_MAX_ATTEMPTS=${EMAIL_MAX_ATTEMPTS:-3}
+      # Security hard gate: only accept enqueue/status requests whose source is
+      # inside RFC1918 private space (the compose internal network / localhost) —
+      # never from the public internet. Enforced in addition to the bearer token.
+      - EMAIL_ALLOW_IPS=${EMAIL_ALLOW_IPS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1}
+    # Do NOT expose the enqueue API to the host network / public internet.
+    # The server reaches it over the private `hl` network at email:3001; the
+    # host port is bound to loopback only so local dev can still reach it.
+    ports:
+      - "127.0.0.1:${EMAIL_PORT:-3001}:3001"
+    depends_on:
       postgres:
         condition: service_healthy
     networks: [hl]
@@ -248,6 +292,11 @@ services:
       # Copy the go-livepeer keystore 'wallet' file (from the app-pipelines
       # reference) into docker/keystore/ to run the signer locally.
       - ./keystore:/keystore:ro
+      # Writable host folder mapped to $DATA_DIR (/data): the entrypoint copies
+      # /keystore/* into /data/keystore, so go-livepeer CREATES + persists its
+      # live keystore here (docker/signer-data). Without this the keystore lived
+      # only in an anonymous volume that vanished on container recreation.
+      - ./signer-data:/data
     networks: [hl]
 
 networks:

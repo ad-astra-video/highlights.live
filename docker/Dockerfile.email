@@ -1,0 +1,11 @@
+# Email-sender container: SMTP transport + queue API + DB write-through for
+# transactional email (invites + password reset). It imports the shared DB
+# module from @highlights/server, so the whole monorepo is the build context
+# (same pattern as Dockerfile.server) and `npm ci` installs all workspaces.
+FROM node:24-slim
+WORKDIR /app
+COPY . .
+RUN npm ci
+ENV NODE_ENV=production
+EXPOSE 3001
+CMD ["npx", "tsx", "services/email/src/index.ts"]
