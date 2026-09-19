@@ -26,6 +26,8 @@ services:
       # auto-generates a keystore under the writable ./lpdata-orch datadir mount;
       # no -ethKeystorePath / -ethOrchAddr pinned (use the keystore account).
       - -ethPassword=${ORCHESTRATOR_ETH_PASSWORD:-highlights-orch}
+      # On-chain orchestrator requires an explicit price per unit (wei/pixel).
+      - -pricePerUnit=${PRICE_PER_UNIT:-0}
       - -monitor=false
       - -v=6
     environment:
