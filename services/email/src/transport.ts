@@ -3,6 +3,7 @@
 // server; a log-mode transport stands in when no SMTP is configured (dev/CI)
 // so the queue + worker lifecycle can be exercised end to end without real
 // mailbox credentials.
+import nodemailer from "nodemailer";
 
 export interface MailMessage {
   to: string;
@@ -48,9 +49,11 @@ export class NodemailerTransport implements MailTransport {
     smtpPass?: string;
     smtpRequireTls: boolean;
   }) {
-    // Lazy require so this module also loads in test environments that don't
-    // have nodemailer installed / network access.
-    const nodemailer = require("nodemailer");
+    // nodemailer is a declared dependency of this workspace; import it here
+    // (not at module top) keeps the require/import resolution lazy so the
+    // class can be referenced in pure-logic tests without forcing a network
+    // package to load. ESM `import` (this package is "type": "module") works
+    // under tsx/vitest where CommonJS `require` is undefined.
     this.transporter = nodemailer.createTransport({
       host: cfg.smtpHost,
       port: cfg.smtpPort,
