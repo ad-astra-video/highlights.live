@@ -10,7 +10,7 @@ import { analyzeJob, EvidenceTracker, type AnalyzeEvent, type PipelineClient } f
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { LiveIngest, type LiveKind } from "./live";
-import type { Db, MediaSession } from "./db";
+import type { Db, MediaSession, AnalyticsSnapshot } from "./db";
 import { AuthService, BetaGateError, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
@@ -352,6 +352,32 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       body: `You're invited! Your highlights.live beta account is ready to activate.\n\nOpen ${cfg.publicBaseUrl}/auth and choose "Create account" to get started.`,
     });
     return { ok: true, email: entry.email, status: entry.status };
+  });
+
+  // Admin analytics: signups, clips generated, and paying-user conversion vs
+  // the 100-public-beta-user goal. Feeds the beta telemetry + box-health board
+  // view (ADAAAA-25). Admin-only; derived live from the DB on each call.
+  app.get<{ Querystring: { goal?: string } }>("/admin/analytics", { preHandler: adminReq }, async (req) => {
+    const a = await db.analytics();
+    const goal = req.query?.goal ? Number(req.query.goal) : 100;
+    const payingPro = a.subscriptions
+      .filter((s) => s.tier === "pro" && s.status === "active")
+      .reduce((n, s) => n + s.count, 0);
+    const payingAnyActive = a.subscriptions
+      .filter((s) => s.status === "active" && s.tier !== "free")
+      .reduce((n, s) => n + s.count, 0);
+    return {
+      generatedAt: new Date().toISOString(),
+      goal: { payingUsersTarget: goal },
+      signups: { usersTotal: a.usersTotal, usersActivated: a.usersActivated, waitlistTotal: a.waitlistTotal, waitlistInvited: a.waitlistInvited },
+      clips: { clipsTotal: a.clipsTotal, clipsUsed: a.clipsUsed, usageEvents: a.usageEvents },
+      conversion: {
+        payingProActive: payingPro,
+        payingAnyActive: payingAnyActive,
+        pctOfGoal: Math.round((payingAnyActive / goal) * 10000) / 100,
+      },
+      subscriptions: a.subscriptions,
+    };
   });
 
   app.get("/admin/waitlist", { preHandler: adminReq }, async () => ({
