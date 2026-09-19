@@ -172,7 +172,7 @@ export function Landing() {
           </div>
           <div className="card card-accent p-6">
             <div className="text-sm font-bold tracking-wide text-pink">PRO</div>
-            <div className="mt-2 text-3xl font-black">$19<span className="text-base font-semibold text-mut">/mo</span></div>
+            <div className="mt-2 text-3xl font-black">$9<span className="text-base font-semibold text-mut">/mo</span></div>
             <p className="mt-1 text-xs text-mut">Coming at GA — not sold during beta.</p>
             <ul className="mt-4 space-y-2 text-sm text-slate-ink">
               <li><Check className="mr-2 inline h-4 w-4 text-green" />100 clips / month</li>

@@ -64,7 +64,8 @@ export interface ServerConfig {
   stripePriceUsage?: string;
   /** Public base URL (for Stripe return URLs). */
   publicBaseUrl: string;
-  /** Free plan included-highlights cap (0 blocks free farming). */
+  /** Free plan included-highlights cap (beta: 10 clips/month, matching the
+   * entitlement ledger's BETA_CLIP_QUOTA default; 0 blocks free farming). */
   freeHighlights: number;
   /** Fixed fee per decide call (single shot, USD). Default $0.01. */
   decideFee: number;
@@ -79,6 +80,14 @@ export interface ServerConfig {
    * have been activated (a claimed invite code or an invited waitlist email).
    * Default ON in prod. Tests/off turn it off for the un-gated loop. */
   betaGate: boolean;
+  /** Closed-beta auto-publish: when true (default), a clip that a user's job
+   * successfully generates is published straight to the public /feed (status
+   * "accepted") without an admin review step. This is what makes the beta
+   * cohort's clips show up in /feed the moment a job finishes (gate X "K clips
+   * usable"). During the closed beta every user is invite-gated and quota-capped
+   * (betaClipQuota), so the blast radius is bounded. Set AUTO_PUBLISH_HIGHLIGHTS=0
+   * once real admin review is wanted. */
+  autoPublishHighlights: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -113,11 +122,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     stripePricePro: env.STRIPE_PRICE_PRO,
     stripePriceUsage: env.STRIPE_PRICE_USAGE,
     publicBaseUrl: env.PUBLIC_BASE_URL ?? "http://127.0.0.1:3000",
-    freeHighlights: Number(env.FREE_HIGHLIGHTS ?? 3),
+    freeHighlights: Number(env.FREE_HIGHLIGHTS ?? 10),
     decideFee: Number(env.DECIDE_FEE ?? 0.01),
     freeDecides: Number(env.FREE_DECIDES ?? 5),
     billingWireframe: env.BILLING_WIREFRAME === "1" || env.BILLING_WIREFRAME === "true",
     betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),
     betaGate: env.BETA_GATE === "1" || env.BETA_GATE === "true" || !env.BETA_GATE,
+    autoPublishHighlights: env.AUTO_PUBLISH_HIGHLIGHTS === "0" || env.AUTO_PUBLISH_HIGHLIGHTS === "false" ? false : true,
   };
 }
