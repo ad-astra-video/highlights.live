@@ -57,9 +57,9 @@ bcrypt-hashed; sessions are JWTs signed with `JWT_SECRET`.
   current user for the token, or 401 if stale/revoked. The SPA calls this on load
   to restore a logged-in session.
 - `POST /auth/forgot {email}` — starts a password reset. Always returns
-  `{ ok: true }` (no account enumeration). **Beta**: there is no mailer yet, so a
-  real account also returns the single-use `resetToken` inline so the loop can be
-  completed; wire it to an email send before public launch.
+  `{ ok: true }` (no account enumeration). For a real account the reset link is
+  delivered by email (the email-sender container, see §1.5); the single-use
+  token is **never** returned inline.
 - `POST /auth/reset {token, password}` — redeems the single-use reset token with
   a new password (≥ 8 chars). Invalid/expired tokens → 400.
 - Attach the token: `Authorization: Bearer <token>`.
@@ -82,6 +82,72 @@ Env:
 | `AUTH_RATE_LIMIT_WINDOW_SEC` | no | `60` | Rate-limit window (seconds). |
 
 The dev admin is `admin@highlights.local` / `admin`. Change both via env.
+
+---
+
+## 1.5 Transactional email (email-sender container)
+
+Outbound transactional email (waitlist→invite and password reset) is handled by
+a **standalone email-sender container** (`services/email`, `@highlights/email`).
+It holds the mailbox **SMTP** credentials, exposes a small queue API, and has
+direct access to the shared DB (same Postgres as the API server in prod) to
+persist the send queue and its lifecycle.
+
+**Flow.** The API server never sends mail itself: it POSTs a message to the
+email sender's queue API (`POST /emails`, bearer-token auth). The email sender
+persists the row (`queued`) in `email_sends`, a worker claims it (`sending`),
+delivers it over SMTP as **onboarding@highlights.live**, and marks it `sent`
+(→ `failed` with bounded retry otherwise). Enqueue from the server is
+best-effort and never blocks the API response, so a delivery failure surfaces in
+the email sender's logs/queue without ever revealing whether an account exists.
+
+**Lifecycle:** `queued → sending → sent | failed` (exponential-backoff retry
+until `EMAIL_MAX_ATTEMPTS`), tracked in the `email_sends` table.
+
+**API:**
+- `POST /emails {to, subject, body}` (Bearer `EMAIL_QUEUE_TOKEN`) → `202 {id, status:'queued'}`.
+- `GET /emails/:id` (Bearer) → `{status, attempts, lastError, sentAt, ...}`.
+- `GET /health`.
+
+**Wired paths:**
+- `POST /admin/invite-codes` with an `email` → emails that inbox its invite code (usable at registration).
+- `POST /admin/waitlist/:email/invite` → emails that inbox a working invitation (an invited waitlist email registers without a code).
+- `POST /auth/forgot` for a real account → emails the reset link (`<PUBLIC_BASE_URL>/reset?token=…`). Browsing that link lands on the webapp's `/reset` page to set a new password. The token is never returned inline.
+
+**Env vars (email-sender container):**
+
+| Var | Default | Notes |
+|---|---|---|
+| `EMAIL_PORT` | `3001` | Queue API / health port. |
+| `EMAIL_QUEUE_TOKEN` | — | Bearer token shared with the server (`MAILER_TOKEN`). |
+| `SMTP_HOST` | — | **Required in prod.** When unset the sender runs in log mode (sends are logged, not delivered) — dev/CI only. |
+| `SMTP_PORT` | `587`/`465` | `465` when `SMTP_SECURE=1` (implicit TLS). |
+| `SMTP_SECURE` | `0` | `1` for implicit TLS on 465. |
+| `SMTP_REQUIRE_TLS` | `0` | `1` to refuse unencrypted connections. |
+| `SMTP_USER` / `SMTP_PASS` | — | Mailbox credentials (secrets-managed, never committed). |
+| `EMAIL_FROM` / `EMAIL_REPLY_TO` | `onboarding@highlights.live` | From / Reply-To (onboarding alias on the support mailbox). |
+| `EMAIL_FROM_NAME` | `Highlights` | Display name. |
+| `EMAIL_MAX_ATTEMPTS` | `3` | Retries before a send is marked failed. |
+| `EMAIL_POLL_INTERVAL_MS` | `5000` | Worker poll cadence. |
+| `EMAIL_ALLOW_IPS` | private subnets | Source allow-list (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1` by default): a request whose source address is not on the list is rejected with `403` before any work happens — in addition to the bearer token. |
+| `DATABASE_URL` | — | Same Postgres as the API server. |
+
+**Server env:** `EMAIL_SENDER_URL` (base URL of the sender, e.g. `http://email:3001`)
+and `MAILER_TOKEN` (same value as the sender's `EMAIL_QUEUE_TOKEN`). When
+`EMAIL_SENDER_URL` is unset the server skips email (logs) — fine for local dev.
+
+**Docker:** `docker/Dockerfile.email` + the `email` service in
+`docker/docker-compose.yml` (shares Postgres, reads SMTP creds from the host
+`.env`). SMTP credentials are bound as environment/secrets — never plain text.
+
+**Security (hard gate, ADAAAA-2475):** the enqueue API is not exposed to the
+public internet — it lives on the private compose network (`hl`) and its host
+port is bound to `127.0.0.1` only. Every enqueue/status request must (1) come
+from a source on `EMAIL_ALLOW_IPS` (RFC1918 private space by default) and
+(2) carry the shared `EMAIL_QUEUE_TOKEN`/`MAILER_TOKEN` bearer secret; requests
+failing either check are rejected (`403`/`401`) and logged before any work
+happens. SMTP/DB credentials are never logged, returned, or embedded
+client-side — they are bound as env/secrets only and can be rotated.
 
 ---
 
