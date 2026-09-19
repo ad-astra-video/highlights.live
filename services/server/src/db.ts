@@ -94,8 +94,21 @@ export interface Subscription {
   updatedAt: string;
 }
 
-/**
- * A live media-server session tracked by the control plane. Persisted so that
+/** Public-beta telemetry snapshot backing the /admin/analytics endpoint
+ * (ADAAAA-25): signups, clips generated, and paying-user conversion vs goal.
+ * Derived live from the DB on each call. */
+export interface AnalyticsSnapshot {
+  usersTotal: number;
+  usersActivated: number;
+  waitlistTotal: number;
+  waitlistInvited: number;
+  clipsTotal: number;
+  clipsUsed: number;
+  usageEvents: number;
+  subscriptions: { tier: string; status: string; count: number }[];
+}
+
+/** A live media-server session tracked by the control plane. Persisted so that
  * if a media node dies the server can detect the gap and re-route the browser
  * to a freshly-provisioned session on a healthy node (seamless reconnect).
  * `wsUrl` is the full LB-routable ingest URL the browser streams over;
@@ -162,6 +175,8 @@ export interface Db {
   setWaitlistInvited(email: string): Promise<WaitlistEntry>;
   /** All waitlist entries incl. status, newest first (admin gate inspection). */
   listWaitlist(): Promise<WaitlistEntry[]>;
+  /** Public-beta telemetry snapshot (signups, clips, usage, subscriptions). */
+  analytics(): Promise<AnalyticsSnapshot>;
   /** Get an invite code record by SHA-256 hash of the code. */
   getInviteByHash(codeHash: string): Promise<InviteCode | undefined>;
   /** Persist a new invite code (unused, unrevolved). */
@@ -423,6 +438,31 @@ export class SqliteDb implements Db {
   async getInviteByHash(codeHash: string): Promise<InviteCode | undefined> {
     const r = this.db.prepare("SELECT * FROM invite_codes WHERE code_hash = ?").get(codeHash);
     return r ? rowToInvite(r) : undefined;
+  }
+
+  async analytics(): Promise<AnalyticsSnapshot> {
+    const n = (sql: string) =>
+      Number((this.db.prepare(sql).get() as { n?: number } | undefined)?.n ?? 0);
+    const usersTotal = n("SELECT COUNT(*) AS n FROM users");
+    const usersActivated = n("SELECT COUNT(*) AS n FROM users WHERE beta_activated_at IS NOT NULL");
+    const waitlistTotal = n("SELECT COUNT(*) AS n FROM waitlist");
+    const waitlistInvited = n("SELECT COUNT(*) AS n FROM waitlist WHERE status = 'invited'");
+    const clipsTotal = n("SELECT COUNT(*) AS n FROM highlights");
+    const clipsUsed = n("SELECT COUNT(*) AS n FROM usage_events WHERE event_type = 'highlight'");
+    const usageEvents = n("SELECT COUNT(*) AS n FROM usage_events");
+    const rows = this.db
+      .prepare("SELECT tier, status, COUNT(*) AS count FROM subscriptions GROUP BY tier, status")
+      .all() as { tier: string; status: string; count: number }[];
+    return {
+      usersTotal,
+      usersActivated,
+      waitlistTotal,
+      waitlistInvited,
+      clipsTotal,
+      clipsUsed,
+      usageEvents,
+      subscriptions: rows.map((r) => ({ tier: String(r.tier), status: String(r.status), count: Number(r.count) })),
+    };
   }
 
   async createInviteCode(ic: Omit<InviteCode, "usedBy" | "usedAt" | "revokedAt">): Promise<InviteCode> {
@@ -738,6 +778,38 @@ export class PgDb implements Db {
   async getInviteByHash(codeHash: string): Promise<InviteCode | undefined> {
     const r = await this.pool.query("SELECT * FROM invite_codes WHERE code_hash = $1", [codeHash]);
     return r.rows[0] ? rowToInvite(r.rows[0]) : undefined;
+  }
+
+  async analytics(): Promise<AnalyticsSnapshot> {
+    const n = async (sql: string) =>
+      Number((await this.pool.query(sql)).rows[0]?.n ?? 0);
+    const [usersTotal, usersActivated, waitlistTotal, waitlistInvited, clipsTotal, clipsUsed, usageEvents] =
+      await Promise.all([
+        n("SELECT COUNT(*)::int AS n FROM users"),
+        n("SELECT COUNT(*)::int AS n FROM users WHERE beta_activated_at IS NOT NULL"),
+        n("SELECT COUNT(*)::int AS n FROM waitlist"),
+        n("SELECT COUNT(*)::int AS n FROM waitlist WHERE status = 'invited'"),
+        n("SELECT COUNT(*)::int AS n FROM highlights"),
+        n("SELECT COUNT(*)::int AS n FROM usage_events WHERE event_type = 'highlight'"),
+        n("SELECT COUNT(*)::int AS n FROM usage_events"),
+      ]);
+    const r = await this.pool.query(
+      "SELECT tier, status, COUNT(*)::int AS count FROM subscriptions GROUP BY tier, status"
+    );
+    return {
+      usersTotal,
+      usersActivated,
+      waitlistTotal,
+      waitlistInvited,
+      clipsTotal,
+      clipsUsed,
+      usageEvents,
+      subscriptions: r.rows.map((row: any) => ({
+        tier: String(row.tier),
+        status: String(row.status),
+        count: Number(row.count),
+      })),
+    };
   }
 
   async createInviteCode(ic: Omit<InviteCode, "usedBy" | "usedAt" | "revokedAt">): Promise<InviteCode> {
