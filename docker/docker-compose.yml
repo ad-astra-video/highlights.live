@@ -21,7 +21,12 @@ services:
       - -orchSecret=${ORCHESTRATOR_SECRET:-highlights-secret}
       - -network=arbitrum-one-mainnet
       - -ethUrl=${ARBITRUM_RPC}
-      - -ethOrchAddr=${ORCHESTRATOR_ETH_ADDR:-0x3b28a7d785356dc67c7970666747e042305bfb79}
+      # Orchestrator self-creates its on-chain wallet if none exists (no
+      # pre-funded LPT deposit required to be active in the set). The keystore
+      # lives in a writable volume under ./lpdata-orch so go-livepeer generates
+      # and persists it; no pinned -ethOrchAddr (use the keystore account).
+      - -ethKeystorePath=/root/.lpData/keystore
+      - -ethPassword=${ORCHESTRATOR_ETH_PASSWORD:-highlights-orch}
       - -monitor=false
       - -v=6
     environment:
@@ -30,6 +35,7 @@ services:
       - "8935:8935"
     volumes:
       - ./runners.json:/config/runners.json:ro
+      - ./lpdata-orch:/root/.lpData
     healthcheck:
       test: ["CMD-SHELL", "openssl s_client -connect 127.0.0.1:8935 </dev/null 2>/dev/null | grep -q CONNECTED"]
       interval: 5s
