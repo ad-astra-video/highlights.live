@@ -8,12 +8,20 @@
       "healthy_status_code": 200,
       "app": "highlights-live/perceive",
       "version": "0.1.0",
-      "metadata": "{\"maxTracks\":2,\"models\":\"stub-iou\"}",
+      "metadata": "{\"maxTracks\": 2, \"models\": \"florence-sam\"}",
       "mode": "persistent",
       "capacity": 1,
       "proxy": true,
-      "gpu": { "id": "0", "name": "stub", "vram_mb": 0 },
-      "price_info": { "price": 0.01, "currency": "usd", "unit": "hour" }
+      "gpu": {
+        "id": "0",
+        "name": "NVIDIA GeForce RTX 3090 Ti",
+        "vram_mb": 24564
+      },
+      "price_info": {
+        "price": 0.01,
+        "currency": "usd",
+        "unit": "hour"
+      }
     },
     {
       "label": "highlights-decide",
@@ -23,12 +31,20 @@
       "healthy_status_code": 200,
       "app": "highlights-live/decide",
       "version": "0.1.0",
-      "metadata": "{\"model\":\"stub-rule\"}",
+      "metadata": "{\"model\": \"gemma-4-12b-it-qat-q4_0\"}",
       "mode": "single-shot",
       "capacity": 1,
       "proxy": true,
-      "gpu": { "id": "1", "name": "stub", "vram_mb": 0 },
-      "price_info": { "price": 0.01, "currency": "usd", "unit": "fixed" }
+      "gpu": {
+        "id": "1",
+        "name": "NVIDIA GeForce RTX 5070 Ti",
+        "vram_mb": 16303
+      },
+      "price_info": {
+        "price": 0.01,
+        "currency": "usd",
+        "unit": "fixed"
+      }
     }
   ]
 }
