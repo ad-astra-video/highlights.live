@@ -15,7 +15,7 @@
 //   5. GET  {events_out}/{seq}                       -> read the observation (specific seq returns
 //                                                       stored data; -1 streams forever)
 //   6. POST /apps/{app}/session/{sid}/stop           -> release the paid slot
-import { LivepeerClient, type SignerClient } from "@highlights/livepeer-session";
+import { LivepeerClient, PaymentRequiredError, type SignerClient } from "@highlights/livepeer-session";
 import { createPaymentRefresher, type PaymentRefresher } from "./payments";
 
 export interface ProvisionedSession {
@@ -25,6 +25,13 @@ export interface ProvisionedSession {
   videoIn: string;
   eventsOut: string;
   control: string;
+  /**
+   * On-chain only: the signer state (ticket nonce/round) established when the
+   * paid reserve succeeded. Seeded into the payment refresher on startPayment
+   * so the ongoing ticket refresh continues from the same sequence (not from a
+   * fresh/higher nonce that the orchestrator would reject). Undefined offchain.
+   */
+  paymentState?: unknown;
 }
 
 export interface MediaOrchOptions {
@@ -86,11 +93,34 @@ export class MediaOrchestrator {
     };
   }
 
-  /** Reserve + open the perceive session's trickle channels. */
+  /**
+   * Reserve + open the perceive session's trickle channels.
+   * On-chain the first reserve usually returns 402 (PaymentRequiredError): we
+   * pull Livepeer-Payment/Livepeer-Segment from the remote signer and retry the
+   * reserve with them. Offchain (no signer, orchestrator never 402s) this path
+   * is a no-op and behaves exactly as before.
+   */
   async provision(opts?: { seedImageB64?: string }): Promise<ProvisionedSession> {
-    const res = await this.client.reservePerceive(
-      this.opts.payerAddress ? { payerAddress: this.opts.payerAddress } : undefined
-    );
+    let signerState: unknown;
+    let res;
+    try {
+      res = await this.client.reservePerceive(
+        this.opts.payerAddress ? { payerAddress: this.opts.payerAddress } : undefined
+      );
+    } catch (err) {
+      if (!(err instanceof PaymentRequiredError) || !this.opts.signer) throw err;
+      // 402 on-chain: pay to reserve. generateLivePayment(null, prev) is the
+      // same call the running payment refresher uses, so the retry material is
+      // consistent with the ongoing refresh.
+      const pmt = await this.opts.signer.generateLivePayment(null, undefined);
+      signerState = pmt.signerState;
+      // Retry WITH the payment headers; a second 402 here means the orchestrator
+      // rejected the payment -> reservePerceive throws PaymentRequiredError.
+      res = await this.client.reservePerceive({
+        payerAddress: this.opts.payerAddress,
+        paymentHeaders: { "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds },
+      });
+    }
     const { sessionId, appUrl, controlUrl } = res;
     if (!sessionId) throw new Error("reserve returned no session_id");
 
@@ -105,14 +135,16 @@ export class MediaOrchestrator {
     if (!t?.video_in || !t?.events_out) {
       throw new Error(`open channels failed: no trickle endpoints in stats: ${JSON.stringify(body)}`);
     }
-    return {
+    const p: ProvisionedSession = {
       sessionId,
       appUrl,
       controlUrl,
       videoIn: t.video_in,
       eventsOut: t.events_out,
       control: t.control || "",
+      paymentState: signerState,
     };
+    return p;
   }
 
   /** Seed the runner so it opens channels; tolerate the (expected) bad-image error
@@ -163,7 +195,9 @@ export class MediaOrchestrator {
     const signer = this.opts.signer;
     if (!signer) return; // offchain lab: sessions are unpaid
     if (this.payers.has(p.sessionId)) return;
-    let signerState: unknown;
+    // Continue the ticket sequence from the state the paid reserve established
+    // (not a fresh/higher nonce, which the orchestrator would reject).
+    let signerState: unknown = p.paymentState;
     const refresh = async () => {
       const next = await this.client.refreshPerceivePayment(p.sessionId, p.controlUrl, signer, signerState);
       if (next !== undefined && next !== null) signerState = next;
