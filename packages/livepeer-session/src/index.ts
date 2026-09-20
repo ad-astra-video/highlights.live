@@ -153,10 +153,18 @@ export class LivepeerClient {
     private transport: Transport = new HttpTransport(orchBase)
   ) {}
 
-  /** Reserve a persistent perceive session. On-chain: throws PaymentRequiredError on 402. */
-  async reservePerceive(opts?: { payerAddress?: string }): Promise<ReserveResult> {
+  /**
+   * Reserve a persistent perceive session.
+   *   - Offchain: returns 200 immediately (no payment headers needed).
+   *   - On-chain: the first reserve normally returns 402 (PaymentRequiredError).
+   *     The caller attaches `paymentHeaders` (Livepeer-Payment / Livepeer-Segment
+   *     from the remote signer) and retries. When already retrying with payment,
+   *     a 402 again means the payment was rejected -> throw PaymentRequiredError.
+   */
+  async reservePerceive(opts?: { payerAddress?: string; paymentHeaders?: Record<string, string> }): Promise<ReserveResult> {
     const headers: Record<string, string> = {};
     if (opts?.payerAddress) headers["Livepeer-Payer-Address"] = opts.payerAddress;
+    if (opts?.paymentHeaders) Object.assign(headers, opts.paymentHeaders);
     const res = await this.transport.request("POST", `/apps/${ROUTES.perceive}/session`, { headers });
     if (res.status === 402) {
       throw new PaymentRequiredError(await res.json().catch(() => ({})));
