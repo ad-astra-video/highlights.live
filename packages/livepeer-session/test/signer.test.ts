@@ -1,5 +1,12 @@
+
 import { describe, expect, it } from "vitest";
-import { HttpSignerClient, type Transport } from "../src/index";
+import {
+  HttpSignerClient,
+  NoTicketsError,
+  PriceExceededError,
+  RefreshSessionError,
+  type Transport,
+} from "../src/index";
 
 const mkTransport = (routes: Record<string, (init?: any) => { status: number; body: unknown }>): Transport => {
   return {
@@ -88,5 +95,48 @@ describe("HttpSignerClient", () => {
     const t = mkTransport({ "GET *": () => ({ status: 500, body: {} }) });
     const c = new HttpSignerClient("http://signer", t);
     await expect(c.discover(["x"])).rejects.toThrow(/500/);
+  });
+
+  it("maps signer 482 to a benign NoTicketsError (no payment needed)", async () => {
+    const t = mkTransport({ "POST /generate-live-payment": () => ({ status: 482, body: { err: "no tickets" } }) });
+    const c = new HttpSignerClient("http://signer", t);
+    await expect(c.generateLivePayment("b64", null, { type: "live" })).rejects.toBeInstanceOf(NoTicketsError);
+  });
+
+  it("maps signer 481 to PriceExceededError (fatal price ceiling)", async () => {
+    const t = mkTransport({ "POST /generate-live-payment": () => ({ status: 481, body: { err: "price exceeded" } }) });
+    const c = new HttpSignerClient("http://signer", t);
+    await expect(c.generateLivePayment("b64", null, { type: "live" })).rejects.toBeInstanceOf(PriceExceededError);
+  });
+
+  it("maps signer 480 to RefreshSessionError carrying the orchestrator URL header", async () => {
+    const t = {
+      async request(method: string, url: string) {
+        return {
+          status: 480,
+          headers: new Headers({ "Livepeer-Orchestrator-URL": "http://orch" }),
+          json: async () => ({}),
+          text: async () => "",
+        };
+      },
+    } as unknown as Transport;
+    const c = new HttpSignerClient("http://signer", t);
+    await expect(c.generateLivePayment("b64", null)).rejects.toMatchObject({
+      name: "RefreshSessionError",
+      orchestratorUrl: "http://orch",
+    });
+  });
+
+  it("forwards inPixels sized to the billing window when provided", async () => {
+    let body: any;
+    const t = mkTransport({
+      "POST /generate-live-payment": (init) => {
+        body = JSON.parse(init.body);
+        return { status: 200, body: { payment: "pay", segCreds: "seg", state: { State: "c3RhdGU=", Sig: "c2ln" } } };
+      },
+    });
+    const c = new HttpSignerClient("http://signer", t);
+    await c.generateLivePayment("b64", null, { type: "live", inPixels: 27_648_000 });
+    expect(body.inPixels).toBe(27_648_000);
   });
 });

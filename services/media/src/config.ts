@@ -1,3 +1,4 @@
+
 // Media server env config.
 export interface MediaConfig {
   port: number;
@@ -11,8 +12,15 @@ export interface MediaConfig {
   signerUrl?: string;
   /** Payer address advertised on reserve (on-chain). */
   payerAddress?: string;
-  /** Payment refresh interval in ms (default 10_000). */
+  /** Payment refresh interval in ms (default 10_000; overridden by the
+   *  orchestrator's announced payment interval when present). */
   paymentIntervalMs?: number;
+  /**
+   * Live-stream pixel rate (pixels/sec) for sizing on-chain top-up tickets.
+   * Defaults to go-livepeer's defaultSegInfo (1280x720x30). Set to the actual
+   * broadcast resolution×fps (e.g. 1920*1080*30) to avoid chronic over/under-fund.
+   */
+  streamPixelsPerSec?: number;
   /**
    * PEM of the orchestrator self-signed cert to trust for the GetOrchestratorInfo
    * gRPC TLS handshake (on-chain only). When unset, defaults to
@@ -44,6 +52,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     signerUrl: env.SIGNER_URL,
     payerAddress: env.PAYER_ADDRESS,
     paymentIntervalMs: env.PAYMENT_INTERVAL_MS ? Number(env.PAYMENT_INTERVAL_MS) : 10_000,
+    streamPixelsPerSec: env.MEDIA_STREAM_PIXELS_PER_SEC ? Number(env.MEDIA_STREAM_PIXELS_PER_SEC) : undefined,
     // On-chain GetOrchestratorInfo TLS: explicit PEM env wins, else the repo's
     // docker/orchestrator-ca.crt when present (media runs from the repo root).
     orchInfoCaPem: env.ORCHESTRATOR_CA,

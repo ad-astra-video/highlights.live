@@ -1,3 +1,4 @@
+
 import { describe, it, expect, vi } from "vitest";
 import { LivepeerClient, PaymentRequiredError, ROUTES, type SignerClient, type Transport } from "../src/index";
 
