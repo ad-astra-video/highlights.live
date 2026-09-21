@@ -1,7 +1,5 @@
 import { HttpSignerClient } from "@highlights/livepeer-session";
-import { existsSync } from "node:fs";
 import { loadConfig } from "./config";
-import { createOrchInfoProvider, readCaPem } from "./orch-info";
 import { MediaServer } from "./server";
 
 async function main() {
@@ -11,36 +9,24 @@ async function main() {
   // media server runs unpaid.
   const signer = cfg.signerUrl ? new HttpSignerClient(cfg.signerUrl) : undefined;
 
-  // On-chain only: resolve the orchestrator's net.OrchestratorInfo (base64) the
-  // signer REQUIRES for /generate-live-payment. Fetch it from the orchestrator
-  // over gRPC GetOrchestrator. Offchain (no signer) this is never used.
-  const caCertPem =
-    cfg.orchInfoCaPem ??
-    (cfg.orchInfoCaPath && existsSync(cfg.orchInfoCaPath)
-      ? readCaPem(cfg.orchInfoCaPath)
-      : undefined);
-  const orchInfoProvider =
-    cfg.signerUrl && cfg.orchBase.startsWith("https")
-      ? createOrchInfoProvider({
-          signerUrl: cfg.signerUrl,
-          orchBase: cfg.orchBase,
-          caCertPem,
-        })
-      : undefined;
+  // On-chain: find WHICH orchestrator / live-runner to start the session against
+  // via the signer's /discover-orchestrators — the media server never dials the
+  // orchestrator for OrchestratorInfo directly. The orchestrator's info comes
+  // from the 402 reserve challenge, not from a gRPC GetOrchestrator. Offchain
+  // (no signer) discovery is never invoked and ORCHESTRATOR_URL is used.
+  const discoverOrchestrators = signer ? async () => signer.discover([]) : undefined;
 
-  const media = new MediaServer(
-    {
-      orchBase: cfg.orchBase,
-      callbackBase: cfg.callbackBase,
-      seedImageB64: cfg.seedImageB64,
-      signer,
-      payerAddress: cfg.payerAddress,
-      paymentIntervalMs: cfg.paymentIntervalMs,
-      orchInfoProvider,
-      publicBaseUrl: cfg.publicBaseUrl,
-      provisionNoClientMs: cfg.provisionNoClientMs,
-    },
-  );
+  const media = new MediaServer({
+    orchBase: cfg.orchBase,
+    callbackBase: cfg.callbackBase,
+    seedImageB64: cfg.seedImageB64,
+    signer,
+    payerAddress: cfg.payerAddress,
+    paymentIntervalMs: cfg.paymentIntervalMs,
+    discoverOrchestrators,
+    publicBaseUrl: cfg.publicBaseUrl,
+    provisionNoClientMs: cfg.provisionNoClientMs,
+  });
   const app = await media.build();
   await app.listen({ port: cfg.port, host: "0.0.0.0" });
   // eslint-disable-next-line no-console

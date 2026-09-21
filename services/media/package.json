@@ -15,8 +15,6 @@
   },
   "dependencies": {
     "@fastify/websocket": "^8.2.0",
-    "@grpc/grpc-js": "^1.14.5",
-    "@grpc/proto-loader": "^0.8.1",
     "@highlights/livepeer-session": "0.1.0",
     "fastify": "^4.28.0"
   }

@@ -53,8 +53,10 @@ class FakeOrch {
   async readObservation(p: ProvisionedSession, seq: number) {
     return this.obsBySeq.get(seq) ?? null;
   }
-  async closeSession(sessionId: string) {
-    this.closed.push(sessionId);
+  async closeSession(controlUrl: string) {
+    // MediaServer now targets the session via its control URL; record the
+    // session this fake orchestrator owns so assertions stay on session ids.
+    this.closed.push(this.provisioned.sessionId);
   }
 }
 
