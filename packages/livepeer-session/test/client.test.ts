@@ -91,11 +91,13 @@ describe("LivepeerClient", () => {
         return { a: 1 };
       },
       async generateLivePayment() {
-        return { payment: "P", segCreds: "S", signerState: { st: 2 } };
+        return { payment: "P", segCreds: "S", signerState: { State: "c3RhdGU=", Sig: "c2ln" } };
       },
     };
-    const out = await c.refreshPerceivePayment("s1", "http://c", signer, { st: 1 });
-    expect(out).toMatchObject({ st: 2 });
+    // The 4th arg is now the base64 net.OrchestratorInfo (go-livepeer requires
+    // it in every /generate-live-payment call); the 5th is the opaque state.
+    const out = await c.refreshPerceivePayment("s1", "http://c", signer, "b3JjaA==", null);
+    expect(out).toMatchObject({ State: "c3RhdGU=", Sig: "c2ln" });
     expect(t.calls[0].url).toBe("http://c/payment");
     expect(t.calls[0].headers).toMatchObject({ "Livepeer-Payment": "P", "Livepeer-Segment": "S" });
   });

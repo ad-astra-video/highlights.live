@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { MediaOrchestrator } from "../src/orch";
 import type { SignerClient, LivePayment } from "@highlights/livepeer-session";
 
@@ -43,6 +43,10 @@ function fakeFetch(opts: { paidReserve?: boolean }) {
   });
 }
 
+// Records the orchestrator info + state each generateLivePayment receives, so
+// the test can prove the wire fix (a real base64 net.OrchestratorInfo is sent,
+// NOT null as in the pre-fix bug that caused "400 missing orchestrator").
+const generatePaymentCalls: Array<{ orchInfoB64: unknown; prev: unknown; opts: unknown }> = [];
 const fakeSigner: SignerClient = {
   async discover() {
     return [];
@@ -50,10 +54,19 @@ const fakeSigner: SignerClient = {
   async signOrchInfo() {
     return {};
   },
-  async generateLivePayment(): Promise<LivePayment> {
-    return { payment: "livepeer-payment-ticket", segCreds: "segment-creds", signerState: { n: 1 } };
+  async generateLivePayment(
+    orchInfoB64: string,
+    prev: unknown,
+    opts: { app?: string; type?: "live" | "lv2v" | "fixed"; inPixels?: number } = {}
+  ): Promise<LivePayment> {
+    generatePaymentCalls.push({ orchInfoB64, prev, opts });
+    return { payment: "livepeer-payment-ticket", segCreds: "segment-creds", signerState: { State: "c3RhdGU=", Sig: "c2ln" } };
   },
 };
+
+beforeEach(() => {
+  generatePaymentCalls.length = 0;
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -69,6 +82,7 @@ describe("MediaOrchestrator on-chain: 402 -> paid reserve -> open channels", () 
       orchBase: "http://orch",
       signer: fakeSigner,
       payerAddress: "0x68d6FF3938Ff63d2df16567Cb8CA9772e14496F7",
+      orchInfoB64Provider: async () => "b3JjaC1pbmZv", // base64 net.OrchestratorInfo
     });
 
     const p = await orch.provision();
@@ -84,8 +98,28 @@ describe("MediaOrchestrator on-chain: 402 -> paid reserve -> open channels", () 
     expect(p.sessionId).toBe("sess-pay");
     expect(p.videoIn).toContain("/trickle/video-in");
     expect(p.eventsOut).toContain("/trickle/events-out");
-    // The signer state from the paid reserve is seeded for the refresher.
-    expect(p.paymentState).toEqual({ n: 1 });
+    // WIRE FIX: the signer received the real orchestrator info (base64
+    // net.OrchestratorInfo), NOT null — the bug that caused "400 missing
+    // orchestrator" on every paid reserve.
+    expect(generatePaymentCalls).toHaveLength(1);
+    expect(generatePaymentCalls[0].orchInfoB64).toBe("b3JjaC1pbmZv");
+    expect(generatePaymentCalls[0].prev).toBe(null); // first payment: no state yet
+    // The signer state from the paid reserve is seeded for the refresher, and
+    // the orchestrator info is carried onto the session so the refresher can
+    // re-issue tickets without refetching.
+    expect(p.paymentState).toEqual({ State: "c3RhdGU=", Sig: "c2ln" });
+    expect(p.orchInfoB64).toBe("b3JjaC1pbmZv");
+  });
+
+  it("fails hard with a clear error when an on-chain 402 needs orchestrator info but no provider is configured", async () => {
+    const fetchMock = fakeFetch({ paidReserve: false }); // 402 on first reserve
+    vi.stubGlobal("fetch", fetchMock);
+
+    const orch = new MediaOrchestrator({
+      orchBase: "http://orch",
+      signer: fakeSigner, // on-chain path, but no orchInfoB64Provider
+    });
+    await expect(orch.provision()).rejects.toThrow(/orchInfoB64Provider/);
   });
 
   it("stays offchain (one unpaid reserve, no signer payment) when no signer is configured", async () => {
