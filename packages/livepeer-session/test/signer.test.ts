@@ -44,18 +44,44 @@ describe("HttpSignerClient", () => {
     expect(body.orchestrator).toBe("0xabc");
   });
 
-  it("generateLivePayment returns payment headers + state", async () => {
+  it("generateLivePayment sends the go-livepeer RemotePaymentRequest schema (regression: non-null orchestrator)", async () => {
+    let body: any;
     const t = mkTransport({
-      "POST /generate-live-payment": () => ({
-        status: 200,
-        body: { payment: "pay", segCreds: "seg", signerState: { n: 1 } },
-      }),
+      "POST /generate-live-payment": (init) => {
+        body = JSON.parse(init.body);
+        return {
+          status: 200,
+          body: { payment: "pay", segCreds: "seg", state: { State: "c3RhdGU=", Sig: "c2ln" } },
+        };
+      },
     });
     const c = new HttpSignerClient("http://signer", t);
-    const p = await c.generateLivePayment({ orch: 1 }, { prev: 0 });
-    expect(p.payment).toBe("pay");
-    expect(p.segCreds).toBe("seg");
-    expect(p.signerState).toEqual({ n: 1 });
+
+    // First payment: omits `state`, but MUST include base64 `orchestrator`.
+    const orchB64 = Buffer.from("net.OrchestratorInfo proto bytes").toString("base64");
+    const p1 = await c.generateLivePayment(orchB64, null, { type: "live", app: "highlights-perceive" });
+    expect(body.orchestrator).toBe(orchB64);
+    expect(body.state).toBeUndefined();
+    expect(body.type).toBe("live");
+    expect(body.app).toBe("highlights-perceive");
+    // OLD (buggy) shape must NOT be sent: no `orchInfo` / `prevState` keys.
+    expect(body).not.toHaveProperty("orchInfo");
+    expect(body).not.toHaveProperty("prevState");
+    expect(p1.payment).toBe("pay");
+    expect(p1.segCreds).toBe("seg");
+    expect(p1.signerState).toEqual({ State: "c3RhdGU=", Sig: "c2ln" });
+
+    // Refresh: passes the opaque signed state back verbatim.
+    const p2 = await c.generateLivePayment(orchB64, p1.signerState);
+    expect(body.state).toEqual({ State: "c3RhdGU=", Sig: "c2ln" });
+    expect(body.orchestrator).toBe(orchB64);
+    expect(p2.signerState).toEqual({ State: "c3RhdGU=", Sig: "c2ln" });
+  });
+
+  it("signaler surfaces a 400 (e.g. missing orchestrator) as generateLivePayment failed", async () => {
+    const t = mkTransport({ "POST /generate-live-payment": () => ({ status: 400, body: { err: "missing orchestrator" } }) });
+    const c = new HttpSignerClient("http://signer", t);
+    await expect(c.generateLivePayment("b64", null)).rejects.toThrow(/HTTP 400/);
   });
 
   it("throws on non-200", async () => {
