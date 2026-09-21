@@ -50,8 +50,8 @@ export class Store {
     }
   }
 
-  async createJob(input: { ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare" | "browser"; sourceUrl?: string; gameHint?: string; preferLabels?: string[] }): Promise<Job> {
-    const id = randomUUID();
+  async createJob(input: { id?: string; ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare" | "browser"; sourceUrl?: string; gameHint?: string; preferLabels?: string[] }): Promise<Job> {
+    const id = input.id ?? randomUUID();
     const job: Job = JobSchema.parse({
       id,
       ownerId: input.ownerId,

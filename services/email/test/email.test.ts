@@ -40,10 +40,13 @@ const baseCfg = {
   fromEmail: "onboarding@highlights.live",
   replyToEmail: "onboarding@highlights.live",
   fromName: "Highlights",
+  publicBaseUrl: "http://127.0.0.1:3000",
   pollIntervalMs: 999999,
   batchSize: 10,
   maxAttempts: 3,
   retryBaseMs: 30_000,
+  allocatorIntervalMs: 3_600_000,
+  allocatorBatchSize: 50,
 };
 
 describe("email sender: queue API", () => {

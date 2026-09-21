@@ -42,12 +42,22 @@ export interface EmailSenderConfig {
   replyToEmail: string;
   fromName: string;
 
+  /** Public base URL, used to build invite links in waitlist->invite emails
+   * (e.g. https://highlights.live). Falls back to PUBLIC_BASE_URL. */
+  publicBaseUrl: string;
+
   /** Worker polling: process up to `batchSize` sends every `pollIntervalMs`. */
   pollIntervalMs: number;
   batchSize: number;
   maxAttempts: number;
   /** Base for exponential backoff between retries: delay = base * 2^(attempt-1). */
   retryBaseMs: number;
+
+  /** Waitlist->invite allocator (ADAAAA-2555): poll the waitlist table every
+   * `allocatorIntervalMs` (default 1h) and allocate up to `allocatorBatchSize`
+   * of the OLDEST new signups each tick, subject to the admin gate. */
+  allocatorIntervalMs: number;
+  allocatorBatchSize: number;
 }
 
 export function loadEmailConfig(env: NodeJS.ProcessEnv = process.env): EmailSenderConfig {
@@ -67,9 +77,12 @@ export function loadEmailConfig(env: NodeJS.ProcessEnv = process.env): EmailSend
     fromEmail: env.EMAIL_FROM ?? "onboarding@highlights.live",
     replyToEmail: env.EMAIL_REPLY_TO ?? "onboarding@highlights.live",
     fromName: env.EMAIL_FROM_NAME ?? "Highlights",
+    publicBaseUrl: env.APP_PUBLIC_URL || env.PUBLIC_BASE_URL || "http://127.0.0.1:3000",
     pollIntervalMs: Number(env.EMAIL_POLL_INTERVAL_MS ?? 5000),
     batchSize: Number(env.EMAIL_BATCH_SIZE ?? 10),
     maxAttempts: Number(env.EMAIL_MAX_ATTEMPTS ?? 3),
     retryBaseMs: Number(env.EMAIL_RETRY_BASE_MS ?? 30_000),
+    allocatorIntervalMs: Number(env.EMAIL_ALLOCATOR_INTERVAL_MS ?? 3_600_000),
+    allocatorBatchSize: Number(env.EMAIL_ALLOCATOR_BATCH_SIZE ?? 50),
   };
 }
