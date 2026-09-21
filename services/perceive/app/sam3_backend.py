@@ -22,6 +22,7 @@ handle_stream_request surface.
 """
 from __future__ import annotations
 
+import threading
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -68,13 +69,51 @@ def _as_numpy_mask(m) -> Optional["np.ndarray"]:
 # --------------------------------------------------------------------------
 # backend
 # --------------------------------------------------------------------------
+# Shared SAM 3 predictor, built once off-loop by preload.preload_sam3() at
+# container startup. Building the GPU predictor (build_sam3_video_predictor) is
+# a multi-second blocking op; reusing one predictor across Sam3Backends means
+# the first VOD pass never pays it mid-call. SAM 3 hosts multiple sessions on a
+# single predictor (each start_session gets its own session_id), so sharing is
+# safe. Falls back to a per-backend factory when no shared predictor exists.
+_shared_predictor = None
+_shared_lock = threading.Lock()
+
+
+def preload_sam3() -> bool:
+    """Build the shared SAM 3 GPU predictor once (idempotent, thread-safe).
+    Returns True when a shared predictor is available for Sam3Backend to reuse.
+    Never raises: on CPU / no-SDK / gated-weights-missing it returns False and
+    each backend builds (or skips) its own as before."""
+    global _shared_predictor
+    with _shared_lock:
+        if _shared_predictor is not None:
+            return True
+        try:
+            _shared_predictor = Sam3Backend._default_predictor()
+            return _shared_predictor is not None
+        except Exception:
+            _shared_predictor = None
+            return False
+
+
+def _get_shared_predictor():
+    with _shared_lock:
+        return _shared_predictor
+
+
 class Sam3Backend(SamBackend):
     """Per-frame SAM 3.x tracker. `predictor_factory` defaults to the repo's
     build_sam3_video_predictor (lazy). `advance()` runs exactly one frame's
-    propagation for every active slot; `get(slot)` peeks the cached result."""
+    propagation for every active slot; `get(slot)` peeks the cached result.
+
+    Uses the shared preloaded predictor (see preload_sam3) when available, so
+    all sessions reuse one GPU build instead of each paying it. When an
+    explicit `predictor_factory` is passed (tests / bespoke predictors), that
+    factory always wins and the shared predictor is ignored.
+    """
 
     def __init__(self, predictor_factory=None, clip_path: str | None = None):
-        self._factory = predictor_factory or self._default_predictor
+        self._explicit_factory = predictor_factory
         self._clip_path = clip_path
         self._predictor = None
         self._session_id: Optional[str] = None
@@ -99,7 +138,14 @@ class Sam3Backend(SamBackend):
     def _start(self) -> bool:
         try:
             if self._clip_path:
-                self._predictor = self._factory()
+                # Prefer the preloaded shared predictor (reuse the boot build);
+                # an explicit factory (tests) always wins over the shared one.
+                if self._explicit_factory is not None:
+                    self._predictor = self._explicit_factory()
+                else:
+                    self._predictor = _get_shared_predictor()
+                    if self._predictor is None:
+                        self._predictor = Sam3Backend._default_predictor()
                 resp = self._predictor.handle_request(
                     {"type": "start_session", "resource_path": self._clip_path}
                 )
