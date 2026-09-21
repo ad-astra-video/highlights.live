@@ -39,6 +39,31 @@ export interface AnalyzerConfig {
   clipAfterS: number;
   jobId: string;
   gameHint: string;
+  /**
+   * Max times the job will re-reserve a fresh perceive session after the
+   * current one is lost mid-pass (HTTP 404 "runner not found" / "runner
+   * session not found"). The perceive live-runner's health can flap and
+   * go-livepeer then releases all its sessions, turning the in-flight
+   * `/analyze` into a 404. Bounded re-reserve lets a VOD pass ride through a
+   * transient perceive restart by reconnecting to the recovered runner;
+   * beyond this we abort cleanly instead of spinning. Default 3.
+   */
+  maxReReserves?: number;
+}
+
+/**
+ * The perceive session/runner disappeared while a pass was in flight (the
+ * orchestrator returned HTTP 404 "runner not found" / "runner session not
+ * found" for our proxied analyze call — released because the static runner's
+ * health flapped, or the session was explicitly released). A caller may safely
+ * re-reserve a fresh session and retry the current frame. Any other analyze
+ * error stays a plain Error and aborts the pass.
+ */
+export class SessionLostError extends Error {
+  constructor(msg = "perceive session/runner lost (404)") {
+    super(msg);
+    this.name = "SessionLostError";
+  }
 }
 
 /** Compute per-job evidence from the observation stream. */
@@ -85,14 +110,39 @@ export async function analyzeJob(
   cfg: AnalyzerConfig,
   onEvent?: (ev: AnalyzeEvent) => void
 ): Promise<AnalyzeOutcome> {
-  const { sessionId } = await client.reservePerceive();
+  const maxReReserves = cfg.maxReReserves ?? 3;
+  const first = await client.reservePerceive();
+  let sessionId = first.sessionId;
+  // Every session we reserved (initial + any re-reserves) must be stopped /
+  // un-paid in `finally`, even the ones go-livepeer already released (the
+  // server-side released ones still hold a payment refiller in the adapter).
+  const reserved = new Set<string>([first.sessionId]);
   const evidence = new EvidenceTracker();
   const highlights: HighlightRecord[] = [];
   let framesAnalyzed = 0;
   try {
     for await (const frame of iterFrames) {
       framesAnalyzed++;
-      const res = await client.analyze(sessionId, frame);
+      let res: ObservationResult;
+      let reReserved = 0;
+      // The perceive live-runner's health can flap mid-pass; go-livepeer then
+      // marks it unavailable and releases all its sessions, so our next
+      // /analyze returns 404 "runner not found". Re-reserve a fresh session
+      // and retry this frame (the 404 frame was never processed) up to the
+      // bounded cap, then surface the error cleanly.
+      for (;;) {
+        try {
+          res = await client.analyze(sessionId, frame);
+          break;
+        } catch (err) {
+          if (!(err instanceof SessionLostError)) throw err;
+          if (reReserved >= maxReReserves) throw err;
+          reReserved++;
+          const fresh = await client.reservePerceive();
+          sessionId = fresh.sessionId;
+          reserved.add(fresh.sessionId);
+        }
+      }
       evidence.step(res.observation);
       onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "observation", observation: res.observation });
       if (res.candidate) {
@@ -129,7 +179,12 @@ export async function analyzeJob(
       }
     }
   } finally {
-    await client.stopPerceive(sessionId).catch(() => {});
+    // Stop / un-pay every session we reserved this pass. Sessions the server
+    // already released are a no-op on the orchestrator but still drop their
+    // adapter payment refiller, so stopping them is required to avoid leaks.
+    for (const s of reserved) {
+      await client.stopPerceive(s).catch(() => {});
+    }
   }
   return { sessionId, highlights, framesAnalyzed };
 }
