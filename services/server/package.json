@@ -10,20 +10,21 @@
     "db:backup": "tsx scripts/backup.ts"
   },
   "dependencies": {
-    "@highlights/livepeer-session": "0.1.0",
-    "@highlights/events": "0.1.0",
-    "fastify": "^4.28.0",
     "@fastify/cors": "^9.0.0",
+    "@fastify/multipart": "^8.3.1",
+    "@highlights/events": "0.1.0",
+    "@highlights/livepeer-session": "0.1.0",
     "bcryptjs": "^2.4.3",
+    "fastify": "^4.28.0",
     "jsonwebtoken": "^9.0.2",
-    "stripe": "^16.0.0",
-    "pg": "^8.11.0"
+    "pg": "^8.11.0",
+    "stripe": "^16.0.0"
   },
   "devDependencies": {
-    "vitest": "^2.1.0",
-    "tsx": "^4.19.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.7",
-    "@types/pg": "^8.11.0"
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
+    "vitest": "^2.1.0"
   }
 }

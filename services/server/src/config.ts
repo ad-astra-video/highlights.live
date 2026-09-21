@@ -18,6 +18,12 @@ export interface ServerConfig {
    * so its persistent session SAM-tracker opens THAT clip (tracking across the
    * whole stream), rather than a server-side path perceive can't read. */
   perceiveClipRoot: string;
+  /** Hard cap (bytes) for a single browser VOD upload. Default 2 GB
+   * (`VOD_MAX_UPLOAD_BYTES`, default `2147483648`). The server rejects any
+   * multipart upload larger than this with 413 before any compute is queued;
+   * the webapp mirrors it as a client-side pre-check. Keep at 2 GB — raising
+   * it increases billed Livepeer GPU time per job (see ADAAAA-2983). */
+  vodMaxUploadBytes: number;
   ffmpegPath: string;
   gameHintDefault: string;
   clipBeforeS: number;
@@ -100,6 +106,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     signerUrl: env.SIGNER_URL,
     dataDir: env.DATA_DIR ?? "data",
     perceiveClipRoot: env.PERCEIVE_CLIP_ROOT ?? "/data",
+    vodMaxUploadBytes: Number(env.VOD_MAX_UPLOAD_BYTES ?? 2147483648),
     ffmpegPath: env.FFMPEG_PATH ?? "ffmpeg",
     gameHintDefault: env.GAME_HINT ?? "unspecified",
     clipBeforeS: Number(env.CLIP_BEFORE_S ?? 4),
