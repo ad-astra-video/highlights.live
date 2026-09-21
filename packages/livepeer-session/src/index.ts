@@ -18,10 +18,71 @@ export type Route = (typeof ROUTES)[keyof typeof ROUTES];
 
 // --- Signer interface (remote signer is the only ETH holder) --------------
 
+/**
+ * Opaque signed state blob the remote signer returns for a live payment.
+ * It MUST be passed back verbatim on the next payment/refresh (go-livepeer
+ * `RemotePaymentStateSig`: both fields are base64).
+ */
+export interface RemotePaymentStateSig {
+  State: string; // base64
+  Sig: string; // base64
+}
+
+/**
+ * Request body for go-livepeer `POST /generate-live-payment`
+ * (`server/RemotePaymentRequest`, v0.9.2). The `orchestrator` field is the
+ * base64 protobuf of `net.OrchestratorInfo` and is REQUIRED — go-livepeer
+ * returns `400 err=missing orchestrator` when it is empty. A JSON object
+ * shape differing from this schema is a protocol bug the signer silently
+ * ignores, so keep this exactly aligned with the Go struct.
+ */
+export interface RemotePaymentRequest {
+  /** Opaque signed state from the previous payment; omit on the first payment. */
+  state?: RemotePaymentStateSig;
+  /** base64 protobuf of net.OrchestratorInfo — REQUIRED. */
+  orchestrator: string;
+  /** Optional; ties the payment to orchestrator accounting for a session. */
+  manifestID?: string;
+  /** Application associated with the payment (e.g. "highlights-perceive"). */
+  app?: string;
+  /** Pixels to generate a ticket for. Required if `type` is not set. */
+  inPixels?: number;
+  /** Job type: "live" | "lv2v" | "fixed". */
+  type?: "live" | "lv2v" | "fixed";
+  /** Maximum acceptable price (currency must be "wei", unit per type). */
+  maxPrice?: { price: string; currency: string; unit: string };
+  /** base64 protobuf Capabilities; may be set for the lv2v job type. */
+  capabilities?: string;
+}
+
+/** Response from go-livepeer `POST /generate-live-payment` (RemotePaymentResponse). */
+export interface RemotePaymentResponse {
+  payment: string; // Livepeer-Payment header value
+  segCreds?: string; // Livepeer-Segment header value
+  state: RemotePaymentStateSig; // pass back verbatim on the next call
+}
+
+/**
+ * Build the exact JSON string go-livepeer expects for `/generate-live-payment`.
+ * Only defined fields are emitted (`omitempty` semantics) so an empty-state
+ * first payment omits `state`; `orchestrator` is always present.
+ */
+export function buildRemotePaymentRequest(req: RemotePaymentRequest): string {
+  const out: Record<string, unknown> = { orchestrator: req.orchestrator };
+  if (req.state && (req.state.State || req.state.Sig)) out.state = req.state;
+  if (req.manifestID) out.manifestID = req.manifestID;
+  if (req.app) out.app = req.app;
+  if (req.inPixels !== undefined) out.inPixels = req.inPixels;
+  if (req.type) out.type = req.type;
+  if (req.maxPrice) out.maxPrice = req.maxPrice;
+  if (req.capabilities) out.capabilities = req.capabilities;
+  return JSON.stringify(out);
+}
+
 export interface GeneratePaymentResult {
   payment: string; // Livepeer-Payment header value
   segCreds: string; // Livepeer-Segment header value
-  signerState: unknown;
+  signerState: RemotePaymentStateSig | null; // opaque blob; pass back verbatim
 }
 
 export interface DiscoveredRunner {
@@ -39,7 +100,7 @@ export interface DiscoveredRunner {
 export interface LivePayment {
   payment: string;
   segCreds: string;
-  signerState: unknown;
+  signerState: RemotePaymentStateSig | null; // opaque signed blob; pass back verbatim
 }
 
 export interface SignerClient {
@@ -47,8 +108,22 @@ export interface SignerClient {
   discover(caps: string[]): Promise<{ address: string; runners: DiscoveredRunner[] }[]>;
   /** Signer POST /sign-orchestrator-info for a given orchestrator address */
   signOrchInfo(address: string): Promise<unknown>;
-  /** Signer POST /generate-live-payment -> payment headers + state */
-  generateLivePayment(orchInfo: unknown, prevState: unknown): Promise<GeneratePaymentResult>;
+  /**
+   * Signer POST /generate-live-payment -> payment headers + state.
+   * `orchInfoB64` is the base64 protobuf of the orchestrator's
+   * `net.OrchestratorInfo` (go-livepeer REQUIRES it; null -> 400).
+   * `prevState` is the opaque signed blob from the previous call (null on the
+   * first payment). The returned `signerState` must be passed back verbatim.
+   */
+  generateLivePayment(
+    orchInfoB64: string,
+    prevState: RemotePaymentStateSig | null,
+    opts?: {
+      app?: string;
+      type?: "live" | "lv2v" | "fixed";
+      inPixels?: number;
+    }
+  ): Promise<LivePayment>;
 }
 
 // --- Errors -----------------------------------------------------------------
@@ -137,13 +212,33 @@ export class HttpSignerClient implements SignerClient {
     return res.json();
   }
 
-  async generateLivePayment(orchInfo: unknown, prevState: unknown): Promise<LivePayment> {
+  async generateLivePayment(
+    orchInfoB64: string,
+    prevState: RemotePaymentStateSig | null,
+    opts: { app?: string; type?: "live" | "lv2v" | "fixed"; inPixels?: number } = {}
+  ): Promise<LivePayment> {
+    // go-livepeer decodes a RemotePaymentRequest and REQUIRES the base64
+    // net.OrchestratorInfo protobuf in the `orchestrator` field. Sending the
+    // OLD `{ orchInfo, prevState }` shape made the field empty -> `400 err=missing
+    // orchestrator`, which media surfaced as "signer generateLivePayment failed: HTTP 400".
+    const body = buildRemotePaymentRequest({
+      orchestrator: orchInfoB64,
+      ...(prevState ? { state: prevState } : {}),
+      ...(opts.app ? { app: opts.app } : {}),
+      ...(opts.type ? { type: opts.type } : {}),
+      ...(opts.inPixels !== undefined ? { inPixels: opts.inPixels } : {}),
+    });
     const res = await this.transport.request("POST", "/generate-live-payment", {
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orchInfo, prevState }),
+      body,
     });
     if (res.status !== 200) throw new Error(`signer generateLivePayment failed: HTTP ${res.status}`);
-    return (await res.json()) as LivePayment;
+    const parsed = (await res.json()) as RemotePaymentResponse;
+    return {
+      payment: parsed.payment,
+      segCreds: parsed.segCreds ?? "",
+      signerState: parsed.state ?? null,
+    };
   }
 }
 
@@ -153,10 +248,18 @@ export class LivepeerClient {
     private transport: Transport = new HttpTransport(orchBase)
   ) {}
 
-  /** Reserve a persistent perceive session. On-chain: throws PaymentRequiredError on 402. */
-  async reservePerceive(opts?: { payerAddress?: string }): Promise<ReserveResult> {
+  /**
+   * Reserve a persistent perceive session.
+   *   - Offchain: returns 200 immediately (no payment headers needed).
+   *   - On-chain: the first reserve normally returns 402 (PaymentRequiredError).
+   *     The caller attaches `paymentHeaders` (Livepeer-Payment / Livepeer-Segment
+   *     from the remote signer) and retries. When already retrying with payment,
+   *     a 402 again means the payment was rejected -> throw PaymentRequiredError.
+   */
+  async reservePerceive(opts?: { payerAddress?: string; paymentHeaders?: Record<string, string> }): Promise<ReserveResult> {
     const headers: Record<string, string> = {};
     if (opts?.payerAddress) headers["Livepeer-Payer-Address"] = opts.payerAddress;
+    if (opts?.paymentHeaders) Object.assign(headers, opts.paymentHeaders);
     const res = await this.transport.request("POST", `/apps/${ROUTES.perceive}/session`, { headers });
     if (res.status === 402) {
       throw new PaymentRequiredError(await res.json().catch(() => ({})));
@@ -221,10 +324,22 @@ export class LivepeerClient {
     }
   }
 
-  /** Interval payment refresh. No-op offchain (sessions are unpaid); no-op when no signer. */
-  async refreshPerceivePayment(sessionId: string, controlUrl: string, signer?: SignerClient, signerState?: unknown): Promise<unknown> {
+  /**
+   * Interval payment refresh. No-op offchain (sessions are unpaid); no-op when
+   * no signer. `orchInfoB64` is the base64 protobuf of the orchestrator's
+   * `net.OrchestratorInfo` the signer needs to (re)issue a ticket; `signerState`
+   * is the opaque signed state blob from the previous payment (null on first).
+   */
+  async refreshPerceivePayment(
+    sessionId: string,
+    controlUrl: string,
+    signer?: SignerClient,
+    orchInfoB64?: string,
+    signerState?: RemotePaymentStateSig | null
+  ): Promise<unknown> {
     if (!signer) return null;
-    const paid = await signer.generateLivePayment(null, signerState);
+    if (!orchInfoB64) throw new Error("payment refresh requires orchestrator info (orchInfoB64)");
+    const paid = await signer.generateLivePayment(orchInfoB64, signerState ?? null, { type: "live" });
     const res = await this.transport.request("POST", `${controlUrl}/payment`, {
       headers: { "Livepeer-Payment": paid.payment, "Livepeer-Segment": paid.segCreds },
     });

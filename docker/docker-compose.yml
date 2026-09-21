@@ -27,7 +27,7 @@ services:
       - -ethOrchAddr=0x3b28a7d785356dc67c7970666747e042305bfb79
       - -ethPassword=${ORCHESTRATOR_ETH_PASSWORD:-highlights-orch}
       # On-chain orchestrator requires an explicit price per unit (wei/pixel).
-      - -pricePerUnit=${PRICE_PER_UNIT:-0}
+      - -pricePerUnit=${PRICE_PER_UNIT:-1}
       - -monitor=false
       - -v=6
     environment:
@@ -299,6 +299,7 @@ services:
       # Copy the go-livepeer keystore 'wallet' file (from the app-pipelines
       # reference) into docker/keystore/ to run the signer locally.
       - ./keystore:/keystore:ro
+      - ./orchestrator-ca.crt:/usr/local/share/ca-certificates/orchestrator-ca.crt:ro
       # Writable host folder mapped to $DATA_DIR (/data): the entrypoint copies
       # /keystore/* into /data/keystore, so go-livepeer CREATES + persists its
       # live keystore here (docker/signer-data). Without this the keystore lived
