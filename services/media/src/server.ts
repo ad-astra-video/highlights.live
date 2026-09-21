@@ -44,9 +44,10 @@ export interface MediaServerOptions {
   /**
    * On-chain only: resolves the orchestrator's base64 `net.OrchestratorInfo`
    * protobuf (via gRPC GetOrchestrator) that the signer REQUIRES in
-   * `/generate-live-payment`. REQUIRED for the paid path; offchain it is unused.
+   * `/generate-live-payment`, plus the AuthToken.SessionId the live payment's
+   * manifestID must match. REQUIRED for the paid path; offchain it is unused.
    */
-  orchInfoB64Provider?: () => Promise<string>;
+  orchInfoProvider?: import("./orch-info").OrchInfoProvider;
   port?: number;
   /** Public origin (LB / Cloudflare front) used for the full WS ingest URL. */
   publicBaseUrl?: string;
@@ -90,7 +91,7 @@ export class MediaServer {
         signer: opts.signer,
         payerAddress: opts.payerAddress,
         paymentIntervalMs: opts.paymentIntervalMs,
-        orchInfoB64Provider: opts.orchInfoB64Provider,
+        orchInfoProvider: opts.orchInfoProvider,
         // A failed payment refresh closes the stream (release the slot rather
         // than let the runner work for free).
         onPaymentFailure: (sessionId, err) => void this.teardown(sessionId).catch(() => {}),

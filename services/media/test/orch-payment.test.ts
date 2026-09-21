@@ -57,7 +57,7 @@ const fakeSigner: SignerClient = {
   async generateLivePayment(
     orchInfoB64: string,
     prev: unknown,
-    opts: { app?: string; type?: "live" | "lv2v" | "fixed"; inPixels?: number } = {}
+    opts: { app?: string; type?: "live" | "lv2v" | "fixed"; inPixels?: number; manifestID?: string } = {}
   ): Promise<LivePayment> {
     generatePaymentCalls.push({ orchInfoB64, prev, opts });
     return { payment: "livepeer-payment-ticket", segCreds: "segment-creds", signerState: { State: "c3RhdGU=", Sig: "c2ln" } };
@@ -82,7 +82,13 @@ describe("MediaOrchestrator on-chain: 402 -> paid reserve -> open channels", () 
       orchBase: "http://orch",
       signer: fakeSigner,
       payerAddress: "0x68d6FF3938Ff63d2df16567Cb8CA9772e14496F7",
-      orchInfoB64Provider: async () => "b3JjaC1pbmZv", // base64 net.OrchestratorInfo
+      // Returns the base64 net.OrchestratorInfo + the AuthToken.SessionId the
+      // live payment's manifestID must match (go-livepeer rejects a mismatch
+      // with `403 mismatched manifest and auth token`).
+      orchInfoProvider: async () => ({
+        b64: "b3JjaC1pbmZv",
+        sessionId: "sess-abc",
+      }),
     });
 
     const p = await orch.provision();
@@ -104,11 +110,16 @@ describe("MediaOrchestrator on-chain: 402 -> paid reserve -> open channels", () 
     expect(generatePaymentCalls).toHaveLength(1);
     expect(generatePaymentCalls[0].orchInfoB64).toBe("b3JjaC1pbmZv");
     expect(generatePaymentCalls[0].prev).toBe(null); // first payment: no state yet
+    // WIRE FIX #2: the live payment carries the orchestrator's AuthToken
+    // SessionId as manifestID — without it the orchestrator returns
+    // `403 mismatched manifest and auth token`.
+    expect((generatePaymentCalls[0].opts as any).manifestID).toBe("sess-abc");
     // The signer state from the paid reserve is seeded for the refresher, and
-    // the orchestrator info is carried onto the session so the refresher can
-    // re-issue tickets without refetching.
+    // the orchestrator info + sessionId are carried onto the session so the
+    // refresher can re-issue tickets without refetching.
     expect(p.paymentState).toEqual({ State: "c3RhdGU=", Sig: "c2ln" });
     expect(p.orchInfoB64).toBe("b3JjaC1pbmZv");
+    expect(p.orchInfoSessionId).toBe("sess-abc");
   });
 
   it("fails hard with a clear error when an on-chain 402 needs orchestrator info but no provider is configured", async () => {
@@ -117,9 +128,9 @@ describe("MediaOrchestrator on-chain: 402 -> paid reserve -> open channels", () 
 
     const orch = new MediaOrchestrator({
       orchBase: "http://orch",
-      signer: fakeSigner, // on-chain path, but no orchInfoB64Provider
+      signer: fakeSigner, // on-chain path, but no orchInfoProvider
     });
-    await expect(orch.provision()).rejects.toThrow(/orchInfoB64Provider/);
+    await expect(orch.provision()).rejects.toThrow(/orchInfoProvider/);
   });
 
   it("stays offchain (one unpaid reserve, no signer payment) when no signer is configured", async () => {

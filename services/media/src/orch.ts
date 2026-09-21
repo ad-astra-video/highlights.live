@@ -22,6 +22,7 @@ import {
   type SignerClient,
 } from "@highlights/livepeer-session";
 import { createPaymentRefresher, type PaymentRefresher } from "./payments";
+import type { OrchInfoProvider, OrchInfoResult } from "./orch-info";
 
 export interface ProvisionedSession {
   sessionId: string;
@@ -44,6 +45,12 @@ export interface ProvisionedSession {
    * needs it too. Undefined offchain.
    */
   orchInfoB64?: string;
+  /**
+   * On-chain only: the orchestrator's AuthToken.SessionId (from
+   * GetOrchestratorInfo). go-livepeer requires the payment `manifestID` to
+   * equal this, so the refresher passes it on every refresh. Undefined offchain.
+   */
+  orchInfoSessionId?: string;
 }
 
 export interface MediaOrchOptions {
@@ -64,7 +71,7 @@ export interface MediaOrchOptions {
    * path: go-livepeer rejects a `/generate-live-payment` with no `orchestrator`
    * field (400 missing orchestrator). Cached after the first resolve.
    */
-  orchInfoB64Provider?: () => Promise<string>;
+  orchInfoProvider?: OrchInfoProvider;
   /** Interval between payment refreshes (default 10s). */
   paymentIntervalMs?: number;
   /** Called when a payment refresh fails — the payer stops + releases the slot. */
@@ -83,7 +90,7 @@ export class MediaOrchestrator {
   private orchBase: string;
   private payers = new Map<string, PaymentRefresher>();
   private app = "highlights-perceive";
-  private orchInfoB64Cached?: string;
+  private orchInfoCached?: OrchInfoResult;
 
   constructor(opts: MediaOrchOptions) {
     this.orchBase = opts.orchBase.replace(/\/$/, "");
@@ -118,20 +125,20 @@ export class MediaOrchestrator {
    * protobuf needed for on-chain payment. The orchestrator's info (including
    * its signed TicketParams) can only come from GetOrchestratorInfo on the
    * orchestrator — it cannot be fabricated by the payer — so the caller must
-   * supply an `orchInfoB64Provider`.
+   * supply an `orchInfoProvider`.
    */
-  private async resolveOrchInfoB64(): Promise<string> {
-    if (this.orchInfoB64Cached) return this.orchInfoB64Cached;
-    const provider = this.opts.orchInfoB64Provider;
+  private async resolveOrchInfo(): Promise<OrchInfoResult> {
+    if (this.orchInfoCached) return this.orchInfoCached;
+    const provider = this.opts.orchInfoProvider;
     if (!provider) {
       throw new Error(
-        "on-chain reserve requires orchInfoB64Provider (fetch orchestrator GetOrchestratorInfo)"
+        "on-chain reserve requires orchInfoProvider (fetch orchestrator GetOrchestratorInfo)"
       );
     }
-    const b64 = await provider();
-    if (!b64) throw new Error("orchInfoB64Provider returned empty orchestrator info");
-    this.orchInfoB64Cached = b64;
-    return b64;
+    const result = await provider();
+    if (!result?.b64) throw new Error("orchInfoProvider returned empty orchestrator info");
+    this.orchInfoCached = result;
+    return result;
   }
 
   /**
@@ -154,13 +161,16 @@ export class MediaOrchestrator {
       // (base64) and ask the remote signer for a real payment ticket. go-livepeer
       // REQUIRES the `orchestrator` field; a null/old wire shape -> 400 and the
       // session reserve fails with "signer generateLivePayment failed: HTTP 400".
-      const orchInfoB64 = await this.resolveOrchInfoB64();
-      const pmt = await this.opts.signer.generateLivePayment(orchInfoB64, null, {
+      const orchInfo = await this.resolveOrchInfo();
+      const pmt = await this.opts.signer.generateLivePayment(orchInfo.b64, null, {
         app: this.app,
         type: "live",
+        // go-livepeer requires manifestID == orchestrator AuthToken.SessionId,
+        // else the reserve returns `403 mismatched manifest and auth token`.
+        manifestID: orchInfo.sessionId || undefined,
       });
       signerState = pmt.signerState;
-      this.orchInfoB64Cached = orchInfoB64;
+      this.orchInfoCached = orchInfo;
       // Retry WITH the payment headers; a second 402 here means the orchestrator
       // rejected the payment -> reservePerceive throws PaymentRequiredError.
       res = await this.client.reservePerceive({
@@ -190,7 +200,8 @@ export class MediaOrchestrator {
       eventsOut: t.events_out,
       control: t.control || "",
       paymentState: signerState,
-      orchInfoB64: this.orchInfoB64Cached,
+      orchInfoB64: this.orchInfoCached?.b64,
+      orchInfoSessionId: this.orchInfoCached?.sessionId,
     };
     return p;
   }
@@ -246,14 +257,17 @@ export class MediaOrchestrator {
     // Continue the ticket sequence from the state the paid reserve established
     // (not a fresh/higher nonce, which the orchestrator would reject).
     let signerState: RemotePaymentStateSig | null = p.paymentState ?? null;
-    const orchInfoB64: string | undefined = p.orchInfoB64 ?? this.orchInfoB64Cached;
+    const orchInfoB64: string | undefined = p.orchInfoB64 ?? this.orchInfoCached?.b64;
+    const manifestID: string | undefined =
+      p.orchInfoSessionId ?? this.orchInfoCached?.sessionId;
     const refresh = async () => {
       const next = await this.client.refreshPerceivePayment(
         p.sessionId,
         p.controlUrl,
         signer,
         orchInfoB64,
-        signerState
+        signerState,
+        manifestID
       );
       if (next !== undefined && next !== null) signerState = next as RemotePaymentStateSig;
     };
