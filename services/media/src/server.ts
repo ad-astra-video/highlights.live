@@ -1,3 +1,4 @@
+
 // Media server (the gateway terminus + payer for one perceived live stream).
 //
 // Control plane is Fastify control-plane compatible:
@@ -41,12 +42,16 @@ export interface MediaServerOptions {
   signer?: import("@highlights/livepeer-session").SignerClient;
   payerAddress?: string;
   paymentIntervalMs?: number;
+  /** Live-stream pixel rate (pixels/sec) for sizing on-chain top-up tickets
+   *  (default go-livepeer defaultSegInfo 1280x720x30). */
+  streamPixelsPerSec?: number;
   /**
    * On-chain only: resolves the orchestrator's base64 `net.OrchestratorInfo`
    * protobuf (via gRPC GetOrchestrator) that the signer REQUIRES in
-   * `/generate-live-payment`. REQUIRED for the paid path; offchain it is unused.
+   * `/generate-live-payment`, plus the AuthToken.SessionId the live payment's
+   * manifestID must match. REQUIRED for the paid path; offchain it is unused.
    */
-  orchInfoB64Provider?: () => Promise<string>;
+  orchInfoProvider?: import("./orch-info").OrchInfoProvider;
   port?: number;
   /** Public origin (LB / Cloudflare front) used for the full WS ingest URL. */
   publicBaseUrl?: string;
@@ -90,7 +95,8 @@ export class MediaServer {
         signer: opts.signer,
         payerAddress: opts.payerAddress,
         paymentIntervalMs: opts.paymentIntervalMs,
-        orchInfoB64Provider: opts.orchInfoB64Provider,
+        streamPixelsPerSec: opts.streamPixelsPerSec,
+        orchInfoProvider: opts.orchInfoProvider,
         // A failed payment refresh closes the stream (release the slot rather
         // than let the runner work for free).
         onPaymentFailure: (sessionId, err) => void this.teardown(sessionId).catch(() => {}),
@@ -114,7 +120,7 @@ export class MediaServer {
       };
       this.active.set(p.sessionId, stream);
       // Pay the orchestrator for as long as the stream is open (no-op offchain).
-      this.orch.startPayment(p);
+      void this.orch.startPayment(p);
       // Release the slot if the browser never connects (e.g. provision succeeded
       // but the client vanished) — otherwise a reserved slot leaks forever.
       const noClientMs = this.opts.provisionNoClientMs ?? 60000;

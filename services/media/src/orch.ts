@@ -1,3 +1,4 @@
+
 // Media-server -> orchestrator client.
 //
 // The media server is the PAYER / broadcaster for a perceived live stream: it
@@ -17,11 +18,14 @@
 //   6. POST /apps/{app}/session/{sid}/stop           -> release the paid slot
 import {
   LivepeerClient,
+  NoTicketsError,
   PaymentRequiredError,
+  RefreshSessionError,
   type RemotePaymentStateSig,
   type SignerClient,
 } from "@highlights/livepeer-session";
 import { createPaymentRefresher, type PaymentRefresher } from "./payments";
+import type { OrchInfoProvider, OrchInfoResult } from "./orch-info";
 
 export interface ProvisionedSession {
   sessionId: string;
@@ -44,7 +48,24 @@ export interface ProvisionedSession {
    * needs it too. Undefined offchain.
    */
   orchInfoB64?: string;
+  /**
+   * On-chain only: the orchestrator's AuthToken.SessionId (from
+   * GetOrchestratorInfo). go-livepeer requires the payment `manifestID` to
+   * equal this, so the refresher passes it on every refresh. Undefined offchain.
+   */
+  orchInfoSessionId?: string;
 }
+
+/**
+ * Default live-stream pixel rate (pixels/sec) used to size each top-up ticket,
+ * matching go-livepeer's `defaultSegInfo` (1280x720x30, `NewLV2VPaymentProcessor`)
+ * — the pixels the orchestrator bills per second of stream time. The orchestrator
+ * bills inPixels × pricePerUnit/pixelsPerUnit, so sizing to this window's burn
+ * keeps the prepaid balance from draining between refreshes. Override via
+ * `streamPixelsPerSec` (MEDIA_STREAM_PIXELS_PER_SEC) when the actual resolution
+ * is known, to avoid chronic over/under-funding.
+ */
+export const DEFAULT_STREAM_PIXELS_PER_SEC = 1280 * 720 * 30;
 
 export interface MediaOrchOptions {
   orchBase: string; // orchestrator public URL (offchain lab) or gateway URL
@@ -64,10 +85,18 @@ export interface MediaOrchOptions {
    * path: go-livepeer rejects a `/generate-live-payment` with no `orchestrator`
    * field (400 missing orchestrator). Cached after the first resolve.
    */
-  orchInfoB64Provider?: () => Promise<string>;
-  /** Interval between payment refreshes (default 10s). */
+  orchInfoProvider?: OrchInfoProvider;
+  /** Interval between payment refreshes (default 10s; overridden by the
+   *  orchestrator's announced `paymentIntervalMs` when present). */
   paymentIntervalMs?: number;
-  /** Called when a payment refresh fails — the payer stops + releases the slot. */
+  /**
+   * Live-stream pixel rate (pixels/sec) used to size each top-up ticket. When
+   * absent, uses go-livepeer's defaultSegInfo (1280x720x30). Set to the actual
+   * broadcast resolution×fps to avoid chronic over/under-funding.
+   */
+  streamPixelsPerSec?: number;
+  /** Called when a payment refresh fails — the payer stops + releases the slot.
+   *  NOT invoked for a benign 482 "no payment needed". */
   onPaymentFailure?: (sessionId: string, err: Error) => void;
 }
 
@@ -83,7 +112,7 @@ export class MediaOrchestrator {
   private orchBase: string;
   private payers = new Map<string, PaymentRefresher>();
   private app = "highlights-perceive";
-  private orchInfoB64Cached?: string;
+  private orchInfoCached?: OrchInfoResult;
 
   constructor(opts: MediaOrchOptions) {
     this.orchBase = opts.orchBase.replace(/\/$/, "");
@@ -114,24 +143,82 @@ export class MediaOrchestrator {
   }
 
   /**
+   * Effective payment cadence: the orchestrator's announced session payment
+   * interval when present, else the configured `paymentIntervalMs` (default
+   * 10s). Matching the orchestrator's charge cadence means each ticket is
+   * sized to exactly one billing window, so the prepaid balance never drains
+   * between refreshes.
+   */
+  private paymentIntervalMs(): number {
+    if (this.orchInfoCached?.paymentIntervalMs != null) {
+      return this.orchInfoCached.paymentIntervalMs;
+    }
+    return this.opts.paymentIntervalMs ?? 10_000;
+  }
+
+  /**
+   * Size the top-up ticket to the pixels the orchestrator will bill in the next
+   * window: stream pixel rate × (one payment interval in seconds). Mirrors
+   * go-livepeer `unitsSinceLastProcessed = units × seconds`.
+   */
+  private sizeTopUpPixels(intervalMs: number): number {
+    const pxPerSec = this.opts.streamPixelsPerSec ?? DEFAULT_STREAM_PIXELS_PER_SEC;
+    return Math.max(1, Math.round((pxPerSec * intervalMs) / 1000));
+  }
+
+  /**
    * Resolve (and cache) the orchestrator's base64 `net.OrchestratorInfo`
    * protobuf needed for on-chain payment. The orchestrator's info (including
    * its signed TicketParams) can only come from GetOrchestratorInfo on the
    * orchestrator — it cannot be fabricated by the payer — so the caller must
-   * supply an `orchInfoB64Provider`.
+   * supply an `orchInfoProvider`.
    */
-  private async resolveOrchInfoB64(): Promise<string> {
-    if (this.orchInfoB64Cached) return this.orchInfoB64Cached;
-    const provider = this.opts.orchInfoB64Provider;
+  private async resolveOrchInfo(force = false): Promise<OrchInfoResult> {
+    if (!force && this.orchInfoCached) return this.orchInfoCached;
+    const provider = this.opts.orchInfoProvider;
     if (!provider) {
       throw new Error(
-        "on-chain reserve requires orchInfoB64Provider (fetch orchestrator GetOrchestratorInfo)"
+        "on-chain reserve requires orchInfoProvider (fetch orchestrator GetOrchestratorInfo)"
       );
     }
-    const b64 = await provider();
-    if (!b64) throw new Error("orchInfoB64Provider returned empty orchestrator info");
-    this.orchInfoB64Cached = b64;
-    return b64;
+    const result = await provider(force);
+    if (!result?.b64) throw new Error("orchInfoProvider returned empty orchestrator info");
+    this.orchInfoCached = result;
+    return result;
+  }
+
+  /**
+   * Generate a live payment from the remote signer. On a 480 (auth token inside
+   * the orchestrator info expired) go-livepeer expects the payer to re-fetch
+   * fresh GetOrchestratorInfo (new auth token) and retry — it is NOT fatal.
+   * We do exactly that: invalidate the orchestrator-info cache, re-resolve, and
+   * retry once with the fresh token (and the fresh manifestID).
+   */
+  private async generateLivePaymentOrRefresh(): Promise<{
+    pmt: import("@highlights/livepeer-session").LivePayment;
+    orchInfo: OrchInfoResult;
+  }> {
+    const orchInfo = await this.resolveOrchInfo();
+    // Size the (first) ticket to one payment window so the reserve doesn't
+    // under-fund the session before the refresher takes over.
+    const inPixels = this.sizeTopUpPixels(this.paymentIntervalMs());
+    const request = (info: OrchInfoResult) =>
+      this.opts.signer!.generateLivePayment(info.b64, null, {
+        app: this.app,
+        type: "live",
+        manifestID: info.sessionId || undefined,
+        inPixels,
+      });
+    try {
+      const pmt = await request(orchInfo);
+      return { pmt, orchInfo };
+    } catch (err) {
+      if (!(err instanceof RefreshSessionError) || !this.opts.signer) throw err;
+      // Auth token expired — refresh the orchestrator info and retry once.
+      const fresh = await this.resolveOrchInfo(true);
+      const pmt = await request(fresh);
+      return { pmt, orchInfo: fresh };
+    }
   }
 
   /**
@@ -154,13 +241,10 @@ export class MediaOrchestrator {
       // (base64) and ask the remote signer for a real payment ticket. go-livepeer
       // REQUIRES the `orchestrator` field; a null/old wire shape -> 400 and the
       // session reserve fails with "signer generateLivePayment failed: HTTP 400".
-      const orchInfoB64 = await this.resolveOrchInfoB64();
-      const pmt = await this.opts.signer.generateLivePayment(orchInfoB64, null, {
-        app: this.app,
-        type: "live",
-      });
+      // A 480 (expired auth token) is handled inside — re-fetch + retry once.
+      const { pmt, orchInfo } = await this.generateLivePaymentOrRefresh();
       signerState = pmt.signerState;
-      this.orchInfoB64Cached = orchInfoB64;
+      this.orchInfoCached = orchInfo;
       // Retry WITH the payment headers; a second 402 here means the orchestrator
       // rejected the payment -> reservePerceive throws PaymentRequiredError.
       res = await this.client.reservePerceive({
@@ -190,7 +274,8 @@ export class MediaOrchestrator {
       eventsOut: t.events_out,
       control: t.control || "",
       paymentState: signerState,
-      orchInfoB64: this.orchInfoB64Cached,
+      orchInfoB64: this.orchInfoCached?.b64,
+      orchInfoSessionId: this.orchInfoCached?.sessionId,
     };
     return p;
   }
@@ -237,29 +322,65 @@ export class MediaOrchestrator {
    * Pay the orchestrator for the session for as long as it stays open. No-op
    * offchain (no signer). On-chain it starts an interval refiller on the
    * session's controlUrl; a failed refresh calls onPaymentFailure (the caller
-   * closes the stream). Idempotent per session.
+   * closes the stream). A benign 482 ("no payment needed") does NOT fail the
+   * session — the loop just waits for the next window. Idempotent per session.
    */
-  startPayment(p: ProvisionedSession): void {
+  async startPayment(p: ProvisionedSession): Promise<void> {
     const signer = this.opts.signer;
     if (!signer) return; // offchain lab: sessions are unpaid
     if (this.payers.has(p.sessionId)) return;
+    // Resolve (cached) orch info up-front so the cadence reflects the
+    // orchestrator's announced payment interval when it publishes one; a
+    // failure here falls back to the configured/default interval.
+    await this.resolveOrchInfo().catch(() => {});
+    const intervalMs = this.paymentIntervalMs();
     // Continue the ticket sequence from the state the paid reserve established
     // (not a fresh/higher nonce, which the orchestrator would reject).
     let signerState: RemotePaymentStateSig | null = p.paymentState ?? null;
-    const orchInfoB64: string | undefined = p.orchInfoB64 ?? this.orchInfoB64Cached;
+    // Resolve the latest cached orch info each tick; a prior 480 refresh updates
+    // the cache so subsequent ticks carry the fresh auth token + manifestID. Each
+    // top-up is sized to the pixels burned in one payment window so the prepaid
+    // balance never drains between refreshes.
     const refresh = async () => {
-      const next = await this.client.refreshPerceivePayment(
-        p.sessionId,
-        p.controlUrl,
-        signer,
-        orchInfoB64,
-        signerState
-      );
-      if (next !== undefined && next !== null) signerState = next as RemotePaymentStateSig;
+      const inPixels = this.sizeTopUpPixels(this.paymentIntervalMs());
+      let orchInfo = await this.resolveOrchInfo();
+      try {
+        const next = await this.client.refreshPerceivePayment(
+          p.sessionId,
+          p.controlUrl,
+          signer,
+          orchInfo.b64,
+          signerState,
+          orchInfo.sessionId || undefined,
+          inPixels
+        );
+        if (next !== undefined && next !== null) signerState = next as RemotePaymentStateSig;
+      } catch (err) {
+        if (err instanceof NoTicketsError) {
+          // 482: signer says no top-up is needed this cycle (reserved balance
+          // still covers the minimum). BENIGN — continue the session, do NOT
+          // tear it down. Wait for the next window to re-check.
+          return;
+        }
+        if (!(err instanceof RefreshSessionError)) throw err;
+        // Auth token expired mid-session — refresh the orchestrator info (new
+        // auth token) and retry once, like go-livepeer.
+        orchInfo = await this.resolveOrchInfo(true);
+        const next = await this.client.refreshPerceivePayment(
+          p.sessionId,
+          p.controlUrl,
+          signer,
+          orchInfo.b64,
+          signerState,
+          orchInfo.sessionId || undefined,
+          inPixels
+        );
+        if (next !== undefined && next !== null) signerState = next as RemotePaymentStateSig;
+      }
     };
     const ref = createPaymentRefresher({
       refresh,
-      intervalMs: this.opts.paymentIntervalMs ?? 10_000,
+      intervalMs,
       onFailure: this.opts.onPaymentFailure
         ? (e) => this.opts.onPaymentFailure!(p.sessionId, e)
         : undefined,

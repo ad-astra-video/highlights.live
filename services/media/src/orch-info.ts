@@ -1,3 +1,4 @@
+
 // GetOrchestratorInfo provider for the on-chain paid path.
 //
 // go-livepeer REQUIRES the orchestrator's `net.OrchestratorInfo` (base64
@@ -93,18 +94,60 @@ export async function signerInfoSig(
  * of `net.OrchestratorInfo` — exactly the string go-livepeer wants in the
  * `orchestrator` field of `/generate-live-payment`.
  */
+/**
+ * Reduce a gRPC endpoint URL (e.g. `https://orchestrator:8935`) to the bare
+ * `host:port` target grpc-js expects. grpc-js treats a string with a URL scheme
+ * as a DNS-style resolved address and fails `Name resolution failed for target
+ * dns:https://…`, so the scheme must be stripped before constructing the client.
+ */
+export function grpcTargetFromUrl(url: string): string {
+  // Already a bare host:port (no scheme) — pass through unchanged.
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url)) {
+    return url;
+  }
+  const parsed = new URL(url);
+  const host = parsed.hostname;
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  return `${host}:${port}`;
+}
+
+export interface OrchInfoResult {
+  /** base64 protobuf of net.OrchestratorInfo — the `orchestrator` field value. */
+  b64: string;
+  /**
+   * The orchestrator's AuthToken.SessionId. go-livepeer REQUIRES the live
+   * payment's `manifestID` to equal this, otherwise the orchestrator returns
+   * `403 mismatched manifest and auth token`. The payer must thread it into
+   * the `/generate-live-payment` request as `manifestID`.
+   */
+  sessionId: string;
+  /**
+   * The orchestrator's announced session payment interval (ms), when it
+   * publishes one (e.g. from a discoverable `price_info`/config channel).
+   * The payer drives its refresh cadence from this so it never under-fills
+   * between the orchestrator's charge windows. When absent, the payer falls
+   * back to its configured `paymentIntervalMs` (default 10s).
+   */
+  paymentIntervalMs?: number;
+}
+
 export async function getOrchestratorInfoB64(
   opts: Pick<OrchInfoProviderOptions, "orchBase" | "caCertPem">,
   sig: InfoSigResponse
-): Promise<string> {
+): Promise<OrchInfoResult> {
   const proto = loadProto();
-  const creds = opts.caCertPem
-    ? grpc.credentials.createSsl(Buffer.from(opts.caCertPem), undefined, undefined, {
-        checkServerIdentity: () => undefined,
-      })
+  const target = grpcTargetFromUrl(opts.orchBase);
+  // TLS when we have a CA (https orchestrator); otherwise insecure (offchain/dev).
+  const useTls = opts.orchBase.startsWith("https");
+  const creds = useTls
+    ? (opts.caCertPem
+        ? grpc.credentials.createSsl(Buffer.from(opts.caCertPem), undefined, undefined, {
+            checkServerIdentity: () => undefined,
+          })
+        : grpc.credentials.createSsl())
     : grpc.credentials.createInsecure();
 
-  const client = new proto.net.Orchestrator(opts.orchBase, creds);
+  const client = new proto.net.Orchestrator(target, creds);
   try {
     const info = await new Promise<any>((resolve, reject) => {
       client.GetOrchestrator(
@@ -125,7 +168,9 @@ export async function getOrchestratorInfoB64(
     const responseSerialize =
       proto.net.Orchestrator.service.GetOrchestrator.responseSerialize;
     const bytes = responseSerialize(info);
-    return Buffer.from(bytes).toString("base64");
+    // keepCase:true -> proto field names preserved (auth_token / session_id).
+    const sessionId = info?.auth_token?.session_id ?? "";
+    return { b64: Buffer.from(bytes).toString("base64"), sessionId };
   } finally {
     client.close();
   }
@@ -137,17 +182,27 @@ export async function getOrchestratorInfoB64(
  * change until the ticket params expire, at which point the orchestrator will
  * reject and the session is torn down — a fresh fetch happens on retry).
  */
+export type OrchInfoProvider = (force?: boolean) => Promise<OrchInfoResult>;
+
+export function createOrchInfoProvider(
+  opts: OrchInfoProviderOptions
+): OrchInfoProvider {
+  let cached: OrchInfoResult | null = null;
+  return async (force = false): Promise<OrchInfoResult> => {
+    if (cached && !force) return cached;
+    const sig = await signerInfoSig(opts.signerUrl);
+    const result = await getOrchestratorInfoB64(opts, sig);
+    cached = result;
+    return result;
+  };
+}
+
+/** @deprecated alias kept for callers that only need the base64. */
 export function createOrchInfoB64Provider(
   opts: OrchInfoProviderOptions
 ): () => Promise<string> {
-  let cached: string | null = null;
-  return async (): Promise<string> => {
-    if (cached) return cached;
-    const sig = await signerInfoSig(opts.signerUrl);
-    const b64 = await getOrchestratorInfoB64(opts, sig);
-    cached = b64;
-    return b64;
-  };
+  const provider = createOrchInfoProvider(opts);
+  return async () => (await provider()).b64;
 }
 
 /** Optional helper for tests/config to read a CA PEM from a path. */

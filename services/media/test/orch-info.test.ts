@@ -1,9 +1,15 @@
+
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { getOrchestratorInfoB64, hexToBytes, signerInfoSig } from "../src/orch-info";
+import {
+  getOrchestratorInfoB64,
+  grpcTargetFromUrl,
+  hexToBytes,
+  signerInfoSig,
+} from "../src/orch-info";
 
 const PROTO = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "proto", "lp_rpc.proto");
 const def = protoLoader.loadSync(PROTO, {
@@ -21,6 +27,18 @@ describe("hexToBytes", () => {
   });
   it("rejects odd-length hex", () => {
     expect(() => hexToBytes("0xabc")).toThrow(/odd-length/);
+  });
+});
+
+describe("grpcTargetFromUrl", () => {
+  it("strips https scheme to host:port", () => {
+    expect(grpcTargetFromUrl("https://orchestrator:8935")).toBe("orchestrator:8935");
+  });
+  it("defaults https port when omitted", () => {
+    expect(grpcTargetFromUrl("https://orchestrator")).toBe("orchestrator:443");
+  });
+  it("passes a bare host:port through unchanged", () => {
+    expect(grpcTargetFromUrl("127.0.0.1:1234")).toBe("127.0.0.1:1234");
   });
 });
 
@@ -61,6 +79,7 @@ describe("getOrchestratorInfoB64 (in-process gRPC GetOrchestrator)", () => {
           address: Buffer.from("deadbeef", "hex"),
           price_info: { pricePerUnit: "1", pixelsPerUnit: "1" },
           nodes: ["https://orchestrator:8935"],
+          auth_token: { session_id: "sess-abc", token: Buffer.from("tok", "hex"), expiration: "123" },
         });
       },
     });
@@ -79,12 +98,14 @@ describe("getOrchestratorInfoB64 (in-process gRPC GetOrchestrator)", () => {
   });
 
   it("returns base64 OrchestratorInfo that round-trips to the same fields", async () => {
-    const b64 = await getOrchestratorInfoB64(
+    const { b64, sessionId } = await getOrchestratorInfoB64(
       { orchBase: `127.0.0.1:${port}` },
       { address: "0xdeadbeef", signature: "0x" + "ab".repeat(65) }
     );
     expect(typeof b64).toBe("string");
     expect(b64.length).toBeGreaterThan(0);
+    // go-livepeer requires the live payment manifestID == AuthToken.SessionId.
+    expect(sessionId).toBe("sess-abc");
 
     const responseDeserialize = proto.net.Orchestrator.service.GetOrchestrator.responseDeserialize;
     const decoded: any = responseDeserialize(Buffer.from(b64, "base64"));

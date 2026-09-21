@@ -1,3 +1,4 @@
+
 // Livepeer session + payment client for highlights.live.
 //
 // The SERVER is the only caller. It never holds an ETH keystore. Two paths:
@@ -122,6 +123,13 @@ export interface SignerClient {
       app?: string;
       type?: "live" | "lv2v" | "fixed";
       inPixels?: number;
+      /**
+       * go-livepeer REQUIRES the live payment's manifestID to equal the
+       * orchestrator's AuthToken.SessionId (from GetOrchestratorInfo);
+       * otherwise the orchestrator's live-runner reserve returns
+       * `403 mismatched manifest and auth token`.
+       */
+      manifestID?: string;
     }
   ): Promise<LivePayment>;
 }
@@ -137,6 +145,50 @@ export class PaymentRequiredError extends Error {
 export class NotAuthorizedError extends Error {
   constructor(msg = "401: unauthorized") {
     super(msg);
+  }
+}
+
+/**
+ * 480 Refresh Session (go-livepeer `HTTPStatusRefreshSession`): the auth token
+ * inside the orchestrator info we sent has expired (or ticket params expired),
+ * so the signer replies 480 asking the payer to re-fetch fresh
+ * GetOrchestratorInfo and retry. The `Livepeer-Orchestrator-URL` response
+ * header names the orchestrator to re-fetch from. The payer MUST NOT treat this
+ * as fatal: re-resolve the orchestrator info (new auth token) and retry once.
+ */
+export class RefreshSessionError extends Error {
+  constructor(public orchestratorUrl = "") {
+    super(`480 refresh session for remote signer (orch=${orchestratorUrl || "unknown"})`);
+    this.name = "RefreshSessionError";
+  }
+}
+
+/**
+ * 482 No Tickets (go-livepeer `HTTPStatusNoTickets`, "no payment needed"): the
+ * signer determined the reserved balance still covers the minimum required
+ * credit for the requested billable units, so no new payment ticket is needed
+ * this cycle. This is a BENIGN "no top-up required" signal — the payer must
+ * NOT treat it as a payment failure and MUST NOT tear the session down. It only
+ * retries once the balance has been run down further. go-livepeer surfaces 482
+ * whenever `balUpdate.NumTickets <= 0`.
+ */
+export class NoTicketsError extends Error {
+  constructor() {
+    super("482 no tickets (no payment needed) — benign, no top-up required this cycle");
+    this.name = "NoTicketsError";
+  }
+}
+
+/**
+ * 481 Price Exceeded (go-livepeer `HTTPStatusPriceExceeded`): the orchestrator's
+ * announced price exceeds the configured / requested maximum. This is a FATAL
+ * session error — the payer cannot fund the session at an acceptable price, so
+ * it must surface it (not silently continue).
+ */
+export class PriceExceededError extends Error {
+  constructor() {
+    super("481 price exceeded — orchestrator price above configured or requested maximum");
+    this.name = "PriceExceededError";
   }
 }
 
@@ -215,15 +267,18 @@ export class HttpSignerClient implements SignerClient {
   async generateLivePayment(
     orchInfoB64: string,
     prevState: RemotePaymentStateSig | null,
-    opts: { app?: string; type?: "live" | "lv2v" | "fixed"; inPixels?: number } = {}
+    opts: { app?: string; type?: "live" | "lv2v" | "fixed"; inPixels?: number; manifestID?: string } = {}
   ): Promise<LivePayment> {
     // go-livepeer decodes a RemotePaymentRequest and REQUIRES the base64
     // net.OrchestratorInfo protobuf in the `orchestrator` field. Sending the
     // OLD `{ orchInfo, prevState }` shape made the field empty -> `400 err=missing
     // orchestrator`, which media surfaced as "signer generateLivePayment failed: HTTP 400".
+    // `manifestID` must equal the orchestrator's AuthToken.SessionId, else the
+    // orchestrator's live-runner reserve returns `403 mismatched manifest and auth token`.
     const body = buildRemotePaymentRequest({
       orchestrator: orchInfoB64,
       ...(prevState ? { state: prevState } : {}),
+      ...(opts.manifestID ? { manifestID: opts.manifestID } : {}),
       ...(opts.app ? { app: opts.app } : {}),
       ...(opts.type ? { type: opts.type } : {}),
       ...(opts.inPixels !== undefined ? { inPixels: opts.inPixels } : {}),
@@ -232,6 +287,18 @@ export class HttpSignerClient implements SignerClient {
       headers: { "Content-Type": "application/json" },
       body,
     });
+    // 480 = the auth token inside the orchestrator info expired; the payer must
+    // re-fetch fresh GetOrchestratorInfo (new auth token) and retry — not fatal.
+    if (res.status === 480) {
+      const orchUrl = res.headers?.get?.("Livepeer-Orchestrator-URL") ?? "";
+      throw new RefreshSessionError(orchUrl);
+    }
+    // 482 = no payment needed this cycle (reserved balance still covers it).
+    // BENIGN: the payer must continue the session, NOT tear it down. 481 = price
+    // exceeded — FATAL (surfaced per go-livepeer). Both are mapped to typed
+    // errors so callers can distinguish benign no-top-up from a real failure.
+    if (res.status === 482) throw new NoTicketsError();
+    if (res.status === 481) throw new PriceExceededError();
     if (res.status !== 200) throw new Error(`signer generateLivePayment failed: HTTP ${res.status}`);
     const parsed = (await res.json()) as RemotePaymentResponse;
     return {
@@ -328,18 +395,26 @@ export class LivepeerClient {
    * Interval payment refresh. No-op offchain (sessions are unpaid); no-op when
    * no signer. `orchInfoB64` is the base64 protobuf of the orchestrator's
    * `net.OrchestratorInfo` the signer needs to (re)issue a ticket; `signerState`
-   * is the opaque signed state blob from the previous payment (null on first).
+   * is the opaque signed state blob from the previous payment (null on first);
+   * `manifestID` must equal the orchestrator's AuthToken.SessionId (else the
+   * orchestrator returns `403 mismatched manifest and auth token`).
    */
   async refreshPerceivePayment(
     sessionId: string,
     controlUrl: string,
     signer?: SignerClient,
     orchInfoB64?: string,
-    signerState?: RemotePaymentStateSig | null
+    signerState?: RemotePaymentStateSig | null,
+    manifestID?: string,
+    inPixels?: number
   ): Promise<unknown> {
     if (!signer) return null;
     if (!orchInfoB64) throw new Error("payment refresh requires orchestrator info (orchInfoB64)");
-    const paid = await signer.generateLivePayment(orchInfoB64, signerState ?? null, { type: "live" });
+    const paid = await signer.generateLivePayment(orchInfoB64, signerState ?? null, {
+      type: "live",
+      manifestID,
+      ...(inPixels !== undefined ? { inPixels } : {}),
+    });
     const res = await this.transport.request("POST", `${controlUrl}/payment`, {
       headers: { "Livepeer-Payment": paid.payment, "Livepeer-Segment": paid.segCreds },
     });
