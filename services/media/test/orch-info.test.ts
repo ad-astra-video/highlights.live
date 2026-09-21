@@ -3,7 +3,12 @@ import * as protoLoader from "@grpc/proto-loader";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { getOrchestratorInfoB64, hexToBytes, signerInfoSig } from "../src/orch-info";
+import {
+  getOrchestratorInfoB64,
+  grpcTargetFromUrl,
+  hexToBytes,
+  signerInfoSig,
+} from "../src/orch-info";
 
 const PROTO = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "proto", "lp_rpc.proto");
 const def = protoLoader.loadSync(PROTO, {
@@ -21,6 +26,18 @@ describe("hexToBytes", () => {
   });
   it("rejects odd-length hex", () => {
     expect(() => hexToBytes("0xabc")).toThrow(/odd-length/);
+  });
+});
+
+describe("grpcTargetFromUrl", () => {
+  it("strips https scheme to host:port", () => {
+    expect(grpcTargetFromUrl("https://orchestrator:8935")).toBe("orchestrator:8935");
+  });
+  it("defaults https port when omitted", () => {
+    expect(grpcTargetFromUrl("https://orchestrator")).toBe("orchestrator:443");
+  });
+  it("passes a bare host:port through unchanged", () => {
+    expect(grpcTargetFromUrl("127.0.0.1:1234")).toBe("127.0.0.1:1234");
   });
 });
 
