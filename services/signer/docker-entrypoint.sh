@@ -15,6 +15,7 @@ fi
 mkdir -p "$DATA_DIR/keystore"
 cp /keystore/* "$DATA_DIR/keystore/"
 
+update-ca-certificates >/dev/null 2>&1 || true
 set -- livepeer \
   -remoteSigner \
   -remoteDiscovery \
