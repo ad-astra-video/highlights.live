@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -364,5 +364,144 @@ describe("media session reroute (DB-tracked)", () => {
 
     await app.close();
     await new Promise<void>((r) => srv.close(() => r()));
+  });
+});
+
+describe("VOD browser upload (multipart POST /jobs/upload)", () => {
+  async function multipart(opts: {
+    fields?: Record<string, string>;
+    file?: Buffer | string;
+    filename?: string;
+    mime?: string;
+  }) {
+    const boundary = "----hlBoundary" + Math.random().toString(36).slice(2);
+    const chunks: Buffer[] = [];
+    for (const [k, v] of Object.entries(opts.fields ?? {})) {
+      chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`, "utf8"));
+    }
+    if (opts.file !== undefined) {
+      chunks.push(
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${opts.filename ?? "clip.mp4"}"\r\nContent-Type: ${opts.mime ?? "video/mp4"}\r\n\r\n`,
+          "utf8"
+        )
+      );
+      chunks.push(Buffer.isBuffer(opts.file) ? opts.file : Buffer.from(opts.file, "utf8"));
+      chunks.push(Buffer.from("\r\n", "utf8"));
+    }
+    chunks.push(Buffer.from(`--${boundary}--\r\n`, "utf8"));
+    return { payload: Buffer.concat(chunks), contentType: `multipart/form-data; boundary=${boundary}` };
+  }
+
+  it("valid small upload -> job created + standard VOD pipeline runs", async () => {
+    const { app, cfg } = await buildTestApp();
+    const token = await register(app, "up@test.dev", "password123");
+    const { payload, contentType } = await multipart({
+      fields: { gameHint: "valorant" },
+      file: readFileSync(videoPath),
+      filename: "my clip.mp4",
+      mime: "video/mp4",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs/upload",
+      headers: { authorization: `Bearer ${token}`, "content-type": contentType },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.framesAnalyzed).toBeGreaterThan(0);
+    expect(body.job.status).toBe("done");
+    expect(body.job.source).toBe("file");
+    // File landed at dataDir/uploads/<jobId>/<safe-filename> (spaces kept, no path traversal).
+    expect(existsSync(path.join(cfg.dataDir, "uploads", body.job.id, "my clip.mp4"))).toBe(true);
+    // Generated a highlight through the same pipeline as a local path source.
+    const hl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
+    expect(hl.length).toBe(1);
+    expect(hl[0].score).toBe(86);
+    await app.close();
+  });
+
+  it("over-limit upload returns 413 before any job/compute is queued", async () => {
+    // Smaller cap so the ">2GB" path is testable without a 2GB fixture.
+    const { app, cfg } = await buildTestApp({ VOD_MAX_UPLOAD_BYTES: "2048" });
+    const token = await register(app, "big@test.dev", "password123");
+    const { payload, contentType } = await multipart({
+      file: Buffer.alloc(3000, 0x61), // 3 KB > 2 KB cap, declared video/mp4
+      filename: "big.mp4",
+      mime: "video/mp4",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs/upload",
+      headers: { authorization: `Bearer ${token}`, "content-type": contentType },
+      payload,
+    });
+    expect(res.statusCode).toBe(413);
+    expect(res.json().error).toContain("File too large");
+    // No job was created, no upload dir persisted, no compute (no highlights).
+    expect(existsSync(path.join(cfg.dataDir, "uploads"))).toBe(false);
+    const hl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
+    expect(hl.length).toBe(0);
+    await app.close();
+  });
+
+  it("rejects a non-video upload with a readable message (415)", async () => {
+    const { app, cfg } = await buildTestApp();
+    const token = await register(app, "nv@test.dev", "password123");
+    const { payload, contentType } = await multipart({
+      file: "not a video at all",
+      filename: "notes.txt",
+      mime: "text/plain",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs/upload",
+      headers: { authorization: `Bearer ${token}`, "content-type": contentType },
+      payload,
+    });
+    expect(res.statusCode).toBe(415);
+    expect(res.json().error).toContain("Unsupported file type");
+    expect(existsSync(path.join(cfg.dataDir, "uploads"))).toBe(false);
+    await app.close();
+  });
+
+  it("requires auth (401) and sanitizes path-traversal filenames", async () => {
+    const { app, cfg } = await buildTestApp();
+    const token = await register(app, "tra@test.dev", "password123");
+    // Unauthenticated -> 401, no compute.
+    const { payload: anonPayload, contentType: anonCt } = await multipart({
+      file: readFileSync(videoPath),
+      filename: "x.mp4",
+      mime: "video/mp4",
+    });
+    const anon = await app.inject({ method: "POST", url: "/jobs/upload", headers: { "content-type": anonCt }, payload: anonPayload });
+    expect(anon.statusCode).toBe(401);
+
+    // A hostile filename must be stripped to its safe basename, never escape uploads/.
+    const { payload, contentType } = await multipart({
+      fields: { gameHint: "Esports" },
+      file: readFileSync(videoPath),
+      filename: "../../evil.mp4",
+      mime: "video/mp4",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs/upload",
+      headers: { authorization: `Bearer ${token}`, "content-type": contentType },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+    const jobId = res.json().job.id;
+    expect(existsSync(path.join(cfg.dataDir, "uploads", jobId, "evil.mp4"))).toBe(true);
+    await app.close();
+  });
+
+  it("GET /config exposes the server upload cap", async () => {
+    const { app } = await buildTestApp();
+    const res = await app.inject({ method: "GET", url: "/config" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().vodMaxUploadBytes).toBe(2147483648);
+    await app.close();
   });
 });
