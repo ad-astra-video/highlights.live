@@ -34,10 +34,27 @@ describe("LivepeerClient", () => {
     expect(t.calls[0]).toMatchObject({ method: "POST", url: `/apps/${ROUTES.perceive}/session` });
   });
 
-  it("throws PaymentRequiredError on 402", async () => {
-    const t = new MockTransport([{ status: 402, data: { err: "payment" } }]);
+  it("throws PaymentRequiredError on 402 with the challenge parsed from the body", async () => {
+    const t = new MockTransport([
+      {
+        status: 402,
+        data: { payment_params: "b3JjaA==", orchestrator: "http://orch", manifest_id: "sess-abc", payment_url: "http://orch/pay" },
+      },
+    ]);
     const c = new LivepeerClient("http://orch:8935", t);
-    await expect(c.reservePerceive()).rejects.toBeInstanceOf(PaymentRequiredError);
+    try {
+      await c.reservePerceive();
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(PaymentRequiredError);
+      const e = err as PaymentRequiredError;
+      // go-livepeer carries the OrchestratorInfo in the 402 challenge body — the
+      // payer forwards these to the signer rather than dialing the orchestrator.
+      expect(e.challenge?.paymentParams).toBe("b3JjaA==");
+      expect(e.challenge?.manifestId).toBe("sess-abc");
+      expect(e.challenge?.orchestrator).toBe("http://orch");
+      expect(e.challenge?.paymentUrl).toBe("http://orch/pay");
+    }
   });
 
   it("throws on unexpected errors", async () => {
@@ -83,6 +100,7 @@ describe("LivepeerClient", () => {
   it("refreshPerceivePayment uses signer when present", async () => {
     const t = new MockTransport([{ status: 200, data: { ok: true } }]);
     const c = new LivepeerClient("http://orch", t);
+    const refreshOpts: unknown[] = [];
     const signer: SignerClient = {
       async discover() {
         return [];
@@ -90,7 +108,8 @@ describe("LivepeerClient", () => {
       async signOrchInfo() {
         return { a: 1 };
       },
-      async generateLivePayment() {
+      async generateLivePayment(_b64: string, _prev: unknown, opts: unknown = {}) {
+        refreshOpts.push(opts);
         return { payment: "P", segCreds: "S", signerState: { State: "c3RhdGU=", Sig: "c2ln" } };
       },
     };
@@ -100,5 +119,8 @@ describe("LivepeerClient", () => {
     expect(out).toMatchObject({ State: "c3RhdGU=", Sig: "c2ln" });
     expect(t.calls[0].url).toBe("http://c/payment");
     expect(t.calls[0].headers).toMatchObject({ "Livepeer-Payment": "P", "Livepeer-Segment": "S" });
+    // Refresh must restate the app (ROUTES.perceive) or the signer rejects the
+    // established state with `400 app mismatch`.
+    expect(refreshOpts).toEqual([{ app: ROUTES.perceive, type: "live", manifestID: undefined }]);
   });
 });

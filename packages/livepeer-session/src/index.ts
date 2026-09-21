@@ -135,9 +135,51 @@ export interface SignerClient {
 
 // --- Errors -----------------------------------------------------------------
 
+/**
+ * The orchestrator's 402 payment-challenge payload. go-livepeer
+ * (`liveRunnerPaymentChallengeResponse`, server/ai_http.go) returns this in the
+ * reserve 402 response BODY — the payer does NOT need to call gRPC
+ * GetOrchestrator on the orchestrator to obtain the OrchestratorInfo; it is
+ * already in the challenge. `paymentParams` is base64 of `net.OrchestratorInfo`
+ * (exactly the `orchestrator` field `/generate-live-payment` REQUIRES) and
+ * `manifestId` is `AuthToken.SessionId` (the live payment's `manifestID` must
+ * equal it or the orchestrator rejects with `403 mismatched manifest and auth
+ * token`).
+ */
+export interface LivePaymentChallenge {
+  /** base64 protobuf of net.OrchestratorInfo — the /generate-live-payment `orchestrator` field. */
+  paymentParams?: string;
+  /** Orchestrator service URI (oInfo.Transcoder). */
+  orchestrator?: string;
+  /** AuthToken.SessionId — must equal the live payment manifestID. */
+  manifestId?: string;
+  /** Orchestrator payment endpoint (`…/session/{sid}/payment`). */
+  paymentUrl?: string;
+}
+
+/** Normalize a 402 challenge body (snake_case wire keys) to camelCase. */
+export function livePaymentChallengeFromBody(body: unknown): LivePaymentChallenge | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const b = body as Record<string, unknown>;
+  const out: LivePaymentChallenge = {};
+  if (typeof b.payment_params === "string") out.paymentParams = b.payment_params as string;
+  if (typeof b.orchestrator === "string") out.orchestrator = b.orchestrator as string;
+  if (typeof b.manifest_id === "string") out.manifestId = b.manifest_id as string;
+  if (typeof b.payment_url === "string") out.paymentUrl = b.payment_url as string;
+  return Object.keys(out).length ? out : undefined;
+}
+
 export class PaymentRequiredError extends Error {
-  constructor(public paymentParams: unknown) {
+  /**
+   * @param paymentParams The raw 402 challenge body (snake_case JSON) the
+   *   orchestrator returned. `challenge` is the parsed camelCase view.
+   * @param challenge Parsed payment material the payer should forward to the
+   *   remote signer to obtain tickets (see LivePaymentChallenge). Undefined
+   *   when the 402 body carried no recognizable challenge.
+   */
+  constructor(public paymentParams: unknown, public challenge?: LivePaymentChallenge) {
     super("402 Payment Required: reserve needs signer payment material");
+    this.name = "PaymentRequiredError";
   }
 }
 
@@ -272,7 +314,13 @@ export class LivepeerClient {
     if (opts?.paymentHeaders) Object.assign(headers, opts.paymentHeaders);
     const res = await this.transport.request("POST", `/apps/${ROUTES.perceive}/session`, { headers });
     if (res.status === 402) {
-      throw new PaymentRequiredError(await res.json().catch(() => ({})));
+      // The orchestrator's 402 reserve response carries the payment challenge
+      // in its BODY (liveRunnerPaymentChallengeResponse): payment_params
+      // (base64 net.OrchestratorInfo) + manifest_id (AuthToken.SessionId). The
+      // payer forwards these to the remote signer to obtain tickets — it does
+      // NOT need to call gRPC GetOrchestrator on the orchestrator directly.
+      const body = await res.json().catch(() => ({}));
+      throw new PaymentRequiredError(body, livePaymentChallengeFromBody(body));
     }
     if (res.status !== 200) {
       throw new Error(`reserve perceive failed: HTTP ${res.status} ${await res.text()}`);
@@ -353,6 +401,11 @@ export class LivepeerClient {
     if (!signer) return null;
     if (!orchInfoB64) throw new Error("payment refresh requires orchestrator info (orchInfoB64)");
     const paid = await signer.generateLivePayment(orchInfoB64, signerState ?? null, {
+      // The signer validates `state.App == req.App` on every refresh (remote
+      // signer `GenerateLivePayment`): omitting `app` sends "" and the signer
+      // rejects with `400 app mismatch` once state has been established by the
+      // paid reserve (which set app=ROUTES.perceive). Keep it stable.
+      app: ROUTES.perceive,
       type: "live",
       manifestID,
     });

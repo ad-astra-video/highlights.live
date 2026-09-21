@@ -4,48 +4,62 @@ import type { SignerClient, LivePayment } from "@highlights/livepeer-session";
 
 // The orchestrator's transport is injected as `_req` (real fetch). We stub
 // global.fetch to simulate an ON-CHAIN orchestrator: the first reserve returns
-// 402 (payment required), the paid retry returns 200, then analyze opens the
-// trickle channels and stats reports them.
+// 402 with the live-payment challenge BODY (payment_params = base64
+// OrchestratorInfo, manifest_id = AuthToken.SessionId), the paid retry returns
+// 200, then analyze opens the trickle channels and stats reports them.
 const appUrl = "http://orch/apps/highlights-perceive/session/sess-pay";
 const controlUrl = "http://orch/apps/highlights-perceive/session/sess-pay/control";
+
+// go-livepeer `liveRunnerPaymentChallengeResponse` shape (server/ai_http.go).
+const CHALLENGE = {
+  payment_params: "b3JjaC1pbmZv", // base64 net.OrchestratorInfo
+  orchestrator: "http://orch",
+  manifest_id: "sess-abc", // AuthToken.SessionId
+  payment_url: "http://orch/apps/highlights-perceive/session/sess-abc/payment",
+};
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function fakeFetch(opts: { paidReserve?: boolean }) {
+function fakeFetch(opts: { paidReserve?: boolean; challengeBody?: any }) {
   let reserveCalls = 0;
-  const gotHeaders: Array<Record<string, string>> = [];
-  return vi.fn(async (input: any) => {
-    const url = String(input);
-    if (url.endsWith("/apps/highlights-perceive/session")) {
-      reserveCalls++;
-      const h = (input?.headers as any) || {};
-      gotHeaders.push({ ...h });
-      if (reserveCalls === 1 && !opts.paidReserve) {
-        return jsonResponse(402, { error: "payment required", params: {} });
+  const log: Array<{ url: string; headers: Record<string, string> }> = [];
+  return {
+    fn: vi.fn(async (input: any, init?: any) => {
+      const url = String(input);
+      const headers = { ...((init?.headers as any) || {}) };
+      log.push({ url, headers });
+      if (url.endsWith("/apps/highlights-perceive/session")) {
+        reserveCalls++;
+        if (reserveCalls === 1 && !opts.paidReserve) {
+          return jsonResponse(402, opts.challengeBody ?? { error: "payment required" });
+        }
+        return jsonResponse(200, { session_id: "sess-pay", app_url: appUrl, control_url: controlUrl });
       }
-      return jsonResponse(200, { session_id: "sess-pay", app_url: appUrl, control_url: controlUrl });
-    }
-    if (url.endsWith("/app/analyze")) {
-      return jsonResponse(200, { ok: true });
-    }
-    if (url.includes("/app/session/stats")) {
-      return jsonResponse(200, {
-        trickle: {
-          video_in: `${appUrl}/trickle/video-in`,
-          events_out: `${appUrl}/trickle/events-out`,
-          control: `${appUrl}/trickle/control`,
-        },
-      });
-    }
-    return jsonResponse(404, { error: "nf" });
-  });
+      if (url.endsWith("/app/analyze")) {
+        return jsonResponse(200, { ok: true });
+      }
+      if (url.includes("/app/session/stats")) {
+        return jsonResponse(200, {
+          trickle: {
+            video_in: `${appUrl}/trickle/video-in`,
+            events_out: `${appUrl}/trickle/events-out`,
+            control: `${appUrl}/trickle/control`,
+          },
+        });
+      }
+      return jsonResponse(404, { error: "nf" });
+    }),
+    log,
+  };
 }
 
 // Records the orchestrator info + state each generateLivePayment receives, so
-// the test can prove the wire fix (a real base64 net.OrchestratorInfo is sent,
-// NOT null as in the pre-fix bug that caused "400 missing orchestrator").
+// the test can prove the 402-challenge wire fix: the base64 OrchestratorInfo
+// comes from the 402 challenge's `payment_params` (NOT null, and NOT fetched via
+// gRPC GetOrchestrator), and the manifestID comes from the challenge's
+// `manifest_id` (== AuthToken.SessionId).
 const generatePaymentCalls: Array<{ orchInfoB64: unknown; prev: unknown; opts: unknown }> = [];
 const fakeSigner: SignerClient = {
   async discover() {
@@ -74,45 +88,39 @@ afterEach(() => {
 });
 
 describe("MediaOrchestrator on-chain: 402 -> paid reserve -> open channels", () => {
-  it("retries the reserve with signer payment material and seeds the refresh state", async () => {
-    const fetchMock = fakeFetch({ paidReserve: false });
-    vi.stubGlobal("fetch", fetchMock);
+  it("forwards the 402 challenge's payment_params + manifest_id to the signer and retries the reserve", async () => {
+    const { fn, log } = fakeFetch({ paidReserve: false, challengeBody: CHALLENGE });
+    vi.stubGlobal("fetch", fn);
 
     const orch = new MediaOrchestrator({
       orchBase: "http://orch",
       signer: fakeSigner,
       payerAddress: "0x68d6FF3938Ff63d2df16567Cb8CA9772e14496F7",
-      // Returns the base64 net.OrchestratorInfo + the AuthToken.SessionId the
-      // live payment's manifestID must match (go-livepeer rejects a mismatch
-      // with `403 mismatched manifest and auth token`).
-      orchInfoProvider: async () => ({
-        b64: "b3JjaC1pbmZv",
-        sessionId: "sess-abc",
-      }),
     });
 
     const p = await orch.provision();
 
-    expect(fetchMock).toHaveBeenCalledTimes(4); // reserve(402) + reserve(paid) + analyze + stats
+    expect(fn).toHaveBeenCalledTimes(4); // reserve(402) + reserve(paid) + analyze + stats
     // The paid retry carried the signer's Livepeer-Payment / Livepeer-Segment.
-    const payHeader = gotHeader(fetchMock, "Livepeer-Payment");
-    expect(payHeader).toBe("livepeer-payment-ticket");
-    expect(gotHeader(fetchMock, "Livepeer-Segment")).toBe("segment-creds");
+    const paymentReserves = log.filter((c) => c.url.endsWith("/apps/highlights-perceive/session"));
+    expect(paymentReserves).toHaveLength(2);
+    expect(paymentReserves[1].headers["Livepeer-Payment"]).toBe("livepeer-payment-ticket");
+    expect(paymentReserves[1].headers["Livepeer-Segment"]).toBe("segment-creds");
     // Payer address advertised on both reserves.
-    expect(gotHeader(fetchMock, "Livepeer-Payer-Address")).toBe("0x68d6FF3938Ff63d2df16567Cb8CA9772e14496F7");
+    expect(paymentReserves[0].headers["Livepeer-Payer-Address"]).toBe("0x68d6FF3938Ff63d2df16567Cb8CA9772e14496F7");
 
     expect(p.sessionId).toBe("sess-pay");
     expect(p.videoIn).toContain("/trickle/video-in");
     expect(p.eventsOut).toContain("/trickle/events-out");
-    // WIRE FIX: the signer received the real orchestrator info (base64
-    // net.OrchestratorInfo), NOT null — the bug that caused "400 missing
-    // orchestrator" on every paid reserve.
+    // 402-CHALLENGE WIRE FIX: the signer received the base64 OrchestratorInfo
+    // straight from the 402 challenge's `payment_params` — NOT null (the bug
+    // that caused "400 missing orchestrator") and NOT a gRPC GetOrchestrator
+    // fetch against the orchestrator.
     expect(generatePaymentCalls).toHaveLength(1);
     expect(generatePaymentCalls[0].orchInfoB64).toBe("b3JjaC1pbmZv");
     expect(generatePaymentCalls[0].prev).toBe(null); // first payment: no state yet
-    // WIRE FIX #2: the live payment carries the orchestrator's AuthToken
-    // SessionId as manifestID — without it the orchestrator returns
-    // `403 mismatched manifest and auth token`.
+    // manifestID comes from the challenge's `manifest_id` (== AuthToken.SessionId);
+    // without it the orchestrator returns `403 mismatched manifest and auth token`.
     expect((generatePaymentCalls[0].opts as any).manifestID).toBe("sess-abc");
     // The signer state from the paid reserve is seeded for the refresher, and
     // the orchestrator info + sessionId are carried onto the session so the
@@ -122,44 +130,77 @@ describe("MediaOrchestrator on-chain: 402 -> paid reserve -> open channels", () 
     expect(p.orchInfoSessionId).toBe("sess-abc");
   });
 
-  it("fails hard with a clear error when an on-chain 402 needs orchestrator info but no provider is configured", async () => {
-    const fetchMock = fakeFetch({ paidReserve: false }); // 402 on first reserve
-    vi.stubGlobal("fetch", fetchMock);
+  it("uses the signer's /discover-orchestrators to pick the orchestrator for the session start", async () => {
+    const { fn, log } = fakeFetch({ paidReserve: false, challengeBody: CHALLENGE });
+    vi.stubGlobal("fetch", fn);
+
+    const orch = new MediaOrchestrator({
+      orchBase: "http://fallback-orch", // should NOT be used once discovery resolves
+      signer: fakeSigner,
+      // The signer discovers an orchestrator advertising the perceive runner.
+      discoverOrchestrators: async () => [
+        { address: "http://not-perceive", runners: [{ app: "something-else" } as any] },
+        { address: "http://orch-disc", runners: [{ app: "highlights-perceive" } as any] },
+      ],
+    });
+
+    const p = await orch.provision();
+
+    const paymentReserves = log.filter((c) => c.url.endsWith("/apps/highlights-perceive/session"));
+    expect(paymentReserves).toHaveLength(2);
+    // Session start went to the DISCOVERED orchestrator (the one advertising the
+    // perceive runner), not the configured fallback.
+    expect(paymentReserves[0].url.startsWith("http://orch-disc")).toBe(true);
+    expect(p.orchInfoB64).toBe("b3JjaC1pbmZv");
+  });
+
+  it("falls back to the configured orchBase when discovery returns nothing", async () => {
+    const { fn, log } = fakeFetch({ paidReserve: false, challengeBody: CHALLENGE });
+    vi.stubGlobal("fetch", fn);
+
+    const orch = new MediaOrchestrator({
+      orchBase: "http://fallback-orch",
+      signer: fakeSigner,
+      discoverOrchestrators: async () => [], // discovery empty / unavailable
+    });
+
+    await orch.provision();
+
+    const paymentReserves = log.filter((c) => c.url.endsWith("/apps/highlights-perceive/session"));
+    expect(paymentReserves[0].url.startsWith("http://fallback-orch")).toBe(true);
+  });
+
+  it("fails hard with a clear error when a 402 challenge carries no payment_params", async () => {
+    const { fn } = fakeFetch({ paidReserve: false, challengeBody: {} }); // no payment_params/manifest_id
+    vi.stubGlobal("fetch", fn);
 
     const orch = new MediaOrchestrator({
       orchBase: "http://orch",
-      signer: fakeSigner, // on-chain path, but no orchInfoProvider
+      signer: fakeSigner,
     });
-    await expect(orch.provision()).rejects.toThrow(/orchInfoProvider/);
+    await expect(orch.provision()).rejects.toThrow(/payment_params/);
   });
 
   it("stays offchain (one unpaid reserve, no signer payment) when no signer is configured", async () => {
-    const fetchMock = fakeFetch({ paidReserve: true }); // never 402s
-    vi.stubGlobal("fetch", fetchMock);
+    const { fn, log } = fakeFetch({ paidReserve: true }); // never 402s
+    vi.stubGlobal("fetch", fn);
 
     const orch = new MediaOrchestrator({ orchBase: "http://orch" }); // no signer, no payer
     const p = await orch.provision();
 
-    expect(fetchMock).toHaveBeenCalledTimes(3); // reserve(200) + analyze + stats
-    expect(gotHeader(fetchMock, "Livepeer-Payment")).toBeUndefined();
-    expect(gotHeader(fetchMock, "Livepeer-Payer-Address")).toBeUndefined();
+    expect(fn).toHaveBeenCalledTimes(3); // reserve(200) + analyze + stats
+    const paymentReserves = log.filter((c) => c.url.endsWith("/apps/highlights-perceive/session"));
+    expect(paymentReserves).toHaveLength(1);
+    expect(paymentReserves[0].headers["Livepeer-Payment"]).toBeUndefined();
+    expect(paymentReserves[0].headers["Livepeer-Payer-Address"]).toBeUndefined();
     expect(p.paymentState).toBeUndefined();
   });
 
   it("fails hard when an on-chain reserve is unpaid (402) and no signer is present", async () => {
-    const fetchMock = fakeFetch({ paidReserve: false }); // 402 on first reserve
-    vi.stubGlobal("fetch", fetchMock);
+    const { fn } = fakeFetch({ paidReserve: false, challengeBody: CHALLENGE }); // 402 on first reserve
+    vi.stubGlobal("fetch", fn);
 
     const orch = new MediaOrchestrator({ orchBase: "http://orch" }); // no signer
     await expect(orch.provision()).rejects.toThrow(/402 Payment Required/);
   });
 });
-
-function gotHeader(fetchMock: ReturnType<typeof vi.fn>, name: string): string | undefined {
-  for (const call of fetchMock.mock.calls) {
-    // fetch(url, init) -> headers live in init (call[1]); fall back to input.
-    const h = (call[1]?.headers as any) || (call[0]?.headers as any) || {};
-    if (h[name] != null) return h[name];
-  }
-  return undefined;
-}

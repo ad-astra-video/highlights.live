@@ -42,12 +42,13 @@ export interface MediaServerOptions {
   payerAddress?: string;
   paymentIntervalMs?: number;
   /**
-   * On-chain only: resolves the orchestrator's base64 `net.OrchestratorInfo`
-   * protobuf (via gRPC GetOrchestrator) that the signer REQUIRES in
-   * `/generate-live-payment`, plus the AuthToken.SessionId the live payment's
-   * manifestID must match. REQUIRED for the paid path; offchain it is unused.
+   * On-chain: resolve WHICH orchestrator / live-runner to start the session
+   * against from the signer's /discover-orchestrators (falls back to the
+   * configured orchBase). The media server never dials the orchestrator for
+   * OrchestratorInfo directly — the payment material comes from the 402
+   * reserve challenge. Offchain this is unused.
    */
-  orchInfoProvider?: import("./orch-info").OrchInfoProvider;
+  discoverOrchestrators?: () => Promise<{ address: string; runners: import("@highlights/livepeer-session").DiscoveredRunner[] }[]>;
   port?: number;
   /** Public origin (LB / Cloudflare front) used for the full WS ingest URL. */
   publicBaseUrl?: string;
@@ -91,7 +92,7 @@ export class MediaServer {
         signer: opts.signer,
         payerAddress: opts.payerAddress,
         paymentIntervalMs: opts.paymentIntervalMs,
-        orchInfoProvider: opts.orchInfoProvider,
+        discoverOrchestrators: opts.discoverOrchestrators,
         // A failed payment refresh closes the stream (release the slot rather
         // than let the runner work for free).
         onPaymentFailure: (sessionId, err) => void this.teardown(sessionId).catch(() => {}),
@@ -320,8 +321,10 @@ export class MediaServer {
         /* skip */
       }
     }
-    // 3) release the paid slot / perceive session.
-    await this.orch.closeSession(sid).catch(() => {});
+    // 3) release the paid slot / perceive session. Target the orchestrator that
+    // issued the session via its control URL (correct even when it is not the
+    // configured orchBase, e.g. a discovered orchestrator).
+    await this.orch.closeSession(stream.provisioned.controlUrl).catch(() => {});
     this.active.delete(sid);
   }
 }
