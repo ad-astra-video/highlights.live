@@ -11,6 +11,7 @@ import {
 import type { ServerConfig } from "./config";
 import { createPaymentRefresher, type PaymentRefresher } from "./payment";
 import type { DecisionResult, ObservationResult, PipelineClient, ReserveResult } from "./analyzer";
+import { SessionLostError } from "./analyzer";
 
 export function buildAnalyzeFrames(frameDir: string, sampleFps = 1) {
   // Frames are extracted by extractFrames() at `sampleFps`. This iterates them
@@ -146,7 +147,14 @@ export class OrchestratorAdapter implements PipelineClient {
         clip_path: frame.clipPath || "",  // per-JOB recorded stream (SAM persistent session)
       }),
     });
-    if (status >= 400) throw new Error(`analyze failed: HTTP ${status}`);
+    if (status >= 400) {
+      // 404 "runner not found" / "runner session not found" means go-livepeer
+      // released the session (static runner health flapped) — a recoverable
+      // "session lost" that analyzeJob re-reserves against. Any other status
+      // is a real analyze error that aborts the pass.
+      if (status === 404) throw new SessionLostError(`analyze failed: HTTP ${status}`);
+      throw new Error(`analyze failed: HTTP ${status}`);
+    }
     return normalizeObservation(data);
   }
   async decide(
@@ -194,7 +202,10 @@ export class DirectAdapter implements PipelineClient {
         clip_path: frame.clipPath || "",
       }),
     });
-    if (!r.ok) throw new Error(`analyze failed: HTTP ${r.status}`);
+    if (!r.ok) {
+      if (r.status === 404) throw new SessionLostError(`analyze failed: HTTP ${r.status}`);
+      throw new Error(`analyze failed: HTTP ${r.status}`);
+    }
     return normalizeObservation(await r.json());
   }
   async decide(
