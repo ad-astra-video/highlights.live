@@ -17,6 +17,7 @@ import { mkdir } from "node:fs/promises";
 import { loadEmailConfig, type EmailSenderConfig } from "./config";
 import { createTransport } from "./transport";
 import { EmailWorker } from "./queue";
+import { WaitlistAllocator } from "./allocator";
 import { ipInAllowlist } from "./allowlist";
 import { openDb, type Db } from "../../server/src/db";
 
@@ -101,7 +102,17 @@ async function main() {
   const db = await openDb({ databasePath: cfg.databasePath, databaseUrl: cfg.databaseUrl });
   const transport = createTransport(cfg);
   const worker = new EmailWorker({ db, transport, ...cfg });
+  const allocator = new WaitlistAllocator({
+    db,
+    batchSize: cfg.allocatorBatchSize,
+    maxAttempts: cfg.maxAttempts,
+    publicBaseUrl: cfg.publicBaseUrl,
+  });
   const app = buildEmailApp({ cfg, db, worker });
+  // Hourly waitlist->invite allocator (ADAAAA-2555), gated by the admin's
+  // allocation flag. Runs independently of the send worker above.
+  allocator.start(cfg.allocatorIntervalMs);
+  app.addHook("onClose", async () => allocator.stop());
   await app.listen({ port: cfg.port, host: "0.0.0.0" });
   const mode = cfg.smtpHost ? `smtp://${cfg.smtpHost}:${cfg.smtpPort}` : "LOG (no SMTP_HOST configured)";
   // eslint-disable-next-line no-console

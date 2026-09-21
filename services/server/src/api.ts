@@ -1,8 +1,11 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import path from "node:path";
 import { randomUUID, randomBytes } from "node:crypto";
-import { existsSync, statSync, readdirSync, createReadStream } from "node:fs";
+import { existsSync, statSync, readdirSync, createReadStream, createWriteStream } from "node:fs";
+import { pipeline } from "node:stream/promises";
+import { Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
 import type { ServerConfig } from "./config";
 import type { Store } from "./store";
@@ -16,6 +19,7 @@ import { BillingService, BillingRequiredError } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
 import { FixedWindowLimiter, rateLimit } from "./rate-limit";
 import { enqueueBestEffort, type Mailer } from "./mailer";
+import { composeInviteEmail } from "./invites";
 
 /** Resolve the perceive sampling fps from the runner's measured capability
  * (when reachable directly) else the configured interval. */
@@ -30,6 +34,28 @@ async function resolveSampleFps(cfg: ServerConfig): Promise<number> {
     }
   }
   return sampleFps;
+}
+
+// Extension-based fallback for sources that ship a generic MIME (mpegts is
+// frequently served as application/octet-stream; some MP4s as audio/mp4).
+const VIDEO_UPLOAD_EXT = /\.(mp4|m4v|mov|webm|mkv|mpeg|mpg|ts|m2ts|mts)$/i;
+/** Accept a browser upload when its declared type is a common video type
+ * (mp4, mov, webm, matroska/mkv, mpegts). Clearly non-video uploads are
+ * rejected with a readable message so they never reach GPU compute. */
+function isVideoUpload(mime: string | null | undefined, filename: string): boolean {
+  const m = (mime || "").toLowerCase().trim();
+  if (m.startsWith("video/")) return true;
+  if (m === "application/octet-stream" || m === "audio/mp4" || m === "") {
+    return VIDEO_UPLOAD_EXT.test(filename);
+  }
+  return false;
+}
+
+/** Keep only safe filename characters and the basename; never allow path
+ * traversal or separators to escape the job's upload directory. */
+function sanitizeFilename(name: string): string {
+  const base = path.basename(name || "").replace(/[^\w.\- ]+/g, "_").trim();
+  return base && base !== "." ? base : "upload.mp4";
 }
 
 export interface ApiDeps {
@@ -47,6 +73,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const { cfg, store, adapter, db, auth, billing, entitlements, mailer } = deps;
   const app = Fastify({ logger: false });
   app.register(cors, { origin: true });
+  // Multipart parsing for browser VOD uploads (POST /jobs/upload). Files are
+  // streamed (never buffered in memory). The 2 GB cap is enforced authoritatively
+  // by the route's own byte counter, which aborts an over-limit upload with 413
+  // before reaching compute. We MUST set busboy's `limits.fileSize` ABOVE the cap:
+  // @fastify/multipart otherwise defaults it to fastify.initialConfig.bodyLimit
+  // (1 MiB = 1,048,576), which silently truncates every upload to exactly
+  // 1,048,576 bytes and makes the 2 GB counter unreachable (ADAAAA-3041).
+  // fileSize must be > cap (not == cap): when busboy's own limit trips first it
+  // rejects inside `req.file()` with an unhandled FST_REQ_FILE_TOO_LARGE (500),
+  // stealing the route counter's clean 413. A +1 MiB margin keeps busboy from
+  // ever firing for a file the 2 GB counter has already accepted, so the counter
+  // alone decides 413 at the cap.
+  app.register(multipart, {
+    limits: { files: 1, fields: 10, fileSize: cfg.vodMaxUploadBytes + 1024 * 1024 },
+  });
 
   // Keep raw JSON body for Stripe webhook signature verification.
   app.removeContentTypeParser("application/json");
@@ -209,7 +250,49 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
   }
 
+  // Run a VOD `file` job through the standard extractFrames -> analyzeJob ->
+  // clip pipeline, storing generated highlights + clips. Shared by the server
+  // path/URL POST /jobs route and the browser-upload POST /jobs/upload route so
+  // both feed identical compute and quota/billing side effects.
+  async function runVodJob(job: { id: string; gameHint?: string }, videoPath: string, user: any, sub: any) {
+    const frameDir = path.join(cfg.dataDir, "frames", job.id);
+    const sampleFps = await resolveSampleFps(cfg);
+    await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps);
+    const clipDir = path.join(cfg.dataDir, "clips");
+    const cut = async (ts: number) => {
+      const clipId = randomUUID();
+      const out = path.join(clipDir, `${clipId}.mp4`);
+      await cutClip(cfg.ffmpegPath, videoPath, out, Math.max(0, ts - cfg.clipBeforeS), cfg.clipBeforeS + cfg.clipAfterS);
+      return { clipId, clipUri: `/clips/${clipId}.mp4` };
+    };
+    const iter = buildAnalyzeFrames(frameDir, sampleFps)();
+    const outcome = await analyzeJob(
+      adapter,
+      iter,
+      cut,
+      {
+        jobId: job.id,
+        clipBeforeS: cfg.clipBeforeS,
+        clipAfterS: cfg.clipAfterS,
+        gameHint: job.gameHint || cfg.gameHintDefault,
+      },
+      jobEventHook(job.id)
+    );
+    for (const h of outcome.highlights) {
+      await store.addHighlight({ ...h, ownerId: user.id, status: cfg.autoPublishHighlights ? "accepted" : "pending" });
+      await billing.onHighlightCreated(user, sub);
+      // A clip generated successfully debits the quota once.
+      await entitlements.onClipGenerated(user);
+    }
+    await store.patchJob(job.id, { status: "done", perceiveSessionId: outcome.sessionId });
+    return { job: store.getJob(job.id), framesAnalyzed: outcome.framesAnalyzed };
+  }
+
   app.get("/health", async () => ({ status: "ok", billing: billing.enabled ? "live" : "disabled" }));
+
+  // Public config surfaced so the webapp can mirror the server's upload cap as
+  // a client-side pre-check (kept in sync with VOD_MAX_UPLOAD_BYTES).
+  app.get("/config", async () => ({ vodMaxUploadBytes: cfg.vodMaxUploadBytes }));
 
   // --- auth (public endpoints are rate limited per IP) ---
   app.post<{ Body: { email?: string; password?: string; inviteCode?: string } }>("/auth/register", { preHandler: limitAuth }, async (req, reply) => {
@@ -345,12 +428,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const entry = await db.setWaitlistInvited(email);
     // Waitlist -> invite delivery: flipping an inbox to `invited` grants it
     // account activation, so email that inbox a working invitation. (An invited
-    // waitlist email can register without a code.)
-    await enqueueBestEffort(mailer, {
-      to: email,
-      subject: "You're invited to highlights.live beta",
-      body: `You're invited! Your highlights.live beta account is ready to activate.\n\nOpen ${cfg.publicBaseUrl}/auth and choose "Create account" to get started.`,
-    });
+    // waitlist email can register without a code.) Copy is shared with the
+    // email-runner allocator (invites.ts) so both send identical invites.
+    const invite = composeInviteEmail(cfg.publicBaseUrl);
+    await enqueueBestEffort(mailer, { to: email, subject: invite.subject, body: invite.body });
     return { ok: true, email: entry.email, status: entry.status };
   });
 
@@ -388,6 +469,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       createdAt: w.createdAt,
     })),
   }));
+
+  // Waitlist->invite allocation gate (ADAAAA-2555). The email-runner allocator
+  // polls the waitlist hourly and allocates new signups in FIFO order ONLY
+  // while the gate is OPEN. The server admin toggles it: allocationOpen=false
+  // means "no new users currently" (allocation suppressed); true (or unset)
+  // resumes polling. Persisted in the shared DB; admin-only toggling.
+  app.get("/admin/waitlist/gate", { preHandler: adminReq }, async () => await db.getWaitlistGate());
+
+  app.put<{ Body: { allocationOpen?: boolean } }>("/admin/waitlist/gate", { preHandler: adminReq }, async (req: any, reply) => {
+    const allocationOpen = req.body?.allocationOpen;
+    if (typeof allocationOpen !== "boolean") return reply.code(400).send({ error: "allocationOpen boolean required" });
+    const gate = await db.setWaitlistGate(allocationOpen, req.user.email);
+    return gate;
+  });
 
   // --- billing ---
   app.get("/billing/plans", async () => ({ plans: billing.plans() }));
@@ -537,44 +632,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         return { job: store.getJob(job.id), status: "ingesting", framesAnalyzed: 0 };
       }
       try {
-        const frameDir = path.join(cfg.dataDir, "frames", job.id);
-        // Tune frame sampling to the perceive card's measured capability: one
-        // frame every sample_interval_s seconds (from the runner when reachable
-        // directly, else the SAMPLE_INTERVAL_SEC config).
-        let sampleFps = 1 / Math.max(0.2, cfg.sampleIntervalSec);
-        if (cfg.perceiveUrl) {
-          try {
-            const h = (await (await fetch(`${cfg.perceiveUrl}/health`)).json()) as any;
-            if (h && h.sample_interval_s > 0.2) sampleFps = Math.min(1.0, 1 / h.sample_interval_s);
-          } catch {
-            /* fall back to config interval */
-          }
-        }
-        await extractFrames(cfg.ffmpegPath, videoPath!, frameDir, sampleFps);
-        const clipDir = path.join(cfg.dataDir, "clips");
-        const cut = async (ts: number) => {
-          const clipId = randomUUID();
-          const out = path.join(clipDir, `${clipId}.mp4`);
-          await cutClip(cfg.ffmpegPath, videoPath!, out, Math.max(0, ts - cfg.clipBeforeS), cfg.clipBeforeS + cfg.clipAfterS);
-          return { clipId, clipUri: `/clips/${clipId}.mp4` };
-        };
-        const iter = buildAnalyzeFrames(frameDir, sampleFps)();
-        const outcome = await analyzeJob(adapter, iter, cut, {
-          jobId: job.id,
-          clipBeforeS: cfg.clipBeforeS,
-          clipAfterS: cfg.clipAfterS,
-          gameHint: job.gameHint || cfg.gameHintDefault,
-        },
-        jobEventHook(job.id)
-        );
-        for (const h of outcome.highlights) {
-          await store.addHighlight({ ...h, ownerId: user.id, status: cfg.autoPublishHighlights ? "accepted" : "pending" });
-          await billing.onHighlightCreated(user, sub);
-          // A clip generated successfully debits the quota once.
-          await entitlements.onClipGenerated(user);
-        }
-        await store.patchJob(job.id, { status: "done", perceiveSessionId: outcome.sessionId });
-        return { job: store.getJob(job.id), framesAnalyzed: outcome.framesAnalyzed };
+        const out = await runVodJob(job, videoPath!, user, sub);
+        return out;
       } catch (e: any) {
         await store.patchJob(job.id, { status: "failed" });
         const raw = String(e?.message || e);
@@ -588,6 +647,117 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       }
     }
   );
+
+  // Browser VOD file upload (the "Upload / file" source). Multipart/streamed;
+  // the file lands at dataDir/uploads/<jobId>/<safe-filename> and then runs the
+  // SAME extractFrames -> analyzeJob -> clip path as any local path source.
+  // Auth, quota (429), and billing (402) gates apply identically BEFORE any
+  // bytes are persisted or any compute is queued; an over-limit or non-video
+  // upload returns 413/415 and never reaches GPU.
+  app.post("/jobs/upload", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user;
+    // Budget hard-stop, identical to POST /jobs.
+    try {
+      await entitlements.canSubmit(user);
+    } catch (e) {
+      if (e instanceof QuotaExceededError) {
+        return reply.code(429).send({
+          error: "monthly clip quota used up — resets at the start of next month",
+          code: "quota_exceeded",
+          clipQuotaPeriod: entitlements.periodKey(),
+          clipQuotaLimit: entitlements.limit,
+          clipQuotaRemaining: 0,
+        });
+      }
+      throw e;
+    }
+    const sub = await db.getSubscription(user.id);
+    let billingBlocked = false;
+    try {
+      await billing.canCreateHighlight(user, sub);
+    } catch (e) {
+      if (e instanceof BillingRequiredError) billingBlocked = true;
+      else throw e;
+    }
+    if (billingBlocked) {
+      return reply.code(402).send({ error: "free allowance used; subscribe to Pro to continue", upgrade: "/billing/checkout" });
+    }
+
+    const data = await req.file();
+    if (!data) return reply.code(400).send({ error: "multipart file part required" });
+    const { file, fields, filename, mimetype } = data;
+    if (!isVideoUpload(mimetype, filename)) {
+      // Drain the rejected part so the connection can be reused.
+      file.resume();
+      return reply.code(415).send({
+        error: "Unsupported file type — upload a video (mp4, mov, webm, mkv, or mpegts).",
+      });
+    }
+    const fv = (v: any) => (Array.isArray(v) ? v[0] : v)?.value ?? "";
+    const gameHint = fv(fields.gameHint) || cfg.gameHintDefault;
+    let preferLabels: string[] = [];
+    try {
+      const raw = fv(fields.preferLabels);
+      if (raw) preferLabels = JSON.parse(raw);
+    } catch {
+      preferLabels = [];
+    }
+
+    const jobId = randomUUID();
+    const safeName = sanitizeFilename(filename);
+    // Stream to a dataDir-level staging file first (dataDir already exists, so
+    // this creates no dirs); the uploads/<jobId> dir is only created once the
+    // upload is accepted, so a rejected/over-limit upload leaves no footprint.
+    const stagePath = path.join(cfg.dataDir, `.upload-stage-${jobId}.tmp`);
+    const { mkdir, rename, rm } = await import("node:fs/promises");
+    const dir = path.join(cfg.dataDir, "uploads", jobId);
+    const finalPath = path.join(dir, safeName);
+
+    // Stream to the staging file while counting bytes; abort + 413 + clean up
+    // if the hard cap is crossed (never buffer the whole file, never queue
+    // compute).
+    let bytes = 0;
+    const counter = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        bytes += chunk.length;
+        if (bytes > cfg.vodMaxUploadBytes) {
+          cb(Object.assign(new Error("too_large"), { statusCode: 413 }) as any);
+          return;
+        }
+        cb(null, chunk);
+      },
+    });
+    try {
+      await pipeline(file, counter, createWriteStream(stagePath));
+    } catch (e: any) {
+      await rm(stagePath, { force: true }).catch(() => {});
+      if (e?.statusCode === 413 || e?.message === "too_large" || e?.code === "FST_REQ_FILE_TOO_LARGE") {
+        return reply.code(413).send({
+          error: "File too large (max 2 GB). Paste a download URL instead to process it.",
+        });
+      }
+      return reply.code(500).send({ error: String(e?.message || e) });
+    }
+    // Accepted: create the job dir and land the file at its final path.
+    await mkdir(dir, { recursive: true });
+    await rename(stagePath, finalPath);
+
+    const job = await store.createJob({
+      id: jobId,
+      ownerId: user.id,
+      source: "file",
+      sourceUrl: finalPath,
+      gameHint,
+      preferLabels,
+    });
+    await store.patchJob(job.id, { status: "active" });
+    try {
+      return await runVodJob(job, finalPath, user, sub);
+    } catch (e: any) {
+      await store.patchJob(job.id, { status: "failed" });
+      return reply.code(500).send({ error: String(e?.message || e) });
+    }
+  });
 
   app.get("/jobs/:id", { preHandler: authReq }, async (req: any, reply) => {
     const user = req.user;

@@ -53,6 +53,54 @@ describe("public waitlist (beta landing capture)", () => {
   });
 });
 
+describe("waitlist->invite allocation gate (ADAAAA-2555, admin-only)", () => {
+  it("is read/toggled by the server admin only and persisted", async () => {
+    const { app, cfg, auth, db } = await buildTestApp();
+    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: cfg.adminEmail, password: cfg.adminPassword } });
+    const adminTok = login.json().token as string;
+    const authH = { authorization: `Bearer ${adminTok}` };
+
+    // Defaults open, and is readable by an admin.
+    const g0 = await app.inject({ method: "GET", url: "/admin/waitlist/gate", headers: authH });
+    expect(g0.statusCode).toBe(200);
+    expect(g0.json().allocationOpen).toBe(true);
+
+    // Admin closes the gate -> persisted.
+    const closed = await app.inject({ method: "PUT", url: "/admin/waitlist/gate", headers: authH, payload: { allocationOpen: false } });
+    expect(closed.statusCode).toBe(200);
+    expect(closed.json().allocationOpen).toBe(false);
+    expect((await db.getWaitlistGate()).allocationOpen).toBe(false);
+
+    // Admin reopens -> persisted.
+    const open = await app.inject({ method: "PUT", url: "/admin/waitlist/gate", headers: authH, payload: { allocationOpen: true } });
+    expect(open.statusCode).toBe(200);
+    expect(open.json().allocationOpen).toBe(true);
+    expect((await db.getWaitlistGate()).allocationOpen).toBe(true);
+  });
+
+  it("rejects non-admins (401 anon, 403 non-admin user) and bad bodies", async () => {
+    const { app, cfg, auth } = await buildTestApp();
+    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: cfg.adminEmail, password: cfg.adminPassword } });
+    const adminTok = login.json().token as string;
+
+    const user = await auth.register("normal@user.test", "password123");
+    const userTok = user.token as string;
+
+    // Anonymous -> 401.
+    const anon = await app.inject({ method: "GET", url: "/admin/waitlist/gate" });
+    expect(anon.statusCode).toBe(401);
+
+    // Non-admin user -> 403 on both read and write.
+    const uh = { authorization: `Bearer ${userTok}` };
+    expect((await app.inject({ method: "GET", url: "/admin/waitlist/gate", headers: uh })).statusCode).toBe(403);
+    expect((await app.inject({ method: "PUT", url: "/admin/waitlist/gate", headers: uh, payload: { allocationOpen: false } })).statusCode).toBe(403);
+
+    // Invalid body (missing/non-boolean) -> 400, gate untouched.
+    const bad = await app.inject({ method: "PUT", url: "/admin/waitlist/gate", headers: { authorization: `Bearer ${adminTok}` }, payload: { allocationOpen: "yes" } });
+    expect(bad.statusCode).toBe(400);
+  });
+});
+
 describe("SPA static serving (landing over HTTPS)", () => {
   const dist = mkdtempSync(path.join(tmpdir(), "hl-dist-"));
   afterAll(() => rmSync(dist, { recursive: true, force: true }));

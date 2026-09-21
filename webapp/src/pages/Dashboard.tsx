@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X } from "lucide-react";
-import { api, type Highlight } from "../lib/api";
+import { api, type Highlight, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
+import { isOverLimit, oversizedHelp } from "../lib/vodUpload";
 import { useAuth } from "../lib/auth";
 import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
@@ -48,6 +49,13 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<any>(null);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
+  // VOD "Upload / file" source: the picked local file, whether the user chose
+  // the "paste a URL" fallback instead, upload progress (0..1), and the server
+  // upload cap (refreshed from /config; defaults to 2 GB).
+  const [file, setFile] = useState<File | null>(null);
+  const [useUrl, setUseUrl] = useState(false);
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
+  const [vodMax, setVodMax] = useState<number>(VOD_MAX_UPLOAD_BYTES);
   // live ingest state
   const [liveJob, setLiveJob] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
@@ -69,6 +77,13 @@ export function Dashboard() {
   }
   useEffect(() => {
     refreshHighlights().catch(() => {});
+    // Keep the client-side upload cap in sync with the server's
+    // VOD_MAX_UPLOAD_BYTES so a pre-flight >cap rejection matches the 413.
+    api<{ vodMaxUploadBytes?: number }>("/config")
+      .then((c) => {
+        if (c?.vodMaxUploadBytes && c.vodMaxUploadBytes > 0) setVodMax(c.vodMaxUploadBytes);
+      })
+      .catch(() => {});
   }, []);
 
   // Poll a running live job until it finishes.
@@ -96,6 +111,49 @@ export function Dashboard() {
     setBusy(true);
     setError(null);
     setJob(null);
+    // VOD "Upload / file" source with a local file chosen (not the URL
+    // fallback): pre-check size client-side, then multipart upload with
+    // progress; the server runs the same extractFrames -> analyzeJob -> clip
+    // pipeline and returns the same { job, framesAnalyzed } shape as POST /jobs.
+    if (source === "file" && !useUrl && file) {
+      if (isOverLimit(file.size, vodMax)) {
+        // Reject BEFORE sending — never upload an over-limit file.
+        setError(oversizedHelp(vodMax));
+        setBusy(false);
+        return;
+      }
+      setUploadPct(0);
+      try {
+        const r = await uploadVideo<any>({
+          file,
+          gameHint,
+          preferLabels: lookFor.split(",").map((s) => s.trim()).filter(Boolean),
+          onProgress: (f) => setUploadPct(f),
+        });
+        setUploadPct(null);
+        setJob(r.job);
+        setDebugJob(r.job.id);
+        refreshBilling().catch(() => {});
+      } catch (e: any) {
+        setUploadPct(null);
+        if (e.status === 429) {
+          setError("Monthly clip quota used up — resets at the start of next month.");
+          refreshBilling().catch(() => {});
+        } else if (e.status === 402) {
+          setError(`${e.message} — subscribe on Billing to continue.`);
+        } else if (e.status === 413) {
+          // Server-side hard cap tripped (shouldn't happen given the pre-check,
+          // but guard it) — point at the URL fallback.
+          setError(oversizedHelp(vodMax));
+        } else {
+          setError(e.message);
+        }
+      } finally {
+        setBusy(false);
+        refreshHighlights().catch(() => {});
+      }
+      return;
+    }
     try {
       const r = await api<any>("/jobs", {
         body: {
@@ -142,9 +200,8 @@ export function Dashboard() {
     }
   }
 
-  const sourceInputLabel = source === "screenshare" ? null
-    : source === "rtmp" || source === "webrtc" ? "RTMP / stream URL"
-    : "Source path / URL";
+  const sourceInputLabel = source === "screenshare" || source === "file" ? null
+    : "RTMP / stream URL";
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -179,6 +236,58 @@ export function Dashboard() {
           ))}
         </div>
 
+        {source === "file" && (
+          <div className="mb-1 mt-5" data-vod-upload>
+            {!useUrl ? (
+              <>
+                <label className="mb-2 block text-xs uppercase tracking-wide text-mut">
+                  Upload a video file (mp4, mov, webm, mkv, mpegts)
+                </label>
+                <label className="input-neon inline-flex cursor-pointer items-center gap-2">
+                  <Upload className="h-4 w-4" />
+                  {file ? "Choose a different video" : "Choose a video file…"}
+                  <input
+                    type="file"
+                    accept="video/*,.mp4,.m4v,.mov,.webm,.mkv,.ts,.mpeg,.mpg"
+                    className="hidden"
+                    data-testid="video-file-input"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null;
+                      setFile(f);
+                      // Show the oversized help text as soon as the file is
+                      // picked (still reachable to switch to a URL).
+                      setError(f && isOverLimit(f.size, vodMax) ? oversizedHelp(vodMax) : null);
+                    }}
+                  />
+                </label>
+                {file && (
+                  <div className="mt-2 text-sm text-mut" data-testid="selected-file">
+                    {file.name} · {formatBytes(file.size)}
+                    {isOverLimit(file.size, vodMax) && (
+                      <span className="ml-2 text-red">— over the {formatBytes(vodMax)} upload limit</span>
+                    )}
+                  </div>
+                )}
+                <button type="button" className="chip mt-3" onClick={() => setUseUrl(true)}>
+                  Paste a download URL instead
+                </button>
+              </>
+            ) : (
+              <>
+                <label className="mb-2 block text-xs uppercase tracking-wide text-mut">Video URL / path</label>
+                <input
+                  className="input-neon"
+                  value={videoPath}
+                  onChange={(e) => setVideoPath(e.target.value)}
+                  placeholder="https://example.com/game.mp4"
+                />
+                <button type="button" className="chip mt-3" onClick={() => setUseUrl(false)}>
+                  Upload a file instead
+                </button>
+              </>
+            )}
+          </div>
+        )}
         {sourceInputLabel && (
           <>
             <label className="mb-2 block text-xs uppercase tracking-wide text-mut">{sourceInputLabel}</label>
@@ -186,9 +295,7 @@ export function Dashboard() {
               className="input-neon"
               value={videoPath}
               onChange={(e) => setVideoPath(e.target.value)}
-              placeholder={
-                source === "rtmp" || source === "webrtc" ? "rtmp://host/app/stream" : "/data/test_vod.mp4"
-              }
+              placeholder="rtmp://host/app/stream"
             />
           </>
         )}
@@ -229,10 +336,27 @@ export function Dashboard() {
             )}
             {liveJob && liveStatus !== "done" && liveStatus !== "failed" && <LiveConsole jobId={liveJob} />}
             {!liveJob && (
-              <button className="btn-neon mt-6" onClick={run} disabled={busy}>
-                {busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <Zap className="mr-2 inline h-4 w-4" />}
-                {busy ? "Starting…" : isLive ? "Start live detection" : "Run detection"}
-              </button>
+              <>
+                <button
+                  className="btn-neon mt-6"
+                  onClick={run}
+                  disabled={busy || (source === "file" && !useUrl && !!file && isOverLimit(file.size, vodMax))}
+                >
+                  {busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <Zap className="mr-2 inline h-4 w-4" />}
+                  {busy
+                    ? source === "file" && file && !useUrl
+                      ? "Uploading…"
+                      : "Starting…"
+                    : isLive
+                    ? "Start live detection"
+                    : "Run detection"}
+                </button>
+                {uploadPct != null && (
+                  <div className="mt-3 text-sm text-mut" data-testid="upload-progress">
+                    Uploading… {Math.round(uploadPct * 100)}%
+                  </div>
+                )}
+              </>
             )}
           </>
         )}

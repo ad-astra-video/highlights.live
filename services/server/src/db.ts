@@ -47,6 +47,19 @@ export interface WaitlistEntry {
   createdAt: string;
 }
 
+/** The waitlist->invite allocation gate (ADAAAA-2555). The email-runner
+ * allocator polls the waitlist and allocates new signups in FIFO order ONLY
+ * while `allocationOpen` is true. It is toggled by the server admin only
+ * (`false` = "no new users currently" → allocation suppressed; `true` =
+ * resumed). Persisted as a single singleton row in `waitlist_gate`. */
+export interface WaitlistGate {
+  allocationOpen: boolean;
+  /** Admin identity that last set the gate (email or user id), or null if it
+   * has never been explicitly set — in which case allocation defaults open. */
+  setBy: string | null;
+  updatedAt: string;
+}
+
 /** A single-use invite code issued by the cohort owner (invite path "a").
  * Stored as a SHA-256 hash; the plaintext code is shown to the owner once at
  * issuance and handed out of band. */
@@ -175,6 +188,16 @@ export interface Db {
   setWaitlistInvited(email: string): Promise<WaitlistEntry>;
   /** All waitlist entries incl. status, newest first (admin gate inspection). */
   listWaitlist(): Promise<WaitlistEntry[]>;
+  /** Read the waitlist->invite allocation gate (defaults to open when it has
+   * never been set — the admin starts allocation-open). */
+  getWaitlistGate(): Promise<WaitlistGate>;
+  /** Persist the allocation gate (admin-only writer). Returns the stored gate. */
+  setWaitlistGate(allocationOpen: boolean, setBy: string): Promise<WaitlistGate>;
+  /** Atomically claim up to `limit` waitlisted signups, OLDEST first (FIFO by
+   * signup `created_at`), flipping each to `invited` and returning them. Used
+   * by the email-runner allocator so a signup is allocated exactly once; the
+   * single UPDATE...RETURNING makes the claim race-free across ticks/processes. */
+  claimWaitlistSignups(limit: number, now: string): Promise<WaitlistEntry[]>;
   /** Public-beta telemetry snapshot (signups, clips, usage, subscriptions). */
   analytics(): Promise<AnalyticsSnapshot>;
   /** Get an invite code record by SHA-256 hash of the code. */
@@ -432,6 +455,42 @@ export class SqliteDb implements Db {
 
   async listWaitlist(): Promise<WaitlistEntry[]> {
     const rows = this.db.prepare("SELECT * FROM waitlist ORDER BY created_at DESC").all() as any[];
+    return rows.map(rowToWaitlist);
+  }
+
+  async getWaitlistGate(): Promise<WaitlistGate> {
+    const r = this.db.prepare("SELECT * FROM waitlist_gate WHERE id = 'gate'").get() as any;
+    if (!r) return { allocationOpen: true, setBy: null, updatedAt: new Date().toISOString() };
+    return { allocationOpen: !!r.allocation_open, setBy: r.set_by ?? null, updatedAt: r.updated_at };
+  }
+
+  async setWaitlistGate(allocationOpen: boolean, setBy: string): Promise<WaitlistGate> {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO waitlist_gate (id, allocation_open, set_by, updated_at) VALUES ('gate',?,?,?)
+         ON CONFLICT(id) DO UPDATE SET allocation_open=excluded.allocation_open,
+           set_by=excluded.set_by, updated_at=excluded.updated_at`
+      )
+      .run(allocationOpen ? 1 : 0, setBy, now);
+    return { allocationOpen, setBy, updatedAt: now };
+  }
+
+  async claimWaitlistSignups(limit: number, now: string): Promise<WaitlistEntry[]> {
+    // Atomic FIFO claim (ADAAAA-2555): reserve the OLDEST still-waitlisted
+    // signups and flip them to `invited` in one UPDATE...RETURNING so two ticks
+    // (or processes) can never allocate the same signup. The allocator then
+    // enqueues an invite for each returned row.
+    const rows = this.db
+      .prepare(
+        `UPDATE waitlist SET status='invited', invited_at=?
+         WHERE id IN (
+           SELECT id FROM waitlist
+           WHERE status='waitlisted'
+           ORDER BY created_at ASC, id ASC LIMIT ?
+         ) RETURNING *`
+      )
+      .all(now, limit) as any[];
     return rows.map(rowToWaitlist);
   }
 
@@ -775,6 +834,38 @@ export class PgDb implements Db {
     return r.rows.map(rowToWaitlist);
   }
 
+  async getWaitlistGate(): Promise<WaitlistGate> {
+    const r = await this.pool.query("SELECT * FROM waitlist_gate WHERE id = 'gate'");
+    const row = r.rows[0];
+    if (!row) return { allocationOpen: true, setBy: null, updatedAt: new Date().toISOString() };
+    return { allocationOpen: row.allocation_open === true || row.allocation_open === 1, setBy: row.set_by ?? null, updatedAt: row.updated_at };
+  }
+
+  async setWaitlistGate(allocationOpen: boolean, setBy: string): Promise<WaitlistGate> {
+    const now = new Date().toISOString();
+    await this.pool.query(
+      `INSERT INTO waitlist_gate (id, allocation_open, set_by, updated_at) VALUES ('gate',$1,$2,$3)
+       ON CONFLICT (id) DO UPDATE SET allocation_open=EXCLUDED.allocation_open,
+         set_by=EXCLUDED.set_by, updated_at=EXCLUDED.updated_at`,
+      [allocationOpen, setBy, now]
+    );
+    return { allocationOpen, setBy, updatedAt: now };
+  }
+
+  async claimWaitlistSignups(limit: number, now: string): Promise<WaitlistEntry[]> {
+    const r = await this.pool.query(
+      `UPDATE waitlist SET status='invited', invited_at=$1
+       WHERE id IN (
+         SELECT id FROM waitlist
+         WHERE status='waitlisted'
+         ORDER BY created_at ASC, id ASC
+         LIMIT $2
+       ) RETURNING *`,
+      [now, limit]
+    );
+    return r.rows.map(rowToWaitlist);
+  }
+
   async getInviteByHash(codeHash: string): Promise<InviteCode | undefined> {
     const r = await this.pool.query("SELECT * FROM invite_codes WHERE code_hash = $1", [codeHash]);
     return r.rows[0] ? rowToInvite(r.rows[0]) : undefined;
@@ -988,6 +1079,12 @@ const SCHEMA_SQLITE = `
     updated_at TEXT NOT NULL,
     sent_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS waitlist_gate (
+    id TEXT PRIMARY KEY CHECK (id = 'gate'),
+    allocation_open INTEGER NOT NULL DEFAULT 1,
+    set_by TEXT,
+    updated_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS _schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -1085,6 +1182,12 @@ const SCHEMA_PG = `
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     sent_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS waitlist_gate (
+    id TEXT PRIMARY KEY CHECK (id = 'gate'),
+    allocation_open INTEGER NOT NULL DEFAULT 1,
+    set_by TEXT,
+    updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS _schema_migrations (
     version INTEGER PRIMARY KEY,
