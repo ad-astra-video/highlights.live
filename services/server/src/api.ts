@@ -74,11 +74,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const app = Fastify({ logger: false });
   app.register(cors, { origin: true });
   // Multipart parsing for browser VOD uploads (POST /jobs/upload). Files are
-  // streamed (never buffered in memory). The 2 GB cap is enforced by the
-  // route's own byte counter (authoritative) so an over-limit upload aborts
-  // with 413 before reaching compute; we do NOT set busboy's fileSize limit
-  // here because that truncates the part before the counter can trip.
-  app.register(multipart, { limits: { files: 1, fields: 10 } });
+  // streamed (never buffered in memory). The 2 GB cap is enforced authoritatively
+  // by the route's own byte counter, which aborts an over-limit upload with 413
+  // before reaching compute. We MUST set busboy's `limits.fileSize` ABOVE the cap:
+  // @fastify/multipart otherwise defaults it to fastify.initialConfig.bodyLimit
+  // (1 MiB = 1,048,576), which silently truncates every upload to exactly
+  // 1,048,576 bytes and makes the 2 GB counter unreachable (ADAAAA-3041).
+  // fileSize must be > cap (not == cap): when busboy's own limit trips first it
+  // rejects inside `req.file()` with an unhandled FST_REQ_FILE_TOO_LARGE (500),
+  // stealing the route counter's clean 413. A +1 MiB margin keeps busboy from
+  // ever firing for a file the 2 GB counter has already accepted, so the counter
+  // alone decides 413 at the cap.
+  app.register(multipart, {
+    limits: { files: 1, fields: 10, fileSize: cfg.vodMaxUploadBytes + 1024 * 1024 },
+  });
 
   // Keep raw JSON body for Stripe webhook signature verification.
   app.removeContentTypeParser("application/json");

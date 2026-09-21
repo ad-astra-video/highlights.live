@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -8,11 +8,18 @@ import { buildTestApp } from "./helpers";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-test-"));
 const videoPath = path.join(tmp, "test.mp4");
+// A valid video genuinely larger than the historical 1 MiB truncation point, so
+// the 413/truncation regression test exercises busboy's fileSize default.
+const bigVideoPath = path.join(tmp, "big-test.mp4");
 
 beforeAll(() => {
   execFileSync("ffmpeg", [
     "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x180:rate=1",
     "-pix_fmt", "yuv420p", videoPath,
+  ]);
+  execFileSync("ffmpeg", [
+    "-y", "-f", "lavfi", "-i", "testsrc2=duration=2:size=1280x720:rate=30",
+    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "0", "-pix_fmt", "yuv420p", bigVideoPath,
   ]);
 });
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -443,6 +450,34 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
     expect(existsSync(path.join(cfg.dataDir, "uploads"))).toBe(false);
     const hl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
     expect(hl.length).toBe(0);
+    await app.close();
+  });
+
+  it("accepts a >1 MiB upload intact — regression for the 1 MiB default fileSize truncation", async () => {
+    // @fastify/multipart defaults busboy's `fileSize` to fastify's bodyLimit
+    // (1 MiB = 1,048,576), so an unset limit silently truncates every upload to
+    // exactly 1,048,576 bytes and the 2 GB counter can never trip. Verify a
+    // real >1 MiB video passes through byte-for-byte (stored size == sent size).
+    const sent = readFileSync(bigVideoPath);
+    expect(sent.length).toBeGreaterThan(1024 * 1024); // precondition: fixture is > the old truncation point
+    const { app, cfg } = await buildTestApp(); // default cap = 2 GiB
+    const token = await register(app, "multi@test.dev", "password123");
+    const { payload, contentType } = await multipart({
+      file: sent,
+      filename: "big clip.mp4",
+      mime: "video/mp4",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs/upload",
+      headers: { authorization: `Bearer ${token}`, "content-type": contentType },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.framesAnalyzed).toBeGreaterThan(0);
+    const stored = path.join(cfg.dataDir, "uploads", body.job.id, "big clip.mp4");
+    expect(statSync(stored).size).toBe(sent.length); // NOT truncated to 1,048,576
     await app.close();
   });
 
