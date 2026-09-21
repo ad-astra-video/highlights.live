@@ -11,6 +11,7 @@ services:
   orchestrator:
     image: livepeer/go-livepeer:v0.9.2
     container_name: highlights-orchestrator
+    restart: unless-stopped
     command:
       - -orchestrator
       - -useLiveRunners
@@ -50,6 +51,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.perceive
     container_name: highlights-perceive
+    restart: unless-stopped
     expose: ["8080"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/health')"]
@@ -73,6 +75,7 @@ services:
   gemma:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
     container_name: highlights-gemma
+    restart: unless-stopped
     entrypoint: ["/app/llama-server"]
     command:
       - --model
@@ -121,6 +124,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.decide
     container_name: highlights-decide
+    restart: unless-stopped
     expose: ["8081"]
     # Real Gemma 4 12B QAT via the in-compose gemma llama-server (see
     # docs/plan/03-decide-runner.md). DECIDE_MODE=rule falls back to the stub.
@@ -143,6 +147,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.server
     container_name: highlights-server
+    restart: unless-stopped
     environment:
       - PORT=3000
       - ORCHESTRATOR_URL=https://orchestrator:8935
@@ -188,6 +193,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.email
     container_name: highlights-email
+    restart: unless-stopped
     environment:
       - EMAIL_PORT=3001
       - DATABASE_URL=postgres://${POSTGRES_USER:-highlights}:${POSTGRES_PASSWORD:-highlights}@postgres:5432/${POSTGRES_DB:-highlights}
@@ -230,6 +236,7 @@ services:
   postgres:
     image: postgres:18
     container_name: highlights-postgres
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-highlights}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-highlights}
@@ -255,6 +262,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.media
     container_name: highlights-media
+    restart: unless-stopped
     environment:
       - PORT=4070
       - ORCHESTRATOR_URL=https://orchestrator:8935
@@ -289,6 +297,7 @@ services:
       dockerfile: services/signer/Dockerfile
     container_name: highlights-signer
     profiles: ["signer"]
+    restart: unless-stopped
     environment:
       # Runtime-validated by the entrypoint (signer needs RPC to start).
       - ARBITRUM_RPC=${ARBITRUM_RPC:-}
