@@ -1,0 +1,14 @@
+[Unit]
+Description=highlights.live compose stack boot guard (ADAAAA-3248)
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/highlights-live-boot.sh
+TimeoutStartSec=600
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
