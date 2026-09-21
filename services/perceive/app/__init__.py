@@ -18,6 +18,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from . import preload  # noqa: E402  (startup model preload)
 from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
 from .florence import capability, get_detector, record_analyze
@@ -274,14 +275,18 @@ def create_app() -> FastAPI:
 
     @router.get("/health")
     async def health():
-        # Healthy when the perceive process + tracker are up. Do NOT tie to the
-        # decide GPU's state — an unhealthy check would release live sessions.
+        # Healthy when the perceive process + tracker are up. Do NOT tie the
+        # upstream status to model-load state — an unhealthy check would release
+        # live sessions. Models are preloaded asynchronously at startup (JIT
+        # otherwise loads on first use); expose their progress under "models"
+        # for diagnostics without ever flipping /health to a failing state.
         mode = os.environ.get("PERCEIVE_MODE", "stub")
         cap = capability()
         return {
             "status": "ok",
             "model": "florence-2" if mode == "florence" else "stub-iou",
             "slots": MAX_TRACKS,
+            "models": preload.preload_status(),
             **cap,
         }
 
@@ -438,7 +443,23 @@ def create_app() -> FastAPI:
             await _stop_trickle(sid)
         return {"closed": sid}
 
-    app = FastAPI(title="highlights-perceive", version="0.1.0")
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI):
+        # On startup: kick off Florence-2 + SAM 3.1 model preload on a background
+        # thread so the first live/VOD pass never pays the multi-second model
+        # build mid-call (ADAAAA-3305 VOD 404 "runner not found"). This returns
+        # immediately (worker is daemon) and never touches the event loop's
+        # latency, so /health answers instantly and the orchestrator never sees a
+        # stalled runner. Idempotent; no-op when the models aren't configured.
+        preload.start_background_preload()
+        try:
+            yield
+        finally:
+            pass
+
+    app = FastAPI(title="highlights-perceive", version="0.1.0", lifespan=_lifespan)
     app.state.registry = registry  # exposed for tests / admin tooling
 
     def _cancel_trickle(session_id: str) -> None:
