@@ -122,6 +122,13 @@ export interface SignerClient {
       app?: string;
       type?: "live" | "lv2v" | "fixed";
       inPixels?: number;
+      /**
+       * go-livepeer REQUIRES the live payment's manifestID to equal the
+       * orchestrator's AuthToken.SessionId (from GetOrchestratorInfo);
+       * otherwise the orchestrator's live-runner reserve returns
+       * `403 mismatched manifest and auth token`.
+       */
+      manifestID?: string;
     }
   ): Promise<LivePayment>;
 }
@@ -215,15 +222,18 @@ export class HttpSignerClient implements SignerClient {
   async generateLivePayment(
     orchInfoB64: string,
     prevState: RemotePaymentStateSig | null,
-    opts: { app?: string; type?: "live" | "lv2v" | "fixed"; inPixels?: number } = {}
+    opts: { app?: string; type?: "live" | "lv2v" | "fixed"; inPixels?: number; manifestID?: string } = {}
   ): Promise<LivePayment> {
     // go-livepeer decodes a RemotePaymentRequest and REQUIRES the base64
     // net.OrchestratorInfo protobuf in the `orchestrator` field. Sending the
     // OLD `{ orchInfo, prevState }` shape made the field empty -> `400 err=missing
     // orchestrator`, which media surfaced as "signer generateLivePayment failed: HTTP 400".
+    // `manifestID` must equal the orchestrator's AuthToken.SessionId, else the
+    // orchestrator's live-runner reserve returns `403 mismatched manifest and auth token`.
     const body = buildRemotePaymentRequest({
       orchestrator: orchInfoB64,
       ...(prevState ? { state: prevState } : {}),
+      ...(opts.manifestID ? { manifestID: opts.manifestID } : {}),
       ...(opts.app ? { app: opts.app } : {}),
       ...(opts.type ? { type: opts.type } : {}),
       ...(opts.inPixels !== undefined ? { inPixels: opts.inPixels } : {}),
@@ -328,18 +338,24 @@ export class LivepeerClient {
    * Interval payment refresh. No-op offchain (sessions are unpaid); no-op when
    * no signer. `orchInfoB64` is the base64 protobuf of the orchestrator's
    * `net.OrchestratorInfo` the signer needs to (re)issue a ticket; `signerState`
-   * is the opaque signed state blob from the previous payment (null on first).
+   * is the opaque signed state blob from the previous payment (null on first);
+   * `manifestID` must equal the orchestrator's AuthToken.SessionId (else the
+   * orchestrator returns `403 mismatched manifest and auth token`).
    */
   async refreshPerceivePayment(
     sessionId: string,
     controlUrl: string,
     signer?: SignerClient,
     orchInfoB64?: string,
-    signerState?: RemotePaymentStateSig | null
+    signerState?: RemotePaymentStateSig | null,
+    manifestID?: string
   ): Promise<unknown> {
     if (!signer) return null;
     if (!orchInfoB64) throw new Error("payment refresh requires orchestrator info (orchInfoB64)");
-    const paid = await signer.generateLivePayment(orchInfoB64, signerState ?? null, { type: "live" });
+    const paid = await signer.generateLivePayment(orchInfoB64, signerState ?? null, {
+      type: "live",
+      manifestID,
+    });
     const res = await this.transport.request("POST", `${controlUrl}/payment`, {
       headers: { "Livepeer-Payment": paid.payment, "Livepeer-Segment": paid.segCreds },
     });

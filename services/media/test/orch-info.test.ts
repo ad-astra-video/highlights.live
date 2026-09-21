@@ -78,6 +78,7 @@ describe("getOrchestratorInfoB64 (in-process gRPC GetOrchestrator)", () => {
           address: Buffer.from("deadbeef", "hex"),
           price_info: { pricePerUnit: "1", pixelsPerUnit: "1" },
           nodes: ["https://orchestrator:8935"],
+          auth_token: { session_id: "sess-abc", token: Buffer.from("tok", "hex"), expiration: "123" },
         });
       },
     });
@@ -96,12 +97,14 @@ describe("getOrchestratorInfoB64 (in-process gRPC GetOrchestrator)", () => {
   });
 
   it("returns base64 OrchestratorInfo that round-trips to the same fields", async () => {
-    const b64 = await getOrchestratorInfoB64(
+    const { b64, sessionId } = await getOrchestratorInfoB64(
       { orchBase: `127.0.0.1:${port}` },
       { address: "0xdeadbeef", signature: "0x" + "ab".repeat(65) }
     );
     expect(typeof b64).toBe("string");
     expect(b64.length).toBeGreaterThan(0);
+    // go-livepeer requires the live payment manifestID == AuthToken.SessionId.
+    expect(sessionId).toBe("sess-abc");
 
     const responseDeserialize = proto.net.Orchestrator.service.GetOrchestrator.responseDeserialize;
     const decoded: any = responseDeserialize(Buffer.from(b64, "base64"));
