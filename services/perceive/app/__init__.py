@@ -51,6 +51,29 @@ async def _trickle_on_frame(state, seq: int, image_b64: str, timestamp: float) -
     return await asyncio.to_thread(_run)
 
 
+async def _analyze_offloop(
+    state, seq: int, timestamp: float, image_b64: str
+) -> tuple[dict, dict | None]:
+    """Run one HTTP /analyze through the same pipeline as trickle video-in —
+    OFF the asyncio event loop and serialized on the shared GPU lock.
+
+    Why this matters (VOD 404 "runner not found", ADAAAA-3305): starting a fresh
+    SAM 3 backend builds the GPU predictor (`build_sam3_video_predictor`) and
+    opens its clip session — a multi-second BLOCKING operation. If it runs on
+    the event loop, the whole process (including /health) stalls for seconds.
+    The orchestrator health-probes perceive every ~5s; a stall that long makes
+    it mark the runner unavailable and RELEASE the live session mid-pass, so the
+    next proxied app call returns 404 "runner not found" from go-livepeer. By
+    running analyze off-loop (same as trickle already does), /health always
+    answers and the live session stays reserved for the whole VOD pass."""
+
+    def _run() -> tuple[dict, dict | None]:
+        with _gpu_lock:
+            return process_frame(state, seq, timestamp, image_b64)
+
+    return await asyncio.to_thread(_run)
+
+
 async def _ensure_trickle(
     state, control_url: str, token: str, route: str = ""
 ) -> TrickleSession | None:
@@ -296,7 +319,11 @@ def create_app() -> FastAPI:
             state.last_rgb = _decode_rgb(req.image)
             state.last_image_b64 = req.image
 
-        obs, cand = process_frame(state, req.seq, req.timestamp, req.image)
+        # Run the frame through the SAME off-loop, GPU-serialized path the
+        # trickle rail uses — never block the event loop with model load /
+        # inference, or /health stalls and the orchestrator releases the live
+        # session mid-pass (ADAAAA-3305 VOD 404 "runner not found").
+        obs, cand = await _analyze_offloop(state, req.seq, req.timestamp, req.image)
         if cand is not None:
             return {"candidate": {"type": "candidate", "sessionId": sid, "eventType": cand["eventType"], "timestamp": cand["timestamp"], "seq": req.seq}, "observation": obs}
         return obs
