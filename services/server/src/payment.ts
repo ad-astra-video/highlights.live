@@ -25,6 +25,26 @@ export interface PaymentRefresherOptions {
    * Default: rethrow (aborts the caller too).
    */
   onFailure?: (err: Error) => void;
+  /**
+   * When true, a refresh failure logs via `onFailure` but the loop keeps
+   * running and retries on the next cadence. Default false (a failed payment
+   * release is fatal — the current tick halts the loop permanently).
+   *
+   * ADAAAA-3250: a live perceive session must be re-funded on every payment
+   * interval or its signer-state `LastUpdate` goes stale and the NEXT payment
+   * bills the ENTIRE backlog since the last successful payment in one batch.
+   * go-livepeer's remote signer caps a live batch at 100 tickets
+   * (`remote_signer.go` numTickets > 100 -> 400), so a session left unfunded
+   * for ~an hour computes hundreds of tickets and its very next refresh is
+   * rejected (HTTP 400 `numTickets 456 exceeds maximum of 100`), killing the
+   * VOD job. The refresh loop must therefore be resilient: a transient/benign
+   * failure (e.g. HTTP 482 "no new tickets needed" when reserved balance
+   * already covers the minimum credit) must NOT strand the session. With
+   * `retryOnFailure` the loop keeps the cadence and re-funds as soon as the
+   * signer will accept it, keeping `LastUpdate` fresh so a real/long clip
+   * never accumulates a >100-ticket backlog.
+   */
+  retryOnFailure?: boolean;
   /** External abort (e.g. on stream end) — same as stop(). */
   signal?: AbortSignal;
 }
@@ -44,9 +64,17 @@ export function createPaymentRefresher(opts: PaymentRefresherOptions): PaymentRe
     try {
       await opts.refresh();
     } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      if (opts.retryOnFailure) {
+        // Keep the cadence: log and retry on the next interval so a benign /
+        // transient failure never strands the session's payment state. A
+        // permanently-stale state would bill the whole backlog in one batch on
+        // the next successful refresh and be rejected (numTickets > 100).
+        if (opts.onFailure) opts.onFailure(e);
+        return;
+      }
       halt();
       stopped = true;
-      const e = err instanceof Error ? err : new Error(String(err));
       // The worker MUST wire onFailure to stop the perceive session on a failed
       // payment (plan: releasing SAM3 for free is worse than stopping). Without
       // a handler we halt the loop but do NOT rethrow — an unhandled rejection

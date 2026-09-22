@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrchestratorAdapter } from "../src/livepeer-adapter";
+import { createPaymentRefresher } from "../src/payment";
 import { loadConfig } from "../src/config";
 import type { SignerClient, LivePayment } from "@highlights/livepeer-session";
 
@@ -194,5 +195,64 @@ describe("OrchestratorAdapter (VOD) on-chain payment", () => {
     expect(fixed[fixed.length - 1].opts.manifestID).toBe("sess-abc");
 
     expect(res).toEqual({ decision: "make_clip" });
+  });
+});
+
+// ADAAAA-3250: a live perceive session's payment refresher must never strand on
+// a benign/transient failure (e.g. go-livepeer 482 "no new tickets needed"). If
+// the loop halts permanently, the session's signer-state LastUpdate goes stale
+// and the NEXT payment bills the whole backlog in one batch, which go-livepeer's
+// remote signer rejects (numTickets 456 > 100 cap -> 400), killing the VOD job.
+describe("payment refresher resilience (ADAAAA-3250)", () => {
+  it("retryOnFailure keeps the cadence after a failure instead of halting permanently", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const errs: string[] = [];
+      const ref = createPaymentRefresher({
+        refresh: vi.fn(async () => {
+          calls++;
+          if (calls === 1) throw new Error("signer generateLivePayment failed: HTTP 482");
+          return "ok";
+        }),
+        intervalMs: 100,
+        retryOnFailure: true,
+        onFailure: (e) => errs.push(e.message),
+      });
+      ref.start();
+      // First tick fires immediately and fails — with retryOnFailure the loop
+      // must NOT set `stopped`, so the next interval tick still runs.
+      await vi.advanceTimersByTimeAsync(50);
+      expect(calls).toBe(1);
+      expect(errs).toEqual(["signer generateLivePayment failed: HTTP 482"]);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(calls).toBe(2); // it retried — not stranded
+      ref.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("without retryOnFailure a failure halts the loop permanently (existing fatal semantics)", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const ref = createPaymentRefresher({
+        refresh: vi.fn(async () => {
+          calls++;
+          throw new Error("payment refresh failed: HTTP 400");
+        }),
+        intervalMs: 100,
+      });
+      ref.start();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(calls).toBe(1); // halted after the first failure
+      ref.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
