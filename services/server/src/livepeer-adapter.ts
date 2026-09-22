@@ -130,6 +130,13 @@ export class OrchestratorAdapter implements PipelineClient {
     const ref = createPaymentRefresher({
       refresh,
       intervalMs: this.paymentIntervalMs,
+      // ADAAAA-3250: never strand a live perceive session's funding. A refresh
+      // failure (e.g. the benign go-livepeer 482 "no new tickets needed", or a
+      // transient network blip) must NOT permanently stop the loop, or the
+      // session's signer-state LastUpdate goes stale and the next payment bills
+      // the whole backlog in one batch (numTickets > 100 cap -> 400), killing
+      // the VOD job. Keep the cadence and retry so LastUpdate stays fresh.
+      retryOnFailure: true,
       onFailure: (e) => {
         console.error(`[adapter] payment refresh failed for session ${p.sessionId}: ${e?.message}`);
       },
