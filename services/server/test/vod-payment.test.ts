@@ -28,8 +28,9 @@ function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function fakeFetch(opts: { paidReserve?: boolean; challengeBody?: any } = {}) {
+function fakeFetch(opts: { paidReserve?: boolean; paidDecide?: boolean; challengeBody?: any } = {}) {
   let reserveCalls = 0;
+  let decideCalls = 0;
   const log: Array<{ url: string; headers: Record<string, string>; method: string }> = [];
   return {
     fn: vi.fn(async (input: any, init?: any) => {
@@ -46,6 +47,15 @@ function fakeFetch(opts: { paidReserve?: boolean; challengeBody?: any } = {}) {
           app_url: "http://orch/app",
           control_url: "http://orch/ctl",
         });
+      }
+      if (url.endsWith("/apps/highlights-decide/app/highlight")) {
+        decideCalls++;
+        // The single-shot decide runner 402s once with the payment challenge,
+        // then accepts the retry carrying Livepeer-Payment/Livepeer-Segment.
+        if (decideCalls === 1 && !opts.paidDecide) {
+          return jsonResponse(402, opts.challengeBody ?? { error: "payment required" });
+        }
+        return jsonResponse(200, { decision: "make_clip" });
       }
       if (url.includes("/payment")) return jsonResponse(200, { ok: true });
       if (url.endsWith("/stop")) return new Response(null, { status: 204 });
@@ -148,5 +158,41 @@ describe("OrchestratorAdapter (VOD) on-chain payment", () => {
 
     const adapter = new OrchestratorAdapter(cfg()); // no signer
     await expect(adapter.reservePerceive()).rejects.toThrow(/402 Payment Required/);
+  });
+
+  it("pays the single-shot decide runner via the remote signer on 402 (regression: decide-path 402)", async () => {
+    const { fn, log } = fakeFetch({ paidReserve: true, challengeBody: CHALLENGE });
+    vi.stubGlobal("fetch", fn);
+
+    const adapter = new OrchestratorAdapter(cfg(), {
+      signer: fakeSigner,
+      payerAddress: PAYER,
+    });
+
+    const res = await adapter.decide(
+      { eventType: "KILL", trackCount: 1, maxVelocity: 0, ocrHits: 0 },
+      { gameHint: "final" }
+    );
+
+    const decideCalls = log.filter((c) => c.url.endsWith("/apps/highlights-decide/app/highlight"));
+    // First unpaid decide 402s with the challenge; the paid retry succeeds.
+    expect(decideCalls).toHaveLength(2);
+    // Every decide advertises the signer's payer address (this is what the
+    // orchestrator validated to return `invalid live runner payment signer address`).
+    expect(decideCalls[0].headers["Livepeer-Payer-Address"]).toBe(PAYER);
+    expect(decideCalls[0].headers["Livepeer-Payment"]).toBeUndefined();
+    // The paid retry carried the signer's Livepeer-Payment / Livepeer-Segment.
+    expect(decideCalls[1].headers["Livepeer-Payment"]).toBe("livepeer-payment-ticket");
+    expect(decideCalls[1].headers["Livepeer-Segment"]).toBe("segment-creds");
+
+    // The signer got the fixed-price request with the 402 challenge's orch info + manifest id.
+    const fixed = generatePaymentCalls.filter((c) => c.opts.type === "fixed");
+    expect(fixed.length).toBeGreaterThanOrEqual(1);
+    expect(fixed[fixed.length - 1].orchInfoB64).toBe("b3JjaC1pbmZv");
+    expect(fixed[fixed.length - 1].prev).toBe(null);
+    expect(fixed[fixed.length - 1].opts.app).toBe("highlights-decide");
+    expect(fixed[fixed.length - 1].opts.manifestID).toBe("sess-abc");
+
+    expect(res).toEqual({ decision: "make_clip" });
   });
 });

@@ -5,6 +5,7 @@ import {
   HttpSignerClient,
   LivepeerClient,
   PaymentRequiredError,
+  ROUTES,
   type RemotePaymentStateSig,
   type SignerClient,
 } from "@highlights/livepeer-session";
@@ -161,7 +162,8 @@ export class OrchestratorAdapter implements PipelineClient {
     evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
     opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
   ): Promise<DecisionResult> {
-    const { status, data } = await this.client.decide("highlight", {
+    const payerAddress = this.payerAddress;
+    const payload = {
       sessionId: "job",
       eventType: evidence.eventType,
       timestamp: 0,
@@ -169,9 +171,41 @@ export class OrchestratorAdapter implements PipelineClient {
       reasoningEffort: opts?.reasoningEffort || "none",
       evidence,
       images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
-    });
-    if (status >= 400) throw new Error(`decide failed: HTTP ${status}`);
-    return data as DecisionResult;
+    };
+    // The decide runner is a fixed-price single-shot live runner; the first
+    // unpaid call 402s with a payment challenge. On-chain (signer + payer
+    // address) we forward the challenge's orchestrator info to the remote signer
+    // and retry with Livepeer-Payment/Livepeer-Segment — the same flow as
+    // reservePerceive, but with a "fixed" unit (1 billable unit) instead of
+    // "live" (per-second). This path is what made go-livepeer return
+    // `402 invalid live runner payment signer address` for a VOD job at
+    // live-runner decide time (6c723cd only paid the persistent perceive reserve).
+    const run = async (paymentHeaders?: Record<string, string>) => {
+      const { status, data } = await this.client.decide("highlight", payload, {
+        payerAddress: payerAddress || undefined,
+        paymentHeaders,
+      });
+      if (status >= 400) throw new Error(`decide failed: HTTP ${status}`);
+      return data as DecisionResult;
+    };
+    try {
+      return await run();
+    } catch (err) {
+      if (!(err instanceof PaymentRequiredError) || !this.signer || !payerAddress) throw err;
+      const b64 = err.challenge?.paymentParams;
+      if (!b64) {
+        throw new Error(
+          "on-chain decide 402 challenge carried no payment_params (orchestrator info) to forward to the signer; cannot obtain tickets"
+        );
+      }
+      const manifestID = err.challenge?.manifestId;
+      const pmt = await this.signer.generateLivePayment(b64, null, {
+        app: ROUTES.decide,
+        type: "fixed",
+        manifestID: manifestID || undefined,
+      });
+      return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
+    }
   }
   async stopPerceive(sessionId: string): Promise<void> {
     // Stop paying for the session before releasing it (idempotent; no-op
