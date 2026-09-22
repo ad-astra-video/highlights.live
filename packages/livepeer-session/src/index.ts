@@ -354,16 +354,33 @@ export class LivepeerClient {
     return { status: res.status, data };
   }
 
-  /** Single-shot decide call through the orchestrator (one paid slot, released on finish). */
+  /**
+   * Single-shot decide call through the orchestrator (one paid slot, released on
+   * finish). On-chain (payerAddress + paymentHeaders) the first call normally
+   * returns 402 (`ProxyLiveRunnerSingleShot` -> `reservePaidLiveRunnerSession` ->
+   * `runnerChallenge`, same fixed-price live-runner flow as reserve): the 402
+   * body carries the payment challenge (payment_params / manifest_id) the caller
+   * forwards to the remote signer to obtain tickets, then retries with the
+   * returned Livepeer-Payment/Livepeer-Segment. A bare decide call with no
+   * `Livepeer-Payer-Address` is rejected by the orchestrator with
+   * `402 invalid live runner payment signer address`.
+   */
   async decide(
     path: string,
     body: unknown,
-    opts?: { headers?: Record<string, string> }
+    opts?: { headers?: Record<string, string>; payerAddress?: string; paymentHeaders?: Record<string, string> }
   ): Promise<{ status: number; data: unknown }> {
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts?.headers || {}) };
+    if (opts?.payerAddress) headers["Livepeer-Payer-Address"] = opts.payerAddress;
+    if (opts?.paymentHeaders) Object.assign(headers, opts.paymentHeaders);
     const res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
-      headers: { "Content-Type": "application/json", ...(opts?.headers || {}) },
+      headers,
       body: JSON.stringify(body),
     });
+    if (res.status === 402) {
+      const body2 = await res.json().catch(() => ({}));
+      throw new PaymentRequiredError(body2, livePaymentChallengeFromBody(body2));
+    }
     const text = await res.text();
     let data: unknown = null;
     try {
