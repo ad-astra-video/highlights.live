@@ -242,19 +242,36 @@ export interface ReserveResult {
 export class HttpSignerClient implements SignerClient {
   constructor(
     public readonly base: string,
-    private transport: Transport = new HttpTransport(base)
+    private transport: Transport = new HttpTransport(base),
+    private authToken?: string
   ) {}
+
+  /**
+   * Merge the shared signer bearer token (SIGNER_AUTH_TOKEN) into outbound
+   * request headers. The remote signer (`livepeer -remoteSigner` on Railway,
+   * sealed as SIGNER_AUTH_TOKEN) expects `Authorization: Bearer <token>` on
+   * every signing call; without it the signer rejects the request and the
+   * server never obtains a valid Livepeer-Payment ticket, so go-livepeer
+   * returns `402 invalid live runner payment signer address` at live-runner
+   * serve time (ADAAAA-3250). Offchain/no-token signers get no header.
+   */
+  private authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    if (this.authToken) extra["Authorization"] = `Bearer ${this.authToken}`;
+    return extra;
+  }
 
   async discover(caps: string[]): Promise<{ address: string; runners: DiscoveredRunner[] }[]> {
     const qs = caps.map((c) => `caps=${encodeURIComponent(c)}`).join("&");
-    const res = await this.transport.request("GET", `/discover-orchestrators${qs ? `?${qs}` : ""}`, {});
+    const res = await this.transport.request("GET", `/discover-orchestrators${qs ? `?${qs}` : ""}`, {
+      headers: this.authHeaders(),
+    });
     if (res.status !== 200) throw new Error(`signer discover failed: HTTP ${res.status}`);
     return (await res.json()) as { address: string; runners: DiscoveredRunner[] }[];
   }
 
   async signOrchInfo(address: string): Promise<unknown> {
     const res = await this.transport.request("POST", "/sign-orchestrator-info", {
-      headers: { "Content-Type": "application/json" },
+      headers: this.authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ orchestrator: address }),
     });
     if (res.status !== 200) throw new Error(`signer signOrchInfo failed: HTTP ${res.status}`);
@@ -281,7 +298,7 @@ export class HttpSignerClient implements SignerClient {
       ...(opts.inPixels !== undefined ? { inPixels: opts.inPixels } : {}),
     });
     const res = await this.transport.request("POST", "/generate-live-payment", {
-      headers: { "Content-Type": "application/json" },
+      headers: this.authHeaders({ "Content-Type": "application/json" }),
       body,
     });
     if (res.status !== 200) throw new Error(`signer generateLivePayment failed: HTTP ${res.status}`);

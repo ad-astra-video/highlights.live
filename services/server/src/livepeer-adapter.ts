@@ -289,6 +289,6 @@ export function makeAdapter(cfg: ServerConfig): PipelineClient {
   // On-chain: wire the remote signer + payer address so VOD submissions can pay
   // the orchestrator (mirrors the live media-server payer). Offchain (no signer)
   // this is the old unpaid path and the orchestrator never 402s.
-  const signer = cfg.signerUrl ? new HttpSignerClient(cfg.signerUrl) : undefined;
+  const signer = cfg.signerUrl ? new HttpSignerClient(cfg.signerUrl, undefined, cfg.signerAuthToken) : undefined;
   return new OrchestratorAdapter(cfg, { signer, payerAddress: cfg.payerAddress });
 }

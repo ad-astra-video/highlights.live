@@ -7,7 +7,7 @@ async function main() {
   // On-chain: point the media server at the remote signer so it pays the
   // orchestrator for the whole time a stream is open. Offchain (no signer) the
   // media server runs unpaid.
-  const signer = cfg.signerUrl ? new HttpSignerClient(cfg.signerUrl) : undefined;
+  const signer = cfg.signerUrl ? new HttpSignerClient(cfg.signerUrl, undefined, cfg.signerAuthToken) : undefined;
 
   // On-chain: find WHICH orchestrator / live-runner to start the session against
   // via the signer's /discover-orchestrators — the media server never dials the
