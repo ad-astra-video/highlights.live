@@ -82,6 +82,21 @@ export interface ServerConfig {
   /** Per-user per-calendar-month clip quota during the beta (the entitlement
    * ledger's hard-stop; no billing during beta). Default 10 clips/month. */
   betaClipQuota: number;
+  /** TEMPORARY, operator-controlled beta quota lift (ADAAAA-3577). When set to
+   * a positive number (`BETA_QUOTA_LIFT`), the entitlement ledger's ENFORCEMENT
+   * limit (and the free-tier generation fee gate) is lifted to that value so
+   * the N=2 real users can collectively drive toward K=100 clips on the live
+   * paid path. This is an INTERNAL TESTING lift only: `displayLimit` (the
+   * canonical 10/mo shown to users) and published pricing (PLANS free=10 /
+   * pro=100, landing copy) are never changed. Reversible: unset the env to
+   * revert. Time-boxed: when `betaQuotaLiftUntil` (`BETA_QUOTA_LIFT_UNTIL`,
+   * ISO) has passed the lift auto-expires and enforcement falls back to
+   * `betaClipQuota`. `null` = no lift. */
+  betaQuotaLift: number | null;
+  /** Optional ISO expiry for `betaQuotaLift`. Past this instant the lift is
+   * inactive (the operator override time-boxes itself). `null` = no expiry
+   * (the lift is still reversible by unsetting `BETA_QUOTA_LIFT`). */
+  betaQuotaLiftUntil: string | null;
   /** Invite/beta-gate: when true, registration + login require the account to
    * have been activated (a claimed invite code or an invited waitlist email).
    * Default ON in prod. Tests/off turn it off for the un-gated loop. */
@@ -134,7 +149,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     freeDecides: Number(env.FREE_DECIDES ?? 5),
     billingWireframe: env.BILLING_WIREFRAME === "1" || env.BILLING_WIREFRAME === "true",
     betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),
+    betaQuotaLift: env.BETA_QUOTA_LIFT ? Number(env.BETA_QUOTA_LIFT) : null,
+    betaQuotaLiftUntil: env.BETA_QUOTA_LIFT_UNTIL || null,
     betaGate: env.BETA_GATE === "1" || env.BETA_GATE === "true" || !env.BETA_GATE,
     autoPublishHighlights: env.AUTO_PUBLISH_HIGHLIGHTS === "0" || env.AUTO_PUBLISH_HIGHLIGHTS === "false" ? false : true,
   };
+}
+
+/** True when the operator-controlled beta quota lift (ADAAAA-3577) is in
+ * effect at `now`: `BETA_QUOTA_LIFT` is set to a positive number and (when
+ * `BETA_QUOTA_LIFT_UNTIL` is also set) its ISO expiry has not yet passed.
+ * A malformed `BETA_QUOTA_LIFT_UNTIL` fails open (the lift stays active) —
+ * either way it remains reversible by unsetting `BETA_QUOTA_LIFT`. */
+export function betaQuotaLiftActive(cfg: Pick<ServerConfig, "betaQuotaLift" | "betaQuotaLiftUntil">, now: Date = new Date()): boolean {
+  if (cfg.betaQuotaLift == null || cfg.betaQuotaLift <= 0) return false;
+  if (!cfg.betaQuotaLiftUntil) return true;
+  const t = new Date(cfg.betaQuotaLiftUntil).getTime();
+  if (Number.isNaN(t)) return true;
+  return now.getTime() < t;
 }

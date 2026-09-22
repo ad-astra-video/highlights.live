@@ -447,11 +447,27 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const payingAnyActive = a.subscriptions
       .filter((s) => s.status === "active" && s.tier !== "free")
       .reduce((n, s) => n + s.count, 0);
+    // Gate-X pipeline reliability: successfully-generated jobs over submitted.
+    const jobsDone = a.jobStatus.find((j) => j.status === "done")?.count ?? 0;
+    const jobsTotal = a.jobStatus.reduce((n, j) => n + j.count, 0);
+    const reliability = jobsTotal > 0 ? Math.round((jobsDone / jobsTotal) * 10000) / 100 : null;
     return {
       generatedAt: new Date().toISOString(),
       goal: { payingUsersTarget: goal },
       signups: { usersTotal: a.usersTotal, usersActivated: a.usersActivated, waitlistTotal: a.waitlistTotal, waitlistInvited: a.waitlistInvited },
       clips: { clipsTotal: a.clipsTotal, clipsUsed: a.clipsUsed, usageEvents: a.usageEvents },
+      jobs: { status: a.jobStatus, done: jobsDone, total: jobsTotal },
+      reliability: { pct: reliability, jobsDone, jobsTotal },
+      // Gate-X N/K readout (ADAAAA-3577): clips generated so far vs K, plus the
+      // temporary operator quota-lift state so the PO can see the lift is active
+      // and the canonical per-user quota that is still shown to users.
+      gateX: {
+        clipsGenerated: a.clipsTotal,
+        targetK: 100,
+        quotaLiftActive: entitlements.liftActive,
+        canonicalPerUserQuota: entitlements.displayLimit,
+        effectivePerUserQuota: entitlements.limit,
+      },
       conversion: {
         payingProActive: payingPro,
         payingAnyActive: payingAnyActive,
@@ -513,9 +529,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       freeHighlights: cfg.freeHighlights,
       // Per-user per-calendar-month clip quota (the entitlement ledger) surfaced
       // so the UI can show remaining quota and so an exhausted quota is visible
-      // without making a submission.
+      // without making a submission. `clipQuotaLimit` is the EFFECTIVE limit
+      // (canonical 10/mo normally; lifted during the temporary operator lift
+      // ADAAAA-3577) so the used/remaining counter stays coherent. The canonical
+      // number the user is "published" against (`clipQuotaLimitCanonical`) and
+      // whether the internal testing lift is active are surfaced separately so
+      // the PO can read the temporary state back.
       clipQuotaPeriod: entitlements.periodKey(),
       clipQuotaLimit: entitlements.limit,
+      clipQuotaLimitCanonical: entitlements.displayLimit,
+      quotaLiftActive: entitlements.liftActive,
       clipQuotaUsed: await entitlements.used(user.id),
       clipQuotaRemaining: await entitlements.remaining(user.id),
     };
