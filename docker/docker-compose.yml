@@ -162,6 +162,11 @@ services:
       # Media-path (b): the browser streams frames to the media server instead
       # of the server's HTTP /ingest when this is set.
       - MEDIA_SERVER_URL=${MEDIA_SERVER_URL:-http://media:4070}
+      # On-chain: the server also pays the orchestrator for VOD submission
+      # (SIGNER_URL + PAYER_ADDRESS + shared bearer SIGNER_AUTH_TOKEN).
+      - SIGNER_URL=${SIGNER_URL:-}
+      - PAYER_ADDRESS=${PAYER_ADDRESS:-}
+      - SIGNER_AUTH_TOKEN=${SIGNER_AUTH_TOKEN:-}
       # Transactional email: the server enqueues invites + password resets to
       # the email-sender container over its queue API (bearer-token auth).
       - EMAIL_SENDER_URL=${EMAIL_SENDER_URL:-http://email:3001}
@@ -262,6 +267,7 @@ services:
       - NODE_TLS_REJECT_UNAUTHORIZED=0
       - SIGNER_URL=${SIGNER_URL:-}
       - PAYER_ADDRESS=${PAYER_ADDRESS:-}
+      - SIGNER_AUTH_TOKEN=${SIGNER_AUTH_TOKEN:-}
       # Public LB / Cloudflare front for the media tier. The media server returns
       # this as the FULL ws ingest URL on provision so clients can be routed by
       # the load balancer rather than assuming a path on one node.
