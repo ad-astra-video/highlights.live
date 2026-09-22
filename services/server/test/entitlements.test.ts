@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildTestApp } from "./helpers";
+import { BillingRequiredError } from "../src/billing";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-ent-"));
 const videoPath = path.join(tmp, "test.mp4");
@@ -161,6 +162,108 @@ describe("invite / beta-gate (hard gate)", () => {
     const { app } = await buildTestApp(gate);
     const anon = await app.inject({ method: "POST", url: "/admin/invite-codes" });
     expect(anon.statusCode).toBe(401);
+    await app.close();
+  });
+});
+
+describe("temporary operator quota lift (ADAAAA-3577)", () => {
+  it("with the lift active (BETA_QUOTA_LIFT), a user may exceed the canonical cap toward K=100; the canonical number shown to users stays unchanged", async () => {
+    const { app, db, cfg } = await buildTestApp({ BETA_CLIP_QUOTA: "10", BETA_QUOTA_LIFT: "1000", FREE_HIGHLIGHTS: "100" });
+    const r = await register(app, "lift@test.dev", "password123");
+    expect(r.statusCode).toBe(200);
+    const userId = (await db.getUserByEmail("lift@test.dev"))!.id;
+    const period = "2026-09";
+
+    // Simulate 12 clips already generated this month (> canonical 10).
+    for (let i = 0; i < 12; i++) await db.incrementQuota(userId, period);
+
+    // /billing/status: effective limit lifted, canonical stays 10, lift surfaced.
+    const s = (await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${r.json().token}` } })).json();
+    expect(s.clipQuotaLimit).toBe(1000);
+    expect(s.clipQuotaLimitCanonical).toBe(10);
+    expect(s.quotaLiftActive).toBe(true);
+    expect(s.clipQuotaUsed).toBe(12);
+    expect(s.clipQuotaRemaining).toBe(988);
+
+    // A submission that would have been a premature 429 under the canonical cap
+    // must NOT be quota-blocked while the lift is active (it proceeds past the
+    // gate to pipeline processing: an ffmpeg failure is expected, not 429).
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${r.json().token}` },
+      payload: { videoPath: "/does/not/matter.mp4" },
+    });
+    expect(res.statusCode).not.toBe(429);
+    expect(cfg.betaClipQuota).toBe(10); // canonical config untouched
+    await app.close();
+  });
+
+  it("the lift is time-boxed: after BETA_QUOTA_LIFT_UNTIL passes, enforcement reverts to the canonical cap", async () => {
+    const { app, db } = await buildTestApp({
+      BETA_CLIP_QUOTA: "10",
+      BETA_QUOTA_LIFT: "1000",
+      BETA_QUOTA_LIFT_UNTIL: "2020-01-01T00:00:00Z", // long expired
+    });
+    const r = await register(app, "expired@test.dev", "password123");
+    expect(r.statusCode).toBe(200);
+    const userId = (await db.getUserByEmail("expired@test.dev"))!.id;
+    const period = "2026-09";
+
+    const s0 = (await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${r.json().token}` } })).json();
+    expect(s0.quotaLiftActive).toBe(false);
+    expect(s0.clipQuotaLimit).toBe(10);
+
+    // Fill the canonical 10-clip month -> the 11th submission 429s (lift expired).
+    for (let i = 0; i < 10; i++) await db.incrementQuota(userId, period);
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${r.json().token}` },
+      payload: { videoPath: "/does/not/matter.mp4" },
+    });
+    expect(res.statusCode).toBe(429);
+    expect(res.json().clipQuotaLimit).toBe(10);
+    await app.close();
+  });
+
+  it("the lift is reversible: with BETA_QUOTA_LIFT unset, enforcement is the canonical cap", async () => {
+    const { app, db } = await buildTestApp({ BETA_CLIP_QUOTA: "10" }); // no lift
+    const r = await register(app, "revert@test.dev", "password123");
+    const userId = (await db.getUserByEmail("revert@test.dev"))!.id;
+    const period = "2026-09";
+    const s = (await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${r.json().token}` } })).json();
+    expect(s.quotaLiftActive).toBe(false);
+    expect(s.clipQuotaLimit).toBe(10);
+    expect(s.clipQuotaLimitCanonical).toBe(10);
+    for (let i = 0; i < 10; i++) await db.incrementQuota(userId, period);
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${r.json().token}` },
+      payload: { videoPath: "/does/not/matter.mp4" },
+    });
+    expect(res.statusCode).toBe(429);
+    await app.close();
+  });
+
+  it("the lift also raises the free-tier generation fee gate so a free user isn't 402-blocked before K=100, without changing PLANS", async () => {
+    const { app, db, billing } = await buildTestApp({ FREE_HIGHLIGHTS: "3", BETA_QUOTA_LIFT: "1000" });
+    const r = await register(app, "freecap@test.dev", "password123");
+    const user = (await db.getUserByEmail("freecap@test.dev"))!;
+    // 3 used = canonical free cap reached.
+    for (let i = 0; i < 3; i++) await db.recordUsage(user.id, "highlight");
+    // Lift active -> the next generation does NOT 402.
+    await expect(billing.canCreateHighlight(user, { tier: "free", status: "active" } as any)).resolves.toBeUndefined();
+    await app.close();
+  });
+
+  it("without the lift, the free-tier gate still 402s past the canonical cap", async () => {
+    const { app, db, billing } = await buildTestApp({ FREE_HIGHLIGHTS: "3" });
+    const r = await register(app, "freeoff@test.dev", "password123");
+    const user = (await db.getUserByEmail("freeoff@test.dev"))!;
+    for (let i = 0; i < 3; i++) await db.recordUsage(user.id, "highlight");
+    await expect(billing.canCreateHighlight(user, { tier: "free", status: "active" } as any)).rejects.toBeInstanceOf(BillingRequiredError);
     await app.close();
   });
 });

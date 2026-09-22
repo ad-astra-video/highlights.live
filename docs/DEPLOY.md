@@ -49,6 +49,24 @@ rebuild, tunnel routing) are owned by the **Infra Monitor**. Developer owns
 getting the code onto `origin/master`; Infra Monitor handles the box leg so
 the tunnel serves current master.
 
+## Temporary operator quota lift (ADAAAA-3577)
+
+The per-user monthly clip quota (`BETA_CLIP_QUOTA`, default 10) can be raised
+OPERATOR-ONLY, reversibly, and time-boxed for the gate-X K=100 push. It does
+NOT change published pricing (PLANS free=10/pro=100, landing copy) or the
+canonical 10/mo shown to users (`clipQuotaLimitCanonical` stays the canonical
+number).
+
+- `BETA_QUOTA_LIFT=<n>` — set to a positive number to lift enforcement (the
+  entitlement hard-stop AND the free-tier generation fee gate) to `n` so the
+  N=2 real users can drive toward K=100. Unset to revert.
+- `BETA_QUOTA_LIFT_UNTIL=<ISO>` — optional expiry; past this instant the lift
+  auto-reverts to `BETA_CLIP_QUOTA`.
+
+Read back the live state via admin analytics `/admin/analytics`: `gateX`
+(clips generated vs K=100, `quotaLiftActive`, `effectivePerUserQuota`,
+`canonicalPerUserQuota`) and `reliability` (pipeline job done/total %).
+
 ## Post-deploy live re-check (acceptance for this task)
 
 After a deploy, confirm the served behavior matches source:
