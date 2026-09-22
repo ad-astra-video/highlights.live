@@ -37,6 +37,15 @@ async function main() {
     console.log(`invite/beta-gate: ON (${cfg.betaClipQuota} clips/mo per user)`);
   }
 
+  if (cfg.betaQuotaLift && cfg.betaQuotaLift > 0) {
+    // Temporary operator quota lift (ADAAAA-3577). Visible at boot so the only
+    // operators who can set it see it is live and when it auto-expires.
+    console.log(
+      `quota lift: ACTIVE -> ${cfg.betaQuotaLift} clips/mo (canonical ${cfg.betaClipQuota} unchanged)` +
+        (cfg.betaQuotaLiftUntil ? `, expires ${cfg.betaQuotaLiftUntil}` : ", no expiry (revert by unsetting BETA_QUOTA_LIFT)")
+    );
+  }
+
   if (cfg.autoPublishHighlights) {
     console.log("clip auto-publish: ON — generated clips go straight to the public /feed (admin review off).");
   }

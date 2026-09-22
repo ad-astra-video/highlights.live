@@ -9,6 +9,7 @@
 // failed generations and in-submission retries never debit).
 import type { Db, User } from "./db";
 import type { ServerConfig } from "./config";
+import { betaQuotaLiftActive } from "./config";
 
 /** Thrown when the current month's clip quota is exhausted. Maps to HTTP 429
  * (assertable) with the remaining (0) so the client can surface it. */
@@ -34,8 +35,27 @@ export class EntitlementsService {
     return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
   }
 
-  get limit(): number {
+  /** Canonical per-user beta clip quota (10/mo by default) shown to users on
+   * published surfaces. NEVER changed by the temporary operator lift
+   * (ADAAAA-3577) — the published/canonical number stays put. */
+  get displayLimit(): number {
     return this.cfg.betaClipQuota;
+  }
+
+  /** Effective quota the ledger HARD-STOPS against. Equal to `displayLimit`
+   * unless the operator-controlled lift (BETA_QUOTA_LIFT) is active and (when
+   * BETA_QUOTA_LIFT_UNTIL is set) not yet expired. This is the internal testing
+   * lift: enforcement is raised so the N=2 real users can drive toward K=100,
+   * while the canonical number shown to users stays unchanged. */
+  get limit(): number {
+    return betaQuotaLiftActive(this.cfg) ? this.cfg.betaQuotaLift! : this.cfg.betaClipQuota;
+  }
+
+  /** True while the temporary operator lift is in effect (enforcement limit
+   * differs from the canonical). Surfaced on /billing/status + analytics so the
+   * PO can read back that the lift is active and whether it has reverted. */
+  get liftActive(): boolean {
+    return betaQuotaLiftActive(this.cfg);
   }
 
   /** Clips generated successfully this month. */

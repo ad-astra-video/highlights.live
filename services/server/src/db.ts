@@ -119,6 +119,8 @@ export interface AnalyticsSnapshot {
   clipsUsed: number;
   usageEvents: number;
   subscriptions: { tier: string; status: string; count: number }[];
+  /** Per-pipeline-job status counts (gate X reliability: done/total). */
+  jobStatus: { status: string; count: number }[];
 }
 
 /** A live media-server session tracked by the control plane. Persisted so that
@@ -512,6 +514,9 @@ export class SqliteDb implements Db {
     const rows = this.db
       .prepare("SELECT tier, status, COUNT(*) AS count FROM subscriptions GROUP BY tier, status")
       .all() as { tier: string; status: string; count: number }[];
+    const jobStatus = (this.db.prepare("SELECT status, COUNT(*) AS count FROM jobs GROUP BY status").all() as { status: string; count: number }[]).map(
+      (r) => ({ status: String(r.status ?? "unknown"), count: Number(r.count) })
+    );
     return {
       usersTotal,
       usersActivated,
@@ -521,6 +526,7 @@ export class SqliteDb implements Db {
       clipsUsed,
       usageEvents,
       subscriptions: rows.map((r) => ({ tier: String(r.tier), status: String(r.status), count: Number(r.count) })),
+      jobStatus,
     };
   }
 
@@ -887,6 +893,7 @@ export class PgDb implements Db {
     const r = await this.pool.query(
       "SELECT tier, status, COUNT(*)::int AS count FROM subscriptions GROUP BY tier, status"
     );
+    const jr = await this.pool.query("SELECT status, COUNT(*)::int AS count FROM jobs GROUP BY status");
     return {
       usersTotal,
       usersActivated,
@@ -900,6 +907,7 @@ export class PgDb implements Db {
         status: String(row.status),
         count: Number(row.count),
       })),
+      jobStatus: jr.rows.map((row: any) => ({ status: String(row.status ?? "unknown"), count: Number(row.count) })),
     };
   }
 

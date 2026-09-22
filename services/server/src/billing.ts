@@ -12,6 +12,7 @@
 // on demand and billed through Stripe Checkout + the Customer portal.
 import type { Db, Subscription, User } from "./db";
 import type { ServerConfig } from "./config";
+import { betaQuotaLiftActive } from "./config";
 
 export interface Plan {
   id: string;
@@ -94,9 +95,13 @@ export class BillingService {
    */
   async canCreateHighlight(user: User, sub: Subscription): Promise<void> {
     if (sub.tier === "pro" && sub.status === "active") return;
-    // free (or past_due/canceled pro) -> count toward the free cap
+    // free (or past_due/canceled pro) -> count toward the free cap. During the
+    // temporary operator lift (ADAAAA-3577) the free-tier generation fee gate is
+    // raised to the lift value so the N=2 real users aren't 402-blocked before
+    // K=100 — the published free=10 cap (PLANS + landing) is unchanged.
+    const cap = betaQuotaLiftActive(this.cfg) ? this.cfg.betaQuotaLift! : this.cfg.freeHighlights;
     const used = await this.db.countUsage(user.id, "highlight");
-    if (used < this.cfg.freeHighlights) return;
+    if (used < cap) return;
     throw new BillingRequiredError("free highlight allowance used; subscribe to Pro or add funds");
   }
 
