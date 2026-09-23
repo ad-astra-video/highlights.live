@@ -21,19 +21,35 @@ import { FixedWindowLimiter, rateLimit } from "./rate-limit";
 import { enqueueBestEffort, type Mailer } from "./mailer";
 import { composeInviteEmail } from "./invites";
 
-/** Resolve the perceive sampling fps from the runner's measured capability
- * (when reachable directly) else the configured interval. */
-async function resolveSampleFps(cfg: ServerConfig): Promise<number> {
+/** Resolve the VOD sampling fps from the runner's measured capability (when
+ * reachable directly) else the configured interval.
+ *
+ * ADAAAA-3726: this previously hard-capped VOD sampling at 1 fps
+ * (`Math.min(1.0, ...)`) regardless of device, so a GPU that sustains 3-8 fps
+ * still only sampled one frame per second. On a short clip a brief high-value
+ * moment (a soccer goal) can occur in the one or two frames between samples —
+ * the tracker never accumulates a sharp move, no candidate fires, and the
+ * decide runner never sees the moment, so the goal is missed. The perceive
+ * CPU capability already reports `sample_interval_s >= 1.0` (test_cpu_policy),
+ * so CPU safely stays at 1 fps on its own; here we honor the runner's reported
+ * interval and bound it only by `vodSampleMaxFps`.
+ */
+export async function resolveSampleFps(cfg: ServerConfig): Promise<number> {
+  // Base: the configured interval (used when perceive is unreachable).
   let sampleFps = 1 / Math.max(0.2, cfg.sampleIntervalSec);
   if (cfg.perceiveUrl) {
     try {
       const h = (await (await fetch(`${cfg.perceiveUrl}/health`)).json()) as any;
-      if (h && h.sample_interval_s > 0.2) sampleFps = Math.min(1.0, 1 / h.sample_interval_s);
+      const interval = Number(h?.sample_interval_s);
+      // Honor the runner's sustainable interval when it reports one. No 1 fps
+      // clamp: CPU reports interval >= 1.0 itself (stays at 1 fps), GPU reports
+      // a smaller interval so VOD samples faster toward the chartered cadence.
+      if (Number.isFinite(interval) && interval > 0.05) sampleFps = 1 / interval;
     } catch {
       /* fall back to config interval */
     }
   }
-  return sampleFps;
+  return Math.min(cfg.vodSampleMaxFps, Math.max(0.25, sampleFps));
 }
 
 // Extension-based fallback for sources that ship a generic MIME (mpegts is
