@@ -49,6 +49,38 @@ rebuild, tunnel routing) are owned by the **Infra Monitor**. Developer owns
 getting the code onto `origin/master`; Infra Monitor handles the box leg so
 the tunnel serves current master.
 
+## Live-payment durability (ADAAAA-3932)
+
+The paid path (live/VOD -> orchestrator -> remote signer) is the source of the
+recurring 402. Two things must survive every redeploy — both are documented in
+`.env.example` at the repo root:
+
+1. **Orchestrator ticket EV.** `docker/docker-compose.yml` hard-codes
+   `- -ticketEV=80000000000` on the `orchestrator` service. Do not lower it:
+   the default 8e9 makes go-livepeer size ~454-ticket live-payment lottery
+   batches, which the signer rejects with 400 `numTickets N exceeds maximum of
+   100` and the session fails 402 before any GPU compute. 8e10 keeps batches
+   under the hard cap of 100 with unchanged total EV. Keep `TICKET_EV` in the
+   box `.env` at `80000000000` too.
+
+2. **SIGNER_URL + PAYER_ADDRESS.** These are required, non-empty values in the
+   box `.env` (`SIGNER_URL=http://signer:7936`, `PAYER_ADDRESS=<payer
+   address>`). The compose placeholders are `${SIGNER_URL:-}` /
+   `${PAYER_ADDRESS:-}`, so if they are missing from `.env` a container
+   recreate resolves them to empty and every paid session fails 402 "invalid
+   live runner payment signer address". `SIGNER_AUTH_TOKEN` is the shared
+   bearer secret sent to the remote signer and must also be in `.env`.
+
+Define the full set in `.env` (copy `.env.example`). Never commit a real
+`.env`; it holds `SIGNER_AUTH_TOKEN`, `ORCHESTRATOR_ETH_PASSWORD`, database and
+SMTP credentials. After a repo-based redeploy, confirm with:
+
+```sh
+docker inspect highlights-orchestrator --format '{{.Config.Cmd}}'   # has -ticketEV=80000000000
+docker logs highlights-orchestrator | grep TicketEV                  # | TicketEV | 80000000000 |
+docker inspect highlights-media --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E 'SIGNER_URL|PAYER_ADDRESS'
+```
+
 ## Post-deploy live re-check (acceptance for this task)
 
 After a deploy, confirm the served behavior matches source:
