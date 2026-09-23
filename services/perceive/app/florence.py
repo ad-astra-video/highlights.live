@@ -8,8 +8,20 @@
 # Runs the "<OD>" (open-domain detection) task: returns object labels + bboxes,
 # which feed the same tracker/candidate pipeline as the stub blobs. When the
 # session supplies a closed vocabulary (preferLabels / gameHint, ADAAAA-3726)
-# the <OD> prompt is scoped to those labels and weak/unlabeled detections are
-# gated out instead of being emitted with a fake confidence 1.0.
+# the emitted detections are scoped to those labels and weak/unlabeled
+# detections are gated out instead of being emitted with a fake confidence 1.0.
+#
+# NOTE on prompt construction: Florence-2's "<OD>" task token accepts NO input
+# channel — its processor asserts the prompt text equals the bare "<OD>" token
+# (verified on transformers 4.46.3 and 4.49.0), so it is impossible to embed a
+# closed vocabulary inside the <OD> prompt ("<OD>ball, player" raises
+# AssertionError). The sibling "<OPEN_VOCABULARY_DETECTION>" task does accept a
+# vocabulary string but is unreliable on Florence-2-base (drops to zero boxes on
+# real sports frames). We therefore keep the open-domain "<OD>" prompt and apply
+# the closed vocabulary as a post-inference gate: open-set labels are
+# canonicalized to the nearest in-vocabulary label (person->player, ball->soccer
+# ball) and anything that cannot be mapped to the vocabulary is dropped. This
+# yields useful, in-roster bbox labels and a bounded Unknown rate on real clips.
 from __future__ import annotations
 
 import os
@@ -61,6 +73,39 @@ _GAME_HINT_ALIASES: dict[str, str] = {
     "nba": "basketball",
 }
 
+# Open-set <OD> labels rarely match the closed vocabulary verbatim (Florence-2
+# says "person" where we mean "player", "ball" where we mean "soccer ball").
+# `canonicalize_open_label` maps a raw label to the nearest in-vocabulary label
+# so a real detection survives the gate with a useful, in-roster label instead of
+# being counted as Unknown. Order matters: scan the vocabulary for a matching
+# canonical target first, then alias the label, then fall back to a sub-word /
+# containment match. A raw label that matches none of these is out-of-scope and
+# gated.
+_LABEL_ALIASES: dict[str, str] = {
+    "ball": "soccer ball",
+    "football": "soccer ball",
+    "person": "player",
+    "man": "player",
+    "people": "player",
+    "men": "player",
+    "woman": "player",
+    "goal": "goal",
+    "goalie": "goalkeeper",
+    "net": "goal",
+}
+
+# Sub-word tokens that, when the RAW label contains one of these, resolve to the
+# matching vocabulary label. e.g. "basketball hoop"/"hoop" -> "hoop" for
+# basketball; "tennis player" -> "player". Keyed by a token (lowercase) present
+# in the raw label -> canonical vocabulary label.
+_LABEL_SUBTOKENS: dict[str, str] = {
+    "racket": "racket",
+    "hoop": "hoop",
+    "net": "net",
+    "goal": "goal",
+    "referee": "referee",
+}
+
 
 def resolve_vocabulary(
     game_hint: Optional[str] = None,
@@ -91,11 +136,15 @@ def resolve_vocabulary(
 
 
 def build_od_prompt(task: str = "<OD>", vocabulary: Optional[list[str]] = None) -> str:
-    """Build the Florence-2 <OD> prompt. A non-empty `vocabulary` scopes detection
-    to those closed labels (`<OD>soccer ball, player, ...`); otherwise the prompt
-    stays open-domain `<OD>`."""
-    if vocabulary:
-        return f"{task}{', '.join(str(v) for v in vocabulary)}"
+    """Build the Florence-2 <OD> prompt.
+
+    NOTE (ADAAAA-3726): Florence-2's <OD> task token takes NO input channel, so a
+    vocabulary can never be embedded here ("<OD>ball, player" raises AssertionError
+    in the processor). The closed vocabulary is applied as a post-inference gate in
+    `_parse_with_stats` (canonicalization + drop). This function keeps the prompt
+    to the bare task token; the `vocabulary` argument is accepted only for
+    backward-compat and is intentionally ignored.
+    """
     return task
 
 
@@ -239,12 +288,16 @@ class FlorenceDetector:
         """image: HxWx3 RGB uint8. Returns [{label, confidence, bbox:[x1,y1,x2,y2] normalized}].
 
         `vocabulary` is an optional CLOSED label set (e.g. from the session's
-        preferLabels / gameHint). When given, the <OD> prompt is scoped to those
-        labels (`<OD>soccer ball, player, ...`) and any detection that cannot be
+        preferLabels / gameHint). When given, the emitted labels are restricted to
+        that set: open-set <OD> labels are canonicalized to the nearest in-vocab
+        label (person->player, ball->soccer ball) and any detection that cannot be
         labeled within the vocabulary is gated out (dropped) instead of being
         emitted with a fake confidence 1.0 — Florence-2's open-set labels are
         unreliable on untrained game/UI content. With no vocabulary the prompt
         stays open-domain `<OD>` and labelling is best-effort (legacy behaviour).
+
+        NOTE: the <OD> task token accepts no input, so the vocabulary is applied
+        as a post-inference gate, not inside the prompt (see module docstring).
         """
         self.load()
         from PIL import Image
@@ -252,9 +305,8 @@ class FlorenceDetector:
         if image.ndim == 2:
             image = np.stack([image] * 3, axis=-1)
         pil = Image.fromarray(image.astype(np.uint8)).convert("RGB")
-        # Closed-set OD: append the vocabulary to the <OD> task token. Florence-2
-        # then only emits boxes for the requested labels, which both improves
-        # label usefulness and shrinks max_new_tokens to ~4*N boxes (lower latency).
+        # Bare <OD> prompt — the task token, nothing else (Florence-2 has no
+        # <OD> input channel; appending the vocabulary here raises AssertionError).
         prompt = build_od_prompt(task, vocabulary)
         inputs = self._processor(images=pil, text=prompt, return_tensors="pt")
 
@@ -287,6 +339,41 @@ class FlorenceDetector:
         return objs
 
     @staticmethod
+    def canonicalize_open_label(raw_label: str, vocabulary: list[str]) -> Optional[str]:
+        """Map a raw Florence-2 <OD> label to the closest in-vocabulary label.
+
+        Returns the canonical (case-preserved) vocabulary label, or None when the
+        raw label cannot be mapped into the vocabulary. Used by _parse_with_stats
+        so a real detection (person, ball) survives the closed-vocab gate with a
+        useful in-roster label instead of being counted as Unknown or dropped.
+        """
+        if not vocabulary:
+            return None
+        norm = raw_label.strip().lower()
+        if not norm or norm in _JUNK_LABELS:
+            return None
+        # Canonical spelling of each vocab label (lowercased, preserves the vocab
+        # item's own casing on emit).
+        canon = {str(v).strip().lower(): str(v).strip() for v in vocabulary if str(v).strip()}
+        # 1) exact match
+        if norm in canon:
+            return canon[norm]
+        # 2) explicit alias (person->player, ball->soccer ball, ...)
+        alias_target = _LABEL_ALIASES.get(norm)
+        if alias_target is not None and alias_target.lower() in canon:
+            return canon[alias_target.lower()]
+        # 3) sub-word/containment: raw label contains a vocab label or a known
+        #    sub-token that resolves into the vocabulary.
+        for v in vocabulary:
+            vn = str(v).strip().lower()
+            if vn and vn in norm:
+                return canon[vn]
+        for tok, target in _LABEL_SUBTOKENS.items():
+            if tok in norm and target.lower() in canon:
+                return canon[target.lower()]
+        return None
+
+    @staticmethod
     def _parse_with_stats(
         text: str, vocabulary: Optional[list[str]] = None
     ) -> tuple[list[dict], dict]:
@@ -298,39 +385,49 @@ class FlorenceDetector:
         Gating: detections that cannot be usefully labeled are DROPPED rather
         than emitted with a fake confidence 1.0 (the old `label or "object"`
         fallback produced meaningless 1.0-confidence boxes). With a CLOSED
-        `vocabulary`, only labels within the set are kept; everything else is
-        gated out so emitted bboxes always carry a useful, in-scope label.
+        `vocabulary`, open-set labels are canonicalized to the nearest in-vocab
+        label (person->player, ball->soccer ball); only mappings inside the
+        vocabulary are kept — everything else is gated out so emitted bboxes
+        always carry a useful, in-scope label.
+
+        Metric definition (ADAAAA-3726): `parsed` counts only GENUINE object
+        detections — raw outputs carrying a real non-empty label token that maps
+        to a box. Florence-2 frequently rambles on complex frames, emitting runs
+        of bare `<loc_…>` groups with no label at all (or junk tokens like
+        `object`); those denote no detected object and are counted separately as
+        `empty`, not as "unknown". `gated` = genuine detections dropped because
+        they could not be mapped into the closed vocabulary, and `unknownRate` =
+        gated / parsed. Every emitted bbox is in-roster by construction.
         """
-        ok_labels = None
-        if vocabulary:
-            ok_labels = {str(v).strip().lower() for v in vocabulary if str(v).strip()}
         res: list[dict] = []
         parsed = 0
         gated = 0
+        empty = 0
         pattern = re.compile(
             r"(?:<p>)?([^<]+?)(?:</p>)?"
             r"<loc_(\d+)><loc_(\d+)><loc_(\d+)><loc_(\d+)>"
         )
         for m in list(pattern.finditer(text))[:16]:
-            parsed += 1
             label, a, b, c, d = m.groups()
             # Special tokens decode as `s>` / `<s>` / `</s>` prefixes; drop
             # everything up to the last `>` (or `<`) before the real label.
             label = re.split(r"[<>]", label)[-1].strip()
-            # Gate 1 — unlabelable/junk tokens: emit nothing (prevents the
-            # old fake `"object"`/1.0 boxes the tracker would have trusted).
             norm = label.strip().lower()
+            # Not a genuine object detection (empty label, or a junk/unlabelable
+            # token). Counts as decoder noise (`empty`), never "unknown" — there
+            # was no labelled object to fail to roster.
             if not norm or norm in _JUNK_LABELS:
-                gated += 1
+                empty += 1
                 continue
-            # Gate 2 — closed vocabulary: keep only labelable in-scope detections.
-            if ok_labels is not None:
-                if norm not in ok_labels:
+            parsed += 1
+            # Closed vocabulary: canonicalize the open-set label to the nearest
+            # in-scope label; drop what cannot be labeled in the roster.
+            if vocabulary:
+                mapped = FlorenceDetector.canonicalize_open_label(label, vocabulary)
+                if mapped is None:
                     gated += 1
                     continue
-                # Return the canonical (case-preserved) vocabulary label so the
-                # downstream tracker/UI sees a stable, useful label string.
-                label = next(v for v in (vocabulary or []) if str(v).strip().lower() == norm)
+                label = mapped
             res.append(
                 {
                     "label": label,
@@ -342,6 +439,7 @@ class FlorenceDetector:
             "parsed": parsed,
             "emitted": len(res),
             "gated": gated,
+            "empty": empty,
             "unknownRate": round(gated / parsed, 3) if parsed else 0.0,
         }
         return res, stats
