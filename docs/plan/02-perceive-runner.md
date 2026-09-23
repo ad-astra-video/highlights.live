@@ -34,6 +34,7 @@ mode `persistent`, capacity 1, health 200 when Florence loaded (NOT when Gemma i
 ## STATUS
 - Session map keyed by id: DONE (session.py).
 - Florence-2 real <OD> with device select (CPU/DirectML/CUDA/OpenVINO), fps gate, runtime sampling: DONE (florence.py).
+- Florence-2 closed-vocabulary <OD>: prompt scoped to session preferLabels/gameHint (resolve_vocabulary, `<OD>label, ...`), weak/unlabeled detections gated out (no fake 1.0), per-frame gating stats (unknownRate) surfaced on observations (ADAAAA-3726).
 - /app/analyze → same session.step, SSE /events, /session/stats, /session/close: DONE (app/__init__.py).
 - SAM3 real multiplex: DONE — app/sam3_backend.py (Sam3Backend, per-frame obj_id-keyed advance) behind HybridTracker (app/sam_tracker.py), box-seeded from Florence; degrades to Florence->IoU when triton/weights absent. Tests: test_sam3_backend.py, test_sam_tracker.py.
 - WebSocket /app/ws + control message handlers (seed/evict/lock/confirm/configure/ping/analyze-still): DONE — handle_control() in app/__init__.py shared by WS and trickle control; rejects WS that creates a new session.
