@@ -81,6 +81,51 @@ docker logs highlights-orchestrator | grep TicketEV                  # | TicketE
 docker inspect highlights-media --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E 'SIGNER_URL|PAYER_ADDRESS'
 ```
 
+## Signer RPC + LivepeerToken contract config (ADAAAA-4023)
+
+The remote signer (`services/signer/docker-entrypoint.sh`) is a go-livepeer
+`-remoteSigner` node that must reach Arbitrum One to sign Livepeer live
+payments. It reads exactly three contract addresses from go-livepeer's chain
+defaults, so keep them aligned with the canonical Arbitrum One deployment:
+
+| Item                       | Value                                                            |
+| -------------------------- | ---------------------------------------------------------------- |
+| Chain                      | Arbitrum One (chain id `42161`, `eth_chainId` -> `0xa4b1`)       |
+| Network flag (`-network`)  | `arbitrum-one-mainnet` (the only valid Arbitrum prod name)       |
+| Controller (`-ethController`) | `0xD8E8328501E9645d16Cf49539efC04f734606ee4`                     |
+| LivepeerToken (via Controller `getContractInfo`) | `0x289ba1701c2f088cf0faf8b3705246331cb8a839` |
+
+`ARBITRUM_RPC` must be an Arbitrum One endpoint. Verify it is the right chain:
+
+```sh
+curl -s -X POST "$ARBITRUM_RPC" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
+# 42161 (0xa4b1) = Arbitrum One mainnet. 0x1 = Ethereum L1 (WRONG for the signer).
+```
+
+Both the Controller and LivepeerToken above have code deployed on Arbitrum One
+(a stale read that returns "no code" is therefore an RPC problem, not a config
+one). Confirm with `eth_getCode` (any public Arb One RPC, e.g.
+`https://arb1.arbitrum.io/rpc`, works for this check): a non-`0x` return means
+the contract is deployed.
+
+**Recurrence diagnosis (<5 min) — restart-loop `no contract code at given address`:**
+
+1. `docker logs highlights-signer --tail 200` — look for `Error getting
+   LivepeerToken address` / `Failed to set gas info`. If you also see
+   `Controller: 0x000...000` (zero), the network flag is misconfigured to an
+   unrecognized name (must be `arbitrum-one-mainnet`) OR `-ethController` is
+   missing — that is a persistent misconfig and the current fix pins both.
+2. If the Controller is canonical (`0xD8E8...ee4`) but `eth_getCode` on the
+   Controller + LivepeerToken via `$ARBITRUM_RPC` returns `0x`, the RPC node is
+   stale/unsynced (transient blip) — re-restart `/ health` usually clears it
+   within a few minutes; confirm `Up (healthy)` after >1h before closing.
+3. If `eth_chainId` != `0xa4b1`, `ARBITRUM_RPC` points at the wrong chain.
+
+Cause classification: canonical addresses are deployed + code-verified on
+Arbitrum One, so a signer that recovers and stays `Up (healthy)` was a transient
+RPC stale/empty read, not a persistent address/ABI misconfig (see ADAAAA-4023).
+
 ## Post-deploy live re-check (acceptance for this task)
 
 After a deploy, confirm the served behavior matches source:
