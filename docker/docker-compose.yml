@@ -28,6 +28,14 @@ services:
       - -ethPassword=${ORCHESTRATOR_ETH_PASSWORD:-highlights-orch}
       # On-chain orchestrator requires an explicit price per unit (wei/pixel).
       - -pricePerUnit=${PRICE_PER_UNIT:-1}
+      # Live-payment durability (ADAAAA-3932): raise orchestrator ticket EV from
+      # the default 8e9 to 8e10 so go-livepeer sizes live-payment lottery batches
+      # under the hard cap of 100 (default 8e9 yields ~454-ticket batches ->
+      # signer 400 "numTickets N exceeds maximum of 100" -> recurring 402).
+      # Total EV/credit paid to the orchestrator is unchanged; this is a pure
+      # config change (no wallet funding / on-chain write). Keep this in sync with
+      # the box .env TICKET_EV and the livepeer-live-payment skill.
+      - -ticketEV=80000000000
       - -monitor=false
       - -v=6
     environment:
