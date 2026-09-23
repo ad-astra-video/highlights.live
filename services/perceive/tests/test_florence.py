@@ -31,6 +31,101 @@ def test_parse_empty():
     assert FlorenceDetector._parse("<s></s>") == []
 
 
+# --- ADAAAA-3726: closed-vocabulary <OD> prompt + weak/unlabeled gating ---------
+
+def test_build_od_prompt_open_domain():
+    assert florence.build_od_prompt() == "<OD>"
+    assert florence.build_od_prompt(vocabulary=[]) == "<OD>"
+
+
+def test_build_od_prompt_closed_vocabulary():
+    prompt = florence.build_od_prompt(vocabulary=["soccer ball", "player", "goalkeeper", "goal", "referee"])
+    assert prompt == "<OD>soccer ball, player, goalkeeper, goal, referee"
+
+
+def test_parse_drops_junk_unlabeled_objects():
+    # Old behaviour emitted `label == "object"` with fake 1.0 confidence.
+    text = "<s>object<loc_100><loc_200><loc_300><loc_400>person<loc_1><loc_2><loc_3><loc_4></s>"
+    objs = FlorenceDetector._parse(text)
+    assert all(o["label"] != "object" for o in objs)
+    # Only the genuinely labelable detection survives.
+    assert [o["label"] for o in objs] == ["person"]
+
+
+def test_parse_closed_vocabulary_keeps_only_in_scope():
+    vocab = ["soccer ball", "player", "goalkeeper", "goal", "referee"]
+    # `mobile phone`/`digital clock` are the known unreliable open-set mislabels.
+    text = (
+        "<s>soccer ball<loc_100><loc_200><loc_300><loc_400>"
+        "mobile phone<loc_500><loc_600><loc_700><loc_800>"
+        "player<loc_10><loc_20><loc_30><loc_40>"
+    )
+    objs = FlorenceDetector._parse(text, vocabulary=vocab)
+    labels = [o["label"] for o in objs]
+    assert labels == ["soccer ball", "player"]
+    # Every emitted bbox carries a useful, in-scope label (Unknown rate 0 here).
+    assert all(l in {v.lower() for v in vocab} for l in labels)
+
+
+def test_parse_closed_vocabulary_canonicalizes_label_case():
+    vocab = ["Soccer Ball", "Player"]
+    text = "<s>soccer ball<loc_100><loc_200><loc_300><loc_400>"
+    objs = FlorenceDetector._parse(text, vocabulary=vocab)
+    assert objs[0]["label"] == "Soccer Ball"
+
+
+def test_parse_with_stats_reports_unknown_rate():
+    vocab = ["soccer ball", "player"]
+    # A realistic soccer-goal clip: mostly in-vocab players/ball, one unreliable
+    # open-set mislabel that gets gated -> Unknown 1/11 (~9.1%) stays < 10%.
+    parts = ["player<loc_%d><loc_%d><loc_%d><loc_%d>" % (i, i, i + 1, i + 1) for i in range(1, 11)]
+    parts.append("mobile phone<loc_50><loc_51><loc_52><loc_53>")
+    text = "<s>" + "".join(parts)
+    objs, stats = FlorenceDetector._parse_with_stats(text, vocabulary=vocab)
+    assert len(objs) == 10
+    assert all(o["label"] == "player" for o in objs)
+    assert stats["parsed"] == 11
+    assert stats["emitted"] == 10
+    assert stats["gated"] == 1
+    # Unknown rate = gated / parsed stays small on a good clip (< ~10% target).
+    assert 0.0 < stats["unknownRate"] < 0.10
+
+
+def test_parse_no_vocabulary_keeps_legacy_open_set():
+    # Without a closed vocabulary the open-set labels are preserved (back-compat).
+    text = "<s>person<loc_100><loc_200><loc_300><loc_400>"
+    objs = FlorenceDetector._parse(text)
+    assert objs[0]["label"] == "person"
+    assert objs[0]["confidence"] == 1.0
+
+
+# --- vocabulary resolution ----------------------------------------------------
+
+def test_resolve_vocabulary_prefer_labels_wins_over_game_hint():
+    vocab = florence.resolve_vocabulary(game_hint="soccer", prefer_labels=["score", "clock"])
+    assert vocab == ["score", "clock"]
+
+
+def test_resolve_vocabulary_game_hint_soccer():
+    vocab = florence.resolve_vocabulary(game_hint="soccer")
+    assert vocab is not None
+    assert "soccer ball" in vocab
+    assert "goalkeeper" in vocab
+
+
+def test_resolve_vocabulary_game_hint_alias_substring():
+    # A competition alias resolves to the sport vocabulary via substring match.
+    vocab = florence.resolve_vocabulary(game_hint="FA Cup final")
+    assert vocab is not None
+    assert "soccer ball" in vocab
+
+
+def test_resolve_vocabulary_unknown_hint_is_none():
+    assert florence.resolve_vocabulary(game_hint="some-unknown-game") is None
+    assert florence.resolve_vocabulary() is None
+    assert florence.resolve_vocabulary(game_hint="") is None
+
+
 def test_gate_stub_mode(monkeypatch):
     monkeypatch.setenv("PERCEIVE_MODE", "stub")
     ok, fps, _ = florence.gate_1fps()

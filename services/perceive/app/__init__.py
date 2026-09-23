@@ -21,7 +21,7 @@ from sse_starlette.sse import EventSourceResponse
 from . import preload  # noqa: E402  (startup model preload)
 from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
-from .florence import capability, get_detector, record_analyze
+from .florence import capability, get_detector, record_analyze, resolve_vocabulary
 from .sam_tracker import HybridTracker
 from .trickle import TrickleError, TrickleRail, TrickleSession
 
@@ -154,12 +154,17 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     subscribers bound to the session.
     """
     objects: list[dict] = []
+    vocabulary: list[str] | None = None
     detector = get_detector()
     if detector is not None:
         # Real Florence-2: identify objects + bboxes and feed them to the tracker.
+        # Scope the <OD> prompt to the session's closed vocabulary (preferLabels /
+        # gameHint) so boxes carry useful labels and weak/unlabeled detection is
+        # gated out inside florence._parse (no more fake 1.0-confidence boxes).
+        vocabulary = resolve_vocabulary(state.game_hint, state.prefer_labels)
         try:
             _s = monotonic()
-            objects = detector.detect(state.last_rgb)
+            objects = detector.detect(state.last_rgb, vocabulary=vocabulary)
             record_analyze(monotonic() - _s)
         except Exception as e:  # keep the pipeline alive if the GPU hiccups
             objects = [{"label": "error", "confidence": 0.0, "bbox": [0, 0, 0.001, 0.001]}]
@@ -174,7 +179,16 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     if isinstance(state.tracker, HybridTracker) and state.last_rgb is not None:
         if state.tracker._detect is None:
             _d = detector
-            state.tracker._detect = lambda rgb, _d=_d: [_norm_bbox(o["bbox"]) for o in (_d.detect(rgb) if _d else []) if o.get("bbox")]
+            _v = (
+                resolve_vocabulary(state.game_hint, state.prefer_labels)
+                if detector is not None
+                else None
+            )
+            state.tracker._detect = lambda rgb, _d=_d, _v=_v: [
+                _norm_bbox(o["bbox"])
+                for o in (_d.detect(rgb, vocabulary=_v) if _d else [])
+                if o.get("bbox")
+            ]
         tracks = state.tracker.step_frame(state.last_rgb, timestamp, boxes)
     else:
         tracks = state.tracker.step(boxes, timestamp)
@@ -198,6 +212,13 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         ],
         "objects": objects,
         "ocr": [],
+        # ADAAAA-3726: closed-vocab <OD> gating metrics (Unknown rate) so QA can
+        # verify bboxes stay labelable on a real clip (target Unknown < ~10%).
+        **(
+            {"detector": {"vocabulary": bool(vocabulary), "stats": getattr(detector, "stats", None)}}
+            if detector is not None
+            else {}
+        ),
     }
     state.recent_frames.append({"seq": seq, "timestamp": timestamp, "tracks": obs["tracks"]})
 
