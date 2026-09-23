@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { analyzeJob, EvidenceTracker, type PipelineClient } from "../src/analyzer";
+import { analyzeJob, EvidenceTracker, SessionLostError, type PipelineClient } from "../src/analyzer";
 
 function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClient; log: string[] } {
   const log: string[] = [];
@@ -113,6 +113,90 @@ describe("analyzeJob", () => {
     );
     expect(cuts).toEqual([]);
     expect(outcome.highlights).toHaveLength(0);
+  });
+
+  it("re-reserves a fresh perceive session and continues when analyze 404s (session/runner lost mid-pass)", async () => {
+    let reserveCalls = 0;
+    let analyzeCalls = 0;
+    const sessions = ["sess-a", "sess-b"];
+    const stops: string[] = [];
+    const client = fakeClient({
+      reservePerceive: async () => {
+        reserveCalls++;
+        return { sessionId: sessions[reserveCalls - 1], appUrl: "", controlUrl: "" };
+      },
+      analyze: async (sid) => {
+        analyzeCalls++;
+        if (sid === "sess-a" && analyzeCalls === 2) {
+          // The perceive runner flapped mid-pass: session lost on the 2nd frame.
+          throw new SessionLostError();
+        }
+        return { observation: { tracks: [], seq: analyzeCalls - 1, timestamp: analyzeCalls - 1 } };
+      },
+      stopPerceive: async (sid) => {
+        stops.push(sid);
+      },
+    });
+    const outcome = await analyzeJob(
+      client.client,
+      frames(3),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" }
+    );
+    // 2 reserves (initial + one re-reserve), 4 analyze invocations (3 frames,
+    // with the 2nd frame's lost-session 404 retried once on the fresh session),
+    // and both sessions stopped.
+    expect(reserveCalls).toBe(2);
+    expect(analyzeCalls).toBe(4);
+    expect(outcome.sessionId).toBe("sess-b");
+    expect(outcome.framesAnalyzed).toBe(3);
+    expect(new Set(stops)).toEqual(new Set(["sess-a", "sess-b"]));
+  });
+
+  it("aborts cleanly (no more re-reserves) once the bounded re-reserve cap is exhausted", async () => {
+    let reserveCalls = 0;
+    const client = fakeClient({
+      reservePerceive: async () => {
+        reserveCalls++;
+        return { sessionId: `sess-${reserveCalls}`, appUrl: "", controlUrl: "" };
+      },
+      analyze: async () => {
+        throw new SessionLostError();
+      },
+    });
+    await expect(
+      analyzeJob(
+        client.client,
+        frames(2),
+        async (ts) => ({ clipId: "c", clipUri: "u" }),
+        { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", maxReReserves: 2 }
+      )
+    ).rejects.toBeInstanceOf(SessionLostError);
+    // 1 initial + maxReReserves=2 retries (the 3rd analyze throws straight out).
+    expect(reserveCalls).toBe(3);
+    expect(client.log.filter((x) => x === "stop").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does not re-reserve on a non-404 analyze error — the pass aborts", async () => {
+    let reserveCalls = 0;
+    const client = fakeClient({
+      reservePerceive: async () => {
+        reserveCalls++;
+        return { sessionId: "sess-x", appUrl: "", controlUrl: "" };
+      },
+      analyze: async () => {
+        throw new Error("analyze failed: HTTP 503");
+      },
+    });
+    await expect(
+      analyzeJob(client.client, frames(2), async (ts) => ({ clipId: "c", clipUri: "u" }), {
+        jobId: "j",
+        clipBeforeS: 4,
+        clipAfterS: 4,
+        gameHint: "",
+      })
+    ).rejects.toThrow("HTTP 503");
+    expect(reserveCalls).toBe(1);
   });
 
   it("records max velocity + track count from observations", () => {
