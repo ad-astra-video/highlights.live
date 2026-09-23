@@ -170,6 +170,16 @@ services:
       # Media-path (b): the browser streams frames to the media server instead
       # of the server's HTTP /ingest when this is set.
       - MEDIA_SERVER_URL=${MEDIA_SERVER_URL:-http://media:4070}
+      # Live-payment durability (ADAAAA-3932): the SERVER is the VOD payer — it
+      # reserves perceive/decide sessions and, on the orchestrator's 402
+      # challenge, forwards the payment_params to the remote signer for tickets
+      # (livepeer-adapter.ts). It therefore needs SIGNER_URL + PAYER_ADDRESS +
+      # SIGNER_AUTH_TOKEN in its env. Missing these -> every paid job fails 402
+      # "reserve needs signer payment material". Values come from the compose
+      # project .env (docker/.env), never committed.
+      - SIGNER_URL=${SIGNER_URL:-}
+      - PAYER_ADDRESS=${PAYER_ADDRESS:-}
+      - SIGNER_AUTH_TOKEN=${SIGNER_AUTH_TOKEN:-}
       # Transactional email: the server enqueues invites + password resets to
       # the email-sender container over its queue API (bearer-token auth).
       - EMAIL_SENDER_URL=${EMAIL_SENDER_URL:-http://email:3001}
@@ -270,6 +280,11 @@ services:
       - NODE_TLS_REJECT_UNAUTHORIZED=0
       - SIGNER_URL=${SIGNER_URL:-}
       - PAYER_ADDRESS=${PAYER_ADDRESS:-}
+      # Live-payment durability (ADAAAA-3932): the media runner also calls the
+      # remote signer for live payments and needs the shared SIGNER_AUTH_TOKEN
+      # (it reads it from env like the server). Missing it -> live-payment
+      # signer calls fail auth. Values come from docker/.env, never committed.
+      - SIGNER_AUTH_TOKEN=${SIGNER_AUTH_TOKEN:-}
       # Public LB / Cloudflare front for the media tier. The media server returns
       # this as the FULL ws ingest URL on provision so clients can be routed by
       # the load balancer rather than assuming a path on one node.
