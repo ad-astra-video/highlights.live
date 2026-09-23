@@ -39,8 +39,58 @@ def test_build_od_prompt_open_domain():
 
 
 def test_build_od_prompt_closed_vocabulary():
+    # Regression (ADAAAA-3726, QA ADAAAA-3774): Florence-2's <OD> task token has
+    # NO input channel — its processor asserts the prompt equals the bare task
+    # token, so appending a vocabulary raises "Task token <OD> should be the only
+    # token in the text" on every detect() call. The closed vocabulary is applied
+    # as a post-inference gate (see canonicalize_open_label), so build_od_prompt
+    # must ALWAYS emit the bare task token, regardless of the vocabulary arg.
     prompt = florence.build_od_prompt(vocabulary=["soccer ball", "player", "goalkeeper", "goal", "referee"])
-    assert prompt == "<OD>soccer ball, player, goalkeeper, goal, referee"
+    assert prompt == "<OD>"
+    assert florence.build_od_prompt(task="<OD>", vocabulary=["ball"]) == "<OD>"
+
+
+def test_canonicalize_open_label_to_vocab():
+    vocab = ["soccer ball", "player", "goalkeeper", "goal", "referee"]
+    # Open-set <OD> names that map into the soccer roster.
+    assert florence.FlorenceDetector.canonicalize_open_label("person", vocab) == "player"
+    assert florence.FlorenceDetector.canonicalize_open_label("man", vocab) == "player"
+    assert florence.FlorenceDetector.canonicalize_open_label("ball", vocab) == "soccer ball"
+    assert florence.FlorenceDetector.canonicalize_open_label("football", vocab) == "soccer ball"
+    assert florence.FlorenceDetector.canonicalize_open_label("net", vocab) == "goal"
+    assert florence.FlorenceDetector.canonicalize_open_label("goalkeeper", vocab) == "goalkeeper"
+    assert florence.FlorenceDetector.canonicalize_open_label("referee", vocab) == "referee"
+
+
+def test_canonicalize_open_label_out_of_scope_is_none():
+    vocab = ["soccer ball", "player", "goalkeeper", "goal", "referee"]
+    # Non-roster labels (missing-case capitalization preserved on None too).
+    assert florence.FlorenceDetector.canonicalize_open_label("scoreboard", vocab) is None
+    assert florence.FlorenceDetector.canonicalize_open_label("car", vocab) is None
+    assert florence.FlorenceDetector.canonicalize_open_label("sock", vocab) is None
+    assert florence.FlorenceDetector.canonicalize_open_label("object", vocab) is None
+    assert florence.FlorenceDetector.canonicalize_open_label("", vocab) is None
+
+
+def test_parse_counts_decoder_ramble_as_empty_not_unknown():
+    # Florence rambles bare <loc_> groups (no label) on complex frames. Those are
+    # decoder noise, not detections: they must count as `empty`, never inflate
+    # `parsed`/`gated`/unknownRate. Real in-scope labels still survive.
+    vocab = ["soccer ball", "player"]
+    # Two genuine in-roster boxes + bare loc-runs (no label) + a junk token.
+    text = (
+        "<s>person<loc_100><loc_200><loc_300><loc_400>"
+        "<loc_1><loc_2><loc_3><loc_4><loc_5><loc_6><loc_7><loc_8>"
+        "object<loc_9><loc_10><loc_11><loc_12>"
+        "ball<loc_50><loc_51><loc_52><loc_53></s>"
+    )
+    objs, stats = FlorenceDetector._parse_with_stats(text, vocabulary=vocab)
+    assert stats["parsed"] == 2  # person + ball (genuine detections only)
+    assert stats["emitted"] == 2
+    assert stats["gated"] == 0
+    assert stats["empty"] == 2  # the bare loc-run + the junk "object" token
+    assert stats["unknownRate"] == 0.0
+    assert [o["label"] for o in objs] == ["player", "soccer ball"]
 
 
 def test_parse_drops_junk_unlabeled_objects():
