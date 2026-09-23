@@ -50,7 +50,11 @@ Create THREE services from this repo so they share the private network:
 - Build: Dockerfile `services/signer/Dockerfile` (build context = repo root).
 - Deploy: port 7936. Turn the public domain OFF (private networking only).
 - Env (sealed):
-  - `ARBITRUM_RPC` (required; signer cannot run on offchain)
+  - `ARBITRUM_RPC` (required; signer cannot run on offchain). Must be Arbitrum
+    One mainnet (chain id 42161). The entrypoint pins `-network
+    arbitrum-one-mainnet` + `-ethController 0xD8E8328501E9645d16Cf49539efC04f734606ee4`
+    so a `no contract code at given address` restart loop is a stale-RPC blip,
+    not a config error (see docs/DEPLOY.md).
   - `ETH_PASSWORD` = the keystore password (e.g. `testbroadcaster` in the ref).
   - `SIGNER_AUTH_TOKEN` = shared bearer token (server sends it as
     `Authorization: Bearer <token>` via `-remoteSignerHeaders`).
