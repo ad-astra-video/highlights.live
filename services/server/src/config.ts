@@ -11,6 +11,16 @@ export interface ServerConfig {
   mediaServerUrl?: string;
   /** go-livepeer remote signer base URL (on-chain). Internal-only on Railway. */
   signerUrl?: string;
+  /** Shared bearer token the remote signer requires (sealed SIGNER_AUTH_TOKEN).
+   * Sent as `Authorization: Bearer <token>` on every signer signing call; the
+   * signer rejects unauthenticated requests, so without it the server can't
+   * obtain a valid Livepeer-Payment ticket and go-livepeer returns
+   * `402 invalid live runner payment signer address` (ADAAAA-3250). */
+  signerAuthToken?: string;
+  /** Payer EVM address (the remote signer's account) advertised on the
+   * orchestrator reserve. On-chain only; live AND VOD submissions pass it so
+   * the orchestrator's payment validation sees a valid signer address. */
+  payerAddress?: string;
   /** Where VOD sources + clips live. */
   dataDir: string;
   /** In-container path prefix at which the perceive runner sees this server's
@@ -104,6 +114,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     decideUrl: env.DECIDE_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
     signerUrl: env.SIGNER_URL,
+    signerAuthToken: env.SIGNER_AUTH_TOKEN,
+    payerAddress: env.PAYER_ADDRESS,
     dataDir: env.DATA_DIR ?? "data",
     perceiveClipRoot: env.PERCEIVE_CLIP_ROOT ?? "/data",
     vodMaxUploadBytes: Number(env.VOD_MAX_UPLOAD_BYTES ?? 2147483648),

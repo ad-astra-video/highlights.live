@@ -89,4 +89,42 @@ describe("HttpSignerClient", () => {
     const c = new HttpSignerClient("http://signer", t);
     await expect(c.discover(["x"])).rejects.toThrow(/500/);
   });
+
+  it("sends SIGNER_AUTH_TOKEN as Authorization: Bearer on every signer call (ADAAAA-3250)", async () => {
+    let seen: Record<string, string | undefined> = {};
+    const t = mkTransport({
+      "GET /discover-orchestrators": (init) => {
+        seen.auth = init.headers?.Authorization;
+        return { status: 200, body: [] };
+      },
+      "POST /sign-orchestrator-info": (init) => {
+        seen.auth = init.headers?.Authorization;
+        return { status: 200, body: {} };
+      },
+      "POST /generate-live-payment": (init) => {
+        seen.auth = init.headers?.Authorization;
+        return { status: 200, body: { payment: "pay", segCreds: "seg", state: { State: "c3RhdGU=", Sig: "c2ln" } } };
+      },
+    });
+    const c = new HttpSignerClient("http://signer", t, "tok-123");
+    await c.discover([]);
+    expect(seen.auth).toBe("Bearer tok-123");
+    await c.signOrchInfo("0xabc");
+    expect(seen.auth).toBe("Bearer tok-123");
+    await c.generateLivePayment(Buffer.from("x").toString("base64"), null, { type: "live" });
+    expect(seen.auth).toBe("Bearer tok-123");
+  });
+
+  it("sends no Authorization header when no token is configured (offchain)", async () => {
+    let auth: string | undefined = "unset";
+    const t = mkTransport({
+      "POST /generate-live-payment": (init) => {
+        auth = init.headers?.Authorization;
+        return { status: 200, body: { payment: "p", state: { State: "cw==", Sig: "cw==" } } };
+      },
+    });
+    const c = new HttpSignerClient("http://signer", t);
+    await c.generateLivePayment(Buffer.from("x").toString("base64"), null, { type: "live" });
+    expect(auth).toBeUndefined();
+  });
 });

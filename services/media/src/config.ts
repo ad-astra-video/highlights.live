@@ -14,6 +14,13 @@ export interface MediaConfig {
   seedImageB64?: string;
   /** Remote signer base URL (on-chain). When set, the media server pays. */
   signerUrl?: string;
+  /** Shared bearer token the remote signer requires (sealed SIGNER_AUTH_TOKEN),
+   * sent as `Authorization: Bearer <token>` on every signer signing call.
+   * Without it the signer rejects the media server, which therefore never
+   * obtains a valid Livepeer-Payment ticket and go-livepeer returns
+   * `402 invalid live runner payment signer address` at live-runner serve time
+   * (ADAAAA-3250). */
+  signerAuthToken?: string;
   /** Payer address advertised on reserve (on-chain). */
   payerAddress?: string;
   /** Payment refresh interval in ms (default 10_000). */
@@ -37,6 +44,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     callbackBase: env.CALLBACK_URL,
     seedImageB64: env.MEDIA_SEED_IMAGE_B64,
     signerUrl: env.SIGNER_URL,
+    signerAuthToken: env.SIGNER_AUTH_TOKEN,
     payerAddress: env.PAYER_ADDRESS,
     paymentIntervalMs: env.PAYMENT_INTERVAL_MS ? Number(env.PAYMENT_INTERVAL_MS) : 10_000,
     publicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,
