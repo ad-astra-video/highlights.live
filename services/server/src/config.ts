@@ -42,6 +42,15 @@ export interface ServerConfig {
    * queried (orchestrator mode); with PERCEIVE_URL set the runner's measured
    * sample_interval_s is used instead. */
   sampleIntervalSec: number;
+  /** Hard ceiling on VOD source sampling (frames/second) when the perceive
+   * runner reports it can sustain more than `sampleIntervalSec`. ADAAAA-3726:
+   * VOD sampling was previously hard-capped at 1 fps regardless of device,
+   * which starved the tracker and decide of enough frames to catch a brief
+   * moment (a soccer goal) and fire a candidate. The perceive CPU capability
+   * already reports `sample_interval_s >= 1.0`, so CPU stays at 1 fps by
+   * itself; this ceiling only bounds GPU sampling toward the chartered
+   * "3 live / 8 VOD" cadence. Default `VOD_SAMPLE_MAX_FPS` = 8. */
+  vodSampleMaxFps: number;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -124,6 +133,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     clipBeforeS: Number(env.CLIP_BEFORE_S ?? 4),
     clipAfterS: Number(env.CLIP_AFTER_S ?? 4),
     sampleIntervalSec: Number(env.SAMPLE_INTERVAL_SEC ?? 1.0),
+    vodSampleMaxFps: Number(env.VOD_SAMPLE_MAX_FPS ?? 8),
     jwtSecret: env.JWT_SECRET ?? "dev-insecure-secret-change-me",
     resetTokenTtlSec: Number(env.RESET_TOKEN_TTL_SEC ?? 3600),
     authRateLimit: Number(env.AUTH_RATE_LIMIT ?? 30),
