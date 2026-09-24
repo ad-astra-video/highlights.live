@@ -70,6 +70,22 @@ describe("DirectAdapter.postAudio (server -> perceive /audio client)", () => {
     expect(body).toEqual({ seq: 3, timestamp: 1.2, samples: "AAAA", stream_id: "job-x" });
   });
 
+  it("controlForward POSTs an operator find-and-track intent to /app/control (INC-6 / ADAAAA-4330)", async () => {
+    const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      async () => new Response("{}", { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = new DirectAdapter(cfg);
+    await adapter.controlForward("session-abc", { type: "track", bbox: [0.1, 0.2, 0.4, 0.5], label: "player" });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [{}, Record<string, any>];
+    expect(url).toBe("http://p/app/control");
+    expect(init.method).toBe("POST");
+    expect(init.headers["X-Session-Id"]).toBe("local-dev"); // DirectAdapter fake session
+    const body = JSON.parse(init.body);
+    expect(body.type).toBe("track");
+    expect(body.bbox).toEqual([0.1, 0.2, 0.4, 0.5]);
+  });
+
   it("throws on 5xx (sick runner) but tolerates 404/4xx (session re-reserved — best effort)", async () => {
     vi.stubGlobal(
       "fetch",

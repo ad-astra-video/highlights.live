@@ -590,6 +590,22 @@ def create_app() -> FastAPI:
         except WebSocketDisconnect:
             pass
 
+    @router.post("/control")
+    async def control(
+        payload: dict,
+        livepeer_session_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ):
+        """HTTP control forward (INC-6 / ADAAAA-4330): lets the server / UI
+        deliver a find-and-track intent (track/seed/evict/lock) to a reserved
+        perceive session over HTTP instead of the WS control channel. Mirrors
+        handle_control; returns the same ack object. Binds to an EXISTING
+        session (same rule as /ws)."""
+        sid = _read_session_id(livepeer_session_id, x_session_id)
+        if not sid or registry.get(sid) is None:
+            raise HTTPException(status_code=404, detail="no such session")
+        return handle_control(registry.get(sid), payload)
+
     @router.get("/session/stats")
     async def stats(
         livepeer_session_id: str | None = Header(default=None),

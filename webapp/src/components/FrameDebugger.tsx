@@ -7,6 +7,13 @@ interface ObsTrack {
   bbox: number[]; // [x1,y1,x2,y2] normalized 0..1
   kind: string;
   lostFrames: number;
+  // INC-6 / ADAAAA-4330: on-demand find-and-track surfacing. The perceive
+  // tracker marks the object a user chose to follow (selected) and reports how
+  // continuously it stays on screen (accuracy = matched on-screen frames /
+  // total tracked frames) so the operator sees tracking value at a glance.
+  selected?: boolean;
+  accuracy?: number;
+  ontoFrames?: number;
 }
 interface Observation {
   seq: number;
@@ -42,6 +49,7 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
   const [obsBySeq, setObsBySeq] = useState<Record<number, ObsTrack[]>>({});
   const [sel, setSel] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [following, setFollowing] = useState<{ label: string; slot: number; ts: string } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Track blob object URLs so we can revoke them on unmount (they otherwise
   // leak — a real bug for a filmstrip that can grow to MAX_THUMBS entries).
@@ -109,19 +117,59 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
       const tracks = obsBySeq[sel] ?? [];
       tracks.forEach((t, i) => {
         const [x1, y1, x2, y2] = t.bbox;
-        const color = PALETTE[t.slot % PALETTE.length];
+        const selected = !!t.selected;
+        const color = selected ? "#fbbf24" : PALETTE[t.slot % PALETTE.length];
         ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = selected ? 3 : 2;
         ctx.strokeRect(x1 * FRAME_W, y1 * FRAME_H, (x2 - x1) * FRAME_W, (y2 - y1) * FRAME_H);
         ctx.fillStyle = color;
         ctx.font = "10px monospace";
-        ctx.fillText(`${t.kind}#${t.slot}`, x1 * FRAME_W, Math.max(10, y1 * FRAME_H - 4));
+        const acc = t.accuracy !== undefined && t.accuracy !== null ? ` ${Math.round(t.accuracy * 100)}%` : "";
+        ctx.fillText(
+          `${t.kind}#${t.slot}${selected ? " ●" : ""}${acc}`,
+          x1 * FRAME_W,
+          Math.max(10, y1 * FRAME_H - 4)
+        );
       });
     };
     img.src = url;
   }, [sel, thumbs, obsBySeq]);
 
+  // INC-6 / ADAAAA-4330: click a detection box to issue an on-demand find-and-
+  // track intent. Hit-test the normalized bbox against the click point and
+  // forward the intent through /jobs/:id/control (the server proxies it to the
+  // perceive session, which Florence-finds + SAM3-tracks the object and reports
+  // its on-screen persistence/accuracy back in the observations feed).
+  async function followTrack(e: React.MouseEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current;
+    if (!canvas || sel === null) return;
+    const rect = canvas.getBoundingClientRect();
+    const nx = (e.clientX - rect.left) / rect.width;
+    const ny = (e.clientY - rect.top) / rect.height;
+    const tracks = obsBySeq[sel] ?? [];
+    const hit = tracks.find((t) => {
+      const [x1, y1, x2, y2] = t.bbox;
+      return nx >= x1 && nx <= x2 && ny >= y1 && ny <= y2;
+    });
+    if (!hit) return;
+    try {
+      const res = await api<{ ok: boolean; control?: { type: string; args: any } }>(`/jobs/${jobId}/control`, {
+        body: { type: "track", args: { bbox: hit.bbox, label: hit.kind, slot: hit.slot } },
+      });
+      setFollowing({ label: `${hit.kind}#${hit.slot}`, slot: hit.slot, ts: new Date().toISOString() });
+      setErr(null);
+    } catch (e2: any) {
+      setErr(`find-and-track: ${String(e2?.message || e2)}`);
+    }
+  }
+
   const selObs = useMemo(() => (sel === null ? undefined : obsBySeq[sel]), [sel, obsBySeq]);
+  // The object currently being followed (from its persisted selection marker),
+  // used to highlight it and show tracking accuracy/count in the caption.
+  const selectedTrack = useMemo(
+    () => (selObs ?? []).find((t) => t.selected) ?? null,
+    [selObs]
+  );
 
   if (err) return <div className="mt-6 rounded-lg border border-red/40 bg-red/10 p-3 text-sm text-red">Frame debugger: {err}</div>;
   if (frames.length === 0) return <div className="mt-6 text-sm text-mut">No frames saved for this job.</div>;
@@ -133,11 +181,27 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
       </div>
       <div className="flex flex-col gap-4 sm:flex-row">
         <div className="relative shrink-0">
-          <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} className="rounded-lg bg-black" />
+          <canvas
+            ref={canvasRef}
+            width={FRAME_W}
+            height={FRAME_H}
+            onClick={followTrack}
+            className="cursor-crosshair rounded-lg bg-black"
+          />
           {selObs && (
             <div className="mt-1 text-[11px] text-mut">
               seq {sel} — {selObs.length} track(s) detected
             </div>
+          )}
+          {selectedTrack ? (
+            <div className="mt-1 rounded bg-yellow/20 px-2 py-1 text-[11px] text-yellow">
+              ● following {selectedTrack.kind}#{selectedTrack.slot}
+              {selectedTrack.accuracy !== undefined && selectedTrack.accuracy !== null
+                ? ` — ${Math.round(selectedTrack.accuracy * 100)}% on screen (${selectedTrack.ontoFrames ?? 0} frames)`
+                : ""}
+            </div>
+          ) : (
+            <div className="mt-1 text-[10px] text-mut">click a box to follow that object</div>
           )}
         </div>
         <div className="flex max-h-44 flex-wrap gap-1 overflow-y-auto">
