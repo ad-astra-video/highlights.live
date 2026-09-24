@@ -4,6 +4,7 @@ import {
   CandidateEventSchema,
   BallVelocitySchema,
   BallPossessionSchema,
+  AudioSignalSchema,
   ContextSnapshotSchema,
   HighlightDecisionSchema,
   OutboundEventSchema,
@@ -149,6 +150,68 @@ describe("Ball signal on CandidateEvent (INC-2b)", () => {
     expect(() => BallVelocitySchema.parse({ speedMps: -1 })).toThrow();
     expect(
       () => BallPossessionSchema.parse({ possessingPlayerId: "t", distanceM: -0.5 })
+    ).toThrow();
+  });
+});
+
+describe("Audio gate signal on CandidateEvent (INC-2)", () => {
+  const audio = {
+    kind: "burst" as const,
+    ts: 12.0,
+    firedAt: 12.9,
+    onsetLatencyS: 0.9,
+    peakEnergy: 0.62,
+    baselineEnergy: 0.02,
+  };
+
+  it("accepts a candidate WITHOUT audio (backward compatible)", () => {
+    const c = CandidateEventSchema.parse({
+      type: "candidate",
+      sessionId: "s",
+      eventType: "GOAL",
+      timestamp: 12.5,
+    });
+    expect(c.audio).toBeUndefined();
+  });
+
+  it("accepts an audio burst signal (candidate, not decision)", () => {
+    const c = CandidateEventSchema.parse({
+      type: "candidate",
+      sessionId: "s",
+      eventType: "CROWD",
+      timestamp: audio.ts,
+      audio,
+    });
+    expect(c.audio?.kind).toBe("burst");
+    expect(c.audio?.onsetLatencyS).toBeLessThanOrEqual(5);
+    // no highlight/decision field on the candidate itself
+    expect((c as Record<string, unknown>).isHighlight).toBeUndefined();
+  });
+
+  it("accepts a sustained swell with 3 s onset latency", () => {
+    const c = CandidateEventSchema.parse({
+      type: "candidate",
+      sessionId: "s",
+      eventType: "CROWD",
+      timestamp: 30.0,
+      audio: { ...audio, kind: "swell", ts: 30.0, firedAt: 33.0, onsetLatencyS: 3.0 },
+    });
+    expect(c.audio?.kind).toBe("swell");
+    expect(c.audio?.onsetLatencyS).toBe(3.0);
+  });
+
+  it("rejects onset latency outside the 1-5 s live budget", () => {
+    expect(() =>
+      AudioSignalSchema.parse({ ...audio, onsetLatencyS: 5.5 })
+    ).toThrow();
+    expect(() => AudioSignalSchema.parse({ ...audio, onsetLatencyS: -0.1 })).toThrow();
+  });
+
+  it("rejects unknown kind and out-of-range energies", () => {
+    expect(() => AudioSignalSchema.parse({ ...audio, kind: "quiet" })).toThrow();
+    expect(() => AudioSignalSchema.parse({ ...audio, peakEnergy: 1.5 })).toThrow();
+    expect(() =>
+      AudioSignalSchema.parse({ ...audio, baselineEnergy: -0.1 })
     ).toThrow();
   });
 });

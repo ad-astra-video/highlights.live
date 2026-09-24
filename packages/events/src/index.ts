@@ -85,6 +85,28 @@ export const BallPossessionSchema = z.object({
 });
 export type BallPossession = z.infer<typeof BallPossessionSchema>;
 
+// Stage-A audio noise-change gate signal (INC-2 / ADAAAA-4325). Cheap
+// pure-DSP candidate evidence (RMS energy burst / sustained swell) — the
+// gate NEVER decides a highlight; it only marks the frame as a candidate so
+// the decide stage (Gemma) runs on candidates only. All fields optional on
+// CandidateEvent: backward compatible, no version bump.
+export const AudioSignalSchema = z.object({
+  // "burst" (fast path, ~1 s from onset) or "swell" (sustained, ~3 s window).
+  kind: z.enum(["burst", "swell"]),
+  // Onset timestamp (seconds from stream start) of the energy change — the
+  // candidate is anchored here, not at the reaction time.
+  ts: z.number(),
+  // When the gate actually fired (>= ts).
+  firedAt: z.number().min(0),
+  // firedAt - ts; must be within the live 1–5 s budget.
+  onsetLatencyS: z.number().min(0).max(5),
+  // Max frame energy (RMS, 0..1) in the trigger window.
+  peakEnergy: z.number().min(0).max(1),
+  // Quiet-baseline energy at fire time (feeds the FP-rate cost metric).
+  baselineEnergy: z.number().min(0).max(1),
+});
+export type AudioSignal = z.infer<typeof AudioSignalSchema>;
+
 export const CandidateEventSchema = z.object({
   type: z.literal("candidate"),
   sessionId: z.string(),
@@ -94,6 +116,9 @@ export const CandidateEventSchema = z.object({
   seq: z.number().int().min(0).optional(),
   ballVelocity: BallVelocitySchema.optional(),
   ballPossession: BallPossessionSchema.optional(),
+  // Stage-A audio gate evidence (INC-2); present when the candidate was
+  // triggered by the audio noise-change gate (or corroboration carried it).
+  audio: AudioSignalSchema.optional(),
 });
 export type CandidateEvent = z.infer<typeof CandidateEventSchema>;
 
