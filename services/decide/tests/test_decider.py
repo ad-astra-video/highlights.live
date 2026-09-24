@@ -45,3 +45,33 @@ def test_highlight_endpoint():
     assert body["isHighlight"] is True
     assert body["score"] == 86.0
     assert body["eventType"] == "KILL"
+
+
+def test_highlight_endpoint_accepts_reaction_evidence():
+    # INC-4 / ADAAAA-4328: the decide endpoint must accept the reaction evidence
+    # block without 422 (pydantic parses it). Rule mode ignores reaction for the
+    # score but must not reject the payload — the strict-JSON contract holds.
+    r = client.post(
+        "/app/highlight",
+        json={
+            "sessionId": "sess-1",
+            "eventType": "GOAL",
+            "timestamp": 12.0,
+            "evidence": {
+                "trackCount": 2,
+                "maxVelocity": 0.4,
+                "ocrHits": 0,
+                "reaction": {
+                    "crowdEnergy": 0.93,
+                    "audioKind": "swell",
+                    "humansInMotion": 5,
+                    "ballSpeedMps": 21.4,
+                    "ballPossessionId": "t2",
+                },
+            },
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "isHighlight" in body
+    assert "reason" in body

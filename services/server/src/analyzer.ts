@@ -12,7 +12,46 @@ export interface ReserveResult {
 }
 export interface ObservationResult {
   observation: { tracks: TrackObservation[]; seq: number; timestamp: number };
-  candidate?: { eventType: string; timestamp: number };
+  candidate?: {
+    eventType: string;
+    timestamp: number;
+    // INC-2 audio-gate signal and INC-2b ball signal ride the CandidateEvent
+    // from perceive; the server folds them into decide() reaction evidence.
+    audio?: AudioCandidate["audio"];
+    ballVelocity?: { speedMps?: number };
+    ballPossession?: { possessingPlayerId?: string };
+  };
+}
+/** People-reaction context (INC-4 / ADAAAA-4328) forwarded to decide() so the
+ * Gemma prompt can reason about the humans' reaction. Corroborating evidence
+ * only — never the highlight arbiter. All-zero == no reaction signal. */
+export interface ReactionEvidence {
+  crowdEnergy: number; // 0..1 peak of the INC-2 audio gate burst/swell
+  audioKind: string; // "burst" | "swell" | "" when no audio reaction
+  humansInMotion: number; // cheap visual celebration cue (tracked players counted)
+  ballSpeedMps: number; // INC-2b ground-plane ball speed (0 when absent)
+  ballPossessionId: string; // INC-2b possessor player id ("" when absent)
+}
+/** Build the reaction evidence object for a candidate from whatever reaction
+ * signals it carries (audio gate energy, ball velocity/possession) plus the
+ * cheap visual cue (tracked-object count as humans-in-motion proxy). Fields
+ * that are absent default to "no signal", so a candidate with no reaction data
+ * forwards an all-zero reaction block (prompt renders without it). */
+export function buildReactionEvidence(
+  candidate: {
+    audio?: AudioCandidate["audio"];
+    ballVelocity?: { speedMps?: number };
+    ballPossession?: { possessingPlayerId?: string };
+  },
+  humansInMotion: number
+): ReactionEvidence {
+  return {
+    crowdEnergy: candidate.audio?.peakEnergy ?? 0,
+    audioKind: candidate.audio?.kind ?? "",
+    humansInMotion,
+    ballSpeedMps: candidate.ballVelocity?.speedMps ?? 0,
+    ballPossessionId: candidate.ballPossession?.possessingPlayerId ?? "",
+  };
 }
 export interface DecisionResult {
   isHighlight: boolean;
@@ -76,7 +115,13 @@ export interface PipelineClient {
    * not just scalar evidence. Adapt the call site to forward it.
    */
   decide(
-    evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
+    evidence: {
+      eventType: string;
+      trackCount: number;
+      maxVelocity: number;
+      ocrHits: number;
+      reaction?: ReactionEvidence; // INC-4 people-reaction context
+    },
     opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
   ): Promise<DecisionResult>;
   stopPerceive(sessionId: string): Promise<void>;
@@ -240,6 +285,7 @@ export async function decideOnCandidate(
       trackCount: shared.evidence.trackCount,
       maxVelocity: shared.evidence.maxVelocity,
       ocrHits: 0,
+      reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
     },
     { gameHint: cfg.gameHint, imageB64: anchoredImage }
   );
@@ -352,6 +398,7 @@ export async function analyzeJob(
             trackCount: evidence.trackCount,
             maxVelocity: evidence.maxVelocity,
             ocrHits: 0,
+            reaction: buildReactionEvidence(res.candidate, evidence.trackCount),
           },
           { gameHint: cfg.gameHint, imageB64: anchoredImage }
         );

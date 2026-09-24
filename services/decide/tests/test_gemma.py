@@ -34,6 +34,113 @@ def test_build_prompt_contains_context():
     assert '"isHighlight"' in p
 
 
+# --- INC-4 / ADAAAA-4328: people-reaction dimension --------------------------
+
+def test_build_prompt_includes_reaction_dimension():
+    evidence = {
+        "trackCount": 3,
+        "maxVelocity": 0.6,
+        "ocrHits": 0,
+        "reaction": {
+            "crowdEnergy": 0.91,
+            "audioKind": "swell",
+            "humansInMotion": 5,
+            "ballSpeedMps": 21.4,
+            "ballPossessionId": "t2",
+        },
+    }
+    p = build_prompt("GOAL", evidence, "soccer", n_frames=6, has_audio=True)
+    # the reaction evidence is cited as context for the verdict
+    assert "people-reaction evidence:" in p
+    assert "audio reaction: swell at crowd energy 0.91/1.0" in p
+    assert "visual reaction: 5 human(s) in high motion (celebration cue)" in p
+    assert "ball context: 21.4 m/s toward/at possession player t2" in p
+    # explicit reaction-reasoning instructions present
+    assert "EXPLICITLY describe their reaction" in p
+    assert "group pile" in p
+    assert "bench" in p
+    # reaction is corroborating evidence, never the arbiter
+    assert "corroborating evidence only" in p
+    # strict-JSON contract is unchanged
+    assert '"isHighlight"' in p
+
+
+def test_build_prompt_no_reaction_no_regression():
+    # A candidate with no reaction signal renders the base prompt without any
+    # people-reaction scalar context (no "people-reaction evidence" block), so a
+    # candidate with no reaction data is unchanged vs today. The reaction
+    # REASONING instruction stays (it nudges the model to cite reactions when
+    # people are visible, which is what the reaction-recall metric needs), but it
+    # never changes the strict-JSON contract.
+    p = build_prompt("KILL", {"trackCount": 2, "maxVelocity": 0.4}, "valorant")
+    assert "people-reaction evidence:" not in p
+    assert "audio reaction:" not in p
+    assert '"isHighlight"' in p
+    assert '"score": 0..100' in p
+    # absent reaction field / None / garbage are all tolerated
+    for bad in ({}, {"reaction": None}, {"reaction": "junk"}, {"reaction": {"crowdEnergy": "x"}}):
+        q = build_prompt("KILL", bad)
+        assert '"isHighlight"' in q
+
+
+# --- INC-4: strict-JSON eval (no regression to parse rate vs today) ----------
+
+# Representative corpus of Gemma 12B outputs (including the noisy forms that the
+# strip/parse pipeline must keep handling). parse_decision must return a valid
+# HighlightDecision-shaped dict for every one — this is the strict-JSON eval
+# gate: a prompt edit must not regress the parse rate.
+CORPUS = [
+    '{"isHighlight":true,"score":82,"eventType":"GOAL","reason":"crowd erupts, arms raised"}',
+    'Sure! ```json\n{"isHighlight":false,"score":9,"eventType":"NONE","reason":"quiet"}\n```',
+    '```json\n{"isHighlight":true,"score":95,"eventType":"DUNK","reason":"pile on"}\n```',
+    'Here is the decision: {"isHighlight":true,"score":74,"eventType":"CLUTCH","reason":"bench up"}',
+    '{"isHighlight": true, "score": 66, "eventType": "KILL", "reason": "group celebrate"} trailing',
+    '     {"isHighlight":false,"score":3.5,"reason":"nothing","eventType":"NONE"}     ',
+]
+
+
+def test_strict_json_eval_corpus_full_parse():
+    for raw in CORPUS:
+        d = parse_decision(raw)
+        assert d is not None, f"parse failure -> regression for: {raw!r}"
+        assert isinstance(d["isHighlight"], bool)
+        assert 0.0 <= d["score"] <= 100.0
+        assert "reason" in d
+        assert "source" in d
+
+
+def test_decide_with_gemma_forwards_reaction_context():
+    # The reaction evidence folded into the prompt reaches the model request
+    # (single decide() call — no additional inference).
+    mock = MockLlama('{"isHighlight":true,"score":90,"eventType":"GOAL","reason":"crowd up"}')
+    try:
+        decide_with_gemma(
+            "GOAL",
+            {
+                "trackCount": 3,
+                "maxVelocity": 0.6,
+                "ocrHits": 0,
+                "reaction": {
+                    "crowdEnergy": 0.9,
+                    "audioKind": "burst",
+                    "humansInMotion": 4,
+                    "ballSpeedMps": 0.0,
+                    "ballPossessionId": "",
+                },
+            },
+            game_hint="soccer",
+            url=f"http://127.0.0.1:{mock.port}",
+        )
+    finally:
+        mock.stop()
+    assert len(mock.requests) == 1  # exactly one decide() call
+    text_content = [c for c in mock.requests[0]["messages"][0]["content"] if c.get("type") == "text"]
+    prompt = text_content[0]["text"]
+    assert "audio reaction: burst at crowd energy 0.90/1.0" in prompt
+    assert "visual reaction: 4 human(s) in high motion" in prompt
+    assert "people-reaction evidence:" in prompt
+
+
 # --- decide_with_gemma against a mock llama-server ---------------------------
 
 class MockLlama:
