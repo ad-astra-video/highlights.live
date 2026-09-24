@@ -25,6 +25,7 @@ from .tracker import MAX_TRACKS, foreground_blobs
 from .florence import capability, get_detector, record_analyze, resolve_vocabulary, sport_specific_event_type
 from .sam_tracker import HybridTracker
 from .trickle import TrickleError, TrickleRail, TrickleSession
+from .ball_signal import BallSignalPipeline, is_ball_label
 
 # One live trickle session per perceive session (plan §0.1 session rule).
 _trickle: dict[str, TrickleSession] = {}
@@ -172,6 +173,66 @@ def _read_session_id(
     return livepeer_session_id or x_session_id
 
 
+def _env_homography() -> np.ndarray | None:
+    """Optional global image->field pitch homography from env (3x3 JSON).
+
+    A per-session calibration (control `configure` homography) wins over this.
+    Expected as a JSON array of 9 floats (row-major). Unparseable / absent ->
+    None, so the ball signal falls back to image space (homography: false).
+    """
+    raw = os.environ.get("PERCEIVE_PITCH_HOMOGRAPHY", "").strip()
+    if not raw:
+        return None
+    try:
+        arr = json.loads(raw)
+        m = np.array(arr, dtype=float).reshape(3, 3)
+        return m
+    except Exception:  # noqa: BLE001
+        log.warning("PERCEIVE_PITCH_HOMOGRAPHY unparseable; ignoring")
+        return None
+
+
+def _ensure_ball_signal(state) -> BallSignalPipeline | None:
+    """Lazily build this session's ball-signal pipeline (idempotent).
+
+    Uses the session's homography when set (control `configure`), else the env
+    default. Returns the pipeline; it never raises -- a calibration problem
+    degrades the signal, never the frame/candidate path.
+    """
+    if state.ball_signal is not None:
+        return state.ball_signal
+    H = state.homography if state.homography is not None else _env_homography()
+    state.homography = H
+    state.ball_signal = BallSignalPipeline(H=H)
+    return state.ball_signal
+
+
+def _player_tracks(tracks) -> dict:
+    """Build {track_id: bbox} for on-screen player tracks, excluding the ball.
+
+    The tracker's max-2 slots can include the ball itself (a small, fast blob).
+    The ball is never a possession candidate, so drop ball-kind / ball-labeled
+    / ball-sized (tiny area) boxes; what remains is the player set for
+    nearest-neighbor possession. Returns a plain dict keyed by track id.
+    """
+    out: dict = {}
+    try:
+        for t in tracks:
+            if getattr(t, "kind", "") == "ball":
+                continue
+            if is_ball_label(getattr(t, "label", "")):
+                continue
+            b = getattr(t, "bbox", (0, 0, 0, 0))
+            x1, y1, x2, y2 = (float(v) for v in b)
+            area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+            if area < 0.004:  # ball-sized
+                continue
+            out[t.track_id] = (x1, y1, x2, y2)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[dict, dict | None]:
     """Run one sampled frame through the shared perceive pipeline: Florence or
     background-diff detection -> tracker.step -> observation (+ candidate).
@@ -221,6 +282,23 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     else:
         tracks = state.tracker.step(boxes, timestamp)
     state.seq = seq
+
+    # Ball-centric candidate signal (INC-2b): per-frame ball track ->
+    # homography velocity + nearest-player possession, attached to the
+    # CandidateEvent as corroborating decide() context (NOT the highlight
+    # arbiter). Fully optional and fault-tolerant: any failure drops the
+    # signal for this frame, never the frame observation or the candidate.
+    ball_signal_fields: dict = {}
+    pipe = _ensure_ball_signal(state)
+    if pipe is not None:
+        try:
+            _bf = pipe.step(objects, _player_tracks(tracks), timestamp)
+            if _bf.velocity is not None:
+                ball_signal_fields["ballVelocity"] = _bf.velocity
+            if _bf.possession is not None:
+                ball_signal_fields["ballPossession"] = _bf.possession
+        except Exception as e:  # noqa: BLE001
+            log.warning("ball signal skipped for frame %s: %s", seq, e)
 
     obs = {
         "type": "observation",
@@ -275,7 +353,12 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         event_type = sport_specific_event_type(state.game_hint, cand.event_type)
         # Return a plain dict (JSON-serializable) so callers can embed it in a
         # response/ack without reaching into the dataclass.
-        cand_dict = {"eventType": event_type, "timestamp": cand.timestamp, "trackId": cand.track_id}
+        cand_dict = {
+            "eventType": event_type,
+            "timestamp": cand.timestamp,
+            "trackId": cand.track_id,
+            **ball_signal_fields,
+        }
         events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
     for q in state.subscribers:
         for e in events:
@@ -356,6 +439,18 @@ def handle_control(state, msg: dict) -> dict:
             state.sample_fps = float(msg["sampleFps"])
         if msg.get("gameHint") is not None:
             state.game_hint = str(msg["gameHint"])
+        # Ball-signal calibration (INC-2b): optional image->field homography as
+        # a 9-number (row-major 3x3) array. A bad value is ignored (KEEP the
+        # existing calibration) and reported, never fatal.
+        if isinstance(msg.get("homography"), list):
+            try:
+                h = np.array(msg["homography"], dtype=float).reshape(3, 3)
+                state.homography = h
+                # Rebuild the pipeline on the new calibration (drops stale
+                # velocity samples + ball track so velocity restarts clean).
+                state.ball_signal = BallSignalPipeline(H=h)
+            except Exception as e:  # noqa: BLE001
+                return {"type": "ack", "ok": False, "cmd": "configure", "error": f"bad homography: {e}"}
         return {"type": "ack", "ok": True, "cmd": "configure", "preferLabels": state.prefer_labels, "sampleFps": state.sample_fps}
     if ctype == "seed":
         bbox = msg.get("bbox")
@@ -489,7 +584,7 @@ def create_app() -> FastAPI:
         # session mid-pass (ADAAAA-3305 VOD 404 "runner not found").
         obs, cand = await _analyze_offloop(state, req.seq, req.timestamp, req.image)
         if cand is not None:
-            return {"candidate": {"type": "candidate", "sessionId": sid, "eventType": cand["eventType"], "timestamp": cand["timestamp"], "seq": req.seq}, "observation": obs}
+            return {"candidate": {"type": "candidate", "sessionId": sid, **cand, "seq": req.seq}, "observation": obs}
         return obs
 
     @router.post("/audio")

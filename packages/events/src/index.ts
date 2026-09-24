@@ -213,6 +213,10 @@ export const ControlMessageSchema = z.discriminatedUnion("type", [
     preferLabels: z.array(z.string()).default([]),
     sampleFps: z.number().positive().default(1),
     gameHint: z.string().optional(),
+    // Optional image->field pitch homography (9 floats, row-major 3x3) for
+    // the ball-centric candidate signal (INC-2b). Absent -> uncalibrated, and
+    // perceive falls back to image-space velocity/possession.
+    homography: z.array(z.number()).length(9).optional(),
   }),
   z.object({
     type: z.literal("seed"),

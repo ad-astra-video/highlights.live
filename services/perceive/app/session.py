@@ -56,6 +56,12 @@ class SessionState:
     audio_gate: AudioEnergyGate = field(default_factory=AudioEnergyGate)
     # per-session audio chunk counter (event seq for audio-sourced candidates).
     audio_seq: int = 0
+    # Ball-centric candidate signal (INC-2b). `homography` is the image->field
+    # pitch homography (3x3, fit on normalized image coords) when the session
+    # is calibrated; `ball_signal` is the per-session orchestrator, created in
+    # SessionRegistry.get_or_create. Both optional: absent -> graceful fallback.
+    homography: Optional[np.ndarray] = None
+    ball_signal: Optional[object] = None
 
     @property
     def is_idle(self) -> bool:
