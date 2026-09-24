@@ -19,6 +19,17 @@ function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
     stopPerceive: async () => {
       log.push("stop");
     },
+    // Stage-A audio gate client (INC-2 / ADAAAA-4325): no-op here — the audio
+    // path is not exercised in these unit tests, but postAudio is now required
+    // on the PipelineClient interface.
+    postAudio: async () => {
+      log.push("audio");
+    },
+    // INC-6 find-and-track control forward: not exercised in these unit tests,
+    // but required on the PipelineClient interface.
+    controlForward: async () => {
+      log.push("control");
+    },
     ...over,
   };
   return { client, log };
