@@ -26,6 +26,7 @@ from .florence import capability, get_detector, record_analyze, resolve_vocabula
 from .sam_tracker import HybridTracker
 from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
+from .zone_trigger import DetectionZoneTrigger, resolve_zones
 
 # One live trickle session per perceive session (plan §0.1 session rule).
 _trickle: dict[str, TrickleSession] = {}
@@ -207,6 +208,21 @@ def _ensure_ball_signal(state) -> BallSignalPipeline | None:
     return state.ball_signal
 
 
+def _ensure_zone_trigger(state) -> DetectionZoneTrigger | None:
+    """Lazily build this session's detection-in-zone Stage-A trigger.
+
+    Zones are resolved from the session's current gameHint (soccer -> goal
+    mouths). Rebuilt on a gameHint change so the goal regions track the sport;
+    an unknown/empty sport yields an inert trigger (no zones) — motion-burst
+    + audio gates still generate candidates. Never raises.
+    """
+    if state.zone_trigger is not None:
+        return state.zone_trigger
+    tr = DetectionZoneTrigger(zones=resolve_zones(state.game_hint))
+    state.zone_trigger = tr
+    return tr
+
+
 def _player_tracks(tracks) -> dict:
     """Build {track_id: bbox} for on-screen player tracks, excluding the ball.
 
@@ -341,6 +357,19 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     state.recent_frames.append({"seq": seq, "timestamp": timestamp, "tracks": obs["tracks"]})
 
     events: list[dict] = [obs]
+    # INC-3 / ADAAAA-4327: a detection-in-zone (or ball-velocity-spike) Stage-A
+    # trigger can fire its own candidate independent of the motion-burst gate.
+    # Both are cheap (no GPU), both mark a *candidate only* — the decide()
+    # stage (Gemma) runs later on candidates. The zone trigger folds the INC-2b
+    # ball velocity/possession signals in; each candidate carries them too.
+    zone_trigger = _ensure_zone_trigger(state)
+    zone_cand = None
+    if zone_trigger is not None:
+        try:
+            zone_cand = zone_trigger.update(tracks, ball_signal_fields or None, timestamp)
+        except Exception as e:  # noqa: BLE001  (a zone hiccup never drops a frame)
+            log.warning("zone trigger skipped for frame %s: %s", seq, e)
+
     cand = state.tracker.candidate(ts=timestamp)
     cand_dict = None
     if cand is not None:
@@ -357,6 +386,18 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             "eventType": event_type,
             "timestamp": cand.timestamp,
             "trackId": cand.track_id,
+            **ball_signal_fields,
+        }
+        events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
+    elif zone_cand is not None:
+        # No motion burst this frame, but the detection-in-zone trigger fired.
+        # Classify to the sport (GOAL on a goal-scoring sport) so decide() sees
+        # a plausible event type; carry ball velocity/possession corroboration.
+        event_type = sport_specific_event_type(state.game_hint, zone_cand["eventType"])
+        cand_dict = {
+            "eventType": event_type,
+            "timestamp": zone_cand["timestamp"],
+            "trigger": zone_cand["trigger"],
             **ball_signal_fields,
         }
         events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
@@ -438,7 +479,13 @@ def handle_control(state, msg: dict) -> dict:
         if "sampleFps" in msg and msg.get("sampleFps", 0) > 0:
             state.sample_fps = float(msg["sampleFps"])
         if msg.get("gameHint") is not None:
+            changed = str(msg["gameHint"]) != state.game_hint
             state.game_hint = str(msg["gameHint"])
+            # INC-3: a sport change rebuilds the detection-in-zone trigger so
+            # the goal-mouth zones track the new sport.
+            if changed:
+                state.zone_trigger = None
+                _ensure_zone_trigger(state)
         # Ball-signal calibration (INC-2b): optional image->field homography as
         # a 9-number (row-major 3x3) array. A bad value is ignored (KEEP the
         # existing calibration) and reported, never fatal.
@@ -558,7 +605,13 @@ def create_app() -> FastAPI:
         # session is configured BEFORE the frame is run. Same effect as a WS
         # `configure` — applies to resolve_vocabulary() inside process_frame.
         if req.gameHint:
+            changed = str(req.gameHint) != state.game_hint
             state.game_hint = req.gameHint
+            # INC-3: a sport change rebuilds the detection-in-zone trigger so
+            # the goal-mouth zones track the new sport.
+            if changed:
+                state.zone_trigger = None
+                _ensure_zone_trigger(state)
         if req.preferLabels:
             state.prefer_labels = list(req.preferLabels)
         # Live path: the worker reserved a session with a control URL, so this
