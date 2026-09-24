@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { analyzeJob, EvidenceTracker, SessionLostError, type PipelineClient } from "../src/analyzer";
+import {
+  analyzeJob,
+  EvidenceTracker,
+  LiveRunShared,
+  decideOnCandidate,
+  SessionLostError,
+  type PipelineClient,
+} from "../src/analyzer";
 
 function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClient; log: string[] } {
   const log: string[] = [];
@@ -21,9 +28,10 @@ function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
     },
     // Stage-A audio gate client (INC-2 / ADAAAA-4325): no-op here — the audio
     // path is not exercised in these unit tests, but postAudio is now required
-    // on the PipelineClient interface.
+    // on the PipelineClient interface. null = the gate did not fire.
     postAudio: async () => {
       log.push("audio");
+      return null;
     },
     // INC-6 find-and-track control forward: not exercised in these unit tests,
     // but required on the PipelineClient interface.
@@ -291,5 +299,101 @@ describe("analyzeJob", () => {
     });
     expect(ev.trackCount).toBe(1);
     expect(ev.maxVelocity).toBeGreaterThan(0);
+  });
+});
+
+describe("decideOnCandidate (INC-2 / ADAAAA-4325 slice 4: audio candidate -> decide on anchored frame)", () => {
+  it("decides an audio candidate on the ANCHORED video frame and records a highlight when Gemma accepts", async () => {
+    const decideImages: (string | undefined)[] = [];
+    const { client } = fakeClient({
+      decide: async (_ev, opts) => {
+        decideImages.push(opts?.imageB64);
+        return { isHighlight: true, score: 75, eventType: "GOAL" };
+      },
+    });
+    const shared = new LiveRunShared();
+    // The video leg already sampled frames t=0..4; the audio onset (t=3) must
+    // anchor to img3 even though the audio gate fired off the video cadence.
+    for (let i = 0; i <= 4; i++) shared.addFrame(i, i, `img${i}`);
+    // Seed video evidence so the decide payload carries the current track state.
+    shared.evidence.step({ tracks: [{ trackId: "a", slot: 0, bbox: [0, 0, 0.1, 0.1], kind: "player", lostFrames: 0 }] as any });
+    const cuts: number[] = [];
+    const events: any[] = [];
+    await decideOnCandidate(
+      client,
+      shared,
+      async (ts) => {
+        cuts.push(ts);
+        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
+      },
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" },
+      { eventType: "AUDIO", timestamp: 3, seq: 99 },
+      (ev) => events.push(ev),
+      { seq: 99, timestamp: 3 }
+    );
+    expect(decideImages).toEqual(["img3"]); // anchored to the audio onset frame
+    expect(cuts).toEqual([3]);
+    expect(shared.highlights).toHaveLength(1);
+    expect(shared.highlights[0]).toMatchObject({ jobId: "j", eventType: "GOAL", status: "pending" });
+    expect(events.map((e) => e.type)).toEqual(["candidate", "highlight"]);
+  });
+
+  it("does NOT cut or record a highlight when decide rejects an audio candidate (cost bound)", async () => {
+    const { client } = fakeClient({ decide: async () => ({ isHighlight: false, score: 10 }) });
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    const cuts: number[] = [];
+    const events: any[] = [];
+    await decideOnCandidate(
+      client,
+      shared,
+      async (ts) => {
+        cuts.push(ts);
+        return { clipId: "c", clipUri: "u" };
+      },
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
+      { eventType: "AUDIO", timestamp: 0, seq: 1 },
+      (ev) => events.push(ev)
+    );
+    expect(cuts).toEqual([]);
+    expect(shared.highlights).toHaveLength(0);
+    expect(events.map((e) => e.type)).toEqual(["candidate"]); // candidate only, no highlight
+  });
+
+  it("LiveRunShared: video + audio legs accumulate highlights into the SAME array (runLiveJob wiring)", async () => {
+    let call = 0;
+    const { client } = fakeClient({
+      analyze: async () => {
+        call++;
+        if (call === 1) {
+          return { observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "KILL", timestamp: 0 } };
+        }
+        return { observation: { tracks: [], seq: 0, timestamp: 0 } };
+      },
+      decide: async () => ({ isHighlight: true, score: 70, eventType: "GOAL" }),
+    });
+    const shared = new LiveRunShared();
+    const outcome = await analyzeJob(
+      client,
+      frames(2),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
+      undefined,
+      undefined,
+      shared
+    );
+    // A video candidate already landed in shared.highlights, and the shared
+    // array is the one analyzeJob returns/persists.
+    expect(outcome.highlights).toBe(shared.highlights);
+    // Now an audio candidate fires on the same live session — it routes to the
+    // same decide path and same highlight array (no separate persistence pass).
+    await decideOnCandidate(
+      client,
+      shared,
+      async (ts) => ({ clipId: `a${ts}`, clipUri: `/clips/a${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
+      { eventType: "AUDIO", timestamp: 0, seq: 1 }
+    );
+    expect(shared.highlights.length).toBe(2);
   });
 });

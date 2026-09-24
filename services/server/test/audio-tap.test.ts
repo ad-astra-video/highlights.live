@@ -93,12 +93,37 @@ describe("DirectAdapter.postAudio (server -> perceive /audio client)", () => {
     );
     const adapter = new DirectAdapter(cfg);
     // 404 must NOT throw — analysisJob may have re-reserved a fresh session.
-    await expect(adapter.postAudio("sess-1", { seq: 0, timestamp: 0, samples: "AA" })).resolves.toBeUndefined();
+    // It also means the gate didn't return a candidate (null).
+    await expect(adapter.postAudio("sess-1", { seq: 0, timestamp: 0, samples: "AA" })).resolves.toBeNull();
     // 500 must throw.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("{}", { status: 500 }))
     );
     await expect(adapter.postAudio("sess-1", { seq: 0, timestamp: 0, samples: "AA" })).rejects.toThrow(/5\d\d/);
+  });
+
+  it("returns the gate's CandidateEvent when the noise-change gate fires (INC-2 slice 4)", async () => {
+    const cand = {
+      type: "candidate",
+      sessionId: "local-dev",
+      eventType: "AUDIO",
+      timestamp: 12.3,
+      seq: 41,
+      audio: { kind: "burst", ts: 12.1, firedAt: 12.3, onsetLatencyS: 0.2, peakEnergy: 0.9, baselineEnergy: 0.02 },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ candidate: cand }), { status: 200 }))
+    );
+    const adapter = new DirectAdapter(cfg);
+    const out = await adapter.postAudio("sess-1", { seq: 41, timestamp: 12.3, samples: "AAAA" });
+    expect(out).toEqual(cand);
+  });
+
+  it("returns null when the gate does NOT fire (candidate: null)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ candidate: null }), { status: 200 })));
+    const adapter = new DirectAdapter(cfg);
+    await expect(adapter.postAudio("sess-1", { seq: 0, timestamp: 0, samples: "AA" })).resolves.toBeNull();
   });
 });

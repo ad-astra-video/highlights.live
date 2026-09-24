@@ -9,7 +9,15 @@ import { Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
 import type { ServerConfig } from "./config";
 import type { Store } from "./store";
-import { analyzeJob, EvidenceTracker, type AnalyzeEvent, type PipelineClient } from "./analyzer";
+import {
+  analyzeJob,
+  EvidenceTracker,
+  LiveRunShared,
+  decideOnCandidate,
+  type AnalyzeEvent,
+  type AnalyzerConfig,
+  type PipelineClient,
+} from "./analyzer";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { LiveIngest, type LiveKind } from "./live";
@@ -248,20 +256,42 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // both mark candidates on the same live session. analyzeJob() receives it
       // as `initialSession` and stops it (and any re-reserves) in its finally.
       const initial = await adapter.reservePerceive();
+      const anaCfg: AnalyzerConfig = {
+        jobId: job.id,
+        clipBeforeS: cfg.clipBeforeS,
+        clipAfterS: cfg.clipAfterS,
+        gameHint: job.gameHint || cfg.gameHintDefault,
+        preferLabels: job.preferLabels,
+      };
+      const onEvent = jobEventHook(job.id);
+      // Shared live-run context (INC-2 / ADAAAA-4325 slice 4): the video
+      // /analyze leg and the audio tap leg both feed their frames + evidence
+      // into this so an audio-triggered candidate can be decided on the
+      // anchored video frame, exactly like a video candidate.
+      const shared = new LiveRunShared();
       // Drive the audio tap (a second ffmpeg decoding 0:a:0 -> mono pcm_s16le)
       // in parallel with the video pass at ~10 Hz. Best-effort: a dropped
-      // chunk or a stopped tap never aborts the video look; the loop ends when
-      // ingest.stop() (below) kills the audio ffmpeg.
-      void (async () => {
+      // chunk or a stopped tap never aborts the video look. When the gate
+      // fires, postAudio() returns the CandidateEvent and we route it through
+      // decide() on the anchored frame — the gate itself never decides, and
+      // this path bills no GPU for the gate. The loop ends when ingest.stop()
+      // (below) kills the audio ffmpeg.
+      const audioLoop = (async () => {
         try {
           for await (const chunk of ingest.audioChunks()) {
             try {
-              await adapter.postAudio(initial.sessionId, {
+              const cand = await adapter.postAudio(initial.sessionId, {
                 seq: chunk.seq,
                 timestamp: chunk.timestamp,
                 samples: chunk.samples,
                 streamId: job.id,
               });
+              if (cand) {
+                await decideOnCandidate(adapter, shared, ingest.cut, anaCfg, cand, onEvent, {
+                  seq: chunk.seq,
+                  timestamp: chunk.timestamp,
+                });
+              }
             } catch {
               /* gate is best-effort — keep going */
             }
@@ -271,21 +301,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         }
       })();
 
-      const outcome = await analyzeJob(
-        adapter,
-        ingest.frames(),
-        (ts) => ingest.cut(ts),
-        {
-          jobId: job.id,
-          clipBeforeS: cfg.clipBeforeS,
-          clipAfterS: cfg.clipAfterS,
-          gameHint: job.gameHint || cfg.gameHintDefault,
-          preferLabels: job.preferLabels,
-        },
-        jobEventHook(job.id),
-        initial
-      );
-      for (const h of outcome.highlights) {
+      const outcome = await analyzeJob(adapter, ingest.frames(), ingest.cut, anaCfg, onEvent, initial, shared);
+      // Terminate ingest (kills both ffmpeg procs); the audio tap drains and
+      // the loop resolves any in-flight candidates before we persist.
+      await ingest.stop();
+      await audioLoop;
+      // Persist highlights from BOTH legs: the video and audio legs accumulate
+      // into the same shared.highlights array, so one pass covers both.
+      for (const h of shared.highlights) {
         await store.addHighlight({ ...h, ownerId: user.id, status: cfg.autoPublishHighlights ? "accepted" : "pending" });
         await billing.onHighlightCreated(user, sub);
         // A clip generated successfully debits the quota once.
@@ -296,7 +319,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       await store.patchJob(job.id, { status: "failed" });
       console.error(`[live:${job.id}]`, e);
     } finally {
-      ingest.stop();
+      await ingest.stop();
       liveSessions.delete(job.id);
     }
   }

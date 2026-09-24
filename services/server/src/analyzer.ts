@@ -31,6 +31,23 @@ export interface AudioChunk {
   samples: string;
   streamId?: string;
 }
+/** The audio noise-change gate fired a Stage-A candidate (INC-2 / ADAAAA-4325).
+ * Returned by perceive /audio when the gate tripped; ``null`` when it did not.
+ * The gate marks a candidate only — it never decides a highlight. The server
+ * routes this to ``decide()`` on the anchored frame (slice 4). */
+export interface AudioCandidate {
+  eventType: string;
+  seq: number;
+  timestamp: number;
+  audio?: {
+    kind: string;
+    ts: number;
+    firedAt: number;
+    onsetLatencyS: number;
+    peakEnergy: number;
+    baselineEnergy: number;
+  };
+}
 export interface PipelineClient {
   reservePerceive(): Promise<ReserveResult>;
   analyze(
@@ -40,8 +57,10 @@ export interface PipelineClient {
   ): Promise<ObservationResult>;
   /** Feed one audio chunk to the perceive session's Stage-A noise-change gate.
    * Pure DSP on the perceive side — never touches the detector/SAM/Gemma, so
-   * this path bills no GPU. Fires a *candidate* only; decide runs later. */
-  postAudio(sessionId: string, chunk: AudioChunk): Promise<void>;
+   * this path bills no GPU. Fires a *candidate* only (returned to the caller so
+   * the server can route it to ``decide()``); ``null`` when the gate didn't
+   * trip. The gate never decides a highlight itself. */
+  postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioCandidate | null>;
   /**
    * Deliver an operator/find-and-track control intent (INC-6 / ADAAAA-4330) to
    * the perceive session over HTTP: `track`/`seed`/`lock`/`evict`, plus the
@@ -151,6 +170,92 @@ function nearestFrameImage(
   return best;
 }
 
+/**
+ * Shared state for one LIVE run, used by BOTH legs that feed the same perceive
+ * session (INC-2 / ADAAAA-4325 slice 4):
+ *   - the video /analyze leg (inside analyzeJob), and
+ *   - the Stage-A audio tap leg (in runLiveJob, POSTing chunks to /audio).
+ *
+ * The audio gate fires on its own ~10 Hz cadence, decoupled from the 1 fps
+ * video rail, so when an audio CandidateEvent lands the server must anchor it
+ * to the video frame nearest the audio onset and hand that image + the current
+ * video evidence to the Gemma decide runner. The two legs share this object so
+ * decide sees the actual moment, not a bare scalar candidate.
+ *
+ * Without a shared instance (VOD path), analyzeJob builds its own namespace, so
+ * the VOD pass is completely unchanged.
+ */
+export class LiveRunShared {
+  readonly evidence = new EvidenceTracker();
+  readonly highlights: HighlightRecord[] = [];
+  private frames = new Map<number, { timestamp: number; imageB64: string }>();
+  /** Record a sampled frame into the rolling anchor window (same ring size as
+   * the pre-existing DECIDE_FRAME_WINDOW in analyzeJob). */
+  addFrame(seq: number, timestamp: number, imageB64: string): void {
+    this.frames.set(seq, { timestamp, imageB64 });
+    if (this.frames.size > DECIDE_FRAME_WINDOW) {
+      const oldest = this.frames.keys().next().value;
+      if (oldest !== undefined) this.frames.delete(oldest);
+    }
+  }
+  /** Nearest sampled frame image to ``ts`` (for anchoring a candidate that
+   * fired off-cycle, e.g. an audio onset between video samples), or undefined
+   * when no frame is in the window yet. */
+  anchor(timestamp: number): string | undefined {
+    return nearestFrameImage(this.frames, timestamp);
+  }
+}
+
+/**
+ * Route ONE candidate through the decide stage on the anchored frame (INC-2 /
+ * ADAAAA-4325 slice 4). Shared by the video /analyze leg and the Stage-A audio
+ * tap leg so both: emit a live-console candidate, anchor the decide frame image
+ * to the candidate's timestamp, run the Gemma decide runner with the shared
+ * video evidence, and — when it is a highlight — cut a clip and record it.
+ *
+ * The candidate marks a possible highlight only; only ``decide()`` decides.
+ * ``emit`` carries the caller's seq/timestamp for live-console events.
+ */
+export async function decideOnCandidate(
+  client: PipelineClient,
+  shared: LiveRunShared,
+  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cfg: AnalyzerConfig,
+  candidate: { eventType: string; timestamp: number; seq?: number },
+  onEvent?: (ev: AnalyzeEvent) => void,
+  emit?: { seq: number; timestamp: number }
+): Promise<void> {
+  const evSeq = emit?.seq ?? candidate.seq ?? 0;
+  const evTs = emit?.timestamp ?? candidate.timestamp;
+  onEvent?.({ seq: evSeq, timestamp: evTs, type: "candidate", candidate });
+  const anchoredImage = shared.anchor(candidate.timestamp);
+  const decision = await client.decide(
+    {
+      eventType: candidate.eventType,
+      trackCount: shared.evidence.trackCount,
+      maxVelocity: shared.evidence.maxVelocity,
+      ocrHits: 0,
+    },
+    { gameHint: cfg.gameHint, imageB64: anchoredImage }
+  );
+  if (!decision.isHighlight) return;
+  const { clipId, clipUri } = await cut(candidate.timestamp);
+  const rec: HighlightRecord = {
+    id: randomUUID(),
+    jobId: cfg.jobId,
+    clipUri,
+    start: Math.max(0, candidate.timestamp - cfg.clipBeforeS),
+    end: candidate.timestamp + cfg.clipAfterS,
+    eventType: decision.eventType,
+    score: decision.score,
+    reason: decision.reason,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+  };
+  shared.highlights.push(rec);
+  onEvent?.({ seq: evSeq, timestamp: evTs, type: "highlight", highlight: rec });
+}
+
 /** Live-console event: pushed to SSE subscribers for a job as analysis runs. */
 export interface AnalyzeEvent {
   seq: number;
@@ -171,7 +276,13 @@ export async function analyzeJob(
   /** Optional pre-reserved session (shared with a concurrent audio tap so both
    * the video /analyze and audio /audio legs feed the SAME perceive session).
    * When absent, analyzedJob reserves one itself. */
-  initialSession?: ReserveResult
+  initialSession?: ReserveResult,
+  /** Optional shared live-run context (INC-2 / ADAAAA-4325 slice 4). When a
+   * Stage-A audio tap is concurrently feeding the same percieve session, pass a
+   * LiveRunShared so both legs share the frame-anchor window, video evidence,
+   * and collected highlights. When absent (VOD), a private namespace is used
+   * and behavior is unchanged. */
+  shared_?: LiveRunShared
 ): Promise<AnalyzeOutcome> {
   const maxReReserves = cfg.maxReReserves ?? 3;
   const first = initialSession ?? (await client.reservePerceive());
@@ -180,20 +291,16 @@ export async function analyzeJob(
   // un-paid in `finally`, even the ones go-livepeer already released (the
   // server-side released ones still hold a payment refiller in the adapter).
   const reserved = new Set<string>([first.sessionId]);
-  const evidence = new EvidenceTracker();
-  const highlights: HighlightRecord[] = [];
-  // Ring of recent sampled frames so `decide` can look the anchored strike frame
-  // up by timestamp rather than judging the late post-strike frame.
-  const frameWindow = new Map<number, { timestamp: number; imageB64: string }>();
+  // Live path shares frame window / evidence / highlights with the audio tap so
+  // decide sees the anchored moment; VOD path gets a private namespace.
+  const run = shared_ ?? new LiveRunShared();
+  const evidence = run.evidence;
+  const highlights = run.highlights;
   let framesAnalyzed = 0;
   try {
     for await (const frame of iterFrames) {
       framesAnalyzed++;
-      frameWindow.set(frame.seq, { timestamp: frame.timestamp, imageB64: frame.imageB64 });
-      if (frameWindow.size > DECIDE_FRAME_WINDOW) {
-        const oldest = frameWindow.keys().next().value;
-        if (oldest !== undefined) frameWindow.delete(oldest);
-      }
+      run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
       let res: ObservationResult;
       let reReserved = 0;
       // The perceive live-runner's health can flap mid-pass; go-livepeer then
@@ -229,7 +336,7 @@ export async function analyzeJob(
         // candidate is ANCHORED at the peak-motion (strike) frame's timestamp,
         // so resolve that frame's image from the rolling window — a candidate
         // fired on the late post-strike frame must still be judged on the strike.
-        const anchoredImage = nearestFrameImage(frameWindow, res.candidate.timestamp) ?? frame.imageB64;
+        const anchoredImage = run.anchor(res.candidate.timestamp) ?? frame.imageB64;
         const decision = await client.decide(
           {
             eventType: res.candidate.eventType,
