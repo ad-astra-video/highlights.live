@@ -15,7 +15,12 @@ from typing import Deque, List, Optional, Tuple
 
 import numpy as np
 
-MAX_TRACKS = 2
+# Schema ceiling (VOD chart target). Live sessions run at a lower capacity
+# (see LIVE_MAX_TRACKS in packages/events). `IoUTracker`/`HybridTracker` accept
+# an explicit `capacity` so the session can raise/lower it per mode.
+MAX_TRACKS = 8
+LIVE_MAX_TRACKS = 3
+VOD_MAX_TRACKS = 8
 
 BBox = Tuple[float, float, float, float]  # x1, y1, x2, y2 normalized 0..1
 
@@ -23,12 +28,18 @@ BBox = Tuple[float, float, float, float]  # x1, y1, x2, y2 normalized 0..1
 @dataclass
 class Track:
     track_id: str
-    slot: int  # 0 | 1
+    slot: int  # 0..capacity-1
     bbox: BBox
     kind: str = "unknown"
     label: str = ""
     lost_frames: int = 0
     last_seen: float = 0.0
+    # INC-6 tracked-object semantics: a user-selected find-and-track target
+    # persisted across frames while on screen. `onto_frames` counts the frames
+    # it was matched (on-screen) over the tracked window; `accuracy` is the
+    # continuity metric matched/(matched+lost) since selection (1.0 = never lost).
+    selected: bool = False
+    onto_frames: int = 0
     # for velocity-jump candidate detection
     prev_center: Optional[Tuple[float, float]] = None
     moved_frames: int = 0
@@ -38,6 +49,14 @@ class Track:
     # can be ANCHORED at the peak single-step (the strike moment) instead of the
     # later frame where accumulated displacement happens to cross the threshold.
     step_hist: Deque[Tuple[float, float]] = field(default_factory=lambda: deque(maxlen=10))
+
+    @property
+    def accuracy(self) -> Optional[float]:
+        """INC-6 tracking continuity: matched / (matched + lost) over the tracked
+        window; None when we have never matched this track on-screen."""
+        if not self.selected or self.onto_frames <= 0:
+            return None
+        return self.onto_frames / float(self.onto_frames + max(0, self.lost_frames))
 
 
 @dataclass
@@ -61,8 +80,8 @@ def _iou(a: BBox, b: BBox) -> float:
     return inter / (area_a + area_b - inter + 1e-9)
 
 
-def foreground_blobs(gray: np.ndarray, prev: Optional[np.ndarray], thresh: float = 28.0) -> List[BBox]:
-    """Return bounding boxes of the largest two foreground regions.
+def foreground_blobs(gray: np.ndarray, prev: Optional[np.ndarray], thresh: float = 28.0, capacity: int = MAX_TRACKS) -> List[BBox]:
+    """Return bounding boxes of the largest `capacity` foreground regions.
 
     gray/prev are float32 in [0,255], shape (H,W). Regions smaller than
     `min_area_frac` of the image are noise and dropped.
@@ -92,7 +111,7 @@ def foreground_blobs(gray: np.ndarray, prev: Optional[np.ndarray], thresh: float
         blobs.append((w * h, w, h, (x1 + x2) / 2, (y1 + y2) / 2))
     blobs.sort(key=lambda b: -b[0])  # largest area first
     out: List[BBox] = []
-    for _area, w, h, cx, cy in blobs[:MAX_TRACKS]:
+    for _area, w, h, cx, cy in blobs[:capacity]:
         x1, y1 = max(0.0, cx - w / 2), max(0.0, cy - h / 2)
         x2, y2 = min(1.0, cx + w / 2), min(1.0, cy + h / 2)
         out.append((x1, y1, x2, y2))
@@ -104,30 +123,32 @@ class IoUTracker:
     # action/combat moment -> KILL-tier candidate. Slower drift -> MOVE.
     FAST_STEP = 0.15
 
-    def __init__(self, jump_velocity: float = 0.2, lost_before_evict: int = 8, cooldown_s: float = 2.0):
+    def __init__(self, jump_velocity: float = 0.2, lost_before_evict: int = 8, cooldown_s: float = 2.0, capacity: int = MAX_TRACKS):
         self.tracks: List[Track] = []
         self.jump_velocity = jump_velocity
         self.lost_before_evict = lost_before_evict
         self.cooldown_s = cooldown_s
+        self.capacity = max(1, int(capacity))
         self.last_candidate: float = -1e9
         # Slots that refuse automatic eviction (control `lock`). A locked slot
         # that loses its object keeps its last bbox instead of being dropped.
         self.locked: set[int] = set()
 
     # --- operator control (§3.4) -------------------------------------------
-    def seed(self, bbox: BBox, kind: str = "unknown", label: str = "", slot: int | None = None, ts: float = 0.0) -> Track:
+    def seed(self, bbox: BBox, kind: str = "unknown", label: str = "", slot: int | None = None, ts: float = 0.0, selected: bool = False) -> Track:
         """Force a track into a slot from an operator-provided box. Replaces any
-        existing occupant of that slot. Returns the created Track."""
+        existing occupant of that slot. Returns the created Track. `selected=True`
+        marks it as an INC-6 find-and-track target (persisted + accuracy tracked)."""
         # normalize bbox to 0..1
         b = tuple(min(max(float(x), 0.0), 1.0) for x in bbox)
         if slot is not None:
-            slot = int(slot)
+            slot = min(max(int(slot), 0), self.capacity - 1)
         else:
             used = {t.slot for t in self.tracks}
-            slot = next((s for s in (0, 1) if s not in used), 0)
+            slot = next((s for s in range(self.capacity) if s not in used), 0)
         # evict any current occupant of the slot
         self.tracks = [t for t in self.tracks if t.slot != slot]
-        tr = Track(track_id=f"seed-{int(time.time()*1000)}-{slot}", slot=slot, bbox=b, kind=kind, label=label, last_seen=ts)
+        tr = Track(track_id=f"seed-{int(time.time()*1000)}-{slot}", slot=slot, bbox=b, kind=kind, label=label, last_seen=ts, selected=selected)
         self.tracks.append(tr)
         self.tracks.sort(key=lambda t: t.slot)
         return tr
@@ -171,6 +192,10 @@ class IoUTracker:
                 tr.prev_center = new_center
                 tr.bbox = new_bbox
                 tr.lost_frames = 0
+                # INC-6: a selected find-and-track target counts each matched
+                # (on-screen) frame, feeding the continuity/accuracy metric.
+                if tr.selected:
+                    tr.onto_frames += 1
                 tr.last_seen = ts
                 matched_tracks.add(id(tr))
             else:
@@ -179,9 +204,9 @@ class IoUTracker:
                 if tr.lost_frames > self.lost_before_evict and tr.slot not in self.locked:
                     self.tracks.remove(tr)
 
-        # create tracks for remaining unmatched boxes into free slots (0,1)
+        # create tracks for remaining unmatched boxes into free slots
         used = {t.slot for t in self.tracks}
-        free_slots = [s for s in (0, 1) if s not in used]
+        free_slots = [s for s in range(self.capacity) if s not in used]
         for b in unmatched:
             if not free_slots:
                 break

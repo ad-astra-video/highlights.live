@@ -30,7 +30,9 @@ import numpy as np
 from .sam_tracker import SamBackend
 from .tracker import BBox
 
-MAX_TRACKS = 2
+# Schema ceiling (VOD target, INC-6). Live sessions cap lower; the capacity is
+# threaded through the tracker the backend serves.
+MAX_TRACKS = 8
 
 
 # --------------------------------------------------------------------------

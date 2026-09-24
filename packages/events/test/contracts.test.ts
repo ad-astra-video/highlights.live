@@ -12,36 +12,56 @@ import {
   TrackObservationSchema,
   RunnerSessionSchema,
   MAX_TRACKS,
+  LIVE_MAX_TRACKS,
 } from "../src/index";
 
 describe("TrackObservation", () => {
-  it("accepts a valid track with slot 0/1", () => {
+  it("accepts a valid track with slot 1 and tracked-object semantics", () => {
     const t = TrackObservationSchema.parse({
       trackId: "t0",
       slot: 1,
       bbox: [0.1, 0.2, 0.3, 0.4],
       kind: "player",
+      selected: true,
+      onScreen: true,
+      ontoFrames: 12,
+      accuracy: 0.92,
     });
     expect(t.lostFrames).toBe(0);
+    expect(t.selected).toBe(true);
+    expect(t.accuracy).toBe(0.92);
   });
-  it("rejects slot outside 0|1", () => {
+  it("accepts slots up to VOD max (7)", () => {
+    const t = TrackObservationSchema.parse({
+      trackId: "t7",
+      slot: 7,
+      bbox: [0, 0, 1, 1],
+      kind: "player",
+    });
+    expect(t.slot).toBe(7);
+  });
+  it("rejects slot >= MAX_TRACKS and negative slot", () => {
     expect(() =>
-      TrackObservationSchema.parse({
-        trackId: "t",
-        slot: 2,
-        bbox: [0, 0, 1, 1],
-        kind: "player",
-      })
+      TrackObservationSchema.parse({ trackId: "t", slot: 8, bbox: [0, 0, 1, 1], kind: "player" })
+    ).toThrow();
+    expect(() =>
+      TrackObservationSchema.parse({ trackId: "t", slot: -1, bbox: [0, 0, 1, 1], kind: "player" })
+    ).toThrow();
+  });
+  it("rejects out-of-range accuracy", () => {
+    expect(() =>
+      TrackObservationSchema.parse({ trackId: "t", slot: 0, bbox: [0, 0, 1, 1], kind: "player", accuracy: 1.2 })
     ).toThrow();
   });
 });
 
 describe("MAX_TRACKS", () => {
-  it("is 2", () => expect(MAX_TRACKS).toBe(2));
+  it("is 8 (VOD chart target)", () => expect(MAX_TRACKS).toBe(8));
+  it("live capacity is 3 (charter target)", () => expect(LIVE_MAX_TRACKS).toBe(3));
   it("FrameObservation rejects > MAX_TRACKS tracks", () => {
-    const tracks = Array.from({ length: 3 }, (_, i) => ({
+    const tracks = Array.from({ length: 9 }, (_, i) => ({
       trackId: `t${i}`,
-      slot: i as 0 | 1,
+      slot: i,
       bbox: [0, 0, 1, 1] as [number, number, number, number],
       kind: "player" as const,
     }));

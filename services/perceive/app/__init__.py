@@ -235,6 +235,18 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 "bbox": list(t.bbox),
                 "kind": t.kind,
                 "lostFrames": t.lost_frames,
+                **(
+                    # INC-6 tracked-object semantics: surface selection persistence
+                    # + tracking accuracy so the UI can show "following object N".
+                    {
+                        "selected": True,
+                        "onScreen": t.lost_frames == 0,
+                        "ontoFrames": t.onto_frames,
+                        **({"accuracy": round(t.accuracy, 4)} if t.accuracy is not None else {}),
+                    }
+                    if t.selected
+                    else {}
+                ),
             }
             for t in tracks
         ],
@@ -352,19 +364,45 @@ def handle_control(state, msg: dict) -> dict:
         slot = msg.get("slot")
         kind = msg.get("kind") or "unknown"
         label = msg.get("label") or ""
-        tr = state.tracker.seed(tuple(bbox), kind=kind, label=label, slot=slot)
-        return {"type": "ack", "ok": True, "cmd": "seed", "slot": tr.slot, "trackId": tr.track_id}
+        # INC-6: a user find-and-track target marks the slot selected so the
+        # observation carries persistence + accuracy and it is not auto-evicted.
+        selected = bool(msg.get("selected"))
+        tr = state.tracker.seed(tuple(bbox), kind=kind, label=label, slot=slot, selected=selected)
+        return {"type": "ack", "ok": True, "cmd": "seed", "slot": tr.slot, "trackId": tr.track_id, "selected": tr.selected}
+    if ctype in ("track", "find-track"):
+        # INC-6 / ADAAAA-4330: on-demand find-and-track. The user selects an
+        # object (bbox) and perceive follows it across frames while on screen.
+        # This is the surfaced, company-bounded form of `seed`; it always marks
+        # the slot as a selected tracked object. Without an explicit bbox we
+        # fall back to the most recent frame's largest detection (Florence find)
+        # so a bare "follow it" works from the last seen frame.
+        bbox = msg.get("bbox")
+        if bbox is None:
+            cand = next((t for t in reversed(state.recent_frames) if t.get("tracks")), None)
+            cand = cand["tracks"][0] if cand and cand["tracks"] else None
+            if cand is None:
+                return {"type": "ack", "ok": False, "cmd": ctype, "error": "no bbox and no prior track to follow"}
+            bbox = cand["bbox"]
+        if not bbox or len(bbox) != 4:
+            return {"type": "ack", "ok": False, "cmd": ctype, "error": "bbox required (4 numbers)"}
+        slot = msg.get("slot")
+        kind = msg.get("kind") or "unknown"
+        label = msg.get("label") or ""
+        tr = state.tracker.seed(tuple(bbox), kind=kind, label=label, slot=slot, selected=True)
+        return {"type": "ack", "ok": True, "cmd": ctype, "slot": tr.slot, "trackId": tr.track_id, "selected": True}
     if ctype == "evict":
         slot = msg.get("slot")
-        if slot not in (0, 1):
-            return {"type": "ack", "ok": False, "cmd": "evict", "error": "slot must be 0|1"}
-        removed = state.tracker.evict(slot)
+        capacity = getattr(state.tracker, "capacity", MAX_TRACKS)
+        if slot is None or not (0 <= int(slot) < capacity):
+            return {"type": "ack", "ok": False, "cmd": "evict", "error": f"slot must be 0..{capacity - 1}"}
+        removed = state.tracker.evict(int(slot))
         return {"type": "ack", "ok": True, "cmd": "evict", "slot": slot, "removed": removed}
     if ctype == "lock":
         slot = msg.get("slot")
-        if slot not in (0, 1):
-            return {"type": "ack", "ok": False, "cmd": "lock", "error": "slot must be 0|1"}
-        state.tracker.lock(slot)
+        capacity = getattr(state.tracker, "capacity", MAX_TRACKS)
+        if slot is None or not (0 <= int(slot) < capacity):
+            return {"type": "ack", "ok": False, "cmd": "lock", "error": f"slot must be 0..{capacity - 1}"}
+        state.tracker.lock(int(slot))
         return {"type": "ack", "ok": True, "cmd": "lock", "slot": slot}
     if ctype == "analyze-still":
         if state.last_image_b64 and state.last_rgb is not None:

@@ -172,3 +172,40 @@ def test_control_worker_contract_with_candidate():
     import json as _json
 
     _json.dumps(last)  # must not raise
+
+
+# --- INC-6 on-demand find-and-track -----------------------------------------
+
+
+def test_ws_track_intent_seeds_selected_object():
+    """INC-6: the surfaced `track` control selects an object (bbox) as a
+    find-and-track target and acks with its slot."""
+    sid = _uuid_sid()
+    _create_session(sid)
+    with client.websocket_connect(f"/app/ws?session_id={sid}") as ws:
+        ws.send_text('{"type":"track","bbox":[0.2,0.2,0.4,0.4],"kind":"player","label":"p1"}')
+        ack = ws.receive_json()
+        assert ack["ok"] is True and ack["cmd"] == "track"
+        assert ack["selected"] is True
+        assert ack["slot"] in (0, 1)
+
+
+def test_seed_selected_surfaces_accuracy_in_observation():
+    """INC-6: once a find-and-track target is selected and matched on-screen,
+    the /analyze observation carries selected/onScreen/ontoFrames/accuracy."""
+    sid = _uuid_sid()
+    _create_session(sid)
+    with client.websocket_connect(f"/app/ws?session_id={sid}") as ws:
+        ws.send_text('{"type":"track","bbox":[0.2,0.2,0.4,0.4],"kind":"player"}')
+        ack = ws.receive_json()
+        assert ack["ok"] is True
+    # re-analyze a blank frame with a matching blob in the tracked region
+    g = np.zeros((60, 80), dtype=np.float32)
+    g[12:24, 16:32] = 255.0  # ~0.2-0.4 normalized -> overlaps selected box
+    r = client.post("/app/analyze", json={"seq": 1, "timestamp": 1.0, "image": _frame_jpeg(g)}, headers={"X-Session-Id": sid})
+    body = r.json()
+    selected = [t for t in body.get("tracks", []) if t.get("selected")]
+    assert selected, "expected a selected find-and-track track in the observation"
+    assert selected[0]["onScreen"] is True
+    assert selected[0]["ontoFrames"] >= 1
+    assert "accuracy" in selected[0]
