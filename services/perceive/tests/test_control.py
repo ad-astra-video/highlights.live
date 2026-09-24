@@ -177,6 +177,25 @@ def test_control_worker_contract_with_candidate():
 # --- INC-6 on-demand find-and-track -----------------------------------------
 
 
+def test_http_control_forward_track():
+    """INC-6: the HTTP /control endpoint (server -> perceive forward) delivers
+    a find-and-track intent to a reserved session and returns an ack."""
+    sid = _uuid_sid()
+    _create_session(sid)
+    r = client.post(
+        "/app/control",
+        json={"type": "track", "bbox": [0.2, 0.2, 0.4, 0.4], "kind": "player", "label": "p1"},
+        headers={"X-Session-Id": sid},
+    )
+    assert r.status_code == 200
+    ack = r.json()
+    assert ack["ok"] is True and ack["cmd"] == "track"
+    assert ack["selected"] is True
+    # unknown session -> 404
+    r2 = client.post("/app/control", json={"type": "track", "bbox": [0, 0, 1, 1]}, headers={"X-Session-Id": "nope"})
+    assert r2.status_code == 404
+
+
 def test_ws_track_intent_seeds_selected_object():
     """INC-6: the surfaced `track` control selects an object (bbox) as a
     find-and-track target and acks with its slot."""
