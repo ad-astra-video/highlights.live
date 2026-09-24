@@ -21,7 +21,11 @@ export interface DecisionResult {
 }
 export interface PipelineClient {
   reservePerceive(): Promise<ReserveResult>;
-  analyze(sessionId: string, frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string }): Promise<ObservationResult>;
+  analyze(
+    sessionId: string,
+    frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
+    opts?: { gameHint?: string; preferLabels?: string[] }
+  ): Promise<ObservationResult>;
   /**
    * Decide whether a candidate is a highlight. `imageB64` is the candidate
    * frame so the Gemma 12B QAT decide runner sees the actual moment (vision),
@@ -39,6 +43,12 @@ export interface AnalyzerConfig {
   clipAfterS: number;
   jobId: string;
   gameHint: string;
+  /**
+   * Operator closed-vocabulary labels (ADAAAA-4109). Delivered to the perceive
+   * session on every /analyze alongside gameHint so the paid VOD path activates
+   * the closed soccer roster (`resolve_vocabulary`) instead of open-set OD.
+   */
+  preferLabels?: string[];
   /**
    * Max times the job will re-reserve a fresh perceive session after the
    * current one is lost mid-pass (HTTP 404 "runner not found" / "runner
@@ -130,9 +140,14 @@ export async function analyzeJob(
       // /analyze returns 404 "runner not found". Re-reserve a fresh session
       // and retry this frame (the 404 frame was never processed) up to the
       // bounded cap, then surface the error cleanly.
+      // Deliver the job's closed vocabulary (gameHint/preferLabels) on EVERY
+      // /analyze (ADAAAA-4109): a fresh session — including one re-reserved
+      // after a 404 session-lost — inherits the config the moment its first
+      // frame runs, before resolve_vocabulary() gates the <OD> prompt.
+      const vocab = { gameHint: cfg.gameHint, preferLabels: cfg.preferLabels };
       for (;;) {
         try {
-          res = await client.analyze(sessionId, frame);
+          res = await client.analyze(sessionId, frame, vocab);
           break;
         } catch (err) {
           if (!(err instanceof SessionLostError)) throw err;
