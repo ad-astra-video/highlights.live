@@ -17,6 +17,7 @@ import type {
   DecisionResult,
   ObservationResult,
   PipelineClient,
+  ReactionEvidence,
   ReserveResult,
 } from "./analyzer";
 import { SessionLostError } from "./analyzer";
@@ -216,7 +217,13 @@ export class OrchestratorAdapter implements PipelineClient {
     if (status >= 500) throw new Error(`controlForward failed: HTTP ${status}`);
   }
   async decide(
-    evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
+    evidence: {
+      eventType: string;
+      trackCount: number;
+      maxVelocity: number;
+      ocrHits: number;
+      reaction?: ReactionEvidence; // INC-4 people-reaction context
+    },
     opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -337,7 +344,13 @@ export class DirectAdapter implements PipelineClient {
     if (r.status >= 500) throw new Error(`controlForward failed: HTTP ${r.status}`);
   }
   async decide(
-    evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
+    evidence: {
+      eventType: string;
+      trackCount: number;
+      maxVelocity: number;
+      ocrHits: number;
+      reaction?: ReactionEvidence; // INC-4 people-reaction context
+    },
     opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
