@@ -397,3 +397,34 @@ describe("decideOnCandidate (INC-2 / ADAAAA-4325 slice 4: audio candidate -> dec
     expect(shared.highlights.length).toBe(2);
   });
 });
+
+describe("Stage-A FP-rate metric on decideOnCandidate (INC-2 / ADAAAA-4325 slice 5)", () => {
+  it("records accepted vs rejected audio candidates so the fpRate cost bound is tracked", async () => {
+    let call = 0;
+    const { client } = fakeClient({
+      decide: async () => {
+        call++;
+        return call === 1 ? { isHighlight: true, score: 80 } : { isHighlight: false, score: 10 };
+      },
+    });
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    const cand = (ts: number) => ({
+      eventType: "AUDIO",
+      timestamp: ts,
+      seq: ts,
+      audio: { kind: "burst", ts, firedAt: ts + 0.3, onsetLatencyS: 0.3, peakEnergy: 0.8, baselineEnergy: 0.1 },
+    });
+    // First candidate accepted, second rejected.
+    await decideOnCandidate(client, shared, async () => ({ clipId: "c", clipUri: "u" }), { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" }, cand(0));
+    await decideOnCandidate(client, shared, async () => ({ clipId: "c", clipUri: "u" }), { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" }, cand(1));
+    const s = shared.stageA.snapshot();
+    expect(s.totalCandidates).toBe(2);
+    expect(s.accepted).toBe(1);
+    expect(s.rejected).toBe(1);
+    expect(s.fpRate).toBeCloseTo(0.5, 10); // 1/2 rejected -> <= 60% budget
+    expect(s.fpRateWithinBudget).toBe(true);
+    expect(s.meanOnsetLatencyS).toBeCloseTo(0.3, 3); // both reported onsetLatencyS 0.3
+    expect(shared.highlights).toHaveLength(1); // only the accepted one cut a clip
+  });
+});

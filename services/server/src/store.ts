@@ -71,7 +71,7 @@ export class Store {
     return this.jobs.get(id);
   }
 
-  async patchJob(id: string, patch: Partial<Pick<Job, "status" | "perceiveSessionId">>): Promise<Job> {
+  async patchJob(id: string, patch: Partial<Pick<Job, "status" | "perceiveSessionId" | "stageAMetrics">>): Promise<Job> {
     const j = this.jobs.get(id);
     if (!j) throw new Error(`no job ${id}`);
     const next = JobSchema.parse({ ...j, ...patch });

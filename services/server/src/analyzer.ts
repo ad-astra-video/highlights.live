@@ -3,6 +3,7 @@
 // clip on each highlight, and stop the session in `finally`.
 import { randomUUID } from "node:crypto";
 import type { HighlightRecord, TrackObservation } from "@highlights/events";
+import { StageAMetrics } from "./stage-a-metrics";
 
 export interface ReserveResult {
   sessionId: string;
@@ -188,6 +189,10 @@ function nearestFrameImage(
 export class LiveRunShared {
   readonly evidence = new EvidenceTracker();
   readonly highlights: HighlightRecord[] = [];
+  /** Stage-A audio-gate FP-rate + latency metric (INC-2 / ADAAAA-4325 slice 5).
+   * Every audio candidate routed through decideOnCandidate() records its
+   * outcome here; runLiveJob snapshots it onto the job at completion. */
+  readonly stageA = new StageAMetrics();
   private frames = new Map<number, { timestamp: number; imageB64: string }>();
   /** Record a sampled frame into the rolling anchor window (same ring size as
    * the pre-existing DECIDE_FRAME_WINDOW in analyzeJob). */
@@ -221,7 +226,7 @@ export async function decideOnCandidate(
   shared: LiveRunShared,
   cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
   cfg: AnalyzerConfig,
-  candidate: { eventType: string; timestamp: number; seq?: number },
+  candidate: { eventType: string; timestamp: number; seq?: number; audio?: AudioCandidate["audio"] },
   onEvent?: (ev: AnalyzeEvent) => void,
   emit?: { seq: number; timestamp: number }
 ): Promise<void> {
@@ -238,6 +243,10 @@ export async function decideOnCandidate(
     },
     { gameHint: cfg.gameHint, imageB64: anchoredImage }
   );
+  // Track the Stage-A FP-rate metric (INC-2 / ADAAAA-4325 slice 5): whether
+  // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
+  // reported onset latency. Feeds job.stageAMetrics fpRate = rejected / total.
+  shared.stageA.recordOutcome(decision.isHighlight, candidate.audio?.onsetLatencyS);
   if (!decision.isHighlight) return;
   const { clipId, clipUri } = await cut(candidate.timestamp);
   const rec: HighlightRecord = {

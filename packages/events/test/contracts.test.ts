@@ -11,6 +11,8 @@ import {
   ControlMessageSchema,
   TrackObservationSchema,
   RunnerSessionSchema,
+  JobSchema,
+  StageAMetricsSnapshotSchema,
   MAX_TRACKS,
   LIVE_MAX_TRACKS,
 } from "../src/index";
@@ -254,5 +256,38 @@ describe("RunnerSession", () => {
     const s = RunnerSessionSchema.parse({ sessionId: "x", streamId: "j", kind: "perceive" });
     expect(s.sampleFps).toBe(1);
     expect(s.preferLabels).toEqual([]);
+  });
+});
+
+describe("Job + StageAMetricsSnapshot (INC-2 / ADAAAA-4325 slice 5: FP-rate metric)", () => {
+  it("accepts a job carrying a stageAMetrics snapshot; field is optional", () => {
+    const j = JobSchema.parse({
+      id: "job",
+      source: "rtmp",
+      status: "done",
+      createdAt: "2026-09-24T00:00:00Z",
+      stageAMetrics: {
+        totalCandidates: 5,
+        accepted: 2,
+        rejected: 3,
+        fpRate: 0.6,
+        meanOnsetLatencyS: 1.2,
+        maxOnsetLatencyS: 4.8,
+        fpRateWithinBudget: true,
+      },
+    });
+    expect(j.stageAMetrics?.fpRate).toBe(0.6);
+    expect(j.stageAMetrics?.fpRateWithinBudget).toBe(true);
+    // Older / non-audio jobs without the field still parse.
+    expect(JobSchema.parse({ id: "j2", source: "file", createdAt: "2026-09-24T00:00:00Z" }).stageAMetrics).toBeUndefined();
+  });
+
+  it("rejects an out-of-range fpRate or corrupted snapshot counts", () => {
+    const base = {
+      totalCandidates: 5, accepted: 2, rejected: 3, fpRate: 0.6,
+      meanOnsetLatencyS: 1, maxOnsetLatencyS: 4, fpRateWithinBudget: true,
+    };
+    expect(() => StageAMetricsSnapshotSchema.parse({ ...base, fpRate: 1.5 })).toThrow();
+    expect(() => StageAMetricsSnapshotSchema.parse({ ...base, rejected: -1 })).toThrow();
   });
 });
