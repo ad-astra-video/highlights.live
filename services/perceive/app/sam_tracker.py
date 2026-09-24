@@ -69,12 +69,14 @@ class HybridTracker:
         jump_velocity: float = 0.2,
         lost_before_evict: int = 8,
         cooldown_s: float = 2.0,
+        capacity: int = MAX_TRACKS,
     ):
         self._detect = detect
         self._backend = backend
         self.redetect_every = redetect_every
         self.lost_before_redetect = lost_before_redetect
-        self._iou = IoUTracker(jump_velocity=jump_velocity, lost_before_evict=lost_before_evict, cooldown_s=cooldown_s)
+        self.capacity = max(1, int(capacity))
+        self._iou = IoUTracker(jump_velocity=jump_velocity, lost_before_evict=lost_before_evict, cooldown_s=cooldown_s, capacity=self.capacity)
         # slot -> box prompt SAM is currently tracking; slot -> miss count
         self._prompts: Dict[int, BBox] = {}
         self._miss: Dict[int, int] = {}
@@ -85,8 +87,8 @@ class HybridTracker:
         return self._iou.tracks
 
     # --- operator control (delegated, plus SAM re-prompt on seed) -----------
-    def seed(self, bbox: BBox, kind: str = "unknown", label: str = "", slot: int | None = None, ts: float = 0.0) -> Track:
-        tr = self._iou.seed(bbox, kind=kind, label=label, slot=slot, ts=ts)
+    def seed(self, bbox: BBox, kind: str = "unknown", label: str = "", slot: int | None = None, ts: float = 0.0, selected: bool = False) -> Track:
+        tr = self._iou.seed(bbox, kind=kind, label=label, slot=slot, ts=ts, selected=selected)
         if slot is None:  # match the slot IoUTracker chose
             slot = tr.slot
         self._prompts[slot] = tr.bbox  # user changed / set target -> SAM re-prompts here
@@ -176,8 +178,8 @@ class HybridTracker:
                     self._prompts[slot] = best
                     self._miss[slot] = 0
                     boxes.remove(best)
-        # seed empty slots from remaining detections
-        free = [s for s in range(MAX_TRACKS) if s not in self._prompts]
+        # seed empty slots from remaining detections (mode capacity)
+        free = [s for s in range(self.capacity) if s not in self._prompts]
         for slot, b in zip(free, boxes):
             self._iou.seed(b)
             self._prompts[slot] = b
@@ -196,7 +198,7 @@ def _real_sam3_backend(clip_path: str | None = None) -> Optional[SamBackend]:
         return None
 
 
-def make_tracker(clip_path: str | None = None) -> "IoUTracker":
+def make_tracker(clip_path: str | None = None, capacity: int = MAX_TRACKS) -> "IoUTracker":
     """Construct the tracker per PERCEIVE_TRACKER (default `iou`). `florence_sam`
     opts into the Florence+SAM hybrid; without a real SAM backend it falls back
     to the exact Florence->IoU behaviour.
@@ -205,13 +207,16 @@ def make_tracker(clip_path: str | None = None) -> "IoUTracker":
     is the full recorded stream for this session: the Sam3Backend opens a SAM
     session on it and steps one frame per `advance()` as frames arrive, so the
     persistent session tracks across the whole stream — Florence re-detects only
-    on SAM loss / cadence / target change."""
+    on SAM loss / cadence / target change.
+
+    `capacity` is the mode's track slot count (INC-6: default 8 VOD; live
+    sessions pass LIVE_MAX_TRACKS=3)."""
     mode = os.environ.get("PERCEIVE_TRACKER", "iou")
     if mode == "florence_sam":
         b = _real_sam3_backend(clip_path or os.environ.get("PERCEIVE_SAM_CLIP"))
         if b is not None:
-            return HybridTracker(detect=None, backend=b)
-    return IoUTracker()
+            return HybridTracker(detect=None, backend=b, capacity=capacity)
+    return IoUTracker(capacity=capacity)
 
 
 def _nearest_box(ref: BBox, boxes: List[BBox]) -> Optional[BBox]:

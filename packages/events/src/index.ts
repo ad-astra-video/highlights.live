@@ -3,7 +3,15 @@
 // Python runners + frontend. Any new required field is a version bump.
 import { z } from "zod";
 
-export const MAX_TRACKS = 2 as const;
+// Track capacity (INC-6 / ADAAAA-4330): the charter target is 3 live / 8 VOD
+// objects. Today's code capped at 2. The schema ceiling is the VOD target (8);
+// live sessions run at 3. A session advertises its ACTUAL capacity (via
+// health.slots) so the UI never reserves more slots than the runner supports,
+// while the schema accepts records from either mode.
+export const MAX_TRACKS = 8 as const; // schema ceiling (VOD target)
+export const LIVE_MAX_TRACKS = 3 as const; // live capacity
+export const VOD_MAX_TRACKS = 8 as const; // VOD capacity
+export type Slot = number;
 
 // --- geometry / detector primitives ---------------------------------------
 
@@ -25,13 +33,27 @@ export const TrackKindSchema = z.enum([
 ]);
 export type TrackKind = z.infer<typeof TrackKindSchema>;
 
+// Tracked-object semantics (INC-6 / ADAAAA-4330). A "tracked object" is an
+// on-demand, user-selected object (Florence find + SAM3 track) that persists
+// across frames while on screen. We surface that persistence as:
+//   - `selected`    true for the user-picked find-and-track target(s)
+//   - `onScreen`    whether the target is currently being tracked this frame
+//   - `ontoFrames`  cumulative frames the target has been followed while on screen
+//   - `lostFrames`  frames it was absent while we were still tracking it
+//   - `accuracy`    0..1 continuity metric = matched / (matched + lost) over the
+//                   tracked window (1.0 = never dropped while on screen)
 export const TrackObservationSchema = z.object({
   trackId: z.string(),
-  slot: z.union([z.literal(0), z.literal(1)]), // 0 | 1
+  slot: z.number().int().min(0).max(MAX_TRACKS - 1), // 0..7 (mode capacity caps the live session)
   bbox: BBoxSchema,
   kind: TrackKindSchema,
   label: z.string().optional(),
   lostFrames: z.number().int().min(0).default(0),
+  // INC-6 tracked-object semantics (all optional -> backward compatible)
+  selected: z.boolean().optional(),
+  onScreen: z.boolean().optional(),
+  ontoFrames: z.number().int().min(0).optional(),
+  accuracy: z.number().min(0).max(1).optional(),
 });
 export type TrackObservation = z.infer<typeof TrackObservationSchema>;
 
@@ -194,13 +216,25 @@ export const ControlMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("seed"),
-    slot: z.union([z.literal(0), z.literal(1)]).optional(),
+    slot: z.number().int().min(0).max(MAX_TRACKS - 1).optional(),
     bbox: BBoxSchema,
     kind: TrackKindSchema,
     label: z.string().optional(),
+    selected: z.boolean().optional(), // INC-6: mark this slot as the find-and-track target
   }),
-  z.object({ type: z.literal("evict"), slot: z.union([z.literal(0), z.literal(1)]) }),
-  z.object({ type: z.literal("lock"), slot: z.union([z.literal(0), z.literal(1)]) }),
+  z.object({ type: z.literal("evict"), slot: z.number().int().min(0).max(MAX_TRACKS - 1) }),
+  z.object({ type: z.literal("lock"), slot: z.number().int().min(0).max(MAX_TRACKS - 1) }),
+  // INC-6 / ADAAAA-4330: on-demand find-and-track — the user picks an object
+  // (bbox, optionally a slot) and perceive follows it across frames while on
+  // screen. `bbox` normalizes to a slot via Florence find/SAM track; this is
+  // the surfaced, company-bounded version of the low-level `seed`.
+  z.object({
+    type: z.literal("track"),
+    slot: z.number().int().min(0).max(MAX_TRACKS - 1).optional(),
+    bbox: BBoxSchema.optional(), // explicit region; omit to find the nearest detected object
+    kind: TrackKindSchema.optional(),
+    label: z.string().optional(),
+  }),
   z.object({ type: z.literal("analyze-still"), timestamp: z.number() }),
   z.object({ type: z.literal("confirm"), timestamp: z.number(), pre: z.number(), post: z.number() }),
   z.object({ type: z.literal("clip"), start: z.number(), end: z.number() }),

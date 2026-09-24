@@ -16,10 +16,16 @@ from typing import Deque, List, Optional
 import numpy as np
 
 from .audio_gate import AudioEnergyGate
-from .tracker import IoUTracker, MAX_TRACKS
+from .tracker import IoUTracker, LIVE_MAX_TRACKS, VOD_MAX_TRACKS
 from .sam_tracker import HybridTracker, make_tracker
 
 RECENT_FRAMES = 30  # ~30 sampled frames kept for clip/confirm
+
+
+def mode_capacity(clip_path: str = "") -> int:
+    """INC-6 / ADAAAA-4330: charter is 3 live / 8 VOD tracked objects. A session
+    with a clip_path is a VOD pass (deep-detail budget) -> 8; a live session -> 3."""
+    return VOD_MAX_TRACKS if clip_path else LIVE_MAX_TRACKS
 
 
 @dataclass
@@ -71,13 +77,15 @@ class SessionRegistry:
                 # But avoid unbounded growth: drop a single expired session.
                 self._evict_expired()
             s = SessionState(session_id=session_id, stream_id=stream_id, clip_path=clip_path)
-            s.tracker = make_tracker(clip_path or None)  # bind SAM to this job's clip
+            # INC-6: bind SAM to this job's clip AND set the mode's track capacity
+            # (3 live / 8 VOD) so the tracker instantiates with the right slots.
+            s.tracker = make_tracker(clip_path or None, capacity=mode_capacity(clip_path))
             self._sessions[session_id] = s
         elif clip_path and clip_path != s.clip_path:
             # A (new) clip was declared for an existing session -> (re)bind SAM
             # so the persistent session tracks THIS stream, not a stale/global one.
             s.clip_path = clip_path
-            s.tracker = make_tracker(clip_path or None)
+            s.tracker = make_tracker(clip_path or None, capacity=mode_capacity(clip_path))
         s.health_ts = time.time()
         return s
 
