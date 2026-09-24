@@ -107,6 +107,43 @@ _LABEL_SUBTOKENS: dict[str, str] = {
 }
 
 
+def canonical_sport(game_hint: Optional[str] = None) -> Optional[str]:
+    """Resolve a raw game hint to its canonical sport key (or None if unknown).
+
+    e.g. "Premier League" / "FA Cup" -> "soccer". Mirrors the alias resolution
+    used by `resolve_vocabulary` so sport-specific candidate classification and
+    closed-vocabulary detection stay consistent.
+    """
+    hint = (game_hint or "").strip().lower()
+    for alias, canonical in _GAME_HINT_ALIASES.items():
+        if alias in hint:
+            hint = canonical
+            break
+    if hint in _GAME_VOCABULARIES:
+        return hint
+    return None
+
+
+# Goal-scoring sports whose fast-strike tracker candidate (a generic KILL/MOVE
+# motion primitive) must be classified as a GOAL so the decide model judges and
+# auto-cuts it as a highlight. The tracker is sport-agnostic (KILL = explosive
+# single-step >= FAST_STEP, MOVE = large accumulated move); on a soccer paid
+# path those labels conflict with the scene (the decide model hard-rejects
+# "this is soccer, not a KILL event"), so the candidate is re-labelled here.
+_GOAL_EVENT_SPORTS = {"soccer"}
+
+
+def sport_specific_event_type(game_hint: Optional[str] = None, generic_type: str = "MOVE") -> str:
+    """Map the tracker's generic candidate event type onto the active sport.
+
+    A goal-scoring sport (soccer) classifies a fast-strike KILL/MOVE candidate
+    as a GOAL; every other sport keeps the raw generic type.
+    """
+    if canonical_sport(game_hint) in _GOAL_EVENT_SPORTS:
+        return "GOAL"
+    return generic_type
+
+
 def resolve_vocabulary(
     game_hint: Optional[str] = None,
     prefer_labels: Optional[list[str]] = None,

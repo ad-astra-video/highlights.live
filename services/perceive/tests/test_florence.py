@@ -170,6 +170,36 @@ def test_resolve_vocabulary_game_hint_alias_substring():
     assert "soccer ball" in vocab
 
 
+# --- ADAAAA-4193: sport-specific candidate event classification ---------------
+
+def test_sport_specific_event_soccer_kill_to_goal():
+    # The tracker anchors a fast strike as a generic KILL (explosive single-step).
+    # On the soccer paid path that must reach decide as a GOAL, or the model
+    # hard-rejects it ("this is soccer, not a KILL event") and no clip is cut.
+    assert florence.sport_specific_event_type("soccer", "KILL") == "GOAL"
+    assert florence.sport_specific_event_type("soccer", "MOVE") == "GOAL"
+
+
+def test_sport_specific_event_soccer_alias():
+    assert florence.sport_specific_event_type("Premier League", "KILL") == "GOAL"
+    assert florence.sport_specific_event_type("FA Cup", "MOVE") == "GOAL"
+
+
+def test_sport_specific_event_non_soccer_keeps_generic():
+    # Unknown/unspecified game and non-goal sports keep the raw tracker type.
+    assert florence.sport_specific_event_type(None, "KILL") == "KILL"
+    assert florence.sport_specific_event_type("", "MOVE") == "MOVE"
+    assert florence.sport_specific_event_type("some-unknown-game", "KILL") == "KILL"
+
+
+def test_canonical_sport():
+    assert florence.canonical_sport("soccer") == "soccer"
+    assert florence.canonical_sport("Champions League") == "soccer"
+    assert florence.canonical_sport("basketball") == "basketball"
+    assert florence.canonical_sport("unknown-game") is None
+    assert florence.canonical_sport(None) is None
+
+
 def test_resolve_vocabulary_unknown_hint_is_none():
     assert florence.resolve_vocabulary(game_hint="some-unknown-game") is None
     assert florence.resolve_vocabulary() is None
