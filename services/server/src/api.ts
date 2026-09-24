@@ -238,7 +238,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   }
   async function runLiveJob(
     ingest: LiveIngest,
-    job: { id: string },
+    job: { id: string; gameHint?: string; preferLabels?: string[] },
     user: any,
     sub: any
   ) {
@@ -247,7 +247,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         adapter,
         ingest.frames(),
         (ts) => ingest.cut(ts),
-        { jobId: job.id, clipBeforeS: cfg.clipBeforeS, clipAfterS: cfg.clipAfterS, gameHint: job.gameHint || cfg.gameHintDefault },
+        {
+          jobId: job.id,
+          clipBeforeS: cfg.clipBeforeS,
+          clipAfterS: cfg.clipAfterS,
+          gameHint: job.gameHint || cfg.gameHintDefault,
+          preferLabels: job.preferLabels,
+        },
         jobEventHook(job.id)
       );
       for (const h of outcome.highlights) {
@@ -270,7 +276,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // clip pipeline, storing generated highlights + clips. Shared by the server
   // path/URL POST /jobs route and the browser-upload POST /jobs/upload route so
   // both feed identical compute and quota/billing side effects.
-  async function runVodJob(job: { id: string; gameHint?: string }, videoPath: string, user: any, sub: any) {
+  async function runVodJob(job: { id: string; gameHint?: string; preferLabels?: string[] }, videoPath: string, user: any, sub: any) {
     const frameDir = path.join(cfg.dataDir, "frames", job.id);
     const sampleFps = await resolveSampleFps(cfg);
     await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps);
@@ -291,6 +297,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         clipBeforeS: cfg.clipBeforeS,
         clipAfterS: cfg.clipAfterS,
         gameHint: job.gameHint || cfg.gameHintDefault,
+        preferLabels: job.preferLabels,
       },
       jobEventHook(job.id)
     );
@@ -850,12 +857,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         }
         // Hand perceive the full recorded stream (shared-volume in-container path)
         // so the persistent session's SAM tracker tracks THIS job's whole stream.
-        const res = await adapter.analyze(bj.sessionId, {
-          seq,
-          timestamp,
-          imageB64: image,
-          clipPath: browserClipInPerceive(req.params.id),
-        });
+        const res = await adapter.analyze(
+          bj.sessionId,
+          {
+            seq,
+            timestamp,
+            imageB64: image,
+            clipPath: browserClipInPerceive(req.params.id),
+          },
+          // ADAAAA-4109: carry the job's closed vocabulary to perceive so the
+          // session activates resolve_vocabulary() on the browser rail too.
+          { gameHint: job.gameHint || cfg.gameHintDefault, preferLabels: job.preferLabels }
+        );
         bj.evidence.step(res.observation);
         emitJobEvent(req.params.id, { seq, timestamp, type: "observation", observation: res.observation });
         let highlight: any = null;
