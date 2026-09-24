@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from . import preload  # noqa: E402  (startup model preload)
+from .audio_gate import AudioEnergyGate
 from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
 from .florence import capability, get_detector, record_analyze, resolve_vocabulary, sport_specific_event_type
@@ -141,6 +142,23 @@ class AnalyzeRequest(BaseModel):
     preferLabels: list[str] = Field(default_factory=list)
 
 
+class AudioChunkRequest(BaseModel):
+    """One audio chunk for the Stage-A noise-change gate (INC-2 / ADAAAA-4325).
+
+    The server's ffmpeg audio tap decodes the stream's audio track and POSTs
+    short mono chunks (default ~100 ms at the gate's native cadence, so a
+    burst/swell fires inside the live 1-5 s budget without waiting on the
+    1 fps video /analyze). ``samples`` is base64 of planar mono int16
+    little-endian PCM (ffmpeg ``-ac 1 -c:a pcm_s16le -f s16le``), which the
+    gate's RMS energy normalizes — sample rate is not needed for the metric.
+    """
+
+    timestamp: float = 0.0  # seconds from stream start (this chunk's end)
+    samples: str = ""       # base64 int16 mono LE PCM
+    stream_id: str = ""
+    seq: int = Field(default=-1)  # optional; <0 -> per-session auto counter
+
+
 class SessionCloseResponse(BaseModel):
     closed: str | None = None
 
@@ -254,6 +272,63 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             except Exception:
                 pass
     return obs, cand_dict
+
+
+def _decode_audio(b64: str) -> np.ndarray:
+    """Decode base64 int16 mono LE PCM into a float sample array for the gate."""
+    if not b64:
+        raise HTTPException(status_code=400, detail="empty samples")
+    try:
+        raw = base64.b64decode(b64.split(",")[-1])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"bad samples b64: {e}") from e
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty samples payload")
+    if len(raw) % 2:
+        raise HTTPException(status_code=400, detail="samples not aligned to int16")
+    return np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+
+
+def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> dict | None:
+    """Run one audio chunk through the Stage-A noise-change gate (INC-2).
+
+    Pure DSP — NEVER touches the detector / SAM / Gemma (no billed GPU on the
+    gate path). When the gate fires it returns a *candidate* event carrying the
+    AudioSignal evidence (kind, onset ts, firedAt, onsetLatencyS, peakEnergy,
+    baselineEnergy) and enqueues it onto any SSE subscribers. It does NOT
+    decide a highlight — the decide stage (Gemma) runs later, on candidates.
+    """
+    samples = _decode_audio(samples_b64)
+    sig = state.audio_gate.update(samples, ts=timestamp)
+    state.audio_seq = seq if seq >= 0 else state.audio_seq + 1
+    if sig is None:
+        return None
+    # AudioSignalSchema (packages/events) camelCase keys.
+    audio = {
+        "kind": sig.kind,
+        "ts": round(sig.ts, 3),
+        "firedAt": round(sig.fired_at, 3),
+        "onsetLatencyS": round(sig.onset_latency_s, 3),
+        "peakEnergy": round(sig.peak_energy, 6),
+        "baselineEnergy": round(sig.baseline_energy, 6),
+    }
+    cand = {
+        "type": "candidate",
+        "sessionId": state.session_id,
+        "streamId": state.stream_id,
+        # Audio gate does not classify the event (no vision here); the decide
+        # stage (Gemma) assigns the real eventType from the anchored frame.
+        "eventType": "AUDIO",
+        "timestamp": audio["ts"],
+        "seq": state.audio_seq,
+        "audio": audio,
+    }
+    for q in state.subscribers:
+        try:
+            q.put_nowait(cand)
+        except Exception:
+            pass
+    return cand
 
 
 def handle_control(state, msg: dict) -> dict:
@@ -378,6 +453,28 @@ def create_app() -> FastAPI:
         if cand is not None:
             return {"candidate": {"type": "candidate", "sessionId": sid, "eventType": cand["eventType"], "timestamp": cand["timestamp"], "seq": req.seq}, "observation": obs}
         return obs
+
+    @router.post("/audio")
+    async def audio(
+        req: AudioChunkRequest,
+        livepeer_session_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ):
+        """Feed one audio chunk to the Stage-A noise-change gate (INC-2).
+
+        Pure DSP: decodes int16 mono PCM, runs the RMS energy gate, and when it
+        fires returns the audio CandidateEvent (with the AudioSignal evidence).
+        It NEVER runs the detector / SAM / Gemma, so this path bills no GPU.
+        The gate does NOT decide a highlight — it only marks a candidate.
+        """
+        sid = _read_session_id(livepeer_session_id, x_session_id)
+        if not sid:
+            raise HTTPException(status_code=400, detail="missing session id (Livepeer-Session-Id or X-Session-Id)")
+        state = registry.get_or_create(sid, req.stream_id)
+        if req.stream_id:
+            state.stream_id = req.stream_id
+        cand = process_audio(state, req.seq, req.timestamp, req.samples)
+        return {"candidate": cand}
 
     @router.get("/events")
     async def events(

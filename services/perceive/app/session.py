@@ -15,6 +15,7 @@ from typing import Deque, List, Optional
 
 import numpy as np
 
+from .audio_gate import AudioEnergyGate
 from .tracker import IoUTracker, MAX_TRACKS
 from .sam_tracker import HybridTracker, make_tracker
 
@@ -43,6 +44,12 @@ class SessionState:
     prefer_labels: List[str] = field(default_factory=list)
     sample_fps: float = 1.0
     idle_timeout_s: float = 120.0
+    # Stage-A audio noise-change gate (INC-2 / ADAAAA-4325). Cheap pure-DSP
+    # candidate trigger fed by the server's ffmpeg audio tap (own ~10 Hz
+    # cadence, independent of the 1 fps video /analyze). Never touches the GPU.
+    audio_gate: AudioEnergyGate = field(default_factory=AudioEnergyGate)
+    # per-session audio chunk counter (event seq for audio-sourced candidates).
+    audio_seq: int = 0
 
     @property
     def is_idle(self) -> bool:
