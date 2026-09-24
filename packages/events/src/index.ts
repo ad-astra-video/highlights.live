@@ -56,6 +56,35 @@ export const FrameObservationSchema = z.object({
 });
 export type FrameObservation = z.infer<typeof FrameObservationSchema>;
 
+// Ball-centric candidate signal (INC-2b / research §4b). All fields optional:
+// a candidate without them is exactly today's event (backward compatible, no
+// version bump). perceive populates them when the ball track + pitch
+// homography are available; they feed INC-3 candidate generation and the
+// decide() context as corroborating signal, not the highlight arbiter.
+export const BallVelocitySchema = z.object({
+  // Ground-plane (homography-corrected) ball velocity in m/s, field coords.
+  vxMps: z.number().optional(),
+  vyMps: z.number().optional(),
+  // Scalar ground-plane speed in m/s (set whenever vx/vy are available).
+  speedMps: z.number().min(0),
+  // Ball center in real field meters (origin/axes per the calibration used).
+  posXm: z.number().optional(),
+  posYm: z.number().optional(),
+  // True when speedMps comes from the pitch homography; false/omitted means
+  // image-space fallback (no calibrated pitch).
+  homography: z.boolean().default(false),
+});
+export type BallVelocity = z.infer<typeof BallVelocitySchema>;
+
+export const BallPossessionSchema = z.object({
+  // Track id of the nearest player to the ball center, or "none" when the
+  // nearest player is beyond the loose-ball distance threshold.
+  possessingPlayerId: z.string(),
+  // Distance (m) from ball center to that player's bbox centroid.
+  distanceM: z.number().min(0).optional(),
+});
+export type BallPossession = z.infer<typeof BallPossessionSchema>;
+
 export const CandidateEventSchema = z.object({
   type: z.literal("candidate"),
   sessionId: z.string(),
@@ -63,6 +92,8 @@ export const CandidateEventSchema = z.object({
   eventType: z.string(), // KILL | GOAL | DUNK | CLUTCH | ...
   timestamp: z.number(),
   seq: z.number().int().min(0).optional(),
+  ballVelocity: BallVelocitySchema.optional(),
+  ballPossession: BallPossessionSchema.optional(),
 });
 export type CandidateEvent = z.infer<typeof CandidateEventSchema>;
 

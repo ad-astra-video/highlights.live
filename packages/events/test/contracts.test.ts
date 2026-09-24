@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   FrameObservationSchema,
   CandidateEventSchema,
+  BallVelocitySchema,
+  BallPossessionSchema,
   ContextSnapshotSchema,
   HighlightDecisionSchema,
   OutboundEventSchema,
@@ -89,6 +91,65 @@ describe("ControlMessage", () => {
     expect(ControlMessageSchema.parse({ type: "configure", preferLabels: ["agent"], sampleFps: 2 }).type).toBe("configure");
     expect(ControlMessageSchema.parse({ type: "seed", bbox: [0, 0, 1, 1], kind: "player", label: "p1" }).type).toBe("seed");
     expect(ControlMessageSchema.parse({ type: "ping" }).type).toBe("ping");
+  });
+});
+
+describe("Ball signal on CandidateEvent (INC-2b)", () => {
+  it("accepts a candidate WITHOUT ball fields (backward compatible)", () => {
+    const c = CandidateEventSchema.parse({
+      type: "candidate",
+      sessionId: "s",
+      eventType: "GOAL",
+      timestamp: 12.5,
+      seq: 7,
+    });
+    expect(c.ballVelocity).toBeUndefined();
+    expect(c.ballPossession).toBeUndefined();
+  });
+
+  it("accepts homography-corrected velocity + possession", () => {
+    const c = CandidateEventSchema.parse({
+      type: "candidate",
+      sessionId: "s",
+      eventType: "GOAL",
+      timestamp: 12.5,
+      ballVelocity: {
+        vxMps: 24.1,
+        vyMps: -3.2,
+        speedMps: 24.3,
+        posXm: 12.5,
+        posYm: -3.0,
+        homography: true,
+      },
+      ballPossession: { possessingPlayerId: "track-9", distanceM: 1.4 },
+    });
+    expect(c.ballVelocity?.homography).toBe(true);
+    expect(c.ballVelocity?.speedMps).toBe(24.3);
+    expect(c.ballPossession?.possessingPlayerId).toBe("track-9");
+  });
+
+  it("accepts loose ball (possession 'none') and image-space fallback", () => {
+    const v = BallVelocitySchema.parse({ speedMps: 18.0 });
+    expect(v.homography).toBe(false);
+    const p = BallPossessionSchema.parse({ possessingPlayerId: "none" });
+    expect(p.distanceM).toBeUndefined();
+    const c = CandidateEventSchema.parse({
+      type: "candidate",
+      sessionId: "s",
+      eventType: "MOVE",
+      timestamp: 1.0,
+      ballVelocity: { speedMps: 18.0 },
+      ballPossession: { possessingPlayerId: "none" },
+    });
+    expect(c.ballVelocity?.speedMps).toBe(18.0);
+    expect(c.ballPossession?.possessingPlayerId).toBe("none");
+  });
+
+  it("rejects negative speedMps / distanceM", () => {
+    expect(() => BallVelocitySchema.parse({ speedMps: -1 })).toThrow();
+    expect(
+      () => BallPossessionSchema.parse({ possessingPlayerId: "t", distanceM: -0.5 })
+    ).toThrow();
   });
 });
 
