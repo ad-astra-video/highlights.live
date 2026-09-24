@@ -243,6 +243,34 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     sub: any
   ) {
     try {
+      // Reserve ONE perceive session for this live job, shared by the video
+      // /analyze leg and the Stage-A audio /audio tap (INC-2 / ADAAAA-4325) so
+      // both mark candidates on the same live session. analyzeJob() receives it
+      // as `initialSession` and stops it (and any re-reserves) in its finally.
+      const initial = await adapter.reservePerceive();
+      // Drive the audio tap (a second ffmpeg decoding 0:a:0 -> mono pcm_s16le)
+      // in parallel with the video pass at ~10 Hz. Best-effort: a dropped
+      // chunk or a stopped tap never aborts the video look; the loop ends when
+      // ingest.stop() (below) kills the audio ffmpeg.
+      void (async () => {
+        try {
+          for await (const chunk of ingest.audioChunks()) {
+            try {
+              await adapter.postAudio(initial.sessionId, {
+                seq: chunk.seq,
+                timestamp: chunk.timestamp,
+                samples: chunk.samples,
+                streamId: job.id,
+              });
+            } catch {
+              /* gate is best-effort — keep going */
+            }
+          }
+        } catch {
+          /* tap never started or ended early — video leg unaffected */
+        }
+      })();
+
       const outcome = await analyzeJob(
         adapter,
         ingest.frames(),
@@ -254,7 +282,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           gameHint: job.gameHint || cfg.gameHintDefault,
           preferLabels: job.preferLabels,
         },
-        jobEventHook(job.id)
+        jobEventHook(job.id),
+        initial
       );
       for (const h of outcome.highlights) {
         await store.addHighlight({ ...h, ownerId: user.id, status: cfg.autoPublishHighlights ? "accepted" : "pending" });
@@ -1069,10 +1098,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return reply; // keep the socket open
   });
 
-  // Operator control intent for a live-console session (preferLabels, lock,
-  // evict, confirm). Recorded + acked on the job. Delivery to the perceive
-  // runner's control channel is the next adapter increment (see perceive WS
-  // control); the API surface and ack are live now so the UI can send it.
+  // Operator control intent for a live-console session, including the INC-6
+  // on-demand find-and-track intent (track/seed/evict/lock). The `track` /
+  // `find-track` intent carries the user-selected object bbox and is forwarded
+  // to the perceive session over HTTP so the runner actually follows it
+  // (Florence find -> SAM track -> selected-track accuracy surfaced in the UI).
+  // Async + best-effort: we ack immediately with the recorded intent and always
+  // return the current job; a dropped forward (session re-reserved/404) never
+  // fails the request.
   app.post<{ Params: { id: string }; Body: { type?: string; args?: any } }>(
     "/jobs/:id/control",
     { preHandler: authReq },
@@ -1081,8 +1114,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       if (!job) return reply.code(404).send({ error: "no job" });
       const type = req.body?.type || "none";
       const args = req.body?.args ?? {};
-      // Ack to the operator immediately; delivery to the perceive control
-      // channel is handled once the adapter exposes a control forward.
+      // Resolve the active perceive session for this job: the browser-capture
+      // rail keeps it on the job record, and a VOD/live job persists it on the
+      // job once the session is reserved.
+      const sid = browserJobs.get(job.id)?.sessionId || job.perceiveSessionId;
+      // Control messages (find-and-track intent) mirror the perceive schema: a
+      // flat object with `type` plus its args spread at top level.
+      const fwd = { type, ...args };
+      if (sid && ["track", "find-track", "seed", "lock", "evict", "configure"].includes(type)) {
+        adapter.controlForward(sid, fwd).catch((e: any) => {
+          // Best-effort: never surface a dropped find-and-track to the user as a
+          // failure; the console ack reflects the recorded intent.
+          console.error(`[control:${job.id}] forward ${type} failed:`, e?.message || e);
+        });
+      }
       return { ok: true, control: { type, args, at: new Date().toISOString() }, job: store.getJob(job.id) };
     }
   );

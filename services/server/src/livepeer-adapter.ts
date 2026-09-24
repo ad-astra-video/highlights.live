@@ -11,7 +11,7 @@ import {
 } from "@highlights/livepeer-session";
 import type { ServerConfig } from "./config";
 import { createPaymentRefresher, type PaymentRefresher } from "./payment";
-import type { DecisionResult, ObservationResult, PipelineClient, ReserveResult } from "./analyzer";
+import type { AudioChunk, DecisionResult, ObservationResult, PipelineClient, ReserveResult } from "./analyzer";
 import { SessionLostError } from "./analyzer";
 
 export function buildAnalyzeFrames(frameDir: string, sampleFps = 1) {
@@ -175,6 +175,36 @@ export class OrchestratorAdapter implements PipelineClient {
     }
     return normalizeObservation(data);
   }
+  async postAudio(sessionId: string, chunk: AudioChunk): Promise<void> {
+    // Pure-DSP audio gate on the perceive runner — no GPU on this path. Proxy
+    // through the same orchestrator session as /analyze so the gate marks
+    // candidates on the live session the worker is already paying for.
+    const { status } = await this.client.appCall<any>(sessionId, "audio", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        seq: chunk.seq,
+        timestamp: chunk.timestamp,
+        samples: chunk.samples,
+        stream_id: chunk.streamId || "",
+      }),
+    });
+    // A dropped audio chunk is cheap (gate is best-effort); a 404 just means
+    // the video leg already re-reserved a fresh session. Never abort the pass.
+    if (status >= 500) throw new Error(`postAudio failed: HTTP ${status}`);
+  }
+  async controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<void> {
+    // INC-6 / ADAAAA-4330: proxy a find-and-track / operator control intent
+    // through the same orchestrator session as /analyze so the perceive runner
+    // marks the slot selected and follows it. Best-effort like postAudio: a 404
+    // means the video leg already re-reserved a fresh session — drop, never fatal.
+    const { status } = await this.client.appCall<any>(sessionId, "control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(control),
+    });
+    if (status >= 500) throw new Error(`controlForward failed: HTTP ${status}`);
+  }
   async decide(
     evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
     opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
@@ -265,6 +295,31 @@ export class DirectAdapter implements PipelineClient {
       throw new Error(`analyze failed: HTTP ${r.status}`);
     }
     return normalizeObservation(await r.json());
+  }
+  async postAudio(sessionId: string, chunk: AudioChunk): Promise<void> {
+    // Direct dev path: POST straight to perceive /app/audio (pure DSP, no GPU).
+    const r = await fetch(`${this.cfg.perceiveUrl}/app/audio`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Id": this.fakeSession },
+      body: JSON.stringify({
+        seq: chunk.seq,
+        timestamp: chunk.timestamp,
+        samples: chunk.samples,
+        stream_id: chunk.streamId || "",
+      }),
+    });
+    // Best-effort gate: a dropped chunk must never abort the video pass.
+    if (r.status >= 500) throw new Error(`postAudio failed: HTTP ${r.status}`);
+  }
+  async controlForward(_sessionId: string, control: { type: string; [k: string]: any }): Promise<void> {
+    // INC-6 / ADAAAA-4330: direct dev path posts the find-and-track control
+    // intent straight to perceive /app/control with the fake session id.
+    const r = await fetch(`${this.cfg.perceiveUrl}/app/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Id": this.fakeSession },
+      body: JSON.stringify(control),
+    });
+    if (r.status >= 500) throw new Error(`controlForward failed: HTTP ${r.status}`);
   }
   async decide(
     evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },

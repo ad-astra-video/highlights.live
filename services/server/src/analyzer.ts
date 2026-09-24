@@ -19,6 +19,18 @@ export interface DecisionResult {
   eventType?: string;
   reason?: string;
 }
+/** One audio chunk fed to the Stage-A noise-change gate (INC-2 / ADAAAA-4325).
+ * Owned by the server's ffmpeg audio tap: short (default ~100 ms) mono int16
+ * little-endian PCM, base64-encoded, matched to perceive's AudioChunkRequest. */
+export interface AudioChunk {
+  /** Optional chunk sequence; <0 -> perceive uses its per-session counter. */
+  seq: number;
+  /** Seconds from stream start (this chunk's end timestamp). */
+  timestamp: number;
+  /** base64 of planar mono int16 LE PCM (ffmpeg `-ac 1 -c:a pcm_s16le -f s16le`). */
+  samples: string;
+  streamId?: string;
+}
 export interface PipelineClient {
   reservePerceive(): Promise<ReserveResult>;
   analyze(
@@ -26,6 +38,18 @@ export interface PipelineClient {
     frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
     opts?: { gameHint?: string; preferLabels?: string[] }
   ): Promise<ObservationResult>;
+  /** Feed one audio chunk to the perceive session's Stage-A noise-change gate.
+   * Pure DSP on the perceive side — never touches the detector/SAM/Gemma, so
+   * this path bills no GPU. Fires a *candidate* only; decide runs later. */
+  postAudio(sessionId: string, chunk: AudioChunk): Promise<void>;
+  /**
+   * Deliver an operator/find-and-track control intent (INC-6 / ADAAAA-4330) to
+   * the perceive session over HTTP: `track`/`seed`/`lock`/`evict`, plus the
+   * pre-existing configure/ping. The UI surfaces object selection (bbox) as a
+   * `track` intent; perceive marks the slot selected and follows it. Best-effort:
+   * a 404 (fresh session after re-reserve) is dropped, never fatal.
+   */
+  controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<void>;
   /**
    * Decide whether a candidate is a highlight. `imageB64` is the candidate
    * frame so the Gemma 12B QAT decide runner sees the actual moment (vision),
@@ -131,10 +155,11 @@ function nearestFrameImage(
 export interface AnalyzeEvent {
   seq: number;
   timestamp: number;
-  type: "observation" | "candidate" | "highlight";
+  type: "observation" | "candidate" | "highlight" | "candidateBlocked";
   observation?: { tracks: TrackObservation[] };
   candidate?: { eventType: string; timestamp: number };
   highlight?: HighlightRecord;
+  reason?: string;
 }
 
 export async function analyzeJob(
@@ -142,10 +167,14 @@ export async function analyzeJob(
   iterFrames: AsyncIterable<{ seq: number; timestamp: number; imageB64: string }>,
   cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
   cfg: AnalyzerConfig,
-  onEvent?: (ev: AnalyzeEvent) => void
+  onEvent?: (ev: AnalyzeEvent) => void,
+  /** Optional pre-reserved session (shared with a concurrent audio tap so both
+   * the video /analyze and audio /audio legs feed the SAME perceive session).
+   * When absent, analyzedJob reserves one itself. */
+  initialSession?: ReserveResult
 ): Promise<AnalyzeOutcome> {
   const maxReReserves = cfg.maxReReserves ?? 3;
-  const first = await client.reservePerceive();
+  const first = initialSession ?? (await client.reservePerceive());
   let sessionId = first.sessionId;
   // Every session we reserved (initial + any re-reserves) must be stopped /
   // un-paid in `finally`, even the ones go-livepeer already released (the

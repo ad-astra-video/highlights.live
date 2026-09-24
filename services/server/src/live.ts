@@ -21,10 +21,46 @@ export interface LiveSpec {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Stage-A audio tap (INC-2 / ADAAAA-4325). The server decodes the stream's
+// audio track to mono pcm_s16le and POSTs short chunks to perceive /audio so
+// the noise-change gate can fire a *candidate* inside the live 1-5 s budget,
+// independent of the 1 fps video /analyze. The gate normalizes RMS energy, so
+// sample rate doesn't change the metric — 16 kHz keeps the tap cheap.
+export const AUDIO_SAMPLE_RATE = 16_000;
+export const AUDIO_CHUNK_S = 0.1; // 100 ms chunks -> 10 chunks/sec cadence
+
+/** Split a raw int16-le mono PCM byte buffer into complete fixed-size chunks.
+ * Pure + deterministic so it is directly unit-testable. Trailing bytes shorter
+ * than one chunk are held back by the caller (buffered for the next read).
+ * timestamp = baseTimestampSec + (chunkIndex + 1) * chunkSec (chunk end). */
+export function chunkPcmBytes(
+  bytes: Buffer,
+  chunkBytes: number,
+  chunkSec: number,
+  baseSeq: number,
+  baseTimestampSec: number
+): { seq: number; timestamp: number; samples: string }[] {
+  const out: { seq: number; timestamp: number; samples: string }[] = [];
+  let offset = 0;
+  while (offset + chunkBytes <= bytes.length) {
+    const idx = out.length;
+    const chunk = bytes.subarray(offset, offset + chunkBytes);
+    out.push({
+      seq: baseSeq + idx,
+      timestamp: baseTimestampSec + (idx + 1) * chunkSec,
+      samples: chunk.toString("base64"),
+    });
+    offset += chunkBytes;
+  }
+  return out;
+}
+
 export class LiveIngest {
   running = false;
   stderrTail = "";
   private proc: ChildProcessWithoutNullStreams | null = null;
+  /** Second ffmpeg decoding `0:a:0` -> mono pcm_s16le raw to stdout (INC-2). */
+  private audioProc: ChildProcessWithoutNullStreams | null = null;
   private frameDir: string;
   private sessionTs: string;
   private sampleSec: number;
@@ -87,6 +123,33 @@ export class LiveIngest {
       if (this.running) console.error(`[live:${this.jobId}] ffmpeg exited code=${code} sig=${sig}`);
       this.running = false;
     });
+
+    // Stage-A audio tap (INC-2): a SECOND ffmpeg decodes `0:a:0` (absent on
+    // silent streams -> no-op) to mono pcm_s16le raw on stdout, which
+    // audioChunks() batches into ~100 ms pieces for perceive /audio. Pure DSP
+    // on the gate — no GPU billed. Never fatal: if the tap fails to start or
+    // exits, the video /analyze pipeline just runs without audio candidates.
+    const audioArgs = [
+      "-hide_banner",
+      "-loglevel", "error",
+      ...input,
+      "-map", "0:a:0?",
+      "-ac", "1",
+      "-ar", String(AUDIO_SAMPLE_RATE),
+      "-c:a", "pcm_s16le",
+      "-f", "s16le",
+      "-",
+    ];
+    this.audioProc = spawn(this.cfg.ffmpegPath, audioArgs);
+    this.audioProc.stderr.on("data", (d: Buffer) => {
+      this.stderrTail = (this.stderrTail + d.toString()).slice(-4000);
+    });
+    this.audioProc.on("exit", (code, sig) => {
+      if (this.running && code && code !== 0)
+        console.error(`[live:${this.jobId}] audio-tap ffmpeg exited code=${code} sig=${sig}`);
+      this.audioProc = null;
+    });
+
     // Give ffmpeg a beat to open the input before we start sampling.
     await sleep(800);
   }
@@ -119,6 +182,17 @@ export class LiveIngest {
     // Wait for the process to actually exit so its file handles are released
     // (otherwise the next run can hit EBUSY unlinking the session file).
     await Promise.race([exited, sleep(2000)]);
+    // Kill the audio tap too (if still running) so it doesn't leak a decoder.
+    const ap = this.audioProc;
+    this.audioProc = null;
+    if (ap) {
+      const aExited = new Promise<void>((res) => {
+        ap.once("exit", () => res());
+        ap.once("error", () => res());
+      });
+      ap.kill("SIGKILL");
+      await Promise.race([aExited, sleep(500)]);
+    }
   }
 
   /** Subscribe to frames as ffmpeg writes them; ends when stop() is called. */
@@ -141,6 +215,32 @@ export class LiveIngest {
         seq++;
       }
       await sleep(250);
+    }
+  }
+
+  /**
+   * Yield ~100 ms mono int16 PCM chunks from the audio tap, each to POST to
+   * perceive /audio (INC-2). Runs INDEPENDENTLY of frames(): the gate needs a
+   * ~10 Hz cadence to fire inside the live 1-5 s budget while video samples at
+   * ~1 fps. Ends when the tap process exits or stop() is called. Trailing
+   * partial bytes are buffered and prepended to the next read.
+   */
+  async *audioChunks(): AsyncGenerator<{ seq: number; timestamp: number; samples: string }> {
+    const p = this.audioProc;
+    if (!p) return;
+    const chunkBytes = Math.round(AUDIO_SAMPLE_RATE * AUDIO_CHUNK_S) * 2;
+    let buf = Buffer.alloc(0);
+    let seq = 0;
+    let baseTs = 0;
+    for await (const data of p.stdout as AsyncIterable<Buffer>) {
+      buf = Buffer.concat([buf, data]);
+      const done = chunkPcmBytes(buf, chunkBytes, AUDIO_CHUNK_S, seq, baseTs);
+      if (done.length) {
+        seq = done[done.length - 1].seq + 1;
+        baseTs = done[done.length - 1].timestamp;
+        buf = buf.subarray(done.length * chunkBytes);
+        for (const c of done) yield c;
+      }
     }
   }
 
