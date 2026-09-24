@@ -314,7 +314,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // A clip generated successfully debits the quota once.
         await entitlements.onClipGenerated(user);
       }
-      await store.patchJob(job.id, { status: "done", perceiveSessionId: outcome.sessionId });
+      // Durable Stage-A FP-rate + latency metric (INC-2 / ADAAAA-4325 slice 5):
+      // snapshotted onto the job so the noise-trigger cost bound (<= 60% of
+      // audio candidates rejected by Gemma) is inspectable/queryable post-run.
+      const stageA = shared.stageA.snapshot();
+      await store.patchJob(job.id, {
+        status: "done",
+        perceiveSessionId: outcome.sessionId,
+        stageAMetrics: stageA,
+      });
+      if (stageA.totalCandidates > 0) {
+        console.log(
+          `[live:${job.id}] stageA fpRate=${stageA.fpRate} (${stageA.rejected}/${stageA.totalCandidates} rejected), ` +
+            `latency mean/max=${stageA.meanOnsetLatencyS}/${stageA.maxOnsetLatencyS}s, withinBudget=${stageA.fpRateWithinBudget}`
+        );
+      }
     } catch (e) {
       await store.patchJob(job.id, { status: "failed" });
       console.error(`[live:${job.id}]`, e);

@@ -258,6 +258,28 @@ export type RunnerSession = z.infer<typeof RunnerSessionSchema>;
 
 // --- server public API ---
 
+// Stage-A (audio noise-change gate) FP-rate + latency metric snapshot (INC-2 /
+// ADAAAA-4325 slice 5). Recorded on the job when the live pass routes audio-gate
+// candidates through decide(). All fields present (snapshot is atomic); the
+// field itself is optional on Job so older records parse fine (no version bump).
+export const StageAMetricsSnapshotSchema = z.object({
+  // Candidates the gate fired that Gemma decide() actually judged.
+  totalCandidates: z.number().int().min(0),
+  // Gemini accepted (highlight cut) vs rejected (no highlight) of those.
+  accepted: z.number().int().min(0),
+  rejected: z.number().int().min(0),
+  // Noise-trigger false-positive rate = rejected / total (0..1). Cost bound:
+  // must be <= 0.6 (<= 60%) for the gate to stay on budget.
+  fpRate: z.number().min(0).max(1),
+  // Observed onset->fire latency (s) across candidates (mean / max). The gate
+  // bounds each at <= 5 s; this verifies the live 1-5 s budget in aggregate.
+  meanOnsetLatencyS: z.number().min(0),
+  maxOnsetLatencyS: z.number().min(0),
+  // True when fpRate is within the <= 60% acceptance bound (cost gate passed).
+  fpRateWithinBudget: z.boolean(),
+});
+export type StageAMetricsSnapshot = z.infer<typeof StageAMetricsSnapshotSchema>;
+
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -267,6 +289,9 @@ export const JobSchema = z.object({
   preferLabels: z.array(z.string()).default([]),
   status: z.enum(["queued", "active", "done", "failed"]).default("queued"),
   perceiveSessionId: z.string().optional(),
+  // Stage-A audio-gate metric snapshot (INC-2 / ADAAAA-4325); absent on VOD /
+  // non-audio jobs and on older records.
+  stageAMetrics: StageAMetricsSnapshotSchema.optional(),
   createdAt: z.string(),
 });
 export type Job = z.infer<typeof JobSchema>;
