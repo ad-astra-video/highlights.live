@@ -144,7 +144,11 @@ export class OrchestratorAdapter implements PipelineClient {
     this.payers.set(p.sessionId, ref);
     ref.start();
   }
-  async analyze(sessionId: string, frame: { seq: number; timestamp: number; imageB64: string }): Promise<ObservationResult> {
+  async analyze(
+    sessionId: string,
+    frame: { seq: number; timestamp: number; imageB64: string },
+    opts?: { gameHint?: string; preferLabels?: string[] }
+  ): Promise<ObservationResult> {
     const { status, data } = await this.client.appCall<any>(sessionId, "analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -153,6 +157,12 @@ export class OrchestratorAdapter implements PipelineClient {
         timestamp: frame.timestamp,
         image: frame.imageB64,
         clip_path: frame.clipPath || "",  // per-JOB recorded stream (SAM persistent session)
+        // ADAAAA-4109: carry the job's closed vocabulary so perceive activates
+        // resolve_vocabulary() (soccer roster) instead of open-set OD in the
+        // paid/orchestrator VOD path. Sent on every frame so a re-reserve
+        // configures the fresh session automatically.
+        gameHint: opts?.gameHint || "",
+        preferLabels: opts?.preferLabels || [],
       }),
     });
     if (status >= 400) {
@@ -232,7 +242,11 @@ export class DirectAdapter implements PipelineClient {
   async reservePerceive(): Promise<ReserveResult> {
     return { sessionId: this.fakeSession, appUrl: "", controlUrl: "" };
   }
-  async analyze(sessionId: string, frame: { seq: number; timestamp: number; imageB64: string }): Promise<ObservationResult> {
+  async analyze(
+    sessionId: string,
+    frame: { seq: number; timestamp: number; imageB64: string },
+    opts?: { gameHint?: string; preferLabels?: string[] }
+  ): Promise<ObservationResult> {
     const r = await fetch(`${this.cfg.perceiveUrl}/app/analyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Session-Id": this.fakeSession },
@@ -241,6 +255,9 @@ export class DirectAdapter implements PipelineClient {
         timestamp: frame.timestamp,
         image: frame.imageB64,
         clip_path: frame.clipPath || "",
+        // ADAAAA-4109: carry the job's closed vocabulary (same as OrchestratorAdapter).
+        gameHint: opts?.gameHint || "",
+        preferLabels: opts?.preferLabels || [],
       }),
     });
     if (!r.ok) {

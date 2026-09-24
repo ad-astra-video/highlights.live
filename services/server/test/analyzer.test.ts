@@ -199,6 +199,38 @@ describe("analyzeJob", () => {
     expect(reserveCalls).toBe(1);
   });
 
+  it("delivers the job's closed vocabulary to perceive on every analyze (ADAAAA-4109)", async () => {
+    const optsSeen: { gameHint?: string; preferLabels?: string[] }[] = [];
+    const sess: string[] = [];
+    // Reserve twice (sess-a then sess-b on the 404 re-reserve) to prove the
+    // vocabulary rides the /analyze call for a FRESH re-reserved session too.
+    const client = fakeClient({
+      reservePerceive: async () => {
+        const s = sess.length === 0 ? "sess-a" : "sess-b";
+        sess.push(s);
+        return { sessionId: s, appUrl: "", controlUrl: "" };
+      },
+      analyze: async (sid, _frame, opts) => {
+        optsSeen.push(opts || {});
+        if (sid === "sess-a" && optsSeen.length === 2) throw new SessionLostError();
+        return { observation: { tracks: [], seq: optsSeen.length - 1, timestamp: optsSeen.length - 1 } };
+      },
+      stopPerceive: async () => {},
+    });
+    await analyzeJob(
+      client.client,
+      frames(3),
+      async (ts) => ({ clipId: "c", clipUri: "u" }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", preferLabels: ["player", "soccer ball"] }
+    );
+    expect(optsSeen.length).toBe(4); // 3 frames; frame 2's session-lost retried on the fresh session
+    for (const o of optsSeen) {
+      expect(o.gameHint).toBe("soccer");
+      expect(o.preferLabels).toEqual(["player", "soccer ball"]);
+    }
+    expect(sess).toContain("sess-b"); // a re-reserved session also got config on its first analyze
+  });
+
   it("records max velocity + track count from observations", () => {
     const ev = new EvidenceTracker();
     ev.step({
