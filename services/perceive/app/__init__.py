@@ -105,6 +105,16 @@ class AnalyzeRequest(BaseModel):
     stream_id: str = ""
     # Per-JOB full recorded stream this session should track against (SAM).
     clip_path: str = ""
+    # Closed-vocabulary delivery (ADAAAA-4109): the paid/orchestrator VOD worker
+    # sends the job's gameHint/preferLabels on every /analyze so a fresh (or
+    # re-reserved) session activates resolve_vocabulary() before frames run.
+    # The worker includes them on every call so a session loss + re-reserve
+    # carries the config automatically; perceive just re-applies them.
+    # Field names are CAMEL case to match the over-the-wire contract the VOD
+    # worker sends (mirrors handle_control's configure message keys).
+    gameHint: str = ""
+    # PreferLabels delivered as a JSON array; a valid empty array clears.
+    preferLabels: list[str] = Field(default_factory=list)
 
 
 class SessionCloseResponse(BaseModel):
@@ -300,6 +310,14 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="missing session id (Livepeer-Session-Id or X-Session-Id)")
         state = registry.get_or_create(sid, req.stream_id, req.clip_path)
         state.stream_id = req.stream_id or state.stream_id
+        # Closed-vocabulary delivery (ADAAAA-4109): the paid VOD worker sends the
+        # job's gameHint/preferLabels on every /analyze, so a fresh or re-reserved
+        # session is configured BEFORE the frame is run. Same effect as a WS
+        # `configure` — applies to resolve_vocabulary() inside process_frame.
+        if req.gameHint:
+            state.game_hint = req.gameHint
+        if req.preferLabels:
+            state.prefer_labels = list(req.preferLabels)
         # Live path: the worker reserved a session with a control URL, so this
         # first proxied call opens this session's trickle channels and the rail
         # starts consuming video-in frames (plan §3.2/§3.5). The orchestrator
@@ -317,7 +335,14 @@ def create_app() -> FastAPI:
             state.last_rgb = _decode_rgb(req.image)
             state.last_image_b64 = req.image
 
-        obs, cand = process_frame(state, req.seq, req.timestamp, req.image)
+        # Run the heavy synchronous work (first-frame SAM 3.1 predictor build,
+        # per-frame Florence + SAM inference) OFF the event loop. If it ran here,
+        # the ~4s model build on a job's first frame would block this process's
+        # /health for the same ~4s, go-livepeer's health probe would time out and
+        # mark the runner unavailable, and the live session would be released
+        # (next reserve/appCall -> 404 'runner not found'). A thread executor
+        # keeps /health responsive so the paid VOD session survives the warmup.
+        obs, cand = await asyncio.to_thread(process_frame, state, req.seq, req.timestamp, req.image)
         if cand is not None:
             return {"candidate": {"type": "candidate", "sessionId": sid, "eventType": cand["eventType"], "timestamp": cand["timestamp"], "seq": req.seq}, "observation": obs}
         return obs

@@ -70,6 +70,33 @@ def test_ws_rejects_unknown_session():
             ws.receive_text()
 
 
+def test_analyze_delivers_game_hint_and_prefer_labels_to_session():
+    """ADAAAA-4109: the /analyze body carries the job's closed vocabulary and
+    perceive applies it to the session BEFORE the frame is run, so a paid VOD
+    session activates resolve_vocabulary (vocabulary=True) without a WS round-trip."""
+    import uuid
+
+    from app import app as _app
+
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    g = np.zeros((60, 80), dtype=np.float32)
+    client.post(
+        "/app/analyze",
+        json={
+            "seq": 0,
+            "timestamp": 0.0,
+            "image": _frame_jpeg(g),
+            "gameHint": "soccer",
+            "preferLabels": ["player", "soccer ball"],
+        },
+        headers={"X-Session-Id": sid},
+    )
+    state = _app.state.registry.get(sid)
+    assert state is not None
+    assert state.game_hint == "soccer"
+    assert state.prefer_labels == ["player", "soccer ball"]
+
+
 def test_ws_ping_and_configure_ack():
     sid = _uuid_sid()
     _create_session(sid)
