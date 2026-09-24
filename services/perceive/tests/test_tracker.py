@@ -53,6 +53,43 @@ def test_candidate_on_accumulated_movement_and_cooldown():
     assert tr.candidate(ts=7.2) is None
 
 
+def test_candidate_anchors_to_peak_motion_strike_frame():
+    """A candidate whose accumulated displacement crosses the threshold AFTER the
+    explosive step must still be anchored at the peak-motion (strike) frame, so
+    the decide/cut moment lands on the strike, not the post-strike follow-through."""
+    tr = IoUTracker(jump_velocity=0.2, cooldown_s=0.0)
+    # seed the track (no displacement recorded for the seeding frame)
+    tr.step([(0.1, 0.1, 0.2, 0.2)], ts=1.0)
+    assert tr.candidate(ts=1.0) is None
+    # settle frame establishes prev_center with negligible motion
+    tr.step([(0.11, 0.11, 0.21, 0.21)], ts=2.0)
+    assert tr.candidate(ts=2.0) is None
+    # strike burst: PEAK step 0.16 at ts=3.0 (still < the 0.2 jump_velocity alone)
+    tr.step([(0.19, 0.19, 0.29, 0.29)], ts=3.0)
+    assert tr.candidate(ts=3.0) is None  # not crossed yet (moved=0.18)
+    # follow-through: small step at ts=4.0 pushes accumulated over 0.2
+    tr.step([(0.21, 0.21, 0.31, 0.31)], ts=4.0)
+    c = tr.candidate(ts=4.0)
+    assert c is not None
+    assert c.timestamp == 3.0  # anchored at the peak-motion frame, not the late crossing frame
+    assert c.event_type == "KILL"  # classified from the anchored step (0.16 >= FAST_STEP)
+
+
+def test_candidate_accumulated_motion_stays_move_anchored_in_burst():
+    """Steady drift spikes the accumulated threshold with no single big step: the
+    candidate stays a MOVE and anchors to the burst, not the evaluation frame."""
+    tr = IoUTracker(jump_velocity=0.2, cooldown_s=0.0)
+    tr.step([(0.1, 0.1, 0.2, 0.2)], ts=1.0)
+    assert tr.candidate(ts=1.0) is None
+    for i in range(5):  # 0.05/frame drift -> 0.10 displacement per step
+        dx = 0.05 * (i + 1)
+        tr.step([(0.1 + dx, 0.1 + dx, 0.2 + dx, 0.2 + dx)], ts=2.0 + i)
+    c = tr.candidate(ts=7.0)
+    assert c is not None and c.event_type == "MOVE"
+    # anchored to a drift-burst step (2.0..6.0), not the later evaluation frame (7.0)
+    assert 2.0 <= c.timestamp <= 6.0
+
+
 def test_foreground_blobs_real_frame():
     # a white moving square on black background produces a blob
     h = w = 100

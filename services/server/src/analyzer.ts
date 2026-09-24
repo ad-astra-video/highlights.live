@@ -103,6 +103,30 @@ export interface AnalyzeOutcome {
   framesAnalyzed: number;
 }
 
+/**
+ * Rolling window of the most recent sampled frames (seq -> {timestamp, image}).
+ * A tracker candidate may be ANCHORED at an earlier (peak-motion / strike) frame
+ * than the one whose /analyze triggered it, so `decide` should see that anchored
+ * frame's image — not the late post-strike frame — to judge the actual moment.
+ */
+const DECIDE_FRAME_WINDOW = 16;
+
+function nearestFrameImage(
+  window: Map<number, { timestamp: number; imageB64: string }>,
+  ts: number
+): string | undefined {
+  let best: string | undefined;
+  let bestDiff = Infinity;
+  for (const v of window.values()) {
+    const d = Math.abs(v.timestamp - ts);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = v.imageB64;
+    }
+  }
+  return best;
+}
+
 /** Live-console event: pushed to SSE subscribers for a job as analysis runs. */
 export interface AnalyzeEvent {
   seq: number;
@@ -129,10 +153,18 @@ export async function analyzeJob(
   const reserved = new Set<string>([first.sessionId]);
   const evidence = new EvidenceTracker();
   const highlights: HighlightRecord[] = [];
+  // Ring of recent sampled frames so `decide` can look the anchored strike frame
+  // up by timestamp rather than judging the late post-strike frame.
+  const frameWindow = new Map<number, { timestamp: number; imageB64: string }>();
   let framesAnalyzed = 0;
   try {
     for await (const frame of iterFrames) {
       framesAnalyzed++;
+      frameWindow.set(frame.seq, { timestamp: frame.timestamp, imageB64: frame.imageB64 });
+      if (frameWindow.size > DECIDE_FRAME_WINDOW) {
+        const oldest = frameWindow.keys().next().value;
+        if (oldest !== undefined) frameWindow.delete(oldest);
+      }
       let res: ObservationResult;
       let reReserved = 0;
       // The perceive live-runner's health can flap mid-pass; go-livepeer then
@@ -164,7 +196,11 @@ export async function analyzeJob(
         onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "candidate", candidate: res.candidate });
 
         // Send the ACTUAL candidate frame so the Gemma vision decide runner can
-        // see the moment, plus the game hint. Evidence remains as context.
+        // see the moment, plus the game hint. Evidence remains as context. The
+        // candidate is ANCHORED at the peak-motion (strike) frame's timestamp,
+        // so resolve that frame's image from the rolling window — a candidate
+        // fired on the late post-strike frame must still be judged on the strike.
+        const anchoredImage = nearestFrameImage(frameWindow, res.candidate.timestamp) ?? frame.imageB64;
         const decision = await client.decide(
           {
             eventType: res.candidate.eventType,
@@ -172,7 +208,7 @@ export async function analyzeJob(
             maxVelocity: evidence.maxVelocity,
             ocrHits: 0,
           },
-          { gameHint: cfg.gameHint, imageB64: frame.imageB64 }
+          { gameHint: cfg.gameHint, imageB64: anchoredImage }
         );
         if (decision.isHighlight) {
           const { clipId, clipUri } = await cut(res.candidate.timestamp);

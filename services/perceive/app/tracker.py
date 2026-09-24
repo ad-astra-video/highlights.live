@@ -9,8 +9,9 @@ tracks. Swap in Florence+SAM3 behind the same `step()` contract on GPU hosts.
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Deque, List, Optional, Tuple
 
 import numpy as np
 
@@ -33,6 +34,10 @@ class Track:
     moved_frames: int = 0
     moved: float = 0.0  # accumulated matched-frame displacement (normalized units)
     last_step_disp: float = 0.0  # |dx|+|dy| of the most recent matched step
+    # Recent (timestamp, |dx|+|dy|) for the current motion burst, so a candidate
+    # can be ANCHORED at the peak single-step (the strike moment) instead of the
+    # later frame where accumulated displacement happens to cross the threshold.
+    step_hist: Deque[Tuple[float, float]] = field(default_factory=lambda: deque(maxlen=10))
 
 
 @dataclass
@@ -162,6 +167,7 @@ class IoUTracker:
                     disp = abs(new_center[0] - tr.prev_center[0]) + abs(new_center[1] - tr.prev_center[1])
                     tr.moved += disp
                     tr.last_step_disp = disp
+                    tr.step_hist.append((ts, disp))
                 tr.prev_center = new_center
                 tr.bbox = new_bbox
                 tr.lost_frames = 0
@@ -197,15 +203,38 @@ class IoUTracker:
             return None
         return gate - d  # closer == higher score (max 0.14)
 
+    @staticmethod
+    def _anchor_step(tr: "Track") -> Tuple[float, float]:
+        """Anchor a candidate at the peak single-step of the just-crossed burst.
+
+        `tr.moved` is ACCUMULATED displacement, so it can cross `jump_velocity`
+        one or more frames AFTER the explosive moment (a fast strike spreads
+        over 2+ sampled frames; the threshold lands on the follow-through). Return
+        the (timestamp, displacement) of the single biggest step in the burst so
+        the emitted candidate points at the strike, not the late-crossing frame.
+        """
+        if not tr.step_hist:
+            return (tr.last_seen, tr.last_step_disp)
+        return max(tr.step_hist, key=lambda p: p[1])
+
     def candidate(self, ts: float) -> Optional[CandidateEvent]:
-        """Emit a candidate on a sharp track move, rate-limited by cooldown."""
+        """Emit a candidate on a sharp track move, rate-limited by cooldown.
+
+        The candidate's `timestamp` is anchored at the peak single-step in the
+        burst (the strike moment), and its event type is classified from that
+        anchored step — so a GOAL strike is reported at/around the moment it
+        happens instead of a post-strike frame. Fall back to the current frame
+        when the burst is a single step (peak == here).
+        """
         if ts - self.last_candidate < self.cooldown_s:
             return None
         for tr in self.tracks:
             if tr.moved >= self.jump_velocity:
-                event_type = "KILL" if tr.last_step_disp >= self.FAST_STEP else "MOVE"
+                anchor_ts, anchor_disp = self._anchor_step(tr)
+                event_type = "KILL" if anchor_disp >= self.FAST_STEP else "MOVE"
                 tr.moved = 0.0
                 tr.last_step_disp = 0.0
+                tr.step_hist.clear()
                 self.last_candidate = ts
-                return CandidateEvent(event_type=event_type, timestamp=ts, track_id=tr.track_id)
+                return CandidateEvent(event_type=event_type, timestamp=anchor_ts, track_id=tr.track_id)
         return None

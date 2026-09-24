@@ -96,6 +96,41 @@ describe("analyzeJob", () => {
     expect(hl.highlight.score).toBe(80);
   });
 
+  it("decides on the ANCHORED strike frame image and cuts at its timestamp when a candidate fires late (ADAAAA-4193)", async () => {
+    let call = 0;
+    const decideImages: (string | undefined)[] = [];
+    const { client } = fakeClient({
+      analyze: async () => {
+        call++;
+        if (call === 4) {
+          // Candidate fired during frame seq=3 (t=3, the late post-strike frame),
+          // but ANCHORED at the peak-motion strike frame seq=2 (t=2).
+          return { observation: { tracks: [], seq: 3, timestamp: 3 }, candidate: { eventType: "GOAL", timestamp: 2 } };
+        }
+        return { observation: { tracks: [], seq: call - 1, timestamp: call - 1 } };
+      },
+      decide: async (_evidence, opts) => {
+        decideImages.push(opts?.imageB64);
+        return { isHighlight: true, score: 85, eventType: "GOAL" };
+      },
+    });
+    const cuts: number[] = [];
+    const outcome = await analyzeJob(
+      client,
+      frames(4),
+      async (ts) => {
+        cuts.push(ts);
+        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
+      },
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" }
+    );
+    // decide saw the anchored strike frame (img2), NOT the late current frame (img3)
+    expect(decideImages).toEqual(["img2"]);
+    // clip cut centered at the anchored strike timestamp, not the late frame
+    expect(cuts).toEqual([2]);
+    expect(outcome.highlights[0]).toMatchObject({ eventType: "GOAL", start: Math.max(0, 2 - 4), end: 2 + 4 });
+  });
+
   it("does NOT cut when decide returns isHighlight=false", async () => {
     const { client } = fakeClient({
       analyze: async () => ({ observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "MOVE", timestamp: 0 } }),
