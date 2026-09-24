@@ -21,7 +21,7 @@ from sse_starlette.sse import EventSourceResponse
 from . import preload  # noqa: E402  (startup model preload)
 from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
-from .florence import capability, get_detector, record_analyze, resolve_vocabulary
+from .florence import capability, get_detector, record_analyze, resolve_vocabulary, sport_specific_event_type
 from .sam_tracker import HybridTracker
 from .trickle import TrickleError, TrickleRail, TrickleSession
 
@@ -236,9 +236,16 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     cand = state.tracker.candidate(ts=timestamp)
     cand_dict = None
     if cand is not None:
+        # ADAAAA-4222/4193: the tracker anchors the strike but emits a generic
+        # KILL/MOVE motion type. On a goal-scoring sport (soccer) that label
+        # conflicts with the scene and the decide model hard-rejects it
+        # ("this is soccer, not a KILL event"), so no GOAL clip is ever cut.
+        # Classify the anchored candidate with the sport-specific event type
+        # (GOAL) now that the session knows gameHint.
+        event_type = sport_specific_event_type(state.game_hint, cand.event_type)
         # Return a plain dict (JSON-serializable) so callers can embed it in a
         # response/ack without reaching into the dataclass.
-        cand_dict = {"eventType": cand.event_type, "timestamp": cand.timestamp, "trackId": cand.track_id}
+        cand_dict = {"eventType": event_type, "timestamp": cand.timestamp, "trackId": cand.track_id}
         events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
     for q in state.subscribers:
         for e in events:
