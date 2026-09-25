@@ -92,11 +92,11 @@ def http_json(url: str, payload: dict, timeout: float = 60.0,
 def analyze_frame(perceive: str, sid: str, seq: int, ts: float, b64: str,
                   game_hint: str, prefer: list[str], latent: list[float]):
     """POST one frame to perceive /app/analyze. Returns (candidate_dict|None,
-    n_tracks) where n_tracks is the honest count of tracks perceive detected on
-    this frame (the cheap visual humans-in-motion celebration cue the deployed
-    live pipeline forwards as buildReactionEvidence(..., trackCount)). Appends
-    the wall-clock round-trip to `latent`. perceive binds a session per stream
-    and requires X-Session-Id on every /analyze."""
+    obs) where `obs` is the full observation (tracks with bboxes/kind plus raw
+    detections) — the honest source for the cheap celebration-discriminator
+    signals the deployed live pipeline forwards to decide. Appends the
+    wall-clock round-trip to `latent`. perceive binds a session per stream and
+    requires X-Session-Id on every /analyze."""
     body = {"seq": seq, "timestamp": ts, "image": b64, "gameHint": game_hint, "preferLabels": prefer}
     t0 = time.monotonic()
     try:
@@ -105,8 +105,7 @@ def analyze_frame(perceive: str, sid: str, seq: int, ts: float, b64: str,
     finally:
         latent.append(time.monotonic() - t0)
     obs = resp.get("observation") or {}
-    tracks = obs.get("tracks") or []
-    return resp.get("candidate"), len(tracks)
+    return resp.get("candidate"), obs
 
 
 # --- honest people-reaction evidence (INC-9 / ADAAAA-4496) -------------------
@@ -204,6 +203,121 @@ def crowd_energy_from_audio(clip_path: str, ts: float,
     return ce, kind
 
 
+# --- celebration discriminator (INC-9 precision / ADAAAA-4496) --------------
+# The 2fps INC-9 re-run still failed precision (60% < 70%) because the only
+# reaction signal available to Gemma was raw humansInMotion (~2-3 tracks on BOTH
+# positives and negatives) plus a crowd-energy proxy that is ~0 on these clips
+# (most are broadcast captures with no separable loudness burst; several are
+# audio-less). Gemma therefore accepted any in-zone strike as GOAL. Here we
+# replace the crude motion count with two HONEST spatial signals computed from
+# perceive's own detections (never ground-truth labels/manifest.reaction):
+#   * ballInGoalMouth  - is the detected ball's center inside the goal-mouth
+#                        region? A real goal puts the ball in/near the mouth;
+#                        off-target/warm-up keep it in midfield/centre-circle.
+#   * celebrationCluster - how many player detections are clustered together
+#                        in the goal-mouth region (a celebration pile)? A real
+#                        goal crowds players at the goal; warm-up/off-target
+#                        spread them (or huddle at centre-circle, not the goal).
+GOAL_MOUTH_REGIONS = [(0.00, 0.12, 0.30, 0.90), (0.70, 0.12, 1.00, 0.90)]
+CLUSTER_RADIUS = 0.12   # normalized; a celebration pile packs players tightly
+PLAYER_MIN_AREA = 0.004  # drop ball-sized boxes from the player cluster
+
+
+def _norm_center(b: list) -> tuple[float, float]:
+    return ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
+
+
+def _in_goal_region(cx: float, cy: float) -> bool:
+    return any(x1 <= cx <= x2 and y1 <= cy <= y2
+               for x1, y1, x2, y2 in GOAL_MOUTH_REGIONS)
+
+
+def _obs_ball_bbox(obs: dict) -> list | None:
+    """Bbox of the ball detection from the observation (raw objects preferred,
+    ball-kind track as fallback), or None when no ball is detected."""
+    for o in obs.get("objects") or []:
+        label = (o.get("label") or "").lower()
+        if "ball" in label:
+            b = o.get("bbox")
+            if b and len(b) == 4:
+                return b
+    for t in obs.get("tracks") or []:
+        if (t.get("kind") or "") == "ball":
+            b = t.get("bbox")
+            if b and len(b) == 4:
+                return b
+    return None
+
+
+def ball_in_goal_mouth(obs: dict) -> bool:
+    b = _obs_ball_bbox(obs)
+    if not b:
+        return False
+    cx, cy = _norm_center(b)
+    return _in_goal_region(cx, cy)
+
+
+def _player_centers_in_goal_region(obs: dict) -> list[tuple[float, float]]:
+    """Centers of all player detections in the goal-mouth region, from the raw
+    per-frame detections (`objects`, the FULL detection set) preferred over the
+    slot-limited `tracks` (the tracker keeps only ~2 slots, so a celebration pile
+    of many players is invisible in tracks). Excludes ball/tiny boxes. Honest:
+    derived purely from perceive's detections, never ground-truth labels."""
+    players = []
+    objs = obs.get("objects") or []
+    for o in objs:
+        label = (o.get("label") or "").lower()
+        if "ball" in label:
+            continue
+        b = o.get("bbox")
+        if not b or len(b) != 4:
+            continue
+        x1, y1, x2, y2 = (float(v) for v in b)
+        if (x2 - x1) * (y2 - y1) < PLAYER_MIN_AREA:
+            continue
+        cx, cy = _norm_center([x1, y1, x2, y2])
+        if _in_goal_region(cx, cy):
+            players.append((cx, cy))
+    if players:
+        return players
+    # Fallback: no raw detections -> use the slot-limited tracks so the signal
+    # is never entirely empty on a stub/observation-only path.
+    for t in obs.get("tracks") or []:
+        if (t.get("kind") or "") == "ball":
+            continue
+        if (t.get("label") or "").lower() == "ball":
+            continue
+        b = t.get("bbox")
+        if not b or len(b) != 4:
+            continue
+        x1, y1, x2, y2 = (float(v) for v in b)
+        if (x2 - x1) * (y2 - y1) < PLAYER_MIN_AREA:
+            continue
+        cx, cy = _norm_center([x1, y1, x2, y2])
+        if _in_goal_region(cx, cy):
+            players.append((cx, cy))
+    return players
+
+
+def celebration_cluster(obs: dict) -> int:
+    """Max count of player detections (excl. ball, excl. ball-sized boxes) whose
+    centers are inside the goal-mouth region AND mutually within CLUSTER_RADIUS.
+    0 = no celebration pile at the goal; >=2 = a genuine group pile/huddle."""
+    players = _player_centers_in_goal_region(obs)
+    if not players:
+        return 0
+    best = 1
+    for i, (ax, ay) in enumerate(players):
+        c = 1
+        for j, (bx, by) in enumerate(players):
+            if i == j:
+                continue
+            if (ax - bx) ** 2 + (ay - by) ** 2 <= CLUSTER_RADIUS ** 2:
+                c += 1
+        best = max(best, c)
+    return best
+
+
 def decide(decide_url: str, sid: str, cand: dict, game_hint: str,
            image_b64: str, reaction: dict | None = None) -> dict:
     """POST a candidate to decide /highlight (Gemma). Returns the decision dict.
@@ -289,29 +403,36 @@ def main() -> int:
             if args.dry_run:
                 print(f"    dry: {len(frames)} frames")
                 continue
-            cand_ts_by_seq = {}
+            cand_obs_by_seq = {}
             for i, ts, b64 in frames:
-                cand, n_tracks = analyze_frame(args.perceive, sid, i, ts, b64, args.game_hint, prefer, latent)
+                cand, obs = analyze_frame(args.perceive, sid, i, ts, b64, args.game_hint, prefer, latent)
                 if cand is not None:
                     stage_total += 1
-                    cand_ts_by_seq[i] = (cand, n_tracks)
+                    cand_obs_by_seq[i] = (cand, obs)
                     events.append({"type": "candidate", "clipId": cid,
                                    "eventType": cand["eventType"], "timestamp": cand["timestamp"]})
-            if cand_ts_by_seq:
+            if cand_obs_by_seq:
                 # route to decide with the anchored frame, feeding honest
-                # crowd-reaction evidence derived from the clip's real audio
-                # (INC-9 / ADAAAA-4496) + the frame's human track count — never
-                # ground-truth reaction labels.
-                for i, (cand, n_tracks) in cand_ts_by_seq.items():
+                # reaction evidence (INC-9 / ADAAAA-4496): the crowd-energy
+                # proxy from the clip's REAL audio + the celebration discriminator
+                # computed from perceive's OWN detections (spatial cluster +
+                # ball-in-goal-mouth) — never ground-truth reaction labels.
+                for i, (cand, obs) in cand_obs_by_seq.items():
                     frame_b64 = frames[i][2] if i < len(frames) else ""
                     ce, kind = crowd_energy_from_audio(src, cand["timestamp"])
-                    reaction = {"crowdEnergy": ce, "audioKind": kind, "humansInMotion": n_tracks}
+                    n_tracks = len(obs.get("tracks") or [])
+                    cluster = celebration_cluster(obs)
+                    bigm = ball_in_goal_mouth(obs)
+                    reaction = {
+                        "crowdEnergy": ce, "audioKind": kind, "humansInMotion": n_tracks,
+                        "celebrationCluster": cluster, "ballInGoalMouth": bigm,
+                    }
                     dec = decide(args.decide, sid, cand, args.game_hint, frame_b64, reaction)
                     events.append({"type": "decision", "clipId": cid, "timestamp": cand["timestamp"] + 2.0,
                                    "decision": dec, "reaction": reaction})
                     if not dec.get("isHighlight"):
                         stage_rejected += 1
-                    print(f"    cand={cand['eventType']} @{cand['timestamp']}s reaction=ce{ce}/{kind or 'none'} -> decided isHighlight={dec.get('isHighlight')}")
+                    print(f"    cand={cand['eventType']} @{cand['timestamp']}s reaction=ce{ce}/{kind or 'none'} cluster={cluster} ballMouth={int(bigm)} -> decided isHighlight={dec.get('isHighlight')}")
 
     trace = {
         "events": events,
