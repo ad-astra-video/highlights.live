@@ -257,6 +257,7 @@ def test_capability_stub_is_one_fps(monkeypatch):
 
 def test_capability_tracks_measured_fps(monkeypatch):
     monkeypatch.setenv("PERCEIVE_MODE", "florence")
+    monkeypatch.setattr(florence, "_measured_fps", None)  # isolate: cold EMA
     for _ in range(10):
         florence.record_analyze(1.0)  # 1.0s/frame -> 1.0 fps
     c = florence.capability()
@@ -267,6 +268,7 @@ def test_capability_tracks_measured_fps(monkeypatch):
 
 def test_capability_slows_down_for_slow_card(monkeypatch):
     monkeypatch.setenv("PERCEIVE_MODE", "florence")
+    monkeypatch.setattr(florence, "_measured_fps", None)  # isolate: cold EMA
     for _ in range(5):
         florence.record_analyze(2.5)  # 0.4 fps
     c = florence.capability()
