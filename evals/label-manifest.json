@@ -14,41 +14,241 @@
     "possessionAccuracyMinPct": 90
   },
   "phases": [
-    { "id": "goal",       "isHighlight": true,  "expectEventType": "GOAL",     "expectReaction": true },
-    { "id": "near_goal",  "isHighlight": true,  "expectEventType": "GOAL",     "expectReaction": true },
-    { "id": "off_target", "isHighlight": false, "expectEventType": null,       "expectReaction": false },
-    { "id": "warm_up",    "isHighlight": false, "expectEventType": null,       "expectReaction": false }
+    {
+      "id": "goal",
+      "isHighlight": true,
+      "expectEventType": "GOAL",
+      "expectReaction": true
+    },
+    {
+      "id": "near_goal",
+      "isHighlight": true,
+      "expectEventType": "GOAL",
+      "expectReaction": true
+    },
+    {
+      "id": "off_target",
+      "isHighlight": false,
+      "expectEventType": null,
+      "expectReaction": false
+    },
+    {
+      "id": "warm_up",
+      "isHighlight": false,
+      "expectEventType": null,
+      "expectReaction": false
+    }
   ],
   "clips": [
-    { "id": "soc-goal-01", "phase": "goal",       "mode": "live", "source": null, "startS": null, "endS": null,
-      "groundTruth": { "isHighlight": true, "eventType": "GOAL" }, "reaction": { "audio": true, "visual": true },
-      "ballTrack": { "onScreenPctLabel": 1.0, "speedErrorLabelPct": null, "possessorGroundTruth": "striker" } },
-    { "id": "soc-goal-02", "phase": "goal",       "mode": "live", "source": null, "startS": null, "endS": null,
-      "groundTruth": { "isHighlight": true, "eventType": "GOAL" }, "reaction": { "audio": true, "visual": false },
-      "ballTrack": { "onScreenPctLabel": 1.0, "speedErrorLabelPct": null, "possessorGroundTruth": "striker" } },
-    { "id": "soc-goal-03", "phase": "goal",       "mode": "vod",  "source": null, "startS": null, "endS": null,
-      "groundTruth": { "isHighlight": true, "eventType": "GOAL" }, "reaction": { "audio": true, "visual": true },
-      "ballTrack": { "onScreenPctLabel": 1.0, "speedErrorLabelPct": null, "possessorGroundTruth": "striker" } },
-    { "id": "soc-goal-04", "phase": "goal",       "mode": "vod",  "source": null, "startS": null, "endS": null,
-      "groundTruth": { "isHighlight": true, "eventType": "GOAL" }, "reaction": { "audio": true, "visual": true },
-      "ballTrack": { "onScreenPctLabel": 1.0, "speedErrorLabelPct": null, "possessorGroundTruth": "striker" } },
-    { "id": "soc-near-01", "phase": "near_goal",  "mode": "live", "source": null, "startS": null, "endS": null,
-      "groundTruth": { "isHighlight": true, "eventType": "GOAL" }, "reaction": { "audio": true, "visual": true },
-      "ballTrack": { "onScreenPctLabel": 0.95, "speedErrorLabelPct": 0.08, "possessorGroundTruth": "striker" } },
-    { "id": "soc-near-02", "phase": "near_goal",  "mode": "vod",  "source": null, "startS": null, "endS": null,
-      "groundTruth": { "isHighlight": true, "eventType": "GOAL" }, "reaction": { "audio": true, "visual": false },
-      "ballTrack": { "onScreenPctLabel": 0.95, "speedErrorLabelPct": 0.08, "possessorGroundTruth": "striker" } },
-    { "id": "soc-off-01",  "phase": "off_target", "mode": "live", "source": null, "startS": null, "endS": null,
-      "groundTruth": { "isHighlight": false, "eventType": null }, "reaction": { "audio": false, "visual": false },
-      "ballTrack": { "onScreenPctLabel": 0.98, "speedErrorLabelPct": 0.10, "possessorGroundTruth": "striker" } },
-    { "id": "soc-off-02",  "phase": "off_target", "mode": "vod",  "source": null, "startS": null, "endS": null,
-      "groundTruth": { "isHighlight": false, "eventType": null }, "reaction": { "audio": false, "visual": false },
-      "ballTrack": { "onScreenPctLabel": 0.98, "speedErrorLabelPct": 0.10, "possessorGroundTruth": "striker" } },
-    { "id": "soc-warm-01", "phase": "warm_up",    "mode": "live", "source": null, "startS": null, "endS": null,
-      "groundTruth": { "isHighlight": false, "eventType": null }, "reaction": { "audio": false, "visual": false },
-      "ballTrack": { "onScreenPctLabel": 0.0, "speedErrorLabelPct": null, "possessorGroundTruth": "none" } },
-    { "id": "soc-warm-02", "phase": "warm_up",    "mode": "vod",  "source": null, "startS": null, "endS": null,
-      "groundTruth": { "isHighlight": false, "eventType": null }, "reaction": { "audio": false, "visual": false },
-      "ballTrack": { "onScreenPctLabel": 0.0, "speedErrorLabelPct": null, "possessorGroundTruth": "none" } }
+    {
+      "id": "soc-goal-01",
+      "phase": "goal",
+      "mode": "live",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/c57b67f0-e538-4286-ade5-5cc7fe37443a.mp4",
+      "startS": 0.0,
+      "endS": 8.0,
+      "groundTruth": {
+        "isHighlight": true,
+        "eventType": "GOAL"
+      },
+      "reaction": {
+        "audio": true,
+        "visual": true
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 1.0,
+        "speedErrorLabelPct": null,
+        "possessorGroundTruth": "striker"
+      }
+    },
+    {
+      "id": "soc-goal-02",
+      "phase": "goal",
+      "mode": "live",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/8e0d65ca-466e-495d-b7ee-a1aabb32b4b3.mp4",
+      "startS": 0.0,
+      "endS": 12.0,
+      "groundTruth": {
+        "isHighlight": true,
+        "eventType": "GOAL"
+      },
+      "reaction": {
+        "audio": true,
+        "visual": false
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 1.0,
+        "speedErrorLabelPct": null,
+        "possessorGroundTruth": "striker"
+      }
+    },
+    {
+      "id": "soc-goal-03",
+      "phase": "goal",
+      "mode": "vod",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/a11ca3bc-3284-42f7-ab5f-03cb355d5767.mp4",
+      "startS": 0.0,
+      "endS": 12.0,
+      "groundTruth": {
+        "isHighlight": true,
+        "eventType": "GOAL"
+      },
+      "reaction": {
+        "audio": true,
+        "visual": true
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 1.0,
+        "speedErrorLabelPct": null,
+        "possessorGroundTruth": "striker"
+      }
+    },
+    {
+      "id": "soc-goal-04",
+      "phase": "goal",
+      "mode": "vod",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/9b35c577-aef8-49dd-92c3-5d4431134c43.mp4",
+      "startS": 0.0,
+      "endS": 10.1,
+      "groundTruth": {
+        "isHighlight": true,
+        "eventType": "GOAL"
+      },
+      "reaction": {
+        "audio": true,
+        "visual": true
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 1.0,
+        "speedErrorLabelPct": null,
+        "possessorGroundTruth": "striker"
+      }
+    },
+    {
+      "id": "soc-near-01",
+      "phase": "near_goal",
+      "mode": "live",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/9c09c609-e762-4034-a1e2-b370e4bbfbd8.mp4",
+      "startS": 0.0,
+      "endS": 10.0,
+      "groundTruth": {
+        "isHighlight": true,
+        "eventType": "GOAL"
+      },
+      "reaction": {
+        "audio": true,
+        "visual": true
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 0.95,
+        "speedErrorLabelPct": 0.08,
+        "possessorGroundTruth": "striker"
+      }
+    },
+    {
+      "id": "soc-near-02",
+      "phase": "near_goal",
+      "mode": "vod",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/9de3678f-0c26-4700-bd04-39b14229a9fa.mp4",
+      "startS": 0.0,
+      "endS": 9.1,
+      "groundTruth": {
+        "isHighlight": true,
+        "eventType": "GOAL"
+      },
+      "reaction": {
+        "audio": true,
+        "visual": false
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 0.95,
+        "speedErrorLabelPct": 0.08,
+        "possessorGroundTruth": "striker"
+      }
+    },
+    {
+      "id": "soc-off-01",
+      "phase": "off_target",
+      "mode": "live",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/ba54a06a-017f-4c8c-8f6a-e3f756f19505.mp4",
+      "startS": 0.0,
+      "endS": 14.1,
+      "groundTruth": {
+        "isHighlight": false,
+        "eventType": null
+      },
+      "reaction": {
+        "audio": false,
+        "visual": false
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 0.98,
+        "speedErrorLabelPct": 0.1,
+        "possessorGroundTruth": "striker"
+      }
+    },
+    {
+      "id": "soc-off-02",
+      "phase": "off_target",
+      "mode": "vod",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/ad3d909b-5b6d-40f1-87e1-7d259d608425.mp4",
+      "startS": 0.0,
+      "endS": 9.1,
+      "groundTruth": {
+        "isHighlight": false,
+        "eventType": null
+      },
+      "reaction": {
+        "audio": false,
+        "visual": false
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 0.98,
+        "speedErrorLabelPct": 0.1,
+        "possessorGroundTruth": "striker"
+      }
+    },
+    {
+      "id": "soc-warm-01",
+      "phase": "warm_up",
+      "mode": "live",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/ee910098-9fd3-4222-a841-5e51a34a9038.mp4",
+      "startS": 0.0,
+      "endS": 8.0,
+      "groundTruth": {
+        "isHighlight": false,
+        "eventType": null
+      },
+      "reaction": {
+        "audio": false,
+        "visual": false
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 0.0,
+        "speedErrorLabelPct": null,
+        "possessorGroundTruth": "none"
+      }
+    },
+    {
+      "id": "soc-warm-02",
+      "phase": "warm_up",
+      "mode": "vod",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/ccca9146-d468-4dc8-8392-4ad39b9b7439.mp4",
+      "startS": 0.0,
+      "endS": 8.7,
+      "groundTruth": {
+        "isHighlight": false,
+        "eventType": null
+      },
+      "reaction": {
+        "audio": false,
+        "visual": false
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 0.0,
+        "speedErrorLabelPct": null,
+        "possessorGroundTruth": "none"
+      }
+    }
   ]
 }
