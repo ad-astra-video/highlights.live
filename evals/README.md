@@ -38,3 +38,28 @@ python3 evals/metrics_runner.py evals/label-manifest.json evals/fixtures/synthet
 - End-to-end GPU metrics (highlight recall live/VOD, precision, e2e latency,
   reaction-cited rate on real clips) require driving the deployed perceive+
   decide pipeline over the labeled clips. Filled in as that run completes.
+
+## INC-7 / ADAAAA-4452 — track cap expansion (3 live / 8 VOD)
+
+INC-7 raises the perceive object cap from MAX_TRACKS=2 to 3 concurrent live
+objects / 8 VOD objects and verifies the mode carve-out, ball eviction-guard,
+and measured per-track latency at the new cap. Delivered on top of the INC-6
+find-and-track work:
+
+- Mode carve-out locked: `session.mode_capacity()` -> 8 when a `clip_path`
+  (VOD pass) is set, else 3 (live). Wired into the tracker the session builds.
+  - `services/perceive/tests/test_capacity_modes.py` (5 tests)
+- Ball eviction-guard holds as track count grows: 8 concurrent player tracks
+  fill all slots while the dedicated `BallTracker` slot persists >= 95% under
+  2-8% per-frame detection dropout and survives occlusion bursts at cap 8.
+  - `services/perceive/tests/test_ball_persistence_at_cap.py` (5 tests)
+- Measured per-track detect->candidate latency (CPU IoU path, 600 frames/fold,
+  `services/perceive/tools/bench_latency.py`):
+  - per-track incremental cost ~= 5.7 us/track
+  - live cap 3 total step = 0.010 ms/frame; VOD cap 8 = 0.043 ms/frame
+  - candidate trigger ~= 3.3 us; far inside the 1-5 s live budget.
+    detect() (one Florence <OD> pass) is fixed per frame independent of track
+    count; the track-count-sensitive step cost is sub-millisecond even at cap 8.
+- No regression: full `services/perceive` suite green (165 passed) on the
+  integrated branch, including INC-2/2b/3/4 tests and the INC-5 eval runner
+  self-check (all 10 acceptance bars PASS on `evals/fixtures/synthetic-pass.json`).
