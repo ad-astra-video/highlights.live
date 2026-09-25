@@ -76,9 +76,13 @@ def extract_frames(clip_path: str, fps: float, start_s: float, end_s: float, wor
     return out
 
 
-def http_json(url: str, payload: dict, timeout: float = 60.0) -> dict:
+def http_json(url: str, payload: dict, timeout: float = 60.0,
+              headers: dict | None = None) -> dict:
+    hdrs = {"Content-Type": "application/json"}
+    if headers:
+        hdrs.update(headers)
     req = urllib.request.Request(
-        url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST"
+        url, data=json.dumps(payload).encode(), headers=hdrs, method="POST"
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
@@ -87,11 +91,13 @@ def http_json(url: str, payload: dict, timeout: float = 60.0) -> dict:
 def analyze_frame(perceive: str, sid: str, seq: int, ts: float, b64: str,
                   game_hint: str, prefer: list[str], latent: list[float]) -> dict | None:
     """POST one frame to perceive /app/analyze. Returns the candidate dict (if
-    any) and appends the wall-clock round-trip to `latent`."""
+    any) and appends the wall-clock round-trip to `latent`. perceive binds a
+    session per stream and requires X-Session-Id on every /analyze."""
     body = {"seq": seq, "timestamp": ts, "image": b64, "gameHint": game_hint, "preferLabels": prefer}
     t0 = time.monotonic()
     try:
-        resp = http_json(f"{perceive}/app/analyze", body, timeout=120.0)
+        resp = http_json(f"{perceive}/app/analyze", body, timeout=120.0,
+                         headers={"X-Session-Id": sid})
     finally:
         latent.append(time.monotonic() - t0)
     return resp.get("candidate")
