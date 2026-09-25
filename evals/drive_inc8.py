@@ -90,10 +90,13 @@ def http_json(url: str, payload: dict, timeout: float = 60.0,
 
 
 def analyze_frame(perceive: str, sid: str, seq: int, ts: float, b64: str,
-                  game_hint: str, prefer: list[str], latent: list[float]) -> dict | None:
-    """POST one frame to perceive /app/analyze. Returns the candidate dict (if
-    any) and appends the wall-clock round-trip to `latent`. perceive binds a
-    session per stream and requires X-Session-Id on every /analyze."""
+                  game_hint: str, prefer: list[str], latent: list[float]):
+    """POST one frame to perceive /app/analyze. Returns (candidate_dict|None,
+    n_tracks) where n_tracks is the honest count of tracks perceive detected on
+    this frame (the cheap visual humans-in-motion celebration cue the deployed
+    live pipeline forwards as buildReactionEvidence(..., trackCount)). Appends
+    the wall-clock round-trip to `latent`. perceive binds a session per stream
+    and requires X-Session-Id on every /analyze."""
     body = {"seq": seq, "timestamp": ts, "image": b64, "gameHint": game_hint, "preferLabels": prefer}
     t0 = time.monotonic()
     try:
@@ -101,7 +104,9 @@ def analyze_frame(perceive: str, sid: str, seq: int, ts: float, b64: str,
                          headers={"X-Session-Id": sid})
     finally:
         latent.append(time.monotonic() - t0)
-    return resp.get("candidate")
+    obs = resp.get("observation") or {}
+    tracks = obs.get("tracks") or []
+    return resp.get("candidate"), len(tracks)
 
 
 # --- honest people-reaction evidence (INC-9 / ADAAAA-4496) -------------------
@@ -286,20 +291,21 @@ def main() -> int:
                 continue
             cand_ts_by_seq = {}
             for i, ts, b64 in frames:
-                cand = analyze_frame(args.perceive, sid, i, ts, b64, args.game_hint, prefer, latent)
+                cand, n_tracks = analyze_frame(args.perceive, sid, i, ts, b64, args.game_hint, prefer, latent)
                 if cand is not None:
                     stage_total += 1
-                    cand_ts_by_seq[i] = cand
+                    cand_ts_by_seq[i] = (cand, n_tracks)
                     events.append({"type": "candidate", "clipId": cid,
                                    "eventType": cand["eventType"], "timestamp": cand["timestamp"]})
             if cand_ts_by_seq:
                 # route to decide with the anchored frame, feeding honest
                 # crowd-reaction evidence derived from the clip's real audio
-                # (INC-9 / ADAAAA-4496) — never ground-truth reaction labels.
-                for i, cand in cand_ts_by_seq.items():
+                # (INC-9 / ADAAAA-4496) + the frame's human track count — never
+                # ground-truth reaction labels.
+                for i, (cand, n_tracks) in cand_ts_by_seq.items():
                     frame_b64 = frames[i][2] if i < len(frames) else ""
                     ce, kind = crowd_energy_from_audio(src, cand["timestamp"])
-                    reaction = {"crowdEnergy": ce, "audioKind": kind}
+                    reaction = {"crowdEnergy": ce, "audioKind": kind, "humansInMotion": n_tracks}
                     dec = decide(args.decide, sid, cand, args.game_hint, frame_b64, reaction)
                     events.append({"type": "decision", "clipId": cid, "timestamp": cand["timestamp"] + 2.0,
                                    "decision": dec, "reaction": reaction})
