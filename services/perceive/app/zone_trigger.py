@@ -41,11 +41,20 @@ def _b_center(b: Sequence[float]) -> Tuple[float, float]:
 # whose center lands inside a zone is a candidate trigger (high recall). Tuned
 # off a broadcast soccer/hoops/tennis framing — over-broad by design (precision
 # is Stage-B's job), but narrow enough to avoid firing on the whole frame.
+#
+# INC-9 (ADAAAA-4496): the soccer goal-mouth strips were widened from 12% to
+# ~24% of frame width (and relaxed vertically) so NEAR-GOAL clips — action in
+# the penalty box / six-yard area just outside the goal mouth — also fire a
+# GOAL candidate. INC-8's eval showed soc-near-02 (VOD near-goal) emitted NO
+# candidate at 1fps/2fps because the sampled frames had players in the penalty
+# box but outside the narrow 12% strip. Stage-A is high-recall by design and
+# precision is Stage-B's (Gemma's) job, so widening costs nothing on precision
+# while recovering near-goal recall.
 DEFAULT_ZONES: Dict[str, List[ZoneBox]] = {
-    # goal mouths at the left and right edges of a side-on broadcast frame
+    # goal mouths + penalty-box edge at the left and right of a side-on frame
     "soccer": [
-        (0.00, 0.15, 0.12, 0.88),  # left goal mouth / penalty area
-        (0.88, 0.15, 1.00, 0.88),  # right goal mouth / penalty area
+        (0.00, 0.10, 0.24, 0.90),  # left goal mouth / penalty area
+        (0.76, 0.10, 1.00, 0.90),  # right goal mouth / penalty area
     ],
     "basketball": [
         (0.00, 0.10, 0.20, 0.45),  # left hoop / key

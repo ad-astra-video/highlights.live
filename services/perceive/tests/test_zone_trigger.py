@@ -75,6 +75,18 @@ def test_detection_in_zone_finds_center_overlap():
     assert detection_in_zone([_track((0.4, 0.4, 0.6, 0.6))], zones) is None
 
 
+def test_widened_soccer_zone_catches_near_goal(monkeypatch):
+    """INC-9 (ADAAAA-4496): the soccer zones were widened so NEAR-GOAL action in
+    the penalty box — outside the old 12% goal-mouth strip — still fires a GOAL
+    candidate. A player at x_center=0.18 (inside the widened 0.24 zone, outside
+    the old 0.12 strip) must trigger; a mid-field player must not."""
+    tr = DetectionZoneTrigger(zones=resolve_zones("soccer"))
+    cand = tr.update([_track((0.10, 0.4, 0.26, 0.6))], None, ts=1.0)
+    assert cand is not None and cand["eventType"] == "GOAL" and cand["trigger"] == "zone"
+    tr.reset()
+    assert tr.update([_track((0.4, 0.4, 0.6, 0.6))], None, ts=2.0) is None
+
+
 def test_detection_in_zone_accepts_dict_tracks():
     zones = [DEFAULT_ZONES["soccer"][0]]
     hit = detection_in_zone([{"bbox": (0.0, 0.4, 0.10, 0.6), "label": "player"}], zones)
