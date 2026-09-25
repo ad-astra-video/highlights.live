@@ -75,3 +75,48 @@ def test_highlight_endpoint_accepts_reaction_evidence():
     body = r.json()
     assert "isHighlight" in body
     assert "reason" in body
+
+
+def test_decide_accepts_out_of_old_bounds_evidence_no_422():
+    # ADAAAA-4736: real media observes trackCount > 2 and crowdEnergy > 1.0.
+    # The schema was relaxed so these are accepted (200), never 422-rejected.
+    for track_count in (3, 5, 8):
+        r = client.post(
+            "/app/highlight",
+            json={
+                "sessionId": "sess-1",
+                "eventType": "KILL",
+                "timestamp": 12.0,
+                "evidence": {
+                    "trackCount": track_count,
+                    "maxVelocity": 0.4,
+                    "ocrHits": 0,
+                    "reaction": {
+                        "crowdEnergy": 1.5,
+                        "audioKind": "swell",
+                        "humansInMotion": track_count,
+                        "ballSpeedMps": 18.0,
+                        "ballPossessionId": "t1",
+                    },
+                },
+            },
+        )
+        assert r.status_code == 200, f"track_count={track_count} -> {r.status_code} {r.text}"
+        assert "isHighlight" in r.json()
+    # crowdEnergy up to 2.0 accepted (old bound was 1.0).
+    r = client.post(
+        "/app/highlight",
+        json={
+            "sessionId": "sess-1",
+            "eventType": "GOAL",
+            "timestamp": 12.0,
+            "evidence": {
+                "trackCount": 2,
+                "maxVelocity": 0.4,
+                "ocrHits": 0,
+                "reaction": {"crowdEnergy": 2.0, "audioKind": "burst", "humansInMotion": 2},
+            },
+        },
+    )
+    assert r.status_code == 200
+    assert "isHighlight" in r.json()

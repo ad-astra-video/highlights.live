@@ -37,6 +37,20 @@ export interface ReactionEvidence {
  * cheap visual cue (tracked-object count as humans-in-motion proxy). Fields
  * that are absent default to "no signal", so a candidate with no reaction data
  * forwards an all-zero reaction block (prompt renders without it). */
+/** Clamp a numerical signal into the decide schema's accepted band. The decide
+ * service enforces strict `le` bounds on crowdEnergy/trackCount (ADAAAA-4736):
+ * real media sometimes reports peakEnergy > 1.0 or many tracked objects, and an
+ * out-of-bounds value makes FastAPI reject the WHOLE request with HTTP 422,
+ * killing the clip. The server is the owner of truth, so we clamp here to keep
+ * the paid path inside schema bounds. */
+export function clamp01(v: number | undefined): number {
+  if (v === undefined || Number.isNaN(v)) return 0;
+  return Math.min(1, Math.max(0, v));
+}
+export function clampTrackCount(v: number | undefined): number {
+  if (v === undefined || Number.isNaN(v)) return 0;
+  return Math.min(2, Math.max(0, Math.round(v)));
+}
 export function buildReactionEvidence(
   candidate: {
     audio?: AudioCandidate["audio"];
@@ -46,9 +60,9 @@ export function buildReactionEvidence(
   humansInMotion: number
 ): ReactionEvidence {
   return {
-    crowdEnergy: candidate.audio?.peakEnergy ?? 0,
+    crowdEnergy: clamp01(candidate.audio?.peakEnergy),
     audioKind: candidate.audio?.kind ?? "",
-    humansInMotion,
+    humansInMotion: clampTrackCount(humansInMotion),
     ballSpeedMps: candidate.ballVelocity?.speedMps ?? 0,
     ballPossessionId: candidate.ballPossession?.possessingPlayerId ?? "",
   };
@@ -171,7 +185,10 @@ export class EvidenceTracker {
   maxVelocity = 0;
   trackCount = 0;
   step(obs: { tracks: TrackObservation[] }): void {
-    this.trackCount = obs.tracks.length;
+    // Clamp into the decide schema's accepted band ([0,2], ADAAAA-4736): real
+    // multi-player tracking can exceed 2 objects and an out-of-range value
+    // makes FastAPI 422-reject the whole payload. Server is owner of truth.
+    this.trackCount = clampTrackCount(obs.tracks.length);
     for (const t of obs.tracks) {
       const [bx1, by1, bx2, by2] = t.bbox;
       const cx = (bx1 + bx2) / 2;

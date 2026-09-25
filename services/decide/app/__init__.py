@@ -26,7 +26,11 @@ class ReactionEvidence(BaseModel):
       reasons (ball moving fast toward goal, possessor celebrating).
     """
 
-    crowdEnergy: float = Field(default=0.0, ge=0.0, le=1.0)
+    # ADAAAA-4736: previously le=1.0. Real media (audio gate peakEnergy) can
+    # observe >1.0; treat it as evidence, never reject the whole request. The
+    # server already clamps its own send to [0,1]; this bound is defensive so a
+    # legitimately larger reading is accepted (keep ge=0 only).
+    crowdEnergy: float = Field(default=0.0, ge=0.0, le=2.0)
     audioKind: str = Field(default="")
     humansInMotion: int = Field(default=0, ge=0)
     ballSpeedMps: float = Field(default=0.0, ge=0.0)
@@ -34,7 +38,11 @@ class ReactionEvidence(BaseModel):
 
 
 class Evidence(BaseModel):
-    trackCount: int = Field(default=0, ge=0, le=2)
+    # ADAAAA-4736: previously le=2. Real multi-player tracking observes >2
+    # objects; a larger count is legitimate evidence and must not 422 the whole
+    # request. Defensive upper bound well above realistic multi-player counts
+    # (server clamps its own send to [0,2]; this just tolerates a larger one).
+    trackCount: int = Field(default=0, ge=0, le=8)
     maxVelocity: float = Field(default=0.0, ge=0.0)  # normalized units/frame
     ocrHits: int = Field(default=0, ge=0)
     # People-reaction context (INC-4). Optional; absent == no reaction signal,
