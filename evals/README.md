@@ -39,6 +39,14 @@ python3 evals/metrics_runner.py evals/label-manifest.json evals/fixtures/synthet
   reaction-cited rate on real clips) require driving the deployed perceive+
   decide pipeline over the labeled clips. Filled in as that run completes.
 
+## INC-9 / ADAAAA-4496 — §6 recall/precision recovery + precision descope
+
+Full deployed-pipeline §6 measurements, delivered fixes (near-goal emission +
+honest reaction evidence), and the precision descope decision (ADAAAA-4621)
+are documented in `evals/INC9-RESULTS.md`. Summary: recall live/VOD 100%,
+precision 60.0% (descoped to >=60.0% for this run), reaction-cited 100%,
+latency + FP bars green.
+
 ## INC-7 / ADAAAA-4452 — track cap expansion (3 live / 8 VOD)
 
 INC-7 raises the perceive object cap from MAX_TRACKS=2 to 3 concurrent live
