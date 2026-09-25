@@ -85,6 +85,45 @@ def _in_zone(b: Sequence[float], zone: ZoneBox) -> bool:
     return x1 <= cx <= x2 and y1 <= cy <= y2
 
 
+# INC-9 (ADAAAA-4496): soccer ball-in-play-area near-goal capture.
+# A detected soccer ball anywhere on the play area (below the scoreboard/crowd
+# top band) is treated as high-recall near-goal/goal signal even when it sits
+# centre-frame, outside the goal-mouth edge strips. soc-near-02 emitted NO
+# candidate at 1fps/2fps because its ball was detected at x~0.32-0.51 (centre)
+# while the only zones were the left/right edge goal mouths. A real ball in the
+# play area is exactly the near-goal/goal cue; Stage-A is high-recall by design
+# and precision stays Stage-B's (Gemma's) job. Cooldown still bounds the rate.
+# Play-area excludes the top ~15% (scoreboard/crowd band) and requires a
+# reasonably small, ball-sized box so a full-width crowd band labelled "player"
+# never fires as a ball.
+BALL_PLAY_Y_MIN = 0.12      # below scoreboard/crowd band
+BALL_PLAY_Y_MAX = 0.95
+BALL_PLAY_MAX_AREA = 0.06   # a real ball is small; full-frame boxes are not
+
+
+@dataclass
+class BallPlayConfig:
+    enabled: bool = True        # ball-in-play-area trigger (soccer near-goal)
+    y_min: float = BALL_PLAY_Y_MIN
+    y_max: float = BALL_PLAY_Y_MAX
+    max_area: float = BALL_PLAY_MAX_AREA
+
+
+def ball_in_play_area(b: Sequence[float], cfg: BallPlayConfig | None = None) -> bool:
+    """True when a detection's centre is a ball-sized box in the play area.
+
+    ``b`` is a normalized bbox. This is honest: it only uses the detected box
+    geometry (the clip's own vision), never ground-truth reaction labels.
+    """
+    cfg = cfg or BallPlayConfig()
+    cx, cy = _b_center(b)
+    if not (cfg.y_min <= cy <= cfg.y_max):
+        return False
+    x1, y1, x2, y2 = (float(v) for v in b)
+    area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    return area <= cfg.max_area
+
+
 def detection_in_zone(tracks: Sequence[object], zones: List[ZoneBox]) -> Optional[Tuple[str, ZoneBox]]:
     """Return (track_id-ish_label, zone) for the first relevant detection whose
     center is inside a zone, else None. A "relevant" detection is the ball (by
@@ -136,6 +175,7 @@ class DetectionZoneTrigger:
 
     cfg: ZoneTriggerConfig = field(default_factory=ZoneTriggerConfig)
     zones: List[ZoneBox] = field(default_factory=list)
+    ball_play: BallPlayConfig = field(default_factory=BallPlayConfig)
 
     def __post_init__(self) -> None:
         self._last_fired: Optional[float] = None
@@ -172,12 +212,16 @@ class DetectionZoneTrigger:
         ball_fields: Optional[dict],
         ts: float,
         event_type: str = "GOAL",
+        ball_objects: Sequence[object] | None = None,
     ) -> Optional[dict]:
-        """Check the detection-in-zone + ball-velocity/possession triggers.
+        """Check the detection-in-zone + ball-velocity/possession + ball-in-play
+        triggers.
 
         ``tracks`` are this frame's tracked detections (ball + players),
-        ``ball_fields`` the INC-2b signal dict (with ballVelocity/ballPossession).
-        Returns a Stage-A candidate trigger dict, or None.
+        ``ball_fields`` the INC-2b signal dict (with ballVelocity/ballPossession),
+        ``ball_objects`` the raw per-frame detections (used to capture a soccer
+        ball detected in the centre play area — INC-9). Returns a Stage-A
+        candidate trigger dict, or None.
 
         Fires when:
           * a relevant detection is inside a scoring zone, AND
@@ -186,7 +230,9 @@ class DetectionZoneTrigger:
               or a real possession assignment (shot / decisive touch), or
           * the ball-velocity signal itself spikes toward the target speed
             (shot signature, high recall) — catches a fast ball that a motion
-            gate or zone-overlap missed.
+            gate or zone-overlap missed, or
+          * a soccer ball is detected in the play area (centre-frame near-goal
+            capture, INC-9 / ADAAAA-4496).
 
         Cooldown suppresses a second candidate so the union of Stage-A triggers
         stays bounded (bounds Gemma Stage-B invocations).
@@ -206,6 +252,19 @@ class DetectionZoneTrigger:
             if not is_ball or not self.cfg.require_ball_confirm or speed or possessed:
                 return self._make_candidate(ts, event_type, "zone")
             return None
+
+        # Ball-in-play-area (INC-9): a soccer ball detected in the centre play
+        # area outside the goal-mouth strips still means near-goal action.
+        if self.ball_play.enabled and ball_objects:
+            for o in ball_objects:
+                b = o.get("bbox") if isinstance(o, dict) else getattr(o, "bbox", None)
+                label = o.get("label", "") if isinstance(o, dict) else getattr(o, "label", "")
+                if not b or len(b) != 4:
+                    continue
+                if "ball" not in (label or "").lower():
+                    continue
+                if ball_in_play_area(b, self.ball_play):
+                    return self._make_candidate(ts, event_type, "ball_play")
 
         # Velocity-spike trigger: a fast ball on its own (no zone overlap
         # resolved this frame) is still a high-recall shot signature.

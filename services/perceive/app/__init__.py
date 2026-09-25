@@ -366,7 +366,7 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     zone_cand = None
     if zone_trigger is not None:
         try:
-            zone_cand = zone_trigger.update(tracks, ball_signal_fields or None, timestamp)
+            zone_cand = zone_trigger.update(tracks, ball_signal_fields or None, timestamp, ball_objects=objects)
         except Exception as e:  # noqa: BLE001  (a zone hiccup never drops a frame)
             log.warning("zone trigger skipped for frame %s: %s", seq, e)
 

@@ -27,8 +27,10 @@ from app import process_frame
 from app.zone_trigger import (
     BALL_TARGET_SPEED_MPS,
     DEFAULT_ZONES,
+    BallPlayConfig,
     DetectionZoneTrigger,
     ZoneTriggerConfig,
+    ball_in_play_area,
     detection_in_zone,
     resolve_zones,
 )
@@ -124,6 +126,42 @@ def test_ball_can_fire_without_confirm_when_disabled():
     tr.cfg.require_ball_confirm = False
     ball = _track((0.0, 0.4, 0.10, 0.6), kind="ball", label="soccer ball")
     assert tr.update([ball], None, ts=1.0) is not None
+
+
+def test_ball_in_play_area_geometry():
+    # centre-frame ball below the scoreboard band -> in play area (soc-near-02)
+    assert ball_in_play_area((0.30, 0.20, 0.34, 0.24)) is True
+    # full-width top crowd band labelled player is NOT a ball: centre y in the
+    # top band -> out of play area.
+    assert ball_in_play_area((0.0, 0.0, 0.998, 0.05)) is False
+    # a full-frame box (too large for a real ball) -> excluded even in play area
+    assert ball_in_play_area((0.0, 0.30, 1.0, 0.90), BallPlayConfig()) is False
+
+
+def test_ball_play_trigger_fires_centre_frame_near_goal():
+    """INC-9 (ADAAAA-4496): soc-near-02 emitted NO candidate because its ball was
+    detected centre-frame (x~0.32-0.51), outside the edge goal-mouth zones. A
+    raw soccer-ball detection in the play area must now fire a GOAL candidate via
+    the ball_play trigger, with no velocity/possession confirmation needed."""
+    tr = DetectionZoneTrigger(zones=resolve_zones("soccer"))
+    ball_obj = {"label": "soccer ball", "bbox": [0.316, 0.212, 0.329, 0.225]}
+    cand = tr.update([], None, ts=1.0, ball_objects=[ball_obj])
+    assert cand is not None
+    assert cand["eventType"] == "GOAL"
+    assert cand["trigger"] == "ball_play"
+
+
+def test_ball_play_trigger_ignores_non_ball_and_crowd_band():
+    tr = DetectionZoneTrigger(zones=resolve_zones("soccer"))
+    # full-width crowd band (labelled player) must NOT fire ball_play
+    cand = tr.update([], None, ts=1.0,
+                     ball_objects=[{"label": "player", "bbox": [0.0, 0.0, 0.998, 0.24]}])
+    assert cand is None
+    # but a real centre-frame ball does (respecting cooldown)
+    tr.reset()
+    cand2 = tr.update([], None, ts=2.0,
+                      ball_objects=[{"label": "soccer ball", "bbox": [0.5, 0.30, 0.52, 0.32]}])
+    assert cand2 is not None and cand2["trigger"] == "ball_play"
 
 
 def test_ball_speed_spike_fires_own_candidate():

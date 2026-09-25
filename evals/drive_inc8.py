@@ -204,13 +204,26 @@ def decide(decide_url: str, sid: str, cand: dict, game_hint: str,
     """POST a candidate to decide /highlight (Gemma). Returns the decision dict.
 
     `reaction` is the honest people-reaction evidence (crowdEnergy / audioKind
-    from the clip's real audio). It is folded into `evidence.reaction` exactly
-    like buildReactionEvidence does for the deployed live pipeline, so Gemma
-    weighs the INC-4 people-reaction dimension it already prompts for.
+    from the clip's real audio) plus the ball velocity/possession the deployed
+    pipeline carries on the candidate. It is folded into `evidence.reaction`
+    exactly like buildReactionEvidence does for the deployed live pipeline, so
+    Gemma weighs the INC-4 people-reaction dimension it already prompts for.
     """
     evidence = {"trackCount": 1, "maxVelocity": 0.0, "ocrHits": 0}
-    if reaction:
-        evidence["reaction"] = reaction
+    r = dict(reaction or {})
+    # Forward the candidate's honest INC-2b ball signal (shot signature) the
+    # same way buildReactionEvidence does for the live pipeline — never
+    # ground-truth labels, only what perceive actually detected.
+    if cand.get("ballVelocity"):
+        v = cand["ballVelocity"]
+        try:
+            r["ballSpeedMps"] = float(v.get("speedMps") or 0.0)
+        except (TypeError, ValueError):
+            r["ballSpeedMps"] = 0.0
+    if cand.get("ballPossession"):
+        r["ballPossessionId"] = cand["ballPossession"].get("possessingPlayerId", "")
+    if r:
+        evidence["reaction"] = r
     payload = {
         "sessionId": sid,
         "eventType": cand["eventType"],
