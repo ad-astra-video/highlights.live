@@ -125,6 +125,59 @@ describe("analyzeJob", () => {
     });
   });
 
+  it("clamps crowdEnergy and trackCount into decide schema bounds (ADAAAA-4736)", async () => {
+    // Real media can report peakEnergy > 1 and observe > 2 tracked objects;
+    // without clamping the server would 422-reject the whole decide request.
+    let seen: any;
+    const { client } = fakeClient({
+      analyze: async () => ({
+        observation: {
+          tracks: [
+            { trackId: "a", slot: 0, bbox: [0, 0, 0.2, 0.2], kind: "player", lostFrames: 0 },
+            { trackId: "b", slot: 1, bbox: [0.5, 0.5, 0.6, 0.6], kind: "player", lostFrames: 0 },
+            { trackId: "c", slot: 2, bbox: [0.1, 0.9, 0.3, 1.0], kind: "player", lostFrames: 0 },
+            { trackId: "d", slot: 3, bbox: [0.8, 0.1, 1.0, 0.3], kind: "player", lostFrames: 0 },
+            { trackId: "e", slot: 4, bbox: [0.3, 0.3, 0.4, 0.4], kind: "player", lostFrames: 0 },
+          ] as any,
+          seq: 0,
+          timestamp: 0,
+        },
+        candidate: {
+          eventType: "GOAL",
+          timestamp: 0,
+          audio: { kind: "burst", ts: 0, firedAt: 0.2, onsetLatencyS: 0.2, peakEnergy: 1.5, baselineEnergy: 0.1 },
+        } as any,
+      }),
+      decide: async (evidence: any) => {
+        seen = evidence;
+        return { isHighlight: true, score: 80, eventType: "GOAL" };
+      },
+    });
+    await analyzeJob(client, frames(1), async () => ({ clipId: "c", clipUri: "/c.mp4" }), {
+      jobId: "j",
+      clipBeforeS: 4,
+      clipAfterS: 4,
+    });
+    // trackCount (5 observed) clamped to the decide schema's accepted top (2);
+    // crowdEnergy (1.5 observed) clamped to 1.0; humansInMotion follows trackCount.
+    expect(seen.trackCount).toBe(2);
+    expect(seen.reaction.crowdEnergy).toBe(1.0);
+    expect(seen.reaction.humansInMotion).toBe(2);
+    // clamp01 / clampTrackCount helpers also guard NaN and negatives.
+    const { clamp01, clampTrackCount, buildReactionEvidence } = await import("../src/analyzer");
+    expect(clamp01(undefined)).toBe(0);
+    expect(clamp01(-0.5)).toBe(0);
+    expect(clamp01(1.5)).toBe(1);
+    expect(clamp01(0.4)).toBe(0.4);
+    expect(clampTrackCount(undefined)).toBe(0);
+    expect(clampTrackCount(-3)).toBe(0);
+    expect(clampTrackCount(5)).toBe(2);
+    expect(clampTrackCount(1)).toBe(1);
+    expect(
+      buildReactionEvidence({ audio: { peakEnergy: 2.4 } as any, ballVelocity: { speedMps: 99 } }, 12).crowdEnergy
+    ).toBe(1);
+  });
+
   it("fires onEvent for every observation, candidate, and highlight (live-console feed)", async () => {
     let call = 0;
     const { client } = fakeClient({
