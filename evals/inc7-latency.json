@@ -1,0 +1,7 @@
+{
+  "tracks": {
+    "live-a": { "n": 4, "min": 0.7793, "max": 0.9206, "mean": 0.8274, "p50": 0.805, "candidates": 0 },
+    "live-b": { "n": 4, "min": 0.2532, "max": 0.3814, "mean": 0.3073, "p50": 0.3227, "candidates": 0 },
+    "live-c": { "n": 4, "min": 0.6134, "max": 0.7773, "mean": 0.6758, "p50": 0.6665, "candidates": 0 }
+  }
+}
