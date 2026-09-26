@@ -71,6 +71,19 @@ class Track:
     # can be ANCHORED at the peak single-step (the strike moment) instead of the
     # later frame where accumulated displacement happens to cross the threshold.
     step_hist: Deque[Tuple[float, float]] = field(default_factory=lambda: deque(maxlen=10))
+    # --- ADAAAA-5069 VOD identity hardening --------------------------------
+    # A track starts TENTATIVE (confirmed=False) and only becomes a real
+    # identity after `confirm_frames` consecutive matched frames. Tentative
+    # tracks are cheap to evict and are recycled at capacity instead of
+    # squatting on a slot, so a single frame's spurious detection can never
+    # churn a slot's identity the instant a real object appears.
+    confirmed: bool = False
+    match_count: int = 0  # consecutive matched frames since creation
+    # Per-frame velocity of the last matched step, used to extrapolate a lost
+    # track's predicted position so dropout-tolerant revival can re-attach the
+    # SAME trackId across a short detection gap instead of re-seeding.
+    vx: float = 0.0
+    vy: float = 0.0
 
     @property
     def accuracy(self) -> Optional[float]:
@@ -145,12 +158,16 @@ class IoUTracker:
     # action/combat moment -> KILL-tier candidate. Slower drift -> MOVE.
     FAST_STEP = 0.15
 
-    def __init__(self, jump_velocity: float = 0.2, lost_before_evict: int = 8, cooldown_s: float = 2.0, capacity: int = MAX_TRACKS):
+    def __init__(self, jump_velocity: float = 0.2, lost_before_evict: int = 8, cooldown_s: float = 2.0, capacity: int = MAX_TRACKS,
+                 confirm_frames: int = 2, unconfirmed_max_lost: int = 2):
         self.tracks: List[Track] = []
         self.jump_velocity = jump_velocity
         self.lost_before_evict = lost_before_evict
         self.cooldown_s = cooldown_s
         self.capacity = max(1, int(capacity))
+        # ADAAAA-5069 hardening knobs
+        self.confirm_frames = max(1, int(confirm_frames))
+        self.unconfirmed_max_lost = max(1, int(unconfirmed_max_lost))
         self.last_candidate: float = -1e9
         # Slots that refuse automatic eviction (control `lock`). A locked slot
         # that loses its object keeps its last bbox instead of being dropped.
@@ -188,15 +205,32 @@ class IoUTracker:
         self.locked.add(int(slot))
 
     def step(self, boxes: List[BBox], ts: float, labels: Optional[List[str]] = None) -> List[Track]:
-        """Match new boxes to existing tracks: IoU if they overlap, else nearest
-        centroid within a distance gate (so a fast-moving blob stays ONE track).
-        Create/evict as needed; accumulate per-frame displacement.
+        """Match new boxes to existing tracks (ADAAAA-5069 hardened).
+
+        Identity is hardened against real-video per-frame detection dropout and
+        enter/exit/overlap in two ways:
+
+        1. CONFIRM GATE — a newly created track is TENTATIVE (``confirmed``
+           False) until it has been matched on ``confirm_frames`` consecutive
+           frames. Tentative tracks are cheap to evict (``unconfirmed_max_lost``
+           unmatched frames) and are recycled at capacity, so a single spurious
+           detection can never seize a slot and churn its identity.
+
+        2. DROPOUT-TOLERANT REVIVAL — after present tracks match, any box that
+           matched no present track is offered, via a widened velocity-
+           extrapolated gate, to a *recently-lost confirmed* track within the
+           eviction window. Re-attaching the box to that track preserves its
+           ``trackId`` across a short detection gap instead of re-seeding a new
+           identity (the dominant VOD failure QA measured).
 
         `labels` (optional, parallel to `boxes`) carries each detection's label.
         New tracks are seeded with it (and a derived kind) so the boxes the UI
         surfaces carry the detector's in-roster label instead of a hard-coded
         "unknown" (ADAAAA-5056). An existing track keeps its label when it is
-        re-matched (identity persistence)."""
+        re-matched (identity persistence).
+
+        Matching order, capacity ceiling, velocity-jump candidate accumulation
+        and locked-slot semantics are otherwise unchanged."""
         unmatched = list(boxes)
         # Stub path and callers that omit labels pass an empty/absent list while
         # still handing new boxes; keep a parallel array so pops stay in lockstep.
@@ -205,46 +239,78 @@ class IoUTracker:
         else:
             u_labels = [None] * len(boxes)
         matched_tracks: set[int] = set()
+
+        # PASS 1 — present tracks (lost_frames == 0) match by IoU / centroid
+        # gate, exactly as before.
         for tr in list(self.tracks):
-            best_i, best_score, best_type = None, 0.0, None
+            if tr.lost_frames > 0:
+                continue  # lost tracks are handled in pass 2 (revival)
+            best_i, best_score = None, 0.0
             for i, b in enumerate(unmatched):
                 iou = _iou(tr.bbox, b)
                 if iou >= 0.05 and iou > best_score:
-                    best_i, best_score, best_type = i, iou, "iou"
+                    best_i, best_score = i, iou
                 else:
                     cd = self._centroid_gate(tr.bbox, b)
                     if cd is not None and cd > best_score:
-                        best_i, best_score, best_type = i, cd, "gate"
+                        best_i, best_score = i, cd
             if best_i is not None:
-                new_bbox = unmatched.pop(best_i)
-                u_labels.pop(best_i)  # keep labels parallel to unmatched boxes
-                new_center = ((new_bbox[0] + new_bbox[2]) / 2, (new_bbox[1] + new_bbox[3]) / 2)
-                if tr.prev_center is not None:
-                    disp = abs(new_center[0] - tr.prev_center[0]) + abs(new_center[1] - tr.prev_center[1])
-                    tr.moved += disp
-                    tr.last_step_disp = disp
-                    tr.step_hist.append((ts, disp))
-                tr.prev_center = new_center
-                tr.bbox = new_bbox
-                tr.lost_frames = 0
-                # INC-6: a selected find-and-track target counts each matched
-                # (on-screen) frame, feeding the continuity/accuracy metric.
-                if tr.selected:
-                    tr.onto_frames += 1
-                tr.last_seen = ts
+                self._match(tr, unmatched.pop(best_i), u_labels.pop(best_i), ts)
                 matched_tracks.add(id(tr))
-            else:
-                tr.lost_frames += 1
-                # Locked slots survive repeated lost frames (operator pinned them).
-                if tr.lost_frames > self.lost_before_evict and tr.slot not in self.locked:
-                    self.tracks.remove(tr)
 
-        # create tracks for remaining unmatched boxes into free slots
+        # PASS 2 — dropout-tolerant re-acquire. A box that matched no present
+        # track may be the same physical object reappearing after a short gap.
+        # Re-attach it to any in-window lost track (the widened predicted gate
+        # bridges motion during the gap) so the SAME trackId is preserved
+        # instead of re-seeding a new identity. Present tracks already matched
+        # first, so a lost track's box can never steal a present object's box.
+        for tr in list(self.tracks):
+            if id(tr) in matched_tracks or tr.lost_frames <= 0:
+                continue
+            best_i, best_score = None, -1.0
+            for i, b in enumerate(unmatched):
+                # exact-IoU / centroid-on-last-box (original re-acquire) plus the
+                # widened predicted gate (motion-extrapolated dropout tolerance)
+                iou = _iou(tr.bbox, b)
+                s = iou if iou >= 0.05 else 0.0
+                cd = self._centroid_gate(tr.bbox, b)
+                if cd is not None and cd > s:
+                    s = cd
+                rg = self._revive_gate(tr, b)
+                if rg is not None and rg > s:
+                    s = rg
+                if s > best_score:
+                    best_i, best_score = i, s
+            if best_i is not None and best_score > 0.0:
+                self._match(tr, unmatched.pop(best_i), u_labels.pop(best_i), ts)
+                matched_tracks.add(id(tr))
+
+        # advance lost counters; evict tracks that (a) exceed the eviction
+        # window, or (b) are still tentative and have been lost too long.
+        for tr in list(self.tracks):
+            if id(tr) in matched_tracks:
+                continue
+            tr.lost_frames += 1
+            evict = tr.lost_frames > self.lost_before_evict
+            if not tr.confirmed and tr.lost_frames > self.unconfirmed_max_lost:
+                evict = True
+            # Locked slots survive repeated lost frames (operator pinned them).
+            if evict and tr.slot not in self.locked:
+                self.tracks.remove(tr)
+
+        # create tracks for remaining unmatched boxes. Prefer a free slot;
+        # at capacity, recycle the oldest TENTATIVE (unconfirmed) slot so a
+        # real detection is never dropped because a blip squats the slot.
         used = {t.slot for t in self.tracks}
         free_slots = [s for s in range(self.capacity) if s not in used]
         for i, b in enumerate(unmatched):
             if not free_slots:
-                break
+                tent = [t for t in self.tracks if not t.confirmed and t.slot not in self.locked]
+                if not tent:
+                    break  # all slots are confirmed identities — drop the box
+                drop = tent[0]
+                self.tracks.remove(drop)
+                free_slots.append(drop.slot)
             slot = free_slots.pop(0)
             lab = u_labels[i] or ""
             tr = Track(
@@ -260,6 +326,53 @@ class IoUTracker:
 
         self.tracks.sort(key=lambda t: t.slot)
         return list(self.tracks)
+
+    def _match(self, tr: Track, new_bbox: BBox, label: Optional[str], ts: float) -> None:
+        """Apply a matched detection to ``tr``: carry the box forward, refresh
+        motion/velocity, and drive the confirmation gate. The trackId is never
+        changed here — a match (present or revived) preserves identity. A
+        non-empty ``label`` refreshes the track's surfaced label/kind (an
+        identity kept across a re-acquire never falls back to "unknown")."""
+        new_center = ((new_bbox[0] + new_bbox[2]) / 2, (new_bbox[1] + new_bbox[3]) / 2)
+        prev_ts = tr.last_seen if tr.last_seen else ts
+        if tr.prev_center is not None:
+            disp = abs(new_center[0] - tr.prev_center[0]) + abs(new_center[1] - tr.prev_center[1])
+            tr.moved += disp
+            tr.last_step_disp = disp
+            tr.step_hist.append((ts, disp))
+            dt = max(1e-6, abs(ts - prev_ts))
+            tr.vx = max(-0.5, min(0.5, (new_center[0] - tr.prev_center[0]) / dt))
+            tr.vy = max(-0.5, min(0.5, (new_center[1] - tr.prev_center[1]) / dt))
+        tr.prev_center = new_center
+        tr.bbox = new_bbox
+        tr.lost_frames = 0
+        tr.match_count += 1
+        if tr.match_count >= self.confirm_frames:
+            tr.confirmed = True
+        if label:
+            tr.label = label
+            tr.kind = kind_from_label(label)
+        # INC-6: a selected find-and-track target counts each matched
+        # (on-screen) frame, feeding the continuity/accuracy metric.
+        if tr.selected:
+            tr.onto_frames += 1
+        tr.last_seen = ts
+
+    def _revive_gate(self, tr: Track, b: BBox, base: float = 0.20, per_lost: float = 0.025, max_extra: float = 0.30) -> float | None:
+        """Revival confidence: centroid proximity of ``b`` to ``tr``'s PREDICTED
+        position (last center extrapolated by velocity x lost frames), with a
+        gate that widens with lost_frames so a briefly-missed player is still
+        re-attached. None when the box is beyond the (widened) gate."""
+        ca = tr.prev_center
+        if ca is None:
+            ca = ((tr.bbox[0] + tr.bbox[2]) / 2, (tr.bbox[1] + tr.bbox[3]) / 2)
+        pred = (ca[0] + tr.vx * tr.lost_frames, ca[1] + tr.vy * tr.lost_frames)
+        cb = ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+        d = abs(pred[0] - cb[0]) + abs(pred[1] - cb[1])
+        gate = base + min(max_extra, per_lost * max(0, tr.lost_frames - 1))
+        if d >= gate:
+            return None
+        return gate - d
 
     @staticmethod
     def _centroid_gate(a: BBox, b: BBox, gate: float = 0.20) -> float | None:

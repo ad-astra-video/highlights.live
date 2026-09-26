@@ -67,6 +67,31 @@ eviction window and is **not locked** is removed (its slot frees, its identity
 ends). A **locked / selected** slot survives repeated lost frames and keeps its
 last box until re-acquired or explicitly evicted.
 
+### VOD identity hardening (ADAAAA-5069)
+
+Deployed real-video QA (ADAAAA-5062) found that per-frame detection dropout and
+player enter/exit/overlap caused VOD tracks to re-seed, dropping ID persistence
+below the 0.95 bar (real VOD 0.655 vs live 0.956). Two rules harden identity
+against this, applied in `IoUTracker.step` without changing the live 3 / VOD 8
+caps:
+
+1. **Confirm gate.** A newly created track is **tentative** (`confirmed=False`)
+   until it has been matched on `confirm_frames` (default 2) consecutive frames.
+   Tentative tracks are cheap to evict (`unconfirmed_max_lost`, default 2) and
+   are recycled at capacity, so a single spurious detection can never seize a
+   slot and churn a slot's identity the instant a real object appears.
+2. **Dropout-tolerant revival.** After present tracks match, a box that matched
+   no present track is offered to any in-eviction-window *lost* track via a
+   velocity-extrapolated predicted gate (centroid-PRIME, widening with
+   `lost_frames`). Re-attaching a reappearing object to its prior track
+   preserves the **same trackId** across a short detection gap instead of
+   re-seeding a new identity. A locked or selected slot's identity is always
+   preserved (never auto-recycled).
+
+Both are tunable (`confirm_frames`, `unconfirmed_max_lost`) with defaults that
+keep the existing live continuity (a live window matches consecutively and
+confirms immediately).
+
 The perceived continuity metric on a selected target is
 `accuracy = onto_frames / (onto_frames + lost_frames)` over the tracked window
 (1.0 = never dropped while on screen) — surfaced on `TrackObservation` as
