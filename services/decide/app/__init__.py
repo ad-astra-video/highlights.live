@@ -6,7 +6,7 @@ from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, Field
 
 from .decider import decide
-from .gemma import decide_with_gemma
+from .gemma import TRACK_EVIDENCE_DEFAULT, decide_with_gemma
 
 HIGH_VALUE_EVENTS = {"KILL", "GOAL", "DUNK", "CLUTCH", "ACE", "PENTAKILL"}
 
@@ -67,6 +67,11 @@ class HighlightRequest(BaseModel):
     # Frontend-selectable; defaults to "none" (thinking off = fast single-shot
     # JSON). Other values (low/medium/high) are passed to llama.cpp verbatim.
     reasoningEffort: str = Field(default="none")
+    # ADAAAA-5069 tracked-object reaction-evidence A/B switch. "auto" (default)
+    # == current shipped behavior (tracked humansInMotion cue folded in);
+    # "off" / "baseline" select the A/B arms. Shipped pipeline unchanged unless
+    # explicitly set. See gemma.TRACK_EVIDENCE_DEFAULT.
+    trackEvidence: str = Field(default=TRACK_EVIDENCE_DEFAULT)
 
 
 def _is_gemma_mode() -> bool:
@@ -99,6 +104,7 @@ def create_app() -> FastAPI:
                 audio_sample_rate=req.audioSampleRate,
                 reasoning_effort=req.reasoningEffort,
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
+                track_evidence=req.trackEvidence,
             )
         d = decide(
             event_type=req.eventType,

@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from fastapi.testclient import TestClient
 
-from app.gemma import build_prompt, decide_with_gemma, parse_decision
+from app.gemma import TRACK_EVIDENCE_DEFAULT, build_prompt, decide_with_gemma, parse_decision, _reaction_summary
 
 
 # --- parse/build units ------------------------------------------------------
@@ -139,6 +139,120 @@ def test_decide_with_gemma_forwards_reaction_context():
     assert "audio reaction: burst at crowd energy 0.90/1.0" in prompt
     assert "visual reaction: 4 human(s) in high motion" in prompt
     assert "people-reaction evidence:" in prompt
+
+
+# --- ADAAAA-5069 tracked-object reaction-evidence A/B arms -------------------
+
+REACTION_EVID = {
+    "trackCount": 3,
+    "maxVelocity": 0.6,
+    "ocrHits": 0,
+    "reaction": {
+        "crowdEnergy": 0.9, "audioKind": "burst",
+        "humansInMotion": 4, "ballSpeedMps": 0.0, "ballPossessionId": "",
+    },
+}
+
+
+def test_track_evidence_default_is_auto():
+    assert TRACK_EVIDENCE_DEFAULT == "auto"
+
+
+def test_track_evidence_auto_keeps_current_behavior():
+    # auto (default / unset) must be byte-identical to today's prompt: track
+    # count + humansInMotion visual reaction cue both folded in.
+    p = build_prompt("GOAL", REACTION_EVID, "soccer")
+    assert "track count: 3" in p
+    assert "max tracked velocity: 0.60" in p
+    assert "visual reaction: 4 human(s) in high motion (celebration cue)" in p
+    assert "people-reaction evidence:" in p
+    # exactly one prompt when called twice (no leak of arm state)
+    p2 = build_prompt("GOAL", REACTION_EVID, "soccer")
+    assert p == p2
+
+
+def test_track_evidence_on_explicit_matches_auto():
+    a = build_prompt("GOAL", REACTION_EVID, "soccer", track_evidence="auto")
+    o = build_prompt("GOAL", REACTION_EVID, "soccer", track_evidence="on")
+    assert a == o
+
+
+def test_track_evidence_off_drops_humans_in_motion_cue():
+    # "off": tracking numeric context kept, but the humansInMotion visual
+    # reaction cue (the tracked-count reaction evidence) is excluded.
+    p = build_prompt("GOAL", REACTION_EVID, "soccer", track_evidence="off")
+    assert "track count: 3" in p
+    assert "max tracked velocity: 0.60" in p
+    assert "visual reaction: 4 human(s) in high motion" not in p
+    # audio/ball reaction context still rendered (not tracking-derived)
+    assert "audio reaction: burst at crowd energy 0.90/1.0" in p
+    # strict-JSON contract unchanged
+    assert '"isHighlight"' in p
+
+
+def test_track_evidence_baseline_untracked():
+    # "baseline": no tracking-derived context at all — pre-object-tracking prompt.
+    p = build_prompt("GOAL", REACTION_EVID, "soccer", track_evidence="baseline")
+    assert "track count:" not in p
+    assert "tracked velocity" not in p
+    assert "visual reaction: 4 human(s)" not in p
+    # audio reaction still fine (independent of tracking)
+    assert "audio reaction:" in p
+    assert '"isHighlight"' in p
+
+
+def test_track_evidence_env_gate(monkeypatch):
+    # env var selects the default arm when no per-request value is given.
+    monkeypatch.setenv("DECIDE_TRACK_EVIDENCE", "off")
+    p = build_prompt("GOAL", REACTION_EVID, "soccer")
+    assert "visual reaction: 4 human(s)" not in p
+    assert "track count: 3" in p
+    # a per-request value overrides the env default
+    monkeypatch.delenv("DECIDE_TRACK_EVIDENCE")
+    p = build_prompt("GOAL", REACTION_EVID, "soccer", track_evidence="baseline")
+    assert "track count:" not in p
+
+
+def test__reaction_summary_honors_arm():
+    assert any("visual reaction:" in ln for ln in _reaction_summary(REACTION_EVID, "auto"))
+    assert not any("visual reaction:" in ln for ln in _reaction_summary(REACTION_EVID, "off"))
+    assert not any("visual reaction:" in ln for ln in _reaction_summary(REACTION_EVID, "baseline"))
+
+
+def test_decide_with_gemma_forwards_track_evidence(monkeypatch):
+    # The per-request trackEvidence arm is threaded into the model prompt.
+    mock = MockLlama('{"isHighlight":true,"score":90,"eventType":"GOAL","reason":"crowd up"}')
+    try:
+        decide_with_gemma(
+            "GOAL", dict(REACTION_EVID), game_hint="soccer",
+            url=f"http://127.0.0.1:{mock.port}", track_evidence="baseline",
+        )
+    finally:
+        mock.stop()
+    text_content = [c for c in mock.requests[0]["messages"][0]["content"] if c.get("type") == "text"]
+    assert "track count:" not in text_content[0]["text"]
+    assert "visual reaction: 4 human(s)" not in text_content[0]["text"]
+
+
+def test_highlight_endpoint_accepts_track_evidence(monkeypatch):
+    from app import app
+    monkeypatch.setenv("DECIDE_MODE", "gemma")
+    c = TestClient(app)
+    r = c.post(
+        "/app/highlight",
+        json={
+            "sessionId": "s1", "eventType": "GOAL", "timestamp": 1.0,
+            "gameHint": "soccer",
+            "evidence": {"trackCount": 3, "maxVelocity": 0.6, "ocrHits": 0,
+                         "reaction": {"crowdEnergy": 0.9, "audioKind": "burst",
+                                      "humansInMotion": 4}},
+            "trackEvidence": "baseline",
+        },
+    )
+    assert r.status_code == 200
+    assert "isHighlight" in r.json()
+    # gyma unreachable in test -> rule fallback; still a valid decision
+    assert r.json()["source"] in ("rule-fallback", "gemma")
 
 
 # --- decide_with_gemma against a mock llama-server ---------------------------

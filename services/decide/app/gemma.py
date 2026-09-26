@@ -62,13 +62,49 @@ def parse_decision(text: str) -> dict | None:
     }
 
 
-def _reaction_summary(evidence: dict) -> list[str]:
+# Tracked-object reaction-evidence toggle (ADAAAA-5069). The decide prompt folds
+# the tracked-object people-reaction cue (`trackCount` -> `humansInMotion`)
+# into the prompt. This A/B switch lets an operator run the precision-lift
+# comparison on the deployed Gemma decide() path WITHOUT changing the shipped
+# pipeline: values are applied only when `DECIDE_TRACK_EVIDENCE` is set or the
+# per-request `trackEvidence` field is non-"auto". Default (unset / auto) =
+# EXACTLY today's behavior (tracked reaction evidence folded in), so the shipped
+# pipeline is unchanged. Arms:
+#   auto      (default) — tracked-count reaction evidence ON (current behavior)
+#   on        — same as auto (explicit)
+#   off       — tracking numeric context present, but the humansInMotion visual
+#               reaction cue (the "tracked-count reaction evidence") is excluded
+#   baseline  — untracked: no tracking-derived context at all (no trackCount /
+#               maxVelocity / humansInMotion) — the pre-object-tracking prompt
+TRACK_EVIDENCE_DEFAULT = "auto"
+
+
+def _resolve_track_evidence(per_request: str | None) -> str:
+    val = (per_request or "").strip().lower()
+    if val in ("auto", "on", "off", "baseline"):
+        return val
+    env = os.environ.get("DECIDE_TRACK_EVIDENCE", "").strip().lower()
+    if env in ("on", "off", "baseline"):
+        return env
+    return TRACK_EVIDENCE_DEFAULT
+
+
+def _tracking_reaction_included(track_evidence: str) -> bool:
+    """Whether the humansInMotion (tracked-count) reaction cue is folded in."""
+    return track_evidence in ("auto", "on")
+
+
+def _reaction_summary(evidence: dict, track_evidence: str = TRACK_EVIDENCE_DEFAULT) -> list[str]:
     """Render the people-reaction context lines for the decide prompt (INC-4 /
     ADAAAA-4328). Contacts the INC-2 audio gate (crowd/commentary energy) and the
     INC-2b ball signal, plus a cheap visual-celebration cue. Reaction is
     corroborating evidence for the verdict, not the arbiter: Gemma still decides
     on its full read of the frames + audio + play detail. Returns [] when no
-    reaction signal is present (no regression vs today's prompt)."""
+    reaction signal is present (no regression vs today's prompt).
+
+    `track_evidence` controls whether the tracked-object (humansInMotion)
+    visual-reaction cue is included (see TRACK_EVIDENCE_DEFAULT); audio and ball
+    reaction context are always rendered when present."""
     r = evidence.get("reaction") or {}
     if not isinstance(r, dict):
         r = {}
@@ -80,11 +116,12 @@ def _reaction_summary(evidence: dict) -> list[str]:
     if ce > 0:
         kind = (r.get("audioKind") or "").strip() or "crowd/commentary energy"
         out.append(f"audio reaction: {kind} at crowd energy {ce:.2f}/1.0")
+    include_him = _tracking_reaction_included(track_evidence)
     try:
         him = int(r.get("humansInMotion", 0) or 0)
     except (TypeError, ValueError):
         him = 0
-    if him > 0:
+    if include_him and him > 0:
         out.append(f"visual reaction: {him} human(s) in high motion (celebration cue)")
     try:
         bsp = float(r.get("ballSpeedMps", 0.0) or 0.0)
@@ -105,18 +142,21 @@ def build_prompt(
     game_hint: str = "",
     n_frames: int = 1,
     has_audio: bool = False,
+    track_evidence: str = TRACK_EVIDENCE_DEFAULT,
 ) -> str:
     ev = event_type.upper()
+    te = _resolve_track_evidence(track_evidence)
     meta = [
         f"candidate event type: {ev}",
         f"game hint: {game_hint or 'unspecified'}",
-        f"track count: {evidence.get('trackCount', 0)}",
-        f"max tracked velocity: {evidence.get('maxVelocity', 0):.2f}",
-        f"ocr hits: {evidence.get('ocrHits', 0)}",
-        f"frames shown (1 FPS temporal window): {n_frames}",
-        f"audio provided (commentary/crowd): {'yes' if has_audio else 'no'}",
     ]
-    reaction_lines = _reaction_summary(evidence)
+    if te != "baseline":  # untracked baseline omits all tracking-derived context
+        meta.append(f"track count: {evidence.get('trackCount', 0)}")
+        meta.append(f"max tracked velocity: {evidence.get('maxVelocity', 0):.2f}")
+    meta.append(f"ocr hits: {evidence.get('ocrHits', 0)}")
+    meta.append(f"frames shown (1 FPS temporal window): {n_frames}")
+    meta.append(f"audio provided (commentary/crowd): {'yes' if has_audio else 'no'}")
+    reaction_lines = _reaction_summary(evidence, te)
     if reaction_lines:
         meta.append("people-reaction evidence:")
         meta.extend("  " + ln for ln in reaction_lines)
@@ -153,6 +193,7 @@ def ask(
     audio_sample_rate: int = 16000,
     reasoning_effort: str = "none",
     timeout_s: float = 180.0,
+    track_evidence: str = TRACK_EVIDENCE_DEFAULT,
 ) -> dict | None:
     """Call llama-server multimodal completion. Returns a parsed/validated
     HighlightDecision dict, or None on any transport/parse failure.
@@ -177,7 +218,7 @@ def ask(
     content.append(
         {
             "type": "text",
-            "text": build_prompt(event_type, evidence, game_hint, n_frames=len(frames), has_audio=bool(audio_b64)),
+            "text": build_prompt(event_type, evidence, game_hint, n_frames=len(frames), has_audio=bool(audio_b64), track_evidence=track_evidence),
         }
     )
     # 3) audio AFTER the text (modality-order rule)
@@ -230,11 +271,12 @@ def decide_with_gemma(
     audio_sample_rate: int = 16000,
     reasoning_effort: str = "none",
     url: str | None = None,
+    track_evidence: str = TRACK_EVIDENCE_DEFAULT,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision."""
     u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
-    g = ask(u, event_type, evidence, game_hint, images, frames, audio_b64, audio_sample_rate, reasoning_effort=reasoning_effort)
+    g = ask(u, event_type, evidence, game_hint, images, frames, audio_b64, audio_sample_rate, reasoning_effort=reasoning_effort, track_evidence=track_evidence)
     if g is not None:
         return g
     # fallback: deterministic rule
