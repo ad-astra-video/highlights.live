@@ -238,6 +238,10 @@ export interface Db {
    * successful generation — callers invoke once per clip generated). Returns
    * the new count. */
   incrementQuota(userId: string, period: string): Promise<number>;
+  /** Atomically decrement a user's clip count for a period, clamped at zero
+   * (a rejected clip releases the slot its generation debited). Returns the
+   * new count. */
+  decrementQuota(userId: string, period: string): Promise<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +611,18 @@ export class SqliteDb implements Db {
          ON CONFLICT(user_id,period) DO UPDATE SET clips_used = quota_ledger.clips_used + 1, updated_at = excluded.updated_at`
       )
       .run(userId, period, now);
+    return (await this.getQuota(userId, period));
+  }
+
+  async decrementQuota(userId: string, period: string): Promise<number> {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `UPDATE quota_ledger
+         SET clips_used = MAX(0, clips_used - 1), updated_at = ?
+         WHERE user_id = ? AND period = ?`
+      )
+      .run(now, userId, period);
     return (await this.getQuota(userId, period));
   }
 }
@@ -982,6 +998,16 @@ export class PgDb implements Db {
     await this.pool.query(
       `INSERT INTO quota_ledger (user_id,period,clips_used,updated_at) VALUES ($1,$2,1,$3)
        ON CONFLICT (user_id,period) DO UPDATE SET clips_used = quota_ledger.clips_used + 1, updated_at = EXCLUDED.updated_at`,
+      [userId, period, new Date().toISOString()]
+    );
+    return this.getQuota(userId, period);
+  }
+
+  async decrementQuota(userId: string, period: string): Promise<number> {
+    await this.pool.query(
+      `UPDATE quota_ledger
+       SET clips_used = GREATEST(0, clips_used - 1), updated_at = $3
+       WHERE user_id = $1 AND period = $2`,
       [userId, period, new Date().toISOString()]
     );
     return this.getQuota(userId, period);

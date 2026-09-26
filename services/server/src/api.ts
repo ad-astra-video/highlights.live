@@ -1095,10 +1095,34 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   app.post<{ Params: { id: string }; Body: { status: "accepted" | "rejected" } }>(
     "/highlights/:id/review",
-    { preHandler: adminReq },
-    async (req, reply) => {
+    { preHandler: authReq },
+    async (req: any, reply) => {
       try {
-        return await store.reviewHighlight(req.params.id, req.body?.status || "accepted");
+        const user = req.user as { id: string; role: string };
+        const cur = store.getHighlight(req.params.id);
+        if (!cur) return reply.code(404).send({ error: "no highlight" });
+        // Ownership scoping: the owner (or an admin) may review a clip. This is
+        // the user's precision backstop over auto-detected highlights, so it
+        // must work for the owning user, not just admins.
+        if (user.role !== "admin" && cur.ownerId !== user.id) {
+          return reply.code(403).send({ error: "not your highlight" });
+        }
+        const status: "accepted" | "rejected" = req.body?.status === "rejected" ? "rejected" : "accepted";
+        const prev = cur.status;
+        const next = await store.reviewHighlight(cur.id, status);
+        // Quota accounting — only accepted clips consume the clip-count limit,
+        // and the change must be idempotent (no off-by accounting on replay):
+        //  - reject releases the slot the generation debited (skip if already
+        //    rejected, so re-rejecting never double-releases);
+        //  - accept re-consumes it only when coming back from rejected (a
+        //    first accept or a re-accept of an accepted/pending clip is a
+        //    no-op — the slot was already debited at generation).
+        if (status === "rejected" && prev !== "rejected") {
+          await entitlements.onClipRejected(user);
+        } else if (status === "accepted" && prev === "rejected") {
+          await entitlements.onClipAccepted(user);
+        }
+        return next;
       } catch (e: any) {
         return reply.code(404).send({ error: String(e?.message || e) });
       }

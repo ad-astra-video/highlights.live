@@ -70,4 +70,24 @@ export class EntitlementsService {
   async onClipGenerated(user: User, now: Date = new Date()): Promise<number> {
     return this.db.incrementQuota(user.id, this.periodKey(now));
   }
+
+  /**
+   * A rejected clip releases the slot its generation debited, so rejected
+   * clips never count toward the clip-count limit — only accepted (retained /
+   * published) clips consume it. Must only be called on a NOT-already-rejected
+   * transition (the review route guards idempotency), so re-rejecting never
+   * double-releases. Clamped at zero.
+   */
+  async onClipRejected(user: { id: string }, now: Date = new Date()): Promise<number> {
+    return this.db.decrementQuota(user.id, this.periodKey(now));
+  }
+
+  /**
+   * Re-accepting a previously-rejected clip re-consumes the released slot so
+   * the ledger stays consistent ("accepted clips consume the limit"). Guarded
+   * to only fire on a rejected->accepted transition.
+   */
+  async onClipAccepted(user: { id: string }, now: Date = new Date()): Promise<number> {
+    return this.db.incrementQuota(user.id, this.periodKey(now));
+  }
 }
