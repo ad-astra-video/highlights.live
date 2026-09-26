@@ -91,3 +91,21 @@ drives the same tracker the deployed path uses and scores:
 Acceptance target for the spawned eval set: **ID persist ≥ 95%**, **IoU ≥ 0.5**,
 and **max concurrent = mode cap** on the representative mix of live (3) and VOD
 (8) soccer scenes. (Numbers for the run are posted on the increment issue.)
+
+## VOD identity hardening (ADAAAA-5069)
+
+On real VOD-length video, per-frame Florence/SAM3 detection dropout + player
+enter/exit/overlap could evict a confirmed track; when the object reappeared it
+was re-seeded with a **new `trackId`**, splitting identity (QA measured VOD ID
+persistence 0.655 vs the >=0.95 bar). The tracker now:
+
+- only promotes a detection to a permanent identity after `confirm_frames`
+  CONSECUTIVE matches (a single spurious detection cannot fragment an ID);
+- **resurrects** a recently-evicted confirmed identity when a box reappears
+  near its last bbox (`resurrect_window_frames`), reusing the same `trackId`
+  instead of re-seeding;
+- preserves identity on the SAM re-detect path (`HybridTracker._reseed_from` ->
+  `seed_reuse_identity`).
+
+Max concurrent is unchanged and never exceeds the mode cap (3 live / 8 VOD).
+See `evals/track-measurements.md` for the measured before/after numbers.

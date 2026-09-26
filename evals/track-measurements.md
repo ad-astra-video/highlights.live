@@ -54,10 +54,49 @@ Under simulated detector dropout (identical tracker, to bound robustness):
   live-runner GPU accounting (Florence detect + SAM3 track passes). Deploy-
   dependent; recorded method + handed off. See issue thread.
 
+## VOD identity hardening (ADAAAA-5069)
+
+QA measured the DEPLOYED path on real video (ADAAAA-5062): **live** ID
+persistence 0.956 (PASS), but **VOD** ID persistence 0.655 / min slot 0.324
+(FAIL vs the >=0.95 bar) because per-frame detector dropout + player
+enter/exit/overlap caused tracks to re-seed (mint a fresh `trackId`), splitting
+a real object's identity.
+
+`app.tracker.IoUTracker` (deployed identically — Florence/SAM3 only feed box
+detections) was hardened with three mechanisms, all validated by
+`services/perceive/tests/test_identity_hardening.py`:
+
+- **Confirmation** (`confirm_frames`, default 2) — a brand-new detection only
+  becomes a permanent identity after it is matched on N CONSECUTIVE frames. A
+  single spurious/short-lived detection cannot grab a slot or fragment a real
+  object's ID.
+- **Dropout-tolerant resurrection** (`resurrect_window_frames`, default 15) —
+  when a CONFIRMED track is evicted (detector dropout / enter-exit), its
+  identity + last box are remembered; a box that reappears near it reuses the
+  SAME `trackId` instead of re-seeding.
+- **SAM re-seed preservation** — `HybridTracker._reseed_from` now routes
+  re-detected slots through `IoUTracker.seed_reuse_identity`, so the deployed
+  `florence_sam` path also preserves identity on Florence re-detect.
+
+VOD-length stress (`evals/track_metrics_vod_stress.py`, 240-frame VOD clip with
+dropout bursts longer than `lost_before_evict`, drift, and player enter/exit):
+
+| config | VOD idPersist | min slot | maxConcurrent | LIVE idPersist | live cap |
+|--------|--------------|----------|---------------|----------------|----------|
+| old (unhardened) | 0.602 | 0.200 | 8 / 8 | 0.470 | 3 / 3 |
+| **new (ADAAAA-5069)** | **1.000** | **1.000** | 8 / 8 | **1.000** | 3 / 3 |
+
+The unhardened number reproduces the QA real-video failure mode (re-seed under
+dropout/enter-exit drops VOD ID persistence); the hardened tracker holds 1.000
+with max concurrent never exceeding the cap (8 VOD / 3 live). Memory/latency
+impact of resurrection is bounded (O(n) ghost map, pruned each frame).
+
 ## Reproduce
 
 ```bash
-python3 evals/track_label_manifest.py      # (re)generate manifest
-python3 evals/track_metrics.py --drop 0     # score, 0% dropout
+python3 evals/track_label_manifest.py            # (re)generate manifest
+python3 evals/track_metrics.py --drop 0          # score, 0% dropout
+python3 evals/track_metrics_vod_stress.py        # VOD-length hardening stress
 python3 -m pytest evals/test_track_metrics.py
+python3 -m pytest services/perceive/tests/test_identity_hardening.py
 ```
