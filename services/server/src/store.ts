@@ -50,7 +50,7 @@ export class Store {
     }
   }
 
-  async createJob(input: { id?: string; ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare" | "browser"; sourceUrl?: string; gameHint?: string; preferLabels?: string[] }): Promise<Job> {
+  async createJob(input: { id?: string; ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare" | "browser"; sourceUrl?: string; gameHint?: string; preferLabels?: string[]; sampleFps?: number }): Promise<Job> {
     const id = input.id ?? randomUUID();
     const job: Job = JobSchema.parse({
       id,
@@ -59,6 +59,7 @@ export class Store {
       sourceUrl: input.sourceUrl,
       gameHint: input.gameHint,
       preferLabels: input.preferLabels ?? [],
+      sampleFps: input.sampleFps,
       status: "queued",
       createdAt: new Date().toISOString(),
     });

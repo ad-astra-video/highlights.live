@@ -177,6 +177,10 @@ export const JobSchema = z.object({
   preferLabels: z.array(z.string()).default([]),
   status: z.enum(["queued", "active", "done", "failed"]).default("queued"),
   perceiveSessionId: z.string().optional(),
+  // Per-job VOD sampling override (ADAAAA-5059). When present, overrides the
+  // `vodSampleFpsDefault` config for this job; still bounded by runner
+  // capability and `vodSampleMaxFps` in resolveSampleFps.
+  sampleFps: z.number().positive().optional(),
   createdAt: z.string(),
 });
 export type Job = z.infer<typeof JobSchema>;

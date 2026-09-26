@@ -539,4 +539,41 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
     expect(res.json().vodMaxUploadBytes).toBe(2147483648);
     await app.close();
   });
+
+  // ADAAAA-5059: a delivered highlight is trimmed to the configured event window
+  // ([event - clipBeforeS, event + clipAfterS]) — clearly shorter than the full
+  // sampled segment — and the trimmed duration is respected in the emitted file.
+  it("trims a VOD highlight to the event window, not the full segment", async () => {
+    const winPath = path.join(tmp, "window.mp4");
+    execFileSync("ffmpeg", [
+      "-y", "-f", "lavfi", "-i", "testsrc=duration=12:size=320x180:rate=4",
+      "-pix_fmt", "yuv420p", winPath,
+    ]);
+    const { app, cfg } = await buildTestApp({ CLIP_BEFORE_S: "2", CLIP_AFTER_S: "3" });
+    const token = await register(app, "w@test.dev", "password123");
+    const res = await app.inject({
+      method: "POST", url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { videoPath: winPath, gameHint: "valorant" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const hl = (await app.inject({
+      method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` },
+    })).json().highlights;
+    expect(hl.length).toBeGreaterThan(0);
+    // The recorded window is the event +/- the configured rolls (5s total).
+    expect(hl[0].end - hl[0].start).toBeLessThanOrEqual(5.01);
+    expect(hl[0].end - hl[0].start).toBeGreaterThan(0);
+    const clipFile = path.join(cfg.dataDir, "clips", path.basename(hl[0].clipUri));
+    expect(existsSync(clipFile)).toBe(true);
+    // Emitted clip duration must match the trimmed window, not the 12s source.
+    const dur = parseFloat(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", clipFile]).toString().trim());
+    // Emitted clip is the event window (~5s target), not the 12s source. Allow
+    // codec-copy keyframe alignment slop on top of the target window.
+    expect(dur).toBeLessThan(12);
+    expect(dur).toBeGreaterThan(0);
+    expect(dur).toBeLessThanOrEqual(6.5);
+    await app.close();
+  });
 });
