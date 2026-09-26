@@ -224,7 +224,13 @@ export class OrchestratorAdapter implements PipelineClient {
       ocrHits: number;
       reaction?: ReactionEvidence; // INC-4 people-reaction context
     },
-    opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
+    opts?: {
+      gameHint?: string;
+      imageB64?: string;
+      reasoningEffort?: string;
+      frames?: { role: string; base64: string }[];
+      audioB64?: string;
+    }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
     const payload = {
@@ -235,6 +241,11 @@ export class OrchestratorAdapter implements PipelineClient {
       reasoningEffort: opts?.reasoningEffort || "none",
       evidence,
       images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
+      // Detail-first (ADAAAA-4954): the temporal frame SEQUENCE + surrounding
+      // audio clip the Gemma runner reasons across. Absent on the live baseline.
+      frames: opts?.frames ?? [],
+      audioB64: opts?.audioB64 ?? "",
+      audioSampleRate: 16_000,
     };
     // The decide runner is a fixed-price single-shot live runner; the first
     // unpaid call 402s with a payment challenge. On-chain (signer + payer
@@ -351,7 +362,13 @@ export class DirectAdapter implements PipelineClient {
       ocrHits: number;
       reaction?: ReactionEvidence; // INC-4 people-reaction context
     },
-    opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
+    opts?: {
+      gameHint?: string;
+      imageB64?: string;
+      reasoningEffort?: string;
+      frames?: { role: string; base64: string }[];
+      audioB64?: string;
+    }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
       method: "POST",
@@ -364,6 +381,9 @@ export class DirectAdapter implements PipelineClient {
         reasoningEffort: opts?.reasoningEffort || "none",
         evidence,
         images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
+        frames: opts?.frames ?? [],
+        audioB64: opts?.audioB64 ?? "",
+        audioSampleRate: 16_000,
       }),
     });
     if (!r.ok) throw new Error(`decide failed: HTTP ${r.status}`);
