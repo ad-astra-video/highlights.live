@@ -247,7 +247,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         adapter,
         ingest.frames(),
         (ts) => ingest.cut(ts),
-        { jobId: job.id, clipBeforeS: cfg.clipBeforeS, clipAfterS: cfg.clipAfterS, gameHint: job.gameHint || cfg.gameHintDefault },
+        { jobId: job.id, clipBeforeS: cfg.clipBeforeS, clipAfterS: cfg.clipAfterS, gameHint: job.gameHint || cfg.gameHintDefault, decideAnchorDelayS: cfg.decideAnchorDelayS },
         jobEventHook(job.id)
       );
       for (const h of outcome.highlights) {
@@ -291,6 +291,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         clipBeforeS: cfg.clipBeforeS,
         clipAfterS: cfg.clipAfterS,
         gameHint: job.gameHint || cfg.gameHintDefault,
+        decideAnchorDelayS: cfg.decideAnchorDelayS,
       },
       jobEventHook(job.id)
     );
