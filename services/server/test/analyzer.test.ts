@@ -96,6 +96,73 @@ describe("analyzeJob", () => {
     expect(hl.highlight.score).toBe(80);
   });
 
+  it("defers the decide to the anchor frame when decideAnchorDelayS>0 (sees the celebration, not the onset)", async () => {
+    // Candidate fires at t=2 (audio onset). With a 2s anchor delay the decide
+    // must run on a later frame's imageB64 (t>=4), not the onset frame's.
+    let call = 0;
+    const seenImages: string[] = [];
+    const decide = async (_ev: any, opts: any) => {
+      seenImages.push(opts.imageB64);
+      return { isHighlight: true, score: 95, eventType: "GOAL" };
+    };
+    const { client } = fakeClient({
+      analyze: async () => {
+        call++;
+        if (call === 3) {
+          return { observation: { tracks: [], seq: 2, timestamp: 2 }, candidate: { eventType: "GOAL", timestamp: 2 } };
+        }
+        return { observation: { tracks: [], seq: call - 1, timestamp: call - 1 } };
+      },
+      decide,
+    });
+    const cuts: number[] = [];
+    const cut = async (ts: number) => {
+      cuts.push(ts);
+      return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
+    };
+    // frames(8): timestamps 0..7 -> anchor window t=2+2=4 lands on img4.
+    const outcome = await analyzeJob(client, frames(8), cut, {
+      jobId: "j",
+      clipBeforeS: 4,
+      clipAfterS: 4,
+      gameHint: "",
+      decideAnchorDelayS: 2,
+    });
+    // Clip is cut at the candidate's timestamp (2), not the anchor frame.
+    expect(cuts).toEqual([2]);
+    expect(outcome.highlights).toHaveLength(1);
+    // Gemma saw the post-onset celebration frame, not the onset frame.
+    expect(seenImages).toEqual(["img4"]);
+  });
+
+  it("flushes a tail candidate on the last captured frame when the anchor window never closes", async () => {
+    let call = 0;
+    const seenImages: string[] = [];
+    const { client } = fakeClient({
+      analyze: async () => {
+        call++;
+        if (call === 4) {
+          return { observation: { tracks: [], seq: 3, timestamp: 3 }, candidate: { eventType: "GOAL", timestamp: 3 } };
+        }
+        return { observation: { tracks: [], seq: call - 1, timestamp: call - 1 } };
+      },
+      decide: async (_ev: any, opts: any) => {
+        seenImages.push(opts.imageB64);
+        return { isHighlight: true, score: 95, eventType: "GOAL" };
+      },
+    });
+    const outcome = await analyzeJob(client, frames(4), async (ts) => ({ clipId: `c${ts}`, clipUri: "u" }), {
+      jobId: "j",
+      clipBeforeS: 4,
+      clipAfterS: 4,
+      gameHint: "",
+      decideAnchorDelayS: 5,
+    });
+    // Due at t=3+5=8, stream ends at t=3 -> flush on the last frame (img3).
+    expect(outcome.highlights).toHaveLength(1);
+    expect(seenImages).toEqual(["img3"]);
+  });
+
   it("does NOT cut when decide returns isHighlight=false", async () => {
     const { client } = fakeClient({
       analyze: async () => ({ observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "MOVE", timestamp: 0 } }),

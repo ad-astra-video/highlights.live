@@ -38,6 +38,11 @@ export interface ServerConfig {
   gameHintDefault: string;
   clipBeforeS: number;
   clipAfterS: number;
+  /** Seconds after an audio-noise candidate fires before the gemma decide runs,
+   * anchored to a later (celebration) frame instead of the onset frame, so real
+   * goals are not judged on pre-celebration build-up (reduces gemma FP-rate).
+   * 0 = decide on the candidate frame immediately (legacy). Default 2. */
+  decideAnchorDelayS: number;
   /** Seconds between frames when the perceive runner's capability can't be
    * queried (orchestrator mode); with PERCEIVE_URL set the runner's measured
    * sample_interval_s is used instead. */
@@ -132,6 +137,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     gameHintDefault: env.GAME_HINT ?? "unspecified",
     clipBeforeS: Number(env.CLIP_BEFORE_S ?? 4),
     clipAfterS: Number(env.CLIP_AFTER_S ?? 4),
+    decideAnchorDelayS: Number(env.DECIDE_ANCHOR_DELAY_S ?? 2),
     sampleIntervalSec: Number(env.SAMPLE_INTERVAL_SEC ?? 1.0),
     vodSampleMaxFps: Number(env.VOD_SAMPLE_MAX_FPS ?? 8),
     jwtSecret: env.JWT_SECRET ?? "dev-insecure-secret-change-me",
