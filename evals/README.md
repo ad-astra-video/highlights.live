@@ -19,6 +19,15 @@ research ADAAAA-4275 §6 and report pass/fail per metric with evidence.
   tracking aggregation) is validated. This is a runner test, NOT pipeline
   evidence.
 
+## Tracking-accuracy eval set (ADAAAA-5050)
+
+`track_label_manifest.py` generates a labeled soccer tracking eval set
+(`track_label_manifest.json`: per-frame ground-truth objects with stable ids,
+live 3 / VOD 8 mode clips, occlusion + dropout cases). `track_metrics.py` scores
+the real tracker on it (ID persistence / IoU / max concurrent count); results
+and acceptance interpretation in `track-measurements.md`. Definition of a
+tracked object in `../docs/tracked-object.md`.
+
 ## Run
 
 ```bash

@@ -33,9 +33,17 @@ export const TrackKindSchema = z.enum([
 ]);
 export type TrackKind = z.infer<typeof TrackKindSchema>;
 
-// Tracked-object semantics (INC-6 / ADAAAA-4330). A "tracked object" is an
-// on-demand, user-selected object (Florence find + SAM3 track) that persists
-// across frames while on screen. We surface that persistence as:
+// Tracked-object semantics (INC-6 / ADAAAA-4330; definition ADAAAA-5050).
+// A "tracked object" is a detected object promoted into a persistent identity
+// (a Track) carried across frames while on screen. Selection rules: operator /
+// on-demand `track`/`seed` (selected target), auto-detection into a free slot
+// up to the mode capacity (live 3 / VOD 8), or the dedicated eviction-guarded
+// ball slot. ID-persistence rules: a detection keeps a track's identity when
+// it IoU-overlaps (>=0.05) or is within the centroid gate (<0.20); an unmatched
+// track survives `lost_before_evict` (8) frames unless locked; selected/locked
+// slots are never auto-evicted. See docs/tracked-object.md (authoritative) and
+// the labeled eval set + accuracy harness (evals/track_*.py). We surface the
+// persistence on selected targets as:
 //   - `selected`    true for the user-picked find-and-track target(s)
 //   - `onScreen`    whether the target is currently being tracked this frame
 //   - `ontoFrames`  cumulative frames the target has been followed while on screen
