@@ -249,6 +249,48 @@
         "speedErrorLabelPct": null,
         "possessorGroundTruth": "none"
       }
+    },
+    {
+      "id": "soc-lull-01",
+      "phase": "commentary_lull",
+      "mode": "vod",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/01e9e5ca-791e-4828-ae15-cccdd37fa075.mp4",
+      "startS": 0.0,
+      "endS": 11.099,
+      "groundTruth": {
+        "isHighlight": false,
+        "eventType": null
+      },
+      "reaction": {
+        "audio": "commentary",
+        "visual": false
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 0.0,
+        "speedErrorLabelPct": null,
+        "possessorGroundTruth": "none"
+      }
+    },
+    {
+      "id": "soc-replay-01",
+      "phase": "replay_loop",
+      "mode": "vod",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/0778d4c3-1ee2-42af-9bf8-f3e7bdaadd92.mp4",
+      "startS": 0.0,
+      "endS": 8.011,
+      "groundTruth": {
+        "isHighlight": false,
+        "eventType": null
+      },
+      "reaction": {
+        "audio": false,
+        "visual": false
+      },
+      "ballTrack": {
+        "onScreenPctLabel": 0.0,
+        "speedErrorLabelPct": null,
+        "possessorGroundTruth": "none"
+      }
     }
   ]
 }
