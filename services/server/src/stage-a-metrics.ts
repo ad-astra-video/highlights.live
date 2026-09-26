@@ -26,6 +26,9 @@ export class StageAMetrics {
   private onsetLatencySum = 0;
   private latencyObserved = 0;
   private maxOnsetLatencyS = 0;
+  // Raw onset->fire latency samples (s), kept for p50/p95 percentile reporting
+  // (ADAAAA-4785 latency acceptance: event -> flagged within 1-5 s, p50/p95).
+  private onsetLatencySamples: number[] = [];
 
   /** Record the outcome of one audio-gate candidate after Gemma decide() ran.
    * `accepted` is `decision.isHighlight` (a highlight was cut). `onsetLatencyS`
@@ -38,7 +41,18 @@ export class StageAMetrics {
       this.onsetLatencySum += onsetLatencyS;
       this.maxOnsetLatencyS = Math.max(this.maxOnsetLatencyS, onsetLatencyS);
       this.latencyObserved += 1;
+      this.onsetLatencySamples.push(onsetLatencyS);
     }
+  }
+
+  /** p-th percentile (0..1) of the observed onset latency samples (nearest-rank).
+   * 0 when no sample was observed. */
+  percentileLatencyS(p: number): number {
+    const n = this.onsetLatencySamples.length;
+    if (n === 0) return 0;
+    const sorted = [...this.onsetLatencySamples].sort((a, b) => a - b);
+    const rank = Math.max(1, Math.ceil(p * n));
+    return sorted[Math.min(n - 1, rank - 1)];
   }
 
   get totalCandidates(): number {
@@ -72,8 +86,11 @@ export class StageAMetrics {
       accepted: this.accepted,
       rejected: this.rejected,
       fpRate: Number(this.fpRate().toFixed(4)),
+      gemmaFpRate: Number(this.fpRate().toFixed(4)),
       meanOnsetLatencyS: Number(this.meanOnsetLatencyS().toFixed(3)),
       maxOnsetLatencyS: Number(this.maxOnsetLatencyS.toFixed(3)),
+      p50LatencyS: Number(this.percentileLatencyS(0.5).toFixed(3)),
+      p95LatencyS: Number(this.percentileLatencyS(0.95).toFixed(3)),
       fpRateWithinBudget: this.fpRate() <= FP_RATE_BUDGET,
     };
   }

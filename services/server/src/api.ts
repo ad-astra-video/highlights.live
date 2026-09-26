@@ -279,6 +279,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const audioLoop = (async () => {
         try {
           for await (const chunk of ingest.audioChunks()) {
+            // Buffer the raw mono PCM chunk into the shared live-run context so
+            // an audio-triggered candidate can assemble the AROUND audio clip
+            // for Gemma (ADAAAA-4785: video + audio frame analysis per trigger).
+            shared.addAudioChunk(chunk.timestamp, chunk.samples);
             try {
               const cand = await adapter.postAudio(initial.sessionId, {
                 seq: chunk.seq,
