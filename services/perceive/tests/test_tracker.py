@@ -180,3 +180,59 @@ def test_foreground_blobs_real_frame():
     # square is at x20..40, y20..40 of 100 -> normalized ~0.2..0.4
     assert abs(bx1 - 0.2) < 0.05 and abs(bx2 - 0.4) < 0.05
     assert abs(by1 - 0.2) < 0.05 and abs(by2 - 0.4) < 0.05
+
+
+# --- ADAAAA-5069 VOD identity hardening -------------------------------------
+
+def test_confirm_gate_prevents_spurious_slot_squat():
+    """A single-frame spurious detection must not become a confirmed identity
+    that squats a slot and drops a real object the same frame (the real-video
+    VOD churn QA measured in ADAAAA-5062). The confirm gate keeps the blip
+    TENTATIVE and recycles it at capacity so a real player is never dropped."""
+    tr = IoUTracker(capacity=2, lost_before_evict=8, confirm_frames=2)
+    # F1: real player A + one-frame spurious blip B (both new -> tentative)
+    t1 = tr.step([(0.1, 0.1, 0.25, 0.3), (0.8, 0.05, 0.95, 0.15)], ts=1.0)
+    assert all(not t.confirmed for t in t1)  # nothing confirmed after ONE frame
+    # F2: A + a NEW real player C on the right; B's spurious box is gone.
+    t2 = tr.step([(0.1, 0.1, 0.25, 0.3), (0.5, 0.5, 0.65, 0.6)], ts=2.0)
+    # C gets a slot (the tentative B slot is recycled, not B squatting it):
+    c = next((t for t in t2 if t.slot == 1 and t.bbox[0] > 0.4), None)
+    assert c is not None, "real player C must not be dropped because a blip squatted slot 1"
+
+
+def test_confirm_requires_stable_detections_before_commit():
+    """A track only becomes a real identity after `confirm_frames` consecutive
+    matched frames; a one-shot detection stays tentative and is evicted fast if
+    it never repeats (no long-lived ghost identity)."""
+    tr = IoUTracker(capacity=2, confirm_frames=3, unconfirmed_max_lost=2)
+    # one detection then never again (spurious)
+    tr.step([(0.1, 0.1, 0.3, 0.3)], ts=1.0)
+    tr.step([], ts=2.0)   # lost 1
+    tr.step([], ts=3.0)   # lost 2
+    t4 = tr.step([], ts=4.0)  # lost 3 > unconfirmed_max_lost=2 -> tentative evicted
+    assert len(t4) == 0, "a never-repeated detection must not linger as a ghost identity"
+
+
+def test_dropout_tolerant_revival_preserves_track_id():
+    """A CONFIRMED track that is briefly missed (detection dropout) is revived
+    with the SAME trackId when the object reappears near its predicted position,
+    instead of re-seeding a new identity (the dominant VOD failure)."""
+    tr = IoUTracker(capacity=2, confirm_frames=2, unconfirmed_max_lost=2, lost_before_evict=8)
+    pid = None
+    # establish + confirm the player: frame 0 CREATES the track (not a match),
+    # frames 1-2 give it the confirm_frames=2 consecutive matches to commit.
+    for f in range(3):
+        tr.step([(0.3, 0.3, 0.45, 0.5)], ts=float(f))
+    confirmed = tr.tracks[0]
+    assert confirmed.confirmed
+    pid = confirmed.track_id
+    # detection dropout: player missed for 3 frames (a spurious blip elsewhere
+    # appears, but the real player's slot simply carries no box)
+    tr.step([], ts=2.0)
+    tr.step([(0.8, 0.1, 0.95, 0.2)], ts=3.0)
+    tr.step([], ts=4.0)
+    # player reappears at ~same predicted position -> SAME trackId survives
+    tr.step([(0.31, 0.31, 0.46, 0.51)], ts=5.0)
+    reappeared = next((t for t in tr.tracks if abs(t.bbox[0] - 0.3) < 0.2), None)
+    assert reappeared is not None
+    assert reappeared.track_id == pid, "identity must survive a short detection gap"
