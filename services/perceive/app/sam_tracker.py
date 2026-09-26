@@ -28,7 +28,7 @@ from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
-from .tracker import BBox, CandidateEvent, IoUTracker, MAX_TRACKS, Track
+from .tracker import BBox, CandidateEvent, IoUTracker, MAX_TRACKS, Track, kind_from_label
 
 # A detect callable: rgb frame (HxWx3 uint8) -> [{label, confidence, bbox}] (Florence <OD>)
 DetectFn = Callable[[np.ndarray], List[dict]]
@@ -107,20 +107,23 @@ class HybridTracker:
         return self._iou.candidate(ts)
 
     # --- frame step ---------------------------------------------------------
-    def step_frame(self, frame_rgb: np.ndarray, ts: float, florence_boxes: Optional[List[BBox]] = None) -> List[Track]:
+    def step_frame(self, frame_rgb: np.ndarray, ts: float, florence_boxes: Optional[List[BBox]] = None, labels: Optional[List[str]] = None) -> List[Track]:
         """Advance one frame. `florence_boxes` are the caller's already-computed
         Florence detections for THIS frame; they seed the IoU layer (and, on a
         cold SAM start, the SAM prompts) — see `_sam_step` for the gating rule.
+        `labels` (parallel to `florence_boxes`) carries each detection's in-roster
+        label so tracks are seeded with it instead of "unknown" (ADAAAA-5056).
         With no SAM backend this degrades to pure Florence -> IoU."""
         if self._backend is not None and self._backend.ready():
-            boxes = self._sam_step(frame_rgb, florence_boxes)
+            boxes, box_labels = self._sam_step(frame_rgb, florence_boxes, labels)
         else:
             # No SAM: pure Florence -> IoU (unchanged behaviour).
             boxes = florence_boxes or []
+            box_labels = labels
             self._since_detect += 1
-        return self._iou.step(boxes, ts)
+        return self._iou.step(boxes, ts, labels=box_labels)
 
-    def _sam_step(self, frame_rgb: np.ndarray, florence_boxes: Optional[List[BBox]] = None) -> List[BBox]:
+    def _sam_step(self, frame_rgb: np.ndarray, florence_boxes: Optional[List[BBox]] = None, labels: Optional[List[str]] = None) -> tuple[List[BBox], Optional[List[str]]]:
         """Run SAM one frame ahead for every tracked slot.
 
         Gating (rule: Florence IDENTIFIES, SAM TRACKS — SAM never runs with
@@ -134,18 +137,21 @@ class HybridTracker:
             identified); ask Florence to re-detect on cadence / SAM loss /
             target change. Re-detect uses the caller's Florence boxes for this
             frame when provided (no redundant model pass), else `detect`.
-        Returns the boxes to feed the IoU CD layer."""
+        `labels` (parallel to `florence_boxes`) carries each detection's in-roster
+        label so reseeded tracks keep the gated label (ADAAAA-5056).
+        Returns (boxes to feed the IoU CD layer, labels parallel to those boxes)."""
         self._since_detect += 1
         # Bootstrap / idle gating: only call SAM when there is a target to track.
         if not self._prompts:
             if florence_boxes:
-                self._reseed_from(list(florence_boxes))  # Florence identified -> seed SAM
+                self._reseed_from(list(florence_boxes), labels)  # Florence identified -> seed SAM
                 self._since_detect = 0
             else:
-                return florence_boxes or []  # nothing identified -> skip SAM
+                return (florence_boxes or []), labels  # nothing identified -> skip SAM
         need_redetect = self._since_detect >= self.redetect_every
         self._backend.advance(dict(self._prompts))  # one frame's compute for all slots
         sam_boxes: List[BBox] = []
+        sam_labels: List[str] = []
         for slot in list(self._prompts.keys()):
             b = self._backend.get(slot)
             if b is None:
@@ -156,35 +162,51 @@ class HybridTracker:
                 self._miss[slot] = 0
                 self._prompts[slot] = b  # carry the prompt forward
                 sam_boxes.append(b)
+                # Keep the slot's known label on the SAM-propated box.
+                tr = next((t for t in self._iou.tracks if t.slot == slot), None)
+                sam_labels.append(tr.label if tr is not None else "")
 
         if need_redetect:
             if florence_boxes is None and self._detect is not None:
                 det = self._detect(frame_rgb) or []
                 florence_boxes = [d["bbox"] for d in det if d.get("bbox")]
-            self._reseed_from(florence_boxes or [])
+                labels = [str(d.get("label", "") or "") for d in det if d.get("bbox")]
+            self._reseed_from(florence_boxes or [], labels)
             self._since_detect = 0
-            return florence_boxes or sam_boxes
-        return sam_boxes
+            return (florence_boxes or sam_boxes), (labels or sam_labels)
+        return sam_boxes, sam_labels
 
-    def _reseed_from(self, boxes: List[BBox]) -> None:
+    def _reseed_from(self, boxes: List[BBox], labels: Optional[List[str]] = None) -> None:
         """Re-prompt SAM slots from a fresh Florence detection set."""
         boxes = list(boxes)
+        u_labels = list(labels) if labels is not None else [None] * len(boxes)
         # refresh existing tracked slots with the nearest detected box when possible
         for slot in list(self._prompts.keys()):
             tr = next((t for t in self._iou.tracks if t.slot == slot), None)
             if tr is not None:
                 best = _nearest_box(tr.bbox, boxes)
                 if best is not None:
+                    bi = boxes.index(best)
+                    lab = u_labels[bi] or ""
                     self._prompts[slot] = best
                     self._miss[slot] = 0
-                    boxes.remove(best)
+                    # Preserve track identity; just refresh its gated label/kind
+                    # so the surfaced box never falls back to "unknown".
+                    tr.bbox = best
+                    if lab:
+                        tr.label = lab
+                        tr.kind = kind_from_label(lab)
+                    boxes.pop(bi)
+                    u_labels.pop(bi)
         # seed empty slots from remaining detections (mode capacity)
         free = [s for s in range(self.capacity) if s not in self._prompts]
-        for slot, b in zip(free, boxes):
+        for slot, (b, lab) in zip(free, zip(boxes, u_labels)):
             # ADAAAA-5069: reuse a recently-evicted identity when this box is a
             # re-appearance (dropout-tolerant), so SAM re-detect does not mint a
             # fresh track id and split a real object's ID.
-            tr = self._iou.seed_reuse_identity(b, ts=0.0)
+            # ADAAAA-5056: seed with the gated in-roster label so the surfaced
+            # box never falls back to "unknown".
+            self._iou.seed_reuse_identity(b, ts=0.0, kind=kind_from_label(lab or ""), label=lab or "")
             self._prompts[slot] = b
             self._miss[slot] = 0
 

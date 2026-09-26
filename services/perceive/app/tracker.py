@@ -25,6 +25,28 @@ VOD_MAX_TRACKS = 8
 BBox = Tuple[float, float, float, float]  # x1, y1, x2, y2 normalized 0..1
 
 
+def kind_from_label(label: str) -> str:
+    """Map an (in-roster) detection label to a coarse TrackKind.
+
+    The tracker surfaces a track's label to the user; `kind` is a coarse
+    category (schema TrackKind). An in-roster label must never survive as the
+    meaningless "unknown" default, or the user sees "unknown" on every box even
+    though the closed-vocab gate labeled the detection (ADAAAA-5056).
+    """
+    l = (label or "").strip().lower()
+    if not l:
+        return "unknown"
+    if "ball" in l:
+        return "ball"
+    if l in ("player", "goalkeeper", "referee", "agent", "person", "people", "man", "woman", "men", "head"):
+        return "player"
+    if l in ("goal", "net", "hoop", "structure"):
+        return "structure"
+    if l in ("racket", "weapon", "proj"):
+        return "proj"
+    return "unknown"
+
+
 @dataclass
 class Track:
     track_id: str
@@ -192,7 +214,7 @@ class IoUTracker:
         """Prevent automatic eviction of a slot (operator `lock`)."""
         self.locked.add(int(slot))
 
-    def step(self, boxes: List[BBox], ts: float) -> List[Track]:
+    def step(self, boxes: List[BBox], ts: float, labels: Optional[List[str]] = None) -> List[Track]:
         """Match new boxes to existing tracks: IoU if they overlap, else nearest
         centroid within a distance gate (so a fast-moving blob stays ONE track).
         Create/evict as needed; accumulate per-frame displacement.
@@ -208,10 +230,22 @@ class IoUTracker:
             `resurrect_window_frames`. A box that reappears near its last bbox is
             matched to the SAME track id instead of minting a new identity, so
             the object's ID persists across short detection gaps.
+
+        `labels` (optional, parallel to `boxes`) carries each detection's label.
+        New tracks are seeded with it (and a derived kind) so the boxes the UI
+        surfaces carry the detector's in-roster label instead of a hard-coded
+        "unknown" (ADAAAA-5056). An existing track keeps its label when it is
+        re-matched (identity persistence).
         """
         self._frame += 1
         self._prune_ghosts()
         unmatched = list(boxes)
+        # Stub path and callers that omit labels pass an empty/absent list while
+        # still handing new boxes; keep a parallel array so pops stay in lockstep.
+        if labels is not None and len(labels) == len(boxes):
+            u_labels = list(labels)
+        else:
+            u_labels = [None] * len(boxes)
         matched_tracks: set[int] = set()
         for tr in list(self.tracks):
             best_i, best_score, best_type = None, 0.0, None
@@ -225,6 +259,7 @@ class IoUTracker:
                         best_i, best_score, best_type = i, cd, "gate"
             if best_i is not None:
                 new_bbox = unmatched.pop(best_i)
+                u_labels.pop(best_i)  # keep labels parallel to unmatched boxes
                 new_center = ((new_bbox[0] + new_bbox[2]) / 2, (new_bbox[1] + new_bbox[3]) / 2)
                 if tr.prev_center is not None:
                     disp = abs(new_center[0] - tr.prev_center[0]) + abs(new_center[1] - tr.prev_center[1])
@@ -259,17 +294,18 @@ class IoUTracker:
         # create tracks for remaining unmatched boxes into free slots
         used = {t.slot for t in self.tracks}
         free_slots = [s for s in range(self.capacity) if s not in used]
-        for b in unmatched:
+        for i, b in enumerate(unmatched):
             if not free_slots:
                 break
             # Dropout-tolerant matching: prefer resurrecting a recently-evicted
             # identity over minting a new one.
             tid = self._resurrect(b)
             slot = free_slots.pop(0)
+            lab = u_labels[i] or ""
             if tid is not None:
-                tr = Track(track_id=tid, slot=slot, bbox=b, kind="unknown", last_seen=ts, confirmed=True)
+                tr = Track(track_id=tid, slot=slot, bbox=b, kind=kind_from_label(lab), label=lab, last_seen=ts, confirmed=True)
             else:
-                tr = Track(track_id=f"t{int(time.time()*1000)}-{slot}", slot=slot, bbox=b, kind="unknown", last_seen=ts)
+                tr = Track(track_id=f"t{int(time.time()*1000)}-{slot}", slot=slot, bbox=b, kind=kind_from_label(lab), label=lab, last_seen=ts)
             self.tracks.append(tr)
             used.add(slot)
 
