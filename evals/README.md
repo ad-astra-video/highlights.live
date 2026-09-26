@@ -25,6 +25,27 @@ research ADAAAA-4275 §6 and report pass/fail per metric with evidence.
 python3 evals/metrics_runner.py evals/label-manifest.json evals/fixtures/synthetic-pass.json
 ```
 
+## ADAAAA-4959 — paired VOD-vs-live scoring (first detail-first eval run)
+
+`metrics_runner.py` gained a paired mode for the ADAAAA-4940 §3 eval run: it
+scores the detail-first **VOD pass** trace against the **live baseline** trace
+on identical labels, plus the paired A4 out-depth gate (mean `D_vod > D_live`
+by >=10% relative, via the per-finding detail score `D_detail` from spec §3:
+
+`D_detail = w1·framesJudged + w2·evidence-cited + w3·reason-tokens +
+w4·event-window IoU`, 0-100).
+
+```bash
+python3 evals/metrics_runner.py --vod <vod-trace.json> --live <live-trace.json> \
+    evals/label-manifest.json
+```
+
+Runner self-check for the paired accounting (no ffmpeg/GPU):
+
+```bash
+python3 evals/tests/test_metrics_runner_depth.py  # or pytest evals/tests/test_metrics_runner_depth.py
+```
+
 ## Evidence status (updated each QA heartbeat)
 
 - Mechanism-level bars verified by the repo test suites on the integrated
