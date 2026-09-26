@@ -6,6 +6,10 @@ interface ObsTrack {
   slot: number;
   bbox: number[]; // [x1,y1,x2,y2] normalized 0..1
   kind: string;
+  // ADAAAA-5056: in-roster detector label on the tracked box. Prefer it over
+  // `kind` for display so the user sees "player 0" / "soccer ball 0", not
+  // "unknown 0".
+  label?: string;
   lostFrames: number;
   // INC-6 / ADAAAA-4330: on-demand find-and-track surfacing. The perceive
   // tracker marks the object a user chose to follow (selected) and reports how
@@ -125,8 +129,11 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
         ctx.fillStyle = color;
         ctx.font = "10px monospace";
         const acc = t.accuracy !== undefined && t.accuracy !== null ? ` ${Math.round(t.accuracy * 100)}%` : "";
+        // ADAAAA-5056: prefer the in-roster detector label over the coarse kind
+        // so the surfaced box reads "player 0" / "soccer ball 0", never "unknown 0".
+        const shown = (t.label?.trim() || t.kind) || "detection";
         ctx.fillText(
-          `${t.kind}#${t.slot}${selected ? " ●" : ""}${acc}`,
+          `${shown}#${t.slot}${selected ? " ●" : ""}${acc}`,
           x1 * FRAME_W,
           Math.max(10, y1 * FRAME_H - 4)
         );
@@ -154,9 +161,9 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
     if (!hit) return;
     try {
       const res = await api<{ ok: boolean; control?: { type: string; args: any } }>(`/jobs/${jobId}/control`, {
-        body: { type: "track", args: { bbox: hit.bbox, label: hit.kind, slot: hit.slot } },
+        body: { type: "track", args: { bbox: hit.bbox, label: hit.label?.trim() || hit.kind, slot: hit.slot } },
       });
-      setFollowing({ label: `${hit.kind}#${hit.slot}`, slot: hit.slot, ts: new Date().toISOString() });
+      setFollowing({ label: `${(hit.label?.trim() || hit.kind) || "detection"}#${hit.slot}`, slot: hit.slot, ts: new Date().toISOString() });
       setErr(null);
     } catch (e2: any) {
       setErr(`find-and-track: ${String(e2?.message || e2)}`);
@@ -195,7 +202,7 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
           )}
           {selectedTrack ? (
             <div className="mt-1 rounded bg-yellow/20 px-2 py-1 text-[11px] text-yellow">
-              ● following {selectedTrack.kind}#{selectedTrack.slot}
+              ● following {(selectedTrack.label?.trim() || selectedTrack.kind) || "detection"}#{selectedTrack.slot}
               {selectedTrack.accuracy !== undefined && selectedTrack.accuracy !== null
                 ? ` — ${Math.round(selectedTrack.accuracy * 100)}% on screen (${selectedTrack.ontoFrames ?? 0} frames)`
                 : ""}
