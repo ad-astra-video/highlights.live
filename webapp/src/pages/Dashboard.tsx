@@ -71,6 +71,10 @@ export function Dashboard() {
     try {
       await api(`/highlights/${id}/review`, { body: { status } });
       refreshHighlights().catch(() => {});
+      // Accepting/rejecting changes which clips consume the clip-count quota, so
+      // refresh the billing snapshot so the quota banner reflects accepted-only
+      // immediately after a review (a rejected clip releases its slot).
+      refreshBilling().catch(() => {});
     } catch (e: any) {
       setError(e.message);
     }
