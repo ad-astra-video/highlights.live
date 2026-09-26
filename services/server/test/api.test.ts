@@ -31,7 +31,7 @@ async function register(app: any, email: string, pw: string) {
 }
 
 describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () => {
-  it("register -> login -> run auth'd job -> review as admin", async () => {
+  it("register -> login -> run auth'd job -> review own highlight as user", async () => {
     const { app, cfg } = await buildTestApp();
     const userToken = await register(app, "a@test.dev", "password123");
     const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "a@test.dev", password: "password123" } });
@@ -63,15 +63,35 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     const other = await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${otherToken}` } });
     expect(other.json().highlights.length).toBe(0);
 
-    // review is admin-only
-    const userReview = await app.inject({
+    // the OWNER can review their own highlight (accept + reject), not admin-only
+    const userAccept = await app.inject({
       method: "POST",
       url: `/highlights/${myhl[0].id}/review`,
       headers: { authorization: `Bearer ${userToken}` },
       payload: { status: "accepted" },
     });
-    expect(userReview.statusCode).toBe(403);
+    expect(userAccept.statusCode).toBe(200);
+    expect(userAccept.json().status).toBe("accepted");
 
+    const userReject = await app.inject({
+      method: "POST",
+      url: `/highlights/${myhl[0].id}/review`,
+      headers: { authorization: `Bearer ${userToken}` },
+      payload: { status: "rejected" },
+    });
+    expect(userReject.statusCode).toBe(200);
+    expect(userReject.json().status).toBe("rejected");
+
+    // a user cannot review another user's highlight
+    const otherReview = await app.inject({
+      method: "POST",
+      url: `/highlights/${myhl[0].id}/review`,
+      headers: { authorization: `Bearer ${otherToken}` },
+      payload: { status: "accepted" },
+    });
+    expect(otherReview.statusCode).toBe(403);
+
+    // admin can still review any highlight
     const admin = await app.inject({ method: "POST", url: "/auth/login", payload: { email: cfg.adminEmail, password: cfg.adminPassword } });
     expect(admin.statusCode).toBe(200);
     const admintok = admin.json().token;
@@ -87,6 +107,63 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     // unauthenticated job -> 401
     const anon = await app.inject({ method: "POST", url: "/jobs", payload: { videoPath } });
     expect(anon.statusCode).toBe(401);
+
+    await app.close();
+  });
+
+  it("reject releases the clip-count slot; only accepted clips consume the limit (idempotent)", async () => {
+    const { app } = await buildTestApp({ BETA_CLIP_QUOTA: "10" });
+    const userToken = await register(app, "quota-rej@test.dev", "password123");
+
+    // A generated highlight debits the quota once.
+    const gen = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${userToken}` },
+      payload: { videoPath, gameHint: "valorant" },
+    });
+    expect(gen.statusCode).toBe(200);
+    const myhl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${userToken}` } })).json().highlights;
+    expect(myhl.length).toBe(1);
+
+    const status = async () => (await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${userToken}` } })).json();
+    expect((await status()).clipQuotaUsed).toBe(1);
+
+    // Reject -> the clip no longer counts toward the quota.
+    const rej = await app.inject({
+      method: "POST",
+      url: `/highlights/${myhl[0].id}/review`,
+      headers: { authorization: `Bearer ${userToken}` },
+      payload: { status: "rejected" },
+    });
+    expect(rej.statusCode).toBe(200);
+    expect(rej.json().status).toBe("rejected");
+    expect((await status()).clipQuotaUsed).toBe(0);
+    expect((await status()).clipQuotaRemaining).toBe(10);
+
+    // Idempotent: re-rejecting the already-rejected clip must not double-release (stays 0).
+    const rej2 = await app.inject({
+      method: "POST",
+      url: `/highlights/${myhl[0].id}/review`,
+      headers: { authorization: `Bearer ${userToken}` },
+      payload: { status: "rejected" },
+    });
+    expect(rej2.statusCode).toBe(200);
+    expect((await status()).clipQuotaUsed).toBe(0);
+
+    // Re-accepting a rejected clip re-consumes the released slot (consistency).
+    const acc = await app.inject({
+      method: "POST",
+      url: `/highlights/${myhl[0].id}/review`,
+      headers: { authorization: `Bearer ${userToken}` },
+      payload: { status: "accepted" },
+    });
+    expect(acc.statusCode).toBe(200);
+    expect((await status()).clipQuotaUsed).toBe(1);
+
+    // A rejected clip is removed from the public feed; an accepted one is present.
+    const feed = await app.inject({ method: "GET", url: "/feed" });
+    expect(feed.json().highlights.some((h: any) => h.id === myhl[0].id)).toBe(true); // accepted
 
     await app.close();
   });
