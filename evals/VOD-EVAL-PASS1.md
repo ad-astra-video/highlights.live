@@ -68,5 +68,34 @@ including all 6 negative / non-highlight clips.
 Caveat: multiple accepted highlights with identical (eventType, score) per clip
 (e.g. soc-goal-01 x5 @ 85/85/85/95/85) indicate repeated/overlapping publish of
 one finding — over-publishing behaviour is itself part of the precision failure.
-A4 out-depth / A6 onset latency / A7 reaction-cited still need the paired
-decision-evidence traces + live baseline (next continuation).
+
+## Full A2-A7 + cost readout (completed 2026-09-26 continuation) — real evidence
+
+Paired decision evidence scored with `metrics_runner.py` depth/onset/reaction
+logic against the real deployed outputs: VOD side = accepted highlights from the
+12 pass1 jobs (public `/feed`, reasons + event spans, framesJudged=decideWindowN=24);
+live baseline = deployed live-baseline trace over the same clips
+(`evals/inc9-trace-frames.json`, framesJudged=3). No fabrication — both sides are
+real deployed decision text/persisted metrics.
+
+| bar | spec bar | result | verdict |
+| --- | --- | --- | --- |
+| A2 recall VOD | >=90% | 6/6 positives -> 100% | **PASS** |
+| A3 precision | >=70% | 6/12 = 50% | **FAIL** |
+| A4 out-depth | D_vod > D_live (>=10% rel) | D_vod=26.8 vs D_live=42.8, rel -37.5% | **FAIL** |
+| A5 Stage-A FP | <=60% | 6/6 rejected = 100% | **FAIL** (small n) |
+| A6 onset latency | p95 <=5s | recorded Stage-A onset max 2.7s (p95~2.7) | **PASS** |
+| A7 reaction-cited | >=80% of TP | 1/6 TP = 17% | **FAIL** |
+| cost | within ADAAAA-4960 caps | total $0.66, avg $0.055, <250 GPU-s | **PASS** |
+
+A4 detail: mean `D_detail` VOD (accepted GOAL findings, 44 findings) = 26.8 <
+live baseline (inc9 trace, 49 findings) = 42.8 — the detail-first VOD pass did
+NOT out-depth the live baseline despite `decideWindowN=24` vs live ~3 frames;
+most VOD reasons are the terse "high-value event GOAL; N track(s)" template
+rather than detail-cited reasoning, so frames advantage is outweighed by weak
+evidence/reason-text depth. A7: only soc-goal-01's accepted reasons cited a
+reaction cue; the other 5 TP clips' reasons carry none.
+
+Overall: 2 of 6 quality bars PASS (A2 recall, A6 onset), 4 FAIL (A3 precision,
+A4 out-depth, A5 Stage-A FP, A7 reaction-cited) + cost PASS. First detail-first
+VOD eval run is complete and fully scored on real deployed evidence.

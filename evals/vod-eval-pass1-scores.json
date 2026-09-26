@@ -1,0 +1,15 @@
+{
+  "$comment": "ADAAAA-4959 first detail-first VOD eval run - final A2-A7 + cost scores, computed 2026-09-26 from REAL deployed evidence. VOD side = accepted highlights from the 12 pass1 jobs (public /feed: reasons + event spans, framesJudged=decideWindowN=24). Live baseline = deployed live trace over the same clips (evals/inc9-trace-frames.json, framesJudged=3). No synthetic/fabricated values.",
+  "scoredAt": "2026-09-26T15:40:00Z",
+  "bars": {
+    "A2_recallVod": {"spec": ">=90%", "gotPct": 100.0, "pass": true, "note": "6/6 positive clips produced an accepted GOAL highlight"},
+    "A3_precision": {"spec": ">=70%", "gotPct": 50.0, "pass": false, "note": "6/12 clips (all 6 negatives incl noise-traps) produced an accepted GOAL"},
+    "A4_outdepth": {"spec": "D_vod > D_live by >=10% rel", "dvMean": 26.8, "dvN": 44, "dlMean": 42.8, "dlN": 49, "relPct": -37.5, "pass": false, "note": "detail-first VOD did NOT out-depth live baseline despite decideWindowN=24"},
+    "A5_stageA_fp": {"spec": "<=60%", "gotPct": 100.0, "pass": false, "note": "6/6 Stage-A gate triggers rejected by Gemma (small n)"},
+    "A6_onset": {"spec": "p95 <=5s", "gotMaxS": 2.7, "pass": true, "note": "recorded Stage-A onset latency max 2.7s (p95~2.7)"},
+    "A7_reactionCited": {"spec": ">=80% of TP", "gotPct": 16.7, "pass": false, "note": "1/6 TP clips' accepted reasons cite a reaction cue"}
+  },
+  "cost": {"totalUsd": 0.66, "avgUsdPerClip": 0.055, "gate": "within ADAAAA-4960 caps (list $5 / avg $0.20 / GPU 7200s)", "pass": true},
+  "passCount": 3,
+  "failCount": 4
+}
