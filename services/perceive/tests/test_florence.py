@@ -1,6 +1,8 @@
 """Unit tests for Florence-2 OD output parsing (real <loc_> token format)."""
 import time
 
+import numpy as np
+
 from app import florence
 from app.florence import FlorenceDetector
 
@@ -290,3 +292,93 @@ def test_capability_slows_down_for_slow_card(monkeypatch):
     c = florence.capability()
     assert c["max_fps"] < 0.6
     assert c["sample_interval_s"] > 1.5
+
+
+# --- ADAAAA-5056: residual "unknown" label on the user-visible surface ---------
+#
+# The closed-vocab gate labels `objects` in-roster, but the boxes a user sees are
+# the tracker's tracks. This locks the joined behaviour: the track a detection
+# seeds must carry the gated label (and a derived kind), never a bare "unknown".
+
+
+class _LabeledFakeDetector:
+    """Mimics FlorenceDetector.detect() on a closed-vocab soccer frame: emits the
+    raw open-set <OD> label text carrying both an in-roster box and an
+    out-of-roster box (which the gate must drop)."""
+
+    def __init__(self, text):
+        self._text = text
+        self.stats = None
+
+    def load(self):
+        pass
+
+    def detect(self, image, vocabulary=None):
+        objs, stats = FlorenceDetector._parse_with_stats(self._text, vocabulary=vocabulary)
+        self.stats = stats
+        return objs
+
+
+def test_process_frame_track_carries_gated_label_not_unknown(monkeypatch):
+    """End-to-end at the pipeline boundary: a real closed-vocab Florence output
+    (player + a gated low-value 'mobile phone') must surface a track whose box
+    label is the in-roster 'player', and NO 'unknown' label on any track."""
+    from app import process_frame
+    from app.session import SessionRegistry
+    from app.tracker import IoUTracker
+
+    # A realistic Florence <OD> decode: person->player (in-roster), mobile
+    # phone (out-of-roster, must be gated by the closed vocab).
+    vocab = ["soccer ball", "player", "goalkeeper", "goal", "referee"]
+    text = (
+        "<s>person<loc_100><loc_200><loc_300><loc_400>"
+        "mobile phone<loc_500><loc_600><loc_700><loc_800>"
+    )
+
+    detector = _LabeledFakeDetector(text)
+    monkeypatch.setattr("app.get_detector", lambda: detector)
+    monkeypatch.setattr(florence, "get_detector", lambda: detector)
+
+    reg = SessionRegistry(max_sessions=1)
+    state = reg.get_or_create("sess-5056", "", "")
+    state.game_hint = "soccer"
+    state.prefer_labels = list(vocab)
+    state.last_rgb = np.zeros((60, 80, 3), dtype=np.uint8)
+    state.tracker = IoUTracker(capacity=3)
+
+    obs, cand = process_frame(
+        state, 1, 1.0, "ix."  # image b64 unused on the florence path (last_rgb used)
+    )
+
+    objs = obs["objects"]
+    # Gate active + working at the detection layer: only the in-roster box.
+    assert [o["label"] for o in objs] == ["player"], objs
+    assert detector.stats is not None and detector.stats["gated"] == 1
+
+    tracks = obs["tracks"]
+    assert tracks, "expected the in-roster detection to seed a track"
+    # The surfaced track carries the gated label, never "unknown".
+    assert all(t.get("label") for t in tracks), tracks
+    assert all(t["kind"] != "unknown" for t in tracks), tracks
+    assert all("unknown" not in (t.get("label") or "") for t in tracks), tracks
+
+
+def test_process_frame_no_vocabulary_keeps_open_set_labels(monkeypatch):
+    """Without a closed vocabulary the open-set label survives on the track
+    (legacy best-effort), but never the meaningless 'unknown' default."""
+    from app import process_frame
+    from app.session import SessionRegistry
+    from app.tracker import IoUTracker
+
+    detector = _LabeledFakeDetector("<s>person<loc_100><loc_200><loc_300><loc_400>")
+    monkeypatch.setattr("app.get_detector", lambda: detector)
+    monkeypatch.setattr(florence, "get_detector", lambda: detector)
+
+    reg = SessionRegistry(max_sessions=1)
+    state = reg.get_or_create("sess-5056b", "", "")
+    state.last_rgb = np.zeros((60, 80, 3), dtype=np.uint8)
+    state.tracker = IoUTracker(capacity=3)
+
+    obs, _ = process_frame(state, 1, 1.0, "ix.")
+    tracks = obs["tracks"]
+    assert tracks and tracks[0]["label"] == "person"

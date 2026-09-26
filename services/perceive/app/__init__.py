@@ -274,11 +274,16 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         except Exception as e:  # keep the pipeline alive if the GPU hiccups
             objects = [{"label": "error", "confidence": 0.0, "bbox": [0, 0, 0.001, 0.001]}]
             state.last_florence_error = str(e)
+        # Carry each detection's in-roster label alongside its bbox so the
+        # tracker seeds tracks with the gated label (not a hard-coded
+        # "unknown" the user then sees on the box) — ADAAAA-5056.
         boxes = [_norm_bbox(o["bbox"]) for o in objects if o.get("bbox")]
+        labels = [str(o.get("label", "") or "") for o in objects if o.get("bbox")]
     else:
         # stub path: background-diff blobs from the grayscale frame
         gray = _decode_gray(image_b64)
         boxes = foreground_blobs(gray, state.prev_gray)
+        labels = []
         state.prev_gray = gray
 
     if isinstance(state.tracker, HybridTracker) and state.last_rgb is not None:
@@ -290,13 +295,13 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 else None
             )
             state.tracker._detect = lambda rgb, _d=_d, _v=_v: [
-                _norm_bbox(o["bbox"])
+                {**o, "bbox": _norm_bbox(o["bbox"])}
                 for o in (_d.detect(rgb, vocabulary=_v) if _d else [])
                 if o.get("bbox")
             ]
-        tracks = state.tracker.step_frame(state.last_rgb, timestamp, boxes)
+        tracks = state.tracker.step_frame(state.last_rgb, timestamp, boxes, labels=labels)
     else:
-        tracks = state.tracker.step(boxes, timestamp)
+        tracks = state.tracker.step(boxes, timestamp, labels=labels)
     state.seq = seq
 
     # Ball-centric candidate signal (INC-2b): per-frame ball track ->
@@ -328,6 +333,9 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 "slot": t.slot,
                 "bbox": list(t.bbox),
                 "kind": t.kind,
+                # In-roster detector label (ADAAAA-5056): the box a user sees
+                # carries the gated label, never a bare "unknown".
+                **({"label": t.label} if t.label else {}),
                 "lostFrames": t.lost_frames,
                 **(
                     # INC-6 tracked-object semantics: surface selection persistence
