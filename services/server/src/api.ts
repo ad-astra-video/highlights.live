@@ -538,20 +538,23 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // so the UI can show remaining quota and so an exhausted quota is visible
       // without making a submission.
       clipQuotaPeriod: entitlements.periodKey(),
-      clipQuotaLimit: entitlements.limit,
+      clipQuotaLimit: entitlements.limitFor(sub),
       clipQuotaUsed: await entitlements.used(user.id),
-      clipQuotaRemaining: await entitlements.remaining(user.id),
+      clipQuotaRemaining: await entitlements.remaining(user.id, sub),
     };
   });
 
-  // --- dev wireframe billing (BILLING_WIREFRAME=1 only) ---------------------
+  // --- dev wireframe billing (BILLING_WIREFRAME=1, NON-PRODUCTION only) -----
   // Simulate the side effects the Stripe webhook would normally produce, so the
   // full subscription lifecycle can be exercised locally without real Stripe.
-  // These routes are MOUNTED ONLY when BILLING_WIREFRAME is set. When the flag
-  // is off (prod), the routes do not exist at all — Fastify answers 404
+  // These routes are MOUNTED ONLY when BILLING_WIREFRAME is set AND the server
+  // is not running in production (NODE_ENV != production). When either is
+  // false (prod default), the routes do not exist at all — Fastify answers 404
   // route-not-found — so the wireframe "free upgrade" surface is never
-  // reachable outside the dev simulator, regardless of auth or client.
-  if (cfg.billingWireframe) {
+  // reachable from a prod deploy, regardless of auth or client. The NODE_ENV
+  // check is the server-side env gate that keeps the simulator unreachable in
+  // prod even if BILLING_WIREFRAME is accidentally set in the deploy env.
+  if (cfg.billingWireframe && cfg.nodeEnv !== "production") {
     app.post("/dev/billing/activate", { preHandler: authReq }, async (req: any, reply) => {
       const user = (req as any).user;
       const sub = await db.setSubscription(user.id, {
@@ -591,24 +594,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     { preHandler: authReq },
     async (req, reply) => {
       const user = (req as any).user;
+      const sub = await db.getSubscription(user.id);
       // Budget hard-stop: reject at submission time as soon as the month's clip
       // quota is exhausted. This runs BEFORE any job is created or any compute
       // (Livepeer GPU / decide) is scheduled — quota overspend never runs a job.
       try {
-        await entitlements.canSubmit(user);
+        await entitlements.canSubmit(user, sub);
       } catch (e) {
         if (e instanceof QuotaExceededError) {
           return reply.code(429).send({
             error: "monthly clip quota used up — resets at the start of next month",
             code: "quota_exceeded",
             clipQuotaPeriod: entitlements.periodKey(),
-            clipQuotaLimit: entitlements.limit,
+            clipQuotaLimit: entitlements.limitFor(sub),
             clipQuotaRemaining: 0,
           });
         }
         throw e;
       }
-      const sub = await db.getSubscription(user.id);
       let billingBlocked = false;
       try {
         await billing.canCreateHighlight(user, sub);
@@ -679,22 +682,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // upload returns 413/415 and never reaches GPU.
   app.post("/jobs/upload", { preHandler: authReq }, async (req: any, reply) => {
     const user = req.user;
+    const sub = await db.getSubscription(user.id);
     // Budget hard-stop, identical to POST /jobs.
     try {
-      await entitlements.canSubmit(user);
+      await entitlements.canSubmit(user, sub);
     } catch (e) {
       if (e instanceof QuotaExceededError) {
         return reply.code(429).send({
           error: "monthly clip quota used up — resets at the start of next month",
           code: "quota_exceeded",
           clipQuotaPeriod: entitlements.periodKey(),
-          clipQuotaLimit: entitlements.limit,
+          clipQuotaLimit: entitlements.limitFor(sub),
           clipQuotaRemaining: 0,
         });
       }
       throw e;
     }
-    const sub = await db.getSubscription(user.id);
     let billingBlocked = false;
     try {
       await billing.canCreateHighlight(user, sub);

@@ -7,6 +7,24 @@ async function register(app: any, email: string, pw = "password123") {
 }
 
 describe("dev wireframe billing (BILLING_WIREFRAME=1)", () => {
+  // PROD GATE (server-side env gate): even when BILLING_WIREFRAME=1 is
+  // accidentally set in the deploy env, a production server (NODE_ENV =
+  // production) must NOT mount /dev/billing/*. The NODE_ENV check is the
+  // server-side gate that keeps the simulator unreachable in prod.
+  it("prod gate: /dev/billing/* stay 404 in production even if BILLING_WIREFRAME=1", async () => {
+    const { app } = await buildTestApp({ BILLING_WIREFRAME: "1", NODE_ENV: "production" });
+    const token = await register(app, "wprod@x.dev");
+    for (const url of ["/dev/billing/activate", "/dev/billing/deactivate", "/dev/billing/reset-usage"]) {
+      const r = await app.inject({ method: "POST", url, headers: { authorization: `Bearer ${token}` }, payload: {} });
+      expect(r.statusCode).toBe(404);
+    }
+    // no silent pro upgrade in prod
+    const st = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } });
+    expect(st.json().tier).toBe("free");
+    await app.close();
+  });
+
+
   // PROD GATE: when the wireframe flag is off (prod default), the /dev/billing/*
   // routes must not exist at all. Even with a valid token, activate/deactivate/
   // reset-usage all return 404 route-not-found, so the simulator's "free pro

@@ -7,8 +7,9 @@
 // submit a job (or run a decide) once the month's quota is exhausted, and a
 // "clip generated successfully" marks exactly one ledger debits (partial /
 // failed generations and in-submission retries never debit).
-import type { Db, User } from "./db";
+import type { Db, Subscription, User } from "./db";
 import type { ServerConfig } from "./config";
+import { PLANS } from "./billing";
 
 /** Thrown when the current month's clip quota is exhausted. Maps to HTTP 429
  * (assertable) with the remaining (0) so the client can surface it. */
@@ -38,14 +39,27 @@ export class EntitlementsService {
     return this.cfg.betaClipQuota;
   }
 
+  /**
+   * Monthly clip quota for a subscription: an active Paying (Pro) subscriber
+   * gets the Pro plan's included-highlights allowance (100/mo per PLANS);
+   * everyone else (free, canceled/past_due) stays on the free tier's monthly
+   * cap (10/mo per PLANS, aligned with the ledger's betaClipQuota default).
+   */
+  limitFor(sub: Subscription | null | undefined): number {
+    const pro = sub && sub.tier === "pro" && (sub.status === "active" || sub.status === "trialing");
+    if (pro) return PLANS.find((p) => p.id === "pro")?.includedHighlights ?? this.cfg.betaClipQuota;
+    return this.cfg.betaClipQuota;
+  }
+
   /** Clips generated successfully this month. */
   async used(userId: string, now: Date = new Date()): Promise<number> {
     return this.db.getQuota(userId, this.periodKey(now));
   }
 
-  /** Clips remaining this month (>= 0). */
-  async remaining(userId: string, now: Date = new Date()): Promise<number> {
-    return Math.max(0, this.limit - (await this.used(userId, now)));
+  /** Clips remaining this month (>= 0), tier-aware. */
+  async remaining(userId: string, sub?: Subscription | null, now: Date = new Date()): Promise<number> {
+    const limit = this.limitFor(sub);
+    return Math.max(0, limit - (await this.used(userId, now)));
   }
 
   /**
@@ -54,8 +68,8 @@ export class EntitlementsService {
    * before any job is created or any compute (Livepeer GPU) is scheduled. This
    * is what guarantees the "quota overspend never runs a job" invariant.
    */
-  async canSubmit(user: User, now: Date = new Date()): Promise<void> {
-    if ((await this.used(user.id, now)) >= this.limit) {
+  async canSubmit(user: User, sub?: Subscription | null, now: Date = new Date()): Promise<void> {
+    if ((await this.used(user.id, now)) >= this.limitFor(sub)) {
       throw new QuotaExceededError(this.periodKey(now));
     }
   }
