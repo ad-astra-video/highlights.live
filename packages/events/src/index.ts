@@ -279,6 +279,15 @@ export const StageAMetricsSnapshotSchema = z.object({
   // bounds each at <= 5 s; this verifies the live 1-5 s budget in aggregate.
   meanOnsetLatencyS: z.number().min(0),
   maxOnsetLatencyS: z.number().min(0),
+  // Latency percentiles p50 / p95 over the observed onset->fire samples (s),
+  // so the live 1-5 s acceptance budget is verified on the distribution, not
+  // just the mean/max. 0 when no latency sample was observed yet.
+  p50LatencyS: z.number().min(0).default(0),
+  p95LatencyS: z.number().min(0).default(0),
+  // Explicit gemma-call FP rate (ADAAAA-4785): gemma invocations judged with no
+  // true event (rejected) / total invocations on the noise-trigger path. Same
+  // value as fpRate but surfaced under the acceptance's exact metric name.
+  gemmaFpRate: z.number().min(0).max(1).default(0),
   // True when fpRate is within the <= 60% acceptance bound (cost gate passed).
   fpRateWithinBudget: z.boolean(),
 });
