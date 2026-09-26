@@ -38,6 +38,39 @@ def test_tracker_caps_at_capacity():
     assert {t.slot for t in trs} == {0, 1, 2}
 
 
+def test_tracker_seeds_tracks_with_in_roster_label_not_unknown():
+    """ADAAAA-5056: a track created from a closed-vocab detection must carry the
+    gated label (and a derived kind), never a hard-coded "unknown", so the box
+    the user sees on the frame reads "player"/"soccer ball" not "unknown"."""
+    tr = IoUTracker(capacity=3)
+    tracks = tr.step(
+        [(0.1, 0.1, 0.3, 0.3), (0.5, 0.5, 0.7, 0.7)],
+        ts=1.0,
+        labels=["player", "soccer ball"],
+    )
+    by_slot = {t.slot: t for t in tracks}
+    # player track
+    t0 = by_slot[0]
+    assert t0.label == "player"
+    assert t0.kind == "player"
+    # soccer ball track
+    t1 = by_slot[1]
+    assert t1.label == "soccer ball"
+    assert t1.kind == "ball"
+    # nothing labelled "unknown"
+    assert all(t.label != "unknown" for t in tracks)
+    assert "unknown" not in {t.kind for t in tracks}
+
+
+def test_tracker_labels_absent_keeps_legacy_default():
+    """Back-compat: when no labels are provided (stub path), tracks keep the
+    previous kind="unknown" default so existing behaviour is unchanged."""
+    tr = IoUTracker(capacity=2)
+    tracks = tr.step([(0.1, 0.1, 0.3, 0.3)], ts=1.0)
+    assert tracks[0].kind == "unknown"
+    assert tracks[0].label == ""
+
+
 def test_tracker_default_capacity_is_schema_ceiling():
     tr = IoUTracker()
     assert tr.capacity == MAX_TRACKS
