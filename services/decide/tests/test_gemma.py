@@ -236,14 +236,14 @@ def test_decide_with_gemma_forwards_track_evidence(monkeypatch):
 
 def test_highlight_endpoint_accepts_track_evidence(monkeypatch):
     from app import app
-    monkeypatch.setenv("DECIDE_MODE", "gemma")
+    monkeypatch.setenv("DECIDE_MODE", "rule")  # deterministic: no live Gemma
     c = TestClient(app)
     r = c.post(
         "/app/highlight",
         json={
             "sessionId": "s1", "eventType": "GOAL", "timestamp": 1.0,
             "gameHint": "soccer",
-            "evidence": {"trackCount": 3, "maxVelocity": 0.6, "ocrHits": 0,
+            "evidence": {"trackCount": 2, "maxVelocity": 0.6, "ocrHits": 0,
                          "reaction": {"crowdEnergy": 0.9, "audioKind": "burst",
                                       "humansInMotion": 4}},
             "trackEvidence": "baseline",
@@ -251,8 +251,8 @@ def test_highlight_endpoint_accepts_track_evidence(monkeypatch):
     )
     assert r.status_code == 200
     assert "isHighlight" in r.json()
-    # gyma unreachable in test -> rule fallback; still a valid decision
-    assert r.json()["source"] in ("rule-fallback", "gemma")
+    # forced DECIDE_MODE=rule -> deterministic 'rule' source; still a valid decision
+    assert r.json()["source"] == "rule"
 
 
 # --- decide_with_gemma against a mock llama-server ---------------------------
