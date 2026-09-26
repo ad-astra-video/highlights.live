@@ -16,11 +16,13 @@ import {
   decideOnCandidate,
   type AnalyzeEvent,
   type AnalyzerConfig,
+  type AnalyzeOutcome,
   type PipelineClient,
 } from "./analyzer";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { LiveIngest, type LiveKind } from "./live";
+import { extractVodAudioChunks } from "./vod-audio";
 import type { Db, MediaSession, AnalyticsSnapshot } from "./db";
 import { AuthService, BetaGateError, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError } from "./billing";
@@ -60,9 +62,15 @@ export async function resolveSampleFps(cfg: ServerConfig): Promise<number> {
   return Math.min(cfg.vodSampleMaxFps, Math.max(0.25, sampleFps));
 }
 
+/** Perceive persistent-session list price per hour (docker/runners.json
+ * perceives `$0.01/hr`). Used for the recorded per-video `costUsd` list cost on
+ * VOD jobs (ADAAAA-4954 spec §4.1). Flat hour unit, so session billing is
+ * proportional to perceiveSessionS. */
+const PERCEIVE_PER_HOUR_USD = 0.01;
+
 // Extension-based fallback for sources that ship a generic MIME (mpegts is
 // frequently served as application/octet-stream; some MP4s as audio/mp4).
-const VIDEO_UPLOAD_EXT = /\.(mp4|m4v|mov|webm|mkv|mpeg|mpg|ts|m2ts|mts)$/i;
+const VIDEO_UPLOAD_EXT = /\\.(mp4|m4v|mov|webm|mkv|mpeg|mpg|ts|m2ts|mts)$/i;
 /** Accept a browser upload when its declared type is a common video type
  * (mp4, mov, webm, matroska/mkv, mpegts). Clearly non-video uploads are
  * rejected with a readable message so they never reach GPU compute. */
@@ -342,10 +350,39 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // clip pipeline, storing generated highlights + clips. Shared by the server
   // path/URL POST /jobs route and the browser-upload POST /jobs/upload route so
   // both feed identical compute and quota/billing side effects.
+  //
+  // ADAAAA-4954 (detail-first build): the VOD pass now runs its decide pass in
+  // a SHARED LiveRunShared (exactly like the live path) and feeds audio through
+  // the Stage-A noise-change gate (/audio, pure DSP — no GPU) via a second
+  // ffmpeg decode of the file's audio track. It persists job.stageAMetrics and
+  // the per-video cost/volume fields (§4.5) so the FP-rate + budget gate are
+  // measured on VOD exactly as on live. The GPU eval run itself is spend-gated
+  // (PO budget-gate approval); this only wires + records the compute.
   async function runVodJob(job: { id: string; gameHint?: string; preferLabels?: string[] }, videoPath: string, user: any, sub: any) {
-    const frameDir = path.join(cfg.dataDir, "frames", job.id);
-    const sampleFps = await resolveSampleFps(cfg);
-    await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps);
+    const jobId = job.id;
+    const scheduledAt = new Date().toISOString();
+    const anaCfg: AnalyzerConfig = {
+      jobId,
+      clipBeforeS: cfg.clipBeforeS,
+      clipAfterS: cfg.clipAfterS,
+      gameHint: job.gameHint || cfg.gameHintDefault,
+      preferLabels: job.preferLabels,
+      // Detail-first knobs (ADAAAA-4954): deeper than live (2 fps / 640p / 24
+      // frame window). Opt into the temporal frames[] + audio decide payload.
+      sampleFps: cfg.vodDetailFps,
+      frameScale: cfg.vodFrameScale,
+      decideWindowN: cfg.vodDecideWindowN,
+    };
+    // Count candidates (video + audio) for the recorded decide/cost fields.
+    let candidatesTriggered = 0;
+    const baseHook = jobEventHook(jobId);
+    const onEvent: (ev: AnalyzeEvent) => void = (ev) => {
+      if (ev.type === "candidate") candidatesTriggered++;
+      baseHook(ev);
+    };
+    const frameDir = path.join(cfg.dataDir, "frames", jobId);
+    const sampleFps = cfg.vodDetailFps;
+    await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps, cfg.vodFrameScale);
     const clipDir = path.join(cfg.dataDir, "clips");
     const cut = async (ts: number) => {
       const clipId = randomUUID();
@@ -354,27 +391,86 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       return { clipId, clipUri: `/clips/${clipId}.mp4` };
     };
     const iter = buildAnalyzeFrames(frameDir, sampleFps)();
-    const outcome = await analyzeJob(
-      adapter,
-      iter,
-      cut,
-      {
-        jobId: job.id,
-        clipBeforeS: cfg.clipBeforeS,
-        clipAfterS: cfg.clipAfterS,
-        gameHint: job.gameHint || cfg.gameHintDefault,
-        preferLabels: job.preferLabels,
-      },
-      jobEventHook(job.id)
-    );
+    const t0 = Date.now();
+    // Reserve ONE perceive session shared by the video /analyze leg and the
+    // Stage-A audio /audio tap (same pattern as runLiveJob); analyzeJob stops
+    // it (and any re-reserves) in its finally. The shared LiveRunShared is
+    // passed so both legs anchor to the SAME frame window + evidence.
+    const initial = await adapter.reservePerceive();
+    const shared = new LiveRunShared({ decideWindowN: cfg.vodDecideWindowN });
+    // Drive the Stage-A audio tap from the VOD file's audio track in parallel
+    // with the video pass. Best-effort: no audio track or a dropped chunk never
+    // aborts the video look. When the gate fires, route the candidate through
+    // decide() on the anchored frame + detail-first frames/audio — the gate
+    // itself never decides and bills no GPU.
+    const audioLoop = (async () => {
+      try {
+        for await (const chunk of extractVodAudioChunks(cfg.ffmpegPath, videoPath)) {
+          shared.addAudioChunk(chunk.timestamp, chunk.samples);
+          try {
+            const cand = await adapter.postAudio(initial.sessionId, {
+              seq: chunk.seq,
+              timestamp: chunk.timestamp,
+              samples: chunk.samples,
+              streamId: jobId,
+            });
+            if (cand) {
+              candidatesTriggered++;
+              await decideOnCandidate(adapter, shared, cut, anaCfg, cand, onEvent, {
+                seq: chunk.seq,
+                timestamp: chunk.timestamp,
+              });
+            }
+          } catch {
+            /* gate best-effort — keep going */
+          }
+        }
+      } catch {
+        /* tap ended early — video leg unaffected */
+      }
+    })();
+    let outcome: AnalyzeOutcome;
+    try {
+      outcome = await analyzeJob(adapter, iter, cut, anaCfg, onEvent, initial, shared);
+    } finally {
+      await audioLoop;
+    }
     for (const h of outcome.highlights) {
       await store.addHighlight({ ...h, ownerId: user.id, status: cfg.autoPublishHighlights ? "accepted" : "pending" });
       await billing.onHighlightCreated(user, sub);
       // A clip generated successfully debits the quota once.
       await entitlements.onClipGenerated(user);
     }
-    await store.patchJob(job.id, { status: "done", perceiveSessionId: outcome.sessionId });
-    return { job: store.getJob(job.id), framesAnalyzed: outcome.framesAnalyzed };
+    const perceiveSessionS = (Date.now() - t0) / 1000;
+    const stageA = shared.stageA.snapshot();
+    // Each candidate (video or audio) is judged by exactly one Gemma decide()
+    // call here, so decideCalls == candidatesTriggered. Cost = fixed decide fee
+    // per call + the perceive session's hourly list price for its duration.
+    const decideCalls = candidatesTriggered;
+    const costUsd = cfg.decideFee * decideCalls + (perceiveSessionS / 3600) * PERCEIVE_PER_HOUR_USD;
+    await store.patchJob(jobId, {
+      status: "done",
+      perceiveSessionId: outcome.sessionId,
+      stageAMetrics: stageA,
+      sampleFps,
+      frameScale: cfg.vodFrameScale,
+      decideWindowN: cfg.vodDecideWindowN,
+      framesAnalyzed: outcome.framesAnalyzed,
+      candidatesTriggered,
+      decideCalls,
+      perceiveSessionS: Number(perceiveSessionS.toFixed(1)),
+      costUsd: Number(costUsd.toFixed(4)),
+      scheduledAt,
+      completedAt: new Date().toISOString(),
+    });
+    if (stageA.totalCandidates > 0) {
+      console.log(
+        `[vod:${jobId}] stageA fpRate=${stageA.fpRate} (${stageA.rejected}/${stageA.totalCandidates} rejected), ` +
+          `latency mean/max=${stageA.meanOnsetLatencyS}/${stageA.maxOnsetLatencyS}s, withinBudget=${stageA.fpRateWithinBudget}, ` +
+          `costUsd=${costUsd.toFixed(4)} (${decideCalls} decide @ $${cfg.decideFee}, ${perceiveSessionS.toFixed(0)}s perceive)`
+      );
+    }
+    return { job: store.getJob(jobId), framesAnalyzed: outcome.framesAnalyzed, costUsd, stageA };
   }
 
   app.get("/health", async () => ({ status: "ok", billing: billing.enabled ? "live" : "disabled" }));

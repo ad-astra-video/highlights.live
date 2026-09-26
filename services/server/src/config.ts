@@ -51,6 +51,18 @@ export interface ServerConfig {
    * itself; this ceiling only bounds GPU sampling toward the chartered
    * "3 live / 8 VOD" cadence. Default `VOD_SAMPLE_MAX_FPS` = 8. */
   vodSampleMaxFps: number;
+  /** Detail-first VOD sampling fps (ADAAAA-4954, spec §1 knob `sampleFps`).
+   * Deeper than the live 1 fps share; default 2. `VOD_DETAIL_FPS`. */
+  vodDetailFps: number;
+  /** Detail-first VOD frame scale for OD + decide image (spec knob
+   * `frameScale`, default 640:360 — higher-res than live 320:180).
+   * `VOD_FRAME_SCALE`. */
+  vodFrameScale: string;
+  /** Detail-first VOD decide temporal window length (spec knob
+   * `decideWindowN`, default 24 > live 16). Frames forwarded to decide()'s
+   * `frames[]` so Gemma reasons across a longer SEQUENCE per trigger.
+   * `VOD_DECIDE_WINDOW_N`. */
+  vodDecideWindowN: number;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -134,6 +146,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     clipAfterS: Number(env.CLIP_AFTER_S ?? 4),
     sampleIntervalSec: Number(env.SAMPLE_INTERVAL_SEC ?? 1.0),
     vodSampleMaxFps: Number(env.VOD_SAMPLE_MAX_FPS ?? 8),
+    vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 2),
+    vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
+    vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
     jwtSecret: env.JWT_SECRET ?? "dev-insecure-secret-change-me",
     resetTokenTtlSec: Number(env.RESET_TOKEN_TTL_SEC ?? 3600),
     authRateLimit: Number(env.AUTH_RATE_LIMIT ?? 30),

@@ -290,4 +290,28 @@ describe("Job + StageAMetricsSnapshot (INC-2 / ADAAAA-4325 slice 5: FP-rate metr
     expect(() => StageAMetricsSnapshotSchema.parse({ ...base, fpRate: 1.5 })).toThrow();
     expect(() => StageAMetricsSnapshotSchema.parse({ ...base, rejected: -1 })).toThrow();
   });
+
+  it("accepts the detail-first VOD cost/volume fields, all optional (ADAAAA-4954 §4.5)", () => {
+    const j = JobSchema.parse({
+      id: "job-vod",
+      source: "file",
+      status: "done",
+      createdAt: "2026-09-26T00:00:00Z",
+      sampleFps: 2,
+      frameScale: "640:360",
+      decideWindowN: 24,
+      framesAnalyzed: 10800,
+      candidatesTriggered: 14,
+      decideCalls: 14,
+      perceiveSessionS: 5400,
+      costUsd: 0.16,
+      scheduledAt: "2026-09-26T00:00:00Z",
+      completedAt: "2026-09-26T01:30:00Z",
+    });
+    expect(j.sampleFps).toBe(2);
+    expect(j.costUsd).toBe(0.16);
+    expect(j.decideWindowN).toBe(24);
+    // Old records without the fields still parse (no version bump).
+    expect(JobSchema.parse({ id: "j", source: "file", createdAt: "2026-09-24T00:00:00Z" }).costUsd).toBeUndefined();
+  });
 });

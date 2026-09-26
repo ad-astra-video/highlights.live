@@ -5,6 +5,7 @@ import {
   LiveRunShared,
   decideOnCandidate,
   SessionLostError,
+  pcmInt16ToWavB64,
   type PipelineClient,
 } from "../src/analyzer";
 
@@ -501,5 +502,101 @@ describe("Stage-A FP-rate metric on decideOnCandidate (INC-2 / ADAAAA-4325 slice
     expect(s.fpRateWithinBudget).toBe(true);
     expect(s.meanOnsetLatencyS).toBeCloseTo(0.3, 3); // both reported onsetLatencyS 0.3
     expect(shared.highlights).toHaveLength(1); // only the accepted one cut a clip
+  });
+});
+
+describe("detail-first VOD (ADAAAA-4954)", () => {
+  it("LiveRunShared respects the decideWindowN knob for its frame window size", () => {
+    const shared = new LiveRunShared({ decideWindowN: 4 });
+    for (let i = 0; i < 10; i++) shared.addFrame(i, i, `img${i}`);
+    // Only the last 4 frames are kept in the rolling anchor window.
+    expect(shared.framesWindow()).toHaveLength(4);
+    expect(shared.framesWindow().map((f) => f.base64)).toEqual(["img6", "img7", "img8", "img9"]);
+    // Default (live baseline) window is still the legacy 16.
+    const def = new LiveRunShared();
+    for (let i = 0; i < 20; i++) def.addFrame(i, i, `img${i}`);
+    expect(def.framesWindow()).toHaveLength(16);
+  });
+
+  it("pcmInt16ToWavB64 wraps int16 PCM into a valid mono 16 kHz WAV (RIFF/fmt/data)", () => {
+    // 4 samples of mono int16 LE (0, 0, 256, -256 -> 0x0100, 0xFF00).
+    const pcm = Buffer.from([0, 0, 0, 0, 0, 1, 0, 255]);
+    const wavB64 = pcmInt16ToWavB64(pcm.toString("base64"));
+    const wav = Buffer.from(wavB64, "base64");
+    expect(wav.subarray(0, 4).toString()).toBe("RIFF");
+    expect(wav.subarray(8, 12).toString()).toBe("WAVE");
+    expect(wav.subarray(12, 16).toString()).toBe("fmt ");
+    expect(wav.readUInt16LE(20)).toBe(1); // PCM
+    expect(wav.readUInt16LE(22)).toBe(1); // mono
+    expect(wav.readUInt32LE(24)).toBe(16_000); // sample rate
+    expect(wav.readUInt16LE(34)).toBe(16); // bits per sample
+    expect(wav.subarray(36, 40).toString()).toBe("data");
+    expect(wav.readUInt32LE(40)).toBe(4 * 2); // 4 samples * 2 bytes
+    expect(wav.length).toBe(44 + 8);
+  });
+
+  it("detail-first (decideWindowN set): forwards frames[] SEQUENCE + audio clip to decide", async () => {
+    let seen: any;
+    const { client } = fakeClient({
+      analyze: async () => ({
+        observation: { tracks: [], seq: 0, timestamp: 0 },
+        candidate: { eventType: "GOAL", timestamp: 0 },
+      }),
+      decide: async (_ev, opts) => {
+        seen = opts;
+        return { isHighlight: true, score: 80, eventType: "GOAL" };
+      },
+    });
+    const shared = new LiveRunShared({ decideWindowN: 4 });
+    shared.addAudioChunk(0, Buffer.from([0, 0, 1, 0]).toString("base64"));
+    await analyzeJob(
+      client,
+      frames(4),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 4 },
+      undefined,
+      undefined,
+      shared
+    );
+    expect(seen.frames).toBeDefined();
+    expect(seen.frames!.length).toBeGreaterThanOrEqual(1);
+    expect(seen.frames![0]).toMatchObject({ role: "full" });
+    expect(seen.audioB64).toBeTruthy(); // surrounding audio clip forwarded
+    expect(seen.imageB64).toBeDefined(); // anchored frame still present
+  });
+
+  it("live baseline (no decideWindowN): decide sees only the anchored single image, no frames/audio", async () => {
+    let seen: any;
+    const { client } = fakeClient({
+      analyze: async () => ({
+        observation: { tracks: [], seq: 0, timestamp: 0 },
+        candidate: { eventType: "GOAL", timestamp: 0 },
+      }),
+      decide: async (_ev, opts) => {
+        seen = opts;
+        return { isHighlight: true, score: 80, eventType: "GOAL" };
+      },
+    });
+    await analyzeJob(
+      client,
+      frames(2),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" }
+    );
+    expect(seen.frames).toBeUndefined();
+    expect(seen.audioB64).toBeUndefined();
+    expect(seen.imageB64).toBeDefined();
+  });
+
+  it("LiveRunShared audioClipB64 accumulates the ~10s rolling clip and trims old chunks", () => {
+    const shared = new LiveRunShared();
+    shared.addAudioChunk(0, Buffer.from([0, 0]).toString("base64"));
+    shared.addAudioChunk(1, Buffer.from([1, 0]).toString("base64"));
+    shared.addAudioChunk(2, Buffer.from([2, 0]).toString("base64"));
+    expect(shared.audioClipB64()).toBeTruthy();
+    // A far-later chunk trims chunks older than AUDIO_CLIP_KEEP_S (10 s).
+    shared.addAudioChunk(30, Buffer.from([3, 0]).toString("base64"));
+    const wav = Buffer.from(shared.audioClipB64(), "base64");
+    expect(wav.length).toBe(44 + 2); // only the t=30 chunk (2 bytes) survives
   });
 });

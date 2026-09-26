@@ -296,6 +296,20 @@ export const JobSchema = z.object({
   // Stage-A audio-gate metric snapshot (INC-2 / ADAAAA-4325); absent on VOD /
   // non-audio jobs and on older records.
   stageAMetrics: StageAMetricsSnapshotSchema.optional(),
+  // Detail-first VOD knobs + build-phase cost/volume record (ADAAAA-4954, spec
+  // §4.5). All optional on Job — additive, no contract version bump. Persisted
+  // by runVodJob so the per-video cost + FP gate are measurable exactly as on
+  // the live path.
+  sampleFps: z.number().positive().optional(),
+  frameScale: z.string().optional(),
+  decideWindowN: z.number().int().positive().optional(),
+  framesAnalyzed: z.number().int().min(0).optional(),
+  candidatesTriggered: z.number().int().min(0).optional(),
+  decideCalls: z.number().int().min(0).optional(),
+  perceiveSessionS: z.number().min(0).optional(),
+  costUsd: z.number().min(0).optional(),
+  scheduledAt: z.string().optional(),
+  completedAt: z.string().optional(),
   createdAt: z.string(),
 });
 export type Job = z.infer<typeof JobSchema>;
