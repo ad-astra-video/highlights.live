@@ -181,7 +181,10 @@ class HybridTracker:
         # seed empty slots from remaining detections (mode capacity)
         free = [s for s in range(self.capacity) if s not in self._prompts]
         for slot, b in zip(free, boxes):
-            self._iou.seed(b)
+            # ADAAAA-5069: reuse a recently-evicted identity when this box is a
+            # re-appearance (dropout-tolerant), so SAM re-detect does not mint a
+            # fresh track id and split a real object's ID.
+            tr = self._iou.seed_reuse_identity(b, ts=0.0)
             self._prompts[slot] = b
             self._miss[slot] = 0
 
