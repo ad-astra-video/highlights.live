@@ -51,3 +51,22 @@ baseline) over the same clips; those traces are produced by driving
 perceive+decide directly (drive_inc8-style) and fed to the paired
 `metrics_runner.py --vod <trace> --live <trace>` scorer. Pending the baseline
 leg + scoring pass.
+
+## Scored bars (real /feed outcomes of this pass, verified jobId + 15:21-15:22Z attribution)
+
+Every one of the 12 jobs produced >=1 **accepted** GOAL highlight (auto-publish on),
+including all 6 negative / non-highlight clips.
+
+- **A2 recall (VOD >= 90%): 6/6 positives produced an accepted GOAL -> 100% PASS**
+  TP clips: soc-goal-01..04, soc-near-01..02.
+- **A3 precision (>= 70%): 6/12 = 50% FAIL** — all 6 negatives (soc-off-01/02,
+  soc-warm-01/02, soc-lull-01, soc-replay-01) yielded an accepted GOAL (6 FPs).
+  Both noise-traps (commentary_lull, replay_loop) tripped.
+- **A5 Stage-A FP-rate (<= 60%): 6/6 rejected = 100% FAIL** (small sample).
+- Cost within ADAAAA-4960 caps (total $0.66 / avg $0.055 / <250 GPU-sec).
+
+Caveat: multiple accepted highlights with identical (eventType, score) per clip
+(e.g. soc-goal-01 x5 @ 85/85/85/95/85) indicate repeated/overlapping publish of
+one finding — over-publishing behaviour is itself part of the precision failure.
+A4 out-depth / A6 onset latency / A7 reaction-cited still need the paired
+decision-evidence traces + live baseline (next continuation).
