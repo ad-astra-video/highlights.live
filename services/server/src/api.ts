@@ -42,9 +42,14 @@ import { composeInviteEmail } from "./invites";
  * so CPU safely stays at 1 fps on its own; here we honor the runner's reported
  * interval and bound it only by `vodSampleMaxFps`.
  */
-export async function resolveSampleFps(cfg: ServerConfig): Promise<number> {
-  // Base: the configured interval (used when perceive is unreachable).
-  let sampleFps = 1 / Math.max(0.2, cfg.sampleIntervalSec);
+export async function resolveSampleFps(
+  cfg: ServerConfig,
+  defaultFps?: number
+): Promise<number> {
+  // Base: the configured default fps (VOD: `vodSampleFpsDefault`, default 5;
+  // ADAAAA-5059) else the configured interval (live: sampleIntervalSec). Used
+  // when perceive is unreachable.
+  let sampleFps = defaultFps ?? 1 / Math.max(0.2, cfg.sampleIntervalSec);
   if (cfg.perceiveUrl) {
     try {
       const h = (await (await fetch(`${cfg.perceiveUrl}/health`)).json()) as any;
@@ -346,9 +351,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // clip pipeline, storing generated highlights + clips. Shared by the server
   // path/URL POST /jobs route and the browser-upload POST /jobs/upload route so
   // both feed identical compute and quota/billing side effects.
-  async function runVodJob(job: { id: string; gameHint?: string; preferLabels?: string[] }, videoPath: string, user: any, sub: any) {
+  async function runVodJob(job: { id: string; gameHint?: string; preferLabels?: string[]; sampleFps?: number }, videoPath: string, user: any, sub: any) {
     const frameDir = path.join(cfg.dataDir, "frames", job.id);
-    const sampleFps = await resolveSampleFps(cfg);
+    // ADAAAA-5059: VOD defaults to 5 fps (`vodSampleFpsDefault`); a per-job
+    // override (`job.sampleFps`) wins when provided, still bounded by the
+    // runner capability and `vodSampleMaxFps` in resolveSampleFps.
+    const sampleFps = await resolveSampleFps(cfg, job.sampleFps ?? cfg.vodSampleFpsDefault);
     await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps);
     const clipDir = path.join(cfg.dataDir, "clips");
     const cut = async (ts: number) => {
@@ -656,7 +664,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   });
 
   // --- pipeline (auth + billing gated) ---
-  app.post<{ Body: { source?: string; videoPath?: string; gameHint?: string; preferLabels?: string[] } }>(
+  app.post<{ Body: { source?: string; videoPath?: string; gameHint?: string; preferLabels?: string[]; sampleFps?: number } }>(
     "/jobs",
     { preHandler: authReq },
     async (req, reply) => {
@@ -699,6 +707,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         sourceUrl: videoPath,
         gameHint: req.body.gameHint || cfg.gameHintDefault,
         preferLabels: req.body.preferLabels ?? [],
+        sampleFps: req.body.sampleFps,
       });
       await store.patchJob(job.id, { status: "active" });
       if (req.body.source === "browser") {
@@ -835,6 +844,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     await mkdir(dir, { recursive: true });
     await rename(stagePath, finalPath);
 
+    let sampleFps: number | undefined;
+    try {
+      const raw = fv(fields.sampleFps);
+      if (raw) sampleFps = Number(raw);
+    } catch {
+      sampleFps = undefined;
+    }
+
     const job = await store.createJob({
       id: jobId,
       ownerId: user.id,
@@ -842,6 +859,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sourceUrl: finalPath,
       gameHint,
       preferLabels,
+      sampleFps,
     });
     await store.patchJob(job.id, { status: "active" });
     try {

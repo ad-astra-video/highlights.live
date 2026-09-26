@@ -302,6 +302,10 @@ export const JobSchema = z.object({
   preferLabels: z.array(z.string()).default([]),
   status: z.enum(["queued", "active", "done", "failed"]).default("queued"),
   perceiveSessionId: z.string().optional(),
+  // Per-job VOD sampling override (ADAAAA-5059). When present, overrides the
+  // `vodSampleFpsDefault` config for this job; still bounded by runner
+  // capability and `vodSampleMaxFps` in resolveSampleFps.
+  sampleFps: z.number().positive().optional(),
   // Stage-A audio-gate metric snapshot (INC-2 / ADAAAA-4325); absent on VOD /
   // non-audio jobs and on older records.
   stageAMetrics: StageAMetricsSnapshotSchema.optional(),

@@ -36,12 +36,25 @@ export interface ServerConfig {
   vodMaxUploadBytes: number;
   ffmpegPath: string;
   gameHintDefault: string;
+  /** Target window (seconds) around the flagged event for a delivered highlight
+   * clip. cutClip trims `[event - clipBeforeS, event + clipAfterS]`, so the
+   * total delivered clip is `clipBeforeS + clipAfterS` seconds centered on the
+   * event. ADAAAA-5059: defaults were 4/4 (an 8s window that read as the whole
+   * segment); reduced to 2/2 (4s, "the moment") — short enough to read as the
+   * flagged moment while keeping pre-roll context and post-roll reaction.
+   * Tunable per-deployment via CLIP_BEFORE_S / CLIP_AFTER_S; recommended window
+   * is ~1.5-2s each side of the event. */
   clipBeforeS: number;
   clipAfterS: number;
   /** Seconds between frames when the perceive runner's capability can't be
    * queried (orchestrator mode); with PERCEIVE_URL set the runner's measured
    * sample_interval_s is used instead. */
   sampleIntervalSec: number;
+  /** Default VOD source sampling rate (frames/second). ADAAAA-5059: raised to
+   * 5 (from the previous 1 fps fallback) so a brief high-value moment (a soccer
+   * goal) is sampled densely enough to fire a candidate; still bounded above by
+   * `vodSampleMaxFps` (8) and overridable per job. */
+  vodSampleFpsDefault: number;
   /** Hard ceiling on VOD source sampling (frames/second) when the perceive
    * runner reports it can sustain more than `sampleIntervalSec`. ADAAAA-3726:
    * VOD sampling was previously hard-capped at 1 fps regardless of device,
@@ -130,9 +143,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodMaxUploadBytes: Number(env.VOD_MAX_UPLOAD_BYTES ?? 2147483648),
     ffmpegPath: env.FFMPEG_PATH ?? "ffmpeg",
     gameHintDefault: env.GAME_HINT ?? "unspecified",
-    clipBeforeS: Number(env.CLIP_BEFORE_S ?? 4),
-    clipAfterS: Number(env.CLIP_AFTER_S ?? 4),
+    // ADAAAA-5059: trim the delivered highlight to a defined window around the
+    // flagged event (~2s pre-roll + ~2s post-roll = 4s total) instead of the
+    // previous 8s window that read as the whole segment. Tunable via env.
+    clipBeforeS: Number(env.CLIP_BEFORE_S ?? 2),
+    clipAfterS: Number(env.CLIP_AFTER_S ?? 2),
     sampleIntervalSec: Number(env.SAMPLE_INTERVAL_SEC ?? 1.0),
+    // ADAAAA-5059: VOD default sampling moved up to 5 fps (from the previous
+    // 1 fps fallback); still bounded above by VOD_SAMPLE_MAX_FPS (8) and
+    // overridable per job. Keep the live path's sampleIntervalSec untouched.
+    vodSampleFpsDefault: Number(env.VOD_SAMPLE_FPS_DEFAULT ?? 5),
     vodSampleMaxFps: Number(env.VOD_SAMPLE_MAX_FPS ?? 8),
     jwtSecret: env.JWT_SECRET ?? "dev-insecure-secret-change-me",
     resetTokenTtlSec: Number(env.RESET_TOKEN_TTL_SEC ?? 3600),
