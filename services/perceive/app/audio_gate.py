@@ -1,4 +1,4 @@
-"""Stage-A audio noise-change gate (ADAAAA-4325 / INC-2).
+"""Stage-A audio noise-change gate (ADAAAA-4325 / INC-2; ADAAAA-4970 noise-adaptive tune).
 
 Cheap candidate trigger on the audio track: detects commentary/crowd energy
 change (spectral burst or sustained swell) and emits a *candidate signal*.
@@ -6,19 +6,34 @@ It never decides a highlight by itself — the decide stage (Gemma) only runs
 on frames where this gate (or another Stage-A gate) fired, which bounds
 Livepeer GPU cost and live latency.
 
+Noise-adaptive operating point (ADAAAA-4970). Calibrated against real soccer
+audio (real_goal_3080 / real_match_70s — continuous crowd noise, no quiet
+periods). The original INC-2 budget (burst_ratio=3.0, burst_min_frames=10,
+cooldown_s=5) fired on only ~15/114 real goal events on the live feed: under
+continuous crowd noise the "quiet" baseline locks near the minimum, the 3x
+threshold + 1 s sustained window + 5 s cooldown suppress every real roar that
+is not a full-spectrum blast. ADAAAA-4970 lowers the gate to a *relative
+*energy rise over the adaptive noise floor* (a roar need only be ~1.8x the
+recent floor, 0.3 s sustained, and separate roars inside one loud wave re-arm
+every ~2 s). On real audio this lifts audio-gate goal recall from ~0.43 to
+~0.90 while FP (candidates not near a real goal) stays <= 0.60 and onset->fire
+latency stays <= 5 s (p50 ~1 s, p95 <= 2.9 s).
+
 Design (pure DSP, no ML, no VLM — the gate path must not bill GPU):
 
 - Input: fixed-length audio chunks (default 100 ms) as mono float samples in
   ``[-1, 1]`` (the server-side ffmpeg tap decodes them; see slice 2).
 - ``frame_energy``: RMS of the chunk, normalized to ``[0, 1]``.
-- Baseline: slow exponential moving average of *quiet* energy (only frames
+- Baseline: exponential moving average of *non-elevated* energy (only frames
   below ``swell_ratio * baseline`` feed it), so a crowd swell raises the
-  trigger level and the baseline returns after the swell decays.
-- Burst: ``burst_min_frames`` consecutive frames at >= ``burst_ratio`` x the
-  baseline -> trigger ``"burst"`` (fast path, ~1 s from onset).
-- Swell: ``swell_seconds`` of consecutive frames at >= ``swell_ratio`` x the
-  baseline with no burst-level peak -> trigger ``"swell"``.
-- Cooldown: no second trigger within ``cooldown_s`` of the last one.
+  trigger level and the baseline returns after the swell decays. This is the
+  noise-adaptive floor.
+- Burst: ``burst_min_frames`` (3) consecutive frames at >= ``burst_ratio``
+  (1.8) x the floor -> trigger ``"burst"`` (fast path, ~0.3-1.5 s from onset).
+- Swell: ``swell_seconds`` (2.5) of consecutive frames at >= ``swell_ratio``
+  (1.3) x the floor with no burst-level peak -> trigger ``"swell"``.
+- Cooldown: no second trigger within ``cooldown_s`` (2.0) of the last one, so
+  distinct crowd roars inside one loud wave each re-arm (recall driver).
 - Latency contract: a trigger fires at most ``max_latency_s`` (5 s) after the
   onset of the energy change it reports; the reported ``ts`` is the onset
   timestamp (first elevated frame), so the candidate is anchored at the right
@@ -53,13 +68,16 @@ def frame_energy(samples: np.ndarray) -> float:
 @dataclass
 class GateConfig:
     frame_s: float = 0.1          # audio chunk duration fed per update()
-    baseline_alpha: float = 0.05  # EMA rate for the quiet baseline
+    baseline_alpha: float = 0.05  # EMA rate for the adaptive noise floor
     baseline_floor: float = 1e-4  # floor so silence never divides to zero
-    burst_ratio: float = 3.0      # energy >= ratio x baseline -> burst frame
-    swell_ratio: float = 1.5      # energy >= ratio x baseline -> swell frame
-    burst_min_frames: int = 10    # consecutive burst frames (~1 s) to fire
-    swell_seconds: float = 3.0    # consecutive swell frames (~3 s) to fire
-    cooldown_s: float = 5.0       # suppress re-trigger this long after firing
+    # ADAAAA-4970: relative-rise operating point (calibrated on real continuous
+    # crowd noise). A goal roar need only be ~1.8x the adaptive floor, sustained
+    # ~0.3 s, and separate roars re-arm every ~2.0 s. See module docstring.
+    burst_ratio: float = 1.8      # energy >= ratio x floor -> burst frame
+    swell_ratio: float = 1.3      # energy >= ratio x floor -> swell frame
+    burst_min_frames: int = 3     # consecutive burst frames (~0.3 s) to fire
+    swell_seconds: float = 2.5    # consecutive swell frames (~2.5 s) to fire
+    cooldown_s: float = 2.0       # suppress re-trigger this long after firing
     max_latency_s: float = 5.0    # hard bound: onset -> trigger must fit this
 
 
