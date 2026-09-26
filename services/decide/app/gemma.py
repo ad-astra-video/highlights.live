@@ -80,8 +80,14 @@ TRACK_EVIDENCE_DEFAULT = "auto"
 
 
 def _resolve_track_evidence(per_request: str | None) -> str:
+    """Resolve the effective A/B arm.
+
+    Explicit per-request arm (on/off/baseline) wins. An empty/"auto" per-request
+    value means "not specified" and falls through to the DECIDE_TRACK_EVIDENCE
+    env override, then to the default. (so setting the env var selects the arm
+    when callers that pass the default auto value are running)."""
     val = (per_request or "").strip().lower()
-    if val in ("auto", "on", "off", "baseline"):
+    if val in ("on", "off", "baseline"):
         return val
     env = os.environ.get("DECIDE_TRACK_EVIDENCE", "").strip().lower()
     if env in ("on", "off", "baseline"):

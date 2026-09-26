@@ -30,7 +30,8 @@ def test_health():
     assert r.json()["status"] == "ok"
 
 
-def test_highlight_endpoint():
+def test_highlight_endpoint(monkeypatch):
+    monkeypatch.setenv("DECIDE_MODE", "rule")  # deterministic: no live Gemma
     r = client.post(
         "/app/highlight",
         json={
@@ -47,10 +48,11 @@ def test_highlight_endpoint():
     assert body["eventType"] == "KILL"
 
 
-def test_highlight_endpoint_accepts_reaction_evidence():
+def test_highlight_endpoint_accepts_reaction_evidence(monkeypatch):
     # INC-4 / ADAAAA-4328: the decide endpoint must accept the reaction evidence
     # block without 422 (pydantic parses it). Rule mode ignores reaction for the
     # score but must not reject the payload — the strict-JSON contract holds.
+    monkeypatch.setenv("DECIDE_MODE", "rule")  # deterministic: no live Gemma
     r = client.post(
         "/app/highlight",
         json={
