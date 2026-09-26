@@ -1,5 +1,10 @@
 export interface ServerConfig {
   port: number;
+  /** "production" | "development" | "test" (alias of NODE_ENV). Used as the
+   * server-side env gate that keeps dev-only surfaces (e.g. the /dev/billing
+   * wireframe simulator) unreachable in prod even if their env flag is
+   * accidentally set. */
+  nodeEnv: string;
   /** Orchestrator public URL (offchain lab) or gateway URL. */
   orchestratorUrl: string;
   /** When set, bypass the orchestrator and call runners directly (dev). */
@@ -118,6 +123,7 @@ export interface ServerConfig {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   return {
     port: Number(env.PORT ?? 3000),
+    nodeEnv: env.NODE_ENV ?? "development",
     orchestratorUrl: env.ORCHESTRATOR_URL ?? "http://127.0.0.1:8935",
     perceiveUrl: env.PERCEIVE_URL,
     decideUrl: env.DECIDE_URL,

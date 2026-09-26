@@ -164,6 +164,23 @@ export class BillingService {
         await this.activateFromSubscription(meta.userId, event.data.object.subscription);
         break;
       }
+      case "invoice.paid": {
+        // A subscription invoice was paid -> confirm the entitlement stays
+        // active (billing.success_url already handled checkout.session.completed;
+        // invoice.paid covers renewals and ensures status doesn't drift to
+        // past_due while the card is good).
+        const inv = event.data.object as any;
+        const subId = inv.subscription as string | null;
+        const customerId = inv.customer as string | undefined;
+        const meta = event.data.object?.metadata || {};
+        if (subId) {
+          await this.activateFromSubscription(meta.userId, subId);
+        } else if (customerId) {
+          // No subscription id on record (rare) -> resolve by customer.
+          await this.activateFromCustomer(customerId);
+        }
+        break;
+      }
       case "customer.subscription.updated":
       case "customer.subscription.created": {
         const meta = event.data.object.metadata || {};
@@ -179,6 +196,17 @@ export class BillingService {
         break;
     }
     return { handled: event.type };
+  }
+
+  /** Resolve a user's subscription by Stripe customer id and persist it. Used
+   * by webhooks that carry a customer but no subscription id (invoice.paid). */
+  private async activateFromCustomer(customerId: string | undefined): Promise<void> {
+    if (!customerId) return;
+    const subs = await this.stripe.subscriptions.list({ customer: customerId, status: "all", limit: 1 });
+    const head = subs?.data?.[0];
+    if (!head) return;
+    const userId = head.metadata?.userId;
+    await this.activateFromSubscription(userId, head.id);
   }
 
   /** Fetch the subscription from Stripe and persist tier/status + overage item. */
