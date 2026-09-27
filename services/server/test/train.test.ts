@@ -16,6 +16,10 @@ const SAMPLES = [
   { image: "/srv/frames/b.png", labels: [{ label: "player", bbox: [0.2, 0.2, 0.7, 0.55] }] },
 ];
 
+function sha256(buf: Buffer): string {
+  return createHash("sha256").update(buf).digest("hex");
+}
+
 describe("train trigger (ADAAAA-5262)", () => {
   it("board user starts a fine-tune and sees it complete (result surfaced)", async () => {
     const { app, db } = await buildTestApp();
@@ -92,10 +96,6 @@ describe("train trigger (ADAAAA-5262)", () => {
 });
 
 describe("train artifact delivery (ADAAAA-5323)", () => {
-  function sha256(buf: Buffer): string {
-    return createHash("sha256").update(buf).digest("hex");
-  }
-
   it("serves a run-scoped LoRA download with an integrity hash, company-scoped", async () => {
     const trainArtifactRoot = mkdtempSync(path.join(tmpdir(), "hl-art-"));
     const adapterBytes = Buffer.from("fake-lora-safetensors-bytes-".repeat(3));
@@ -220,5 +220,56 @@ describe("curated manifest trigger (ADAAAA-5323)", () => {
     });
     expect(res.statusCode).toBe(422);
     expect(res.json().code).toBe("no_curated_manifest");
+  });
+
+  it("end-to-end: annotation loop publishes manifests (A) → curated trigger (B) → artifact downloaded with verified hash", async () => {
+    // Stage a fake LoRA adapter the "runner" will produce.
+    const trainArtifactRoot = mkdtempSync(path.join(tmpdir(), "hl-art-e2e-"));
+    const adapterBytes = Buffer.from("e2e-lora-adapter-bytes");
+    writeFileSync(path.join(trainArtifactRoot, "Florence-2-base-finetuned-r1.safetensors"), adapterBytes);
+    const expectedSha = sha256(adapterBytes);
+    const rover = { ...fakePipeline(), async train(_r: any) { return { run: "r1", checkpoint: "/runs/r1/model.safetensors", adapter: "/runs/r1/model.safetensors", artifact: { filename: "Florence-2-base-finetuned-r1.safetensors", sha256: expectedSha, size: adapterBytes.length }, eval: { eval: "completed", precision: 0.9, recall: 0.87, f1: 0.885 } }; } };
+
+    const { app } = await buildTestApp({ TRAIN_ARTIFACT_ROOT: trainArtifactRoot }, { adapter: rover });
+    const token = await register(app, "e2e@test.dev", "password123");
+
+    // [A] Publish curated manifests via the annotation-loop route (/training/manifests).
+    const curatedSample = {
+      id: "frame-0001",
+      imageRef: "data/training/extract/b1/frame_0001.jpg",
+      width: 1280,
+      height: 720,
+      objects: [{ label: "player", bbox: [0.1, 0.2, 0.3, 0.4] }],
+    };
+    const pub = await app.inject({
+      method: "POST",
+      url: "/training/manifests",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { train: [curatedSample], val: [curatedSample] },
+    });
+    expect(pub.statusCode).toBe(200);
+
+    // [B] The fine-tune trigger sees the curated data and launches from it.
+    const info = await app.inject({ method: "GET", url: "/train/curated", headers: { authorization: `Bearer ${token}` } });
+    expect(info.json().curated.present).toBe(true);
+    expect(info.json().curated.trainCount).toBe(1);
+
+    const started = await app.inject({
+      method: "POST",
+      url: "/train",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { manifestSource: "curated", epochs: 2 },
+    });
+    expect(started.statusCode).toBe(200);
+    const run = started.json().run;
+    expect(run.status).toBe("done");
+    expect(run.result?.artifact?.downloadPath).toBe(`/train/${run.id}/artifact`);
+    expect(JSON.parse(run.manifest.split("\n")[0]).imageRef).toBe(curatedSample.imageRef);
+
+    // [Delivery] user downloads the LoRA artifact; bytes + hash verified.
+    const dl = await app.inject({ method: "GET", url: `/train/${run.id}/artifact`, headers: { authorization: `Bearer ${token}` } });
+    expect(dl.statusCode).toBe(200);
+    expect(dl.headers["x-checksum-sha256"]).toBe(expectedSha);
+    expect(Buffer.from(dl.body as any)).toEqual(adapterBytes);
   });
 });

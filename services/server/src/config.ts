@@ -211,7 +211,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     adminPassword: env.ADMIN_PASSWORD ?? "admin",
     webappDist: env.WEBAPP_DIST || "",
     trainArtifactRoot: env.TRAIN_ARTIFACT_ROOT || path.join(env.DATA_DIR ?? "data", "train-artifacts"),
-    curatedManifestDir: env.CURATED_MANIFEST_DIR || path.join(env.DATA_DIR ?? "data", "curated"),
+    // Increment A (the annotation loop) publishes curated train/val manifests
+    // to <dataDir>/../evals via /training/manifests — this is the default feed
+    // dir the fine-tune curated trigger reads from.
+    curatedManifestDir: env.CURATED_MANIFEST_DIR || path.join(env.DATA_DIR ?? "data", "..", "evals"),
     databasePath: env.DATABASE_PATH ?? "data/highlights.db",
     databaseUrl: env.DATABASE_URL,
     databaseBackupDir: env.DATABASE_BACKUP_DIR ?? "data/backups",
