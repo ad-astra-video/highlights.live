@@ -12,6 +12,7 @@ Served by: uvicorn run:app --host 0.0.0.0 --port 8083  (see Dockerfile.train).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -61,6 +62,45 @@ def load_json(path: Path) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception:  # missing / partial file -> treat as no report
         return {}
+
+
+def sha256_file(path: Path) -> str:
+    """Hex SHA-256 of a file (streamed; fine for multi-GB safetensors)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def artifact_meta(checkpoint: str, adapter: str | None, out_dir: Path) -> dict | None:
+    """Emit the run-scoped downloadable artifact metadata (filename + integrity
+    hash) for the LoRA adapter the runner just produced. Prefers the single-file
+    `*.safetensors` adapter (the plan artifact); falls back to the checkpoint
+    dir's adapter file. Used by the server to offer a download, not a path."""
+    candidate = None
+    if adapter:
+        candidate = Path(adapter)
+    if candidate is None or not candidate.is_file():
+        # checkpoint may be a file (safetensors) or a merged dir
+        cp = Path(checkpoint)
+        if cp.is_dir():
+            for name in ("adapter_model.safetensors", "model.safetensors"):
+                p = cp / name
+                if p.is_file():
+                    candidate = p
+                    break
+        elif cp.is_file():
+            candidate = cp
+    if candidate is None or not candidate.is_file():
+        return None
+    size = candidate.stat().st_size
+    return {
+        "filename": candidate.name,
+        "sha256": sha256_file(candidate),
+        "size": size,
+        "contentType": "application/octet-stream",
+    }
 
 
 def extract_metrics(report: dict) -> dict:
@@ -153,6 +193,24 @@ def train(req: TrainRequest) -> dict:
         "adapter": adapter,
         "out": str(out_dir),
         "eval": eval_info,
+        "artifact": artifact_meta(checkpoint, adapter, out_dir),
         "epochs": req.epochs,
         "batch_size": req.batch_size,
     }
+
+
+@app.get("/app/artifact")
+def artifact(run: str = "") -> dict:
+    """Run-scoped artifact download metadata (ADAAAA-5323). The server/deploy
+    pulls the LoRA for a run from here when it is not already staged under its
+    own artifact root. Requires the run's summary to have been written."""
+    if not run:
+        raise HTTPException(status_code=422, detail="run required")
+    out_dir = Path(TRAIN_OUT)
+    summary = load_json(out_dir / f"summary-{run}.json")
+    checkpoint = summary.get("checkpoint_dir") or str(out_dir / f"Florence-2-base-finetuned-{run}")
+    adapter = summary.get("adapter_file")
+    meta = artifact_meta(checkpoint, adapter, out_dir)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"no artifact staged for run {run}")
+    return meta

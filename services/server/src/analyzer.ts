@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import type { HighlightRecord, TrackObservation } from "@highlights/events";
 import { StageAMetrics } from "./stage-a-metrics";
+import type { TrainArtifact } from "./db";
 
 export interface ReserveResult {
   sessionId: string;
@@ -173,6 +174,7 @@ export interface TrainResult {
   run?: string;
   checkpoint?: string;
   out?: string;
+  adapter?: string;
   eval?: {
     eval?: string; // "skipped" when no val manifest
     reason?: string;
@@ -181,6 +183,8 @@ export interface TrainResult {
     f1?: number;
     [k: string]: unknown;
   };
+  /** Run-scoped downloadable artifact metadata (fileName + integrity hash). */
+  artifact?: TrainArtifact;
   epochs?: number;
   samples?: number;
   [k: string]: unknown;

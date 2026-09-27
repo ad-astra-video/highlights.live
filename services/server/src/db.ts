@@ -60,6 +60,23 @@ export interface WaitlistGate {
   updatedAt: string;
 }
 
+/** A run-scoped downloadable LoRA/checkpoint artifact (ADAAAA-5323). Carries
+ * integrity metadata + the server download path so the UI can offer a download
+ * instead of a bare server path string, and verify the bytes on the way down.
+ * `sha256` is the hex digest of the artifact file. */
+export interface TrainArtifact {
+  /** Base file name of the LoRA adapter, e.g. `Florence-2-base-finetuned-<run>.safetensors`. */
+  filename: string;
+  contentType?: string;
+  /** Hex SHA-256 of the artifact file (runner-emitted, server-verified). */
+  sha256?: string;
+  /** Byte size of the artifact file. */
+  size?: number;
+  /** Run-scoped download path (server route), e.g. `/train/<runId>/artifact`. */
+  downloadPath?: string;
+  [k: string]: unknown;
+}
+
 /** A fine-tune run started from the dashboard `train` trigger (ADAAAA-5262).
  * `status` is one of `queued | running | done | failed`; `result` is the
  * checkpoint + eval-delta report surfaced to the UI (set when the runner
@@ -82,7 +99,10 @@ export interface TrainRun {
     run?: string;
     checkpoint?: string;
     out?: string;
+    adapter?: string;
     eval?: { eval?: string; reason?: string; precision?: number; recall?: number; f1?: number };
+    /** Run-scoped downloadable artifact metadata (filename + integrity hash). */
+    artifact?: TrainArtifact;
     [k: string]: unknown;
   };
   createdAt: string;

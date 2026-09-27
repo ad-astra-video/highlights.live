@@ -33,6 +33,8 @@ import { FixedWindowLimiter, rateLimit } from "./rate-limit";
 import { enqueueBestEffort, type Mailer } from "./mailer";
 import { composeInviteEmail } from "./invites";
 import { createTrainService, TrainValidationError } from "./train";
+import { inspectCuratedManifests, loadCuratedManifest } from "./train-curated";
+import { prepareArtifactDownload } from "./train-artifacts";
 
 /** Resolve the VOD sampling fps from the runner's measured capability (when
  * reachable directly) else the configured interval.
@@ -143,7 +145,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   const authReq = authRequired(auth);
   const adminReq = adminRequired(auth);
-  const train = createTrainService(db, adapter);
+  const train = createTrainService(db, adapter, cfg);
 
   // Public auth endpoints share one anti-abuse budget per IP (login, register,
   // forgot, reset). In-process fixed-window: fine for a single beta instance;
@@ -730,21 +732,35 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     };
   });
 
-  // --- fine-tune "train" trigger (ADAAAA-5262) -------------------------------
+  // --- fine-tune "train" trigger (ADAAAA-5262 / 5323) -------------------------
   // Board user starts a Florence-2 fine-tune on the highlights-train single-shot
   // runner. POST accepts a DetectionTrainingSample manifest (array, serialized
   // to JSONL) + optional hyper-params, persists the run, and submits the job.
-  // GET /train lists the caller's runs (newest first); GET /train/:run returns a
-  // run's live status + surfaced result (checkpoint / eval deltas).
-  app.post<{ Body: { manifest?: unknown[] | string; val?: unknown[] | string; epochs?: number; batchSize?: number; lr?: number; baseModel?: string } }>(
+  // With `manifestSource: "curated"` the curated manifests published by the
+  // annotation loop (Increment A) are loaded server-side — the one-click path
+  // that replaces manual paste; manual paste stays as the operator fallback.
+  // GET /train lists the caller's runs (newest first); GET /train/curated
+  // returns whether a curated manifest is present; GET /train/:run returns a
+  // run's live status + result; GET /train/:run/artifact streams the run's
+  // LoRA artifact with integrity (SHA-256) verification.
+  app.post<{ Body: { manifest?: unknown[] | string; val?: unknown[] | string; manifestSource?: "curated" | "paste"; epochs?: number; batchSize?: number; lr?: number; baseModel?: string } }>(
     "/train",
     { preHandler: authReq },
     async (req: any, reply) => {
       const user = req.user as { id: string };
       try {
+        let manifest: unknown[] | string | undefined = req.body?.manifest;
+        let val: unknown[] | string | undefined = req.body?.val;
+        if (req.body?.manifestSource === "curated") {
+          // Increment B: pull the curated train/val manifests directly from the
+          // annotation loop's published files instead of a pasted body.
+          const curated = await loadCuratedManifest(cfg);
+          manifest = curated.manifest;
+          val = curated.val;
+        }
         const run = await train.submit(user.id, {
-          manifest: req.body?.manifest,
-          val: req.body?.val,
+          manifest,
+          val,
           epochs: req.body?.epochs,
           batchSize: req.body?.batchSize,
           lr: req.body?.lr,
@@ -754,6 +770,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       } catch (err) {
         if (err instanceof TrainValidationError) {
           return reply.code(422).send({ error: err.message, code: "invalid_manifest" });
+        }
+        if (err instanceof Error && /no curated train manifest/.test(err.message)) {
+          return reply.code(422).send({ error: err.message, code: "no_curated_manifest" });
         }
         throw err;
       }
@@ -765,6 +784,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return { runs: await train.list(user.id) };
   });
 
+  app.get("/train/curated", { preHandler: authReq }, async () => {
+    return { curated: inspectCuratedManifests(cfg) };
+  });
+
   app.get<{ Params: { id: string } }>("/train/:id", { preHandler: authReq }, async (req: any, reply) => {
     const user = req.user as { id: string; role?: string };
     const run = await train.get(req.params.id);
@@ -773,6 +796,35 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (run.ownerId !== user.id && user.role !== "admin")
       return reply.code(403).send({ error: "forbidden", code: "forbidden" });
     return { run };
+  });
+
+  // Run-scoped LoRA artifact download (ADAAAA-5323). Same company boundary as
+  // GET /train/:id; the file is re-hashed on the way out and compared against
+  // the run's recorded digest, so a user downloads the exact bytes the runner
+  // produced (integrity check), with the digest surfaced in headers.
+  app.get<{ Params: { id: string } }>("/train/:id/artifact", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user as { id: string; role?: string };
+    const run = await train.get(req.params.id);
+    if (!run) return reply.code(404).send({ error: "train run not found", code: "not_found" });
+    if (run.ownerId !== user.id && user.role !== "admin")
+      return reply.code(403).send({ error: "forbidden", code: "forbidden" });
+    if (run.status !== "done" || !run.result?.artifact)
+      return reply.code(409).send({ error: "artifact not ready", code: "artifact_not_ready" });
+    try {
+      const dl = await prepareArtifactDownload(cfg, run);
+      reply
+        .header("Content-Type", run.result.artifact.contentType || "application/octet-stream")
+        .header("Content-Disposition", `attachment; filename="${dl.filename.replace(/"/g, "")}"`)
+        .header("Content-Length", String(dl.size))
+        .header("X-Checksum-Sha256", dl.sha256)
+        .header("Digest", `sha-256=${Buffer.from(dl.sha256, "hex").toString("base64")}`)
+        .header("ETag", `"${dl.sha256}"`)
+        .header("Cache-Control", "private, no-store");
+      return reply.send(dl.stream);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return reply.code(409).send({ error: msg, code: "artifact_unavailable" });
+    }
   });
 
   // --- dev wireframe billing (BILLING_WIREFRAME=1, NON-PRODUCTION only) -----

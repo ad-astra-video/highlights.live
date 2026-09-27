@@ -86,7 +86,10 @@ export interface TestApp {
   mailer: NoopMailer;
 }
 
-export async function buildTestApp(over: Record<string, string> = {}): Promise<TestApp> {
+export async function buildTestApp(
+  over: Record<string, string> = {},
+  opts: { adapter?: any } = {}
+): Promise<TestApp> {
   const cfg = testCfg(over);
   const db = new SqliteDb(cfg.databasePath);
   const mailer = new NoopMailer();
@@ -97,7 +100,7 @@ export async function buildTestApp(over: Record<string, string> = {}): Promise<T
   const billing = new BillingService(cfg, db, stripeStub(stripeCalls), entitlements);
   const store = new Store(db);
   await store.load();
-  const adapter = fakePipeline();
+  const adapter = opts.adapter ?? fakePipeline();
   const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements, mailer });
   await app.ready();
   return { app, cfg, db, auth, billing, store, stripeCalls, mailer };
