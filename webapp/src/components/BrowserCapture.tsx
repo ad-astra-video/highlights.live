@@ -1,24 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { Square, Play, Share2 } from "lucide-react";
-import { api, getToken } from "../lib/api";
+import { api } from "../lib/api";
 import { useSettings } from "../lib/settings";
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(String(fr.result).split(",")[1]);
-    fr.onerror = reject;
-    fr.readAsDataURL(blob);
-  });
-}
-
-const SAMPLE_FPS = 1; // perceived frames/sec (CPU Florence is slow; 1fps is the plan target)
-const MAX_RECONNECT = 6; // consecutive media-WS reconnect attempts before falling back to /ingest
+const MAX_RECONNECT = 6; // consecutive media reconnect attempts before falling back to /ingest
 
 // Client-side capture: getDisplayMedia (screen / tab / window). The REAL pixels
-// never leave the browser as a big stream — we sample the preview to a small
-// canvas and POST JPEG frames to the server ingest rail (perceive -> decide),
-// and a MediaRecorder recording is chunked up so clips can be cut server-side.
+// never leave the browser as a big stream:
+//   - WebRTC ingest (primary): the display video track is sent live over a
+//     WebRTC connection to the media server, which decodes + samples the stream
+//     onto the orchestrator video-in rail (C1). No canvas sampling happens in
+//     the browser.
+//   - WS / HTTP fallbacks: if the media server has no WebRTC ingest yet, we
+//     fall back to the previous behaviour (sample the preview to a small canvas
+//     and push JPEG frames over the media-server WS, else the /ingest rail).
+// In every mode a MediaRecorder recording is chunked up so clips can be cut
+// server-side.
 export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone: () => void }) {
   const { reasoningEffort } = useSettings();
   const [sharing, setSharing] = useState(false);
@@ -31,41 +28,130 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   const seqRef = useRef(0);
   const ivRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const modeRef = useRef<"ingest" | "ws" | "pending">("pending");
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const modeRef = useRef<"ingest" | "ws" | "rtc" | "pending">("pending");
   // True while we're intentionally stopping (so reconnects never fire on user
   // stop / unmount). Consecutive reconnect attempts, reset on a successful open.
   const stoppingRef = useRef(false);
   const rcRef = useRef(0);
 
-  // Reconnect the media-server WS transparently. On any unexpected close we
-  // re-ask the server for the current / freshly-rerouted wsUrl (the server
-  // reuses the live session from the DB, or re-provisions on a healthy node if
-  // the one serving us went down) and re-open. Seamless — sampling never stops.
-  function openMedia(jobId: string): Promise<void> {
-    return api<{ wsUrl?: string }>(`/jobs/${jobId}/media`, { method: "POST", body: {} })
-      .then((media) => {
-        if (!media?.wsUrl) {
-          modeRef.current = "ingest";
-          return;
+  /** Build the WebRTC offer -> answer + ICE signaling to the media server.
+   *  The media server assigns the pcId on the offer round-trip, so candidates
+   *  that gather before then are buffered and flushed once pcId is known. */
+  function establishRtc(origin: string, sid: string, stream: MediaStream) {
+    const pc = new RTCPeerConnection();
+    pcRef.current = pc;
+    const pendingCandidates: any[] = [];
+    let pcId = "";
+    const sendCandidate = (c: any) => {
+      if (!pcId) {
+        pendingCandidates.push(c);
+        return;
+      }
+      void fetch(`${origin}/sessions/${sid}/rtc/ice/${pcId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate: c }),
+      }).catch(() => {});
+    };
+    const track = stream.getVideoTracks()[0];
+    if (track) pc.addTransceiver(track, { direction: "sendonly" });
+    // Trickle ICE candidates to the media server as they gather.
+    pc.onicecandidate = (e) => {
+      if (e.candidate) sendCandidate(e.candidate.toJSON());
+    };
+    // Node failover / transport drop -> transparently reconnect (the server
+    // re-provisions on a healthy node if the one serving us went down).
+    pc.onconnectionstatechange = () => {
+      if (stoppingRef.current) return;
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+        teardownRtc();
+        if (modeRef.current === "rtc") scheduleReconnect(jobIdRef.current || "");
+      }
+    };
+    return pc
+      .createOffer()
+      .then((offer) => pc.setLocalDescription(offer))
+      .then(() =>
+        fetch(`${origin}/sessions/${sid}/rtc/offer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ offer: pc.localDescription }),
+        })
+      )
+      .then((r) => {
+        if (!r.ok) throw new Error(`rtc signaling failed: HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(async ({ answer, pcId: id }) => {
+        pcId = id;
+        await pc.setRemoteDescription(answer);
+        // Flush any candidates that gathered during the offer round-trip.
+        pendingCandidates.forEach(sendCandidate);
+        pendingCandidates.length = 0;
+      });
+  }
+
+  function teardownRtc() {
+    const pc = pcRef.current;
+    if (pc) {
+      try {
+        pc.close();
+      } catch {
+        /* noop */
+      }
+      pcRef.current = null;
+    }
+  }
+
+  // Open the media-server ingest path: prefer WebRTC (C1), else the media WS,
+  // else the HTTP /ingest rail. On any unexpected failure we re-ask the server
+  // for the current / freshly-rerouted details (it reuses the session from the
+  // DB, or re-provisions on a healthy node) and reconnect — seamless.
+  function openMedia(jobId: string, stream: MediaStream): Promise<void> {
+    return api<{ wsUrl?: string; mediaOrigin?: string; mediaSessionId?: string; rtc?: boolean }>(
+      `/jobs/${jobId}/media`,
+      { method: "POST", body: {} }
+    )
+      .then(async (media) => {
+        if (media?.rtc && media.mediaOrigin && media.mediaSessionId) {
+          modeRef.current = "rtc";
+          try {
+            await establishRtc(media.mediaOrigin, media.mediaSessionId, stream);
+            rcRef.current = 0;
+            return;
+          } catch (e) {
+            // RTC establishment failed (e.g. older media server has no RTC
+            // routes): fall through to the WS path.
+            console.error("rtc establish failed, falling back", e);
+            teardownRtc();
+          }
         }
-        modeRef.current = "ws";
-        const ws = new WebSocket(media.wsUrl);
-        wsRef.current = ws;
-        ws.onopen = () => {
-          rcRef.current = 0;
-        };
-        ws.onerror = () => {
-          try { ws.close(); } catch { /* noop */ }
-        };
-        ws.onclose = () => {
-          if (wsRef.current === ws) wsRef.current = null;
-          if (stoppingRef.current || modeRef.current !== "ws") return;
-          scheduleReconnect(jobId);
-        };
-        return new Promise<void>((resolve) => {
-          ws.addEventListener("open", () => resolve(), { once: true });
-          ws.addEventListener("error", () => resolve(), { once: true });
-        });
+        if (media?.wsUrl) {
+          modeRef.current = "ws";
+          const ws = new WebSocket(media.wsUrl);
+          wsRef.current = ws;
+          ws.onopen = () => {
+            rcRef.current = 0;
+          };
+          ws.onerror = () => {
+            try {
+              ws.close();
+            } catch {
+              /* noop */
+            }
+          };
+          ws.onclose = () => {
+            if (wsRef.current === ws) wsRef.current = null;
+            if (stoppingRef.current || modeRef.current !== "ws") return;
+            scheduleReconnect(jobId);
+          };
+          return new Promise<void>((resolve) => {
+            ws.addEventListener("open", () => resolve(), { once: true });
+            ws.addEventListener("error", () => resolve(), { once: true });
+          });
+        }
+        modeRef.current = "ingest";
       })
       .catch(() => {
         modeRef.current = "ingest";
@@ -73,15 +159,16 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   }
 
   function scheduleReconnect(jobId: string) {
-    if (stoppingRef.current) return;
+    if (stoppingRef.current || !streamRef.current) return;
     if (rcRef.current >= MAX_RECONNECT) {
       modeRef.current = "ingest";
       return;
     }
     const delay = Math.min(800 * 2 ** rcRef.current, 5000);
     rcRef.current += 1;
+    modeRef.current = "pending";
     setTimeout(() => {
-      if (!stoppingRef.current) void openMedia(jobId);
+      if (!stoppingRef.current && streamRef.current) void openMedia(jobId, streamRef.current);
     }, delay);
   }
 
@@ -90,6 +177,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       stopInternal(false);
     };
     return onUnmount;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function start() {
@@ -108,13 +196,12 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       const job = await api<{ job: { id: string } }>("/jobs", { body: { source: "browser", gameHint } });
       jobIdRef.current = job.job.id;
 
-      // Media-server handshake: stream frames over the media-server WS
+      // Media-server handshake: stream the live video track over WebRTC
       // (browser -> media server -> orchestrator video-in), with transparent
-      // reconnect + reroute. If no media server is configured / reachable,
-      // openMedia falls back to the HTTP /ingest rail.
+      // reconnect + reroute on node failover. Falls back to WS / HTTP /ingest.
       stoppingRef.current = false;
       rcRef.current = 0;
-      await openMedia(job.job.id);
+      await openMedia(job.job.id, stream);
 
       const mime = ["video/mp4;codecs=avc1", "video/webm;codecs=vp9", "video/webm"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
       const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 3_000_000 } : undefined);
@@ -129,31 +216,32 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       rec.start(1000); // 1s chunks keep the uploads small
       recRef.current = rec;
 
-      // sample the shared video element -> JPEG -> ingest
-      ivRef.current = setInterval(() => {
-        const v = videoRef.current;
-        if (!v || !v.videoWidth) return;
-        const cv = document.createElement("canvas");
-        cv.width = 320;
-        cv.height = 180;
-        const ctx = cv.getContext("2d")!;
-        ctx.drawImage(v, 0, 0, cv.width, cv.height);
-        const image = cv.toDataURL("image/jpeg", 0.6).split(",")[1];
-        const seq = seqRef.current++;
-        const id = jobIdRef.current;
-        if (modeRef.current === "ws") {
-          // Media path: stream over the media-server WS. While reconnecting
-          // (WS not yet open) drop the frame rather than double-ingest.
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ seq, timestamp: seq / SAMPLE_FPS, image, reasoningEffort }));
+      // WS / HTTP fallback only: sample the shared video element -> JPEG ->
+      // push to the media-server WS (or /ingest). In RTC mode the media server
+      // decodes the live track itself, so no sampling happens here.
+      if (modeRef.current === "ws" || modeRef.current === "ingest") {
+        ivRef.current = setInterval(() => {
+          const v = videoRef.current;
+          if (!v || !v.videoWidth) return;
+          const cv = document.createElement("canvas");
+          cv.width = 320;
+          cv.height = 180;
+          const ctx = cv.getContext("2d")!;
+          ctx.drawImage(v, 0, 0, cv.width, cv.height);
+          const image = cv.toDataURL("image/jpeg", 0.6).split(",")[1];
+          const seq = seqRef.current++;
+          const id = jobIdRef.current;
+          if (modeRef.current === "ws") {
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ seq, timestamp: seq, image, reasoningEffort }));
+            }
+          } else if (id) {
+            api(`/jobs/${id}/ingest`, {
+              body: { seq, timestamp: seq, image, reasoningEffort },
+            }).catch(() => {});
           }
-        } else if (id) {
-          // Fallback: HTTP /ingest rail.
-          api(`/jobs/${id}/ingest`, {
-            body: { seq, timestamp: seq / SAMPLE_FPS, image, reasoningEffort },
-          }).catch(() => {});
-        }
-      }, 1000 / SAMPLE_FPS);
+        }, 1000);
+      }
 
       setSharing(true);
       const track = stream.getVideoTracks()[0];
@@ -172,10 +260,15 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     rcRef.current = 0;
     if (ivRef.current) clearInterval(ivRef.current);
     ivRef.current = null;
-    // Media path: closing the WS (after a short reconnect grace on the media
-    // server) stops paying + releases the perceive slot; /stop is idempotent.
-    try { wsRef.current?.close(); } catch { /* noop */ }
+    // Media path: closing the WebRTC/WS (after a short reconnect grace on the
+    // media server) stops paying + releases the perceive slot; /stop is idempotent.
+    try {
+      wsRef.current?.close();
+    } catch {
+      /* noop */
+    }
     wsRef.current = null;
+    teardownRtc();
     modeRef.current = "pending";
     if (recRef.current && recRef.current.state !== "inactive") {
       recRef.current.stop();
@@ -204,7 +297,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     <div className="mt-6 rounded-2xl border border-neon/40 bg-black/40 p-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-neon">
         <Share2 className="h-4 w-4" /> Client-side capture
-        <span className="normal-case text-mut">— pixels are sampled in your browser and pushed to the server</span>
+        <span className="normal-case text-mut">— pixels stream live to the media server via WebRTC</span>
       </div>
       <div className="flex flex-col gap-3 sm:flex-row">
         <video ref={videoRef} muted autoPlay playsInline className="aspect-video w-full max-w-md rounded-lg bg-black" />
@@ -220,7 +313,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
           )}
           {sharing && (
             <p className="text-xs text-mut">
-              Capturing at {SAMPLE_FPS}fps. Highlight clips are cut from the recording when you stop.
+              Capturing live. Highlight clips are cut from the recording when you stop.
               Use the browser's "Stop sharing" control to end capture early.
             </p>
           )}
@@ -229,4 +322,13 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       {error && <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{error}</div>}
     </div>
   );
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(",")[1]);
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
 }

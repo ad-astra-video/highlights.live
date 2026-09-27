@@ -1284,10 +1284,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // or — if the media node serving it went down — transparently re-provisions
     // on a healthy node so the browser's reconnect is seamlessly re-routed.
     try {
-      const { wsUrl, mediaSessionId } = await provisionMedia(req.params.id);
+      const { wsUrl, mediaSessionId, mediaOrigin } = await provisionMedia(req.params.id);
       bj.mediaWsUrl = wsUrl;
       bj.mediaSessionId = mediaSessionId;
-      return { wsUrl, mediaSessionId };
+      // WebRTC ingest (C1): the browser signals to the media server via
+      // POST {mediaOrigin}/sessions/{mediaSessionId}/rtc/offer instead of
+      // posting sampled frames over the WS. wsUrl is kept for the WS fallback.
+      return { wsUrl, mediaSessionId, mediaOrigin, rtc: true };
     } catch (e: any) {
       return reply.code(500).send({ error: String(e?.message || e) });
     }
