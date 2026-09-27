@@ -38,6 +38,11 @@ export class EntitlementsService {
     return this.cfg.betaClipQuota;
   }
 
+  /** Included single-shot decides per period for a free user. */
+  get decideLimit(): number {
+    return this.cfg.freeDecides;
+  }
+
   /** Clips generated successfully this month. */
   async used(userId: string, now: Date = new Date()): Promise<number> {
     return this.db.getQuota(userId, this.periodKey(now));
@@ -60,8 +65,7 @@ export class EntitlementsService {
     }
   }
 
-  /**
-   * A "clip generated successfully" debits the ledger exactly once. Call this
+  /** A "clip generated successfully" debits the ledger exactly once. Call this
    * once per concrete, successfully-generated highlight. Partial/failed
    * generations and retries within the same submission must NOT call this (the
    * caller only invokes it when a highlight record is actually created), so a
@@ -89,5 +93,21 @@ export class EntitlementsService {
    */
   async onClipAccepted(user: { id: string }, now: Date = new Date()): Promise<number> {
     return this.db.incrementQuota(user.id, this.periodKey(now));
+  }
+
+  /** Single-shot decides used this period. */
+  async decidesUsed(userId: string, now: Date = new Date()): Promise<number> {
+    return this.db.getDecideQuota(userId, this.periodKey(now));
+  }
+
+  /** Single-shot decides remaining this period (>= 0). */
+  async decidesRemaining(userId: string, now: Date = new Date()): Promise<number> {
+    return Math.max(0, this.decideLimit - (await this.decidesUsed(userId, now)));
+  }
+
+  /** Meter ONE completed single-shot decide into the per-period ledger (always
+   * increments, mirroring `onClipGenerated`). */
+  async onDecideCompleted(user: User, now: Date = new Date()): Promise<number> {
+    return this.db.incrementDecideQuota(user.id, this.periodKey(now));
   }
 }
