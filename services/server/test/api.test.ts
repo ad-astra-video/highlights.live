@@ -138,10 +138,14 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     });
     expect(rej.statusCode).toBe(200);
     expect(rej.json().status).toBe("rejected");
+    // ADAAAA-5168: reject also records a durable rejectedAt (start of the 24h
+    // soft-delete undo window) so the TTL sweep can age the clip for hard-delete.
+    expect(rej.json().rejectedAt).toBeTruthy();
     expect((await status()).clipQuotaUsed).toBe(0);
     expect((await status()).clipQuotaRemaining).toBe(10);
 
-    // Idempotent: re-rejecting the already-rejected clip must not double-release (stays 0).
+    // Idempotent: re-rejecting the already-rejected clip must not double-release (stays 0),
+    // and must NOT extend the undo window (rejectedAt keeps its original stamp).
     const rej2 = await app.inject({
       method: "POST",
       url: `/highlights/${myhl[0].id}/review`,
@@ -149,9 +153,11 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
       payload: { status: "rejected" },
     });
     expect(rej2.statusCode).toBe(200);
+    expect(rej2.json().rejectedAt).toBe(rej.json().rejectedAt);
     expect((await status()).clipQuotaUsed).toBe(0);
 
-    // Re-accepting a rejected clip re-consumes the released slot (consistency).
+    // Re-accepting a rejected clip re-consumes the released slot (consistency)
+    // and CLEARS rejectedAt — the clip is restored and is no longer a purge target.
     const acc = await app.inject({
       method: "POST",
       url: `/highlights/${myhl[0].id}/review`,
@@ -159,6 +165,7 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
       payload: { status: "accepted" },
     });
     expect(acc.statusCode).toBe(200);
+    expect(acc.json().rejectedAt).toBeUndefined();
     expect((await status()).clipQuotaUsed).toBe(1);
 
     // A rejected clip is removed from the public feed; an accepted one is present.

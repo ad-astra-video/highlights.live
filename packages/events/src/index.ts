@@ -192,6 +192,12 @@ export const HighlightRecordSchema = z.object({
   score: z.number().min(0).max(100),
   reason: z.string().optional(),
   status: z.enum(["pending", "accepted", "rejected"]).default("pending"),
+  /** ISO timestamp when the clip was rejected (see {@link HighlightRecordSchema}).
+   * Set on the reject transition, cleared on reject->accept undo. The TTL cleanup
+   * sweep (ADAAAA-5168) only ever hard-deletes clips where status === "rejected"
+   * and age(rejectedAt) >= the configured TTL, so this marks the start of the
+   * 24h soft-delete undo grace window. */
+  rejectedAt: z.string().optional(),
   createdAt: z.string(),
 });
 export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;

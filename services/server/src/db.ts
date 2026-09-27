@@ -173,6 +173,9 @@ export interface Db {
   saveHighlight(h: HighlightRecord): Promise<void>;
   getHighlight(id: string): Promise<HighlightRecord | undefined>;
   listHighlights(): Promise<HighlightRecord[]>;
+  /** Hard-delete a highlight row. Idempotent — deleting a missing id is a no-op.
+   * Used by the rejected-clip TTL sweep (ADAAAA-5168). */
+  deleteHighlight(id: string): Promise<void>;
   /** Public waitlist: add an email, deduped by the normalized email (UNIQUE
    * constraint). Returns whether this call actually created a new entry vs the
    * email already being present (idempotent re-submission). */
@@ -420,6 +423,10 @@ export class SqliteDb implements Db {
   async listHighlights(): Promise<HighlightRecord[]> {
     const rows = this.db.prepare("SELECT record FROM highlights").all() as { record: string }[];
     return rows.map((r) => JSON.parse(r.record) as HighlightRecord);
+  }
+
+  async deleteHighlight(id: string): Promise<void> {
+    this.db.prepare("DELETE FROM highlights WHERE id = ?").run(id);
   }
 
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
@@ -810,6 +817,10 @@ export class PgDb implements Db {
   async listHighlights(): Promise<HighlightRecord[]> {
     const r = await this.pool.query("SELECT record FROM highlights");
     return r.rows.map((row) => JSON.parse(row.record) as HighlightRecord);
+  }
+
+  async deleteHighlight(id: string): Promise<void> {
+    await this.pool.query("DELETE FROM highlights WHERE id = $1", [id]);
   }
 
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
