@@ -59,6 +59,9 @@ function boxId(): string {
 
 export function Dataset() {
   const [source, setSource] = useState("");
+  const [inSec, setInSec] = useState("0");
+  const [outSec, setOutSec] = useState("");
+  const [fps, setFps] = useState("1");
   const [extracting, setExtracting] = useState(false);
   const [frames, setFrames] = useState<CurationFrame[]>([]);
   const [selIdx, setSelIdx] = useState<number | null>(null);
@@ -87,8 +90,15 @@ export function Dataset() {
     setSelBox(null);
     for (const u of createdUrls.current) URL.revokeObjectURL(u);
     createdUrls.current.clear();
+    const body: Record<string, unknown> = { source: source.trim() };
+    const fpsNum = parseFloat(fps);
+    if (Number.isFinite(fpsNum) && fpsNum > 0) body.fps = fpsNum;
+    const inNum = parseFloat(inSec);
+    if (Number.isFinite(inNum) && inNum >= 0) body.inSec = inNum;
+    const outNum = parseFloat(outSec);
+    if (Number.isFinite(outNum) && outNum > (Number.isFinite(inNum) ? inNum : -1)) body.outSec = outNum;
     try {
-      const r = await api<{ frames: ExtractedMeta[] }>("/training/extract", { body: { source: source.trim() } });
+      const r = await api<{ frames: ExtractedMeta[] }>("/training/extract", { body });
       const mapped: CurationFrame[] = r.frames.map((f) => ({
         id: f.id,
         imageRef: f.imageRef,
@@ -368,12 +378,30 @@ export function Dataset() {
             onChange={(e) => setSource(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && doExtract()}
           />
+        </div>
+        {/* Sliding window: in/out time handles + frame rate. Only the frames
+            inside the window are extracted (ffmpeg -ss/-to). */}
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-mut">In (s)</span>
+            <input className="input-neon w-28" type="number" min={0} step={0.5} value={inSec} onChange={(e) => setInSec(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-mut">Out (s, empty = end)</span>
+            <input className="input-neon w-28" type="number" min={0} step={0.5} value={outSec} onChange={(e) => setOutSec(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-mut">Frame rate (fps)</span>
+            <input className="input-neon w-24" type="number" min={0.1} step={0.1} value={fps} onChange={(e) => setFps(e.target.value)} />
+          </label>
           <button className="btn-neon btn-fill" onClick={doExtract} disabled={extracting || !source.trim()}>
             {extracting ? "Extracting…" : "Extract frames"}
           </button>
         </div>
         <p className="mt-2 text-xs text-mut">
-          Extracts 1 fps frames with ffmpeg at 1280×720 under <code className="text-neon">data/training/extract/</code>.
+          Extracts frames at 1280×720 under <code className="text-neon">data/training/extract/</code>. Set the in/out
+          time window to a ~10–30 s sliding segment and a frame rate (default ~1 fps) to keep curation bounded —
+          only frames inside the window are extracted.
         </p>
       </section>
 
@@ -426,6 +454,9 @@ export function Dataset() {
                   Delete box
                 </button>
               </div>
+
+              {/* Selectable thumbnail grid of extracted frames */}
+              <FrameGrid frames={frames} selIdx={selIdx} onSelect={setSelIdx} />
 
               <div className="relative w-full overflow-hidden rounded-xl border border-white/10 bg-dusk/50">
                 <canvas
@@ -547,6 +578,78 @@ export function Dataset() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+// --- selectable thumbnail grid ---------------------------------------------
+/** Renders the extracted frames as a choose-a-frame thumbnail grid so the
+ * operator can jump to any extracted frame instantly, not just step
+ * prev/next. Each tile is auth-fetched to an object URL and shows accepted /
+ * boxed state. Clicking a tile selects it in the editor. */
+function FrameGrid({ frames, selIdx, onSelect }: { frames: CurationFrame[]; selIdx: number | null; onSelect: (i: number) => void }) {
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  const urlsRef = useRef<Record<string, string>>({});
+  // revoke all created object URLs (also on unmount) so we never leak blobs
+  useEffect(() => () => {
+    const all = { ...urlsRef.current };
+    urlsRef.current = {};
+    for (const u of Object.values(all)) URL.revokeObjectURL(u);
+  }, []);
+  useEffect(() => {
+    let alive = true;
+    const pending = new Map<string, string>();
+    (async () => {
+      for (const f of frames) {
+        if (!f.uri) continue;
+        try {
+          const u = await frameObjectURL(f.uri);
+          if (!alive) {
+            URL.revokeObjectURL(u);
+            continue;
+          }
+          pending.set(f.id, u);
+        } catch {
+          /* tile stays as placeholder */
+        }
+      }
+      if (alive) {
+        urlsRef.current = Object.fromEntries(pending);
+        setUrls(urlsRef.current);
+      }
+    })();
+    return () => {
+      alive = false;
+      for (const u of pending.values()) URL.revokeObjectURL(u);
+    };
+  }, [frames]);
+  return (
+    <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+      {frames.map((f, i) => {
+        const u = urls[f.id];
+        const sel = i === selIdx;
+        const boxed = f.boxes.length > 0;
+        return (
+          <button
+            key={f.id}
+            type="button"
+            title={`frame ${i + 1}${f.accepted ? " · accepted" : ""}${boxed ? ` · ${f.boxes.length} box(es)` : ""}`}
+            onClick={() => onSelect(i)}
+            className={`relative h-16 w-24 shrink-0 overflow-hidden rounded-lg border-2 ${sel ? "border-neon" : "border-white/10"} ${f.accepted ? "bg-green/20" : "bg-white/5"} hover:border-white/40`}
+          >
+            {u ? (
+              <img src={u} alt={`frame ${i + 1}`} className="h-full w-full object-cover" />
+            ) : (
+              <span className="flex h-full w-full items-center justify-center text-[10px] text-mut">{i + 1}</span>
+            )}
+            <span className="absolute bottom-0 left-0 right-0 rounded-t bg-black/50 px-1 text-left text-[9px] text-white">
+              {i + 1}
+              {boxed ? " ■" : ""}
+            </span>
+            {f.accepted && <span className="absolute right-0 top-0 bg-green px-1 text-[9px] font-bold text-black">✓</span>}
+          </button>
+        );
+      })}
     </div>
   );
 }

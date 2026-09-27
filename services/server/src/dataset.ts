@@ -28,18 +28,29 @@ export interface ExtractedFrameMeta {
   source: string;
 }
 
-/** Extract a VOD clip to 1 fps frames under the dataset staging dir and return
- * the frame metadata the curation UI needs. `imageRef` is kept relative to
- * data/training so the manifest pointer stays valid after frames are staged to
- * object storage by the submission path. */
+/** Extract a VOD clip to curation frames under the dataset staging dir and
+ * return the frame metadata the curation UI needs. A sliding time window
+ * (inSec/outSec) restricts extraction to a sub-range of the clip; fps defaults
+ * to ~1. `imageRef` is kept relative to data/training so the manifest pointer
+ * stays valid after frames are staged to object storage by the submission
+ * path. */
 export async function extractFramesForDataset(opts: {
   ffmpegPath: string;
   source: string;
   outDir: string;
   fps?: number;
+  inSec?: number;
+  outSec?: number;
 }): Promise<ExtractedFrameMeta[]> {
   const fps = opts.fps ?? TRAIN_FPS;
-  const files = await extractFrames(opts.ffmpegPath, opts.source, opts.outDir, fps, TRAIN_SCALE);
+  const files = await extractFrames(
+    opts.ffmpegPath,
+    opts.source,
+    opts.outDir,
+    fps,
+    TRAIN_SCALE,
+    { inSec: opts.inSec, outSec: opts.outSec },
+  );
   const relRoot = path.resolve(opts.outDir, ".."); // .../data/training/extract
   return files.map((f, i) => ({
     id: `frame-${String(i + 1).padStart(4, "0")}`,

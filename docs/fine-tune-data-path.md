@@ -40,8 +40,14 @@ Lives in `packages/events/src/index.ts` (re-exported from
 `webapp/src/pages/Dataset.tsx` (nav: **Dataset Curation**) reuses the
 Dashboard / FrameDebugger / BrowserCapture patterns:
 
-1. **Ingest** a VOD clip → `POST /training/extract` extracts 1 fps frames with
-   ffmpeg at 1280x720 under `data/training/extract/`.
+1. **Ingest** a VOD clip → `POST /training/extract` extracts frames with ffmpeg
+   at 1280x720 under `data/training/extract/`. A **sliding window** (in/out
+   second handles, default full clip) plus a **frame rate** (default ~1 fps)
+   bound the extraction — only frames inside the window are produced
+   (`buildExtractArgs` in `services/server/src/ffmpeg.ts` positions `-ss`
+   before `-i` and `-to` after `-i`). Extracted frames appear as a **selectable
+   thumbnail grid** in the UI so the operator can jump straight to any frame,
+   not just step prev/next.
 2. **Auto-seed** (optional): paste the base Florence-2 open-set detections;
    `autoSeedBoxes` canonicalizes into the closed vocab and drops the rest.
 3. **Review**: per-frame canvas editor — draw new boxes, drag to move, corner

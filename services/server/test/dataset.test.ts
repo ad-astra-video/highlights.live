@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { writeTrainValManifests } from "../src/dataset";
+import { buildExtractArgs } from "../src/ffmpeg";
 import { DetectionTrainingSampleSchema, type DetectionTrainingSample } from "@highlights/events";
 
 function sample(id: string, label: string): DetectionTrainingSample {
@@ -55,5 +56,39 @@ describe("writeTrainValManifests (ADAAAA-5164 server gate)", () => {
     expect(res.errors![0]).toContain("train[0]");
     await expect(fs.readFile(path.join(evalsDir, "train_manifest.jsonl"), "utf8")).rejects.toThrow();
     await fs.rm(evalsDir, { recursive: true, force: true });
+  });
+});
+
+describe("buildExtractArgs sliding window (ADAAAA-5322 v2)", () => {
+  it("omits -ss/-to when no window is given (whole clip, default fps/scale)", () => {
+    const args = buildExtractArgs({ source: "s.mp4", outDir: "/o" });
+    expect(args).toContain("-i");
+    expect(args).not.toContain("-ss");
+    expect(args).not.toContain("-to");
+    expect(args).toContain("-vf");
+    expect(args[args.indexOf("-vf") + 1]).toBe("fps=1,scale=320:180");
+  });
+
+  it("positions -ss before -i and -to after -i for a bounded window", () => {
+    const args = buildExtractArgs({ source: "s.mp4", outDir: "/o", window: { inSec: 12.5, outSec: 40 } });
+    const iIdx = args.indexOf("-i");
+    const ssIdx = args.indexOf("-ss");
+    const toIdx = args.indexOf("-to");
+    expect(args[ssIdx + 1]).toBe("12.5");
+    expect(args[toIdx + 1]).toBe("40");
+    expect(ssIdx).toBeLessThan(iIdx); // fast-seek before input
+    expect(toIdx).toBeGreaterThan(iIdx); // stop after input
+  });
+
+  it("honours a custom frame rate inside the window", () => {
+    const args = buildExtractArgs({ source: "s.mp4", outDir: "/o", fps: 2, window: { inSec: 5, outSec: 10 } });
+    const vf = args[args.indexOf("-vf") + 1];
+    expect(vf).toBe("fps=2,scale=320:180");
+  });
+
+  it("emits -ss alone (no -to) when only an in handle is set", () => {
+    const args = buildExtractArgs({ source: "s.mp4", outDir: "/o", window: { inSec: 5 } });
+    expect(args).toContain("-ss");
+    expect(args).not.toContain("-to");
   });
 });

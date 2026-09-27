@@ -1354,14 +1354,23 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   );
 
   // --- Florence-2 fine-tune data path (ADAAAA-5164) --------------------------
-  // Extract a VOD clip to 1 fps curation frames. No training GPU is scheduled
-  // on this leg; this only stages frames for the Dataset Curation UI.
-  app.post<{ Body: { source?: string; fps?: number } }>("/training/extract", { preHandler: authReq }, async (req, reply) => {
+  // Extract a VOD clip to curation frames (sliding-window frame-rate aware).
+  // The client sets inSec/outSec time handles + an fps (default ~1); only the
+  // frames inside that window are extracted. No training GPU is scheduled on
+  // this leg; this only stages frames for the Dataset Curation UI.
+  app.post<{ Body: { source?: string; fps?: number; inSec?: number; outSec?: number } }>("/training/extract", { preHandler: authReq }, async (req, reply) => {
     const source = req.body?.source;
     if (!source) return reply.code(400).send({ error: "source is required" });
     const outDir = path.join(cfg.dataDir, "training", "extract", randomUUID());
     try {
-      const frames = await extractFramesForDataset({ ffmpegPath: cfg.ffmpegPath, source, outDir, fps: req.body?.fps });
+      const frames = await extractFramesForDataset({
+        ffmpegPath: cfg.ffmpegPath,
+        source,
+        outDir,
+        fps: req.body?.fps,
+        inSec: req.body?.inSec,
+        outSec: req.body?.outSec,
+      });
       return { frames };
     } catch (e: any) {
       return reply.code(422).send({ error: String(e?.message || e) });
