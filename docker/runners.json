@@ -50,7 +50,7 @@
       "label": "highlights-train",
       "routing": "label",
       "runner_url": "http://train:8083",
-      "health_url": null,
+      "health_url": "/health",
       "healthy_status_code": 200,
       "app": "highlights-live/train",
       "version": "0.1.0",
