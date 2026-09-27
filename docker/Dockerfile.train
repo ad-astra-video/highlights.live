@@ -11,12 +11,12 @@ FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
 WORKDIR /srv
 
 # py3.12: keep setuptools<81 so pkg_resources still exists (transformers chain)
-RUN pip install --no-cache-dir --upgrade pip "setuptools<81"
+RUN pip install --no-cache-dir --upgrade pip "setuptools<81" "einops"
 
 # Florence-2 fine-tune stack + the FastAPI/uvicorn wrapper (in requirements.txt).
 COPY services/requirements.txt /srv/requirements.txt
 RUN pip install --no-cache-dir -r /srv/requirements.txt \
- && pip install --no-cache-dir "transformers==4.49.0" "peft" "accelerate" safetensors
+ && pip install --no-cache-dir "transformers==4.49.0" timm "peft" "accelerate" safetensors
 
 # Base/pre-trained weight cache + fine-tune artifacts live outside the image
 # (mounted at runtime so a warm cache + produced checkpoints survive restarts).
@@ -24,7 +24,9 @@ ENV HF_HOME=/models/hf-cache \
     TRAIN_OUT=/runs \
     TRAIN_WORK_ROOT=/runs/train-work
 
-# Fine-tune service (fine_tune_od.py) + the FastAPI single-shot app (run.py).
+# FlorenceDetector (fine_tune_od.py inline eval imports app.florence) + the
+# fine-tune service (fine_tune_od.py) + the FastAPI single-shot app (run.py).
+COPY services/perceive /srv/perceive
 COPY services/train /srv/train
 WORKDIR /srv/train
 EXPOSE 8083
