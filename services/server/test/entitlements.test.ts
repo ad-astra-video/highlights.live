@@ -20,6 +20,59 @@ async function adminToken(app: any, cfg: any) {
   return r.json().token as string;
 }
 
+describe("paid (Pro) entitlement binding — quota widens for active Pro, free stays at 10/mo", () => {
+  it("free user's clip quota defaults to 10/mo; activating Pro widens it to 100/mo; cancel returns to 10/mo", async () => {
+    const { app, db } = await buildTestApp({ BETA_CLIP_QUOTA: "10", BILLING_WIREFRAME: "1" });
+    const r = await register(app, "tier@test.dev", "password123");
+    const token = r.json().token as string;
+    const userId = (await db.getUserByEmail("tier@test.dev"))!.id;
+
+    const free = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } });
+    expect(free.json().clipQuotaLimit).toBe(10);
+    expect(free.json().tier).toBe("free");
+
+    // Simulate a paid upgrade (wireframe webhook mounts only in non-prod test env).
+    const act = await app.inject({ method: "POST", url: "/dev/billing/activate", headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(act.statusCode).toBe(200);
+    expect(act.json().sub.tier).toBe("pro");
+
+    const pro = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } });
+    expect(pro.json().tier).toBe("pro");
+    expect(pro.json().clipQuotaLimit).toBe(100); // 100 clips/mo included in Pro plan
+
+    // Downgrade/cancel returns to the free 10/mo cap.
+    const deact = await app.inject({ method: "POST", url: "/dev/billing/deactivate", headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(deact.statusCode).toBe(200);
+    const back = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } });
+    expect(back.json().tier).toBe("free");
+    expect(back.json().clipQuotaLimit).toBe(10);
+    await app.close();
+  });
+
+  it("an active Pro user can exceed the free cap and submit (quota hard-stop honors the widened cap)", async () => {
+    const { app, db } = await buildTestApp({ BETA_CLIP_QUOTA: "10", BILLING_WIREFRAME: "1" });
+    const r = await register(app, "tiercap@test.dev", "password123");
+    const token = r.json().token as string;
+    const userId = (await db.getUserByEmail("tiercap@test.dev"))!.id;
+    const act = await app.inject({ method: "POST", url: "/dev/billing/activate", headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(act.statusCode).toBe(200);
+
+    // Fill 15 clips this period (above the free 10 cap, below the Pro 100 cap).
+    const period = (await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } })).json().clipQuotaPeriod;
+    for (let i = 0; i < 15; i++) await db.incrementQuota(userId, period);
+
+    // Submission still allowed (Pro cap is 100).
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { videoPath: "/does/not/matter.mp4" },
+    });
+    expect(res.statusCode).not.toBe(429);
+    await app.close();
+  });
+});
+
 describe("per-user monthly clip quota (entitlement ledger)", () => {
   it("rejects the submission that would exceed the month's quota (429) and surfaces remaining quota", async () => {
     const { app, db } = await buildTestApp({ BETA_CLIP_QUOTA: "2" });
