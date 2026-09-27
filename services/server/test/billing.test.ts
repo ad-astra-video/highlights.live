@@ -1,16 +1,41 @@
 import { describe, expect, it } from "vitest";
 import { BillingService, BillingRequiredError } from "../src/billing";
+import { EntitlementsService } from "../src/entitlements";
 import type { ServerConfig } from "../src/config";
 
-// --- in-memory Db stub (the two usage methods the decide fee touches) -------
+// --- in-memory Db stub backing both billing's usage methods and the per-period
+// quota ledger (clips + decides) the entitlement service reads. --------------
 class StubDb {
   usage: Record<string, number> = {};
   posting: Array<{ itemId: string; qty: number }> = [];
+  // per-period clip + decide ledger (key: `${userId}|${period}`)
+  clips: Record<string, number> = {};
+  decides: Record<string, number> = {};
+  now = new Date();
+  periodKey() {
+    return `${this.now.getUTCFullYear()}-${String(this.now.getUTCMonth() + 1).padStart(2, "0")}`;
+  }
   async recordUsage(_u: string, kind: string) {
     this.usage[kind] = (this.usage[kind] ?? 0) + 1;
   }
   async countUsage(_u: string, kind: string) {
     return this.usage[kind] ?? 0;
+  }
+  async getQuota(uid: string) {
+    return this.clips[`${uid}|${this.periodKey()}`] ?? 0;
+  }
+  async incrementQuota(uid: string) {
+    const k = `${uid}|${this.periodKey()}`;
+    this.clips[k] = (this.clips[k] ?? 0) + 1;
+    return this.clips[k];
+  }
+  async getDecideQuota(uid: string) {
+    return this.decides[`${uid}|${this.periodKey()}`] ?? 0;
+  }
+  async incrementDecideQuota(uid: string) {
+    const k = `${uid}|${this.periodKey()}`;
+    this.decides[k] = (this.decides[k] ?? 0) + 1;
+    return this.decides[k];
   }
   async getSubscription(_u: string) {
     return { tier: "free", status: "active" } as any;
@@ -30,10 +55,19 @@ const stripe = {
   subscriptionItems: { createUsageRecord: (id: string, r: any) => ({ id, qty: r.quantity }) },
 };
 
+function makeBilling(db: StubDb, st: any) {
+  return new BillingService(cfg, db as any, st, new EntitlementsService(db as any, cfg));
+}
+function newDecideDb() {
+  const db = new StubDb();
+  db.now = new Date("2026-09-15T00:00:00Z");
+  return db;
+}
+
 describe("decide fixed-fee billing ($0.01/shot)", () => {
   it("free user passes within the included decide allowance", async () => {
-    const db = new StubDb();
-    const b = new BillingService(cfg, db as any, stripe);
+    const db = newDecideDb();
+    const b = makeBilling(db, stripe);
     const sub = await db.getSubscription(user.id);
     await expect(b.canDecide(user, sub)).resolves.toBeUndefined();
     await b.onDecideCompleted(user, sub);
@@ -41,16 +75,27 @@ describe("decide fixed-fee billing ($0.01/shot)", () => {
   });
 
   it("free user is gated (402) once the included allowance is exhausted", async () => {
-    const db = new StubDb();
-    const b = new BillingService(cfg, db as any, stripe);
+    const db = newDecideDb();
+    const b = makeBilling(db, stripe);
     const sub = await db.getSubscription(user.id);
     for (let i = 0; i < cfg.freeDecides; i++) await b.onDecideCompleted(user, sub);
     // allowance now 3/3 used -> next decide is billed at $0.01 -> gate
     await expect(b.canDecide(user, sub)).rejects.toBeInstanceOf(BillingRequiredError);
   });
 
+  it("a free user's decide allowance resets at the start of the next period", async () => {
+    const db = newDecideDb();
+    const b = makeBilling(db, stripe);
+    const sub = await db.getSubscription(user.id);
+    for (let i = 0; i < cfg.freeDecides; i++) await b.onDecideCompleted(user, sub);
+    await expect(b.canDecide(user, sub)).rejects.toBeInstanceOf(BillingRequiredError);
+    // Roll into the next month -> the per-period ledger is empty again.
+    db.now = new Date("2026-10-01T00:00:00Z");
+    await expect(b.canDecide(user, sub)).resolves.toBeUndefined();
+  });
+
   it("pro-active user is never gated and overage is metered as usage records", async () => {
-    const db = new StubDb();
+    const db = newDecideDb();
     const recordingStripe = {
       subscriptionItems: {
         createUsageRecord: (id: string, r: any) => {
@@ -59,7 +104,7 @@ describe("decide fixed-fee billing ($0.01/shot)", () => {
         },
       },
     };
-    const b = new BillingService(cfg, db as any, recordingStripe);
+    const b = makeBilling(db, recordingStripe);
     const proSub = { ...(await db.getSubscription(user.id)), tier: "pro", status: "active", stripeSubItemId: "si_1" } as any;
     await expect(b.canDecide(user, proSub)).resolves.toBeUndefined();
     // use beyond the free allowance -> Stripe PAYG usage record posted

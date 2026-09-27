@@ -525,7 +525,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return {
       tier: sub.tier,
       status: sub.status,
-      usedHighlights: await db.countUsage(user.id, "highlight"),
+      // Both figures derive from the SAME per-period entitlement ledger (not the
+      // lifetime usage_events counter) so enforcement, display, and this status
+      // surface can never drift apart (ADAAAA-5129).
+      usedHighlights: await entitlements.used(user.id),
       freeHighlights: cfg.freeHighlights,
       // Per-user per-calendar-month clip quota (the entitlement ledger) surfaced
       // so the UI can show remaining quota and so an exhausted quota is visible
@@ -565,7 +568,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     app.post("/dev/billing/reset-usage", { preHandler: authReq }, async (req: any, reply) => {
       const user = (req as any).user;
       await db.resetUsage(user.id, "highlight");
-      return reply.send({ ok: true, usedHighlights: await db.countUsage(user.id, "highlight") });
+      await db.resetUsage(user.id, "decide");
+      // The per-period quota ledger is the enforcement + display counter now
+      // (ADAAAA-5129); reset the current period so the "reset" fully restores a
+      // fresh month's allowance rather than leaving the ledger drifting from
+      // what `/billing/status` reports.
+      await db.resetQuota(user.id, entitlements.periodKey());
+      return reply.send({ ok: true, usedHighlights: await entitlements.used(user.id) });
     });
   }
 

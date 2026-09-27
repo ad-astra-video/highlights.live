@@ -283,20 +283,36 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     await app.close();
   });
 
-  it("rejects a user's job when the free allowance is exhausted (402)", async () => {
-    const { app, db } = await buildTestApp({ FREE_HIGHLIGHTS: "2" });
+  it("NO 402 from a full lifetime usage_events counter while the current-period ledger has room (ADAAAA-5129)", async () => {
+    const { app, db } = await buildTestApp();
     const token = await register(app, "c@test.dev", "password123");
     const cid = (await db.getUserByEmail("c@test.dev"))!.id;
-    await db.recordUsage(cid, "highlight");
-    await db.recordUsage(cid, "highlight");
+    // Simulate the historical divergence: the LIFETIME usage_events counter is
+    // already over the free cap, but the current-period entitlement ledger is
+    // untouched (the UI would show quota remaining). Enforcement must read the
+    // per-period ledger, so the job is accepted — no 402 "free allowance used".
+    for (let i = 0; i < 50; i++) await db.recordUsage(cid, "highlight");
     const res = await app.inject({
       method: "POST",
       url: "/jobs",
       headers: { authorization: `Bearer ${token}` },
       payload: { videoPath },
     });
-    expect(res.statusCode).toBe(402);
-    expect(res.json().upgrade).toBe("/billing/checkout");
+    expect(res.statusCode).not.toBe(402);
+    expect(res.statusCode).not.toBe(429); // current-period quota still available
+    await app.close();
+  });
+
+  it("/billing/status usedHighlights and clipQuotaUsed agree (same per-period ledger, ADAAAA-5129)", async () => {
+    const { app, db } = await buildTestApp();
+    const token = await register(app, "agree@test.dev", "password123");
+    const uid = (await db.getUserByEmail("agree@test.dev"))!.id;
+    // Debit the current-period clip ledger once; leave lifetime usage_events as-is.
+    const period = (await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } })).json().clipQuotaPeriod;
+    await db.incrementQuota(uid, period);
+    await db.recordUsage(uid, "highlight"); // lifetime counter is now 1 as well
+    const s = (await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } })).json();
+    expect(s.usedHighlights).toBe(s.clipQuotaUsed);
     await app.close();
   });
 });
