@@ -321,7 +321,6 @@ export const JobSchema = z.object({
   // §4.5). All optional on Job — additive, no contract version bump. Persisted
   // by runVodJob so the per-video cost + FP gate are measurable exactly as on
   // the live path.
-  sampleFps: z.number().positive().optional(),
   frameScale: z.string().optional(),
   decideWindowN: z.number().int().positive().optional(),
   framesAnalyzed: z.number().int().min(0).optional(),
