@@ -1,0 +1,36 @@
+{
+  "$comment": "Runner paired-mode self-check fixture (NOT pipeline evidence). A Vod-pass trace that out-depths a live-baseline trace over the same clips: identical detect/decide behaviour (recall/precision/FP identical) except the VOD pass forwards more frames per trigger (framesJudged) and longer/reason-detailed decisions, so A4 (mean D_vod > D_live) differs while the other bars are held constant. Validates the paired accounting + out-depth gate, not the pipeline.",
+  "vod": {
+    "events": [
+      {"type":"candidate","clipId":"soc-goal-01","eventType":"GOAL","timestamp":12.0},
+      {"type":"decision","clipId":"soc-goal-01","timestamp":13.5,"framesJudged":24,
+       "decision":{"isHighlight":true,"eventType":"GOAL",
+                   "reason":"goal: striker on the ball, ball into goal, crowd erupts, players pile, bench dugout reaction, score 1-0"}},
+      {"type":"candidate","clipId":"soc-goal-02","eventType":"GOAL","timestamp":40.0},
+      {"type":"decision","clipId":"soc-goal-02","timestamp":41.8,"framesJudged":22,
+       "decision":{"isHighlight":true,"eventType":"GOAL",
+                   "reason":"goal: possession by striker, reaction crowd swell, players celebrate, score 2-0"}},
+      {"type":"candidate","clipId":"soc-near-01","eventType":"GOAL","timestamp":8.0},
+      {"type":"decision","clipId":"soc-near-01","timestamp":9.5,"framesJudged":20,
+       "decision":{"isHighlight":true,"eventType":"GOAL",
+                   "reason":"near goal: striker shot on target, crowd applause, ball close to goal"}}
+    ],
+    "stageA": {"totalCandidates": 4, "rejected": 1},
+    "tracking": {"soc-goal-01": {"persistencePct": 0.97, "speedErrorPct": 0.07, "possessionCorrect": true}}
+  },
+  "live": {
+    "events": [
+      {"type":"candidate","clipId":"soc-goal-01","eventType":"GOAL","timestamp":12.0},
+      {"type":"decision","clipId":"soc-goal-01","timestamp":13.5,"framesJudged":3,
+       "decision":{"isHighlight":true,"eventType":"GOAL","reason":"goal"}},
+      {"type":"candidate","clipId":"soc-goal-02","eventType":"GOAL","timestamp":40.0},
+      {"type":"decision","clipId":"soc-goal-02","timestamp":41.8,"framesJudged":3,
+       "decision":{"isHighlight":true,"eventType":"GOAL","reason":"shot, crowd"}},
+      {"type":"candidate","clipId":"soc-near-01","eventType":"GOAL","timestamp":8.0},
+      {"type":"decision","clipId":"soc-near-01","timestamp":9.5,"framesJudged":3,
+       "decision":{"isHighlight":true,"eventType":"GOAL","reason":"near"}}
+    ],
+    "stageA": {"totalCandidates": 4, "rejected": 1},
+    "tracking": {"soc-goal-01": {"persistencePct": 0.97, "speedErrorPct": 0.07, "possessionCorrect": true}}
+  }
+}

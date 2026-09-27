@@ -1,0 +1,1283 @@
+{
+  "events": [
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 1.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 1.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 2.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player striking the ball towards the goal area with high-motion celebration cues from nearby players, indicating a successful goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 3.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A soccer player in a maroon jersey is shown in a dynamic, high-motion pose following a play, with another player in blue nearby, suggesting a goal was just scored or a significant scoring opportunity occurred.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 4.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard play in progress with no goal scored or significant highlight action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 3.75,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player about to strike the ball, but no goal is scored within the provided frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 6.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a blue jersey striking the ball towards the goal, followed by a celebration where players raise their arms in excitement.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 6.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a maroon shirt successfully strikes the ball into the goal area, followed by high-motion celebration from nearby players.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a maroon jersey is shown striking the ball towards the goal, with a defender in blue attempting to block, and the visual cues suggest a scoring opportunity or goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a soccer practice or casual game with no clear goal being scored or significant action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 1
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 9.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 10.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 11.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 2.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored in a soccer match, with a player in a red kit celebrating and a high-motion reaction from others on the field.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 4.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard play in the middle of the pitch with no goal scored or significant action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 4.75,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard play in the middle of the pitch with no goal scored or significant scoring action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.021,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 6.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored as the ball crosses the goal line, followed by immediate celebration from the attacking team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 8.75,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard play in the middle of the pitch with no goal scored or significant celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.008,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 11.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a red kit (number 2) successfully striking the ball past a sliding defender into the goal area, followed by a celebration pose.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.058,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 12.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a Liverpool player (Sadio Man\u00e9) striking the ball into the net, followed by a goal celebration and a wide-angle view of the goal being scored in a high-profile match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.053,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 13.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer player in a blue kit has just scored a goal, with a teammate nearby and the opposing team in a state of reaction near the goal line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.033,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 1
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 3.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 8.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 10.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 11.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 5.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored in the bottom right corner of the frame, with a player in a red kit celebrating and the crowd reacting.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 1,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 6.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored in a high-stakes FA Cup match, evidenced by the player's celebration and the positioning of the ball in the net.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 1,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard phase of play with no goal scored or significant action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.047,
+        "audioKind": "",
+        "humansInMotion": 1,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 10.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored in a high-profile match between Manchester City and Liverpool in the FA Cup, evidenced by the ball crossing the goal line and the subsequent celebration by the attacking team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 1,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 12.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored as the ball crosses the goal line into the net, followed by a celebration from the attacking team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.055,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 13.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a light blue kit is shown in a dynamic running motion towards the bottom right corner, while a player in a red kit is nearby, suggesting a goal has just been scored or is about to be scored in a high-stakes FA Cup match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 1
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 0.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 2.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored in a high-profile match between Manchester City and Manchester United, with players in celebration and a clear goal-scoring action.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 6.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard play in the middle of the pitch with no goal scored or significant action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a light blue kit successfully maneuvering past a defender in red to strike the ball into the net, resulting in a goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.024,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 8.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a Manchester City player striking the ball towards the goal while a Liverpool defender is in pursuit, capturing the moment of a goal-scoring attempt.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.005,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 3.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 8.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 5.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored in the bottom right corner of the frame, with a player in a red kit celebrating and the crowd reacting.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 1,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 6.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored in a high-stakes FA Cup match, evidenced by the player's celebration and the positioning of the ball in the net.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 1,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard phase of play with no goal scored or significant action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.047,
+        "audioKind": "",
+        "humansInMotion": 1,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 10.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored in a high-profile Emirates FA Cup match between Manchester City and Liverpool, evidenced by the player's celebration and the positioning of the players near the goal line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 1,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 1
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 5.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 8.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 7.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored in a high-stakes soccer match, evidenced by the players' positions and the celebratory reaction of the players on the field.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 10.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard play in the middle of the pitch with no goal scored or immediate celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 2
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 9.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 12.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 2.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer player in a red kit is shown in the process of scoring a goal, with a teammate nearby and a goalkeeper in the vicinity, capturing a key scoring moment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.01,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 4.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard phase of play with no goal scored or significant celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.067,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 4.75,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard play in the middle of the pitch with no goal scored or significant celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.028,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 11.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard play in the middle of the pitch with no goal scored or significant action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 14.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored as a player in a red kit celebrates with arms raised while the opposing team in light blue reacts in disappointment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 7.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 2.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard play in progress with no goal scored or significant highlight action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.002,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 6.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard kickoff or a neutral ball situation in the center circle with no goal scored or significant action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.167,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 9.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored in a high-profile match between Manchester City and Manchester United, with players in celebratory motion.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 4.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 5.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 4.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored in a high-profile match at the Etihad Stadium, with players in celebration and a clear goal-scoring action.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 6.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard build-up play in the middle of the pitch with no goal scored or significant scoring action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.128,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 6.75,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard play in progress with no goal scored or significant action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.047,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored in the bottom corner of the net, with players in red celebrating and the crowd reacting.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 7.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored in the bottom corner of the net, with players in high-motion celebration and a visible reaction from the crowd.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 1.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 2.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a red kit striking the ball past a defender into the goal area, followed by a celebration motion.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 3.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a light blue jersey striking the ball past a defender in a red jersey, with the ball moving toward the goal area and the defender in a high-motion reaction.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 4.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a light blue kit successfully dribbling past a defender and striking the ball towards the goal, followed by a celebration from the attacking team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard build-up play with no goal scored or significant scoring opportunity occurring within the frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.076,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 3
+    }
+  ],
+  "stageA": {
+    "totalCandidates": 49,
+    "rejected": 18
+  },
+  "tracking": {}
+}

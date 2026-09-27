@@ -228,11 +228,8 @@ export class OrchestratorAdapter implements PipelineClient {
       gameHint?: string;
       imageB64?: string;
       reasoningEffort?: string;
-      // ADAAAA-4785 (live latency-first): temporal frame sequence + audio clip
-      // around a noise trigger, forwarded to Gemma for video+audio analysis.
-      frames?: { role?: string; base64: string; timestamp: number }[];
+      frames?: { role: string; base64: string }[];
       audioB64?: string;
-      audioSampleRate?: number;
     }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -244,13 +241,11 @@ export class OrchestratorAdapter implements PipelineClient {
       reasoningEffort: opts?.reasoningEffort || "none",
       evidence,
       images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
-      // ADAAAA-4785 (live latency-first): forward the temporal frame sequence
-      // + audio clip around the noise trigger so Gemma analyzes video + audio
-      // frames, not a single still. Opt-in fields; decide runner ignores them
-      // when absent (rule mode / VOD with no audio).
+      // Detail-first (ADAAAA-4954): the temporal frame SEQUENCE + surrounding
+      // audio clip the Gemma runner reasons across. Absent on the live baseline.
       frames: opts?.frames ?? [],
       audioB64: opts?.audioB64 ?? "",
-      audioSampleRate: opts?.audioSampleRate ?? 16000,
+      audioSampleRate: 16_000,
     };
     // The decide runner is a fixed-price single-shot live runner; the first
     // unpaid call 402s with a payment challenge. On-chain (signer + payer
@@ -371,11 +366,8 @@ export class DirectAdapter implements PipelineClient {
       gameHint?: string;
       imageB64?: string;
       reasoningEffort?: string;
-      // ADAAAA-4785 (live latency-first): temporal frame sequence + audio clip
-      // around a noise trigger, forwarded to Gemma for video+audio analysis.
-      frames?: { role?: string; base64: string; timestamp: number }[];
+      frames?: { role: string; base64: string }[];
       audioB64?: string;
-      audioSampleRate?: number;
     }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
@@ -391,7 +383,7 @@ export class DirectAdapter implements PipelineClient {
         images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
         frames: opts?.frames ?? [],
         audioB64: opts?.audioB64 ?? "",
-        audioSampleRate: opts?.audioSampleRate ?? 16000,
+        audioSampleRate: 16_000,
       }),
     });
     if (!r.ok) throw new Error(`decide failed: HTTP ${r.status}`);
