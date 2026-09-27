@@ -1,0 +1,883 @@
+{
+  "events": [
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 0.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 3.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 5.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 6.5
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 2.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player is shown in a dynamic striking motion with the ball at his feet, and the visual reaction cues suggest a significant scoring moment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 5.5,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a standard play in progress with no goal scored or immediate celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 7.5,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a soccer practice or low-intensity game with no clear goal-scoring action occurring; the ball is not visible and players are in neutral positions.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 8.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a maroon jersey is shown in a dynamic pose following a shot, with a teammate in blue celebrating nearby, indicating a goal was just scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 0.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 2.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 8.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 10.5
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 2.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a red kit is shown striking the ball into the net, followed by a celebration from teammates.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 4.5,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a live play in progress with the ball in the middle of the pitch; no goal has been scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.008,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 10.5,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a kickoff or a dead-ball situation with players positioned around the center circle; no goal is being scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.034,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 12.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a goal-scoring moment where a Liverpool player (Roberto Firmino) is in possession of the ball while a Manchester City defender is on the ground, indicating a successful offensive play.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.063,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 1.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 7.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 10.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 11.5
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 3.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer player in a red kit is seen celebrating a goal in the penalty area, with a teammate nearby and a crowd reaction visible.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 9.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal has just been scored, evidenced by the player in red celebrating with arms raised and the general positioning of the players near the goal line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 12.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a red kit is shown in a dynamic striking motion towards the goal, with a teammate nearby in a celebration-like posture, indicating a goal-scoring moment in a high-profile match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.016,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 13.5,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a live play in progress with no clear goal being scored or immediate celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.027,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 0.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 4.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 5.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 6.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 6.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 8.5
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 2.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer match is shown where a player in a red kit has just scored a goal, evidenced by the positioning of the players and the celebration cues.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 6.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a goal-scoring moment in a soccer match, with players in high-motion celebration and the ball near the goal line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 7.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer player in a light blue jersey has just struck the ball into the net, with a teammate celebrating in the background.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.081,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 8.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a red kit is shown in a dynamic striking motion, making contact with the ball towards the goal area, with a defender in a blue kit attempting to block.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.013,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 8.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a high-stakes moment in a soccer match where a Manchester City player is about to strike the ball past a defender, leading to a goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.013,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 10.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a high-intensity moment in a soccer match where a player in a light blue kit is about to strike the ball, with a defender in red closing in, indicating a goal-scoring opportunity.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 1.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 7.5
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 3.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer match is in progress with a player in a red kit having just scored a goal, evidenced by the positioning of the players and the celebration cues.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 9.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal has just been scored, evidenced by the red player celebrating with arms raised and the blue team's defensive posture near the goal line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 2.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 5.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 7.5
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 4.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a red kit has just struck the ball into the net, and the surrounding players and crowd are reacting to a goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 7.5,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a static moment of play in the midfield with no goal scored or immediate celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 9.5,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a standard play in the middle of the pitch with no goal scored or immediate celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.044,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 0.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 3.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 9.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 12.5
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 2.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a soccer match in progress with a player in a red kit moving towards the goal area, and the visual reaction cues suggest a significant play or goal event.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.018,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 5.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a high-intensity soccer match with players in active positions near the goal area, and the visual reaction cues suggest a goal has just occurred.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 11.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a red kit has just struck the ball into the net, and the surrounding players and crowd are reacting to a goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 14.5,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a kickoff or a dead-ball situation with the ball at the center circle; no goal has been scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 0.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 2.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 4.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 7.5
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 2.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer match is in progress with players in red and blue kits; the visual reaction of players in high motion suggests a goal has just been scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 4.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored in the center circle area, with players from both teams reacting to the play.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 6.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a goal-scoring moment in a soccer match, with players from both teams clustered in the center circle and a clear goal-scoring situation unfolding.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.253,
+        "audioKind": "swell",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 9.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a goal-scoring moment in a soccer match, with a player in a red kit having just struck the ball towards the goal while teammates and opponents are in active positions.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 3.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 5.5
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 5.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer player in a red kit has just scored a goal, as evidenced by the ball crossing the goal line and the immediate celebration of the attacking team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.129,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 7.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal has just been scored in the bottom corner of the net, with players in red celebrating and the crowd reacting.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 0.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 2.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 4.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 6.5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 8.5
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 2.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer player in a light blue kit is shown in a dynamic pose following a shot, with a ball visible in the foreground and a player in red pursuing, indicating a goal-scoring moment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 4.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a soccer player in possession of the ball moving towards the goal area with a defender in pursuit, capturing a key attacking moment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 6.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a high-intensity soccer match with players in active pursuit of the ball near the penalty area, and the visual reaction cues suggest a significant scoring moment or goal celebration.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 8.5,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer player in a blue kit is shown in a scoring position near the goal line, with a high-motion celebration cue from nearby players.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.148,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 10.5,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a standard phase of play with no goal being scored or immediate celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.036,
+        "audioKind": "",
+        "humansInMotion": 3
+      }
+    }
+  ],
+  "stageA": {
+    "totalCandidates": 38,
+    "rejected": 9
+  },
+  "tracking": {}
+}

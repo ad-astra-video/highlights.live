@@ -15,7 +15,12 @@ from typing import Deque, List, Optional, Tuple
 
 import numpy as np
 
-MAX_TRACKS = 2
+# Schema ceiling (VOD chart target). Live sessions run at a lower capacity
+# (see LIVE_MAX_TRACKS in packages/events). `IoUTracker`/`HybridTracker` accept
+# an explicit `capacity` so the session can raise/lower it per mode.
+MAX_TRACKS = 8
+LIVE_MAX_TRACKS = 3
+VOD_MAX_TRACKS = 8
 
 BBox = Tuple[float, float, float, float]  # x1, y1, x2, y2 normalized 0..1
 
@@ -23,12 +28,25 @@ BBox = Tuple[float, float, float, float]  # x1, y1, x2, y2 normalized 0..1
 @dataclass
 class Track:
     track_id: str
-    slot: int  # 0 | 1
+    slot: int  # 0..capacity-1
     bbox: BBox
     kind: str = "unknown"
     label: str = ""
     lost_frames: int = 0
     last_seen: float = 0.0
+    # INC-6 tracked-object semantics: a user-selected find-and-track target
+    # persisted across frames while on screen. `onto_frames` counts the frames
+    # it was matched (on-screen) over the tracked window; `accuracy` is the
+    # continuity metric matched/(matched+lost) since selection (1.0 = never lost).
+    selected: bool = False
+    onto_frames: int = 0
+    # VOD ID-persistence hardening (ADAAAA-5069): a track only becomes a
+    # permanent identity after it has been matched for `confirm_frames`
+    # CONSECUTIVE frames. A tentative (unconfirmed) track that is lost before
+    # confirmation is dropped without reserving identity/slot, so a single
+    # spurious or short-lived detection cannot fragment a real object's ID.
+    confirmed: bool = False
+    stable_frames: int = 0
     # for velocity-jump candidate detection
     prev_center: Optional[Tuple[float, float]] = None
     moved_frames: int = 0
@@ -38,6 +56,14 @@ class Track:
     # can be ANCHORED at the peak single-step (the strike moment) instead of the
     # later frame where accumulated displacement happens to cross the threshold.
     step_hist: Deque[Tuple[float, float]] = field(default_factory=lambda: deque(maxlen=10))
+
+    @property
+    def accuracy(self) -> Optional[float]:
+        """INC-6 tracking continuity: matched / (matched + lost) over the tracked
+        window; None when we have never matched this track on-screen."""
+        if not self.selected or self.onto_frames <= 0:
+            return None
+        return self.onto_frames / float(self.onto_frames + max(0, self.lost_frames))
 
 
 @dataclass
@@ -61,8 +87,8 @@ def _iou(a: BBox, b: BBox) -> float:
     return inter / (area_a + area_b - inter + 1e-9)
 
 
-def foreground_blobs(gray: np.ndarray, prev: Optional[np.ndarray], thresh: float = 28.0) -> List[BBox]:
-    """Return bounding boxes of the largest two foreground regions.
+def foreground_blobs(gray: np.ndarray, prev: Optional[np.ndarray], thresh: float = 28.0, capacity: int = MAX_TRACKS) -> List[BBox]:
+    """Return bounding boxes of the largest `capacity` foreground regions.
 
     gray/prev are float32 in [0,255], shape (H,W). Regions smaller than
     `min_area_frac` of the image are noise and dropped.
@@ -92,7 +118,7 @@ def foreground_blobs(gray: np.ndarray, prev: Optional[np.ndarray], thresh: float
         blobs.append((w * h, w, h, (x1 + x2) / 2, (y1 + y2) / 2))
     blobs.sort(key=lambda b: -b[0])  # largest area first
     out: List[BBox] = []
-    for _area, w, h, cx, cy in blobs[:MAX_TRACKS]:
+    for _area, w, h, cx, cy in blobs[:capacity]:
         x1, y1 = max(0.0, cx - w / 2), max(0.0, cy - h / 2)
         x2, y2 = min(1.0, cx + w / 2), min(1.0, cy + h / 2)
         out.append((x1, y1, x2, y2))
@@ -104,30 +130,52 @@ class IoUTracker:
     # action/combat moment -> KILL-tier candidate. Slower drift -> MOVE.
     FAST_STEP = 0.15
 
-    def __init__(self, jump_velocity: float = 0.2, lost_before_evict: int = 8, cooldown_s: float = 2.0):
+    def __init__(self, jump_velocity: float = 0.2, lost_before_evict: int = 8, cooldown_s: float = 2.0, capacity: int = MAX_TRACKS, confirm_frames: int = 2, resurrect_window_frames: int = 15):
         self.tracks: List[Track] = []
         self.jump_velocity = jump_velocity
         self.lost_before_evict = lost_before_evict
         self.cooldown_s = cooldown_s
+        self.capacity = max(1, int(capacity))
         self.last_candidate: float = -1e9
         # Slots that refuse automatic eviction (control `lock`). A locked slot
         # that loses its object keeps its last bbox instead of being dropped.
         self.locked: set[int] = set()
+        # VOD ID-persistence hardening (ADAAAA-5069).
+        # `confirm_frames`: a detection must be matched on this many CONSECUTIVE
+        # frames before its track is promoted to a permanent identity. This
+        # stops a single spurious/short-lived detection from grabbing a slot and
+        # fragmenting a real object's ID when it re-detects.
+        self.confirm_frames = max(1, int(confirm_frames))
+        # `resurrect_window_frames`: after a CONFIRMED track is evicted (object
+        # dropped out of detection / exited), remember its last identity + box
+        # for this many frames. If a detection reappears near that box within
+        # the window, reuse the SAME track id (dropout-tolerant matching) instead
+        # of minting a new identity and splitting the object's ID.
+        self.resurrect_window_frames = max(0, int(resurrect_window_frames))
+        self._frame = 0
+        # recently-evicted confirmed identities: {track_id: (bbox, evicted_frame)}
+        self._ghosts: dict = {}
 
     # --- operator control (§3.4) -------------------------------------------
-    def seed(self, bbox: BBox, kind: str = "unknown", label: str = "", slot: int | None = None, ts: float = 0.0) -> Track:
+    def seed(self, bbox: BBox, kind: str = "unknown", label: str = "", slot: int | None = None, ts: float = 0.0, selected: bool = False) -> Track:
         """Force a track into a slot from an operator-provided box. Replaces any
-        existing occupant of that slot. Returns the created Track."""
+        existing occupant of that slot. Returns the created Track. `selected=True`
+        marks it as an INC-6 find-and-track target (persisted + accuracy tracked)."""
         # normalize bbox to 0..1
         b = tuple(min(max(float(x), 0.0), 1.0) for x in bbox)
         if slot is not None:
-            slot = int(slot)
+            slot = min(max(int(slot), 0), self.capacity - 1)
         else:
             used = {t.slot for t in self.tracks}
-            slot = next((s for s in (0, 1) if s not in used), 0)
+            slot = next((s for s in range(self.capacity) if s not in used), 0)
         # evict any current occupant of the slot
         self.tracks = [t for t in self.tracks if t.slot != slot]
-        tr = Track(track_id=f"seed-{int(time.time()*1000)}-{slot}", slot=slot, bbox=b, kind=kind, label=label, last_seen=ts)
+        tr = Track(track_id=f"seed-{int(time.time()*1000)}-{slot}", slot=slot, bbox=b, kind=kind, label=label, last_seen=ts, selected=selected)
+        # An operator/selection seed is a deliberate, trusted identity, so it is
+        # confirmed immediately (INC-6 find-and-track target).
+        if selected:
+            tr.confirmed = True
+            tr.stable_frames = self.confirm_frames
         self.tracks.append(tr)
         self.tracks.sort(key=lambda t: t.slot)
         return tr
@@ -147,7 +195,22 @@ class IoUTracker:
     def step(self, boxes: List[BBox], ts: float) -> List[Track]:
         """Match new boxes to existing tracks: IoU if they overlap, else nearest
         centroid within a distance gate (so a fast-moving blob stays ONE track).
-        Create/evict as needed; accumulate per-frame displacement."""
+        Create/evict as needed; accumulate per-frame displacement.
+
+        VOD ID-persistence hardening (ADAAAA-5069):
+          - CONFIRMATION: a brand-new detection only becomes a permanent identity
+            after it is matched on `confirm_frames` consecutive frames. A track
+            that is lost before confirmation is dropped without reserving a slot
+            or identity (a single spurious/short-lived detection cannot fragment
+            a real object's ID).
+          - RESURRECTION: when a CONFIRMED track is evicted (per-frame detector
+            dropout on real video, or enter/exit), its identity is remembered for
+            `resurrect_window_frames`. A box that reappears near its last bbox is
+            matched to the SAME track id instead of minting a new identity, so
+            the object's ID persists across short detection gaps.
+        """
+        self._frame += 1
+        self._prune_ghosts()
         unmatched = list(boxes)
         matched_tracks: set[int] = set()
         for tr in list(self.tracks):
@@ -171,27 +234,95 @@ class IoUTracker:
                 tr.prev_center = new_center
                 tr.bbox = new_bbox
                 tr.lost_frames = 0
+                # INC-6: a selected find-and-track target counts each matched
+                # (on-screen) frame, feeding the continuity/accuracy metric.
+                if tr.selected:
+                    tr.onto_frames += 1
                 tr.last_seen = ts
+                # Confirmation: consecutive stable matches promote to identity.
+                if not tr.confirmed:
+                    tr.stable_frames += 1
+                    if tr.stable_frames >= self.confirm_frames:
+                        tr.confirmed = True
                 matched_tracks.add(id(tr))
             else:
                 tr.lost_frames += 1
                 # Locked slots survive repeated lost frames (operator pinned them).
                 if tr.lost_frames > self.lost_before_evict and tr.slot not in self.locked:
                     self.tracks.remove(tr)
+                    # Remember a CONFIRMED identity that timed out (per-frame
+                    # detector dropout / enter-exit) so a near reappearance can
+                    # resurrect the same id. Unconfirmed tracks leave no ghost.
+                    if tr.confirmed and self.resurrect_window_frames > 0:
+                        self._ghosts[tr.track_id] = (tr.bbox, self._frame)
 
-        # create tracks for remaining unmatched boxes into free slots (0,1)
+        # create tracks for remaining unmatched boxes into free slots
         used = {t.slot for t in self.tracks}
-        free_slots = [s for s in (0, 1) if s not in used]
+        free_slots = [s for s in range(self.capacity) if s not in used]
         for b in unmatched:
             if not free_slots:
                 break
+            # Dropout-tolerant matching: prefer resurrecting a recently-evicted
+            # identity over minting a new one.
+            tid = self._resurrect(b)
             slot = free_slots.pop(0)
-            tr = Track(track_id=f"t{int(time.time()*1000)}-{slot}", slot=slot, bbox=b, kind="unknown", last_seen=ts)
+            if tid is not None:
+                tr = Track(track_id=tid, slot=slot, bbox=b, kind="unknown", last_seen=ts, confirmed=True)
+            else:
+                tr = Track(track_id=f"t{int(time.time()*1000)}-{slot}", slot=slot, bbox=b, kind="unknown", last_seen=ts)
             self.tracks.append(tr)
             used.add(slot)
 
         self.tracks.sort(key=lambda t: t.slot)
         return list(self.tracks)
+
+    def _prune_ghosts(self) -> None:
+        """Drop resurrection candidates older than the window."""
+        if self.resurrect_window_frames <= 0:
+            self._ghosts.clear()
+            return
+        cutoff = self._frame - self.resurrect_window_frames
+        self._ghosts = {tid: v for tid, v in self._ghosts.items() if v[1] > cutoff}
+
+    def _resurrect(self, box: BBox) -> Optional[str]:
+        """Return a reused track id for a detection that reappears near a
+        recently-evicted confirmed track, else None. A box must IoU-overlap or
+        sit within the movement gate of the ghost's last box to be the same
+        object (enter/exit + dropout tolerance without aliasing two objects)."""
+        if not self._ghosts:
+            return None
+        best_tid, best_score = None, 0.0
+        for tid, (bbox, _when) in self._ghosts.items():
+            iou = _iou(bbox, box)
+            score = iou
+            if iou < 0.05:
+                cd = self._centroid_gate(bbox, box)
+                if cd is not None:
+                    score = cd
+                else:
+                    continue
+            if score > best_score:
+                best_tid, best_score = tid, score
+        if best_tid is None:
+            return None
+        self._ghosts.pop(best_tid)
+        return best_tid
+
+    def seed_reuse_identity(self, bbox: BBox, ts: float = 0.0, kind: str = "unknown", label: str = "") -> Track:
+        """Seed a slot from a fresh detection, PRESERVING identity when the box
+        reappears near a recently-evicted confirmed track (used by the SAM path's
+        `_reseed_from`). Falls back to a fresh id for genuinely new objects.
+
+        Returns the created/updated Track. Confirmed when it resurrected an
+        existing identity (so it is not re-fragmented by confirmation)."""
+        tid = self._resurrect(bbox)
+        used = {t.slot for t in self.tracks}
+        slot = next((s for s in range(self.capacity) if s not in used), 0)
+        tr = Track(track_id=tid or f"t{int(time.time()*1000)}-{slot}", slot=slot, bbox=bbox, kind=kind, label=label, last_seen=ts, confirmed=tid is not None)
+        self.tracks = [t for t in self.tracks if t.slot != slot]
+        self.tracks.append(tr)
+        self.tracks.sort(key=lambda t: t.slot)
+        return tr
 
     @staticmethod
     def _centroid_gate(a: BBox, b: BBox, gate: float = 0.20) -> float | None:

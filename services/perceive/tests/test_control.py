@@ -172,3 +172,115 @@ def test_control_worker_contract_with_candidate():
     import json as _json
 
     _json.dumps(last)  # must not raise
+
+
+def test_live_analyze_with_soccer_game_hint_emits_GOAL():
+    """INC-8 (ADAAAA-4484): the live /analyze front door (the path the INC-7
+    deployed soccer drive used) must activate the closed vocabulary + sport
+    classification when the session is told gameHint='soccer'. Same fast-strike
+    frames that emit a generic KILL with no hint must surface as GOAL, so the
+    decide model judges and auto-cuts a real goal instead of rejecting a
+    shooter/combat label. Without this, §6 live recall can't be met."""
+    sid = _uuid_sid()
+    fired = False
+    for i, g in enumerate(_moving_frames(5, dx=12)):
+        r = client.post(
+            "/app/analyze",
+            json={
+                "seq": i,
+                "timestamp": float(i),
+                "image": _frame_jpeg(g),
+                "gameHint": "soccer",
+                "preferLabels": ["player", "soccer ball", "goal"],
+            },
+            headers={"X-Session-Id": sid},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        if "candidate" in body:
+            fired = True
+            assert body["candidate"]["eventType"] == "GOAL", body["candidate"]
+            # when a real detector is present the closed vocabulary is active
+            # (the stub test env has no detector, so this is asserted only when
+            # the observation surfaces a detector block).
+            det = body["observation"].get("detector")
+            if det is not None:
+                assert det.get("vocabulary") is True
+    assert fired, "expected a GOAL candidate from the soccer moving box"
+
+
+def test_live_analyze_soccer_alias_alias_or_default_still_emits_GOAL():
+    """INC-8: a human-facing gameHint like 'Premier League Match' (not the bare
+    word 'soccer') must map through _GAME_HINT_ALIASES to soccer and still emit
+    GOAL — the live drive must not fail just because the hint isn't literally
+    'soccer'."""
+    sid = _uuid_sid()
+    fired = False
+    for i, g in enumerate(_moving_frames(5, dx=12)):
+        r = client.post(
+            "/app/analyze",
+            json={"seq": i, "timestamp": float(i), "image": _frame_jpeg(g), "gameHint": "Premier League Match"},
+            headers={"X-Session-Id": sid},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        if "candidate" in body:
+            fired = True
+            assert body["candidate"]["eventType"] == "GOAL", body["candidate"]
+    assert fired, "expected a GOAL candidate from the aliased soccer hint"
+
+
+# --- INC-6 on-demand find-and-track -----------------------------------------
+
+
+def test_http_control_forward_track():
+    """INC-6: the HTTP /control endpoint (server -> perceive forward) delivers
+    a find-and-track intent to a reserved session and returns an ack."""
+    sid = _uuid_sid()
+    _create_session(sid)
+    r = client.post(
+        "/app/control",
+        json={"type": "track", "bbox": [0.2, 0.2, 0.4, 0.4], "kind": "player", "label": "p1"},
+        headers={"X-Session-Id": sid},
+    )
+    assert r.status_code == 200
+    ack = r.json()
+    assert ack["ok"] is True and ack["cmd"] == "track"
+    assert ack["selected"] is True
+    # unknown session -> 404
+    r2 = client.post("/app/control", json={"type": "track", "bbox": [0, 0, 1, 1]}, headers={"X-Session-Id": "nope"})
+    assert r2.status_code == 404
+
+
+def test_ws_track_intent_seeds_selected_object():
+    """INC-6: the surfaced `track` control selects an object (bbox) as a
+    find-and-track target and acks with its slot."""
+    sid = _uuid_sid()
+    _create_session(sid)
+    with client.websocket_connect(f"/app/ws?session_id={sid}") as ws:
+        ws.send_text('{"type":"track","bbox":[0.2,0.2,0.4,0.4],"kind":"player","label":"p1"}')
+        ack = ws.receive_json()
+        assert ack["ok"] is True and ack["cmd"] == "track"
+        assert ack["selected"] is True
+        assert ack["slot"] in (0, 1)
+
+
+def test_seed_selected_surfaces_accuracy_in_observation():
+    """INC-6: once a find-and-track target is selected and matched on-screen,
+    the /analyze observation carries selected/onScreen/ontoFrames/accuracy."""
+    sid = _uuid_sid()
+    _create_session(sid)
+    with client.websocket_connect(f"/app/ws?session_id={sid}") as ws:
+        ws.send_text('{"type":"track","bbox":[0.2,0.2,0.4,0.4],"kind":"player"}')
+        ack = ws.receive_json()
+        assert ack["ok"] is True
+    # re-analyze a blank frame with a matching blob in the tracked region
+    g = np.zeros((60, 80), dtype=np.float32)
+    g[12:24, 16:32] = 255.0  # ~0.2-0.4 normalized -> overlaps selected box
+    r = client.post("/app/analyze", json={"seq": 1, "timestamp": 1.0, "image": _frame_jpeg(g)}, headers={"X-Session-Id": sid})
+    body = r.json()
+    selected = [t for t in body.get("tracks", []) if t.get("selected")]
+    assert selected, "expected a selected find-and-track track in the observation"
+    assert selected[0]["onScreen"] is True
+    assert selected[0]["ontoFrames"] >= 1
+    assert "accuracy" in selected[0]

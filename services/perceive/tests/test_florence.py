@@ -185,6 +185,22 @@ def test_sport_specific_event_soccer_alias():
     assert florence.sport_specific_event_type("FA Cup", "MOVE") == "GOAL"
 
 
+def test_sport_specific_event_extended_soccer_aliases_inc8():
+    """INC-8 (ADAAAA-4484): a real operator/driver may hand a human league name
+    (Serie A, Ligue 1, Eredivisie, MLS, "soccer match", Uefa Champions League)
+    rather than the bare token 'soccer'. All must canonicalize to soccer so the
+    GOAL classification fires and the drive doesn't silently fall back to KILL."""
+    soc = ["Serie A", "Ligue 1", "Eredivisie", "Primeira Liga", "Liga MX",
+           "Major League Soccer", "MLS", "soccer match", "football match",
+           "UEFA Champions League", "Uefa Nations League"]
+    for hint in soc:
+        assert florence.sport_specific_event_type(hint, "KILL") == "GOAL", hint
+        assert florence.canonical_sport(hint) == "soccer", hint
+    # non-soccer stays intact
+    assert florence.sport_specific_event_type("NBA", "KILL") == "KILL"
+    assert florence.canonical_sport("NBA") == "basketball"
+
+
 def test_sport_specific_event_non_soccer_keeps_generic():
     # Unknown/unspecified game and non-goal sports keep the raw tracker type.
     assert florence.sport_specific_event_type(None, "KILL") == "KILL"
@@ -257,6 +273,7 @@ def test_capability_stub_is_one_fps(monkeypatch):
 
 def test_capability_tracks_measured_fps(monkeypatch):
     monkeypatch.setenv("PERCEIVE_MODE", "florence")
+    monkeypatch.setattr(florence, "_measured_fps", None)  # isolate: cold EMA
     for _ in range(10):
         florence.record_analyze(1.0)  # 1.0s/frame -> 1.0 fps
     c = florence.capability()
@@ -267,6 +284,7 @@ def test_capability_tracks_measured_fps(monkeypatch):
 
 def test_capability_slows_down_for_slow_card(monkeypatch):
     monkeypatch.setenv("PERCEIVE_MODE", "florence")
+    monkeypatch.setattr(florence, "_measured_fps", None)  # isolate: cold EMA
     for _ in range(5):
         florence.record_analyze(2.5)  # 0.4 fps
     c = florence.capability()

@@ -62,6 +62,43 @@ def parse_decision(text: str) -> dict | None:
     }
 
 
+def _reaction_summary(evidence: dict) -> list[str]:
+    """Render the people-reaction context lines for the decide prompt (INC-4 /
+    ADAAAA-4328). Contacts the INC-2 audio gate (crowd/commentary energy) and the
+    INC-2b ball signal, plus a cheap visual-celebration cue. Reaction is
+    corroborating evidence for the verdict, not the arbiter: Gemma still decides
+    on its full read of the frames + audio + play detail. Returns [] when no
+    reaction signal is present (no regression vs today's prompt)."""
+    r = evidence.get("reaction") or {}
+    if not isinstance(r, dict):
+        r = {}
+    out: list[str] = []
+    try:
+        ce = float(r.get("crowdEnergy", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        ce = 0.0
+    if ce > 0:
+        kind = (r.get("audioKind") or "").strip() or "crowd/commentary energy"
+        out.append(f"audio reaction: {kind} at crowd energy {ce:.2f}/1.0")
+    try:
+        him = int(r.get("humansInMotion", 0) or 0)
+    except (TypeError, ValueError):
+        him = 0
+    if him > 0:
+        out.append(f"visual reaction: {him} human(s) in high motion (celebration cue)")
+    try:
+        bsp = float(r.get("ballSpeedMps", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        bsp = 0.0
+    if bsp > 0:
+        possessor = (r.get("ballPossessionId") or "").strip()
+        out.append(
+            f"ball context: {bsp:.1f} m/s"
+            + (f" toward/at possession player {possessor}" if possessor else "")
+        )
+    return out
+
+
 def build_prompt(
     event_type: str,
     evidence: dict,
@@ -79,6 +116,10 @@ def build_prompt(
         f"frames shown (1 FPS temporal window): {n_frames}",
         f"audio provided (commentary/crowd): {'yes' if has_audio else 'no'}",
     ]
+    reaction_lines = _reaction_summary(evidence)
+    if reaction_lines:
+        meta.append("people-reaction evidence:")
+        meta.extend("  " + ln for ln in reaction_lines)
     return (
         "You are a sports/esports highlight judge. You are shown a temporal "
         "SEQUENCE of frames (extracted at 1 FPS from the moment of a detected "
@@ -88,6 +129,12 @@ def build_prompt(
         "location, scoreboard/OCR) AND the audio (commentary, crowd, whistle) to "
         "decide whether this is a real highlight worth clipping, and to classify "
         "the event precisely.\n"
+        "When people are visible, EXPLICITLY describe their reaction and weigh it "
+        "as evidence: players with arms raised, a group pile/team huddle, "
+        "bench/dugout leaping up to celebrate, or the crowd/commentary erupting. "
+        "Reaction is corroborating evidence only - cite it, but decide on your "
+        "full read of the frames, audio, and context; never let reaction alone "
+        "override a clear read of the play.\n"
         "Context:\n- " + "\n- ".join(meta) + "\n\n"
         "Do NOT provide any reasoning or thinking. Answer immediately with ONLY one "
         "JSON object, no markdown, no preamble, exactly: "
