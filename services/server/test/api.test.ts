@@ -617,6 +617,17 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
     await app.close();
   });
 
+  // ADAAAA-5204 (5168 frontend leg): /config exposes the rejected-clip recovery
+  // TTL so the UI derives its "recover until" deadline from the server's own
+  // purge config, guaranteeing zero false recoverability claims after TTL.
+  it("GET /config exposes the rejected-clip recovery TTL", async () => {
+    const { app } = await buildTestApp({ REJECTED_CLIP_TTL_MS: String(2 * 60 * 60 * 1000) });
+    const res = await app.inject({ method: "GET", url: "/config" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().rejectedClipTtlMs).toBe(2 * 60 * 60 * 1000);
+    await app.close();
+  });
+
   // ADAAAA-5059: a delivered highlight is trimmed to the configured event window
   // ([event - clipBeforeS, event + clipAfterS]) — clearly shorter than the full
   // sampled segment — and the trimmed duration is respected in the emitted file.

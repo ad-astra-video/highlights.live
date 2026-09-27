@@ -196,6 +196,11 @@ export const HighlightRecordSchema = z.object({
   score: z.number().min(0).max(100),
   reason: z.string().optional(),
   status: z.enum(["pending", "accepted", "rejected"]).default("pending"),
+  // When the clip entered `rejected` (soft-delete undo grace start). Set on
+  // reject, cleared on reject->accept (cancels pending TTL purge). Only
+  // `rejected` clips with a `rejectedAt` aged >= rejectTtlMs are ever purge
+  // candidates — accepted/published/pending/queued clips are never touched.
+  rejectedAt: z.string().optional(),
   createdAt: z.string(),
 });
 export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
