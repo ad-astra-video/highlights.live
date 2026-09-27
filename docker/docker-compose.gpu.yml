@@ -45,6 +45,40 @@ services:
               device_ids: ["0"]
               capabilities: [gpu]
 
+  # Fine-tune runner (highlights-train): Florence-2 <OD> LoRA, single-shot,
+  # served by the FastAPI app at /app/train (http://train:8083 per
+  # docker/runners.json mode single-shot). Built from Dockerfile.train; the
+  # orchestrator proxies /app/train to it and it blocks until checkpoint+eval
+  # are written. Checkpoints/evals land in the host RUNS_DIR mount, and the HF
+  # token + cache mount parallels the perceive runner (gated weights).
+  train:
+    image: adastravideo/highlights-live:train
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.train
+    container_name: highlights-train
+    environment:
+      - HF_HOME=/models/hf-cache
+      - HF_TOKEN=${HF_TOKEN:-}
+      - TRAIN_OUT=/runs
+      - TRAIN_WORK_ROOT=/runs/train-work
+    volumes:
+      # HF cache (holds both the token and downloaded/base weights) — shared
+      # with perceive so a warm cache is reused across fine-tunes.
+      - ${HF_CACHE_DIR:-/home/brad/.cache/huggingface}:/models/hf-cache
+      # Produced LoRA adapter + merged model + eval reports (TRAIN_OUT).
+      - ${RUNS_DIR:-./runs}:/runs
+    expose: ["8083"] # only on the private hl network (orchestrator proxy -> train:8083)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # Fine-tune (Florence-2 LoRA) shares GPU 0 = RTX 3090 Ti with perceive.
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    networks: [hl]
+
   # Gemma VLM: same llama.cpp server as the base stack, but attach the GPU so
   # the DECIDE VLM actually offloads (base compose is CPU-only for local labs).
   # Matches the production launch: --n-gpu-layers 99, q8_0 KV cache, parallel 2.
