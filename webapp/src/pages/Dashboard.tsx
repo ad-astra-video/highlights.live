@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X } from "lucide-react";
+import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X, ChevronDown, ChevronRight } from "lucide-react";
 import { api, type Highlight, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
 import { isOverLimit, oversizedHelp } from "../lib/vodUpload";
+import { DEFAULT_REJECTED_CLIP_TTL_MS, isRecoverable, recoverLabel } from "../lib/rejected";
 import { useAuth } from "../lib/auth";
 import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
@@ -60,6 +61,13 @@ export function Dashboard() {
   const [liveJob, setLiveJob] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [debugJob, setDebugJob] = useState<string | null>(null);
+  // rejected-clips lifecycle (ADAAAA-5168/5204): the server's recovery TTL (for
+  // "recover until" deadlines), whether the collapsed rejected section is open,
+  // and a ticking `now` so relative deadlines stay accurate while the section
+  // is visible (a rejected clip's recovery clock is real-time, not render-time).
+  const [rejectedTtlMs, setRejectedTtlMs] = useState<number>(DEFAULT_REJECTED_CLIP_TTL_MS);
+  const [rejectedOpen, setRejectedOpen] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
   const isLive = source !== "file";
 
@@ -83,12 +91,21 @@ export function Dashboard() {
     refreshHighlights().catch(() => {});
     // Keep the client-side upload cap in sync with the server's
     // VOD_MAX_UPLOAD_BYTES so a pre-flight >cap rejection matches the 413.
-    api<{ vodMaxUploadBytes?: number }>("/config")
+    api<{ vodMaxUploadBytes?: number; rejectedClipTtlMs?: number }>("/config")
       .then((c) => {
         if (c?.vodMaxUploadBytes && c.vodMaxUploadBytes > 0) setVodMax(c.vodMaxUploadBytes);
+        if (c?.rejectedClipTtlMs && c.rejectedClipTtlMs > 0) setRejectedTtlMs(c.rejectedClipTtlMs);
       })
       .catch(() => {});
   }, []);
+
+  // Tick the rejected-clip recovery clock while the section is expanded so the
+  // relative "recover until" deadlines and the Recover affordance stay live.
+  useEffect(() => {
+    if (!rejectedOpen) return;
+    const iv = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [rejectedOpen]);
 
   // Poll a running live job until it finishes.
   useEffect(() => {
@@ -374,42 +391,155 @@ export function Dashboard() {
 
       {debugJob && <FrameDebugger jobId={debugJob} />}
 
+      {/* Rejected clips live in a separate, collapsed section (distinct from the
+          accepted/published feed) so the user can inspect them before the 24h
+          TTL purge (ADAAAA-5163/5204). While a clip is within its undo window
+          we show a live "Recover until …" deadline + a Recover affordance; once
+          past TTL (or hard-deleted by the sweep) the indicator and affordance
+          disappear and the section reflects the API's current lifecycle. */}
+      <RejectedSection
+        highlights={highlights}
+        now={now}
+        ttlMs={rejectedTtlMs}
+        open={rejectedOpen}
+        onToggle={() => setRejectedOpen((o) => !o)}
+        onRecover={(id) => review(id, "accepted")}
+        onError={setError}
+      />
+
       <h2 className="mt-10 text-2xl font-black">Your highlights</h2>
       <div className="mt-4 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-        {highlights.length === 0 && <div className="text-mut">Nothing yet — run a detection above.</div>}
-        {highlights.map((h) => (
-          <div key={h.id} className="card card-hover overflow-hidden">
-            <VideoClip src={h.clipUri} label={h.eventType} />
-            <div className="p-4">
-              <div className="flex items-center justify-between">
-                <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">{h.eventType || "EVENT"}</span>
-                <span className={`text-xs ${h.status === "accepted" ? "text-green" : h.status === "rejected" ? "text-red" : "text-yellow"}`}>
-                  {h.status}
-                </span>
-              </div>
-              <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
-              <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
-              <div className="text-xs text-mut">T+{Math.round(h.start)}s → T+{Math.round(h.end)}s</div>
-              <div className="mt-3 flex gap-2">
-                <button
-                  className="btn-neon flex-1"
-                  disabled={h.status === "accepted"}
-                  onClick={() => review(h.id, "accepted")}
-                >
-                  <Check className="mr-1 inline h-4 w-4" /> Accept
-                </button>
-                <button
-                  className="btn-neon btn-pink flex-1"
-                  disabled={h.status === "rejected"}
-                  onClick={() => review(h.id, "rejected")}
-                >
-                  <X className="mr-1 inline h-4 w-4" /> Reject
-                </button>
+        {highlights.filter((h) => h.status !== "rejected").length === 0 && (
+          <div className="text-mut">Nothing yet — run a detection above.</div>
+        )}
+        {highlights
+          .filter((h) => h.status !== "rejected")
+          .map((h) => (
+            <div key={h.id} className="card card-hover overflow-hidden">
+              <VideoClip src={h.clipUri} label={h.eventType} />
+              <div className="p-4">
+                <div className="flex items-center justify-between">
+                  <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">{h.eventType || "EVENT"}</span>
+                  <span className={`text-xs ${h.status === "accepted" ? "text-green" : h.status === "rejected" ? "text-red" : "text-yellow"}`}>
+                    {h.status}
+                  </span>
+                </div>
+                <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
+                <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
+                <div className="text-xs text-mut">T+{Math.round(h.start)}s → T+{Math.round(h.end)}s</div>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    className="btn-neon flex-1"
+                    disabled={h.status === "accepted"}
+                    onClick={() => review(h.id, "accepted")}
+                  >
+                    <Check className="mr-1 inline h-4 w-4" /> Accept
+                  </button>
+                  <button
+                    className="btn-neon btn-pink flex-1"
+                    disabled={h.status === "rejected"}
+                    onClick={() => review(h.id, "rejected")}
+                  >
+                    <X className="mr-1 inline h-4 w-4" /> Reject
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          ))}
       </div>
+    </div>
+  );
+}
+
+/** Collapsed-by-default "Rejected" section on the highlight list. Rejected
+ * clips render here (not in the published feed) with a live recovery deadline
+ * while they are still within the undo window before the server's TTL purge. */
+function RejectedSection({
+  highlights,
+  now,
+  ttlMs,
+  open,
+  onToggle,
+  onRecover,
+  onError,
+}: {
+  highlights: Highlight[];
+  now: number;
+  ttlMs: number;
+  open: boolean;
+  onToggle: () => void;
+  onRecover: (id: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const rejected = highlights.filter((h) => h.status === "rejected");
+  if (rejected.length === 0) return null;
+
+  return (
+    <div className="mt-10">
+      <button
+        type="button"
+        onClick={onToggle}
+        data-rejected-section-toggle
+        className="flex w-full items-center justify-between rounded-lg border border-red/40 bg-red/10 px-4 py-3 text-left hover:bg-red/15"
+      >
+        <span className="flex items-center gap-2 text-lg font-black text-red">
+          {open ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
+          Rejected
+          <span className="rounded-full bg-red/20 px-2 py-0.5 text-xs font-bold">{rejected.length}</span>
+        </span>
+        <span className="text-xs text-mut">Recoverable until auto-deleted</span>
+      </button>
+      {open && (
+        <div className="mt-4 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {rejected.map((h) => {
+            const label = recoverLabel(h.rejectedAt, ttlMs, now);
+            const recoverable = isRecoverable(h.rejectedAt, ttlMs, now);
+            return (
+              <div key={h.id} data-rejected-clip className="card card-hover overflow-hidden">
+                <div className="relative">
+                  <VideoClip src={h.clipUri} label={h.eventType} />
+                  <span className="absolute right-2 top-2 rounded-full bg-red/80 px-2 py-0.5 text-xs font-bold text-ink">rejected</span>
+                </div>
+                <div className="p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="rounded-full border border-red/50 px-2 py-0.5 text-xs font-bold text-red">{h.eventType || "EVENT"}</span>
+                    <span className="text-xs text-red">{h.status}</span>
+                  </div>
+                  <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
+                  <div className="mt-1 text-xs text-mut">T+{Math.round(h.start)}s → T+{Math.round(h.end)}s</div>
+                  {recoverable && label ? (
+                    <div data-recover-until className="mt-3 rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-2 text-sm font-semibold text-yellow">
+                      {label}
+                      <span className="mt-0.5 block text-xs font-normal text-mut">Reject→Accept restores this clip before the deadline.</span>
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-lg border border-mut/30 bg-mut/10 px-3 py-2 text-sm text-mut">
+                      Recovery window expired — this clip will be deleted.
+                    </div>
+                  )}
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      data-recover-button
+                      className="btn-neon flex-1"
+                      disabled={!recoverable}
+                      onClick={() => {
+                        try {
+                          onRecover(h.id);
+                        } catch (e: any) {
+                          onError(e?.message || "Recover failed");
+                        }
+                      }}
+                    >
+                      <Check className="mr-1 inline h-4 w-4" /> Recover
+                    </button>
+                    <span className="flex-1" />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

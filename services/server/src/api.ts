@@ -322,8 +322,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   app.get("/health", async () => ({ status: "ok", billing: billing.enabled ? "live" : "disabled" }));
 
   // Public config surfaced so the webapp can mirror the server's upload cap as
-  // a client-side pre-check (kept in sync with VOD_MAX_UPLOAD_BYTES).
-  app.get("/config", async () => ({ vodMaxUploadBytes: cfg.vodMaxUploadBytes }));
+  // a client-side pre-check (kept in sync with VOD_MAX_UPLOAD_BYTES), plus the
+  // rejected-clip recovery TTL (ADAAAA-5168/5204) so the rejected-clips UI
+  // derives its "recover until" deadline from the server's own purge config
+  // rather than a hardcoded client copy.
+  app.get("/config", async () => ({
+    vodMaxUploadBytes: cfg.vodMaxUploadBytes,
+    rejectedClipTtlMs: cfg.rejectTtlMs,
+  }));
 
   // --- auth (public endpoints are rate limited per IP) ---
   app.post<{ Body: { email?: string; password?: string; inviteCode?: string } }>("/auth/register", { preHandler: limitAuth }, async (req, reply) => {

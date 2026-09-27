@@ -159,6 +159,11 @@ export interface Highlight {
   start: number;
   end: number;
   createdAt: string;
+  // When the clip entered `rejected` (soft-delete undo-grace start). Set on
+  // reject, cleared on reject->accept; only rejected clips with a rejectedAt
+  // aged >= the server's rejection TTL are ever hard-deleted. Exposed by the
+  // backend (ADAAAA-5168) so the UI can show a recovery deadline.
+  rejectedAt?: string;
 }
 export interface Job {
   id: string;
