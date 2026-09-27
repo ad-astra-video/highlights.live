@@ -8,7 +8,34 @@ import { EntitlementsService } from "./entitlements";
 import { buildApp } from "./api";
 import { makeAdapter } from "./livepeer-adapter";
 import { makeMailer } from "./mailer";
+import { runRejectSweep } from "./lifecycle";
 import Stripe from "stripe";
+
+/** Schedule the rejected-clip TTL sweep (runs at least once per `interval`,
+ * plus one startup run so newly-elapsed clips are reclaimed promptly). Returns
+ * an unref'd timer so it never keeps the process alive on its own. Pure
+ * storage-lifecycle work — no inference, no Livepeer GPU cost. */
+function scheduleRejectSweep(cfg: ReturnType<typeof loadConfig>, store: Store): NodeJS.Timeout {
+  const run = async (dryRun: boolean) => {
+    try {
+      const report = await runRejectSweep(store, cfg, { dryRun });
+      // eslint-disable-next-line no-console
+      console.log(
+        `reject-sweep ${dryRun ? "(dry-run) " : ""}candidates=${report.candidates} ` +
+          `objects=${report.objectsRemoved} bytes=${report.bytesReclaimed} rows=${report.rowsRemoved}`
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("reject-sweep error:", e);
+    }
+  };
+  // First pass: dry-run report only (per requirement) so operators see what a
+  // sweep would reclaim before any hard delete happens.
+  void run(true);
+  const t = setInterval(() => void run(false), cfg.rejectSweepIntervalMs);
+  t.unref();
+  return t;
+}
 
 async function main() {
   const cfg = loadConfig();
@@ -44,6 +71,7 @@ async function main() {
   const entitlements = new EntitlementsService(db, cfg);
   const adapter = makeAdapter(cfg);
   const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements, mailer: mailer ?? undefined });
+  scheduleRejectSweep(cfg, store);
   await app.listen({ port: cfg.port, host: "0.0.0.0" });
   // eslint-disable-next-line no-console
   console.log(`highlights server on :${cfg.port} (orchestrator=${cfg.orchestratorUrl})`);
