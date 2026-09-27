@@ -8,10 +8,15 @@ WORKDIR /srv
 # py3.12: keep setuptools<81 so pkg_resources still exists (SAM 3 imports it)
 RUN pip install --no-cache-dir --upgrade pip "setuptools<81" "einops"
 
-# perceive service deps + Florence-2 runtime on torch (CUDA) + openvino fallback
+# perceive service deps + Florence-2 runtime on torch (CUDA) + openvino fallback.
+# LoRA fine-tuning (highlights-train runner, ADAAAA-5165) needs peft + safetensors
+# in addition to the perceive runtime, so this same image serves both runners:
+#   highlights-perceive -> /srv/perceive-entrypoint.sh (uvicorn, default)
+#   highlights-train    -> /srv/train-entrypoint.sh   (fine-tune, single-shot)
 COPY services/requirements.txt /srv/requirements.txt
 RUN pip install --no-cache-dir -r /srv/requirements.txt \
- && pip install --no-cache-dir "transformers==4.49.0" timm openvino
+ && pip install --no-cache-dir "transformers==4.49.0" timm openvino \
+    "peft" "accelerate" safetensors
 
 # SAM 3 SDK, vendored at the build context root (sam3/). -e install pulls its
 # core deps (timm/ftfy/regex/iopath/huggingface_hub); einops + pycocotools are
@@ -30,10 +35,18 @@ RUN chmod +x /srv/perceive-entrypoint.sh
 WORKDIR /srv/perceive
 EXPOSE 8080
 
+# training task + entrypoint (highlights-train runner, ADAAAA-5165)
+COPY services/train /srv/train
+COPY docker/train-entrypoint.sh /srv/train-entrypoint.sh
+RUN chmod +x /srv/train-entrypoint.sh
+
 ENV PERCEIVE_CAPACITY=2 \
     PERCEIVE_MODE=florence \
     PERCEIVE_DEVICE=cuda \
     PERCEIVE_TRACKER=florence_sam \
-    PERCEIVE_MIN_FPS=1.0
+    PERCEIVE_MIN_FPS=1.0 \
+    HF_HOME=/models/hf-cache
 
+# Default entrypoint stays the perceive server (uvicorn). The highlights-train
+# single-shot runner overrides it to /srv/train-entrypoint.sh via the job shape.
 ENTRYPOINT ["/srv/perceive-entrypoint.sh"]

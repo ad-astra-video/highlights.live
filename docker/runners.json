@@ -45,6 +45,29 @@
         "currency": "usd",
         "unit": "fixed"
       }
+    },
+    {
+      "label": "highlights-train",
+      "routing": "label",
+      "runner_url": "http://train:8083",
+      "health_url": null,
+      "healthy_status_code": 200,
+      "app": "highlights-live/train",
+      "version": "0.1.0",
+      "metadata": "{\"task\": \"florence2-od-lora\", \"baseModel\": \"microsoft/Florence-2-base\", \"loraRank\": 16, \"loraAlpha\": 32}",
+      "mode": "single-shot",
+      "capacity": 1,
+      "proxy": false,
+      "gpu": {
+        "id": "0",
+        "name": "NVIDIA GeForce RTX 3090 Ti",
+        "vram_mb": 24564
+      },
+      "price_info": {
+        "price": 0.01,
+        "currency": "usd",
+        "unit": "fixed"
+      }
     }
   ]
 }
