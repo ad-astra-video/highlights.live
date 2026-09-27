@@ -127,3 +127,45 @@ describe("DirectAdapter.postAudio (server -> perceive /audio client)", () => {
     await expect(adapter.postAudio("sess-1", { seq: 0, timestamp: 0, samples: "AA" })).resolves.toBeNull();
   });
 });
+
+describe("DirectAdapter.decide detail-first forwarding (ADAAAA-4954)", () => {
+  const cfg = loadConfig({ PERCEIVE_URL: "http://p", DECIDE_URL: "http://d" });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("POSTs frames[] + audioB64 to /app/highlight when detail-first opts are provided", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ isHighlight: true, score: 80 }), { status: 200 }))
+    );
+    const adapter = new DirectAdapter(cfg);
+    await adapter.decide(
+      { eventType: "GOAL", trackCount: 3, maxVelocity: 0.4, ocrHits: 0 },
+      {
+        gameHint: "soccer",
+        imageB64: "img-anchor",
+        frames: [{ role: "full", base64: "f1" }, { role: "full", base64: "f2" }],
+        audioB64: "wav-base64",
+      }
+    );
+    const [url, init] = (vi.mocked(fetch).mock.calls[0] as unknown) as [string, Record<string, any>];
+    expect(url).toBe("http://d/app/highlight");
+    const body = JSON.parse(init.body);
+    expect(body.frames).toEqual([{ role: "full", base64: "f1" }, { role: "full", base64: "f2" }]);
+    expect(body.audioB64).toBe("wav-base64");
+    expect(body.images).toEqual([{ role: "full", base64: "img-anchor" }]);
+    expect(body.audioSampleRate).toBe(16_000);
+  });
+
+  it("defaults frames[]/audioB64 to empty when detail-first is absent (live baseline unchanged)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ isHighlight: false, score: 10 }), { status: 200 }))
+    );
+    const adapter = new DirectAdapter(cfg);
+    await adapter.decide({ eventType: "KILL", trackCount: 0, maxVelocity: 0, ocrHits: 0 });
+    const [, init] = (vi.mocked(fetch).mock.calls[0] as unknown) as [string, Record<string, any>];
+    const body = JSON.parse(init.body);
+    expect(body.frames).toEqual([]);
+    expect(body.audioB64).toBe("");
+  });
+});

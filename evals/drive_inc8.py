@@ -319,7 +319,8 @@ def celebration_cluster(obs: dict) -> int:
 
 
 def decide(decide_url: str, sid: str, cand: dict, game_hint: str,
-           image_b64: str, reaction: dict | None = None) -> dict:
+           image_b64: str, reaction: dict | None = None,
+           frame_window: list[str] | None = None) -> dict:
     """POST a candidate to decide /highlight (Gemma). Returns the decision dict.
 
     `reaction` is the honest people-reaction evidence (crowdEnergy / audioKind
@@ -327,6 +328,15 @@ def decide(decide_url: str, sid: str, cand: dict, game_hint: str,
     pipeline carries on the candidate. It is folded into `evidence.reaction`
     exactly like buildReactionEvidence does for the deployed live pipeline, so
     Gemma weighs the INC-4 people-reaction dimension it already prompts for.
+
+    `frame_window` is an honest temporal SEQUENCE of base64 JPEGs (the clip's
+    own frames from the candidate moment onward). The deployed decide feed_gemma
+    prompt reasons across this frame sequence ("reason across the frame
+    sequence: motion, position, ball/foot/player location") so Gemma can
+    SEE the ball cross the line / net ripple / celebration instead of
+    hallucinating a goal from a single ambiguous off-target/warm-up still.
+    Sent as `frames` (list of {role, base64}), the first-class temporal input.
+    Never ground-truth labels — only the clip's own frames.
     """
     evidence = {"trackCount": 1, "maxVelocity": 0.0, "ocrHits": 0}
     r = dict(reaction or {})
@@ -350,7 +360,9 @@ def decide(decide_url: str, sid: str, cand: dict, game_hint: str,
         "gameHint": game_hint,
         "evidence": evidence,
         "images": [{"role": "full", "base64": image_b64}],
-        "frames": [],
+        # Temporal frame window (honest clip frames from the candidate moment)
+        # so Gemma reasons across the SEQUENCE, not a single ambiguous still.
+        "frames": [{"role": "full", "base64": b} for b in (frame_window or [])],
         "reasoningEffort": "none",
     }
     try:
@@ -373,6 +385,9 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="extract frames only; do not POST")
     ap.add_argument("--out", default="evals/inc8-trace.json")
     ap.add_argument("--latency-out", default=None)
+    ap.add_argument("--decide-frames", type=int, default=3,
+                    help="temporal frames from the candidate moment sent to decide "
+                         "(honest, in-scope INC-9 precision fix; 0 disables)")
     args = ap.parse_args()
 
     with open(args.manifest) as fh:
@@ -419,6 +434,11 @@ def main() -> int:
                 # ball-in-goal-mouth) — never ground-truth reaction labels.
                 for i, (cand, obs) in cand_obs_by_seq.items():
                     frame_b64 = frames[i][2] if i < len(frames) else ""
+                    # Honest temporal window: the clip's own frames from the
+                    # candidate moment (INC-9 precision fix). Sent to decide as
+                    # `frames` so Gemma reasons across the SEQUENCE.
+                    window = [frames[j][2] for j in range(i, min(i + args.decide_frames, len(frames)))
+                              if frames[j][2]]
                     ce, kind = crowd_energy_from_audio(src, cand["timestamp"])
                     n_tracks = len(obs.get("tracks") or [])
                     cluster = celebration_cluster(obs)
@@ -427,12 +447,12 @@ def main() -> int:
                         "crowdEnergy": ce, "audioKind": kind, "humansInMotion": n_tracks,
                         "celebrationCluster": cluster, "ballInGoalMouth": bigm,
                     }
-                    dec = decide(args.decide, sid, cand, args.game_hint, frame_b64, reaction)
+                    dec = decide(args.decide, sid, cand, args.game_hint, frame_b64, reaction, window)
                     events.append({"type": "decision", "clipId": cid, "timestamp": cand["timestamp"] + 2.0,
-                                   "decision": dec, "reaction": reaction})
+                                   "decision": dec, "reaction": reaction, "frameWindow": len(window)})
                     if not dec.get("isHighlight"):
                         stage_rejected += 1
-                    print(f"    cand={cand['eventType']} @{cand['timestamp']}s reaction=ce{ce}/{kind or 'none'} cluster={cluster} ballMouth={int(bigm)} -> decided isHighlight={dec.get('isHighlight')}")
+                    print(f"    cand={cand['eventType']} @{cand['timestamp']}s frames={len(window)} reaction=ce{ce}/{kind or 'none'} cluster={cluster} ballMouth={int(bigm)} -> decided isHighlight={dec.get('isHighlight')}")
 
     trace = {
         "events": events,

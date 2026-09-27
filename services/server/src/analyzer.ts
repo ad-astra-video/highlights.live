@@ -37,6 +37,20 @@ export interface ReactionEvidence {
  * cheap visual cue (tracked-object count as humans-in-motion proxy). Fields
  * that are absent default to "no signal", so a candidate with no reaction data
  * forwards an all-zero reaction block (prompt renders without it). */
+/** Clamp a numerical signal into the decide schema's accepted band. The decide
+ * service enforces strict `le` bounds on crowdEnergy/trackCount (ADAAAA-4736):
+ * real media sometimes reports peakEnergy > 1.0 or many tracked objects, and an
+ * out-of-bounds value makes FastAPI reject the WHOLE request with HTTP 422,
+ * killing the clip. The server is the owner of truth, so we clamp here to keep
+ * the paid path inside schema bounds. */
+export function clamp01(v: number | undefined): number {
+  if (v === undefined || Number.isNaN(v)) return 0;
+  return Math.min(1, Math.max(0, v));
+}
+export function clampTrackCount(v: number | undefined): number {
+  if (v === undefined || Number.isNaN(v)) return 0;
+  return Math.min(2, Math.max(0, Math.round(v)));
+}
 export function buildReactionEvidence(
   candidate: {
     audio?: AudioCandidate["audio"];
@@ -46,9 +60,9 @@ export function buildReactionEvidence(
   humansInMotion: number
 ): ReactionEvidence {
   return {
-    crowdEnergy: candidate.audio?.peakEnergy ?? 0,
+    crowdEnergy: clamp01(candidate.audio?.peakEnergy),
     audioKind: candidate.audio?.kind ?? "",
-    humansInMotion,
+    humansInMotion: clampTrackCount(humansInMotion),
     ballSpeedMps: candidate.ballVelocity?.speedMps ?? 0,
     ballPossessionId: candidate.ballPossession?.possessingPlayerId ?? "",
   };
@@ -126,13 +140,11 @@ export interface PipelineClient {
       gameHint?: string;
       imageB64?: string;
       reasoningEffort?: string;
-      // ADAAAA-4785 (live latency-first): temporal frame SEQUENCE (1 FPS window
-      // around the trigger) so Gemma 4 12B reasons across video, not one still.
-      frames?: { role?: string; base64: string; timestamp: number }[];
-      // Accompanying audio clip (mono 16 kHz int16 WAV, base64) around the
-      // noise trigger, so Gemma sees the audio context, not just the gate peak.
+      /** Detail-first (ADAAAA-4954): temporal frame SEQUENCE the Gemma runner
+       * reasons across (decideWindowN-length). Absent = single image (live). */
+      frames?: { role: string; base64: string }[];
+      /** Surrounding audio clip (mono 16 kHz WAV, base64) at the trigger. */
       audioB64?: string;
-      audioSampleRate?: number;
     }
   ): Promise<DecisionResult>;
   stopPerceive(sessionId: string): Promise<void>;
@@ -144,11 +156,21 @@ export interface AnalyzerConfig {
   jobId: string;
   gameHint: string;
   /**
-   * Operator closed-vocabulary labels (ADAAAA-4109). Delivered to the perceive
-   * session on every /analyze alongside gameHint so the paid VOD path activates
-   * the closed soccer roster (`resolve_vocabulary`) instead of open-set OD.
-   */
-  preferLabels?: string[];
+   /** Operator closed-vocabulary labels (ADAAAA-4109). Delivered to the perceive
+    * session on every /analyze alongside gameHint so the paid VOD path activates
+    * the closed soccer roster (`resolve_vocabulary`) instead of open-set OD.
+    */
+   preferLabels?: string[];
+   /** Detail-first VOD knobs (ADAAAA-4954, spec §1). When absent the pass runs at
+    * the live/default depth (1 fps frames, 16-frame window, single decide image).
+    * When `decideWindowN` is set the pass is "detail-first": the shared frame
+    * window is that long, and each decide() call forwards the temporal
+    * `frames[]` SEQUENCE (+ surrounding audio clip) so Gemma reasons deeper per
+    * trigger than the single-image live baseline. `frameScale` is the extract
+    * scale for OD + decide images. */
+   sampleFps?: number;
+   frameScale?: string;
+   decideWindowN?: number;
   /**
    * Max times the job will re-reserve a fresh perceive session after the
    * current one is lost mid-pass (HTTP 404 "runner not found" / "runner
@@ -182,7 +204,10 @@ export class EvidenceTracker {
   maxVelocity = 0;
   trackCount = 0;
   step(obs: { tracks: TrackObservation[] }): void {
-    this.trackCount = obs.tracks.length;
+    // Clamp into the decide schema's accepted band ([0,2], ADAAAA-4736): real
+    // multi-player tracking can exceed 2 objects and an out-of-range value
+    // makes FastAPI 422-reject the whole payload. Server is owner of truth.
+    this.trackCount = clampTrackCount(obs.tracks.length);
     for (const t of obs.tracks) {
       const [bx1, by1, bx2, by2] = t.bbox;
       const cx = (bx1 + bx2) / 2;
@@ -228,10 +253,11 @@ function nearestFrameImage(
 }
 
 /**
- * Shared state for one LIVE run, used by BOTH legs that feed the same perceive
+ * Shared state for one run, used by BOTH legs that feed the same perceive
  * session (INC-2 / ADAAAA-4325 slice 4):
  *   - the video /analyze leg (inside analyzeJob), and
- *   - the Stage-A audio tap leg (in runLiveJob, POSTing chunks to /audio).
+ *   - the Stage-A audio tap leg (POSTing chunks to /audio) — live and, since
+ *     ADAAAA-4954, the detail-first VOD pass too.
  *
  * The audio gate fires on its own ~10 Hz cadence, decoupled from the 1 fps
  * video rail, so when an audio CandidateEvent lands the server must anchor it
@@ -239,27 +265,37 @@ function nearestFrameImage(
  * video evidence to the Gemma decide runner. The two legs share this object so
  * decide sees the actual moment, not a bare scalar candidate.
  *
- * Without a shared instance (VOD path), analyzeJob builds its own namespace, so
- * the VOD pass is completely unchanged.
+ * A VOD pass supplies one via `analyzeJob`'s `shared_` slot (exactly like the
+ * live path) so its audio leg reuses the same anchor window. The decide window
+ * length defaults to the legacy DECIDE_FRAME_WINDOW (16) — the live baseline —
+ * and is raised by the detail-first `decideWindowN` knob (ADAAAA-4954).
  */
 export class LiveRunShared {
   readonly evidence = new EvidenceTracker();
   readonly highlights: HighlightRecord[] = [];
   /** Stage-A audio-gate FP-rate + latency metric (INC-2 / ADAAAA-4325 slice 5).
    * Every audio candidate routed through decideOnCandidate() records its
-   * outcome here; runLiveJob snapshots it onto the job at completion. */
+   * outcome here; the job runner snapshots it onto the job at completion. */
   readonly stageA = new StageAMetrics();
   private frames = new Map<number, { timestamp: number; imageB64: string }>();
-  // Rolling mono int16 PCM audio chunks (base64) from the live tap, keyed by
-  // their end timestamp, so a noise trigger can assemble the AROUND image's
-  // audio clip for Gemma (ADAAAA-4785: gemma analyzes video + audio frames
-  // around each trigger, not a bare gate peak).
-  private audio = new Map<number, { timestamp: number; pcmB64: string }>();
-  /** Record a sampled frame into the rolling anchor window (same ring size as
-   * the pre-existing DECIDE_FRAME_WINDOW in analyzeJob). */
+  /** Detail-first decide window length (frames kept for the temporal SEQUENCE).
+   * Defaults to the live baseline (DECIDE_FRAME_WINDOW); the VOD knob
+   * `decideWindowN` raises it (ADAAAA-4954). */
+  private readonly windowN: number;
+  /** Raw mono 16 kHz int16 PCM taps (base64 per ~100 ms chunk) + end timestamp,
+   * kept as a short rolling clip so the surrounding audio can be handed to
+   * decide() (ADAAAA-4954 detail-first). */
+  private audio: { ts: number; samples: string }[] = [];
+
+  constructor(opts: { decideWindowN?: number } = {}) {
+    this.windowN = opts.decideWindowN ?? DECIDE_FRAME_WINDOW;
+  }
+
+  /** Record a sampled frame into the rolling anchor window. Ring size is the
+   * decide window (legacy DECIDE_FRAME_WINDOW, or the detail-first knob). */
   addFrame(seq: number, timestamp: number, imageB64: string): void {
     this.frames.set(seq, { timestamp, imageB64 });
-    if (this.frames.size > DECIDE_FRAME_WINDOW) {
+    if (this.frames.size > this.windowN) {
       const oldest = this.frames.keys().next().value;
       if (oldest !== undefined) this.frames.delete(oldest);
     }
@@ -270,59 +306,77 @@ export class LiveRunShared {
   anchor(timestamp: number): string | undefined {
     return nearestFrameImage(this.frames, timestamp);
   }
-  /** Up to ``n`` sampled frames at/before ``ts`` in chronological order (the
-   * temporal SEQUENCE Gemma reasons across for video understanding). Falls back
-   * to nearest-frame when fewer are available. Mutates nothing. */
-  framesWindow(ts: number, n: number): { role: string; base64: string; timestamp: number }[] {
-    const sorted = [...this.frames.values()].sort((a, b) => a.timestamp - b.timestamp);
-    const before = sorted.filter((f) => f.timestamp <= ts + 0.01);
-    const win = before.slice(-n);
-    return win.map((f) => ({ role: "frame", base64: f.imageB64, timestamp: f.timestamp }));
+  /** The rolling frame window as decide() `frames[]` ImageRefs (detail-first:
+   * the temporal SEQUENCE Gemma reasons across). Ordered oldest -> newest. */
+  framesWindow(): { role: string; base64: string }[] {
+    return [...this.frames.values()].map((f) => ({ role: "full", base64: f.imageB64 }));
   }
-  /** Record one mono int16 PCM chunk (base64) from the live audio tap, keeping
-   * a bounded ring (~keepS of audio) so a trigger can assemble a clip. */
-  addAudioChunk(timestampEnd: number, pcmB64: string, keepS = 4): void {
-    this.audio.set(timestampEnd, { timestamp: timestampEnd, pcmB64 });
-    // Evict chunks older than the keep window (they're past the clip range).
-    const cutoff = timestampEnd - keepS;
-    for (const [ts] of this.audio) {
-      if (ts < cutoff) this.audio.delete(ts);
-    }
+  /** Buffer one audio tap chunk (base64 mono 16 kHz int16 PCM, ~100 ms) into
+   * the rolling clip, kept ~AUDIO_CLIP_KEEP_S seconds behind `ts`. */
+  addAudioChunk(ts: number, samples: string): void {
+    this.audio.push({ ts, samples });
+    const cutoff = ts - AUDIO_CLIP_KEEP_S;
+    while (this.audio.length > 1 && this.audio[0].ts < cutoff) this.audio.shift();
   }
-  /** Assemble a mono 16 kHz int16 WAV (base64) spanning [ts-preS, ts+postS]
-   * from the buffered tap chunks, in timestamp order. Returns "" when no audio
-   * is buffered in range (callers treat as absent audio — Gemma still runs). */
-  audioClipB64(ts: number, preS = 1.5, postS = 1.5, sampleRate = 16000): string {
-    const lo = ts - preS;
-    const hi = ts + postS;
-    const chunks = [...this.audio.values()]
-      .filter((c) => c.timestamp >= lo && c.timestamp <= hi)
-      .sort((a, b) => a.timestamp - b.timestamp)
-      .map((c) => Buffer.from(c.pcmB64, "base64"));
-    if (!chunks.length) return "";
-    return wavFromPcm16(Buffer.concat(chunks), sampleRate).toString("base64");
+  /** The buffered audio as a mono 16 kHz 16-bit PCM WAV (base64), covering the
+   * last `AUDIO_CLIP_KEEP_S` seconds — the surrounding audio clip for decide().
+   * "" when the tap has buffered nothing yet. */
+  audioClipB64(): string {
+    if (!this.audio.length) return "";
+    return pcmInt16ToWavB64(this.audio.map((a) => a.samples).join(""));
   }
 }
 
-/** Build a 16-bit mono PCM WAV file (44-byte canonical header) from raw int16
- * little-endian PCM bytes. Pure + deterministic — directly unit-testable. */
-export function wavFromPcm16(pcm: Buffer, sampleRate = 16000): Buffer {
-  const byteRate = sampleRate * 2; // 1 channel * 16-bit
+/** Seconds of audio tap kept for the decide() surrounding-audio clip
+ * (ADAAAA-4954 detail-first; bounded so a long VOD pass doesn't grow unbounded).
+ * Roughly the clip-relevant window around a trigger. */
+export const AUDIO_CLIP_KEEP_S = 10;
+
+/** Wrap a run of base64 mono 16 kHz int16 PCM samples into a RIFF/WAVE file and
+ * return it as base64. Pure + deterministic so it is unit-testable. The decide
+ * runner accepts a mono WAV at any of the common PCM bit depths; 16-bit is the
+ * natural format our ffmpeg tap already emits (pcm_s16le). */
+export function pcmInt16ToWavB64(samplesB64: string, sampleRate = 16_000): string {
+  const pcm = Buffer.from(samplesB64, "base64");
+  const dataSize = pcm.length;
   const header = Buffer.alloc(44);
   header.write("RIFF", 0);
-  header.writeUInt32LE(36 + pcm.length, 4);
+  header.writeUInt32LE(36 + dataSize, 4);
   header.write("WAVE", 8);
   header.write("fmt ", 12);
   header.writeUInt32LE(16, 16); // fmt chunk size
   header.writeUInt16LE(1, 20); // PCM
   header.writeUInt16LE(1, 22); // mono
   header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt32LE(sampleRate * 2, 28); // byte rate (16-bit mono)
   header.writeUInt16LE(2, 32); // block align
-  header.writeUInt16LE(16, 34); // bits
+  header.writeUInt16LE(16, 34); // bits per sample
   header.write("data", 36);
-  header.writeUInt32LE(pcm.length, 40);
-  return Buffer.concat([header, pcm]);
+  header.writeUInt32LE(dataSize, 40);
+  return Buffer.concat([header, pcm]).toString("base64");
+}
+
+/** Build the decide() opts for a candidate. Always anchors the candidate to
+ * its nearest frame image; in DETAIL-FIRST mode (cfg.decideWindowN set,
+ * ADAAAA-4954) additionally forwards the temporal `frames[]` SEQUENCE and the
+ * surrounding audio clip so Gemma reasons deeper per trigger than the single
+ * still-image live baseline. Live/default passes (no decideWindowN) send only
+ * the anchored image, keeping the deployed baseline byte-for-byte unchanged. */
+function detailDecideOpts(
+  cfg: AnalyzerConfig,
+  shared: LiveRunShared,
+  anchoredImage: string | undefined
+): { gameHint: string; imageB64: string | undefined; frames?: { role: string; base64: string }[]; audioB64?: string } {
+  const opts: { gameHint: string; imageB64: string | undefined; frames?: { role: string; base64: string }[]; audioB64?: string } = {
+    gameHint: cfg.gameHint,
+    imageB64: anchoredImage,
+  };
+  if (cfg.decideWindowN !== undefined) {
+    opts.frames = shared.framesWindow();
+    const audio = shared.audioClipB64();
+    if (audio) opts.audioB64 = audio;
+  }
+  return opts;
 }
 
 /**
@@ -348,10 +402,6 @@ export async function decideOnCandidate(
   const evTs = emit?.timestamp ?? candidate.timestamp;
   onEvent?.({ seq: evSeq, timestamp: evTs, type: "candidate", candidate });
   const anchoredImage = shared.anchor(candidate.timestamp);
-  // ADAAAA-4785 (live latency-first): give Gemma the temporal frame SEQUENCE
-  // around the trigger plus the audio clip, not just one still. The decide
-  // runner reasons across video + audio frames for the noise-trigger path; when
-  // no audio is buffered the call simply omits it (Gemma still runs on video).
   const decision = await client.decide(
     {
       eventType: candidate.eventType,
@@ -360,12 +410,7 @@ export async function decideOnCandidate(
       ocrHits: 0,
       reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
     },
-    {
-      gameHint: cfg.gameHint,
-      imageB64: anchoredImage,
-      frames: shared.framesWindow(candidate.timestamp, DECIDE_FRAME_WINDOW),
-      audioB64: shared.audioClipB64(candidate.timestamp),
-    }
+    detailDecideOpts(cfg, shared, anchoredImage)
   );
   // Track the Stage-A FP-rate metric (INC-2 / ADAAAA-4325 slice 5): whether
   // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
@@ -478,7 +523,7 @@ export async function analyzeJob(
             ocrHits: 0,
             reaction: buildReactionEvidence(res.candidate, evidence.trackCount),
           },
-          { gameHint: cfg.gameHint, imageB64: anchoredImage }
+          detailDecideOpts(cfg, run, anchoredImage)
         );
         if (decision.isHighlight) {
           const { clipId, clipUri } = await cut(res.candidate.timestamp);
