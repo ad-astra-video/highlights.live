@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BrainCircuit, Loader2, Play, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { api } from "../lib/api";
+import { FineTuneHelp } from "../components/FineTuneHelp";
 
 // A tiny default manifest so an operator can fire the highlights-train runner
 // from the dashboard without preparing a dataset first. Real training data
@@ -90,9 +91,12 @@ export function Train() {
           <h1 className="text-2xl font-extrabold text-ink">Fine-tune</h1>
           <p className="text-sm text-mut">Trigger the Florence-2 &lt;OD&gt; LoRA runner and track its checkpoint + eval deltas.</p>
         </div>
+        <div className="ml-auto">
+          <FineTuneHelp page="train" />
+        </div>
       </div>
 
-      <section className="card card-accent mb-6 p-5">
+      <section id="train-manifest" className="card card-accent mb-6 p-5">
         <label className="mb-1 block text-xs font-semibold text-mut">Training manifest (DetectionTrainingSample JSON)</label>
         <textarea
           value={manifest}
