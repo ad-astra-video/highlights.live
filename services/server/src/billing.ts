@@ -117,8 +117,15 @@ export class BillingService {
    * clip quota uses (ADAAAA-5129), so it resets monthly instead of being a
    * lifetime gate. Works the same whether or not Stripe is configured
    * (billing disabled).
+   *
+   * Streaming waiver (ADAAAA-5341): a decide driven by an ACTIVE streaming
+   * session is not charged again on top of stream processing. Pass
+   * `{ streaming: true }` when the decide belongs to an active stream; the
+   * fixed per-decide gate is then waived entirely (no 402 mid-stream). All
+   * non-streaming callers leave `streaming` unset and keep today's behaviour.
    */
-  async canDecide(user: User, sub: Subscription): Promise<void> {
+  async canDecide(user: User, sub: Subscription, opts?: { streaming?: boolean }): Promise<void> {
+     if (opts?.streaming) return;
      if (sub.tier === "pro" && sub.status === "active") return;
      const remaining = await this.entitlements.decidesRemaining(user.id);
      if (remaining > 0) return;
@@ -128,9 +135,18 @@ export class BillingService {
    /** Meter ONE single-shot decide. Always increments the per-period decide
     * ledger (so a free user's allowance resets monthly); for Pro overage
     * beyond the included decide allowance, posts a Stripe usage record so the
-    * fixed per-use fee (DECIDE_FEE price) is billed PAYG. */
-   async onDecideCompleted(user: User, sub: Subscription): Promise<void> {
+    * fixed per-use fee (DECIDE_FEE price) is billed PAYG.
+    *
+    * Streaming waiver (ADAAAA-5341): a decide driven by an ACTIVE streaming
+    * session is metered at $0 — the decide is still RECORDED (cost visibility,
+    * `recordUsage` so decide volume stays observable) but the per-period
+    * free-decide allowance is NOT decremented and no Stripe PAYG usage record
+    * is posted, so a streaming decision never double-charges on top of stream
+    * processing. Non-streaming callers leave `streaming` unset and keep
+    * today's behaviour exactly. */
+   async onDecideCompleted(user: User, sub: Subscription, opts?: { streaming?: boolean }): Promise<void> {
      await this.db.recordUsage(user.id, "decide");
+     if (opts?.streaming) return; // waived: no allowance decrement, no PAYG
      await this.entitlements.onDecideCompleted(user);
      if (sub.tier === "pro" && sub.status === "active" && this.enabled && sub.stripeSubItemId) {
        const used = await this.entitlements.decidesUsed(user.id);

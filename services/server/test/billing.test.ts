@@ -117,4 +117,55 @@ describe("decide fixed-fee billing ($0.01/shot)", () => {
   it("the fixed fee surface is 1 cent by default config", async () => {
     expect(cfg.decideFee).toBe(0.01);
   });
+
+  it("streaming decide is NOT gated (no 402) even with a drained allowance", async () => {
+    const db = newDecideDb();
+    const b = makeBilling(db, stripe);
+    const sub = await db.getSubscription(user.id);
+    // Drain the free allowance for a NON-streaming decide -> gated as today.
+    for (let i = 0; i < cfg.freeDecides; i++) await b.onDecideCompleted(user, sub);
+    await expect(b.canDecide(user, sub)).rejects.toBeInstanceOf(BillingRequiredError);
+    // Same user, same drained ledger, but a streaming decide passes (waived).
+    await expect(b.canDecide(user, sub, { streaming: true })).resolves.toBeUndefined();
+  });
+
+  it("streaming decide does NOT decrement the free-decide allowance or post PAYG", async () => {
+    const db = newDecideDb();
+    const recordingStripe = {
+      subscriptionItems: {
+        createUsageRecord: (id: string, r: any) => {
+          db.posting.push({ itemId: id, qty: r.quantity });
+          return { id, qty: r.quantity };
+        },
+      },
+    };
+    const b = makeBilling(db, recordingStripe);
+    // Free user: a streaming decide leaves the per-period allowance untouched.
+    await b.onDecideCompleted(user, await db.getSubscription(user.id), { streaming: true });
+    expect(await db.getDecideQuota(user.id)).toBe(0); // allowance NOT decremented
+    // Pro overage: no Stripe usage record for the streaming decide.
+    const proSub = { ...(await db.getSubscription(user.id)), tier: "pro", status: "active", stripeSubItemId: "si_1" } as any;
+    await b.onDecideCompleted(user, proSub, { streaming: true });
+    expect(db.posting.length).toBe(0); // no PAYG usage record
+    // ...but the streaming decide still RECORDS for cost visibility.
+    expect(db.usage["decide"]).toBe(2);
+  });
+
+  it("streaming waiver leaves the non-streaming path exactly unchanged", async () => {
+    const db = newDecideDb();
+    const recordingStripe = {
+      subscriptionItems: {
+        createUsageRecord: (id: string, r: any) => {
+          db.posting.push({ itemId: id, qty: r.quantity });
+          return { id, qty: r.quantity };
+        },
+      },
+    };
+    const b = makeBilling(db, recordingStripe);
+    const proSub = { ...(await db.getSubscription(user.id)), tier: "pro", status: "active", stripeSubItemId: "si_1" } as any;
+    // Non-streaming pro overage still posts PAYG (regression guard).
+    for (let i = 0; i < cfg.freeDecides + 1; i++) await b.onDecideCompleted(user, proSub);
+    expect(db.posting.length).toBeGreaterThan(0);
+    expect(db.usage["decide"]).toBe(cfg.freeDecides + 1);
+  });
 });

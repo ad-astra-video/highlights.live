@@ -1214,10 +1214,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         let highlight: any = null;
         if (res.candidate) {
           emitJobEvent(req.params.id, { seq, timestamp, type: "candidate", candidate: res.candidate });
-          // Fixed-fee single-shot decide (Gemma 4 12B): gate + meter at the call.
+          // Fixed-fee single-shot decide (Gemma 4 12B): gate + meter at the
+          // call. This rail is an ACTIVE streaming session (the client is
+          // continuously posting sampled frames and is already billed stream
+          // processing), so the per-decide fee is WAIVED (ADAAAA-5341): the
+          // gate never 402s mid-stream and the decide is metered at $0.
           const duser = (req as any).user;
           const dsub = await db.getSubscription(duser.id);
-          await billing.canDecide(duser, dsub).catch((err: any) => {
+          await billing.canDecide(duser, dsub, { streaming: true }).catch((err: any) => {
             if (err?.statusCode === 402) {
               emitJobEvent(req.params.id, { seq, timestamp, type: "candidateBlocked", reason: String(err?.message) });
             }
@@ -1237,7 +1241,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               reasoningEffort: (req.body as any)?.reasoningEffort || "none",
             }
           );
-          await billing.onDecideCompleted(duser, dsub);
+          await billing.onDecideCompleted(duser, dsub, { streaming: true });
           if (d.isHighlight) {
             highlight = {
               id: randomUUID(),
