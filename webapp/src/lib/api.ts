@@ -115,6 +115,47 @@ export function uploadVideo<T = any>({ file, gameHint, preferLabels, onProgress 
   });
 }
 
+// Download a run's LoRA artifact (ADAAAA-5323) over an authenticated fetch so
+// the token stays in the Authorization header (never a query string), then
+// verify the SHA-256 end-to-end on the client against the X-Checksum-Sha256 the
+// server recorded at emit time — a user downloads exactly the bytes the runner
+// produced, or the download fails loudly. Throws an ApiError on failure.
+export async function downloadTrainArtifact(runId: string, filename: string): Promise<string> {
+  const token = getToken();
+  const res = await fetch(`/train/${runId}/artifact`, {
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    let body: any = null;
+    try {
+      body = await res.json();
+    } catch {
+      /* binary/empty */
+    }
+    if (res.status === 401 && token) setToken(null);
+    const err = new Error(body?.error || `HTTP ${res.status}`) as ApiError;
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
+  const expected = res.headers.get("X-Checksum-Sha256");
+  const blob = await res.blob();
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  if (expected && hex !== expected) {
+    throw new Error("Artifact checksum mismatch — download aborted.");
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || `lora-${runId}.safetensors`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  return hex;
+}
+
 // Human-readable size for the oversized-file message, e.g. "2 GB".
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";

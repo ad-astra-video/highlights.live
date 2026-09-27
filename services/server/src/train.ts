@@ -14,11 +14,15 @@
 import { randomUUID } from "node:crypto";
 import type { Db, TrainRun } from "./db";
 import type { PipelineClient, TrainRunRequest, TrainResult } from "./analyzer";
+import type { ServerConfig } from "./config";
+import { resolveArtifact } from "./train-artifacts";
 
 export interface SubmitTrainInput {
   /** Training samples. Accepts an array of DetectionTrainingSample objects
-   * (serialized to JSONL) or a pre-serialized newline-delimited JSON string. */
-  manifest: unknown[] | string;
+   * (serialized to JSONL) or a pre-serialized newline-delimited JSON string.
+   * Optional so the route can defer manifest resolution; an absent/empty value
+   * fails validation with a 422. */
+  manifest?: unknown[] | string;
   /** Optional held-out val samples (same shape). */
   val?: unknown[] | string;
   epochs?: number;
@@ -48,11 +52,12 @@ export function toJsonl(v: unknown[] | string): string {
 
 export class TrainValidationError extends Error {}
 
-export function createTrainService(db: Db, adapter: PipelineClient): TrainService {
+export function createTrainService(db: Db, adapter: PipelineClient, cfg: ServerConfig): TrainService {
   async function submit(ownerId: string | null, input: SubmitTrainInput): Promise<TrainRun> {
     let manifest: string;
     let val: string | undefined;
     try {
+      if (input.manifest === undefined) throw new TrainValidationError("manifest is required");
       manifest = toJsonl(input.manifest);
       if (input.val !== undefined) val = toJsonl(input.val);
     } catch (e) {
@@ -92,7 +97,11 @@ export function createTrainService(db: Db, adapter: PipelineClient): TrainServic
     };
     try {
       const result: TrainResult = await adapter.train(request);
-      const done: TrainRun = { ...started, status: "done", result, updatedAt: new Date().toISOString() };
+      // ADAAAA-5323: attach a run-scoped downloadable artifact (filename +
+      // integrity hash) so the UI can offer a download, not a bare path.
+      const artifact = await resolveArtifact(cfg, result);
+      const enriched: TrainResult = { ...result, artifact: artifact ? { ...artifact, downloadPath: `/train/${run.id}/artifact` } : result.artifact };
+      const done: TrainRun = { ...started, status: "done", result: enriched, updatedAt: new Date().toISOString() };
       await db.saveTrainRun(done);
       return done;
     } catch (err) {
