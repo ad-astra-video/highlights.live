@@ -121,6 +121,11 @@ export class WebRtcIngestSession extends EventEmitter {
 
   /** Handle a browser offer, answering (best-effort ICE gathering). */
   async handleOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
+    // Reconnect to the SAME session (transport blip, node still healthy) will
+    // POST a fresh offer on this session. Reset all per-connection ingest state
+    // (incl. closing the old peer) so the new connection re-subscribes onTrack;
+    // otherwise `started` stays true and frames silently stop flowing.
+    this.resetConnection();
     // Advertise the video codecs we can decode (H264, VP8, VP9) so negotiation
     // lands on a codec the ffmpeg demuxer understands, whatever the browser
     // sends. Without this werift's default config advertises VP8 only.
@@ -168,6 +173,30 @@ export class WebRtcIngestSession extends EventEmitter {
     } catch {
       /* tolerate duplicates / late candidates */
     }
+  }
+
+  /** Reset ALL per-connection ingest state. Safe to call when idle or before
+   *  accepting a fresh offer on an already-connected session (reconnect). */
+  private resetConnection() {
+    if (this.pc) {
+      try {
+        void this.pc.close();
+      } catch {
+        /* noop */
+      }
+      this.pc = undefined;
+    }
+    this.au = [];
+    this.fragment = undefined;
+    this.seq = 0;
+    this.started = false;
+    this.codecMime = "";
+    this.activeTrack = undefined;
+    this.paramSets = undefined;
+    this.seg = [];
+    this.vclCount = 0;
+    this.lastNalType = -1;
+    this.lastSampleWall = 0;
   }
 
   private onRtp(rtp: RtpPacket) {

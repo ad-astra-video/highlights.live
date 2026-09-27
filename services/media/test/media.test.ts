@@ -235,39 +235,36 @@ describe("media server WebRTC ingest (C1)", () => {
     return out;
   }
 
-  it("browser WebRTC -> media server -> orchestrator video-in rail (frame published)", async () => {
-    // 1) provision a session via the Fastify control plane.
-    const prov = await app.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-rtc" } });
-    expect(prov.statusCode).toBe(200);
-    const sid = prov.json().sessionId;
-    expect(prov.json().rtc).toBe(true);
-
-    // 2) browser (offerer) creates a sendonly video WebRTC connection.
+  /** Establish a browser (offerer) WebRTC session against a media server,
+   *  wait for ICE to connect, then stream the module-level H264 fixture as RTP
+   *  and poll for a real decoded JPEG landing in the fake orchestrator. Returns
+   *  the browser peer + the elapsed ms from first RTP to first publish. */
+  async function rtcPublish(
+    srv: FastifyInstance,
+    sBase: string,
+    sid: string,
+    orch: FakeOrch
+  ): Promise<{ pc: any; elapsedMs: number }> {
     const browserPc = new RTCPeerConnection({ codecs: { video: [useH264()] } } as any);
     const sendTrack = new MediaStreamTrack({ kind: "video" });
     browserPc.addTransceiver(sendTrack, { direction: "sendonly" } as any);
     const offer = await browserPc.createOffer();
     await browserPc.setLocalDescription(offer);
 
-    // 3) media server answers via the RTC signaling route.
-    const ans = await app.inject({
+    const ans = await srv.inject({
       method: "POST",
       url: `/sessions/${sid}/rtc/offer`,
       payload: { offer },
     });
     expect(ans.statusCode).toBe(200);
-    const { answer, pcId } = ans.json();
+    const { answer } = ans.json();
     await browserPc.setRemoteDescription(answer);
 
-    // Wait for ICE to connect before sending RTP, else packets drop on the
-    // unestablished transport and no frames ever reach the media server.
     for (let i = 0; i < 40 && browserPc.connectionState !== "connected"; i++) {
       await new Promise((r) => setTimeout(r, 50));
     }
     expect(browserPc.connectionState).toBe("connected");
 
-    // init the sender's seq/timestamp offsets (werift normally does this on
-    // source change; the raw send path below sets them explicitly).
     const sender = browserPc.getTransceivers().find((t) => t.sender)?.sender;
     if (sender) {
       const s = sender as any;
@@ -277,40 +274,85 @@ describe("media server WebRTC ingest (C1)", () => {
       s.timestampOffset = 0;
     }
 
-    // 4) send the H264 stream as RTP video packets (complete access units).
-    const nals = nalUnits(h264);
+    const before = orch.publishes.length;
+    const added = () => orch.publishes.slice(before);
     const pay = sender?.codec?.payloadType ?? 96;
+    const t0 = Date.now();
+    const nals = nalUnits(h264);
     let clock = 0, ts = 0;
     for (const nal of nals) {
       const header = new RtpHeader({
         payloadType: pay,
         sequenceNumber: (clock++) % 65536,
-        timestamp: (ts += 90000 / 15), // 90000kHz clock at 15fps
+        timestamp: (ts += 90000 / 15),
         ssrc: sender?.ssrc ?? 1,
         marker: 1,
       } as any);
       sendTrack.writeRtp(new RtpPacket(header, nal));
     }
-
-    // 5) await the media server depacketizing + decoding a sample frame and
-    //    publishing it to the orchestrator video-in rail. Scope to publishes
-    //    added during THIS test (the shared `fake` orch also received the
-    //    earlier WS-path publish whose 15-byte fake jpeg would pollute it).
-    const before = fake.publishes.length;
-    const added = () => fake.publishes.slice(before);
     let published = false;
     for (let i = 0; i < 40 && !published; i++) {
       await new Promise((r) => setTimeout(r, 100));
       published = added().some((p) => p.jpeg.length > 100 && p.jpeg[0] === 0xff && p.jpeg[1] === 0xd8);
     }
+    const elapsedMs = Date.now() - t0;
     expect(published).toBe(true);
+    return { pc: browserPc, elapsedMs };
+  }
+
+  it("browser WebRTC -> media server -> orchestrator video-in rail (frame published)", async () => {
+    // 1) provision a session via the Fastify control plane.
+    const prov = await app.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-rtc" } });
+    expect(prov.statusCode).toBe(200);
+    const sid = prov.json().sessionId;
+    expect(prov.json().rtc).toBe(true);
+
+    // full loopback through the shared fake orchestrator
+    const before = fake.publishes.length;
+    const added = () => fake.publishes.slice(before);
+    const { pc, elapsedMs } = await rtcPublish(app, base, sid, fake);
+    // the media-server ingest leg (RTP -> depacketize -> ffmpeg decode -> video-in
+    // publish) must land a real JPEG well inside the 1-5s budget.
+    expect(elapsedMs).toBeLessThan(3000);
     const pub = [...added()].reverse().find((p) => p.jpeg.length > 100)!;
     expect(pub.jpeg.length).toBeGreaterThan(100);
     // a real JPEG SOI mark opens the decoded sample
     expect(pub.jpeg[0]).toBe(0xff);
     expect(pub.jpeg[1]).toBe(0xd8);
+    expect(elapsedMs).toBeGreaterThan(0);
 
-    await browserPc.close();
+    await pc.close();
+  });
+
+  it("same-session reconnect: a fresh offer on an already-ingesting session keeps frames flowing", async () => {
+    // Independent media server + fake orch with a long grace so the session
+    // survives between connections (mirrors a transport blip on a healthy node).
+    const g = new FakeOrch("sess-reconnect");
+    const ms = new MediaServer(
+      { orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", reconnectGraceMs: 3000 },
+      g as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    try {
+      const prov = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-reconnect" } });
+      const sid = prov.json().sessionId;
+
+      // first connection sends frames -> published
+      const first = await rtcPublish(srv, sBase, sid, g);
+      await first.pc.close();
+      await new Promise((r) => setTimeout(r, 100)); // let the server observe the drop
+
+      // second offer on the SAME sid (reconnect): frames must flow again
+      const before2 = g.publishes.length;
+      const second = await rtcPublish(srv, sBase, sid, g);
+      const added2 = g.publishes.slice(before2);
+      expect(added2.some((p) => p.jpeg.length > 100 && p.jpeg[0] === 0xff && p.jpeg[1] === 0xd8)).toBe(true);
+      await second.pc.close();
+    } finally {
+      await srv.close();
+    }
   });
 
   it("falls through to 404 for unknown sessions on the RTC offer route", async () => {
