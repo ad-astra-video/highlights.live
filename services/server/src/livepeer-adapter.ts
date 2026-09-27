@@ -19,6 +19,8 @@ import type {
   PipelineClient,
   ReactionEvidence,
   ReserveResult,
+  TrainResult,
+  TrainRunRequest,
 } from "./analyzer";
 import { SessionLostError } from "./analyzer";
 
@@ -282,6 +284,47 @@ export class OrchestratorAdapter implements PipelineClient {
       return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
     }
   }
+  /** Submit a single-shot fine-tune to the highlights-train runner, mirroring
+   * `decide`: one fixed-price live-runner app call, with the 402 -> signer ->
+   * retry payment flow on-chain. The payload maps TrainRunRequest fields to the
+   * train-entrypoint env contract (manifest path + hyper-params). */
+  async train(request: TrainRunRequest): Promise<TrainResult> {
+    const payerAddress = this.payerAddress;
+    const payload = {
+      manifest: request.manifest,
+      val: request.val ?? "",
+      epochs: request.epochs ?? 5,
+      batch_size: request.batchSize ?? 8,
+      lr: request.lr ?? 1e-4,
+      base_model: request.baseModel ?? "microsoft/Florence-2-base",
+    };
+    const run = async (paymentHeaders?: Record<string, string>) => {
+      const { status, data } = await this.client.train("train", payload, {
+        payerAddress: payerAddress || undefined,
+        paymentHeaders,
+      });
+      if (status >= 400) throw new Error(`train failed: HTTP ${status}`);
+      return data as TrainResult;
+    };
+    try {
+      return await run();
+    } catch (err) {
+      if (!(err instanceof PaymentRequiredError) || !this.signer || !payerAddress) throw err;
+      const b64 = err.challenge?.paymentParams;
+      if (!b64) {
+        throw new Error(
+          "on-chain train 402 challenge carried no payment_params (orchestrator info) to forward to the signer; cannot obtain tickets"
+        );
+      }
+      const manifestID = err.challenge?.manifestId;
+      const pmt = await this.signer.generateLivePayment(b64, null, {
+        app: ROUTES.train,
+        type: "fixed",
+        manifestID: manifestID || undefined,
+      });
+      return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
+    }
+  }
   async stopPerceive(sessionId: string): Promise<void> {
     // Stop paying for the session before releasing it (idempotent; no-op
     // offchain where there is no refresher).
@@ -388,6 +431,27 @@ export class DirectAdapter implements PipelineClient {
     });
     if (!r.ok) throw new Error(`decide failed: HTTP ${r.status}`);
     return (await r.json()) as DecisionResult;
+  }
+  async train(request: TrainRunRequest): Promise<TrainResult> {
+    // Direct dev path: requires a reachable TRAIN_URL exposing /app/train (the
+    // train single-shot app). Unknown in this adapter if unset.
+    if (!this.cfg.trainUrl) {
+      throw new Error("train unsupported in direct mode (TRAIN_URL not set)");
+    }
+    const r = await fetch(`${this.cfg.trainUrl}/app/train`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        manifest: request.manifest,
+        val: request.val ?? "",
+        epochs: request.epochs ?? 5,
+        batch_size: request.batchSize ?? 8,
+        lr: request.lr ?? 1e-4,
+        base_model: request.baseModel ?? "microsoft/Florence-2-base",
+      }),
+    });
+    if (!r.ok) throw new Error(`train failed: HTTP ${r.status}`);
+    return (await r.json()) as TrainResult;
   }
   async stopPerceive(): Promise<void> {
     await fetch(`${this.cfg.perceiveUrl}/app/session/close`, {

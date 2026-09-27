@@ -30,6 +30,7 @@ import { EntitlementsService, QuotaExceededError } from "./entitlements";
 import { FixedWindowLimiter, rateLimit } from "./rate-limit";
 import { enqueueBestEffort, type Mailer } from "./mailer";
 import { composeInviteEmail } from "./invites";
+import { createTrainService, TrainValidationError } from "./train";
 
 /** Resolve the VOD sampling fps from the runner's measured capability (when
  * reachable directly) else the configured interval.
@@ -140,6 +141,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   const authReq = authRequired(auth);
   const adminReq = adminRequired(auth);
+  const train = createTrainService(db, adapter);
 
   // Public auth endpoints share one anti-abuse budget per IP (login, register,
   // forgot, reset). In-process fixed-window: fine for a single beta instance;
@@ -724,6 +726,51 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       clipQuotaUsed: await entitlements.used(user.id),
       clipQuotaRemaining: await entitlements.remaining(user.id, sub),
     };
+  });
+
+  // --- fine-tune "train" trigger (ADAAAA-5262) -------------------------------
+  // Board user starts a Florence-2 fine-tune on the highlights-train single-shot
+  // runner. POST accepts a DetectionTrainingSample manifest (array, serialized
+  // to JSONL) + optional hyper-params, persists the run, and submits the job.
+  // GET /train lists the caller's runs (newest first); GET /train/:run returns a
+  // run's live status + surfaced result (checkpoint / eval deltas).
+  app.post<{ Body: { manifest?: unknown[] | string; val?: unknown[] | string; epochs?: number; batchSize?: number; lr?: number; baseModel?: string } }>(
+    "/train",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const user = req.user as { id: string };
+      try {
+        const run = await train.submit(user.id, {
+          manifest: req.body?.manifest,
+          val: req.body?.val,
+          epochs: req.body?.epochs,
+          batchSize: req.body?.batchSize,
+          lr: req.body?.lr,
+          baseModel: req.body?.baseModel,
+        });
+        return { run };
+      } catch (err) {
+        if (err instanceof TrainValidationError) {
+          return reply.code(422).send({ error: err.message, code: "invalid_manifest" });
+        }
+        throw err;
+      }
+    }
+  );
+
+  app.get("/train", { preHandler: authReq }, async (req: any) => {
+    const user = req.user as { id: string };
+    return { runs: await train.list(user.id) };
+  });
+
+  app.get<{ Params: { id: string } }>("/train/:id", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user as { id: string; role?: string };
+    const run = await train.get(req.params.id);
+    if (!run) return reply.code(404).send({ error: "train run not found", code: "not_found" });
+    // Company boundary: only the owning user (or admin) can read a run.
+    if (run.ownerId !== user.id && user.role !== "admin")
+      return reply.code(403).send({ error: "forbidden", code: "forbidden" });
+    return { run };
   });
 
   // --- dev wireframe billing (BILLING_WIREFRAME=1, NON-PRODUCTION only) -----

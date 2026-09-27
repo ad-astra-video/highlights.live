@@ -39,6 +39,9 @@ function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
     controlForward: async () => {
       log.push("control");
     },
+    // ADAAAA-5262 fine-tune trigger: not exercised in these unit tests, but
+    // required on the PipelineClient interface.
+    train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     ...over,
   };
   return { client, log };

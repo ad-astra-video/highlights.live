@@ -125,6 +125,10 @@ export function fakePipeline(): any {
     async decide() {
       return { isHighlight: true, score: 86, eventType: "KILL", reason: "test" };
     },
+    async train(_req: any) {
+      return { run: "train-smoke", checkpoint: "/runs/train-smoke/model.safetensors", epochs: 5, samples: 2,
+        eval: { eval: "completed", precision: 0.91, recall: 0.88, f1: 0.895 } };
+    },
     async stopPerceive() {
       (this as any).stopCount++;
     },
