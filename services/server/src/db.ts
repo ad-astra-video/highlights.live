@@ -244,6 +244,16 @@ export interface Db {
    * (a rejected clip releases the slot its generation debited). Returns the
    * new count. */
   decrementQuota(userId: string, period: string): Promise<number>;
+  /** Drop a user's ledger row for a period (clips + decides) — used by the
+   * dev wireframe reset to fully restore a fresh period's allowance. */
+  resetQuota(userId: string, period: string): Promise<void>;
+  /** Single-shot decides used by a user in a period key (e.g. "2026-09").
+   * Per-period like `getQuota`, so a free user's decide allowance resets at
+   * the start of each period instead of being a lifetime gate (ADAAAA-5129). */
+  getDecideQuota(userId: string, period: string): Promise<number>;
+  /** Atomically increment a user's decide count for a period. Returns the new
+   * count. */
+  incrementDecideQuota(userId: string, period: string): Promise<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +640,28 @@ export class SqliteDb implements Db {
       )
       .run(now, userId, period);
     return (await this.getQuota(userId, period));
+  }
+
+  async getDecideQuota(userId: string, period: string): Promise<number> {
+    const r = this.db
+      .prepare("SELECT decides_used FROM quota_ledger WHERE user_id = ? AND period = ?")
+      .get(userId, period) as { decides_used: number } | undefined;
+    return r?.decides_used ?? 0;
+  }
+
+  async resetQuota(userId: string, period: string): Promise<void> {
+    this.db.prepare("DELETE FROM quota_ledger WHERE user_id = ? AND period = ?").run(userId, period);
+  }
+
+  async incrementDecideQuota(userId: string, period: string): Promise<number> {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO quota_ledger (user_id,period,clips_used,decides_used,updated_at) VALUES (?,?,0,1,?)
+         ON CONFLICT(user_id,period) DO UPDATE SET decides_used = quota_ledger.decides_used + 1, updated_at = excluded.updated_at`
+      )
+      .run(userId, period, now);
+    return (await this.getDecideQuota(userId, period));
   }
 }
 
@@ -1022,6 +1054,24 @@ export class PgDb implements Db {
     );
     return this.getQuota(userId, period);
   }
+
+  async getDecideQuota(userId: string, period: string): Promise<number> {
+    const r = await this.pool.query("SELECT decides_used FROM quota_ledger WHERE user_id = $1 AND period = $2", [userId, period]);
+    return (r.rows[0]?.decides_used as number | undefined) ?? 0;
+  }
+
+  async resetQuota(userId: string, period: string): Promise<void> {
+    await this.pool.query("DELETE FROM quota_ledger WHERE user_id = $1 AND period = $2", [userId, period]);
+  }
+
+  async incrementDecideQuota(userId: string, period: string): Promise<number> {
+    await this.pool.query(
+      `INSERT INTO quota_ledger (user_id,period,clips_used,decides_used,updated_at) VALUES ($1,$2,0,1,$3)
+       ON CONFLICT (user_id,period) DO UPDATE SET decides_used = quota_ledger.decides_used + 1, updated_at = EXCLUDED.updated_at`,
+      [userId, period, new Date().toISOString()]
+    );
+    return this.getDecideQuota(userId, period);
+  }
 }
 
 const SCHEMA_SQLITE = `
@@ -1066,6 +1116,7 @@ const SCHEMA_SQLITE = `
     user_id TEXT NOT NULL,
     period TEXT NOT NULL,
     clips_used INTEGER NOT NULL DEFAULT 0,
+    decides_used INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (user_id, period)
   );
@@ -1170,6 +1221,7 @@ const SCHEMA_PG = `
     user_id TEXT NOT NULL,
     period TEXT NOT NULL,
     clips_used INTEGER NOT NULL DEFAULT 0,
+    decides_used INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (user_id, period)
   );
@@ -1293,6 +1345,18 @@ const MIGRATIONS: Migration[] = [
       // waitlist.status drives invite-path "b": 'waitlisted' → 'invited'.
       if (!(await hasColumn("waitlist", "status"))) await exec("ALTER TABLE waitlist ADD COLUMN status TEXT NOT NULL DEFAULT 'waitlisted'");
       if (!(await hasColumn("waitlist", "invited_at"))) await exec("ALTER TABLE waitlist ADD COLUMN invited_at TEXT");
+    },
+  },
+  {
+    version: 3,
+    name: "quota-ledger-decides-per-period",
+    up: async (exec, hasColumn) => {
+      // ADAAAA-5129: the quota ledger tracks single-shot decides per period
+      // too, so a free user's decide allowance resets monthly instead of being
+      // a lifetime gate. Fresh DBs (baseline CREATE) already include the
+      // column; this ALTER brings pre-existing on-disk ledgers up to shape.
+      if (!(await hasColumn("quota_ledger", "decides_used")))
+        await exec("ALTER TABLE quota_ledger ADD COLUMN decides_used INTEGER NOT NULL DEFAULT 0");
     },
   },
 ];
