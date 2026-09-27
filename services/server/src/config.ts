@@ -78,6 +78,20 @@ export interface ServerConfig {
   /** Detail-first VOD sampling fps (ADAAAA-4954, spec §1 knob `sampleFps`).
    * Deeper than the live 1 fps share; default 2. `VOD_DETAIL_FPS`. */
   vodDetailFps: number;
+  /** Hard ceiling on LIVE source sampling (frames/second) when the perceive
+   * runner reports it can sustain more than `sampleIntervalSec`. ADAAAA-5342:
+   * live sampling is driven from the runner's measured capability (mirroring
+   * VOD) and this bounds it toward the "3 live / 8 VOD" charter — default 10,
+   * above the VOD ceiling because live holds the runner open for a stream and
+   * samples its own cadence. `LIVE_SAMPLE_MAX_FPS` = 10. */
+  liveSampleMaxFps: number;
+  /** Headroom (0..1) applied to the runner's measured LIVE max fps so the
+   * runner never sits at its sustained ceiling (frame-queue latency backs up
+   * inside the 1-5s budget). ADAAAA-5342: live samples at
+   * `min(liveSampleMaxFps, max(base, runnerMaxFps * liveSampleHeadroom))` —
+   * the base cadence floor keeps a ~1 fps CPU runner from regressing. Default
+   * 0.9 (10% headroom). `LIVE_SAMPLE_HEADROOM` = 0.9. */
+  liveSampleHeadroom: number;
   /** Detail-first VOD frame scale for OD + decide image (spec knob
    * `frameScale`, default 640:360 — higher-res than live 320:180).
    * `VOD_FRAME_SCALE`. */
@@ -203,6 +217,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 2),
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
+    // ADAAAA-5342: live sampling driven from the runner's measured capability
+    // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
+    // headroom so capable GPUs accelerate toward the chartered cadence while
+    // the runner never sits at its sustained max; CPU (which reports interval
+    // >= 1.0) stays at ~1 fps via the base-cadence floor. Tunable without a
+    // redeploy via LIVE_SAMPLE_MAX_FPS / LIVE_SAMPLE_HEADROOM.
+    liveSampleMaxFps: Number(env.LIVE_SAMPLE_MAX_FPS ?? 10),
+    liveSampleHeadroom: Number(env.LIVE_SAMPLE_HEADROOM ?? 0.9),
     jwtSecret: env.JWT_SECRET ?? "dev-insecure-secret-change-me",
     resetTokenTtlSec: Number(env.RESET_TOKEN_TTL_SEC ?? 3600),
     authRateLimit: Number(env.AUTH_RATE_LIMIT ?? 30),
