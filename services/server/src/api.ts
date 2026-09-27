@@ -49,27 +49,55 @@ import { prepareArtifactDownload } from "./train-artifacts";
  * so CPU safely stays at 1 fps on its own; here we honor the runner's reported
  * interval and bound it only by `vodSampleMaxFps`.
  */
+export interface SampleFpsOpts {
+  /** Base per-job FPS override (VOD passed its `vodSampleFpsDefault`). For
+   * live it is absent, so the configured `sampleIntervalSec` cadence is the
+   * base AND the floor (keeps ~1 fps CPU runners from regressing). */
+  defaultFps?: number;
+  /** Hard ceiling on the resolved sampling fps. VOD's bound is
+   * `vodSampleMaxFps` (default 8); live passes `liveSampleMaxFps` (default 10). */
+  maxFps?: number;
+  /** Headroom (0..1) applied to the runner's measured max fps so the runner
+   * never sits at its sustained ceiling. VOD's legacy behavior has no headroom
+   * (default 1); live applies `liveSampleHeadroom` (default 0.9). */
+  headroom?: number;
+}
+
+/** Resolve the sampling fps from the runner's measured capability (when
+ * reachable directly) else the configured interval.
+ *
+ * ADAAAA-5342: live mirrors the VOD mechanism (ADAAAA-3726) that drives
+ * sampling from perceive's reported `sample_interval_s`. The base cadence
+ * (the configured `sampleIntervalSec`, ~1 fps for live) is a FLOOR: a headroom
+ * < 1 must never push a low-capability runner below its incumbent rate, so a
+ * CPU runner (which reports interval >= 1.0) stays at ≈1 fps while a GPU
+ * accelerates toward the chartered cadence bounded by the live cap.
+ */
 export async function resolveSampleFps(
   cfg: ServerConfig,
-  defaultFps?: number
+  opts: SampleFpsOpts = {}
 ): Promise<number> {
-  // Base: the configured default fps (VOD: `vodSampleFpsDefault`, default 5;
-  // ADAAAA-5059) else the configured interval (live: sampleIntervalSec). Used
-  // when perceive is unreachable.
-  let sampleFps = defaultFps ?? 1 / Math.max(0.2, cfg.sampleIntervalSec);
+  const { defaultFps, maxFps = cfg.vodSampleMaxFps, headroom = 1 } = opts;
+  // Base cadence: the configured default fps (VOD: `vodSampleFpsDefault`,
+  // default 5; ADAAAA-5059) else the configured interval (live:
+  // sampleIntervalSec). Used when perceive is unreachable, and it also floors
+  // the resolved value so a headroom < 1 never regresses the cadence.
+  const baseFps = Math.max(0.25, defaultFps ?? 1 / Math.max(0.2, cfg.sampleIntervalSec));
+  let sampleFps = baseFps;
   if (cfg.perceiveUrl) {
     try {
       const h = (await (await fetch(`${cfg.perceiveUrl}/health`)).json()) as any;
       const interval = Number(h?.sample_interval_s);
-      // Honor the runner's sustainable interval when it reports one. No 1 fps
-      // clamp: CPU reports interval >= 1.0 itself (stays at 1 fps), GPU reports
-      // a smaller interval so VOD samples faster toward the chartered cadence.
-      if (Number.isFinite(interval) && interval > 0.05) sampleFps = 1 / interval;
+      // Honor the runner's sustainable interval and apply headroom. No 1 fps
+      // clamp: CPU reports interval >= 1.0 itself (the base floor keeps it at
+      // ~1 fps even × headroom), GPU reports a smaller interval so sampling
+      // accelerates toward the chartered cadence.
+      if (Number.isFinite(interval) && interval > 0.05) sampleFps = (1 / interval) * headroom;
     } catch {
       /* fall back to config interval */
     }
   }
-  return Math.min(cfg.vodSampleMaxFps, Math.max(0.25, sampleFps));
+  return Math.min(maxFps, Math.max(baseFps, sampleFps));
 }
 
 /** Perceive persistent-session list price per hour (docker/runners.json
@@ -935,7 +963,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // Live ingest: capture/pull the stream, record it to disk, and sample
         // frames into the analyzer rail. Runs in the background; the job is
         // stopped via POST /jobs/:id/stop.
-        const sampleFps = await resolveSampleFps(cfg);
+        // ADAAAA-5342: live sampling driven from the runner's measured
+        // capability (mirroring VOD) — capped at a live-specific ceiling with
+        // a headroom so capable GPUs accelerate while the runner never sits at
+        // its sustained max, and floored at the base cadence so ~1 fps CPU
+        // runners never regress. The resolved rate is recorded on the job so
+        // it surfaces in job/stream metrics for verification.
+        const sampleFps = await resolveSampleFps(cfg, {
+          maxFps: cfg.liveSampleMaxFps,
+          headroom: cfg.liveSampleHeadroom,
+        });
+        await store.patchJob(job.id, { sampleFps });
         const kind: LiveKind = req.body.source === "screen" ? "screen" : "rtmp";
         const ingest = new LiveIngest(cfg, job.id, {
           kind,
