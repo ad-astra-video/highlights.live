@@ -1,10 +1,11 @@
 import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
-import { Zap, LayoutDashboard, CreditCard, Settings as SettingsIcon, LogOut, BrainCircuit } from "lucide-react";
+import { Zap, LayoutDashboard, Database, CreditCard, Settings as SettingsIcon, LogOut, BrainCircuit } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { DevBanner } from "./DevBanner";
 
 const nav = [
   { to: "/app", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/app/dataset", label: "Dataset Curation", icon: Database },
   { to: "/app/billing", label: "Billing", icon: CreditCard },
   { to: "/app/settings", label: "Settings", icon: SettingsIcon },
   { to: "/app/train", label: "Fine-tune", icon: BrainCircuit },

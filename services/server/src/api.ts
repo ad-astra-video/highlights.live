@@ -21,6 +21,8 @@ import {
 } from "./analyzer";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
+import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
+import type { DetectionTrainingSample } from "@highlights/events";
 import { LiveIngest, type LiveKind } from "./live";
 import { extractVodAudioChunks } from "./vod-audio";
 import type { Db, MediaSession, AnalyticsSnapshot } from "./db";
@@ -1350,6 +1352,49 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       return { ok: true, control: { type, args, at: new Date().toISOString() }, job: store.getJob(job.id) };
     }
   );
+
+  // --- Florence-2 fine-tune data path (ADAAAA-5164) --------------------------
+  // Extract a VOD clip to 1 fps curation frames. No training GPU is scheduled
+  // on this leg; this only stages frames for the Dataset Curation UI.
+  app.post<{ Body: { source?: string; fps?: number } }>("/training/extract", { preHandler: authReq }, async (req, reply) => {
+    const source = req.body?.source;
+    if (!source) return reply.code(400).send({ error: "source is required" });
+    const outDir = path.join(cfg.dataDir, "training", "extract", randomUUID());
+    try {
+      const frames = await extractFramesForDataset({ ffmpegPath: cfg.ffmpegPath, source, outDir, fps: req.body?.fps });
+      return { frames };
+    } catch (e: any) {
+      return reply.code(422).send({ error: String(e?.message || e) });
+    }
+  });
+
+  // Validate + write the curated train/val manifests. Server-side gate: any
+  // sample that fails the shared Zod schema returns 422 and writes nothing.
+  app.post<{ Body: { train?: unknown[]; val?: unknown[] } }>("/training/manifests", { preHandler: authReq }, async (req, reply) => {
+    const res = await writeTrainValManifests({
+      train: (req.body?.train ?? []) as DetectionTrainingSample[],
+      val: (req.body?.val ?? []) as DetectionTrainingSample[],
+      evalsDir: path.join(cfg.dataDir, "..", "evals"),
+    });
+    return reply.code(res.ok ? 200 : 422).send(res);
+  });
+
+  // Serve extracted training frames so the Dataset Curation UI can render
+  // them. imageRef from /training/extract is "<bucket>/frame_XXXX.jpg" relative
+  // to dataDir/training/extract; map it here, confined to that directory so a
+  // malicious ref can never escape the training staging root.
+  app.get<{ Params: { "*": string } }>("/training/frames/*", { preHandler: authReq }, async (req: any, reply: any) => {
+    const rel = req.params["*"] as string;
+    if (!rel || !rel.endsWith(".jpg") || rel.includes("..")) {
+      return reply.code(400).send({ error: "bad frame ref" });
+    }
+    const root = path.join(cfg.dataDir, "training", "extract");
+    const abs = path.join(root, rel);
+    if (!abs.startsWith(root + path.sep) || !existsSync(abs)) {
+      return reply.code(404).send({ error: "frame not found" });
+    }
+    return reply.type("image/jpeg").send(createReadStream(abs));
+  });
 
   app.get("/highlights", { preHandler: authReq }, async (req: any) => {
     const user = req.user;

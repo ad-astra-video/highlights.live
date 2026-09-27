@@ -72,6 +72,68 @@ export const DetectedObjectSchema = z.object({
 });
 export type DetectedObject = z.infer<typeof DetectedObjectSchema>;
 
+// --- Florence-2 detection training data (ADAAAA-5164, fine-tune data path) --
+//
+// The unit of data built by the Dataset Curation page and handed to a
+// Florence-2 fine-tune job. Frozen as a contract: the webapp curates against
+// it, the server validates with it before writing `evals/*_manifest.jsonl`,
+// and a future training leg consumes it verbatim. Any new required field is a
+// version bump.
+//
+// Closed 5-label soccer vocabulary. Mirrors the soccer alias group in
+// services/perceive/app/florence.py `_GAME_VOCABULARIES["soccer"]` so curated
+// labels are the same labels the deployed detector prefers.
+export const SOCCER_TRAINING_LABELS = [
+  "player",
+  "soccer ball",
+  "goalkeeper",
+  "goal",
+  "referee",
+] as const;
+export type TrainingLabel = (typeof SOCCER_TRAINING_LABELS)[number];
+
+export const TrainingLabelSchema = z.enum(SOCCER_TRAINING_LABELS);
+
+// A bbox whose four coordinates are enforced normalized 0..1 with a valid
+// (non-empty) ordering -- stricter than BBoxSchema, because a fine-tune sample
+// must never carry an out-of-frame or inverted box.
+export const NormalizedBBoxSchema = z
+  .tuple([
+    z.number().min(0).max(1), // x1
+    z.number().min(0).max(1), // y1
+    z.number().min(0).max(1), // x2
+    z.number().min(0).max(1), // y2
+  ])
+  .refine(([x1, , x2]) => x2 >= x1, { message: "bbox x2 must be >= x1" })
+  .refine(([, y1, , y2]) => y2 >= y1, { message: "bbox y2 must be >= y1" });
+export type NormalizedBBox = z.infer<typeof NormalizedBBoxSchema>;
+
+// One labelled detection in a curated frame. `bbox` is normalized 0..1
+// [x1,y1,x2,y2] (top-left, bottom-right), the same convention as BBoxSchema
+// on the live/VOD detection path, but range-checked for the training set.
+export const DetectionTrainingBoxSchema = z.object({
+  label: TrainingLabelSchema,
+  bbox: NormalizedBBoxSchema,
+});
+export type DetectionTrainingBox = z.infer<typeof DetectionTrainingBoxSchema>;
+
+// One frame's worth of labelled detections -- the row unit of the train/val
+// manifests. `imageRef` is a stable pointer to the extracted frame (object
+// storage key, or a file path under `data/training/`).
+export const DetectionTrainingSampleSchema = z.object({
+  id: z.string(),
+  imageRef: z.string(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  objects: z.array(DetectionTrainingBoxSchema),
+});
+export type DetectionTrainingSample = z.infer<typeof DetectionTrainingSampleSchema>;
+
+// Which side of the 85/15 train/val split a sample lands on (assigned at
+// export time; not part of a sample's identity).
+export const SampleSplitSchema = z.enum(["train", "val"]);
+export type SampleSplit = z.infer<typeof SampleSplitSchema>;
+
 // --- observations / events -------------------------------------------------
 
 export const FrameObservationSchema = z.object({
@@ -353,3 +415,10 @@ export const HighlightRecordSchema = z.object({
   createdAt: z.string(),
 });
 export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
+
+// --- training pipeline re-exports (ADAAAA-5164) -----------------------------
+// The dataset-curation pipeline (perceptual-hash bucketing, coverage, split,
+// JSONL manifests) ships in ./training. Re-exported here so consumers use one
+// import specifier (`@highlights/events`); safe because ./training only uses
+// the schemas at call time, never at module-eval time (no init-cycle hazard).
+export * from "./training";

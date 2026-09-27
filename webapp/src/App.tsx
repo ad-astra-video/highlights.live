@@ -5,6 +5,7 @@ import { Landing } from "./pages/Landing";
 import { AuthPage } from "./pages/AuthPage";
 import { ResetPage } from "./pages/ResetPage";
 import { Dashboard } from "./pages/Dashboard";
+import { Dataset } from "./pages/Dataset";
 import { Billing } from "./pages/Billing";
 import { Settings } from "./pages/Settings";
 import { Train } from "./pages/Train";
@@ -35,6 +36,7 @@ export default function App() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route path="dataset" element={<Dataset />} />
         <Route path="billing" element={<Billing />} />
         <Route path="settings" element={<Settings />} />
         <Route path="train" element={<Train />} />
