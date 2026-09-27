@@ -1,3 +1,5 @@
+import path from "node:path";
+
 export interface ServerConfig {
   port: number;
   /** "production" | "development" | "test" (alias of NODE_ENV). Used as the
@@ -101,6 +103,17 @@ export interface ServerConfig {
    * reachable over HTTPS. Falls back to the repo-local `webapp/dist` when the
    * directory exists; empty disables SPA serving (API-only). */
   webappDist?: string;
+  /** Root directory (server-visible) where completed fine-tune artifacts are
+   * staged for user download (ADAAAA-5323). The train runner emits a LoRA
+   * adapter file per run; in direct/shared-mount deployments the server reads
+   * the artifact from here so it can serve the run-scoped download endpoint
+   * with hash verification. Default `${dataDir}/train-artifacts`. */
+  trainArtifactRoot: string;
+  /** Directory where the curated train/val manifests (fine-tune Increment A)
+   * are published as `train_manifest.jsonl` / `val_manifest.jsonl`. The
+   * fine-tune page uses them as the one-click trigger source (manual JSON
+   * paste stays as the operator fallback). Default `${dataDir}/curated`. */
+  curatedManifestDir: string;
   /** SQLite database file path (dev; used when `databaseUrl` is unset). */
   databasePath: string;
   /** Postgres connection string (prod). When set, the server uses Postgres
@@ -197,6 +210,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     adminEmail: env.ADMIN_EMAIL ?? "admin@highlights.local",
     adminPassword: env.ADMIN_PASSWORD ?? "admin",
     webappDist: env.WEBAPP_DIST || "",
+    trainArtifactRoot: env.TRAIN_ARTIFACT_ROOT || path.join(env.DATA_DIR ?? "data", "train-artifacts"),
+    // Increment A (the annotation loop) publishes curated train/val manifests
+    // to <dataDir>/../evals via /training/manifests — this is the default feed
+    // dir the fine-tune curated trigger reads from.
+    curatedManifestDir: env.CURATED_MANIFEST_DIR || path.join(env.DATA_DIR ?? "data", "..", "evals"),
     databasePath: env.DATABASE_PATH ?? "data/highlights.db",
     databaseUrl: env.DATABASE_URL,
     databaseBackupDir: env.DATABASE_BACKUP_DIR ?? "data/backups",

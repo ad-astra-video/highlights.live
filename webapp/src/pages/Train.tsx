@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { BrainCircuit, Loader2, Play, CheckCircle2, XCircle, Clock } from "lucide-react";
-import { api } from "../lib/api";
+import {
+  BrainCircuit,
+  Loader2,
+  Play,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Download,
+  Database,
+  PenLine,
+  ShieldCheck,
+} from "lucide-react";
+import { api, downloadTrainArtifact } from "../lib/api";
 
 // A tiny default manifest so an operator can fire the highlights-train runner
 // from the dashboard without preparing a dataset first. Real training data
-// (DetectionTrainingSample JSONL) is pasted in the textarea to override this.
+// (DetectionTrainingSample JSONL) comes from the curated dataset (default) or is
+// pasted in the textarea to override (operator fallback).
 const DEFAULT_MANIFEST = [
   { image: "/srv/frames/sample_a.png", labels: [{ label: "player", bbox: [0.1, 0.1, 0.46, 0.32] }] },
   { image: "/srv/frames/sample_b.png", labels: [{ label: "player", bbox: [0.2, 0.2, 0.7, 0.55] }] },
@@ -13,10 +25,28 @@ const DEFAULT_MANIFEST = [
 type Run = {
   id: string;
   status: string;
-  result?: { checkpoint?: string; eval?: { eval?: string; reason?: string; precision?: number; recall?: number; f1?: number } };
+  result?: {
+    checkpoint?: string;
+    adapter?: string;
+    artifact?: {
+      filename?: string;
+      sha256?: string;
+      size?: number;
+      contentType?: string;
+      downloadPath?: string;
+    };
+    eval?: { eval?: string; reason?: string; precision?: number; recall?: number; f1?: number };
+  };
   error?: string;
   epochs?: number;
   createdAt: string;
+};
+
+type CuratedInfo = {
+  present: boolean;
+  trainCount?: number;
+  valCount?: number;
+  updatedAt?: string;
 };
 
 const STATUS_META: Record<string, { icon: typeof Clock; cls: string; label: string }> = {
@@ -28,11 +58,23 @@ const STATUS_META: Record<string, { icon: typeof Clock; cls: string; label: stri
 
 export function Train() {
   const [manifest, setManifest] = useState(JSON.stringify(DEFAULT_MANIFEST, null, 2));
+  const [source, setSource] = useState<"curated" | "paste">("curated");
+  const [curated, setCurated] = useState<CuratedInfo | null>(null);
   const [epochs, setEpochs] = useState("5");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const pollRef = useRef<number | null>(null);
+
+  const refreshCurated = async () => {
+    try {
+      const r = await api<{ curated: CuratedInfo }>("/train/curated");
+      setCurated(r.curated);
+      if (r.curated.present) setSource("curated");
+    } catch {
+      /* curated feed may be empty before Increment A lands */
+    }
+  };
 
   const refreshRuns = async () => {
     const r = await api<{ runs: Run[] }>("/train");
@@ -48,6 +90,7 @@ export function Train() {
   };
 
   useEffect(() => {
+    refreshCurated();
     refreshRuns();
     return () => {
       if (pollRef.current !== null) window.clearInterval(pollRef.current);
@@ -58,25 +101,40 @@ export function Train() {
     setBusy(true);
     setError(null);
     try {
-      let parsed: unknown[] | string = manifest;
-      try {
-        parsed = JSON.parse(manifest);
-      } catch {
-        // fall through: treat the raw textarea as pre-serialized JSONL
+      let parsed: unknown[] | string | undefined = manifest;
+      let manifestSource: "curated" | "paste" | undefined = undefined;
+      if (source === "paste") {
+        try {
+          parsed = JSON.parse(manifest);
+        } catch {
+          // fall through: treat the raw textarea as pre-serialized JSONL
+        }
+      } else {
+        manifestSource = "curated";
+        parsed = undefined; // server loads the curated manifests
       }
-      const res = await api<{ run: Run }>("/train", {
+      await api<{ run: Run }>("/train", {
         method: "POST",
         body: {
           manifest: parsed,
+          manifestSource,
           epochs: Number(epochs) || undefined,
         },
       });
       await refreshRuns();
-      void res;
     } catch (e: any) {
       setError(e?.message || "Failed to start fine-tune");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function download(run: Run) {
+    const filename = run.result?.artifact?.filename || `lora-${run.id}.safetensors`;
+    try {
+      await downloadTrainArtifact(run.id, filename);
+    } catch (e: any) {
+      setError(e?.message || "Artifact download failed");
     }
   }
 
@@ -88,19 +146,63 @@ export function Train() {
         </div>
         <div>
           <h1 className="text-2xl font-extrabold text-ink">Fine-tune</h1>
-          <p className="text-sm text-mut">Trigger the Florence-2 &lt;OD&gt; LoRA runner and track its checkpoint + eval deltas.</p>
+          <p className="text-sm text-mut">Trigger the Florence-2 &lt;OD&gt; LoRA runner from your curated dataset and download the trained adapter.</p>
         </div>
       </div>
 
       <section className="card card-accent mb-6 p-5">
-        <label className="mb-1 block text-xs font-semibold text-mut">Training manifest (DetectionTrainingSample JSON)</label>
-        <textarea
-          value={manifest}
-          onChange={(e) => setManifest(e.target.value)}
-          spellCheck={false}
-          rows={6}
-          className="input-neon w-full resize-y font-mono text-xs"
-        />
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setSource("curated")}
+            disabled={!curated?.present}
+            className={`btn flex items-center gap-2 ${source === "curated" ? "btn-purple btn-fill" : "btn-ghost"}`}
+          >
+            <Database className="h-4 w-4" />
+            Curated dataset
+            {curated?.present ? (
+              <span className="ml-1 text-xs opacity-80">
+                {curated.trainCount ?? 0} train / {curated.valCount ?? 0} val
+              </span>
+            ) : (
+              <span className="ml-1 text-xs opacity-60">unavailable</span>
+            )}
+          </button>
+          <button
+            onClick={() => setSource("paste")}
+            className={`btn flex items-center gap-2 ${source === "paste" ? "btn-purple btn-fill" : "btn-ghost"}`}
+          >
+            <PenLine className="h-4 w-4" />
+            Manual JSON (operator)
+          </button>
+        </div>
+
+        {source === "curated" && (
+          <div className="mb-3 rounded-xl border border-purple/20 bg-dusk/40 p-3 text-sm">
+            {curated?.present ? (
+              <p className="text-mut">
+                Launches from the curated manifests published by the annotation loop (train{" "}
+                {curated.trainCount} · val {curated.valCount}
+                {curated.updatedAt ? ` · updated ${new Date(curated.updatedAt).toLocaleString()}` : ""}).
+              </p>
+            ) : (
+              <p className="text-mut">No curated manifest published yet — use Manual JSON, or finish the annotation loop first.</p>
+            )}
+          </div>
+        )}
+
+        {source === "paste" && (
+          <>
+            <label className="mb-1 block text-xs font-semibold text-mut">Training manifest (DetectionTrainingSample JSON)</label>
+            <textarea
+              value={manifest}
+              onChange={(e) => setManifest(e.target.value)}
+              spellCheck={false}
+              rows={6}
+              className="input-neon w-full resize-y font-mono text-xs"
+            />
+          </>
+        )}
+
         <div className="mt-3 flex flex-wrap items-end gap-4">
           <div className="flex flex-col gap-1">
             <label className="text-xs text-mut">Epochs</label>
@@ -112,7 +214,11 @@ export function Train() {
               className="input-neon w-24"
             />
           </div>
-          <button onClick={startTrain} disabled={busy} className="btn-purple btn-fill flex items-center gap-2">
+          <button
+            onClick={startTrain}
+            disabled={busy || (source === "curated" && !curated?.present)}
+            className="btn-purple btn-fill flex items-center gap-2"
+          >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             Start fine-tune
           </button>
@@ -129,6 +235,7 @@ export function Train() {
             {runs.map((r) => {
               const meta = STATUS_META[r.status] ?? { icon: Clock, cls: "text-mut", label: r.status };
               const Icon = meta.icon;
+              const artifact = r.result?.artifact;
               return (
                 <li key={r.id} className="card p-4 text-sm">
                   <div className="mb-2 flex items-center justify-between gap-3">
@@ -150,6 +257,28 @@ export function Train() {
                           <dt className="text-mut">precision / recall / f1</dt>
                           <dd className="font-mono">
                             {r.result.eval.precision ?? "—"} / {r.result.eval.recall ?? "—"} / {r.result.eval.f1 ?? "—"}
+                          </dd>
+                        </>
+                      )}
+                      {artifact && (
+                        <>
+                          <dt className="text-mut">LoRA artifact</dt>
+                          <dd className="flex flex-col gap-1">
+                            <button
+                              onClick={() => download(r)}
+                              className="inline-flex w-fit items-center gap-1.5 rounded-lg border border-purple/30 bg-dusk px-2.5 py-1 font-semibold text-purple hover:bg-purple/10"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              Download {artifact.filename}
+                            </button>
+                            {artifact.sha256 && (
+                              <span className="inline-flex items-center gap-1 font-mono text-[11px] text-mut">
+                                <ShieldCheck className="h-3 w-3" /> sha256:{artifact.sha256.slice(0, 16)}…
+                              </span>
+                            )}
+                            {artifact.size ? (
+                              <span className="font-mono text-[11px] text-mut">{Math.round(artifact.size / 1024)} KB</span>
+                            ) : null}
                           </dd>
                         </>
                       )}
