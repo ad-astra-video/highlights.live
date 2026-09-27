@@ -98,10 +98,31 @@ export class Store {
   async reviewHighlight(id: string, status: "accepted" | "rejected"): Promise<HighlightRecord> {
     const h = this.highlights.get(id);
     if (!h) throw new Error(`no highlight ${id}`);
-    const next = HighlightRecordSchema.parse({ ...h, status });
+    const now = new Date().toISOString();
+    // Reject -> record the soft-delete grace start (rejectedAt). Undo
+    // (reject -> accept) clears it so the clip is never a TTL purge candidate.
+    const rejectedAt =
+      status === "rejected" ? (h.status === "rejected" ? h.rejectedAt : now) : undefined;
+    const next = HighlightRecordSchema.parse({ ...h, status, rejectedAt });
     this.highlights.set(id, next);
     if (this.db) await this.db.saveHighlight(next);
     return next;
+  }
+
+  /** Hard-remove a highlight (DB row + in-memory working set). Used by the TTL
+   * purge sweep for `rejected` clips aged >= rejectTtlMs. Idempotent: deleting
+   * an already-purged id is a no-op. */
+  async deleteHighlight(id: string): Promise<boolean> {
+    const h = this.highlights.get(id);
+    if (!h) return false;
+    this.highlights.delete(id);
+    const list = this.byJob.get(h.jobId);
+    if (list) {
+      const i = list.indexOf(id);
+      if (i >= 0) list.splice(i, 1);
+    }
+    if (this.db) await this.db.deleteHighlight(id);
+    return true;
   }
 
   async patchHighlight(id: string, patch: Partial<Pick<HighlightRecord, "clipUri" | "start" | "end">>): Promise<HighlightRecord> {
