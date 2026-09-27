@@ -10,6 +10,10 @@ export interface ServerConfig {
   /** When set, bypass the orchestrator and call runners directly (dev). */
   perceiveUrl?: string;
   decideUrl?: string;
+  /** When set, bypass the orchestrator and call the train runner directly (dev).
+   * No train container ships with the local stack today, so this stays unset
+   * and direct train calls fail with a clear error until a TRAIN_URL is wired. */
+  trainUrl?: string;
   /** Media server (gateway terminus + payer) base URL. When set, browser media
    * frames route browser -> media-server WS -> orchestrator video-in instead of
    * the server's /jobs/:id/ingest HTTP rail. */
@@ -162,6 +166,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     orchestratorUrl: env.ORCHESTRATOR_URL ?? "http://127.0.0.1:8935",
     perceiveUrl: env.PERCEIVE_URL,
     decideUrl: env.DECIDE_URL,
+    trainUrl: env.TRAIN_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
     signerUrl: env.SIGNER_URL,
     signerAuthToken: env.SIGNER_AUTH_TOKEN,

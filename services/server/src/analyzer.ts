@@ -147,7 +147,43 @@ export interface PipelineClient {
       audioB64?: string;
     }
   ): Promise<DecisionResult>;
+  /**
+   * Submit a single-shot fine-tune job to the highlights-train runner
+   * (Florence-2 <OD> LoRA). The runner blocks until the job finishes and the
+   * 200 body carries the trained checkpoint path + eval delta report, which the
+   * server folds into the surfaced TrainRun result.
+   */
+  train(request: TrainRunRequest): Promise<TrainResult>;
   stopPerceive(sessionId: string): Promise<void>;
+}
+
+/** Manifest + hyper-params for a highlights-train single-shot job. Mirrors the
+ * env contract of the train-entrypoint (docker/train-entrypoint.sh). */
+export interface TrainRunRequest {
+  manifest: string; // JSONL DetectionTrainingSample manifest (newline-delimited JSON)
+  val?: string; // optional held-out val manifest (JSONL)
+  epochs?: number; // default 5
+  batchSize?: number; // default 8
+  lr?: number; // default 1e-4
+  baseModel?: string; // default microsoft/Florence-2-base
+}
+
+/** Result of a completed highlights-train job (mirrors fine_tune_od.py output). */
+export interface TrainResult {
+  run?: string;
+  checkpoint?: string;
+  out?: string;
+  eval?: {
+    eval?: string; // "skipped" when no val manifest
+    reason?: string;
+    precision?: number;
+    recall?: number;
+    f1?: number;
+    [k: string]: unknown;
+  };
+  epochs?: number;
+  samples?: number;
+  [k: string]: unknown;
 }
 
 export interface AnalyzerConfig {

@@ -7,6 +7,7 @@ import { ResetPage } from "./pages/ResetPage";
 import { Dashboard } from "./pages/Dashboard";
 import { Billing } from "./pages/Billing";
 import { Settings } from "./pages/Settings";
+import { Train } from "./pages/Train";
 import { Legal } from "./pages/Legal";
 
 function Protected({ children }: { children: React.ReactNode }) {
@@ -36,6 +37,7 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="billing" element={<Billing />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="train" element={<Train />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

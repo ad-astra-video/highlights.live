@@ -60,6 +60,35 @@ export interface WaitlistGate {
   updatedAt: string;
 }
 
+/** A fine-tune run started from the dashboard `train` trigger (ADAAAA-5262).
+ * `status` is one of `queued | running | done | failed`; `result` is the
+ * checkpoint + eval-delta report surfaced to the UI (set when the runner
+ * returns, or an `{error}` on failure). Holistic contract of `services/train`.
+ * Stored as a JSON record, mirroring jobs/highlights. */
+export interface TrainRun {
+  id: string;
+  ownerId: string | null;
+  status: "queued" | "running" | "done" | "failed";
+  /** Newline-delimited JSON DetectionTrainingSample manifest submitted by the
+   * board user (persisted so a restart can re-surface the run's inputs). */
+  manifest: string;
+  val?: string;
+  epochs?: number;
+  batchSize?: number;
+  lr?: number;
+  baseModel?: string;
+  error?: string;
+  result?: {
+    run?: string;
+    checkpoint?: string;
+    out?: string;
+    eval?: { eval?: string; reason?: string; precision?: number; recall?: number; f1?: number };
+    [k: string]: unknown;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** A single-use invite code issued by the cohort owner (invite path "a").
  * Stored as a SHA-256 hash; the plaintext code is shown to the owner once at
  * issuance and handed out of band. */
@@ -175,6 +204,11 @@ export interface Db {
   listHighlights(): Promise<HighlightRecord[]>;
   /** Permanently remove a highlight row (TTL purge of rejected clips). */
   deleteHighlight(id: string): Promise<void>;
+  /** Persist a fine-tune train run record (full JSON upsert by id). */
+  saveTrainRun(r: TrainRun): Promise<void>;
+  getTrainRun(id: string): Promise<TrainRun | undefined>;
+  /** All train runs, newest first; optionally scoped to one owner. */
+  listTrainRuns(ownerId?: string): Promise<TrainRun[]>;
   /** Public waitlist: add an email, deduped by the normalized email (UNIQUE
    * constraint). Returns whether this call actually created a new entry vs the
    * email already being present (idempotent re-submission). */
@@ -436,6 +470,31 @@ export class SqliteDb implements Db {
 
   async deleteHighlight(id: string): Promise<void> {
     this.db.prepare("DELETE FROM highlights WHERE id = ?").run(id);
+  }
+
+  async saveTrainRun(r: TrainRun): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO train_runs (id, record, owner_id, status, created_at)
+         VALUES (?,?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET record=excluded.record, owner_id=excluded.owner_id,
+           status=excluded.status, created_at=excluded.created_at`
+      )
+      .run(r.id, JSON.stringify(r), r.ownerId ?? null, r.status, r.createdAt);
+  }
+
+  async getTrainRun(id: string): Promise<TrainRun | undefined> {
+    const r = this.db.prepare("SELECT record FROM train_runs WHERE id = ?").get(id);
+    return r ? (JSON.parse((r as any).record) as TrainRun) : undefined;
+  }
+
+  async listTrainRuns(ownerId?: string): Promise<TrainRun[]> {
+    const rows = (
+      ownerId
+        ? this.db.prepare("SELECT record, created_at FROM train_runs WHERE owner_id = ? ORDER BY created_at DESC").all(ownerId)
+        : this.db.prepare("SELECT record, created_at FROM train_runs ORDER BY created_at DESC").all()
+    ) as { record: string }[];
+    return rows.map((r) => JSON.parse(r.record) as TrainRun);
   }
 
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
@@ -854,6 +913,31 @@ export class PgDb implements Db {
     await this.pool.query("DELETE FROM highlights WHERE id = $1", [id]);
   }
 
+  async saveTrainRun(r: TrainRun): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO train_runs (id, record, owner_id, status, created_at)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (id) DO UPDATE SET record=EXCLUDED.record, owner_id=EXCLUDED.owner_id,
+         status=EXCLUDED.status, created_at=EXCLUDED.created_at`,
+      [r.id, JSON.stringify(r), r.ownerId ?? null, r.status, r.createdAt]
+    );
+  }
+
+  async getTrainRun(id: string): Promise<TrainRun | undefined> {
+    const r = await this.pool.query("SELECT record FROM train_runs WHERE id = $1", [id]);
+    return r.rows[0] ? (JSON.parse(r.rows[0].record) as TrainRun) : undefined;
+  }
+
+  async listTrainRuns(ownerId?: string): Promise<TrainRun[]> {
+    const r = ownerId
+      ? await this.pool.query(
+          "SELECT record FROM train_runs WHERE owner_id = $1 ORDER BY created_at DESC",
+          [ownerId]
+        )
+      : await this.pool.query("SELECT record FROM train_runs ORDER BY created_at DESC");
+    return r.rows.map((row) => JSON.parse(row.record) as TrainRun);
+  }
+
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
     const r = await this.pool.query(
       "INSERT INTO waitlist (id,email,created_at) VALUES ($1,$2,$3) ON CONFLICT (email) DO NOTHING",
@@ -1145,6 +1229,13 @@ const SCHEMA_SQLITE = `
     status TEXT,
     created_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS train_runs (
+    id TEXT PRIMARY KEY,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    status TEXT,
+    created_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS waitlist (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
@@ -1245,6 +1336,13 @@ const SCHEMA_PG = `
   CREATE TABLE IF NOT EXISTS highlights (
     id TEXT PRIMARY KEY,
     job_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    status TEXT,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS train_runs (
+    id TEXT PRIMARY KEY,
     record TEXT NOT NULL,
     owner_id TEXT,
     status TEXT,
@@ -1357,6 +1455,25 @@ const MIGRATIONS: Migration[] = [
       // column; this ALTER brings pre-existing on-disk ledgers up to shape.
       if (!(await hasColumn("quota_ledger", "decides_used")))
         await exec("ALTER TABLE quota_ledger ADD COLUMN decides_used INTEGER NOT NULL DEFAULT 0");
+    },
+  },
+  {
+    version: 4,
+    name: "train-runs-table",
+    up: async (exec) => {
+      // ADAAAA-5262: durable fine-tune runs started from the dashboard train
+      // trigger. Fresh DBs (baseline CREATE) already include the table; this
+      // brings pre-existing on-disk DBs up to shape. TEXT types are valid in
+      // both SQLite and Postgres, so one statement serves both backends.
+      await exec(
+        `CREATE TABLE IF NOT EXISTS train_runs (
+          id TEXT PRIMARY KEY,
+          record TEXT NOT NULL,
+          owner_id TEXT,
+          status TEXT,
+          created_at TEXT
+        )`
+      );
     },
   },
 ];

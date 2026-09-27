@@ -12,6 +12,7 @@
 export const ROUTES = {
   perceive: "highlights-perceive",
   decide: "highlights-decide",
+  train: "highlights-train",
 } as const;
 
 export type Route = (typeof ROUTES)[keyof typeof ROUTES];
@@ -391,6 +392,43 @@ export class LivepeerClient {
     if (opts?.payerAddress) headers["Livepeer-Payer-Address"] = opts.payerAddress;
     if (opts?.paymentHeaders) Object.assign(headers, opts.paymentHeaders);
     const res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (res.status === 402) {
+      const body2 = await res.json().catch(() => ({}));
+      throw new PaymentRequiredError(body2, livePaymentChallengeFromBody(body2));
+    }
+    const text = await res.text();
+    let data: unknown = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = text;
+    }
+    return { status: res.status, data };
+  }
+
+  /**
+   * Submit a single-shot fine-tune job to the highlights-train runner
+   * (`POST /apps/highlights-train/app/{path}`). Same fixed-price live-runner
+   * flow as `decide`: offchain 200 immediately; on-chain the first call 402s
+   * with a payment challenge (payment_params / manifest_id) the caller forwards
+   * to the remote signer for tickets, then retries with the returned
+   * Livepeer-Payment/Livepeer-Segment. The train entrypoint reads the run inputs
+   * (TRAIN_MANIFEST / TRAIN_VAL / epochs / batch size / lr) from the submitted
+   * payload and blocks until the job finishes, returning the checkpoint + eval
+   * report in the 200 body.
+   */
+  async train(
+    path: string,
+    body: unknown,
+    opts?: { headers?: Record<string, string>; payerAddress?: string; paymentHeaders?: Record<string, string> }
+  ): Promise<{ status: number; data: unknown }> {
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts?.headers || {}) };
+    if (opts?.payerAddress) headers["Livepeer-Payer-Address"] = opts.payerAddress;
+    if (opts?.paymentHeaders) Object.assign(headers, opts.paymentHeaders);
+    const res = await this.transport.request("POST", `/apps/${ROUTES.train}/app/${path}`, {
       headers,
       body: JSON.stringify(body),
     });
