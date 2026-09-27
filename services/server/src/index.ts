@@ -26,8 +26,9 @@ async function main() {
   const auth = new AuthService(db, cfg, mailer ?? undefined);
   await auth.bootstrapAdmin();
 
+  const entitlements = new EntitlementsService(db, cfg);
   const stripe = cfg.stripeSecretKey ? new Stripe(cfg.stripeSecretKey) : null;
-  const billing = new BillingService(cfg, db, stripe);
+  const billing = new BillingService(cfg, db, stripe, entitlements);
 
   if (!billing.enabled) {
     console.warn("WARN: billing is DISABLED (set STRIPE_SECRET_KEY + STRIPE_PRICE_PRO) — /jobs gated on free quota only.");
@@ -41,7 +42,6 @@ async function main() {
     console.log("clip auto-publish: ON — generated clips go straight to the public /feed (admin review off).");
   }
 
-  const entitlements = new EntitlementsService(db, cfg);
   const adapter = makeAdapter(cfg);
   const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements, mailer: mailer ?? undefined });
   await app.listen({ port: cfg.port, host: "0.0.0.0" });

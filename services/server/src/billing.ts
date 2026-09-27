@@ -12,6 +12,7 @@
 // on demand and billed through Stripe Checkout + the Customer portal.
 import type { Db, Subscription, User } from "./db";
 import type { ServerConfig } from "./config";
+import type { EntitlementsService } from "./entitlements";
 
 export interface Plan {
   id: string;
@@ -32,7 +33,8 @@ export class BillingService {
   constructor(
     private cfg: ServerConfig,
     private db: Db,
-    private stripe: any
+    private stripe: any,
+    private entitlements: EntitlementsService
   ) {}
 
   get enabled(): boolean {
@@ -91,55 +93,69 @@ export class BillingService {
   /**
    * Gate: may this user create a highlight now?
    * Throws a BillingRequiredError (-> HTTP 402 with upgrade intent) when not.
+   *
+   * The free-tier cap is read from the SAME per-period entitlement ledger the
+   * UI displays (`clipQuotaUsed` / `clipQuotaLimit`), not the lifetime
+   * `usage_events` counter. This keeps enforcement and display on one
+   * consistent counter and lets a free user's allowance reset at the start of
+   * each period (ADAAAA-5129).
    */
   async canCreateHighlight(user: User, sub: Subscription): Promise<void> {
     if (sub.tier === "pro" && sub.status === "active") return;
-    // free (or past_due/canceled pro) -> count toward the free cap
-    const used = await this.db.countUsage(user.id, "highlight");
-    if (used < this.cfg.freeHighlights) return;
+    // free (or past_due/canceled pro) -> count against the current period
+    const remaining = await this.entitlements.remaining(user.id);
+    if (remaining > 0) return;
     throw new BillingRequiredError("free highlight allowance used; subscribe to Pro or add funds");
   }
 
   /**
-   /**
-    * Gate: may this user run a single-shot decide now? The decide VLM (Gemma 4
-    * 12B) is priced as a FIXED fee per single shot (`cfg.decideFee`, default
-    * $0.01). Pro-active users pass through (billed PAYG via onDecideCompleted);
-    * free users get a small included `freeDecides` allowance, then 402.
-    * Works the same whether or not Stripe is configured (billing disabled).
-    */
-   async canDecide(user: User, sub: Subscription): Promise<void> {
+   * Gate: may this user run a single-shot decide now? The decide VLM (Gemma 4
+   * 12B) is priced as a FIXED fee per single shot (`cfg.decideFee`, default
+   * $0.01). Pro-active users pass through (billed PAYG via onDecideCompleted);
+   * free users get a small included `freeDecides` allowance per period, then
+   * 402. The allowance reads from the SAME per-period entitlement ledger the
+   * clip quota uses (ADAAAA-5129), so it resets monthly instead of being a
+   * lifetime gate. Works the same whether or not Stripe is configured
+   * (billing disabled).
+   */
+  async canDecide(user: User, sub: Subscription): Promise<void> {
      if (sub.tier === "pro" && sub.status === "active") return;
-     const used = await this.db.countUsage(user.id, "decide");
-     if (used < this.cfg.freeDecides) return;
+     const remaining = await this.entitlements.decidesRemaining(user.id);
+     if (remaining > 0) return;
      throw new BillingRequiredError(`one-time decide fee $${this.cfg.decideFee.toFixed(2)}; top up to continue`);
    }
 
-   /** Meter ONE single-shot decide. Always increments the DB counter; for Pro
-    * overage beyond the included decide allowance, posts a Stripe usage record
-    * so the fixed per-use fee (DECIDE_FEE price) is billed PAYG. */
+   /** Meter ONE single-shot decide. Always increments the per-period decide
+    * ledger (so a free user's allowance resets monthly); for Pro overage
+    * beyond the included decide allowance, posts a Stripe usage record so the
+    * fixed per-use fee (DECIDE_FEE price) is billed PAYG. */
    async onDecideCompleted(user: User, sub: Subscription): Promise<void> {
      await this.db.recordUsage(user.id, "decide");
+     await this.entitlements.onDecideCompleted(user);
      if (sub.tier === "pro" && sub.status === "active" && this.enabled && sub.stripeSubItemId) {
-       const used = await this.db.countUsage(user.id, "decide");
+       const used = await this.entitlements.decidesUsed(user.id);
        const included = this.cfg.freeDecides;
        if (used > included) await this.postUsageRecord(sub.stripeSubItemId, used - included);
      }
    }
 
-   /** Meter ONE highlight. Increments the DB counter always; for Pro overage
-    * beyond the included quota, posts a Stripe usage record so PAYG is billed.
+   /** Meter ONE highlight. Always records the usage event (lifetime analytics)
+    * and increments the per-period clip ledger via EntitlementsService (the
+    * ledger is what gates + displays the free allowance, ADAAAA-5129); for Pro
+    * overage beyond the included quota, posts a Stripe usage record so PAYG is
+    * billed. The clip ledger increment lives in api.ts (entitlements.onClipGenerated)
+    * so a clip is debited exactly once per successful generation.
     */
    async onHighlightCreated(user: User, sub: Subscription): Promise<void> {
     await this.db.recordUsage(user.id, "highlight");
     if (sub.tier === "pro" && sub.status === "active" && this.enabled) {
-      const used = await this.db.countUsage(user.id, "highlight");
+      const used = await this.entitlements.used(user.id);
       const included = PLANS.find((p) => p.id === "pro")?.includedHighlights ?? 0;
       if (used > included && sub.stripeSubItemId) {
         await this.postUsageRecord(sub.stripeSubItemId, used - included);
       }
     }
-  }
+   }
 
   private async postUsageRecord(subItemId: string, quantity: number): Promise<void> {
     if (quantity <= 0) return;
