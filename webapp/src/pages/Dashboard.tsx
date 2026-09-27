@@ -391,22 +391,6 @@ export function Dashboard() {
 
       {debugJob && <FrameDebugger jobId={debugJob} />}
 
-      {/* Rejected clips live in a separate, collapsed section (distinct from the
-          accepted/published feed) so the user can inspect them before the 24h
-          TTL purge (ADAAAA-5163/5204). While a clip is within its undo window
-          we show a live "Recover until …" deadline + a Recover affordance; once
-          past TTL (or hard-deleted by the sweep) the indicator and affordance
-          disappear and the section reflects the API's current lifecycle. */}
-      <RejectedSection
-        highlights={highlights}
-        now={now}
-        ttlMs={rejectedTtlMs}
-        open={rejectedOpen}
-        onToggle={() => setRejectedOpen((o) => !o)}
-        onRecover={(id) => review(id, "accepted")}
-        onError={setError}
-      />
-
       <h2 className="mt-10 text-2xl font-black">Your highlights</h2>
       <div className="mt-4 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {highlights.filter((h) => h.status !== "rejected").length === 0 && (
@@ -447,6 +431,23 @@ export function Dashboard() {
             </div>
           ))}
       </div>
+
+      {/* Rejected clips live in a separate, collapsed section shown BELOW the
+          accepted/published feed so the user can inspect them before the 24h
+          TTL purge (ADAAAA-5163/5204 / ADAAAA-5261). While a clip is within its
+          undo window we show a live "Recover until …" deadline + a Recover
+          affordance; once past TTL (or hard-deleted by the sweep) the indicator
+          and affordance disappear and the section reflects the API's current
+          lifecycle. */}
+      <RejectedSection
+        highlights={highlights}
+        now={now}
+        ttlMs={rejectedTtlMs}
+        open={rejectedOpen}
+        onToggle={() => setRejectedOpen((o) => !o)}
+        onRecover={(id) => review(id, "accepted")}
+        onError={setError}
+      />
     </div>
   );
 }
@@ -480,12 +481,12 @@ function RejectedSection({
         type="button"
         onClick={onToggle}
         data-rejected-section-toggle
-        className="flex w-full items-center justify-between rounded-lg border border-red/40 bg-red/10 px-4 py-3 text-left hover:bg-red/15"
+        className="flex w-full items-center justify-between rounded-lg border border-purple/40 bg-card/70 px-4 py-3 text-left transition hover:border-neon/50 hover:bg-card"
       >
-        <span className="flex items-center gap-2 text-lg font-black text-red">
+        <span className="flex items-center gap-2 text-lg font-black text-ink">
           {open ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
           Rejected
-          <span className="rounded-full bg-red/20 px-2 py-0.5 text-xs font-bold">{rejected.length}</span>
+          <span className="rounded-full bg-ink/15 px-2 py-0.5 text-xs font-bold text-ink">{rejected.length}</span>
         </span>
         <span className="text-xs text-mut">Recoverable until auto-deleted</span>
       </button>
@@ -498,15 +499,16 @@ function RejectedSection({
               <div key={h.id} data-rejected-clip className="card card-hover overflow-hidden">
                 <div className="relative">
                   <VideoClip src={h.clipUri} label={h.eventType} />
-                  <span className="absolute right-2 top-2 rounded-full bg-red/80 px-2 py-0.5 text-xs font-bold text-ink">rejected</span>
+                  <span className="absolute right-2 top-2 rounded-full bg-void/80 px-2 py-0.5 text-xs font-bold text-ink">rejected</span>
                 </div>
                 <div className="p-4">
                   <div className="flex items-center justify-between">
-                    <span className="rounded-full border border-red/50 px-2 py-0.5 text-xs font-bold text-red">{h.eventType || "EVENT"}</span>
-                    <span className="text-xs text-red">{h.status}</span>
+                    <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">{h.eventType || "EVENT"}</span>
+                    <span className="text-xs text-ink">{h.status}</span>
                   </div>
                   <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
-                  <div className="mt-1 text-xs text-mut">T+{Math.round(h.start)}s → T+{Math.round(h.end)}s</div>
+                  <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
+                  <div className="text-xs text-mut">T+{Math.round(h.start)}s → T+{Math.round(h.end)}s</div>
                   {recoverable && label ? (
                     <div data-recover-until className="mt-3 rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-2 text-sm font-semibold text-yellow">
                       {label}
