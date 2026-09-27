@@ -9,7 +9,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 
 async function freshApp(): Promise<TestApp> {
-  return buildTestApp({ REJECT_TTL_MS: String(DAY), REJECT_SWEEP_INTERVAL_MS: String(HOUR) });
+  return buildTestApp({ REJECTED_CLIP_TTL_MS: String(DAY), REJECTED_CLIP_SWEEP_INTERVAL_MS: String(HOUR) });
 }
 
 /** Seed a highlight with a controlled rejectedAt plus a real 100 KB storage

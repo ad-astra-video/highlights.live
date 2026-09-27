@@ -188,7 +188,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),
     betaGate: env.BETA_GATE === "1" || env.BETA_GATE === "true" || !env.BETA_GATE,
     autoPublishHighlights: env.AUTO_PUBLISH_HIGHLIGHTS === "0" || env.AUTO_PUBLISH_HIGHLIGHTS === "false" ? false : true,
-    rejectTtlMs: Number(env.REJECT_TTL_MS ?? 24 * 60 * 60 * 1000),
-    rejectSweepIntervalMs: Number(env.REJECT_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
+    rejectTtlMs: Number(env.REJECTED_CLIP_TTL_MS ?? 24 * 60 * 60 * 1000),
+    rejectSweepIntervalMs: Number(env.REJECTED_CLIP_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
   };
 }
