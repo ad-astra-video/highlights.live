@@ -54,11 +54,45 @@ services:
     networks: [hl]
 
   perceive:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.perceive
+    # GPU perceive live-runner. Uses the prebuilt CUDA+triton image (built from
+    # Dockerfile.perceive.gpu, sam3 vendored at the build-context root) so SAM 3.1
+    # can import (it hard-depends on triton). PERCEIVE_DEVICE=cuda is enforced here
+    # in the BASE file so the standard `docker compose -f docker/docker-compose.yml
+    # up -d` can NEVER silently fall back to the CPU Dockerfile.perceive defaults
+    # (PERCEIVE_MODE=stub / PERCEIVE_DEVICE=cpu). Durable GPU-on-launch fix.
+    image: adastravideo/highlights-live:perceive
     container_name: highlights-perceive
+    environment:
+      - PERCEIVE_MODE=florence
+      - PERCEIVE_DEVICE=cuda
+      - PERCEIVE_MIN_FPS=${PERCEIVE_MIN_FPS:-1.0}
+      - PERCEIVE_TRACKER=florence_sam
+      - PERCEIVE_CAPACITY=${PERCEIVE_CAPACITY:-2}
+      # HF token required to pull the gated facebook/sam3.1 weights on a COLD HF
+      # cache. Comes from docker/.env / shell at deploy time, never committed. A
+      # warm HF cache (see HF_CACHE_DIR mount below) boots without it.
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_HOME=/models/hf-cache
+      - PERCEIVE_SAM_CLIP=/clips
+    volumes:
+      # HF cache (token + downloaded weights). Warm on the box at
+      # /home/brad/.cache/huggingface, so a redeploy reuses cached weights.
+      - ${HF_CACHE_DIR:-/home/brad/.cache/huggingface}:/models/hf-cache
+      # VOD clips the SAM backend tracks across frames (PERCEIVE_SAM_CLIP).
+      - ${CLIPS_DIR:-./clips}:/clips:ro
+      # Shared with the server: perceive sees the server's dataDir at /data so
+      # the per-JOB recorded stream (cfg.perceiveClipRoot=/data) is readable and
+      # the persistent-session SAM tracker can open THAT job's clip.
+      - ${DATA_DIR:-./data}:/data:ro
     expose: ["8080"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # Perceive (Florence-2 + SAM 3.1) pinned to GPU 0 = RTX 3090 Ti.
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/health')"]
       interval: 5s
@@ -122,6 +156,15 @@ services:
       timeout: 5s
       retries: 30
       start_period: 60s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # Gemma (llama.cpp VLM) pinned to GPU 1 = RTX 5070 Ti only, so the
+            # model offloads (--n-gpu-layers 99) onto a single card.
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
     networks: [hl]
 
   decide:
@@ -144,6 +187,17 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # Decide is a thin HTTP client of the gemma VLM (DECIDE_MODE=gemma),
+            # so its GPU compute happens through gemma on GPU 1. Attach the same
+            # card so the container carries a GPU reservation (acceptance: no
+            # CPU-only fallback) without adding real device load here.
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
     networks: [hl]
 
   server:
@@ -155,6 +209,9 @@ services:
       - PORT=3000
       - ORCHESTRATOR_URL=https://orchestrator:8935
       - DATA_DIR=/data
+      # Perceive mounts the server's dataDir at /data; server hands it the
+      # per-job recorded stream as an in-container path (GPU perceive stack).
+      - PERCEIVE_CLIP_ROOT=${PERCEIVE_CLIP_ROOT:-/data}
       - FFMPEG_PATH=ffmpeg
       - NODE_TLS_REJECT_UNAUTHORIZED=0
       - JWT_SECRET=dev-secret
