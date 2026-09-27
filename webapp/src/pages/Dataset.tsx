@@ -1,0 +1,610 @@
+// Florence-2 fine-tune Dataset Curation page (ADAAAA-5164, data path).
+//
+// Workflow: ingest a VOD clip (source URL/path) and extract 1 fps frames via
+// POST /training/extract; the operator reviews each frame on a canvas, draws /
+// moves / deletes boxes, assigns a class from the closed 5-label soccer vocab,
+// optionally auto-seeds from the base detector's raw output, accepts the frame,
+// tracks class coverage vs. the V1 targets, then exports Zod-validated
+// train/val JSONL manifests via POST /training/manifests (server writes
+// evals/train_manifest.jsonl + evals/val_manifest.jsonl).
+//
+// Mirrors the Dashboard / FrameDebugger / BrowserCapture styling + auth-fetch
+// patterns. No training GPU is scheduled on this leg.
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getToken, api } from "../lib/api";
+import {
+  SOCCER_TRAINING_LABELS,
+  type TrainingLabel,
+} from "@highlights/events";
+import {
+  autoSeedBoxes,
+  coverageSummary,
+  exportManifests,
+  phashFromImageData,
+  type CurationBox,
+  type CurationFrame,
+} from "../lib/dataset";
+
+const PALETTE: Record<string, string> = {
+  player: "#22d3ee",
+  "soccer ball": "#a3e635",
+  goalkeeper: "#f472b6",
+  goal: "#fbbf24",
+  referee: "#a78bfa",
+};
+
+interface ExtractedMeta {
+  id: string;
+  imageRef: string;
+  seq: number;
+  width: number;
+  height: number;
+  source: string;
+}
+
+const CANVAS_W = 960;
+
+/** Auth'd fetch of a frame to an object URL (same pattern as FrameDebugger). */
+async function frameObjectURL(path: string): Promise<string> {
+  const t = getToken();
+  const r = await fetch(path, { headers: t ? { authorization: "Bearer " + t } : {} });
+  if (!r.ok) throw new Error(`frame fetch HTTP ${r.status}`);
+  return URL.createObjectURL(await r.blob());
+}
+
+let seqId = 0;
+function boxId(): string {
+  return `box-${++seqId}`;
+}
+
+export function Dataset() {
+  const [source, setSource] = useState("");
+  const [extracting, setExtracting] = useState(false);
+  const [frames, setFrames] = useState<CurationFrame[]>([]);
+  const [selIdx, setSelIdx] = useState<number | null>(null);
+  const [selBox, setSelBox] = useState<string | null>(null);
+  const [label, setLabel] = useState<TrainingLabel>("player");
+  const [seedJson, setSeedJson] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imgUrlRef = useRef<{ _frameId: string; url: string } | null>(null);
+  const createdUrls = useRef<Set<string>>(new Set());
+  const aliveRef = useRef(true);
+  const drag = useRef<{ ref: CurationFrame; mode: "draw" | "move" | "resize"; corner?: string; startCanvasX: number; startCanvasY: number; startBox?: CurationBox } | null>(null);
+
+  const cur = selIdx != null ? frames[selIdx] : null;
+
+  // --- frame extraction ---------------------------------------------------
+  async function doExtract() {
+    if (!source.trim()) return;
+    setErr(null);
+    setExtracting(true);
+    setFrames([]);
+    setSelIdx(null);
+    setSelBox(null);
+    for (const u of createdUrls.current) URL.revokeObjectURL(u);
+    createdUrls.current.clear();
+    try {
+      const r = await api<{ frames: ExtractedMeta[] }>("/training/extract", { body: { source: source.trim() } });
+      const mapped: CurationFrame[] = r.frames.map((f) => ({
+        id: f.id,
+        imageRef: f.imageRef,
+        width: f.width,
+        height: f.height,
+        uri: `/training/frames/${f.imageRef}`,
+        phash: "",
+        sourceSeq: f.seq,
+        accepted: false,
+        boxes: [],
+      }));
+      setFrames(mapped);
+      setSelIdx(mapped.length ? 0 : null);
+      setExportMsg(`Extracted ${mapped.length} frame(s). Review each, then export.`);
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  // --- load + draw the selected frame --------------------------------------
+  const drawFrame = useCallback((frame: CurationFrame | null, boxSel: string | null) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!frame) {
+      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    if (!ctx) return;
+    const H = Math.round((CANVAS_W * frame.height) / frame.width);
+    canvas.width = CANVAS_W;
+    canvas.height = H;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const img = (canvas as any)._img as HTMLImageElement | undefined;
+    if (img && img.complete && img.naturalWidth > 0) {
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      for (const b of frame.boxes) drawBox(ctx, b, b.id === boxSel, frame.width, frame.height);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (imgUrlRef.current) URL.revokeObjectURL(imgUrlRef.current.url);
+      for (const u of createdUrls.current) URL.revokeObjectURL(u);
+    };
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (!cur) {
+      drawFrame(null, null);
+      return;
+    }
+    // Frame pixels already on the canvas for this frame (e.g. box edits)? Just
+    // redraw with the current boxes/selection.
+    const existing = (canvas as any)._img as (HTMLImageElement & { _frameId?: string }) | null;
+    if (existing && existing._frameId === cur.id && existing.complete && existing.naturalWidth > 0) {
+      drawFrame(cur, selBox);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      let url: string;
+      try {
+        url = await frameObjectURL(cur.uri || "");
+      } catch (e: any) {
+        if (!cancelled) setErr("failed to load frame: " + String(e?.message || e));
+        return;
+      }
+      if (cancelled) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      // Frames are served behind the Bearer auth header (like the Frame
+      // Debugger), so we fetch to a blob and hand <img> an object URL.
+      if (imgUrlRef.current && imgUrlRef.current._frameId !== cur.id) {
+        URL.revokeObjectURL(imgUrlRef.current.url);
+        imgUrlRef.current = null;
+      }
+      const img = new Image();
+      (img as any)._frameId = cur.id;
+      (canvas as any)._img = img;
+      imgUrlRef.current = { _frameId: cur.id, url };
+      img.onload = () => {
+        if (cancelled) return;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          const H = Math.round((CANVAS_W * cur.height) / cur.width);
+          canvas.width = CANVAS_W;
+          canvas.height = H;
+          ctx.drawImage(img, 0, 0, CANVAS_W, H);
+          // perceptual hash for near-dup-aware 85/15 split at export time
+          let data: Uint8ClampedArray = new Uint8ClampedArray([0]);
+          try {
+            data = ctx.getImageData(0, 0, CANVAS_W, H).data;
+          } catch {
+            // tainted canvas: skip hashing, split falls back to per-frame ratio
+          }
+          const ph = phashFromImageData(data, CANVAS_W, H);
+          if (cur.phash !== ph) {
+            setFrames((fs) => fs.map((f) => (f.id === cur.id ? { ...f, phash: ph } : f)));
+          }
+        }
+        drawFrame(cur, selBox);
+      };
+      img.src = url;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cur, selBox]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- box editing ----------------------------------------------------------
+  function updateFrame(idx: number, fn: (f: CurationFrame) => CurationFrame) {
+    setFrames((fs) => fs.map((f, i) => (i === idx ? fn(f) : f)));
+  }
+
+  function canvasXY(e: React.MouseEvent<HTMLCanvasElement>): { x: number; y: number } {
+    const canvas = canvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
+    const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
+    return { x, y };
+  }
+
+  function onMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (!cur) return;
+    const { x, y } = canvasXY(e);
+    const nx = x / canvasRef.current!.width;
+    const ny = y / canvasRef.current!.height;
+    // resize handle? (selected box corners)
+    if (selBox) {
+      const b = cur.boxes.find((bb) => bb.id === selBox);
+      if (b) {
+        const corner = hitCorner(b, nx, ny);
+        if (corner) {
+          drag.current = { ref: cur, mode: "resize", corner, startCanvasX: x, startCanvasY: y, startBox: { ...b } };
+          return;
+        }
+      }
+    }
+    // inside an existing box -> move
+    const hit = cur.boxes.find((bb) => inside(nx, ny, bb.bbox));
+    if (hit) {
+      setSelBox(hit.id);
+      drag.current = { ref: cur, mode: "move", startCanvasX: x, startCanvasY: y, startBox: { ...hit } };
+      return;
+    }
+    // empty -> draw a new box with the current label
+    setSelBox(null);
+    const nb: CurationBox = { id: boxId(), label, bbox: [nx, ny, nx, ny] };
+    updateFrame(selIdx!, (f) => ({ ...f, boxes: [...f.boxes, nb] }));
+    drag.current = { ref: cur, mode: "draw", startCanvasX: x, startCanvasY: y, startBox: { ...nb } };
+  }
+
+  function onMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
+    const d = drag.current;
+    if (!d || selIdx == null) return;
+    const { x, y } = canvasXY(e);
+    const canvas = canvasRef.current!;
+    const nx = Math.min(1, Math.max(0, x / canvas.width));
+    const ny = Math.min(1, Math.max(0, y / canvas.height));
+    updateFrame(selIdx, (f) => {
+      const boxes = f.boxes.map((b) => {
+        if (!d.startBox || b.id !== d.startBox.id) return b;
+        const sb = d.startBox.bbox;
+        if (d.mode === "draw") return { ...b, bbox: [clamp01(Math.min(sb[0], nx)), clamp01(Math.min(sb[1], ny)), clamp01(Math.max(sb[0], nx)), clamp01(Math.max(sb[1], ny))] as [number, number, number, number] };
+        if (d.mode === "move") {
+          const dx = nx - sb[0];
+          const dy = ny - sb[1];
+          return { ...b, bbox: moveBox(sb, dx, dy) };
+        }
+        // resize
+        const corner = d.corner!;
+        let [x1, y1, x2, y2] = sb;
+        if (corner.includes("w")) x1 = Math.min(nx, x2 - 0.02);
+        if (corner.includes("e")) x2 = Math.max(nx, x1 + 0.02);
+        if (corner.includes("n")) y1 = Math.min(ny, y2 - 0.02);
+        if (corner.includes("s")) y2 = Math.max(ny, y1 + 0.02);
+        return { ...b, bbox: normalizeBox([clamp01(x1), clamp01(y1), clamp01(x2), clamp01(y2)]) };
+      });
+      return { ...f, boxes };
+    });
+  }
+
+  function onMouseUp() {
+    drag.current = null;
+  }
+
+  function deleteSelected() {
+    if (selBox == null || selIdx == null) return;
+    updateFrame(selIdx, (f) => ({ ...f, boxes: f.boxes.filter((b) => b.id !== selBox) }));
+    setSelBox(null);
+  }
+
+  function changeLabelOf(boxIdSel: string, l: TrainingLabel) {
+    if (selIdx == null) return;
+    updateFrame(selIdx, (f) => ({ ...f, boxes: f.boxes.map((b) => (b.id === boxIdSel ? { ...b, label: l } : b)) }));
+  }
+
+  function seedCurrent() {
+    if (selIdx == null) return;
+    let raw: Array<{ label: string; bbox: [number, number, number, number] }> = [];
+    try {
+      raw = JSON.parse(seedJson || "[]");
+    } catch {
+      setErr("Seed JSON is not valid JSON — expected an array of { label, bbox:[x1,y1,x2,y2] }.");
+      return;
+    }
+    const seeded = autoSeedBoxes(raw);
+    if (!seeded.length) {
+      setErr("No in-vocabulary boxes seeded (voices outside the closed soccer vocab are dropped).");
+    } else {
+      setErr(null);
+    }
+    updateFrame(selIdx, (f) => ({ ...f, boxes: f.boxes.concat(seeded.map((s) => ({ ...s, id: boxId() }))) }));
+  }
+
+  // --- export ----------------------------------------------------------------
+  const exportOut = useMemo(() => (frames.length ? exportManifests(frames) : null), [frames]);
+  const coverage = useMemo(() => coverageSummary(frames.filter((f) => f.accepted).map((f) => ({ objects: f.boxes }))), [frames]);
+
+  function download(name: string, text: string) {
+    const blob = new Blob([text], { type: "application/x-ndjson" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  async function saveManifests() {
+    if (!exportOut || !exportOut.valid) return;
+    setSaving(true);
+    setErr(null);
+    setExportMsg(null);
+    try {
+      const res = await api<{ ok: boolean; trainPath?: string; valPath?: string; trainCount: number; valCount: number; invalidCount: number; errors?: string[] }>(
+        "/training/manifests",
+        { body: { train: exportOut.train, val: exportOut.val } }
+      );
+      setExportMsg(
+        `Saved to server: ${res.trainPath} (${res.trainCount}) + ${res.valPath} (${res.valCount}). ` +
+        `Manifest shape matches track_label_manifest.json (objects carry normalized [x1,y1,x2,y2] bbox + label).`
+      );
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <header className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-extrabold text-neon">Dataset Curation</h1>
+          <p className="text-sm text-mut">Florence-2 fine-tune data path · build train/val manifests at 1 fps.</p>
+        </div>
+      </header>
+
+      {/* Ingest */}
+      <section className="card p-5">
+        <h2 className="mb-3 text-lg font-bold">1 · Ingest a VOD clip</h2>
+        <div className="flex gap-3">
+          <input
+            className="input-neon flex-1"
+            placeholder="source URL or clip path, e.g. https://…/clip.mp4 or /data/…/clip.mp4"
+            value={source}
+            onChange={(e) => setSource(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && doExtract()}
+          />
+          <button className="btn-neon btn-fill" onClick={doExtract} disabled={extracting || !source.trim()}>
+            {extracting ? "Extracting…" : "Extract frames"}
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-mut">
+          Extracts 1 fps frames with ffmpeg at 1280×720 under <code className="text-neon">data/training/extract/</code>.
+        </p>
+      </section>
+
+      {/* Auto-seed */}
+      <section className="card p-5">
+        <h2 className="mb-3 text-lg font-bold">2 · Auto-seed from base detector (optional)</h2>
+        <div className="flex gap-3">
+          <textarea
+            className="input-neon flex-1 resize-y"
+            rows={2}
+            placeholder='[{"label":"person","bbox":[0.1,0.2,0.3,0.5]}, …]'
+            value={seedJson}
+            onChange={(e) => setSeedJson(e.target.value)}
+          />
+          <button className="btn-neon btn-ghost" onClick={seedCurrent} disabled={selIdx == null}>
+            Seed current frame
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-mut">
+          Paste raw Florence-2 open-set detections; labels are canonicalized into the closed soccer vocab (player /
+          soccer ball / goalkeeper / goal / referee), out-of-vocab dropped.
+        </p>
+      </section>
+
+      {/* Editor + coverage */}
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="card p-5 lg:col-span-2">
+          <h2 className="mb-3 text-lg font-bold">3 · Per-frame review</h2>
+          {frames.length === 0 ? (
+            <p className="text-sm text-mut">Extract a clip to begin. Frames render here for box review.</p>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <button className="btn-neon btn-ghost" onClick={() => setSelIdx((i) => (i == null ? 0 : Math.max(0, i - 1)))} disabled={selIdx == null || selIdx === 0}>
+                  ‹ prev
+                </button>
+                <span className="text-mut">
+                  frame {selIdx == null ? "–" : selIdx + 1} / {frames.length}
+                </span>
+                <button className="btn-neon btn-ghost" onClick={() => setSelIdx((i) => (i == null ? 0 : Math.min(frames.length - 1, i + 1)))} disabled={selIdx == null || selIdx === frames.length - 1}>
+                  next ›
+                </button>
+                <span className="mx-2 text-mut">·</span>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={!!cur?.accepted} onChange={(e) => selIdx != null && updateFrame(selIdx, (f) => ({ ...f, accepted: e.target.checked }))} />
+                  <span className="text-neon font-semibold">Accept frame</span>
+                </label>
+                <span className="mx-2 text-mut">·</span>
+                <button className="btn-neon btn-ghost" onClick={deleteSelected} disabled={!selBox}>
+                  Delete box
+                </button>
+              </div>
+
+              <div className="relative w-full overflow-hidden rounded-xl border border-white/10 bg-dusk/50">
+                <canvas
+                  ref={canvasRef}
+                  className="block w-full"
+                  style={{ aspectRatio: cur ? `${cur.width}/${cur.height}` : "16/9", touchAction: "none" }}
+                  onMouseDown={onMouseDown}
+                  onMouseMove={onMouseMove}
+                  onMouseUp={onMouseUp}
+                  onMouseLeave={onMouseUp}
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-mut">new-box class:</span>
+                {SOCCER_TRAINING_LABELS.map((l) => (
+                  <button
+                    key={l}
+                    className={`rounded-lg border px-2 py-1 ${label === l ? "border-neon/60 bg-neon/10 text-neon" : "border-white/10 text-slate-ink hover:border-white/30"}`}
+                    onClick={() => setLabel(l)}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </div>
+              {cur && (
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="text-mut">edit boxes:</span>
+                  {cur.boxes.map((b) => (
+                    <span key={b.id} className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 ${selBox === b.id ? "border-neon/60 bg-neon/10" : "border-white/10"}`}>
+                      <button onClick={() => { setSelBox(b.id); }}>
+                        <span style={{ color: PALETTE[b.label] }}>■</span> {b.label}
+                      </button>
+                      <select
+                        className="input-neon px-1 py-0 text-xs"
+                        value={b.label}
+                        onChange={(e) => changeLabelOf(b.id, e.target.value as TrainingLabel)}
+                      >
+                        {SOCCER_TRAINING_LABELS.map((l) => (
+                          <option key={l} value={l}>{l}</option>
+                        ))}
+                      </select>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {err && <p className="text-sm text-pink">{err}</p>}
+            </div>
+          )}
+        </div>
+
+        {/* Coverage dashboard */}
+        <div className="card p-5">
+          <h2 className="mb-3 text-lg font-bold">4 · Class coverage</h2>
+          <div className="flex flex-col gap-2 text-xs">
+            {SOCCER_TRAINING_LABELS.map((l) => {
+              const c = coverage.byLabel[l];
+              const pct = Math.min(100, Math.round((c.count / c.max) * 100));
+              return (
+                <div key={l}>
+                  <div className="flex justify-between">
+                    <span style={{ color: PALETTE[l] }} className="font-semibold">{l}</span>
+                    <span className="text-mut">
+                      {c.count} / {c.max} {c.withinRange ? "✓" : ""}
+                    </span>
+                  </div>
+                  <div className="mt-1 h-2 rounded bg-white/10">
+                    <div className={`h-2 rounded ${c.withinRange ? "bg-green" : "bg-yellow"}`} style={{ width: `${pct}%` }} />
+                  </div>
+                  <div className="text-[10px] text-mut">target {c.min}–{c.max}</div>
+                </div>
+              );
+            })}
+            <div className="mt-2 flex justify-between border-t border-white/10 pt-2">
+              <span className="text-mut">total accepted frames</span>
+              <span className={coverage.totalWithinRange ? "text-green" : "text-yellow"}>
+                {coverage.totalFrames} / {coverage.byLabel ? "3,000–6,000" : "–"}
+              </span>
+            </div>
+            {!coverage.totalWithinRange && frames.length > 0 && (
+              <p className="text-[11px] text-yellow">Below the 3,000-frame floor — keep extracting/accepting.</p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* Export */}
+      <section className="card p-5">
+        <h2 className="mb-3 text-lg font-bold">5 · Export train/val manifests</h2>
+        {!exportOut || !frames.length ? (
+          <p className="text-sm text-mut">Extract + accept frames first.</p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <div className="text-xs text-mut">
+              Accepted: <span className="text-neon">{exportOut.train.length + exportOut.val.length}</span> → train{" "}
+              <span className="text-neon">{exportOut.train.length}</span> / val <span className="text-neon">{exportOut.val.length}</span>{" "}
+              (85/15, near-dup aware) · manifests pass the shared Zod schema:{" "}
+              <span className={exportOut.valid ? "text-green" : "text-pink"}>{exportOut.valid ? "valid" : "INVALID"}</span>
+            </div>
+            {!exportOut.valid && (
+              <ul className="text-xs text-pink">
+                {exportOut.validationErrors.slice(0, 5).map((e, i) => (
+                  <li key={i}>{e}</li>
+                ))}
+              </ul>
+            )}
+            <div className="flex flex-wrap gap-3">
+              <button className="btn-neon btn-ghost" onClick={() => download("train_manifest.jsonl", exportOut.trainJsonl)} disabled={!exportOut.train.length}>
+                Download train_manifest.jsonl
+              </button>
+              <button className="btn-neon btn-ghost" onClick={() => download("val_manifest.jsonl", exportOut.valJsonl)} disabled={!exportOut.val.length}>
+                Download val_manifest.jsonl
+              </button>
+              <button className="btn-neon btn-fill" onClick={saveManifests} disabled={!exportOut.valid || saving}>
+                {saving ? "Saving…" : "Save to server (evals/*.jsonl)"}
+              </button>
+            </div>
+            {exportMsg && <p className="text-sm text-green">{exportMsg}</p>}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// --- box geometry helpers ---------------------------------------------------
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+function inside(nx: number, ny: number, bbox: [number, number, number, number]): boolean {
+  return nx >= bbox[0] && nx <= bbox[2] && ny >= bbox[1] && ny <= bbox[3];
+}
+function normalizeBox(b: [number, number, number, number]): [number, number, number, number] {
+  const [x1, y1, x2, y2] = b;
+  const nx1 = Math.min(x1, x2);
+  const nx2 = Math.max(x1, x2);
+  const ny1 = Math.min(y1, y2);
+  const ny2 = Math.max(y1, y2);
+  return [nx1, ny1, nx2, ny2];
+}
+function moveBox(bbox: [number, number, number, number], dx: number, dy: number): [number, number, number, number] {
+  let [x1, y1, x2, y2] = bbox;
+  const w = x2 - x1;
+  const h = y2 - y1;
+  x1 = clamp01(x1 + dx); x2 = clamp01(x1 + w);
+  y1 = clamp01(y1 + dy); y2 = clamp01(y1 + h);
+  return normalizeBox([x1, y1, x2, y2]);
+}
+function hitCorner(b: CurationBox, nx: number, ny: number): string | null {
+  const r = 0.015;
+  const [x1, y1, x2, y2] = b.bbox;
+  const horiz = Math.abs(nx - x1) <= r ? "w" : Math.abs(nx - x2) <= r ? "e" : "";
+  const vert = Math.abs(ny - y1) <= r ? "n" : Math.abs(ny - y2) <= r ? "s" : "";
+  if (horiz && vert) return horiz + vert;
+  return null;
+}
+function drawBox(ctx: CanvasRenderingContext2D, b: CurationBox, selected: boolean, W: number, H: number) {
+  const [x1, y1, x2, y2] = b.bbox;
+  const px = x1 * ctx.canvas.width;
+  const py = y1 * ctx.canvas.height;
+  const pw = (x2 - x1) * ctx.canvas.width;
+  const ph = (y2 - y1) * ctx.canvas.height;
+  const c = PALETTE[b.label] ?? "#22d3ee";
+  ctx.strokeStyle = c;
+  ctx.lineWidth = selected ? 3 : 2;
+  ctx.setLineDash(selected ? [6, 4] : []);
+  ctx.strokeRect(px, py, pw, ph);
+  ctx.setLineDash([]);
+  ctx.fillStyle = c;
+  ctx.font = "11px monospace";
+  ctx.fillText(b.label, px, Math.max(10, py - 4));
+  if (selected) {
+    ctx.strokeStyle = c;
+    ctx.lineWidth = 2;
+    const r = 6;
+    for (const [cx, cy] of [[x1, y1], [x2, y1], [x1, y2], [x2, y2]] as const) {
+      ctx.beginPath();
+      ctx.arc(cx * ctx.canvas.width, cy * ctx.canvas.height, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+}
