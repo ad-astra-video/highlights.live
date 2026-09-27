@@ -113,6 +113,20 @@ export interface ServerConfig {
    * (betaClipQuota), so the blast radius is bounded. Set AUTO_PUBLISH_HIGHLIGHTS=0
    * once real admin review is wanted. */
   autoPublishHighlights: boolean;
+  /** Rejected-clip lifecycle TTL (ADAAAA-5168). A clip marked `rejected` keeps its
+   * DB row + storage object for this long as a soft-delete undo grace period
+   * (reject -> accept within the window restores it and cancels deletion), then
+   * the TTL sweep hard-deletes row + object. Default 24h (`REJECTED_CLIP_TTL_MS`,
+   * default `86400000`). */
+  rejectedClipTtlMs: number;
+  /** Max time between TTL sweeps. Must be <= `rejectedClipTtlMs` so a rejected clip
+   * aged `>= TTL` is removed within [TTL, TTL + interval] (<= 24h reject->removal).
+   * Default 6h (`REJECTED_CLIP_SWEEP_INTERVAL_MS`, default `21600000`). */
+  rejectedClipSweepIntervalMs: number;
+  /** When true, the rejected-clip sweep only reports (objects + bytes reclaimable,
+   * candidates) and deletes nothing. Set `REJECTED_CLIP_CLEANUP_DRY_RUN=1` for
+   * report-only operation. */
+  rejectedClipCleanupDryRun: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -158,5 +172,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),
     betaGate: env.BETA_GATE === "1" || env.BETA_GATE === "true" || !env.BETA_GATE,
     autoPublishHighlights: env.AUTO_PUBLISH_HIGHLIGHTS === "0" || env.AUTO_PUBLISH_HIGHLIGHTS === "false" ? false : true,
+    rejectedClipTtlMs: Number(env.REJECTED_CLIP_TTL_MS ?? 86_400_000),
+    rejectedClipSweepIntervalMs: Number(env.REJECTED_CLIP_SWEEP_INTERVAL_MS ?? 6 * 3_600_000),
+    rejectedClipCleanupDryRun: env.REJECTED_CLIP_CLEANUP_DRY_RUN === "1" || env.REJECTED_CLIP_CLEANUP_DRY_RUN === "true",
   };
 }

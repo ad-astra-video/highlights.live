@@ -97,10 +97,41 @@ export class Store {
   async reviewHighlight(id: string, status: "accepted" | "rejected"): Promise<HighlightRecord> {
     const h = this.highlights.get(id);
     if (!h) throw new Error(`no highlight ${id}`);
-    const next = HighlightRecordSchema.parse({ ...h, status });
+    // Lifecycle stamp (ADAAAA-5168): a reject records `rejectedAt` (start of the
+    // 24h undo grace window); a reject->accept undo clears it so the clip is no
+    // longer a TTL-purge candidate. Re-rejecting keeps the ORIGINAL stamp so the
+    // window never extends on a no-op re-reject, and quota stays idempotent.
+    const nowIso = new Date().toISOString();
+    const rejectedAt =
+      status === "rejected" ? (h.status === "rejected" ? h.rejectedAt : nowIso) : undefined;
+    const next = HighlightRecordSchema.parse({ ...h, status, rejectedAt });
     this.highlights.set(id, next);
     if (this.db) await this.db.saveHighlight(next);
     return next;
+  }
+
+  /** Hard-remove a highlight from the working set AND the durable store. Best
+   * effort / idempotent — removing an unknown id is a no-op. Used by the
+   * rejected-clip TTL sweep (ADAAAA-5168). */
+  async removeHighlight(id: string): Promise<void> {
+    const h = this.highlights.get(id);
+    this.highlights.delete(id);
+    if (h) {
+      const list = this.byJob.get(h.jobId) ?? [];
+      const i = list.indexOf(id);
+      if (i >= 0) list.splice(i, 1);
+    }
+    if (this.db) await this.db.deleteHighlight(id);
+  }
+
+  /** Exact purge filter for the TTL sweep: ONLY clips in `rejected` state whose
+   * `rejectedAt` age is >= `ttlMs` are ever candidates. Accepted/published/pending
+   * and not-yet-expired rejected clips are never returned. */
+  rejectedExpired(ttlMs: number, now: Date = new Date()): HighlightRecord[] {
+    const cutoff = now.getTime() - ttlMs;
+    return [...this.highlights.values()].filter(
+      (h) => h.status === "rejected" && !!h.rejectedAt && new Date(h.rejectedAt).getTime() <= cutoff
+    );
   }
 
   async patchHighlight(id: string, patch: Partial<Pick<HighlightRecord, "clipUri" | "start" | "end">>): Promise<HighlightRecord> {

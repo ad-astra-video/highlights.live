@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { loadConfig } from "./config";
 import { Store } from "./store";
+import { RejectedClipCleanup } from "./cleanup";
 import { openDb } from "./db";
 import { AuthService } from "./auth";
 import { BillingService } from "./billing";
@@ -44,6 +45,30 @@ async function main() {
   const entitlements = new EntitlementsService(db, cfg);
   const adapter = makeAdapter(cfg);
   const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements, mailer: mailer ?? undefined });
+
+  // Rejected-clip storage-lifecycle sweep (ADAAAA-5168): permanently removes the
+  // DB row + storage object for every `rejected` clip aged >= rejectedClipTtlMs.
+  // Runs once at boot, then on `rejectedClipSweepIntervalMs` (<= the TTL, so a
+  // clip aged >= TTL is removed within <= 24h of rejection). Dry-run mode only
+  // reports objects + bytes reclaimable. No inference / no GPU — pure storage.
+  const cleanup = new RejectedClipCleanup(store, cfg);
+  const sweep = async () => {
+    try {
+      const r = await cleanup.run();
+      console.log(
+        `[rejected-clip-sweep] ${r.dryRun ? "dry-run" : "run"} ` +
+          `ttl=${r.ttlMs}ms scanned=${r.scanned} candidates=${r.candidates} ` +
+          `purged=${r.purged} objects=${r.objectsDeleted} bytes=${r.bytesReclaimed} ` +
+          `skipped=${r.skipped}${r.errors.length ? ` errors=${r.errors.length}` : ""}`
+      );
+    } catch (e) {
+      console.error("[rejected-clip-sweep] failed:", e);
+    }
+  };
+  void sweep();
+  const sweepTimer = setInterval(sweep, cfg.rejectedClipSweepIntervalMs);
+  sweepTimer.unref?.();
+
   await app.listen({ port: cfg.port, host: "0.0.0.0" });
   // eslint-disable-next-line no-console
   console.log(`highlights server on :${cfg.port} (orchestrator=${cfg.orchestratorUrl})`);
