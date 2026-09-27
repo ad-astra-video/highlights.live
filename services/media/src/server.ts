@@ -18,6 +18,7 @@ import path from "node:path";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
+import { WebRtcIngestSession } from "./rtc";
 
 interface ActiveStream {
   streamId: string;
@@ -25,6 +26,8 @@ interface ActiveStream {
   provisioned: ProvisionedSession;
   sockets: Set<any>;
   closed: boolean;
+  /** Active WebRTC ingest terminus (present once a browser opens an RTC session). */
+  rtc?: { pcId: string; session: WebRtcIngestSession };
   /** Muxed (video+audio) MediaRecorder chunks reassembled in arrival order.
    *  Lazily created on the first muxed chunk; the container's own PTS is the
    *  authoritative clock for clip cutting AND for feeding the analysis rails. */
@@ -68,6 +71,8 @@ export interface MediaServerOptions {
   provisionNoClientMs?: number;
   /** Directory where per-session muxed recordings are reassembled. Default tmpdir. */
   tmpDir?: string;
+  /** WebRTC ingest JPEG sample cadence (fps). Default 1.0. */
+  rtcSampleFps?: number;
 }
 
 const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
@@ -83,7 +88,10 @@ export class MediaServer {
   // Pending teardowns for provisioned sessions that never got a browser WS.
   private noClientTimers = new Map<string, NodeJS.Timeout>();
   private orch: MediaOrchestrator;
+  /** WebRTC ingest JPEG sample cadence (fps) decoded by the media server. */
+  private rtcSampleFps: number;
   constructor(private opts: MediaServerOptions, orch?: MediaOrchestrator) {
+    this.rtcSampleFps = opts.rtcSampleFps ?? 1;
     this.orch =
       orch ??
       new MediaOrchestrator({
@@ -136,10 +144,62 @@ export class MediaServer {
         sessionId: p.sessionId,
         wsPath: `/stream/${p.sessionId}`,
         wsUrl: wsBase ? `${wsBase}/stream/${p.sessionId}` : undefined,
+        // WebRTC ingest is enabled: the browser signals via
+        // POST /sessions/:sid/rtc/offer + /rtc/ice/:pcId instead of WS frame
+        // posting. Older WS clients may still connect to /stream/:sid.
+        rtc: true,
         streamId: stream.streamId,
         jobId: stream.jobId,
       };
     });
+
+    // ---- WebRTC ingest signaling (browser -> media server) --------
+    // The browser creates the offer and POSTs it; the media server answers as
+    // a recvonly video terminus. Decoded frames are published to the
+    // orchestrator video-in rail exactly like WS frames (publishAndObserve),
+    // so the perceive runner consumes them through the same session.step().
+    app.post<{ Params: { sid: string }; Body: { offer?: any } }>(
+      "/sessions/:sid/rtc/offer",
+      async (req, reply) => {
+        const stream = this.active.get(req.params.sid);
+        if (!stream || stream.closed) return reply.code(404).send({ error: "no such session" });
+        if (!req.body?.offer) return reply.code(400).send({ error: "offer required" });
+        if (!stream.rtc) {
+          const session = new WebRtcIngestSession({ sampleFps: this.rtcSampleFps });
+          // Decoded frames -> orchestrator video-in rail -> observation relay.
+          session.on("frame", (f) => {
+            void this.publishAndObserve(stream, f.seq, f.jpeg, f.ts).catch((e) =>
+              console.error("[media] rtc frame err", e)
+            );
+          });
+          // Peer drop -> normal teardown path (reconnect grace -> release slot).
+          session.on("close", () => {
+            if (stream.sockets.size === 0) this.armGrace(req.params.sid);
+          });
+          session.on("error", (e) => console.error("[media] rtc err", e));
+          stream.rtc = { pcId: randomUUID(), session };
+          // A browser attached via RTC — the no-client timer no longer applies.
+          this.clearNoClient(req.params.sid);
+        }
+        const { session } = stream.rtc;
+        try {
+          const answer = await session.handleOffer(req.body.offer);
+          return { pcId: stream.rtc.pcId, answer };
+        } catch (e: any) {
+          return reply.code(400).send({ error: String(e?.message || e) });
+        }
+      }
+    );
+
+    app.post<{ Params: { sid: string; pcId: string }; Body: { candidate?: any } }>(
+      "/sessions/:sid/rtc/ice/:pcId",
+      async (req, reply) => {
+        const stream = this.active.get(req.params.sid);
+        if (!stream?.rtc || !req.body?.candidate) return reply.code(404).send({ error: "no rtc session" });
+        await stream.rtc.session.addIceCandidate(req.body.candidate);
+        return { ok: true };
+      }
+    );
 
     // Browser streams sampled frames over this WS. The handler receives a
     // SocketStream (a Duplex): read frames as 'data', write observations via
@@ -203,6 +263,22 @@ export class MediaServer {
     if (!jpeg.length) return;
     const ts = typeof timestamp === "number" ? timestamp : seq;
 
+    await this.publishAndObserve(stream, seq, jpeg, ts, socket);
+  }
+
+  /**
+   * Publish one decoded JPEG to the orchestrator video-in rail and relay the
+   * runner's observation back (over any live WS sockets + the control-plane
+   * callback). Shared by the WS frame path and the WebRTC ingest path, so both
+   * transports feed the perceive runner through the exact same front door.
+   */
+  private async publishAndObserve(
+    stream: ActiveStream,
+    seq: number,
+    jpeg: Uint8Array,
+    ts: number,
+    socket?: any
+  ) {
     const p = stream.provisioned;
     await this.orch.publishFrame(p, seq, jpeg, ts);
 
@@ -313,7 +389,12 @@ export class MediaServer {
     }
     // 1) stop paying (no more ticket refresh). Idempotent.
     this.orch.stopPayment(sid);
-    // 2) drop remaining sockets.
+    // 2) close any WebRTC ingest terminus (peer + pending decode).
+    if (stream.rtc) {
+      void stream.rtc.session.close().catch(() => {});
+      stream.rtc = undefined;
+    }
+    // 3) drop remaining sockets.
     for (const s of stream.sockets) {
       try {
         s.destroy();

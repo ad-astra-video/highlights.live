@@ -1,11 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
-import { MediaServer } from "../src/server";
-import type { ProvisionedSession } from "../src/orch";
-import { readFileSync, mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  RTCPeerConnection,
+  MediaStreamTrack,
+  RtpHeader,
+  RtpPacket,
+  useH264,
+} from "werift";
+import { MediaServer } from "../src/server";
+import type { ProvisionedSession } from "../src/orch";
 
 const wsConnect = (url: string) =>
   new Promise<WebSocket>((res, rej) => {
@@ -192,5 +200,121 @@ describe("media server handshake (b)", () => {
   it("pays the orchestrator while the stream is open and stops paying on teardown", async () => {
     expect(fake.startedPayments).toContain("sess-fake"); // provision started payment
     expect(fake.stoppedPayments).toContain("sess-fake"); // the close above stopped it
+  });
+});
+
+describe("media server WebRTC ingest (C1)", () => {
+  // Generate a tiny valid H264 stream (SPS/PPS/IDR + P frames) via ffmpeg so
+  // the loopback test has real decodable bytes (ffmpeg is a hard dependency of
+  // the media server, so it is safe to require in tests).
+  let h264: Buffer;
+  beforeAll(() => {
+    const p = path.join(tmpdir(), `hl-rtc-${process.pid}.h264`);
+    execFileSync("ffmpeg", [
+      "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=15",
+      "-t", "0.6", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+      "-f", "h264", p,
+    ]);
+    h264 = readFileSync(p);
+  });
+
+  function nalUnits(data: Buffer): Buffer[] {
+    const out: Buffer[] = [];
+    let i = 0;
+    while (i < data.length - 3) {
+      if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 1) {
+        let s = i + 3;
+        if (data[s] === 0 && data[s + 1] === 1) s += 1;
+        let e = s;
+        while (e < data.length && !(data[e] === 0 && data[e + 1] === 0 && (data[e + 2] === 1 || data[e + 2] === 0))) e++;
+        if (e > s) out.push(data.subarray(s, e));
+        i = e;
+      } else i++;
+    }
+    return out;
+  }
+
+  it("browser WebRTC -> media server -> orchestrator video-in rail (frame published)", async () => {
+    // 1) provision a session via the Fastify control plane.
+    const prov = await app.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-rtc" } });
+    expect(prov.statusCode).toBe(200);
+    const sid = prov.json().sessionId;
+    expect(prov.json().rtc).toBe(true);
+
+    // 2) browser (offerer) creates a sendonly video WebRTC connection.
+    const browserPc = new RTCPeerConnection({ codecs: { video: [useH264()] } } as any);
+    const sendTrack = new MediaStreamTrack({ kind: "video" });
+    browserPc.addTransceiver(sendTrack, { direction: "sendonly" } as any);
+    const offer = await browserPc.createOffer();
+    await browserPc.setLocalDescription(offer);
+
+    // 3) media server answers via the RTC signaling route.
+    const ans = await app.inject({
+      method: "POST",
+      url: `/sessions/${sid}/rtc/offer`,
+      payload: { offer },
+    });
+    expect(ans.statusCode).toBe(200);
+    const { answer, pcId } = ans.json();
+    await browserPc.setRemoteDescription(answer);
+
+    // Wait for ICE to connect before sending RTP, else packets drop on the
+    // unestablished transport and no frames ever reach the media server.
+    for (let i = 0; i < 40 && browserPc.connectionState !== "connected"; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(browserPc.connectionState).toBe("connected");
+
+    // init the sender's seq/timestamp offsets (werift normally does this on
+    // source change; the raw send path below sets them explicitly).
+    const sender = browserPc.getTransceivers().find((t) => t.sender)?.sender;
+    if (sender) {
+      const s = sender as any;
+      s.sequenceNumber = 0;
+      s.timestamp = 0;
+      s.seqOffset = 0;
+      s.timestampOffset = 0;
+    }
+
+    // 4) send the H264 stream as RTP video packets (complete access units).
+    const nals = nalUnits(h264);
+    const pay = sender?.codec?.payloadType ?? 96;
+    let clock = 0, ts = 0;
+    for (const nal of nals) {
+      const header = new RtpHeader({
+        payloadType: pay,
+        sequenceNumber: (clock++) % 65536,
+        timestamp: (ts += 90000 / 15), // 90000kHz clock at 15fps
+        ssrc: sender?.ssrc ?? 1,
+        marker: 1,
+      } as any);
+      sendTrack.writeRtp(new RtpPacket(header, nal));
+    }
+
+    // 5) await the media server depacketizing + decoding a sample frame and
+    //    publishing it to the orchestrator video-in rail. Scope to publishes
+    //    added during THIS test (the shared `fake` orch also received the
+    //    earlier WS-path publish whose 15-byte fake jpeg would pollute it).
+    const before = fake.publishes.length;
+    const added = () => fake.publishes.slice(before);
+    let published = false;
+    for (let i = 0; i < 40 && !published; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      published = added().some((p) => p.jpeg.length > 100 && p.jpeg[0] === 0xff && p.jpeg[1] === 0xd8);
+    }
+    expect(published).toBe(true);
+    const pub = [...added()].reverse().find((p) => p.jpeg.length > 100)!;
+    expect(pub.jpeg.length).toBeGreaterThan(100);
+    // a real JPEG SOI mark opens the decoded sample
+    expect(pub.jpeg[0]).toBe(0xff);
+    expect(pub.jpeg[1]).toBe(0xd8);
+
+    await browserPc.close();
+  });
+
+  it("falls through to 404 for unknown sessions on the RTC offer route", async () => {
+    const res = await app.inject({ method: "POST", url: "/sessions/nope/rtc/offer", payload: { offer: {} } });
+    expect(res.statusCode).toBe(404);
   });
 });

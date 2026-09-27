@@ -1,5 +1,7 @@
 FROM node:24-slim
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# ffmpeg decodes the WebRTC-ingested H264/VP8/VP9 stream to sampled JPEGs
+# on the media server (C1 — browser WebRTC -> media server -> video-in rail).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # Whole monorepo; .dockerignore strips .venv/node_modules/data.
 COPY . .
