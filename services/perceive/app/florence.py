@@ -70,6 +70,16 @@ _GAME_HINT_ALIASES: dict[str, str] = {
     "world cup": "soccer",
     "fa cup": "soccer",
     "euro": "soccer",
+    "serie a": "soccer",
+    "ligue 1": "soccer",
+    "eredivisie": "soccer",
+    "primeira liga": "soccer",
+    "liga mx": "soccer",
+    "major league soccer": "soccer",
+    "mls": "soccer",
+    "soccer match": "soccer",
+    "football match": "soccer",
+    "uefa": "soccer",
     "nba": "basketball",
 }
 

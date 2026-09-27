@@ -15,10 +15,17 @@ from typing import Deque, List, Optional
 
 import numpy as np
 
-from .tracker import IoUTracker, MAX_TRACKS
+from .audio_gate import AudioEnergyGate
+from .tracker import IoUTracker, LIVE_MAX_TRACKS, VOD_MAX_TRACKS
 from .sam_tracker import HybridTracker, make_tracker
 
 RECENT_FRAMES = 30  # ~30 sampled frames kept for clip/confirm
+
+
+def mode_capacity(clip_path: str = "") -> int:
+    """INC-6 / ADAAAA-4330: charter is 3 live / 8 VOD tracked objects. A session
+    with a clip_path is a VOD pass (deep-detail budget) -> 8; a live session -> 3."""
+    return VOD_MAX_TRACKS if clip_path else LIVE_MAX_TRACKS
 
 
 @dataclass
@@ -43,6 +50,22 @@ class SessionState:
     prefer_labels: List[str] = field(default_factory=list)
     sample_fps: float = 1.0
     idle_timeout_s: float = 120.0
+    # Stage-A audio noise-change gate (INC-2 / ADAAAA-4325). Cheap pure-DSP
+    # candidate trigger fed by the server's ffmpeg audio tap (own ~10 Hz
+    # cadence, independent of the 1 fps video /analyze). Never touches the GPU.
+    audio_gate: AudioEnergyGate = field(default_factory=AudioEnergyGate)
+    # per-session audio chunk counter (event seq for audio-sourced candidates).
+    audio_seq: int = 0
+    # Ball-centric candidate signal (INC-2b). `homography` is the image->field
+    # pitch homography (3x3, fit on normalized image coords) when the session
+    # is calibrated; `ball_signal` is the per-session orchestrator, created in
+    # SessionRegistry.get_or_create. Both optional: absent -> graceful fallback.
+    homography: Optional[np.ndarray] = None
+    ball_signal: Optional[object] = None
+    # INC-3 / ADAAAA-4327: per-session detection-in-zone Stage-A candidate
+    # trigger (goal-mouth zones per sport, folding ball velocity/possession).
+    # Built lazily in __init__._ensure_zone_trigger, rebuilt on gameHint change.
+    zone_trigger: Optional[object] = None
 
     @property
     def is_idle(self) -> bool:
@@ -64,13 +87,15 @@ class SessionRegistry:
                 # But avoid unbounded growth: drop a single expired session.
                 self._evict_expired()
             s = SessionState(session_id=session_id, stream_id=stream_id, clip_path=clip_path)
-            s.tracker = make_tracker(clip_path or None)  # bind SAM to this job's clip
+            # INC-6: bind SAM to this job's clip AND set the mode's track capacity
+            # (3 live / 8 VOD) so the tracker instantiates with the right slots.
+            s.tracker = make_tracker(clip_path or None, capacity=mode_capacity(clip_path))
             self._sessions[session_id] = s
         elif clip_path and clip_path != s.clip_path:
             # A (new) clip was declared for an existing session -> (re)bind SAM
             # so the persistent session tracks THIS stream, not a stale/global one.
             s.clip_path = clip_path
-            s.tracker = make_tracker(clip_path or None)
+            s.tracker = make_tracker(clip_path or None, capacity=mode_capacity(clip_path))
         s.health_ts = time.time()
         return s
 

@@ -1,0 +1,32 @@
+{
+  "$comment": "Runner self-check fixture (NOT pipeline evidence). Reflects the component-test-verified behaviour so the metrics runner's accounting (TP/FP classification, rates, medians, tracking aggregation) is validated. Real traces come from driving the deployed pipeline over the labeled clips.",
+  "events": [
+    {"type":"candidate","clipId":"soc-goal-01","eventType":"GOAL","timestamp":12.0},
+    {"type":"decision","clipId":"soc-goal-01","timestamp":13.5,"decision":{"isHighlight":true,"eventType":"GOAL","reason":"shot on target; crowd erupted, group pile in the goal mouth"}},
+    {"type":"candidate","clipId":"soc-goal-02","eventType":"GOAL","timestamp":40.0},
+    {"type":"decision","clipId":"soc-goal-02","timestamp":41.8,"decision":{"isHighlight":true,"eventType":"GOAL","reason":"audio reaction: swell; players celebrating"}},
+    {"type":"candidate","clipId":"soc-goal-03","eventType":"GOAL","timestamp":5.0},
+    {"type":"decision","clipId":"soc-goal-03","timestamp":6.5,"decision":{"isHighlight":true,"eventType":"GOAL","reason":"crowd cheer and bench reaction"}},
+    {"type":"candidate","clipId":"soc-goal-04","eventType":"GOAL","timestamp":22.0},
+    {"type":"decision","clipId":"soc-goal-04","timestamp":23.7,"decision":{"isHighlight":true,"eventType":"GOAL","reason":"goal; players pile, dugout leaping"}},
+    {"type":"candidate","clipId":"soc-near-01","eventType":"GOAL","timestamp":8.0},
+    {"type":"decision","clipId":"soc-near-01","timestamp":9.5,"decision":{"isHighlight":true,"eventType":"GOAL","reason":"near miss, crowd reaction audible"}},
+    {"type":"candidate","clipId":"soc-near-02","eventType":"GOAL","timestamp":15.0},
+    {"type":"decision","clipId":"soc-near-02","timestamp":16.5,"decision":{"isHighlight":true,"eventType":"GOAL","reason":"strike at goal, crowd applause"}},
+    {"type":"candidate","clipId":"soc-off-01","eventType":"GOAL","timestamp":30.0},
+    {"type":"candidate","clipId":"soc-off-02","eventType":"GOAL","timestamp":50.0},
+    {"type":"candidate","clipId":"soc-warm-01","eventType":"GOAL","timestamp":2.0}
+  ],
+  "stageA": {"totalCandidates": 9, "rejected": 3},
+  "tracking": {
+    "soc-goal-01": {"persistencePct": 0.97, "speedErrorPct": 0.06, "possessionCorrect": true},
+    "soc-goal-02": {"persistencePct": 0.98, "speedErrorPct": 0.09, "possessionCorrect": true},
+    "soc-goal-03": {"persistencePct": 0.96, "speedErrorPct": 0.07, "possessionCorrect": true},
+    "soc-goal-04": {"persistencePct": 0.97, "speedErrorPct": 0.08, "possessionCorrect": true},
+    "soc-near-01": {"persistencePct": 0.96, "speedErrorPct": 0.08, "possessionCorrect": true},
+    "soc-near-02": {"persistencePct": 0.95, "speedErrorPct": 0.10, "possessionCorrect": true},
+    "soc-off-01":  {"persistencePct": 0.98, "speedErrorPct": 0.10, "possessionCorrect": true},
+    "soc-off-02":  {"persistencePct": 0.97, "speedErrorPct": 0.11, "possessionCorrect": true},
+    "soc-warm-01": {"persistencePct": 0.99, "speedErrorPct": 0.05, "possessionCorrect": true}
+  }
+}

@@ -19,11 +19,14 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from . import preload  # noqa: E402  (startup model preload)
+from .audio_gate import AudioEnergyGate
 from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
 from .florence import capability, get_detector, record_analyze, resolve_vocabulary, sport_specific_event_type
 from .sam_tracker import HybridTracker
 from .trickle import TrickleError, TrickleRail, TrickleSession
+from .ball_signal import BallSignalPipeline, is_ball_label
+from .zone_trigger import DetectionZoneTrigger, resolve_zones
 
 # One live trickle session per perceive session (plan §0.1 session rule).
 _trickle: dict[str, TrickleSession] = {}
@@ -141,6 +144,23 @@ class AnalyzeRequest(BaseModel):
     preferLabels: list[str] = Field(default_factory=list)
 
 
+class AudioChunkRequest(BaseModel):
+    """One audio chunk for the Stage-A noise-change gate (INC-2 / ADAAAA-4325).
+
+    The server's ffmpeg audio tap decodes the stream's audio track and POSTs
+    short mono chunks (default ~100 ms at the gate's native cadence, so a
+    burst/swell fires inside the live 1-5 s budget without waiting on the
+    1 fps video /analyze). ``samples`` is base64 of planar mono int16
+    little-endian PCM (ffmpeg ``-ac 1 -c:a pcm_s16le -f s16le``), which the
+    gate's RMS energy normalizes — sample rate is not needed for the metric.
+    """
+
+    timestamp: float = 0.0  # seconds from stream start (this chunk's end)
+    samples: str = ""       # base64 int16 mono LE PCM
+    stream_id: str = ""
+    seq: int = Field(default=-1)  # optional; <0 -> per-session auto counter
+
+
 class SessionCloseResponse(BaseModel):
     closed: str | None = None
 
@@ -152,6 +172,81 @@ def _read_session_id(
     # Behind the orchestrator the Livepeer header is injected; direct (dev)
     # calls use X-Session-Id. Neither present -> refuse (no guessing).
     return livepeer_session_id or x_session_id
+
+
+def _env_homography() -> np.ndarray | None:
+    """Optional global image->field pitch homography from env (3x3 JSON).
+
+    A per-session calibration (control `configure` homography) wins over this.
+    Expected as a JSON array of 9 floats (row-major). Unparseable / absent ->
+    None, so the ball signal falls back to image space (homography: false).
+    """
+    raw = os.environ.get("PERCEIVE_PITCH_HOMOGRAPHY", "").strip()
+    if not raw:
+        return None
+    try:
+        arr = json.loads(raw)
+        m = np.array(arr, dtype=float).reshape(3, 3)
+        return m
+    except Exception:  # noqa: BLE001
+        log.warning("PERCEIVE_PITCH_HOMOGRAPHY unparseable; ignoring")
+        return None
+
+
+def _ensure_ball_signal(state) -> BallSignalPipeline | None:
+    """Lazily build this session's ball-signal pipeline (idempotent).
+
+    Uses the session's homography when set (control `configure`), else the env
+    default. Returns the pipeline; it never raises -- a calibration problem
+    degrades the signal, never the frame/candidate path.
+    """
+    if state.ball_signal is not None:
+        return state.ball_signal
+    H = state.homography if state.homography is not None else _env_homography()
+    state.homography = H
+    state.ball_signal = BallSignalPipeline(H=H)
+    return state.ball_signal
+
+
+def _ensure_zone_trigger(state) -> DetectionZoneTrigger | None:
+    """Lazily build this session's detection-in-zone Stage-A trigger.
+
+    Zones are resolved from the session's current gameHint (soccer -> goal
+    mouths). Rebuilt on a gameHint change so the goal regions track the sport;
+    an unknown/empty sport yields an inert trigger (no zones) — motion-burst
+    + audio gates still generate candidates. Never raises.
+    """
+    if state.zone_trigger is not None:
+        return state.zone_trigger
+    tr = DetectionZoneTrigger(zones=resolve_zones(state.game_hint))
+    state.zone_trigger = tr
+    return tr
+
+
+def _player_tracks(tracks) -> dict:
+    """Build {track_id: bbox} for on-screen player tracks, excluding the ball.
+
+    The tracker's max-2 slots can include the ball itself (a small, fast blob).
+    The ball is never a possession candidate, so drop ball-kind / ball-labeled
+    / ball-sized (tiny area) boxes; what remains is the player set for
+    nearest-neighbor possession. Returns a plain dict keyed by track id.
+    """
+    out: dict = {}
+    try:
+        for t in tracks:
+            if getattr(t, "kind", "") == "ball":
+                continue
+            if is_ball_label(getattr(t, "label", "")):
+                continue
+            b = getattr(t, "bbox", (0, 0, 0, 0))
+            x1, y1, x2, y2 = (float(v) for v in b)
+            area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+            if area < 0.004:  # ball-sized
+                continue
+            out[t.track_id] = (x1, y1, x2, y2)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[dict, dict | None]:
@@ -204,6 +299,23 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         tracks = state.tracker.step(boxes, timestamp)
     state.seq = seq
 
+    # Ball-centric candidate signal (INC-2b): per-frame ball track ->
+    # homography velocity + nearest-player possession, attached to the
+    # CandidateEvent as corroborating decide() context (NOT the highlight
+    # arbiter). Fully optional and fault-tolerant: any failure drops the
+    # signal for this frame, never the frame observation or the candidate.
+    ball_signal_fields: dict = {}
+    pipe = _ensure_ball_signal(state)
+    if pipe is not None:
+        try:
+            _bf = pipe.step(objects, _player_tracks(tracks), timestamp)
+            if _bf.velocity is not None:
+                ball_signal_fields["ballVelocity"] = _bf.velocity
+            if _bf.possession is not None:
+                ball_signal_fields["ballPossession"] = _bf.possession
+        except Exception as e:  # noqa: BLE001
+            log.warning("ball signal skipped for frame %s: %s", seq, e)
+
     obs = {
         "type": "observation",
         "sessionId": state.session_id,
@@ -217,6 +329,18 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 "bbox": list(t.bbox),
                 "kind": t.kind,
                 "lostFrames": t.lost_frames,
+                **(
+                    # INC-6 tracked-object semantics: surface selection persistence
+                    # + tracking accuracy so the UI can show "following object N".
+                    {
+                        "selected": True,
+                        "onScreen": t.lost_frames == 0,
+                        "ontoFrames": t.onto_frames,
+                        **({"accuracy": round(t.accuracy, 4)} if t.accuracy is not None else {}),
+                    }
+                    if t.selected
+                    else {}
+                ),
             }
             for t in tracks
         ],
@@ -233,6 +357,19 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     state.recent_frames.append({"seq": seq, "timestamp": timestamp, "tracks": obs["tracks"]})
 
     events: list[dict] = [obs]
+    # INC-3 / ADAAAA-4327: a detection-in-zone (or ball-velocity-spike) Stage-A
+    # trigger can fire its own candidate independent of the motion-burst gate.
+    # Both are cheap (no GPU), both mark a *candidate only* — the decide()
+    # stage (Gemma) runs later on candidates. The zone trigger folds the INC-2b
+    # ball velocity/possession signals in; each candidate carries them too.
+    zone_trigger = _ensure_zone_trigger(state)
+    zone_cand = None
+    if zone_trigger is not None:
+        try:
+            zone_cand = zone_trigger.update(tracks, ball_signal_fields or None, timestamp, ball_objects=objects)
+        except Exception as e:  # noqa: BLE001  (a zone hiccup never drops a frame)
+            log.warning("zone trigger skipped for frame %s: %s", seq, e)
+
     cand = state.tracker.candidate(ts=timestamp)
     cand_dict = None
     if cand is not None:
@@ -245,7 +382,24 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         event_type = sport_specific_event_type(state.game_hint, cand.event_type)
         # Return a plain dict (JSON-serializable) so callers can embed it in a
         # response/ack without reaching into the dataclass.
-        cand_dict = {"eventType": event_type, "timestamp": cand.timestamp, "trackId": cand.track_id}
+        cand_dict = {
+            "eventType": event_type,
+            "timestamp": cand.timestamp,
+            "trackId": cand.track_id,
+            **ball_signal_fields,
+        }
+        events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
+    elif zone_cand is not None:
+        # No motion burst this frame, but the detection-in-zone trigger fired.
+        # Classify to the sport (GOAL on a goal-scoring sport) so decide() sees
+        # a plausible event type; carry ball velocity/possession corroboration.
+        event_type = sport_specific_event_type(state.game_hint, zone_cand["eventType"])
+        cand_dict = {
+            "eventType": event_type,
+            "timestamp": zone_cand["timestamp"],
+            "trigger": zone_cand["trigger"],
+            **ball_signal_fields,
+        }
         events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
     for q in state.subscribers:
         for e in events:
@@ -254,6 +408,63 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             except Exception:
                 pass
     return obs, cand_dict
+
+
+def _decode_audio(b64: str) -> np.ndarray:
+    """Decode base64 int16 mono LE PCM into a float sample array for the gate."""
+    if not b64:
+        raise HTTPException(status_code=400, detail="empty samples")
+    try:
+        raw = base64.b64decode(b64.split(",")[-1])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"bad samples b64: {e}") from e
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty samples payload")
+    if len(raw) % 2:
+        raise HTTPException(status_code=400, detail="samples not aligned to int16")
+    return np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+
+
+def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> dict | None:
+    """Run one audio chunk through the Stage-A noise-change gate (INC-2).
+
+    Pure DSP — NEVER touches the detector / SAM / Gemma (no billed GPU on the
+    gate path). When the gate fires it returns a *candidate* event carrying the
+    AudioSignal evidence (kind, onset ts, firedAt, onsetLatencyS, peakEnergy,
+    baselineEnergy) and enqueues it onto any SSE subscribers. It does NOT
+    decide a highlight — the decide stage (Gemma) runs later, on candidates.
+    """
+    samples = _decode_audio(samples_b64)
+    sig = state.audio_gate.update(samples, ts=timestamp)
+    state.audio_seq = seq if seq >= 0 else state.audio_seq + 1
+    if sig is None:
+        return None
+    # AudioSignalSchema (packages/events) camelCase keys.
+    audio = {
+        "kind": sig.kind,
+        "ts": round(sig.ts, 3),
+        "firedAt": round(sig.fired_at, 3),
+        "onsetLatencyS": round(sig.onset_latency_s, 3),
+        "peakEnergy": round(sig.peak_energy, 6),
+        "baselineEnergy": round(sig.baseline_energy, 6),
+    }
+    cand = {
+        "type": "candidate",
+        "sessionId": state.session_id,
+        "streamId": state.stream_id,
+        # Audio gate does not classify the event (no vision here); the decide
+        # stage (Gemma) assigns the real eventType from the anchored frame.
+        "eventType": "AUDIO",
+        "timestamp": audio["ts"],
+        "seq": state.audio_seq,
+        "audio": audio,
+    }
+    for q in state.subscribers:
+        try:
+            q.put_nowait(cand)
+        except Exception:
+            pass
+    return cand
 
 
 def handle_control(state, msg: dict) -> dict:
@@ -268,7 +479,25 @@ def handle_control(state, msg: dict) -> dict:
         if "sampleFps" in msg and msg.get("sampleFps", 0) > 0:
             state.sample_fps = float(msg["sampleFps"])
         if msg.get("gameHint") is not None:
+            changed = str(msg["gameHint"]) != state.game_hint
             state.game_hint = str(msg["gameHint"])
+            # INC-3: a sport change rebuilds the detection-in-zone trigger so
+            # the goal-mouth zones track the new sport.
+            if changed:
+                state.zone_trigger = None
+                _ensure_zone_trigger(state)
+        # Ball-signal calibration (INC-2b): optional image->field homography as
+        # a 9-number (row-major 3x3) array. A bad value is ignored (KEEP the
+        # existing calibration) and reported, never fatal.
+        if isinstance(msg.get("homography"), list):
+            try:
+                h = np.array(msg["homography"], dtype=float).reshape(3, 3)
+                state.homography = h
+                # Rebuild the pipeline on the new calibration (drops stale
+                # velocity samples + ball track so velocity restarts clean).
+                state.ball_signal = BallSignalPipeline(H=h)
+            except Exception as e:  # noqa: BLE001
+                return {"type": "ack", "ok": False, "cmd": "configure", "error": f"bad homography: {e}"}
         return {"type": "ack", "ok": True, "cmd": "configure", "preferLabels": state.prefer_labels, "sampleFps": state.sample_fps}
     if ctype == "seed":
         bbox = msg.get("bbox")
@@ -277,19 +506,45 @@ def handle_control(state, msg: dict) -> dict:
         slot = msg.get("slot")
         kind = msg.get("kind") or "unknown"
         label = msg.get("label") or ""
-        tr = state.tracker.seed(tuple(bbox), kind=kind, label=label, slot=slot)
-        return {"type": "ack", "ok": True, "cmd": "seed", "slot": tr.slot, "trackId": tr.track_id}
+        # INC-6: a user find-and-track target marks the slot selected so the
+        # observation carries persistence + accuracy and it is not auto-evicted.
+        selected = bool(msg.get("selected"))
+        tr = state.tracker.seed(tuple(bbox), kind=kind, label=label, slot=slot, selected=selected)
+        return {"type": "ack", "ok": True, "cmd": "seed", "slot": tr.slot, "trackId": tr.track_id, "selected": tr.selected}
+    if ctype in ("track", "find-track"):
+        # INC-6 / ADAAAA-4330: on-demand find-and-track. The user selects an
+        # object (bbox) and perceive follows it across frames while on screen.
+        # This is the surfaced, company-bounded form of `seed`; it always marks
+        # the slot as a selected tracked object. Without an explicit bbox we
+        # fall back to the most recent frame's largest detection (Florence find)
+        # so a bare "follow it" works from the last seen frame.
+        bbox = msg.get("bbox")
+        if bbox is None:
+            cand = next((t for t in reversed(state.recent_frames) if t.get("tracks")), None)
+            cand = cand["tracks"][0] if cand and cand["tracks"] else None
+            if cand is None:
+                return {"type": "ack", "ok": False, "cmd": ctype, "error": "no bbox and no prior track to follow"}
+            bbox = cand["bbox"]
+        if not bbox or len(bbox) != 4:
+            return {"type": "ack", "ok": False, "cmd": ctype, "error": "bbox required (4 numbers)"}
+        slot = msg.get("slot")
+        kind = msg.get("kind") or "unknown"
+        label = msg.get("label") or ""
+        tr = state.tracker.seed(tuple(bbox), kind=kind, label=label, slot=slot, selected=True)
+        return {"type": "ack", "ok": True, "cmd": ctype, "slot": tr.slot, "trackId": tr.track_id, "selected": True}
     if ctype == "evict":
         slot = msg.get("slot")
-        if slot not in (0, 1):
-            return {"type": "ack", "ok": False, "cmd": "evict", "error": "slot must be 0|1"}
-        removed = state.tracker.evict(slot)
+        capacity = getattr(state.tracker, "capacity", MAX_TRACKS)
+        if slot is None or not (0 <= int(slot) < capacity):
+            return {"type": "ack", "ok": False, "cmd": "evict", "error": f"slot must be 0..{capacity - 1}"}
+        removed = state.tracker.evict(int(slot))
         return {"type": "ack", "ok": True, "cmd": "evict", "slot": slot, "removed": removed}
     if ctype == "lock":
         slot = msg.get("slot")
-        if slot not in (0, 1):
-            return {"type": "ack", "ok": False, "cmd": "lock", "error": "slot must be 0|1"}
-        state.tracker.lock(slot)
+        capacity = getattr(state.tracker, "capacity", MAX_TRACKS)
+        if slot is None or not (0 <= int(slot) < capacity):
+            return {"type": "ack", "ok": False, "cmd": "lock", "error": f"slot must be 0..{capacity - 1}"}
+        state.tracker.lock(int(slot))
         return {"type": "ack", "ok": True, "cmd": "lock", "slot": slot}
     if ctype == "analyze-still":
         if state.last_image_b64 and state.last_rgb is not None:
@@ -350,7 +605,13 @@ def create_app() -> FastAPI:
         # session is configured BEFORE the frame is run. Same effect as a WS
         # `configure` — applies to resolve_vocabulary() inside process_frame.
         if req.gameHint:
+            changed = str(req.gameHint) != state.game_hint
             state.game_hint = req.gameHint
+            # INC-3: a sport change rebuilds the detection-in-zone trigger so
+            # the goal-mouth zones track the new sport.
+            if changed:
+                state.zone_trigger = None
+                _ensure_zone_trigger(state)
         if req.preferLabels:
             state.prefer_labels = list(req.preferLabels)
         # Live path: the worker reserved a session with a control URL, so this
@@ -376,8 +637,30 @@ def create_app() -> FastAPI:
         # session mid-pass (ADAAAA-3305 VOD 404 "runner not found").
         obs, cand = await _analyze_offloop(state, req.seq, req.timestamp, req.image)
         if cand is not None:
-            return {"candidate": {"type": "candidate", "sessionId": sid, "eventType": cand["eventType"], "timestamp": cand["timestamp"], "seq": req.seq}, "observation": obs}
+            return {"candidate": {"type": "candidate", "sessionId": sid, **cand, "seq": req.seq}, "observation": obs}
         return obs
+
+    @router.post("/audio")
+    async def audio(
+        req: AudioChunkRequest,
+        livepeer_session_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ):
+        """Feed one audio chunk to the Stage-A noise-change gate (INC-2).
+
+        Pure DSP: decodes int16 mono PCM, runs the RMS energy gate, and when it
+        fires returns the audio CandidateEvent (with the AudioSignal evidence).
+        It NEVER runs the detector / SAM / Gemma, so this path bills no GPU.
+        The gate does NOT decide a highlight — it only marks a candidate.
+        """
+        sid = _read_session_id(livepeer_session_id, x_session_id)
+        if not sid:
+            raise HTTPException(status_code=400, detail="missing session id (Livepeer-Session-Id or X-Session-Id)")
+        state = registry.get_or_create(sid, req.stream_id)
+        if req.stream_id:
+            state.stream_id = req.stream_id
+        cand = process_audio(state, req.seq, req.timestamp, req.samples)
+        return {"candidate": cand}
 
     @router.get("/events")
     async def events(
@@ -454,6 +737,22 @@ def create_app() -> FastAPI:
                 await websocket.send_text(json.dumps(ack))
         except WebSocketDisconnect:
             pass
+
+    @router.post("/control")
+    async def control(
+        payload: dict,
+        livepeer_session_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ):
+        """HTTP control forward (INC-6 / ADAAAA-4330): lets the server / UI
+        deliver a find-and-track intent (track/seed/evict/lock) to a reserved
+        perceive session over HTTP instead of the WS control channel. Mirrors
+        handle_control; returns the same ack object. Binds to an EXISTING
+        session (same rule as /ws)."""
+        sid = _read_session_id(livepeer_session_id, x_session_id)
+        if not sid or registry.get(sid) is None:
+            raise HTTPException(status_code=404, detail="no such session")
+        return handle_control(registry.get(sid), payload)
 
     @router.get("/session/stats")
     async def stats(

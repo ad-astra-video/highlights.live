@@ -1,0 +1,551 @@
+
+{
+  "events": [
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 1.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 1.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 3.75,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a soccer game in progress with players in position, but no goal has been scored or immediate celebration is occurring.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 3.75,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a moment of play in a small-sided soccer game, but no goal has been scored; the ball is still in play in the middle of the field.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 6.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a player in possession of the ball in the middle of the field; no goal has been scored.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a practice or casual game setting with no active goal being scored or significant action occurring.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 10.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 4.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a red kit has just struck the ball into the net, and the opposing team is reacting to the goal.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 12.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "Mohamed Salah is shown in a clear goal-scoring position, having just struck the ball past a sliding defender.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 3.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 8.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 11.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 5.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer match is in progress with a player in a red kit about to strike the ball towards the goal, and the stadium atmosphere suggests a high-stakes FA Cup match.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 6.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a high-stakes moment in a soccer match where a player in a red kit is positioned near the goal area, and the surrounding players and crowd indicate a significant scoring event or a critical attacking play.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a red kit has just struck the ball into the net, and the opposing team is reacting to the goal.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 10.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a red kit has just struck the ball into the net, and the surrounding players and crowd are reacting to a goal being scored.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 13.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer player in a light blue kit is shown in the bottom right corner of the frame having just struck the ball into the net, with a red player nearby and a goal celebration beginning.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a high-intensity moment where a player in a light blue kit is about to strike the ball, with a defender in red attempting a challenge, typical of a goal-scoring opportunity.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 8.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a soccer player in a light blue kit about to strike the ball, with a defender in red pursuing. This is a high-leverage scoring opportunity.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 3.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 8.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 5.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer match is in progress with a player in a red kit about to strike the ball towards the goal, and the crowd is densely packed, indicating a high-stakes competitive environment.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 6.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a soccer match in progress with players positioned for an attacking play near the goal, indicating a high-leverage moment in a professional match.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a goal-scoring moment in a soccer match, with a player in a red kit having just struck the ball into the net while the opposing team in blue is positioned in the defensive area.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 10.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a red kit is shown in a goal-scoring position near the penalty area, with a high concentration of players from both teams in the vicinity, indicating a significant scoring moment in a professional soccer match.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 0.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 4.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 2.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a soccer match in progress with a player in a red kit about to strike the ball towards the goal, a key moment in a competitive match.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 4.25,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a static moment of play with no goal being scored or immediate celebration occurring.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 4.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a high-action moment in a soccer match where a player in a red kit is moving towards the goal area, with several players from both teams converging on the ball, indicating a scoring opportunity or a goal just scored.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 4.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a high-action moment in a soccer match where a player in a red kit is about to strike the ball towards the goal, with multiple players from both teams converging in the penalty area.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 6.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a soccer match in progress with players in active positions, capturing a high-intensity moment near the center circle where a goal-scoring opportunity or immediate aftermath is occurring.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 3.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 4.75
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 5.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 5.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 7.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 5.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a high-stakes soccer match at the Etihad Stadium with a goal-scoring opportunity in progress, featuring players from both teams in active positions near the penalty area.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 6.75,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a soccer match in progress with players positioned for an attacking play near the goal area, indicating a high-leverage moment in a professional FA Cup match.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 7.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer match is in progress with a clear goal-scoring opportunity as a player in a red kit is moving towards the goal area while the opposing team in blue is defending.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 7.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer player in a red kit is shown in the middle of a scoring play, with the ball near the goal line and the opposing team's defense out of position.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 9.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A soccer player in a red kit has just struck the ball into the net, and the opposing team is reacting to the goal.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 1.25
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 2.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a red kit is shown striking the ball towards the goal line, which is a clear goal-scoring attempt in a professional soccer match.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 3.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a soccer player in a red kit about to strike the ball, while an opposing player in a light blue kit is in a defensive position, indicating a high-probability goal-scoring moment.",
+        "source": "gemma"
+      }
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 8.25,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a red kit is shown in a scoring position near the goal line, with a high concentration of players from both teams in the box, indicating a goal-scoring opportunity or goal.",
+        "source": "gemma"
+      }
+    }
+  ],
+  "stageA": {
+    "totalCandidates": 30,
+    "rejected": 5
+  },
+  "tracking": {}
+}
+

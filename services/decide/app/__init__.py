@@ -11,10 +11,35 @@ from .gemma import decide_with_gemma
 HIGH_VALUE_EVENTS = {"KILL", "GOAL", "DUNK", "CLUTCH", "ACE", "PENTAKILL"}
 
 
+class ReactionEvidence(BaseModel):
+    """People-reaction context (INC-4 / ADAAAA-4328) folded into the decide()
+    prompt so Gemma can reason about the humans' reaction. This is corroborating
+    evidence for the verdict — it never replaces the arbiter (Gemma's multimodal
+    read of the frames + audio). All fields default to 'no signal'.
+
+    - crowdEnergy 0..1: peak crowd/commentary energy of the INC-2 audio gate
+      (burst/swell) that fired the candidate.
+    - audioKind: kind of audio reaction, "burst" | "swell" | "" when none.
+    - humansInMotion: cheap visual celebration cue — tracked humans/players in
+      high motion around the candidate (proxy; Gemma reasons over the frames).
+    - ballSpeedMps / ballPossessionId: optional INC-2b ball context for sharper
+      reasons (ball moving fast toward goal, possessor celebrating).
+    """
+
+    crowdEnergy: float = Field(default=0.0, ge=0.0, le=1.0)
+    audioKind: str = Field(default="")
+    humansInMotion: int = Field(default=0, ge=0)
+    ballSpeedMps: float = Field(default=0.0, ge=0.0)
+    ballPossessionId: str = Field(default="")
+
+
 class Evidence(BaseModel):
     trackCount: int = Field(default=0, ge=0, le=2)
     maxVelocity: float = Field(default=0.0, ge=0.0)  # normalized units/frame
     ocrHits: int = Field(default=0, ge=0)
+    # People-reaction context (INC-4). Optional; absent == no reaction signal,
+    # so the prompt renders without it (no regression vs today).
+    reaction: ReactionEvidence = Field(default_factory=ReactionEvidence)
 
 
 class ImageRef(BaseModel):

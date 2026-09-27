@@ -11,7 +11,15 @@ import {
 } from "@highlights/livepeer-session";
 import type { ServerConfig } from "./config";
 import { createPaymentRefresher, type PaymentRefresher } from "./payment";
-import type { DecisionResult, ObservationResult, PipelineClient, ReserveResult } from "./analyzer";
+import type {
+  AudioCandidate,
+  AudioChunk,
+  DecisionResult,
+  ObservationResult,
+  PipelineClient,
+  ReactionEvidence,
+  ReserveResult,
+} from "./analyzer";
 import { SessionLostError } from "./analyzer";
 
 export function buildAnalyzeFrames(frameDir: string, sampleFps = 1) {
@@ -175,9 +183,57 @@ export class OrchestratorAdapter implements PipelineClient {
     }
     return normalizeObservation(data);
   }
+  async postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioCandidate | null> {
+    // Pure-DSP audio gate on the perceive runner — no GPU on this path. Proxy
+    // through the same orchestrator session as /analyze so the gate marks
+    // candidates on the live session the worker is already paying for. The
+    // gate's CandidateEvent (or null) rides the response back so the server can
+    // route an audio-triggered candidate to decide() on the anchored frame.
+    const { status, data } = await this.client.appCall<any>(sessionId, "audio", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        seq: chunk.seq,
+        timestamp: chunk.timestamp,
+        samples: chunk.samples,
+        stream_id: chunk.streamId || "",
+      }),
+    });
+    // A dropped audio chunk is cheap (gate is best-effort); a 404 just means
+    // the video leg already re-reserved a fresh session. Never abort the pass.
+    if (status >= 500) throw new Error(`postAudio failed: HTTP ${status}`);
+    return (status >= 200 && status < 300 ? data?.candidate : null) ?? null;
+  }
+  async controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<void> {
+    // INC-6 / ADAAAA-4330: proxy a find-and-track / operator control intent
+    // through the same orchestrator session as /analyze so the perceive runner
+    // marks the slot selected and follows it. Best-effort like postAudio: a 404
+    // means the video leg already re-reserved a fresh session — drop, never fatal.
+    const { status } = await this.client.appCall<any>(sessionId, "control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(control),
+    });
+    if (status >= 500) throw new Error(`controlForward failed: HTTP ${status}`);
+  }
   async decide(
-    evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
-    opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
+    evidence: {
+      eventType: string;
+      trackCount: number;
+      maxVelocity: number;
+      ocrHits: number;
+      reaction?: ReactionEvidence; // INC-4 people-reaction context
+    },
+    opts?: {
+      gameHint?: string;
+      imageB64?: string;
+      reasoningEffort?: string;
+      // ADAAAA-4785 (live latency-first): temporal frame sequence + audio clip
+      // around a noise trigger, forwarded to Gemma for video+audio analysis.
+      frames?: { role?: string; base64: string; timestamp: number }[];
+      audioB64?: string;
+      audioSampleRate?: number;
+    }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
     const payload = {
@@ -188,6 +244,13 @@ export class OrchestratorAdapter implements PipelineClient {
       reasoningEffort: opts?.reasoningEffort || "none",
       evidence,
       images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
+      // ADAAAA-4785 (live latency-first): forward the temporal frame sequence
+      // + audio clip around the noise trigger so Gemma analyzes video + audio
+      // frames, not a single still. Opt-in fields; decide runner ignores them
+      // when absent (rule mode / VOD with no audio).
+      frames: opts?.frames ?? [],
+      audioB64: opts?.audioB64 ?? "",
+      audioSampleRate: opts?.audioSampleRate ?? 16000,
     };
     // The decide runner is a fixed-price single-shot live runner; the first
     // unpaid call 402s with a payment challenge. On-chain (signer + payer
@@ -266,9 +329,54 @@ export class DirectAdapter implements PipelineClient {
     }
     return normalizeObservation(await r.json());
   }
+  async postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioCandidate | null> {
+    // Direct dev path: POST straight to perceive /app/audio (pure DSP, no GPU).
+    const r = await fetch(`${this.cfg.perceiveUrl}/app/audio`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Id": this.fakeSession },
+      body: JSON.stringify({
+        seq: chunk.seq,
+        timestamp: chunk.timestamp,
+        samples: chunk.samples,
+        stream_id: chunk.streamId || "",
+      }),
+    });
+    // Best-effort gate: a dropped chunk must never abort the video pass. The
+    // gate's CandidateEvent (or null) rides the response back so the server can
+    // route an audio-triggered candidate to decide() on the anchored frame.
+    if (r.status >= 500) throw new Error(`postAudio failed: HTTP ${r.status}`);
+    if (r.status < 200 || r.status >= 300) return null;
+    const body = (await r.json().catch(() => null)) as { candidate?: AudioCandidate } | null;
+    return body?.candidate ?? null;
+  }
+  async controlForward(_sessionId: string, control: { type: string; [k: string]: any }): Promise<void> {
+    // INC-6 / ADAAAA-4330: direct dev path posts the find-and-track control
+    // intent straight to perceive /app/control with the fake session id.
+    const r = await fetch(`${this.cfg.perceiveUrl}/app/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Id": this.fakeSession },
+      body: JSON.stringify(control),
+    });
+    if (r.status >= 500) throw new Error(`controlForward failed: HTTP ${r.status}`);
+  }
   async decide(
-    evidence: { eventType: string; trackCount: number; maxVelocity: number; ocrHits: number },
-    opts?: { gameHint?: string; imageB64?: string; reasoningEffort?: string }
+    evidence: {
+      eventType: string;
+      trackCount: number;
+      maxVelocity: number;
+      ocrHits: number;
+      reaction?: ReactionEvidence; // INC-4 people-reaction context
+    },
+    opts?: {
+      gameHint?: string;
+      imageB64?: string;
+      reasoningEffort?: string;
+      // ADAAAA-4785 (live latency-first): temporal frame sequence + audio clip
+      // around a noise trigger, forwarded to Gemma for video+audio analysis.
+      frames?: { role?: string; base64: string; timestamp: number }[];
+      audioB64?: string;
+      audioSampleRate?: number;
+    }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
       method: "POST",
@@ -281,6 +389,9 @@ export class DirectAdapter implements PipelineClient {
         reasoningEffort: opts?.reasoningEffort || "none",
         evidence,
         images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
+        frames: opts?.frames ?? [],
+        audioB64: opts?.audioB64 ?? "",
+        audioSampleRate: opts?.audioSampleRate ?? 16000,
       }),
     });
     if (!r.ok) throw new Error(`decide failed: HTTP ${r.status}`);

@@ -9,7 +9,15 @@ import { Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
 import type { ServerConfig } from "./config";
 import type { Store } from "./store";
-import { analyzeJob, EvidenceTracker, type AnalyzeEvent, type PipelineClient } from "./analyzer";
+import {
+  analyzeJob,
+  EvidenceTracker,
+  LiveRunShared,
+  decideOnCandidate,
+  type AnalyzeEvent,
+  type AnalyzerConfig,
+  type PipelineClient,
+} from "./analyzer";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { LiveIngest, type LiveKind } from "./live";
@@ -248,31 +256,93 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     sub: any
   ) {
     try {
-      const outcome = await analyzeJob(
-        adapter,
-        ingest.frames(),
-        (ts) => ingest.cut(ts),
-        {
-          jobId: job.id,
-          clipBeforeS: cfg.clipBeforeS,
-          clipAfterS: cfg.clipAfterS,
-          gameHint: job.gameHint || cfg.gameHintDefault,
-          preferLabels: job.preferLabels,
-        },
-        jobEventHook(job.id)
-      );
-      for (const h of outcome.highlights) {
+      // Reserve ONE perceive session for this live job, shared by the video
+      // /analyze leg and the Stage-A audio /audio tap (INC-2 / ADAAAA-4325) so
+      // both mark candidates on the same live session. analyzeJob() receives it
+      // as `initialSession` and stops it (and any re-reserves) in its finally.
+      const initial = await adapter.reservePerceive();
+      const anaCfg: AnalyzerConfig = {
+        jobId: job.id,
+        clipBeforeS: cfg.clipBeforeS,
+        clipAfterS: cfg.clipAfterS,
+        gameHint: job.gameHint || cfg.gameHintDefault,
+        preferLabels: job.preferLabels,
+      };
+      const onEvent = jobEventHook(job.id);
+      // Shared live-run context (INC-2 / ADAAAA-4325 slice 4): the video
+      // /analyze leg and the audio tap leg both feed their frames + evidence
+      // into this so an audio-triggered candidate can be decided on the
+      // anchored video frame, exactly like a video candidate.
+      const shared = new LiveRunShared();
+      // Drive the audio tap (a second ffmpeg decoding 0:a:0 -> mono pcm_s16le)
+      // in parallel with the video pass at ~10 Hz. Best-effort: a dropped
+      // chunk or a stopped tap never aborts the video look. When the gate
+      // fires, postAudio() returns the CandidateEvent and we route it through
+      // decide() on the anchored frame — the gate itself never decides, and
+      // this path bills no GPU for the gate. The loop ends when ingest.stop()
+      // (below) kills the audio ffmpeg.
+      const audioLoop = (async () => {
+        try {
+          for await (const chunk of ingest.audioChunks()) {
+            // Buffer the raw mono PCM chunk into the shared live-run context so
+            // an audio-triggered candidate can assemble the AROUND audio clip
+            // for Gemma (ADAAAA-4785: video + audio frame analysis per trigger).
+            shared.addAudioChunk(chunk.timestamp, chunk.samples);
+            try {
+              const cand = await adapter.postAudio(initial.sessionId, {
+                seq: chunk.seq,
+                timestamp: chunk.timestamp,
+                samples: chunk.samples,
+                streamId: job.id,
+              });
+              if (cand) {
+                await decideOnCandidate(adapter, shared, ingest.cut, anaCfg, cand, onEvent, {
+                  seq: chunk.seq,
+                  timestamp: chunk.timestamp,
+                });
+              }
+            } catch {
+              /* gate is best-effort — keep going */
+            }
+          }
+        } catch {
+          /* tap never started or ended early — video leg unaffected */
+        }
+      })();
+
+      const outcome = await analyzeJob(adapter, ingest.frames(), ingest.cut, anaCfg, onEvent, initial, shared);
+      // Terminate ingest (kills both ffmpeg procs); the audio tap drains and
+      // the loop resolves any in-flight candidates before we persist.
+      await ingest.stop();
+      await audioLoop;
+      // Persist highlights from BOTH legs: the video and audio legs accumulate
+      // into the same shared.highlights array, so one pass covers both.
+      for (const h of shared.highlights) {
         await store.addHighlight({ ...h, ownerId: user.id, status: cfg.autoPublishHighlights ? "accepted" : "pending" });
         await billing.onHighlightCreated(user, sub);
         // A clip generated successfully debits the quota once.
         await entitlements.onClipGenerated(user);
       }
-      await store.patchJob(job.id, { status: "done", perceiveSessionId: outcome.sessionId });
+      // Durable Stage-A FP-rate + latency metric (INC-2 / ADAAAA-4325 slice 5):
+      // snapshotted onto the job so the noise-trigger cost bound (<= 60% of
+      // audio candidates rejected by Gemma) is inspectable/queryable post-run.
+      const stageA = shared.stageA.snapshot();
+      await store.patchJob(job.id, {
+        status: "done",
+        perceiveSessionId: outcome.sessionId,
+        stageAMetrics: stageA,
+      });
+      if (stageA.totalCandidates > 0) {
+        console.log(
+          `[live:${job.id}] stageA fpRate=${stageA.fpRate} (${stageA.rejected}/${stageA.totalCandidates} rejected), ` +
+            `latency mean/max=${stageA.meanOnsetLatencyS}/${stageA.maxOnsetLatencyS}s, withinBudget=${stageA.fpRateWithinBudget}`
+        );
+      }
     } catch (e) {
       await store.patchJob(job.id, { status: "failed" });
       console.error(`[live:${job.id}]`, e);
     } finally {
-      ingest.stop();
+      await ingest.stop();
       liveSessions.delete(job.id);
     }
   }
@@ -1102,10 +1172,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return reply; // keep the socket open
   });
 
-  // Operator control intent for a live-console session (preferLabels, lock,
-  // evict, confirm). Recorded + acked on the job. Delivery to the perceive
-  // runner's control channel is the next adapter increment (see perceive WS
-  // control); the API surface and ack are live now so the UI can send it.
+  // Operator control intent for a live-console session, including the INC-6
+  // on-demand find-and-track intent (track/seed/evict/lock). The `track` /
+  // `find-track` intent carries the user-selected object bbox and is forwarded
+  // to the perceive session over HTTP so the runner actually follows it
+  // (Florence find -> SAM track -> selected-track accuracy surfaced in the UI).
+  // Async + best-effort: we ack immediately with the recorded intent and always
+  // return the current job; a dropped forward (session re-reserved/404) never
+  // fails the request.
   app.post<{ Params: { id: string }; Body: { type?: string; args?: any } }>(
     "/jobs/:id/control",
     { preHandler: authReq },
@@ -1114,8 +1188,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       if (!job) return reply.code(404).send({ error: "no job" });
       const type = req.body?.type || "none";
       const args = req.body?.args ?? {};
-      // Ack to the operator immediately; delivery to the perceive control
-      // channel is handled once the adapter exposes a control forward.
+      // Resolve the active perceive session for this job: the browser-capture
+      // rail keeps it on the job record, and a VOD/live job persists it on the
+      // job once the session is reserved.
+      const sid = browserJobs.get(job.id)?.sessionId || job.perceiveSessionId;
+      // Control messages (find-and-track intent) mirror the perceive schema: a
+      // flat object with `type` plus its args spread at top level.
+      const fwd = { type, ...args };
+      if (sid && ["track", "find-track", "seed", "lock", "evict", "configure"].includes(type)) {
+        adapter.controlForward(sid, fwd).catch((e: any) => {
+          // Best-effort: never surface a dropped find-and-track to the user as a
+          // failure; the console ack reflects the recorded intent.
+          console.error(`[control:${job.id}] forward ${type} failed:`, e?.message || e);
+        });
+      }
       return { ok: true, control: { type, args, at: new Date().toISOString() }, job: store.getJob(job.id) };
     }
   );
