@@ -157,7 +157,7 @@ export class OrchestratorAdapter implements PipelineClient {
   async analyze(
     sessionId: string,
     frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
-    opts?: { gameHint?: string; preferLabels?: string[] }
+    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string }
   ): Promise<ObservationResult> {
     const { status, data } = await this.client.appCall<any>(sessionId, "analyze", {
       method: "POST",
@@ -173,6 +173,9 @@ export class OrchestratorAdapter implements PipelineClient {
         // configures the fresh session automatically.
         gameHint: opts?.gameHint || "",
         preferLabels: opts?.preferLabels || [],
+        // Per-stream LoRA injection (ADAAAA-5324): carry the stream-attached
+        // merged model dir so perceive serves this stream's adapter variant.
+        loraRef: opts?.loraRef || "",
       }),
     });
     if (status >= 400) {
@@ -346,7 +349,7 @@ export class DirectAdapter implements PipelineClient {
   async analyze(
     sessionId: string,
     frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
-    opts?: { gameHint?: string; preferLabels?: string[] }
+    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string }
   ): Promise<ObservationResult> {
     const r = await fetch(`${this.cfg.perceiveUrl}/app/analyze`, {
       method: "POST",
@@ -359,6 +362,9 @@ export class DirectAdapter implements PipelineClient {
         // ADAAAA-4109: carry the job's closed vocabulary (same as OrchestratorAdapter).
         gameHint: opts?.gameHint || "",
         preferLabels: opts?.preferLabels || [],
+        // Per-stream LoRA injection (ADAAAA-5324): carry the stream-attached
+        // merged model dir so perceive serves this stream's adapter variant.
+        loraRef: opts?.loraRef || "",
       }),
     });
     if (!r.ok) {

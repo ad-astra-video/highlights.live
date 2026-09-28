@@ -24,12 +24,15 @@
 # yields useful, in-roster bbox labels and a bounded Unknown rate on real clips.
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+log = logging.getLogger("highlights.perceive.florence")
 
 # OpenVINO targets Intel suites (iGPU + PCIe Arc dGPU + NPU + CPU) behind one
 # backend; used in-container via the GPU plugin (/dev/dri) and on Windows hosts.
@@ -233,8 +236,19 @@ def _materialize_original_model(model_id: str, dest: Path) -> Path:
 class FlorenceDetector:
     """Thin wrapper over microsoft/Florence-2 (HF transformers) for <OD>."""
 
-    def __init__(self, model_name: str | None = None, device: str | None = None):
+    def __init__(
+        self,
+        model_name: str | None = None,
+        device: str | None = None,
+        model_path: str | None = None,
+    ):
         self.model_name = model_name or os.environ.get("FLORENCE_MODEL", "microsoft/Florence-2-base")
+        # Per-stream LoRA injection (ADAAAA-5324): when set, this detector loads
+        # the given model DIRECTORY instead of the shared base model. The adapter
+        # is a pre-merged drop-in Florence-2 model dir (train's `merge_and_unload`
+        # output), so serving requires no PEFT/Gradient-merge at runtime — the
+        # model is simply loaded from that path, one variant per stream.
+        self.model_path = model_path
         self._device = device or os.environ.get("PERCEIVE_DEVICE", "auto")
         self._torch = None
         self._tdml = None
@@ -283,6 +297,17 @@ class FlorenceDetector:
         self._torch = torch
         chosen = self._pick_device()
         if chosen == "openvino":
+            if self.model_path:
+                # Per-stream LoRA variants load via the torch/accelerator path
+                # (from_pretrained on a local merged model dir). The OpenVINO
+                # converter resolves a HF model id against the local hub cache,
+                # not an arbitrary filesystem dir, so a LoRA variant is not
+                # converted here — documented constraint (ADAAAA-5324).
+                log.warning(
+                    "openvino detector does not serve a per-stream LoRA dir (%s); using base converter",
+                    self.model_path,
+                )
+                self.model_path = None
             # Intel's parts-based OpenVINO port (DaViT image encoder + BART text
             # encoder/decoder converted separately with stateful KV cache). The
             # first boot converts HF Florence-2 -> OpenVINO IR into a cache dir;
@@ -318,10 +343,11 @@ class FlorenceDetector:
             device = torch.device("cpu")
             self.device_label = "cpu"
 
-        self._processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
-        self._model = AutoModelForCausalLM.from_pretrained(
-            self.model_name, trust_remote_code=True
-        ).to(device)
+        # Per-stream LoRA variant (ADAAAA-5324): load this stream's pre-merged
+        # Florence-2 model dir when configured; otherwise the shared base model.
+        source = self.model_path or self.model_name
+        self._processor = AutoProcessor.from_pretrained(source, trust_remote_code=True)
+        self._model = AutoModelForCausalLM.from_pretrained(source, trust_remote_code=True).to(device)
         self._model.eval()
         self.dtype = next(self._model.parameters()).dtype
 
@@ -493,16 +519,43 @@ class FlorenceDetector:
 
 
 _detector: Optional[FlorenceDetector] = None
+# Per-stream LoRA variants (ADAAAA-5324): one cached FlorenceDetector per
+# adapter ref. Each holds its own loaded (base+LoRA-merged) model, so a
+# LoRA-attached stream gets its variant while every other stream keeps the
+# shared base singleton below. GPU memory grows ~one model per distinct
+# adapter ref that is concurrently attached (documented cost, see plan).
+_detectors: dict[str, FlorenceDetector] = {}
 
 
-def get_detector() -> FlorenceDetector | None:
-    """Return the shared Florence-2 detector when enabled, else None (stub path)."""
+def reset_detectors() -> None:
+    """Drop the cached detectors (base singleton + all LoRA variants). Used by
+    tests to isolate selection state; called at perceive startup after the
+    boot gate so a stale/partial variant never survives into serving."""
+    global _detector, _detectors
+    _detector = None
+    _detectors = {}
+
+
+def get_detector(lora_ref: str | None = None) -> FlorenceDetector | None:
+    """Return the Florence-2 detector for a session, or None (stub path).
+
+    `lora_ref` selects a PER-STREAM adapter: a LoRA-attached stream gets a
+    dedicated detector that loads that stream's merged model dir; a stream
+    with no adapter (None) gets the shared base singleton (unchanged legacy
+    behaviour — no regression on base-stream detection).
+    """
     global _detector
     if os.environ.get("PERCEIVE_MODE", "stub") != "florence":
         return None
-    if _detector is None:
-        _detector = FlorenceDetector()
-    return _detector
+    if not lora_ref:
+        if _detector is None:
+            _detector = FlorenceDetector()
+        return _detector
+    d = _detectors.get(lora_ref)
+    if d is None:
+        d = FlorenceDetector(model_path=lora_ref)
+        _detectors[lora_ref] = d
+    return d
 
 
 def detector_label() -> str:

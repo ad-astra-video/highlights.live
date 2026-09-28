@@ -381,6 +381,28 @@ describe("analyzeJob", () => {
     expect(sess).toContain("sess-b"); // a re-reserved session also got config on its first analyze
   });
 
+  it("carries the stream's LoRA ref to perceive on every analyze (ADAAAA-5324)", async () => {
+    const optsSeen: { loraRef?: string }[] = [];
+    const client = fakeClient({
+      reservePerceive: async () => ({ sessionId: "sess-l", appUrl: "", controlUrl: "" }),
+      analyze: async (sid, _frame, opts) => {
+        optsSeen.push(opts || {});
+        return { observation: { tracks: [], seq: optsSeen.length - 1, timestamp: optsSeen.length - 1 } };
+      },
+      stopPerceive: async () => {},
+    });
+    await analyzeJob(
+      client.client,
+      frames(2),
+      async (ts) => ({ clipId: "c", clipUri: "u" }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", loraRef: "/models/lora-stream-7" }
+    );
+    expect(optsSeen.length).toBe(2);
+    for (const o of optsSeen) {
+      expect(o.loraRef).toBe("/models/lora-stream-7");
+    }
+  });
+
   it("records max velocity + track count from observations", () => {
     const ev = new EvidenceTracker();
     ev.step({

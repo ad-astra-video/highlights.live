@@ -215,7 +215,7 @@ def test_process_frame_fires_detection_in_zone_candidate(monkeypatch):
     # Player parked in the left goal mouth all frames; slow, no motion burst.
     objects_per_frame = [[{"label": "player", "confidence": 0.9, "bbox": [30, 400, 130, 650]}]]
     fake = _FakeDetector(objects_per_frame)
-    monkeypatch.setattr(app_mod, "get_detector", lambda: fake)
+    monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: fake)
 
     saw_candidate = False
     for k in range(4):
@@ -240,7 +240,7 @@ def test_process_frame_no_candidate_when_center_field_and_no_trigger(monkeypatch
 
     objects_per_frame = [[{"label": "player", "confidence": 0.9, "bbox": [450, 300, 560, 700]}]]
     fake = _FakeDetector(objects_per_frame)
-    monkeypatch.setattr(app_mod, "get_detector", lambda: fake)
+    monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: fake)
 
     any_candidate = False
     for k in range(5):
