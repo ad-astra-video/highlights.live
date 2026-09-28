@@ -142,6 +142,10 @@ class AnalyzeRequest(BaseModel):
     gameHint: str = ""
     # PreferLabels delivered as a JSON array; a valid empty array clears.
     preferLabels: list[str] = Field(default_factory=list)
+    # Per-stream LoRA injection (ADAAAA-5324): optional ref to this stream's
+    # merged Florence-2 model dir. Carried on every /analyze (like gameHint)
+    # so a fresh or re-reserved session is configured before frames run.
+    loraRef: str = ""
 
 
 class AudioChunkRequest(BaseModel):
@@ -260,7 +264,10 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     """
     objects: list[dict] = []
     vocabulary: list[str] | None = None
-    detector = get_detector()
+    # Per-stream LoRA injection (ADAAAA-5324): a session with an attached
+    # adapter uses its own detector (base+LoRA-merged model); every other
+    # session keeps the shared base detector.
+    detector = get_detector(state.lora_ref or None)
     if detector is not None:
         # Real Florence-2: identify objects + bboxes and feed them to the tracker.
         # Scope the <OD> prompt to the session's closed vocabulary (preferLabels /
@@ -486,6 +493,10 @@ def handle_control(state, msg: dict) -> dict:
             if changed:
                 state.zone_trigger = None
                 _ensure_zone_trigger(state)
+        # Per-stream LoRA injection (ADAAAA-5324): reconfigure this session's
+        # adapter (or clear to base with empty string).
+        if "loraRef" in msg:
+            state.lora_ref = str(msg["loraRef"])
         # Ball-signal calibration (INC-2b): optional image->field homography as
         # a 9-number (row-major 3x3) array. A bad value is ignored (KEEP the
         # existing calibration) and reported, never fatal.
@@ -614,6 +625,10 @@ def create_app() -> FastAPI:
                 _ensure_zone_trigger(state)
         if req.preferLabels:
             state.prefer_labels = list(req.preferLabels)
+        # Per-stream LoRA injection (ADAAAA-5324): an attached adapter selects
+        # this stream's detector at frame time (florence.get_detector(lora_ref)).
+        if req.loraRef:
+            state.lora_ref = req.loraRef
         # Live path: the worker reserved a session with a control URL, so this
         # first proxied call opens this session's trickle channels and the rail
         # starts consuming video-in frames (plan §3.2/§3.5). The orchestrator

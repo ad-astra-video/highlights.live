@@ -104,3 +104,71 @@ def test_close_session():
     client.post("/app/analyze", json={"seq": 0, "timestamp": 0, "image": img}, headers={"X-Session-Id": "sess-close"})
     r = client.post("/app/session/close", headers={"X-Session-Id": "sess-close"})
     assert r.status_code == 200
+
+
+# --- Per-stream LoRA injection (ADAAAA-5324): /analyze carries loraRef -------
+
+LORA_SID = "sess-lora"
+
+
+def test_analyze_carries_lora_ref_into_session():
+    """A LoRA-attached stream: /analyze sets the session's lora_ref so
+    process_frame selects that stream's detector variant."""
+    import uuid
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    img = _frame_jpeg(_black())
+    r = TestClient(app).post(
+        "/app/analyze",
+        json={"seq": 0, "timestamp": 0.0, "image": img, "loraRef": "/models/lora-abc"},
+        headers={"X-Session-Id": sid},
+    )
+    assert r.status_code == 200
+    state = app.state.registry.get(sid)
+    assert state.lora_ref == "/models/lora-abc"
+
+
+def test_analyze_without_lora_keeps_base():
+    """No adapter attached -> session stays base (lora_ref empty): the
+    no-regression guarantee for non-fine-tuned streams."""
+    import uuid
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    img = _frame_jpeg(_black())
+    r = TestClient(app).post(
+        "/app/analyze",
+        json={"seq": 0, "timestamp": 0.0, "image": img},
+        headers={"X-Session-Id": sid},
+    )
+    assert r.status_code == 200
+    state = app.state.registry.get(sid)
+    assert state.lora_ref == ""
+
+
+def test_process_frame_uses_per_stream_detector(monkeypatch):
+    """process_frame selects the detector via get_detector(lora_ref): with an
+    attached adapter it MUST receive that ref (per-stream selection), and with
+    none it MUST receive None (base singleton)."""
+    import uuid
+    import app as _app
+
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    calls: list = []
+
+    class FakeDet:
+        def detect(self, rgb, vocabulary=None):
+            return []
+
+    monkeypatch.setattr(_app, "get_detector", lambda lora_ref=None: (calls.append(lora_ref) or FakeDet()))
+    # attached adapter -> selected with the ref
+    TestClient(app).post(
+        "/app/analyze",
+        json={"seq": 0, "timestamp": 0.0, "image": _frame_jpeg(_black()), "loraRef": "/models/lora-xyz"},
+        headers={"X-Session-Id": sid},
+    )
+    assert "/models/lora-xyz" in calls
+    # separate base stream -> selected with None
+    TestClient(app).post(
+        "/app/analyze",
+        json={"seq": 0, "timestamp": 0.0, "image": _frame_jpeg(_black())},
+        headers={"X-Session-Id": f"sess-{uuid.uuid4().hex[:8]}"},
+    )
+    assert None in calls
