@@ -716,3 +716,148 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
     await app.close();
   });
 });
+
+describe("VOD resumable/chunked upload rail (init/chunk/complete, ADAAAA-5714)", () => {
+  async function chunkPart(file: Buffer, filename = "part.mp4") {
+    const boundary = "----hlChunk" + Math.random().toString(36).slice(2);
+    const head = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: video/mp4\r\n\r\n`,
+      "utf8"
+    );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
+    return { payload: Buffer.concat([head, file, tail]), contentType: `multipart/form-data; boundary=${boundary}` };
+  }
+
+  it("init -> N chunks -> complete reassembles byte-for-byte and runs the pipeline", async () => {
+    const { app, cfg } = await buildTestApp({ VOD_CHUNK_BYTES: "4096" });
+    const token = await register(app, "chunk@test.dev", "password123");
+    const sent = readFileSync(videoPath);
+    const init = await app.inject({
+      method: "POST",
+      url: "/jobs/upload/init",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { filename: "chunked clip.mp4", size: sent.length, mime: "video/mp4", gameHint: "valorant" },
+    });
+    expect(init.statusCode).toBe(200);
+    const { uploadId, chunkBytes } = init.json();
+    expect(chunkBytes).toBe(4096);
+
+    let received = 0;
+    for (let s = 0; s < sent.length; s += 4096) {
+      const { payload, contentType } = await chunkPart(sent.subarray(s, Math.min(s + 4096, sent.length)));
+      const r = await app.inject({
+        method: "POST",
+        url: `/jobs/upload/${uploadId}/chunk`,
+        headers: { authorization: `Bearer ${token}`, "content-type": contentType },
+        payload,
+      });
+      expect(r.statusCode).toBe(200);
+      received = r.json().received;
+    }
+    expect(received).toBe(sent.length);
+
+    const done = await app.inject({
+      method: "POST",
+      url: "/jobs/upload/complete",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { uploadId, size: sent.length },
+    });
+    expect(done.statusCode).toBe(200);
+    const body = done.json();
+    expect(body.job.status).toBe("done");
+    expect(body.framesAnalyzed).toBeGreaterThan(0);
+    // Reassembled file is byte-for-byte identical to the source and runs the
+    // same extractFrames -> analyze -> clip pipeline as single-shot uploads.
+    const stored = path.join(cfg.dataDir, "uploads", uploadId, "chunked clip.mp4");
+    expect(statSync(stored).size).toBe(sent.length);
+    const hl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
+    expect(hl.length).toBe(1);
+    await app.close();
+  });
+
+  it("init rejects a declared size over the real cap with 413 (AC2)", async () => {
+    const { app } = await buildTestApp({ VOD_MAX_UPLOAD_BYTES: "2048" });
+    const token = await register(app, "cbig@test.dev", "password123");
+    const r = await app.inject({
+      method: "POST",
+      url: "/jobs/upload/init",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { filename: "big.mp4", size: 3000, mime: "video/mp4" },
+    });
+    expect(r.statusCode).toBe(413);
+    expect(r.json().error).toContain("File too large");
+    await app.close();
+  });
+
+  it("init rejects a non-video with 415", async () => {
+    const { app } = await buildTestApp();
+    const token = await register(app, "cnv@test.dev", "password123");
+    const r = await app.inject({
+      method: "POST",
+      url: "/jobs/upload/init",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { filename: "notes.txt", size: 100, mime: "text/plain" },
+    });
+    expect(r.statusCode).toBe(415);
+    await app.close();
+  });
+
+  it("complete before all chunks arrive is rejected as incomplete (400)", async () => {
+    const { app } = await buildTestApp({ VOD_CHUNK_BYTES: "4096" });
+    const token = await register(app, "cin@test.dev", "password123");
+    const sent = readFileSync(videoPath);
+    const init = (await app.inject({
+      method: "POST",
+      url: "/jobs/upload/init",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { filename: "part.mp4", size: sent.length, mime: "video/mp4" },
+    })).json();
+    // Send only the first chunk, then complete -> server knows we're short.
+    const { payload, contentType } = await chunkPart(sent.subarray(0, 4096));
+    await app.inject({
+      method: "POST",
+      url: `/jobs/upload/${init.uploadId}/chunk`,
+      headers: { authorization: `Bearer ${token}`, "content-type": contentType },
+      payload,
+    });
+    const done = await app.inject({
+      method: "POST",
+      url: "/jobs/upload/complete",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { uploadId: init.uploadId, size: sent.length },
+    });
+    expect(done.statusCode).toBe(400);
+    expect(done.json().error).toContain("incomplete");
+    await app.close();
+  });
+
+  it("chunks summing past the session's declared size abort with 413 and no job", async () => {
+    const { app, cfg } = await buildTestApp({ VOD_MAX_UPLOAD_BYTES: "2048" });
+    const token = await register(app, "cow@test.dev", "password123");
+    const init = (await app.inject({
+      method: "POST",
+      url: "/jobs/upload/init",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { filename: "big.mp4", size: 1500, mime: "video/mp4" },
+    })).json();
+    // One 2048-byte chunk exceeds the declared 1500-byte session.
+    const { payload, contentType } = await chunkPart(Buffer.alloc(2048, 0x61));
+    const r = await app.inject({
+      method: "POST",
+      url: `/jobs/upload/${init.uploadId}/chunk`,
+      headers: { authorization: `Bearer ${token}`, "content-type": contentType },
+      payload,
+    });
+    expect(r.statusCode).toBe(413);
+    expect(existsSync(path.join(cfg.dataDir, "uploads"))).toBe(false);
+    await app.close();
+  });
+
+  it("GET /config exposes the chunk size used by the resumable rail", async () => {
+    const { app } = await buildTestApp({ VOD_CHUNK_BYTES: "4096" });
+    const res = await app.inject({ method: "GET", url: "/config" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().vodChunkBytes).toBe(4096);
+    await app.close();
+  });
+});

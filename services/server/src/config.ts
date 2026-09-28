@@ -45,6 +45,15 @@ export interface ServerConfig {
    * the webapp mirrors it as a client-side pre-check. Keep at 2 GB — raising
    * it increases billed Livepeer GPU time per job (see ADAAAA-2983). */
   vodMaxUploadBytes: number;
+  /** Chunk size (bytes) for the resumable VOD upload rail. The deployed app is
+   * reached through a Cloudflare proxy/tunnel whose free plan caps each proxied
+   * request body at ~100 MB (ADAAAA-5704), so a single >100 MB upload is
+   * rejected by Cloudflare's own 413 before the origin. The webapp slices large
+   * files into `vodChunkBytes` parts, each well under the edge cap (64 MiB
+   * leaves headroom for multipart/header overhead), and posts them through
+   * /jobs/upload/:uploadId/chunk; the server reassembles into the same staged
+   * file the single-shot rail produces. 0 disables chunking. */
+  vodChunkBytes: number;
   ffmpegPath: string;
   gameHintDefault: string;
   /** Target window (seconds) around the flagged event for a delivered highlight
@@ -211,6 +220,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // all compare in bytes; only human-facing messages render units (api.formatBytes).
     // See the vodMaxUploadBytes prop comment for the default (2147483648 = 2 GB).
     vodMaxUploadBytes: Number(env.VOD_MAX_UPLOAD_BYTES ?? 2147483648),
+    vodChunkBytes: Number(env.VOD_CHUNK_BYTES ?? 64 * 1024 * 1024),
     ffmpegPath: env.FFMPEG_PATH ?? "ffmpeg",
     gameHintDefault: env.GAME_HINT ?? "unspecified",
     // ADAAAA-5059: trim the delivered highlight to a defined window around the

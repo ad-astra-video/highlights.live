@@ -4,6 +4,7 @@ import multipart from "@fastify/multipart";
 import path from "node:path";
 import { randomUUID, randomBytes } from "node:crypto";
 import { existsSync, statSync, readdirSync, createReadStream, createWriteStream } from "node:fs";
+import { rm } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -156,6 +157,17 @@ function sanitizeFilename(name: string): string {
   return base && base !== "." ? base : "upload.mp4";
 }
 
+/** Human-readable upload cap for 413 messages — reflects the ACTUAL configured
+ * cap (vorMaxUploadBytes), not a hardcoded "2 GB", matching the client's
+ * `formatBytes` wording so the edge-vs-app story stays self-consistent. */
+function formatUploadLimit(bytes: number): string {
+  const gb = bytes / 1024 / 1024 / 1024;
+  if (Number.isInteger(gb) && gb > 0) return `${gb} GB`;
+  const mb = bytes / 1024 / 1024;
+  if (Number.isInteger(mb)) return `${mb} MB`;
+  return `${Math.round(mb)} MB`;
+}
+
 /** Lightweight projection of a persisted dataset for list/summary responses:
  * the manifest arrays stay server-side for the detail route; the list carries
  * counts + imageRefs the curation UI needs to re-materialize a saved set. */
@@ -234,6 +246,41 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
   // session.
   const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string }>();
+
+  // --- Resumable VOD upload sessions (ADAAAA-5714) ---
+  // The single-shot POST /jobs/upload is served through a Cloudflare tunnel that
+  // caps each proxied request body at ~100 MB (free plan), so a 454 MB video is
+  // rejected by Cloudflare's own 413 before the origin. The webapp instead
+  // slices large files into `vodChunkBytes` parts and posts each through
+  // /jobs/upload/:uploadId/chunk; we append them here to the same staged file
+  // the single-shot rail produces and finalize exactly like it. Sessions are
+  // in-memory (the server is a single box) with an idle TTL sweep; a client that
+  // abandons mid-upload leaves a staging file that the sweep cleans up.
+  interface UploadSession {
+    ownerId: string;
+    filename: string;
+    mimetype: string;
+    size: number;
+    received: number;
+    stagePath: string;
+    dir: string;
+    finalPath: string;
+    gameHint: string;
+    preferLabels: string[];
+    sampleFps?: number;
+    lastChunkAt: number;
+  }
+  const uploadSessions = new Map<string, UploadSession>();
+  const UPLOAD_SESSION_TTL_MS = 30 * 60 * 1000;
+  function sweepUploadSessions(forceExpiredAt = Date.now()) {
+    for (const [id, s] of uploadSessions) {
+      if (forceExpiredAt - s.lastChunkAt > UPLOAD_SESSION_TTL_MS) {
+        uploadSessions.delete(id);
+        rm(s.stagePath, { force: true }).catch(() => {});
+        rm(s.dir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+  }
 
   async function isMediaHealthy(base: string): Promise<boolean> {
     try {
@@ -571,6 +618,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // rather than a hardcoded client copy.
   app.get("/config", async () => ({
     vodMaxUploadBytes: cfg.vodMaxUploadBytes,
+    // Chunk size (bytes) for the resumable upload rail; 0 = disabled. The webapp
+    // slices files larger than the Cloudflare edge cap into these parts.
+    vodChunkBytes: cfg.vodChunkBytes,
     rejectedClipTtlMs: cfg.rejectTtlMs,
   }));
 
@@ -1167,6 +1217,146 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     await store.patchJob(job.id, { status: "active" });
     try {
       return await runVodJob(job, finalPath, user, sub);
+    } catch (e: any) {
+      await store.patchJob(job.id, { status: "failed" });
+      return reply.code(500).send({ error: String(e?.message || e) });
+    }
+  });
+
+  // --- Resumable VOD upload rail (ADAAAA-5714) ---
+  // The single-shot POST /jobs/upload above caps the FILE at vodMaxUploadBytes,
+  // but the whole request body must cross the Cloudflare tunnel in one proxied
+  // POST, which the free plan cuts at ~100 MB (Cloudflare's own 413, before the
+  // origin is reached). The webapp instead slices files larger than that into
+  // `vodChunkBytes` parts and posts each through /jobs/upload/:uploadId/chunk;
+  // the server appends each part to the same staged file the single-shot rail
+  // produces, then /jobs/upload/complete lands it and runs the identical
+  // job+compute path. Auth/quota/billing gates are enforced at init (and the
+  // pipeline at complete), so no bytes persist and no compute queues for an
+  // unauthorized/over-quota session.
+  const uploadTooLargeMsg = () =>
+    `File too large (max ${formatUploadLimit(cfg.vodMaxUploadBytes)}). Paste a download URL instead to process it.`;
+
+  app.post<{ Body: any }>("/jobs/upload/init", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user;
+    // Sweep idle sessions left by abandoned clients before opening a new one.
+    sweepUploadSessions();
+    const { filename, size, mime, gameHint, preferLabels, sampleFps } = req.body ?? {};
+    const sub = await db.getSubscription(user.id);
+    try {
+      await entitlements.canSubmit(user, sub);
+    } catch (e: any) {
+      if (e instanceof QuotaExceededError) {
+        return reply.code(429).send({
+          error: "monthly clip quota used up — resets at the start of next month",
+          code: "quota_exceeded",
+          clipQuotaPeriod: entitlements.periodKey(),
+          clipQuotaLimit: entitlements.limitFor(sub),
+          clipQuotaRemaining: 0,
+        });
+      }
+      throw e;
+    }
+    try {
+      await billing.canCreateHighlight(user, sub);
+    } catch (e: any) {
+      if (e instanceof BillingRequiredError) {
+        return reply.code(402).send({ error: "free allowance used; subscribe to Pro to continue", upgrade: "/billing/checkout" });
+      }
+      throw e;
+    }
+    const total = Number(size);
+    if (!Number.isFinite(total) || total <= 0) return reply.code(400).send({ error: "upload size is required and must be positive" });
+    if (total > cfg.vodMaxUploadBytes) return reply.code(413).send({ error: uploadTooLargeMsg() });
+    if (total > 0 && isVideoUpload(mime, filename) === false) {
+      return reply.code(415).send({ error: "Unsupported file type — upload a video (mp4, mov, webm, mkv, or mpegts)." });
+    }
+    const jobId = randomUUID();
+    const safeName = sanitizeFilename(filename);
+    const stagePath = path.join(cfg.dataDir, `.upload-chunk-${jobId}.tmp`);
+    const dir = path.join(cfg.dataDir, "uploads", jobId);
+    const finalPath = path.join(dir, safeName);
+    let labels: string[] = [];
+    try {
+      const raw = Array.isArray(preferLabels) ? JSON.stringify(preferLabels) : preferLabels;
+      if (raw) labels = JSON.parse(String(raw));
+    } catch {
+      labels = [];
+    }
+    uploadSessions.set(jobId, {
+      ownerId: user.id,
+      filename: safeName,
+      mimetype: mime ?? "",
+      size: total,
+      received: 0,
+      stagePath,
+      dir,
+      finalPath,
+      gameHint: gameHint || cfg.gameHintDefault,
+      preferLabels: labels,
+      sampleFps: sampleFps !== undefined ? Number(sampleFps) : undefined,
+      lastChunkAt: Date.now(),
+    });
+    return { uploadId: jobId, chunkBytes: cfg.vodChunkBytes, vodMax: cfg.vodMaxUploadBytes };
+  });
+
+  app.post<{ Params: { uploadId: string } }>("/jobs/upload/:uploadId/chunk", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user;
+    const session = uploadSessions.get(req.params.uploadId);
+    if (!session || session.ownerId !== user.id) return reply.code(404).send({ error: "upload session not found" });
+    const data = await req.file();
+    if (!data) return reply.code(400).send({ error: "multipart file part required" });
+    const { file } = data;
+    // Whether this is a video was already validated once at init against the
+    // declared mime+filename; a chunk is opaque bytes appended to the staged
+    // file, so its cosmetic part-name is irrelevant here.
+    const counter = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        session.received += chunk.length;
+        if (session.received > session.size) {
+          cb(Object.assign(new Error("too_large"), { statusCode: 413 }) as any);
+          return;
+        }
+        cb(null, chunk);
+      },
+    });
+    try {
+      await pipeline(file, counter, createWriteStream(session.stagePath, { flags: "a" }));
+    } catch (e: any) {
+      if (e?.statusCode === 413 || e?.code === "FST_REQ_FILE_TOO_LARGE") {
+        return reply.code(413).send({ error: uploadTooLargeMsg() });
+      }
+      return reply.code(500).send({ error: String(e?.message || e) });
+    }
+    session.lastChunkAt = Date.now();
+    return { received: session.received };
+  });
+
+  app.post<{ Body: any }>("/jobs/upload/complete", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user;
+    const { uploadId } = req.body ?? {};
+    const session = uploadSessions.get(uploadId);
+    if (!session || session.ownerId !== user.id) return reply.code(404).send({ error: "upload session not found" });
+    if (session.received !== session.size) {
+      return reply.code(400).send({ error: `incomplete upload: received ${session.received} of ${session.size} bytes` });
+    }
+    const { mkdir, rename } = await import("node:fs/promises");
+    await mkdir(session.dir, { recursive: true });
+    await rename(session.stagePath, session.finalPath);
+    uploadSessions.delete(uploadId);
+    const sub = await db.getSubscription(user.id);
+    const job = await store.createJob({
+      id: uploadId,
+      ownerId: user.id,
+      source: "file",
+      sourceUrl: session.finalPath,
+      gameHint: session.gameHint,
+      preferLabels: session.preferLabels,
+      sampleFps: session.sampleFps,
+    });
+    await store.patchJob(job.id, { status: "active" });
+    try {
+      return await runVodJob(job, session.finalPath, user, sub);
     } catch (e: any) {
       await store.patchJob(job.id, { status: "failed" });
       return reply.code(500).send({ error: String(e?.message || e) });

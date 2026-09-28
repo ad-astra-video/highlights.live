@@ -1,4 +1,6 @@
 // Thin fetch client. Base is relative -> same origin (dev: vite proxies to :3000).
+import { chunkRanges, VOD_SINGLE_SHOT_MAX } from "./vodUpload";
+
 const TOKEN_KEY = "hl_token";
 
 // Client-side mirror of the server's VOD_MAX_UPLOAD_BYTES (default 2 GB). The
@@ -61,11 +63,45 @@ export interface UploadVideoOptions {
   onProgress?: (fraction: number) => void;
 }
 
+/** Build an ApiError from a failed fetch Response, redirecting to sign-in on a
+ * stale 401 (mirrors the inline handling in `api()`). */
+async function httpError(res: Response, token: string | null): Promise<ApiError> {
+  let body: any = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = await res.text();
+  }
+  if (res.status === 401 && token) {
+    setToken(null);
+    if (typeof window !== "undefined" && !window.location.pathname.startsWith("/auth")) {
+      window.location.assign("/auth");
+    }
+  }
+  const err = new Error(body?.error || `HTTP ${res.status}`) as ApiError;
+  err.status = res.status;
+  err.body = body;
+  return err;
+}
+
 // Multipart browser upload for the VOD "Upload / file" source. Uses
 // XMLHttpRequest (not fetch) so upload progress is observable; rejects with an
 // ApiError carrying `status` (e.g. 413 oversized, 415 non-video, 429/402) so
 // the dashboard can surface a clear, non-silent message.
+//
+// ADAAAA-5714: the deployed app sits behind a Cloudflare tunnel that caps each
+// proxied request body at ~100 MB, so a single upload larger than
+// VOD_SINGLE_SHOT_MAX is sliced into chunks and reassembled server-side via the
+// /jobs/upload/{init,chunk,complete} rail. Smaller files keep the one-request
+// multipart path unchanged.
 export function uploadVideo<T = any>({ file, gameHint, preferLabels, onProgress }: UploadVideoOptions): Promise<T> {
+  if (file.size > VOD_SINGLE_SHOT_MAX) {
+    return uploadVideoChunked<T>({ file, gameHint, preferLabels, onProgress });
+  }
+  return uploadVideoSingle<T>({ file, gameHint, preferLabels, onProgress });
+}
+
+function uploadVideoSingle<T = any>({ file, gameHint, preferLabels, onProgress }: UploadVideoOptions): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/jobs/upload");
@@ -111,6 +147,84 @@ export function uploadVideo<T = any>({ file, gameHint, preferLabels, onProgress 
     fd.append("file", file, file.name);
     fd.append("gameHint", gameHint);
     if (preferLabels && preferLabels.length > 0) fd.append("preferLabels", JSON.stringify(preferLabels));
+    xhr.send(fd);
+  });
+}
+
+/** Upload a file in <chunkBytes parts (each well under the Cloudflare ~100 MB
+ * edge cap) via the resumable /jobs/upload rail. Returns the same { job, … }
+ * shape as the single-shot upload once the server has reassembled + run it. */
+async function uploadVideoChunked<T = any>({ file, gameHint, preferLabels, onProgress }: UploadVideoOptions): Promise<T> {
+  const token = getToken();
+  const jsonHeaders: Record<string, string> = { "content-type": "application/json" };
+  if (token) jsonHeaders["authorization"] = `Bearer ${token}`;
+
+  const initRes = await fetch("/jobs/upload/init", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ filename: file.name, size: file.size, mime: file.type, gameHint, preferLabels }),
+  });
+  if (!initRes.ok) throw await httpError(initRes, token);
+  const init: { uploadId: string; chunkBytes: number } = await initRes.json();
+
+  const chunkBytes = init.chunkBytes && init.chunkBytes > 0 ? init.chunkBytes : file.size;
+  const ranges = chunkRanges(file.size, chunkBytes);
+  for (const { start, end } of ranges) {
+    const sent = await postChunk(init.uploadId, file.slice(start, end), file.name, token);
+    if (onProgress) onProgress(Math.min(1, (sent ?? end) / file.size));
+  }
+
+  const compRes = await fetch("/jobs/upload/complete", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ uploadId: init.uploadId, size: file.size }),
+  });
+  if (!compRes.ok) throw await httpError(compRes, token);
+  return (await compRes.json()) as T;
+}
+
+/** POST one blob as a multipart `file` part to the session append endpoint; the
+ * server replies with the cumulative bytes received. XHR (not fetch) so each
+ * part's upload progress is observable and the request is streamed. */
+function postChunk(uploadId: string, blob: Blob, name: string, token: string | null): Promise<number | undefined> {
+  return new Promise<number | undefined>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/jobs/upload/${uploadId}/chunk`);
+    if (token) xhr.setRequestHeader("authorization", `Bearer ${token}`);
+    xhr.onload = () => {
+      let body: any = null;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        /* non-JSON error body */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body?.received);
+        return;
+      }
+      if (xhr.status === 401 && token) {
+        setToken(null);
+        if (typeof window !== "undefined" && !window.location.pathname.startsWith("/auth")) {
+          window.location.assign("/auth");
+        }
+      }
+      const err = new Error(body?.error || `HTTP ${xhr.status}`) as ApiError;
+      err.status = xhr.status;
+      err.body = body;
+      reject(err);
+    };
+    xhr.onerror = () => {
+      const err = new Error("Upload failed — check your connection and try again.") as ApiError;
+      err.status = 0;
+      reject(err);
+    };
+    xhr.ontimeout = () => {
+      const err = new Error("Upload timed out — try again or paste a download URL instead.") as ApiError;
+      err.status = 0;
+      reject(err);
+    };
+    const fd = new FormData();
+    fd.append("file", blob, name);
     xhr.send(fd);
   });
 }
