@@ -288,20 +288,31 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         boxes = foreground_blobs(gray, state.prev_gray)
         state.prev_gray = gray
 
-    if isinstance(state.tracker, HybridTracker) and state.last_rgb is not None:
-        if state.tracker._detect is None:
-            _d = detector
-            _v = (
-                resolve_vocabulary(state.game_hint, state.prefer_labels)
-                if detector is not None
-                else None
-            )
-            state.tracker._detect = lambda rgb, _d=_d, _v=_v: [
-                _norm_bbox(o["bbox"])
-                for o in (_d.detect(rgb, vocabulary=_v) if _d else [])
-                if o.get("bbox")
-            ]
-        tracks = state.tracker.step_frame(state.last_rgb, timestamp, boxes)
+    if isinstance(state.tracker, HybridTracker):
+        # HybridTracker has NO `.step()` — only `step_frame()`. The seed
+        # /analyze that opens the live session can carry an empty image
+        # (`image:""` when MEDIA_SEED_IMAGE_B64 is unset, ADAAAA-5488), which
+        # leaves `state.last_rgb` None and previously fell into the else branch
+        # calling the nonexistent `.step()` -> AttributeError at provision time.
+        # Guard on the tracker type alone so a HybridTracker always routes to
+        # the step_frame path; a missing/empty frame has no content to advance,
+        # so ack it with empty tracks instead of crashing the live ingester.
+        if state.last_rgb is None:
+            tracks = []
+        else:
+            if state.tracker._detect is None:
+                _d = detector
+                _v = (
+                    resolve_vocabulary(state.game_hint, state.prefer_labels)
+                    if detector is not None
+                    else None
+                )
+                state.tracker._detect = lambda rgb, _d=_d, _v=_v: [
+                    _norm_bbox(o["bbox"])
+                    for o in (_d.detect(rgb, vocabulary=_v) if _d else [])
+                    if o.get("bbox")
+                ]
+            tracks = state.tracker.step_frame(state.last_rgb, timestamp, boxes)
     else:
         tracks = state.tracker.step(boxes, timestamp)
     state.seq = seq
