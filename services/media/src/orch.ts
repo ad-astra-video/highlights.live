@@ -157,9 +157,21 @@ export class MediaOrchestrator {
     try {
       const list = await discover();
       if (Array.isArray(list) && list.length) {
-        const withPerceive = list.find((o) => o.runners?.some((r) => r.app === this.app));
-        const chosen = withPerceive ?? list[0];
-        if (chosen?.address) return chosen.address.replace(/\/$/, "");
+        // Only start the session against a DISCOVERED orchestrator when it
+        // explicitly advertises the perceive runner. The signer's
+        // /discover-orchestrators can return remote fleet orchestrators that
+        // carry no perceive runner (e.g. comfystream-only boxes); blindly
+        // falling back to list[0] then reserves against a box that answers
+        // 404 "runner not found" and breaks every streaming session before any
+        // WebRTC/signaling happens. Always prefer the configured local
+        // orchBase (the self-hosted perceive orchestrator) unless discovery
+        // yields an entry that actually advertises perceive.
+        const withPerceive = list.find((o) =>
+          o?.runners?.some((r) => r?.app === this.app)
+        );
+        if (withPerceive?.address) {
+          return withPerceive.address.replace(/\/$/, "");
+        }
       }
     } catch {
       /* discovery unavailable — fall back to configured orchBase */

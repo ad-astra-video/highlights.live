@@ -170,6 +170,32 @@ describe("MediaOrchestrator on-chain: 402 -> paid reserve -> open channels", () 
     expect(paymentReserves[0].url.startsWith("http://fallback-orch")).toBe(true);
   });
 
+  it("falls back to the configured orchBase when discovery returns NO perceive-advertising orchestrator (regression ADAAAA-5343)", async () => {
+    const { fn, log } = fakeFetch({ paidReserve: false, challengeBody: CHALLENGE });
+    vi.stubGlobal("fetch", fn);
+
+    const orch = new MediaOrchestrator({
+      orchBase: "http://selfhosted-orch", // the self-hosted perceive orchestrator
+      signer: fakeSigner,
+      // Discovery returns REMOTE fleet orchestrators that carry no perceive
+      // runner (e.g. comfystream-only boxes). Before the fix, the client
+      // blindly reserved against list[0], which answered 404 "runner not
+      // found" and broke every streaming session. It must instead use the
+      // configured local orchBase, where the perceive runner lives.
+      discoverOrchestrators: async () => [
+        { address: "http://remote-fleet-1", runners: [{ app: "comfystream" } as any] },
+        { address: "http://remote-fleet-2", runners: [{ app: "comfystream/ffmpeg" } as any] },
+      ],
+    });
+
+    await orch.provision();
+
+    const paymentReserves = log.filter((c) => c.url.endsWith("/apps/highlights-perceive/session"));
+    expect(paymentReserves).toHaveLength(2);
+    // Session start went to the configured LOCAL orchBase, not a remote one.
+    expect(paymentReserves[0].url.startsWith("http://selfhosted-orch")).toBe(true);
+  });
+
   it("fails hard with a clear error when a 402 challenge carries no payment_params", async () => {
     const { fn } = fakeFetch({ paidReserve: false, challengeBody: {} }); // no payment_params/manifest_id
     vi.stubGlobal("fetch", fn);
