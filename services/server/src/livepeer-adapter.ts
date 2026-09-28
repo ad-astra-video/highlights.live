@@ -156,7 +156,7 @@ export class OrchestratorAdapter implements PipelineClient {
   }
   async analyze(
     sessionId: string,
-    frame: { seq: number; timestamp: number; imageB64: string },
+    frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
     opts?: { gameHint?: string; preferLabels?: string[] }
   ): Promise<ObservationResult> {
     const { status, data } = await this.client.appCall<any>(sessionId, "analyze", {
@@ -345,7 +345,7 @@ export class DirectAdapter implements PipelineClient {
   }
   async analyze(
     sessionId: string,
-    frame: { seq: number; timestamp: number; imageB64: string },
+    frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
     opts?: { gameHint?: string; preferLabels?: string[] }
   ): Promise<ObservationResult> {
     const r = await fetch(`${this.cfg.perceiveUrl}/app/analyze`, {

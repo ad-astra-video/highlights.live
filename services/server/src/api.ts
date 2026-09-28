@@ -1678,7 +1678,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   app.get("/admin/dataset-purge-log", { preHandler: adminReq }, async () => ({
     entries: await db.listDatasetPurgeLog(200),
   }));
-ndler: authReq }, async (req: any) => {
+  app.get("/highlights", { preHandler: authReq }, async (req: any) => {
     const user = req.user;
     const all = store.allHighlights();
     return { highlights: user.role === "admin" ? all : all.filter((h) => h.ownerId === user.id) };

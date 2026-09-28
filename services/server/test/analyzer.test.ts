@@ -62,7 +62,7 @@ describe("analyzeJob", () => {
         cuts.push(ts);
         return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
       },
-      { jobId: "job-1", clipBeforeS: 4, clipAfterS: 4 }
+      { jobId: "job-1", clipBeforeS: 4, clipAfterS: 4, gameHint: "" }
     );
     expect(log).toEqual(["reserve", "analyze", "analyze", "analyze", "stop"]);
     expect(outcome.sessionId).toBe("sess-x");
@@ -85,7 +85,7 @@ describe("analyzeJob", () => {
       cuts.push(ts);
       return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
     };
-    const outcome = await analyzeJob(client, frames(4), cut, { jobId: "j", clipBeforeS: 4, clipAfterS: 4 });
+    const outcome = await analyzeJob(client, frames(4), cut, { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" });
     expect(cuts).toEqual([2]);
     expect(outcome.highlights).toHaveLength(1);
     expect(outcome.highlights[0]).toMatchObject({ jobId: "j", eventType: "KILL", status: "pending" });
@@ -117,6 +117,7 @@ describe("analyzeJob", () => {
       jobId: "j",
       clipBeforeS: 4,
       clipAfterS: 4,
+      gameHint: "",
     });
     // ball velocity/possession from the CandidateEvent fold into reaction
     // evidence; humansInMotion = tracked-object count (visual celebration proxy).
@@ -258,7 +259,7 @@ describe("analyzeJob", () => {
         cuts.push(ts);
         return { clipId: "c", clipUri: "u" };
       },
-      { jobId: "j", clipBeforeS: 4, clipAfterS: 4 }
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" }
     );
     expect(cuts).toEqual([]);
     expect(outcome.highlights).toHaveLength(0);
