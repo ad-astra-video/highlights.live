@@ -392,8 +392,8 @@ def test_process_frame_track_carries_gated_label_not_unknown(monkeypatch):
     )
 
     detector = _LabeledFakeDetector(text)
-    monkeypatch.setattr("app.get_detector", lambda: detector)
-    monkeypatch.setattr(florence, "get_detector", lambda: detector)
+    monkeypatch.setattr("app.get_detector", lambda _ref=None: detector)
+    monkeypatch.setattr(florence, "get_detector", lambda _ref=None: detector)
 
     reg = SessionRegistry(max_sessions=1)
     state = reg.get_or_create("sess-5056", "", "")
@@ -427,8 +427,8 @@ def test_process_frame_no_vocabulary_keeps_open_set_labels(monkeypatch):
     from app.tracker import IoUTracker
 
     detector = _LabeledFakeDetector("<s>person<loc_100><loc_200><loc_300><loc_400>")
-    monkeypatch.setattr("app.get_detector", lambda: detector)
-    monkeypatch.setattr(florence, "get_detector", lambda: detector)
+    monkeypatch.setattr("app.get_detector", lambda _ref=None: detector)
+    monkeypatch.setattr(florence, "get_detector", lambda _ref=None: detector)
 
     reg = SessionRegistry(max_sessions=1)
     state = reg.get_or_create("sess-5056b", "", "")
@@ -438,3 +438,63 @@ def test_process_frame_no_vocabulary_keeps_open_set_labels(monkeypatch):
     obs, _ = process_frame(state, 1, 1.0, "ix.")
     tracks = obs["tracks"]
     assert tracks and tracks[0]["label"] == "person"
+
+
+# --- ADAAAA-5700: "floating on nothing" — a label must never surface on an
+# invisible / degenerate box ------------------------------------------------
+#
+# The SAM path feeds mask-derived boxes straight into the tracker WITHOUT the
+# _norm_bbox guard Florence detections get. A sparse/sliver mask (e.g. a
+# 1-pixel blob) yields a sub-pixel bbox that renders as an invisible (or
+# zero-area) box while the label overlay still draws -> a label "floating on
+# nothing". The emission boundary normalizes every surfaced track bbox through
+# _norm_bbox, so any box a user sees has a minimum visible area and every label
+# is anchored to its box.
+
+
+
+class _BareIoUTrackerStep:
+    """Drive IoUTracker directly with a degenerate box, exactly as the SAM
+    propagation path does (SamBackend.get -> IoUTracker.step, no _norm_bbox)."""
+
+
+def test_process_frame_anchors_label_to_visible_box_not_floating(monkeypatch):
+    """A track seeded from a degenerate (sub-pixel) box must surface a bbox with
+    a minimum visible area, so the UI never draws a label on an invisible box
+    ("floating on nothing")."""
+    from app import process_frame
+    from app.session import SessionRegistry
+    from app.tracker import IoUTracker
+
+    # A degenerate sub-pixel box: a 1-pixel mask on a 2000x2000 frame maps to
+    # ~0.0005 x 0.0005, below _norm_bbox's 0.005 minimum side. Un-normalized
+    # SAM boxes arrive like this, straight into the tracker with no _norm_bbox
+    # guard, and would surface as an invisible box -> label floating on nothing.
+    degenerate = (0.5, 0.5, 0.5005, 0.5005)
+
+    class _EmptyDetector:
+        def detect(self, image, vocabulary=None):
+            return []  # no new Florence detections this frame; seed only
+
+        def load(self):
+            pass
+
+    monkeypatch.setattr(florence, "get_detector", lambda _ref=None: _EmptyDetector())
+    monkeypatch.setattr("app.get_detector", lambda _ref=None: _EmptyDetector())
+
+    reg = SessionRegistry(max_sessions=1)
+    state = reg.get_or_create("sess-5700-floating", "", "")
+    state.last_rgb = np.zeros((100, 100, 3), dtype=np.uint8)
+    state.tracker = IoUTracker(capacity=2)
+    tr = state.tracker.seed(degenerate, kind="player", label="player")
+    assert tr is not None
+
+    obs, _ = process_frame(state, 1, 1.0, "ix.")
+    tracks = obs["tracks"]
+    assert tracks, "expected the seeded track to surface"
+    bx = tracks[0]["bbox"]
+    # The surfaced box must have a visible area (>= _norm_bbox min 0.005 side),
+    # so it never renders as an invisible sliver with a floating label.
+    assert bx[2] - bx[0] >= 0.005, f"box too thin: {bx}"
+    assert bx[3] - bx[1] >= 0.005, f"box too short: {bx}"
+    assert tracks[0].get("label") or tracks[0]["kind"], "label must be present to anchor"
