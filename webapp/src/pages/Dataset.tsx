@@ -38,6 +38,8 @@ import {
   saveSession,
   type DatasetSessionState,
 } from "../lib/datasetSession";
+import { FineTuneHelp } from "../components/FineTuneHelp";
+
 
 const PALETTE: Record<string, string> = {
   player: "#22d3ee",
@@ -581,6 +583,7 @@ export function Dataset() {
         {/* C2 — workflow controls: your curated work-in-progress auto-saves to
             your browser, so you can Stop and come back / reload and Resume. */}
         <div className="flex flex-wrap items-center gap-2">
+          <FineTuneHelp page="dataset" />
           {hasWork && (
             <>
               <button className="btn-neon btn-ghost" onClick={handleStop}>
@@ -627,7 +630,7 @@ export function Dataset() {
       )}
 
       {/* Ingest */}
-      <section className="card p-5">
+      <section id="extract" className="card p-5">
         <h2 className="mb-3 text-lg font-bold">1 · Ingest a VOD clip</h2>
         <div className="flex gap-3">
           <input
@@ -665,7 +668,7 @@ export function Dataset() {
       </section>
 
       {/* Auto-seed */}
-      <section className="card p-5">
+      <section id="seed" className="card p-5">
         <h2 className="mb-3 text-lg font-bold">2 · Auto-seed from base detector (optional)</h2>
         <div className="flex gap-3">
           <textarea
@@ -768,7 +771,7 @@ export function Dataset() {
         </div>
 
         {/* Coverage dashboard */}
-        <div className="card p-5">
+        <div id="coverage" className="card p-5">
           <h2 className="mb-3 text-lg font-bold">4 · Class coverage</h2>
           <div className="flex flex-col gap-2 text-xs">
             {SOCCER_TRAINING_LABELS.map((l) => {
@@ -803,7 +806,7 @@ export function Dataset() {
       </section>
 
       {/* Export */}
-      <section className="card p-5">
+      <section id="export" className="card p-5">
         <h2 className="mb-3 text-lg font-bold">5 · Export train/val manifests</h2>
         {!exportOut || !frames.length ? (
           <p className="text-sm text-mut">Extract + accept frames first.</p>
