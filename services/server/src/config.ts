@@ -20,6 +20,12 @@ export interface ServerConfig {
    * frames route browser -> media-server WS -> orchestrator video-in instead of
    * the server's /jobs/:id/ingest HTTP rail. */
   mediaServerUrl?: string;
+  /** Public origin of the standalone media server (e.g. https://highlights-media.dpn.gg)
+   *  that the BROWSER can reach for WebRTC signaling (offer/ICE) + WS ingest.
+   *  MEDIA_SERVER_URL is the docker-internal address the control plane uses to
+   *  provision/host; this is the LB/Cloudflare front the user's browser dials.
+   *  When unset, the browser-facing origin falls back to MEDIA_SERVER_URL (dev). */
+  mediaPublicBaseUrl?: string;
   /** go-livepeer remote signer base URL (on-chain). Internal-only on Railway. */
   signerUrl?: string;
   /** Shared bearer token the remote signer requires (sealed SIGNER_AUTH_TOKEN).
@@ -200,6 +206,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     decideUrl: env.DECIDE_URL,
     trainUrl: env.TRAIN_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
+    mediaPublicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,
     signerUrl: env.SIGNER_URL,
     signerAuthToken: env.SIGNER_AUTH_TOKEN,
     payerAddress: env.PAYER_ADDRESS,

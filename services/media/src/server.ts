@@ -111,6 +111,29 @@ export class MediaServer {
     const app = Fastify({ logger: false });
     await app.register(websocket, { options: { maxPayload: 4 * 1024 * 1024 } });
 
+    // CORS for the browser's WebRTC signaling (offer / ICE). The browser POSTs
+    // to the PUBLIC media origin (e.g. https://highlights-media.dpn.gg) from the
+    // webapp's own origin while the control plane talks to the media server on a
+    // docker-internal address — so the signaling fetches are cross-origin and,
+    // without an Access-Control-Allow-Origin + preflight handler, the browser
+    // rejects them with `TypeError: Failed to fetch` (ADAAAA-5776). Reflect the
+    // request origin (the control plane's webapp serves on its own origin) and
+    // answer OPTIONS so the fetch's preflight succeeds. The WS and session
+    // routes are unaffected (WS has no CORS; the control plane is same-origin).
+    app.addHook("onRequest", async (req, reply) => {
+      const origin = req.headers.origin;
+      if (origin) {
+        reply.header("Access-Control-Allow-Origin", origin);
+        reply.header("Vary", "Origin");
+      }
+      reply.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+      reply.header("Access-Control-Allow-Headers", "Content-Type,Authorization");
+      reply.header("Access-Control-Max-Age", "86400");
+      if (req.method === "OPTIONS") {
+        reply.code(204).send();
+      }
+    });
+
     // Provision a perceive session for a stream. Returns the WS path the
     // browser connects to.
     app.post<{ Body: { jobId?: string } }>("/sessions", async (_, reply) => {

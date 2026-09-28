@@ -227,6 +227,11 @@ services:
       # Media-path (b): the browser streams frames to the media server instead
       # of the server's HTTP /ingest when this is set.
       - MEDIA_SERVER_URL=${MEDIA_SERVER_URL:-http://media:4070}
+      # Browser-reachable LB/Cloudflare front of the media tier. The control
+      # plane returns this (not the docker-internal MEDIA_SERVER_URL) as the
+      # browser's WebRTC signaling origin, and the media server emits CORS so a
+      # cross-origin fetch to it succeeds (ADAAAA-5776).
+      - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-https://highlights-media.dpn.gg}
       # Live-payment durability (ADAAAA-3932): the SERVER is the VOD payer — it
       # reserves perceive/decide sessions and, on the orchestrator's 402
       # challenge, forwards the payment_params to the remote signer for tickets

@@ -255,14 +255,45 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   //   - if the media node that served the session goes DOWN, isMediaHealthy()
   //     fails and we re-provision on a healthy node, seamlessly re-routing the
   //     browser to a fresh wsUrl (no user action needed).
+  // The browser-facing origin the USER's browser should use for WebRTC
+  // signaling (offer / ICE) + WS ingest against the media server. The control
+  // plane provisions/health-checks MEDIA_SERVER_URL (a docker-internal host the
+  // browser cannot reach); this returns the operator-configured public origin
+  // (e.g. https://highlights-media.dpn.gg) so a cross-origin fetch from the
+  // webapp actually succeeds instead of `TypeError: Failed to fetch`
+  // (ADAAAA-5776). Falls back to the public WS URL's origin, else the internal
+  // origin (dev where they coincide).
+  function browserMediaOrigin(wsUrl: string, fallbackInternal: string): string {
+    if (cfg.mediaPublicBaseUrl) return cfg.mediaPublicBaseUrl.replace(/\/+$/, "");
+    if (wsUrl) {
+      try {
+        const u = new URL(wsUrl);
+        if (u.protocol === "wss:") u.protocol = "https:";
+        else if (u.protocol === "ws:") u.protocol = "http:";
+        return u.origin;
+      } catch {
+        /* fall through to fallback */
+      }
+    }
+    return fallbackInternal;
+  }
+
   async function provisionMedia(jobId: string): Promise<{ wsUrl: string; mediaSessionId: string; mediaOrigin: string }> {
     if (!cfg.mediaServerUrl) throw new Error("media server not configured (MEDIA_SERVER_URL)");
-    const mediaOrigin = cfg.mediaServerUrl.replace(/\/+$/, "");
+    // Control-plane (internal) origin: provisioning + health checks. Never
+    // returned to the browser — it is a docker-internal hostname the browser
+    // cannot resolve. The browser instead gets mediaPublicBaseUrl (or the
+    // origin of the public wsUrl) for signaling.
+    const internalOrigin = cfg.mediaServerUrl.replace(/\/+$/, "");
     const existing = await db.getMediaSession(jobId);
     if (existing && existing.status === "active" && (await isMediaHealthy(existing.mediaOrigin))) {
-      return { wsUrl: existing.wsUrl, mediaSessionId: existing.sessionId, mediaOrigin: existing.mediaOrigin };
+      return {
+        wsUrl: existing.wsUrl,
+        mediaSessionId: existing.sessionId,
+        mediaOrigin: browserMediaOrigin(existing.wsUrl, existing.mediaOrigin),
+      };
     }
-    const r = await fetch(`${mediaOrigin}/sessions`, {
+    const r = await fetch(`${internalOrigin}/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jobId }),
@@ -271,15 +302,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const body: any = await r.json();
     // Prefer the media server's own full URL (LB-routable); fall back to
     // deriving ws:// from MEDIA_SERVER_URL + the returned path.
-    const base = mediaOrigin.replace(/^http/, "ws");
+    const base = internalOrigin.replace(/^http/, "ws");
     const wsUrl = body.wsUrl ?? `${base}${body.wsPath}`;
     const now = new Date().toISOString();
+    // Store the internal origin in the DB: isMediaHealthy() reuses it to
+    // health-check the node from the control plane. browserMediaOrigin() maps
+    // it to the browser-reachable origin on the way out.
     await db.setMediaSession({
       jobId,
       sessionId: body.sessionId,
       streamId: body.streamId ?? "",
       wsUrl,
-      mediaOrigin,
+      mediaOrigin: internalOrigin,
       status: "active",
       createdAt: now,
       updatedAt: now,
@@ -290,7 +324,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       bj.mediaSessionId = body.sessionId;
       bj.mediaWsUrl = wsUrl;
     }
-    return { wsUrl, mediaSessionId: body.sessionId, mediaOrigin };
+    return { wsUrl, mediaSessionId: body.sessionId, mediaOrigin: browserMediaOrigin(wsUrl, internalOrigin) };
   }
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));

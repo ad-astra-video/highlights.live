@@ -162,6 +162,13 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     if (stoppingRef.current || !streamRef.current) return;
     if (rcRef.current >= MAX_RECONNECT) {
       modeRef.current = "ingest";
+      // Media path (RTC + WS) is unreachable. Fall back to the HTTP /ingest
+      // rail but TELL the user instead of silently letting the console spam
+      // `Failed to fetch` (ADAAAA-5776).
+      setError(
+        "Live streaming to the media server could not be established (RTC + reconnects exhausted). " +
+          "Falling back to a degraded frame-upload mode; if highlights fail, stop and retry."
+      );
       return;
     }
     const delay = Math.min(800 * 2 ** rcRef.current, 5000);
