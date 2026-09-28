@@ -389,7 +389,10 @@ export type StageAMetricsSnapshot = z.infer<typeof StageAMetricsSnapshotSchema>;
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
-  source: z.enum(["file", "rtmp", "webrtc", "screenshare", "browser"]),
+  // `file-sim` = loop a local file at real-time rate as a synthetic live source
+  // (LiveIngest kind `file-sim`); used by QA/dev to run the live pipeline
+  // deterministically without an RTMP encoder or a display (ADAAAA-5777).
+  source: z.enum(["file", "rtmp", "webrtc", "screenshare", "browser", "file-sim"]),
   sourceUrl: z.string().optional(),
   gameHint: z.string().optional(),
   preferLabels: z.array(z.string()).default([]),

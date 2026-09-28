@@ -355,7 +355,9 @@ export function Highlights() {
                 </button>
               </div>
             )}
-            {liveJob && liveStatus !== "done" && liveStatus !== "failed" && <LiveConsole jobId={liveJob} />}
+            {liveJob && liveStatus !== "done" && liveStatus !== "failed" && (
+              <LiveConsole jobId={liveJob} onHighlight={() => refreshHighlights().catch(() => {})} />
+            )}
             {!liveJob && (
               <>
                 <button
