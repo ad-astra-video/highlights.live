@@ -250,3 +250,57 @@ def test_process_frame_attaches_ball_signal_to_candidate(monkeypatch):
             assert isinstance(cand["ballPossession"]["possessingPlayerId"], str)
             break
     assert saw_candidate, "expected at least one candidate from the fast-moving player"
+
+
+# ------------------------------------------------------- ADAAAA-5488 empty-seed fix
+def test_process_frame_empty_seed_hybridtracker_no_crash(monkeypatch):
+    """ADAAAA-5488: a session running PERCEIVE_TRACKER=florence_sam uses a
+    HybridTracker, which has NO `.step()` (only `step_frame`). The live-provision
+    seed /analyze carries an EMPTY image (`image:""` when MEDIA_SEED_IMAGE_B64 is
+    unset) so `last_rgb` stays None — this previously fell into the `.step()`
+    branch and crashed every provision. It must now ack the empty frame with an
+    empty observation instead of raising AttributeError.
+    """
+    from app.sam_tracker import HybridTracker
+    from app.session import SessionState
+
+    monkeypatch.setattr(
+        app_mod,
+        "get_detector",
+        lambda lora_ref=None: _FakeDetector(
+            [[{"label": "player", "confidence": 0.9, "bbox": [10.0, 10.0, 40.0, 60.0]}]]
+        ),
+    )
+    state = SessionState(session_id="s-seed1")
+    state.tracker = HybridTracker(backend=None)  # no SAM backend -> pure IoU degrades
+    # last_rgb deliberately stays None (empty seed image); do NOT set it.
+
+    # Must not raise AttributeError: 'HybridTracker' object has no attribute 'step'
+    obs, cand = process_frame(state, seq=0, timestamp=0.0, image_b64="")
+    assert obs["type"] == "observation"
+    assert obs["tracks"] == []  # empty channel-open handshake -> empty observation
+    assert cand is None
+
+
+def test_process_frame_real_frame_hybridtracker_steps(monkeypatch):
+    """ADAAAA-5488: the tracker-type guard must not regress the real-frame path —
+    with `last_rgb` set a HybridTracker still routes to `step_frame` and produces
+    tracks (regression guard for the fix).
+    """
+    from app.sam_tracker import HybridTracker
+    from app.session import SessionState
+
+    monkeypatch.setattr(
+        app_mod,
+        "get_detector",
+        lambda lora_ref=None: _FakeDetector(
+            [[{"label": "player", "confidence": 0.9, "bbox": [10.0, 10.0, 40.0, 60.0]}]]
+        ),
+    )
+    state = SessionState(session_id="s-seed2")
+    state.tracker = HybridTracker(backend=None)
+    state.last_rgb = np.full((64, 64, 3), 128, np.uint8)  # a real decodable seed
+
+    obs, cand = process_frame(state, seq=1, timestamp=1.0, image_b64="")
+    assert obs["type"] == "observation"
+    assert len(obs["tracks"]) > 0  # HybridTracker stepped a real frame
