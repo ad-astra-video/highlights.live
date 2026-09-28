@@ -205,6 +205,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     payerAddress: env.PAYER_ADDRESS,
     dataDir: env.DATA_DIR ?? "data",
     perceiveClipRoot: env.PERCEIVE_CLIP_ROOT ?? "/data",
+    // VOD_MAX_UPLOAD_BYTES is parsed and compared STRICTLY in bytes (Number(), no
+    // unit coercion — a value like "2048" means 2048 bytes, never 2 GB). The cap,
+    // the multipart fileSize margin, the upload byte counter and the client pre-check
+    // all compare in bytes; only human-facing messages render units (api.formatBytes).
+    // See the vodMaxUploadBytes prop comment for the default (2147483648 = 2 GB).
     vodMaxUploadBytes: Number(env.VOD_MAX_UPLOAD_BYTES ?? 2147483648),
     ffmpegPath: env.FFMPEG_PATH ?? "ffmpeg",
     gameHintDefault: env.GAME_HINT ?? "unspecified",

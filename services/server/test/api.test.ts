@@ -539,10 +539,45 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
     });
     expect(res.statusCode).toBe(413);
     expect(res.json().error).toContain("File too large");
+    // ADAAAA-5698: the 413 must report the ACTUAL configured cap (2048 B -> "2 KB"),
+    // never a hardcoded "2 GB" — a lowered cap must not masquerade as the 2 GB default.
+    expect(res.json().error).toContain("2 KB");
+    expect(res.json().error).not.toContain("2 GB");
     // No job was created, no upload dir persisted, no compute (no highlights).
     expect(existsSync(path.join(cfg.dataDir, "uploads"))).toBe(false);
     const hl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
     expect(hl.length).toBe(0);
+    await app.close();
+  });
+
+  it("accepts a real below-cap large upload (no false 413) — ADAAAA-5698", async () => {
+    // Regression for the 454MB-under-2GB report: with a cap set just above the
+    // file, a genuinely large near-cap upload must NOT be falsely rejected. The
+    // server counter only 413s when bytes > cap, and the multipart fileSize margin
+    // sits above the cap, so a below-cap file always passes through byte-for-byte.
+    const sent = readFileSync(bigVideoPath);
+    expect(sent.length).toBeGreaterThan(1024 * 1024); // genuinely "large" fixture
+    const cap = sent.length + 4096; // near-cap, still under the limit
+    const { app, cfg } = await buildTestApp({ VOD_MAX_UPLOAD_BYTES: String(cap) });
+    expect(cfg.vodMaxUploadBytes).toBe(cap); // parsed strictly in bytes
+    const token = await register(app, "nearcap@test.dev", "password123");
+    const { payload, contentType } = await multipart({
+      file: sent,
+      filename: "nearcap.mp4",
+      mime: "video/mp4",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs/upload",
+      headers: { authorization: `Bearer ${token}`, "content-type": contentType },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.framesAnalyzed).toBeGreaterThan(0);
+    const stored = path.join(cfg.dataDir, "uploads", body.job.id, "nearcap.mp4");
+    expect(existsSync(stored)).toBe(true);
+    expect(statSync(stored).size).toBe(sent.length); // no truncation of a below-cap file
     await app.close();
   });
 

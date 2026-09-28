@@ -50,6 +50,20 @@ import { createTrainService, TrainValidationError } from "./train";
 import { inspectCuratedManifests, loadCuratedManifest } from "./train-curated";
 import { prepareArtifactDownload } from "./train-artifacts";
 
+/** Human-readable size for the oversized-file message, e.g. "2 GB". Byte-exact:
+ * 1024-based units, so it always renders the configured cap truthfully. Mirrors
+ * `formatBytes` in webapp/src/lib/api.ts so the client pre-check and the server
+ * 413 render the SAME string for the SAME cap (ADAAAA-5698). */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const v = bytes / Math.pow(1024, i);
+  const rounded = Math.round(v);
+  const str = v >= 10 || i === 0 || v === rounded ? String(rounded) : v.toFixed(1);
+  return `${str} ${units[i]}`;
+}
+
 /** Resolve the VOD sampling fps from the runner's measured capability (when
  * reachable directly) else the configured interval.
  *
@@ -1120,8 +1134,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     } catch (e: any) {
       await rm(stagePath, { force: true }).catch(() => {});
       if (e?.statusCode === 413 || e?.message === "too_large" || e?.code === "FST_REQ_FILE_TOO_LARGE") {
+        // Report the ACTUAL configured cap, never a hardcoded "2 GB" — a lowered
+        // VOD_MAX_UPLOAD_BYTES must surface as the real limit (ADAAAA-5698). Mirrors
+        // the client's oversizedHelp(limit) message byte-for-byte.
         return reply.code(413).send({
-          error: "File too large (max 2 GB). Paste a download URL instead to process it.",
+          error: `File too large (max ${formatBytes(cfg.vodMaxUploadBytes)}). Paste a download URL instead to process it.`,
         });
       }
       return reply.code(500).send({ error: String(e?.message || e) });
