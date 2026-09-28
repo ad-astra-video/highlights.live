@@ -69,6 +69,15 @@ python3 evals/tests/test_metrics_runner_depth.py  # or pytest evals/tests/test_m
   reaction-cited rate on real clips) require driving the deployed perceive+
   decide pipeline over the labeled clips. Filled in as that run completes.
 
+## ADAAAA-5778 — notable-only bar data-landing (decide)
+
+`decide_discernment.py` lands the decide gate's `DECIDE_NOTABILITY_MIN` from the
+labeled §6 eval set. It sweeps the notable-only bar (a highlight requires
+corroborating evidence AND [high-value event class OR notability >= bar]) and
+reports the separating band where recall stays at bar with 0 FP phases. Runs
+without GPU; to re-land from real Gemma scores pass `--trace <decisions.jsonl>`.
+See `services/decide/app/decider.py` and the ADAAAA-5778 task.
+
 ## INC-9 / ADAAAA-4496 — §6 recall/precision recovery + precision descope
 
 Full deployed-pipeline §6 measurements, delivered fixes (near-goal emission +

@@ -179,6 +179,9 @@ services:
       - DECIDE_MODE=${DECIDE_MODE:-gemma}
       - GEMMA_URL=${GEMMA_URL:-http://gemma:8088}
       - GEMMA_MODEL=${GEMMA_MODEL:-gemma-4-12b-it-qat-q4_0}
+      # ADAAAA-5778 notable-only knob. Data-landed default 60; override in prod
+      # only after re-measuring on the real-feed eval set (evals/decide_discernment.py).
+      - DECIDE_NOTABILITY_MIN=${DECIDE_NOTABILITY_MIN:-60}
     depends_on:
       gemma:
         condition: service_healthy

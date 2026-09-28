@@ -237,8 +237,15 @@ def decide_with_gemma(
     g = ask(u, event_type, evidence, game_hint, images, frames, audio_b64, audio_sample_rate, reasoning_effort=reasoning_effort)
     if g is not None:
         return g
-    # fallback: deterministic rule
-    d = decide(event_type, track_count=evidence.get("trackCount", 0), max_velocity=evidence.get("maxVelocity", 0), ocr_hits=evidence.get("ocrHits", 0))
+    # fallback: deterministic rule (passes the reaction block so the
+    # notable-only corroboration check is consistent with the Gemma path)
+    d = decide(
+        event_type,
+        track_count=evidence.get("trackCount", 0),
+        max_velocity=evidence.get("maxVelocity", 0),
+        ocr_hits=evidence.get("ocrHits", 0),
+        reaction=evidence.get("reaction"),
+    )
     return {
         "isHighlight": d.is_highlight,
         "score": d.score,

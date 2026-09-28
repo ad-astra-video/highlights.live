@@ -9,8 +9,17 @@ mode `single-shot`, capacity 1, health 200 when llama-server answers.
 - Payments: one `generate-live-payment` per /highlight. Prefer `unit: fixed` → pay once, no refresh.
 - runners.json entry: mode single-shot, capacity 1, gpu{id:1}, price unit fixed.
 
+## Notable-only bar (ADAAAA-5778)
+The `/app/highlight` gate is notable-only: a candidate is a highlight only when
+it carries corroborating evidence AND (its event class is high-value OR its
+notability score clears `DECIDE_NOTABILITY_MIN`, default data-landed 60 on the
+§6 eval set — `evals/decide_discernment.py`). Bare scene/audio triggers with no
+notable content are rejected. The gate is a pure post-process over signals the
+request already carries, so it adds NO inference (same Gemma call budget).
+
 ## STATUS
 - /app/highlight stub-rule (deterministic evidence scorer) + /health: DONE (decider.py, app/__init__.py).
+- Notable-only gate (event-class + corroboration + config bar): DONE (ADAAAA-5778).
 - Real Gemma 12B Q4 via llama-server: NOT DONE. Decide is a stub, no llama.cpp integration, no multipart JPEG ingestion.
 - Clip on CPU via server ffmpeg: DONE (server cutClip).
 
