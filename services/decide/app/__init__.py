@@ -5,10 +5,8 @@ import os
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, Field
 
-from .decider import decide
+from .decider import apply_gate, decide
 from .gemma import decide_with_gemma
-
-HIGH_VALUE_EVENTS = {"KILL", "GOAL", "DUNK", "CLUTCH", "ACE", "PENTAKILL"}
 
 
 class ReactionEvidence(BaseModel):
@@ -97,7 +95,7 @@ def create_app() -> FastAPI:
     @router.post("/highlight")
     async def highlight(req: HighlightRequest):
         if _is_gemma_mode():
-            return decide_with_gemma(
+            decision = decide_with_gemma(
                 event_type=req.eventType,
                 evidence=req.evidence.model_dump(),
                 game_hint=req.gameHint,
@@ -108,11 +106,37 @@ def create_app() -> FastAPI:
                 reasoning_effort=req.reasoningEffort,
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
             )
+            # Notable-only gate on the Gemma verdict (ADAAAA-5778). Pure
+            # post-process over signals we already have — isHighlight, score,
+            # classified eventType, evidence — so it adds NO inference (same
+            # Gemma decide call budget; stricter gate only ever REJECTS). A
+            # bare trigger (audio gate / scene change) with no corroborating
+            # evidence or a low notability score is refused even when Gemma
+            # leaned 'yes'.
+            if decision.get("isHighlight"):
+                ok, rejects = apply_gate(
+                    score=float(decision.get("score") or 0.0),
+                    event_type=decision.get("eventType") or req.eventType,
+                    track_count=req.evidence.trackCount,
+                    max_velocity=req.evidence.maxVelocity,
+                    ocr_hits=req.evidence.ocrHits,
+                    reaction=req.evidence.reaction.model_dump(),
+                )
+                if not ok:
+                    decision["isHighlight"] = False
+                    decision["reason"] = (
+                        (decision.get("reason") or "")
+                        + "; rejected by notable-only bar: "
+                        + "; ".join(rejects)
+                    ).strip("; ")
+            return decision
+        ev = req.evidence.reaction.model_dump() if req.evidence.reaction else None
         d = decide(
             event_type=req.eventType,
             track_count=req.evidence.trackCount,
             max_velocity=req.evidence.maxVelocity,
             ocr_hits=req.evidence.ocrHits,
+            reaction=ev,
         )
         return {
             "isHighlight": d.is_highlight,
@@ -120,6 +144,8 @@ def create_app() -> FastAPI:
             "eventType": req.eventType,
             "reason": d.reason,
             "source": "rule",
+            "eventClass": d.event_class,
+            "corroborated": d.corroborated,
         }
 
     app = FastAPI(title="highlights-decide", version="0.1.0")
