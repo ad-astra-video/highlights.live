@@ -12,7 +12,7 @@ interface FeedItem {
 // Live-console panel: streams perceive observations / candidates / highlights
 // for a running job over the /jobs/:id/events SSE endpoint and lets the operator
 // send preference/control intents to /jobs/:id/control.
-export function LiveConsole({ jobId }: { jobId: string }) {
+export function LiveConsole({ jobId, onHighlight }: { jobId: string; onHighlight?: (h: any) => void }) {
   const [items, setItems] = useState<FeedItem[]>([]);
   const [tracks, setTracks] = useState<number>(0);
   const [connected, setConnected] = useState(false);
@@ -37,6 +37,10 @@ export function LiveConsole({ jobId }: { jobId: string }) {
         push("candidate", `⚡ candidate @T+${Math.round(data.timestamp)}s (${data.candidate?.eventType || "event"})`);
       } else if (name === "highlight") {
         push("highlight", `🎬 highlight clipped: ${data.highlight?.eventType || "event"} score ${Math.round(data.highlight?.score ?? 0)}`);
+        // Live feed surface (ADAAAA-5777): a highlight was just accepted and
+        // persisted server-side at decision time — tell the parent to refresh
+        // the highlights grid so it streams in continuously, not only at end.
+        if (onHighlight) onHighlight(data.highlight);
       }
     }, ac.signal)
       .catch((e: any) => !cancelled && setError(String(e?.message || e)))
