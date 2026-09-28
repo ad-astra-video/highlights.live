@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { BrainCircuit, Database, FlaskConical } from "lucide-react";
+import { FineTuneHelp } from "../components/FineTuneHelp";
 
 const subTab = `flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition ${
   "border-white/10 text-slate-ink hover:border-white/30"
@@ -19,6 +20,9 @@ export function Train() {
           <p className="text-sm text-mut">
             Train the Florence-2 &lt;OD&gt; LoRA runner from your curated dataset and download the trained adapter.
           </p>
+        </div>
+        <div className="ml-auto">
+          <FineTuneHelp page="train" />
         </div>
       </div>
 
