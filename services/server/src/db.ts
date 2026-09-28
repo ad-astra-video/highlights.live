@@ -109,6 +109,50 @@ export interface TrainRun {
   updatedAt: string;
 }
 
+/** A persisted, plan-gated fine-tune dataset (ADAAAA-5391 C3/C4/C5).
+ * `send` (C2/C3) persists the curated set (train/val manifests + the extracted
+ * frame bucket) here so it is retrievable while the account is active on a
+ * non-starter plan.
+ *
+ * `purgingAt` is the 30-day purge schedule (ADAAAA-5398 C4): when a paid plan
+ * is deactivated the account's datasets get `purgingAt = deactivation + 30d`.
+ * While it is null the dataset is retained and retrievable. The retention
+ * purge sweep deletes the DB row + stored objects once `purgingAt` elapses.
+ * Stored as a JSON record mirroring jobs/highlights/train_runs. */
+export interface DatasetRecord {
+  id: string;
+  ownerId: string;
+  name: string;
+  /** Extraction bucket directory name under `dataDir/training/extract/` that
+   * owns the dataset's stored frame images (the `imageRef` files). */
+  bucket: string | null;
+  /** Per-dataset manifest paths under `dataDir/training/datasets/<id>/`. */
+  trainPath: string | null;
+  valPath: string | null;
+  trainCount: number;
+  valCount: number;
+  createdAt: string;
+  /** ISO timestamp the dataset is scheduled for 30-day purge, or null while the
+   * account is an active non-starter subscriber (retained + retrievable). */
+  purgingAt: string | null;
+}
+
+/** One 30-day retention purge of a deactivated account's dataset (ADAAAA-5398
+ * C4). Appended by the purge sweep so QA can observe that deletion actually ran
+ * (the run/purge log). Stored in `dataset_purge_log`. */
+export interface DatasetPurgeLogEntry {
+  id: string;
+  datasetId: string;
+  ownerId: string;
+  /** Reason the dataset was purged (always "plan_deactivated_30d" today). */
+  reason: string;
+  /** Arrays of deleted storage paths, for QA inspection. */
+  objectsRemoved: string[];
+  /** True when the run was a dry-run report (nothing deleted). */
+  dryRun: boolean;
+  purgedAt: string;
+}
+
 /** A single-use invite code issued by the cohort owner (invite path "a").
  * Stored as a SHA-256 hash; the plaintext code is shown to the owner once at
  * issuance and handed out of band. */
@@ -229,6 +273,15 @@ export interface Db {
   getTrainRun(id: string): Promise<TrainRun | undefined>;
   /** All train runs, newest first; optionally scoped to one owner. */
   listTrainRuns(ownerId?: string): Promise<TrainRun[]>;
+  /** Persist a sent dataset (full JSON upsert by id). */
+  saveDataset(d: DatasetRecord): Promise<void>;
+  getDataset(id: string): Promise<DatasetRecord | undefined>;
+  listDatasets(ownerId?: string): Promise<DatasetRecord[]>;
+  /** Permanently remove a dataset row (30-day retention purge sweep). */
+  deleteDataset(id: string): Promise<void>;
+  /** Append a 30-day purge log entry (QA-observable run/purge log). */
+  appendDatasetPurgeLog(e: Omit<DatasetPurgeLogEntry, "id" | "purgedAt"> & { id?: string; purgedAt?: string }): Promise<void>;
+  listDatasetPurgeLog(limit?: number): Promise<DatasetPurgeLogEntry[]>;
   /** Public waitlist: add an email, deduped by the normalized email (UNIQUE
    * constraint). Returns whether this call actually created a new entry vs the
    * email already being present (idempotent re-submission). */
@@ -515,6 +568,43 @@ export class SqliteDb implements Db {
         : this.db.prepare("SELECT record, created_at FROM train_runs ORDER BY created_at DESC").all()
     ) as { record: string }[];
     return rows.map((r) => JSON.parse(r.record) as TrainRun);
+  }
+
+  async saveDataset(d: DatasetRecord): Promise<void> {
+    this.db
+      .prepare(
+        "INSERT INTO datasets (id, record, owner_id, purging_at, created_at) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET record=excluded.record, purging_at=excluded.purging_at, created_at=excluded.created_at"
+      )
+      .run(d.id, JSON.stringify(d), d.ownerId, d.purgingAt, d.createdAt);
+  }
+
+  async getDataset(id: string): Promise<DatasetRecord | undefined> {
+    const r = this.db.prepare("SELECT record FROM datasets WHERE id = ?").get(id) as { record: string } | undefined;
+    return r ? (JSON.parse(r.record) as DatasetRecord) : undefined;
+  }
+
+  async listDatasets(ownerId?: string): Promise<DatasetRecord[]> {
+    const rows = (
+      ownerId
+        ? this.db.prepare("SELECT record FROM datasets WHERE owner_id = ? ORDER BY created_at DESC").all(ownerId)
+        : this.db.prepare("SELECT record FROM datasets ORDER BY created_at ASC").all()
+    ) as { record: string }[];
+    return rows.map((r) => JSON.parse(r.record) as DatasetRecord);
+  }
+
+  async deleteDataset(id: string): Promise<void> {
+    this.db.prepare("DELETE FROM datasets WHERE id = ?").run(id);
+  }
+
+  async appendDatasetPurgeLog(e: Omit<DatasetPurgeLogEntry, "id" | "purgedAt"> & { id?: string; purgedAt?: string }): Promise<void> {
+    this.db
+      .prepare("INSERT INTO dataset_purge_log (id,dataset_id,owner_id,reason,objects_removed,dry_run,purged_at) VALUES (?,?,?,?,?,?,?)")
+      .run(e.id ?? randomUUID(), e.datasetId, e.ownerId, e.reason, JSON.stringify(e.objectsRemoved), e.dryRun ? 1 : 0, e.purgedAt ?? new Date().toISOString());
+  }
+
+  async listDatasetPurgeLog(limit = 100): Promise<DatasetPurgeLogEntry[]> {
+    const rows = this.db.prepare("SELECT * FROM dataset_purge_log ORDER BY purged_at DESC LIMIT ?").all(limit) as any[];
+    return rows.map(rowToDatasetPurgeLog);
   }
 
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
@@ -958,6 +1048,42 @@ export class PgDb implements Db {
     return r.rows.map((row) => JSON.parse(row.record) as TrainRun);
   }
 
+  async saveDataset(d: DatasetRecord): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO datasets (id, record, owner_id, purging_at, created_at) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (id) DO UPDATE SET record=EXCLUDED.record, purging_at=EXCLUDED.purging_at, created_at=EXCLUDED.created_at`,
+      [d.id, JSON.stringify(d), d.ownerId, d.purgingAt, d.createdAt]
+    );
+  }
+
+  async getDataset(id: string): Promise<DatasetRecord | undefined> {
+    const r = await this.pool.query("SELECT record FROM datasets WHERE id = $1", [id]);
+    return r.rows[0] ? (JSON.parse(r.rows[0].record) as DatasetRecord) : undefined;
+  }
+
+  async listDatasets(ownerId?: string): Promise<DatasetRecord[]> {
+    const r = ownerId
+      ? await this.pool.query("SELECT record FROM datasets WHERE owner_id = $1 ORDER BY created_at DESC", [ownerId])
+      : await this.pool.query("SELECT record FROM datasets ORDER BY created_at ASC");
+    return r.rows.map((row) => JSON.parse(row.record) as DatasetRecord);
+  }
+
+  async deleteDataset(id: string): Promise<void> {
+    await this.pool.query("DELETE FROM datasets WHERE id = $1", [id]);
+  }
+
+  async appendDatasetPurgeLog(e: Omit<DatasetPurgeLogEntry, "id" | "purgedAt"> & { id?: string; purgedAt?: string }): Promise<void> {
+    await this.pool.query(
+      "INSERT INTO dataset_purge_log (id,dataset_id,owner_id,reason,objects_removed,dry_run,purged_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+      [e.id ?? randomUUID(), e.datasetId, e.ownerId, e.reason, JSON.stringify(e.objectsRemoved), e.dryRun, e.purgedAt ?? new Date().toISOString()]
+    );
+  }
+
+  async listDatasetPurgeLog(limit = 100): Promise<DatasetPurgeLogEntry[]> {
+    const r = await this.pool.query("SELECT * FROM dataset_purge_log ORDER BY purged_at DESC LIMIT $1", [limit]);
+    return r.rows.map(rowToDatasetPurgeLog);
+  }
+
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
     const r = await this.pool.query(
       "INSERT INTO waitlist (id,email,created_at) VALUES ($1,$2,$3) ON CONFLICT (email) DO NOTHING",
@@ -1256,6 +1382,22 @@ const SCHEMA_SQLITE = `
     status TEXT,
     created_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS datasets (
+    id TEXT PRIMARY KEY,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    purging_at TEXT,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS dataset_purge_log (
+    id TEXT PRIMARY KEY,
+    dataset_id TEXT NOT NULL,
+    owner_id TEXT,
+    reason TEXT NOT NULL,
+    objects_removed TEXT NOT NULL DEFAULT '[]',
+    dry_run INTEGER NOT NULL DEFAULT 0,
+    purged_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS waitlist (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
@@ -1367,6 +1509,22 @@ const SCHEMA_PG = `
     owner_id TEXT,
     status TEXT,
     created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS datasets (
+    id TEXT PRIMARY KEY,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    purging_at TEXT,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS dataset_purge_log (
+    id TEXT PRIMARY KEY,
+    dataset_id TEXT NOT NULL,
+    owner_id TEXT,
+    reason TEXT NOT NULL,
+    objects_removed TEXT NOT NULL DEFAULT '[]',
+    dry_run INTEGER NOT NULL DEFAULT 0,
+    purged_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS waitlist (
     id TEXT PRIMARY KEY,
@@ -1496,6 +1654,35 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 5,
+    name: "datasets-and-purge-log",
+    up: async (exec) => {
+      // ADAAAA-5391 (C3/C4/C5): persisted plan-gated fine-tune datasets +
+      // their 30-day retention purge log. Fresh DBs (baseline CREATE) already
+      // include both tables; this brings pre-existing on-disk DBs up to shape.
+      await exec(
+        `CREATE TABLE IF NOT EXISTS datasets (
+          id TEXT PRIMARY KEY,
+          record TEXT NOT NULL,
+          owner_id TEXT,
+          purging_at TEXT,
+          created_at TEXT
+        )`
+      );
+      await exec(
+        `CREATE TABLE IF NOT EXISTS dataset_purge_log (
+          id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL,
+          owner_id TEXT,
+          reason TEXT NOT NULL,
+          objects_removed TEXT NOT NULL DEFAULT '[]',
+          dry_run INTEGER NOT NULL DEFAULT 0,
+          purged_at TEXT NOT NULL
+        )`
+      );
+    },
+  },
 ];
 
 async function runMigrations(exec: Exec, hasColumn: HasColumn, applied: Applied, markApplied: MarkApplied): Promise<void> {
@@ -1587,5 +1774,23 @@ function rowToMediaSession(r: any): MediaSession {
     status: r.status === "closed" ? "closed" : "active",
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+  };
+}
+
+function rowToDatasetPurgeLog(r: any): DatasetPurgeLogEntry {
+  let objectsRemoved: string[] = [];
+  try {
+    objectsRemoved = JSON.parse(r.objects_removed ?? "[]");
+  } catch {
+    objectsRemoved = [];
+  }
+  return {
+    id: r.id,
+    datasetId: r.dataset_id,
+    ownerId: r.owner_id ?? null,
+    reason: r.reason,
+    objectsRemoved,
+    dryRun: r.dry_run === 1 || r.dry_run === true,
+    purgedAt: r.purged_at,
   };
 }

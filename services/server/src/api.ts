@@ -22,7 +22,14 @@ import {
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
-import type { DetectionTrainingSample } from "@highlights/events";
+import {
+  DetectionTrainingSampleSchema,
+  type DetectionTrainingSample,
+} from "@highlights/events";
+import {
+  datasetAccessActive,
+  scheduleDatasetsPurgeForOwner,
+} from "./dataset-lifecycle";
 import { LiveIngest, type LiveKind } from "./live";
 import { extractVodAudioChunks } from "./vod-audio";
 import type { Db, MediaSession, AnalyticsSnapshot } from "./db";
@@ -880,6 +887,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     app.post("/dev/billing/deactivate", { preHandler: authReq }, async (req: any, reply) => {
       const user = (req as any).user;
       const sub = await db.setSubscription(user.id, { tier: "free", status: "canceled", stripeSubscriptionId: null, stripeSubItemId: null });
+      // Plan deactivated (dev wireframe of the Stripe 'customer.subscription.deleted'
+      // webhook) -> schedule the account's stored datasets for 30-day purge.
+      // Retrieval is denied immediately by the retrieval gate (now free/canceled).
+      await scheduleDatasetsPurgeForOwner(store, user.id);
       return reply.send({ ok: true, sub });
     });
 
@@ -1501,6 +1512,100 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
     return reply.type("image/jpeg").send(createReadStream(abs));
   });
+
+  // --- persisted datasets (ADAAAA-5391 C3/C4/C5) ---------------------------
+  // A curated fine-tune dataset is persisted server-side so it is retrievable
+  // while the account is ACTIVE on a NON-STARTER plan (the shared dataset
+  // model C3/C5 build the UI + zip on). C4 (ADAAAA-5398) adds the 30-day
+  // retention lifecycle: deactivation schedules purge; the retention sweep
+  // hard-deletes at T+30d; retrieval is denied the moment the account leaves an
+  // active non-starter plan.
+  app.post<{ Body: { name?: string; bucket?: string; train?: unknown[]; val?: unknown[] } }>(
+    "/datasets",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const user = req.user as { id: string; role: string };
+      const sub = await db.getSubscription(user.id);
+      if (!datasetAccessActive(sub)) {
+        return reply.code(403).send({ error: "storing a dataset requires an active non-starter plan" });
+      }
+      const body = req.body ?? {};
+      const train = (body.train ?? []) as DetectionTrainingSample[];
+      const val = (body.val ?? []) as DetectionTrainingSample[];
+      const errors: string[] = [];
+      (["train", "val"] as const).forEach((side) => {
+        (side === "train" ? train : val).forEach((s, i) => {
+          const r = DetectionTrainingSampleSchema.safeParse(s);
+          if (!r.success) errors.push(`${side}[${i}]: ${r.error.message}`);
+        });
+      });
+      if (errors.length) return reply.code(422).send({ error: "invalid manifest", errors });
+
+      const id = randomUUID();
+      const dsDir = path.join(cfg.dataDir, "training", "datasets", id);
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      await mkdir(dsDir, { recursive: true });
+      const dump = (side: DetectionTrainingSample[]) =>
+        side.map((s) => JSON.stringify(DetectionTrainingSampleSchema.parse(s))).join("\n") + "\n";
+      const trainPath = path.join(dsDir, "train_manifest.jsonl");
+      const valPath = path.join(dsDir, "val_manifest.jsonl");
+      await writeFile(trainPath, dump(train), "utf8");
+      await writeFile(valPath, dump(val), "utf8");
+
+      const record = await store.saveDataset({
+        id,
+        ownerId: user.id,
+        name: String(body.name ?? "untitled dataset").slice(0, 200),
+        bucket: body.bucket ? path.basename(String(body.bucket)) : null,
+        trainPath,
+        valPath,
+        trainCount: train.length,
+        valCount: val.length,
+        createdAt: new Date().toISOString(),
+        purgingAt: null,
+      });
+      return reply.code(201).send(record);
+    }
+  );
+
+  // List the caller's persisted datasets. Gated: denied once the account is no
+  // longer on an active non-starter plan (immediately at deactivation).
+  app.get("/datasets", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user as { id: string };
+    const sub = await db.getSubscription(user.id);
+    if (!datasetAccessActive(sub)) {
+      return reply.code(403).send({ error: "dataset access requires an active non-starter plan" });
+    }
+    const ds = store.allDatasets(user.id);
+    return {
+      datasets: ds.map((d) => ({ ...d, trainPath: undefined, valPath: undefined })),
+    };
+  });
+
+  // Retrieve one persisted dataset (metadata + manifest). Gated + company-scoped
+  // (owner only); 404 for another user's or unknown id, 403 when the account is
+  // not an active non-starter subscriber (C3 gate — denies retrieval the instant
+  // the plan is deactivated, independent of the 30-day data GC).
+  app.get<{ Params: { id: string } }>("/datasets/:id", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user as { id: string };
+    const d = store.getDataset(req.params.id);
+    if (!d || d.ownerId !== user.id) return reply.code(404).send({ error: "dataset not found" });
+    const sub = await db.getSubscription(user.id);
+    if (!datasetAccessActive(sub)) {
+      return reply.code(403).send({ error: "dataset access requires an active non-starter plan" });
+    }
+    const { readFile } = await import("node:fs/promises");
+    let train = null;
+    let val = null;
+    if (d.trainPath) train = (await readFile(d.trainPath, "utf8").catch(() => null)) ?? null;
+    if (d.valPath) val = (await readFile(d.valPath, "utf8").catch(() => null)) ?? null;
+    return reply.send({ ...d, trainPath: undefined, valPath: undefined, train, val });
+  });
+
+  // Admin: the 30-day dataset retention purge log (QA-observable run/purge log).
+  app.get("/admin/dataset-purge-log", { preHandler: adminReq }, async () => ({
+    entries: await db.listDatasetPurgeLog(200),
+  }));
 
   app.get("/highlights", { preHandler: authReq }, async (req: any) => {
     const user = req.user;
