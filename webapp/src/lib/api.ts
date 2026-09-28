@@ -156,6 +156,39 @@ export async function downloadTrainArtifact(runId: string, filename: string): Pr
   return hex;
 }
 
+// Download a persisted dataset as a zip (ADAAAA-5397, Change 5) over an
+// authenticated fetch so the token stays in the Authorization header. Saves it
+// as <dataset id>.zip via a same-app object URL. Throws an ApiError on failure
+// (403 plan gate, 404 none, 409 incomplete) so the UI can surface the reason.
+export async function downloadDatasetZip(datasetId: string): Promise<void> {
+  const token = getToken();
+  const res = await fetch(`/training/dataset.zip?id=${encodeURIComponent(datasetId)}`, {
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    let body: any = null;
+    try {
+      body = await res.json();
+    } catch {
+      /* binary/empty */
+    }
+    if (res.status === 401 && token) setToken(null);
+    const err = new Error(body?.error || `HTTP ${res.status}`) as ApiError;
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `dataset-${datasetId}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // Human-readable size for the oversized-file message, e.g. "2 GB".
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
