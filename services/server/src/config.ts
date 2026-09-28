@@ -184,6 +184,11 @@ export interface ServerConfig {
    * a rejected clip is removed no more than ~1 sweep interval after its grace
    * elapses. Default: run hourly, well within the <=24h reject->removal bound. */
   rejectSweepIntervalMs: number;
+  /** How often the 30-day dataset retention purge sweep runs (ms). Must be <=
+   * the 30-day grace (PURGE_GRACE_MS) so a deactivated dataset is removed no
+   * more than ~1 sweep interval after its purge window elapses. Default: run
+   * hourly (ADAAAA-5398 C4). */
+  datasetPurgeSweepIntervalMs: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -256,5 +261,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     autoPublishHighlights: env.AUTO_PUBLISH_HIGHLIGHTS === "0" || env.AUTO_PUBLISH_HIGHLIGHTS === "false" ? false : true,
     rejectTtlMs: Number(env.REJECTED_CLIP_TTL_MS ?? 24 * 60 * 60 * 1000),
     rejectSweepIntervalMs: Number(env.REJECTED_CLIP_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
+    datasetPurgeSweepIntervalMs: Number(env.DATASET_PURGE_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
   };
 }
