@@ -10,6 +10,12 @@
 //
 // Mirrors the Dashboard / FrameDebugger / BrowserCapture styling + auth-fetch
 // patterns. No training GPU is scheduled on this leg.
+//
+// ADAAAA-5395 (C2): the curated work-in-progress is auto-persisted to browser
+// storage (localStorage) so the user can START / STOP / RESUME without losing
+// state — reload restores frames + boxes + labels exactly. "Send dataset"
+// produces the Zod-validated train/val manifests (existing export pipeline)
+// and commits them to the server persistence path.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getToken, api } from "../lib/api";
 import {
@@ -24,6 +30,14 @@ import {
   type CurationBox,
   type CurationFrame,
 } from "../lib/dataset";
+import {
+  buildSession,
+  clearSession,
+  framesFromSession,
+  loadSession,
+  saveSession,
+  type DatasetSessionState,
+} from "../lib/datasetSession";
 
 const PALETTE: Record<string, string> = {
   player: "#22d3ee",
@@ -71,6 +85,10 @@ export function Dataset() {
   const [err, setErr] = useState<string | null>(null);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // C2: a previous session found in browser storage on mount. Shown as a
+  // Resume/Start-new prompt until the user chooses. null = never checked or no
+  // saved session.
+  const [pendingResume, setPendingResume] = useState<DatasetSessionState | null | undefined>(undefined);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgUrlRef = useRef<{ _frameId: string; url: string } | null>(null);
@@ -150,6 +168,39 @@ export function Dataset() {
       for (const u of createdUrls.current) URL.revokeObjectURL(u);
     };
   }, []);
+
+  // C2 — restore-on-mount: if a curated session is persisted in browser
+  // storage, surface it as a Resume prompt (don't clobber the editor). The
+  // user picks Resume (hydrate) or Start new (clear + fresh).
+  useEffect(() => {
+    const saved = loadSession();
+    setPendingResume(saved);
+  }, []);
+
+  // C2 — auto-persist the full curation session (debounced) on every change
+  // so reload / Stop always restores exactly what the user had. Skipped while
+  // a Resume prompt is pending (we don't want to overwrite storage with a
+  // half-hydrated empty editor before the user has chosen), and skipped when
+  // there is no curation work yet so a bare visit never leaves a spurious
+  // "0 frames" saved-session behind.
+  useEffect(() => {
+    if (pendingResume === undefined || pendingResume !== null) return;
+    if (frames.length === 0) return;
+    const t = setTimeout(() => {
+      saveSession(
+        buildSession({
+          ingest: { source, inSec, outSec, fps },
+          frames,
+          selIdx,
+          selBox,
+          label,
+          seedJson,
+        })
+      );
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingResume, source, inSec, outSec, fps, frames, selIdx, selBox, label, seedJson]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -347,9 +398,15 @@ export function Dataset() {
         "/training/manifests",
         { body: { train: exportOut.train, val: exportOut.val } }
       );
+      // C2 — a successful send commits the curated set to the server
+      // persistence path, so the local WIP no longer needs to be resumed.
+      // Clear it so a later reload starts fresh instead of resurrecting a
+      // now-committed session.
+      clearSession();
+      setPendingResume(undefined);
       setExportMsg(
-        `Saved to server: ${res.trainPath} (${res.trainCount}) + ${res.valPath} (${res.valCount}). ` +
-        `Manifest shape matches track_label_manifest.json (objects carry normalized [x1,y1,x2,y2] bbox + label).`
+        `Sent to server: ${res.trainPath} (${res.trainCount}) + ${res.valPath} (${res.valCount}). ` +
+        `Manifest shape matches track_label_manifest.json (objects carry normalized [x1,y1,x2,y2] bbox + label). Local WIP cleared.`
       );
     } catch (e: any) {
       setErr(String(e?.message || e));
@@ -358,14 +415,105 @@ export function Dataset() {
     }
   }
 
+  // --- C2: start / stop / resume ------------------------------------------
+  const isResuming = pendingResume !== undefined && pendingResume !== null;
+  const hasWork = frames.length > 0;
+
+  /** Stop: persist current progress (reload-safe) and leave the editor intact.
+   * The saved session is what a later Resume rehydrates. */
+  function handleStop() {
+    saveSession(
+      buildSession({ ingest: { source, inSec, outSec, fps }, frames, selIdx, selBox, label, seedJson })
+    );
+    setExportMsg("Progress saved to your browser — reload or come back later and Resume.");
+  }
+
+  /** Resume: hydrate the persisted session back into the editor exactly. */
+  function handleResume(s: DatasetSessionState) {
+    setSource(s.ingest.source);
+    setInSec(s.ingest.inSec);
+    setOutSec(s.ingest.outSec);
+    setFps(s.ingest.fps);
+    setSeedJson(s.seedJson);
+    setFrames(framesFromSession(s));
+    setSelIdx(s.selIdx != null && s.selIdx < s.frames.length ? s.selIdx : s.frames.length ? 0 : null);
+    setSelBox(s.selBox);
+    setLabel(s.label as TrainingLabel);
+    setPendingResume(null);
+    setErr(null);
+    setExportMsg(`Resumed ${s.frames.length} frame(s) — ${s.frames.filter((f) => f.accepted).length} accepted.`);
+  }
+
+  /** Start new: clear any saved session and reset the editor to a blank one. */
+  function handleStartNew() {
+    clearSession();
+    setPendingResume(null);
+    setSource("");
+    setInSec("0");
+    setOutSec("");
+    setFps("1");
+    setFrames([]);
+    setSelIdx(null);
+    setSelBox(null);
+    setSeedJson("");
+    setErr(null);
+    setExportMsg(null);
+  }
+
   return (
     <div className="flex flex-col gap-6">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-extrabold text-neon">Dataset Curation</h1>
           <p className="text-sm text-mut">Florence-2 fine-tune data path · build train/val manifests at 1 fps.</p>
         </div>
+        {/* C2 — workflow controls: your curated work-in-progress auto-saves to
+            your browser, so you can Stop and come back / reload and Resume. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {hasWork && (
+            <>
+              <button className="btn-neon btn-ghost" onClick={handleStop}>
+                Save progress
+              </button>
+              <button
+                className="btn-neon btn-fill"
+                onClick={saveManifests}
+                disabled={!exportOut?.valid || saving}
+              >
+                {saving ? "Sending…" : "Send dataset"}
+              </button>
+            </>
+          )}
+        </div>
       </header>
+
+      {/* C2 — Resume overlay: a saved session from an earlier Start exists in
+          this browser. Offer to pick it back up or start fresh. */}
+      {isResuming && pendingResume && (
+        <section className="card card-accent p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm">
+              <span className="font-bold text-neon">Saved work found</span>
+              <span className="text-mut">
+                {" "}— {pendingResume.frames.length} frame(s),{" "}
+                {pendingResume.frames.filter((f) => f.accepted).length} accepted, last saved{" "}
+                {new Date(pendingResume.savedAt).toLocaleString()}.
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-neon btn-fill" onClick={() => handleResume(pendingResume)}>
+                Resume
+              </button>
+              <button className="btn-neon btn-ghost" onClick={handleStartNew}>
+                Start new
+              </button>
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-mut">
+            Reloading / stopping never loses your curation — it restores frames, boxes and labels exactly.
+          </p>
+        </section>
+      )}
 
       {/* Ingest */}
       <section className="card p-5">
@@ -571,7 +719,7 @@ export function Dataset() {
                 Download val_manifest.jsonl
               </button>
               <button className="btn-neon btn-fill" onClick={saveManifests} disabled={!exportOut.valid || saving}>
-                {saving ? "Saving…" : "Save to server (evals/*.jsonl)"}
+                {saving ? "Sending…" : "Send dataset"}
               </button>
             </div>
             {exportMsg && <p className="text-sm text-green">{exportMsg}</p>}
