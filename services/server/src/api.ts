@@ -1355,12 +1355,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sampleFps: session.sampleFps,
     });
     await store.patchJob(job.id, { status: "active" });
-    try {
-      return await runVodJob(job, session.finalPath, user, sub);
-    } catch (e: any) {
-      await store.patchJob(job.id, { status: "failed" });
-      return reply.code(500).send({ error: String(e?.message || e) });
-    }
+    // The full file is already reassembled on origin; running the rebuild+
+    // analyze pipeline SYNCHRONOUSLY here blocks this request for minutes on a
+    // long VOD, which outlasts the Cloudflare/tunnel edge request timeout and
+    // hands the browser a Cloudflare 5xx (HTML) page. Dispatch it in the
+    // background and return the active job immediately; the webapp polls
+    // GET /jobs/:id to a terminal state instead (ADAAAA-5714).
+    runVodJob(job, session.finalPath, user, sub).catch(async (e: any) => {
+      try {
+        await store.patchJob(job.id, { status: "failed" });
+      } catch {
+        /* ignore — job record gone */
+      }
+      console.error(`[vod:${job.id}] background analyze failed:`, String(e?.message || e));
+    });
+    return { job: store.getJob(job.id), framesAnalyzed: 0, status: "active", queued: true };
   });
 
   app.get("/jobs/:id", { preHandler: authReq }, async (req: any, reply) => {
