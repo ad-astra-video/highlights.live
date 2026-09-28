@@ -108,7 +108,7 @@ export interface PipelineClient {
   analyze(
     sessionId: string,
     frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
-    opts?: { gameHint?: string; preferLabels?: string[] }
+    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string }
   ): Promise<ObservationResult>;
   /** Feed one audio chunk to the perceive session's Stage-A noise-change gate.
    * Pure DSP on the perceive side — never touches the detector/SAM/Gemma, so
@@ -201,7 +201,12 @@ export interface AnalyzerConfig {
     * the closed soccer roster (`resolve_vocabulary`) instead of open-set OD.
     */
    preferLabels?: string[];
-   /** Detail-first VOD knobs (ADAAAA-4954, spec §1). When absent the pass runs at
+  /** Per-stream LoRA injection (ADAAAA-5324): optional ref to this job's
+   * stream-attached merged Florence-2 model dir. When unset the perceive
+   * session serves the base model (no regression on base-stream detection).
+   * Flowed to perceive on every /analyze exactly like gameHint/preferLabels. */
+  loraRef?: string;
+  /** Detail-first VOD knobs (ADAAAA-4954, spec §1). When absent the pass runs at
     * the live/default depth (1 fps frames, 16-frame window, single decide image).
     * When `decideWindowN` is set the pass is "detail-first": the shared frame
     * window is that long, and each decide() call forwards the temporal
@@ -530,7 +535,7 @@ export async function analyzeJob(
       // /analyze (ADAAAA-4109): a fresh session — including one re-reserved
       // after a 404 session-lost — inherits the config the moment its first
       // frame runs, before resolve_vocabulary() gates the <OD> prompt.
-      const vocab = { gameHint: cfg.gameHint, preferLabels: cfg.preferLabels };
+      const vocab = { gameHint: cfg.gameHint, preferLabels: cfg.preferLabels, loraRef: cfg.loraRef };
       for (;;) {
         try {
           res = await client.analyze(sessionId, frame, vocab);

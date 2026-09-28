@@ -233,7 +233,7 @@ def test_process_frame_attaches_ball_signal_to_candidate(monkeypatch):
         ball_field = ball_field + np.array([12.0, 5.0]) * DT
 
     fake = _FakeDetector(objects_per_frame)
-    monkeypatch.setattr(app_mod, "get_detector", lambda: fake)
+    monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: fake)
 
     saw_candidate = False
     for k in range(n):
