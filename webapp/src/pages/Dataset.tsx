@@ -17,7 +17,7 @@
 // produces the Zod-validated train/val manifests (existing export pipeline)
 // and commits them to the server persistence path.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getToken, api } from "../lib/api";
+import { getToken, api, downloadDatasetZip } from "../lib/api";
 import {
   SOCCER_TRAINING_LABELS,
   type TrainingLabel,
@@ -550,6 +550,20 @@ export function Dataset() {
     }
   }
 
+  // Download a saved dataset as a self-contained zip (ADAAAA-5397, Change 5).
+  // Mirrors the LoRA artifact download: authenticated blob fetch so the token
+  // never leaks into a query string. A 403 surfaces the plan gate; a 409 means
+  // a frame is missing (e.g. purged) so we never save a partial archive.
+  async function downloadZip(id: string) {
+    try {
+      await downloadDatasetZip(id);
+      setErr(null);
+      setArchiveMsg(`Downloaded dataset ${id}.zip — contains manifests + annotated frames.`);
+    } catch (e: any) {
+      setArchiveMsg(`Download failed: ${e?.message || e}`);
+    }
+  }
+
   // Fetch the archive once on mount so a returning session sees its saved sets.
   useEffect(() => {
     refreshArchive();
@@ -848,9 +862,14 @@ export function Dataset() {
                     {new Date(d.createdAt).toLocaleString()}
                   </span>
                 </div>
-                <button className="btn-neon btn-ghost" onClick={() => loadSavedDataset(d.id)}>
-                  Load
-                </button>
+                <div className="flex gap-2">
+                  <button className="btn-neon btn-ghost" onClick={() => loadSavedDataset(d.id)}>
+                    Load
+                  </button>
+                  <button className="btn-neon btn-ghost" onClick={() => downloadZip(d.id)} title="Download this dataset as a zip (manifests + annotated frames)">
+                    Download zip
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
