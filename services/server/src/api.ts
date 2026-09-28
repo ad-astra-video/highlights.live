@@ -22,6 +22,7 @@ import {
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
+import { probeDuration } from "./ffmpeg";
 import {
   buildDatasetZip,
   readPersistedImage,
@@ -1501,7 +1502,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         inSec: req.body?.inSec,
         outSec: req.body?.outSec,
       });
-      return { frames };
+      // Probe the clip's total duration so the curation UI's sliding-window
+      // carousel can bound the timeline (ADAAAA-5512 / ADAAAA-5509). Non-fatal:
+      // when the source can't be probed the UI keeps an unbounded timeline.
+      const clipDuration = await probeDuration(cfg.ffmpegPath, source);
+      return { frames, clipDuration };
     } catch (e: any) {
       return reply.code(422).send({ error: String(e?.message || e) });
     }
