@@ -26,7 +26,16 @@ import {
   buildDatasetZip,
   readPersistedImage,
 } from "./dataset-zip";
-import { DatasetSchema, type Dataset, type DetectionTrainingSample } from "@highlights/events";
+import {
+  DatasetSchema,
+  DetectionTrainingSampleSchema,
+  type Dataset,
+  type DetectionTrainingSample,
+} from "@highlights/events";
+import {
+  datasetAccessActive,
+  scheduleDatasetsPurgeForOwner,
+} from "./dataset-lifecycle";
 import { LiveIngest, type LiveKind } from "./live";
 import { extractVodAudioChunks } from "./vod-audio";
 import type { Db, MediaSession, AnalyticsSnapshot } from "./db";
@@ -900,6 +909,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     app.post("/dev/billing/deactivate", { preHandler: authReq }, async (req: any, reply) => {
       const user = (req as any).user;
       const sub = await db.setSubscription(user.id, { tier: "free", status: "canceled", stripeSubscriptionId: null, stripeSubItemId: null });
+      // Plan deactivated (dev wireframe of the Stripe 'customer.subscription.deleted'
+      // webhook) -> schedule the account's stored datasets for 30-day purge.
+      // Retrieval is denied immediately by the retrieval gate (now free/canceled).
+      await scheduleDatasetsPurgeForOwner(db, user.id);
       return reply.send({ ok: true, sub });
     });
 
@@ -1618,7 +1631,54 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return reply.type("application/zip").send(zip);
   });
 
-  app.get("/highlights", { preHandler: authReq }, async (req: any) => {
+  // --- Store a dataset directly (ADAAAA-5398 C4) ---------------------------
+  // Same persistence model as POST /training/manifests (inline Dataset record
+  // in the server DB), exposed as its own route for callers that persist a
+  // curated set without going through the eval-manifest send. Zod-validates
+  // every sample, is plan-gated like the rest of the dataset API, and returns
+  // the stored record (with a null purgingAt) on 201.
+  app.post<{ Body: { name?: string; train?: unknown[]; val?: unknown[] } }>(
+    "/datasets",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const user = req.user as { id: string; role?: string };
+      const sub = await db.getSubscription(user.id);
+      if (user.role !== "admin" && !datasetAccessActive(sub)) {
+        return reply.code(403).send({ error: "storing a dataset requires an active non-starter plan" });
+      }
+      const train = (req.body?.train ?? []) as DetectionTrainingSample[];
+      const val = (req.body?.val ?? []) as DetectionTrainingSample[];
+      const errors: string[] = [];
+      (["train", "val"] as const).forEach((side) => {
+        (side === "train" ? train : val).forEach((sample, i) => {
+          const r = DetectionTrainingSampleSchema.safeParse(sample);
+          if (!r.success) errors.push(`${side}[${i}]: ${r.error.message}`);
+        });
+      });
+      if (errors.length) return reply.code(422).send({ error: "invalid manifest", errors });
+      const now = new Date().toISOString();
+      const dataset: Dataset = DatasetSchema.parse({
+        id: randomUUID(),
+        ownerId: user.id,
+        name: String(req.body?.name ?? `dataset-${now}`).slice(0, 200),
+        train,
+        val,
+        imageRefs: [...new Set([...train, ...val].map((sample) => sample.imageRef))],
+        trainCount: train.length,
+        valCount: val.length,
+        status: "active",
+        createdAt: now,
+      });
+      await db.saveDataset(dataset, null);
+      return reply.code(201).send({ ...dataset, purgingAt: null });
+    }
+  );
+
+  // Admin: the 30-day dataset retention purge log (QA-observable run/purge log).
+  app.get("/admin/dataset-purge-log", { preHandler: adminReq }, async () => ({
+    entries: await db.listDatasetPurgeLog(200),
+  }));
+ndler: authReq }, async (req: any) => {
     const user = req.user;
     const all = store.allHighlights();
     return { highlights: user.role === "admin" ? all : all.filter((h) => h.ownerId === user.id) };

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { HighlightRecordSchema, JobSchema, type HighlightRecord, type Job } from "@highlights/events";
-import type { Db } from "./db";
+import type { Db, DatasetRecord } from "./db";
 
 export interface StoredObservation {
   seq: number;
@@ -27,6 +27,7 @@ export class Store {
   private highlights = new Map<string, HighlightRecord>();
   private byJob = new Map<string, string[]>();
   private observations = new Map<string, StoredObservation[]>();
+  private datasets = new Map<string, DatasetRecord>();
   private readonly db: Db | null;
 
   constructor(db: Db | null = null) {
@@ -37,10 +38,15 @@ export class Store {
    * re-loading (e.g. after a restart) restores full prior state. */
   async load(): Promise<void> {
     if (!this.db) return;
-    const [jobs, highlights] = await Promise.all([this.db.listJobs(), this.db.listHighlights()]);
+    const [jobs, highlights, datasets] = await Promise.all([
+      this.db.listJobs(),
+      this.db.listHighlights(),
+      this.db.listDatasets(),
+    ]);
     this.jobs.clear();
     this.highlights.clear();
     this.byJob.clear();
+    this.datasets.clear();
     for (const j of jobs) this.jobs.set(j.id, j);
     for (const h of highlights) {
       this.highlights.set(h.id, h);
@@ -48,6 +54,7 @@ export class Store {
       list.push(h.id);
       this.byJob.set(h.jobId, list);
     }
+    for (const d of datasets) this.datasets.set(d.id, d);
   }
 
   async createJob(input: { id?: string; ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare" | "browser"; sourceUrl?: string; gameHint?: string; preferLabels?: string[]; sampleFps?: number }): Promise<Job> {
@@ -156,6 +163,45 @@ export class Store {
 
   observationsForJob(jobId: string): StoredObservation[] {
     return this.observations.get(jobId) ?? [];
+  }
+
+  // --- datasets (ADAAAA-5391 C3/C4/C5): plan-gated persistence + 30-day purge
+  /** Persist a sent dataset (memory + DB). Write-through like jobs/highlights. */
+  async saveDataset(d: DatasetRecord): Promise<DatasetRecord> {
+    this.datasets.set(d.id, d);
+    if (this.db) await this.db.saveDataset(d);
+    return d;
+  }
+
+  getDataset(id: string): DatasetRecord | undefined {
+    return this.datasets.get(id);
+  }
+
+  /** All datasets, optionally scoped to one owner (newest first). */
+  allDatasets(ownerId?: string): DatasetRecord[] {
+    const all = [...this.datasets.values()];
+    const scoped = ownerId ? all.filter((d) => d.ownerId === ownerId) : all;
+    return scoped.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }
+
+  /** Schedule a dataset for purge (set `purgingAt`). Used by the 30-day
+   * retention lifecycle on plan deactivation. Idempotent. */
+  async scheduleDatasetPurge(id: string, purgingAt: string | null): Promise<DatasetRecord | undefined> {
+    const cur = this.datasets.get(id);
+    if (!cur) return undefined;
+    const next: DatasetRecord = { ...cur, purgingAt };
+    this.datasets.set(id, next);
+    if (this.db) await this.db.saveDataset(next);
+    return next;
+  }
+
+  /** Hard-remove a dataset (DB row + in-memory). Used by the 30-day retention
+   * purge sweep. Idempotent: deleting an already-purged id is a no-op. */
+  async deleteDataset(id: string): Promise<boolean> {
+    if (!this.datasets.has(id)) return false;
+    this.datasets.delete(id);
+    if (this.db) await this.db.deleteDataset(id);
+    return true;
   }
 }
 

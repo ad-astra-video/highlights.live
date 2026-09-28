@@ -46,7 +46,8 @@ export class BillingService {
     private cfg: ServerConfig,
     private db: Db,
     private stripe: any,
-    private entitlements: EntitlementsService
+    private entitlements: EntitlementsService,
+    private hooks: { onPlanDeactivated?: (userId: string) => Promise<void> } = {}
   ) {}
 
   get enabled(): boolean {
@@ -233,7 +234,14 @@ export class BillingService {
       }
       case "customer.subscription.deleted": {
         const meta = event.data.object.metadata || {};
-        if (meta.userId) await this.db.setSubscription(meta.userId, { tier: "free", status: "canceled" });
+        if (meta.userId) {
+          await this.db.setSubscription(meta.userId, { tier: "free", status: "canceled" });
+          // Plan deactivated -> schedule the account's stored datasets for purge
+          // after the 30-day grace window (ADAAAA-5398 C4). Retrieval is denied
+          // immediately by the retrieval gate (the account is no longer an
+          // active non-starter); this only schedules the eventual data GC.
+          await this.hooks.onPlanDeactivated?.(meta.userId);
+        }
         break;
       }
       default:
