@@ -40,7 +40,7 @@ const GAME_DEFAULTS: Record<string, string> = {
   General: "fast movement, collisions, dramatic action, notable plays",
 };
 
-export function Dashboard() {
+export function Highlights() {
   const { billing, refreshBilling } = useAuth();
   const [source, setSource] = useState("file");
   const [videoPath, setVideoPath] = useState("/data/test_vod.mp4");
