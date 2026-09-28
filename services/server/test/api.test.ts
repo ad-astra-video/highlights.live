@@ -728,6 +728,26 @@ describe("VOD resumable/chunked upload rail (init/chunk/complete, ADAAAA-5714)",
     return { payload: Buffer.concat([head, file, tail]), contentType: `multipart/form-data; boundary=${boundary}` };
   }
 
+  // complete returns the job "active" and runs the pipeline in the background;
+  // poll GET /jobs/:id until it reaches done (terminal), then return the
+  // highlights so the test can assert the job fully processed.
+  async function waitUntilJobDone(app: any, jobId: string, token: string): Promise<any[]> {
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      const res = await app.inject({
+        method: "GET",
+        url: `/jobs/${jobId}`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const data = res.json();
+      if (data.job?.status === "done") return data.highlights as any[];
+      if (data.job?.status === "failed") throw new Error("background job failed: " + JSON.stringify(data.job));
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error("timed out waiting for background job to finish");
+  }
+
   it("init -> N chunks -> complete reassembles byte-for-byte and runs the pipeline", async () => {
     const { app, cfg } = await buildTestApp({ VOD_CHUNK_BYTES: "4096" });
     const token = await register(app, "chunk@test.dev", "password123");
@@ -762,15 +782,20 @@ describe("VOD resumable/chunked upload rail (init/chunk/complete, ADAAAA-5714)",
       headers: { authorization: `Bearer ${token}` },
       payload: { uploadId, size: sent.length },
     });
+    // complete finalizes the file + creates the job and returns IMMEDIATELY
+    // (never blocks past the edge request timeout); the pipeline runs in the
+    // background. Assert it returned an active job, then poll to a terminal
+    // state — the same contract the webapp relies on.
     expect(done.statusCode).toBe(200);
     const body = done.json();
-    expect(body.job.status).toBe("done");
-    expect(body.framesAnalyzed).toBeGreaterThan(0);
-    // Reassembled file is byte-for-byte identical to the source and runs the
-    // same extractFrames -> analyze -> clip pipeline as single-shot uploads.
+    expect(["active", "queued", "done"]).toContain(body.job.status);
+    expect(body.status).toBe("active");
+    // Reassembled file is byte-for-byte identical to the source.
     const stored = path.join(cfg.dataDir, "uploads", uploadId, "chunked clip.mp4");
     expect(statSync(stored).size).toBe(sent.length);
-    const hl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
+
+    // Poll the job to done (background pipeline), then the highlight shows up.
+    const hl = await waitUntilJobDone(app, uploadId, token);
     expect(hl.length).toBe(1);
     await app.close();
   });

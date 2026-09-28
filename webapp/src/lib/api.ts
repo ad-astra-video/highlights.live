@@ -32,11 +32,17 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
   });
   if (!res.ok) {
+    // Read the body exactly ONCE. A Response stream is consumed by the first
+    // read (json()/text()/…); calling a second read throws
+    // "Failed to execute 'text' on 'Response': body stream already read", which
+    // would mask the real error (e.g. a Cloudflare HTML 5xx). Read text then
+    // parse, so JSON error bodies still surface their `error` message.
+    const text = await res.text();
     let body: any = null;
     try {
-      body = await res.json();
+      body = JSON.parse(text);
     } catch {
-      body = await res.text();
+      body = text;
     }
     // A 401 on a call that actually carried a token means the session is stale
     // or revoked. Clear it and send the user back to sign-in instead of
@@ -66,11 +72,14 @@ export interface UploadVideoOptions {
 /** Build an ApiError from a failed fetch Response, redirecting to sign-in on a
  * stale 401 (mirrors the inline handling in `api()`). */
 async function httpError(res: Response, token: string | null): Promise<ApiError> {
+  // Read the body once (see api()); a second read throws "body stream already
+  // read" and would mask the real non-JSON error (e.g. a Cloudflare HTML page).
+  const text = await res.text();
   let body: any = null;
   try {
-    body = await res.json();
+    body = JSON.parse(text);
   } catch {
-    body = await res.text();
+    body = text;
   }
   if (res.status === 401 && token) {
     setToken(null);
@@ -180,7 +189,47 @@ async function uploadVideoChunked<T = any>({ file, gameHint, preferLabels, onPro
     body: JSON.stringify({ uploadId: init.uploadId, size: file.size }),
   });
   if (!compRes.ok) throw await httpError(compRes, token);
-  return (await compRes.json()) as T;
+  // The server finalizes the file + creates the job and returns immediately
+  // (running the analyze pipeline synchronously would outlast the edge request
+  // timeout on a long VOD). Poll GET /jobs/:id to a terminal state so the
+  // caller still gets the fully-processed job — same contract as single-shot.
+  const submitted = (await compRes.json()) as any;
+  const st = submitted?.job?.status;
+  if (st === "done" || st === "failed" || st === "cancelled") return submitted as T;
+  return (await pollJob<T>(submitted?.job?.id, token)) as T;
+}
+
+/** Poll a job until it reaches a terminal state. Timing out (rather than the
+ * request blocking server-side) keeps the upload from tripping the edge
+ * request timeout; a long VOD processes in the background and we return once
+ * it's done, or throw a clear error if it failed. */
+async function pollJob<T = any>(jobId: string, token: string | null): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (token) headers["authorization"] = `Bearer ${token}`;
+  const startedAt = Date.now();
+  const timeoutMs = 45 * 60 * 1000; // same ballpark as the single-shot pipeline
+  while (Date.now() - startedAt < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const res = await fetch(`/jobs/${jobId}`, { headers });
+    if (!res.ok) throw await httpError(res, token);
+    const data = (await res.json()) as any;
+    const st = data?.job?.status;
+    if (st === "done") return data as T;
+    if (st === "failed") {
+      const err = new Error("Upload finished but the video couldn't be analyzed — try again or paste a download URL instead.") as ApiError;
+      err.status = 0;
+      throw err;
+    }
+    if (st === "cancelled") {
+      const err = new Error("Upload was cancelled.") as ApiError;
+      err.status = 0;
+      throw err;
+    }
+    // still active/queued -> keep polling
+  }
+  const err = new Error("Upload is still processing — check your highlights shortly.") as ApiError;
+  err.status = 0;
+  throw err;
 }
 
 /** POST one blob as a multipart `file` part to the session append endpoint; the
