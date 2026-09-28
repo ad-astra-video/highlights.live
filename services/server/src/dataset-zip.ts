@@ -16,12 +16,19 @@
 //   │                                    objects[{id,bbox,kind}]} — same labelled
 //   │                                    set the tracker eval uses
 //   └── images/
-//       └── <basename of each sample imageRef>   annotated frames / boxes
+//       └── <unique slug of each sample imageRef>   annotated frames / boxes
 //
 // Re-ingest (matches services/train/fine_tune_od.py): point --manifest / --val
 // at the two JSONL files and pass --image-base-dirs images so imageRef
 // basenames resolve to the bundled frames. Every rail is self-contained: the
-// manifests reference only image basenames, and the zip ships those basenames.
+// manifests reference image slugs whose basenames match the bundled file, and
+// the zip ships those files.
+//
+// Naming/disambiguity: a frame's archive name and its `image:` binding are
+// keyed by the FULL persisted imageRef slug (dir + basename, slashes joined by
+// `_`), never by the bare basename. `/training/extract` writes each clip under
+// its own uuid dir and ffmpeg restarts at `frame_0001.jpg`, so two clips would
+// otherwise collide on `frame_0001.jpg` and ship the wrong frame (ADAAAA-5431).
 import { deflateRawSync, crc32 } from "node:zlib";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -63,12 +70,23 @@ export async function readPersistedImage(
 }
 
 // --- DetectionTrainingSample -> image filename ------------------------------
-/** The file name a sample's image is stored under in the zip (basename of its
- * imageRef). Mirrors services/train/fine_tune_od.py `resolve_image`, which
- * matches by basename, so re-ingestion resolves even though the persisted
- * imageRef may carry a bucket/prefix/uuid dir. */
+/** Unique, archive-safe slug for a persisted imageRef (relative to the dataset
+ * extract root, e.g. `clipA/frame_0001.jpg`). Joins every path segment with
+ * `_` so two clips that both restart at `frame_0001.jpg` (each under its own
+ * uuid dir) never collide on a bare basename: `clipA/frame_0001.jpg` ->
+ * `clipA_frame_0001.jpg`. The shipped manifests, track_label_manifest `image:`
+ * field, and bundled images all key on this slug. Because re-ingest
+ * (`fine_tune_od.py resolve_image`) matches by basename, the shipped manifest
+ * imageRef is rewritten to this slug so basename(slug)==slug resolves to the
+ * bundled file even for multi-clip datasets. */
+export function imageRefSlug(imageRef: string): string {
+  return imageRef.split(/[\\/]+/).filter(Boolean).join("_");
+}
+
+/** The file name a sample's image is stored under in the zip (the unique slug
+ * of its full imageRef, not the bare basename — see imageRefSlug). */
 export function sampleImageName(sample: DetectionTrainingSample): string {
-  return path.basename(sample.imageRef.split(/[\\/]/).join("/")).replace(/[\\/]/g, "_");
+  return imageRefSlug(sample.imageRef);
 }
 
 // --- ZIP writer -------------------------------------------------------------
@@ -180,7 +198,7 @@ export function buildTrackLabelManifest(
         bbox: o.bbox,
         kind: o.label,
       })),
-      image: sampleImageName(s),
+      image: imageRefSlug(s.imageRef),
       sourceId: s.id,
     }));
   const manifest = {
@@ -205,14 +223,15 @@ export interface DatasetZipSource {
 const README = `# Curated detection dataset (zip export)
 
 This zip is the persisted DetectionTrainingSample dataset exported for local
-retention. It is fully self-contained: manifests reference only image basenames,
-and the annotated frames ship alongside them.
+retention. It is fully self-contained: each manifest imageRef is a unique
+slug (dir + basename joined by an underscore) and the annotated frames ship
+alongside them, so multi-clip datasets keep every frame distinct.
 
 Layout:
   train_manifest.jsonl      Zod-valid DetectionTrainingSample train set (JSONL)
   val_manifest.jsonl        Zod-valid DetectionTrainingSample val set (JSONL)
   track_label_manifest.json consolidated labelled set ({sport, clips, frames})
-  images/<frame_XXX>.jpg    annotated frames (one per sample imageRef)
+  images/<refSlug>.jpg       annotated frames (one per sample imageRef)
   README.md                 this file
 
 Re-ingest (services/train/fine_tune_od.py):
@@ -222,6 +241,13 @@ Re-ingest (services/train/fine_tune_od.py):
 Each manifest line validates against DetectionTrainingSampleSchema; frames are
 1280x720 and object bboxes are normalized 0..1 in the closed soccer vocab.
 `;
+
+/** A sample's manifest imageRef rewritten to its archive slug so re-ingest
+ * (which matches by basename) resolves to the bundled image even when two
+ * clips restart at the same frame index. */
+function shipSample(s: DetectionTrainingSample): DetectionTrainingSample {
+  return Object.assign({}, s, { imageRef: imageRefSlug(s.imageRef) });
+}
 
 /** Build the downloadable dataset ZIP from a persisted dataset record. Throws
  * with a descriptive error listing any missing annotated frames so a user can
@@ -233,7 +259,7 @@ export async function buildDatasetZip(src: DatasetZipSource): Promise<Buffer> {
     {
       name: "train_manifest.jsonl",
       data: Buffer.from(
-        train.map((s) => JSON.stringify(DetectionTrainingSampleSchema.parse(s))).join("\n") +
+        train.map((s) => JSON.stringify(DetectionTrainingSampleSchema.parse(shipSample(s)))).join("\n") +
           (train.length ? "\n" : ""),
         "utf8",
       ),
@@ -241,7 +267,7 @@ export async function buildDatasetZip(src: DatasetZipSource): Promise<Buffer> {
     {
       name: "val_manifest.jsonl",
       data: Buffer.from(
-        val.map((s) => JSON.stringify(DetectionTrainingSampleSchema.parse(s))).join("\n") +
+        val.map((s) => JSON.stringify(DetectionTrainingSampleSchema.parse(shipSample(s)))).join("\n") +
           (val.length ? "\n" : ""),
         "utf8",
       ),
@@ -249,14 +275,23 @@ export async function buildDatasetZip(src: DatasetZipSource): Promise<Buffer> {
     { name: "track_label_manifest.json", data: Buffer.from(buildTrackLabelManifest(train, val), "utf8") },
   ];
 
-  // Bundle each unique imageRef exactly once (a frame may be shared across
-  // samples). Fail closed if any annotated frame is missing from persistence.
+  // Bundle each unique imageRef exactly once by its archive SLUG (a frame may
+  // be shared across samples; two clips may share a bare basename but never a
+  // full-ref slug). Fail closed if any annotated frame is missing, or if two
+  // distinct imageRefs collapse to the same slug (we never merge frames).
   const missing: string[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, string>(); // slug -> original ref
   for (const ref of imageRefs) {
-    const name = path.basename(ref.split(/[\\/]/).join("/")).replace(/[\\/]/g, "_");
-    if (seen.has(name)) continue;
-    seen.add(name);
+    const name = imageRefSlug(ref);
+    if (seen.has(name)) {
+      if (seen.get(name) !== ref) {
+        throw new Error(
+          `dataset zip aborted: distinct imageRefs map to the same archive image '${name}' (${seen.get(name)} and ${ref}); refusing to merge frames`,
+        );
+      }
+      continue;
+    }
+    seen.set(name, ref);
     const data = await src.readImage(ref);
     if (!data) {
       missing.push(name);
