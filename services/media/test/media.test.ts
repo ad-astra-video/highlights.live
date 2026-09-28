@@ -108,6 +108,34 @@ describe("media server handshake (b)", () => {
     await srv.close();
   });
 
+  it("answers the browser's CORS preflight + reflects Origin for WebRTC signaling (ADAAAA-5776)", async () => {
+    // Cross-origin signaling POST from the webapp origin to the media origin.
+    const origin = "https://app.example.com";
+    const post = await app.inject({
+      method: "POST",
+      url: "/sessions/x/rtc/offer",
+      headers: { origin, "content-type": "application/json" },
+      payload: { offer: {} },
+    });
+    expect(post.headers["access-control-allow-origin"]).toBe(origin);
+    expect(post.headers["access-control-allow-methods"]).toContain("POST");
+
+    // The browser's preflight for an RTC ICE candidate POST must succeed (204),
+    // not be rejected with `TypeError: Failed to fetch`.
+    const pre = await app.inject({
+      method: "OPTIONS",
+      url: "/sessions/x/rtc/ice/pc1",
+      headers: { origin, "access-control-request-method": "POST", "access-control-request-headers": "content-type" },
+    });
+    expect(pre.statusCode).toBe(204);
+    expect(pre.headers["access-control-allow-origin"]).toBe(origin);
+    expect(pre.headers["access-control-allow-headers"]).toContain("Content-Type");
+
+    // No Origin header (control-plane, same-origin) -> no ACAO (never wildcard).
+    const noOrigin = await app.inject({ method: "GET", url: "/health" });
+    expect(noOrigin.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
   it("streams a frame over WS -> publishes to video-in -> relays the observation", async () => {
     const ws = await wsConnect(`${base.replace("http", "ws")}/stream/sess-fake`);
     const jpegB64 = Buffer.from("fake-jpeg-bytes").toString("base64");

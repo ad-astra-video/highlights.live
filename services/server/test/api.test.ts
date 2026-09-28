@@ -465,6 +465,68 @@ describe("media session reroute (DB-tracked)", () => {
     await app.close();
     await new Promise<void>((r) => srv.close(() => r()));
   });
+
+  it("returns the PUBLIC media origin to the browser for WebRTC signaling, not the docker-internal MEDIA_SERVER_URL (ADAAAA-5776)", async () => {
+    // Fake media server reachable only on the control-plane network (the docker
+    // internal host). The BROWSER could never resolve/reserve this — before the
+    // fix its RTC signaling fetch to it failed with `TypeError: Failed to fetch`.
+    const srv = createServer((req, res) => {
+      const url = (req.url || "").split("?")[0];
+      if (url === "/health") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"status":"ok"}');
+        return;
+      }
+      if (url === "/sessions" && req.method === "POST") {
+        req.on("data", () => undefined);
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              sessionId: "sess-pub",
+              wsPath: "/stream/sess-pub",
+              wsUrl: `ws://media:4070/stream/sess-pub`,
+              streamId: "st-pub",
+            })
+          );
+        });
+        return;
+      }
+      if (req.method === "POST" && url.endsWith("/close")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"ok":true}');
+        return;
+      }
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end('{"error":"nf"}');
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as any).port;
+
+    // MEDIA_SERVER_URL is the docker-internal address the control plane dials;
+    // MEDIA_PUBLIC_BASE_URL is the LB/Cloudflare front the user's browser dials.
+    const { app, db } = await buildTestApp({
+      MEDIA_SERVER_URL: `http://127.0.0.1:${port}`,
+      MEDIA_PUBLIC_BASE_URL: "https://highlights-media.dpn.gg",
+    });
+    const token = await register(app, "mpub@test.dev", "password123");
+    const jr = await app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token}` }, payload: { source: "browser", gameHint: "x" } });
+    const jobId = jr.json().job.id;
+
+    const m1 = await app.inject({ method: "POST", url: `/jobs/${jobId}/media`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(m1.statusCode).toBe(200);
+    const body = m1.json();
+    // The browser must signal to the PUBLIC origin, never `media` / 127.0.0.1.
+    expect(body.mediaOrigin).toBe("https://highlights-media.dpn.gg");
+    expect(body.rtc).toBe(true);
+    expect(body.mediaSessionId).toBe("sess-pub");
+    // The DB row keeps the INTERNAL origin so the control plane can health-check it.
+    const rec = await db.getMediaSession(jobId);
+    expect(rec?.mediaOrigin).toBe(`http://127.0.0.1:${port}`);
+
+    await app.close();
+    await new Promise<void>((r) => srv.close(() => r()));
+  });
 });
 
 describe("VOD browser upload (multipart POST /jobs/upload)", () => {
