@@ -33,6 +33,7 @@ import {
   DetectionTrainingSampleSchema,
   type Dataset,
   type DetectionTrainingSample,
+  type HighlightRecord,
 } from "@highlights/events";
 import {
   datasetAccessActive,
@@ -40,7 +41,7 @@ import {
 } from "./dataset-lifecycle";
 import { LiveIngest, type LiveKind } from "./live";
 import { extractVodAudioChunks } from "./vod-audio";
-import type { Db, MediaSession, AnalyticsSnapshot } from "./db";
+import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./db";
 import { AuthService, BetaGateError, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError, canRetrieveDataset } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
@@ -193,6 +194,45 @@ export interface ApiDeps {
   billing: BillingService;
   entitlements: EntitlementsService;
   mailer?: Mailer;
+}
+
+/** The persisted-record shape used when a highlight is accepted: write-through
+ * the record (memory + DB) so GET /highlights and GET /feed see it immediately,
+ * then bill + debit quota exactly once. */
+export interface LiveHighlightPersistence {
+  store: Store;
+  cfg: ServerConfig;
+  billing: BillingService;
+  entitlements: EntitlementsService;
+}
+
+/** Persist + publish an accepted highlight to the user's feed at DECISION time
+ * (ADAAAA-5777). Previously the live path only called store.addHighlight after
+ * `ingest.stop()` at session end, so end users saw highlights only once the live
+ * session completed. This writes the record through at the moment the highlight
+ * is decided (store memory write is synchronous, so the feed reads it the same
+ * tick), then applies billing (billing.onHighlightCreated) and the quota debit
+ * (entitlements.onClipGenerated) — exactly once per accepted highlight.
+ *
+ * Called fire-and-forget from the live onEvent `highlight` hook; a rejected
+ * record never reaches it, and a failure is logged without stalling the live
+ * frame loop. Keep db (highlight persist) <-> server (publish) <-> ui (feed
+ * surface) contracts in sync when editing this. */
+export async function persistLiveHighlight(
+  deps: LiveHighlightPersistence,
+  user: User,
+  sub: Subscription,
+  highlight: HighlightRecord
+): Promise<HighlightRecord> {
+  const stored = await deps.store.addHighlight({
+    ...highlight,
+    ownerId: user.id,
+    status: deps.cfg.autoPublishHighlights ? "accepted" : "pending",
+  });
+  await deps.billing.onHighlightCreated(user, sub);
+  // A clip generated successfully debits the quota once.
+  await deps.entitlements.onClipGenerated(user);
+  return stored;
 }
 
 export function buildApp(deps: ApiDeps): FastifyInstance {
@@ -394,6 +434,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // both mark candidates on the same live session. analyzeJob() receives it
       // as `initialSession` and stops it (and any re-reserves) in its finally.
       const initial = await adapter.reservePerceive();
+      // Bind `ingest.cut` (it reads `this.cfg`): analyzeJob/decideOnCandidate
+      // receive it as a plain function reference, so an unbound method loses
+      // `this` and throws (job->failed) the moment a highlight needs a clip.
+      const cut = (ts: number) => ingest.cut(ts);
       const anaCfg: AnalyzerConfig = {
         jobId: job.id,
         clipBeforeS: cfg.clipBeforeS,
@@ -401,7 +445,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         gameHint: job.gameHint || cfg.gameHintDefault,
         preferLabels: job.preferLabels,
       };
-      const onEvent = jobEventHook(job.id);
+      // Persist + publish each accepted highlight at DECISION time, not at
+      // session end, so the user's feed streams highlights continuously while
+      // the live session runs (ADAAAA-5777). jobEventHook fans the same event
+      // to the live-console SSE subscribers; the `highlight` branch additionally
+      // write-throughs the record (store memory + DB) and bills/debits exactly
+      // once. Best-effort: a failed persist logs and never stalls the live
+      // frame loop, so the stream keeps identifying highlights regardless.
+      const onEvent = (ev: AnalyzeEvent) => {
+        jobEventHook(job.id)(ev);
+        if (ev.type === "highlight" && ev.highlight) {
+          persistLiveHighlight({ store, cfg, billing, entitlements }, user, sub, ev.highlight).catch((e) =>
+            console.error(`[live:${job.id}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
+          );
+        }
+      };
       // Shared live-run context (INC-2 / ADAAAA-4325 slice 4): the video
       // /analyze leg and the audio tap leg both feed their frames + evidence
       // into this so an audio-triggered candidate can be decided on the
@@ -429,7 +487,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
                 streamId: job.id,
               });
               if (cand) {
-                await decideOnCandidate(adapter, shared, ingest.cut, anaCfg, cand, onEvent, {
+                await decideOnCandidate(adapter, shared, cut, anaCfg, cand, onEvent, {
                   seq: chunk.seq,
                   timestamp: chunk.timestamp,
                 });
@@ -443,19 +501,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         }
       })();
 
-      const outcome = await analyzeJob(adapter, ingest.frames(), ingest.cut, anaCfg, onEvent, initial, shared);
+      const outcome = await analyzeJob(adapter, ingest.frames(), cut, anaCfg, onEvent, initial, shared);
       // Terminate ingest (kills both ffmpeg procs); the audio tap drains and
-      // the loop resolves any in-flight candidates before we persist.
+      // the loop resolves any in-flight candidates. Highlights from BOTH legs
+      // (video + audio) were already persisted + billed at DECISION time via
+      // the onEvent `highlight` hook above — nothing to re-persist here.
       await ingest.stop();
       await audioLoop;
-      // Persist highlights from BOTH legs: the video and audio legs accumulate
-      // into the same shared.highlights array, so one pass covers both.
-      for (const h of shared.highlights) {
-        await store.addHighlight({ ...h, ownerId: user.id, status: cfg.autoPublishHighlights ? "accepted" : "pending" });
-        await billing.onHighlightCreated(user, sub);
-        // A clip generated successfully debits the quota once.
-        await entitlements.onClipGenerated(user);
-      }
       // Durable Stage-A FP-rate + latency metric (INC-2 / ADAAAA-4325 slice 5):
       // snapshotted onto the job so the noise-trigger cost bound (<= 60% of
       // audio candidates rejected by Gemma) is inspectable/queryable post-run.
@@ -1072,7 +1124,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           headroom: cfg.liveSampleHeadroom,
         });
         await store.patchJob(job.id, { sampleFps });
-        const kind: LiveKind = req.body.source === "screen" ? "screen" : "rtmp";
+        const kind: LiveKind =
+          req.body.source === "screen" ? "screen" : (req.body.source as LiveKind) === "file-sim" ? "file-sim" : "rtmp";
         const ingest = new LiveIngest(cfg, job.id, {
           kind,
           url: videoPath,
