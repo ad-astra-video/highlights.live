@@ -606,7 +606,6 @@ export class SqliteDb implements Db {
     const rows = this.db.prepare("SELECT * FROM dataset_purge_log ORDER BY purged_at DESC LIMIT ?").all(limit) as any[];
     return rows.map(rowToDatasetPurgeLog);
   }
-  }
 
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
     const r = this.db
@@ -1087,7 +1086,6 @@ export class PgDb implements Db {
   async listDatasetPurgeLog(limit = 100): Promise<DatasetPurgeLogEntry[]> {
     const r = await this.pool.query("SELECT * FROM dataset_purge_log ORDER BY purged_at DESC LIMIT $1", [limit]);
     return r.rows.map(rowToDatasetPurgeLog);
-  }
   }
 
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
