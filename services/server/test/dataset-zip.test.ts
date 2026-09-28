@@ -21,6 +21,7 @@ import {
   readPersistedImage,
   datasetExtractRoot,
   sampleImageName,
+  imageRefSlug,
 } from "../src/dataset-zip";
 import { canRetrieveDataset } from "../src/billing";
 import { buildTestApp } from "./helpers";
@@ -124,8 +125,8 @@ describe("buildDatasetZip layout (ADAAAA-5397)", () => {
     const unzipped = readZip(zip);
     const names = Object.keys(unzipped).sort();
     expect(names).toEqual(
-      ["README.md", "images/frame_0001.jpg", "images/frame_0002.jpg", "images/frame_0003.jpg",
-        "images/frame_0101.jpg", "track_label_manifest.json", "train_manifest.jsonl", "val_manifest.jsonl"],
+      ["README.md", "images/d1_frame_0001.jpg", "images/d1_frame_0002.jpg", "images/d1_frame_0003.jpg",
+        "images/d1_frame_0101.jpg", "track_label_manifest.json", "train_manifest.jsonl", "val_manifest.jsonl"],
     );
 
     // manifests re-ingest cleanly against the shared Zod schema
@@ -149,7 +150,7 @@ describe("buildDatasetZip layout (ADAAAA-5397)", () => {
   });
 
   it("aborts (no corrupt zip) when an annotated frame is missing from persistence", async () => {
-    const images = new Map<string, Buffer>([["frame_0001.jpg", TINY_JPEG]]);
+    const images = new Map<string, Buffer>([["d1_frame_0001.jpg", TINY_JPEG]]);
     await expect(
       buildDatasetZip({
         dataset: makeDataset("ds2", "u1"),
@@ -158,8 +159,80 @@ describe("buildDatasetZip layout (ADAAAA-5397)", () => {
     ).rejects.toThrow(/missing from persistence/);
   });
 
+  it("ships every clip's frame when two clips share frame indices (ADAAAA-5431)", async () => {
+    // Regression: two clips both restart at frame_0001.jpg (each under its own
+    // uuid dir). A bare-basename key silently dropped clipB and bound both
+    // manifests to clipA's first frame -> wrong-frame data corruption on
+    // re-ingest. Keying by the full imageRef slug must keep every frame.
+    const refs = [
+      "clipA/frame_0001.jpg",
+      "clipA/frame_0002.jpg",
+      "clipB/frame_0001.jpg",
+      "clipB/frame_0002.jpg",
+    ];
+    // Distinct bytes per ref so any mis-binding is detectable (TINY_JPEG is one
+    // constant buffer; these differ per index).
+    const bytes: Record<string, Buffer> = {};
+    refs.forEach((r, i) => {
+      bytes[r] = Buffer.from([i, 0xaa, 0xbb, 0xcc, i]);
+    });
+    const mk = (id: string, ref: string, label: TrainingLabel): DetectionTrainingSample =>
+      buildSample(id, ref, 1280, 720, [{ label, bbox: [0.1, 0.2, 0.3, 0.4] }]);
+    const dataset = {
+      id: "ds-multiclip",
+      ownerId: "u1",
+      name: "mc",
+      train: [mk("a1", "clipA/frame_0001.jpg", "player"), mk("a2", "clipA/frame_0002.jpg", "soccer ball")],
+      val: [mk("b1", "clipB/frame_0001.jpg", "goalkeeper"), mk("b2", "clipB/frame_0002.jpg", "goal")],
+      imageRefs: refs,
+      trainCount: 2,
+      valCount: 2,
+      status: "active",
+      createdAt: new Date().toISOString(),
+    } as Dataset;
+
+    let reads = 0;
+    const zip = await buildDatasetZip({
+      dataset,
+      readImage: async (ref) => {
+        reads++;
+        return bytes[ref] ?? null;
+      },
+    });
+    const unzipped = readZip(zip);
+
+    // 1) Every clip's frame is read and bundled — nothing dropped by a
+    //    basename collision (the old code read clipA's first frame once and
+    //    emitted a single images/frame_0001.jpg).
+    expect(reads).toBe(refs.length);
+    const slugs = refs.map(imageRefSlug);
+    expect(new Set(slugs).size).toBe(refs.length); // no slug collapse
+    for (const s of slugs) expect(unzipped[`images/${s}`]).toBeTruthy();
+
+    // 2) Each bundled image is the RIGHT clip's distinct bytes (clipA and
+    //    clipB's frame_0001 are different).
+    for (const ref of refs) {
+      expect(unzipped[`images/${imageRefSlug(ref)}`].equals(bytes[ref])).toBe(true);
+    }
+
+    // 3) Manifests bind each sample to its own frame: imageRef is rewritten to
+    //    the unique slug, so basename(slug)==slug resolves on re-ingest.
+    const train = parseManifestJsonl(unzipped["train_manifest.jsonl"].toString());
+    const val = parseManifestJsonl(unzipped["val_manifest.jsonl"].toString());
+    expect([...train, ...val].map((s) => s.imageRef)).toEqual(slugs);
+    for (const s of [...train, ...val]) {
+      const ref = refs.find((r) => imageRefSlug(r) === s.imageRef)!;
+      expect(unzipped[`images/${s.imageRef}`].equals(bytes[ref])).toBe(true);
+    }
+
+    // 4) track_label_manifest.image uses the same slugs.
+    const tlm = JSON.parse(unzipped["track_label_manifest.json"].toString());
+    const tlmImages = tlm.clips.flatMap((c: any) => c.frames.map((f: any) => f.image));
+    expect([...tlmImages].sort()).toEqual([...slugs].sort());
+  });
+
   it("isDecodableByPythonZipfile (external well-formedness check)", async () => {
-    const images = new Map([["frame_0001.jpg", TINY_JPEG]]);
+    const images = new Map([["d1_frame_0001.jpg", TINY_JPEG]]);
     const zip = await buildDatasetZip({
       dataset: makeDataset("ds3", "u1", TRAIN.slice(0, 1), []),
       readImage: async (r) => images.get(sampleImageName({ imageRef: r } as any)) as Buffer,
@@ -169,11 +242,11 @@ describe("buildDatasetZip layout (ADAAAA-5397)", () => {
     await fs.writeFile(zipPath, zip);
     const listing = execFileSync("python3", ["-m", "zipfile", "-l", zipPath], { encoding: "utf8" });
     expect(listing).toContain("train_manifest.jsonl");
-    expect(listing).toContain("images/frame_0001.jpg");
+    expect(listing).toContain("images/d1_frame_0001.jpg");
     execFileSync("python3", ["-m", "zipfile", "-e", zipPath, path.join(dir, "out")]);
     const manifest = await fs.readFile(path.join(dir, "out", "train_manifest.jsonl"), "utf8");
     expect(parseManifestJsonl(manifest)).toHaveLength(1);
-    const img = await fs.readFile(path.join(dir, "out", "images", "frame_0001.jpg"));
+    const img = await fs.readFile(path.join(dir, "out", "images", "d1_frame_0001.jpg"));
     expect(img.equals(TINY_JPEG)).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
@@ -275,7 +348,7 @@ describe("GET /training/dataset.zip route (ADAAAA-5397)", () => {
     const unzipped = readZip(res.rawPayload as Buffer);
     expect(unzipped["train_manifest.jsonl"]).toBeTruthy();
     expect(parseManifestJsonl(unzipped["train_manifest.jsonl"].toString())).toHaveLength(3);
-    expect(unzipped["images/frame_0001.jpg"].equals(TINY_JPEG)).toBe(true);
+    expect(unzipped["images/d1_frame_0001.jpg"].equals(TINY_JPEG)).toBe(true);
 
     // explicit ?id= also works
     res = await app.inject({ method: "GET", url: `/training/dataset.zip?id=${dsId}`, headers: { authorization: `Bearer ${token}` } });
