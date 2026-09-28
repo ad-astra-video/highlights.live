@@ -48,6 +48,11 @@ class SessionState:
     last_image_b64: str = ""
     game_hint: str = ""
     prefer_labels: List[str] = field(default_factory=list)
+    # Per-stream LoRA injection (ADAAAA-5324): filesystem ref to this stream's
+    # merged Florence-2 model dir (train's LoRA merge output). Empty = base
+    # model (other streams keep base). Selects the detector via
+    # florence.get_detector(lora_ref) at frame time.
+    lora_ref: str = ""
     sample_fps: float = 1.0
     idle_timeout_s: float = 120.0
     # Stage-A audio noise-change gate (INC-2 / ADAAAA-4325). Cheap pure-DSP

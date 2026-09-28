@@ -290,3 +290,59 @@ def test_capability_slows_down_for_slow_card(monkeypatch):
     c = florence.capability()
     assert c["max_fps"] < 0.6
     assert c["sample_interval_s"] > 1.5
+
+
+# --- Per-stream LoRA injection (ADAAAA-5324) ---------------------------------
+
+def test_get_detector_base_is_shared_singleton(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_MODE", "florence")
+    florence.reset_detectors()
+    try:
+        d1 = florence.get_detector()
+        d2 = florence.get_detector()
+        d3 = florence.get_detector(None)  # no adapter == base
+        assert d1 is d2 is d3, "base stream must always share ONE detector"
+        assert d1.model_path is None
+        assert d1.model_name == "microsoft/Florence-2-base"
+    finally:
+        florence.reset_detectors()
+
+
+def test_get_detector_selects_distinct_lora_variant_per_ref(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_MODE", "florence")
+    florence.reset_detectors()
+    try:
+        a = florence.get_detector("/models/lora-1")
+        b = florence.get_detector("/models/lora-2")
+        a_again = florence.get_detector("/models/lora-1")
+        # Each adapter ref -> its own detector (its own base+LoRA model).
+        assert a is not b
+        # Same ref is cached (one model in memory per adapter, no reload).
+        assert a_again is a
+        assert a.model_path == "/models/lora-1"
+        assert b.model_path == "/models/lora-2"
+        # Base stays a separate shared singleton (no regression on base streams).
+        base = florence.get_detector(None)
+        assert base is not a
+        assert base.model_path is None
+    finally:
+        florence.reset_detectors()
+
+
+def test_get_detector_reset_clears_variants(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_MODE", "florence")
+    florence.reset_detectors()
+    a = florence.get_detector("/models/lora-1")
+    base = florence.get_detector(None)
+    florence.reset_detectors()
+    a2 = florence.get_detector("/models/lora-1")
+    base2 = florence.get_detector(None)
+    assert a2 is not a, "reset must drop the cached variant so a fresh model loads"
+    assert base2 is not base
+
+
+def test_get_detector_stub_mode_returns_none(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_MODE", "stub")
+    florence.reset_detectors()
+    assert florence.get_detector("/models/lora-1") is None
+    assert florence.get_detector(None) is None
