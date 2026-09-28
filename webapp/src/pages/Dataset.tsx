@@ -56,6 +56,35 @@ interface ExtractedMeta {
   source: string;
 }
 
+// Saved-dataset archive contract (ADAAAA-5396, Change 3): the server persists
+// every sent dataset in its DB and exposes it via GET /datasets (list) and
+// GET /datasets/:id (detail), gated to an account that is active on a paid
+// (non-starter) plan. The list carries a lightweight summary; the detail
+// returns the full train/val manifests so a previously-sent dataset can be
+// re-materialized in the curation UI after a reload or a new session.
+interface SavedDatasetSummary {
+  id: string;
+  name: string | null;
+  ownerId: string;
+  trainCount: number;
+  valCount: number;
+  imageRefs: string[];
+  status: string;
+  createdAt: string;
+}
+interface SavedDatasetDetail {
+  id: string;
+  ownerId: string;
+  name?: string;
+  train: Array<{ id: string; imageRef: string; width: number; height: number; objects: Array<{ label: string; bbox: [number, number, number, number] }> }>;
+  val: Array<{ id: string; imageRef: string; width: number; height: number; objects: Array<{ label: string; bbox: [number, number, number, number] }> }>;
+  imageRefs: string[];
+  trainCount: number;
+  valCount: number;
+  status: string;
+  createdAt: string;
+}
+
 const CANVAS_W = 960;
 
 /** Auth'd fetch of a frame to an object URL (same pattern as FrameDebugger). */
@@ -89,6 +118,11 @@ export function Dataset() {
   // Resume/Start-new prompt until the user chooses. null = never checked or no
   // saved session.
   const [pendingResume, setPendingResume] = useState<DatasetSessionState | null | undefined>(undefined);
+  // Saved-dataset archive (ADAAAA-5396 C3): list of the user's persisted,
+  // sent datasets (loaded from GET /datasets). null = not yet fetched.
+  const [saved, setSaved] = useState<SavedDatasetSummary[] | null>(null);
+  const [archiveMsg, setArchiveMsg] = useState<string | null>(null);
+  const [archiveDenied, setArchiveDenied] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgUrlRef = useRef<{ _frameId: string; url: string } | null>(null);
@@ -413,6 +447,7 @@ export function Dataset() {
     } finally {
       setSaving(false);
     }
+    refreshArchive();
   }
 
   // --- C2: start / stop / resume ------------------------------------------
@@ -459,6 +494,68 @@ export function Dataset() {
     setErr(null);
     setExportMsg(null);
   }
+  // --- saved-dataset archive (ADAAAA-5396 C3) ------------------------------
+  // Load the user's persisted, sent datasets. A 403 means the account is on a
+  // starter plan or deactivated — the archive is hidden (not an error) so a
+  // starter user isn't haunted by a dead control. Admin/paid active accounts
+  // get the live list.
+  async function refreshArchive() {
+    setArchiveDenied(false);
+    try {
+      const r = await api<{ datasets: SavedDatasetSummary[] }>("/datasets");
+      setSaved(r.datasets);
+      setArchiveMsg(null);
+    } catch (e: any) {
+      if (e?.status === 403) {
+        setArchiveDenied(true);
+        setSaved(null);
+      } else {
+        setSaved([]);
+        setArchiveMsg(String(e?.message || e));
+      }
+    }
+  }
+
+  // Re-materialize a saved dataset's train+val samples back into curation
+  // frames so the operator can continue reviewing / re-export after a reload
+  // or a new session (proves retrieval for the paid active account).
+  async function loadSavedDataset(id: string) {
+    try {
+      const r = await api<{ dataset: SavedDatasetDetail }>(`/datasets/${id}`);
+      const samples = [...r.dataset.train, ...r.dataset.val];
+      const frames: CurationFrame[] = samples.map((s, i) => ({
+        id: s.id,
+        imageRef: s.imageRef,
+        width: s.width,
+        height: s.height,
+        uri: `/training/frames/${s.imageRef}`,
+        phash: "",
+        sourceSeq: i,
+        accepted: true,
+        boxes: s.objects.map((o, j) => ({
+          id: `saved-box-${i}-${j}`,
+          label: o.label as TrainingLabel,
+          bbox: o.bbox,
+        })),
+      }));
+      for (const u of createdUrls.current) URL.revokeObjectURL(u);
+      createdUrls.current.clear();
+      setFrames(frames);
+      setSelIdx(frames.length ? 0 : null);
+      setSelBox(null);
+      setErr(null);
+      setExportMsg(`Loaded saved dataset “${r.dataset.name || id}” (${frames.length} sample(s)).`);
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    }
+  }
+
+  // Fetch the archive once on mount so a returning session sees its saved sets.
+  useEffect(() => {
+    refreshArchive();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
 
   return (
     <div className="flex flex-col gap-6">
@@ -725,6 +822,43 @@ export function Dataset() {
             {exportMsg && <p className="text-sm text-green">{exportMsg}</p>}
           </div>
         )}
+      </section>
+
+      {/* Saved-dataset archive (ADAAAA-5396 C3): the server persists every sent
+          dataset in its DB. This section lists them (retrievable for a paid
+          active account) and can re-materialize a saved set back into the
+          editor after a reload / new session. It is hidden for a starter-plan
+          or deactivated account (server denies with 403). */}
+      <section className="card p-5">
+        <h2 className="mb-3 text-lg font-bold">6 · Your saved datasets (server archive)</h2>
+        {archiveDenied ? (
+          <p className="text-sm text-mut">Dataset archive requires an active paid plan.</p>
+        ) : saved === null ? (
+          <p className="text-sm text-mut">Loading…</p>
+        ) : saved.length === 0 ? (
+          <p className="text-sm text-mut">No saved datasets yet — send (save) a train/val manifest to persist one.</p>
+        ) : (
+          <ul className="flex flex-col gap-2 text-sm">
+            {saved.map((d) => (
+              <li key={d.id} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 px-3 py-2">
+                <div>
+                  <span className="text-neon font-semibold">{d.name || d.id}</span>
+                  <span className="ml-2 text-mut">
+                    {d.trainCount} train / {d.valCount} val · {d.imageRefs.length} frame(s) ·{" "}
+                    {new Date(d.createdAt).toLocaleString()}
+                  </span>
+                </div>
+                <button className="btn-neon btn-ghost" onClick={() => loadSavedDataset(d.id)}>
+                  Load
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button className="btn-neon btn-ghost mt-3" onClick={refreshArchive} disabled={archiveDenied}>
+          Refresh
+        </button>
+        {archiveMsg && <p className="mt-2 text-xs text-yellow">{archiveMsg}</p>}
       </section>
     </div>
   );

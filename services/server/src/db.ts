@@ -9,7 +9,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
-import type { Job, HighlightRecord } from "@highlights/events";
+import type { Dataset, Job, HighlightRecord } from "@highlights/events";
 
 // `node:sqlite` is experimental and not in Vite/vitest's builtin external
 // list, so load it via createRequire at runtime instead of a static ESM import
@@ -229,6 +229,11 @@ export interface Db {
   getTrainRun(id: string): Promise<TrainRun | undefined>;
   /** All train runs, newest first; optionally scoped to one owner. */
   listTrainRuns(ownerId?: string): Promise<TrainRun[]>;
+  /** Persist a sent dataset record (full JSON upsert by id) — ADAAAA-5396. */
+  saveDataset(d: Dataset): Promise<void>;
+  getDataset(id: string): Promise<Dataset | undefined>;
+  /** All datasets, newest first; optionally scoped to one owner. */
+  listDatasets(ownerId?: string): Promise<Dataset[]>;
   /** Public waitlist: add an email, deduped by the normalized email (UNIQUE
    * constraint). Returns whether this call actually created a new entry vs the
    * email already being present (idempotent re-submission). */
@@ -515,6 +520,30 @@ export class SqliteDb implements Db {
         : this.db.prepare("SELECT record, created_at FROM train_runs ORDER BY created_at DESC").all()
     ) as { record: string }[];
     return rows.map((r) => JSON.parse(r.record) as TrainRun);
+  }
+
+  async saveDataset(d: Dataset): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO datasets (id, record, owner_id, created_at)
+         VALUES (?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET record=excluded.record, owner_id=excluded.owner_id, created_at=excluded.created_at`
+      )
+      .run(d.id, JSON.stringify(d), d.ownerId, d.createdAt);
+  }
+
+  async getDataset(id: string): Promise<Dataset | undefined> {
+    const r = this.db.prepare("SELECT record FROM datasets WHERE id = ?").get(id);
+    return r ? (JSON.parse((r as any).record) as Dataset) : undefined;
+  }
+
+  async listDatasets(ownerId?: string): Promise<Dataset[]> {
+    const rows = (
+      ownerId
+        ? this.db.prepare("SELECT record, created_at FROM datasets WHERE owner_id = ? ORDER BY created_at DESC").all(ownerId)
+        : this.db.prepare("SELECT record, created_at FROM datasets ORDER BY created_at DESC").all()
+    ) as { record: string }[];
+    return rows.map((r) => JSON.parse(r.record) as Dataset);
   }
 
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
@@ -958,6 +987,31 @@ export class PgDb implements Db {
     return r.rows.map((row) => JSON.parse(row.record) as TrainRun);
   }
 
+  async saveDataset(d: Dataset): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO datasets (id, record, owner_id, created_at)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (id) DO UPDATE SET record=EXCLUDED.record, owner_id=EXCLUDED.owner_id,
+         created_at=EXCLUDED.created_at`,
+      [d.id, JSON.stringify(d), d.ownerId, d.createdAt]
+    );
+  }
+
+  async getDataset(id: string): Promise<Dataset | undefined> {
+    const r = await this.pool.query("SELECT record FROM datasets WHERE id = $1", [id]);
+    return r.rows[0] ? (JSON.parse(r.rows[0].record) as Dataset) : undefined;
+  }
+
+  async listDatasets(ownerId?: string): Promise<Dataset[]> {
+    const r = ownerId
+      ? await this.pool.query(
+          "SELECT record FROM datasets WHERE owner_id = $1 ORDER BY created_at DESC",
+          [ownerId]
+        )
+      : await this.pool.query("SELECT record FROM datasets ORDER BY created_at DESC");
+    return r.rows.map((row) => JSON.parse(row.record) as Dataset);
+  }
+
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
     const r = await this.pool.query(
       "INSERT INTO waitlist (id,email,created_at) VALUES ($1,$2,$3) ON CONFLICT (email) DO NOTHING",
@@ -1256,6 +1310,12 @@ const SCHEMA_SQLITE = `
     status TEXT,
     created_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS datasets (
+    id TEXT PRIMARY KEY,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    created_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS waitlist (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
@@ -1366,6 +1426,12 @@ const SCHEMA_PG = `
     record TEXT NOT NULL,
     owner_id TEXT,
     status TEXT,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS datasets (
+    id TEXT PRIMARY KEY,
+    record TEXT NOT NULL,
+    owner_id TEXT,
     created_at TEXT
   );
   CREATE TABLE IF NOT EXISTS waitlist (
@@ -1491,6 +1557,25 @@ const MIGRATIONS: Migration[] = [
           record TEXT NOT NULL,
           owner_id TEXT,
           status TEXT,
+          created_at TEXT
+        )`
+      );
+    },
+  },
+  {
+    version: 5,
+    name: "datasets-table",
+    up: async (exec) => {
+      // ADAAAA-5396 (Change 3): server-side persistence of sent datasets so a
+      // paid active account can retrieve them across sessions. Fresh DBs
+      // (baseline CREATE) already include the table; this brings
+      // pre-existing on-disk DBs up to shape. TEXT types are valid in both
+      // SQLite and Postgres, so one statement serves both backends.
+      await exec(
+        `CREATE TABLE IF NOT EXISTS datasets (
+          id TEXT PRIMARY KEY,
+          record TEXT NOT NULL,
+          owner_id TEXT,
           created_at TEXT
         )`
       );
