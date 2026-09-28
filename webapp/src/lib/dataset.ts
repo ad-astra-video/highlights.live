@@ -33,6 +33,11 @@ export interface CurationFrame {
   /** perceptual hash of the frame's pixels, used for near-dup bucketing. */
   phash: string;
   sourceSeq: number;
+  /** absolute time (seconds on the clip) of this frame. Set by the curation
+   * windowing layer (ADAAAA-5512) so the carousel can place each frame on the
+   * clip timeline and map time-jumps to frames. Optional for backward compat
+   * with persisted / saved-dataset frames. */
+  sourceTime?: number;
   accepted: boolean;
   boxes: CurationBox[];
 }

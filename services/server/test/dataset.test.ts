@@ -69,15 +69,27 @@ describe("buildExtractArgs sliding window (ADAAAA-5322 v2)", () => {
     expect(args[args.indexOf("-vf") + 1]).toBe("fps=1,scale=320:180");
   });
 
-  it("positions -ss before -i and -to after -i for a bounded window", () => {
+  it("positions -ss before -i and -t (duration) after -i for a bounded in/out window", () => {
+    // ADAAAA-5512: with an in-point, bound the decode with `-t (outSec -
+    // inSec)` so a time-jump window is exact. `-to outSec` after `-ss` input
+    // seeking is measured from the stream start, not the seek point, and would
+    // over-run the window.
     const args = buildExtractArgs({ source: "s.mp4", outDir: "/o", window: { inSec: 12.5, outSec: 40 } });
     const iIdx = args.indexOf("-i");
     const ssIdx = args.indexOf("-ss");
-    const toIdx = args.indexOf("-to");
+    const tIdx = args.indexOf("-t");
     expect(args[ssIdx + 1]).toBe("12.5");
-    expect(args[toIdx + 1]).toBe("40");
+    expect(args[tIdx + 1]).toBe("27.5"); // 40 - 12.5
     expect(ssIdx).toBeLessThan(iIdx); // fast-seek before input
-    expect(toIdx).toBeGreaterThan(iIdx); // stop after input
+    expect(tIdx).toBeGreaterThan(iIdx); // duration bound after input
+    expect(args).not.toContain("-to");
+  });
+
+  it("uses -to (from stream start) when only an out handle is set (no in-point)", () => {
+    const args = buildExtractArgs({ source: "s.mp4", outDir: "/o", window: { outSec: 40 } });
+    const toIdx = args.indexOf("-to");
+    expect(args[toIdx + 1]).toBe("40");
+    expect(args).not.toContain("-t");
   });
 
   it("honours a custom frame rate inside the window", () => {

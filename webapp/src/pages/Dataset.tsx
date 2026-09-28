@@ -39,7 +39,15 @@ import {
   type DatasetSessionState,
 } from "../lib/datasetSession";
 import { FineTuneHelp } from "../components/FineTuneHelp";
-
+import {
+  defaultWindowState,
+  windowExtractParams,
+  jumpWindowTo,
+  nextWindow,
+  clampWindowStart,
+  isAtWindowEnd,
+  type WindowState,
+} from "../lib/datasetWindow";
 
 const PALETTE: Record<string, string> = {
   player: "#22d3ee",
@@ -106,7 +114,14 @@ export function Dataset() {
   const [source, setSource] = useState("");
   const [inSec, setInSec] = useState("0");
   const [outSec, setOutSec] = useState("");
-  const [fps, setFps] = useState("1");
+  const [fps, setFps] = useState("10");
+  // Active 30 s sliding window on the clip timeline (ADAAAA-5512 / 5509):
+  // auto-extract on load, draggable carousel handle, time-jump, auto-advance.
+  // `frames` accumulates curated frames across the windows the operator
+  // reviews (so export/coverage/session keep working), while the carousel and
+  // canvas render only the active window's frames lazily.
+  const [win, setWin] = useState<WindowState>(defaultWindowState(null));
+  const [timeJump, setTimeJump] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [frames, setFrames] = useState<CurationFrame[]>([]);
   const [selIdx, setSelIdx] = useState<number | null>(null);
@@ -134,25 +149,24 @@ export function Dataset() {
 
   const cur = selIdx != null ? frames[selIdx] : null;
 
-  // --- frame extraction ---------------------------------------------------
-  async function doExtract() {
-    if (!source.trim()) return;
+  // --- frame extraction (sliding window, ADAAAA-5512/5509) ----------------
+  // Extracts the *active window* (windowExtractParams -> inSec/outSec/fps) and
+  // merges the resulting frames into the accumulated curation set. Each frame
+  // is stamped with its absolute clip time (sourceTime) so the carousel can
+  // place it on the timeline and time-jumps can land on it. When `landAt` is
+  // given (time-jump), the landed frame — the one nearest that clip time in the
+  // just-extracted window — is selected (within ±1 s @ 10 fps). Returns the
+  // selected global index into `frames`.
+  async function doExtractWindow(w: WindowState, landAt?: number): Promise<number | null> {
+    if (!source.trim()) return null;
     setErr(null);
     setExtracting(true);
-    setFrames([]);
-    setSelIdx(null);
-    setSelBox(null);
-    for (const u of createdUrls.current) URL.revokeObjectURL(u);
-    createdUrls.current.clear();
-    const body: Record<string, unknown> = { source: source.trim() };
-    const fpsNum = parseFloat(fps);
-    if (Number.isFinite(fpsNum) && fpsNum > 0) body.fps = fpsNum;
-    const inNum = parseFloat(inSec);
-    if (Number.isFinite(inNum) && inNum >= 0) body.inSec = inNum;
-    const outNum = parseFloat(outSec);
-    if (Number.isFinite(outNum) && outNum > (Number.isFinite(inNum) ? inNum : -1)) body.outSec = outNum;
+    const { inSec: inNum, outSec: outNum, fps: fpsNum } = windowExtractParams(w);
     try {
-      const r = await api<{ frames: ExtractedMeta[] }>("/training/extract", { body });
+      const r = await api<{ frames: ExtractedMeta[]; clipDuration?: number | null }>("/training/extract", {
+        body: { source: source.trim(), fps: fpsNum, inSec: inNum, outSec: outNum },
+      });
+      const windowStart = inNum;
       const mapped: CurationFrame[] = r.frames.map((f) => ({
         id: f.id,
         imageRef: f.imageRef,
@@ -161,17 +175,93 @@ export function Dataset() {
         uri: `/training/frames/${f.imageRef}`,
         phash: "",
         sourceSeq: f.seq,
+        sourceTime: windowStart + f.seq / fpsNum,
         accepted: false,
         boxes: [],
       }));
-      setFrames(mapped);
-      setSelIdx(mapped.length ? 0 : null);
-      setExportMsg(`Extracted ${mapped.length} frame(s). Review each, then export.`);
+      // Merge into the accumulated set, de-duping by imageRef (re-extracting a
+      // window must not duplicate frames already curated at that time).
+      const existing = new Set(frames.map((f) => f.imageRef));
+      const fresh = mapped.filter((f) => !existing.has(f.imageRef));
+      const merged = frames.concat(fresh);
+      setFrames(merged);
+      // Select: the time-jump landing frame, or the first frame of the window.
+      let select: number;
+      if (landAt != null && fresh.length) {
+        const lo = w.start - 1, hi = w.start + w.len + 1;
+        let best = fresh[0].sourceTime != null ? merged.length - fresh.length : -1;
+        let bestD = Infinity;
+        for (let i = merged.length - fresh.length; i < merged.length; i++) {
+          const t = merged[i].sourceTime;
+          if (t == null) continue;
+          if (t < lo || t > hi) continue;
+          const d = Math.abs(t - landAt);
+          if (d < bestD) { bestD = d; best = i; }
+        }
+        select = best >= 0 ? best : merged.length - fresh.length;
+      } else if (fresh.length) {
+        select = merged.length - fresh.length;
+      } else {
+        select = -1;
+      }
+      // Persist the probed clip duration so the carousel timeline is bounded.
+      if (r.clipDuration != null && Number.isFinite(r.clipDuration)) {
+        setWin((prev) => ({ ...prev, clipDuration: r.clipDuration as number }));
+      }
+      setExportMsg(
+        `Extracted ${mapped.length} frame(s) in window ${inNum}s–${outNum}s at ${fpsNum} fps${
+          landAt != null ? ` · jumped to ${landAt}s` : ""
+        }. Review each, then export.`
+      );
+      return select >= 0 ? select : null;
     } catch (e: any) {
       setErr(String(e?.message || e));
+      return null;
     } finally {
       setExtracting(false);
     }
+  }
+
+  /** Auto-extract the first 30 s window when a clip is loaded (or re-extract
+   * after a time-jump). Selects the landed / first frame of the new window. */
+  async function autoExtractWindow(w: WindowState, landAt?: number) {
+    const idx = await doExtractWindow(w, landAt);
+    if (idx != null) {
+      setSelIdx(idx);
+      setSelBox(null);
+    }
+  }
+
+  // --- window controls (carousel drag / time-jump / auto-advance) ---------
+  /** Move the active window to `startSec` and extract it (carousel drag). */
+  async function moveWindowTo(startSec: number) {
+    const next = { ...win, start: clampWindowStart(win, startSec) };
+    setWin(next);
+    // don't wipe the selection if we're just nudging within the same window
+    await autoExtractWindow(next);
+  }
+
+  /** Time-jump: anchor the window at `t` and extract the matching 30 s;
+   * select the frame nearest to `t` (lands within ±1 s). */
+  async function doTimeJump(t: number) {
+    if (!Number.isFinite(t) || t < 0) return;
+    const next = jumpWindowTo(win, t);
+    setWin(next);
+    setTimeJump(String(t));
+    await autoExtractWindow(next, t);
+  }
+
+  /** Auto-advance: reach the end of the current window without a jump →
+   * extract the next 30 s (sliding window) and select its first frame. */
+  async function doAutoAdvance() {
+    const next = nextWindow(win);
+    if (next.start === win.start) {
+      // no room to advance (clip end) — stay put
+      setExportMsg("Reached the end of the clip — no further window to advance to.");
+      return;
+    }
+    setWin(next);
+    await autoExtractWindow(next);
   }
 
   // --- load + draw the selected frame --------------------------------------
@@ -225,7 +315,9 @@ export function Dataset() {
     const t = setTimeout(() => {
       saveSession(
         buildSession({
-          ingest: { source, inSec, outSec, fps },
+          // Persist the active window position through the ingest fields so a
+          // Resume restores the same 30 s window (ADAAAA-5512/5509).
+          ingest: { source, inSec: String(win.start), outSec: String(win.start + win.len), fps: String(win.fps) },
           frames,
           selIdx,
           selBox,
@@ -460,14 +552,25 @@ export function Dataset() {
    * The saved session is what a later Resume rehydrates. */
   function handleStop() {
     saveSession(
-      buildSession({ ingest: { source, inSec, outSec, fps }, frames, selIdx, selBox, label, seedJson })
+      buildSession({
+        ingest: { source, inSec: String(win.start), outSec: String(win.start + win.len), fps: String(win.fps) },
+        frames,
+        selIdx,
+        selBox,
+        label,
+        seedJson,
+      })
     );
     setExportMsg("Progress saved to your browser — reload or come back later and Resume.");
   }
 
-  /** Resume: hydrate the persisted session back into the editor exactly. */
+  /** Resume: hydrate the persisted session back into the editor exactly (the
+   * window position is restored from the persisted ingest fields). */
   function handleResume(s: DatasetSessionState) {
     setSource(s.ingest.source);
+    const wIn = parseFloat(s.ingest.inSec);
+    const wFps = parseFloat(s.ingest.fps) || 10;
+    setWin({ start: Number.isFinite(wIn) && wIn >= 0 ? wIn : 0, len: 30, fps: wFps, clipDuration: null });
     setInSec(s.ingest.inSec);
     setOutSec(s.ingest.outSec);
     setFps(s.ingest.fps);
@@ -488,7 +591,8 @@ export function Dataset() {
     setSource("");
     setInSec("0");
     setOutSec("");
-    setFps("1");
+    setFps("10");
+    setWin(defaultWindowState(null));
     setFrames([]);
     setSelIdx(null);
     setSelBox(null);
@@ -533,6 +637,9 @@ export function Dataset() {
         uri: `/training/frames/${s.imageRef}`,
         phash: "",
         sourceSeq: i,
+        // Stamp a nominal sourceTime so loaded saved samples still place on the
+        // carousel timeline (windowed view at the current fps).
+        sourceTime: i / (parseFloat(fps) || 10) + win.start,
         accepted: true,
         boxes: s.objects.map((o, j) => ({
           id: `saved-box-${i}-${j}`,
@@ -638,32 +745,61 @@ export function Dataset() {
             placeholder="source URL or clip path, e.g. https://…/clip.mp4 or /data/…/clip.mp4"
             value={source}
             onChange={(e) => setSource(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && doExtract()}
+            onKeyDown={(e) => e.key === "Enter" && autoExtractWindow(defaultWindowState(win.clipDuration))}
           />
         </div>
-        {/* Sliding window: in/out time handles + frame rate. Only the frames
-            inside the window are extracted (ffmpeg -ss/-to). */}
+        {/* Sliding window (ADAAAA-5512/5509): auto-extract the first 30 s at
+            10 fps on load, drag the carousel handle to slide, jump to a time,
+            or auto-advance to the next 30 s. */}
         <div className="mt-3 flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-xs">
-            <span className="text-mut">In (s)</span>
-            <input className="input-neon w-28" type="number" min={0} step={0.5} value={inSec} onChange={(e) => setInSec(e.target.value)} />
+            <span className="text-mut">Load (auto first 30 s @ 10 fps)</span>
+            <button
+              className="btn-neon btn-fill"
+              onClick={() => autoExtractWindow(defaultWindowState(win.clipDuration))}
+              disabled={extracting || !source.trim()}
+            >
+              {extracting ? "Extracting…" : "Load clip"}
+            </button>
           </label>
           <label className="flex flex-col gap-1 text-xs">
-            <span className="text-mut">Out (s, empty = end)</span>
-            <input className="input-neon w-28" type="number" min={0} step={0.5} value={outSec} onChange={(e) => setOutSec(e.target.value)} />
+            <span className="text-mut">Jump to time (s)</span>
+            <div className="flex gap-2">
+              <input
+                className="input-neon w-28"
+                type="number"
+                min={0}
+                step={0.5}
+                placeholder="e.g. 42"
+                value={timeJump}
+                onChange={(e) => setTimeJump(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && doTimeJump(parseFloat(timeJump))}
+              />
+              <button className="btn-neon btn-ghost" onClick={() => doTimeJump(parseFloat(timeJump))} disabled={extracting || !source.trim() || !Number.isFinite(parseFloat(timeJump))}>
+                Jump
+              </button>
+            </div>
           </label>
           <label className="flex flex-col gap-1 text-xs">
-            <span className="text-mut">Frame rate (fps)</span>
-            <input className="input-neon w-24" type="number" min={0.1} step={0.1} value={fps} onChange={(e) => setFps(e.target.value)} />
+            <span className="text-mut">Window (s)</span>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-neon text-sm">{win.start.toFixed(1)}</span>
+              <span className="text-mut">–</span>
+              <span className="font-mono text-neon text-sm">{(win.start + win.len).toFixed(1)}</span>
+              <span className="mx-1 text-mut">·</span>
+              <em className="text-mut not-italic">{win.fps} fps</em>
+            </div>
           </label>
-          <button className="btn-neon btn-fill" onClick={doExtract} disabled={extracting || !source.trim()}>
-            {extracting ? "Extracting…" : "Extract frames"}
-          </button>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-mut">Next 30 s (auto-advance)</span>
+            <button className="btn-neon btn-ghost" onClick={doAutoAdvance} disabled={extracting || frames.length === 0}>
+              Advance ›
+            </button>
+          </label>
         </div>
         <p className="mt-2 text-xs text-mut">
-          Extracts frames at 1280×720 under <code className="text-neon">data/training/extract/</code>. Set the in/out
-          time window to a ~10–30 s sliding segment and a frame rate (default ~1 fps) to keep curation bounded —
-          only frames inside the window are extracted.
+          Auto-extracts the first 30 s at 10 fps (~300 frames) into the canvas. Drag the window in the carousel
+          below to slide along the clip, or jump/advance to extract the next 30 s block (ffmpeg −ss/−to).
         </p>
       </section>
 
@@ -702,8 +838,34 @@ export function Dataset() {
                 </button>
                 <span className="text-mut">
                   frame {selIdx == null ? "–" : selIdx + 1} / {frames.length}
+                  {cur?.sourceTime != null && <span className="text-neon"> · {cur.sourceTime.toFixed(1)}s</span>}
                 </span>
-                <button className="btn-neon btn-ghost" onClick={() => setSelIdx((i) => (i == null ? 0 : Math.min(frames.length - 1, i + 1)))} disabled={selIdx == null || selIdx === frames.length - 1}>
+                <button
+                  className="btn-neon btn-ghost"
+                  onClick={() => {
+                    if (selIdx == null) return;
+                    // Reaching the end of the *current window* without a jump →
+                    // auto-extract the next 30 s (sliding window) and continue.
+                    // The window's frames are those whose sourceTime falls inside
+                    // [win.start, win.start+win.len]; being on the last one and
+                    // pressing next triggers the slide.
+                    const inWindow = frames
+                      .map((f, i) => ({ f, i }))
+                      .filter(({ f }) => {
+                        const t = f.sourceTime;
+                        return t != null && t >= win.start - 0.05 && t <= win.start + win.len + 0.05;
+                      })
+                      .sort((a, b) => (a.f.sourceTime ?? 0) - (b.f.sourceTime ?? 0));
+                    const lastGlob = inWindow.length ? inWindow[inWindow.length - 1].i : -1;
+                    const atEnd = selIdx === lastGlob && isAtWindowEnd(win, inWindow.length ? inWindow.length - 1 : -1, inWindow.length);
+                    if (atEnd) {
+                      void doAutoAdvance();
+                    } else {
+                      setSelIdx((i) => (i == null ? 0 : Math.min(frames.length - 1, i + 1)));
+                    }
+                  }}
+                  disabled={selIdx == null}
+                >
                   next ›
                 </button>
                 <span className="mx-2 text-mut">·</span>
@@ -717,8 +879,19 @@ export function Dataset() {
                 </button>
               </div>
 
-              {/* Selectable thumbnail grid of extracted frames */}
-              <FrameGrid frames={frames} selIdx={selIdx} onSelect={setSelIdx} />
+              {/* Carousel + sliding window (ADAAAA-5512/5509): the canvas above
+                  is the primary frame view; here only the active window's frames
+                  render lazily, under a draggable window handle that slides the
+                  30 s window along the clip timeline. */}
+              <WindowCarousel
+                frames={frames}
+                win={win}
+                selIdx={selIdx}
+                onSelect={setSelIdx}
+                onMoveWindow={moveWindowTo}
+                onJump={doTimeJump}
+                extracting={extracting}
+              />
 
               <div className="relative w-full overflow-hidden rounded-xl border border-white/10 bg-dusk/50">
                 <canvas
@@ -886,74 +1059,204 @@ export function Dataset() {
   );
 }
 
-// --- selectable thumbnail grid ---------------------------------------------
-/** Renders the extracted frames as a choose-a-frame thumbnail grid so the
- * operator can jump to any extracted frame instantly, not just step
- * prev/next. Each tile is auth-fetched to an object URL and shows accepted /
- * boxed state. Clicking a tile selects it in the editor. */
-function FrameGrid({ frames, selIdx, onSelect }: { frames: CurationFrame[]; selIdx: number | null; onSelect: (i: number) => void }) {
+// --- carousel + sliding window (ADAAAA-5512/5509) --------------------------
+/** Thumbnail carousel carrying a draggable sliding window. Only the active
+ * 30 s window's frames are shown, and only the tiles near the scroll viewport
+ * are rendered + auth-fetched (lazy), so the UI stays fluid at 10 fps (~300
+ * frames/window) without materializing the whole clip.
+ *
+ *  - A horizontal strip of the window's frame thumbnails (lazy, virtualized).
+ *  - A timeline row below maps the clip duration; a draggable window bracket
+ *    shows where the active window sits. Dragging it moves the 30 s window
+ *    along the timeline (onMoveWindow on release); clicking the timeline
+ *    (outside the bracket) time-jumps (onJump).
+ *  - The canvas above remains the primary frame view; selecting a tile swaps
+ *    the canvas frame. */
+function WindowCarousel({
+  frames,
+  win,
+  selIdx,
+  onSelect,
+  onMoveWindow,
+  onJump,
+  extracting,
+}: {
+  frames: CurationFrame[];
+  win: WindowState;
+  selIdx: number | null;
+  onSelect: (gi: number) => void;
+  onMoveWindow: (startSec: number) => void;
+  onJump: (t: number) => void;
+  extracting: boolean;
+}) {
+  // --- active window's frames (with their global index into `frames`) -------
+  const windowFrames = useMemo(() => {
+    const lo = win.start;
+    const hi = win.start + win.len;
+    const out: { f: CurationFrame; gi: number }[] = [];
+    frames.forEach((f, gi) => {
+      const t = f.sourceTime;
+      if (t == null) return;
+      if (t >= lo - 0.05 && t <= hi + 0.05) out.push({ f, gi });
+    });
+    out.sort((a, b) => a.f.sourceSeq - b.f.sourceSeq);
+    return out;
+  }, [frames, win.start, win.len]);
+
+  // --- lazy: auth-fetch object URLs only for rendered tiles ----------------
   const [urls, setUrls] = useState<Record<string, string>>({});
   const urlsRef = useRef<Record<string, string>>({});
-  // revoke all created object URLs (also on unmount) so we never leak blobs
   useEffect(() => () => {
-    const all = { ...urlsRef.current };
+    for (const u of Object.values(urlsRef.current)) URL.revokeObjectURL(u);
     urlsRef.current = {};
-    for (const u of Object.values(all)) URL.revokeObjectURL(u);
   }, []);
+  const requestUrl = useCallback((id: string, uri: string | null) => {
+    if (!uri || urlsRef.current[id]) return;
+    frameObjectURL(uri)
+      .then((u) => {
+        urlsRef.current[id] = u;
+        setUrls((prev) => ({ ...prev, [id]: u }));
+      })
+      .catch(() => {
+        /* tile stays as placeholder */
+      });
+  }, []);
+
+  // --- virtualization: render a small viewport window of tiles --------------
+  const stripRef = useRef<HTMLDivElement>(null);
+  const [viewWin, setViewWin] = useState({ lo: 0, hi: 20 });
+  const TILE = 96 + 8; // tile width + gap (w-24 = 96px, gap-2 = 8px)
+  const onStripScroll = useCallback(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    const first = Math.max(0, Math.floor(el.scrollLeft / TILE) - 2);
+    const last = Math.min(windowFrames.length - 1, Math.ceil((el.scrollLeft + el.clientWidth) / TILE) + 2);
+    setViewWin({ lo: first, hi: Math.max(first, last) });
+  }, [windowFrames.length]);
+  // (re)compute the visible range + eagerly request the currently selected tile
   useEffect(() => {
-    let alive = true;
-    const pending = new Map<string, string>();
-    (async () => {
-      for (const f of frames) {
-        if (!f.uri) continue;
-        try {
-          const u = await frameObjectURL(f.uri);
-          if (!alive) {
-            URL.revokeObjectURL(u);
-            continue;
-          }
-          pending.set(f.id, u);
-        } catch {
-          /* tile stays as placeholder */
-        }
-      }
-      if (alive) {
-        urlsRef.current = Object.fromEntries(pending);
-        setUrls(urlsRef.current);
-      }
-    })();
-    return () => {
-      alive = false;
-      for (const u of pending.values()) URL.revokeObjectURL(u);
-    };
-  }, [frames]);
+    onStripScroll();
+    if (selIdx != null) {
+      const hit = windowFrames.find((w) => w.gi === selIdx);
+      if (hit) requestUrl(hit.f.id, hit.f.uri);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [windowFrames, selIdx]);
+
+  // --- draggable window bracket ---------------------------------------------
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState<{ startX: number; startWin: number } | null>(null);
+  const duration = win.clipDuration && win.clipDuration > win.len ? win.clipDuration : win.start + win.len + 1;
+  const usable = Math.max(0, duration - win.len);
+  const widthFrac = (t: number) => (duration > 0 ? t / duration : 0);
+  const timeAtX = (clientX: number) => {
+    const el = timelineRef.current!;
+    const r = el.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+    return frac * duration;
+  };
+  const onBracketDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDrag({ startX: e.clientX, startWin: win.start });
+  };
+  const onTimelineMove = (e: React.MouseEvent) => {
+    if (!drag) return;
+    e.preventDefault();
+    const dxSec = (e.clientX - drag.startX) / (timelineRef.current?.getBoundingClientRect().width || 1) * duration;
+    const next = Math.max(0, Math.min(usable, drag.startWin + dxSec));
+    // live-update the bracket position visually without re-extracting each move
+    setViewWin((vw) => vw); // keep re-render via state
+    // We need the bracket to follow the pointer: store a transient window start.
+    setTransientStart(Math.round(next * 10) / 10);
+  };
+  const [transientStart, setTransientStart] = useState<number | null>(null);
+  const bracketStart = transientStart ?? win.start;
+  const onTimelineUp = () => {
+    if (drag) {
+      const final = transientStart ?? win.start;
+      setDrag(null);
+      setTransientStart(null);
+      onMoveWindow(final);
+    }
+  };
+  const onTimelineClick = (e: React.MouseEvent) => {
+    // clicking the empty timeline (not the bracket) time-jumps
+    onJump(Math.max(0, Math.round(timeAtX(e.clientX) * 10) / 10));
+  };
+
   return (
-    <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
-      {frames.map((f, i) => {
-        const u = urls[f.id];
-        const sel = i === selIdx;
-        const boxed = f.boxes.length > 0;
-        return (
-          <button
-            key={f.id}
-            type="button"
-            title={`frame ${i + 1}${f.accepted ? " · accepted" : ""}${boxed ? ` · ${f.boxes.length} box(es)` : ""}`}
-            onClick={() => onSelect(i)}
-            className={`relative h-16 w-24 shrink-0 overflow-hidden rounded-lg border-2 ${sel ? "border-neon" : "border-white/10"} ${f.accepted ? "bg-green/20" : "bg-white/5"} hover:border-white/40`}
-          >
-            {u ? (
-              <img src={u} alt={`frame ${i + 1}`} className="h-full w-full object-cover" />
-            ) : (
-              <span className="flex h-full w-full items-center justify-center text-[10px] text-mut">{i + 1}</span>
-            )}
-            <span className="absolute bottom-0 left-0 right-0 rounded-t bg-black/50 px-1 text-left text-[9px] text-white">
-              {i + 1}
-              {boxed ? " ■" : ""}
-            </span>
-            {f.accepted && <span className="absolute right-0 top-0 bg-green px-1 text-[9px] font-bold text-black">✓</span>}
-          </button>
-        );
-      })}
+    <div className="flex flex-col gap-2">
+      {/* thumbnail strip (lazy) */}
+      <div
+        ref={stripRef}
+        onScroll={onStripScroll}
+        className="flex max-h-20 gap-2 overflow-x-auto pb-1"
+      >
+        {windowFrames
+          .filter((_, i) => i >= viewWin.lo && i <= viewWin.hi)
+          .map(({ f, gi }) => {
+            const u = urls[f.id];
+            if (!u) requestUrl(f.id, f.uri);
+            const sel = gi === selIdx;
+            const boxed = f.boxes.length > 0;
+            return (
+              <button
+                key={f.id}
+                type="button"
+                title={`frame ${gi + 1} @ ${f.sourceTime?.toFixed(1) ?? "?"}s${f.accepted ? " · accepted" : ""}${boxed ? ` · ${f.boxes.length} box(es)` : ""}`}
+                onClick={() => onSelect(gi)}
+                className={`relative h-16 w-24 shrink-0 overflow-hidden rounded-lg border-2 ${sel ? "border-neon" : "border-white/10"} ${f.accepted ? "bg-green/20" : "bg-white/5"} hover:border-white/40`}
+              >
+                {u ? (
+                  <img src={u} alt={`frame ${gi + 1}`} className="h-full w-full object-cover" />
+                ) : (
+                  <span className="flex h-full w-full items-center justify-center text-[10px] text-mut">{gi + 1}</span>
+                )}
+                <span className="absolute bottom-0 left-0 right-0 rounded-t bg-black/50 px-1 text-left text-[9px] text-white">
+                  {f.sourceTime != null ? `${f.sourceTime.toFixed(1)}s` : gi + 1}
+                  {boxed ? " ■" : ""}
+                </span>
+                {f.accepted && <span className="absolute right-0 top-0 bg-green px-1 text-[9px] font-bold text-black">✓</span>}
+              </button>
+            );
+          })}
+      </div>
+      {/* timeline + draggable window bracket */}
+      <div
+        ref={timelineRef}
+        onMouseMove={onTimelineMove}
+        onMouseUp={onTimelineUp}
+        onMouseLeave={onTimelineUp}
+        onClick={onTimelineClick}
+        className="relative h-9 cursor-pointer select-none rounded-lg border border-white/10 bg-dusk/40"
+        title="Drag the window to slide along the clip, or click to time-jump"
+      >
+        {/* full-clip tick marks */}
+        {[0, 0.25, 0.5, 0.75, 1].map((frac) => (
+          <span key={frac} className="absolute top-1 text-[9px] text-mut" style={{ left: `${frac * 100}%` }}>
+            {(frac * duration).toFixed(0)}s
+          </span>
+        ))}
+        {/* window bracket */}
+        <div
+          onMouseDown={onBracketDown}
+          className={`absolute top-0 h-full rounded-md border-2 border-neon/70 bg-neon/20 ${extracting ? "opacity-50" : ""}`}
+          style={{
+            left: `${widthFrac(bracketStart) * 100}%`,
+            width: `${Math.max(1.5, widthFrac(win.len) * 100)}%`,
+          }}
+        >
+          <div className="flex h-full items-center justify-center gap-1 text-[10px] font-semibold text-neon">
+            <span>◂</span>
+            <span>{bracketStart.toFixed(1)}s</span>
+            <span>▸</span>
+          </div>
+        </div>
+      </div>
+      {windowFrames.length === 0 && (
+        <p className="text-[11px] text-yellow">No frames in this window yet — load the clip or advance to extract.</p>
+      )}
     </div>
   );
 }

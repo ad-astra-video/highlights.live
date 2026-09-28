@@ -6,6 +6,26 @@ import path from "node:path";
 
 const exec = promisify(execFile);
 
+/** Probe a source's duration (seconds) via ffprobe. Used by the curation UI's
+ * sliding-window carousel to bound the timeline. Returns null when the source
+ * cannot be probed (non-fatal — the UI can keep extracting from an unbounded
+ * timeline). */
+export async function probeDuration(ffmpegPath: string, source: string): Promise<number | null> {
+  const ffprobe = ffmpegPath.replace(/ffmpeg([^/]*)$/, "ffprobe$1") || "ffprobe";
+  try {
+    const { stdout } = await exec(ffprobe, [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      source,
+    ]);
+    const d = parseFloat(stdout.trim());
+    return Number.isFinite(d) && d > 0 ? d : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Time window (seconds) to restrict a frame extraction to a sub-range of the
  * source. Omitted bounds mean "from the start" / "to the end". */
 export interface FrameWindow {
@@ -59,9 +79,17 @@ export function buildExtractArgs(opts: {
   const hasIn = inSec > 0;
   const hasOut = opts.window?.outSec != null;
   const args: string[] = ["-y"];
+  // `-ss` before `-i` fast-seeks at the demuxer. When an in-point is set,
+  // bound the decode with `-t <duration>` (outSec - inSec) rather than `-to
+  // <outSec>`: with input seeking, `-to` is measured from the original stream
+  // start, not the seek point, so it would over-run the window (ADAAAA-5512
+  // time-jump accuracy). `-t` is a duration from the seek point, giving an
+  // exact [inSec, inSec + (outSec - inSec)] window. With no in-point, `-to`
+  // is correct (from the stream start).
   if (hasIn) args.push("-ss", String(inSec));
   args.push("-i", opts.source);
-  if (hasOut) args.push("-to", String(opts.window!.outSec!));
+  if (hasOut && hasIn) args.push("-t", String(opts.window!.outSec! - inSec));
+  else if (hasOut) args.push("-to", String(opts.window!.outSec!));
   args.push(
     "-vf", `fps=${fps},scale=${scale}`,
     "-q:v", "3",
