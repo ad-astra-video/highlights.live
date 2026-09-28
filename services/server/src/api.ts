@@ -22,6 +22,10 @@ import {
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
+import {
+  buildDatasetZip,
+  readPersistedImage,
+} from "./dataset-zip";
 import { DatasetSchema, type Dataset, type DetectionTrainingSample } from "@highlights/events";
 import { LiveIngest, type LiveKind } from "./live";
 import { extractVodAudioChunks } from "./vod-audio";
@@ -1573,6 +1577,45 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       return reply.code(403).send({ error: "dataset retrieval requires an active paid plan", code: "paid_plan_required" });
     }
     return { dataset: ds };
+  });
+
+  // --- Dataset zip download for local retention (ADAAAA-5391 C5) ----------
+  // Download a persisted dataset (manifests + annotated frames) as a
+  // self-contained ZIP the user keeps locally. Company/owner-scoped like the
+  // rest of the dataset API, gated on the Change 3 retention rule — available
+  // while the owning account is paid & active (canRetrieveDataset); blocked on
+  // starter or a deactivated paid plan; 404 when nothing is persisted yet. An
+  // optional ?id= pins a specific saved dataset; otherwise the newest one for
+  // the user is downloaded.
+  app.get<{ Querystring: { id?: string } }>("/training/dataset.zip", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user as { id: string; role?: string };
+    const sub = await db.getSubscription(user.id);
+    if (user.role !== "admin" && !canRetrieveDataset(sub)) {
+      return reply.code(403).send({ error: "dataset download requires an active paid (Pro) plan", code: "plan_required" });
+    }
+    let ds: Dataset | undefined;
+    if (req.query?.id) {
+      ds = await db.getDataset(req.query.id);
+      // Owner scope: a non-admin may only download their own dataset.
+      if (ds && ds.ownerId !== user.id && user.role !== "admin") ds = undefined;
+      if (!ds) return reply.code(404).send({ error: "dataset not found", code: "not_found" });
+    } else {
+      const all = await db.listDatasets(user.role === "admin" ? undefined : user.id);
+      ds = all[0]; // newest first
+      if (!ds) return reply.code(404).send({ error: "no persisted dataset for this account yet", code: "no_dataset" });
+    }
+    let zip: Buffer;
+    try {
+      zip = await buildDatasetZip({ dataset: ds, readImage: (ref) => readPersistedImage(cfg, ref) });
+    } catch (e: any) {
+      // Never serve a corrupt/partial archive (e.g. frames purged or missing).
+      return reply.code(409).send({ error: String(e?.message || e), code: "dataset_incomplete" });
+    }
+    reply.header("Content-Disposition", `attachment; filename="dataset-${ds.id}.zip"`);
+    reply.header("X-Dataset-Id", ds.id);
+    reply.header("X-Dataset-Train", String(ds.trainCount));
+    reply.header("X-Dataset-Val", String(ds.valCount));
+    return reply.type("application/zip").send(zip);
   });
 
   app.get("/highlights", { preHandler: authReq }, async (req: any) => {
