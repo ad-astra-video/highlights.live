@@ -349,7 +349,15 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             {
                 "trackId": t.track_id,
                 "slot": t.slot,
-                "bbox": list(t.bbox),
+                # ADAAAA-5700: normalize EVERY surfaced track bbox through the
+                # same guard Florence detections get (_norm_bbox). The SAM path
+                # feeds mask-derived boxes straight into the tracker without
+                # that guard, so a degenerate/sliver mask can surface a sub-pixel
+                # box that renders invisible while its label still draws — a
+                # label "floating on nothing". Clamping to a minimum visible
+                # area here guarantees every surfaced box is drawn, so each
+                # label stays anchored to its detection box (no floating).
+                "bbox": list(_norm_bbox(list(t.bbox))),
                 "kind": t.kind,
                 # In-roster detector label (ADAAAA-5056): the box a user sees
                 # carries the gated label, never a bare "unknown".
