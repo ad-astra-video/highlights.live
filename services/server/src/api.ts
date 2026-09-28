@@ -22,12 +22,12 @@ import {
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractFrames } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
-import type { DetectionTrainingSample } from "@highlights/events";
+import { DatasetSchema, type Dataset, type DetectionTrainingSample } from "@highlights/events";
 import { LiveIngest, type LiveKind } from "./live";
 import { extractVodAudioChunks } from "./vod-audio";
 import type { Db, MediaSession, AnalyticsSnapshot } from "./db";
 import { AuthService, BetaGateError, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
-import { BillingService, BillingRequiredError } from "./billing";
+import { BillingService, BillingRequiredError, canRetrieveDataset } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
 import { FixedWindowLimiter, rateLimit } from "./rate-limit";
 import { enqueueBestEffort, type Mailer } from "./mailer";
@@ -126,6 +126,22 @@ function isVideoUpload(mime: string | null | undefined, filename: string): boole
 function sanitizeFilename(name: string): string {
   const base = path.basename(name || "").replace(/[^\w.\- ]+/g, "_").trim();
   return base && base !== "." ? base : "upload.mp4";
+}
+
+/** Lightweight projection of a persisted dataset for list/summary responses:
+ * the manifest arrays stay server-side for the detail route; the list carries
+ * counts + imageRefs the curation UI needs to re-materialize a saved set. */
+function toDatasetSummary(d: Dataset) {
+  return {
+    id: d.id,
+    name: d.name ?? null,
+    ownerId: d.ownerId,
+    trainCount: d.trainCount,
+    valCount: d.valCount,
+    imageRefs: d.imageRefs,
+    status: d.status,
+    createdAt: d.createdAt,
+  };
 }
 
 export interface ApiDeps {
@@ -1476,13 +1492,37 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   // Validate + write the curated train/val manifests. Server-side gate: any
   // sample that fails the shared Zod schema returns 422 and writes nothing.
+  //
+  // ADAAAA-5396 (Change 3): when a dataset is SENT here, it is also persisted
+  // to the server DB (datasets table) so it is retrievable across reloads and
+  // new sessions while the owning account stays active on a paid plan.
+  // Retrieval (GET /datasets, GET /datasets/:id) is plan-gated separately; the
+  // send itself is open to any authenticated user who has curated a valid set.
   app.post<{ Body: { train?: unknown[]; val?: unknown[] } }>("/training/manifests", { preHandler: authReq }, async (req, reply) => {
+    const train = (req.body?.train ?? []) as DetectionTrainingSample[];
+    const val = (req.body?.val ?? []) as DetectionTrainingSample[];
     const res = await writeTrainValManifests({
-      train: (req.body?.train ?? []) as DetectionTrainingSample[],
-      val: (req.body?.val ?? []) as DetectionTrainingSample[],
+      train,
+      val,
       evalsDir: path.join(cfg.dataDir, "..", "evals"),
     });
-    return reply.code(res.ok ? 200 : 422).send(res);
+    if (!res.ok) return reply.code(422).send(res);
+    const user = (req as any).user as { id: string };
+    const now = new Date().toISOString();
+    const dataset: Dataset = DatasetSchema.parse({
+      id: randomUUID(),
+      ownerId: user.id,
+      name: `dataset-${now}`,
+      train,
+      val,
+      imageRefs: [...new Set([...train, ...val].map((s) => s.imageRef))],
+      trainCount: train.length,
+      valCount: val.length,
+      status: "active",
+      createdAt: now,
+    });
+    await db.saveDataset(dataset);
+    return reply.send({ ...res, dataset: toDatasetSummary(dataset) });
   });
 
   // Serve extracted training frames so the Dataset Curation UI can render
@@ -1500,6 +1540,39 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       return reply.code(404).send({ error: "frame not found" });
     }
     return reply.type("image/jpeg").send(createReadStream(abs));
+  });
+
+  // --- saved dataset archive (ADAAAA-5396, Change 3) ------------------------
+  // The curated train/val manifests persisted on send (POST /training/manifests)
+  // are retrievable here. Same company/owner-scope rules as other entities
+  // (owner or admin may read), plus a plan gate: retrieval is allowed only while
+  // the owning account is ACTIVE on a paid (non-starter) plan. A starter (free)
+  // account or a deactivated paid account (canceled / past_due) is denied
+  // (403), so the archive never surfaces to accounts that no longer qualify.
+  app.get("/datasets", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user as { id: string; role?: string };
+    const sub = await db.getSubscription(user.id);
+    if (user.role !== "admin" && !canRetrieveDataset(sub)) {
+      return reply.code(403).send({ error: "dataset archive requires an active paid plan", code: "paid_plan_required" });
+    }
+    const all = await db.listDatasets(user.role === "admin" ? undefined : user.id);
+    return { datasets: all.map(toDatasetSummary) };
+  });
+
+  app.get<{ Params: { id: string } }>("/datasets/:id", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user as { id: string; role?: string };
+    const ds = await db.getDataset(req.params.id);
+    if (!ds) return reply.code(404).send({ error: "dataset not found", code: "not_found" });
+    // Company/owner scope: only the owning user (or an admin) may read a saved
+    // dataset — matches the other owner-scoped entities (e.g. train runs).
+    if (ds.ownerId !== user.id && user.role !== "admin") {
+      return reply.code(403).send({ error: "forbidden", code: "forbidden" });
+    }
+    const sub = await db.getSubscription(user.id);
+    if (user.role !== "admin" && !canRetrieveDataset(sub)) {
+      return reply.code(403).send({ error: "dataset retrieval requires an active paid plan", code: "paid_plan_required" });
+    }
+    return { dataset: ds };
   });
 
   app.get("/highlights", { preHandler: authReq }, async (req: any) => {

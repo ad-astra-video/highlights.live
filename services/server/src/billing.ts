@@ -28,6 +28,18 @@ export const PLANS: Plan[] = [
   { id: "pro", name: "Pro", description: "100 highlights/mo included; overage pay as you go", currency: "usd", amount: 900, includedHighlights: 100 },
 ];
 
+/**
+ * A saved dataset (ADAAAA-5396) is retrievable only while the owning account
+ * is ACTIVE on a paid (non-starter) plan. A starter (free) account — or a
+ * deactivated paid account (canceled / past_due) — is denied. This mirrors the
+ * paid-active definition used by `EntitlementsService.limitFor` so the
+ * dataset-archive gate and the clip-quota tier agree on what "paid & active"
+ * means.
+ */
+export function canRetrieveDataset(sub: Subscription): boolean {
+  return sub.tier === "pro" && (sub.status === "active" || sub.status === "trialing");
+}
+
 export class BillingService {
   /** injected stripe-like API (real `stripe` client in prod, stub in tests). */
   constructor(

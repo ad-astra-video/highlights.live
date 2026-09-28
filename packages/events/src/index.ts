@@ -134,6 +134,29 @@ export type DetectionTrainingSample = z.infer<typeof DetectionTrainingSampleSche
 export const SampleSplitSchema = z.enum(["train", "val"]);
 export type SampleSplit = z.infer<typeof SampleSplitSchema>;
 
+// A persisted, server-side dataset record (ADAAAA-5396, Change 3). When a
+// curated dataset is "sent" from the curation UI (POST /training/manifests),
+// the server persists a row of this shape so it is retrievable across reloads
+// and new sessions while the owning account stays active on a paid
+// (non-starter) plan. The train/val manifests carry the same
+// DetectionTrainingSample rows the curation page exports; `imageRefs` is the
+// flattened, de-duplicated list of frame image references so a persisted
+// dataset can be re-materialized or zipped for the user to keep locally.
+export const DatasetSchema = z.object({
+  id: z.string(),
+  ownerId: z.string(),
+  /** Optional human label the user gives the dataset (defaults to a timestamp). */
+  name: z.string().optional(),
+  train: z.array(DetectionTrainingSampleSchema),
+  val: z.array(DetectionTrainingSampleSchema),
+  imageRefs: z.array(z.string()),
+  trainCount: z.number().int().nonnegative(),
+  valCount: z.number().int().nonnegative(),
+  status: z.enum(["active"]).default("active"),
+  createdAt: z.string(),
+});
+export type Dataset = z.infer<typeof DatasetSchema>;
+
 // --- observations / events -------------------------------------------------
 
 export const FrameObservationSchema = z.object({
