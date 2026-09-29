@@ -607,42 +607,52 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
     expect(def.framesWindow()).toHaveLength(16);
   });
 
-  it("ADAAAA-6079 framesWindowFor: forward-extends a GOAL candidate's decide window into post-trigger (net-crossing) frames", () => {
-    // A VOD clip sampled at 2 fps -> 0.5 s/frame, 40 frames (20 s).
-    const tl = Array.from({ length: 40 }, (_, i) => ({ seq: i, timestamp: i * 0.5, imageB64: `img${i}` }));
+  it("ADAAAA-6079 framesWindowFor: presents the FULL clip timeline for a GOAL candidate (goal-crossing guaranteed in-window)", () => {
+    // A short VOD event clip sampled at 2 fps -> 0.5 s/frame, 16 frames (8s).
+    // The whole preloaded timeline = 16 frames, all <= windowN=24.
+    const tl = Array.from({ length: 16 }, (_, i) => ({ seq: i, timestamp: i * 0.5, imageB64: `img${i}` }));
     const shared = new LiveRunShared({ decideWindowN: 24, lookaheadN: 8 });
     shared.preloadTimeline(tl);
-    // Streaming has only advanced to the trigger frame (ts=4s, seq 8) so the
-    // rolling window holds only pre-goal frames: img0..img7.
-    for (let i = 0; i <= 8; i++) shared.addFrame(i, i * 0.5, `img${i}`);
-    // A GOAL candidate fires at the strike/cheer (ts=4s).
-    const win = shared.framesWindowFor(4, "GOAL");
-    expect(win.length).toBeGreaterThanOrEqual(1);
-    // With backS = (windowN/2)*0.5 = 6s and lookaheadS = 8 * 0.5 = 4s, the window
-    // spans ts in [-2, 8] => img0..img16 (0s..8s). It MUST include the post-
-    // trigger img9+ that are NOT in the rolling window yet.
+    // Streaming has only advanced to the trigger frame (ts=2s, seq 4) so the
+    // rolling window holds only early/pre-goal frames: img0..img4.
+    for (let i = 0; i <= 4; i++) shared.addFrame(i, i * 0.5, `img${i}`);
+    // A GOAL candidate fires at the strike/cheer (ts=2s) — the goal-crossing may
+    // come later in the clip (net-crossing / celebration at img8+).
+    const win = shared.framesWindowFor(2, "GOAL");
     const b64s = win.map((f) => f.base64);
-    expect(b64s).toContain("img9");
-    expect(b64s).toContain("img12"); // celebration, well past the trigger
-    expect(b64s).toContain("img0");  // still keeps pre-trigger context
+    // The FULL clip timeline is presented: every frame including the late
+    // net-crossing/celebration frames the rolling window has NOT reached yet.
+    expect(b64s).toEqual(tl.map((f) => f.imageB64));
+    expect(b64s).toContain("img8"); // net-crossing, past the trigger
+    expect(b64s).toContain("img12"); // celebration
+    expect(b64s).toContain("img0");  // keeps pre-trigger context too
     // The rolling window itself (what decide would have seen without the fix)
-    // holds only img0..img8 — no post-trigger frames — proving the forward
-    // extension reaches real net-crossing/celebration frames it never had.
-    expect(shared.framesWindow().map((f) => f.base64)).toEqual([
-      "img0", "img1", "img2", "img3", "img4", "img5", "img6", "img7", "img8",
-    ]);
-    expect(shared.framesWindow().map((f) => f.base64)).not.toContain("img9");
+    // holds only img0..img4 — no post-trigger frames.
+    expect(shared.framesWindow().map((f) => f.base64)).toEqual(["img0", "img1", "img2", "img3", "img4"]);
+    expect(shared.framesWindow().map((f) => f.base64)).not.toContain("img8");
   });
 
   it("ADAAAA-6079 framesWindowFor: non-high-value events keep the rolling pre-trigger window (no look-ahead)", () => {
-    const tl = Array.from({ length: 40 }, (_, i) => ({ seq: i, timestamp: i * 0.5, imageB64: `img${i}` }));
+    const tl = Array.from({ length: 16 }, (_, i) => ({ seq: i, timestamp: i * 0.5, imageB64: `img${i}` }));
     const shared = new LiveRunShared({ decideWindowN: 24, lookaheadN: 8 });
     shared.preloadTimeline(tl);
-    for (let i = 0; i <= 8; i++) shared.addFrame(i, i * 0.5, `img${i}`);
+    for (let i = 0; i <= 4; i++) shared.addFrame(i, i * 0.5, `img${i}`);
     // An ordinary (non-GOAL) event at the same trigger stays on the rolling window.
-    const win = shared.framesWindowFor(4, "ORNATE_MOVE");
+    const win = shared.framesWindowFor(2, "ORNATE_MOVE");
     expect(win.map((f) => f.base64)).toEqual(shared.framesWindow().map((f) => f.base64));
-    expect(win.map((f) => f.base64)).not.toContain("img9");
+    expect(win.map((f) => f.base64)).not.toContain("img8");
+  });
+
+  it("ADAAAA-6079 framesWindowFor: long VOD full timeline over windowN is bounded to the most-recent windowN frames", () => {
+    // A long VOD (60 frames) with look-ahead enabled: we present the tail so the
+    // decide window never exceeds `windowN` (decide server frame cap).
+    const tl = Array.from({ length: 60 }, (_, i) => ({ seq: i, timestamp: i * 0.5, imageB64: `img${i}` }));
+    const shared = new LiveRunShared({ decideWindowN: 24, lookaheadN: 8 });
+    shared.preloadTimeline(tl);
+    for (let i = 0; i < 60; i++) shared.addFrame(i, i * 0.5, `img${i}`);
+    const win = shared.framesWindowFor(10, "GOAL");
+    expect(win.length).toBe(24);
+    expect(win.map((f) => f.base64)).toEqual(tl.slice(-24).map((f) => f.imageB64));
   });
 
   it("ADAAAA-6079 framesWindowFor: look-ahead disabled (lookaheadN=0) or no timeline -> rolling window baseline", () => {
