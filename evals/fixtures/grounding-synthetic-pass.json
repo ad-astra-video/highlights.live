@@ -1,0 +1,14 @@
+[
+  { "sampleId": "soc-goal-01", "decision": { "isHighlight": true, "score": 91, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "scoreboard unchanged 1-0", "evidence": "ball in the net and players celebrating", "supports": true } } },
+  { "sampleId": "soc-goal-02", "decision": { "isHighlight": true, "score": 89, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "ball crosses the line into the net", "supports": true } } },
+  { "sampleId": "soc-goal-03", "decision": { "isHighlight": true, "score": 93, "eventType": "GOAL", "grounding": { "objects": ["player #10"], "ocrDelta": "scoreboard 0-0 -> 1-0", "evidence": "scoreboard changed and ball in net", "supports": true } } },
+  { "sampleId": "soc-goal-04", "decision": { "isHighlight": true, "score": 87, "eventType": "GOAL", "grounding": { "objects": ["ball", "player #7"], "ocrDelta": "", "evidence": "shot lands in the net", "supports": true } } },
+  { "sampleId": "soc-near-01", "decision": { "isHighlight": true, "score": 85, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "net ripples after the strike", "supports": true } } },
+  { "sampleId": "soc-near-02", "decision": { "isHighlight": true, "score": 84, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "ball crosses the goal line", "supports": true } } },
+  { "sampleId": "soc-off-01", "decision": { "isHighlight": true, "score": 90, "eventType": "GOAL", "grounding": { "objects": [], "ocrDelta": "", "evidence": "ball off target, no net", "supports": false } } },
+  { "sampleId": "soc-off-02", "decision": { "isHighlight": true, "score": 82, "eventType": "GOAL", "grounding": { "objects": [], "ocrDelta": "", "evidence": "no goal, play continues", "supports": false } } },
+  { "sampleId": "soc-warm-01", "decision": { "isHighlight": true, "score": 80, "eventType": "GOAL", "grounding": { "objects": ["players"], "ocrDelta": "", "evidence": "warm-up passing only", "supports": false } } },
+  { "sampleId": "soc-warm-02", "decision": { "isHighlight": true, "score": 78, "eventType": "GOAL", "grounding": { "objects": [], "ocrDelta": "", "evidence": "no goal in warm-up", "supports": false } } },
+  { "sampleId": "soc-lull-01", "decision": { "isHighlight": true, "score": 74, "eventType": "GOAL", "grounding": { "objects": [], "ocrDelta": "", "evidence": "commentary lull, no goal moment", "supports": false } } },
+  { "sampleId": "soc-replay-01", "decision": { "isHighlight": true, "score": 88, "eventType": "GOAL", "grounding": { "objects": [], "ocrDelta": "", "evidence": "replay loop only", "supports": false } } }
+]
