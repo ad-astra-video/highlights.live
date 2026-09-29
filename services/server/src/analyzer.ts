@@ -205,6 +205,11 @@ export interface PipelineClient {
       frames?: { role: string; base64: string }[];
       /** Surrounding audio clip (mono 16 kHz WAV, base64) at the trigger. */
       audioB64?: string;
+      /** The current 60 s window's already-computed facts as bounded text (A2,
+       * ADAAAA-6029). Assembled on the server from cached findings — no
+       * re-analysis. The decide-runner contract add (ADAAAA-6030) wires this
+       * into the prompt; empty when the window has nothing to add. */
+      priorContextText?: string;
     }
   ): Promise<DecisionResult>;
   /**
@@ -344,8 +349,41 @@ export interface AnalyzeOutcome {
  */
 const DECIDE_FRAME_WINDOW = 16;
 
+/** Rolling cache window (seconds) — the "current-context buffer" (plan §A,
+ * ADAAAA-6029). Frames (and their already-computed findings) older than this
+ * drop out of the window and are no longer part of a decide() call's context.
+ * Grows the legacy 16-frame default to a 60 s window. */
+export const DECIDE_WINDOW_SECONDS = 60;
+/** Hard memory bound for the cache: at ~1 fps, 60 s ≈ 60 frames. The cache
+ * never grows on long streams — a higher-fps VOD pass is still hard-capped at
+ * this many retained frames. */
+export const CACHE_MAX_FRAMES = 60;
+/** Token-budget cap for the assembled window-facts text (A2). ~2400 chars ≈
+ * ~500–600 tokens; the prior-context the decide prompt is augmented with never
+ * exceeds this. Content beyond the cap is dropped oldest-first at assembly. */
+export const WINDOW_FACTS_MAX_CHARS = 2400;
+
+/** Already-computed perception findings for one in-window sampled frame (A1).
+ * These come from the `/analyze` result the server already paid for — cached
+ * and REUSED by window-facts assembly, never re-analyzed (no extra GPU). */
+export interface FrameFindings {
+  /** Tracked-object bboxes + labels (ResNet/Florence + SAM tracking). */
+  tracks: { trackId: string; label?: string; bbox: number[] }[];
+  /** Open-set detections (label + confidence). */
+  objects: { label: string; confidence?: number; bbox: number[] }[];
+  /** OCR text (scoreboard / jersey / caption readings). */
+  ocr: string[];
+}
+/** A candidate event observed inside the window (plan §A: candidate event
+ * types + reaction signals are cached as findings). */
+export interface WindowCandidate {
+  timestamp: number;
+  eventType: string;
+  reaction?: ReactionEvidence;
+}
+
 function nearestFrameImage(
-  window: Map<number, { timestamp: number; imageB64: string }>,
+  window: ReadonlyMap<number, { timestamp: number; imageB64: string }>,
   ts: number
 ): string | undefined {
   let best: string | undefined;
@@ -388,7 +426,14 @@ export class LiveRunShared {
    * Every audio candidate routed through decideOnCandidate() records its
    * outcome here; the job runner snapshots it onto the job at completion. */
   readonly stageA = new StageAMetrics();
-  private frames = new Map<number, { timestamp: number; imageB64: string }>();
+  /** Rolling window of cached frames + their already-computed findings (plan
+   * §A). Time-bounded to DECIDE_WINDOW_SECONDS and hard-capped at
+   * CACHE_MAX_FRAMES, so it never grows on long streams. Findings are REUSED
+   * by window-facts assembly — never re-analyzed. */
+  private frames = new Map<number, { timestamp: number; imageB64: string; findings?: FrameFindings }>();
+  /** Candidate events observed inside the current window (bounded, folded into
+   * the assembled window facts). */
+  private candidates: WindowCandidate[] = [];
   /** Detail-first decide window length (frames kept for the temporal SEQUENCE).
    * Defaults to the live baseline (DECIDE_FRAME_WINDOW); the VOD knob
    * `decideWindowN` raises it (ADAAAA-4954). */
@@ -402,14 +447,54 @@ export class LiveRunShared {
     this.windowN = opts.decideWindowN ?? DECIDE_FRAME_WINDOW;
   }
 
-  /** Record a sampled frame into the rolling anchor window. Ring size is the
-   * decide window (legacy DECIDE_FRAME_WINDOW, or the detail-first knob). */
+  /** Record a sampled frame into the rolling window. The window is
+   * time-bounded (DECIDE_WINDOW_SECONDS) and hard-capped (CACHE_MAX_FRAMES),
+   * so it never grows on long streams. Frame findings arrive later (after the
+   * /analyze round-trip) via setFindings(). */
   addFrame(seq: number, timestamp: number, imageB64: string): void {
     this.frames.set(seq, { timestamp, imageB64 });
-    if (this.frames.size > this.windowN) {
-      const oldest = this.frames.keys().next().value;
-      if (oldest !== undefined) this.frames.delete(oldest);
+    this.evictOldest(timestamp);
+  }
+  /** Attach the already-computed perception findings to an in-window frame
+   * (A1). The findings are produced by the `/analyze` call the server already
+   * paid for and are cached for reuse — never re-analyzed, no extra GPU. */
+  setFindings(
+    seq: number,
+    obs: {
+      tracks: TrackObservation[];
+      objects?: { label: string; confidence?: number; bbox: number[] }[];
+      ocr?: string[];
     }
+  ): void {
+    const findings: FrameFindings = {
+      tracks: obs.tracks.map((t) => ({ trackId: t.trackId, label: t.label, bbox: t.bbox as number[] })),
+      objects: (obs.objects ?? []).map((o) => ({ label: o.label, confidence: o.confidence, bbox: o.bbox as number[] })),
+      ocr: obs.ocr ?? [],
+    };
+    const existing = this.frames.get(seq);
+    if (existing) existing.findings = findings;
+    else this.frames.set(seq, { timestamp: seq, imageB64: "", findings });
+  }
+  /** Cache a candidate event (type + timestamp + reaction signal) into the
+   * window context, bounded so it never grows on long streams. */
+  addCandidate(c: WindowCandidate): void {
+    this.candidates.push(c);
+    if (this.candidates.length > CACHE_MAX_FRAMES) this.candidates.shift();
+  }
+  /** Drop frames (and stale candidates) outside the 60 s window and enforce the
+   * hard size cap. Oldest entries are removed first. */
+  private evictOldest(nowTs: number): void {
+    const cutoff = nowTs - DECIDE_WINDOW_SECONDS;
+    for (const [k, v] of this.frames) {
+      if (v.timestamp < cutoff) this.frames.delete(k);
+    }
+    this.candidates = this.candidates.filter((c) => c.timestamp >= cutoff);
+    while (this.frames.size > CACHE_MAX_FRAMES) {
+      const oldest = this.frames.keys().next().value;
+      if (oldest === undefined) break;
+      this.frames.delete(oldest);
+    }
+    while (this.candidates.length > CACHE_MAX_FRAMES) this.candidates.shift();
   }
   /** Nearest sampled frame image to ``ts`` (for anchoring a candidate that
    * fired off-cycle, e.g. an audio onset between video samples), or undefined
@@ -417,10 +502,69 @@ export class LiveRunShared {
   anchor(timestamp: number): string | undefined {
     return nearestFrameImage(this.frames, timestamp);
   }
+  /** Number of frames currently cached in the 60 s window (memory bound check:
+   * never exceeds CACHE_MAX_FRAMES, and old frames fall off the time window). */
+  cachedFrameCount(): number {
+    return this.frames.size;
+  }
   /** The rolling frame window as decide() `frames[]` ImageRefs (detail-first:
-   * the temporal SEQUENCE Gemma reasons across). Ordered oldest -> newest. */
+   * the temporal SEQUENCE Gemma reasons across). Ordered oldest -> newest, and
+   * SLICED to the decide window length (legacy DECIDE_FRAME_WINDOW or the
+   * detail-first `decideWindowN` knob) so a large 60 s cache never inflates the
+   * per-decision vision sequence. */
   framesWindow(): { role: string; base64: string }[] {
-    return [...this.frames.values()].map((f) => ({ role: "full", base64: f.imageB64 }));
+    const all = [...this.frames.values()];
+    const sliced = all.slice(-this.windowN);
+    return sliced.map((f) => ({ role: "full", base64: f.imageB64 }));
+  }
+  /**
+   * Assemble the current 60 s window's factual content as compact text (A2) —
+   * the "current-context buffer" every decide() call for an in-window candidate
+   * is augmented with. Pure server assembly from cached findings (tracks /
+   * objects / OCR / candidates / confirmed highlights): no GPU inference, no
+   * re-analysis. Returns "" when the window has nothing to add (behavior
+   * identical to the pre-window baseline). Bounded by `maxChars`
+   * (default WINDOW_FACTS_MAX_CHARS) — content is truncated oldest-first so
+   * token growth is hard-capped.
+   */
+  windowFactsText(opts: { maxChars?: number; maxPerFrame?: number } = {}): string {
+    const maxChars = opts.maxChars ?? WINDOW_FACTS_MAX_CHARS;
+    const maxPerFrame = opts.maxPerFrame ?? 3;
+    const frames = [...this.frames.values()].sort((a, b) => a.timestamp - b.timestamp);
+    const lines: string[] = [];
+    for (const f of frames) {
+      if (!f.findings) continue; // frame with no cached findings contributes nothing
+      const parts: string[] = [];
+      const tracks = f.findings.tracks.slice(0, maxPerFrame);
+      if (tracks.length) {
+        parts.push(
+          "tracks:" +
+            tracks.map((t) => `${t.label || t.trackId}@${(t.bbox as number[]).map((b) => b.toFixed(2)).join(",")}`).join(";")
+        );
+      }
+      const objs = f.findings.objects.slice(0, maxPerFrame);
+      if (objs.length) parts.push("objs:" + objs.map((o) => o.label).join(";"));
+      if (f.findings.ocr.length) parts.push("ocr:" + f.findings.ocr.slice(0, 3).join(" | "));
+      if (parts.length) lines.push(`[t=${f.timestamp.toFixed(1)}s] ${parts.join(" ")}`);
+    }
+    const cands = [...this.candidates].sort((a, b) => a.timestamp - b.timestamp).slice(-maxPerFrame);
+    for (const c of cands) {
+      const sig = c.reaction && c.reaction.crowdEnergy > 0 ? ` (rxn:e=${c.reaction.crowdEnergy.toFixed(2)})` : "";
+      lines.push(`[t=${c.timestamp.toFixed(1)}s] candidate:${c.eventType}${sig}`);
+    }
+    // Confirmed highlights that fall inside the current window.
+    if (this.highlights.length) {
+      const newestTs = frames.length ? frames[frames.length - 1].timestamp : NaN;
+      const lo = newestTs - DECIDE_WINDOW_SECONDS;
+      for (const h of this.highlights) {
+        if (h.start >= lo || (Number.isNaN(lo) && h.start >= 0)) {
+          lines.push(`[t=${h.start.toFixed(1)}s] highlight:${h.eventType}`);
+        }
+      }
+    }
+    let text = lines.join("\n");
+    if (text.length > maxChars) text = text.slice(0, maxChars) + "…";
+    return text;
   }
   /** Buffer one audio tap chunk (base64 mono 16 kHz int16 PCM, ~100 ms) into
    * the rolling clip, kept ~AUDIO_CLIP_KEEP_S seconds behind `ts`. */
@@ -477,11 +621,28 @@ function detailDecideOpts(
   cfg: AnalyzerConfig,
   shared: LiveRunShared,
   anchoredImage: string | undefined
-): { gameHint: string; imageB64: string | undefined; frames?: { role: string; base64: string }[]; audioB64?: string } {
-  const opts: { gameHint: string; imageB64: string | undefined; frames?: { role: string; base64: string }[]; audioB64?: string } = {
+): {
+  gameHint: string;
+  imageB64: string | undefined;
+  frames?: { role: string; base64: string }[];
+  audioB64?: string;
+  priorContextText?: string;
+} {
+  const opts: {
+    gameHint: string;
+    imageB64: string | undefined;
+    frames?: { role: string; base64: string }[];
+    audioB64?: string;
+    priorContextText?: string;
+  } = {
     gameHint: cfg.gameHint,
     imageB64: anchoredImage,
   };
+  // A2: every decide call for an in-window candidate carries the current 60 s
+  // window's facts as bounded text tokens (pure server assembly; cached
+  // findings, no re-analysis). Included unconditionally — live and detail-first
+  // alike. Empty when the window has nothing to add (behavior identical).
+  opts.priorContextText = shared.windowFactsText();
   if (cfg.decideWindowN !== undefined) {
     opts.frames = shared.framesWindow();
     const audio = shared.audioClipB64();
@@ -513,6 +674,13 @@ export async function decideOnCandidate(
   const evTs = emit?.timestamp ?? candidate.timestamp;
   onEvent?.({ seq: evSeq, timestamp: evTs, type: "candidate", candidate });
   const anchoredImage = shared.anchor(candidate.timestamp);
+  // Cache the candidate (type + timestamp + reaction) into the 60 s window so
+  // it participates in the window's factual context (plan §A / A2).
+  shared.addCandidate({
+    timestamp: candidate.timestamp,
+    eventType: candidate.eventType,
+    reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
+  });
   const decision = await client.decide(
     {
       eventType: candidate.eventType,
@@ -630,7 +798,12 @@ export async function analyzeJob(
       }
       evidence.step(res.observation);
       onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "observation", observation: res.observation });
+      // A1: cache this frame's already-computed findings (tracks/OCR/objects)
+      // into the 60 s window. Reused by windowFactsText — never re-analyzed.
+      run.setFindings(frame.seq, res.observation);
       if (res.candidate) {
+        // Fold the candidate into the window's factual context (plan §A).
+        run.addCandidate({ timestamp: res.candidate.timestamp, eventType: res.candidate.eventType });
         onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "candidate", candidate: res.candidate });
 
         // Send the ACTUAL candidate frame so the Gemma vision decide runner can
