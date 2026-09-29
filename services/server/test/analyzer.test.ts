@@ -680,3 +680,128 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
     expect(wav.length).toBe(44 + 2); // only the t=30 chunk (2 bytes) survives
   });
 });
+
+describe("A — 60s rolling window + processed-frame/finding cache (ADAAAA-6029)", () => {
+  const obs = (seq: number, over: Partial<{ tracks: any[]; objects: any[]; ocr: string[] }> = {}) => ({
+    tracks: over.tracks ?? [{ trackId: `t${seq}`, label: "player", bbox: [0.1, 0.2, 0.3, 0.4] }],
+    objects: over.objects ?? [],
+    ocr: over.ocr ?? (seq % 2 ? [] : ["SCORE 1-0"]),
+    seq,
+    timestamp: seq,
+  });
+
+  it("A1: window is 60s time-bounded AND hard-capped (no growth on long streams)", () => {
+    // Time-bounded: a frame older than 60 s behind the newest is dropped even
+    // though the count cap never engaged (only 2 frames were added).
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    expect(shared.cachedFrameCount()).toBe(1);
+    shared.addFrame(1, 100, "img100"); // 100 s later: frame 0 falls out of the window
+    expect(shared.cachedFrameCount()).toBe(1);
+    expect(shared.anchor(100)).toBe("img100");
+
+    // Hard count cap: many frames packed into <60 s (10 fps) can't grow past 60.
+    const dense = new LiveRunShared();
+    for (let i = 0; i < 500; i++) dense.addFrame(i, i * 0.1, `img${i}`);
+    expect(dense.cachedFrameCount()).toBe(60);
+
+    // Bounded on a long 1 fps stream: still never exceeds the cap.
+    const long = new LiveRunShared();
+    for (let i = 0; i < 2000; i++) long.addFrame(i, i, `img${i}`);
+    expect(long.cachedFrameCount()).toBeLessThanOrEqual(60);
+  });
+
+  it("A1: findings are cached per frame and REUSED (no re-analysis) — windowFactsText reflects them", () => {
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 12, "img0");
+    shared.setFindings(0, obs(0));
+    shared.addFrame(1, 13, "img1");
+    shared.setFindings(1, obs(1, { ocr: [] }));
+    const text = shared.windowFactsText();
+    // Track label + OCR from the cached /analyze result, assembled — not recomputed.
+    expect(text).toContain("tracks:player@");
+    expect(text).toContain("SCORE 1-0");
+    // Stable/reused: same cache, same output (no side effects / re-analyze).
+    expect(shared.windowFactsText()).toBe(text);
+  });
+
+  it("A1: behavior identical when the window has nothing to add (empty text)", () => {
+    const shared = new LiveRunShared();
+    expect(shared.windowFactsText()).toBe("");
+    // Frames WITHOUT cached findings also add nothing.
+    shared.addFrame(0, 0, "img0");
+    expect(shared.windowFactsText()).toBe("");
+  });
+
+  it("A2: window facts (incl. candidates) are included and bounded by the maxChars cap", () => {
+    const shared = new LiveRunShared();
+    for (let i = 0; i < 40; i++) {
+      shared.addFrame(i, i, `img${i}`);
+      shared.setFindings(i, obs(i));
+    }
+    shared.addCandidate({ timestamp: 39, eventType: "goal_scored", reaction: { crowdEnergy: 0.9, audioKind: "burst", humansInMotion: 2, ballSpeedMps: 12, ballPossessionId: "p9" } });
+    const text = shared.windowFactsText();
+    expect(text).toContain("candidate:goal_scored");
+    expect(text).toContain("(rxn:e=0.90)");
+
+    // Hard token/cap bound: even a pathological payload is truncated to maxChars.
+    const tight = shared.windowFactsText({ maxChars: 100 });
+    expect(tight.length).toBeLessThanOrEqual(100 + 1); // +1 for the ellipsis char
+    // Default cap is WINDOW_FACTS_MAX_CHARS.
+    expect(text.length).toBeLessThanOrEqual(2400 + 1);
+  });
+
+  it("A2: every decide call carries priorContextText (empty when window adds nothing)", async () => {
+    let seen: any;
+    const { client } = fakeClient({
+      analyze: async () => ({ observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "GOAL", timestamp: 0 } }),
+      decide: async (_ev, opts) => {
+        seen = opts;
+        return { isHighlight: true, score: 80, eventType: "GOAL" };
+      },
+    });
+    // detail-first path: candidate processed after finding-cache population.
+    const shared = new LiveRunShared({ decideWindowN: 4 });
+    await analyzeJob(
+      client,
+      frames(2),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 4 },
+      undefined,
+      undefined,
+      shared
+    );
+    expect(seen.priorContextText).toBeDefined();
+    // Window had frames but no findings were recorded by the stub -> text may be
+    // "" or assembled; assert it is a string and bounded.
+    expect(typeof seen.priorContextText).toBe("string");
+    expect(seen.priorContextText!.length).toBeLessThanOrEqual(2400 + 1);
+  });
+
+  it("A2: live baseline carries priorContextText but frames/audio stay unchanged (no regression)", async () => {
+    let seen: any;
+    const { client } = fakeClient({
+      analyze: async () => ({
+        observation: { tracks: [], seq: 0, timestamp: 0 },
+        candidate: { eventType: "GOAL", timestamp: 0 },
+      }),
+      decide: async (_ev, opts) => {
+        seen = opts;
+        return { isHighlight: true, score: 80, eventType: "GOAL" };
+      },
+    });
+    await analyzeJob(
+      client,
+      frames(1),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" }
+    );
+    // A2 window facts are present and bounded...
+    expect(typeof seen.priorContextText).toBe("string");
+    expect(seen.priorContextText.length).toBeLessThanOrEqual(2400 + 1);
+    // ...while the live baseline's vision inputs are byte-for-byte unchanged.
+    expect(seen.frames).toBeUndefined();
+    expect(seen.audioB64).toBeUndefined();
+    expect(seen.imageB64).toBeDefined();
+  });
+});
