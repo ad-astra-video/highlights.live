@@ -1,0 +1,26 @@
+{
+  "$comment": "ADAAAA-6031 labeled retrieval eval set (plan A3). Long-horizon retrieval: a store of prior stream facts plus a query set, each labeled with the relevant prior-fact ids a correct retrieval should surface. Queries model the REAL retrieval input — the current 60s window's salient facts at decide time (same entity refs + event-type tokens the facts carry: player #N (color), yellow/red card, goal, penalty, scoreboard). Each query carries >=2 relevant facts to make precision@k meaningful, reflecting the narrative use (e.g. a red-card decision must retrieve the player's earlier bookings). precision@k scored by FactMemory.query against these labels.",
+  "sport": "soccer",
+  "acceptance": { "retrievalPrecisionAtKMin": 0.8, "topK": 3 },
+  "facts": [
+    { "id": "f1",  "timestamp": 2040, "factText": "player #9 (red) booked with a yellow card at 34:00 for a late foul" },
+    { "id": "f2",  "timestamp": 2110, "factText": "yellow card shown to player #9 (red) again at 35:10 for persistent fouling" },
+    { "id": "f3",  "timestamp": 2460, "factText": "GOAL! player #10 (blue) scores, scoreboard 1-0" },
+    { "id": "f4",  "timestamp": 2700, "factText": "GOAL! player #9 (red) equalizes, scoreboard 1-1" },
+    { "id": "f5",  "timestamp": 3600, "factText": "penalty awarded to blue team, player #10 (blue) will take it" },
+    { "id": "f6",  "timestamp": 3605, "factText": "GOAL! penalty converted by player #10 (blue), scoreboard 2-1" },
+    { "id": "f7",  "timestamp": 3840, "factText": "player #5 (red) booked with a yellow card at 64:00 for a late challenge" },
+    { "id": "f8",  "timestamp": 3860, "factText": "second yellow to player #9 (red) at 64:20 - red card, sent off, team down to ten men" },
+    { "id": "f9",  "timestamp": 4200, "factText": "keeper #1 (blue) makes a double save at 70:00 to keep the 2-1 lead" },
+    { "id": "f10", "timestamp": 5000, "factText": "substitution: player #11 (green) on, player #17 (green) off at 83:00" },
+    { "id": "f11", "timestamp": 5005, "factText": "free kick for red team after a foul on player #2 (blue) at 84:00" }
+  ],
+  "queries": [
+    { "qid": "q1", "queryText": "candidate RED_CARD player #9 (red) sent off second booking red card", "relevant": ["f8", "f2", "f1"] },
+    { "qid": "q2", "queryText": "candidate YELLOW_CARD player #9 (red) late foul booking", "relevant": ["f1", "f2", "f7"] },
+    { "qid": "q3", "queryText": "candidate GOAL player #10 (blue) scores penalty", "relevant": ["f3", "f6", "f5"] },
+    { "qid": "q4", "queryText": "candidate GOAL player #9 (red) equalizer scoreboard", "relevant": ["f4", "f1"] },
+    { "qid": "q5", "queryText": "candidate PENALTY blue team player #10 converted", "relevant": ["f5", "f6", "f3"] },
+    { "qid": "q6", "queryText": "candidate YELLOW_CARD player #5 (red) challenge booking", "relevant": ["f7", "f1", "f2"] }
+  ]
+}

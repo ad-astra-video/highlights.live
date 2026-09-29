@@ -925,6 +925,81 @@ describe("A — 60s rolling window + processed-frame/finding cache (ADAAAA-6029)
     expect(seen.imageB64).toBeDefined();
   });
 });
+describe("C — in-memory vector DB of prior-window facts (ADAAAA-6031 / plan §C)", () => {
+  it("C: confirmed highlights are salience-ingested into the per-stream vector store", async () => {
+    const { client } = fakeClient({
+      analyze: async () => ({ observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "GOAL", timestamp: 0 } }),
+      decide: async () => ({ isHighlight: true, score: 80, eventType: "GOAL", ...GROUNDED }),
+    });
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    await analyzeJob(
+      client,
+      frames(1),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
+      undefined,
+      undefined,
+      shared
+    );
+    expect(shared.highlights).toHaveLength(1);
+    // A confirmed highlight IS a high-confidence fact -> embedded + stored.
+    expect(shared.memory.size).toBe(1);
+  });
+
+  it("C: a bare candidate that is NOT confirmed is NOT ingested (noise-trigger protection)", async () => {
+    const { client } = fakeClient({
+      analyze: async () => ({ observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "scene_change", timestamp: 0 } }),
+      decide: async () => ({ isHighlight: false, score: 20, eventType: "scene_change" }),
+    });
+    const shared = new LiveRunShared();
+    await analyzeJob(
+      client,
+      frames(1),
+      async () => ({ clipId: "c", clipUri: "/c.mp4" }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
+      undefined,
+      undefined,
+      shared
+    );
+    expect(shared.highlights).toHaveLength(0);
+    expect(shared.memory.size).toBe(0); // not high-signal
+  });
+
+  it("C: every decide call carries priorContext that, after a prior highlight, includes the retrieved long-horizon block", async () => {
+    const seen: any[] = [];
+    // First frame confirms a GOAL (ingested into memory); second frame's
+    // candidate triggers a decide whose priorContext should retrieve it.
+    const { client } = fakeClient({
+      analyze: async () => ({ observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "RED_CARD", timestamp: 1 } }),
+      decide: async (_ev, opts) => {
+        seen.push(opts);
+        return { isHighlight: true, score: 80, eventType: "GOAL", ...GROUNDED };
+      },
+    });
+    // Pre-populate the store with the prior booking the red-card decision
+    // should retrieve (simulate a highlight from earlier in the stream).
+    const shared = new LiveRunShared();
+    shared.memory.ingestIfSalient(
+      { timestamp: 34, factText: "highlight YELLOW_CARD: player #9 (red) booked at 34:00", type: "highlight", eventType: "YELLOW_CARD" },
+      { confirmed: true, score: 80 }
+    );
+    shared.addFrame(0, 0, "img0");
+    await analyzeJob(
+      client,
+      frames(1),
+      async () => ({ clipId: "c", clipUri: "/c.mp4" }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
+      undefined,
+      undefined,
+      shared
+    );
+    expect(seen).toHaveLength(2); // coarse + burst
+    const prior = seen[0].priorContextText ?? "";
+    expect(prior).toContain("Prior long-horizon facts");
+    expect(prior).toContain("player #9 (red) booked");
+  });
+});
 describe("E — motion-aware confirmation burst tier (ADAAAA-6030 / plan §E)", () => {
   it("E1: burstFrames spans ±2.5 s around T and is bounded by the live cap", () => {
     const shared = new LiveRunShared();
