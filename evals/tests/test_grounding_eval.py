@@ -92,3 +92,69 @@ def test_no_gate_reproduces_pre_change_baseline():
     assert report["precision"] == pytest.approx(0.5)
     assert report["recall"] == 1.0
     assert report["fp"] == 6
+
+
+# --- E2 — motion-aware confirmation: burst-vs-coarse meet-or-beat (ADAAAA-6030)
+
+# A tiny labeled set with ground-truth event times so localization is expressible.
+LOC_MANIFEST = {
+    "samples": [
+        {"id": "a", "isGoal": True, "timeSeconds": 10.0},
+        {"id": "b", "isGoal": True, "timeSeconds": 20.0},
+        {"id": "c", "isGoal": False},
+    ]
+}
+
+
+def _loc_trace(tier, decision_time, extra=None):
+    entry = {
+        "sampleId": tier,  # placeholder replaced below per-sample
+        "tier": tier,
+        "decisionTime": decision_time,
+        "decision": {
+            "isHighlight": True,
+            "eventType": "GOAL",
+            "grounding": {"objects": ["ball"], "evidence": "in net", "supports": True},
+        },
+    }
+    if extra:
+        entry.update(extra)
+    return entry
+
+
+def test_e2_localization_error_computed_per_sampled_goal():
+    from grounding_eval import localization_meets_or_beats
+
+    trace = []
+    for sid, t in [("a", 11.0), ("b", 20.5)]:
+        e = _loc_trace("burst", t)
+        e["sampleId"] = sid
+        trace.append(e)
+    report = score(LOC_MANIFEST, trace, apply_gate=True)
+    # errors: |11-10|=1.0, |20.5-20|=0.5 -> mean 0.75, max 1.0
+    assert report["meanLocalizationErrorS"] == pytest.approx(0.75)
+    assert report["maxLocalizationErrorS"] == pytest.approx(1.0)
+    assert report["localizationSamples"] == 2
+    assert report["tier"] == "burst"
+
+    # E2 guard: burst with tighter localization + equal precision meets-or-beats
+    # coarse (coarser localization, same precision).
+    coarse_trace = []
+    for sid, t in [("a", 9.0), ("b", 22.0)]:
+        e = _loc_trace("coarse", t)
+        e["sampleId"] = sid
+        coarse_trace.append(e)
+    coarse = score(LOC_MANIFEST, coarse_trace, apply_gate=True)
+    ok, reason = localization_meets_or_beats(coarse, report)
+    assert ok, reason
+    assert "burst mean|err| 0.75s vs coarse" in reason
+
+    # A burst that is WORSE on localization must FAIL the guard.
+    bad_trace = []
+    for sid, t in [("a", 14.0), ("b", 26.0)]:
+        e = _loc_trace("burst", t)
+        e["sampleId"] = sid
+        bad_trace.append(e)
+    bad = score(LOC_MANIFEST, bad_trace, apply_gate=True)
+    ok2, _ = localization_meets_or_beats(coarse, bad)
+    assert not ok2
