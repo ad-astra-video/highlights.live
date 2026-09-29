@@ -578,14 +578,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       await cutClip(cfg.ffmpegPath, videoPath, out, Math.max(0, ts - cfg.clipBeforeS), cfg.clipBeforeS + cfg.clipAfterS);
       return { clipId, clipUri: `/clips/${clipId}.mp4` };
     };
-    const iter = buildAnalyzeFrames(frameDir, sampleFps)();
+    // ADAAAA-6079: materialize the full clip frame timeline up front (VOD has
+    // the whole clip) so the shared LiveRunShared can forward-extend a GOAL
+    // candidate's decide window into the net-crossing/celebration frames that
+    // come AFTER the audio/visual trigger — frames the rolling window has not
+    // reached yet at trigger time. The same frames feed analyzeJob.
+    const frames: { seq: number; timestamp: number; imageB64: string }[] = [];
+    for await (const f of buildAnalyzeFrames(frameDir, sampleFps)()) frames.push(f);
+    const iter = (async function* () {
+      for (const f of frames) yield f;
+    })();
     const t0 = Date.now();
     // Reserve ONE perceive session shared by the video /analyze leg and the
     // Stage-A audio /audio tap (same pattern as runLiveJob); analyzeJob stops
     // it (and any re-reserves) in its finally. The shared LiveRunShared is
     // passed so both legs anchor to the SAME frame window + evidence.
     const initial = await adapter.reservePerceive();
-    const shared = new LiveRunShared({ decideWindowN: cfg.vodDecideWindowN });
+    const shared = new LiveRunShared({ decideWindowN: cfg.vodDecideWindowN, lookaheadN: cfg.vodDecideLookaheadN });
+    shared.preloadTimeline(frames);
     // Drive the Stage-A audio tap from the VOD file's audio track in parallel
     // with the video pass. Best-effort: no audio track or a dropped chunk never
     // aborts the video look. When the gate fires, route the candidate through

@@ -110,6 +110,14 @@ export interface ServerConfig {
    * `frames[]` so Gemma reasons across a longer SEQUENCE per trigger.
    * `VOD_DECIDE_WINDOW_N`. */
   vodDecideWindowN: number;
+  /** Detail-first VOD forward-extending look-ahead (ADAAAA-6079 G2 recall).
+   * For a high-value (GOAL) candidate the decide window is built from the full
+   * preloaded clip timeline and extends `vodDecideLookaheadN` frames PAST the
+   * candidate's own timestamp, so the strike→net→celebration frames (which come
+   * AFTER the audio/visual trigger) enter decide()'s `frames[]` instead of only
+   * the pre-goal rolling window. 0 disables look-ahead (rolling window only).
+   * `VOD_DECIDE_LOOKAHEAD_N`. */
+  vodDecideLookaheadN: number;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -237,6 +245,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 2),
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
+    vodDecideLookaheadN: Number(env.VOD_DECIDE_LOOKAHEAD_N ?? 24),
     // ADAAAA-5342: live sampling driven from the runner's measured capability
     // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
     // headroom so capable GPUs accelerate toward the chartered cadence while
