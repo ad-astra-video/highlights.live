@@ -464,19 +464,19 @@ export class LiveRunShared {
     if (this.lookaheadN <= 0 || !this.timeline || !isHighValueEvent(eventType)) {
       return this.framesWindow();
     }
-    const intervalS = this.timeline[1]?.timestamp - this.timeline[0]?.timestamp || 0.5;
-    // ~ (windowN - lookaheadN) frames of context before the trigger, plus
-    // `lookaheadN` frames of forward look-ahead into the net-crossing/celebration.
-    const backS = Math.max(0, (this.windowN - this.lookaheadN) * intervalS);
-    const lookaheadS = this.lookaheadN * intervalS;
-    const lo = anchorTs - backS;
-    const hi = anchorTs + lookaheadS;
-    const sel = this.timeline.filter((f) => f.timestamp >= lo && f.timestamp <= hi).map((f) => ({
-      role: "full" as const,
-      base64: f.imageB64,
-    }));
-    // Bound to the decide window length (keep the tail/forward frames; a short
-    // clip never overflows but a long VOD could).
+    // ADAAAA-6079 (rev 2): a short VOD event clip IS the whole highlight (the
+    // strike→net→celebration sequence lives in the clip, not only after the
+    // audio/visual trigger). For a HIGH-VALUE (GOAL) candidate we therefore
+    // present the FULL preloaded clip timeline to decide() — every frame in
+    // sequence — so the actual goal-crossing/celebration moment is guaranteed in
+    // the window no matter where the candidate fired (before, at, or after the
+    // strike). The 6068 rolling-window baseline held only pre-trigger frames and
+    // missed early-goal hits (goal-01/02); a naive forward-only window threw away
+    // pre-trigger context and regressed late-goal hits (goal-03/near-01/02). The
+    // full-timeline window cannot miss either. VOD only — the decision-window is
+    // bounded to `windowN` (short event clips are <= that; a long VOD keeps the
+    // most-recent `windowN` frames).
+    const sel = this.timeline.map((f) => ({ role: "full" as const, base64: f.imageB64 }));
     return sel.length <= this.windowN ? sel : sel.slice(sel.length - this.windowN);
   }
   /** Buffer one audio tap chunk (base64 mono 16 kHz int16 PCM, ~100 ms) into
