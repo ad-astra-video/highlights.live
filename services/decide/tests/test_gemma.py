@@ -141,6 +141,13 @@ def test_build_prompt_includes_grounding_schema_and_rules():
     assert "supports=false" in p
     assert "no supporting visual evidence must be rejected" in p
     assert "Do NOT fabricate grounding" in p
+    # ADAAAA-6028 recall-recovery: GOAL support counts celebration-after-shot,
+    # ball in/over goal line or goal area, shot past the keeper, or a
+    # scoreboard/OCR change — but ordinary play with none of these is rejected.
+    assert "count as supporting evidence any of" in p
+    assert "ball in or" in p and "goal line" in p
+    assert "visibly celebrating" in p and "right after a shot on goal" in p
+    assert "Ordinary play with none of these must set supports=false" in p
 
 
 def test_rule_fallback_includes_grounding():
