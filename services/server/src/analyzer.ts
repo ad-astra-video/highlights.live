@@ -210,6 +210,12 @@ export interface PipelineClient {
        * re-analysis. The decide-runner contract add (ADAAAA-6030) wires this
        * into the prompt; empty when the window has nothing to add. */
       priorContextText?: string;
+      /** Dense burst frame SEQUENCE around a CONFIRMED candidate moment (plan §E /
+       * ADAAAA-6030 motion-aware confirmation tight tier): `burstFrames[]` in the
+       * decide request, over ≈±2.5 s around T, bounded count/resolution. Server
+       * pulls it from the already-cached 60 s window — no re-analysis, no extra
+       * GPU. Only present on the confirmation call, never every window. */
+      burstFrames?: { role: string; base64: string }[];
     }
   ): Promise<DecisionResult>;
   /**
@@ -362,6 +368,17 @@ export const CACHE_MAX_FRAMES = 60;
  * ~500–600 tokens; the prior-context the decide prompt is augmented with never
  * exceeds this. Content beyond the cap is dropped oldest-first at assembly. */
 export const WINDOW_FACTS_MAX_CHARS = 2400;
+
+// --- Motion-aware confirmation burst tier (ADAAAA-6030, plan §E) -----------
+/** Full span (seconds) of the dense burst window around a confirmed candidate
+ * moment T: T−BURST_SPAN_S/2 .. T+BURST_SPAN_S/2 (≈ ±2.5 s each side). */
+export const BURST_SPAN_S = 5;
+/** Frame-count cap for the burst in the LIVE path (E). Live ingests at ~1 fps,
+ * so a ±2.5 s span yields ~5–6 cached frames; the cap is a bound, not a fill. */
+export const LIVE_BURST_MAX = 6;
+/** Frame-count cap for the burst in the VOD / detail-first path (E: "larger
+ * burst cap allowed"; higher-fps VOD supplies a denser cached window). */
+export const VOD_BURST_MAX = 16;
 
 /** Already-computed perception findings for one in-window sampled frame (A1).
  * These come from the `/analyze` result the server already paid for — cached
@@ -517,6 +534,28 @@ export class LiveRunShared {
     const sliced = all.slice(-this.windowN);
     return sliced.map((f) => ({ role: "full", base64: f.imageB64 }));
   }
+  /** The dense burst frame SEQUENCE around a confirmed candidate moment ``ts``
+   * (plan §E, motion-aware confirmation tight tier): the cached frames within
+   * [ts−BURST_SPAN_S/2, ts+BURST_SPAN_S/2], ordered oldest -> newest, bounded
+   * to ``max`` frames (kept centered on ``ts`` when trimming). Pulled ONLY from
+   * the already-cached 60 s window — no re-analysis, no extra GPU — so burst
+   * assembly is sub-millisecond and never blocks the paid decision path (A5).
+   * Live (~1 fps) yields ~5–6 frames inside the cap; a denser VOD cache is
+   * trimmed to the VOD cap. Returns [] when the window holds no in-span frame. */
+  burstFrames(ts: number, opts: { max?: number } = {}): { role: string; base64: string }[] {
+    const max = opts.max ?? LIVE_BURST_MAX;
+    const half = BURST_SPAN_S / 2;
+    const inRange = [...this.frames.values()]
+      .filter((f) => Math.abs(f.timestamp - ts) <= half)
+      .sort((a, b) => a.timestamp - b.timestamp);
+    if (!inRange.length) return [];
+    if (inRange.length > max) {
+      const start = Math.floor((inRange.length - max) / 2);
+      inRange.splice(0, start);
+      inRange.length = max;
+    }
+    return inRange.map((f) => ({ role: "full", base64: f.imageB64 }));
+  }
   /**
    * Assemble the current 60 s window's factual content as compact text (A2) —
    * the "current-context buffer" every decide() call for an in-window candidate
@@ -651,6 +690,76 @@ function detailDecideOpts(
   return opts;
 }
 
+/** Frame-count cap for the motion-aware confirmation burst tier, by path (E):
+ * the detail-first / VOD pass allows the larger cap; the live baseline (no
+ * decideWindowN) uses the smaller live cap. */
+function burstCap(cfg: AnalyzerConfig): number {
+  return cfg.decideWindowN !== undefined ? VOD_BURST_MAX : LIVE_BURST_MAX;
+}
+
+/** Result of a two-tier decide on one candidate (plan §E, ADAAAA-6030). */
+export interface TieredDecision {
+  /** The authoritative decision: the burst-confirmation verdict when a burst
+   * tier ran, otherwise the coarse tier's verdict. */
+  decision: DecisionResult;
+  /** True when a dense burst confirmation call actually ran and its verdict is
+   * authoritative. */
+  ranBurst: boolean;
+  /** True when a burst was ASSEMBLED (cached frames exist around T) even if the
+   * confirmation call was skipped/failed and the coarse verdict was kept. */
+  hadBurst: boolean;
+}
+
+/**
+ * Run the two-tier decide for ONE candidate (plan §E): the coarse tier first —
+ * the 60 s window context (priorContext + coarse frames/anchor) — then, only
+ * when the coarse tier CONFIRMS a highlight (isHighlight), a motion-aware
+ * confirmation tier that adds a dense `burstFrames[]` sequence around the
+ * candidate moment to pin down the precise event time/type.
+ *
+ * A5: the burst tier never blocks the paid decision path. Burst assembly is a
+ * pure in-memory pull from the cached 60 s window (sub-ms); if no cached frame
+ * lies within the burst span the burst is skipped, and if the confirmation
+ * call itself throws the coarse verdict is kept. Non-highlights pay exactly one
+ * (coarse) decide call — the burst only ever runs on confirmed candidates.
+ */
+export async function decideWithTwoTiers(
+  client: PipelineClient,
+  cfg: AnalyzerConfig,
+  shared: LiveRunShared,
+  anchoredImage: string | undefined,
+  candidate: {
+    eventType: string;
+    timestamp: number;
+    audio?: AudioCandidate["audio"];
+    ballVelocity?: { speedMps?: number };
+    ballPossession?: { possessingPlayerId?: string };
+  }
+): Promise<TieredDecision> {
+  const evidence = {
+    eventType: candidate.eventType,
+    trackCount: shared.evidence.trackCount,
+    maxVelocity: shared.evidence.maxVelocity,
+    ocrHits: 0,
+    reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
+  };
+  const base = detailDecideOpts(cfg, shared, anchoredImage);
+  const coarse = await client.decide(evidence, base);
+  if (!coarse.isHighlight) return { decision: coarse, ranBurst: false, hadBurst: false };
+  // Coarse tier CONFIRMED -> assemble the dense burst around T from the cache.
+  const burst = shared.burstFrames(candidate.timestamp, { max: burstCap(cfg) });
+  if (!burst.length) return { decision: coarse, ranBurst: false, hadBurst: false };
+  const confirmOpts = { ...base, burstFrames: burst };
+  let confirm: DecisionResult;
+  try {
+    confirm = await client.decide(evidence, confirmOpts);
+  } catch {
+    // A5: burst must never block the paid path — keep the coarse verdict.
+    return { decision: coarse, ranBurst: false, hadBurst: true };
+  }
+  return { decision: confirm, ranBurst: true, hadBurst: true };
+}
+
 /**
  * Route ONE candidate through the decide stage on the anchored frame (INC-2 /
  * ADAAAA-4325 slice 4). Shared by the video /analyze leg and the Stage-A audio
@@ -681,16 +790,10 @@ export async function decideOnCandidate(
     eventType: candidate.eventType,
     reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
   });
-  const decision = await client.decide(
-    {
-      eventType: candidate.eventType,
-      trackCount: shared.evidence.trackCount,
-      maxVelocity: shared.evidence.maxVelocity,
-      ocrHits: 0,
-      reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
-    },
-    detailDecideOpts(cfg, shared, anchoredImage)
-  );
+  // Two-tier decide (plan §E / ADAAAA-6030): coarse tier first, then a dense
+  // burst confirmation tier ONLY for a confirmed candidate (A5 fallback keeps
+  // the paid path alive). The authoritative decision feeds the gate + record.
+  const { decision } = await decideWithTwoTiers(client, cfg, shared, anchoredImage, candidate);
   // Track the Stage-A FP-rate metric (INC-2 / ADAAAA-4325 slice 5): whether
   // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
   // reported onset latency. Feeds job.stageAMetrics fpRate = rejected / total.
@@ -812,16 +915,9 @@ export async function analyzeJob(
         // so resolve that frame's image from the rolling window — a candidate
         // fired on the late post-strike frame must still be judged on the strike.
         const anchoredImage = run.anchor(res.candidate.timestamp) ?? frame.imageB64;
-        const decision = await client.decide(
-          {
-            eventType: res.candidate.eventType,
-            trackCount: evidence.trackCount,
-            maxVelocity: evidence.maxVelocity,
-            ocrHits: 0,
-            reaction: buildReactionEvidence(res.candidate, evidence.trackCount),
-          },
-          detailDecideOpts(cfg, run, anchoredImage)
-        );
+        // Two-tier decide (plan §E / ADAAAA-6030): coarse tier first, then a
+        // dense burst confirmation tier ONLY for a confirmed candidate.
+        const { decision } = await decideWithTwoTiers(client, cfg, run, anchoredImage, res.candidate);
         if (decision.isHighlight) {
           // Grounded-evidence verification gate (plan G3 / ADAAAA-6028).
           const gate = applyGroundingGate(decision, res.candidate.eventType);

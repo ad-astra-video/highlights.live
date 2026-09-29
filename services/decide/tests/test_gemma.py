@@ -438,3 +438,114 @@ def test_highlight_gemma_returns_source_gemma_with_frames_and_audio(monkeypatch)
     types = [c.get("type") for c in content if c.get("type")]
     assert types == ["image_url", "text"]
     assert "audio_url" not in json.dumps(mock.requests[0])
+
+
+# --- B/E — prompt tailoring + motion-aware burst tier (ADAAAA-6030) ----------
+
+def test_build_prompt_includes_prior_context():
+    # B: a non-empty window summary is injected as prior context; the raw window
+    # facts text is embedded verbatim so the model reasons about the current 60s.
+    p = build_prompt("GOAL", {"trackCount": 2, "maxVelocity": 0.4}, "soccer", prior_context="[t=12.0s] tracks:player@0.10,0.20\ncandidate:goal_scored")
+    assert "Prior context — the current 60 s window" in p
+    assert "[t=12.0s] tracks:player@0.10,0.20" in p
+    assert "candidate:goal_scored" in p
+    # empty prior context -> no block (no regression vs today's prompt)
+    q = build_prompt("GOAL", {"trackCount": 2, "maxVelocity": 0.4}, "soccer", prior_context="")
+    assert "Prior context — the current 60 s window" not in q
+
+
+def test_build_prompt_reflects_burst_count():
+    # E: the prompt tells the model it has a dense motion-burst sequence.
+    p = build_prompt("GOAL", {"trackCount": 1, "maxVelocity": 0.2}, "fa cup", n_frames=6, n_burst=8)
+    assert "dense motion burst frames around the moment: 8" in p
+    # absent burst -> no burst line (coarse-only baseline unchanged)
+    q = build_prompt("GOAL", {"trackCount": 1, "maxVelocity": 0.2}, "fa cup", n_frames=6)
+    assert "dense motion burst frames" not in q
+
+
+def test_decide_with_gemma_sends_prior_context_and_burst():
+    # B/E wire through decide_with_gemma -> ask: burst frames are image content
+    # BEFORE the text (modality order) and the prior context is in the prompt.
+    mock = MockLlama('{"isHighlight":true,"score":90,"eventType":"GOAL","reason":"burst confirms in the net"}')
+    try:
+        d = decide_with_gemma(
+            "GOAL",
+            {"trackCount": 2, "maxVelocity": 0.3, "ocrHits": 0},
+            game_hint="fa cup",
+            frames=[{"role": "frame", "base64": "FR1"}],
+            burst_frames=[{"role": "full", "base64": "B1"}, {"role": "full", "base64": "B2"}],
+            prior_context="[t=9.0s] tracks:player@0.1,0.2",
+            url=f"http://127.0.0.1:{mock.port}",
+        )
+    finally:
+        mock.stop()
+    assert d["source"] == "gemma"
+    content = mock.requests[0]["messages"][0]["content"]
+    types = [c.get("type") for c in content if c.get("type")]
+    # 1 coarse frame + 2 burst frames (all image_url) before the text
+    assert types == ["image_url", "image_url", "image_url", "text"]
+    first_text = types.index("text")
+    assert all(t == "image_url" for t in types[:first_text])
+    prompt = [p["text"] for p in content if p.get("type") == "text"][0]
+    assert "Prior context — the current 60 s window" in prompt
+    assert "[t=9.0s] tracks:player@0.1,0.2" in prompt
+    assert "dense motion burst frames around the moment: 2" in prompt
+
+
+def test_highlight_routes_prior_context_and_burst(monkeypatch):
+    # Contract-sync proof (E1/A2): the /highlight request accepts priorContext +
+    # burstFrames and they reach the model through the FastAPI request model.
+    mock = MockLlama('{"isHighlight":true,"score":88,"eventType":"GOAL","reason":"burst: ball in net"}')
+    monkeypatch.setenv("DECIDE_MODE", "gemma")
+    monkeypatch.setenv("GEMMA_URL", f"http://127.0.0.1:{mock.port}")
+    from app import app
+
+    c = TestClient(app)
+    try:
+        r = c.post(
+            "/app/highlight",
+            json={
+                "sessionId": "s1",
+                "eventType": "GOAL",
+                "timestamp": 1.0,
+                "gameHint": "fa cup",
+                "evidence": {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0},
+                "frames": [{"role": "frame", "base64": "FR1"}],
+                "priorContext": "[t=0.0s] candidate:goal_scored",
+                "burstFrames": [{"role": "full", "base64": "B1"}, {"role": "full", "base64": "B2"}, {"role": "full", "base64": "B3"}],
+                "reasoningEffort": "none",
+            },
+        )
+    finally:
+        mock.stop()
+    assert r.status_code == 200
+    assert r.json()["source"] == "gemma"
+    content = mock.requests[0]["messages"][0]["content"]
+    prompt = [p["text"] for p in content if p.get("type") == "text"][0]
+    assert "Prior context — the current 60 s window" in prompt
+    assert "candidate:goal_scored" in prompt
+    assert "dense motion burst frames around the moment: 3" in prompt
+    types = [p.get("type") for p in content if p.get("type")]
+    n_img = types.count("image_url")
+    assert n_img == 1 + 3  # coarse frame + 3 burst frames
+
+
+def test_highlight_accepts_empty_prior_and_burst(monkeypatch):
+    # Optional-new-field backward compatibility: a /highlight call WITHOUT the
+    # new B/E fields still validates (defaults empty) — deployed old callers
+    # keep working against the new runner contract.
+    monkeypatch.setenv("DECIDE_MODE", "rule")
+    from app import app
+
+    c = TestClient(app)
+    r = c.post(
+        "/app/highlight",
+        json={
+            "sessionId": "s1",
+            "eventType": "KILL",
+            "timestamp": 1.0,
+            "evidence": {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0},
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["source"] == "rule"

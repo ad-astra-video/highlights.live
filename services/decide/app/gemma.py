@@ -126,6 +126,8 @@ def build_prompt(
     game_hint: str = "",
     n_frames: int = 1,
     has_audio: bool = False,
+    n_burst: int = 0,
+    prior_context: str = "",
 ) -> str:
     ev = event_type.upper()
     meta = [
@@ -137,10 +139,21 @@ def build_prompt(
         f"frames shown (1 FPS temporal window): {n_frames}",
         f"audio provided (commentary/crowd): {'yes' if has_audio else 'no'}",
     ]
+    if n_burst:
+        meta.append(f"dense motion burst frames around the moment: {n_burst}")
     reaction_lines = _reaction_summary(evidence)
     if reaction_lines:
         meta.append("people-reaction evidence:")
         meta.extend("  " + ln for ln in reaction_lines)
+    prior_block = ""
+    if prior_context and prior_context.strip():
+        prior_block = (
+            "Prior context — the current 60 s window's assembled facts from "
+            "cached perception (fields/tracks/OCR/candidates; corroborating "
+            "context only — verify against the actual frames you see):\n"
+            + prior_context.strip()
+            + "\n\n"
+        )
     return (
         "You are a sports/esports highlight judge. You are shown a temporal "
         "SEQUENCE of frames (extracted at 1 FPS from the moment of a detected "
@@ -171,7 +184,8 @@ def build_prompt(
         "Do NOT fabricate grounding: only cite objects/OCR/motion you can actually "
         "see in the supplied frames.\n"
         "Context:\n- " + "\n- ".join(meta) + "\n\n"
-        "Do NOT provide any reasoning or thinking. Answer immediately with ONLY one "
+        + prior_block
+        + "Do NOT provide any reasoning or thinking. Answer immediately with ONLY one "
         "JSON object, no markdown, no preamble, exactly: "
         '{"isHighlight": true|false, "score": 0..100, "eventType": "<type>", "reason": "<short reason>", '
         '"grounding": {"objects": ["..."], "ocrDelta": "...", "evidence": "...", "supports": true|false}}'
@@ -188,6 +202,8 @@ def ask(
     audio_b64: str = "",
     audio_sample_rate: int = 16000,
     reasoning_effort: str = "none",
+    prior_context: str = "",
+    burst_frames: list | None = None,
     timeout_s: float = 180.0,
 ) -> dict | None:
     """Call llama-server multimodal completion. Returns a parsed/validated
@@ -195,11 +211,17 @@ def ask(
 
     Follows the Gemma 4 12B video+audio modality-order guidance: all image
     content (temporal frame sequence + crops) comes BEFORE the text prompt,
-    and any audio comes AFTER the text. Audio is mono 16 kHz float32 (wav)."""
+    and any audio comes AFTER the text. Audio is mono 16 kHz float32 (wav).
+
+    B/E (ADAAAA-6030): ``prior_context`` (the 60 s window summary) is injected
+    into the prompt text; ``burst_frames`` (the dense motion-awareness sequence
+    around a confirmed candidate) is appended to the image content as the tight
+    tier so the model reads the fast scene motion when confirming time/type."""
     import httpx
 
     frames = frames or []
     images = images or []
+    burst_frames = burst_frames or []
 
     # Raw audio bytes are gated OFF by default. llama-server (this llama.cpp
     # build, b10920) does NOT accept an `audio_url` content block: including one
@@ -219,15 +241,25 @@ def ask(
             return None
         return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
 
-    # 1) frames + images (all image content) BEFORE the text prompt
-    content: list = [i for i in (_img(p) for p in frames + images) if i is not None]
+    # 1) frames + burst + images (all image content) BEFORE the text prompt.
+    # The dense burst (tight tier, plan §E) follows the coarse 1 fps frames so
+    # the model reads the fast scene motion around the confirmed moment.
+    content: list = [i for i in (_img(p) for p in frames + burst_frames + images) if i is not None]
     # 2) the text prompt, in the middle. has_audio reflects whether audio bytes
     # actually reach the model (send_audio), never whether the caller supplied
     # them — we must not tell the model "audio provided: yes" when it is not.
     content.append(
         {
             "type": "text",
-            "text": build_prompt(event_type, evidence, game_hint, n_frames=len(frames), has_audio=send_audio),
+            "text": build_prompt(
+                event_type,
+                evidence,
+                game_hint,
+                n_frames=len(frames),
+                has_audio=send_audio,
+                n_burst=len(burst_frames),
+                prior_context=prior_context,
+            ),
         }
     )
     # 3) audio AFTER the text (modality-order rule) — only when the gate is on.
@@ -306,12 +338,28 @@ def decide_with_gemma(
     audio_b64: str = "",
     audio_sample_rate: int = 16000,
     reasoning_effort: str = "none",
+    prior_context: str = "",
+    burst_frames: list | None = None,
     url: str | None = None,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
-    caller always gets a valid HighlightDecision."""
+    caller always gets a valid HighlightDecision. ``prior_context`` (60 s window
+    summary) and ``burst_frames`` (dense motion confirmation tier) are forwarded
+    to the model (plan §B/E)."""
     u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
-    g = ask(u, event_type, evidence, game_hint, images, frames, audio_b64, audio_sample_rate, reasoning_effort=reasoning_effort)
+    g = ask(
+        u,
+        event_type,
+        evidence,
+        game_hint,
+        images,
+        frames,
+        audio_b64,
+        audio_sample_rate,
+        reasoning_effort=reasoning_effort,
+        prior_context=prior_context,
+        burst_frames=burst_frames,
+    )
     if g is not None:
         return g
     # fallback: deterministic rule (passes the reaction block so the
