@@ -1,0 +1,23 @@
+{
+  "$comment": "ADAAAA-6028 labeled grounding eval set (plan G). Each sample carries a machine-checkable ground truth (isGoal) so the grounding gate's G1 precision / G2 recall / G3 reject-count can be scored. Samples are the real soccer clips already labeled and driven on livepeer-ai-x99 in the INC-5 / VOD-EVAL-PASS1 runs (goal / near_goal = actual goals; off_target / warm_up / lull / replay = non-goals). A single-video eval (the board-flagged run ced2ea19) uses the same shape: supply its known goal timestamps as extra samples with isGoal=true and non-event timestamps with isGoal=false.",
+  "sport": "soccer",
+  "acceptance": {
+    "g1PrecisionMinPct": 70,
+    "g2RecallMinPct": 90,
+    "g3RejectionsMeasurable": true
+  },
+  "samples": [
+    { "id": "soc-goal-01", "isGoal": true,  "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/c57b67f0-e538-4286-ade5-5cc7fe37443a.mp4" },
+    { "id": "soc-goal-02", "isGoal": true,  "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/8e0d65ca-466e-495d-b7ee-a1aabb32b4b3.mp4" },
+    { "id": "soc-goal-03", "isGoal": true,  "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/a11ca3bc-3284-42f7-ab5f-03cb355d5767.mp4" },
+    { "id": "soc-goal-04", "isGoal": true,  "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/9b35c577-aef8-49dd-92c3-5d4431134c43.mp4" },
+    { "id": "soc-near-01", "isGoal": true,  "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/9c09c609-e762-4034-a1e2-b370e4bbfbd8.mp4" },
+    { "id": "soc-near-02", "isGoal": true,  "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/9de3678f-0c26-4700-bd04-39b14229a9fa.mp4" },
+    { "id": "soc-off-01",  "isGoal": false, "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/ba54a06a-017f-4c8c-8f6a-e3f756f19505.mp4" },
+    { "id": "soc-off-02",  "isGoal": false, "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/ad3d909b-5b6d-40f1-87e1-7d259d608425.mp4" },
+    { "id": "soc-warm-01", "isGoal": false, "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/ee910098-9fd3-4222-a841-5e51a34a9038.mp4" },
+    { "id": "soc-warm-02", "isGoal": false, "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/ccca9146-d468-4dc8-8392-4ad39b9b7439.mp4" },
+    { "id": "soc-lull-01", "isGoal": false, "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/01e9e5ca-791e-4828-ae15-cccdd37fa075.mp4" },
+    { "id": "soc-replay-01","isGoal": false, "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/0778d4c3-1ee2-42af-9bf8-f3e7bdaadd92.mp4" }
+  ]
+}
