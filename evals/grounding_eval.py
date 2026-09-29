@@ -80,6 +80,13 @@ def score(manifest: dict, trace: list[dict], apply_gate: bool = True) -> dict:
     rows = []
     tp = fp = fn = 0
     rejections = 0
+    # E2 (ADAAAA-6030): event-time localization scatter over surfaced true
+    # positives. When a labeled sample carries `timeSeconds` (ground-truth event
+    # time) and the trace entry carries `decisionTime` (the decide call's
+    # reported moment), a surfaced GOAL records |decisionTime - timeSeconds|.
+    # Measured per-tier so the coarse-only vs burst comparison is expressible.
+    loc_errors: list[float] = []
+    tier = ""
     for sid, sample in samples.items():
         gt_goal = bool(sample["isGoal"])
         entry = by_id.get(sid)
@@ -88,6 +95,9 @@ def score(manifest: dict, trace: list[dict], apply_gate: bool = True) -> dict:
             if gt_goal:
                 fn += 1
             continue
+        assert isinstance(entry, dict)  # narrow Optional for the reader/type-checker
+        if entry.get("tier"):
+            tier = str(entry.get("tier"))
         decision = entry.get("decision") if isinstance(entry.get("decision"), dict) else entry
         if apply_gate:
             accepted, reason = gate_decision(decision)
@@ -101,6 +111,10 @@ def score(manifest: dict, trace: list[dict], apply_gate: bool = True) -> dict:
         surfaced = accepted and event_type == "GOAL"
         if gt_goal and surfaced:
             tp += 1
+            gt_time = sample.get("timeSeconds")
+            dec_time = entry.get("decisionTime") or decision.get("decisionTime")
+            if isinstance(gt_time, (int, float)) and isinstance(dec_time, (int, float)):
+                loc_errors.append(abs(float(dec_time) - float(gt_time)))
         elif not gt_goal and surfaced:
             fp += 1
         elif gt_goal and not surfaced:
@@ -114,6 +128,8 @@ def score(manifest: dict, trace: list[dict], apply_gate: bool = True) -> dict:
                 "gateAccepted": accepted,
                 "gateReason": reason,
                 "surfacedGoal": surfaced,
+                "decisionTime": decision.get("decisionTime")
+                or entry.get("decisionTime"),
             }
         )
 
@@ -129,8 +145,40 @@ def score(manifest: dict, trace: list[dict], apply_gate: bool = True) -> dict:
         # G3: claimed-but-rejected (no supporting vision evidence), measurable.
         "g3Rejections": rejections,
         "g3RejectionsMeasurable": True,
+        # E2 (ADAAAA-6030): event-time localization (mean/max ±s) + the tier the
+        # trace was captured under, so burst-vs-coarse meet-or-beat is testable.
+        "tier": tier,
+        "meanLocalizationErrorS": (sum(loc_errors) / len(loc_errors)) if loc_errors else None,
+        "maxLocalizationErrorS": max(loc_errors) if loc_errors else None,
+        "localizationSamples": len(loc_errors),
         "rows": rows,
     }
+
+
+def localization_meets_or_beats(coarse: dict, burst: dict, max_error_s: float = 2.0) -> tuple[bool, str]:
+    """E2 regression guard: the burst tier must MEET-OR-BEAT coarse-only on both
+    event-type precision and event-time localization (±s). Returns (ok, reason).
+
+    ``coarse``/``burst`` are the dicts from score(); measures come from their
+    respective tiers. A tier without measurements is treated as not-worse than
+    the other as long as it has equal-or-better precision.
+    """
+    checks: list[str] = []
+    ok = True
+    cp, bp = coarse.get("precision"), burst.get("precision")
+    if cp is not None and bp is not None:
+        ok &= bp >= cp - 1e-9
+        checks.append(f"burst precision {bp:.1%} vs coarse {cp:.1%} ({'PASS' if bp >= cp - 1e-9 else 'FAIL'})")
+    else:
+        checks.append("precision not both measured")
+    cm, bm = coarse.get("meanLocalizationErrorS"), burst.get("meanLocalizationErrorS")
+    if cm is not None and bm is not None:
+        ok &= bm <= cm + 1e-9
+        checks.append(f"burst mean|err| {bm:.2f}s vs coarse {cm:.2f}s ({'PASS' if bm <= cm + 1e-9 else 'FAIL'})")
+    elif cm is None:
+        checks.append("coarse localization not measured (add decisionTime + sample timeSeconds)")
+        ok &= bm is None or bm <= max_error_s
+    return bool(ok), "; ".join(checks)
 
 
 def main(argv: list[str] | None = None) -> int:
