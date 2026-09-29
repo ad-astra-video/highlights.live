@@ -5,6 +5,9 @@ import { randomUUID } from "node:crypto";
 import type { HighlightRecord, TrackObservation } from "@highlights/events";
 import { StageAMetrics } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
+// C — in-memory vector store of prior-window facts (long-horizon memory,
+// plan §C). Per-stream/job CPU-embedding vector memory; see fact-memory.ts.
+import { FactMemory } from "./fact-memory";
 
 export interface ReserveResult {
   sessionId: string;
@@ -451,6 +454,11 @@ export class LiveRunShared {
   /** Candidate events observed inside the current window (bounded, folded into
    * the assembled window facts). */
   private candidates: WindowCandidate[] = [];
+  /** C — in-memory vector store of high-signal facts from at/outside the 60 s
+   * window (long-horizon memory, plan §C). Per-stream/job; salience-gated
+   * ingestion; CPU embedding; small top-k retrieval appended to the decide
+   * prompt's prior context. See fact-memory.ts. */
+  readonly memory = new FactMemory();
   /** Detail-first decide window length (frames kept for the temporal SEQUENCE).
    * Defaults to the live baseline (DECIDE_FRAME_WINDOW); the VOD knob
    * `decideWindowN` raises it (ADAAAA-4954). */
@@ -605,6 +613,24 @@ export class LiveRunShared {
     if (text.length > maxChars) text = text.slice(0, maxChars) + "…";
     return text;
   }
+  /**
+   * C — the decide prompt's prior context: the current 60 s window's facts
+   * (plan §B/A2) PLUS a bounded block of retrieved long-horizon facts from the
+   * in-memory vector store (plan §C/A3). Retrieval embeds the window's salient
+   * facts and pulls top-k similar prior facts from earlier in the SAME stream
+   * (e.g. "player #9 (red) booked at 34:00"). CPU embedding, sub-ms, bounded
+   * top-k + char cap — never blocks the paid decision path (A5) and keeps the
+   * per-decision token-cost increase bounded (A6). Returns the window text
+   * alone when the store is empty (behavior identical to the pre-C baseline).
+   */
+  decideContextText(opts: { retrieverK?: number; retrieverMaxChars?: number } = {}): string {
+    const windowText = this.windowFactsText();
+    const prior = this.memory.retrievedContextText(windowText, opts.retrieverK, opts.retrieverMaxChars);
+    if (!prior) return windowText;
+    const header =
+      "Prior long-horizon facts (earlier in this stream, retrieved by relevance) — corroborating context, verify against the current frames:\n";
+    return windowText ? `${windowText}\n\n${header}${prior}` : `${header}${prior}`;
+  }
   /** Buffer one audio tap chunk (base64 mono 16 kHz int16 PCM, ~100 ms) into
    * the rolling clip, kept ~AUDIO_CLIP_KEEP_S seconds behind `ts`. */
   addAudioChunk(ts: number, samples: string): void {
@@ -677,11 +703,12 @@ function detailDecideOpts(
     gameHint: cfg.gameHint,
     imageB64: anchoredImage,
   };
-  // A2: every decide call for an in-window candidate carries the current 60 s
-  // window's facts as bounded text tokens (pure server assembly; cached
-  // findings, no re-analysis). Included unconditionally — live and detail-first
-  // alike. Empty when the window has nothing to add (behavior identical).
-  opts.priorContextText = shared.windowFactsText();
+  // A2 + C: every decide call for an in-window candidate carries the current
+  // 60 s window's facts PLUS a bounded block of retrieved long-horizon facts
+  // from the in-memory vector store (plan §C/A3). Pure server assembly (cached
+  // findings + CPU embedding), no re-analysis, bounded tokens. Included
+  // unconditionally — live and detail-first alike. Empty when nothing to add.
+  opts.priorContextText = shared.decideContextText();
   if (cfg.decideWindowN !== undefined) {
     opts.frames = shared.framesWindow();
     const audio = shared.audioClipB64();
@@ -826,7 +853,34 @@ export async function decideOnCandidate(
     createdAt: new Date().toISOString(),
   };
   shared.highlights.push(rec);
+  ingestHighlightFact(shared, rec, decision);
   onEvent?.({ seq: evSeq, timestamp: evTs, type: "highlight", highlight: rec });
+}
+
+/**
+ * C — salience-gated ingestion into the per-stream in-memory vector store
+ * (plan §C): a CONFIRMED highlight is a high-confidence fact and is embedded
+ * so later windows in the same stream can retrieve it as prior context (A3,
+ * the yellow→red narrative case). A bare audio-gate / low-score / non-salient
+ * firing is never ingested — that is the noise trigger. Never throws (a memory
+ * hiccup must not sink the paid path).
+ */
+function ingestHighlightFact(shared: LiveRunShared, rec: HighlightRecord, decision: DecisionResult): void {
+  try {
+    const entityRef = (decision.grounding?.objects ?? []).slice(0, 3).join(", ") || undefined;
+    shared.memory.ingestIfSalient(
+      {
+        timestamp: rec.start,
+        factText: `highlight ${rec.eventType}${rec.reason ? `: ${rec.reason}` : ""}${entityRef ? ` — ${entityRef}` : ""}`,
+        type: "highlight",
+        entityRef,
+        eventType: rec.eventType,
+      },
+      { confirmed: true, score: rec.score, eventType: rec.eventType }
+    );
+  } catch {
+    // ignore — memory must never block highlight creation
+  }
 }
 
 /** Live-console event: pushed to SSE subscribers for a job as analysis runs. */
@@ -944,6 +998,9 @@ export async function analyzeJob(
               createdAt: new Date().toISOString(),
             };
             highlights.push(rec);
+            // C — ingest the confirmed highlight into the long-horizon vector
+            // store for later windows in the same stream (plan §C/A3).
+            ingestHighlightFact(run, rec, decision);
             onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "highlight", highlight: rec });
           }
         }

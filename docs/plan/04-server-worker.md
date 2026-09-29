@@ -36,4 +36,5 @@ Reserve→3 analyze→same trackId; Stop→next analyze 404/410; Capacity 1→2n
 - Live ingest (LiveIngest: screen/rtmp/file-sim, record session.ts, sample+analyze rail, clip from session, stop): DONE.
 - Payment REFRESH LOOP actually run in the worker: NOT DONE — refreshPerceivePayment exists but no worker task drives it on an interval.
 - Redis (stream:{id}:session / :tracks), trickle publish/subscribe, 60s buffer, /streams/:id/live server-SSE: NOT DONE.
+- Long-horizon vector memory (plan §C, ADAAAA-6031): DONE — per-stream/job in-memory `FactMemory` (`services/server/src/fact-memory.ts`), CPU IDF-weighted token embedding (no GPU, no Livepeer cost), salience-gated ingestion of confirmed highlights, top-k cosine retrieval appended to the decide prompt's `priorContext`. Labeled retrieval eval in `evals/fact-memory-label-manifest.json` (A3 measured 88.9% precision@3 ≥ 80% bar).
 - Docker compose (orchestrator/perceive/decide/server) + signer profile + Railway split: DONE.
