@@ -165,6 +165,18 @@ def ask(
     frames = frames or []
     images = images or []
 
+    # Raw audio bytes are gated OFF by default. llama-server (this llama.cpp
+    # build, b10920) does NOT accept an `audio_url` content block: including one
+    # makes it reject the WHOLE request with HTTP 400 "unsupported content[].type"
+    # (verified live against highlights-gemma on 2026-09-29), which silently
+    # dropped the entire gemma analysis to the deterministic rule fallback.
+    # Audio-derived reaction evidence (crowd energy, audio kind, ball context) is
+    # already folded into the prompt as TEXT via _reaction_summary, so gating the
+    # raw wav bytes off loses no audio signal — frames + text still reach the
+    # model. Re-enable only once llama-server accepts an audio modality/encoding,
+    # and only by setting GEMMA_SEND_AUDIO=1 (any audio_url request 400s otherwise).
+    send_audio = bool(audio_b64) and os.environ.get("GEMMA_SEND_AUDIO", "0") == "1"
+
     def _img(part: dict) -> dict | None:
         b64 = part.get("base64") or part.get("image") or ""
         if not b64:
@@ -173,15 +185,17 @@ def ask(
 
     # 1) frames + images (all image content) BEFORE the text prompt
     content: list = [i for i in (_img(p) for p in frames + images) if i is not None]
-    # 2) the text prompt, in the middle
+    # 2) the text prompt, in the middle. has_audio reflects whether audio bytes
+    # actually reach the model (send_audio), never whether the caller supplied
+    # them — we must not tell the model "audio provided: yes" when it is not.
     content.append(
         {
             "type": "text",
-            "text": build_prompt(event_type, evidence, game_hint, n_frames=len(frames), has_audio=bool(audio_b64)),
+            "text": build_prompt(event_type, evidence, game_hint, n_frames=len(frames), has_audio=send_audio),
         }
     )
-    # 3) audio AFTER the text (modality-order rule)
-    if audio_b64:
+    # 3) audio AFTER the text (modality-order rule) — only when the gate is on.
+    if send_audio:
         content.append(
             {
                 "type": "audio_url",
