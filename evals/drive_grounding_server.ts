@@ -58,15 +58,12 @@ async function main() {
       sampleFps: VOD_FPS, frameScale: VOD_SCALE, decideWindowN: WINDOW, maxReReserves: 2,
     };
     const cut = async (_ts: number) => ({ clipId: `${clipId}-cut`, clipUri: `/clips/${clipId}-cut.mp4` });
-    // ADAAAA-6079: mirror production VOD — preload the full clip timeline and
-    // enable the GOAL forward-extending look-ahead window so a high-value
-    // candidate's decide window reaches the net-crossing/celebration frames.
-    const LOOKAHEAD = 24;
-    const frames: any[] = [];
-    for await (const f of buildAnalyzeFrames(frameDir, VOD_FPS)()) frames.push(f);
-    const iter = (async function* () { for (const f of frames) yield f; })();
-    const shared = new LiveRunShared({ decideWindowN: WINDOW, lookaheadN: LOOKAHEAD });
-    shared.preloadTimeline(frames);
+    // ADAAAA-6079 (baseline): match production VOD detail-first — rolling
+    // pre-trigger decide frame window (decideWindowN), no forward look-ahead.
+    // The full-timeline GOAL-window experiment (c5cc021/1749ffc) was retired by
+    // PO ruling as net-negative; this driver exercises the baseline path.
+    const iter = buildAnalyzeFrames(frameDir, VOD_FPS)();
+    const shared = new LiveRunShared({ decideWindowN: WINDOW });
     const onEvent = () => {};
     const audioLoop = (async () => {
       for await (const chunk of extractVodAudioChunks(FFMPEG, videoPath)) {

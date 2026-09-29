@@ -344,15 +344,6 @@ export interface AnalyzeOutcome {
  */
 const DECIDE_FRAME_WINDOW = 16;
 
-/** High-value event classes eligible for the forward-extending decide window
- * (ADAAAA-6079). Mirrors the decide server's HIGH_VALUE_EVENTS so GOAL (and
- * the other high-value classes) with a visual/net-crossing moment get the
- * look-ahead; ordinary events keep the rolling pre-trigger window unchanged. */
-const HIGH_VALUE_EVENTS = new Set(["GOAL", "KILL", "DUNK", "CLUTCH", "ACE", "PENTAKILL", "OVERTAKE", "KO"]);
-function isHighValueEvent(eventType: string): boolean {
-  return HIGH_VALUE_EVENTS.has(String(eventType || "").trim().toUpperCase());
-}
-
 function nearestFrameImage(
   window: Map<number, { timestamp: number; imageB64: string }>,
   ts: number
@@ -402,32 +393,13 @@ export class LiveRunShared {
    * Defaults to the live baseline (DECIDE_FRAME_WINDOW); the VOD knob
    * `decideWindowN` raises it (ADAAAA-4954). */
   private readonly windowN: number;
-  /** Detail-first VOD forward-extending look-ahead (ADAAAA-6079 G2 recall):
-   * when > 0 and a full clip timeline is preloaded (VOD), a high-value (GOAL)
-   * candidate's decide window extends `lookaheadN` frames PAST its own trigger
-   * timestamp so the strike→net→celebration frames that come after the audio /
-   * visual trigger reach decide() instead of only the pre-goal rolling window. */
-  private readonly lookaheadN: number;
-  /** Full ordered clip timeline (seq -> frame) preloaded for VOD look-ahead.
-   * Populated once before the pass (all frames are on disk ahead of time); null
-   * in live/rolling mode where forward frames do not exist yet. */
-  private timeline: { seq: number; timestamp: number; imageB64: string }[] | null = null;
   /** Raw mono 16 kHz int16 PCM taps (base64 per ~100 ms chunk) + end timestamp,
    * kept as a short rolling clip so the surrounding audio can be handed to
    * decide() (ADAAAA-4954 detail-first). */
   private audio: { ts: number; samples: string }[] = [];
 
-  constructor(opts: { decideWindowN?: number; lookaheadN?: number } = {}) {
+  constructor(opts: { decideWindowN?: number } = {}) {
     this.windowN = opts.decideWindowN ?? DECIDE_FRAME_WINDOW;
-    this.lookaheadN = opts.lookaheadN ?? 0;
-  }
-
-  /** Preload the full ordered clip frame timeline (VOD only; ADAAAA-6079). The
-   * whole clip is extracted to disk before the pass, so a GOAL candidate that
-   * fires on the strike/cheer can still have its decide window extended forward
-   * into the net-crossing / celebration frames. Live passes never call this. */
-  preloadTimeline(frames: { seq: number; timestamp: number; imageB64: string }[]): void {
-    this.timeline = [...frames].sort((a, b) => a.seq - b.seq);
   }
 
   /** Record a sampled frame into the rolling anchor window. Ring size is the
@@ -449,35 +421,6 @@ export class LiveRunShared {
    * the temporal SEQUENCE Gemma reasons across). Ordered oldest -> newest. */
   framesWindow(): { role: string; base64: string }[] {
     return [...this.frames.values()].map((f) => ({ role: "full", base64: f.imageB64 }));
-  }
-  /** The decide() `frames[]` window for ONE candidate at its anchor timestamp
-   * (ADAAAA-6079 G2 recall). For a HIGH-VALUE (GOAL) candidate when look-ahead
-   * is enabled and the full VOD timeline is preloaded, this returns a
-   * FORWARD-extending window: frames from the preloaded timeline whose
-   * timestamps fall in `[anchorTs - backS, anchorTs + lookaheadS]` — so the
-   * strike→net→celebration frames that follow the audio/visual trigger are in
-   * the sequence (they are NOT in the rolling window yet at trigger time).
-   * Falls back to the rolling window for non-high-value candidates, for live
-   * passes (no timeline), or when look-ahead is disabled (0) — exactly the
-   * old behavior, preserving the byte-for-byte baseline for those paths. */
-  framesWindowFor(anchorTs: number, eventType: string): { role: string; base64: string }[] {
-    if (this.lookaheadN <= 0 || !this.timeline || !isHighValueEvent(eventType)) {
-      return this.framesWindow();
-    }
-    // ADAAAA-6079 (rev 2): a short VOD event clip IS the whole highlight (the
-    // strike→net→celebration sequence lives in the clip, not only after the
-    // audio/visual trigger). For a HIGH-VALUE (GOAL) candidate we therefore
-    // present the FULL preloaded clip timeline to decide() — every frame in
-    // sequence — so the actual goal-crossing/celebration moment is guaranteed in
-    // the window no matter where the candidate fired (before, at, or after the
-    // strike). The 6068 rolling-window baseline held only pre-trigger frames and
-    // missed early-goal hits (goal-01/02); a naive forward-only window threw away
-    // pre-trigger context and regressed late-goal hits (goal-03/near-01/02). The
-    // full-timeline window cannot miss either. VOD only — the decision-window is
-    // bounded to `windowN` (short event clips are <= that; a long VOD keeps the
-    // most-recent `windowN` frames).
-    const sel = this.timeline.map((f) => ({ role: "full" as const, base64: f.imageB64 }));
-    return sel.length <= this.windowN ? sel : sel.slice(sel.length - this.windowN);
   }
   /** Buffer one audio tap chunk (base64 mono 16 kHz int16 PCM, ~100 ms) into
    * the rolling clip, kept ~AUDIO_CLIP_KEEP_S seconds behind `ts`. */
@@ -533,19 +476,14 @@ export function pcmInt16ToWavB64(samplesB64: string, sampleRate = 16_000): strin
 function detailDecideOpts(
   cfg: AnalyzerConfig,
   shared: LiveRunShared,
-  anchoredImage: string | undefined,
-  anchorTs?: number,
-  eventType?: string
+  anchoredImage: string | undefined
 ): { gameHint: string; imageB64: string | undefined; frames?: { role: string; base64: string }[]; audioB64?: string } {
   const opts: { gameHint: string; imageB64: string | undefined; frames?: { role: string; base64: string }[]; audioB64?: string } = {
     gameHint: cfg.gameHint,
     imageB64: anchoredImage,
   };
   if (cfg.decideWindowN !== undefined) {
-    // ADAAAA-6079: for a high-value (GOAL) candidate forward-extend the decide
-    // window past its own trigger so the strike→net→celebration frames enter
-    // the sequence; everyone else gets the rolling pre-trigger window (baseline).
-    opts.frames = anchorTs !== undefined ? shared.framesWindowFor(anchorTs, eventType ?? "") : shared.framesWindow();
+    opts.frames = shared.framesWindow();
     const audio = shared.audioClipB64();
     if (audio) opts.audioB64 = audio;
   }
@@ -583,7 +521,7 @@ export async function decideOnCandidate(
       ocrHits: 0,
       reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
     },
-    detailDecideOpts(cfg, shared, anchoredImage, candidate.timestamp, candidate.eventType)
+    detailDecideOpts(cfg, shared, anchoredImage)
   );
   // Track the Stage-A FP-rate metric (INC-2 / ADAAAA-4325 slice 5): whether
   // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
@@ -709,7 +647,7 @@ export async function analyzeJob(
             ocrHits: 0,
             reaction: buildReactionEvidence(res.candidate, evidence.trackCount),
           },
-          detailDecideOpts(cfg, run, anchoredImage, res.candidate.timestamp, res.candidate.eventType)
+          detailDecideOpts(cfg, run, anchoredImage)
         );
         if (decision.isHighlight) {
           // Grounded-evidence verification gate (plan G3 / ADAAAA-6028).
