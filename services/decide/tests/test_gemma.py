@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from fastapi.testclient import TestClient
 
-from app.gemma import build_prompt, decide_with_gemma, parse_decision
+from app.gemma import build_prompt, decide_with_gemma, parse_decision, rule_grounding
 
 
 # --- parse/build units ------------------------------------------------------
@@ -107,6 +107,63 @@ def test_strict_json_eval_corpus_full_parse():
         assert 0.0 <= d["score"] <= 100.0
         assert "reason" in d
         assert "source" in d
+
+
+# --- ADAAAA-6028 / plan G: grounded-evidence output --------------------------
+
+def test_parse_decision_extracts_grounding():
+    d = parse_decision(
+        '{"isHighlight":true,"score":91,"eventType":"GOAL","reason":"in the net",'
+        '"grounding":{"objects":["ball","player #10"],"ocrDelta":"scoreboard unchanged 1-0",'
+        '"evidence":"ball is in the net and players are celebrating","supports":true}}'
+    )
+    assert d["source"] == "gemma"
+    g = d["grounding"]
+    assert g["objects"] == ["ball", "player #10"]
+    assert g["ocrDelta"] == "scoreboard unchanged 1-0"
+    assert g["evidence"] == "ball is in the net and players are celebrating"
+    assert g["supports"] is True
+
+
+def test_parse_decision_grounding_not_required_for_parse():
+    # A reply without a grounding object still parses (as today); the SERVER-side
+    # gate then rejects the claimed highlight (no grounding evidence). This keeps
+    # the strict-JSON parse rate flat even when the model omits grounding.
+    d = parse_decision('{"isHighlight":true,"score":88,"eventType":"GOAL","reason":"net"}')
+    assert d["isHighlight"] is True
+    assert "grounding" not in d
+
+
+def test_build_prompt_includes_grounding_schema_and_rules():
+    p = build_prompt("GOAL", {"trackCount": 2, "maxVelocity": 0.4}, "soccer")
+    assert "grounding" in p
+    assert '"supports": true|false' in p
+    assert "supports=false" in p
+    assert "no supporting visual evidence must be rejected" in p
+    assert "Do NOT fabricate grounding" in p
+
+
+def test_rule_fallback_includes_grounding():
+    d = decide_with_gemma("GOAL", {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0}, url="http://127.0.0.1:1")
+    assert d["source"] == "rule-fallback"
+    g = d.get("grounding")
+    assert g is not None
+    assert g["supports"] is d["isHighlight"]
+    assert "tracked object" in " ".join(g["objects"])
+
+
+def test_rule_grounding_mirrors_rule_verdict():
+    from app.decider import decide
+    ev = {"trackCount": 1, "maxVelocity": 0.1, "ocrHits": 0}
+    d = decide("GOAL", track_count=1, max_velocity=0.1, ocr_hits=0)
+    g = rule_grounding("GOAL", ev, d)
+    assert g["supports"] is True
+    assert g["objects"] == ["1 tracked object(s)"]
+    # a non-highlight rule verdict yields supports=False (never surfaced)
+    d2 = decide("NONE", track_count=0, max_velocity=0.0, ocr_hits=0)
+    assert d2.is_highlight is False
+    g2 = rule_grounding("NONE", {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0}, d2)
+    assert g2["supports"] is False
 
 
 def test_decide_with_gemma_forwards_reaction_context():

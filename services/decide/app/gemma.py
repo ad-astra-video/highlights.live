@@ -37,7 +37,15 @@ def _strip_json_fence(text: str) -> str:
 
 
 def parse_decision(text: str) -> dict | None:
-    """Turn the model's raw text into a HighlightDecision-shaped dict, or None."""
+    """Turn the model's raw text into a HighlightDecision-shaped dict, or None.
+
+    The grounding object is BEST-EFFORT: the strict JSON gate (isHighlight must
+    be a bool) is unchanged, and a reply without a usable grounding object is
+    still parsed (its `grounding` key is simply absent) so a noisy model reply
+    never drops the whole decision. The SERVER-side grounding gate then rejects
+    a claimed highlight that carries no grounding — that is the G3 rejection the
+    board's feedback is written against.
+    """
     try:
         obj = json.loads(_strip_json_fence(text))
     except Exception:
@@ -53,13 +61,26 @@ def parse_decision(text: str) -> dict | None:
     except (TypeError, ValueError):
         score = 0.0
     score = min(100.0, max(0.0, score))
-    return {
+    out = {
         "isHighlight": is_hl,
         "score": score,
         "eventType": obj.get("eventType"),
         "reason": obj.get("reason"),
         "source": "gemma",
     }
+    grounding = obj.get("grounding")
+    if isinstance(grounding, dict):
+        out["grounding"] = {
+            "objects": grounding.get("objects")
+            if isinstance(grounding.get("objects"), list)
+            else [],
+            "ocrDelta": grounding.get("ocrDelta") if isinstance(grounding.get("ocrDelta"), str) else "",
+            "evidence": grounding.get("evidence") if isinstance(grounding.get("evidence"), str) else "",
+            "supports": grounding.get("supports")
+            if isinstance(grounding.get("supports"), bool)
+            else None,
+        }
+    return out
 
 
 def _reaction_summary(evidence: dict) -> list[str]:
@@ -135,10 +156,25 @@ def build_prompt(
         "Reaction is corroborating evidence only - cite it, but decide on your "
         "full read of the frames, audio, and context; never let reaction alone "
         "override a clear read of the play.\n"
+        "GROUNDING (REQUIRED): every decision MUST include a 'grounding' object "
+        "that ties the claimed event to the actual frame content you see. It has "
+        "four fields: 'objects' (the tracked object(s)/player(s)/regions you are "
+        "looking at, e.g. ['ball', 'player #10 (red)']), 'ocrDelta' (any "
+        "scoreboard/OCR change you observe, e.g. 'scoreboard unchanged 1-0', or "
+        "'' if none), 'evidence' (one sentence on why the frame content supports "
+        "or REFUTES the claimed event type, e.g. 'ball is in the net and players "
+        "are celebrating'), and 'supports' (true ONLY if the frames actually show "
+        "the claimed event; false when the frames do NOT support it). Be honest: "
+        "if a GOAL claim has no ball-in-net / net-mesh / scoreboard support, set "
+        "supports=false and say so. A claimed event with no supporting visual "
+        "evidence must be rejected (supports=false).\n"
+        "Do NOT fabricate grounding: only cite objects/OCR/motion you can actually "
+        "see in the supplied frames.\n"
         "Context:\n- " + "\n- ".join(meta) + "\n\n"
         "Do NOT provide any reasoning or thinking. Answer immediately with ONLY one "
         "JSON object, no markdown, no preamble, exactly: "
-        '{"isHighlight": true|false, "score": 0..100, "eventType": "<type>", "reason": "<short reason>"}'
+        '{"isHighlight": true|false, "score": 0..100, "eventType": "<type>", "reason": "<short reason>", '
+        '"grounding": {"objects": ["..."], "ocrDelta": "...", "evidence": "...", "supports": true|false}}'
     )
 
 
@@ -234,6 +270,33 @@ def ask(
     return parse_decision(text)
 
 
+def rule_grounding(event_type: str, evidence: dict, decision) -> dict:
+    """Build a grounding object from the deterministic rule's own evidence, so
+    even the rule-fallback path keeps the HighlightDecision contract's grounding
+    field populated (the server gate checks grounding, never trusts a bare
+    claim). objects/ocrDelta come from the scalar evidence the rule actually
+    scored; supports mirrors the rule verdict so a rule highlight with
+    corroborating evidence passes the gate exactly as before, and a rule
+    non-highlight is not surfaced (gate is a no-op for non-highlights).
+    """
+    track_count = int(evidence.get("trackCount", 0) or 0)
+    vel = float(evidence.get("maxVelocity", 0.0) or 0.0)
+    objects: list[str] = []
+    if track_count >= 1:
+        objects.append(f"{track_count} tracked object(s)")
+    if vel >= 0.25:
+        objects.append("fast-moving tracked object")
+    ocr_hits = int(evidence.get("ocrHits", 0) or 0)
+    parts = [f"candidate {event_type} scored from rule evidence ({decision.reason})"]
+    parts.append("decision evidence present" if decision.is_highlight else "decision evidence insufficient")
+    return {
+        "objects": objects,
+        "ocrDelta": "" if not ocr_hits else f"{ocr_hits} OCR hit(s)",
+        "evidence": "; ".join(parts),
+        "supports": decision.is_highlight,
+    }
+
+
 def decide_with_gemma(
     event_type: str,
     evidence: dict,
@@ -265,5 +328,6 @@ def decide_with_gemma(
         "score": d.score,
         "eventType": event_type,
         "reason": d.reason,
+        "grounding": rule_grounding(event_type, evidence, d),
         "source": "rule-fallback",
     }

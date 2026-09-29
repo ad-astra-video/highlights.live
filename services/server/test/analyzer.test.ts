@@ -3,6 +3,7 @@ import {
   analyzeJob,
   EvidenceTracker,
   LiveRunShared,
+  applyGroundingGate,
   decideOnCandidate,
   SessionLostError,
   pcmInt16ToWavB64,
@@ -22,7 +23,7 @@ function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
     },
     decide: async () => {
       log.push("decide");
-      return { isHighlight: true, score: 80, eventType: "KILL" };
+      return { isHighlight: true, score: 80, eventType: "KILL", ...GROUNDED };
     },
     stopPerceive: async () => {
       log.push("stop");
@@ -46,6 +47,14 @@ function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
   };
   return { client, log };
 }
+
+// Supported-grounding output for mock decide calls: a claimed highlight must
+// tie to supporting vision evidence (ADAAAA-6028 grounding gate, plan G3), so
+// highlight-claiming mocks carry it. Tests that specifically exercise the gate
+// override this (see the "grounding gate" describe block).
+const GROUNDED = {
+  grounding: { objects: ["ball"], evidence: "ball in net", supports: true },
+};
 
 async function* frames(n: number) {
   for (let i = 0; i < n; i++) yield { seq: i, timestamp: i, imageB64: `img${i}` };
@@ -110,7 +119,7 @@ describe("analyzeJob", () => {
       }),
       decide: async (evidence: any) => {
         seen = evidence;
-        return { isHighlight: true, score: 90, eventType: "GOAL" };
+        return { isHighlight: true, score: 90, eventType: "GOAL", ...GROUNDED };
       },
     });
     await analyzeJob(client, frames(1), async () => ({ clipId: "c", clipUri: "/c.mp4" }), {
@@ -155,7 +164,7 @@ describe("analyzeJob", () => {
       }),
       decide: async (evidence: any) => {
         seen = evidence;
-        return { isHighlight: true, score: 80, eventType: "GOAL" };
+        return { isHighlight: true, score: 80, eventType: "GOAL", ...GROUNDED };
       },
     });
     await analyzeJob(client, frames(1), async () => ({ clipId: "c", clipUri: "/c.mp4" }), {
@@ -226,7 +235,7 @@ describe("analyzeJob", () => {
       },
       decide: async (_evidence, opts) => {
         decideImages.push(opts?.imageB64);
-        return { isHighlight: true, score: 85, eventType: "GOAL" };
+        return { isHighlight: true, score: 85, eventType: "GOAL", ...GROUNDED };
       },
     });
     const cuts: number[] = [];
@@ -426,7 +435,7 @@ describe("decideOnCandidate (INC-2 / ADAAAA-4325 slice 4: audio candidate -> dec
     const { client } = fakeClient({
       decide: async (_ev, opts) => {
         decideImages.push(opts?.imageB64);
-        return { isHighlight: true, score: 75, eventType: "GOAL" };
+        return { isHighlight: true, score: 75, eventType: "GOAL", ...GROUNDED };
       },
     });
     const shared = new LiveRunShared();
@@ -461,7 +470,7 @@ describe("decideOnCandidate (INC-2 / ADAAAA-4325 slice 4: audio candidate -> dec
     const { client } = fakeClient({
       decide: async (evidence: any) => {
         seen = evidence;
-        return { isHighlight: true, score: 70, eventType: "GOAL" };
+        return { isHighlight: true, score: 70, eventType: "GOAL", ...GROUNDED };
       },
     });
     const shared = new LiveRunShared();
@@ -526,7 +535,7 @@ describe("decideOnCandidate (INC-2 / ADAAAA-4325 slice 4: audio candidate -> dec
         }
         return { observation: { tracks: [], seq: 0, timestamp: 0 } };
       },
-      decide: async () => ({ isHighlight: true, score: 70, eventType: "GOAL" }),
+      decide: async () => ({ isHighlight: true, score: 70, eventType: "GOAL", ...GROUNDED }),
     });
     const shared = new LiveRunShared();
     const outcome = await analyzeJob(
@@ -560,7 +569,7 @@ describe("Stage-A FP-rate metric on decideOnCandidate (INC-2 / ADAAAA-4325 slice
     const { client } = fakeClient({
       decide: async () => {
         call++;
-        return call === 1 ? { isHighlight: true, score: 80 } : { isHighlight: false, score: 10 };
+        return call === 1 ? { isHighlight: true, score: 80, ...GROUNDED } : { isHighlight: false, score: 10 };
       },
     });
     const shared = new LiveRunShared();
@@ -624,7 +633,7 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
       }),
       decide: async (_ev, opts) => {
         seen = opts;
-        return { isHighlight: true, score: 80, eventType: "GOAL" };
+        return { isHighlight: true, score: 80, eventType: "GOAL", ...GROUNDED };
       },
     });
     const shared = new LiveRunShared({ decideWindowN: 4 });
@@ -654,7 +663,7 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
       }),
       decide: async (_ev, opts) => {
         seen = opts;
-        return { isHighlight: true, score: 80, eventType: "GOAL" };
+        return { isHighlight: true, score: 80, eventType: "GOAL", ...GROUNDED };
       },
     });
     await analyzeJob(
@@ -678,5 +687,105 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
     shared.addAudioChunk(30, Buffer.from([3, 0]).toString("base64"));
     const wav = Buffer.from(shared.audioClipB64(), "base64");
     expect(wav.length).toBe(44 + 2); // only the t=30 chunk (2 bytes) survives
+  });
+});
+
+describe("grounded-evidence gate (ADAAAA-6028 / plan G3)", () => {
+  it("accepts a claimed highlight that ties to supporting vision evidence", () => {
+    const gate = applyGroundingGate(
+      { isHighlight: true, score: 90, eventType: "GOAL", grounding: { objects: ["ball"], evidence: "ball in net", supports: true } },
+      "GOAL"
+    );
+    expect(gate.accepted).toBe(true);
+    expect(gate.reason).toBe("");
+  });
+
+  it("rejects a claimed highlight with NO grounding object (the board's exact failure mode)", () => {
+    const gate = applyGroundingGate({ isHighlight: true, score: 95, eventType: "GOAL" }, "GOAL");
+    expect(gate.accepted).toBe(false);
+    expect(gate.reason).toContain("no grounding evidence");
+  });
+
+  it("rejects a claimed highlight whose grounding REFUTES the event type (supports=false)", () => {
+    const gate = applyGroundingGate(
+      { isHighlight: true, score: 95, eventType: "GOAL", grounding: { objects: ["ball"], evidence: "ball nowhere near goal", supports: false } },
+      "GOAL"
+    );
+    expect(gate.accepted).toBe(false);
+    expect(gate.reason).toContain("refutes");
+  });
+
+  it("rejects a claimed event with no cited evidence (empty objects/evidence/ocrDelta)", () => {
+    const gate = applyGroundingGate(
+      { isHighlight: true, score: 70, eventType: "GOAL", grounding: { objects: [], evidence: "", ocrDelta: "", supports: true } },
+      "GOAL"
+    );
+    expect(gate.accepted).toBe(false);
+    expect(gate.reason).toContain("no cited evidence");
+  });
+
+  it("accepts when grounding supplies OCR-delta-only support", () => {
+    const gate = applyGroundingGate(
+      { isHighlight: true, score: 60, eventType: "GOAL", grounding: { ocrDelta: "scoreboard 0-0 -> 1-0", supports: true } },
+      "GOAL"
+    );
+    expect(gate.accepted).toBe(true);
+  });
+
+  it("is a no-op for non-highlight decisions (never a counted rejection)", () => {
+    const gate = applyGroundingGate({ isHighlight: false, score: 20 }, "GOAL");
+    expect(gate.accepted).toBe(false);
+    expect(gate.reason).toBe("");
+  });
+
+  it("decideOnCandidate rejects a grounding-less claimed highlight: no clip, counted, candidateBlocked emitted", async () => {
+    const { client } = fakeClient({ decide: async () => ({ isHighlight: true, score: 90, eventType: "GOAL" }) });
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    shared.evidence.step({ tracks: [{ trackId: "a", slot: 0, bbox: [0, 0, 0.1, 0.1], kind: "player", lostFrames: 0 }] as any });
+    const cuts: number[] = [];
+    const events: any[] = [];
+    await decideOnCandidate(
+      client,
+      shared,
+      async (ts) => {
+        cuts.push(ts);
+        return { clipId: `c${ts}`, clipUri: "/clips/c.mp4" };
+      },
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" },
+      { eventType: "GOAL", timestamp: 0, seq: 1 },
+      (ev) => events.push(ev)
+    );
+    expect(cuts).toEqual([]); // no clip cut
+    expect(shared.highlights).toHaveLength(0); // not surfaced
+    expect(shared.groundingRejections).toBe(1); // G3 rejections are measurable
+    const blocked = events.find((e) => e.type === "candidateBlocked");
+    expect(blocked).toBeDefined();
+    expect(blocked.reason).toContain("grounding gate");
+  });
+
+  it("analyzeJob rejects an un-grounded candidate and reports groundingRejections on the outcome", async () => {
+    let call = 0;
+    const { client } = fakeClient({
+      analyze: async () => {
+        call++;
+        if (call === 1) return { observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "GOAL", timestamp: 0 } };
+        return { observation: { tracks: [], seq: call - 1, timestamp: call - 1 } };
+      },
+      decide: async () => ({ isHighlight: true, score: 90, eventType: "GOAL" }),
+    });
+    const cuts: number[] = [];
+    const outcome = await analyzeJob(
+      client,
+      frames(2),
+      async (ts) => {
+        cuts.push(ts);
+        return { clipId: `c${ts}`, clipUri: "/clips/c.mp4" };
+      },
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" }
+    );
+    expect(cuts).toEqual([]);
+    expect(outcome.highlights).toHaveLength(0);
+    expect(outcome.groundingRejections).toBe(1);
   });
 });

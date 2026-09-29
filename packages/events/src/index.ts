@@ -260,12 +260,26 @@ export const ContextSnapshotSchema = z.object({
 });
 export type ContextSnapshot = z.infer<typeof ContextSnapshotSchema>;
 
+/** Grounded-evidence output of the decide call (ADAAAA-6028 / plan G). The
+ * decide LLM ties a claimed event to the tracked object(s)/regions it is
+ * looking at, any OCR/scoreboard delta, and why the frame content supports (or
+ * refutes) the claimed event type. The server-side grounding gate (G3) rejects
+ * a claimed highlight whose event type has no supporting vision evidence. */
+export const GroundingSchema = z.object({
+  objects: z.array(z.string()).optional(),
+  ocrDelta: z.string().optional(),
+  evidence: z.string().optional(),
+  supports: z.boolean().optional(),
+});
+export type Grounding = z.infer<typeof GroundingSchema>;
+
 export const HighlightDecisionSchema = z.object({
   isHighlight: z.boolean(),
   score: z.number().min(0).max(100),
   eventType: z.string().optional(),
   reason: z.string().optional(),
   snapshot: ContextSnapshotSchema.optional(),
+  grounding: GroundingSchema.optional(),
 });
 export type HighlightDecision = z.infer<typeof HighlightDecisionSchema>;
 

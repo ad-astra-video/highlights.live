@@ -73,6 +73,65 @@ export interface DecisionResult {
   score: number;
   eventType?: string;
   reason?: string;
+  /** Grounded-evidence output of the paid decide call (ADAAAA-6028 / plan §G).
+   * The decide LLM ties a claimed event (esp. a high-value label like GOAL) to
+   * explicit visual evidence. The server-side grounding gate (G3) rejects a
+   * claimed highlight whose event type has no supporting vision evidence. */
+  grounding?: Grounding;
+  source?: string;
+}
+/** Grounded-evidence object returned by the paid decide call (plan §G). The
+ * model names the tracked object(s)/regions it is looking at, any OCR /
+ * scoreboard delta, a statement of why the frame content supports (or refutes)
+ * the claimed event type, and whether the frames actually support it. */
+export interface Grounding {
+  objects?: string[];
+  ocrDelta?: string;
+  evidence?: string;
+  supports?: boolean;
+}
+export interface GroundingGateResult {
+  accepted: boolean;
+  /** Non-empty when rejected — the reason to log. */
+  reason: string;
+}
+/**
+ * The grounded-evidence verification gate (ADAAAA-6028 / plan G3). Runs between
+ * the raw decide call and highlight creation: a candidate that CLAIMS a
+ * highlight (isHighlight=true) but whose decision output carries no supporting
+ * vision evidence is rejected — not surfaced — and the rejection is logged.
+ *
+ * Rejection rules (deterministic, unit-testable):
+ *  - no grounding object at all            -> reject ("no grounding evidence")
+ *  - grounding.supports === false          -> reject ("grounding refutes …")
+ *  - grounding cites neither objects, nor
+ *    evidence text, nor an ocrDelta        -> reject ("claims … with no cited evidence")
+ *
+ * Non-highlight decisions are never surfaced regardless, so the gate is a no-op
+ * for them (accepted=false with an empty reason — not a rejection the highlight
+ * path counts).
+ */
+export function applyGroundingGate(
+  decision: DecisionResult,
+  claimedEventType: string
+): GroundingGateResult {
+  if (!decision.isHighlight) return { accepted: false, reason: "" };
+  const ev = claimedEventType || "event";
+  const g = decision.grounding;
+  if (!g) {
+    return { accepted: false, reason: `no grounding evidence for claimed event type ${ev}` };
+  }
+  if (g.supports === false) {
+    return { accepted: false, reason: `grounding refutes claimed event type ${ev}` };
+  }
+  const hasEvidence =
+    !!g.evidence?.trim() ||
+    (Array.isArray(g.objects) && g.objects.length > 0) ||
+    !!g.ocrDelta?.trim();
+  if (!hasEvidence) {
+    return { accepted: false, reason: `grounding claims ${ev} with no cited evidence` };
+  }
+  return { accepted: true, reason: "" };
 }
 /** One audio chunk fed to the Stage-A noise-change gate (INC-2 / ADAAAA-4325).
  * Owned by the server's ffmpeg audio tap: short (default ~100 ms) mono int16
@@ -271,6 +330,10 @@ export interface AnalyzeOutcome {
   sessionId: string;
   highlights: HighlightRecord[];
   framesAnalyzed: number;
+  /** Count of candidates whose claimed event type was rejected by the
+   * grounded-evidence verification gate (plan G3) in this pass. Measurable so
+   * the gate's rejection behaviour can be asserted in eval. */
+  groundingRejections: number;
 }
 
 /**
@@ -318,6 +381,9 @@ function nearestFrameImage(
 export class LiveRunShared {
   readonly evidence = new EvidenceTracker();
   readonly highlights: HighlightRecord[] = [];
+  /** Candidates rejected by the grounded-evidence gate (plan G3): the decide
+   * model CLAIMED a highlight but supplied no supporting vision evidence. */
+  groundingRejections = 0;
   /** Stage-A audio-gate FP-rate + latency metric (INC-2 / ADAAAA-4325 slice 5).
    * Every audio candidate routed through decideOnCandidate() records its
    * outcome here; the job runner snapshots it onto the job at completion. */
@@ -462,6 +528,19 @@ export async function decideOnCandidate(
   // reported onset latency. Feeds job.stageAMetrics fpRate = rejected / total.
   shared.stageA.recordOutcome(decision.isHighlight, candidate.audio?.onsetLatencyS);
   if (!decision.isHighlight) return;
+  // Grounded-evidence verification gate (plan G3 / ADAAAA-6028): only surface a
+  // claimed highlight when the decision ties it to supporting vision evidence.
+  const gate = applyGroundingGate(decision, candidate.eventType);
+  if (!gate.accepted) {
+    shared.groundingRejections += 1;
+    onEvent?.({
+      seq: evSeq,
+      timestamp: evTs,
+      type: "candidateBlocked",
+      reason: `grounding gate: ${gate.reason}`,
+    });
+    return;
+  }
   const { clipId, clipUri } = await cut(candidate.timestamp);
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -571,21 +650,33 @@ export async function analyzeJob(
           detailDecideOpts(cfg, run, anchoredImage)
         );
         if (decision.isHighlight) {
-          const { clipId, clipUri } = await cut(res.candidate.timestamp);
-          const rec: HighlightRecord = {
-            id: randomUUID(),
-            jobId: cfg.jobId,
-            clipUri,
-            start: Math.max(0, res.candidate.timestamp - cfg.clipBeforeS),
-            end: res.candidate.timestamp + cfg.clipAfterS,
-            eventType: decision.eventType,
-            score: decision.score,
-            reason: decision.reason,
-            status: "pending",
-            createdAt: new Date().toISOString(),
-          };
-          highlights.push(rec);
-          onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "highlight", highlight: rec });
+          // Grounded-evidence verification gate (plan G3 / ADAAAA-6028).
+          const gate = applyGroundingGate(decision, res.candidate.eventType);
+          if (!gate.accepted) {
+            run.groundingRejections += 1;
+            onEvent?.({
+              seq: frame.seq,
+              timestamp: frame.timestamp,
+              type: "candidateBlocked",
+              reason: `grounding gate: ${gate.reason}`,
+            });
+          } else {
+            const { clipId, clipUri } = await cut(res.candidate.timestamp);
+            const rec: HighlightRecord = {
+              id: randomUUID(),
+              jobId: cfg.jobId,
+              clipUri,
+              start: Math.max(0, res.candidate.timestamp - cfg.clipBeforeS),
+              end: res.candidate.timestamp + cfg.clipAfterS,
+              eventType: decision.eventType,
+              score: decision.score,
+              reason: decision.reason,
+              status: "pending",
+              createdAt: new Date().toISOString(),
+            };
+            highlights.push(rec);
+            onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "highlight", highlight: rec });
+          }
         }
       }
     }
@@ -597,5 +688,5 @@ export async function analyzeJob(
       await client.stopPerceive(s).catch(() => {});
     }
   }
-  return { sessionId, highlights, framesAnalyzed };
+  return { sessionId, highlights, framesAnalyzed, groundingRejections: run.groundingRejections };
 }
