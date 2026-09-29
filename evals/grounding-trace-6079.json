@@ -1,0 +1,1668 @@
+[
+  {
+    "sampleId": "soc-goal-01",
+    "isGoal": true,
+    "decision": {
+      "isHighlight": false,
+      "eventType": "NONE",
+      "grounding": {}
+    },
+    "claims": 8,
+    "claimedHighlights": 0,
+    "groundingRejections": 0,
+    "framesAnalyzed": 16,
+    "highlights": [],
+    "raw": [
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "player in maroon shirt",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is being dribbled by a player in the center of the field and does not enter the goal.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player dribbling the ball in the middle of the field with no shot on goal or celebration occurring."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in maroon shirt",
+            "player in blue shirt"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is being dribbled by a player in the center of the field with no goal scoring action occurring.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player dribbling the ball in open play; no shot on goal or celebration occurs."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in maroon shirt",
+            "player in blue shirt"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is being dribbled by a player in the middle of the field with no goal-scoring action occurring.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player dribbling the ball in open play; no shot on goal or celebration occurs."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in maroon shirt"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is being dribbled by a player in the middle of the field with no goal scoring action occurring.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player dribbling the ball in open play; no shot on goal or celebration occurs."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "player in maroon shirt",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is being dribbled by a player in the middle of the field with no goal-scoring action occurring.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player dribbling the ball in open play; no shot on goal or celebration occurs."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in maroon shirt"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is being dribbled by a player in the middle of the field, far from the goal.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player dribbling the ball in open play; no shot on goal or goal is scored."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in maroon shirt",
+            "player in blue shirt"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball remains in the middle of the field and no goal is scored in the sequence.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player dribbling the ball in open play; no goal is scored."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in maroon shirt"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is being dribbled by a player in the center of the field, far from the goal.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player dribbling the ball in the middle of the field with no shot on goal or celebration occurring."
+      }
+    ]
+  },
+  {
+    "sampleId": "soc-goal-02",
+    "isGoal": true,
+    "decision": {
+      "isHighlight": false,
+      "eventType": "NONE",
+      "grounding": {}
+    },
+    "claims": 8,
+    "claimedHighlights": 0,
+    "groundingRejections": 0,
+    "framesAnalyzed": 24,
+    "highlights": [],
+    "raw": [
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "players on field"
+          ],
+          "ocrDelta": "",
+          "evidence": "The image shows a standard play in progress with no visual indicators of a major event.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #22 (red)",
+            "player #38 (red)",
+            "player (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the middle of the pitch and no goal is scored in the sequence.",
+          "supports": false
+        },
+        "reason": "The sequence shows a tackle and a fall in the midfield, not a goal."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "players",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The frames show players in a standard midfield/attacking position with no clear goal or highlight event occurring.",
+          "supports": false
+        },
+        "reason": "The provided frames show standard gameplay with no significant action or goal, and there is no audio provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #22 (red)",
+            "player (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the middle of the pitch and no goal is scored in the sequence.",
+          "supports": false
+        },
+        "reason": "The sequence shows a tackle and a player falling, but no goal is scored."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "player #22 (red)",
+            "player #38 (red)",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball remains in the middle of the pitch and no goal is scored.",
+          "supports": false
+        },
+        "reason": "The sequence shows a tackle and a player falling, but no goal is scored."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #2 (red)",
+            "player #38 (red)",
+            "player (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball remains in the middle of the pitch and no goal is scored.",
+          "supports": false
+        },
+        "reason": "The sequence shows a tackle and a player falling, but no goal is scored."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 10,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #22 (red)",
+            "player (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball remains in play in the middle of the pitch and does not enter the goal.",
+          "supports": false
+        },
+        "reason": "The sequence shows a tackle and a player falling, but no goal is scored."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #22 (red)",
+            "player (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is on the ground and no goal is scored in the sequence.",
+          "supports": false
+        },
+        "reason": "The sequence shows a tackle and a player falling, but no goal is scored."
+      }
+    ]
+  },
+  {
+    "sampleId": "soc-goal-03",
+    "isGoal": true,
+    "decision": {
+      "isHighlight": true,
+      "eventType": "GOAL",
+      "grounding": {
+        "objects": [
+          "track"
+        ],
+        "evidence": "surfaced",
+        "supports": true
+      }
+    },
+    "claims": 12,
+    "claimedHighlights": 6,
+    "groundingRejections": 0,
+    "framesAnalyzed": 24,
+    "highlights": [
+      {
+        "eventType": "GOAL",
+        "score": 95
+      },
+      {
+        "eventType": "GOAL",
+        "score": 95
+      },
+      {
+        "eventType": "GOAL",
+        "score": 95
+      },
+      {
+        "eventType": "GOAL",
+        "score": 95
+      },
+      {
+        "eventType": "GOAL",
+        "score": 95
+      },
+      {
+        "eventType": "GOAL",
+        "score": 95
+      }
+    ],
+    "raw": [
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The image shows a standard soccer match in progress with no clear goal or significant event occurring.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "players on field"
+          ],
+          "ocrDelta": "",
+          "evidence": "The frames show players in various positions on the pitch during active play with no clear goal or major event.",
+          "supports": false
+        },
+        "reason": "The audio is not provided, and the visual frames show standard gameplay with no significant event occurring."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red kit",
+            "goal net"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen entering the net and the player in red celebrates while the crowd reacts.",
+          "supports": true
+        },
+        "reason": "A player in a red kit scores a goal, followed by a celebration and a reaction from the crowd."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks for an audio highlight evaluation but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red kit",
+            "goal net"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen entering the net and the player in red celebrates while the crowd reacts.",
+          "supports": true
+        },
+        "reason": "A player in a red kit scores a goal, followed by a celebration and a reaction from the crowd."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks for an audio highlight evaluation but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red kit",
+            "goal net"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen entering the net and the player in red is celebrating.",
+          "supports": true
+        },
+        "reason": "A player in a red kit scores a goal, followed by a celebration and a reaction from the crowd."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks for an audio highlight evaluation but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red kit",
+            "goal net"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen entering the net and the player in red is celebrating.",
+          "supports": true
+        },
+        "reason": "A player in a red kit scores a goal, followed by a celebration and a reaction from the crowd."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "none"
+          ],
+          "ocrDelta": "",
+          "evidence": "No audio track is available for analysis.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red kit",
+            "goal net"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen entering the net and players in red kits are seen celebrating in the goal area.",
+          "supports": true
+        },
+        "reason": "A player in a red kit scores a goal, followed by a celebration where teammates run towards each other and the crowd reacts."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red kit",
+            "goal net"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen entering the net and players in red kits are seen celebrating in the foreground.",
+          "supports": true
+        },
+        "reason": "A player in a red kit scores a goal, followed by a celebration where teammates run towards each other and the crowd erupts."
+      }
+    ]
+  },
+  {
+    "sampleId": "soc-goal-04",
+    "isGoal": true,
+    "decision": {
+      "isHighlight": true,
+      "eventType": "GOAL",
+      "grounding": {
+        "objects": [
+          "track"
+        ],
+        "evidence": "surfaced",
+        "supports": true
+      }
+    },
+    "claims": 4,
+    "claimedHighlights": 2,
+    "groundingRejections": 0,
+    "framesAnalyzed": 20,
+    "highlights": [
+      {
+        "eventType": "GOAL",
+        "score": 95
+      },
+      {
+        "eventType": "GOAL",
+        "score": 95
+      }
+    ],
+    "raw": [
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "player in red kit",
+            "player in light blue kit",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen entering the goal area and the player in red celebrates with arms raised.",
+          "supports": true
+        },
+        "reason": "The sequence shows a player in a red kit taking a shot and the ball entering the net, followed by a celebration."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "player in red kit",
+            "player in light blue kit",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen moving towards the goal and the player in red celebrates after the shot.",
+          "supports": true
+        },
+        "reason": "The sequence shows a player in a red kit taking a shot and the ball entering the goal area, followed by a celebration."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #2 (red)",
+            "player #10 (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is struck but remains in front of the goal line without entering the net.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player taking a shot on goal, but the ball does not enter the net and there is no celebration."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #2 (red)",
+            "player #10 (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is struck but remains in front of the goal line without entering the net.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player taking a shot, but the ball does not enter the goal and there is no celebration."
+      }
+    ]
+  },
+  {
+    "sampleId": "soc-near-01",
+    "isGoal": true,
+    "decision": {
+      "isHighlight": true,
+      "eventType": "GOAL",
+      "grounding": {
+        "objects": [
+          "track"
+        ],
+        "evidence": "surfaced",
+        "supports": true
+      }
+    },
+    "claims": 9,
+    "claimedHighlights": 4,
+    "groundingRejections": 0,
+    "framesAnalyzed": 20,
+    "highlights": [
+      {
+        "eventType": "GOAL",
+        "score": 95
+      },
+      {
+        "eventType": "GOAL",
+        "score": 95
+      },
+      {
+        "eventType": "GOAL",
+        "score": 95
+      },
+      {
+        "eventType": "GOAL",
+        "score": 95
+      }
+    ],
+    "raw": [
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "players",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The image shows a standard soccer play in progress with no clear goal or significant highlight event occurring.",
+          "supports": false
+        },
+        "reason": "The candidate event type is 'AUDIO', but no audio is provided and the visual content shows standard gameplay with no significant highlight action."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "players on field"
+          ],
+          "ocrDelta": "",
+          "evidence": "The frames show players in various positions on the pitch during active play, but no specific highlight event is occurring.",
+          "supports": false
+        },
+        "reason": "The audio is not provided, and the visual frames show standard gameplay with no significant event occurring."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red kit",
+            "goal net"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen entering the net and the player in red is celebrating.",
+          "supports": true
+        },
+        "reason": "A player in a red kit scores a goal, followed by a celebration and a reaction from the crowd."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks for an audio highlight evaluation but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red kit",
+            "goal net"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen entering the net and the player in red is celebrating.",
+          "supports": true
+        },
+        "reason": "A player in a red kit scores a goal, followed by a celebration and a reaction from the crowd."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks for an audio highlight evaluation but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red kit",
+            "goal net"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen entering the net and the player in red is celebrating.",
+          "supports": true
+        },
+        "reason": "A player in a red kit scores a goal, followed by a celebration and a reaction from the crowd."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks to judge an audio highlight but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": true,
+        "eventType": "GOAL",
+        "score": 95,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red kit",
+            "goal net"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is seen entering the net and the player in red is celebrating.",
+          "supports": true
+        },
+        "reason": "A player in a red kit scores a goal, followed by a celebration and a reaction from the crowd."
+      }
+    ]
+  },
+  {
+    "sampleId": "soc-near-02",
+    "isGoal": true,
+    "decision": {
+      "isHighlight": false,
+      "eventType": "NONE",
+      "grounding": {}
+    },
+    "claims": 5,
+    "claimedHighlights": 0,
+    "groundingRejections": 0,
+    "framesAnalyzed": 18,
+    "highlights": [],
+    "raw": [
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "players",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The image shows a standard soccer match in progress with no clear goal or major event occurring.",
+          "supports": false
+        },
+        "reason": "No audio is provided and the visual shows standard gameplay with no significant event."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks for an audio highlight evaluation but no audio is provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red",
+            "player in blue"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the center of the pitch and no goal is scored or celebrated.",
+          "supports": false
+        },
+        "reason": "The sequence shows a standard play in the middle of the field with no shot on goal or celebration occurring."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks for an audio highlight evaluation but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks for an audio highlight evaluation but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      }
+    ]
+  },
+  {
+    "sampleId": "soc-off-01",
+    "isGoal": false,
+    "decision": {
+      "isHighlight": true,
+      "eventType": "GOAL",
+      "grounding": {}
+    },
+    "claims": 9,
+    "claimedHighlights": 1,
+    "groundingRejections": 0,
+    "framesAnalyzed": 28,
+    "highlights": [
+      {
+        "eventType": "AUDIO",
+        "score": 85
+      }
+    ],
+    "raw": [
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "players",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The image shows a standard soccer play in progress with no clear goal or significant event occurring.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player (red)",
+            "player (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the middle of the pitch and no goal is scored in the sequence.",
+          "supports": false
+        },
+        "reason": "The sequence shows general play in the middle of the field with no shot on goal, ball in the net, or clear celebration occurring."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 10,
+        "grounding": {
+          "objects": [
+            "ball",
+            "players in red and blue"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the middle of the field and players are in active positions, but no decisive scoring action is visible.",
+          "supports": false
+        },
+        "reason": "The image shows active gameplay with multiple players in motion, but there is no clear goal, penalty, or significant highlight event occurring in this single frame."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "players in red and blue"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the middle of the field and no goal is scored in the sequence.",
+          "supports": false
+        },
+        "reason": "The sequence shows general play in the middle of the pitch with no shot on goal, ball in the net, or clear celebration occurring."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "none"
+          ],
+          "ocrDelta": "",
+          "evidence": "No audio track is available for analysis.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player (red)",
+            "player (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the middle of the pitch and no goal is scored in the sequence.",
+          "supports": false
+        },
+        "reason": "The sequence shows general play in the middle of the field with no shot on goal, ball in the net, or clear celebration occurring."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": true,
+        "eventType": "AUDIO",
+        "score": 85,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "player in high motion"
+          ],
+          "ocrDelta": "",
+          "evidence": "The crowd energy increases significantly during the sequence, indicating a high-impact moment.",
+          "supports": true
+        },
+        "reason": "The audio features a significant burst of crowd energy, which, combined with the visual of a player in high motion, suggests a key moment in the match."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "player (red)",
+            "player (blue)",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the middle of the pitch and no goal is scored or celebrated in the sequence.",
+          "supports": false
+        },
+        "reason": "The sequence shows general play in the midfield and defensive third with no shot on goal or celebration occurring."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the middle of the pitch and no goal is scored in the sequence.",
+          "supports": false
+        },
+        "reason": "The sequence shows general play in the middle of the field with no goal scored or celebration occurring."
+      }
+    ]
+  },
+  {
+    "sampleId": "soc-off-02",
+    "isGoal": false,
+    "decision": {
+      "isHighlight": false,
+      "eventType": "NONE",
+      "grounding": {}
+    },
+    "claims": 6,
+    "claimedHighlights": 0,
+    "groundingRejections": 0,
+    "framesAnalyzed": 18,
+    "highlights": [],
+    "raw": [
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "players",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The image shows a standard soccer play with no clear goal or significant event occurring.",
+          "supports": false
+        },
+        "reason": "No audio is provided and the visual shows standard play with no significant event."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red",
+            "player in blue"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is stationary in the center circle and players are positioned for a restart, with no goal being scored.",
+          "supports": false
+        },
+        "reason": "The sequence shows a kickoff or a dead-ball situation in the center circle, not a goal being scored."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 10,
+        "grounding": {
+          "objects": [
+            "players in red and blue",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the middle of the pitch and no significant action like a goal or penalty is occurring.",
+          "supports": false
+        },
+        "reason": "The provided frame shows a standard mid-field play with no clear goal, penalty, or significant highlight event occurring."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks for an audio highlight evaluation but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red",
+            "player in blue"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is stationary in the center circle and players are positioned for a restart, with no goal scored.",
+          "supports": false
+        },
+        "reason": "The sequence shows a kickoff or a dead-ball situation in the center circle, not a goal being scored."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player (red)",
+            "player (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is being contested in the center of the pitch and does not enter the goal.",
+          "supports": false
+        },
+        "reason": "The sequence shows a free kick setup and initial play, but no goal is scored."
+      }
+    ]
+  },
+  {
+    "sampleId": "soc-warm-01",
+    "isGoal": false,
+    "decision": {
+      "isHighlight": false,
+      "eventType": "NONE",
+      "grounding": {}
+    },
+    "claims": 6,
+    "claimedHighlights": 0,
+    "groundingRejections": 0,
+    "framesAnalyzed": 16,
+    "highlights": [],
+    "raw": [
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The image shows a standard soccer match in progress with no clear audio cues or significant visual highlights.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "players on field"
+          ],
+          "ocrDelta": "",
+          "evidence": "The frames show a standard soccer play with no clear highlight event occurring.",
+          "supports": false
+        },
+        "reason": "The audio is not provided, and the visual frames show standard play with no significant highlight event."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "players in red and blue"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the center of the pitch and no goal is scored in the sequence.",
+          "supports": false
+        },
+        "reason": "The sequence shows a standard play in the midfield with no shot on goal, no ball crossing the line, and no celebration occurring."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks for an audio highlight evaluation but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #10 (red)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the center of the pitch and no goal is scored or celebrated.",
+          "supports": false
+        },
+        "reason": "The sequence shows a standard play in the midfield with no shot on goal or celebration occurring."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks to judge an audio highlight but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate for a highlight."
+      }
+    ]
+  },
+  {
+    "sampleId": "soc-warm-02",
+    "isGoal": false,
+    "decision": {
+      "isHighlight": false,
+      "eventType": "NONE",
+      "grounding": {}
+    },
+    "claims": 6,
+    "claimedHighlights": 0,
+    "groundingRejections": 0,
+    "framesAnalyzed": 17,
+    "highlights": [],
+    "raw": [
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red",
+            "player in blue"
+          ],
+          "ocrDelta": "",
+          "evidence": "The image shows a soccer play in progress with no audio available to confirm an audio-based highlight.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #2 (red)",
+            "player (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is moving away from the goal area and no goal is scored.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player attempting a shot or pass, but the ball does not enter the goal and there is no celebration."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red",
+            "player in blue"
+          ],
+          "ocrDelta": "",
+          "evidence": "The image shows a soccer player in red about to kick the ball while a player in blue defends, which is ordinary play.",
+          "supports": false
+        },
+        "reason": "The candidate event type is 'AUDIO', but no audio is provided and the visual content shows ordinary play."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #2 (red)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is moving away from the goal area and no goal is scored.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player attempting a shot or pass, but the ball does not enter the goal and there is no celebration."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "player #2 (red)",
+            "player (blue)",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is being dribbled by a player in the middle of the field with no shot on goal occurring.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player in possession of the ball and a defender nearby, but no shot is taken and the ball does not enter the goal."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #2 (red)",
+            "player #10 (blue)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is moving away from the goal area and no goal is scored.",
+          "supports": false
+        },
+        "reason": "The sequence shows a player attempting a shot or pass, but the ball does not enter the goal and there is no celebration."
+      }
+    ]
+  },
+  {
+    "sampleId": "soc-lull-01",
+    "isGoal": false,
+    "decision": {
+      "isHighlight": false,
+      "eventType": "NONE",
+      "grounding": {}
+    },
+    "claims": 7,
+    "claimedHighlights": 0,
+    "groundingRejections": 0,
+    "framesAnalyzed": 22,
+    "highlights": [],
+    "raw": [
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "players on field"
+          ],
+          "ocrDelta": "",
+          "evidence": "The image shows a standard soccer play with no clear goal or significant event occurring.",
+          "supports": false
+        },
+        "reason": "No audio is provided and the visual shows standard play with no significant event."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red",
+            "player in blue"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is stationary in the center circle with players positioned for a restart, and no goal is scored.",
+          "supports": false
+        },
+        "reason": "The sequence shows a kickoff or a dead-ball situation in the center circle, not a goal being scored."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "players in red and blue",
+            "ball"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the middle of the field and no significant action like a goal or penalty is occurring.",
+          "supports": false
+        },
+        "reason": "The provided frame shows a standard phase of play with no clear goal, penalty, or significant highlight event occurring."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks for an audio highlight evaluation but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player in red",
+            "player in blue"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is stationary in the center circle and players are positioned for a restart, not a goal.",
+          "supports": false
+        },
+        "reason": "The sequence shows a kickoff or a dead-ball situation in the center circle with no shot on goal or celebration occurring."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks to judge an audio highlight but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "players in center circle"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is stationary in the center circle and players are positioned for a restart, with no goal scored.",
+          "supports": false
+        },
+        "reason": "The sequence shows a standard kickoff or a dead-ball situation in the center circle with no shot on goal or celebration occurring."
+      }
+    ]
+  },
+  {
+    "sampleId": "soc-replay-01",
+    "isGoal": false,
+    "decision": {
+      "isHighlight": false,
+      "eventType": "NONE",
+      "grounding": {}
+    },
+    "claims": 6,
+    "claimedHighlights": 0,
+    "groundingRejections": 0,
+    "framesAnalyzed": 16,
+    "highlights": [],
+    "raw": [
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The image shows a standard soccer match in progress with no clear audio cues or significant visual highlights.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks to judge an audio highlight but no audio is provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "players in red and blue"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the center of the pitch and no goal is scored in the sequence.",
+          "supports": false
+        },
+        "reason": "The sequence shows a standard play in the midfield with no shot on goal, no ball crossing the line, and no celebration occurring."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks to judge an AUDIO event but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate."
+      },
+      {
+        "claimedEventType": "AUDIO",
+        "isHighlight": false,
+        "eventType": "AUDIO",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "crowd",
+            "players"
+          ],
+          "ocrDelta": "",
+          "evidence": "The request asks to judge an audio highlight but no audio file was provided.",
+          "supports": false
+        },
+        "reason": "No audio is provided to evaluate for a highlight."
+      },
+      {
+        "claimedEventType": "GOAL",
+        "isHighlight": false,
+        "eventType": "GOAL",
+        "score": 0,
+        "grounding": {
+          "objects": [
+            "ball",
+            "player #10 (red)"
+          ],
+          "ocrDelta": "",
+          "evidence": "The ball is in the center of the pitch and no goal is scored or celebrated.",
+          "supports": false
+        },
+        "reason": "The sequence shows a standard play in the midfield with no shot on goal or celebration occurring."
+      }
+    ]
+  }
+]
