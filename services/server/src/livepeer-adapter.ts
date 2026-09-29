@@ -235,6 +235,12 @@ export class OrchestratorAdapter implements PipelineClient {
       reasoningEffort?: string;
       frames?: { role: string; base64: string }[];
       audioB64?: string;
+      /** B/E (ADAAAA-6030): current 60 s window facts as bounded text (B prompt
+       * tailoring) — wire passthrough of the server's priorContextText. */
+      priorContextText?: string;
+      /** B/E (ADAAAA-6030): dense burst frame sequence for the motion-aware
+       * confirmation tier. */
+      burstFrames?: { role: string; base64: string }[];
     }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -249,6 +255,10 @@ export class OrchestratorAdapter implements PipelineClient {
       // Detail-first (ADAAAA-4954): the temporal frame SEQUENCE + surrounding
       // audio clip the Gemma runner reasons across. Absent on the live baseline.
       frames: opts?.frames ?? [],
+      // B/E (ADAAAA-6030): priorContext text + dense burst frames wired onto the
+      // decide request contract. Empty by default — backward compatible.
+      priorContext: opts?.priorContextText ?? "",
+      burstFrames: opts?.burstFrames ?? [],
       audioB64: opts?.audioB64 ?? "",
       audioSampleRate: 16_000,
     };
@@ -417,6 +427,8 @@ export class DirectAdapter implements PipelineClient {
       reasoningEffort?: string;
       frames?: { role: string; base64: string }[];
       audioB64?: string;
+      priorContextText?: string;
+      burstFrames?: { role: string; base64: string }[];
     }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
@@ -431,6 +443,8 @@ export class DirectAdapter implements PipelineClient {
         evidence,
         images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
         frames: opts?.frames ?? [],
+        priorContext: opts?.priorContextText ?? "",
+        burstFrames: opts?.burstFrames ?? [],
         audioB64: opts?.audioB64 ?? "",
         audioSampleRate: 16_000,
       }),

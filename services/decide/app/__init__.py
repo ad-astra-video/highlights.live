@@ -73,6 +73,18 @@ class HighlightRequest(BaseModel):
     # Frontend-selectable; defaults to "none" (thinking off = fast single-shot
     # JSON). Other values (low/medium/high) are passed to llama.cpp verbatim.
     reasoningEffort: str = Field(default="none")
+    # B — prompt tailoring (ADAAAA-6030 / plan §B): the current 60 s window's
+    # already-computed findings as a compact, bounded text summary, assembled pure
+    # server-side (no GPU). Injected into the decide prompt as the window's
+    # prior context so the model reasons about the current window. Empty when the
+    # window has nothing to add.
+    priorContext: str = Field(default="", description="current 60s window summary (bounded text)")
+    # E — motion-aware confirmation (ADAAAA-6030 / plan §E): a dense burst of
+    # sampled frames around a CONFIRMED candidate moment T over a ~5s span
+    # (≈±2.5s), passed as an additional temporal vision sequence. Triggered only
+    # for candidates being confirmed, never every window. Frame count/resolution
+    # capped by the server (live vs VOD burst cap).
+    burstFrames: list[ImageRef] = Field(default_factory=list)
 
 
 def _is_gemma_mode() -> bool:
@@ -104,6 +116,8 @@ def create_app() -> FastAPI:
                 audio_b64=req.audioB64,
                 audio_sample_rate=req.audioSampleRate,
                 reasoning_effort=req.reasoningEffort,
+                prior_context=req.priorContext,
+                burst_frames=[fr.model_dump() for fr in req.burstFrames],
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
             )
             # Notable-only gate on the Gemma verdict (ADAAAA-5778). Pure

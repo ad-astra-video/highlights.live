@@ -222,7 +222,7 @@ describe("analyzeJob", () => {
 
   it("decides on the ANCHORED strike frame image and cuts at its timestamp when a candidate fires late (ADAAAA-4193)", async () => {
     let call = 0;
-    const decideImages: (string | undefined)[] = [];
+    const decideCalls: any[] = [];
     const { client } = fakeClient({
       analyze: async () => {
         call++;
@@ -234,7 +234,7 @@ describe("analyzeJob", () => {
         return { observation: { tracks: [], seq: call - 1, timestamp: call - 1 } };
       },
       decide: async (_evidence, opts) => {
-        decideImages.push(opts?.imageB64);
+        decideCalls.push(opts || {});
         return { isHighlight: true, score: 85, eventType: "GOAL", ...GROUNDED };
       },
     });
@@ -248,8 +248,13 @@ describe("analyzeJob", () => {
       },
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" }
     );
-    // decide saw the anchored strike frame (img2), NOT the late current frame (img3)
-    expect(decideImages).toEqual(["img2"]);
+    // Two-tier decide (plan §E): coarse + confirmed-candidate burst confirmation.
+    // BOTH are anchored to the strike frame (img2), NOT the late frame (img3).
+    expect(decideCalls).toHaveLength(2);
+    expect(decideCalls.map((o) => o.imageB64)).toEqual(["img2", "img2"]);
+    // E1: the confirmation call carries a dense burstFrames[] in the payload.
+    expect(decideCalls[1].burstFrames).toBeDefined();
+    expect(decideCalls[1].burstFrames!.length).toBeGreaterThan(0);
     // clip cut centered at the anchored strike timestamp, not the late frame
     expect(cuts).toEqual([2]);
     expect(outcome.highlights[0]).toMatchObject({ eventType: "GOAL", start: Math.max(0, 2 - 4), end: 2 + 4 });
@@ -431,10 +436,10 @@ describe("analyzeJob", () => {
 
 describe("decideOnCandidate (INC-2 / ADAAAA-4325 slice 4: audio candidate -> decide on anchored frame)", () => {
   it("decides an audio candidate on the ANCHORED video frame and records a highlight when Gemma accepts", async () => {
-    const decideImages: (string | undefined)[] = [];
+    const decideCalls: any[] = [];
     const { client } = fakeClient({
       decide: async (_ev, opts) => {
-        decideImages.push(opts?.imageB64);
+        decideCalls.push(opts || {});
         return { isHighlight: true, score: 75, eventType: "GOAL", ...GROUNDED };
       },
     });
@@ -458,7 +463,11 @@ describe("decideOnCandidate (INC-2 / ADAAAA-4325 slice 4: audio candidate -> dec
       (ev) => events.push(ev),
       { seq: 99, timestamp: 3 }
     );
-    expect(decideImages).toEqual(["img3"]); // anchored to the audio onset frame
+    // Two-tier: coarse + burst confirmation, both anchored to the audio onset
+    // frame (img3); the confirmation carries burstFrames (plan §E).
+    expect(decideCalls).toHaveLength(2);
+    expect(decideCalls.map((o) => o.imageB64)).toEqual(["img3", "img3"]);
+    expect(decideCalls[1].burstFrames!.length).toBeGreaterThan(0);
     expect(cuts).toEqual([3]);
     expect(shared.highlights).toHaveLength(1);
     expect(shared.highlights[0]).toMatchObject({ jobId: "j", eventType: "GOAL", status: "pending" });
@@ -569,7 +578,10 @@ describe("Stage-A FP-rate metric on decideOnCandidate (INC-2 / ADAAAA-4325 slice
     const { client } = fakeClient({
       decide: async () => {
         call++;
-        return call === 1 ? { isHighlight: true, score: 80, ...GROUNDED } : { isHighlight: false, score: 10 };
+        // Candidate 0: coarse (call 1) confirms -> its burst confirmation
+        // (call 2) also confirms => accepted. Candidate 1: coarse (call 3)
+        // rejects => no burst, rejected. (Two-tier, plan §E.)
+        return call <= 2 ? { isHighlight: true, score: 80, ...GROUNDED } : { isHighlight: false, score: 10 };
       },
     });
     const shared = new LiveRunShared();
@@ -911,5 +923,111 @@ describe("A — 60s rolling window + processed-frame/finding cache (ADAAAA-6029)
     expect(seen.frames).toBeUndefined();
     expect(seen.audioB64).toBeUndefined();
     expect(seen.imageB64).toBeDefined();
+  });
+});
+describe("E — motion-aware confirmation burst tier (ADAAAA-6030 / plan §E)", () => {
+  it("E1: burstFrames spans ±2.5 s around T and is bounded by the live cap", () => {
+    const shared = new LiveRunShared();
+    for (let i = 0; i < 20; i++) shared.addFrame(i, i, `img${i}`); // 1 fps
+    // Frames within [T-2.5, T+2.5] for T=10 => ts 8,9,10,11,12 (5 frames).
+    const burst = shared.burstFrames(10, { max: 6 });
+    expect(burst.map((f) => f.base64)).toEqual(["img8", "img9", "img10", "img11", "img12"]);
+    expect(burst.length).toBeLessThanOrEqual(6); // LIVE_BURST_MAX bound
+    // No cached frame within the span -> empty burst (burst skipped upstream).
+    expect(shared.burstFrames(100, { max: 6 })).toEqual([]);
+  });
+
+  it("E1: dense VOD cache is trimmed to the VOD cap, kept centered on T", () => {
+    const shared = new LiveRunShared();
+    for (let i = 0; i < 30; i++) shared.addFrame(i, i * 0.5, `img${i}`); // 2 fps
+    const burst = shared.burstFrames(10, { max: 8 });
+    expect(burst.length).toBeLessThanOrEqual(8); // VOD_BURST_MAX bound
+    // 2 fps over ±2.5 s => ~10 in-span frames trimmed to the 8 cap.
+  });
+
+  it("confirmed candidate runs a SECOND decide with burstFrames; non-highlight pays one call", async () => {
+    const calls: any[] = [];
+    const { client } = fakeClient({
+      analyze: async () => ({ observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "GOAL", timestamp: 0 } }),
+      decide: async (_ev, opts) => {
+        calls.push(opts || {});
+        return { isHighlight: true, score: 80, eventType: "GOAL", ...GROUNDED };
+      },
+    });
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    await analyzeJob(
+      client,
+      frames(1),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
+      undefined,
+      undefined,
+      shared
+    );
+    expect(calls).toHaveLength(2); // coarse + burst confirmation
+    expect(calls[0].burstFrames).toBeUndefined(); // coarse carries no burst
+    expect(calls[1].burstFrames).toBeDefined(); // confirmation carries burst
+    expect(shared.highlights).toHaveLength(1);
+  });
+
+  it("A5: when no cached frame lies in the burst span, burst is skipped (single decide, coarse kept)", async () => {
+    let decideCalls = 0;
+    const { client } = fakeClient({
+      analyze: async () => ({ observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "GOAL", timestamp: 100 } }),
+      decide: async () => {
+        decideCalls++;
+        return { isHighlight: true, score: 80, eventType: "GOAL", ...GROUNDED };
+      },
+    });
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0"); // far from candidate T=100
+    const cuts: number[] = [];
+    await analyzeJob(
+      client,
+      frames(1),
+      async (ts) => {
+        cuts.push(ts);
+        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
+      },
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
+      undefined,
+      undefined,
+      shared
+    );
+    expect(decideCalls).toBe(1); // burst skipped, no second call
+    expect(shared.highlights).toHaveLength(1); // coarse verification kept
+    expect(cuts).toEqual([100]);
+  });
+
+  it("A5: a throwing burst confirmation never blocks the paid path — coarse verdict kept", async () => {
+    let decideCalls = 0;
+    const { client } = fakeClient({
+      analyze: async () => ({ observation: { tracks: [], seq: 0, timestamp: 0 }, candidate: { eventType: "GOAL", timestamp: 0 } }),
+      decide: async () => {
+        decideCalls++;
+        if (decideCalls === 2) throw new Error("burst runner down");
+        return { isHighlight: true, score: 80, eventType: "GOAL", ...GROUNDED };
+      },
+    });
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    const cuts: number[] = [];
+    await analyzeJob(
+      client,
+      frames(1),
+      async (ts) => {
+        cuts.push(ts);
+        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
+      },
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
+      undefined,
+      undefined,
+      shared
+    );
+    // Burst attempted (2 calls) but its failure fell back to the coarse verdict.
+    expect(decideCalls).toBe(2);
+    expect(shared.highlights).toHaveLength(1);
+    expect(cuts).toEqual([0]);
   });
 });
