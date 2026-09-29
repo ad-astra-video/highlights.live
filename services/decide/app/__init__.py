@@ -6,7 +6,7 @@ from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, Field
 
 from .decider import apply_gate, decide
-from .gemma import decide_with_gemma
+from .gemma import decide_with_gemma, rule_grounding
 
 
 class ReactionEvidence(BaseModel):
@@ -143,6 +143,7 @@ def create_app() -> FastAPI:
             "score": d.score,
             "eventType": req.eventType,
             "reason": d.reason,
+            "grounding": rule_grounding(req.eventType, req.evidence.model_dump(), d),
             "source": "rule",
             "eventClass": d.event_class,
             "corroborated": d.corroborated,

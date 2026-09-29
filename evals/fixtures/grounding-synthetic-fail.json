@@ -1,0 +1,11 @@
+[
+  { "sampleId": "soc-goal-01", "decision": { "isHighlight": true, "score": 91, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "ball in net", "supports": true } } },
+  { "sampleId": "soc-goal-02", "decision": { "isHighlight": true, "score": 89, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "ball in net", "supports": true } } },
+  { "sampleId": "soc-goal-03", "decision": { "isHighlight": true, "score": 93, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "ball in net", "supports": true } } },
+  { "sampleId": "soc-goal-04", "decision": { "isHighlight": true, "score": 87, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "ball in net", "supports": true } } },
+  { "sampleId": "soc-near-01", "decision": { "isHighlight": true, "score": 85, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "ball near net", "supports": true } } },
+  { "sampleId": "soc-near-02", "decision": { "isHighlight": true, "score": 84, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "ball near net", "supports": true } } },
+  { "sampleId": "soc-off-01", "decision": { "isHighlight": true, "score": 90, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "ball off target", "supports": true } } },
+  { "sampleId": "soc-warm-01", "decision": { "isHighlight": true, "score": 80, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "passing around", "supports": true } } },
+  { "sampleId": "soc-replay-01", "decision": { "isHighlight": true, "score": 88, "eventType": "GOAL", "grounding": { "objects": ["ball"], "ocrDelta": "", "evidence": "replay", "supports": true } } }
+]

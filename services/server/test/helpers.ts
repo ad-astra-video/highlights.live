@@ -126,7 +126,17 @@ export function fakePipeline(): any {
       return { observation: { tracks: [{ trackId: "a", slot: 0, bbox: [0.1, 0.1, 0.5, 0.5], kind: "player", lostFrames: 0 }], seq: 0, timestamp: 0 } };
     },
     async decide() {
-      return { isHighlight: true, score: 86, eventType: "KILL", reason: "test" };
+      return {
+        isHighlight: true,
+        score: 86,
+        eventType: "KILL",
+        reason: "test",
+        grounding: {
+          objects: ["tracked player"],
+          evidence: "fast-moving tracked object at the candidate moment",
+          supports: true,
+        },
+      };
     },
     async train(_req: any) {
       return { run: "train-smoke", checkpoint: "/runs/train-smoke/model.safetensors", epochs: 5, samples: 2,
