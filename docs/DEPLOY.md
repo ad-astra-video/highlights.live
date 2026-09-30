@@ -44,10 +44,12 @@ git pull origin master          # or fresh: git clone
 docker compose -f docker/docker-compose.yml up -d --build
 ```
 
-Box deploy mechanics (which sync method drops source onto the box, image
-rebuild, tunnel routing) are owned by the **Infra Monitor**. Developer owns
-getting the code onto `origin/master`; Infra Monitor handles the box leg so
-the tunnel serves current master.
+The **Developer** owns both legs of the deploy: getting the code onto
+`origin/master` AND the box leg (reconcile the box branch to `origin/master`,
+rebuild the stack, verify the tunnel serves current master). Routing change
+2026-09-30 per [ADAAAA-6221](/ADAAAA/issues/ADAAAA-6221): all deploy tasks go
+to the Developer; the Infra Monitor keeps read-only fleet health monitoring
+only and no longer executes deploys.
 
 ## Live-payment durability (ADAAAA-3932)
 
