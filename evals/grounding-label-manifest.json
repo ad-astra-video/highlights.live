@@ -1,5 +1,6 @@
 {
   "$comment": "ADAAAA-6028 labeled grounding eval set (plan G). Each sample carries a machine-checkable ground truth (isGoal) so the grounding gate's G1 precision / G2 recall / G3 reject-count can be scored. Samples are the real soccer clips already labeled and driven on livepeer-ai-x99 in the INC-5 / VOD-EVAL-PASS1 runs (goal / near_goal = actual goals; off_target / warm_up / lull / replay = non-goals). A single-video eval (the board-flagged run ced2ea19) uses the same shape: supply its known goal timestamps as extra samples with isGoal=true and non-event timestamps with isGoal=false.",
+  "boardRuling": "Corrected 2026-09-30 by board (ADAAAA-6079 comment 0b80c0b7): soc-goal-01 is a tough/ambiguous shot-on-goal (strange angle, ends right after goal) and soc-goal-02 is NOT a goal (players dribbling at mid-field). Both were mislabeled isGoal=true from the ced2ea19 board-flagged run; the grounding analyzer correctly declined to surface either. Corrected to isGoal=false so G1/G2 are scored against true labels.",
   "sport": "soccer",
   "acceptance": {
     "g1PrecisionMinPct": 70,
@@ -7,8 +8,8 @@
     "g3RejectionsMeasurable": true
   },
   "samples": [
-    { "id": "soc-goal-01", "isGoal": true,  "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/c57b67f0-e538-4286-ade5-5cc7fe37443a.mp4" },
-    { "id": "soc-goal-02", "isGoal": true,  "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/8e0d65ca-466e-495d-b7ee-a1aabb32b4b3.mp4" },
+    { "id": "soc-goal-01", "isGoal": false, "boardNote": "corrected by board (ADAAAA-6079): shot-on-goal, ambiguous angle", "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/c57b67f0-e538-4286-ade5-5cc7fe37443a.mp4" },
+    { "id": "soc-goal-02", "isGoal": false, "boardNote": "corrected by board (ADAAAA-6079): NOT a goal, dribbling mid-field", "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/8e0d65ca-466e-495d-b7ee-a1aabb32b4b3.mp4" },
     { "id": "soc-goal-03", "isGoal": true,  "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/a11ca3bc-3284-42f7-ab5f-03cb355d5767.mp4" },
     { "id": "soc-goal-04", "isGoal": true,  "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/9b35c577-aef8-49dd-92c3-5d4431134c43.mp4" },
     { "id": "soc-near-01", "isGoal": true,  "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/9c09c609-e762-4034-a1e2-b370e4bbfbd8.mp4" },

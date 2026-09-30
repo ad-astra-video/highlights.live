@@ -136,3 +136,56 @@ higher-density / higher-resolution resampling around GOAL candidates (the 2 fps 
 goal-01/02 clips actually contain a visible net-crossing at all. This contradicts
 the "do not re-litigate — it's a window-timing bug" premise and should be
 re-triaged.
+
+---
+
+## ADAAAA-6079 — Corrected-label re-score after board ruling (RESOLVED, no code change)
+
+Executed 2026-09-30. Board ruling (ADAAAA-6079 comment `0b80c0b7`) corrected two
+mislabeled ground-truth samples in `evals/grounding-label-manifest.json`:
+
+- `soc-goal-01` → **not a goal** (tough/ambiguous shot-on-goal; strange camera
+  angle, clip ends right after the goal).
+- `soc-goal-02` → **not a goal** (players dribbling at mid-field).
+
+Both had been mislabeled `isGoal=true` from the board-flagged run `ced2ea19`.
+The grounding analyzer **correctly declined to surface either** — its rejection
+was right, not a recall miss. The analyzer/model is **byte-unchanged** between
+the box-confirmed baseline run (deploy-master @ `32c5c6b`) and this re-score, so
+per-clip surfaced-GOAL outcomes are identical; only the scoring labels changed.
+
+### Result — ALL acceptance criteria PASS (G1/G2/G3)
+
+- **G1 precision = 100%** (TP=4, FP=0) — PASS (>= 70%)
+- **G2 recall = 100%** (TP=4, FN=0) — PASS (>= 90%)
+- **G3 gate present**, 0 rejections (model self-gates) — PASS
+
+### Per-clip (12 labeled clips, corrected ground truth)
+
+| clip | gt | surfaced GOAL | verdict |
+| --- | --- | --- | --- |
+| soc-goal-01 | non-goal | no | TN |
+| soc-goal-02 | non-goal | no | TN |
+| soc-goal-03 | goal | yes | TP |
+| soc-goal-04 | goal | yes | TP |
+| soc-near-01 | goal | yes | TP |
+| soc-near-02 | goal | yes | TP |
+| soc-off-01 | non-goal | no | TN |
+| soc-off-02 | non-goal | no | TN |
+| soc-warm-01 | non-goal | no | TN |
+| soc-warm-02 | non-goal | no | TN |
+| soc-lull-01 | non-goal | no | TN |
+| soc-replay-01 | non-goal | no | TN |
+
+TP=4 FP=0 FN=0 TN=8.
+
+### Conclusion
+
+The ADAAAA-6079 analyzer decision-window/candidate-timing premise is fully
+disproven AND now confirmed by the board to be a ground-truth-labeling error.
+Every analyzer framing tested (rolling 2fps, forward-extend `c5cc021`,
+full-timeline `1749ffc`, native-res density probe `ed39c9c`, baseline
+`32c5c6b`) returns `supports=false`/score 0 for the two clips because there is
+no modelable net-crossing/celebration in them — which is correct, because they
+are not goals. No analyzer fix is warranted; baseline rolling-window behavior
+already achieves G1=100% / G2=100% / G3 present on corrected labels.
