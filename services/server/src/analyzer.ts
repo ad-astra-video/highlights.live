@@ -8,6 +8,7 @@ import type { TrainArtifact } from "./db";
 // C — in-memory vector store of prior-window facts (long-horizon memory,
 // plan §C). Per-stream/job CPU-embedding vector memory; see fact-memory.ts.
 import { FactMemory } from "./fact-memory";
+import { EntityIdentityResolver, extractJersey } from "./entity-identity";
 
 export interface ReserveResult {
   sessionId: string;
@@ -386,9 +387,28 @@ export const VOD_BURST_MAX = 16;
 /** Already-computed perception findings for one in-window sampled frame (A1).
  * These come from the `/analyze` result the server already paid for — cached
  * and REUSED by window-facts assembly, never re-analyzed (no extra GPU). */
+/** Area (normalized units) of a [x1,y1,x2,y2] box; used to pick the dominant
+ * player track for OCR jersey binding (plan §D). */
+function boxArea(b: number[]): number {
+  const w = Math.max(0, b[2] - b[0]);
+  const h = Math.max(0, b[3] - b[1]);
+  return w * h;
+}
+
 export interface FrameFindings {
   /** Tracked-object bboxes + labels (ResNet/Florence + SAM tracking). */
-  tracks: { trackId: string; label?: string; bbox: number[] }[];
+  tracks: {
+    trackId: string;
+    label?: string;
+    bbox: number[];
+    /** Stable entity identity this track resolves to (plan §D / ADAAAA-6032):
+     * `j:<jersey>` when a jersey/OCR identity is bound, else `ent:<uuid>`.
+     * Consumed by the vector-memory `entityRef` (plan §C) and the narrative
+     * case (A4). Empty when the track is a transient blip with no binding yet. */
+    entityRef?: string;
+    /** Jersey/number/name token bound to this entity, when available ('' else). */
+    jersey?: string;
+  }[];
   /** Open-set detections (label + confidence). */
   objects: { label: string; confidence?: number; bbox: number[] }[];
   /** OCR text (scoreboard / jersey / caption readings). */
@@ -439,6 +459,16 @@ function nearestFrameImage(
 export class LiveRunShared {
   readonly evidence = new EvidenceTracker();
   readonly highlights: HighlightRecord[] = [];
+  /** Cross-window entity identity continuity (plan §D / ADAAAA-6032): resolves
+   * the same player/entity across windows (trackId / jersey / OCR) into stable
+   * entity identities consumed by the vector-memory `entityRef` and the
+   * narrative case (A4: yellow at T -> red at T+30 for the SAME entity). */
+  readonly identity = new EntityIdentityResolver();
+  /** Per-entity high-signal event history for the run (the arc store, plan §D /
+   * A4): salient events (confirmed highlights keyed to the entity they involved)
+   * recorded so a later decide on the same entity references the earlier one
+   * (e.g. red-card prior context carries the earlier yellow booking). */
+  private readonly entityEvents = new Map<string, { ts: number; eventType: string; reason?: string }[]>();
   /** Candidates rejected by the grounded-evidence gate (plan G3): the decide
    * model CLAIMED a highlight but supplied no supporting vision evidence. */
   groundingRejections = 0;
@@ -491,8 +521,45 @@ export class LiveRunShared {
       ocr?: string[];
     }
   ): void {
+    const ts = this.frames.get(seq)?.timestamp ?? seq;
+    // D: resolve each track to a stable entity identity (trackId continuity /
+    // IoU reassignment-stitch / jersey+OCR binding). Feed the in-roster label
+    // as the jersey hint (extractJersey discards coarse class labels like
+    // "player"; a numeric roster label binds automatically). OCR is currently
+    // empty on the perceive path (a call-out), so jersey binding is dormant on
+    // real data but first-class + unit-tested below.
+    //
+    // Optional OCR jersey binding (plan §D "jersey / OCR"): when the frame's OCR
+    // yields a single jersey token, bind it to the dominant (largest) player
+    // track (strong cross-window identity). Built into ONE resolve so no
+    // vestigial entity is created for the pre-binding state.
+    const ocrJersey = obs.ocr?.map((o) => extractJersey(o)).find((j) => j) ?? "";
+    const hinted = obs.tracks.map((t) => {
+      let hint = t.label;
+      if (ocrJersey && t.kind === "player") {
+        const players = obs.tracks.filter((p) => p.kind === "player" && p.bbox);
+        const dom = players.length
+          ? players.reduce((a, b) => (boxArea(b.bbox as number[]) > boxArea(a.bbox as number[]) ? b : a))
+          : undefined;
+        if (dom && dom.trackId === t.trackId) hint = ocrJersey;
+      }
+      return { trackId: t.trackId, bbox: t.bbox as number[], jersey: hint };
+    });
+    const resolved = this.identity.resolve(ts, hinted);
     const findings: FrameFindings = {
-      tracks: obs.tracks.map((t) => ({ trackId: t.trackId, label: t.label, bbox: t.bbox as number[] })),
+      tracks: obs.tracks.map((t) => {
+        const r = resolved.get(t.trackId);
+        return {
+          trackId: t.trackId,
+          label: t.label,
+          bbox: t.bbox as number[],
+          // Only surface stable (narrative-safe) identities; transient blips
+          // carry no entityRef so the narrative layer never merges on a blip.
+          ...(r && r.stability === "stable"
+            ? { entityRef: r.entityRef, ...(r.jersey ? { jersey: r.jersey } : {}) }
+            : {}),
+        };
+      }),
       objects: (obs.objects ?? []).map((o) => ({ label: o.label, confidence: o.confidence, bbox: o.bbox as number[] })),
       ocr: obs.ocr ?? [],
     };
@@ -586,7 +653,17 @@ export class LiveRunShared {
       if (tracks.length) {
         parts.push(
           "tracks:" +
-            tracks.map((t) => `${t.label || t.trackId}@${(t.bbox as number[]).map((b) => b.toFixed(2)).join(",")}`).join(";")
+            tracks
+              .map((t) => {
+                // Stable entity identity (plan §D): surface the narrative-safe
+                // entityRef so a later decide on the same entity can reference
+                // this one (the whole-picture/yellow->red arc). Transient blips
+                // (no entityRef) fall back to the raw trackId.
+                const id = t.entityRef || t.trackId;
+                const jes = t.jersey ? `#${t.jersey}` : "";
+                return `${t.label || id}${jes}@${(t.bbox as number[]).map((b) => b.toFixed(2)).join(",")}`;
+              })
+              .join(";")
         );
       }
       const objs = f.findings.objects.slice(0, maxPerFrame);
@@ -631,6 +708,74 @@ export class LiveRunShared {
       "Prior long-horizon facts (earlier in this stream, retrieved by relevance) — corroborating context, verify against the current frames:\n";
     return windowText ? `${windowText}\n\n${header}${prior}` : `${header}${prior}`;
   }
+
+  /** The stable entity identity dominant at time `ts` (plan §D): the largest
+   * stable-entity track among the cached window frames nearest `ts`, or
+   * undefined when no stable identity is present there (or window is empty).
+   * Used to key a candidate/highlight to an entity for the arc. */
+  resolveEntityAt(ts: number): string | undefined {
+    let bestDiff = Infinity;
+    let ref: string | undefined;
+    for (const f of this.frames.values()) {
+      const d = Math.abs(f.timestamp - ts);
+      if (d >= bestDiff) continue;
+      bestDiff = d;
+      ref = undefined;
+      if (f.findings && f.findings.tracks.length) {
+        // Dominant (largest) track at the nearest frame -> its identity from
+        // the registry. We use refOfTrack (not the surfaced entityRef) so a
+        // confirmed-highlight event keys to its entity even when that entity is
+        // young/transient and not yet surfaced to the general narrative window.
+        const dom = f.findings.tracks.reduce((a, b) => (boxArea(b.bbox) > boxArea(a.bbox) ? b : a));
+        ref = this.identity.refOfTrack(dom.trackId) ?? dom.entityRef;
+      }
+    }
+    return ref;
+  }
+
+  /** Record a high-signal event against an entity for the run (plan §D, the arc
+   * store). Salience-gated by the caller (we only call it from the confirmed-
+   * highlight path). Bounded per entity so a long stream never grows unbounded. */
+  recordEntityEvent(entityRef: string, ev: { ts: number; eventType: string; reason?: string }): void {
+    const arr = this.entityEvents.get(entityRef) ?? [];
+    arr.push({ ts: ev.ts, eventType: ev.eventType, reason: ev.reason });
+    if (arr.length > 8) arr.shift();
+    this.entityEvents.set(entityRef, arr);
+  }
+
+  /** Called when a highlight is CONFIRMED (decision.isHighlight & gate passed):
+   * key the highlight to the dominant stable entity at `ts` and append it to
+   * that entity's arc, so a later event on the SAME entity can reference it
+   * (A4: the red card's prior context carries the earlier yellow booking). */
+  recordHighlightEntity(ts: number, decision: { eventType?: string; reason?: string }): void {
+    const ref = this.resolveEntityAt(ts);
+    if (!ref) return;
+    this.recordEntityEvent(ref, { ts, eventType: decision.eventType || "highlight", reason: decision.reason });
+  }
+
+  /** Bounded text of an entity's PRIOR salient events (events strictly before
+   * `excludeTs`), oldest -> newest — the narrative arc the decide prompt gets so
+   * a later event on the same entity references the earlier one (A4). "" when
+   * the entity has no prior events or is unknown. */
+  entityArcContext(entityRef: string, opts: { excludeTs?: number; maxChars?: number } = {}): string {
+    const maxChars = opts.maxChars ?? 800;
+    const excludeTs = opts.excludeTs ?? Infinity;
+    const evs = (this.entityEvents.get(entityRef) ?? []).filter((e) => e.ts < excludeTs);
+    const lines = evs.map((e) => `[t=${e.ts.toFixed(1)}s] ${e.eventType}${e.reason ? `: ${e.reason}` : ""}`);
+    let text = lines.join("\n");
+    if (text.length > maxChars) text = text.slice(0, maxChars) + "…";
+    return text;
+  }
+
+  /** The narrative arc block for whatever entity is dominant at `ts`: the
+   * candidate's entity's prior salient events, as bounded text. "" when no
+   * stable entity / no prior events — behavior identical to the baseline. */
+  entityArcContextForCandidate(ts: number): string {
+    const ref = this.resolveEntityAt(ts);
+    if (!ref) return "";
+    return this.entityArcContext(ref, { excludeTs: ts });
+  }
+
   /** Buffer one audio tap chunk (base64 mono 16 kHz int16 PCM, ~100 ms) into
    * the rolling clip, kept ~AUDIO_CLIP_KEEP_S seconds behind `ts`. */
   addAudioChunk(ts: number, samples: string): void {
@@ -771,6 +916,14 @@ export async function decideWithTwoTiers(
     reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
   };
   const base = detailDecideOpts(cfg, shared, anchoredImage);
+  // D (plan §D / A4): augment the window prior-context with the candidate
+  // entity's PRIOR salient events from the run's arc store, so a later event on
+  // the same entity (e.g. red card at T+30) explicitly carries the earlier one
+  // (e.g. the yellow booking at T). Bounded; "" when none -> baseline unchanged.
+  const arc = shared.entityArcContextForCandidate(candidate.timestamp);
+  if (arc) {
+    base.priorContextText = [base.priorContextText, `[entity arc] ${arc}`].filter(Boolean).join("\n");
+  }
   const coarse = await client.decide(evidence, base);
   if (!coarse.isHighlight) return { decision: coarse, ranBurst: false, hadBurst: false };
   // Coarse tier CONFIRMED -> assemble the dense burst around T from the cache.
@@ -853,7 +1006,12 @@ export async function decideOnCandidate(
     createdAt: new Date().toISOString(),
   };
   shared.highlights.push(rec);
+  // C — ingest the confirmed highlight into the long-horizon vector store so
+  // later windows in the same stream can retrieve it as prior context (A3).
   ingestHighlightFact(shared, rec, decision);
+  // D / A4: key the confirmed highlight to its dominant stable entity so a
+  // later event on the SAME entity references it (the narrative arc).
+  shared.recordHighlightEntity(candidate.timestamp, decision);
   onEvent?.({ seq: evSeq, timestamp: evTs, type: "highlight", highlight: rec });
 }
 
@@ -1001,6 +1159,9 @@ export async function analyzeJob(
             // C — ingest the confirmed highlight into the long-horizon vector
             // store for later windows in the same stream (plan §C/A3).
             ingestHighlightFact(run, rec, decision);
+            // D / A4: key this confirmed highlight to its dominant stable entity
+            // so a later event on the SAME entity references it (the arc).
+            run.recordHighlightEntity(res.candidate.timestamp, decision);
             onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "highlight", highlight: rec });
           }
         }

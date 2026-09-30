@@ -1,0 +1,68 @@
+{
+  "sport": "soccer",
+  "targetContinuity": 0.95,
+  "_comment": "ADAAAA-6032 (plan D) labeled identity-continuity eval set. Each arc models the same entity appearing across 60s windows (and, in the A4 arc, 30 min apart). windows[].tracks[].id is the GROUND-TRUTH entity label; trackId is what the tracker emitted (reassigned between windows on purpose). The harness drives the real server EntityIdentityResolver / LiveRunShared and checks: (1) continuity = every occurrence of a labeled entity resolves to ONE entityRef; (2) falseMerge = distinct labeled entities never share a ref; (3) the A4 red-card arc references the earlier yellow.",
+  "arcs": [
+    {
+      "id": "yellow-red-track-continuity",
+      "description": "A4 headline: same player booked (yellow) at T and dismissed (red) at T+30 min. Same long-lived trackId A in both windows -> one entity; the red arc must reference the earlier yellow.",
+      "windows": [
+        { "ts": 600,  "tracks": [ { "id": "P7", "trackId": "A", "bbox": [0.45,0.3,0.55,0.56] } ] },
+        { "ts": 2400, "tracks": [ { "id": "P7", "trackId": "A", "bbox": [0.46,0.31,0.56,0.57] } ] }
+      ],
+      "events": [
+        { "ts": 600,  "entity": "P7", "eventType": "YELLOW_CARD", "reason": "late challenge" },
+        { "ts": 2400, "entity": "P7", "eventType": "RED_CARD",    "reason": "second bookable offence" }
+      ],
+      "arcEntity": "P7",
+      "arcLaterTs": 2400,
+      "arcEarlierEventType": "YELLOW_CARD",
+      "sameRef": [ [ "P7" ] ]
+    },
+    {
+      "id": "reassignment-within-grace",
+      "description": "Track drops out (occlusion), reappears 5 s later with a REASSIGNED trackId, IoU-overlapping its last position -> the resolver must stitch both to one entity.",
+      "windows": [
+        { "ts": 0,  "tracks": [ { "id": "P9", "trackId": "A", "bbox": [0.40,0.35,0.50,0.61] } ] },
+        { "ts": 5,  "tracks": [ { "id": "P9", "trackId": "B", "bbox": [0.41,0.34,0.51,0.60] } ] }
+      ],
+      "events": [],
+      "sameRef": [ [ "P9" ] ]
+    },
+    {
+      "id": "jersey-cross-window",
+      "description": "Same player seen in two windows 30 min apart under completely different trackIds, but both carry jersey #10 (the strong identity signal) -> resolves to j:10 in both.",
+      "windows": [
+        { "ts": 600,  "tracks": [ { "id": "P10", "trackId": "W1", "bbox": [0.60,0.30,0.70,0.56], "jersey": "10" } ] },
+        { "ts": 2400, "tracks": [ { "id": "P10", "trackId": "W2", "bbox": [0.62,0.32,0.72,0.58], "jersey": "10" } ] }
+      ],
+      "events": [],
+      "sameRef": [ [ "P10" ] ]
+    },
+    {
+      "id": "ambiguous-overlap-no-merge",
+      "description": "A wide re-appearing track overlaps two KNOWN distinct entities -> ambiguous; must NOT be merged onto either (no fabricated identity).",
+      "windows": [
+        { "ts": 0, "tracks": [
+            { "id": "PA", "trackId": "A", "bbox": [0.25,0.30,0.35,0.55] },
+            { "id": "PB", "trackId": "B", "bbox": [0.65,0.30,0.75,0.55] }
+        ] },
+        { "ts": 5, "tracks": [ { "id": "PC", "trackId": "C", "bbox": [0.25,0.30,0.75,0.55] } ] }
+      ],
+      "events": [],
+      "sameRef": [ [ "PA" ], [ "PB" ], [ "PC" ] ],
+      "distinctPairs": [ ["PA","PC"], ["PB","PC"], ["PA","PB"] ]
+    },
+    {
+      "id": "no-fabrication-long-gap",
+      "description": "Ambiguity call-out: same box 30 min apart with NO jersey and a brand-new trackId must NOT be force-merged on spatial proximity alone (would be a fabricated cross-window identity).",
+      "windows": [
+        { "ts": 0,    "tracks": [ { "id": "Q1", "trackId": "A", "bbox": [0.50,0.35,0.60,0.61] } ] },
+        { "ts": 1800, "tracks": [ { "id": "Q2", "trackId": "B", "bbox": [0.50,0.35,0.60,0.61] } ] }
+      ],
+      "events": [],
+      "sameRef": [ [ "Q1" ], [ "Q2" ] ],
+      "distinctPairs": [ ["Q1","Q2"] ]
+    }
+  ]
+}
