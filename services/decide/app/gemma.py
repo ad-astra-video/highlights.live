@@ -218,12 +218,17 @@ def ask(
     frames = frames or []
     images = images or []
 
-    # Raw audio bytes are gated OFF by default (Path 1 infeasible, verified in
-    # ADAAAA-5979): llama-server (llama.cpp build b10920) rejects an `audio_url`
-    # content block with HTTP 400 "unsupported content[].type", which drops the
-    # WHOLE gemma request to the deterministic rule fallback. Audio context is
-    # delivered to the model as TEXT (Path 2 transcript) instead of raw bytes.
-    # Re-enable raw send only via GEMMA_SEND_AUDIO=1.
+    # Raw audio bytes are gated OFF by default. Path 1 feasibility (re-verified
+    # on the box for ADAAAA-6314, 2026-10-03): llama.cpp build 10920 ACCEPTS the
+    # `input_audio` content block (HTTP 200, no 400) — the earlier ADAAAA-5979
+    # "content type rejected" conclusion was against the stale `audio_url` type,
+    # NOT the current `input_audio` schema the Gemma 4 omni GGUF uses. But the
+    # deployed `gemma-4-12b-it-qat-q4_0` is text/vision-only: given `input_audio`
+    # it answers "I am a text-based AI ... cannot transcribe audio", so it does
+    # NOT actually ingest the audio. So raw send stays OFF by default and audio
+    # context is delivered as TEXT (Path 2 transcript). Once the omni
+    # unsloth/gemma-4-12b-it-GGUF (audio-capable) is served, flip
+    # GEMMA_SEND_AUDIO=1 to use the native `input_audio` path.
     send_audio = bool(audio_b64) and os.environ.get("GEMMA_SEND_AUDIO", "0") == "1"
 
     def _img(part: dict) -> dict | None:
@@ -250,12 +255,15 @@ def ask(
     )
     # 3) audio AFTER the text (modality-order rule) — only when the raw-send gate
     # is on. By default (Path 2) the audio context is delivered as TEXT
-    # (transcript) instead, because gemma/llama-server rejects audio_url.
+    # (transcript) instead, because the deployed QAT model is not audio-capable.
+    # The content block uses the current OpenAI `input_audio` schema (not the
+    # stale `audio_url`) per the Gemma 4 omni GGUF card (unsloth/gemma-4-12b-it-GGUF);
+    # build 10920 accepts this block (verified HTTP 200 on the box).
     if send_audio:
         content.append(
             {
-                "type": "audio_url",
-                "audio_url": {"url": f"data:audio/wav;base64,{audio_b64}"},
+                "type": "input_audio",
+                "input_audio": {"data": audio_b64, "format": "wav"},
             }
         )
 
