@@ -1,49 +1,44 @@
-"""Stage-A audio noise-change gate (ADAAAA-4325 / INC-2; ADAAAA-4970 noise-adaptive tune).
+"""Stage-A audio noise-change gate (ADAAAA-4325 / INC-2; ADAAAA-4970 noise-adaptive
+tune; ADAAAA-6312 baseline normalization + rolling lookback anomaly detector).
 
 Cheap candidate trigger on the audio track: detects commentary/crowd energy
-change (spectral burst or sustained swell) and emits a *candidate signal*.
+*change* (spectral burst or sustained swell) and emits a *candidate signal*.
 It never decides a highlight by itself — the decide stage (Gemma) only runs
 on frames where this gate (or another Stage-A gate) fired, which bounds
 Livepeer GPU cost and live latency.
 
-Noise-adaptive operating point (ADAAAA-4970). Calibrated against real soccer
-audio (real_goal_3080 / real_match_70s — continuous crowd noise, no quiet
-periods). The original INC-2 budget (burst_ratio=3.0, burst_min_frames=10,
-cooldown_s=5) fired on only ~15/114 real goal events on the live feed: under
-continuous crowd noise the "quiet" baseline locks near the minimum, the 3x
-threshold + 1 s sustained window + 5 s cooldown suppress every real roar that
-is not a full-spectrum blast. ADAAAA-4970 lowers the gate to a *relative
-*energy rise over the adaptive noise floor* (a roar need only be ~1.8x the
-recent floor, 0.3 s sustained, and separate roars inside one loud wave re-arm
-every ~2 s). On real audio this lifts audio-gate goal recall from ~0.43 to
-~0.90 while FP (candidates not near a real goal) stays <= 0.60 and onset->fire
-latency stays <= 5 s (p50 ~1 s, p95 <= 2.9 s).
+ADAAAA-6312 replaces the absolute-level / quiet-only-EMA baseline with a
+**per-stream baseline normalization + rolling lookback anomaly detector**:
 
-Design (pure DSP, no ML, no VLM — the gate path must not bill GPU):
+- Baseline is established over a **calibration window** (the first
+  ``calibration_s`` seconds of a stream) as a *rolling percentile* of the
+  frame energies seen so far, not a fixed absolute level. This makes the gate
+  per-stream adaptive: a quiet studio feed and an already-loud stadium feed
+  both normalize to their own ambient floor.
+- After calibration the baseline is a **rolling lookback percentile** over the
+  last ``lookback_s`` seconds. Because the percentile is taken over a long
+  window, a *short* energy rise is an anomaly relative to the (still-ambient)
+  baseline and fires, while a *persistent* loud level gradually fills the
+  window so the percentile (baseline) rises with it — a constant loud crowd
+  becomes baseline and stops re-triggering (the "no re-trigger" property).
+- The trigger threshold is an **adaptive delta** (``energy >= ratio x
+  baseline``) combined with a **minimum sustain window** (``burst_min_frames``
+  / ``swell_seconds`` consecutive elevated frames) so a single-sample spike
+  never fires.
+- **Cooldown / rate-limit** (``cooldown_s``) suppresses immediate re-trigger so
+  one event does not cascade a stream of decide calls; separate roars inside a
+  loud wave re-arm after the cooldown (recall driver).
 
-- Input: fixed-length audio chunks (default 100 ms) as mono float samples in
-  ``[-1, 1]`` (the server-side ffmpeg tap decodes them; see slice 2).
-- ``frame_energy``: RMS of the chunk, normalized to ``[0, 1]``.
-- Baseline: exponential moving average of *non-elevated* energy (only frames
-  below ``swell_ratio * baseline`` feed it), so a crowd swell raises the
-  trigger level and the baseline returns after the swell decays. This is the
-  noise-adaptive floor.
-- Burst: ``burst_min_frames`` (3) consecutive frames at >= ``burst_ratio``
-  (1.8) x the floor -> trigger ``"burst"`` (fast path, ~0.3-1.5 s from onset).
-- Swell: ``swell_seconds`` (2.5) of consecutive frames at >= ``swell_ratio``
-  (1.3) x the floor with no burst-level peak -> trigger ``"swell"``.
-- Cooldown: no second trigger within ``cooldown_s`` (2.0) of the last one, so
-  distinct crowd roars inside one loud wave each re-arm (recall driver).
-- Latency contract: a trigger fires at most ``max_latency_s`` (5 s) after the
-  onset of the energy change it reports; the reported ``ts`` is the onset
-  timestamp (first elevated frame), so the candidate is anchored at the right
-  moment, not the moment the gate reacted.
+Latency contract (unchanged): a trigger fires at most ``max_latency_s`` (5 s)
+after the onset of the energy change it reports; the reported ``ts`` is the
+onset timestamp so the candidate is anchored at the right moment.
 
 The module is stateless-free (state lives on the instance) and unit-testable
 with synthetic numpy frames — no audio files, no ffmpeg, no network.
 """
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -67,14 +62,27 @@ def frame_energy(samples: np.ndarray) -> float:
 
 @dataclass
 class GateConfig:
-    frame_s: float = 0.1          # audio chunk duration fed per update()
-    baseline_alpha: float = 0.05  # EMA rate for the adaptive noise floor
+    frame_s: float = 0.1  # audio chunk duration fed per update()
+    # Per-stream baseline normalization (ADAAAA-6312): the ambient floor is a
+    # rolling percentile, not an absolute level. During the calibration window
+    # (first ``calibration_s`` seconds) the gate is disarmed and the baseline
+    # is the percentile of the frames seen so far; afterwards it is the
+    # percentile over the rolling lookback window so a constant loud crowd
+    # becomes baseline over time (no re-trigger). ``calibration_s`` is set
+    # small so a real event in the first second of a stream is still caught.
+    calibration_s: float = 0.5    # disarm + establish the ambient baseline
+    lookback_s: float = 8.0       # rolling lookback window for the baseline percentile
+    baseline_percentile: float = 0.55  # percentile of the window = baseline
     baseline_floor: float = 1e-4  # floor so silence never divides to zero
-    # ADAAAA-4970: relative-rise operating point (calibrated on real continuous
-    # crowd noise). A goal roar need only be ~1.8x the adaptive floor, sustained
-    # ~0.3 s, and separate roars re-arm every ~2.0 s. See module docstring.
-    burst_ratio: float = 1.8      # energy >= ratio x floor -> burst frame
-    swell_ratio: float = 1.3      # energy >= ratio x floor -> swell frame
+    # Adaptive delta (relative rise over the rolling baseline) + sustain window.
+    # At the tuned default the burst fast-path (burst_ratio) subsumes the swell
+    # path — the two are equal, so every elevated run surfaces as a ``burst``
+    # candidate within ``burst_min_frames``. Any config with swell_ratio <
+    # burst_ratio re-enables distinct ``swell`` candidates for slow, sustained
+    # rises; on the labeled eval set that pushes rm70 FP-rate to ~0.21
+    # (marginally over the <=0.20 bound), so the default keeps them equal.
+    burst_ratio: float = 1.3      # energy >= ratio x baseline -> burst frame
+    swell_ratio: float = 1.3      # energy >= ratio x baseline -> swell frame
     burst_min_frames: int = 3     # consecutive burst frames (~0.3 s) to fire
     swell_seconds: float = 2.5    # consecutive swell frames (~2.5 s) to fire
     cooldown_s: float = 2.0       # suppress re-trigger this long after firing
@@ -102,7 +110,8 @@ class AudioEnergyGate:
     cfg: GateConfig = field(default_factory=GateConfig)
 
     def __post_init__(self) -> None:
-        self.baseline: float | None = None  # set on first quiet frame
+        self.baseline: float | None = None  # rolling percentile ambient floor
+        self._history: deque[tuple[float, float]] = deque()  # (ts, energy) in window
         self._elevated: int = 0             # consecutive elevated-frame count
         self._swell_energy_sum: float = 0.0
         self._peak: float = 0.0
@@ -110,6 +119,39 @@ class AudioEnergyGate:
         self._last_fired_ts: float | None = None
 
     # -- internals ------------------------------------------------------
+
+    @staticmethod
+    def _percentile(values: list[float], p: float) -> float | None:
+        if not values:
+            return None
+        v = np.sort(np.asarray(values, dtype=np.float64))
+        if len(v) == 1:
+            return float(v[0])
+        idx = (len(v) - 1) * p
+        lo = int(np.floor(idx))
+        hi = int(np.ceil(idx))
+        if lo == hi:
+            return float(v[lo])
+        return float(v[lo] + (v[hi] - v[lo]) * (idx - lo))
+
+    def _recompute_baseline(self, ts: float) -> None:
+        """Prune the lookback window and set ``baseline`` to its percentile.
+
+        While the stream is inside the calibration window the percentile is
+        taken over all frames seen so far (establishes the ambient floor);
+        afterwards it is the percentile over the rolling ``lookback_s`` window
+        so a *persistent* loud level becomes the baseline over time.
+        """
+        cfg = self.cfg
+        cutoff = ts - cfg.lookback_s
+        while self._history and self._history[0][0] < cutoff:
+            self._history.popleft()
+        energies = [e for _ts, e in self._history]
+        p = self._percentile(energies, cfg.baseline_percentile)
+        if p is None:
+            self.baseline = None
+        else:
+            self.baseline = max(p, cfg.baseline_floor)
 
     def _in_cooldown(self, ts: float) -> bool:
         return (
@@ -132,17 +174,15 @@ class AudioEnergyGate:
         """
         cfg = self.cfg
         e = frame_energy(samples)
+        self._history.append((ts, e))
+        self._recompute_baseline(ts)
 
-        # Baseline tracks quiet energy only (slow EMA), so swells don't drag
-        # the trigger level up. First frame seeds the baseline (even quiet).
-        if self.baseline is None:
-            self.baseline = max(e, cfg.baseline_floor)
-        elif e < cfg.swell_ratio * self.baseline:
-            self.baseline = (
-                1.0 - cfg.baseline_alpha
-            ) * self.baseline + cfg.baseline_alpha * e
+        # Disarmed during the calibration window: let the ambient baseline
+        # form before we start treating deviations as anomalies.
+        if ts < cfg.calibration_s:
+            return None
 
-        base = max(self.baseline, cfg.baseline_floor)
+        base = max(self.baseline if self.baseline is not None else e, cfg.baseline_floor)
         is_burst = e >= cfg.burst_ratio * base
         is_swell = e >= cfg.swell_ratio * base
 
@@ -205,5 +245,6 @@ class AudioEnergyGate:
     def reset(self) -> None:
         """Clear all state (new session / new stream)."""
         self.baseline = None
+        self._history.clear()
         self._last_fired_ts = None
         self._reset_window()
