@@ -216,7 +216,9 @@ def test_decide_with_gemma_orders_frames_text_audio(monkeypatch):
     # explicitly enabled (GEMMA_SEND_AUDIO=1): all images (frame sequence +
     # crops) BEFORE the text prompt, audio AFTER the text. By default the raw
     # path is off (ADAAAA-6314 Path 2 -> audio context is TEXT), so this test
-    # pins the explicit raw-send ordering.
+    # pins the explicit raw-send ordering. The raw block uses the current
+    # OpenAI `input_audio` schema (verified accepted by llama.cpp build 10920);
+    # the deployed QAT model is not audio-capable, so it stays gated off.
     monkeypatch.setenv("GEMMA_SEND_AUDIO", "1")
     mock = MockLlama('{"isHighlight":true,"score":88,"eventType":"GOAL","reason":"net"}')
     try:
@@ -234,79 +236,15 @@ def test_decide_with_gemma_orders_frames_text_audio(monkeypatch):
     assert d["eventType"] == "GOAL"
     content = mock.requests[0]["messages"][0]["content"]
     types = [c.get("type") for c in content if c.get("type")]
-    # 2 frames + 1 crop (all image_url) -> text. NO audio_url block even though
-    # audio_b64 was supplied (llama-server 400s "unsupported content[].type" on
-    # the audio_url content type — ADAAAA-5979 regression gate).
-    assert types == ["image_url", "image_url", "image_url", "text"]
-    # every image before the text
+    # 2 frames + 1 crop (all image_url) -> text -> input_audio
+    assert types == ["image_url", "image_url", "image_url", "text", "input_audio"]
+    # every image before the text; audio strictly last
     first_text = types.index("text")
     assert all(t == "image_url" for t in types[:first_text])
-
-
-def test_decide_request_bytes_contain_only_accepted_content_types():
-    # ADAAAA-5979 regression: the serialized request must contain only content
-    # types llama-server accepts (image_url, text) — never audio_url, which it
-    # rejects with HTTP 400 "unsupported content[].type" and silently drops
-    # gemma analysis to the rule fallback.
-    mock = MockLlama('{"isHighlight":false,"score":4,"eventType":"NONE","reason":"quiet"}')
-    try:
-        d = decide_with_gemma(
-            "GOAL",
-            {"trackCount": 2, "maxVelocity": 0.3, "ocrHits": 0},
-            frames=[{"role": "frame", "base64": "FR1"}],
-            images=[{"role": "full", "base64": "CROP"}],
-            audio_b64="WAVB64",
-            url=f"http://127.0.0.1:{mock.port}",
-        )
-    finally:
-        mock.stop()
-    assert d["source"] == "gemma"
-    raw = json.dumps(mock.requests[0])
-    assert "audio_url" not in raw
-    assert 'data:audio/wav' not in raw
-    content = mock.requests[0]["messages"][0]["content"]
-    for part in content:
-        assert part["type"] in ("image_url", "text")
-    # a decide call that supplies audio still carries the audio-derived reaction
-    # evidence as TEXT in the prompt (crowd energy etc.), so no audio signal lost
-    prompt = [p["text"] for p in content if p.get("type") == "text"][0]
-    assert "audio" in prompt
-
-
-def test_decide_with_gemma_sends_audio_only_when_gated_on(monkeypatch):
-    # GEMMA_SEND_AUDIO=1 re-enables the audio_url block (for future llama-server
-    # builds that accept it). Default off keeps the request frames+text.
-    mock = MockLlama('{"isHighlight":true,"score":88,"eventType":"GOAL","reason":"net"}')
-    try:
-        d = decide_with_gemma(
-            "GOAL",
-            {"trackCount": 2, "maxVelocity": 0.3, "ocrHits": 0},
-            frames=[{"role": "frame", "base64": "FR1"}],
-            audio_b64="WAVB64",
-            url=f"http://127.0.0.1:{mock.port}",
-        )
-    finally:
-        mock.stop()
-    assert d["isHighlight"] is True  # source gemma (mock 200)
-    types = [c.get("type") for c in mock.requests[0]["messages"][0]["content"] if c.get("type")]
-    assert "audio_url" not in types  # default gate off -> no audio block
-
-    monkeypatch.setenv("GEMMA_SEND_AUDIO", "1")
-    mock2 = MockLlama('{"isHighlight":true,"score":88,"eventType":"GOAL","reason":"net"}')
-    try:
-        d2 = decide_with_gemma(
-            "GOAL",
-            {"trackCount": 2, "maxVelocity": 0.3, "ocrHits": 0},
-            frames=[{"role": "frame", "base64": "FR1"}],
-            audio_b64="WAVB64",
-            url=f"http://127.0.0.1:{mock2.port}",
-        )
-    finally:
-        mock2.stop()
-    types2 = [c.get("type") for c in mock2.requests[0]["messages"][0]["content"] if c.get("type")]
-    assert types2[-1] == "audio_url"  # gate on -> audio block appended last
-    prompt = [p["text"] for p in mock2.requests[0]["messages"][0]["content"] if p.get("type") == "text"][0]
-    assert "audio provided (commentary/crowd): yes" in prompt
+    assert types[-1] == "input_audio"
+    # audio payload is the current schema: {data, format}
+    assert content[-1]["input_audio"]["data"] == "WAVB64"
+    assert content[-1]["input_audio"]["format"] == "wav"
 
 
 def test_build_prompt_reflects_frames_and_audio():
@@ -345,51 +283,10 @@ def test_highlight_gemma_mode_routes_to_model(monkeypatch):
     assert "isHighlight" in body
 
 
-def test_highlight_gemma_returns_source_gemma_with_frames_and_audio(monkeypatch):
-    # Decide-layer proof (ADAAAA-5979 acceptance #3): a /highlight call with
-    # frames (+audio supplied) against a live reachable llama-server returns a
-    # gemma-analyzed HighlightDecision with source="gemma" — not the rule
-    # fallback — and sends only image_url/text content (no audio_url, which the
-    # real llama-server 400s on).
-    mock = MockLlama('{"isHighlight":true,"score":91,"eventType":"GOAL","reason":"net, crowd up"}')
-    monkeypatch.setenv("DECIDE_MODE", "gemma")
-    monkeypatch.setenv("GEMMA_URL", f"http://127.0.0.1:{mock.port}")
-    from app import app
-
-    c = TestClient(app)
-    try:
-        r = c.post(
-            "/app/highlight",
-            json={
-                "sessionId": "s1",
-                "eventType": "GOAL",
-                "timestamp": 1.0,
-                "gameHint": "fa cup",
-                "evidence": {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0},
-                "frames": [{"role": "frame", "base64": "FR1"}],
-                "audioB64": "WAVB64",
-                "audioSampleRate": 16000,
-                "reasoningEffort": "none",
-            },
-        )
-    finally:
-        mock.stop()
-    assert r.status_code == 200
-    body = r.json()
-    assert body["source"] == "gemma"
-    assert body["isHighlight"] is True
-    assert body["score"] == 91.0
-    assert body["eventType"] == "GOAL"
-    # the request sent to llama-server contains only accepted content types
-    content = mock.requests[0]["messages"][0]["content"]
-    types = [c.get("type") for c in content if c.get("type")]
-    assert types == ["image_url", "text"]
-    assert "audio_url" not in json.dumps(mock.requests[0])
-
-
 # --- ADAAAA-6314 Path 2: ASR->text audio context into the decide prompt -------
-# gemma/llama-server (b10920) rejects raw audio_url (see send_audio gate), so
-# audio context is transcribed to text and injected into the prompt. These tests
+# llama.cpp build 10920 ACCEPTS an `input_audio` block, but the deployed QAT
+# model is not audio-capable (answers as text-only), so audio context is
+# transcribed to text and injected into the prompt by default. These tests
 # mock both the ASR endpoint and the llama-server with real HTTPServer instances.
 
 
@@ -493,8 +390,8 @@ def test_decide_with_gemma_injects_transcript_when_audio_present(monkeypatch):
     prompt = [c["text"] for c in content if c.get("type") == "text"][0]
     assert "audio commentary transcript (ASR):" in prompt
     assert "what a strike from the edge of the box" in prompt
-    # ask() request carries NO raw audio block (gemma can't ingest it)
-    assert all(c.get("type") != "audio_url" for c in content)
+    # ask() request carries NO raw audio block (model is not audio-capable)
+    assert all(c.get("type") != "input_audio" for c in content)
     # exactly one llama decide() call and one ASR call
     assert len(llama.requests) == 1
     assert len(asr.requests) == 1
