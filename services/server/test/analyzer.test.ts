@@ -668,6 +668,37 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
     expect(seen.imageB64).toBeDefined();
   });
 
+  it("live audio-context knob (audioContext): forwards the audio clip, no frames[] change", async () => {
+    // ADAAAA-6314 Path 2: enabling LIVE_AUDIO_CONTEXT forwards the surrounding
+    // audio clip for LIVE trigger candidates so the decide prompt gets ASR'd
+    // audio context, WITHOUT touching the live frame depth (no frames[]).
+    let seen: any;
+    const { client } = fakeClient({
+      analyze: async () => ({
+        observation: { tracks: [], seq: 0, timestamp: 0 },
+        candidate: { eventType: "GOAL", timestamp: 0 },
+      }),
+      decide: async (_ev, opts) => {
+        seen = opts;
+        return { isHighlight: true, score: 80, eventType: "GOAL" };
+      },
+    });
+    const shared = new LiveRunShared();
+    shared.addAudioChunk(0, Buffer.from([0, 0, 1, 0]).toString("base64"));
+    await analyzeJob(
+      client,
+      frames(2),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", audioContext: true },
+      undefined,
+      undefined,
+      shared
+    );
+    expect(seen.frames).toBeUndefined(); // live frame depth untouched
+    expect(seen.audioB64).toBeTruthy(); // audio clip forwarded for ASR context
+    expect(seen.imageB64).toBeDefined(); // anchored frame still present
+  });
+
   it("LiveRunShared audioClipB64 accumulates the ~10s rolling clip and trims old chunks", () => {
     const shared = new LiveRunShared();
     shared.addAudioChunk(0, Buffer.from([0, 0]).toString("base64"));

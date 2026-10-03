@@ -444,6 +444,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         clipAfterS: cfg.clipAfterS,
         gameHint: job.gameHint || cfg.gameHintDefault,
         preferLabels: job.preferLabels,
+        // ADAAAA-6314 Path 2: live trigger candidates forward the surrounding
+        // audio clip so the decide prompt gets ASR'd audio context (env-gated).
+        audioContext: cfg.audioContext,
       };
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
