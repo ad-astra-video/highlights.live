@@ -216,7 +216,9 @@ def test_decide_with_gemma_orders_frames_text_audio(monkeypatch):
     # explicitly enabled (GEMMA_SEND_AUDIO=1): all images (frame sequence +
     # crops) BEFORE the text prompt, audio AFTER the text. By default the raw
     # path is off (ADAAAA-6314 Path 2 -> audio context is TEXT), so this test
-    # pins the explicit raw-send ordering.
+    # pins the explicit raw-send ordering. The raw block uses the current
+    # OpenAI `input_audio` schema (verified accepted by llama.cpp build 10920);
+    # the deployed QAT model is not audio-capable, so it stays gated off.
     monkeypatch.setenv("GEMMA_SEND_AUDIO", "1")
     mock = MockLlama('{"isHighlight":true,"score":88,"eventType":"GOAL","reason":"net"}')
     try:
@@ -234,14 +236,15 @@ def test_decide_with_gemma_orders_frames_text_audio(monkeypatch):
     assert d["eventType"] == "GOAL"
     content = mock.requests[0]["messages"][0]["content"]
     types = [c.get("type") for c in content if c.get("type")]
-    # 2 frames + 1 crop (all image_url) -> text -> audio_url
-    assert types == ["image_url", "image_url", "image_url", "text", "audio_url"]
+    # 2 frames + 1 crop (all image_url) -> text -> input_audio
+    assert types == ["image_url", "image_url", "image_url", "text", "input_audio"]
     # every image before the text; audio strictly last
     first_text = types.index("text")
     assert all(t == "image_url" for t in types[:first_text])
-    assert types[-1] == "audio_url"
-    # audio payload is a data:wav URI
-    assert content[-1]["audio_url"]["url"].startswith("data:audio/wav;base64,W")
+    assert types[-1] == "input_audio"
+    # audio payload is the current schema: {data, format}
+    assert content[-1]["input_audio"]["data"] == "WAVB64"
+    assert content[-1]["input_audio"]["format"] == "wav"
 
 
 def test_build_prompt_reflects_frames_and_audio():
@@ -281,8 +284,9 @@ def test_highlight_gemma_mode_routes_to_model(monkeypatch):
 
 
 # --- ADAAAA-6314 Path 2: ASR->text audio context into the decide prompt -------
-# gemma/llama-server (b10920) rejects raw audio_url (see send_audio gate), so
-# audio context is transcribed to text and injected into the prompt. These tests
+# llama.cpp build 10920 ACCEPTS an `input_audio` block, but the deployed QAT
+# model is not audio-capable (answers as text-only), so audio context is
+# transcribed to text and injected into the prompt by default. These tests
 # mock both the ASR endpoint and the llama-server with real HTTPServer instances.
 
 
@@ -386,8 +390,8 @@ def test_decide_with_gemma_injects_transcript_when_audio_present(monkeypatch):
     prompt = [c["text"] for c in content if c.get("type") == "text"][0]
     assert "audio commentary transcript (ASR):" in prompt
     assert "what a strike from the edge of the box" in prompt
-    # ask() request carries NO raw audio block (gemma can't ingest it)
-    assert all(c.get("type") != "audio_url" for c in content)
+    # ask() request carries NO raw audio block (model is not audio-capable)
+    assert all(c.get("type") != "input_audio" for c in content)
     # exactly one llama decide() call and one ASR call
     assert len(llama.requests) == 1
     assert len(asr.requests) == 1
