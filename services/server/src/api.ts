@@ -353,6 +353,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         clipAfterS: cfg.clipAfterS,
         gameHint: job.gameHint || cfg.gameHintDefault,
         preferLabels: job.preferLabels,
+        // ADAAAA-6314 Path 2: live trigger candidates forward the surrounding
+        // audio clip so the decide prompt gets ASR'd audio context (env-gated).
+        audioContext: cfg.audioContext,
       };
       const onEvent = jobEventHook(job.id);
       // Shared live-run context (INC-2 / ADAAAA-4325 slice 4): the video

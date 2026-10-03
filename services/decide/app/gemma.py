@@ -99,12 +99,57 @@ def _reaction_summary(evidence: dict) -> list[str]:
     return out
 
 
+def _asr_url() -> str | None:
+    """The cheap ASR endpoint for Path 2 (ADAAAA-6314). Unset => transcription is
+    skipped and the decide prompt runs text-only (no regression vs today)."""
+    u = os.environ.get("ASR_URL", "").strip()
+    return u or None
+
+
+def transcribe_audio(
+    url: str,
+    audio_b64: str,
+    sample_rate: int = 16000,
+    timeout_s: float = 20.0,
+) -> tuple[str, float]:
+    """Transcribe a mono WAV (base64, e.g. 16 kHz 16-bit PCM) to text via the ASR
+    endpoint (Path 2). Returns (text, elapsed_seconds). Any failure returns
+    ("", elapsed) so the decide path still runs text-only and never dies on an
+    ASR glitch.
+
+    Contract (newly introduced by this task): POST {url}/transcribe with JSON
+    ``{"audio": "<wav base64>", "sample_rate": 16000}`` -> ``{"text": "..."}``.
+    Kept tiny so any cheap ASR (faster-whisper server, hosted endpoint) can
+    serve it; it never runs the gemma GPU for audio."""
+    import time
+
+    import httpx
+
+    if not audio_b64:
+        return "", 0.0
+    t0 = time.monotonic()
+    text = ""
+    try:
+        resp = httpx.post(
+            url.rstrip("/") + "/transcribe",
+            json={"audio": audio_b64, "sample_rate": sample_rate},
+            timeout=timeout_s,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        text = (data.get("text") or data.get("transcript") or "").strip()
+    except Exception:
+        text = ""
+    return text, round(time.monotonic() - t0, 4)
+
+
 def build_prompt(
     event_type: str,
     evidence: dict,
     game_hint: str = "",
     n_frames: int = 1,
     has_audio: bool = False,
+    transcript: str = "",
 ) -> str:
     ev = event_type.upper()
     meta = [
@@ -117,9 +162,16 @@ def build_prompt(
         f"audio provided (commentary/crowd): {'yes' if has_audio else 'no'}",
     ]
     reaction_lines = _reaction_summary(evidence)
-    if reaction_lines:
+    transcript = (transcript or "").strip()
+    if reaction_lines or transcript:
         meta.append("people-reaction evidence:")
         meta.extend("  " + ln for ln in reaction_lines)
+        # Path 2 (ADAAAA-6314): the audio window transcribed to text so Gemma can
+        # read what the commentary/crowd is actually *saying* around the trigger,
+        # not just how loud it is. Bounded to keep the prompt lean.
+        if transcript:
+            meta.append("audio commentary transcript (ASR):")
+            meta.append("  " + transcript[:500])
     return (
         "You are a sports/esports highlight judge. You are shown a temporal "
         "SEQUENCE of frames (extracted at 1 FPS from the moment of a detected "
@@ -153,6 +205,7 @@ def ask(
     audio_sample_rate: int = 16000,
     reasoning_effort: str = "none",
     timeout_s: float = 180.0,
+    transcript: str = "",
 ) -> dict | None:
     """Call llama-server multimodal completion. Returns a parsed/validated
     HighlightDecision dict, or None on any transport/parse failure.
@@ -164,6 +217,14 @@ def ask(
 
     frames = frames or []
     images = images or []
+
+    # Raw audio bytes are gated OFF by default (Path 1 infeasible, verified in
+    # ADAAAA-5979): llama-server (llama.cpp build b10920) rejects an `audio_url`
+    # content block with HTTP 400 "unsupported content[].type", which drops the
+    # WHOLE gemma request to the deterministic rule fallback. Audio context is
+    # delivered to the model as TEXT (Path 2 transcript) instead of raw bytes.
+    # Re-enable raw send only via GEMMA_SEND_AUDIO=1.
+    send_audio = bool(audio_b64) and os.environ.get("GEMMA_SEND_AUDIO", "0") == "1"
 
     def _img(part: dict) -> dict | None:
         b64 = part.get("base64") or part.get("image") or ""
@@ -177,11 +238,20 @@ def ask(
     content.append(
         {
             "type": "text",
-            "text": build_prompt(event_type, evidence, game_hint, n_frames=len(frames), has_audio=bool(audio_b64)),
+            "text": build_prompt(
+                event_type,
+                evidence,
+                game_hint,
+                n_frames=len(frames),
+                has_audio=bool(send_audio or transcript),
+                transcript=transcript,
+            ),
         }
     )
-    # 3) audio AFTER the text (modality-order rule)
-    if audio_b64:
+    # 3) audio AFTER the text (modality-order rule) — only when the raw-send gate
+    # is on. By default (Path 2) the audio context is delivered as TEXT
+    # (transcript) instead, because gemma/llama-server rejects audio_url.
+    if send_audio:
         content.append(
             {
                 "type": "audio_url",
@@ -232,17 +302,64 @@ def decide_with_gemma(
     url: str | None = None,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
-    caller always gets a valid HighlightDecision."""
+    caller always gets a valid HighlightDecision.
+
+    ADAAAA-6314 Path 2: when the caller supplied audio for a trigger-passing
+    candidate and the raw path is off (gemma cannot ingest audio), transcribe
+    the window to text and inject it into the prompt. Bounded to candidates that
+    carry audio (never every frame); an ASR glitch degrades to text-only, never
+    kills the verdict. The per-call audio-context cost/latency is reported on the
+    decision as ``audioContext``."""
     u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
-    g = ask(u, event_type, evidence, game_hint, images, frames, audio_b64, audio_sample_rate, reasoning_effort=reasoning_effort)
+    # Path 2 transcription (see module docstring): only when audio is present AND
+    # we are not sending raw bytes AND audio context is enabled AND an ASR
+    # endpoint is configured.
+    transcript = ""
+    asr_latency_s = 0.0
+    asr_ran = False
+    if (
+        audio_b64
+        and not (os.environ.get("GEMMA_SEND_AUDIO", "0") == "1")
+        and os.environ.get("AUDIO_CONTEXT", "1") == "1"
+    ):
+        asr_url = _asr_url()
+        if asr_url:
+            transcript, asr_latency_s = transcribe_audio(asr_url, audio_b64, audio_sample_rate)
+            asr_ran = True
+    g = ask(
+        u,
+        event_type,
+        evidence,
+        game_hint,
+        images,
+        frames,
+        audio_b64,
+        audio_sample_rate,
+        reasoning_effort=reasoning_effort,
+        transcript=transcript,
+    )
     if g is not None:
-        return g
-    # fallback: deterministic rule
-    d = decide(event_type, track_count=evidence.get("trackCount", 0), max_velocity=evidence.get("maxVelocity", 0), ocr_hits=evidence.get("ocrHits", 0))
-    return {
-        "isHighlight": d.is_highlight,
-        "score": d.score,
-        "eventType": event_type,
-        "reason": d.reason,
-        "source": "rule-fallback",
+        result = g
+    else:
+        # fallback: deterministic rule
+        d = decide(
+            event_type,
+            track_count=evidence.get("trackCount", 0),
+            max_velocity=evidence.get("maxVelocity", 0),
+            ocr_hits=evidence.get("ocrHits", 0),
+        )
+        result = {
+            "isHighlight": d.is_highlight,
+            "score": d.score,
+            "eventType": event_type,
+            "reason": d.reason,
+            "source": "rule-fallback",
+        }
+    # Per-highlight audio-context cost/latency readout (Path 2).
+    result["audioContext"] = {
+        "path": "asr_text",
+        "transcribed": bool(transcript),
+        "asrRan": asr_ran,
+        "asrLatencyS": asr_latency_s,
     }
+    return result
