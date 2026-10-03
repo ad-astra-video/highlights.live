@@ -1,0 +1,12 @@
+FROM python:3.11-slim
+# Cheap ASR endpoint (ADAAAA-6314 Path 2): faster-whisper /transcribe.
+# CPU-only by default (ASR_DEVICE=cpu) so a small model fits the live 1-5 s
+# budget without contending for the box GPUs (gemma/perceive hold them). ctranslate2
+# CPU wheels need no CUDA runtime, so this stays a plain slim image.
+WORKDIR /srv
+COPY services/asr/requirements.txt /srv/requirements.txt
+RUN pip install --no-cache-dir -r /srv/requirements.txt
+COPY services/asr /srv/asr
+WORKDIR /srv/asr
+EXPOSE 8082
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8082"]
