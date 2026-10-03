@@ -110,6 +110,11 @@ export interface ServerConfig {
    * `frames[]` so Gemma reasons across a longer SEQUENCE per trigger.
    * `VOD_DECIDE_WINDOW_N`. */
   vodDecideWindowN: number;
+  /** ADAAAA-6314 Path 2: forward the surrounding audio clip for LIVE trigger
+   * candidates so the gemma decide prompt gets ASR'd audio context. Default off
+   * so the deployed live baseline sends no new payload until an operator enables
+   * it. `LIVE_AUDIO_CONTEXT`. */
+  audioContext: boolean;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -237,6 +242,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 2),
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
+    audioContext: env.LIVE_AUDIO_CONTEXT === "1",
     // ADAAAA-5342: live sampling driven from the runner's measured capability
     // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
     // headroom so capable GPUs accelerate toward the chartered cadence while

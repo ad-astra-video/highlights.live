@@ -222,6 +222,15 @@ export interface AnalyzerConfig {
    frameScale?: string;
    decideWindowN?: number;
   /**
+   * ADAAAA-6314 Path 2: forward the surrounding audio clip on the LIVE baseline
+   * too (bounded to trigger candidates — never every frame; no `frames[]`
+   * change, so live frame depth is untouched). The go-livepeer decide runner
+   * (or the ASR endpoint it calls) transcribes it to text for the gemma prompt.
+   * Default off so the deployed live baseline sends no new payload until an
+   * operator enables it. `LIVE_AUDIO_CONTEXT`.
+   */
+   audioContext?: boolean;
+  /**
    * Max times the job will re-reserve a fresh perceive session after the
    * current one is lost mid-pass (HTTP 404 "runner not found" / "runner
    * session not found"). The perceive live-runner's health can flap and
@@ -579,6 +588,13 @@ function detailDecideOpts(
   opts.priorContextText = shared.windowFactsText();
   if (cfg.decideWindowN !== undefined) {
     opts.frames = shared.framesWindow();
+    const audio = shared.audioClipB64();
+    if (audio) opts.audioB64 = audio;
+  } else if (cfg.audioContext) {
+    // ADAAAA-6314 Path 2 (live): forward the surrounding audio clip so the
+    // gemma decide prompt gets ASR'd audio context for trigger candidates.
+    // Bounded: only the ~AUDIO_CLIP_KEEP_S clip; no frames[] change, so the
+    // live frame depth is untouched.
     const audio = shared.audioClipB64();
     if (audio) opts.audioB64 = audio;
   }
