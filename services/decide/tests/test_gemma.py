@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from fastapi.testclient import TestClient
 
-from app.gemma import build_prompt, decide_with_gemma, parse_decision
+from app.gemma import build_prompt, decide_with_gemma, parse_decision, transcribe_audio
 
 
 # --- parse/build units ------------------------------------------------------
@@ -211,9 +211,13 @@ def test_decide_with_gemma_uses_model():
     assert any(c.get("type") == "image_url" for c in content)
 
 
-def test_decide_with_gemma_orders_frames_text_audio():
-    # Gemma 4 12B modality-order guidance: all images (frame sequence + crops)
-    # BEFORE the text prompt, audio AFTER the text.
+def test_decide_with_gemma_orders_frames_text_audio(monkeypatch):
+    # Gemma 4 12B modality-order guidance applies when the raw audio path is
+    # explicitly enabled (GEMMA_SEND_AUDIO=1): all images (frame sequence +
+    # crops) BEFORE the text prompt, audio AFTER the text. By default the raw
+    # path is off (ADAAAA-6314 Path 2 -> audio context is TEXT), so this test
+    # pins the explicit raw-send ordering.
+    monkeypatch.setenv("GEMMA_SEND_AUDIO", "1")
     mock = MockLlama('{"isHighlight":true,"score":88,"eventType":"GOAL","reason":"net"}')
     try:
         d = decide_with_gemma(
@@ -274,3 +278,143 @@ def test_highlight_gemma_mode_routes_to_model(monkeypatch):
     # gemma URL (127.0.0.1:8088) unreachable in test -> rule fallback, still valid
     assert body["source"] in ("rule-fallback", "gemma")
     assert "isHighlight" in body
+
+
+# --- ADAAAA-6314 Path 2: ASR->text audio context into the decide prompt -------
+# gemma/llama-server (b10920) rejects raw audio_url (see send_audio gate), so
+# audio context is transcribed to text and injected into the prompt. These tests
+# mock both the ASR endpoint and the llama-server with real HTTPServer instances.
+
+
+class MockAsr:
+    """Minimal HTTP server faking the ASR endpoint (POST /transcribe)."""
+
+    def __init__(self, reply: str = "and the crowd goes wild! what a strike"):
+        self.reply = reply
+        self.requests: list = []
+        self._srv = HTTPServer(("127.0.0.1", 0), self._handler())
+        self.port = self._srv.server_address[1]
+        self._t = threading.Thread(target=self._srv.serve_forever, daemon=True)
+        self._t.start()
+
+    def _handler(self):
+        owner = self
+
+        class H(BaseHTTPRequestHandler):
+            def do_POST(self):
+                n = int(self.headers.get("content-length", 0))
+                owner.requests.append(json.loads(self.rfile.read(n)))
+                resp = json.dumps({"text": owner.reply})
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(resp.encode())
+
+            def log_message(self, *a):
+                pass
+
+        return H
+
+    def stop(self):
+        self._srv.shutdown()
+
+
+def test_transcribe_audio_calls_asr_and_returns_text():
+    mock = MockAsr("commentary: GOAL for the home side")
+    try:
+        text, latency = transcribe_audio(f"http://127.0.0.1:{mock.port}", "WAVB64", 16000)
+    finally:
+        mock.stop()
+    assert text == "commentary: GOAL for the home side"
+    assert latency >= 0.0
+    # contract: POST /transcribe with {audio, sample_rate}
+    assert mock.requests[0]["audio"] == "WAVB64"
+    assert mock.requests[0]["sample_rate"] == 16000
+
+
+def test_transcribe_audio_failure_returns_empty():
+    # unparseable / unreachable ASR degrades to ("", elapsed) — never raises.
+    text, latency = transcribe_audio("http://127.0.0.1:1", "WAVB64", 16000)
+    assert text == ""
+    assert latency >= 0.0
+
+
+def test_build_prompt_renders_transcript():
+    p = build_prompt(
+        "GOAL",
+        {"trackCount": 1, "maxVelocity": 0.2, "ocrHits": 0},
+        "fa cup",
+        n_frames=2,
+        has_audio=True,
+        transcript="commentary: they've scored!",
+    )
+    assert "audio commentary transcript (ASR):" in p
+    assert "commentary: they've scored!" in p
+    assert '"isHighlight"' in p
+
+
+def test_build_prompt_no_transcript_no_regression():
+    p = build_prompt("GOAL", {"trackCount": 1, "maxVelocity": 0.2, "ocrHits": 0})
+    assert "audio commentary transcript" not in p
+    assert "people-reaction evidence:" not in p
+    assert '"isHighlight"' in p
+
+
+def test_decide_with_gemma_injects_transcript_when_audio_present(monkeypatch):
+    # Audio is supplied (trigger-passing candidate), raw path off, ASR configured:
+    # the transcript reaches the model prompt and the ask() request stays
+    # frames+text (no raw audio_url), and audioContext cost/latency is reported.
+    asr = MockAsr("commentary: what a strike from the edge of the box")
+    llama = MockLlama('{"isHighlight":true,"score":90,"eventType":"GOAL","reason":"goal"}')
+    try:
+        monkeypatch.setenv("ASR_URL", f"http://127.0.0.1:{asr.port}")
+        monkeypatch.setenv("GEMMA_SEND_AUDIO", "0")
+        monkeypatch.setenv("AUDIO_CONTEXT", "1")
+        d = decide_with_gemma(
+            "GOAL",
+            {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0},
+            game_hint="fa cup",
+            frames=[{"role": "frame", "base64": "FR1"}],
+            audio_b64="WAVB64",
+            url=f"http://127.0.0.1:{llama.port}",
+        )
+    finally:
+        asr.stop()
+        llama.stop()
+    # transcript injected into the prompt
+    content = llama.requests[0]["messages"][0]["content"]
+    prompt = [c["text"] for c in content if c.get("type") == "text"][0]
+    assert "audio commentary transcript (ASR):" in prompt
+    assert "what a strike from the edge of the box" in prompt
+    # ask() request carries NO raw audio block (gemma can't ingest it)
+    assert all(c.get("type") != "audio_url" for c in content)
+    # exactly one llama decide() call and one ASR call
+    assert len(llama.requests) == 1
+    assert len(asr.requests) == 1
+    # cost/latency readout
+    assert d["audioContext"]["path"] == "asr_text"
+    assert d["audioContext"]["transcribed"] is True
+    assert d["audioContext"]["asrRan"] is True
+    assert d["audioContext"]["asrLatencyS"] >= 0.0
+
+
+def test_decide_with_gemma_no_asr_url_skips_transcript(monkeypatch):
+    # No ASR endpoint configured: audio present but no transcription, prompt
+    # text-only, and the audioContext readout reports transcribed=False.
+    llama = MockLlama('{"isHighlight":true,"score":80,"eventType":"GOAL","reason":"goal"}')
+    try:
+        monkeypatch.setenv("GEMMA_SEND_AUDIO", "0")
+        monkeypatch.delenv("ASR_URL", raising=False)
+        d = decide_with_gemma(
+            "GOAL",
+            {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0},
+            frames=[{"role": "frame", "base64": "FR1"}],
+            audio_b64="WAVB64",
+            url=f"http://127.0.0.1:{llama.port}",
+        )
+    finally:
+        llama.stop()
+    prompt = [c["text"] for c in llama.requests[0]["messages"][0]["content"] if c.get("type") == "text"][0]
+    assert "audio commentary transcript" not in prompt
+    assert d["audioContext"]["transcribed"] is False
+    assert d["audioContext"]["asrRan"] is False
