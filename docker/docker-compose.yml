@@ -167,6 +167,30 @@ services:
               capabilities: [gpu]
     networks: [hl]
 
+  # Cheap ASR endpoint (ADAAAA-6314 Path 2): faster-whisper /transcribe. The
+  # decide service POSTs the trigger-window audio here and injects the returned
+  # text into the gemma decide prompt. CPU-only (ASR_DEVICE=cpu) small model so
+  # it fits the live 1-5 s budget without contending for the box GPUs;
+  # `ASR_URL` points decide at it on the private hl network.
+  asr:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.asr
+    container_name: highlights-asr
+    expose: ["8082"]
+    environment:
+      - ASR_MODEL=${ASR_MODEL:-base}
+      - ASR_DEVICE=${ASR_DEVICE:-cpu}
+      - ASR_COMPUTE_TYPE=${ASR_COMPUTE_TYPE:-int8}
+      - ASR_THREADS=${ASR_THREADS:-8}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8082/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks: [hl]
+
   decide:
     build:
       context: ..
@@ -179,11 +203,20 @@ services:
       - DECIDE_MODE=${DECIDE_MODE:-gemma}
       - GEMMA_URL=${GEMMA_URL:-http://gemma:8088}
       - GEMMA_MODEL=${GEMMA_MODEL:-gemma-4-12b-it-qat-q4_0}
+      # ADAAAA-6314 Path 2: the cheap ASR endpoint decide POSTs the
+      # trigger-window audio to (POST {ASR_URL}/transcribe -> {text}). Empty
+      # (or unreachable) => decide runs text-only with no audio context and a
+      # transcription failure never kills the verdict. `AUDIO_CONTEXT=1` (default
+      # on) enables the transcript injection for trigger-passing candidates.
+      - ASR_URL=${ASR_URL:-http://asr:8082}
+      - AUDIO_CONTEXT=${AUDIO_CONTEXT:-1}
       # ADAAAA-5778 notable-only knob. Data-landed default 60; override in prod
       # only after re-measuring on the real-feed eval set (evals/decide_discernment.py).
       - DECIDE_NOTABILITY_MIN=${DECIDE_NOTABILITY_MIN:-60}
     depends_on:
       gemma:
+        condition: service_healthy
+      asr:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8081/health')"]
@@ -230,6 +263,11 @@ services:
       # Media-path (b): the browser streams frames to the media server instead
       # of the server's HTTP /ingest when this is set.
       - MEDIA_SERVER_URL=${MEDIA_SERVER_URL:-http://media:4070}
+      # ADAAAA-6314 Path 2 (live): forward the surrounding audio clip on LIVE
+      # trigger candidates so the decide prompt gets ASR'd audio context. Off by
+      # default so the deployed live baseline sends no new payload until an
+      # operator enables it. `LIVE_AUDIO_CONTEXT` (1 => on).
+      - LIVE_AUDIO_CONTEXT=${LIVE_AUDIO_CONTEXT:-0}
       # Live-payment durability (ADAAAA-3932): the SERVER is the VOD payer — it
       # reserves perceive/decide sessions and, on the orchestrator's 402
       # challenge, forwards the payment_params to the remote signer for tickets
