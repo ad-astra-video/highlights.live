@@ -68,6 +68,11 @@ services:
       - PERCEIVE_MIN_FPS=${PERCEIVE_MIN_FPS:-1.0}
       - PERCEIVE_TRACKER=florence_sam
       - PERCEIVE_CAPACITY=${PERCEIVE_CAPACITY:-2}
+      # ADAAAA-6340: switched the detector from the 230M Florence-2-base default
+      # to the 770M fine-tuned large (microsoft/Florence-2-large-ft) for better
+      # ball/detection recall and cleaner <OD> labels. Weights are warm in the
+      # HF cache mount below; no download on cold boot.
+      - FLORENCE_MODEL=microsoft/Florence-2-large-ft
       # HF token required to pull the gated facebook/sam3.1 weights on a COLD HF
       # cache. Comes from docker/.env / shell at deploy time, never committed. A
       # warm HF cache (see HF_CACHE_DIR mount below) boots without it.
