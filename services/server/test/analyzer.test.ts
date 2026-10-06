@@ -211,6 +211,39 @@ describe("analyzeJob", () => {
     expect(hl.highlight.score).toBe(80);
   });
 
+  it("publishes MULTIPLE highlights at decision time — interleaved with observations, not batched at job end (ADAAAA-6352)", async () => {
+    let call = 0;
+    const { client } = fakeClient({
+      analyze: async () => {
+        call++;
+        if (call === 2 || call === 4) {
+          return { observation: { tracks: [], seq: call - 1, timestamp: call - 1 }, candidate: { eventType: "KILL", timestamp: call - 1 } };
+        }
+        return { observation: { tracks: [], seq: call - 1, timestamp: call - 1 } };
+      },
+    });
+    const events: any[] = [];
+    const outcome = await analyzeJob(
+      client,
+      frames(4),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
+      (ev) => events.push(ev)
+    );
+    // Each accepted highlight is emitted IMMEDIATELY after its candidate's
+    // decide inside the frame loop (not deferred until all frames are done): the
+    // event stream interleaves candidate->highlight with the surrounding
+    // observations, and there is no trailing batch of highlights at the end.
+    expect(events.map((e) => e.type)).toEqual([
+      "observation", // frame 1
+      "observation", "candidate", "highlight", // frame 2 (accepted)
+      "observation", // frame 3
+      "observation", "candidate", "highlight", // frame 4 (accepted)
+    ]);
+    expect(events.filter((e) => e.type === "highlight")).toHaveLength(2);
+    expect(outcome.highlights).toHaveLength(2);
+  });
+
   it("decides on the ANCHORED strike frame image and cuts at its timestamp when a candidate fires late (ADAAAA-4193)", async () => {
     let call = 0;
     const decideImages: (string | undefined)[] = [];

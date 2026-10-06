@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X, ChevronDown, ChevronRight } from "lucide-react";
-import { api, type Highlight, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
+import { api, getToken, type Highlight, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
+import { readSSE } from "../lib/sse";
 import { isOverLimit, oversizedHelp } from "../lib/vodUpload";
 import { DEFAULT_REJECTED_CLIP_TTL_MS, isRecoverable, recoverLabel } from "../lib/rejected";
 import { useAuth } from "../lib/auth";
@@ -60,6 +61,13 @@ export function Highlights() {
   // live ingest state
   const [liveJob, setLiveJob] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
+  // VOD feed surface (ADAAAA-6352): the running VOD job id we subscribe to over
+  // SSE so each highlight accepted at decision time streams onto the highlights
+  // grid as it is found, not only at job end. Set only for a VOD job that is
+  // still processing (the synchronous path/URL + single-shot upload complete
+  // within the POST, so it is left null there — the response refresh already
+  // surfaced the full set).
+  const [vodJobId, setVodJobId] = useState<string | null>(null);
   const [debugJob, setDebugJob] = useState<string | null>(null);
   // rejected-clips lifecycle (ADAAAA-5168/5204): the server's recovery TTL (for
   // "recover until" deadlines), whether the collapsed rejected section is open,
@@ -128,10 +136,47 @@ export function Highlights() {
     return () => clearInterval(iv);
   }, [liveJob]);
 
+  // VOD feed surface streaming (ADAAAA-6352): while a VOD job is processing,
+  // subscribe to /jobs/:id/events so each highlight the server accepts at
+  // decision time is surfaced on the highlights grid as it is found (mirrors
+  // the live LiveConsole stream). The server persists + bills the highlight at
+  // decision time too, so GET /highlights returns it the moment it streams in.
+  // Stop the subscription + do a final refresh once the job reaches a terminal
+  // state. For the synchronous path/URL + single-shot upload this id is never
+  // set (the job completes within the POST and its refresh already surfaced the
+  // full set), so the subscription only runs for the async resumable upload.
+  useEffect(() => {
+    if (!vodJobId) return;
+    const ac = new AbortController();
+    let cancelled = false;
+    readSSE(`/jobs/${vodJobId}/events`, getToken(), (name) => {
+      if (name === "highlight" && !cancelled) refreshHighlights().catch(() => {});
+    }, ac.signal).catch(() => {});
+    const iv = setInterval(async () => {
+      try {
+        const r = await api<any>(`/jobs/${vodJobId}`);
+        if (r.job?.status === "done" || r.job?.status === "failed") {
+          clearInterval(iv);
+          ac.abort();
+          setVodJobId(null);
+          refreshHighlights().catch(() => {});
+        }
+      } catch {
+        /* transient */
+      }
+    }, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+      ac.abort();
+    };
+  }, [vodJobId]);
+
   async function run() {
     setBusy(true);
     setError(null);
     setJob(null);
+    setVodJobId(null);
     // VOD "Upload / file" source with a local file chosen (not the URL
     // fallback): pre-check size client-side, then multipart upload with
     // progress; the server runs the same extractFrames -> analyzeJob -> clip
@@ -154,6 +199,10 @@ export function Highlights() {
         setUploadPct(null);
         setJob(r.job);
         setDebugJob(r.job.id);
+        // VOD feed surface: subscribe to the job's SSE feed only while it is
+        // still processing (the synchronous single-shot POST completes within
+        // this request, so there is nothing to stream there).
+        if (r.job?.status !== "done" && r.job?.status !== "failed") setVodJobId(r.job.id);
         refreshBilling().catch(() => {});
       } catch (e: any) {
         setUploadPct(null);
@@ -192,6 +241,10 @@ export function Highlights() {
       } else {
         setJob(r.job);
         setDebugJob(r.job.id);
+        // VOD feed surface: subscribe to the job's SSE feed only while it is
+        // still processing (the path/URL POST /jobs completes within this
+        // request, so there is nothing to stream there).
+        if (r.job?.status !== "done" && r.job?.status !== "failed") setVodJobId(r.job.id);
       }
       // A submitted job may have (or will) consume quota — refresh the billing
       // snapshot so the remaining-quota banner stays accurate.
