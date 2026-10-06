@@ -384,9 +384,13 @@ def decide_with_gemma(
             "reason": d.reason,
             "source": "rule-fallback",
         }
-    # Per-highlight audio-context cost/latency readout (Path 2).
+    # Per-highlight audio-context cost/latency readout. `path` reports which
+    # audio channel the model actually received: native `input_audio` when raw
+    # send is on (GEMMA_SEND_AUDIO=1, ADAAAA-6350), else the ASR->text
+    # transcript (Path 2), else "none" when no audio context entered the call.
+    send_audio_active = bool(audio_b64) and os.environ.get("GEMMA_SEND_AUDIO", "0") == "1"
     result["audioContext"] = {
-        "path": "asr_text",
+        "path": "input_audio" if send_audio_active else ("asr_text" if asr_ran else "none"),
         "transcribed": bool(transcript),
         "asrRan": asr_ran,
         "asrLatencyS": asr_latency_s,

@@ -215,6 +215,11 @@ services:
       # on) enables the transcript injection for trigger-passing candidates.
       - ASR_URL=${ASR_URL:-http://asr:8082}
       - AUDIO_CONTEXT=${AUDIO_CONTEXT:-1}
+      # ADAAAA-6350: native `input_audio` Path-1 block for trigger-passing
+      # candidates. GEMMA_SEND_AUDIO=1 turns the decide call from ASR->text
+      # (Path 2) into a native OpenAI `input_audio` block the deployed QAT
+      # gemma can ground on (no refusal). Default 0 keeps the ASR/text path.
+      - GEMMA_SEND_AUDIO=${GEMMA_SEND_AUDIO:-0}
       # ADAAAA-5778 notable-only knob. Data-landed default 60; override in prod
       # only after re-measuring on the real-feed eval set (evals/decide_discernment.py).
       - DECIDE_NOTABILITY_MIN=${DECIDE_NOTABILITY_MIN:-60}

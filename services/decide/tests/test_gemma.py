@@ -254,6 +254,29 @@ def test_build_prompt_reflects_frames_and_audio():
     assert "SEQUENCE of frames" in p
 
 
+def test_decide_with_gemma_reports_input_audio_path(monkeypatch):
+    # ADAAAA-6350: when the native raw-audio path is on (GEMMA_SEND_AUDIO=1) and
+    # audio is supplied for a trigger-passing candidate, the decision reports
+    # audioContext.path = "input_audio" (not the Path-2 "asr_text") and no ASR
+    # ran — so the caller can tell the model heard the native clip.
+    monkeypatch.setenv("GEMMA_SEND_AUDIO", "1")
+    monkeypatch.setenv("AUDIO_CONTEXT", "1")
+    mock = MockLlama('{"isHighlight":true,"score":88,"eventType":"GOAL","reason":"net"}')
+    try:
+        d = decide_with_gemma(
+            "GOAL",
+            {"trackCount": 2, "maxVelocity": 0.3, "ocrHits": 0},
+            frames=[{"role": "frame", "base64": "FR1"}],
+            audio_b64="WAVB64",
+            url=f"http://127.0.0.1:{mock.port}",
+        )
+    finally:
+        mock.stop()
+    assert d["audioContext"]["path"] == "input_audio"
+    assert d["audioContext"]["asrRan"] is False
+    assert d["audioContext"]["transcribed"] is False
+
+
 def test_decide_falls_back_to_rule_on_model_failure():
     d = decide_with_gemma("KILL", {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0}, url="http://127.0.0.1:1")
     assert d["source"] == "rule-fallback"
