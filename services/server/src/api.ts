@@ -569,6 +569,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const onEvent: (ev: AnalyzeEvent) => void = (ev) => {
       if (ev.type === "candidate") candidatesTriggered++;
       baseHook(ev);
+      // ADAAAA-6352: persist + bill + quota-debit each accepted highlight at
+      // DECISION time (mirror the live publish-at-decision ADAAAA-5777) via the
+      // same write-through helper. jobEventHook already fanned the `highlight`
+      // event to SSE subscribers, so an active SSE connection sees it as it is
+      // found; this write-through is what surfaces it on the VOD feed surface
+      // (GET /highlights, /jobs/:id). Billing/quota debit happen exactly once
+      // here — the old end-of-job batch loop was removed so nothing
+      // double-counts between the SSE stream and the final response.
+      // Best-effort: a failure logs and never stalls the frame loop.
+      if (ev.type === "highlight" && ev.highlight) {
+        persistLiveHighlight({ store, cfg, billing, entitlements }, user, sub, ev.highlight).catch((e) =>
+          console.error(`[vod:${jobId}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
+        );
+      }
     };
     const frameDir = path.join(cfg.dataDir, "frames", jobId);
     const sampleFps = cfg.vodDetailFps;
@@ -626,12 +640,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     } finally {
       await audioLoop;
     }
-    for (const h of outcome.highlights) {
-      await store.addHighlight({ ...h, ownerId: user.id, status: cfg.autoPublishHighlights ? "accepted" : "pending" });
-      await billing.onHighlightCreated(user, sub);
-      // A clip generated successfully debits the quota once.
-      await entitlements.onClipGenerated(user);
-    }
+    // Every accepted highlight was already persisted + billed + quota-debited
+    // at DECISION time by the onEvent `highlight` hook above (ADAAAA-6352),
+    // mirroring the live path. The old end-of-job batch loop was removed so a
+    // highlight is never re-persisted or double-billed here — the final HTTP
+    // response / GET /jobs/:id reads the same store the decision-time writes
+    // populated, so the full set is present once processing ends.
     const perceiveSessionS = (Date.now() - t0) / 1000;
     const stageA = shared.stageA.snapshot();
     // Each candidate (video or audio) is judged by exactly one Gemma decide()
