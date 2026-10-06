@@ -97,11 +97,31 @@ _GAME_HINT_ALIASES: dict[str, str] = {
 _LABEL_ALIASES: dict[str, str] = {
     "ball": "soccer ball",
     "football": "soccer ball",
+    "sports ball": "soccer ball",
     "person": "player",
     "man": "player",
     "people": "player",
     "men": "player",
     "woman": "player",
+    # Florence-2 fragments a player into its uniform parts on real soccer
+    # frames (ADAAAA-6340 measured from live <OD> runs: 'short pants'/'sock'
+    # fired on ~40% of frames and were voided by the closed-vocab gate as
+    # out-of-roster). These ARE genuine player detections split by the detector,
+    # so map them back to the in-roster 'player' instead of voiding them.
+    "soccer player": "player",
+    "footballer": "player",
+    "athlete": "player",
+    "short pants": "player",
+    "shorts": "player",
+    "sock": "player",
+    "socks": "player",
+    "shirt": "player",
+    "jersey": "player",
+    "uniform": "player",
+    "kit": "player",
+    "cleats": "player",
+    "goalpost": "goal",
+    "crossbar": "goal",
     "goal": "goal",
     "goalie": "goalkeeper",
     "net": "goal",
