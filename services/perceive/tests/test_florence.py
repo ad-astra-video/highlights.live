@@ -67,11 +67,32 @@ def test_canonicalize_open_label_to_vocab():
 def test_canonicalize_open_label_out_of_scope_is_none():
     vocab = ["soccer ball", "player", "goalkeeper", "goal", "referee"]
     # Non-roster labels (missing-case capitalization preserved on None too).
+    # scoreboard / car / banner are genuine OUT-OF-SCOPE stadium background the
+    # closed-vocab gate must drop. (player-fragment labels like 'sock'/'short
+    # pants' are NOT here — ADAAAA-6340 maps them to 'player'.)
     assert florence.FlorenceDetector.canonicalize_open_label("scoreboard", vocab) is None
     assert florence.FlorenceDetector.canonicalize_open_label("car", vocab) is None
-    assert florence.FlorenceDetector.canonicalize_open_label("sock", vocab) is None
+    assert florence.FlorenceDetector.canonicalize_open_label("banner", vocab) is None
     assert florence.FlorenceDetector.canonicalize_open_label("object", vocab) is None
     assert florence.FlorenceDetector.canonicalize_open_label("", vocab) is None
+
+
+def test_canonicalize_open_label_player_fragments_map_to_player():
+    # ADAAAA-6340 (measured live from the deployed Florence-2 <OD>): the
+    # detector fragments a soccer player into its uniform parts, and the
+    # closed-vocab gate was voiding those as out-of-roster (~40% of parsed
+    # detections on real frames). Those are GENUINE player detections, so map
+    # them back to the in-roster 'player'.
+    vocab = ["soccer ball", "player", "goalkeeper", "goal", "referee"]
+    for raw in ("short pants", "sock", "shorts", "shirt", "jersey", "uniform",
+                "soccer player", "footballer", "athlete"):
+        assert florence.FlorenceDetector.canonicalize_open_label(raw, vocab) == "player", raw
+
+
+def test_canonicalize_open_label_ball_synonyms():
+    vocab = ["soccer ball", "player", "goalkeeper", "goal", "referee"]
+    assert florence.FlorenceDetector.canonicalize_open_label("sports ball", vocab) == "soccer ball"
+    assert florence.FlorenceDetector.canonicalize_open_label("goalpost", vocab) == "goal"
 
 
 def test_parse_counts_decoder_ramble_as_empty_not_unknown():
