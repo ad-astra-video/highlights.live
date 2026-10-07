@@ -158,6 +158,7 @@ def build_prompt(
         f"track count: {evidence.get('trackCount', 0)}",
         f"max tracked velocity: {evidence.get('maxVelocity', 0):.2f}",
         f"ocr hits: {evidence.get('ocrHits', 0)}",
+        f"scoreboard score change observed during window: {'yes' if evidence.get('scoreBoardChanged') else 'no'}",
         f"frames shown (1 FPS temporal window): {n_frames}",
         f"audio provided (commentary/crowd): {'yes' if has_audio else 'no'}",
     ]
@@ -204,6 +205,12 @@ def build_prompt(
         "infer a goal from the candidate event type, from players celebrating, or "
         "from crowd/commentary alone; only claim a goal (isHighlight=true) when you "
         "actually see the ball cross the line into the net.\n"
+        "Scoreboard evidence: when the context reports a scoreboard score change "
+        "observed during the candidate window, that is independent confirmation of "
+        "a goal — treat it as strong evidence for isHighlight=true (combined with "
+        "the ball crossing the line). When no scoreboard change is reported, treat "
+        "that as weak/absent evidence and NEVER let its absence alone force or block "
+        "a goal verdict.\n"
         "Context:\n- " + "\n- ".join(meta) + "\n\n"
         "Do NOT provide any reasoning or thinking. Answer immediately with ONLY one "
         "JSON object, no markdown, no preamble, exactly: "
@@ -327,6 +334,7 @@ def decide_with_gemma(
     audio_sample_rate: int = 16000,
     reasoning_effort: str = "none",
     url: str | None = None,
+    score_board_changed: bool = False,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision.
@@ -376,6 +384,7 @@ def decide_with_gemma(
             max_velocity=evidence.get("maxVelocity", 0),
             ocr_hits=evidence.get("ocrHits", 0),
             reaction=evidence.get("reaction"),
+            score_board_changed=score_board_changed,
         )
         result = {
             "isHighlight": d.is_highlight,

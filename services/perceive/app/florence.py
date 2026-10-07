@@ -425,6 +425,42 @@ class FlorenceDetector:
         self.stats = stats
         return objs
 
+    def ocr(self, image: "np.ndarray") -> list[str]:
+        """Run the Florence-2 ``<OCR>`` task on a frame (scoreboard text, caption
+        readings). Returns recognized text as a trimmed list of lines.
+
+        Best-effort, bounded to candidate anchor frames by the caller
+        (ADAAAA-6360, decide-leg I3): any GPU/transport failure degrades to
+        ``[]`` — empty OCR is weak/absent evidence and never on its own
+        confirms a goal. Never raises into the frame/candidate path.
+        """
+        self.load()
+        from PIL import Image
+
+        if image.ndim == 2:
+            image = np.stack([image] * 3, axis=-1)
+        pil = Image.fromarray(image.astype(np.uint8)).convert("RGB")
+        prompt = "<OCR>"
+        inputs = self._processor(images=pil, text=prompt, return_tensors="pt")
+
+        if self._ov_model is not None:
+            generated = self._ov_model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                num_beams=3,
+                max_new_tokens=512,
+                do_sample=False,
+            )
+        else:
+            target = self._tdml.device() if self._tdml is not None else next(self._model.parameters()).device
+            inputs = {k: v.to(target) for k, v in inputs.items()}
+            with self._torch.no_grad():
+                generated = self._model.generate(
+                    **inputs, num_beams=3, max_new_tokens=512, do_sample=False
+                )
+        text = self._processor.batch_decode(generated, skip_special_tokens=True)[0]
+        return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
     @staticmethod
     def _parse(text: str, vocabulary: Optional[list[str]] = None) -> list[dict]:
         """See _parse_with_stats; returns just the emitted objects (back-compat)."""

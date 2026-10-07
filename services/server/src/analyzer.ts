@@ -12,7 +12,15 @@ export interface ReserveResult {
   controlUrl: string;
 }
 export interface ObservationResult {
-  observation: { tracks: TrackObservation[]; seq: number; timestamp: number };
+  observation: {
+    tracks: TrackObservation[];
+    seq: number;
+    timestamp: number;
+    // I3 (ADAAAA-6360): the perceive OCR pass reads the scoreboard on candidate
+    // anchor frames; the server folds the count into decide `ocrHits`.
+    ocr?: string[];
+    objects?: { label: string; confidence?: number; bbox: number[] }[];
+  };
   candidate?: {
     eventType: string;
     timestamp: number;
@@ -21,6 +29,9 @@ export interface ObservationResult {
     audio?: AudioCandidate["audio"];
     ballVelocity?: { speedMps?: number };
     ballPossession?: { possessingPlayerId?: string };
+    // I3 (ADAAAA-6360): a scoreboard score change detected across the candidate
+    // window — a hard, independent goal-confirmation signal.
+    scoreBoardChanged?: boolean;
   };
 }
 /** People-reaction context (INC-4 / ADAAAA-4328) forwarded to decide() so the
@@ -136,6 +147,11 @@ export interface PipelineClient {
       maxVelocity: number;
       ocrHits: number;
       reaction?: ReactionEvidence; // INC-4 people-reaction context
+      /** I3 (ADAAAA-6360): a scoreboard score change was detected across the
+       * candidate window — a hard, independent goal-confirmation signal. The
+       * decide runner must force isHighlight=true for a goal when set, and
+       * treat absence as weak/absent evidence (never on its own a goal). */
+      scoreBoardChanged?: boolean;
     },
     opts?: {
       gameHint?: string;
@@ -418,6 +434,22 @@ export class LiveRunShared {
     if (existing) existing.findings = findings;
     else this.frames.set(seq, { timestamp: seq, imageB64: "", findings });
   }
+  /** OCR string count for the cached frame nearest ``ts`` (from already-computed
+   * findings — never re-analyzed). Used to populate decide ``ocrHits`` evidence
+   * (I3 / ADAAAA-6360); 0 when no OCR findings are cached for the moment. */
+  ocrHitsAt(ts: number): number {
+    let best: FrameFindings | undefined;
+    let bestDiff = Infinity;
+    for (const v of this.frames.values()) {
+      if (!v.findings) continue;
+      const d = Math.abs(v.timestamp - ts);
+      if (d < bestDiff) {
+        bestDiff = d;
+        best = v.findings;
+      }
+    }
+    return best?.ocr?.length ?? 0;
+  }
   /** Cache a candidate event (type + timestamp + reaction signal) into the
    * window context, bounded so it never grows on long streams. */
   addCandidate(c: WindowCandidate): void {
@@ -616,7 +648,7 @@ export async function decideOnCandidate(
   shared: LiveRunShared,
   cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
   cfg: AnalyzerConfig,
-  candidate: { eventType: string; timestamp: number; seq?: number; audio?: AudioCandidate["audio"] },
+  candidate: { eventType: string; timestamp: number; seq?: number; audio?: AudioCandidate["audio"]; scoreBoardChanged?: boolean },
   onEvent?: (ev: AnalyzeEvent) => void,
   emit?: { seq: number; timestamp: number }
 ): Promise<void> {
@@ -636,8 +668,9 @@ export async function decideOnCandidate(
       eventType: candidate.eventType,
       trackCount: shared.evidence.trackCount,
       maxVelocity: shared.evidence.maxVelocity,
-      ocrHits: 0,
+      ocrHits: shared.ocrHitsAt(candidate.timestamp),
       reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
+      scoreBoardChanged: candidate.scoreBoardChanged,
     },
     detailDecideOpts(cfg, shared, anchoredImage)
   );
@@ -754,8 +787,9 @@ export async function analyzeJob(
             eventType: res.candidate.eventType,
             trackCount: evidence.trackCount,
             maxVelocity: evidence.maxVelocity,
-            ocrHits: 0,
+            ocrHits: res.observation?.ocr?.length ?? 0,
             reaction: buildReactionEvidence(res.candidate, evidence.trackCount),
+            scoreBoardChanged: res.candidate?.scoreBoardChanged,
           },
           detailDecideOpts(cfg, run, anchoredImage)
         );
