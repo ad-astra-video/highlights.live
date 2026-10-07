@@ -5,7 +5,7 @@ import os
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, Field
 
-from .decider import apply_gate, decide
+from .decider import apply_gate, decide, scoreboard_forces_goal
 from .gemma import decide_with_gemma
 
 
@@ -43,6 +43,10 @@ class Evidence(BaseModel):
     trackCount: int = Field(default=0, ge=0, le=8)
     maxVelocity: float = Field(default=0.0, ge=0.0)  # normalized units/frame
     ocrHits: int = Field(default=0, ge=0)
+    # I3 (ADAAAA-6360): a scoreboard score change was detected across the
+    # candidate window — a hard, independent goal-confirmation signal. Absent
+    # (default False) == weak/absent evidence, never on its own a goal.
+    scoreBoardChanged: bool = Field(default=False)
     # People-reaction context (INC-4). Optional; absent == no reaction signal,
     # so the prompt renders without it (no regression vs today).
     reaction: ReactionEvidence = Field(default_factory=ReactionEvidence)
@@ -105,7 +109,20 @@ def create_app() -> FastAPI:
                 audio_sample_rate=req.audioSampleRate,
                 reasoning_effort=req.reasoningEffort,
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
+                score_board_changed=req.evidence.scoreBoardChanged,
             )
+            # I3 (ADAAAA-6360): a detected scoreboard score change for a GOAL
+            # event is a hard, independent confirmation — force isHighlight=true
+            # regardless of the model's read. Absence is weak/absent evidence and
+            # never forces a goal (scoreboard_forces_goal is false).
+            if scoreboard_forces_goal(
+                req.evidence.scoreBoardChanged, decision.get("eventType") or req.eventType
+            ):
+                decision["isHighlight"] = True
+                decision["reason"] = (
+                    (decision.get("reason") or "")
+                    + "; scoreboard score change confirmed"
+                ).strip("; ")
             # Notable-only gate on the Gemma verdict (ADAAAA-5778). Pure
             # post-process over signals we already have — isHighlight, score,
             # classified eventType, evidence — so it adds NO inference (same
@@ -121,6 +138,7 @@ def create_app() -> FastAPI:
                     max_velocity=req.evidence.maxVelocity,
                     ocr_hits=req.evidence.ocrHits,
                     reaction=req.evidence.reaction.model_dump(),
+                    score_board_changed=req.evidence.scoreBoardChanged,
                 )
                 if not ok:
                     decision["isHighlight"] = False
@@ -137,6 +155,7 @@ def create_app() -> FastAPI:
             max_velocity=req.evidence.maxVelocity,
             ocr_hits=req.evidence.ocrHits,
             reaction=ev,
+            score_board_changed=req.evidence.scoreBoardChanged,
         )
         return {
             "isHighlight": d.is_highlight,

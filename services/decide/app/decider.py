@@ -54,18 +54,32 @@ def event_class(event_type: str) -> str:
     return "high" if normalize_event(event_type) in HIGH_VALUE_EVENTS else "ordinary"
 
 
+# I3 (ADAAAA-6360): a detected scoreboard score change is a hard, independent
+# confirmation of a goal. It forces isHighlight=true ONLY for a goal event; on
+# every other event it is weak/absent evidence and never on its own confirms one.
+GOAL_EVENTS = {"GOAL", "GOL"}
+
+
+def scoreboard_forces_goal(score_board_changed: bool, event_type: str) -> bool:
+    """True only when a score change was actually detected AND the event is a
+    goal. Absence or a non-goal event never forces a highlight."""
+    return bool(score_board_changed) and normalize_event(event_type) in GOAL_EVENTS
+
+
 def has_corroboration(
     track_count: int = 0,
     max_velocity: float = 0.0,
     ocr_hits: int = 0,
     reaction: dict | None = None,
+    score_board_changed: bool = False,
 ) -> bool:
     """True when the candidate carries any corroborating evidence beyond the
-    bare trigger itself: a tracked object, motion, OCR, or a people-reaction
-    signal (crowd energy / humans-in-motion / ball speed). A scene-change or
-    audio-noise-change with NONE of these is a bare trigger with no notable
-    content and must be rejected (acceptance criterion 1)."""
-    if track_count >= 1 or max_velocity > 0 or ocr_hits > 0:
+    bare trigger itself: a tracked object, motion, OCR, a people-reaction
+    signal (crowd energy / humans-in-motion / ball speed), or a detected
+    scoreboard score change. A scene-change or audio-noise-change with NONE of
+    these is a bare trigger with no notable content and must be rejected
+    (acceptance criterion 1)."""
+    if track_count >= 1 or max_velocity > 0 or ocr_hits > 0 or score_board_changed:
         return True
     r = reaction or {}
     if not isinstance(r, dict):
@@ -124,13 +138,21 @@ def apply_gate(
     ocr_hits: int = 0,
     reaction: dict | None = None,
     min_notability: float | None = None,
+    score_board_changed: bool = False,
 ) -> tuple[bool, list[str]]:
     """The notable-only gate (shared by rule + Gemma paths). Returns
     (is_highlight, rejected_reason_parts). Enforces:
         corroborated AND (high-value class OR score >= notability_min)
     The gate only ever REJECTS — it can turn a 'yes' into a 'no', never the
-    reverse — so applying it to the Gemma verdict adds no inference."""
-    corroborated = has_corroboration(track_count, max_velocity, ocr_hits, reaction)
+    reverse — so applying it to the Gemma verdict adds no inference.
+
+    I3 (ADAAAA-6360): a detected scoreboard score change for a GOAL event is a
+    hard, independent confirmation and short-circuits the gate to ACCEPT (the
+    scoreboard delta is itself strong corroboration, so it must not be rejected
+    for 'bare trigger' or a low notability bar)."""
+    if scoreboard_forces_goal(score_board_changed, event_type):
+        return True, []
+    corroborated = has_corroboration(track_count, max_velocity, ocr_hits, reaction, score_board_changed)
     if not corroborated:
         return False, ["no corroborating evidence (bare trigger)"]
     cls = event_class(event_type)
@@ -149,20 +171,31 @@ def decide(
     ocr_hits: int = 0,
     reaction: dict | None = None,
     min_notability: float | None = None,
+    score_board_changed: bool = False,
 ) -> Decision:
     """Score a candidate and apply the notable-only bar. ``reaction`` is the
     INC-4 people-reaction block (corroborating evidence, never the arbiter).
     ``min_notability`` overrides the config knob for callers that want to
-    evaluate a sweep (the eval harness)."""
+    evaluate a sweep (the eval harness).
+
+    I3 (ADAAAA-6360): when a scoreboard score change was detected for a GOAL
+    event the candidate is forced to isHighlight=true; otherwise the scoreboard
+    field is weak/absent evidence and never on its own forces a goal."""
     ev = normalize_event(event_type)
     score, parts = _rule_score(event_type, track_count, max_velocity, ocr_hits)
     cls = event_class(ev)
-    ok, rejects = apply_gate(score, event_type, track_count, max_velocity, ocr_hits, reaction, min_notability)
-    reason = "; ".join(parts + rejects) if (parts or rejects) else "no strong evidence"
+    ok, rejects = apply_gate(score, event_type, track_count, max_velocity, ocr_hits, reaction, min_notability, score_board_changed)
+    if scoreboard_forces_goal(score_board_changed, event_type):
+        ok = True
+        rejects = []
+        reason_parts = parts + ["scoreboard score change confirmed"]
+    else:
+        reason_parts = parts + rejects
+    reason = "; ".join(reason_parts) if reason_parts else "no strong evidence"
     return Decision(
         is_highlight=ok,
         score=round(score, 1),
         reason=reason,
         event_class=cls,
-        corroborated=has_corroboration(track_count, max_velocity, ocr_hits, reaction),
+        corroborated=has_corroboration(track_count, max_velocity, ocr_hits, reaction, score_board_changed),
     )

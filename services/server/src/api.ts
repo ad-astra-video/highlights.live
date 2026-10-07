@@ -1552,7 +1552,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               eventType: res.candidate.eventType,
               trackCount: bj.evidence.trackCount,
               maxVelocity: bj.evidence.maxVelocity,
-              ocrHits: 0,
+              ocrHits: res.observation?.ocr?.length ?? 0,
+              scoreBoardChanged: res.candidate?.scoreBoardChanged,
             },
             {
               gameHint: job.gameHint || cfg.gameHintDefault,
