@@ -21,6 +21,10 @@ export interface ObservationResult {
     audio?: AudioCandidate["audio"];
     ballVelocity?: { speedMps?: number };
     ballPossession?: { possessingPlayerId?: string };
+    // Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome ground-truth
+    // signal. Forwarded first-class to decide as a hard gate.
+    goalCrossed?: boolean;
+    ballOutcome?: string;
   };
 }
 /** People-reaction context (INC-4 / ADAAAA-4328) forwarded to decide() so the
@@ -136,6 +140,10 @@ export interface PipelineClient {
       maxVelocity: number;
       ocrHits: number;
       reaction?: ReactionEvidence; // INC-4 people-reaction context
+      // Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome ground-truth
+      // signal, forwarded first-class so decide can hard-gate on it.
+      goalCrossed?: boolean;
+      ballOutcome?: string;
     },
     opts?: {
       gameHint?: string;
@@ -616,7 +624,7 @@ export async function decideOnCandidate(
   shared: LiveRunShared,
   cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
   cfg: AnalyzerConfig,
-  candidate: { eventType: string; timestamp: number; seq?: number; audio?: AudioCandidate["audio"] },
+  candidate: { eventType: string; timestamp: number; seq?: number; audio?: AudioCandidate["audio"]; goalCrossed?: boolean; ballOutcome?: string },
   onEvent?: (ev: AnalyzeEvent) => void,
   emit?: { seq: number; timestamp: number }
 ): Promise<void> {
@@ -638,6 +646,8 @@ export async function decideOnCandidate(
       maxVelocity: shared.evidence.maxVelocity,
       ocrHits: 0,
       reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
+      goalCrossed: candidate.goalCrossed,
+      ballOutcome: candidate.ballOutcome,
     },
     detailDecideOpts(cfg, shared, anchoredImage)
   );
@@ -756,6 +766,8 @@ export async function analyzeJob(
             maxVelocity: evidence.maxVelocity,
             ocrHits: 0,
             reaction: buildReactionEvidence(res.candidate, evidence.trackCount),
+            goalCrossed: res.candidate.goalCrossed,
+            ballOutcome: res.candidate.ballOutcome,
           },
           detailDecideOpts(cfg, run, anchoredImage)
         );

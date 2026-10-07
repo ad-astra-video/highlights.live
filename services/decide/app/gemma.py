@@ -176,6 +176,26 @@ def _reaction_summary(evidence: dict) -> list[str]:
     return out
 
 
+def apply_ball_outcome_gate(evidence: Optional[dict]) -> tuple[bool, str | None]:
+    """Decide-leg I2 (ADAAAA-6359) HARD GATE over the perceived goal-line
+    ground-truth signal.
+
+    Returns (ok, reason). ok is True when no `ballOutcome` is present (no
+    calibration / no signal — never gates) or when it is `goal`. When
+    `ballOutcome` is present and is anything other than `goal` (off_target /
+    blocked / no_shot / cross), the measured ball did not enter the goal, so
+    the clip must be rejected regardless of any other verdict. This is a hard
+    gate applied deterministically in the /highlight route, not just a prompt
+    instruction.
+    """
+    outcome = (evidence or {}).get("ballOutcome")
+    if not outcome:
+        return True, None
+    if outcome == "goal":
+        return True, None
+    return False, f"perceived ballOutcome={outcome} (not a goal); hard-gate rejection"
+
+
 def _asr_url() -> str | None:
     """The cheap ASR endpoint for Path 2 (ADAAAA-6314). Unset => transcription is
     skipped and the decide prompt runs text-only (no regression vs today)."""
@@ -238,6 +258,20 @@ def build_prompt(
         f"frames shown (1 FPS temporal window): {n_frames}",
         f"audio provided (commentary/crowd): {'yes' if has_audio else 'no'}",
     ]
+    # Decide-leg I2 (ADAAAA-6359): the perceived goal-line / ball-outcome
+    # ground-truth signal. When present it is decisive: a non-"goal" outcome
+    # (off_target / blocked / no_shot / cross) means the ball did NOT enter the
+    # goal, so the clip must be rejected. Absent == no ground-truth signal, no
+    # gate (no regression).
+    outcome = evidence.get("ballOutcome")
+    crossed = evidence.get("goalCrossed")
+    if outcome:
+        meta.append(
+            f"goal-line ground-truth (perceive homography): ballOutcome={outcome}"
+            + (f", goalCrossed={crossed}" if crossed is not None else "")
+        )
+    else:
+        meta.append("goal-line ground-truth (perceive homography): not available")
     reaction_lines = _reaction_summary(evidence)
     transcript = (transcript or "").strip()
     if reaction_lines or transcript:
@@ -305,6 +339,16 @@ def build_prompt(
         "isHighlight=false and name the contradicting evidence in `reason` and in "
         "verdict.contradictedBy. NEVER infer a goal from the candidate event "
         "type, from players celebrating, or from crowd/commentary alone.\n"
+        "HARD GATE — perceived goal-line ground truth: when the context reports a "
+        "`ballOutcome` (goal-line ground-truth from perceive's homography), it is "
+        "a decisive measurement of whether the ball entered the goal. If "
+        "`ballOutcome` is present and is anything other than `goal` (i.e. "
+        "`off_target`, `blocked`, `no_shot`, or `cross`), the ball did NOT enter "
+        "the net and you MUST return isHighlight=false and state that the "
+        "measured ballOutcome contradicts the goal. Treat `ballOutcome=goal` as "
+        "strong confirmation but still verify visually. A missing/absent "
+        "`ballOutcome` is NOT a rejection signal — decide on the frames/audio as "
+        "normal.\n"
         "Context:\n- " + "\n- ".join(meta) + "\n\n"
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "
         "leading/trailing prose, exactly of this shape:\n"

@@ -27,6 +27,7 @@ from .sam_tracker import HybridTracker
 from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
 from .zone_trigger import DetectionZoneTrigger, resolve_zones
+from .goal_plane import GoalLineDetector, GoalLineSpec
 
 # One live trickle session per perceive session (plan §0.1 session rule).
 _trickle: dict[str, TrickleSession] = {}
@@ -178,6 +179,24 @@ def _read_session_id(
     return livepeer_session_id or x_session_id
 
 
+def _env_goal_line() -> GoalLineSpec | None:
+    """Optional global goal-line plane spec from env (Decide-leg I2).
+
+    Expected as a JSON object ``{"axis": "y", "position": 0.0, "mouthMin": ..,
+    "mouthMax": ..}`` in the calibration's field coords. Unparseable / absent ->
+    None, so the candidate carries no goalCrossed/ballOutcome (graceful
+    degradation, same pattern as an optional homography).
+    """
+    raw = os.environ.get("PERCEIVE_GOAL_LINE", "").strip()
+    if not raw:
+        return None
+    try:
+        return GoalLineSpec.from_dict(json.loads(raw))
+    except Exception:  # noqa: BLE001
+        log.warning("PERCEIVE_GOAL_LINE unparseable; ignoring")
+        return None
+
+
 def _env_homography() -> np.ndarray | None:
     """Optional global image->field pitch homography from env (3x3 JSON).
 
@@ -210,6 +229,22 @@ def _ensure_ball_signal(state) -> BallSignalPipeline | None:
     state.homography = H
     state.ball_signal = BallSignalPipeline(H=H)
     return state.ball_signal
+
+
+def _ensure_goal_line_detector(state) -> GoalLineDetector | None:
+    """Lazily build this session's goal-line / ball-outcome detector (I2).
+
+    Uses the session's goal-line spec (control `configure`) else the env
+    default. Returns the detector, or None when no spec is configured (then the
+    candidate carries no goalCrossed/ballOutcome). Never raises.
+    """
+    if state.goal_line_spec is None:
+        state.goal_line_spec = _env_goal_line()
+    if state.goal_line_spec is None:
+        return None
+    if state.goal_line_detector is None:
+        state.goal_line_detector = GoalLineDetector(state.goal_line_spec)
+    return state.goal_line_detector
 
 
 def _ensure_zone_trigger(state) -> DetectionZoneTrigger | None:
@@ -339,6 +374,26 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         except Exception as e:  # noqa: BLE001
             log.warning("ball signal skipped for frame %s: %s", seq, e)
 
+    # Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome ground-truth signal.
+    # Feed the on-pitch ball position (INC-2b homography velocity) through the
+    # goal-plane classifier and attach goalCrossed / ballOutcome to the
+    # candidate as first-class evidence. Optional and fault-tolerant: no goal-
+    # line spec (or no ball position) => no fields on the candidate.
+    goal_signal_fields: dict = {}
+    goal_det = _ensure_goal_line_detector(state)
+    if goal_det is not None:
+        try:
+            _vel = ball_signal_fields.get("ballVelocity") or {}
+            _pos = None
+            if _vel.get("posXm") is not None and _vel.get("posYm") is not None:
+                _pos = (float(_vel["posXm"]), float(_vel["posYm"]))
+            _gl = goal_det.update(_pos, _vel.get("speedMps"), timestamp)
+            if _gl is not None:
+                goal_signal_fields["goalCrossed"] = bool(_gl.goalCrossed)
+                goal_signal_fields["ballOutcome"] = _gl.ballOutcome
+        except Exception as e:  # noqa: BLE001
+            log.warning("goal-line signal skipped for frame %s: %s", seq, e)
+
     obs = {
         "type": "observation",
         "sessionId": state.session_id,
@@ -421,6 +476,7 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             "timestamp": cand.timestamp,
             "trackId": cand.track_id,
             **ball_signal_fields,
+            **goal_signal_fields,
         }
         events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
     elif zone_cand is not None:
@@ -433,6 +489,7 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             "timestamp": zone_cand["timestamp"],
             "trigger": zone_cand["trigger"],
             **ball_signal_fields,
+            **goal_signal_fields,
         }
         events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
     for q in state.subscribers:
@@ -536,6 +593,15 @@ def handle_control(state, msg: dict) -> dict:
                 state.ball_signal = BallSignalPipeline(H=h)
             except Exception as e:  # noqa: BLE001
                 return {"type": "ack", "ok": False, "cmd": "configure", "error": f"bad homography: {e}"}
+        # Decide-leg I2 (ADAAAA-6359): optional goal-line plane spec (field
+        # coords) so perceive can emit goalCrossed / ballOutcome. A bad value is
+        # ignored (KEEP the existing spec) and reported, never fatal.
+        if msg.get("goalLine") is not None:
+            spec = GoalLineSpec.from_dict(msg["goalLine"])
+            if spec is None:
+                return {"type": "ack", "ok": False, "cmd": "configure", "error": "bad goalLine: need {axis, position, mouthMin, mouthMax}"}
+            state.goal_line_spec = spec
+            state.goal_line_detector = GoalLineDetector(spec)
         return {"type": "ack", "ok": True, "cmd": "configure", "preferLabels": state.prefer_labels, "sampleFps": state.sample_fps}
     if ctype == "seed":
         bbox = msg.get("bbox")

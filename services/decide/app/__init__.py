@@ -7,7 +7,7 @@ from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .decider import apply_gate, decide
-from .gemma import decide_with_gemma
+from .gemma import apply_ball_outcome_gate, decide_with_gemma
 
 
 class ReactionEvidence(BaseModel):
@@ -44,6 +44,13 @@ class Evidence(BaseModel):
     trackCount: int = Field(default=0, ge=0, le=8)
     maxVelocity: float = Field(default=0.0, ge=0.0)  # normalized units/frame
     ocrHits: int = Field(default=0, ge=0)
+    # Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome ground-truth signal
+    # from perceive's homography goal-plane classifier. Optional; when present
+    # the decide leg treats ballOutcome as a HARD GATE — a non-"goal" outcome
+    # forces rejection regardless of Gemma's verdict. Absent == no goal-line
+    # calibration / no signal, which never gates.
+    goalCrossed: Optional[bool] = None
+    ballOutcome: Optional[str] = None
     # People-reaction context (INC-4). Optional; absent == no reaction signal,
     # so the prompt renders without it (no regression vs today).
     reaction: ReactionEvidence = Field(default_factory=ReactionEvidence)
@@ -173,6 +180,17 @@ def create_app() -> FastAPI:
                 reasoning_effort=req.reasoningEffort,
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
             )
+            # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
+            # goal-line ground-truth signal. A non-"goal" ballOutcome forces
+            # rejection regardless of Gemma's verdict (deterministic, before the
+            # notable-only gate).
+            gate_ok, gate_reason = apply_ball_outcome_gate(req.evidence.model_dump())
+            if not gate_ok and decision.get("isHighlight"):
+                decision["isHighlight"] = False
+                decision["reason"] = (
+                    (decision.get("reason") or "")
+                    + "; " + (gate_reason or "")
+                ).strip("; ")
             # Notable-only gate on the Gemma verdict (ADAAAA-5778). Pure
             # post-process over signals we already have — isHighlight, score,
             # classified eventType, evidence — so it adds NO inference (same
@@ -205,6 +223,12 @@ def create_app() -> FastAPI:
             ocr_hits=req.evidence.ocrHits,
             reaction=ev,
         )
+        # Decide-leg I2 (ADAAAA-6359): HARD GATE — a non-"goal" perceived
+        # ballOutcome forces rejection even on the deterministic rule path.
+        gate_ok, gate_reason = apply_ball_outcome_gate(req.evidence.model_dump())
+        if not gate_ok:
+            d.is_highlight = False
+            d.reason = ((d.reason or "") + "; " + (gate_reason or "")).strip("; ")
         return {
             "isHighlight": d.is_highlight,
             "score": d.score,

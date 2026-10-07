@@ -71,6 +71,13 @@ class SessionState:
     # trigger (goal-mouth zones per sport, folding ball velocity/possession).
     # Built lazily in __init__._ensure_zone_trigger, rebuilt on gameHint change.
     zone_trigger: Optional[object] = None
+    # Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome ground-truth signal.
+    # `goal_line_spec` is the goal-line plane in the calibration's field coords
+    # (control `configure` goalLine / env); `goal_line_detector` is the
+    # classifier built lazily from it. Both optional: absent -> the candidate
+    # simply carries no goalCrossed/ballOutcome (graceful degradation).
+    goal_line_spec: Optional[object] = None
+    goal_line_detector: Optional[object] = None
 
     @property
     def is_idle(self) -> bool:
