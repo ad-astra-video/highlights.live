@@ -228,7 +228,15 @@ export class OrchestratorAdapter implements PipelineClient {
       maxVelocity: number;
       ocrHits: number;
       reaction?: ReactionEvidence; // INC-4 people-reaction context
+      goalCrossed?: boolean; // I2 (ADAAAA-6359) goal-line ground-truth
+      ballOutcome?: string; // I2 (ADAAAA-6359) ball-outcome outcome
       scoreBoardChanged?: boolean; // I3 (ADAAAA-6360) scoreboard delta
+      // I4 / ADAAAA-6361: rich geometry + audio level curve (forwarded verbatim).
+      detections?: { label: string; bbox: number[]; confidence: number; trackId: string }[];
+      ballPosition?: [number, number] | null;
+      distanceToGoal?: number;
+      goalLineDelta?: number;
+      audioLevels?: number[];
     },
     opts?: {
       gameHint?: string;
@@ -411,7 +419,15 @@ export class DirectAdapter implements PipelineClient {
       maxVelocity: number;
       ocrHits: number;
       reaction?: ReactionEvidence; // INC-4 people-reaction context
+      goalCrossed?: boolean; // I2 (ADAAAA-6359) goal-line ground-truth
+      ballOutcome?: string; // I2 (ADAAAA-6359) ball-outcome outcome
       scoreBoardChanged?: boolean; // I3 (ADAAAA-6360) scoreboard delta
+      // I4 / ADAAAA-6361: rich geometry + audio level curve (forwarded verbatim).
+      detections?: { label: string; bbox: number[]; confidence: number; trackId: string }[];
+      ballPosition?: [number, number] | null;
+      distanceToGoal?: number;
+      goalLineDelta?: number;
+      audioLevels?: number[];
     },
     opts?: {
       gameHint?: string;

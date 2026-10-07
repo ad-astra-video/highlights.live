@@ -196,6 +196,66 @@ def apply_ball_outcome_gate(evidence: Optional[dict]) -> tuple[bool, str | None]
     return False, f"perceived ballOutcome={outcome} (not a goal); hard-gate rejection"
 
 
+def _detection_lines(evidence: dict) -> list[str]:
+    """Render the per-detection boxes + ball/goal-line geometry (I4 / ADAAAA-6361)
+    as prompt context so Gemma can cite concrete numbers instead of guessing
+    position from vision alone. Returns [] when the server forwarded none (no
+    regression vs today). Each detection is one line: label, normalized bbox,
+    confidence, optional track id. Ball position / distance-to-goal /
+    goal-line-relative are appended when present."""
+    dets = evidence.get("detections") or []
+    out: list[str] = []
+    for d in dets[:16]:
+        if not isinstance(d, dict):
+            continue
+        label = (d.get("label") or "").strip() or "object"
+        bb = d.get("bbox") or []
+        try:
+            bbox = ",".join(f"{float(v):.2f}" for v in bb[:4])
+        except (TypeError, ValueError):
+            bbox = ""
+        conf = d.get("confidence")
+        conf_s = f" conf={float(conf):.2f}" if conf not in (None, "") else ""
+        tid = (d.get("trackId") or "").strip()
+        tid_s = f" track={tid}" if tid else ""
+        out.append(f"- {label} bbox=[{bbox}]{conf_s}{tid_s}" if bbox else f"- {label}{conf_s}{tid_s}")
+    bp = evidence.get("ballPosition")
+    if isinstance(bp, list) and len(bp) >= 2:
+        try:
+            out.append(f"- ball position=[{float(bp[0]):.2f},{float(bp[1]):.2f}] (normalized)")
+            dg = evidence.get("distanceToGoal")
+            if isinstance(dg, (int, float)) and dg > 0:
+                out.append(f"- ball distance-to-goal={float(dg):.2f}")
+            gld = evidence.get("goalLineDelta")
+            if isinstance(gld, (int, float)) and gld != 0:
+                side = "crossed" if gld >= 0 else "before"
+                out.append(f"- ball goal-line-relative={float(gld):.2f} ({side} the line)")
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _audio_level_line(evidence: dict) -> str:
+    """Render the audio-energy level CURVE (I4 / ADAAAA-6361) — not just the
+    scalar peak — so Gemma sees the shape of the crowd/commentary energy around
+    the trigger. Returns \"\" when no level series was forwarded (no regression)."""
+    levels = evidence.get("audioLevels") or []
+    if not levels or not isinstance(levels, list):
+        return ""
+    try:
+        nums = [float(v) for v in levels[:64] if isinstance(v, (int, float))]
+    except (TypeError, ValueError):
+        return ""
+    if not nums:
+        return ""
+    # Compact: report count/peak/mean plus the raw series (rounded) so the model
+    # can reason about the shape (rise at/after the trigger, etc.).
+    peak = max(nums)
+    mean = sum(nums) / len(nums)
+    series = ",".join(f"{v:.2f}" for v in nums[:32])
+    return f"audio energy level curve ({len(nums)} samples, peak={peak:.2f}, mean={mean:.2f}): [{series}]"
+
+
 def _asr_url() -> str | None:
     """The cheap ASR endpoint for Path 2 (ADAAAA-6314). Unset => transcription is
     skipped and the decide prompt runs text-only (no regression vs today)."""
@@ -284,6 +344,16 @@ def build_prompt(
         if transcript:
             meta.append("audio commentary transcript (ASR):")
             meta.append("  " + transcript[:500])
+    # I4 / ADAAAA-6361: per-detection geometry + audio-energy level curve, so the
+    # model can cite concrete boxes/ball/levels rather than guess them from vision
+    # alone. Rendered only when the server forwarded them (no regression).
+    detection_lines = _detection_lines(evidence)
+    if detection_lines:
+        meta.append("detection geometry:")
+        meta.extend("  " + ln for ln in detection_lines)
+    audio_level_line = _audio_level_line(evidence)
+    if audio_level_line:
+        meta.append(audio_level_line)
     return (
         "You are a sports/esports highlight judge. You are shown a temporal "
         "SEQUENCE of frames (extracted at 1 FPS from the moment of a detected "

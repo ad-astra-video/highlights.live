@@ -766,3 +766,51 @@ def test_highlight_rule_mode_goal_passes_gate():
     body = r.json()
     # ballOutcome=goal does not force reject; the rule decides on evidence.
     assert isinstance(body["isHighlight"], bool)
+
+# --- I4 / ADAAAA-6361: per-detection geometry + audio-energy level curve -------
+
+def test_build_prompt_includes_detection_geometry():
+    evidence = {
+        "trackCount": 3,
+        "maxVelocity": 0.6,
+        "ocrHits": 0,
+        "detections": [
+            {"label": "player", "bbox": [0.30, 0.40, 0.46, 0.90], "confidence": 0.92, "trackId": "t1"},
+            {"label": "ball", "bbox": [0.48, 0.52, 0.52, 0.58], "confidence": 0.97, "trackId": "b0"},
+        ],
+        "ballPosition": [0.50, 0.55],
+        "distanceToGoal": 0.12,
+        "goalLineDelta": 0.03,
+    }
+    p = build_prompt("GOAL", evidence, "soccer", n_frames=6, has_audio=True)
+    assert "detection geometry:" in p
+    assert "player bbox=[0.30,0.40,0.46,0.90] conf=0.92 track=t1" in p
+    assert "ball bbox=[0.48,0.52,0.52,0.58] conf=0.97 track=b0" in p
+    assert "ball position=[0.50,0.55] (normalized)" in p
+    assert "ball distance-to-goal=0.12" in p
+    assert "ball goal-line-relative=0.03 (crossed the line)" in p
+    # strict-JSON contract is unchanged
+    assert '"isHighlight"' in p
+
+
+def test_build_prompt_includes_audio_level_curve():
+    evidence = {
+        "trackCount": 1,
+        "maxVelocity": 0.2,
+        "ocrHits": 0,
+        "audioLevels": [0.10, 0.22, 0.85, 0.90, 0.31],
+    }
+    p = build_prompt("GOAL", evidence, "soccer", n_frames=6, has_audio=True)
+    assert "audio energy level curve (" in p
+    assert "peak=0.90" in p
+    assert "mean=0.48" in p
+    assert "[0.10,0.22,0.85,0.90,0.31]" in p
+
+
+def test_build_prompt_no_detection_no_regression():
+    # No geometry / audio-level series forwarded -> the base prompt is unchanged
+    # (no "detection geometry", no "audio energy level curve" block).
+    p = build_prompt("KILL", {"trackCount": 2, "maxVelocity": 0.4}, "valorant")
+    assert "detection geometry:" not in p
+    assert "audio energy level curve" not in p
+    assert '"isHighlight"' in p
