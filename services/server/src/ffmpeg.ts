@@ -133,3 +133,43 @@ export async function cutClip(
     outPath,
   ]);
 }
+
+/**
+ * Re-sample a burst of HIGHER-fps frames around a trigger timestamp (I7 /
+ * ADAAAA-6361). The decide window is otherwise sampled at the pass's low cadence
+ * (detail-first VOD default 2 FPS, and the live/legacy 1 FPS), so the
+ * ball-goal-crossing instant can fall between samples and be skipped. This
+ * extracts frames from `source` within [ts - beforeS, ts + afterS] at `fps`,
+ * returning them sorted with ABSOLUTE timestamps so the crossing is represented
+ * in the decide window. Pure wrapper over the windowed `extractFrames`.
+ *
+ * Best-effort: any extraction failure returns [] so the caller degrades to the
+ * rolling window and the decide call never dies (the re-sample is an
+ * optimization, never a hard requirement).
+ */
+export async function extractBurstFrames(
+  ffmpegPath: string,
+  source: string,
+  outDir: string,
+  ts: number,
+  beforeS: number,
+  afterS: number,
+  fps: number,
+  scale = "640:360"
+): Promise<{ timestamp: number; imageB64: string }[]> {
+  const inSec = Math.max(0, ts - beforeS);
+  const outSec = ts + afterS;
+  const burstDir = path.join(outDir, `burst_${Math.round(ts * 1000)}`);
+  try {
+    const files = await extractFrames(ffmpegPath, source, burstDir, fps, scale, { inSec, outSec });
+    const { readFile } = await import("node:fs/promises");
+    const out: { timestamp: number; imageB64: string }[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const b64 = (await readFile(files[i])).toString("base64");
+      out.push({ timestamp: +(inSec + i / fps).toFixed(3), imageB64: b64 });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
