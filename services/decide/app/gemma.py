@@ -6,6 +6,15 @@ few JPEGs (full frame + track crops) as a multimodal chat request and asks for
 a strict JSON HighlightDecision. Parses + validates the reply; on any failure
 falls back to the deterministic rule so the pipeline never dies on a model
 glitch (plan §9: health must not flap, a bad Gemma reply must not kill the job).
+
+ADAAAA-6358 (I1): the decide prompt is de-anchored. The candidate event type
+is framed as a *hypothesis to test*, not a fact, and the model must (a) first
+state what it independently observes, (b) check the explicit goal criteria
+(ball crossed the goal line between the posts / ball in net / scoreboard
+changed / crowd erupted), and (c) return isHighlight=false when a required
+criterion is unverifiable or explicitly contradicted. The response carries a
+structured `verdict` + `evidenceAttested` (plus the independent `reasoning`)
+so a reviewer can see *why* the decision was made, grounded in the evidence.
 """
 
 from __future__ import annotations
@@ -36,8 +45,65 @@ def _strip_json_fence(text: str) -> str:
     return _first_json(text)
 
 
+_VERDICT_CRITERIA_KEYS = (
+    "ballCrossedLineBetweenPosts",
+    "ballInNet",
+    "scoreboardChanged",
+    "crowdErupted",
+)
+
+
+def _as_text(value) -> str:
+    """Coerce an arbitrary model field to a clean str ('' for anything but a
+    non-empty string). Never raises."""
+    return value.strip() if isinstance(value, str) and value.strip() else ""
+
+
+def _as_str_list(value) -> list[str]:
+    """Coerce an arbitrary model field to a list of non-empty strings."""
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            s = item.strip() if isinstance(item, str) else ""
+            if s:
+                out.append(s)
+        return out
+    s = value.strip() if isinstance(value, str) else ""
+    return [s] if s else []
+
+
+def _normalize_verdict(verdict) -> dict | None:
+    """Normalize the model's structured ``verdict`` block to a stable shape.
+    Returns None when absent/malformed. Criteria values are coerced to a
+    strict tri-state: True / False / None (None == unknown/unverifiable), so a
+    reviewer can see which required criterion could not be confirmed."""
+    if not isinstance(verdict, dict):
+        return None
+    criteria_raw = verdict.get("criteria")
+    criteria: dict | None = None
+    if isinstance(criteria_raw, dict):
+        criteria = {}
+        for key in _VERDICT_CRITERIA_KEYS:
+            val = criteria_raw.get(key)
+            criteria[key] = val if isinstance(val, bool) else None
+    observed = _as_text(verdict.get("independentlyObserved"))
+    return {
+        "hypothesis": _as_text(verdict.get("hypothesis")) or None,
+        "independentlyObserved": observed or None,
+        "criteria": criteria,
+        "contradictedBy": _as_text(verdict.get("contradictedBy")) or None,
+    }
+
+
 def parse_decision(text: str) -> dict | None:
-    """Turn the model's raw text into a HighlightDecision-shaped dict, or None."""
+    """Turn the model's raw text into a HighlightDecision-shaped dict, or None.
+
+    ADAAAA-6358 (I1): the reply may now carry a reviewer-facing rationale —
+    ``reasoning`` (independent-observation-first analysis), a structured
+    ``verdict`` (hypothesis / what was observed / goal criteria / what
+    contradicted it) and ``evidenceAttested`` (grounded evidence items). All
+    three are OPTIONAL in the model reply and defaulted here, so a
+    pre-I1 / legacy-shaped reply still parses cleanly with empty rationale."""
     try:
         obj = json.loads(_strip_json_fence(text))
     except Exception:
@@ -53,11 +119,22 @@ def parse_decision(text: str) -> dict | None:
     except (TypeError, ValueError):
         score = 0.0
     score = min(100.0, max(0.0, score))
+    event_type = obj.get("eventType")
+    if not isinstance(event_type, str):
+        event_type = str(event_type) if event_type is not None else None
+    reason = obj.get("reason")
+    if not isinstance(reason, str):
+        reason = str(reason) if reason is not None else None
     return {
         "isHighlight": is_hl,
         "score": score,
-        "eventType": obj.get("eventType"),
-        "reason": obj.get("reason"),
+        "eventType": event_type,
+        "reason": reason,
+        # I1 reviewer-facing rationale (always present so the API response shape
+        # is stable whether or not the model populated them).
+        "reasoning": _as_text(obj.get("reasoning")),
+        "verdict": _normalize_verdict(obj.get("verdict")),
+        "evidenceAttested": _as_str_list(obj.get("evidenceAttested")),
         "source": "gemma",
     }
 
@@ -177,37 +254,71 @@ def build_prompt(
         "SEQUENCE of frames (extracted at 1 FPS from the moment of a detected "
         "candidate event) plus the context images, and, when available, the "
         "accompanying audio.\n"
-        "Reason across the frame sequence (motion, position, ball/foot/player "
-        "location, scoreboard/OCR) AND the audio (commentary, crowd, whistle) to "
-        "decide whether this is a real highlight worth clipping, and to classify "
-        "the event precisely.\n"
+        "The candidate event type given in the context is a HYPOTHESIS to test, "
+        "NOT a fact. It was produced by an upstream detector and is often wrong "
+        "(a near-miss, an off-target shot, a warm-up or lull, or a booking gets "
+        "mislabeled as a GOAL / KILL). Your job is to verify it, not to "
+        "confirm it. NEVER assume the hypothesis is true.\n"
+        "Reason in two passes, in this exact order:\n"
+        "  PASS 1 — INDEPENDENT OBSERVATION (do this FIRST, before considering "
+        "the hypothesis): describe only what you can actually SEE and HEAR in "
+        "the frames + audio. State the player(s), the ball, where the ball is "
+        "relative to the goal line / net / posts, the scoreboard, and the "
+        "people's reaction. Do not use the candidate type to colour this pass.\n"
+        "  PASS 2 — HYPOTHESIS TEST: compare your independent observation to the "
+        "candidate type. Does the evidence actually support it, or is there a "
+        "simpler explanation?\n"
         "When people are visible, EXPLICITLY describe their reaction and weigh it "
         "as evidence: players with arms raised, a group pile/team huddle, "
         "bench/dugout leaping up to celebrate, or the crowd/commentary erupting. "
         "Reaction is corroborating evidence only - cite it, but decide on your "
         "full read of the frames, audio, and context; never let reaction alone "
         "override a clear read of the play.\n"
-        "The candidate event type above is a CANDIDATE label, not proof the event "
-        "happened - you must verify it from the frames and audio.\n"
-        "For soccer (game hint contains 'soccer'), a clip is a highlight ONLY if a "
-        "goal is actually scored: you must plainly see the ball cross the goal line "
-        "into the net (ball in the net / net ripple / goalkeeper beaten) followed by "
-        "a goal celebration. Do NOT flag a soccer clip as a highlight when it shows:\n"
+        "For soccer (game hint contains 'soccer'), the candidate is a GOAL and "
+        "the clip is a highlight ONLY if you can verify a goal was actually "
+        "scored. Explicit goal criteria - verify each against the frames/audio, "
+        "and mark a criterion false when the ball plainly did NOT enter the net "
+        "or a goal was plainly NOT scored, and leave it null (unverifiable) when "
+        "you cannot tell:\n"
+        "- ballCrossedLineBetweenPosts: you plainly see the ball cross the goal "
+        "line between the uprights;\n"
+        "- ballInNet: the ball is in the net / the net ripples / the keeper is "
+        "beaten and the ball ends in the goal;\n"
+        "- scoreboardChanged: the scoreboard / score readout changes to reflect "
+        "a goal;\n"
+        "- crowdErupted: the crowd/commentary erupts consistent with a goal.\n"
+        "A GOAL counts as verified (isHighlight=true) only when the required "
+        "ball criteria (ballCrossedLineBetweenPosts AND ballInNet) are true, with "
+        "the reaction criteria consistent. Do NOT flag a soccer clip as a "
+        "highlight when it shows:\n"
         "- a yellow card, red card, booking, foul, tackle, or any disciplinary "
-        "incident (referee showing a card, players confronting, a player sent off);\n"
+        "incident (referee showing a card, players confronting, a player sent "
+        "off);\n"
         "- a free kick, corner, shot on target, save, miss, near-miss, off-target, "
         "blocked shot, or any chance in which the ball does NOT enter the net;\n"
-        "- only open play, build-up, players running, or a celebration with no ball "
-        "in the net.\n"
-        "When the frames show a card being shown, a foul, or players merely running "
-        "or celebrating with NO ball in the net, return isHighlight=false. NEVER "
-        "infer a goal from the candidate event type, from players celebrating, or "
-        "from crowd/commentary alone; only claim a goal (isHighlight=true) when you "
-        "actually see the ball cross the line into the net.\n"
+        "- only open play, build-up, players running, warm-ups, or a celebration "
+        "with no ball in the net.\n"
+        "When a required goal criterion is UNVERIFIABLE (you cannot confirm the "
+        "ball crossed the line / is in the net) or is EXPLICITLY CONTRADICTED by "
+        "what you see (e.g. you see the ball hit the post, go over the bar, be "
+        "saved, or the clip is warm-ups/lull with no strike), you MUST return "
+        "isHighlight=false and name the contradicting evidence in `reason` and in "
+        "verdict.contradictedBy. NEVER infer a goal from the candidate event "
+        "type, from players celebrating, or from crowd/commentary alone.\n"
         "Context:\n- " + "\n- ".join(meta) + "\n\n"
-        "Do NOT provide any reasoning or thinking. Answer immediately with ONLY one "
-        "JSON object, no markdown, no preamble, exactly: "
-        '{"isHighlight": true|false, "score": 0..100, "eventType": "<type>", "reason": "<short reason>"}'
+        "Now answer with ONLY one JSON object, no markdown, no preamble, no "
+        "leading/trailing prose, exactly of this shape:\n"
+        "{\"isHighlight\": true|false, \"score\": 0..100, \"eventType\": \"<type>\", "
+        "\"reason\": \"<short grounded reason that names the deciding evidence>\", "
+        "\"reasoning\": \"<2-4 sentences: what you independently observed FIRST, then "
+        "how that tests the hypothesis>\", "
+        "\"verdict\": {\"hypothesis\": \"<the candidate type you were testing>\", "
+        "\"independentlyObserved\": \"<what you actually saw, stated before the "
+        "hypothesis>\", \"criteria\": {\"ballCrossedLineBetweenPosts\": true|false|null, "
+        "\"ballInNet\": true|false|null, \"scoreboardChanged\": true|false|null, "
+        "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<the evidence that "
+        "contradicts the hypothesis, or the null when it does not>\"}, "
+        "\"evidenceAttested\": [\"<each concrete piece of grounded evidence you relied on>\"]}"
     )
 
 
