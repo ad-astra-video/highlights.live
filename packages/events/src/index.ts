@@ -200,6 +200,19 @@ export const BallPossessionSchema = z.object({
 });
 export type BallPossession = z.infer<typeof BallPossessionSchema>;
 
+// Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome ground-truth signal.
+// perceive emits these when the ball's ground-plane position crosses the
+// goal-line plane; the decide leg uses ballOutcome as a hard gate. Optional on
+// CandidateEvent: absent == no goal-line calibration / no field signal.
+export const BallOutcomeSchema = z.enum([
+  "goal",
+  "off_target",
+  "blocked",
+  "no_shot",
+  "cross",
+]);
+export type BallOutcome = z.infer<typeof BallOutcomeSchema>;
+
 // Stage-A audio noise-change gate signal (INC-2 / ADAAAA-4325). Cheap
 // pure-DSP candidate evidence (RMS energy burst / sustained swell) — the
 // gate NEVER decides a highlight; it only marks the frame as a candidate so
@@ -231,6 +244,11 @@ export const CandidateEventSchema = z.object({
   seq: z.number().int().min(0).optional(),
   ballVelocity: BallVelocitySchema.optional(),
   ballPossession: BallPossessionSchema.optional(),
+  // Decide-leg I2 (ADAAAA-6359): goal-line crossing + ball-outcome ground
+  // truth. Optional; when present the decide leg treats ballOutcome as a hard
+  // gate (a non-"goal" outcome forces rejection).
+  goalCrossed: z.boolean().optional(),
+  ballOutcome: BallOutcomeSchema.optional(),
   // Stage-A audio gate evidence (INC-2); present when the candidate was
   // triggered by the audio noise-change gate (or corroboration carried it).
   audio: AudioSignalSchema.optional(),
@@ -310,6 +328,17 @@ export const ControlMessageSchema = z.discriminatedUnion("type", [
     // the ball-centric candidate signal (INC-2b). Absent -> uncalibrated, and
     // perceive falls back to image-space velocity/possession.
     homography: z.array(z.number()).length(9).optional(),
+    // Decide-leg I2 (ADAAAA-6359): goal-line plane spec in the calibration's
+    // field coords so perceive can emit goalCrossed / ballOutcome. Absent ->
+    // no goal-line signal on candidates.
+    goalLine: z
+      .object({
+        axis: z.enum(["x", "y"]).default("y"),
+        position: z.number(),
+        mouthMin: z.number().optional(),
+        mouthMax: z.number().optional(),
+      })
+      .optional(),
   }),
   z.object({
     type: z.literal("seed"),

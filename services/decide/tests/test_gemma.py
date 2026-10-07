@@ -685,3 +685,84 @@ def test_highlight_rule_path_preserves_classifiers_through_response_model(monkey
     assert body.get("eventClass") == "high"
     assert body.get("corroborated") is True
     assert body.get("source") == "rule"
+
+
+# --- Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome HARD GATE ---------
+
+
+def test_apply_ball_outcome_gate_non_goal_rejects():
+    from app.gemma import apply_ball_outcome_gate
+
+    for outcome in ["off_target", "blocked", "no_shot", "cross"]:
+        ok, reason = apply_ball_outcome_gate({"ballOutcome": outcome})
+        assert ok is False, f"{outcome} must gate"
+        assert reason is not None and outcome in reason
+    ok, reason = apply_ball_outcome_gate({"ballOutcome": "goal"})
+    assert ok is True and reason is None
+    ok, reason = apply_ball_outcome_gate({})
+    assert ok is True and reason is None
+    ok, reason = apply_ball_outcome_gate(None)
+    assert ok is True and reason is None
+
+
+def test_build_prompt_renders_ball_outcome_gate():
+    p = build_prompt("GOAL", {"ballOutcome": "off_target", "goalCrossed": True}, "soccer")
+    assert "goal-line ground-truth" in p
+    assert "ballOutcome=off_target" in p
+    assert "HARD GATE" in p
+    # Absent signal never gates / never claims a measurement.
+    p2 = build_prompt("GOAL", {"trackCount": 1}, "soccer")
+    assert "not available" in p2
+    assert "HARD GATE" in p2  # the gate instruction is always present
+
+
+def test_highlight_rule_mode_hard_gate_rejects_non_goal():
+    from app import create_app as decide_create_app
+
+    decide_app = decide_create_app()
+    import os
+
+    os.environ["DECIDE_MODE"] = "rule"
+    c = TestClient(decide_app)
+    r = c.post(
+        "/app/highlight",
+        json={
+            "sessionId": "s3",
+            "eventType": "GOAL",
+            "timestamp": 3.0,
+            "gameHint": "soccer",
+            "evidence": {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0,
+                         "ballOutcome": "off_target", "goalCrossed": True,
+                         "reaction": {"crowdEnergy": 0.9}},
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["isHighlight"] is False
+    assert "off_target" in body["reason"]
+
+
+def test_highlight_rule_mode_goal_passes_gate():
+    from app import create_app as decide_create_app
+
+    decide_app = decide_create_app()
+    import os
+
+    os.environ["DECIDE_MODE"] = "rule"
+    c = TestClient(decide_app)
+    r = c.post(
+        "/app/highlight",
+        json={
+            "sessionId": "s4",
+            "eventType": "GOAL",
+            "timestamp": 4.0,
+            "gameHint": "soccer",
+            "evidence": {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0,
+                         "ballOutcome": "goal", "goalCrossed": True,
+                         "reaction": {"crowdEnergy": 0.9, "humansInMotion": 2}},
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # ballOutcome=goal does not force reject; the rule decides on evidence.
+    assert isinstance(body["isHighlight"], bool)
