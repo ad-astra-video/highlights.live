@@ -228,6 +228,7 @@ export class OrchestratorAdapter implements PipelineClient {
       maxVelocity: number;
       ocrHits: number;
       reaction?: ReactionEvidence; // INC-4 people-reaction context
+      scoreBoardChanged?: boolean; // I3 (ADAAAA-6360) scoreboard delta
     },
     opts?: {
       gameHint?: string;
@@ -410,6 +411,7 @@ export class DirectAdapter implements PipelineClient {
       maxVelocity: number;
       ocrHits: number;
       reaction?: ReactionEvidence; // INC-4 people-reaction context
+      scoreBoardChanged?: boolean; // I3 (ADAAAA-6360) scoreboard delta
     },
     opts?: {
       gameHint?: string;

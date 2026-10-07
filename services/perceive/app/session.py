@@ -18,6 +18,7 @@ import numpy as np
 from .audio_gate import AudioEnergyGate
 from .tracker import IoUTracker, LIVE_MAX_TRACKS, VOD_MAX_TRACKS
 from .sam_tracker import HybridTracker, make_tracker
+from .scoreboard import ScoreboardTracker
 
 RECENT_FRAMES = 30  # ~30 sampled frames kept for clip/confirm
 
@@ -78,6 +79,11 @@ class SessionState:
     # simply carries no goalCrossed/ballOutcome (graceful degradation).
     goal_line_spec: Optional[object] = None
     goal_line_detector: Optional[object] = None
+    # Scoreboard OCR / score-delta confirmation (ADAAAA-6360, decide-leg I3):
+    # rolling history of score readings from candidate anchor frames so a later
+    # candidate can report whether the displayed score changed across the
+    # candidate window. Bounded per-session state, never grows on long streams.
+    scoreboard_tracker: ScoreboardTracker = field(default_factory=ScoreboardTracker)
 
     @property
     def is_idle(self) -> bool:

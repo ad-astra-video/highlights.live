@@ -204,3 +204,103 @@ def test_gemma_path_rejects_bare_trigger_on_yes_verdict(monkeypatch):
     body = r.json()
     assert body["isHighlight"] is False
     assert "notable-only bar" in body["reason"]
+
+
+def test_scoreboard_change_forces_goal_on_bare_candidate():
+    # I3 (ADAAAA-6360): a detected scoreboard score change for a GOAL event is a
+    # hard, independent confirmation — it forces isHighlight=true even when the
+    # candidate is otherwise unremarkable (no track, no motion).
+    from app.decider import decide
+
+    d = decide("GOAL", track_count=0, max_velocity=0.0, score_board_changed=True)
+    assert d.is_highlight is True
+    assert "scoreboard score change confirmed" in d.reason
+
+
+def test_scoreboard_absent_never_forces_goal():
+    # Absent scoreboard change is weak/absent evidence — it never on its own
+    # forces a goal; a bare GOAL trigger with no corroboration stays rejected.
+    from app.decider import decide
+
+    d = decide("GOAL", track_count=0, max_velocity=0.0)
+    assert d.is_highlight is False
+
+
+def test_scoreboard_change_does_not_force_non_goal():
+    # A score change on a non-goal event never forces a highlight.
+    from app.decider import decide, scoreboard_forces_goal
+
+    assert scoreboard_forces_goal(True, "SHOT") is False
+    assert scoreboard_forces_goal(False, "GOAL") is False
+    assert scoreboard_forces_goal(True, "GOAL") is True
+    d = decide("SHOT", track_count=0, max_velocity=0.0, score_board_changed=True)
+    assert d.is_highlight is False
+
+
+def test_scoreboard_change_forces_goal_via_endpoint():
+    r = client.post(
+        "/app/highlight",
+        json={
+            "sessionId": "sess-sb",
+            "eventType": "GOAL",
+            "timestamp": 1.0,
+            "evidence": {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0, "scoreBoardChanged": True},
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["isHighlight"] is True
+    assert body["reason"]
+
+
+def test_gemma_path_scoreboard_force_when_gemma_says_no(monkeypatch):
+    # Gemma reads the Goal candidate and says 'no', but a scoreboard score
+    # change was detected -> the I3 force flips isHighlight=true. Absence would
+    # NOT force (separate test above).
+    from app import gemma as gemma_mod
+
+    monkeypatch.setenv("DECIDE_MODE", "gemma")
+    monkeypatch.setattr(
+        gemma_mod,
+        "ask",
+        lambda *a, **k: {"isHighlight": False, "score": 30.0, "eventType": "GOAL", "reason": "no ball in net", "source": "gemma"},
+    )
+    r = client.post(
+        "/app/highlight",
+        json={
+            "sessionId": "sess-sb-gemma",
+            "eventType": "GOAL",
+            "timestamp": 1.0,
+            "evidence": {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0, "scoreBoardChanged": True},
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["isHighlight"] is True
+    assert "scoreboard score change confirmed" in body["reason"]
+
+
+def test_gemma_path_scoreboard_absent_no_force(monkeypatch):
+    # No scoreboard change detected; a GOAL candidate with no corroboration is
+    # still refused even in gemma mode (absent scoreboard never forces a goal).
+    from app import gemma as gemma_mod
+
+    monkeypatch.setenv("DECIDE_MODE", "gemma")
+    monkeypatch.setattr(
+        gemma_mod,
+        "ask",
+        lambda *a, **k: {"isHighlight": True, "score": 20.0, "eventType": "GOAL", "reason": "bare", "source": "gemma"},
+    )
+    r = client.post(
+        "/app/highlight",
+        json={
+            "sessionId": "sess-sb-none",
+            "eventType": "GOAL",
+            "timestamp": 1.0,
+            "evidence": {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0, "scoreBoardChanged": False},
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # score 20 < bar and no corroboration -> forced no by the notable-only gate.
+    assert body["isHighlight"] is False

@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
-from .decider import apply_gate, decide
+from .decider import apply_gate, decide, scoreboard_forces_goal
 from .gemma import apply_ball_outcome_gate, decide_with_gemma
 
 
@@ -51,6 +51,10 @@ class Evidence(BaseModel):
     # calibration / no signal, which never gates.
     goalCrossed: Optional[bool] = None
     ballOutcome: Optional[str] = None
+    # I3 (ADAAAA-6360): a scoreboard score change was detected across the
+    # candidate window — a hard, independent goal-confirmation signal. Absent
+    # (default False) == weak/absent evidence, never on its own a goal.
+    scoreBoardChanged: bool = Field(default=False)
     # People-reaction context (INC-4). Optional; absent == no reaction signal,
     # so the prompt renders without it (no regression vs today).
     reaction: ReactionEvidence = Field(default_factory=ReactionEvidence)
@@ -179,6 +183,7 @@ def create_app() -> FastAPI:
                 audio_sample_rate=req.audioSampleRate,
                 reasoning_effort=req.reasoningEffort,
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
+                score_board_changed=req.evidence.scoreBoardChanged,
             )
             # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
             # goal-line ground-truth signal. A non-"goal" ballOutcome forces
@@ -190,6 +195,19 @@ def create_app() -> FastAPI:
                 decision["reason"] = (
                     (decision.get("reason") or "")
                     + "; " + (gate_reason or "")
+                ).strip("; ")
+            # I3 (ADAAAA-6360): a detected scoreboard score change for a GOAL
+            # event is a hard, independent confirmation — force isHighlight=true
+            # regardless of the model's read (skipped when the I2 ball-outcome
+            # gate already rejected). Absence is weak/absent evidence and never
+            # forces a goal (scoreboard_forces_goal is false).
+            elif scoreboard_forces_goal(
+                req.evidence.scoreBoardChanged, decision.get("eventType") or req.eventType
+            ):
+                decision["isHighlight"] = True
+                decision["reason"] = (
+                    (decision.get("reason") or "")
+                    + "; scoreboard score change confirmed"
                 ).strip("; ")
             # Notable-only gate on the Gemma verdict (ADAAAA-5778). Pure
             # post-process over signals we already have — isHighlight, score,
@@ -206,6 +224,7 @@ def create_app() -> FastAPI:
                     max_velocity=req.evidence.maxVelocity,
                     ocr_hits=req.evidence.ocrHits,
                     reaction=req.evidence.reaction.model_dump(),
+                    score_board_changed=req.evidence.scoreBoardChanged,
                 )
                 if not ok:
                     decision["isHighlight"] = False
@@ -222,6 +241,7 @@ def create_app() -> FastAPI:
             max_velocity=req.evidence.maxVelocity,
             ocr_hits=req.evidence.ocrHits,
             reaction=ev,
+            score_board_changed=req.evidence.scoreBoardChanged,
         )
         # Decide-leg I2 (ADAAAA-6359): HARD GATE — a non-"goal" perceived
         # ballOutcome forces rejection even on the deterministic rule path.

@@ -28,6 +28,7 @@ from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
 from .zone_trigger import DetectionZoneTrigger, resolve_zones
 from .goal_plane import GoalLineDetector, GoalLineSpec
+from .scoreboard import parse_ocr_score, ScoreboardTracker
 
 # One live trickle session per perceive session (plan §0.1 session rule).
 _trickle: dict[str, TrickleSession] = {}
@@ -492,6 +493,24 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             **goal_signal_fields,
         }
         events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
+    # Scoreboard OCR / score-delta confirmation (ADAAAA-6360, decide-leg I3).
+    # Bounded to candidate anchor frames (Stage-A cooldown) — never every frame
+    # — so it adds per-candidate GPU only. A change in the displayed score
+    # across the candidate window is a hard, independent goal confirmation; its
+    # presence/absence is forwarded to decide. OCR failure degrades to [] (weak
+    # / absent evidence); it never drops the frame or the candidate.
+    if cand_dict is not None and detector is not None and state.last_rgb is not None:
+        try:
+            ocr_lines = detector.ocr(state.last_rgb) or []
+        except Exception as e:  # noqa: BLE001
+            log.warning("scoreboard OCR skipped for frame %s: %s", seq, e)
+            ocr_lines = []
+        obs["ocr"] = ocr_lines
+        cand_ts = float(cand_dict["timestamp"])
+        score = parse_ocr_score(ocr_lines)
+        state.scoreboard_tracker.record(cand_ts, score)
+        if state.scoreboard_tracker.changed(cand_ts):
+            cand_dict["scoreBoardChanged"] = True
     for q in state.subscribers:
         for e in events:
             try:

@@ -252,6 +252,10 @@ export const CandidateEventSchema = z.object({
   // Stage-A audio gate evidence (INC-2); present when the candidate was
   // triggered by the audio noise-change gate (or corroboration carried it).
   audio: AudioSignalSchema.optional(),
+  // I3 (ADAAAA-6360): a scoreboard score change was detected across the
+  // candidate window — a hard, independent goal-confirmation signal. Optional:
+  // absent/undefined == weak/absent evidence, never on its own a goal.
+  scoreBoardChanged: z.boolean().optional(),
 });
 export type CandidateEvent = z.infer<typeof CandidateEventSchema>;
 
