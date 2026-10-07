@@ -204,3 +204,35 @@ def test_gemma_path_rejects_bare_trigger_on_yes_verdict(monkeypatch):
     body = r.json()
     assert body["isHighlight"] is False
     assert "notable-only bar" in body["reason"]
+
+
+# --- I4 / ADAAAA-6361: rich evidence schema end-to-end ------------------------
+
+def test_highlight_accepts_rich_detection_evidence():
+    # The extended Evidence schema accepts per-detection boxes, ball position,
+    # distance-to-goal, goal-line-relative position and the audio level curve
+    # without 422 (schema validation), so the server can forward them.
+    r = client.post(
+        "/app/highlight",
+        json={
+            "sessionId": "sess-i4",
+            "eventType": "GOAL",
+            "timestamp": 12.0,
+            "evidence": {
+                "trackCount": 3,
+                "maxVelocity": 0.6,
+                "ocrHits": 0,
+                "detections": [
+                    {"label": "player", "bbox": [0.3, 0.4, 0.46, 0.9], "confidence": 0.92, "trackId": "t1"},
+                    {"label": "ball", "bbox": [0.48, 0.52, 0.52, 0.58], "confidence": 0.97},
+                ],
+                "ballPosition": [0.5, 0.55],
+                "distanceToGoal": 0.12,
+                "goalLineDelta": 0.03,
+                "audioLevels": [0.10, 0.22, 0.85, 0.90, 0.31],
+            },
+        },
+    )
+    assert r.status_code < 400
+    body = r.json()
+    assert "isHighlight" in body

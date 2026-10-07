@@ -6,6 +6,7 @@ import {
   decideOnCandidate,
   SessionLostError,
   pcmInt16ToWavB64,
+  rmsNormalized,
   type PipelineClient,
 } from "../src/analyzer";
 
@@ -867,5 +868,138 @@ describe("A — 60s rolling window + processed-frame/finding cache (ADAAAA-6029)
     expect(seen.frames).toBeUndefined();
     expect(seen.audioB64).toBeUndefined();
     expect(seen.imageB64).toBeDefined();
+  });
+});
+
+
+describe("I4 / ADAAAA-6361: rich detection + audio level evidence", () => {
+  it("rmsNormalized returns a normalized 0..1 RMS energy for a mono PCM buffer", () => {
+    // A max-amplitude 16-bit sample -> ~1.0; silence -> 0.
+    expect(rmsNormalized(Buffer.from([0x00, 0x00]))).toBe(0);
+    expect(rmsNormalized(Buffer.from([0xff, 0x7f]))).toBeCloseTo(1.0, 2);
+    expect(rmsNormalized(Buffer.from([]))).toBe(0);
+  });
+
+  it("audioLevelSeries returns the RMS curve from the buffered audio taps", () => {
+    const shared = new LiveRunShared();
+    shared.addAudioChunk(0, Buffer.from([0, 0]).toString("base64")); // silence
+    shared.addAudioChunk(1, Buffer.from([0xff, 0x7f]).toString("base64")); // loud
+    const levels = shared.audioLevelSeries();
+    expect(levels).toHaveLength(2);
+    expect(levels[0]).toBeCloseTo(0, 3);
+    expect(levels[1]).toBeGreaterThan(0.9);
+  });
+
+  it("richDetections + ballPosition read per-detection geometry from cached findings", () => {
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    shared.setFindings(0, {
+      tracks: [
+        { trackId: "t1", slot: 0, bbox: [0.3, 0.4, 0.46, 0.9], kind: "player", label: "player", lostFrames: 0 },
+        { trackId: "b0", slot: 1, bbox: [0.48, 0.52, 0.52, 0.58], kind: "player", label: "soccer ball", lostFrames: 0 },
+      ],
+      objects: [{ label: "goalkeeper", confidence: 0.7, bbox: [0.1, 0.2, 0.2, 0.6] }],
+      ocr: [],
+    });
+    const dets = shared.richDetections(0);
+    expect(dets.length).toBe(3);
+    expect(dets[0]).toMatchObject({ label: "player", bbox: [0.3, 0.4, 0.46, 0.9], trackId: "t1" });
+    expect(dets[2]).toMatchObject({ label: "goalkeeper", confidence: 0.7 });
+    const ball = shared.ballPosition(0);
+    expect(ball).toEqual([0.5, 0.55]);
+  });
+});
+
+describe("I7 / ADAAAA-6361: higher-FPS burst re-sample around a trigger", () => {
+  it("detail-first decideOnCandidate re-samples the burst and forwards it as frames[]", async () => {
+    let resampledTs: number | undefined;
+    let seenOpts: any;
+    const { client } = fakeClient({
+      decide: async (_ev, opts: any) => {
+        seenOpts = opts;
+        return { isHighlight: true, score: 80, eventType: "GOAL" };
+      },
+    });
+    const shared = new LiveRunShared({ decideWindowN: 4 });
+    shared.addFrame(0, 0, "img0");
+    await decideOnCandidate(
+      client,
+      shared,
+      async () => ({ clipId: "c", clipUri: "u" }),
+      {
+        jobId: "j",
+        clipBeforeS: 4,
+        clipAfterS: 4,
+        gameHint: "soccer",
+        decideWindowN: 4,
+        resampleFrames: async (ts) => {
+          resampledTs = ts;
+          return [
+            { timestamp: ts - 0.25, imageB64: "b0" },
+            { timestamp: ts, imageB64: "b1" },
+            { timestamp: ts + 0.25, imageB64: "b2" },
+          ];
+        },
+      },
+      { eventType: "GOAL", timestamp: 10, seq: 1 }
+    );
+    expect(resampledTs).toBe(10);
+    // The higher-FPS burst (not the low-fps rolling window) is the decide frames[],
+    // so the goal-line-crossing instant is represented in the window.
+    expect(seenOpts.frames).toEqual([
+      { role: "full", base64: "b0" },
+      { role: "full", base64: "b1" },
+      { role: "full", base64: "b2" },
+    ]);
+  });
+
+  it("detail-first decideOnCandidate forwards rich detection + audio level evidence (I4)", async () => {
+    let seenEv: any;
+    const { client } = fakeClient({
+      decide: async (ev: any) => {
+        seenEv = ev;
+        return { isHighlight: true, score: 80, eventType: "GOAL" };
+      },
+    });
+    const shared = new LiveRunShared({ decideWindowN: 4 });
+    shared.addFrame(0, 0, "img0");
+    shared.setFindings(0, {
+      tracks: [{ trackId: "b0", slot: 0, bbox: [0.48, 0.52, 0.52, 0.58], kind: "player", label: "soccer ball", lostFrames: 0 }],
+      objects: [],
+      ocr: [],
+    });
+    shared.addAudioChunk(0, Buffer.from([0xff, 0x7f]).toString("base64"));
+    await decideOnCandidate(
+      client,
+      shared,
+      async () => ({ clipId: "c", clipUri: "u" }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 4 },
+      { eventType: "GOAL", timestamp: 0, seq: 1 }
+    );
+    expect(seenEv.detections).toBeDefined();
+    expect(seenEv.detections![0].label).toBe("soccer ball");
+    expect(seenEv.ballPosition).toEqual([0.5, 0.55]);
+    expect(seenEv.audioLevels).toBeDefined();
+  });
+
+  it("live baseline forwarding no rich evidence stays regressed-free", async () => {
+    let seenEv: any;
+    const { client } = fakeClient({
+      decide: async (ev: any) => {
+        seenEv = ev;
+        return { isHighlight: true, score: 80, eventType: "GOAL" };
+      },
+    });
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    await decideOnCandidate(
+      client,
+      shared,
+      async () => ({ clipId: "c", clipUri: "u" }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" },
+      { eventType: "GOAL", timestamp: 0, seq: 1 }
+    );
+    expect(seenEv.detections).toBeUndefined();
+    expect(seenEv.audioLevels).toBeUndefined();
   });
 });

@@ -33,6 +33,39 @@ export interface ReactionEvidence {
   ballSpeedMps: number; // INC-2b ground-plane ball speed (0 when absent)
   ballPossessionId: string; // INC-2b possessor player id ("" when absent)
 }
+/** One per-detection geometry item forwarded to decide() (I4 / ADAAAA-6361) so
+ * the prompt can cite concrete positions instead of guessing them from vision.
+ * `bbox` is normalized [x1, y1, x2, y2] in 0..1 frame space. */
+export interface DetectionEvidence {
+  label: string;
+  bbox: number[];
+  confidence: number;
+  trackId: string;
+}
+/** The I4 / ADAAAA-6361 evidence extension forwarded to decide(): per-detection
+ * geometry + ball position + audio-energy level curve. Optional so the live
+ * baseline (which forwards none) renders without it. */
+export interface RichEvidence {
+  detections?: DetectionEvidence[];
+  ballPosition?: [number, number] | null;
+  distanceToGoal?: number;
+  goalLineDelta?: number;
+  audioLevels?: number[];
+}
+/** Normalized RMS energy (0..1) of a mono 16-bit PCM buffer — used to build the
+ * audio-energy level curve (I4). Silent buffer -> 0. */
+export function rmsNormalized(pcm: Buffer): number {
+  if (!pcm || pcm.length < 2) return 0;
+  let sum = 0;
+  let n = 0;
+  for (let i = 0; i + 1 < pcm.length; i += 2) {
+    const s = pcm.readInt16LE(i);
+    sum += s * s;
+    n++;
+  }
+  if (!n) return 0;
+  return Math.min(1, Math.sqrt(sum / n) / 32768);
+}
 /** Build the reaction evidence object for a candidate from whatever reaction
  * signals it carries (audio gate energy, ball velocity/possession) plus the
  * cheap visual cue (tracked-object count as humans-in-motion proxy). Fields
@@ -66,6 +99,19 @@ export function buildReactionEvidence(
     humansInMotion: clampTrackCount(humansInMotion),
     ballSpeedMps: candidate.ballVelocity?.speedMps ?? 0,
     ballPossessionId: candidate.ballPossession?.possessingPlayerId ?? "",
+  };
+}
+/** I4 / ADAAAA-6361: assemble the per-detection geometry + ball position +
+ * audio-energy level curve for a candidate at `timestamp`, from the shared
+ * window's cached findings and buffered audio taps (no re-analysis, no extra
+ * GPU). All fields optional — detail-first mode forwards them, the live baseline
+ * forwards none so its prompt is unchanged. */
+export function buildRichEvidence(shared: LiveRunShared, timestamp: number): RichEvidence {
+  const detections = shared.richDetections(timestamp);
+  return {
+    detections: detections.length ? detections : undefined,
+    ballPosition: shared.ballPosition(timestamp) ?? null,
+    audioLevels: shared.audioLevelSeries(),
   };
 }
 export interface DecisionResult {
@@ -136,6 +182,13 @@ export interface PipelineClient {
       maxVelocity: number;
       ocrHits: number;
       reaction?: ReactionEvidence; // INC-4 people-reaction context
+      // I4 / ADAAAA-6361: per-detection geometry + ball position + audio level
+      // curve so the prompt can cite concrete evidence (all optional).
+      detections?: DetectionEvidence[];
+      ballPosition?: [number, number] | null;
+      distanceToGoal?: number;
+      goalLineDelta?: number;
+      audioLevels?: number[];
     },
     opts?: {
       gameHint?: string;
@@ -221,6 +274,12 @@ export interface AnalyzerConfig {
    sampleFps?: number;
    frameScale?: string;
    decideWindowN?: number;
+   /** I7 / ADAAAA-6361: higher-FPS re-sample around a trigger. When set (detail-
+    * first VOD), the decide call site re-samples frames around the candidate
+    * timestamp at a higher FPS so the ball-goal-crossing instant is actually in
+    * the decide window (a 1 FPS / low-fps sample can skip it). Returns absolute-
+    * timestamped frames (always >= 1); a throw/[] degrades to the rolling window. */
+   resampleFrames?: (timestamp: number) => Promise<{ timestamp: number; imageB64: string }[]>;
   /**
    * ADAAAA-6314 Path 2: forward the surrounding audio clip on the LIVE baseline
    * too (bounded to trigger candidates — never every frame; no `frames[]`
@@ -523,6 +582,51 @@ export class LiveRunShared {
     if (!this.audio.length) return "";
     return pcmInt16ToWavB64(this.audio.map((a) => a.samples).join(""));
   }
+  /**
+   * I4 / ADAAAA-6361: the audio-energy level CURVE (not just one scalar peak).
+   * Computes a normalized RMS energy per buffered tap (~100 ms), newest-first
+   * trimmed to `maxPoints`, so the decide prompt can cite the shape of the
+   * crowd/commentary energy around the trigger. [] when nothing buffered yet.
+   */
+  audioLevelSeries(maxPoints = 48): number[] {
+    const out = this.audio.map((a) => rmsNormalized(Buffer.from(a.samples, "base64")));
+    return out.slice(-Math.max(1, maxPoints));
+  }
+  /** I4 / ADAAAA-6361: per-detection boxes (tracks + open-set objects) for the
+   * frame FINDINGS nearest `timestamp`, so the decide prompt gets real geometry
+   * (bboxes) instead of asking Gemma to guess positions from vision alone. []
+   * when no in-window frame has cached findings yet. */
+  richDetections(timestamp: number): DetectionEvidence[] {
+    let best: FrameFindings | undefined;
+    let bestDiff = Infinity;
+    for (const v of this.frames.values()) {
+      if (!v.findings) continue;
+      const d = Math.abs(v.timestamp - timestamp);
+      if (d < bestDiff) {
+        bestDiff = d;
+        best = v.findings;
+      }
+    }
+    if (!best) return [];
+    const out: DetectionEvidence[] = [];
+    for (const t of best.tracks) {
+      out.push({ label: t.label || "player", bbox: t.bbox as number[], confidence: 0, trackId: t.trackId });
+    }
+    for (const o of best.objects) {
+      out.push({ label: o.label, bbox: o.bbox as number[], confidence: o.confidence ?? 0, trackId: "" });
+    }
+    return out.slice(0, 16);
+  }
+  /** I4 / ADAAAA-6361: normalized [x, y] center of the soccer ball detection in
+   * the findings nearest `timestamp`, or undefined when no ball is tracked yet.
+   * Uses the label shallow-match used elsewhere in the soccer closed roster. */
+  ballPosition(timestamp: number): [number, number] | undefined {
+    const dets = this.richDetections(timestamp);
+    const ball = dets.find((d) => /ball/i.test(d.label));
+    if (!ball || ball.bbox.length < 4) return undefined;
+    const [x1, y1, x2, y2] = ball.bbox;
+    return [(x1 + x2) / 2, (y1 + y2) / 2];
+  }
 }
 
 /** Seconds of audio tap kept for the decide() surrounding-audio clip
@@ -563,7 +667,8 @@ export function pcmInt16ToWavB64(samplesB64: string, sampleRate = 16_000): strin
 function detailDecideOpts(
   cfg: AnalyzerConfig,
   shared: LiveRunShared,
-  anchoredImage: string | undefined
+  anchoredImage: string | undefined,
+  burstFrames?: { role: string; base64: string }[]
 ): {
   gameHint: string;
   imageB64: string | undefined;
@@ -587,7 +692,10 @@ function detailDecideOpts(
   // alike. Empty when the window has nothing to add (behavior identical).
   opts.priorContextText = shared.windowFactsText();
   if (cfg.decideWindowN !== undefined) {
-    opts.frames = shared.framesWindow();
+    // I7 / ADAAAA-6361: when a higher-FPS burst was re-sampled around the
+    // trigger, prefer it as the temporal `frames[]` so the ball-goal-crossing
+    // instant is in the decide window; else fall back to the rolling window.
+    opts.frames = burstFrames?.length ? burstFrames : shared.framesWindow();
     const audio = shared.audioClipB64();
     if (audio) opts.audioB64 = audio;
   } else if (cfg.audioContext) {
@@ -624,6 +732,19 @@ export async function decideOnCandidate(
   const evTs = emit?.timestamp ?? candidate.timestamp;
   onEvent?.({ seq: evSeq, timestamp: evTs, type: "candidate", candidate });
   const anchoredImage = shared.anchor(candidate.timestamp);
+  // I7 / ADAAAA-6361: on the detail-first VOD pass, re-sample a higher-FPS burst
+  // of frames around the trigger so the ball-goal-crossing instant is present in
+  // the decide window (a low-FPS sample can skip it). Any failure degrades to the
+  // rolling window — never a dead decide call.
+  let burstFrames: { role: string; base64: string }[] | undefined;
+  if (cfg.decideWindowN !== undefined && cfg.resampleFrames) {
+    try {
+      const burst = await cfg.resampleFrames(candidate.timestamp);
+      if (burst?.length) burstFrames = burst.map((f) => ({ role: "full", base64: f.imageB64 }));
+    } catch {
+      /* degrade to rolling window */
+    }
+  }
   // Cache the candidate (type + timestamp + reaction) into the 60 s window so
   // it participates in the window's factual context (plan §A / A2).
   shared.addCandidate({
@@ -638,8 +759,11 @@ export async function decideOnCandidate(
       maxVelocity: shared.evidence.maxVelocity,
       ocrHits: 0,
       reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
+      // I4 / ADAAAA-6361: forward per-detection geometry + audio level curve on
+      // the detail-first (VOD) pass so the prompt can cite concrete evidence.
+      ...(cfg.decideWindowN !== undefined ? buildRichEvidence(shared, candidate.timestamp) : {}),
     },
-    detailDecideOpts(cfg, shared, anchoredImage)
+    detailDecideOpts(cfg, shared, anchoredImage, burstFrames)
   );
   // Track the Stage-A FP-rate metric (INC-2 / ADAAAA-4325 slice 5): whether
   // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
@@ -749,6 +873,17 @@ export async function analyzeJob(
         // so resolve that frame's image from the rolling window — a candidate
         // fired on the late post-strike frame must still be judged on the strike.
         const anchoredImage = run.anchor(res.candidate.timestamp) ?? frame.imageB64;
+        // I7 / ADAAAA-6361: re-sample a higher-FPS burst around the trigger on the
+        // detail-first VOD pass so the crossing instant is in the decide window.
+        let burstFrames: { role: string; base64: string }[] | undefined;
+        if (cfg.decideWindowN !== undefined && cfg.resampleFrames) {
+          try {
+            const burst = await cfg.resampleFrames(res.candidate.timestamp);
+            if (burst?.length) burstFrames = burst.map((f) => ({ role: "full", base64: f.imageB64 }));
+          } catch {
+            /* degrade to rolling window */
+          }
+        }
         const decision = await client.decide(
           {
             eventType: res.candidate.eventType,
@@ -756,8 +891,11 @@ export async function analyzeJob(
             maxVelocity: evidence.maxVelocity,
             ocrHits: 0,
             reaction: buildReactionEvidence(res.candidate, evidence.trackCount),
+            // I4 / ADAAAA-6361: forward per-detection geometry + audio level
+            // curve on the detail-first (VOD) pass.
+            ...(cfg.decideWindowN !== undefined ? buildRichEvidence(run, res.candidate.timestamp) : {}),
           },
-          detailDecideOpts(cfg, run, anchoredImage)
+          detailDecideOpts(cfg, run, anchoredImage, burstFrames)
         );
         if (decision.isHighlight) {
           const { clipId, clipUri } = await cut(res.candidate.timestamp);

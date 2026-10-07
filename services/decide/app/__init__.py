@@ -35,6 +35,18 @@ class ReactionEvidence(BaseModel):
     ballPossessionId: str = Field(default="")
 
 
+class Detection(BaseModel):
+    """One per-detection observation (I4 / ADAAAA-6361) forwarded so the decide
+    prompt can cite concrete geometry instead of guessing it from vision alone.
+    All optional with safe defaults so an absent detection block renders without
+    regression. ``bbox`` is normalized [x1, y1, x2, y2] in 0..1 frame space."""
+
+    label: str = Field(default="")
+    bbox: list[float] = Field(default_factory=list, max_length=4)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    trackId: str = Field(default="")
+
+
 class Evidence(BaseModel):
     # ADAAAA-4736/5231: previously le=2. Real multi-player tracking observes >2
     # objects; a larger count is legitimate evidence and must not 422 the whole
@@ -46,6 +58,16 @@ class Evidence(BaseModel):
     # People-reaction context (INC-4). Optional; absent == no reaction signal,
     # so the prompt renders without it (no regression vs today).
     reaction: ReactionEvidence = Field(default_factory=ReactionEvidence)
+    # --- I4 / ADAAAA-6361: per-detection geometry + audio-energy level curve ---
+    # Rich detection context so Gemma reasons over where things actually ARE
+    # (boxes, ball, distance-to-goal, goal-line-relative position) and the shape
+    # of the crowd/commentary energy over the window, not just a single scalar.
+    # All empty/absent == no signal, so the prompt renders without them.
+    detections: list[Detection] = Field(default_factory=list, max_length=16)
+    ballPosition: list[float] | None = Field(default=None, max_length=2)  # [x, y] normalized
+    distanceToGoal: float = Field(default=0.0, ge=0.0, le=5.0)
+    goalLineDelta: float = Field(default=0.0)  # signed normalized: <0 before the line, >=0 crossed
+    audioLevels: list[float] = Field(default_factory=list, max_length=64)  # short RMS energy curve
 
 
 class ImageRef(BaseModel):

@@ -110,6 +110,12 @@ export interface ServerConfig {
    * `frames[]` so Gemma reasons across a longer SEQUENCE per trigger.
    * `VOD_DECIDE_WINDOW_N`. */
   vodDecideWindowN: number;
+  /** I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
+   * Frames within +/- `vodResampleWindowS` of a candidate are re-extracted at
+   * `vodResampleFps` so the ball-goal-crossing instant is in the decide window.
+   * `VOD_RESAMPLE_FPS` (default 8) / `VOD_RESAMPLE_WINDOW_S` (default 3). */
+  vodResampleFps: number;
+  vodResampleWindowS: number;
   /** ADAAAA-6314 Path 2: forward the surrounding audio clip for LIVE trigger
    * candidates so the gemma decide prompt gets ASR'd audio context. Default off
    * so the deployed live baseline sends no new payload until an operator enables
@@ -242,7 +248,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 2),
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
-    audioContext: env.LIVE_AUDIO_CONTEXT === "1",
+    // I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
+    // Frames within +/- vodResampleWindowS of a candidate are re-extracted at
+    // vodResampleFps so the ball-goal-crossing instant is in the decide window.
+    vodResampleFps: Number(env.VOD_RESAMPLE_FPS ?? 8),
+    vodResampleWindowS: Number(env.VOD_RESAMPLE_WINDOW_S ?? 3),
+    // I4 / ADAAAA-6361: live-path decide() carries the surrounding audio clip so
+    // Gemma gets auditory context, matching VOD. Opt out with LIVE_AUDIO_CONTEXT=0.
+    audioContext: env.LIVE_AUDIO_CONTEXT !== "0",
     // ADAAAA-5342: live sampling driven from the runner's measured capability
     // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
     // headroom so capable GPUs accelerate toward the chartered cadence while

@@ -21,7 +21,7 @@ import {
   type PipelineClient,
 } from "./analyzer";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
-import { cutClip, extractFrames } from "./ffmpeg";
+import { cutClip, extractBurstFrames, extractFrames } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
 import {
@@ -587,6 +587,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const frameDir = path.join(cfg.dataDir, "frames", jobId);
     const sampleFps = cfg.vodDetailFps;
     await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps, cfg.vodFrameScale);
+    // I7 / ADAAAA-6361: re-sample a higher-FPS burst of frames around each
+    // trigger so the ball-goal-crossing instant is present in the decide window
+    // (the detail-first pass samples at `sampleFps`, which can skip it). Bounded:
+    // only around trigger candidates, at the resample fps. Best-effort ([] on
+    // failure) so a burst extraction glitch never aborts the pass.
+    anaCfg.resampleFrames = async (ts: number) =>
+      extractBurstFrames(
+        cfg.ffmpegPath,
+        videoPath,
+        path.join(frameDir, "bursts"),
+        ts,
+        cfg.vodResampleWindowS,
+        cfg.vodResampleWindowS,
+        cfg.vodResampleFps,
+        cfg.vodFrameScale
+      );
 
     const clipDir = path.join(cfg.dataDir, "clips");
     const cut = async (ts: number) => {
