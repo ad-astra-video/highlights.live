@@ -228,6 +228,12 @@ export class OrchestratorAdapter implements PipelineClient {
       maxVelocity: number;
       ocrHits: number;
       reaction?: ReactionEvidence; // INC-4 people-reaction context
+      // I4 / ADAAAA-6361: rich geometry + audio level curve (forwarded verbatim).
+      detections?: { label: string; bbox: number[]; confidence: number; trackId: string }[];
+      ballPosition?: [number, number] | null;
+      distanceToGoal?: number;
+      goalLineDelta?: number;
+      audioLevels?: number[];
     },
     opts?: {
       gameHint?: string;
@@ -410,6 +416,12 @@ export class DirectAdapter implements PipelineClient {
       maxVelocity: number;
       ocrHits: number;
       reaction?: ReactionEvidence; // INC-4 people-reaction context
+      // I4 / ADAAAA-6361: rich geometry + audio level curve (forwarded verbatim).
+      detections?: { label: string; bbox: number[]; confidence: number; trackId: string }[];
+      ballPosition?: [number, number] | null;
+      distanceToGoal?: number;
+      goalLineDelta?: number;
+      audioLevels?: number[];
     },
     opts?: {
       gameHint?: string;
