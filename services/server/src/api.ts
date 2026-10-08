@@ -42,6 +42,7 @@ import {
 import { LiveIngest, type LiveKind } from "./live";
 import { extractVodAudioChunks } from "./vod-audio";
 import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./db";
+import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribeFunnel, recordSignupFunnel } from "./funnel";
 import { AuthService, BetaGateError, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError, canRetrieveDataset } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
@@ -204,6 +205,7 @@ export interface LiveHighlightPersistence {
   cfg: ServerConfig;
   billing: BillingService;
   entitlements: EntitlementsService;
+  db: Db;
 }
 
 /** Persist + publish an accepted highlight to the user's feed at DECISION time
@@ -232,6 +234,8 @@ export async function persistLiveHighlight(
   await deps.billing.onHighlightCreated(user, sub);
   // A clip generated successfully debits the quota once.
   await deps.entitlements.onClipGenerated(user);
+  // Funnel stage 3: generate (a highlight was produced). Idempotent per user.
+  await recordGenerateFunnel(deps.db, user.id);
   return stored;
 }
 
@@ -458,7 +462,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const onEvent = (ev: AnalyzeEvent) => {
         jobEventHook(job.id)(ev);
         if (ev.type === "highlight" && ev.highlight) {
-          persistLiveHighlight({ store, cfg, billing, entitlements }, user, sub, ev.highlight).catch((e) =>
+          persistLiveHighlight({ store, cfg, billing, entitlements, db }, user, sub, ev.highlight).catch((e) =>
             console.error(`[live:${job.id}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
           );
         }
@@ -579,7 +583,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // double-counts between the SSE stream and the final response.
       // Best-effort: a failure logs and never stalls the frame loop.
       if (ev.type === "highlight" && ev.highlight) {
-        persistLiveHighlight({ store, cfg, billing, entitlements }, user, sub, ev.highlight).catch((e) =>
+        persistLiveHighlight({ store, cfg, billing, entitlements, db }, user, sub, ev.highlight).catch((e) =>
           console.error(`[vod:${jobId}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
         );
       }
@@ -712,7 +716,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // --- auth (public endpoints are rate limited per IP) ---
   app.post<{ Body: { email?: string; password?: string; inviteCode?: string } }>("/auth/register", { preHandler: limitAuth }, async (req, reply) => {
     try {
-      return await auth.register(req.body?.email ?? "", req.body?.password ?? "", req.body?.inviteCode);
+      const att = attributionFrom(req);
+      const result = await auth.register(req.body?.email ?? "", req.body?.password ?? "", req.body?.inviteCode, att);
+      // Funnel stage 1: signup (dimensioned by the user's acquisition channel).
+      await recordSignupFunnel(db, result.user.id);
+      return result;
     } catch (e: any) {
       // Invite/beta-gate rejection -> 403 (not a client 400); keeps "you need an
       // invite" distinct from a malformed request so the UI can route to waitlist.
@@ -876,6 +884,28 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     };
   });
 
+  // Conversion-funnel + per-channel CAC readout (ADAAAA-6368, plan §3b.2).
+  // Admin-only; on demand. Reports N users per funnel stage (signup ->
+  // activate -> generate -> subscribe -> retain), the same dimensioned by
+  // acquisition channel, and CAC per channel = recorded spend / paying
+  // subscribers attributed to that channel. Feed channel spend via
+  // POST /admin/spend.
+  app.get("/admin/funnel", { preHandler: adminReq }, async () => await db.funnelReport());
+
+  // Record / inspect per-channel ad spend over the paid-acquisition window so
+  // CAC per channel is computable (ADAAAA-6368). Spend is an input from the ad
+  // platform (Meta / Google / referral) ledger; upserted per channel.
+  app.post<{ Body: { channel?: string; spendUsd?: number; note?: string } }>("/admin/spend", { preHandler: adminReq }, async (req: any, reply) => {
+    const channel = (req.body?.channel ?? "").trim().toLowerCase();
+    const spendUsd = Number(req.body?.spendUsd);
+    if (!channel) return reply.code(400).send({ error: "channel required" });
+    if (!Number.isFinite(spendUsd) || spendUsd < 0) return reply.code(400).send({ error: "spendUsd must be a non-negative number" });
+    const stored = await db.recordChannelSpend(channel, Number(spendUsd.toFixed(2)), req.body?.note || null);
+    return stored;
+  });
+
+  app.get("/admin/spend", { preHandler: adminReq }, async () => ({ spend: await db.listChannelSpend() }));
+
   app.get("/admin/waitlist", { preHandler: adminReq }, async () => ({
     entries: (await db.listWaitlist()).map((w) => ({
       email: w.email,
@@ -904,6 +934,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   app.post<{ Body: { returnPath?: string } }>("/billing/checkout", { preHandler: authReq }, async (req, reply) => {
     try {
+      // Attribution at checkout: if the user signed up without a channel but
+      // this checkout carries UTM, capture it (COALESCE keeps the first-touch
+      // signup value when present). Subscribe event is recorded on activation.
+      const att = attributionFrom(req);
+      if (att.channel || att.utmSource) await db.setAttribution((req as any).user.id, att);
       return await billing.createCheckout((req as any).user, req.body?.returnPath || "/billing");
     } catch (e: any) {
       return reply.code(400).send({ error: e.message || "billing not configured" });
@@ -1053,6 +1088,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         stripeSubscriptionId: req.body?.stripeSubscriptionId || "wireframe_sub",
         stripeSubItemId: (req.body?.noMeter ?? false) ? null : "si_wire_metered",
       });
+      // Funnel stage 4: subscribe (only on a paid, active Pro conversion).
+      if (sub.tier === "pro" && sub.status === "active") await recordSubscribeFunnel(db, user.id);
       return reply.send({ ok: true, sub });
     });
 
@@ -1126,6 +1163,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const live = !!req.body.source && req.body.source !== "file";
       if (!videoPath && !(live && (req.body.source === "screen" || req.body.source === "browser")))
         return reply.code(400).send({ error: "videoPath required for this source" });
+      // Funnel activate/retain detection: read the user's prior-job state BEFORE
+      // this job is persisted so the new job cannot consume the "first job" slot.
+      const priorJobs = await db.countJobsForUser(user.id);
+      const firstJobAt = priorJobs > 0 ? await db.firstJobAt(user.id) : null;
       const job = await store.createJob({
         ownerId: user.id,
         source: (req.body.source ?? "file") as any,
@@ -1135,6 +1176,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         sampleFps: req.body.sampleFps,
       });
       await store.patchJob(job.id, { status: "active" });
+      await recordJobFunnel(db, user.id, priorJobs, firstJobAt, cfg.funnelRetainDays);
       if (req.body.source === "browser") {
         // Client-side capture (screen share / element capture): the client posts
         // sampled frames to /jobs/:id/ingest and a recording to
@@ -1291,6 +1333,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sampleFps = undefined;
     }
 
+    const priorJobs = await db.countJobsForUser(user.id);
+    const firstJobAt = priorJobs > 0 ? await db.firstJobAt(user.id) : null;
     const job = await store.createJob({
       id: jobId,
       ownerId: user.id,
@@ -1301,6 +1345,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sampleFps,
     });
     await store.patchJob(job.id, { status: "active" });
+    await recordJobFunnel(db, user.id, priorJobs, firstJobAt, cfg.funnelRetainDays);
     try {
       return await runVodJob(job, finalPath, user, sub);
     } catch (e: any) {
@@ -1431,6 +1476,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     await rename(session.stagePath, session.finalPath);
     uploadSessions.delete(uploadId);
     const sub = await db.getSubscription(user.id);
+    const priorJobs = await db.countJobsForUser(user.id);
+    const firstJobAt = priorJobs > 0 ? await db.firstJobAt(user.id) : null;
     const job = await store.createJob({
       id: uploadId,
       ownerId: user.id,
@@ -1441,6 +1488,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sampleFps: session.sampleFps,
     });
     await store.patchJob(job.id, { status: "active" });
+    await recordJobFunnel(db, user.id, priorJobs, firstJobAt, cfg.funnelRetainDays);
     // The full file is already reassembled on origin; running the rebuild+
     // analyze pipeline SYNCHRONOUSLY here blocks this request for minutes on a
     // long VOD, which outlasts the Cloudflare/tunnel edge request timeout and
@@ -1598,6 +1646,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             // quota once (like VOD/live). Board-capture jobs must also count
             // toward the monthly clip quota.
             await entitlements.onClipGenerated(duser);
+            // Funnel stage 3: generate (a highlight was produced).
+            await recordGenerateFunnel(db, duser.id);
             emitJobEvent(req.params.id, { seq, timestamp, type: "highlight", highlight });
           }
         }
