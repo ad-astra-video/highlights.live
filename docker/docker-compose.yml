@@ -73,6 +73,12 @@ services:
       # ball/detection recall and cleaner <OD> labels. Weights are warm in the
       # HF cache mount below; no download on cold boot.
       - FLORENCE_MODEL=microsoft/Florence-2-large-ft
+      # ADAAAA-6395: bounded zoomed-crop/ROI second pass to recover small/far/
+      # occluded soccer balls the full-frame <OD> pass misses. Opt-in (default
+      # off) so live per-frame inference cost is unchanged until an explicit
+      # handoff sets PERCEIVE_ROI_ENABLED=1 (e.g. via docker/.env on the box).
+      - PERCEIVE_ROI_ENABLED=${PERCEIVE_ROI_ENABLED:-0}
+      - PERCEIVE_ROI_GRID=${PERCEIVE_ROI_GRID:-3x4}
       # HF token required to pull the gated facebook/sam3.1 weights on a COLD HF
       # cache. Comes from docker/.env / shell at deploy time, never committed. A
       # warm HF cache (see HF_CACHE_DIR mount below) boots without it.
