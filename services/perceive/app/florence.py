@@ -158,6 +158,100 @@ _LABEL_SUBTOKENS: dict[str, str] = {
 }
 
 
+# --- Bounded zoomed-crop / ROI pass config (ADAAAA-6395) ----------------------
+# The full-frame <OD> pass misses small/far/occluded balls at the model's fixed
+# 768x768 normalize. The ROI second pass re-runs <OD> on bounded overlapping
+# zoomed crops of the lower play area so the ball occupies a larger fraction of
+# model input, then maps any recovered ball back to source coordinates. It is
+# bounded (only fires on soccer frames that produced no soccer ball; no
+# dataset/GPU scale-up), configurable, and never raises. Ops can dial it down or
+# off via env without a code change.
+_ROI_ENV_ENABLED = "PERCEIVE_ROI_ENABLED"  # "1"/"0"
+_ROI_ENV_GRID = "PERCEIVE_ROI_GRID"  # "<rows>x<cols>", e.g. "3x4"
+_ROI_ENV_YFRAC = "PERCEIVE_ROI_YFRAC"  # crop region starts this fraction from top
+_ROI_ENV_OVERLAP = "PERCEIVE_ROI_OVERLAP"
+_ROI_MAX_TILES = 24
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _roi_enabled() -> bool:
+    # Opt-in by default (ADAAAA-6395): the bounded cropped second pass is
+    # explicitly approved for the Leg A measurement, but flipping it on changes
+    # live per-frame inference cost. Leave live serving unchanged until an
+    # explicit handoff sets PERCEIVE_ROI_ENABLED=1.
+    return os.environ.get(_ROI_ENV_ENABLED, "0").strip().lower() not in ("0", "false", "no")
+
+
+def _roi_config() -> tuple[int, int, float, float]:
+    """Return (rows, cols, yfrac, overlap). Bounded to _ROI_MAX_TILES."""
+    rows, cols = 3, 4
+    raw = os.environ.get(_ROI_ENV_GRID, "3x4")
+    try:
+        r, c = raw.strip().lower().split("x")
+        rows, cols = max(1, int(r)), max(1, int(c))
+    except (ValueError, AttributeError):
+        rows, cols = 3, 4
+    if rows * cols > _ROI_MAX_TILES:
+        # clamp to keep the second pass bounded; preserve aspect
+        cols = max(1, _ROI_MAX_TILES // rows)
+    yfrac = min(0.6, max(0.0, _env_float(_ROI_ENV_YFRAC, 0.18)))
+    overlap = min(0.4, max(0.0, _env_float(_ROI_ENV_OVERLAP, 0.15)))
+    return rows, cols, yfrac, overlap
+
+
+def _roi_tiles(W: int, region_h: int, rows: int, cols: int, overlap: float, y0: int) -> list[tuple[int, int, int, int]]:
+    """Return source-frame rects (x0, y0, x1, y1) for an overlapping zoomed-crop
+    grid over the lower play area. Each tile is centered on its grid cell and
+    extends by `overlap` fraction on each side (clamped to the region) so a ball
+    straddling a cell edge is not cut in half across tiles."""
+    if W < 8 or region_h < 8 or rows < 1 or cols < 1:
+        return []
+    step_x = W / float(cols)
+    step_y = region_h / float(rows)
+    extend = 1.0 + overlap
+    rects = []
+    for j in range(rows):
+        for i in range(cols):
+            cx = i * step_x
+            cy = j * step_y
+            tile_w = step_x * extend
+            tile_h = step_y * extend
+            x0 = int(max(0, cx + step_x / 2 - tile_w / 2))
+            ty0 = int(max(0, cy + step_y / 2 - tile_h / 2))
+            x1 = int(min(W, x0 + tile_w))
+            ty1 = int(min(region_h, ty0 + tile_h))
+            if (x1 - x0) >= 8 and (ty1 - ty0) >= 8:
+                rects.append((x0, y0 + ty0, x1, y0 + ty1))
+    return rects
+
+
+def _iou(a: tuple[float, ...], b: tuple[float, ...]) -> float:
+    """Intersection-over-union of two normalized [x1,y1,x2,y2] boxes."""
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _max_iou(box: list[float], boxes: list[tuple[float, ...]]) -> float:
+    """Max IoU of `box` against `boxes` (already-emitted detections)."""
+    b = (box[0], box[1], box[2], box[3])
+    best = 0.0
+    for other in boxes:
+        best = max(best, _iou(b, other))
+    return best
+
+
 def canonical_sport(game_hint: Optional[str] = None) -> Optional[str]:
     """Resolve a raw game hint to its canonical sport key (or None if unknown).
 
@@ -395,6 +489,7 @@ class FlorenceDetector:
         image: "np.ndarray",
         task: str = "<OD>",
         vocabulary: Optional[list[str]] = None,
+        roi_pass: bool = True,
     ) -> list[dict]:
         """image: HxWx3 RGB uint8. Returns [{label, confidence, bbox:[x1,y1,x2,y2] normalized}].
 
@@ -409,6 +504,12 @@ class FlorenceDetector:
 
         NOTE: the <OD> task token accepts no input, so the vocabulary is applied
         as a post-inference gate, not inside the prompt (see module docstring).
+
+        `roi_pass` (ADAAAA-6395): when True and the closed vocabulary is soccer
+        and this frame produced no soccer ball, run the bounded zoomed-crop/ROI
+        second pass (see `_run_roi_pass`) to recover small/far/occluded balls.
+        Callers only interested in tracking boxes (the SAM re-detect path) should
+        pass `roi_pass=False` to avoid the extra per-frame inference.
         """
         self.load()
         from PIL import Image
@@ -419,8 +520,28 @@ class FlorenceDetector:
         # Bare <OD> prompt — the task token, nothing else (Florence-2 has no
         # <OD> input channel; appending the vocabulary here raises AssertionError).
         prompt = build_od_prompt(task, vocabulary)
-        inputs = self._processor(images=pil, text=prompt, return_tensors="pt")
+        text = self._infer(pil, prompt)
+        objs, stats = self._parse_with_stats(text, vocabulary=vocabulary)
+        # Bounded zoomed-crop / ROI pass (ADAAAA-6395): the full-frame <OD> pass
+        # misses small/far/occluded balls at the fixed 768 model normalize. When
+        # the closed vocabulary is soccer and this frame produced no soccer ball,
+        # re-run <OD> on bounded zoomed crops of the play area so the ball occupies
+        # a larger fraction of model input, then merge recovered in-roster ball
+        # detections mapped back to source coordinates. Bounded: only fires on
+        # soccer frames missing a ball (no dataset/GPU scale-up), never raises
+        # (0-crash invariant), and is fully configurable via PERCEIVE_ROI_* env.
+        # `stats` stays the primary full-frame parse so the closed-vocab gate
+        # metrics (parsed/gated/emitted/void) remain defined on the <OD> pass and
+        # are not inflated by per-tile duplicate boxes.
+        if roi_pass and vocabulary and _roi_enabled():
+            objs = self._run_roi_pass(image, vocabulary, objs)
+        self.stats = stats
+        return objs
 
+    def _infer(self, pil, prompt: str) -> str:
+        """Run one Florence-2 generation on a PIL image with the given prompt,
+        dispatching to the OpenVINO or torch backend. Returns decoded text."""
+        inputs = self._processor(images=pil, text=prompt, return_tensors="pt")
         if self._ov_model is not None:
             # OpenVINO runner manages its own devices; it needs the raw token ids
             # plus pixels to merge image + task-prompt embeddings internally.
@@ -438,9 +559,67 @@ class FlorenceDetector:
                 generated = self._model.generate(
                     **inputs, num_beams=3, max_new_tokens=1024, do_sample=False
                 )
-        text = self._processor.batch_decode(generated, skip_special_tokens=False)[0]
-        objs, stats = self._parse_with_stats(text, vocabulary=vocabulary)
-        self.stats = stats
+        assert self._processor is not None  # load() always sets it before detect()
+        return self._processor.batch_decode(generated, skip_special_tokens=False)[0]
+
+    def _run_roi_pass(self, image: "np.ndarray", vocabulary: list[str], objs: list[dict]) -> list[dict]:
+        """Bounded zoomed-crop/ROI second pass (ADAAAA-6395).
+
+        Only meaningful for a soccer closed vocabulary. Runs <OD> on bounded
+        overlapping zoomed crops of the lower play area, maps detected balls back
+        to source-normalized coordinates, and merges the recovered balls into
+        `objs` (deduped by IoU against already-emitted boxes). Any failure logs
+        and returns `objs` unchanged — the ROI pass must never crash the frame.
+        """
+        vocab_lower = [str(v).strip().lower() for v in vocabulary if str(v).strip()]
+        if "soccer ball" not in vocab_lower:
+            return objs
+        # Already have a ball on this frame -> nothing to recover.
+        if any((o.get("label") or "").lower() == "soccer ball" for o in objs):
+            return objs
+        try:
+            from PIL import Image
+
+            if image.ndim == 2:
+                image = np.stack([image] * 3, axis=-1)
+            H, W = image.shape[:2]
+            if H < 32 or W < 32:
+                return objs
+            rows, cols, yfrac, overlap = _roi_config()
+            region_h = H - int(H * yfrac)
+            if region_h < 16:
+                return objs
+            rects = _roi_tiles(W, region_h, rows, cols, overlap, int(H * yfrac))
+            existing = [tuple(round(float(x), 4) for x in o["bbox"]) for o in objs if o.get("bbox")]
+            for (x0, t0, x1, t1) in rects:
+                crop = image[t0:t1, x0:x1]
+                if crop.shape[0] < 8 or crop.shape[1] < 8:
+                    continue
+                cw = x1 - x0
+                ch = t1 - t0
+                text = self._infer(
+                    Image.fromarray(crop.astype(np.uint8)).convert("RGB"), "<OD>"
+                )
+                crop_objs, _ = self._parse_with_stats(text, vocabulary=vocabulary)
+                for o in crop_objs:
+                    if (o.get("label") or "").lower() != "soccer ball":
+                        continue
+                    b = o.get("bbox")
+                    if b is None:
+                        continue
+                    bx0, by0, bx1, by1 = b
+                    nb = [
+                        max(0.0, min(1.0, (x0 + float(bx0) * cw) / W)),
+                        max(0.0, min(1.0, (t0 + float(by0) * ch) / H)),
+                        max(0.0, min(1.0, (x0 + float(bx1) * cw) / W)),
+                        max(0.0, min(1.0, (t0 + float(by1) * ch) / H)),
+                    ]
+                    if _max_iou(nb, existing) > 0.35:
+                        continue  # same ball already emitted (dedupe across tiles)
+                    objs.append({**o, "bbox": nb, "roi": True})
+                    existing.append(tuple(round(float(x), 4) for x in nb))
+        except Exception as e:  # pragma: no cover - defensive; keep 0-crash invariant
+            log.warning("roi pass skipped for frame: %s", e)
         return objs
 
     def ocr(self, image: "np.ndarray") -> list[str]:

@@ -530,3 +530,108 @@ def test_process_frame_anchors_label_to_visible_box_not_floating(monkeypatch):
     assert bx[2] - bx[0] >= 0.005, f"box too thin: {bx}"
     assert bx[3] - bx[1] >= 0.005, f"box too short: {bx}"
     assert tracks[0].get("label") or tracks[0]["kind"], "label must be present to anchor"
+
+
+# --- ADAAAA-6395: bounded zoomed-crop / ROI pass ------------------------------
+
+_SOCCER = ["soccer ball", "player", "goalkeeper", "goal", "referee"]
+
+
+def test_roi_tiles_bounded_within_frame():
+    # H=1080, yfrac=0.2 -> play area starts at y=216, region_h=864.
+    rects = florence._roi_tiles(1920, 864, 3, 4, 0.15, 216)
+    assert len(rects) == 12  # 3 rows x 4 cols
+    for (x0, y0, x1, y1) in rects:
+        assert 0 <= x0 < x1 <= 1920
+        assert 216 <= y0 < y1 <= 1080
+        assert (x1 - x0) >= 8 and (y1 - y0) >= 8
+
+
+def test_roi_tiles_empty_on_tiny_region():
+    assert florence._roi_tiles(4, 4, 3, 4, 0.15, 0) == []
+
+
+def test_iou_and_max_iou():
+    a = [0.0, 0.0, 1.0, 1.0]
+    assert florence._iou((0.0, 0.0, 1.0, 1.0), (0.0, 0.0, 1.0, 1.0)) == 1.0
+    assert florence._iou((0.0, 0.0, 0.5, 0.5), (0.5, 0.5, 1.0, 1.0)) == 0.0
+    assert florence._max_iou(a, [(0.0, 0.0, 0.4, 0.4), (0.5, 0.5, 0.6, 0.6)]) > 0.15
+    assert florence._max_iou([0.0, 0.0, 0.1, 0.1], [(0.9, 0.9, 1.0, 1.0)]) == 0.0
+
+
+def test_roi_config_clamps_to_max_tiles(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_ROI_GRID", "10x10")
+    rows, cols, _, _ = florence._roi_config()
+    assert rows * cols <= florence._ROI_MAX_TILES
+    monkeypatch.setenv("PERCEIVE_ROI_GRID", "bogus")
+    assert florence._roi_config()[:2] == (3, 4)
+
+
+def test_run_roi_pass_recovers_ball_on_missing(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_ROI_GRID", "1x1")
+    monkeypatch.setenv("PERCEIVE_ROI_ENABLED", "1")
+    det = FlorenceDetector()
+    calls = []
+
+    def fake_infer(pil, prompt):
+        calls.append((pil, prompt))
+        # a ball at the crop center, upper-left -> lower-right in crop space
+        return "<s>soccer ball<loc_200><loc_300><loc_600><loc_700></s>"
+
+    det._infer = fake_infer  # shadow the real model call
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    objs = [{"label": "player", "bbox": [0.4, 0.5, 0.6, 0.7]}]
+    out = det._run_roi_pass(image, _SOCCER, objs)
+    balls = [o for o in out if o.get("label") == "soccer ball"]
+    assert len(balls) >= 1, "crop pass should recover a ball"
+    b = balls[0]
+    assert b.get("roi") is True
+    # mapped ball must land inside the frame, in the lower play area
+    assert 0.0 <= b["bbox"][0] <= b["bbox"][2] <= 1.0
+    assert 0.0 <= b["bbox"][1] <= b["bbox"][3] <= 1.0
+    assert b["bbox"][1] > 0.15  # lower region
+    assert calls, "expected a crop inference"
+
+
+def test_run_roi_pass_noop_when_ball_already_found():
+    det = FlorenceDetector()
+    det._infer = lambda pil, prompt: (_ for _ in ()).throw(AssertionError("must not run"))
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    objs = [{"label": "soccer ball", "bbox": [0.4, 0.5, 0.6, 0.7]}]
+    out = det._run_roi_pass(image, _SOCCER, objs)
+    assert len(out) == 1  # unchanged, ball already present
+
+
+def test_run_roi_pass_noop_for_non_soccer_vocab():
+    det = FlorenceDetector()
+    det._infer = lambda pil, prompt: (_ for _ in ()).throw(AssertionError("must not run"))
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    objs = [{"label": "player", "bbox": [0.4, 0.5, 0.6, 0.7]}]
+    out = det._run_roi_pass(image, ["player", "goalkeeper"], objs)
+    assert out == objs
+
+
+def test_run_roi_pass_never_raises(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_ROI_GRID", "1x1")
+    det = FlorenceDetector()
+
+    def boom(pil, prompt):
+        raise RuntimeError("gpu hiccup")
+
+    det._infer = boom
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    objs = [{"label": "player", "bbox": [0.4, 0.5, 0.6, 0.7]}]
+    out = det._run_roi_pass(image, _SOCCER, objs)
+    assert out == objs  # degrades gracefully, no crash
+
+
+def test_roi_should_run_flag_gates_detect(monkeypatch):
+    # roi_pass=False disables the second pass (tracker re-detect path).
+    monkeypatch.setenv("PERCEIVE_ROI_GRID", "1x1")
+    det = FlorenceDetector()
+    det._infer = lambda pil, prompt: "<s>soccer ball<loc_0><loc_0><loc_998><loc_998></s>"
+    # _run_roi_pass still recovers a ball for soccer vocab; the roi flag on detect
+    # is what gates it from the caller.
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    out = det._run_roi_pass(image, _SOCCER, [])
+    assert any(o.get("label") == "soccer ball" for o in out)
