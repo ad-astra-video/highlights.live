@@ -41,9 +41,13 @@ export function Billing() {
       // captured at checkout too (ADAAAA-6368); the server keeps the first-touch
       // signup channel when one already exists.
       const us = p.get("utm_source");
+      const um = p.get("utm_medium");
       const uc = p.get("utm_campaign");
+      const uct = p.get("utm_content");
       if (us) body.utmSource = us;
+      if (um) body.utmMedium = um;
       if (uc) body.utmCampaign = uc;
+      if (uct) body.utmContent = uct;
       const r = await api<{ url: string }>("/billing/checkout", { body });
       window.location.href = r.url; // wireframe: local URL w/ ?wireframe=checkout=success
     } catch (e: any) {

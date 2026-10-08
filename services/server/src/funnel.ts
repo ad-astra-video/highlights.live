@@ -40,20 +40,35 @@ export interface Attribution {
   channel: string | null;
   utmSource: string | null;
   utmCampaign: string | null;
+  /** Medium / creative variant (e.g. "social", "email", "explainer" or a
+   * specific content slug) so multiple placements under one source are
+   * distinguishable in the CAC drilldown (content-referral launch, ADAAAA-6384). */
+  utmMedium: string | null;
+  utmContent: string | null;
+}
+
+function firstStr(...vals: unknown[]): string | null {
+  for (const v of vals) if (typeof v === "string" && v.trim()) return v;
+  return null;
 }
 
 /** Extract acquisition attribution from an inbound register/checkout request.
  * Accepts a `channel` and/or raw UTM params from the query string or body
- * (the webapp sends `utm_source`/`utm_campaign` from the landing URL). The
- * `channel` is normalized; the raw UTM values are kept for reporting. */
+ * (the webapp sends `utm_source`/`utm_medium`/`utm_campaign`/`utm_content`
+ * from the landing URL). The `channel` is normalized; the raw UTM values are
+ * kept for reporting. `utm_source=content_referral` is a first-class channel
+ * (ADAAAA-6384) — the `content_referral` key is preserved verbatim so its
+ * per-channel CAC rolls up cleanly. */
 export function attributionFrom(req: { query?: any; body?: any }): Attribution {
   const q = req.query ?? {};
   const b = req.body ?? {};
-  const utmSource = (b.utmSource ?? b.utm_source ?? q.utm_source ?? q.utmSource ?? null) as string | null;
-  const utmCampaign = (b.utmCampaign ?? b.utm_campaign ?? q.utm_campaign ?? q.utmCampaign ?? null) as string | null;
+  const utmSource = firstStr(b.utmSource, b.utm_source, q.utm_source, q.utmSource);
+  const utmCampaign = firstStr(b.utmCampaign, b.utm_campaign, q.utm_campaign, q.utmCampaign);
+  const utmMedium = firstStr(b.utmMedium, b.utm_medium, q.utm_medium, q.utmMedium);
+  const utmContent = firstStr(b.utmContent, b.utm_content, q.utm_content, q.utmContent);
   let channel = (b.channel ?? q.channel ?? null) as string | null;
   if (!channel && utmSource) channel = utmSource;
-  return { channel: normalizeChannel(channel), utmSource, utmCampaign };
+  return { channel: normalizeChannel(channel), utmSource, utmCampaign, utmMedium, utmContent };
 }
 
 /** True when a subscription is a paid, active Pro (CAC-converting) state. */

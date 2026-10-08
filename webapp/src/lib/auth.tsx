@@ -13,7 +13,7 @@ interface AuthCtx {
   billing: BillingStatus | null;
   ready: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, inviteCode?: string, utm?: { utmSource?: string; utmCampaign?: string }) => Promise<void>;
+  register: (email: string, password: string, inviteCode?: string, utm?: { utmSource?: string; utmCampaign?: string; utmMedium?: string; utmContent?: string }) => Promise<void>;
   logout: () => void;
   refreshBilling: () => Promise<void>;
   /**
@@ -78,6 +78,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (utm) {
           if (utm.utmSource) body.utmSource = utm.utmSource;
           if (utm.utmCampaign) body.utmCampaign = utm.utmCampaign;
+          if (utm.utmMedium) body.utmMedium = utm.utmMedium;
+          if (utm.utmContent) body.utmContent = utm.utmContent;
         }
         const r = await api<{ token: string; user: SessionUser }>("/auth/register", { body });
         setToken(r.token);

@@ -24,7 +24,7 @@ export function Landing() {
   const utmQuery = (() => {
     const p = new URLSearchParams(window.location.search);
     const out = new URLSearchParams();
-    for (const k of ["utm_source", "utm_campaign", "channel"]) {
+    for (const k of ["utm_source", "utm_medium", "utm_campaign", "utm_content", "channel"]) {
       const v = p.get(k);
       if (v) out.set(k, v);
     }
@@ -49,9 +49,13 @@ export function Landing() {
       const p = new URLSearchParams(window.location.search);
       const body: any = { email: value };
       const us = p.get("utm_source");
+      const um = p.get("utm_medium");
       const uc = p.get("utm_campaign");
+      const uct = p.get("utm_content");
       if (us) body.utmSource = us;
+      if (um) body.utmMedium = um;
       if (uc) body.utmCampaign = uc;
+      if (uct) body.utmContent = uct;
       await api("/waitlist", { auth: false, body });
       setStatus("done");
     } catch (err: any) {
