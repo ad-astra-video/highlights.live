@@ -57,7 +57,7 @@ export class AuthService {
    * Otherwise registration is rejected with BetaGateError (HTTP 403) and the
    * visitor keeps the waitlist confirmation instead of reaching the product.
    */
-  async register(email: string, password: string, inviteCode?: string, attribution?: { channel?: string | null; utmSource?: string | null; utmCampaign?: string | null }): Promise<AuthResult> {
+  async register(email: string, password: string, inviteCode?: string, attribution?: { channel?: string | null; utmSource?: string | null; utmCampaign?: string | null; utmMedium?: string | null; utmContent?: string | null }): Promise<AuthResult> {
     const clean = email.trim().toLowerCase();
     if (await this.db.getUserByEmail(clean)) throw new Error("email already registered");
     if (password.length < 8) throw new Error("password must be at least 8 characters");
@@ -93,6 +93,8 @@ export class AuthService {
       channel: attribution?.channel ?? null,
       utmSource: attribution?.utmSource ?? null,
       utmCampaign: attribution?.utmCampaign ?? null,
+      utmMedium: attribution?.utmMedium ?? null,
+      utmContent: attribution?.utmContent ?? null,
     });
     return this.issue(user);
   }

@@ -42,6 +42,10 @@ export interface User {
   /** Raw UTM parameters captured at signup (optional; for audit/reporting). */
   utmSource?: string | null;
   utmCampaign?: string | null;
+  /** UTM medium / content variant (per-placement) captured at signup so
+   * multiple placements under one channel are distinguishable (ADAAAA-6384). */
+  utmMedium?: string | null;
+  utmContent?: string | null;
 }
 
 /** A waitlist signup (public capture). Flipped to `invited` by the cohort
@@ -400,7 +404,7 @@ export interface Db {
   incrementDecideQuota(userId: string, period: string): Promise<number>;
   // --- conversion funnel + per-channel CAC (ADAAAA-6368) ---
   /** Persist the user's acquisition attribution (channel + raw UTM). */
-  setAttribution(userId: string, a: { channel?: string | null; utmSource?: string | null; utmCampaign?: string | null }): Promise<void>;
+  setAttribution(userId: string, a: { channel?: string | null; utmSource?: string | null; utmCampaign?: string | null; utmMedium?: string | null; utmContent?: string | null }): Promise<void>;
   /** Record a funnel stage event once per (user, stage), dimensioned by the
    * user's channel attribute. Idempotent: a repeated call for the same stage
    * is a no-op. */
@@ -454,10 +458,10 @@ export class SqliteDb implements Db {
     const createdAt = u.createdAt ?? new Date().toISOString();
     this.db
       .prepare(
-        "INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id,beta_activated_at,channel,utm_source,utm_campaign) VALUES (?,?,?,?,?,?,?,?,?,?)"
+        "INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id,beta_activated_at,channel,utm_source,utm_campaign,utm_medium,utm_content) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
       )
-      .run(u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null, u.betaActivatedAt ?? null, u.channel ?? null, u.utmSource ?? null, u.utmCampaign ?? null);
-    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null, betaActivatedAt: u.betaActivatedAt ?? null, channel: u.channel ?? null, utmSource: u.utmSource ?? null, utmCampaign: u.utmCampaign ?? null };
+      .run(u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null, u.betaActivatedAt ?? null, u.channel ?? null, u.utmSource ?? null, u.utmCampaign ?? null, u.utmMedium ?? null, u.utmContent ?? null);
+    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null, betaActivatedAt: u.betaActivatedAt ?? null, channel: u.channel ?? null, utmSource: u.utmSource ?? null, utmCampaign: u.utmCampaign ?? null, utmMedium: u.utmMedium ?? null, utmContent: u.utmContent ?? null };
   }
 
   async activateUser(userId: string): Promise<void> {
@@ -895,10 +899,10 @@ export class SqliteDb implements Db {
   }
 
   // --- conversion funnel + per-channel CAC (ADAAAA-6368) ---
-  async setAttribution(userId: string, a: { channel?: string | null; utmSource?: string | null; utmCampaign?: string | null }): Promise<void> {
+  async setAttribution(userId: string, a: { channel?: string | null; utmSource?: string | null; utmCampaign?: string | null; utmMedium?: string | null; utmContent?: string | null }): Promise<void> {
     this.db
-      .prepare("UPDATE users SET channel = COALESCE(?, channel), utm_source = COALESCE(?, utm_source), utm_campaign = COALESCE(?, utm_campaign) WHERE id = ?")
-      .run(a.channel ?? null, a.utmSource ?? null, a.utmCampaign ?? null, userId);
+      .prepare("UPDATE users SET channel = COALESCE(?, channel), utm_source = COALESCE(?, utm_source), utm_campaign = COALESCE(?, utm_campaign), utm_medium = COALESCE(?, utm_medium), utm_content = COALESCE(?, utm_content) WHERE id = ?")
+      .run(a.channel ?? null, a.utmSource ?? null, a.utmCampaign ?? null, a.utmMedium ?? null, a.utmContent ?? null, userId);
   }
 
   async recordFunnelEvent(userId: string, eventType: FunnelStage, at = new Date().toISOString()): Promise<void> {
@@ -1010,10 +1014,10 @@ export class PgDb implements Db {
   async createUser(u: Omit<User, "createdAt"> & { createdAt?: string }): Promise<User> {
     const createdAt = u.createdAt ?? new Date().toISOString();
     await this.pool.query(
-      "INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id,beta_activated_at,channel,utm_source,utm_campaign) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-      [u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null, u.betaActivatedAt ?? null, u.channel ?? null, u.utmSource ?? null, u.utmCampaign ?? null]
+      "INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id,beta_activated_at,channel,utm_source,utm_campaign,utm_medium,utm_content) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+      [u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null, u.betaActivatedAt ?? null, u.channel ?? null, u.utmSource ?? null, u.utmCampaign ?? null, u.utmMedium ?? null, u.utmContent ?? null]
     );
-    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null, betaActivatedAt: u.betaActivatedAt ?? null, channel: u.channel ?? null, utmSource: u.utmSource ?? null, utmCampaign: u.utmCampaign ?? null };
+    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null, betaActivatedAt: u.betaActivatedAt ?? null, channel: u.channel ?? null, utmSource: u.utmSource ?? null, utmCampaign: u.utmCampaign ?? null, utmMedium: u.utmMedium ?? null, utmContent: u.utmContent ?? null };
   }
 
   async activateUser(userId: string): Promise<void> {
@@ -1444,10 +1448,10 @@ export class PgDb implements Db {
   }
 
   // --- conversion funnel + per-channel CAC (ADAAAA-6368) ---
-  async setAttribution(userId: string, a: { channel?: string | null; utmSource?: string | null; utmCampaign?: string | null }): Promise<void> {
+  async setAttribution(userId: string, a: { channel?: string | null; utmSource?: string | null; utmCampaign?: string | null; utmMedium?: string | null; utmContent?: string | null }): Promise<void> {
     await this.pool.query(
-      "UPDATE users SET channel = COALESCE($2, channel), utm_source = COALESCE($3, utm_source), utm_campaign = COALESCE($4, utm_campaign) WHERE id = $1",
-      [userId, a.channel ?? null, a.utmSource ?? null, a.utmCampaign ?? null]
+      "UPDATE users SET channel = COALESCE($2, channel), utm_source = COALESCE($3, utm_source), utm_campaign = COALESCE($4, utm_campaign), utm_medium = COALESCE($5, utm_medium), utm_content = COALESCE($6, utm_content) WHERE id = $1",
+      [userId, a.channel ?? null, a.utmSource ?? null, a.utmCampaign ?? null, a.utmMedium ?? null, a.utmContent ?? null]
     );
   }
 
@@ -1527,7 +1531,9 @@ const SCHEMA_SQLITE = `
     beta_activated_at TEXT,
     channel TEXT,
     utm_source TEXT,
-    utm_campaign TEXT
+    utm_campaign TEXT,
+    utm_medium TEXT,
+    utm_content TEXT
   );
   CREATE TABLE IF NOT EXISTS subscriptions (
     user_id TEXT PRIMARY KEY,
@@ -1672,7 +1678,9 @@ const SCHEMA_PG = `
     beta_activated_at TEXT,
     channel TEXT,
     utm_source TEXT,
-    utm_campaign TEXT
+    utm_campaign TEXT,
+    utm_medium TEXT,
+    utm_content TEXT
   );
   CREATE TABLE IF NOT EXISTS subscriptions (
     user_id TEXT PRIMARY KEY,
@@ -1939,6 +1947,10 @@ const MIGRATIONS: Migration[] = [
       if (!(await hasColumn("users", "channel"))) await exec("ALTER TABLE users ADD COLUMN channel TEXT");
       if (!(await hasColumn("users", "utm_source"))) await exec("ALTER TABLE users ADD COLUMN utm_source TEXT");
       if (!(await hasColumn("users", "utm_campaign"))) await exec("ALTER TABLE users ADD COLUMN utm_campaign TEXT");
+      // ADAAAA-6384: per-placement UTM medium/content so content-referral
+      // placements are distinguishable in the CAC drilldown.
+      if (!(await hasColumn("users", "utm_medium"))) await exec("ALTER TABLE users ADD COLUMN utm_medium TEXT");
+      if (!(await hasColumn("users", "utm_content"))) await exec("ALTER TABLE users ADD COLUMN utm_content TEXT");
     },
   },
 ];
@@ -1970,6 +1982,8 @@ function rowToUser(r: any): User {
     channel: r.channel ?? null,
     utmSource: r.utm_source ?? null,
     utmCampaign: r.utm_campaign ?? null,
+    utmMedium: r.utm_medium ?? null,
+    utmContent: r.utm_content ?? null,
   };
 }
 

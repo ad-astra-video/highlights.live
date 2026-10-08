@@ -4,6 +4,7 @@ import { Store } from "../src/store";
 import { persistLiveHighlight } from "../src/api";
 import { buildTestApp } from "./helpers";
 import {
+  attributionFrom,
   normalizeChannel,
   recordJobFunnel,
   recordGenerateFunnel,
@@ -21,6 +22,28 @@ describe("funnel channel normalization", () => {
     expect(normalizeChannel(undefined)).toBeNull();
     // Unknown sources are kept verbatim (lowercased) for the CAC rollup.
     expect(normalizeChannel("my-custom-channel")).toBe("my-custom-channel");
+    // content-referral is a first-class launch channel (ADAAAA-6384).
+    expect(normalizeChannel("content_referral")).toBe("content_referral");
+  });
+});
+
+describe("attributionFrom (UTM extraction)", () => {
+  it("captures utm_source/medium/campaign/content from body and query", () => {
+    const fromBody = attributionFrom({
+      body: { utmSource: "content_referral", utmMedium: "social", utmCampaign: "creators-2026", utmContent: "explainer" },
+    });
+    expect(fromBody).toEqual({
+      channel: "content_referral",
+      utmSource: "content_referral",
+      utmCampaign: "creators-2026",
+      utmMedium: "social",
+      utmContent: "explainer",
+    });
+    // Query-string path (landing -> auth redirect) works too.
+    const fromQuery = attributionFrom({
+      query: { utm_source: "facebook", utm_medium: "paid", utm_campaign: "launch", utm_content: "v1" },
+    });
+    expect(fromQuery).toMatchObject({ channel: "meta", utmMedium: "paid", utmContent: "v1" });
   });
 });
 
@@ -169,6 +192,37 @@ describe("funnel + CAC admin readout (api-level)", () => {
     const funnel = await app.app.inject({ method: "GET", url: "/admin/funnel", headers: adminHeaders });
     const meta = funnel.json().cac.find((c: any) => c.channel === "meta");
     expect(meta).toMatchObject({ spendUsd: 50, subscribers: 1, cacUsd: 50 });
+
+    await app.app.close();
+  });
+
+  it("attributes content_referral as its own channel with per-placement UTM + CAC", async () => {
+    const app = await buildTestApp({ BILLING_WIREFRAME: "1" });
+    const adminLogin = await app.app.inject({ method: "POST", url: "/auth/login", payload: { email: "admin@test.local", password: "adminpass" } });
+    expect(adminLogin.statusCode).toBe(200);
+    const adminHeaders = { authorization: `Bearer ${adminLogin.json().token}` };
+
+    // content-referral signup with per-placement UTM (ADAAAA-6384).
+    const reg = await app.app.inject({
+      method: "POST",
+      url: "/auth/register",
+      payload: { email: "creator@example.com", password: "password123", utmSource: "content_referral", utmMedium: "social", utmCampaign: "creators-2026", utmContent: "explainer" },
+    });
+    expect(reg.statusCode).toBe(200);
+    const auth = { authorization: `Bearer ${reg.json().token}` };
+
+    // Subscribe (wireframe) so the channel has a paying subscriber.
+    const act = await app.app.inject({ method: "POST", url: "/dev/billing/activate", headers: auth, payload: { plan: "pro" } });
+    expect(act.statusCode).toBe(200);
+
+    // Record content-referral spend and verify channel-level CAC.
+    await app.app.inject({ method: "POST", url: "/admin/spend", headers: adminHeaders, payload: { channel: "content_referral", spendUsd: 30 } });
+
+    const funnel = await app.app.inject({ method: "GET", url: "/admin/funnel", headers: adminHeaders });
+    expect(funnel.statusCode).toBe(200);
+    expect(funnel.json().perChannel["content_referral"]).toMatchObject({ signup: 1, subscribe: 1 });
+    const cr = funnel.json().cac.find((c: any) => c.channel === "content_referral");
+    expect(cr).toMatchObject({ spendUsd: 30, subscribers: 1, cacUsd: 30 });
 
     await app.app.close();
   });
