@@ -28,7 +28,14 @@ export function AuthPage() {
     setBusy(true);
     try {
       if (mode === "login") return await login(email, password).then(() => nav("/app"));
-      if (mode === "register") return await register(email, password, inviteCode || undefined).then(() => nav("/app"));
+      if (mode === "register") {
+        // Per-channel source attribution (ADAAAA-6368): read the landing-page
+        // UTM params so the signup is attributed to an acquisition channel for
+        // CAC. Kept in the URL through the auth redirect by the landing page.
+        const p = new URLSearchParams(window.location.search);
+        const utm = { utmSource: p.get("utm_source") ?? undefined, utmCampaign: p.get("utm_campaign") ?? undefined };
+        return await register(email, password, inviteCode || undefined, utm).then(() => nav("/app"));
+      }
       // forgot: request a reset link (delivered by email)
       await requestPasswordReset(email);
       setForgotMsg("If an account exists for that email, we sent a reset link. Check your inbox.");
