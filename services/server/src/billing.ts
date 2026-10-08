@@ -276,6 +276,10 @@ export class BillingService {
       stripeSubItemId: item?.id ?? null,
       currentPeriodEnd: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null,
     });
+    // Funnel stage 4: subscribe (a user converted to paid, active Pro). Only
+    // record when the subscription is actually active/trialing so a past_due
+    // renewal does not count as a fresh conversion (ADAAAA-6368).
+    if (status === "active" || status === "trialing") await this.db.recordFunnelEvent(userId, "subscribe");
   }
 }
 

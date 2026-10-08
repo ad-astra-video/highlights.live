@@ -186,6 +186,10 @@ export interface ServerConfig {
    * have been activated (a claimed invite code or an invited waitlist email).
    * Default ON in prod. Tests/off turn it off for the un-gated loop. */
   betaGate: boolean;
+  /** Days after a user's first job before a later job counts them as a
+   * returning (retained) user in the conversion funnel (ADAAAA-6368).
+   * Default 7; `FUNNEL_RETAIN_DAYS`. */
+  funnelRetainDays: number;
   /** Closed-beta auto-publish: when true (default), a clip that a user's job
    * successfully generates is published straight to the public /feed (status
    * "accepted") without an admin review step. This is what makes the beta
@@ -292,6 +296,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     billingWireframe: env.BILLING_WIREFRAME === "1" || env.BILLING_WIREFRAME === "true",
     betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),
     betaGate: env.BETA_GATE === "1" || env.BETA_GATE === "true" || !env.BETA_GATE,
+    funnelRetainDays: Number(env.FUNNEL_RETAIN_DAYS ?? 7),
     autoPublishHighlights: env.AUTO_PUBLISH_HIGHLIGHTS === "0" || env.AUTO_PUBLISH_HIGHLIGHTS === "false" ? false : true,
     rejectTtlMs: Number(env.REJECTED_CLIP_TTL_MS ?? 24 * 60 * 60 * 1000),
     rejectSweepIntervalMs: Number(env.REJECTED_CLIP_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),

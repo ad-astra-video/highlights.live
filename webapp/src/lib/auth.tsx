@@ -13,7 +13,7 @@ interface AuthCtx {
   billing: BillingStatus | null;
   ready: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, inviteCode?: string) => Promise<void>;
+  register: (email: string, password: string, inviteCode?: string, utm?: { utmSource?: string; utmCampaign?: string }) => Promise<void>;
   logout: () => void;
   refreshBilling: () => Promise<void>;
   /**
@@ -70,10 +70,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(r.user);
         await refreshBilling().catch(() => {});
       },
-      async register(email, password, inviteCode) {
-        const r = await api<{ token: string; user: SessionUser }>("/auth/register", {
-          body: inviteCode ? { email, password, inviteCode } : { email, password },
-        });
+      async register(email, password, inviteCode, utm) {
+        const body: any = inviteCode ? { email, password, inviteCode } : { email, password };
+        // Per-channel source attribution (ADAAAA-6368): carry the landing-page
+        // UTM params so the server can attribute this signup to an acquisition
+        // channel for CAC. Sent on the signup (and kept for checkout later).
+        if (utm) {
+          if (utm.utmSource) body.utmSource = utm.utmSource;
+          if (utm.utmCampaign) body.utmCampaign = utm.utmCampaign;
+        }
+        const r = await api<{ token: string; user: SessionUser }>("/auth/register", { body });
         setToken(r.token);
         setTok(r.token);
         setUser(r.user);
