@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import jwt from "jsonwebtoken";
 import { SqliteDb, type Db } from "../src/db";
 import { reportMonitoring, RELIABILITY_FLOOR } from "../src/monitoring";
 import { recordSubscribeFunnel } from "../src/funnel";
@@ -168,6 +169,30 @@ describe("monitoring readout route (api-level)", () => {
     // Admin gate: an unauthenticated request must be rejected.
     const noAuth = await app.app.inject({ method: "GET", url: "/admin/monitoring" });
     expect(noAuth.statusCode).toBe(401);
+
+    await app.app.close();
+  });
+
+  it("read-only admin token reads /admin/monitoring but cannot write (ADAAAA-6388)", async () => {
+    const app = await buildTestApp({ BILLING_WIREFRAME: "1" });
+
+    const roToken = jwt.sign(
+      { sub: "dev-readonly", email: "dev@adastra", role: "admin_readonly" },
+      app.cfg.jwtSecret,
+      { expiresIn: "1h" }
+    );
+    const ro = { authorization: `Bearer ${roToken}` };
+
+    // Read succeeds.
+    const res = await app.app.inject({ method: "GET", url: "/admin/monitoring", headers: ro });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().newJobs).toBeDefined();
+
+    // Write routes reject the read-only token with 403.
+    const writeSpend = await app.app.inject({ method: "POST", url: "/admin/spend", headers: ro, payload: { channel: "meta", spendUsd: 50 } });
+    expect(writeSpend.statusCode).toBe(403);
+    const gate = await app.app.inject({ method: "PUT", url: "/admin/waitlist/gate", headers: ro, payload: { allocationOpen: false } });
+    expect(gate.statusCode).toBe(403);
 
     await app.app.close();
   });

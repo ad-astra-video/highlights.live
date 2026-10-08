@@ -178,6 +178,34 @@ export class AuthService {
       return null;
     }
   }
+
+  /** Decode + verify a bearer JWT (signature + expiry) without requiring a DB row. */
+  private decodePrincipal(token?: string): { sub?: string; email?: string; role?: string } | null {
+    if (!token) return null;
+    try {
+      return jwt.verify(token.replace(/^Bearer\s+/i, ""), this.cfg.jwtSecret) as { sub?: string; email?: string; role?: string };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Verify a standalone READ-ONLY admin service token (role `admin_readonly`,
+   * minted with the server jwtSecret). This is a bounded service credential for
+   * the content-referral CAC readout: it may only read the measurement routes
+   * (GET /admin/funnel, /admin/spend, /admin/monitoring) and carries no DB user
+   * row and no write grant. Returns the principal or null.
+   */
+  verifyReadonly(token?: string): { id: string; email: string; role: "admin_readonly" } | null {
+    const p = this.decodePrincipal(token);
+    if (!p || p.role !== "admin_readonly") return null;
+    return { id: String(p.sub ?? "admin_readonly"), email: String(p.email ?? ""), role: "admin_readonly" };
+  }
+
+  /** True when the bearer token is a valid read-only admin service token. */
+  isValidReadonlyToken(token?: string): boolean {
+    return this.verifyReadonly(token) !== null;
+  }
 }
 
 // --- Fastify middleware factories ---
@@ -191,9 +219,40 @@ export function authRequired(auth: AuthService) {
 
 export function adminRequired(auth: AuthService) {
   return async (req: FastifyRequest, reply: FastifyReply) => {
-    const user = await auth.verify((req.headers.authorization as string) || "");
-    if (!user) return reply.code(401).send({ error: "unauthorized" });
+    const token = (req.headers.authorization as string) || "";
+    const user = await auth.verify(token);
+    if (!user) {
+      // A valid read-only admin service token is authenticated but carries no
+      // write grant, so it is denied as "admin only" (403), not "unauthorized"
+      // (401) — this is what makes the read-only principal reject writes.
+      if (auth.isValidReadonlyToken(token)) return reply.code(403).send({ error: "admin only" });
+      return reply.code(401).send({ error: "unauthorized" });
+    }
     if (user.role !== "admin") return reply.code(403).send({ error: "admin only" });
     (req as any).user = user;
+  };
+}
+
+/**
+ * Read-only measurement-route guard (GET /admin/funnel, /admin/spend,
+ * /admin/monitoring). Accepts either the DB-backed full admin (role "admin")
+ * or a standalone read-only admin service token (role "admin_readonly").
+ * Every write route keeps `adminRequired`, so a read-only token is rejected
+ * there with 403.
+ */
+export function adminReadonlyRequired(auth: AuthService) {
+  return async (req: FastifyRequest, reply: FastifyReply) => {
+    const token = (req.headers.authorization as string) || "";
+    const user = await auth.verify(token);
+    if (user && user.role === "admin") {
+      (req as any).user = user;
+      return;
+    }
+    const ro = auth.verifyReadonly(token);
+    if (ro) {
+      (req as any).user = ro;
+      return;
+    }
+    return reply.code(401).send({ error: "unauthorized" });
   };
 }
