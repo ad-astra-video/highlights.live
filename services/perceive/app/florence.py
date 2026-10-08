@@ -296,17 +296,25 @@ def resolve_vocabulary(
     """Resolve the CLOSED detection vocabulary for a perceive session.
 
     Priority:
-      1. `prefer_labels` — the operator's explicit closed label set (won).
-      2. a known `game_hint` -> its canned vocabulary (e.g. soccer).
-      3. None — fall back to open-domain `<OD>` (legacy best-effort labelling).
+      1. a known `game_hint` -> its canned object-class vocabulary (e.g. soccer
+         => [soccer ball, player, goalkeeper, goal, referee]).
+      2. `prefer_labels` — only as a fallback when no sport vocabulary is known.
+
+    IMPORTANT (ADAAAA-6412 regression): `preferLabels` from the UI are the
+    user's requested highlight EVENT categories (e.g. goals / saves / red cards
+    / near-misses / counter-attacks), NOT object classes. Treating them as the
+    closed detection vocabulary voided every real detection — a frame with 3
+    players parsed to 3 gated boxes, unknownRate=1.0, 0 tracks emitted — so no
+    candidate carried corroborating evidence and the decide gate rejected every
+    highlight (verified live: same clip, preferLabels=[] -> 3 tracks; event
+    preferLabels -> 0 tracks). The sport detection vocabulary therefore ALWAYS
+    dominates for a known game hint; event-type preferLabels belong to
+    candidate/decide classification, never the object-detection gate. Only an
+    unknown game hint falls back to prefer_labels (legacy object-label use).
 
     Only returns a vocabulary when one is actually known; an empty/unknown hint
     returns None so detect() keeps the open-set prompt and never breaks callers.
     """
-    if prefer_labels:
-        cleaned = [str(l).strip() for l in prefer_labels if str(l).strip()]
-        if cleaned:
-            return cleaned
     hint = (game_hint or "").strip().lower()
     for alias, canonical in _GAME_HINT_ALIASES.items():
         if alias in hint:
@@ -314,6 +322,10 @@ def resolve_vocabulary(
             break
     if hint in _GAME_VOCABULARIES:
         return _GAME_VOCABULARIES[hint]
+    if prefer_labels:
+        cleaned = [str(l).strip() for l in prefer_labels if str(l).strip()]
+        if cleaned:
+            return cleaned
     return None
 
 
