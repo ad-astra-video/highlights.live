@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import jwt from "jsonwebtoken";
 import { SqliteDb, type Db } from "../src/db";
 import { Store } from "../src/store";
 import { persistLiveHighlight } from "../src/api";
@@ -223,6 +224,46 @@ describe("funnel + CAC admin readout (api-level)", () => {
     expect(funnel.json().perChannel["content_referral"]).toMatchObject({ signup: 1, subscribe: 1 });
     const cr = funnel.json().cac.find((c: any) => c.channel === "content_referral");
     expect(cr).toMatchObject({ spendUsd: 30, subscribers: 1, cacUsd: 30 });
+
+    await app.app.close();
+  });
+
+  it("read-only admin token reads measurement routes but cannot write (ADAAAA-6388)", async () => {
+    const app = await buildTestApp({ BILLING_WIREFRAME: "1" });
+
+    // Mint a read-only admin service token (no DB user row) — the credential the
+    // Developer uses for the content-referral CAC readout.
+    const roToken = jwt.sign(
+      { sub: "dev-readonly", email: "dev@adastra", role: "admin_readonly" },
+      app.cfg.jwtSecret,
+      { expiresIn: "1h" }
+    );
+    const ro = { authorization: `Bearer ${roToken}` };
+
+    // Reads succeed on the three measurement routes.
+    const funnel = await app.app.inject({ method: "GET", url: "/admin/funnel", headers: ro });
+    expect(funnel.statusCode).toBe(200);
+    const spend = await app.app.inject({ method: "GET", url: "/admin/spend", headers: ro });
+    expect(spend.statusCode).toBe(200);
+    const mon = await app.app.inject({ method: "GET", url: "/admin/monitoring", headers: ro });
+    expect(mon.statusCode).toBe(200);
+
+    // Writes are rejected with 403 (read-only principal has no write grant).
+    const writeSpend = await app.app.inject({ method: "POST", url: "/admin/spend", headers: ro, payload: { channel: "meta", spendUsd: 50 } });
+    expect(writeSpend.statusCode).toBe(403);
+    const invite = await app.app.inject({ method: "POST", url: "/admin/invite-codes", headers: ro, payload: { email: "x@y.dev" } });
+    expect(invite.statusCode).toBe(403);
+    const revoke = await app.app.inject({ method: "POST", url: "/admin/invite-codes/revoke", headers: ro, payload: { code: "abc123" } });
+    expect(revoke.statusCode).toBe(403);
+    const gate = await app.app.inject({ method: "PUT", url: "/admin/waitlist/gate", headers: ro, payload: { allocationOpen: false } });
+    expect(gate.statusCode).toBe(403);
+
+    // The full admin retains write access (existing role unchanged).
+    const adminLogin = await app.app.inject({ method: "POST", url: "/auth/login", payload: { email: "admin@test.local", password: "adminpass" } });
+    expect(adminLogin.statusCode).toBe(200);
+    const adminHeaders = { authorization: `Bearer ${adminLogin.json().token}` };
+    const adminWrite = await app.app.inject({ method: "POST", url: "/admin/spend", headers: adminHeaders, payload: { channel: "meta", spendUsd: 10 } });
+    expect(adminWrite.statusCode).toBe(200);
 
     await app.app.close();
   });
