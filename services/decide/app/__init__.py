@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Optional
 
@@ -195,7 +196,15 @@ def create_app() -> FastAPI:
     @router.post("/highlight", response_model=HighlightDecision)
     async def highlight(req: HighlightRequest):
         if _is_gemma_mode():
-            decision = decide_with_gemma(
+            # ADAAAA-6373: the gemma inference is a blocking sync call (httpx).
+            # Called directly it stalls uvicorn's single event loop for the
+            # whole inference, so the go-livepeer orchestrator's /health probe
+            # (runners.json health_url=/health) times out and marks the decide
+            # runner `unavailable` -> decide requests intermittently 404
+            # "runner not found". Run it in a worker thread so /health stays
+            # responsive during inference.
+            decision = await asyncio.to_thread(
+                decide_with_gemma,
                 event_type=req.eventType,
                 evidence=req.evidence.model_dump(),
                 game_hint=req.gameHint,
