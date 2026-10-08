@@ -44,7 +44,7 @@ import { extractVodAudioChunks } from "./vod-audio";
 import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./db";
 import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribeFunnel, recordSignupFunnel } from "./funnel";
 import { reportMonitoring, RELIABILITY_FLOOR } from "./monitoring";
-import { AuthService, BetaGateError, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
+import { AuthService, BetaGateError, adminRequired, adminReadonlyRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError, canRetrieveDataset } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
 import { FixedWindowLimiter, rateLimit } from "./rate-limit";
@@ -274,6 +274,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   const authReq = authRequired(auth);
   const adminReq = adminRequired(auth);
+  const adminReadOnlyReq = adminReadonlyRequired(auth);
   const train = createTrainService(db, adapter, cfg);
 
   // Public auth endpoints share one anti-abuse budget per IP (login, register,
@@ -891,7 +892,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // acquisition channel, and CAC per channel = recorded spend / paying
   // subscribers attributed to that channel. Feed channel spend via
   // POST /admin/spend.
-  app.get("/admin/funnel", { preHandler: adminReq }, async () => await db.funnelReport());
+  app.get("/admin/funnel", { preHandler: adminReadOnlyReq }, async () => await db.funnelReport());
 
   // Record / inspect per-channel ad spend over the paid-acquisition window so
   // CAC per channel is computable (ADAAAA-6368). Spend is an input from the ad
@@ -905,7 +906,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return stored;
   });
 
-  app.get("/admin/spend", { preHandler: adminReq }, async () => ({ spend: await db.listChannelSpend() }));
+  app.get("/admin/spend", { preHandler: adminReadOnlyReq }, async () => ({ spend: await db.listChannelSpend() }));
 
   // New-job reliability + per-clip Livepeer inference cost readout, folded into
   // per-channel CAC (ADAAAA-6369, plan §3b.4 / §3c). This is the hard-stop gate
@@ -913,7 +914,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // reliability is below the floor and spend must pause (budget hard-stop).
   // Admin-only; on demand. `?days=` (default 7) or `?since=<ISO>` sets the
   // window; `since` is the authoritative bound once the push start is known.
-  app.get<{ Querystring: { since?: string; days?: string } }>("/admin/monitoring", { preHandler: adminReq }, async (req) => {
+  app.get<{ Querystring: { since?: string; days?: string } }>("/admin/monitoring", { preHandler: adminReadOnlyReq }, async (req) => {
     const q = req.query ?? {};
     const days = q.days !== undefined ? Number(q.days) : undefined;
     const report = await reportMonitoring(db, { since: q.since || undefined, days });
