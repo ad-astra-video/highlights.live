@@ -120,6 +120,24 @@ _LABEL_ALIASES: dict[str, str] = {
     "uniform": "player",
     "kit": "player",
     "cleats": "player",
+    # Extended player-fragment canonicalization (ADAAAA-6340 extend-gate lever,
+    # measured on the Leg A 211-clip / 1055-frame sample): the closed-vocab gate
+    # was STILL voiding ~807 roster-relevant detections that the detector splits
+    # a player into further (body parts / kit pieces). This is the same class the
+    # block above already maps (shirt/jersey/kit/cleats), so map them back to
+    # in-roster `player` instead of voiding them. Out-of-scope stadium/spectator
+    # items (banner, flag, glasses, hat, watch, wristlet, ...) stay gated.
+    "human face": "player",
+    "sports uniform": "player",
+    "sneakers": "player",
+    "footwear": "player",
+    "baseball glove": "player",
+    "glove": "player",
+    "gloves": "player",
+    "bracelet": "player",
+    "trousers": "player",
+    "baseball cap": "player",
+    "headband": "player",
     "goalpost": "goal",
     "crossbar": "goal",
     "goal": "goal",
