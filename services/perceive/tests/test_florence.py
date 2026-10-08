@@ -185,8 +185,25 @@ def test_parse_no_vocabulary_keeps_legacy_open_set():
 
 # --- vocabulary resolution ----------------------------------------------------
 
-def test_resolve_vocabulary_prefer_labels_wins_over_game_hint():
-    vocab = florence.resolve_vocabulary(game_hint="soccer", prefer_labels=["score", "clock"])
+def test_resolve_vocabulary_game_hint_wins_over_event_prefer_labels():
+    # ADAAAA-6412: preferLabels from the UI are highlight EVENT categories
+    # (goals/saves/red cards/near-misses/counter-attacks), NOT object classes.
+    # They must never override the sport's object-detection vocabulary or every
+    # real detection is gated out (unknownRate=1.0, 0 tracks).
+    vocab = florence.resolve_vocabulary(
+        game_hint="Soccer",
+        prefer_labels=["goals", "saves", "red cards", "near-misses", "counter-attacks"],
+    )
+    assert vocab is not None
+    assert "player" in vocab
+    assert "soccer ball" in vocab
+    assert "goals" not in vocab
+
+
+def test_resolve_vocabulary_object_prefer_labels_fallback_unknown_hint():
+    # When NO sport vocabulary is known, prefer_labels still wins (legacy
+    # object-label use for unknown games / custom closed sets).
+    vocab = florence.resolve_vocabulary(game_hint="some-unknown-game", prefer_labels=["score", "clock"])
     assert vocab == ["score", "clock"]
 
 
