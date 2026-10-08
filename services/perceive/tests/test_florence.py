@@ -89,6 +89,17 @@ def test_canonicalize_open_label_player_fragments_map_to_player():
         assert florence.FlorenceDetector.canonicalize_open_label(raw, vocab) == "player", raw
 
 
+def test_canonicalize_open_label_extended_player_fragments_map_to_player():
+    # ADAAAA-6340 extend-gate lever: the Leg A taxonomy showed the gate still
+    # voiding ~807 roster-relevant detections that are the detector fragmenting a
+    # player further into body parts / kit pieces. Map those back to 'player'.
+    vocab = ["soccer ball", "player", "goalkeeper", "goal", "referee"]
+    for raw in ("human face", "sports uniform", "sneakers", "footwear",
+                "baseball glove", "glove", "gloves", "bracelet", "trousers",
+                "baseball cap", "headband"):
+        assert florence.FlorenceDetector.canonicalize_open_label(raw, vocab) == "player", raw
+
+
 def test_canonicalize_open_label_ball_synonyms():
     vocab = ["soccer ball", "player", "goalkeeper", "goal", "referee"]
     assert florence.FlorenceDetector.canonicalize_open_label("sports ball", vocab) == "soccer ball"
