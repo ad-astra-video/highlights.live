@@ -273,6 +273,11 @@ services:
       # Media-path (b): the browser streams frames to the media server instead
       # of the server's HTTP /ingest when this is set.
       - MEDIA_SERVER_URL=${MEDIA_SERVER_URL:-http://media:4070}
+      # ADAAAA-6372/6373: the server is the VOD payer and calls `${decideUrl}/app/highlight`
+      # (livepeer-adapter.ts). config.ts reads `decideUrl: env.DECIDE_URL` with NO default and
+      # falls back to the server's own relative path -> 404 `decide failed`. Default to the
+      # compose decide service so it survives a server recreate; config.ts is left unchanged.
+      - DECIDE_URL=${DECIDE_URL:-http://decide:8081}
       # ADAAAA-6314 Path 2 (live): forward the surrounding audio clip on LIVE
       # trigger candidates so the decide prompt gets ASR'd audio context. Off by
       # default so the deployed live baseline sends no new payload until an
