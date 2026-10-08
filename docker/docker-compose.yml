@@ -292,6 +292,15 @@ services:
       # project .env (docker/.env), never committed.
       - SIGNER_URL=${SIGNER_URL:-}
       - PAYER_ADDRESS=${PAYER_ADDRESS:-}
+      # Stripe billing (ADAAAA-6373): the server owns checkout + webhook
+      # provisioning. These must survive a server recreate; values come from
+      # the compose project .env (docker/.env), never committed. Without them
+      # /health flips from billing:live to billing:disabled.
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - STRIPE_PRICE_PRO=${STRIPE_PRICE_PRO:-}
+      - STRIPE_PRICE_USAGE=${STRIPE_PRICE_USAGE:-}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://highlights-server.dpn.gg}
       - SIGNER_AUTH_TOKEN=${SIGNER_AUTH_TOKEN:-}
       # Transactional email: the server enqueues invites + password resets to
       # the email-sender container over its queue API (bearer-token auth).
