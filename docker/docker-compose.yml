@@ -68,11 +68,14 @@ services:
       - PERCEIVE_MIN_FPS=${PERCEIVE_MIN_FPS:-1.0}
       - PERCEIVE_TRACKER=florence_sam
       - PERCEIVE_CAPACITY=${PERCEIVE_CAPACITY:-2}
-      # ADAAAA-6340: switched the detector from the 230M Florence-2-base default
-      # to the 770M fine-tuned large (microsoft/Florence-2-large-ft) for better
-      # ball/detection recall and cleaner <OD> labels. Weights are warm in the
-      # HF cache mount below; no download on cold boot.
-      - FLORENCE_MODEL=microsoft/Florence-2-large-ft
+      # ADAAAA-6414: adopted the fine-tuned Florence-2-base detector (lever #1,
+      # board-approved fine-tune 8ba29e16 / ADAAAA-6404) to lift soccer-ball
+      # recall to >=70%. The staged merged model dir is a drop-in Florence-2
+      # model dir (train's LoRA merge output, no runtime PEFT), served from the
+      # host runs dir mounted at /runs:ro below. FINETUNED_MODEL overrides the
+      # in-container model dir (default = the ft6404gpu run). Replaces the
+      # previous microsoft/Florence-2-large-ft serving (ADAAAA-6340).
+      - FLORENCE_MODEL=${FINETUNED_MODEL:-/runs/Florence-2-base-finetuned-ft6404gpu}
       # ADAAAA-6395: bounded zoomed-crop/ROI second pass to recover small/far/
       # occluded soccer balls the full-frame <OD> pass misses. Opt-in (default
       # off) so live per-frame inference cost is unchanged until an explicit
@@ -89,6 +92,10 @@ services:
       # HF cache (token + downloaded weights). Warm on the box at
       # /home/brad/.cache/huggingface, so a redeploy reuses cached weights.
       - ${HF_CACHE_DIR:-/home/brad/.cache/huggingface}:/models/hf-cache
+      # ADAAAA-6414: staged fine-tuned Florence-2-base merged model dir (train's
+      # LoRA merge output) served by the detector via FLORENCE_MODEL above.
+      # Read-only; the container runs as root so it reads the staged weights.
+      - ${RUNS_DIR:-/home/brad/highlights.live/docker/runs}:/runs:ro
       # VOD clips the SAM backend tracks across frames (PERCEIVE_SAM_CLIP).
       - ${CLIPS_DIR:-./clips}:/clips:ro
       # Shared with the server: perceive sees the server's dataDir at /data so
