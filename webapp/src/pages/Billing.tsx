@@ -35,7 +35,16 @@ export function Billing() {
   async function subscribe() {
     setBusy(true);
     try {
-      const r = await api<{ url: string }>("/billing/checkout", { body: { returnPath: "/app/billing" } });
+      const p = new URLSearchParams(window.location.search);
+      const body: any = { returnPath: "/app/billing" };
+      // Carry acquisition UTM to checkout so per-channel attribution can be
+      // captured at checkout too (ADAAAA-6368); the server keeps the first-touch
+      // signup channel when one already exists.
+      const us = p.get("utm_source");
+      const uc = p.get("utm_campaign");
+      if (us) body.utmSource = us;
+      if (uc) body.utmCampaign = uc;
+      const r = await api<{ url: string }>("/billing/checkout", { body });
       window.location.href = r.url; // wireframe: local URL w/ ?wireframe=checkout=success
     } catch (e: any) {
       setMsg(e.message);

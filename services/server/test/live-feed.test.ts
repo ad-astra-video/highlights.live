@@ -34,6 +34,7 @@ describe("persistLiveHighlight — decision-time persistence (ADAAAA-5777)", () 
       cfg: testCfg({ AUTO_PUBLISH_HIGHLIGHTS: "1" }),
       billing: { onHighlightCreated: async () => void billed++ } as any,
       entitlements: { onClipGenerated: async () => void debited++ } as any,
+      db: { recordFunnelEvent: async () => {} } as any,
     };
     const out = await persistLiveHighlight(deps, { id: "u1" } as any, {} as any, rec());
     expect(out.ownerId).toBe("u1");
@@ -53,6 +54,7 @@ describe("persistLiveHighlight — decision-time persistence (ADAAAA-5777)", () 
       cfg: testCfg({ AUTO_PUBLISH_HIGHLIGHTS: "0" }),
       billing: { onHighlightCreated: async () => {} } as any,
       entitlements: { onClipGenerated: async () => {} } as any,
+      db: { recordFunnelEvent: async () => {} } as any,
     };
     const out = await persistLiveHighlight(deps, { id: "u1" } as any, {} as any, rec());
     expect(out.status).toBe("pending");

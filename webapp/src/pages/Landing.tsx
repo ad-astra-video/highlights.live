@@ -18,6 +18,20 @@ export function Landing() {
   const [status, setStatus] = useState<"idle" | "submitting" | "done" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
 
+  // Carry the landing-page acquisition UTM (utm_source / utm_campaign) into the
+  // auth redirect + waitlist capture so per-channel CAC attribution survives the
+  // signup flow (ADAAAA-6368).
+  const utmQuery = (() => {
+    const p = new URLSearchParams(window.location.search);
+    const out = new URLSearchParams();
+    for (const k of ["utm_source", "utm_campaign", "channel"]) {
+      const v = p.get(k);
+      if (v) out.set(k, v);
+    }
+    return out.toString();
+  })();
+  const authHref = utmQuery ? `/auth?${utmQuery}` : "/auth";
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     const value = email.trim();
@@ -32,7 +46,13 @@ export function Landing() {
       // No auth: waitlist capture is open to any visitor. The server dedupes by
       // email (normalized lowercase), so re-submitting is idempotent — the same
       // confirmation is shown either way, per spec §6.
-      await api("/waitlist", { auth: false, body: { email: value } });
+      const p = new URLSearchParams(window.location.search);
+      const body: any = { email: value };
+      const us = p.get("utm_source");
+      const uc = p.get("utm_campaign");
+      if (us) body.utmSource = us;
+      if (uc) body.utmCampaign = uc;
+      await api("/waitlist", { auth: false, body });
       setStatus("done");
     } catch (err: any) {
       setStatus("error");
@@ -55,7 +75,7 @@ export function Landing() {
             Open the console <ArrowRight className="h-4 w-4" />
           </Link>
         ) : (
-          <Link to="/auth" className="text-sm text-slate-ink hover:text-ink">
+          <Link to={authHref} className="text-sm text-slate-ink hover:text-ink">
             Sign in
           </Link>
         )}

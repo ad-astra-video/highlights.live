@@ -35,6 +35,13 @@ export interface User {
    * code never redeemed — such accounts may not reach the product. Admins are
    * always activated (seeded) and are exempt from the gate. */
   betaActivatedAt?: string | null;
+  /** Acquisition channel (first-touch) captured at signup so per-channel CAC is
+   * computable (ADAAAA-6368). Normalized key (e.g. "meta", "google", "organic",
+   * "referral", "invite") or the raw utm_source value. `null` when unknown. */
+  channel?: string | null;
+  /** Raw UTM parameters captured at signup (optional; for audit/reporting). */
+  utmSource?: string | null;
+  utmCampaign?: string | null;
 }
 
 /** A waitlist signup (public capture). Flipped to `invited` by the cohort
@@ -205,6 +212,42 @@ export interface AnalyticsSnapshot {
   subscriptions: { tier: string; status: string; count: number }[];
 }
 
+/** Conversion-funnel stages (ADAAAA-6368, plan §3b.2). A user can reach a
+ * stage at most once (first-touch per stage, dimensioned by acquisition
+ * channel). `retain` = a returning user: a job created >= `funnelRetainDays`
+ * after their first job. */
+export const FUNNEL_STAGES = ["signup", "activate", "generate", "subscribe", "retain"] as const;
+export type FunnelStage = (typeof FUNNEL_STAGES)[number];
+
+/** One observable funnel event row (recorded once per user per stage). */
+export interface FunnelEvent {
+  id: number | string;
+  userId: string;
+  eventType: string;
+  channel: string | null;
+  createdAt: string;
+}
+
+/** Per-channel ad spend ledger over the paid-acquisition window (ADAAAA-6368).
+ * CAC per channel = spend / paying subscribers attributed to that channel. */
+export interface ChannelSpend {
+  channel: string;
+  spendUsd: number;
+  note: string | null;
+  updatedAt: string;
+}
+
+/** On-demand funnel + CAC readout backing `/admin/funnel` (ADAAAA-6368). */
+export interface FunnelReport {
+  generatedAt: string;
+  /** N users at each stage (overall). */
+  stages: Record<string, number>;
+  /** channel -> stage -> N users (only channels that have events). */
+  perChannel: Record<string, Record<string, number>>;
+  /** Per-channel CAC: spend / paying subscribers (null when no subscribers). */
+  cac: { channel: string; spendUsd: number; subscribers: number; cacUsd: number | null }[];
+}
+
 /** A live media-server session tracked by the control plane. Persisted so that
  * if a media node dies the server can detect the gap and re-route the browser
  * to a freshly-provisioned session on a healthy node (seamless reconnect).
@@ -355,6 +398,24 @@ export interface Db {
   /** Atomically increment a user's decide count for a period. Returns the new
    * count. */
   incrementDecideQuota(userId: string, period: string): Promise<number>;
+  // --- conversion funnel + per-channel CAC (ADAAAA-6368) ---
+  /** Persist the user's acquisition attribution (channel + raw UTM). */
+  setAttribution(userId: string, a: { channel?: string | null; utmSource?: string | null; utmCampaign?: string | null }): Promise<void>;
+  /** Record a funnel stage event once per (user, stage), dimensioned by the
+   * user's channel attribute. Idempotent: a repeated call for the same stage
+   * is a no-op. */
+  recordFunnelEvent(userId: string, eventType: FunnelStage, at?: string): Promise<void>;
+  /** Number of jobs a user has created (drives activate/retain detection). */
+  countJobsForUser(userId: string): Promise<number>;
+  /** Earliest job created-at for a user (ISO), or null when none. */
+  firstJobAt(userId: string): Promise<string | null>;
+  /** On-demand funnel counts per stage (overall + per channel) and per-channel
+   * CAC from the `channel_spend` ledger. */
+  funnelReport(): Promise<FunnelReport>;
+  /** Upsert per-channel ad spend (CAC numerator). */
+  recordChannelSpend(channel: string, spendUsd: number, note?: string | null): Promise<ChannelSpend>;
+  /** All per-channel spend entries (for admin inspection). */
+  listChannelSpend(): Promise<ChannelSpend[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,10 +454,10 @@ export class SqliteDb implements Db {
     const createdAt = u.createdAt ?? new Date().toISOString();
     this.db
       .prepare(
-        "INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id,beta_activated_at) VALUES (?,?,?,?,?,?,?)"
+        "INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id,beta_activated_at,channel,utm_source,utm_campaign) VALUES (?,?,?,?,?,?,?,?,?,?)"
       )
-      .run(u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null, u.betaActivatedAt ?? null);
-    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null, betaActivatedAt: u.betaActivatedAt ?? null };
+      .run(u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null, u.betaActivatedAt ?? null, u.channel ?? null, u.utmSource ?? null, u.utmCampaign ?? null);
+    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null, betaActivatedAt: u.betaActivatedAt ?? null, channel: u.channel ?? null, utmSource: u.utmSource ?? null, utmCampaign: u.utmCampaign ?? null };
   }
 
   async activateUser(userId: string): Promise<void> {
@@ -832,6 +893,81 @@ export class SqliteDb implements Db {
       .run(userId, period, now);
     return (await this.getDecideQuota(userId, period));
   }
+
+  // --- conversion funnel + per-channel CAC (ADAAAA-6368) ---
+  async setAttribution(userId: string, a: { channel?: string | null; utmSource?: string | null; utmCampaign?: string | null }): Promise<void> {
+    this.db
+      .prepare("UPDATE users SET channel = COALESCE(?, channel), utm_source = COALESCE(?, utm_source), utm_campaign = COALESCE(?, utm_campaign) WHERE id = ?")
+      .run(a.channel ?? null, a.utmSource ?? null, a.utmCampaign ?? null, userId);
+  }
+
+  async recordFunnelEvent(userId: string, eventType: FunnelStage, at = new Date().toISOString()): Promise<void> {
+    const row = this.db.prepare("SELECT channel FROM users WHERE id = ?").get(userId) as { channel: string | null } | undefined;
+    const channel = row?.channel ?? null;
+    this.db
+      .prepare(
+        `INSERT INTO funnel_events (user_id,event_type,channel,created_at) VALUES (?,?,?,?)
+         ON CONFLICT(user_id,event_type) DO NOTHING`
+      )
+      .run(userId, eventType, channel, at);
+  }
+
+  async countJobsForUser(userId: string): Promise<number> {
+    const r = this.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE owner_id = ?").get(userId) as { n: number } | undefined;
+    return Number(r?.n ?? 0);
+  }
+
+  async firstJobAt(userId: string): Promise<string | null> {
+    const r = this.db.prepare("SELECT MIN(created_at) AS d FROM jobs WHERE owner_id = ?").get(userId) as { d: string | null } | undefined;
+    return r?.d ?? null;
+  }
+
+  async funnelReport(): Promise<FunnelReport> {
+    const stages: Record<string, number> = {};
+    for (const s of FUNNEL_STAGES) stages[s] = 0;
+    const stageRows = this.db.prepare("SELECT event_type, COUNT(*) AS n FROM funnel_events GROUP BY event_type").all() as { event_type: string; n: number }[];
+    for (const r of stageRows) stages[r.event_type] = Number(r.n);
+
+    const perChannel: Record<string, Record<string, number>> = {};
+    const chanRows = this.db
+      .prepare("SELECT event_type, channel, COUNT(*) AS n FROM funnel_events GROUP BY event_type, channel")
+      .all() as { event_type: string; channel: string | null; n: number }[];
+    for (const r of chanRows) {
+      const ch = r.channel ?? "unknown";
+      perChannel[ch] = perChannel[ch] ?? {};
+      perChannel[ch][r.event_type] = Number(r.n);
+    }
+
+    const subRows = this.db
+      .prepare("SELECT channel, COUNT(*) AS n FROM funnel_events WHERE event_type = 'subscribe' GROUP BY channel")
+      .all() as { channel: string | null; n: number }[];
+    const subscribers: Record<string, number> = {};
+    for (const r of subRows) subscribers[r.channel ?? "unknown"] = Number(r.n);
+
+    const spend = await this.listChannelSpend();
+    const cac = spend.map((s) => {
+      const subs = subscribers[s.channel] ?? 0;
+      return { channel: s.channel, spendUsd: s.spendUsd, subscribers: subs, cacUsd: subs > 0 ? Number((s.spendUsd / subs).toFixed(2)) : null };
+    });
+
+    return { generatedAt: new Date().toISOString(), stages, perChannel, cac };
+  }
+
+  async recordChannelSpend(channel: string, spendUsd: number, note: string | null = null): Promise<ChannelSpend> {
+    const updatedAt = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO channel_spend (channel,spend_usd,note,updated_at) VALUES (?,?,?,?)
+         ON CONFLICT(channel) DO UPDATE SET spend_usd=excluded.spend_usd, note=excluded.note, updated_at=excluded.updated_at`
+      )
+      .run(channel, spendUsd, note, updatedAt);
+    return { channel, spendUsd, note, updatedAt };
+  }
+
+  async listChannelSpend(): Promise<ChannelSpend[]> {
+    const rows = this.db.prepare("SELECT * FROM channel_spend ORDER BY channel").all() as any[];
+    return rows.map((r) => ({ channel: String(r.channel), spendUsd: Number(r.spend_usd), note: r.note ?? null, updatedAt: String(r.updated_at) }));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -874,10 +1010,10 @@ export class PgDb implements Db {
   async createUser(u: Omit<User, "createdAt"> & { createdAt?: string }): Promise<User> {
     const createdAt = u.createdAt ?? new Date().toISOString();
     await this.pool.query(
-      "INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id,beta_activated_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-      [u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null, u.betaActivatedAt ?? null]
+      "INSERT INTO users (id,email,password_hash,role,created_at,stripe_customer_id,beta_activated_at,channel,utm_source,utm_campaign) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+      [u.id, u.email, u.passwordHash, u.role, createdAt, u.stripeCustomerId ?? null, u.betaActivatedAt ?? null, u.channel ?? null, u.utmSource ?? null, u.utmCampaign ?? null]
     );
-    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null, betaActivatedAt: u.betaActivatedAt ?? null };
+    return { ...u, role: u.role, createdAt, stripeCustomerId: u.stripeCustomerId ?? null, betaActivatedAt: u.betaActivatedAt ?? null, channel: u.channel ?? null, utmSource: u.utmSource ?? null, utmCampaign: u.utmCampaign ?? null };
   }
 
   async activateUser(userId: string): Promise<void> {
@@ -1306,6 +1442,76 @@ export class PgDb implements Db {
     );
     return this.getDecideQuota(userId, period);
   }
+
+  // --- conversion funnel + per-channel CAC (ADAAAA-6368) ---
+  async setAttribution(userId: string, a: { channel?: string | null; utmSource?: string | null; utmCampaign?: string | null }): Promise<void> {
+    await this.pool.query(
+      "UPDATE users SET channel = COALESCE($2, channel), utm_source = COALESCE($3, utm_source), utm_campaign = COALESCE($4, utm_campaign) WHERE id = $1",
+      [userId, a.channel ?? null, a.utmSource ?? null, a.utmCampaign ?? null]
+    );
+  }
+
+  async recordFunnelEvent(userId: string, eventType: FunnelStage, at = new Date().toISOString()): Promise<void> {
+    const r = await this.pool.query("SELECT channel FROM users WHERE id = $1", [userId]);
+    const channel = r.rows[0]?.channel ?? null;
+    await this.pool.query(
+      `INSERT INTO funnel_events (user_id,event_type,channel,created_at) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (user_id,event_type) DO NOTHING`,
+      [userId, eventType, channel, at]
+    );
+  }
+
+  async countJobsForUser(userId: string): Promise<number> {
+    const r = await this.pool.query("SELECT COUNT(*)::int AS n FROM jobs WHERE owner_id = $1", [userId]);
+    return r.rows[0]?.n ?? 0;
+  }
+
+  async firstJobAt(userId: string): Promise<string | null> {
+    const r = await this.pool.query("SELECT MIN(created_at) AS d FROM jobs WHERE owner_id = $1", [userId]);
+    return r.rows[0]?.d ?? null;
+  }
+
+  async funnelReport(): Promise<FunnelReport> {
+    const stages: Record<string, number> = {};
+    for (const s of FUNNEL_STAGES) stages[s] = 0;
+    const stageRes = await this.pool.query("SELECT event_type, COUNT(*)::int AS n FROM funnel_events GROUP BY event_type");
+    for (const r of stageRes.rows) stages[String(r.event_type)] = Number(r.n);
+
+    const perChannel: Record<string, Record<string, number>> = {};
+    const chanRes = await this.pool.query("SELECT event_type, channel, COUNT(*)::int AS n FROM funnel_events GROUP BY event_type, channel");
+    for (const r of chanRes.rows) {
+      const ch = r.channel ?? "unknown";
+      perChannel[ch] = perChannel[ch] ?? {};
+      perChannel[ch][String(r.event_type)] = Number(r.n);
+    }
+
+    const subRes = await this.pool.query("SELECT channel, COUNT(*)::int AS n FROM funnel_events WHERE event_type = 'subscribe' GROUP BY channel");
+    const subscribers: Record<string, number> = {};
+    for (const r of subRes.rows) subscribers[r.channel ?? "unknown"] = Number(r.n);
+
+    const spend = await this.listChannelSpend();
+    const cac = spend.map((s) => {
+      const subs = subscribers[s.channel] ?? 0;
+      return { channel: s.channel, spendUsd: s.spendUsd, subscribers: subs, cacUsd: subs > 0 ? Number((s.spendUsd / subs).toFixed(2)) : null };
+    });
+
+    return { generatedAt: new Date().toISOString(), stages, perChannel, cac };
+  }
+
+  async recordChannelSpend(channel: string, spendUsd: number, note: string | null = null): Promise<ChannelSpend> {
+    const updatedAt = new Date().toISOString();
+    await this.pool.query(
+      `INSERT INTO channel_spend (channel,spend_usd,note,updated_at) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (channel) DO UPDATE SET spend_usd=EXCLUDED.spend_usd, note=EXCLUDED.note, updated_at=EXCLUDED.updated_at`,
+      [channel, spendUsd, note, updatedAt]
+    );
+    return { channel, spendUsd, note, updatedAt };
+  }
+
+  async listChannelSpend(): Promise<ChannelSpend[]> {
+    const r = await this.pool.query("SELECT * FROM channel_spend ORDER BY channel");
+    return r.rows.map((row: any) => ({ channel: String(row.channel), spendUsd: Number(row.spend_usd), note: row.note ?? null, updatedAt: String(row.updated_at) }));
+  }
 }
 
 const SCHEMA_SQLITE = `
@@ -1318,7 +1524,10 @@ const SCHEMA_SQLITE = `
     stripe_customer_id TEXT,
     reset_token_hash TEXT,
     reset_token_expires TEXT,
-    beta_activated_at TEXT
+    beta_activated_at TEXT,
+    channel TEXT,
+    utm_source TEXT,
+    utm_campaign TEXT
   );
   CREATE TABLE IF NOT EXISTS subscriptions (
     user_id TEXT PRIMARY KEY,
@@ -1335,6 +1544,20 @@ const SCHEMA_SQLITE = `
     event_type TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     extra TEXT
+  );
+  CREATE TABLE IF NOT EXISTS funnel_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    channel TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(user_id, event_type)
+  );
+  CREATE TABLE IF NOT EXISTS channel_spend (
+    channel TEXT PRIMARY KEY,
+    spend_usd REAL NOT NULL,
+    note TEXT,
+    updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS invite_codes (
     id TEXT PRIMARY KEY,
@@ -1446,7 +1669,10 @@ const SCHEMA_PG = `
     stripe_customer_id TEXT,
     reset_token_hash TEXT,
     reset_token_expires TEXT,
-    beta_activated_at TEXT
+    beta_activated_at TEXT,
+    channel TEXT,
+    utm_source TEXT,
+    utm_campaign TEXT
   );
   CREATE TABLE IF NOT EXISTS subscriptions (
     user_id TEXT PRIMARY KEY,
@@ -1463,6 +1689,20 @@ const SCHEMA_PG = `
     event_type TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     extra TEXT
+  );
+  CREATE TABLE IF NOT EXISTS funnel_events (
+    id BIGSERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    channel TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(user_id, event_type)
+  );
+  CREATE TABLE IF NOT EXISTS channel_spend (
+    channel TEXT PRIMARY KEY,
+    spend_usd REAL NOT NULL,
+    note TEXT,
+    updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS invite_codes (
     id TEXT PRIMARY KEY,
@@ -1687,6 +1927,20 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 6,
+    name: "funnel-attribution",
+    up: async (exec, hasColumn) => {
+      // ADAAAA-6368 (plan §3b.2): conversion funnel + per-channel CAC. Adds
+      // first-touch attribution columns to users. The funnel_events and
+      // channel_spend tables are created by the idempotent baseline (applied
+      // before migrations on every boot, both backends), so existing on-disk
+      // DBs get them on the next boot without backend-specific DDL here.
+      if (!(await hasColumn("users", "channel"))) await exec("ALTER TABLE users ADD COLUMN channel TEXT");
+      if (!(await hasColumn("users", "utm_source"))) await exec("ALTER TABLE users ADD COLUMN utm_source TEXT");
+      if (!(await hasColumn("users", "utm_campaign"))) await exec("ALTER TABLE users ADD COLUMN utm_campaign TEXT");
+    },
+  },
 ];
 
 async function runMigrations(exec: Exec, hasColumn: HasColumn, applied: Applied, markApplied: MarkApplied): Promise<void> {
@@ -1713,6 +1967,9 @@ function rowToUser(r: any): User {
     stripeCustomerId: r.stripe_customer_id ?? null,
     resetTokenExpires: r.reset_token_expires ?? null,
     betaActivatedAt: r.beta_activated_at ?? null,
+    channel: r.channel ?? null,
+    utmSource: r.utm_source ?? null,
+    utmCampaign: r.utm_campaign ?? null,
   };
 }
 
