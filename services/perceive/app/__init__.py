@@ -350,7 +350,7 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 )
                 state.tracker._detect = lambda rgb, _d=_d, _v=_v: [
                     {**o, "bbox": _norm_bbox(o["bbox"])}
-                    for o in (_d.detect(rgb, vocabulary=_v) if _d else [])
+                    for o in (_d.detect(rgb, vocabulary=_v, roi_pass=False) if _d else [])
                     if o.get("bbox")
                 ]
             tracks = state.tracker.step_frame(state.last_rgb, timestamp, boxes, labels=labels)
