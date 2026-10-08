@@ -43,6 +43,7 @@ import { LiveIngest, type LiveKind } from "./live";
 import { extractVodAudioChunks } from "./vod-audio";
 import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./db";
 import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribeFunnel, recordSignupFunnel } from "./funnel";
+import { reportMonitoring, RELIABILITY_FLOOR } from "./monitoring";
 import { AuthService, BetaGateError, adminRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError, canRetrieveDataset } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
@@ -905,6 +906,26 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   });
 
   app.get("/admin/spend", { preHandler: adminReq }, async () => ({ spend: await db.listChannelSpend() }));
+
+  // New-job reliability + per-clip Livepeer inference cost readout, folded into
+  // per-channel CAC (ADAAAA-6369, plan §3b.4 / §3c). This is the hard-stop gate
+  // for the paid-acquisition push: when `spendPaused` is true, new-job
+  // reliability is below the floor and spend must pause (budget hard-stop).
+  // Admin-only; on demand. `?days=` (default 7) or `?since=<ISO>` sets the
+  // window; `since` is the authoritative bound once the push start is known.
+  app.get<{ Querystring: { since?: string; days?: string } }>("/admin/monitoring", { preHandler: adminReq }, async (req) => {
+    const q = req.query ?? {};
+    const days = q.days !== undefined ? Number(q.days) : undefined;
+    const report = await reportMonitoring(db, { since: q.since || undefined, days });
+    if (report.spendPaused) {
+      // Detection: log the breach so any run/box-health tail can see the
+      // spend-pause condition, not just the JSON readout.
+      console.warn(
+        `[monitoring] new-job reliability ${report.reliabilityPct}% < ${(RELIABILITY_FLOOR * 100).toFixed(0)}% floor — spend PAUSE condition (hard-stop)`
+      );
+    }
+    return report;
+  });
 
   app.get("/admin/waitlist", { preHandler: adminReq }, async () => ({
     entries: (await db.listWaitlist()).map((w) => ({
