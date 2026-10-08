@@ -11,6 +11,7 @@ import { Settings } from "./pages/Settings";
 import { Train } from "./pages/Train";
 import { FineTune } from "./pages/FineTune";
 import { Legal } from "./pages/Legal";
+import { ContentReferral } from "./pages/ContentReferral";
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { token, ready } = useAuth();
@@ -25,6 +26,7 @@ export default function App() {
       <Route path="/" element={<Landing />} />
       <Route path="/auth" element={<AuthPage />} />
       <Route path="/reset" element={<ResetPage />} />
+      <Route path="/referral" element={<ContentReferral />} />
       <Route path="/privacy" element={<Legal kind="privacy" />} />
       <Route path="/terms" element={<Legal kind="terms" />} />
       <Route path="/retention" element={<Legal kind="retention" />} />
