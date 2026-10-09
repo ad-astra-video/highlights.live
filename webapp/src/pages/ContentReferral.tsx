@@ -3,21 +3,22 @@ import { Zap, Film, Radio, Clapperboard, ArrowRight, Check } from "lucide-react"
 
 // Content-referral explainer page (ADAAAA-6385 / ADAAAA-6384).
 //
-// This is the hosted "short-form explainer" content-referral placement for the
-// first launch leg. It is PUBLIC (no auth) so an external reader can learn what
-// highlights.live does and be funnelled into the signup/waitlist flow. Every
-// CTA carries a distinct UTM tag set with utm_source=content_referral so the
-// ADAAAA-6368 funnel attributes this placement as its own acquisition channel:
+// Launch placement for the first content-referral leg, at /creators-2026
+// (Product Owner option B, ADAAAA-6384). It is PUBLIC (no auth) so an external
+// reader can learn what highlights.live does and be funnelled into the
+// signup/waitlist flow. Every CTA carries the PO-approved UTM tag set with
+// utm_source=content_referral so the ADAAAA-6368 funnel attributes this
+// placement as its own acquisition channel:
 //
 //   utm_source   = content_referral   (first-class channel, preserved verbatim)
-//   utm_medium   = referral           (organic content-referral link)
-//   utm_campaign = content-referral-launch
-//   utm_content  = explainer-page
+//   utm_medium   = page               (hosted explainer page placement)
+//   utm_campaign = creators-2026
+//   utm_content  = explainer
 //
 // The landing page (/auth + /waitlist) carries utm_source/utm_medium/
 // utm_campaign/utm_content through to register + waitlist so per-placement CAC
 // attribution survives the funnel (ADAAAA-6368, ADAAAA-6384).
-const UTM = "utm_source=content_referral&utm_medium=referral&utm_campaign=content-referral-launch&utm_content=explainer-page";
+const UTM = "utm_source=content_referral&utm_medium=page&utm_campaign=creators-2026&utm_content=explainer";
 
 export function ContentReferral() {
   return (

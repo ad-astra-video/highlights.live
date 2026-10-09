@@ -26,7 +26,8 @@ export default function App() {
       <Route path="/" element={<Landing />} />
       <Route path="/auth" element={<AuthPage />} />
       <Route path="/reset" element={<ResetPage />} />
-      <Route path="/referral" element={<ContentReferral />} />
+      <Route path="/referral" element={<Navigate to="/creators-2026" replace />} />
+      <Route path="/creators-2026" element={<ContentReferral />} />
       <Route path="/privacy" element={<Legal kind="privacy" />} />
       <Route path="/terms" element={<Legal kind="terms" />} />
       <Route path="/retention" element={<Legal kind="retention" />} />
