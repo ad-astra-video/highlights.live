@@ -70,7 +70,7 @@ state_for() {
   local svc="$1"
   local out
   out="$(python3 "$KOMODO" "$SERVER" \
-    "docker ps -a --format '{{.Names}}|{{.Status}}' | awk -F'|' '\$1==\"highlights-${svc}\" {print \$2}'")"
+    "docker ps -a --format '{{.Names}}|{{.Status}}' | awk -F'|' '\$1==\"highlights-${svc}\" || \$1 ~ /highlights-${svc}$/ {print \$2}'")"
   # Strip komodo exit-code footer if present.
   out="$(printf '%s\n' "$out" | grep -v '__KOMODO_EXIT_CODE' | grep -v '^$')"
   printf '%s' "$out"
