@@ -731,6 +731,8 @@ def test_highlight_rule_mode_hard_gate_rejects_non_goal():
 
     os.environ["DECIDE_MODE"] = "rule"
     c = TestClient(decide_app)
+    # ADAAAA-6481: ballOutcome=off_target is a goal-bound shot that did NOT
+    # convert -> a near-miss, surfaced but NEVER scored as a goal.
     r = c.post(
         "/app/highlight",
         json={
@@ -745,8 +747,38 @@ def test_highlight_rule_mode_hard_gate_rejects_non_goal():
     )
     assert r.status_code == 200
     body = r.json()
+    # off_target now surfaces as a near-miss (not a rejection, not a goal).
+    assert body["outcome"] == "near_miss"
+    assert body["nearMiss"] is True
+    assert body["isHighlight"] is True
+    assert body["outcome"] != "scoring_play"
+
+
+def test_highlight_rule_mode_hard_gate_still_rejects_no_shot():
+    from app import create_app as decide_create_app
+
+    decide_app = decide_create_app()
+    import os
+
+    os.environ["DECIDE_MODE"] = "rule"
+    c = TestClient(decide_app)
+    r = c.post(
+        "/app/highlight",
+        json={
+            "sessionId": "s3b",
+            "eventType": "GOAL",
+            "timestamp": 3.0,
+            "gameHint": "soccer",
+            "evidence": {"trackCount": 2, "maxVelocity": 0.1, "ocrHits": 0,
+                         "ballOutcome": "no_shot", "goalCrossed": False,
+                         "reaction": {"crowdEnergy": 0.1}},
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # no_shot is a genuine non-event: hard-gate rejection, not a near-miss.
     assert body["isHighlight"] is False
-    assert "off_target" in body["reason"]
+    assert "no_shot" in body["reason"]
 
 
 def test_highlight_rule_mode_goal_passes_gate():

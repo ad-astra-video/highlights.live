@@ -278,6 +278,58 @@ def apply_ball_outcome_gate(evidence: Optional[dict]) -> tuple[bool, str | None]
     return False, f"perceived ballOutcome={outcome} (not a goal); hard-gate rejection"
 
 
+# --- near-miss reconciliation (ADAAAA-6481 / §8 near_miss_recall) ----------
+#
+# A goal-bound shot that does NOT convert is a NEAR-MISS, not a non-event:
+# the deployed plan should be able to act on it. The perceived goal-line /
+# ball-outcome signal is the deterministic ground truth for this: `blocked`
+# (shot stopped at the line within the mouth) and `off_target` (a shot on
+# goal that missed) both mean the ball was genuinely threatening the goal but
+# did not score. Those must surface as `near_miss` — never as `scoring_play`
+# (keeps near_miss_vs_scoring_confusion == 0) and never dismissed as
+# `not_highlight` (that is the recall gap the §8 near_miss_recall metric
+# measures).
+NEAR_MISS_BALL_OUTCOMES: tuple[str, ...] = ("blocked", "off_target")
+
+
+def is_near_miss_ball_outcome(ball_outcome: Optional[str]) -> bool:
+    """True when the perceived goal-line signal records a goal-bound shot that
+    did NOT convert — a genuine near-miss (blocked/saved at the line, or an
+    on-goal shot that missed). Never True for `goal`, `no_shot`, `cross`, or
+    when the signal is absent."""
+    return (ball_outcome or "") in NEAR_MISS_BALL_OUTCOMES
+
+
+def reconcile_outcome_with_ball_signal(decision: dict, ball_outcome: Optional[str]) -> dict:
+    """Deterministically set the near-miss verdict from the goal-line signal
+    (ADAAAA-6481). When `ball_outcome` is a near-miss class the verdict is
+    `near_miss` regardless of the model's read (Gemma often dismisses a
+    near-goal as `not_highlight`); it is NEVER `scoring_play` (the ball did
+    not go in). Mutates and returns `decision`.
+
+    Only acts when the signal is a near-miss class; otherwise `decision` is
+    returned unchanged (no regression for goals / no-signal / non-events)."""
+    if not is_near_miss_ball_outcome(ball_outcome):
+        return decision
+    decision["outcome"] = "near_miss"
+    decision["nearMiss"] = True
+    # A near-miss is notable and surfaces, but at a lower score band than a
+    # scoring play (never treated as a goal).
+    try:
+        sc = float(decision.get("score") or 0.0)
+    except (TypeError, ValueError):
+        sc = 0.0
+    if sc >= 60.0:
+        decision["score"] = 55.0
+    decision["isHighlight"] = True
+    decision["reason"] = (
+        (decision.get("reason") or "")
+        + "; goal-line signal: goal-bound shot did not convert (near-miss)"
+    ).strip("; ")
+    decision["eventType"] = decision.get("eventType") or "NEAR_MISS"
+    return decision
+
+
 def _detection_lines(evidence: dict) -> list[str]:
     """Render the per-detection boxes + ball/goal-line geometry (I4 / ADAAAA-6361)
     as prompt context so Gemma can cite concrete numbers instead of guessing
