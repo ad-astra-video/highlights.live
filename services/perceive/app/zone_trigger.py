@@ -26,7 +26,7 @@ signal), so zones are defined in normalized image coordinates.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .florence import canonical_sport
 
@@ -66,17 +66,70 @@ DEFAULT_ZONES: Dict[str, List[ZoneBox]] = {
 }
 
 
-def resolve_zones(game_hint: Optional[str] = None) -> List[ZoneBox]:
-    """Zones for the session's sport, or [] when the sport is unknown.
+def resolve_zones(game_hint: Optional[str] = None, plan: Optional[Any] = None) -> List[ZoneBox]:
+    """Zones for the session's sport, or [] when unknown.
 
-    Unknown sports have no canned zones -> the detection-in-zone trigger is
-    simply inert (motion-burst + audio still generate candidates). Never
-    crashes on a missing/unknown hint.
+    Plan-first (ADAAAA-6463, plan §7 A/B): when the session carries a
+    TrackingPlan with zones, those normalized boxes ARE the active zones
+    (off-plan regions ignored). Fall back to the canned per-sport map when no
+    plan zones are present — so categories with canned zones keep them and
+    there is no regression. Unknown sports have no canned zones -> the
+    detection-in-zone trigger is simply inert (motion-burst + audio still
+    generate candidates). Never crashes on a missing/unknown hint/plan.
+
+    `plan` may be a TrackingPlan or a raw plan dict (normalized on demand).
     """
+    if plan is not None:
+        zlist = _plan_zone_boxes(plan)
+        if zlist:
+            return zlist
+        # A plan exists but declares no zones -> degrade to the sport's canned
+        # zones when that sport is known (no regression for goal sports).
+        sport = canonical_sport(game_hint, category=_plan_category(plan))
+        if sport is not None:
+            return DEFAULT_ZONES.get(sport, [])
+        return []
     sport = canonical_sport(game_hint)
     if sport is None:
         return []
     return DEFAULT_ZONES.get(sport, [])
+
+
+def _plan_category(plan: Any) -> Optional[str]:
+    """The plan's `category` (str) for canonical-sport resolution, else None."""
+    if plan is None:
+        return None
+    cat = getattr(plan, "category", None) if not isinstance(plan, dict) else plan.get("category")
+    return str(cat).strip().lower() if cat else None
+
+
+def _plan_zone_boxes(plan: Any) -> List[ZoneBox]:
+    """Extract a plan's zones as normalized (x1,y1,x2,y2) tuples.
+
+    Accepts a TrackingPlan (.zones list of {name, normalized, purpose}) or a
+    raw plan dict. Invalid/non-normalized boxes are skipped — never raises.
+    """
+    zones = getattr(plan, "zones", None) if not isinstance(plan, dict) else plan.get("zones")
+    if not isinstance(zones, (list, tuple)) or not zones:
+        return []
+    out: List[ZoneBox] = []
+    for z in zones:
+        if not isinstance(z, dict):
+            continue
+        box = z.get("normalized")
+        if not isinstance(box, (list, tuple)) or len(box) != 4:
+            continue
+        try:
+            vals = [float(v) for v in box[:4]]
+        except (TypeError, ValueError):
+            continue
+        vals = [min(max(v, 0.0), 1.0) for v in vals]
+        if vals[0] > vals[2]:
+            vals[0], vals[2] = vals[2], vals[0]
+        if vals[1] > vals[3]:
+            vals[1], vals[3] = vals[3], vals[1]
+        out.append((vals[0], vals[1], vals[2], vals[3]))
+    return out
 
 
 def _in_zone(b: Sequence[float], zone: ZoneBox) -> bool:

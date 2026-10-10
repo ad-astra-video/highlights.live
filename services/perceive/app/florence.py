@@ -32,6 +32,8 @@ from typing import Optional
 
 import numpy as np
 
+from .tracking_plan import plan_vocabulary
+
 log = logging.getLogger("highlights.perceive.florence")
 
 # OpenVINO targets Intel suites (iGPU + PCIe Arc dGPU + NPU + CPU) behind one
@@ -48,6 +50,47 @@ _JUNK_LABELS = {
     "thing",
 }
 
+# --- discovery-pass tasks (increment C — ADAAAA-6464) ------------------------
+# The caption/region Florence-2 tasks the planner may run at PLAN / RE-PLAN
+# cadence (never per-frame) to discover track candidates on a representative
+# frame. Each maps to a plan `discovery.method`.
+DISCOVERY_TASKS: tuple[str, ...] = (
+    "<DETAILED_CAPTION>",
+    "<MORE_DETAILED_CAPTION>",
+    "<DENSE_REGION_CAPTION>",
+    "<REGION_PROPOSAL>",
+)
+# Which discovery `method` a task implies (plan §4.1 discovery.method).
+_DISCOVERY_METHOD_BY_TASK: dict[str, str] = {
+    "<DETAILED_CAPTION>": "caption",
+    "<MORE_DETAILED_CAPTION>": "caption",
+    "<DENSE_REGION_CAPTION>": "region",
+    "<REGION_PROPOSAL>": "region",
+}
+# Tasks that yield per-region boxes (caption text trailing the <loc_…> tokens);
+# the rest are whole-frame caption tasks (no boxes).
+_DISCOVERY_REGION_TASKS: tuple[str, ...] = (
+    "<DENSE_REGION_CAPTION>",
+    "<REGION_PROPOSAL>",
+)
+
+
+def discovery_task(task: str | None) -> str | None:
+    """Validate/normalize a discovery task token; None if not a discovery task."""
+    if not task:
+        return None
+    t = str(task).strip()
+    return t if t in DISCOVERY_TASKS else None
+
+
+def discovery_method_for_task(task: str | None) -> str | None:
+    """The plan `discovery.method` implied by a discovery task (caption/region)."""
+    t = discovery_task(task)
+    if t is None:
+        return None
+    return _DISCOVERY_METHOD_BY_TASK.get(t, "mixed")
+
+
 # Closed detection vocabulary by game hint. Florence-2's open-set <OD> labels are
 # unreliable on untrained game/UI content (proven live: minimap -> "mobile phone",
 # timer -> "digital clock"), so when a session's gameHint is a known title we scope
@@ -55,13 +98,25 @@ _JUNK_LABELS = {
 # over this map when it is non-empty (it is the operator's explicit closed set).
 _GAME_VOCABULARIES: dict[str, list[str]] = {
     "soccer": ["soccer ball", "player", "goalkeeper", "goal", "referee"],
-    "football": ["soccer ball", "player", "goalkeeper", "goal", "referee"],
+    # American-football synonym fix (ADAAAA-6463, plan §7 B): a US "football"
+    # game must NOT resolve to the soccer vocabulary. "football" (and its
+    # league aliases) now maps to an American-football roster; soccer keeps the
+    # explicit "soccer" key + competition aliases ("football match", leagues).
+    "football": ["football", "player", "referee"],
+    "american football": ["football", "player", "referee"],
     "fa cup": ["soccer ball", "player", "goalkeeper", "goal", "referee"],
     "soccer ball": ["soccer ball", "player", "goalkeeper", "goal", "referee"],
     "basketball": ["basketball", "player", "hoop", "referee"],
     "tennis": ["tennis ball", "player", "racket", "net"],
     "valorant": ["player", "agent", "weapon", "head"],
 }
+
+# No-map categories (per plan §7 A/B: FPS/BR/MOBA/Esports/General) must NEVER
+# silently degrade to open-domain <OD>. When no plan roster and no canned
+# per-sport vocab apply, `resolve_vocabulary` returns this conservative
+# trackable roster (a generic closed set) instead of None/open-domain junk.
+# Every label here is something Florence-2 can box and the tracker can follow.
+SAFE_DEFAULT_VOCABULARY: list[str] = ["player", "person", "vehicle", "ball"]
 
 # Game hints that are synonyms/competitions for the same sport -> canonical key
 # (substring match, so "Premier League" and "FA Cup final" both hit soccer).
@@ -84,6 +139,14 @@ _GAME_HINT_ALIASES: dict[str, str] = {
     "football match": "soccer",
     "uefa": "soccer",
     "nba": "basketball",
+    # American-football synonyms/leagues -> the US football roster (ADAAAA-6463).
+    # A US "football" game must never fall into the soccer vocabulary.
+    "american football": "american football",
+    "nfl": "american football",
+    "ncaa": "american football",
+    "college football": "american football",
+    "super bowl": "american football",
+    "gridiron": "american football",
 }
 
 # Open-set <OD> labels rarely match the closed vocabulary verbatim (Florence-2
@@ -252,14 +315,19 @@ def _max_iou(box: list[float], boxes: list[tuple[float, ...]]) -> float:
     return best
 
 
-def canonical_sport(game_hint: Optional[str] = None) -> Optional[str]:
-    """Resolve a raw game hint to its canonical sport key (or None if unknown).
+def canonical_sport(game_hint: Optional[str] = None, category: Optional[str] = None) -> Optional[str]:
+    """Resolve a raw game hint (or a plan category) to its canonical sport key
+    (or None if unknown).
 
-    e.g. "Premier League" / "FA Cup" -> "soccer". Mirrors the alias resolution
-    used by `resolve_vocabulary` so sport-specific candidate classification and
-    closed-vocabulary detection stay consistent.
+    e.g. "Premier League" / "FA Cup" -> "soccer"; "NFL" / "gridiron" ->
+    "american football". When `category` is supplied (the plan's category on
+    the plan-first path) it takes precedence over `game_hint`, so a stale or
+    ambiguous game hint ("football") cannot override the plan's actual sport.
+    Mirrors the alias resolution used by `resolve_vocabulary` so sport-specific
+    candidate classification and closed-vocabulary detection stay consistent.
     """
-    hint = (game_hint or "").strip().lower()
+    candidate = category if category is not None else game_hint
+    hint = (candidate or "").strip().lower()
     for alias, canonical in _GAME_HINT_ALIASES.items():
         if alias in hint:
             hint = canonical
@@ -278,13 +346,15 @@ def canonical_sport(game_hint: Optional[str] = None) -> Optional[str]:
 _GOAL_EVENT_SPORTS = {"soccer"}
 
 
-def sport_specific_event_type(game_hint: Optional[str] = None, generic_type: str = "MOVE") -> str:
+def sport_specific_event_type(game_hint: Optional[str] = None, generic_type: str = "MOVE", category: Optional[str] = None) -> str:
     """Map the tracker's generic candidate event type onto the active sport.
 
     A goal-scoring sport (soccer) classifies a fast-strike KILL/MOVE candidate
-    as a GOAL; every other sport keeps the raw generic type.
+    as a GOAL; every other sport keeps the raw generic type. When `category`
+    (the plan's category on the plan-first path) is supplied it drives the
+    sport resolution, so American football never classifies as a soccer GOAL.
     """
-    if canonical_sport(game_hint) in _GOAL_EVENT_SPORTS:
+    if canonical_sport(game_hint, category=category) in _GOAL_EVENT_SPORTS:
         return "GOAL"
     return generic_type
 
@@ -292,29 +362,39 @@ def sport_specific_event_type(game_hint: Optional[str] = None, generic_type: str
 def resolve_vocabulary(
     game_hint: Optional[str] = None,
     prefer_labels: Optional[list[str]] = None,
+    plan: Optional[object] = None,
 ) -> Optional[list[str]]:
     """Resolve the CLOSED detection vocabulary for a perceive session.
 
-    Priority:
-      1. a known `game_hint` -> its canned object-class vocabulary (e.g. soccer
-         => [soccer ball, player, goalkeeper, goal, referee]).
-      2. `prefer_labels` — only as a fallback when no sport vocabulary is known.
+    Priority (plan-first tracking, plan §7 A/B, preserving ADAAAA-6412):
+      1. an LLM `TrackingPlan`'s roster when present and non-empty — the plan is
+         the active closed vocabulary (detect/seeding is scoped to plan targets,
+         off-plan objects are dropped). The American-football fix: the plan's
+         own roster is authoritative, so a "Football" plan never leaks the
+         soccer vocab even if gameHint is a stale/ambiguous "football".
+      2. a known `game_hint` -> its canned object-class vocabulary (e.g. soccer
+         => [soccer ball, player, goalkeeper, goal, referee]). IMPORTANT
+         (ADAAAA-6412 regression): when a sport is known its canned vocabulary
+         ALWAYS dominates `prefer_labels` — UI preferLabels are the user's
+         requested highlight EVENT categories (goals / saves / red cards /
+         near-misses / counter-attacks), NOT object classes, and treating them
+         as the closed detection vocabulary voided every real detection
+         (verified live: same clip, preferLabels=[] -> 3 tracks; event
+         preferLabels -> 0 tracks).
+      3. `prefer_labels` — only as a fallback when no sport vocabulary is known
+         (legacy object-label use for unknown games / custom closed sets).
+      4. otherwise a safe-default closed roster for no-map/unknown categories —
+         NEVER None/open-domain junk (no-map categories must not silently
+         degrade to open-domain <OD>).
 
-    IMPORTANT (ADAAAA-6412 regression): `preferLabels` from the UI are the
-    user's requested highlight EVENT categories (e.g. goals / saves / red cards
-    / near-misses / counter-attacks), NOT object classes. Treating them as the
-    closed detection vocabulary voided every real detection — a frame with 3
-    players parsed to 3 gated boxes, unknownRate=1.0, 0 tracks emitted — so no
-    candidate carried corroborating evidence and the decide gate rejected every
-    highlight (verified live: same clip, preferLabels=[] -> 3 tracks; event
-    preferLabels -> 0 tracks). The sport detection vocabulary therefore ALWAYS
-    dominates for a known game hint; event-type preferLabels belong to
-    candidate/decide classification, never the object-detection gate. Only an
-    unknown game hint falls back to prefer_labels (legacy object-label use).
-
-    Only returns a vocabulary when one is actually known; an empty/unknown hint
-    returns None so detect() keeps the open-set prompt and never breaks callers.
+    Returns a non-empty roster in every case except when a caller explicitly
+    wants open-domain (no path does on the plan path). `plan` may be a
+    TrackingPlan or a raw plan dict.
     """
+    if plan is not None:
+        roster = plan_vocabulary(plan)
+        if roster:
+            return roster
     hint = (game_hint or "").strip().lower()
     for alias, canonical in _GAME_HINT_ALIASES.items():
         if alias in hint:
@@ -322,11 +402,14 @@ def resolve_vocabulary(
             break
     if hint in _GAME_VOCABULARIES:
         return _GAME_VOCABULARIES[hint]
+    # No plan roster and no known canned per-sport map: only fall back to
+    # prefer_labels as a raw object set (legacy), then a safe-default closed
+    # roster — never silent open-domain detection.
     if prefer_labels:
         cleaned = [str(l).strip() for l in prefer_labels if str(l).strip()]
         if cleaned:
             return cleaned
-    return None
+    return list(SAFE_DEFAULT_VOCABULARY)
 
 
 def build_od_prompt(task: str = "<OD>", vocabulary: Optional[list[str]] = None) -> str:
@@ -670,6 +753,105 @@ class FlorenceDetector:
         text = self._processor.batch_decode(generated, skip_special_tokens=True)[0]
         return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
+    def discover(self, image: "np.ndarray", task: str = "<DETAILED_CAPTION>") -> dict:
+        """Run ONE Florence-2 caption/region discovery task on a frame.
+
+        This is the PLAN-CADENCE discovery pass (increment C — ADAAAA-6464): the
+        worker invokes it at plan/re-plan cadence ONLY, never from the per-frame
+        hot path — caption/region tasks are slower than ``<OD>`` and would break
+        the 1-5 s live budget (plan §4.2 / §7 C).
+
+        ``task`` must be a discovery task (``DISCOVERY_TASKS``);
+        ``<DETAILED_CAPTION>`` / ``<MORE_DETAILED_CAPTION>`` return a whole-frame
+        description; ``<DENSE_REGION_CAPTION>`` / ``<REGION_PROPOSAL>`` return
+        best-effort per-region boxes (with captions where present). Returns::
+
+            {"task": "<...>", "method": "caption|region",
+             "description": "<raw text>", "regions": [{"bbox": [..], "caption": "..."}],
+             "notes": "<provenance>"}
+
+        Best-effort: a bad/unknown task or any GPU/transport failure returns an
+        empty result (description "", regions []) tagged with the failure in
+        ``notes`` — never raises into the stream.
+        """
+        self.load()
+        task_fmt = discovery_task(task)
+        if task_fmt is None:
+            return {
+                "task": str(task or ""), "method": "mixed",
+                "description": "", "regions": [], "notes": f"invalid discovery task {task!r}",
+            }
+        from PIL import Image
+
+        if image.ndim == 2:
+            image = np.stack([image] * 3, axis=-1)
+        pil = Image.fromarray(image.astype(np.uint8)).convert("RGB")
+        prompt = task_fmt
+        inputs = self._processor(images=pil, text=prompt, return_tensors="pt")
+        try:
+            if self._ov_model is not None:
+                generated = self._ov_model.generate(
+                    input_ids=inputs["input_ids"],
+                    pixel_values=inputs["pixel_values"],
+                    num_beams=3,
+                    max_new_tokens=1024,
+                    do_sample=False,
+                )
+            else:
+                target = self._tdml.device() if self._tdml is not None else next(self._model.parameters()).device
+                inputs = {k: v.to(target) for k, v in inputs.items()}
+                with self._torch.no_grad():
+                    generated = self._model.generate(
+                        **inputs, num_beams=3, max_new_tokens=1024, do_sample=False
+                    )
+        except Exception as exc:  # noqa: BLE001  (discovery must never kill the stream)
+            return {
+                "task": task_fmt, "method": discovery_method_for_task(task_fmt),
+                "description": "", "regions": [], "notes": f"discovery inference failed: {exc}",
+            }
+        try:
+            text = self._processor.batch_decode(generated, skip_special_tokens=False)[0]
+        except Exception:  # noqa: BLE001
+            text = ""
+        is_region = task_fmt in _DISCOVERY_REGION_TASKS
+        regions = self._parse_discovery_regions(text) if is_region else []
+        description = text if not is_region else ""
+        return {
+            "task": task_fmt,
+            "method": discovery_method_for_task(task_fmt),
+            "description": description.strip(),
+            "regions": regions,
+            "notes": f"one {task_fmt} pass at plan cadence",
+        }
+
+    @staticmethod
+    def _parse_discovery_regions(text: str) -> list[dict]:
+        """Best-effort parse of a region-task reply into per-region dicts.
+
+        Florence-2 region replies emit ``<loc_…><loc_…><loc_…><loc_…>`` groups
+        (0-999 coords, normalized by 1000), optionally followed by a caption
+        until the next group. Returns ``[{"bbox": [x1,y1,x2,y2], "caption": str}]``;
+        drops junk/empty entries. Never raises.
+        """
+        out: list[dict] = []
+        if not text:
+            return out
+        # Region group: 4 <loc_N> tokens then optional text until the next group.
+        group_re = re.compile(
+            r"<loc_(\d+)><loc_(\d+)><loc_(\d+)><loc_(\d+)>(.*?)(?=<loc_|\Z)",
+            re.S,
+        )
+        for m in list(group_re.finditer(text))[:16]:
+            a, b, c, d = m.groups()[:4]
+            caption = m.group(5).strip() if m.lastindex and m.lastindex >= 5 else ""
+            caption = re.split(r"[<>]", caption)[-1].strip()
+            try:
+                box = [int(a) / 1000, int(b) / 1000, int(c) / 1000, int(d) / 1000]
+            except ValueError:
+                continue
+            out.append({"bbox": box, "caption": caption})
+        return out
+
     @staticmethod
     def _parse(text: str, vocabulary: Optional[list[str]] = None) -> list[dict]:
         """See _parse_with_stats; returns just the emitted objects (back-compat)."""
@@ -821,6 +1003,38 @@ def get_detector(lora_ref: str | None = None) -> FlorenceDetector | None:
         d = FlorenceDetector(model_path=lora_ref)
         _detectors[lora_ref] = d
     return d
+
+
+def discover_candidates(
+    image: "np.ndarray", task: str = "<DETAILED_CAPTION>", lora_ref: str | None = None
+) -> dict:
+    """Run ONE discovery pass on a representative frame (increment C).
+
+    This is the PLAN-CADENCE discovery entry point: it selects the session's
+    detector (base or per-stream LoRA via ``lora_ref``) and runs a single
+    caption/region task, returning the candidate set the planner folds into the
+    plan's ``discovery`` field. It is a plan/re-plan-cadence helper only — it
+    is never invoked from the per-frame hot path (the ``detect`` method is the
+    per-frame primitive). Best-effort: any detector/transport failure returns
+    an empty result dict (``method``/``task`` set, ``regions``/``description``
+    empty, ``notes`` explaining) — never raises into the stream.
+    """
+    base = {
+        "task": str(task or ""),
+        "method": discovery_method_for_task(task) or "mixed",
+        "description": "",
+        "regions": [],
+        "notes": f"one {task} pass at plan cadence",
+    }
+    d = get_detector(lora_ref)
+    if d is None:
+        base["notes"] = f"discovery skipped: no florence detector (stub mode) for {task}"
+        return base
+    try:
+        return d.discover(image, task=task)
+    except Exception as exc:  # noqa: BLE001  (discovery never kills the stream)
+        base["notes"] = f"discovery inference failed: {exc}"
+        return base
 
 
 def detector_label() -> str:

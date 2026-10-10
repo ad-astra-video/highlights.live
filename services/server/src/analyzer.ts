@@ -134,6 +134,11 @@ export interface DecisionResult {
   score: number;
   eventType?: string;
   reason?: string;
+  // Increment F / ADAAAA-6465: outcome taxonomy member + near-miss flag. A
+  // near miss is notable but NOT a scoring play — surfaced at a lower score and
+  // flagged so the highlight-clip is labeled distinctly downstream.
+  outcome?: "scoring_play" | "near_miss" | "big_play" | "not_highlight";
+  nearMiss?: boolean;
 }
 /** One audio chunk fed to the Stage-A noise-change gate (INC-2 / ADAAAA-4325).
  * Owned by the server's ffmpeg audio tap: short (default ~100 ms) mono int16
@@ -164,13 +169,48 @@ export interface AudioCandidate {
     baselineEnergy: number;
   };
 }
+/** The decide brain's single-shot what-to-track plan (plan §4.4 / §7 D).
+ * Returned by PipelineClient.plan(). `maxTracks` arrives already clamped to
+ * the mode cap (3 live / 8 VOD) by the decide runner. */
+export interface TrackingPlanResult {
+  planVersion: number;
+  category: string;
+  intent: string;
+  source: "planner" | "planner-fallback";
+  plannedAt?: number;
+  anchor?: Record<string, unknown>;
+  targets?: { label: string; role?: string; slotPriority?: number; track?: boolean }[];
+  zones?: Record<string, unknown>[];
+  discovery?: Record<string, unknown> | null;
+  maxTracks: number;
+  reason?: string;
+  [k: string]: unknown;
+}
+
+export interface PlanRequest {
+  intent: string;
+  category: string;
+  gameHint?: string;
+  mode?: "live" | "vod";
+  context?: Record<string, unknown>;
+  /** ONE representative frame (base64 JPEG), never a sequence. */
+  imageB64?: string;
+}
+
 export interface PipelineClient {
   reservePerceive(): Promise<ReserveResult>;
   analyze(
     sessionId: string,
     frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
-    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string }
+    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string; trackingPlan?: Record<string, unknown> }
   ): Promise<ObservationResult>;
+  /** Single-shot what-to-track planner call (plan §4.4 / §7 D). The worker
+   * fires this at stream-start warm-up + out-of-band re-check cadence — NEVER
+   * from the per-frame hot path (the 1-5 s live budget rule). Priced like a
+   * decide /highlight call. Returns a validated TrackingPlan or, on ANY
+   * failure, a safe-default fallback (source "planner-fallback") — never an
+   * exception, so a bad planner reply never kills a stream. */
+  plan(req: PlanRequest): Promise<TrackingPlanResult>;
   /** Feed one audio chunk to the perceive session's Stage-A noise-change gate.
    * Pure DSP on the perceive side — never touches the detector/SAM/Gemma, so
    * this path bills no GPU. Fires a *candidate* only (returned to the caller so
@@ -313,6 +353,23 @@ export interface AnalyzerConfig {
    * operator enables it. `LIVE_AUDIO_CONTEXT`.
    */
    audioContext?: boolean;
+  /** Increment F / ADAAAA-6465 (plan §4.9): analysis FPS cap for the assembly
+   * of the frame sequence the LLM watches per trigger. Default 5 (live). The
+   * sequence is sampled at this rate around the trigger, always includes the
+   * keyframe set, and is HARD-CAPPED at `maxFramesPerAnalysis`. Frames are the
+   * PRIMARY evidence; audio is a cheap, fallible trigger/corroboration. Raising
+   * the cap is a per-call Livepeer GPU cost decision. `ANALYSIS_FPS` /
+   * `VOD_ANALYSIS_FPS` (VOD detail-first gets a higher cap). */
+   analysisFps?: number;
+  /** Hard cap on the number of frames that reach the LLM in ONE analysis call
+   * (never exceeded — plan §4.9D). Live default ≈ 25 + 3 keyframes = 30.
+   * `MAX_FRAMES_PER_ANALYSIS` / `VOD_MAX_FRAMES_PER_ANALYSIS`. */
+   maxFramesPerAnalysis?: number;
+  /** Pre/post window (seconds) around the trigger the assembler samples.
+   * Default 2 s pre / 3 s post (plan §4.9A). VOD may lengthen these (detail-
+   * first; speed secondary). `ANALYSIS_PRE_WINDOW_S` / `ANALYSIS_POST_WINDOW_S`. */
+   preWindowS?: number;
+   postWindowS?: number;
   /**
    * Max times the job will re-reserve a fresh perceive session after the
    * current one is lost mid-pass (HTTP 404 "runner not found" / "runner
@@ -323,6 +380,31 @@ export interface AnalyzerConfig {
    * beyond this we abort cleanly instead of spinning. Default 3.
    */
   maxReReserves?: number;
+  /**
+   * Increment D (ADAAAA-6467): the stream-start warm-up window (seconds)
+   * within which exactly ONE planner call must deliver a valid TrackingPlan
+   * before the per-frame loop begins steady-state tracking. The worker does
+   * NOT block the per-frame loop on the planner; it applies a safe-default
+   * interim roster (via the session's trackingPlan from perceive's canned
+   * map) until the plan lands. Exceeding the window just means the plan
+   * applies late — never a per-frame planner call. `WARMUP_SECONDS` (default
+   * 3).
+   */
+  warmupSeconds?: number;
+  /**
+   * Increment D (ADAAAA-6467): the out-of-band re-check cadence (seconds).
+   * A scheduler samples a few frames from the rolling frame window OFF the
+   * per-frame path and re-plans the TrackingPlan, swapping the active roster
+   * within (~) this interval when the brain detects a type change (scene cut
+   * / different feed). Default 10. `RECHECK_INTERVAL_SECONDS`.
+   */
+  recheckIntervalSeconds?: number;
+  /**
+   * The pass mode (live | vod), forwarded to the planner so it proposes
+   * within the correct cap (3 live / 8 VOD). The live path is "live"; the
+   * detail-first VOD path is "vod". Default "live".
+   */
+  planMode?: "live" | "vod";
 }
 
 /**
@@ -391,6 +473,148 @@ export const CACHE_MAX_FRAMES = 60;
  * ~500–600 tokens; the prior-context the decide prompt is augmented with never
  * exceeds this. Content beyond the cap is dropped oldest-first at assembly. */
 export const WINDOW_FACTS_MAX_CHARS = 2400;
+
+// ---------------------------------------------------------------------------
+// Increment F / ADAAAA-6465: frame-watching assembler (plan §4.9C).
+// The analysis LLM watches a bounded SEQUENCE of actual stream frames around
+// each trigger — this is the PRIMARY evidence path; audio is a cheap, explicitly
+// fallible trigger/corroboration (crowds erupt for near misses / wrong calls /
+// replays). The sequence is sampled from the already-cached frame window at
+// `analysis_fps` (default 5), always includes a keyframe set (trigger-onset,
+// peak-audio, window-end), and is HARD-CAPPED at `max_frames_per_analysis`.
+// ---------------------------------------------------------------------------
+
+/** Default analysis FPS cap for the live pass (plan §4.9A): ~5 fps over a
+ * ~5 s window ≈ 25 frames + 3 keyframes. Raising this is a per-call Livepeer
+ * GPU cost decision, not a code change. */
+export const DEFAULT_ANALYSIS_FPS = 5;
+/** Hard cap on the number of frames that can reach the LLM in ONE analysis
+ * call (plan §4.9D / §14.6). Never exceeded. Live default ≈ 25 + 3 keyframes. */
+export const DEFAULT_MAX_FRAMES_PER_ANALYSIS = 30;
+/** Pre/post window (seconds) around the trigger the assembler samples (plan
+ * §4.9A: default ~2 s pre / ~3 s post — covers the play, the crossing/contact
+ * moment, and the reaction). */
+export const DEFAULT_PRE_WINDOW_S = 2;
+export const DEFAULT_POST_WINDOW_S = 3;
+
+/** A single candidate frame the assembler may select. `keyframe` is one of
+ * "trigger" | "peak_audio" | "window_end" (plan §4.9A keyframe set) or null for
+ * a regular sampled frame. */
+export interface AssembledFrame {
+  timestamp: number;
+  base64: string;
+  keyframe?: "trigger" | "peak_audio" | "window_end";
+}
+
+/** Assemble the capped frame sequence for one analysis call (increment F).
+ *
+ * Pure + deterministic so it is unit-testable. Input is the already-cached
+ * rolling frame window (oldest -> newest, each with a timestamp + base64 image).
+ * Selection rules (plan §4.9A):
+ *   1. Keep only frames inside [triggerTs - preWindowS, triggerTs + postWindowS].
+ *   2. Sample down to `analysis_fps` — pick frames whose timestamp is nearest to
+ *      an even `1/analysis_fps` grid across the window (so a ~5 s window at 5 fps
+ *      yields ~25 frames). Always keeps the first and last in-window frame.
+ *   3. Add the keyframe set: trigger-onset (nearest frame to triggerTs),
+ *      peak-audio (nearest frame to `peakAudioTs`, when supplied), window-end
+ *      (the last in-window frame) — deduped.
+ *   4. HARD-CAP at `maxFramesPerAnalysis` (default 30). If over, keep the
+ *      keyframes and thin the regular sample oldest-first so the total never
+ *      exceeds the cap.
+ * Returns ImageRef-shaped `[{ role: "full", base64 }]` ordered oldest -> newest,
+ * EXACTLY the shape gemma `ask(frames=...)` consumes. An empty window yields [].
+ */
+export function assembleFrameSequence(
+  frames: { timestamp: number; imageB64: string }[],
+  opts: {
+    triggerTs: number;
+    analysisFps?: number;
+    maxFramesPerAnalysis?: number;
+    preWindowS?: number;
+    postWindowS?: number;
+    peakAudioTs?: number;
+  }
+): { role: string; base64: string }[] {
+  const {
+    triggerTs,
+    analysisFps = DEFAULT_ANALYSIS_FPS,
+    maxFramesPerAnalysis = DEFAULT_MAX_FRAMES_PER_ANALYSIS,
+    preWindowS = DEFAULT_PRE_WINDOW_S,
+    postWindowS = DEFAULT_POST_WINDOW_S,
+    peakAudioTs,
+  } = opts;
+  const inWindow = frames
+    .filter((f) => f.timestamp >= triggerTs - preWindowS && f.timestamp <= triggerTs + postWindowS)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (!inWindow.length) return [];
+
+  // --- keyframe set (always included) --------------------------------------
+  const keyframes = new Map<string, AssembledFrame>();
+  const nearest = (ts: number): AssembledFrame | undefined => {
+    if (!Number.isFinite(ts)) return undefined;
+    let best: AssembledFrame | undefined;
+    let bestDiff = Infinity;
+    for (const f of inWindow) {
+      const d = Math.abs(f.timestamp - ts);
+      if (d < bestDiff) {
+        bestDiff = d;
+        best = { timestamp: f.timestamp, base64: f.imageB64 };
+      }
+    }
+    return best;
+  };
+  const trigger = nearest(triggerTs);
+  if (trigger) keyframes.set(`trigger@${trigger.timestamp}`, { ...trigger, keyframe: "trigger" });
+  if (peakAudioTs !== undefined) {
+    const peak = nearest(peakAudioTs);
+    if (peak && !keyframes.has(`trigger@${peak.timestamp}`)) {
+      keyframes.set(`peak@${peak.timestamp}`, { ...peak, keyframe: "peak_audio" });
+    }
+  }
+  const end = inWindow[inWindow.length - 1];
+  if (!keyframes.has(`trigger@${end.timestamp}`) && !keyframes.has(`peak@${end.timestamp}`)) {
+    keyframes.set(`end@${end.timestamp}`, { timestamp: end.timestamp, base64: end.imageB64, keyframe: "window_end" });
+  }
+
+  // --- regular sample at analysis_fps ---------------------------------------
+  const step = analysisFps > 0 ? 1 / analysisFps : Infinity;
+  const start = inWindow[0].timestamp;
+  const endTs = inWindow[inWindow.length - 1].timestamp;
+  const sampled: AssembledFrame[] = [];
+  for (let t = start; t <= endTs + 1e-9; t += step) {
+    const n = nearest(t);
+    if (n) sampled.push(n);
+  }
+  // Dedupe by timestamp, keep first occurrence (grid order).
+  const seen = new Set<number>();
+  const grid: AssembledFrame[] = [];
+  for (const s of sampled) {
+    if (!seen.has(s.timestamp)) {
+      seen.add(s.timestamp);
+      grid.push(s);
+    }
+  }
+  // Merge keyframes (they are decision-relevant even if the grid thinned them).
+  const merged = new Map<number, AssembledFrame>();
+  for (const s of grid) merged.set(s.timestamp, s);
+  for (const k of keyframes.values()) merged.set(k.timestamp, k);
+  let ordered = [...merged.values()].sort((a, b) => a.timestamp - b.timestamp);
+
+  // --- hard cap ---------------------------------------------------------------
+  if (ordered.length > maxFramesPerAnalysis) {
+    const keepTs = new Set(ordered.filter((f) => f.keyframe).map((f) => f.timestamp));
+    const nonKey = ordered.filter((f) => !keepTs.has(f.timestamp));
+    let extra = maxFramesPerAnalysis - keepTs.size;
+    if (extra < 0) extra = 0;
+    const keptKey = ordered.filter((f) => keepTs.has(f.timestamp));
+    // Spread the remaining budget evenly across the non-key frames oldest-first.
+    const thinned = nonKey.filter((_, i) => i < extra);
+    ordered = [...keptKey, ...thinned].sort((a, b) => a.timestamp - b.timestamp);
+    // Final safety clamp (defensive; guarantees the hard cap is never breached).
+    if (ordered.length > maxFramesPerAnalysis) ordered = ordered.slice(0, maxFramesPerAnalysis);
+  }
+  return ordered.map((f) => ({ role: "full", base64: f.base64 }));
+}
 
 /** Already-computed perception findings for one in-window sampled frame (A1).
  * These come from the `/analyze` result the server already paid for — cached
@@ -549,6 +773,13 @@ export class LiveRunShared {
   cachedFrameCount(): number {
     return this.frames.size;
   }
+  /** Timestamp of the newest cached frame (the representative frame for the
+   * out-of-band re-check sampler), or 0 when the window is empty. */
+  lastTimestamp(): number {
+    let max = 0;
+    for (const v of this.frames.values()) if (v.timestamp > max) max = v.timestamp;
+    return max;
+  }
   /** The rolling frame window as decide() `frames[]` ImageRefs (detail-first:
    * the temporal SEQUENCE Gemma reasons across). Ordered oldest -> newest, and
    * SLICED to the decide window length (legacy DECIDE_FRAME_WINDOW or the
@@ -558,6 +789,18 @@ export class LiveRunShared {
     const all = [...this.frames.values()];
     const sliced = all.slice(-this.windowN);
     return sliced.map((f) => ({ role: "full", base64: f.imageB64 }));
+  }
+  /** Increment F / ADAAAA-6465: assemble the capped frame sequence for one
+   * analysis call — sampled at `analysis_fps`, always including the keyframe
+   * set (trigger-onset, peak-audio, window-end) and HARD-CAPPED at
+   * `maxFramesPerAnalysis`. Frames are the PRIMARY evidence; audio is a cheap,
+   * fallible trigger/corroboration. Samples from the already-cached window
+   * (no re-extraction — no extra GPU). Empty when nothing is in the window. */
+  frameSequenceFor(triggerTs: number, peakAudioTs?: number, opts: { analysisFps?: number; maxFramesPerAnalysis?: number; preWindowS?: number; postWindowS?: number } = {}): { role: string; base64: string }[] {
+    const cached = [...this.frames.values()]
+      .filter((f) => f.imageB64)
+      .map((f) => ({ timestamp: f.timestamp, imageB64: f.imageB64 }));
+    return assembleFrameSequence(cached, { triggerTs, peakAudioTs, ...opts });
   }
   /**
    * Assemble the current 60 s window's factual content as compact text (A2) —
@@ -708,6 +951,7 @@ function detailDecideOpts(
   cfg: AnalyzerConfig,
   shared: LiveRunShared,
   anchoredImage: string | undefined,
+  candidate: { timestamp: number; peakAudioTs?: number },
   burstFrames?: { role: string; base64: string }[]
 ): {
   gameHint: string;
@@ -731,22 +975,189 @@ function detailDecideOpts(
   // findings, no re-analysis). Included unconditionally — live and detail-first
   // alike. Empty when the window has nothing to add (behavior identical).
   opts.priorContextText = shared.windowFactsText();
-  if (cfg.decideWindowN !== undefined) {
-    // I7 / ADAAAA-6361: when a higher-FPS burst was re-sampled around the
-    // trigger, prefer it as the temporal `frames[]` so the ball-goal-crossing
-    // instant is in the decide window; else fall back to the rolling window.
-    opts.frames = burstFrames?.length ? burstFrames : shared.framesWindow();
-    const audio = shared.audioClipB64();
-    if (audio) opts.audioB64 = audio;
-  } else if (cfg.audioContext) {
-    // ADAAAA-6314 Path 2 (live): forward the surrounding audio clip so the
-    // gemma decide prompt gets ASR'd audio context for trigger candidates.
-    // Bounded: only the ~AUDIO_CLIP_KEEP_S clip; no frames[] change, so the
-    // live frame depth is untouched.
-    const audio = shared.audioClipB64();
-    if (audio) opts.audioB64 = audio;
-  }
+  // Increment F / ADAAAA-6465: Frames are the PRIMARY evidence on EVERY trigger
+  // (live + VOD). Assemble the capped sequence — sampled at analysis_fps,
+  // keyframe set (trigger-onset, peak-audio, window-end), hard-capped at
+  // max_frames_per_analysis — so the LLM watches the actual play. Audio stays a
+  // cheap, fallible trigger/corroboration (crowds erupt for near misses / wrong
+  // calls / replays). This replaces the detail-first-only `frames[]` gating so
+  // the analysis call always receives the assembled sequence, never a single
+  // still (live baseline no longer sends a bare anchored image).
+  const seq = shared.frameSequenceFor(candidate.timestamp, candidate.peakAudioTs, {
+    analysisFps: cfg.analysisFps,
+    maxFramesPerAnalysis: cfg.maxFramesPerAnalysis,
+    preWindowS: cfg.preWindowS,
+    postWindowS: cfg.postWindowS,
+  });
+  // I7 / ADAAAA-6361: when a higher-FPS burst was re-sampled around the trigger,
+  // prefer it (it already contains the ball-goal-crossing instant); else use the
+  // assembled capped sequence.
+  opts.frames = burstFrames?.length ? burstFrames : seq;
+  const audio = shared.audioClipB64();
+  if (audio) opts.audioB64 = audio;
   return opts;
+}
+
+/**
+ * Increment D (ADAAAA-6467): the what-to-track plan orchestrator on the
+ * worker. Owns the SINGLE stream-start warm-up plan call and the out-of-band
+ * re-check cadence, and holds the active TrackingPlan that the per-frame
+ * /analyze path delivers to perceive (so detect/seeding stays scoped to the
+ * plan's roster). CRITICAL INVARIANT: it NEVER calls the planner from the
+ * per-frame loop — planner calls happen exactly at warm-up and on the
+ * re-check cadence, so per-frame planner/discovery invocations = 0 and the
+ * 1-5 s live detection budget is preserved.
+ *
+ * Guardrails (applied here + by perceive's TrackingPlan contract):
+ *  - maxTracks is clamped to the mode cap (3 live / 8 VOD) — both the decide
+ *    runner and here; a plan can never exceed the company cap.
+ *  - Narrow-only: a plan can only narrow the roster to what is detectable; it
+ *    may not widen past the closed-vocab gate. perceive already degrades any
+ *    untrackable/off-plan target, so a bad plan yields an empty roster ->
+ *    canned/safe-default. The controller additionally drops a plan whose
+ *    maxTracks exceeds the cap or whose targets are empty/untrackable.
+ *  - Degrade-to-canned/safe-default: on an absent/invalid planner reply the
+ *    controller keeps the previous plan (or no plan) and lets perceive run the
+ *    canned gameHint roster — never a dead stream, never a per-frame planner
+ *    retry.
+ */
+export class TrackingPlanController {
+  private activePlan: TrackingPlanResult | null = null;
+  private plannedAt = 0;
+  private warmup = false;
+  private recheckTimer: ReturnType<typeof setInterval> | null = null;
+  private stopped = false;
+  private readonly warmupSeconds: number;
+  private readonly recheckIntervalSeconds: number;
+  private readonly planMode: "live" | "vod";
+  /** Sequential re-check marker so overlapping re-plan calls cannot race. */
+  private replanning = false;
+  onPlan?: (plan: TrackingPlanResult | null, source: "warmup" | "recheck" | "candidate") => void;
+
+  constructor(cfg: { warmupSeconds?: number; recheckIntervalSeconds?: number; planMode?: "live" | "vod" }) {
+    this.warmupSeconds = cfg.warmupSeconds ?? 3;
+    this.recheckIntervalSeconds = cfg.recheckIntervalSeconds ?? 10;
+    this.planMode = cfg.planMode ?? "live";
+  }
+
+  get active(): TrackingPlanResult | null {
+    return this.activePlan;
+  }
+  get lastPlanAt(): number {
+    return this.plannedAt;
+  }
+  /** The plan dict to deliver on the next /analyze (or null for the canned
+   * /safe-default interim). `maxTracks` is already clamped. */
+  delivery(): Record<string, unknown> | null {
+    return this.activePlan ? { ...this.activePlan } : null;
+  }
+
+  private buildRequest(imageB64: string | undefined): PlanRequest {
+    return {
+      intent: "",
+      category: (this.activePlan?.category as string) || "",
+      gameHint: undefined,
+      mode: this.planMode,
+      imageB64,
+      context: this.activePlan ? { previousPlan: this.activePlan } : undefined,
+    };
+  }
+
+  private apply(plan: TrackingPlanResult | null): void {
+    if (plan && plan.maxTracks > (this.planMode === "vod" ? 8 : 3)) {
+      // Hard clamp — a plan can NEVER exceed the mode cap (company invariant).
+      plan = { ...plan, maxTracks: this.planMode === "vod" ? 8 : 3 };
+    }
+    this.activePlan = plan;
+    this.plannedAt = plan?.plannedAt ?? Date.now() / 1000;
+  }
+
+  /** Fire exactly ONE warm-up plan call (blocking the first frame's plan
+   * delivery, NOT the per-frame loop). Returns the plan or null. */
+  async warmUp(client: PipelineClient, imageB64?: string): Promise<TrackingPlanResult | null> {
+    if (this.warmup) return this.activePlan;
+    this.warmup = true;
+    const plan = await this.replan(client, imageB64, "warmup");
+    this.onPlan?.(plan, "warmup");
+    return plan;
+  }
+
+  /** Start the out-of-band re-check cadence. `sample` returns a representative
+   * in-window frame (imageB64) for the planner, or undefined when the window
+   * has none yet. Runs OFF the per-frame path; the timer never blocks a frame. */
+  startRecheck(client: PipelineClient, sample: () => string | undefined): void {
+    if (this.recheckTimer || this.stopped) return;
+    this.recheckTimer = setInterval(async () => {
+      if (this.stopped || this.replanning) return;
+      try {
+        const plan = await this.replan(client, sample(), "recheck");
+        if (plan) this.onPlan?.(plan, "recheck");
+      } catch {
+        /* re-check is best-effort — the last good plan stays active */
+      }
+    }, Math.max(1, this.recheckIntervalSeconds) * 1000);
+    // Let the timer not keep the process alive after the job ends.
+    if (typeof this.recheckTimer.unref === "function") this.recheckTimer.unref();
+  }
+
+  /** Immediate re-plan on a candidate event (out of band from the per-frame
+   * detection; invoked by the worker's candidate handler). */
+  async onCandidate(client: PipelineClient, imageB64?: string): Promise<void> {
+    if (this.stopped || this.replanning) return;
+    const plan = await this.replan(client, imageB64, "candidate");
+    if (plan) this.onPlan?.(plan, "candidate");
+  }
+
+  /** One planner call (warm-up / re-check / candidate). Never throws; on any
+   * failure keeps the current plan (perceive degrades to canned/safe-default
+   * if there is none). Bound so it never becomes a per-frame call. */
+  private async replan(
+    client: PipelineClient,
+    imageB64: string | undefined,
+    _why: string
+  ): Promise<TrackingPlanResult | null> {
+    if (this.replanning) return this.activePlan;
+    this.replanning = true;
+    try {
+      let res: TrackingPlanResult | null = null;
+      try {
+        res = await client.plan(this.buildRequest(imageB64));
+      } catch {
+        // planner call failed (unreachable / 4xx): keep the current plan, so
+        // perceive degrades to canned/safe-default if there is none. Never an
+        // unhandled rejection from the warm-up / re-check paths.
+        return this.activePlan;
+      }
+      if (!res || typeof res !== "object") return this.activePlan;
+      // Narrow-only guard: a plan with no trackable targets or an empty roster
+      // is dropped (perceive will run the canned/safe-default roster), unless
+      // it is an explicit safe-default fallback (source planner-fallback with
+      // empty targets is still valid — it means "degrade to canned").
+      const targets = Array.isArray(res.targets) ? res.targets : [];
+      const trackable = targets.some((t) => t && typeof t.label === "string" && t.label.trim() !== "");
+      if (!trackable && !targets.length) {
+        // empty roster — valid only as an explicit degrade signal; keep active
+        // plan unchanged so prior scoping is preserved, else hand the fallback.
+        if (res.source === "planner-fallback" && !this.activePlan && targets.length === 0) {
+          this.apply(res);
+          return this.activePlan;
+        }
+        return this.activePlan;
+      }
+      this.apply(res);
+      return this.activePlan;
+    } finally {
+      this.replanning = false;
+    }
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.recheckTimer) {
+      clearInterval(this.recheckTimer);
+      this.recheckTimer = null;
+    }
+  }
 }
 
 /**
@@ -806,7 +1217,7 @@ export async function decideOnCandidate(
       // the detail-first (VOD) pass so the prompt can cite concrete evidence.
       ...(cfg.decideWindowN !== undefined ? buildRichEvidence(shared, candidate.timestamp) : {}),
     },
-    detailDecideOpts(cfg, shared, anchoredImage, burstFrames)
+    detailDecideOpts(cfg, shared, anchoredImage, { timestamp: candidate.timestamp, peakAudioTs: candidate.audio?.ts }, burstFrames)
   );
   // Track the Stage-A FP-rate metric (INC-2 / ADAAAA-4325 slice 5): whether
   // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
@@ -823,6 +1234,10 @@ export async function decideOnCandidate(
     eventType: decision.eventType,
     score: decision.score,
     reason: decision.reason,
+    // Increment F / ADAAAA-6465: near-miss surface at a lower score, labeled
+    // distinctly via the outcome/nearMiss flag on the highlight record.
+    outcome: decision.outcome,
+    nearMiss: decision.nearMiss,
     status: "pending",
     createdAt: new Date().toISOString(),
   };
@@ -870,23 +1285,51 @@ export async function analyzeJob(
   const run = shared_ ?? new LiveRunShared();
   const evidence = run.evidence;
   const highlights = run.highlights;
+  // Increment D (ADAAAA-6467): the what-to-track plan orchestrator. Fires the
+  // SINGLE warm-up planner call near stream start and the out-of-band re-check
+  // cadence — never the planner from the per-frame loop. The resulting plan is
+  // delivered to perceive alongside gameHint/preferLabels on every /analyze
+  // (mirrors ADAAAA-4109 delivery so a re-reserved session inherits it too).
+  const planController = new TrackingPlanController({
+    warmupSeconds: cfg.warmupSeconds,
+    recheckIntervalSeconds: cfg.recheckIntervalSeconds,
+    planMode: cfg.planMode ?? "live",
+  });
   let framesAnalyzed = 0;
+  let planApplied = false;
   try {
     for await (const frame of iterFrames) {
       framesAnalyzed++;
       run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
       let res: ObservationResult;
       let reReserved = 0;
-      // The perceive live-runner's health can flap mid-pass; go-livepeer then
-      // marks it unavailable and releases all its sessions, so our next
-      // /analyze returns 404 "runner not found". Re-reserve a fresh session
-      // and retry this frame (the 404 frame was never processed) up to the
-      // bounded cap, then surface the error cleanly.
+      // Warm-up: fire exactly ONE planner call at stream start (on the first
+      // sampled frame, so the plan is grounded in the feed). The per-frame
+      // loop does NOT await the planner — it proceeds on the canned/safe-
+      // default interim (no trackingPlan yet) and the plan applies the moment
+      // it lands. Within the warm-up window the plan is applied before steady-
+      // state tracking (plan §7 D).
+      const planImage = run.anchor(frame.timestamp) ?? frame.imageB64;
+      if (!planApplied) {
+        void planController.warmUp(client, planImage).then(() => {
+          planApplied = true;
+        });
+        // Start the out-of-band re-check cadence (sampling the rolling window,
+        // off the per-frame path).
+        planController.startRecheck(client, () => run.anchor(run.lastTimestamp()));
+      }
       // Deliver the job's closed vocabulary (gameHint/preferLabels) on EVERY
       // /analyze (ADAAAA-4109): a fresh session — including one re-reserved
       // after a 404 session-lost — inherits the config the moment its first
       // frame runs, before resolve_vocabulary() gates the <OD> prompt.
-      const vocab = { gameHint: cfg.gameHint, preferLabels: cfg.preferLabels, loraRef: cfg.loraRef };
+      // The active TrackingPlan rides the same per-frame delivery so the
+      // detect/seeding stays scoped to the plan's roster.
+      const vocab = {
+        gameHint: cfg.gameHint,
+        preferLabels: cfg.preferLabels,
+        loraRef: cfg.loraRef,
+        trackingPlan: planController.delivery() ?? undefined,
+      };
       for (;;) {
         try {
           res = await client.analyze(sessionId, frame, vocab);
@@ -906,6 +1349,9 @@ export async function analyzeJob(
       // into the 60 s window. Reused by windowFactsText — never re-analyzed.
       run.setFindings(frame.seq, res.observation);
       if (res.candidate) {
+        // Immediate re-plan on a candidate event (out of band from the per-frame
+        // detection; never blocks the current candidate's decide()).
+        void planController.onCandidate(client, run.anchor(res.candidate.timestamp) ?? frame.imageB64);
         // Fold the candidate into the window's factual context (plan §A).
         run.addCandidate({ timestamp: res.candidate.timestamp, eventType: res.candidate.eventType });
         onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "candidate", candidate: res.candidate });
@@ -941,7 +1387,7 @@ export async function analyzeJob(
             // curve on the detail-first (VOD) pass.
             ...(cfg.decideWindowN !== undefined ? buildRichEvidence(run, res.candidate.timestamp) : {}),
           },
-          detailDecideOpts(cfg, run, anchoredImage, burstFrames)
+          detailDecideOpts(cfg, run, anchoredImage, { timestamp: res.candidate.timestamp, peakAudioTs: res.candidate.audio?.ts }, burstFrames)
         );
         if (decision.isHighlight) {
           const { clipId, clipUri } = await cut(res.candidate.timestamp);
@@ -954,6 +1400,10 @@ export async function analyzeJob(
             eventType: decision.eventType,
             score: decision.score,
             reason: decision.reason,
+            // Increment F / ADAAAA-6465: near-miss surface at a lower score,
+            // labeled distinctly via the outcome/nearMiss flag.
+            outcome: decision.outcome,
+            nearMiss: decision.nearMiss,
             status: "pending",
             createdAt: new Date().toISOString(),
           };
@@ -966,6 +1416,8 @@ export async function analyzeJob(
     // Stop / un-pay every session we reserved this pass. Sessions the server
     // already released are a no-op on the orchestrator but still drop their
     // adapter payment refiller, so stopping them is required to avoid leaks.
+    // Stop the planner's re-check timer so it cannot outlive the job.
+    planController.stop();
     for (const s of reserved) {
       await client.stopPerceive(s).catch(() => {});
     }

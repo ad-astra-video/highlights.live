@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import Optional
 
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
-from .gemma import apply_ball_outcome_gate, decide_with_gemma
+from .gemma import apply_ball_outcome_gate, decide_with_gemma, plan_tracking_with_gemma, _rule_outcome
 
 
 class ReactionEvidence(BaseModel):
@@ -88,6 +89,56 @@ class ImageRef(BaseModel):
     base64: str = ""
 
 
+class PlanRequest(BaseModel):
+    """Single-shot what-to-track planner request (plan §4.4 / §7 D).
+
+    The server/worker fires this ONCE at stream-start warm-up and on the
+    out-of-band re-check cadence — NEVER from the per-frame hot path. `frame`
+    is ONE representative frame (base64 JPEG); `mode` selects the maxTracks
+    cap (live 3 / vod 8); `context` may carry fineTuneManifest /
+    previousPlan / recentDiscoveryNotes. The heavyweight planner / discovery
+    run on the decide runner's Gemma, priced like a /highlight call."""
+
+    model_config = ConfigDict(extra="ignore")
+    sessionId: str = ""
+    intent: str = ""
+    category: str = ""
+    gameHint: str = ""
+    # live | vod — selects the maxTracks proposal cap (3 live / 8 VOD).
+    mode: str = "live"
+    # Optional per-session planner context (fine-tune manifest, prior plan,
+    # discovery notes) folded into the seed before the frame.
+    context: dict = Field(default_factory=dict)
+    # ONE representative frame (base64 JPEG) so the plan is grounded in the
+    # feed's actual content. Absent/empty -> the planner still returns a valid
+    # fallback plan (never raises, never None).
+    image: str = ""
+    reasoningEffort: str = "none"
+
+
+class TrackingPlanResponse(BaseModel):
+    """The validated TrackingPlan the decide brain produced (plan §7 A/D).
+
+    Mirrors the perceive TrackingPlan contract's shape; `source` reports
+    "planner" (brain produced a valid plan) or "planner-fallback" (degraded to
+    a canned/safe-default roster). Server/worker applies guardrails (maxTracks
+    clamp, narrow-only) after this; perceive applies the roster."""
+
+    model_config = ConfigDict(extra="ignore")
+    planVersion: int = 1
+    category: str = ""
+    intent: str = ""
+    # Added by the perceiver so the worker can audit which path produced it.
+    source: str = "planner"
+    plannedAt: float = 0.0
+    anchor: dict = Field(default_factory=dict)
+    targets: list = Field(default_factory=list)
+    zones: list = Field(default_factory=list)
+    discovery: Optional[dict] = None
+    maxTracks: int = 3
+    reason: str = ""
+
+
 class HighlightRequest(BaseModel):
     sessionId: str
     eventType: str
@@ -164,6 +215,12 @@ class HighlightDecision(BaseModel):
     eventType: Optional[str] = None
     reason: Optional[str] = None
     source: str = "rule"  # "rule" | "gemma" | "rule-fallback"
+    # Increment F / ADAAAA-6465: outcome taxonomy member + near-miss flag. The
+    # model picks one of scoring_play | near_miss | big_play | not_highlight; a
+    # near miss is notable but NOT a scoring play, surfaced at a lower score and
+    # flagged `nearMiss` so downstream highlight assembly labels it distinctly.
+    outcome: str = "not_highlight"
+    nearMiss: bool = False
     # Rule-path classifiers (pre-I1; returned by the deterministic rule so the
     # response contract stays backward compatible now that /highlight declares a
     # response_model — without them `extra=ignore` would silently drop them).
@@ -288,7 +345,48 @@ def create_app() -> FastAPI:
             "source": "rule",
             "eventClass": d.event_class,
             "corroborated": d.corroborated,
+            # Increment F / ADAAAA-6465: outcome taxonomy on the rule path too.
+            "outcome": _rule_outcome(d),
+            "nearMiss": False,
         }
+
+    @router.post("/plan", response_model=TrackingPlanResponse)
+    async def plan(req: PlanRequest):
+        """Single-shot what-to-track planner (plan §4.4 / §7 D). The worker
+        fires this at stream-start warm-up + out-of-band re-check; it is NEVER
+        on the per-frame path. Runs the decide brain (or the rule fallback in
+        rule mode) and returns a validated TrackingPlan; on ANY failure the
+        caller gets a fallback plan (source "planner-fallback"), never an
+        exception — so perceive degrades to the canned/safe-default roster."""
+        if _is_gemma_mode():
+            # The decide runner's Gemma produces the plan from (intent,
+            # category, one representative frame, context). frame is the one
+            # representative frame (never a per-frame sequence). fold the
+            # request's gameHint into context so sport resolution tracks it.
+            ctx = dict(req.context or {})
+            if req.gameHint and "gameHint" not in ctx:
+                ctx["gameHint"] = req.gameHint
+            plan = plan_tracking_with_gemma(
+                intent=req.intent,
+                category=req.category,
+                frame={"base64": req.image} if req.image else None,
+                context=ctx,
+                mode=req.mode,
+                url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
+                timeout_s=float(os.environ.get("PLANNER_TIMEOUT_S", "180")),
+            )
+            return TrackingPlanResponse(**plan) if plan else TrackingPlanResponse(source="planner-fallback", reason="planner returned no plan")
+        # Rule/stub mode: no Gemma; return a deterministic safe-default plan so
+        # the worker still gets a valid, type-specific, non-empty-ish contract
+        # (perceive degrades an empty roster to the canned gameHint map).
+        return TrackingPlanResponse(
+            category=req.category or "",
+            intent=req.intent or "",
+            source="planner-fallback",
+            plannedAt=time.time(),
+            maxTracks=3 if req.mode == "live" else 8,
+            reason="rule mode: no gemma planner; perceive uses canned/safe-default roster",
+        )
 
     app = FastAPI(title="highlights-decide", version="0.1.0")
     # Canonical at root (go-livepeer strips `/app`); `/app/*` alias for direct calls.

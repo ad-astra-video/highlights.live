@@ -177,6 +177,72 @@ def test_foreground_blobs_real_frame():
     blobs = foreground_blobs(gray, prev)
     assert len(blobs) == 1
     bx1, by1, bx2, by2 = blobs[0]
+
+
+# --- ADAAAA-6463: anchor-slot policy ------------------------------------------
+def test_anchor_label_gets_the_primary_slot():
+    """The plan anchor object is seeded into the lowest free slot so it holds the
+    primary slot, even when a non-anchor detection arrives first in box order."""
+    tr = IoUTracker(capacity=3, anchor_label="soccer ball")
+    tracks = tr.step(
+        [(0.1, 0.1, 0.3, 0.3), (0.5, 0.5, 0.7, 0.7)],
+        ts=1.0,
+        labels=["player", "soccer ball"],
+    )
+    slots = {t.label: t.slot for t in tracks}
+    assert slots["soccer ball"] == 0, slots
+    assert slots["player"] == 1, slots
+
+
+def test_set_anchor_applies_and_prioritizes():
+    """set_anchor (called from control `configure trackingPlan`) reserves the
+    anchor's primary slot even on a tracker built without one."""
+    tr = IoUTracker(capacity=3)
+    tr.set_anchor("football")
+    tracks = tr.step(
+        [(0.5, 0.5, 0.7, 0.7), (0.1, 0.1, 0.3, 0.3)],
+        ts=1.0,
+        labels=["player", "football"],
+    )
+    slots = {t.label: t.slot for t in tracks}
+    assert slots["football"] == 0, slots
+    assert slots["player"] == 1, slots
+
+
+def test_no_anchor_keeps_detection_order_slot_assignment():
+    """Without an anchor, slot assignment keeps detection order (no behavior
+    change / no regression on non-plan sessions)."""
+    tr = IoUTracker(capacity=3)
+    tracks = tr.step(
+        [(0.1, 0.1, 0.3, 0.3), (0.5, 0.5, 0.7, 0.7)],
+        ts=1.0,
+        labels=["player", "soccer ball"],
+    )
+    slots = {t.label: t.slot for t in tracks}
+    assert slots["player"] == 0, slots
+    assert slots["soccer ball"] == 1, slots
+
+
+def test_anchor_within_max_tracks_clamp():
+    """The anchor never bypasses the MAX_TRACKS capacity clamp (invariant)."""
+    tr = IoUTracker(capacity=3, anchor_label="ball")
+    # Provide 5 detections; only `capacity` tracks are created.
+    boxes = [(0.01 * i, 0.01 * i, 0.05 + 0.01 * i, 0.05 + 0.01 * i) for i in range(5)]
+    labels = ["ball"] + ["player"] * 4
+    tracks = tr.step(boxes, ts=1.0, labels=labels)
+    # Anchor gets a slot, and the total never exceeds capacity=3.
+    assert any(t.label == "ball" for t in tracks)
+    assert len(tracks) <= 3
+
+
+def test_foreground_blobs_position_and_size():
     # square is at x20..40, y20..40 of 100 -> normalized ~0.2..0.4
+    h = w = 100
+    prev = np.zeros((h, w), dtype=np.float32)
+    gray = np.zeros((h, w), dtype=np.float32)
+    gray[20:40, 20:40] = 255.0
+    blobs = foreground_blobs(gray, prev)
+    bx1, by1, bx2, by2 = blobs[0]
+    assert len(blobs) == 1
     assert abs(bx1 - 0.2) < 0.05 and abs(bx2 - 0.4) < 0.05
     assert abs(by1 - 0.2) < 0.05 and abs(by2 - 0.4) < 0.05

@@ -1,0 +1,28 @@
+{
+  "note": "Synthetic increment-E accounting self-test trace. Mirrors the documented §8 event emission contract so the scorer accounting is validated without GPU. NOT pipeline evidence.",
+  "events": [
+    {"type": "plan", "category": "soccer", "targets": 3, "trackableTargets": 3, "latencyS": 0.42, "warmupS": 2.1, "perFrame": 0, "source": "planner"},
+    {"type": "plan", "category": "fps", "targets": 2, "trackableTargets": 1, "latencyS": 0.61, "perFrame": 0, "source": "planner"},
+    {"type": "plan", "category": "battle-royale", "targets": 2, "trackableTargets": 2, "latencyS": 0.38, "recheckS": 7.0, "perFrame": 0, "source": "planner"},
+    {"type": "plan", "category": "moba", "targets": 3, "trackableTargets": 3, "latencyS": 0.55, "perFrame": 0, "source": "planner"},
+    {"type": "plan", "category": "football", "targets": 3, "trackableTargets": 3, "latencyS": 0.40, "perFrame": 0, "source": "planner"},
+    {"type": "plan", "category": "basketball", "targets": 3, "trackableTargets": 3, "latencyS": 0.47, "perFrame": 0, "source": "planner"},
+    {"type": "plan", "category": "esports", "targets": 2, "trackableTargets": 2, "latencyS": 0.44, "perFrame": 0, "source": "planner"},
+    {"type": "plan", "category": "general", "targets": 2, "trackableTargets": 2, "latencyS": 0.50, "perFrame": 0, "source": "planner"},
+    {"type": "decision", "latencyS": 2.4, "crowdAloneScoring": 0, "followedAudio": 0},
+    {"type": "decision", "latencyS": 3.1, "crowdAloneScoring": 0, "followedAudio": 0},
+    {"type": "decision", "latencyS": 1.9, "crowdAloneScoring": 0, "followedAudio": 0},
+    {"type": "detection", "offPlanTracked": 0},
+    {"type": "detection", "offPlanTracked": 0},
+    {"type": "discovery", "candidates": 8, "promoted": 3},
+    {"type": "discovery", "candidates": 6, "promoted": 2},
+    {"type": "nearmiss", "truth": "near_miss", "verdict": "near_miss", "confused": 0},
+    {"type": "nearmiss", "truth": "near_miss", "verdict": "near_miss", "confused": 0},
+    {"type": "nearmiss", "truth": "near_miss", "verdict": "scoring_play", "confused": 1},
+    {"type": "nearmiss", "truth": "scoring_play", "verdict": "scoring_play", "confused": 0},
+    {"type": "framewatch", "mode": "live", "violated": 0},
+    {"type": "framewatch", "mode": "vod", "violated": 0},
+    {"type": "tracking", "total": 10, "correct": 9},
+    {"type": "depth", "live": 40, "vod": 52}
+  ]
+}

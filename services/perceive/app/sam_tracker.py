@@ -70,13 +70,14 @@ class HybridTracker:
         lost_before_evict: int = 8,
         cooldown_s: float = 2.0,
         capacity: int = MAX_TRACKS,
+        anchor_label: str | None = None,
     ):
         self._detect = detect
         self._backend = backend
         self.redetect_every = redetect_every
         self.lost_before_redetect = lost_before_redetect
         self.capacity = max(1, int(capacity))
-        self._iou = IoUTracker(jump_velocity=jump_velocity, lost_before_evict=lost_before_evict, cooldown_s=cooldown_s, capacity=self.capacity)
+        self._iou = IoUTracker(jump_velocity=jump_velocity, lost_before_evict=lost_before_evict, cooldown_s=cooldown_s, capacity=self.capacity, anchor_label=anchor_label)
         # slot -> box prompt SAM is currently tracking; slot -> miss count
         self._prompts: Dict[int, BBox] = {}
         self._miss: Dict[int, int] = {}
@@ -102,6 +103,10 @@ class HybridTracker:
 
     def lock(self, slot: int) -> None:
         self._iou.lock(slot)
+
+    def set_anchor(self, label: str | None) -> None:
+        """Set the plan anchor label (ADAAAA-6463) — delegate to the IoU layer."""
+        self._iou.set_anchor(label)
 
     def candidate(self, ts: float) -> Optional[CandidateEvent]:
         return self._iou.candidate(ts)
@@ -223,7 +228,7 @@ def _real_sam3_backend(clip_path: str | None = None) -> Optional[SamBackend]:
         return None
 
 
-def make_tracker(clip_path: str | None = None, capacity: int = MAX_TRACKS) -> "IoUTracker":
+def make_tracker(clip_path: str | None = None, capacity: int = MAX_TRACKS, anchor_label: str | None = None) -> "IoUTracker":
     """Construct the tracker per PERCEIVE_TRACKER (default `iou`). `florence_sam`
     opts into the Florence+SAM hybrid; without a real SAM backend it falls back
     to the exact Florence->IoU behaviour.
@@ -235,13 +240,16 @@ def make_tracker(clip_path: str | None = None, capacity: int = MAX_TRACKS) -> "I
     on SAM loss / cadence / target change.
 
     `capacity` is the mode's track slot count (INC-6: default 8 VOD; live
-    sessions pass LIVE_MAX_TRACKS=3)."""
+    sessions pass LIVE_MAX_TRACKS=3). `anchor_label` is the plan anchor
+    (ADAAAA-6463 anchor-slot policy): the anchor object is prioritized for the
+    primary slot.
+    """
     mode = os.environ.get("PERCEIVE_TRACKER", "iou")
     if mode == "florence_sam":
         b = _real_sam3_backend(clip_path or os.environ.get("PERCEIVE_SAM_CLIP"))
         if b is not None:
-            return HybridTracker(detect=None, backend=b, capacity=capacity)
-    return IoUTracker(capacity=capacity)
+            return HybridTracker(detect=None, backend=b, capacity=capacity, anchor_label=anchor_label)
+    return IoUTracker(capacity=capacity, anchor_label=anchor_label)
 
 
 def _nearest_box(ref: BBox, boxes: List[BBox]) -> Optional[BBox]:

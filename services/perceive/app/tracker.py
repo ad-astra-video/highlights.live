@@ -152,7 +152,7 @@ class IoUTracker:
     # action/combat moment -> KILL-tier candidate. Slower drift -> MOVE.
     FAST_STEP = 0.15
 
-    def __init__(self, jump_velocity: float = 0.2, lost_before_evict: int = 8, cooldown_s: float = 2.0, capacity: int = MAX_TRACKS, confirm_frames: int = 2, resurrect_window_frames: int = 15):
+    def __init__(self, jump_velocity: float = 0.2, lost_before_evict: int = 8, cooldown_s: float = 2.0, capacity: int = MAX_TRACKS, confirm_frames: int = 2, resurrect_window_frames: int = 15, anchor_label: str | None = None):
         self.tracks: List[Track] = []
         self.jump_velocity = jump_velocity
         self.lost_before_evict = lost_before_evict
@@ -162,6 +162,10 @@ class IoUTracker:
         # Slots that refuse automatic eviction (control `lock`). A locked slot
         # that loses its object keeps its last bbox instead of being dropped.
         self.locked: set[int] = set()
+        # Plan anchor (ADAAAA-6463, anchor-slot policy): the plan's primary
+        # tracked object label. New detections matching the anchor get priority
+        # for the lowest free slot so the anchor object keeps the primary slot.
+        self.anchor_label = (anchor_label or "").strip().lower()
         # VOD ID-persistence hardening (ADAAAA-5069).
         # `confirm_frames`: a detection must be matched on this many CONSECUTIVE
         # frames before its track is promoted to a permanent identity. This
@@ -213,6 +217,15 @@ class IoUTracker:
     def lock(self, slot: int) -> None:
         """Prevent automatic eviction of a slot (operator `lock`)."""
         self.locked.add(int(slot))
+
+    def set_anchor(self, label: str | None) -> None:
+        """Set the plan anchor label (ADAAAA-6463 anchor-slot policy).
+
+        New detections whose label contains the anchor get priority for the
+        lowest free slot, so the plan's primary object holds the primary slot.
+        Empty/None clears the anchor (no preferential seeding).
+        """
+        self.anchor_label = (label or "").strip().lower()
 
     def step(self, boxes: List[BBox], ts: float, labels: Optional[List[str]] = None) -> List[Track]:
         """Match new boxes to existing tracks: IoU if they overlap, else nearest
@@ -294,9 +307,23 @@ class IoUTracker:
         # create tracks for remaining unmatched boxes into free slots
         used = {t.slot for t in self.tracks}
         free_slots = [s for s in range(self.capacity) if s not in used]
-        for i, b in enumerate(unmatched):
+        # Anchor-slot policy (ADAAAA-6463): order new detections so the plan's
+        # anchor-labeled object is seeded FIRST into the lowest free slot. The
+        # anchor keeps the primary slot among the new arrivals; everything else
+        # fills the remaining slots in detection order.
+        anchor_first: List[int] = []
+        other: List[int] = []
+        for i in range(len(unmatched)):
+            lab = (u_labels[i] or "").strip().lower() if i < len(u_labels) else ""
+            if self.anchor_label and self.anchor_label in lab:
+                anchor_first.append(i)
+            else:
+                other.append(i)
+        order = anchor_first + other
+        for i in order:
             if not free_slots:
                 break
+            b = unmatched[i]
             # Dropout-tolerant matching: prefer resurrecting a recently-evicted
             # identity over minting a new one.
             tid = self._resurrect(b)
