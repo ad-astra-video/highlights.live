@@ -464,6 +464,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         maxFramesPerAnalysis: cfg.maxFramesPerAnalysis,
         preWindowS: cfg.analysisPreWindowS,
         postWindowS: cfg.analysisPostWindowS,
+        // ADAAAA-6489: per-camera/per-clip goal-line calibration for this live
+        // stream/job (absent -> no goal-line signal, reported not_captured).
+        calibration: cfg.goalLineCalibrations?.[job.id],
       };
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
@@ -590,6 +593,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       maxFramesPerAnalysis: cfg.vodMaxFramesPerAnalysis,
       preWindowS: cfg.vodAnalysisPreWindowS,
       postWindowS: cfg.vodAnalysisPostWindowS,
+      // ADAAAA-6489: deliver this VOD clip's per-camera/per-clip goal-line
+      // calibration to the perceive session so the goal-line signal (and the §8
+      // near-miss verdict) is real. Absent -> perceive emits no ballOutcome and
+      // the metric reports not_captured (never a fabricated signal).
+      calibration: cfg.goalLineCalibrations?.[jobId],
     };
     // Count candidates (video + audio) for the recorded decide/cost fields.
     let candidatesTriggered = 0;

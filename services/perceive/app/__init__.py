@@ -173,6 +173,21 @@ class AnalyzeRequest(BaseModel):
     # scoped to plan targets (off-plan objects dropped). Mirrors the WS
     # `configure` trackingPlan key.
     trackingPlan: Optional[dict] = None
+    # Per-camera/per-clip pitch-homography calibration (ADAAAA-6489): optional
+    # row-major 3x3 image->field homography (9 numbers). When present on
+    # /analyze the server delivers a REAL per-clip calibration so the ball's
+    # on-pitch field position (posXm/posYm) and the goal-line signal are real,
+    # not a single static env value. Mirrors the WS `configure` homography key.
+    # Absent -> ball signal falls back to image space (no field coords -> no
+    # goal-line signal), never a fabricated one.
+    homography: Optional[list] = None
+    # Per-session goal-line plane spec (ADAAAA-6489): the goal-line plane in the
+    # calibration's field coords `{axis, position, mouthMin, mouthMax}`. When
+    # present on /analyze the server supplies it so the goal-line detector emits
+    # goalCrossed/ballOutcome (the I2 ground-truth the decide near-miss path
+    # needs). Mirrors the WS `configure` goalLine key. Absent -> the candidate
+    # carries no ballOutcome (reported as not_captured, never invented).
+    goalLine: Optional[dict] = None
 
 
 class AudioChunkRequest(BaseModel):
@@ -271,6 +286,32 @@ def _ensure_goal_line_detector(state) -> GoalLineDetector | None:
     if state.goal_line_detector is None:
         state.goal_line_detector = GoalLineDetector(state.goal_line_spec)
     return state.goal_line_detector
+
+
+def _apply_calibration(state, homography, goal_line) -> None:
+    """Apply a per-session goal-line calibration (ADAAAA-6489): an image->field
+    pitch homography + goal-line plane spec, supplied per camera/clip by the
+    server path on every /analyze (and the WS `configure` key). A bad value is
+    ignored (KEEP the existing calibration) and never fatal; absent -> image-
+    space / no-goal-line-signal fallback (the candidate carries no ballOutcome ->
+    reported not_captured, never a fabricated signal).
+    """
+    if homography is not None:
+        try:
+            h = np.asarray(homography, dtype=float).reshape(3, 3)
+            state.homography = h
+            # Rebuild the pipeline on the new calibration (drops stale velocity
+            # samples so on-pitch velocity restarts clean).
+            state.ball_signal = BallSignalPipeline(H=h)
+        except Exception as e:  # noqa: BLE001
+            log.warning("bad homography calibration: %s", e)
+    if goal_line is not None:
+        spec = GoalLineSpec.from_dict(goal_line)
+        if spec is None:
+            log.warning("bad goalLine calibration: %r", goal_line)
+        else:
+            state.goal_line_spec = spec
+            state.goal_line_detector = GoalLineDetector(spec)
 
 
 def _plan_category(state) -> "str | None":
@@ -823,6 +864,13 @@ def create_app() -> FastAPI:
         # WS `configure` trackingPlan key.
         if req.trackingPlan is not None:
             _apply_tracking_plan(state, req.trackingPlan)
+        # Per-camera/per-clip goal-line calibration (ADAAAA-6489). Mirrors the
+        # WS `configure` homography/goalLine keys: a REAL per-clip calibration
+        # delivered on every /analyze so a fresh or re-reserved session inherits
+        # it on its first frame. Bad values are ignored (KEEP the existing
+        # calibration) and never fatal; absent -> image-space / no-goal-line-
+        # signal fallback (not_captured, never fabricated).
+        _apply_calibration(state, req.homography, req.goalLine)
         # Live path: the worker reserved a session with a control URL, so this
         # first proxied call opens this session's trickle channels and the rail
         # starts consuming video-in frames (plan §3.2/§3.5). The orchestrator
