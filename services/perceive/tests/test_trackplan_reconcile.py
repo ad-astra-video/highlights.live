@@ -50,3 +50,30 @@ def test_target_classes_keeps_per_player_class_count():
     cls = target_classes(targets)
     assert cls.count("player") == 2
     assert cls.count("ball") == 1
+
+
+def test_normalize_dedupes_same_trackable_class_targets():
+    from app.tracking_plan import normalize
+
+    plan, warnings = normalize(
+        {"targets": [{"label": "soccer ball", "role": "ball"},
+                     {"label": "player", "role": "player"},
+                     {"label": "goalkeeper", "role": "player"}]}
+    )
+    # `goalkeeper` is the same trackable class as `player` (Florence-2 boxes the
+    # keeper as a player) -> the justified roster is ball + player (2 targets).
+    labels = [t["label"] for t in plan["targets"]]
+    assert labels == ["soccer ball", "player"]
+    assert len(plan["targets"]) == 2
+    assert any("deduplicated" in w for w in warnings)
+
+
+def test_normalize_keeps_distinct_ball_and_player_classes():
+    from app.tracking_plan import normalize
+
+    plan, _ = normalize(
+        {"targets": [{"label": "soccer ball", "role": "ball"},
+                     {"label": "player", "role": "player"},
+                     {"label": "goal", "role": "entity"}]}
+    )
+    assert [t["label"] for t in plan["targets"]] == ["soccer ball", "player", "goal"]
