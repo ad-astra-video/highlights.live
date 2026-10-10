@@ -134,6 +134,11 @@ export interface DecisionResult {
   score: number;
   eventType?: string;
   reason?: string;
+  // Increment F / ADAAAA-6465: outcome taxonomy member + near-miss flag. A
+  // near miss is notable but NOT a scoring play — surfaced at a lower score and
+  // flagged so the highlight-clip is labeled distinctly downstream.
+  outcome?: "scoring_play" | "near_miss" | "big_play" | "not_highlight";
+  nearMiss?: boolean;
 }
 /** One audio chunk fed to the Stage-A noise-change gate (INC-2 / ADAAAA-4325).
  * Owned by the server's ffmpeg audio tap: short (default ~100 ms) mono int16
@@ -348,6 +353,23 @@ export interface AnalyzerConfig {
    * operator enables it. `LIVE_AUDIO_CONTEXT`.
    */
    audioContext?: boolean;
+  /** Increment F / ADAAAA-6465 (plan §4.9): analysis FPS cap for the assembly
+   * of the frame sequence the LLM watches per trigger. Default 5 (live). The
+   * sequence is sampled at this rate around the trigger, always includes the
+   * keyframe set, and is HARD-CAPPED at `maxFramesPerAnalysis`. Frames are the
+   * PRIMARY evidence; audio is a cheap, fallible trigger/corroboration. Raising
+   * the cap is a per-call Livepeer GPU cost decision. `ANALYSIS_FPS` /
+   * `VOD_ANALYSIS_FPS` (VOD detail-first gets a higher cap). */
+   analysisFps?: number;
+  /** Hard cap on the number of frames that reach the LLM in ONE analysis call
+   * (never exceeded — plan §4.9D). Live default ≈ 25 + 3 keyframes = 30.
+   * `MAX_FRAMES_PER_ANALYSIS` / `VOD_MAX_FRAMES_PER_ANALYSIS`. */
+   maxFramesPerAnalysis?: number;
+  /** Pre/post window (seconds) around the trigger the assembler samples.
+   * Default 2 s pre / 3 s post (plan §4.9A). VOD may lengthen these (detail-
+   * first; speed secondary). `ANALYSIS_PRE_WINDOW_S` / `ANALYSIS_POST_WINDOW_S`. */
+   preWindowS?: number;
+   postWindowS?: number;
   /**
    * Max times the job will re-reserve a fresh perceive session after the
    * current one is lost mid-pass (HTTP 404 "runner not found" / "runner
@@ -451,6 +473,148 @@ export const CACHE_MAX_FRAMES = 60;
  * ~500–600 tokens; the prior-context the decide prompt is augmented with never
  * exceeds this. Content beyond the cap is dropped oldest-first at assembly. */
 export const WINDOW_FACTS_MAX_CHARS = 2400;
+
+// ---------------------------------------------------------------------------
+// Increment F / ADAAAA-6465: frame-watching assembler (plan §4.9C).
+// The analysis LLM watches a bounded SEQUENCE of actual stream frames around
+// each trigger — this is the PRIMARY evidence path; audio is a cheap, explicitly
+// fallible trigger/corroboration (crowds erupt for near misses / wrong calls /
+// replays). The sequence is sampled from the already-cached frame window at
+// `analysis_fps` (default 5), always includes a keyframe set (trigger-onset,
+// peak-audio, window-end), and is HARD-CAPPED at `max_frames_per_analysis`.
+// ---------------------------------------------------------------------------
+
+/** Default analysis FPS cap for the live pass (plan §4.9A): ~5 fps over a
+ * ~5 s window ≈ 25 frames + 3 keyframes. Raising this is a per-call Livepeer
+ * GPU cost decision, not a code change. */
+export const DEFAULT_ANALYSIS_FPS = 5;
+/** Hard cap on the number of frames that can reach the LLM in ONE analysis
+ * call (plan §4.9D / §14.6). Never exceeded. Live default ≈ 25 + 3 keyframes. */
+export const DEFAULT_MAX_FRAMES_PER_ANALYSIS = 30;
+/** Pre/post window (seconds) around the trigger the assembler samples (plan
+ * §4.9A: default ~2 s pre / ~3 s post — covers the play, the crossing/contact
+ * moment, and the reaction). */
+export const DEFAULT_PRE_WINDOW_S = 2;
+export const DEFAULT_POST_WINDOW_S = 3;
+
+/** A single candidate frame the assembler may select. `keyframe` is one of
+ * "trigger" | "peak_audio" | "window_end" (plan §4.9A keyframe set) or null for
+ * a regular sampled frame. */
+export interface AssembledFrame {
+  timestamp: number;
+  base64: string;
+  keyframe?: "trigger" | "peak_audio" | "window_end";
+}
+
+/** Assemble the capped frame sequence for one analysis call (increment F).
+ *
+ * Pure + deterministic so it is unit-testable. Input is the already-cached
+ * rolling frame window (oldest -> newest, each with a timestamp + base64 image).
+ * Selection rules (plan §4.9A):
+ *   1. Keep only frames inside [triggerTs - preWindowS, triggerTs + postWindowS].
+ *   2. Sample down to `analysis_fps` — pick frames whose timestamp is nearest to
+ *      an even `1/analysis_fps` grid across the window (so a ~5 s window at 5 fps
+ *      yields ~25 frames). Always keeps the first and last in-window frame.
+ *   3. Add the keyframe set: trigger-onset (nearest frame to triggerTs),
+ *      peak-audio (nearest frame to `peakAudioTs`, when supplied), window-end
+ *      (the last in-window frame) — deduped.
+ *   4. HARD-CAP at `maxFramesPerAnalysis` (default 30). If over, keep the
+ *      keyframes and thin the regular sample oldest-first so the total never
+ *      exceeds the cap.
+ * Returns ImageRef-shaped `[{ role: "full", base64 }]` ordered oldest -> newest,
+ * EXACTLY the shape gemma `ask(frames=...)` consumes. An empty window yields [].
+ */
+export function assembleFrameSequence(
+  frames: { timestamp: number; imageB64: string }[],
+  opts: {
+    triggerTs: number;
+    analysisFps?: number;
+    maxFramesPerAnalysis?: number;
+    preWindowS?: number;
+    postWindowS?: number;
+    peakAudioTs?: number;
+  }
+): { role: string; base64: string }[] {
+  const {
+    triggerTs,
+    analysisFps = DEFAULT_ANALYSIS_FPS,
+    maxFramesPerAnalysis = DEFAULT_MAX_FRAMES_PER_ANALYSIS,
+    preWindowS = DEFAULT_PRE_WINDOW_S,
+    postWindowS = DEFAULT_POST_WINDOW_S,
+    peakAudioTs,
+  } = opts;
+  const inWindow = frames
+    .filter((f) => f.timestamp >= triggerTs - preWindowS && f.timestamp <= triggerTs + postWindowS)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (!inWindow.length) return [];
+
+  // --- keyframe set (always included) --------------------------------------
+  const keyframes = new Map<string, AssembledFrame>();
+  const nearest = (ts: number): AssembledFrame | undefined => {
+    if (!Number.isFinite(ts)) return undefined;
+    let best: AssembledFrame | undefined;
+    let bestDiff = Infinity;
+    for (const f of inWindow) {
+      const d = Math.abs(f.timestamp - ts);
+      if (d < bestDiff) {
+        bestDiff = d;
+        best = { timestamp: f.timestamp, base64: f.imageB64 };
+      }
+    }
+    return best;
+  };
+  const trigger = nearest(triggerTs);
+  if (trigger) keyframes.set(`trigger@${trigger.timestamp}`, { ...trigger, keyframe: "trigger" });
+  if (peakAudioTs !== undefined) {
+    const peak = nearest(peakAudioTs);
+    if (peak && !keyframes.has(`trigger@${peak.timestamp}`)) {
+      keyframes.set(`peak@${peak.timestamp}`, { ...peak, keyframe: "peak_audio" });
+    }
+  }
+  const end = inWindow[inWindow.length - 1];
+  if (!keyframes.has(`trigger@${end.timestamp}`) && !keyframes.has(`peak@${end.timestamp}`)) {
+    keyframes.set(`end@${end.timestamp}`, { timestamp: end.timestamp, base64: end.imageB64, keyframe: "window_end" });
+  }
+
+  // --- regular sample at analysis_fps ---------------------------------------
+  const step = analysisFps > 0 ? 1 / analysisFps : Infinity;
+  const start = inWindow[0].timestamp;
+  const endTs = inWindow[inWindow.length - 1].timestamp;
+  const sampled: AssembledFrame[] = [];
+  for (let t = start; t <= endTs + 1e-9; t += step) {
+    const n = nearest(t);
+    if (n) sampled.push(n);
+  }
+  // Dedupe by timestamp, keep first occurrence (grid order).
+  const seen = new Set<number>();
+  const grid: AssembledFrame[] = [];
+  for (const s of sampled) {
+    if (!seen.has(s.timestamp)) {
+      seen.add(s.timestamp);
+      grid.push(s);
+    }
+  }
+  // Merge keyframes (they are decision-relevant even if the grid thinned them).
+  const merged = new Map<number, AssembledFrame>();
+  for (const s of grid) merged.set(s.timestamp, s);
+  for (const k of keyframes.values()) merged.set(k.timestamp, k);
+  let ordered = [...merged.values()].sort((a, b) => a.timestamp - b.timestamp);
+
+  // --- hard cap ---------------------------------------------------------------
+  if (ordered.length > maxFramesPerAnalysis) {
+    const keepTs = new Set(ordered.filter((f) => f.keyframe).map((f) => f.timestamp));
+    const nonKey = ordered.filter((f) => !keepTs.has(f.timestamp));
+    let extra = maxFramesPerAnalysis - keepTs.size;
+    if (extra < 0) extra = 0;
+    const keptKey = ordered.filter((f) => keepTs.has(f.timestamp));
+    // Spread the remaining budget evenly across the non-key frames oldest-first.
+    const thinned = nonKey.filter((_, i) => i < extra);
+    ordered = [...keptKey, ...thinned].sort((a, b) => a.timestamp - b.timestamp);
+    // Final safety clamp (defensive; guarantees the hard cap is never breached).
+    if (ordered.length > maxFramesPerAnalysis) ordered = ordered.slice(0, maxFramesPerAnalysis);
+  }
+  return ordered.map((f) => ({ role: "full", base64: f.base64 }));
+}
 
 /** Already-computed perception findings for one in-window sampled frame (A1).
  * These come from the `/analyze` result the server already paid for — cached
@@ -626,6 +790,18 @@ export class LiveRunShared {
     const sliced = all.slice(-this.windowN);
     return sliced.map((f) => ({ role: "full", base64: f.imageB64 }));
   }
+  /** Increment F / ADAAAA-6465: assemble the capped frame sequence for one
+   * analysis call — sampled at `analysis_fps`, always including the keyframe
+   * set (trigger-onset, peak-audio, window-end) and HARD-CAPPED at
+   * `maxFramesPerAnalysis`. Frames are the PRIMARY evidence; audio is a cheap,
+   * fallible trigger/corroboration. Samples from the already-cached window
+   * (no re-extraction — no extra GPU). Empty when nothing is in the window. */
+  frameSequenceFor(triggerTs: number, peakAudioTs?: number, opts: { analysisFps?: number; maxFramesPerAnalysis?: number; preWindowS?: number; postWindowS?: number } = {}): { role: string; base64: string }[] {
+    const cached = [...this.frames.values()]
+      .filter((f) => f.imageB64)
+      .map((f) => ({ timestamp: f.timestamp, imageB64: f.imageB64 }));
+    return assembleFrameSequence(cached, { triggerTs, peakAudioTs, ...opts });
+  }
   /**
    * Assemble the current 60 s window's factual content as compact text (A2) —
    * the "current-context buffer" every decide() call for an in-window candidate
@@ -775,6 +951,7 @@ function detailDecideOpts(
   cfg: AnalyzerConfig,
   shared: LiveRunShared,
   anchoredImage: string | undefined,
+  candidate: { timestamp: number; peakAudioTs?: number },
   burstFrames?: { role: string; base64: string }[]
 ): {
   gameHint: string;
@@ -798,21 +975,26 @@ function detailDecideOpts(
   // findings, no re-analysis). Included unconditionally — live and detail-first
   // alike. Empty when the window has nothing to add (behavior identical).
   opts.priorContextText = shared.windowFactsText();
-  if (cfg.decideWindowN !== undefined) {
-    // I7 / ADAAAA-6361: when a higher-FPS burst was re-sampled around the
-    // trigger, prefer it as the temporal `frames[]` so the ball-goal-crossing
-    // instant is in the decide window; else fall back to the rolling window.
-    opts.frames = burstFrames?.length ? burstFrames : shared.framesWindow();
-    const audio = shared.audioClipB64();
-    if (audio) opts.audioB64 = audio;
-  } else if (cfg.audioContext) {
-    // ADAAAA-6314 Path 2 (live): forward the surrounding audio clip so the
-    // gemma decide prompt gets ASR'd audio context for trigger candidates.
-    // Bounded: only the ~AUDIO_CLIP_KEEP_S clip; no frames[] change, so the
-    // live frame depth is untouched.
-    const audio = shared.audioClipB64();
-    if (audio) opts.audioB64 = audio;
-  }
+  // Increment F / ADAAAA-6465: Frames are the PRIMARY evidence on EVERY trigger
+  // (live + VOD). Assemble the capped sequence — sampled at analysis_fps,
+  // keyframe set (trigger-onset, peak-audio, window-end), hard-capped at
+  // max_frames_per_analysis — so the LLM watches the actual play. Audio stays a
+  // cheap, fallible trigger/corroboration (crowds erupt for near misses / wrong
+  // calls / replays). This replaces the detail-first-only `frames[]` gating so
+  // the analysis call always receives the assembled sequence, never a single
+  // still (live baseline no longer sends a bare anchored image).
+  const seq = shared.frameSequenceFor(candidate.timestamp, candidate.peakAudioTs, {
+    analysisFps: cfg.analysisFps,
+    maxFramesPerAnalysis: cfg.maxFramesPerAnalysis,
+    preWindowS: cfg.preWindowS,
+    postWindowS: cfg.postWindowS,
+  });
+  // I7 / ADAAAA-6361: when a higher-FPS burst was re-sampled around the trigger,
+  // prefer it (it already contains the ball-goal-crossing instant); else use the
+  // assembled capped sequence.
+  opts.frames = burstFrames?.length ? burstFrames : seq;
+  const audio = shared.audioClipB64();
+  if (audio) opts.audioB64 = audio;
   return opts;
 }
 
@@ -1035,7 +1217,7 @@ export async function decideOnCandidate(
       // the detail-first (VOD) pass so the prompt can cite concrete evidence.
       ...(cfg.decideWindowN !== undefined ? buildRichEvidence(shared, candidate.timestamp) : {}),
     },
-    detailDecideOpts(cfg, shared, anchoredImage, burstFrames)
+    detailDecideOpts(cfg, shared, anchoredImage, { timestamp: candidate.timestamp, peakAudioTs: candidate.audio?.ts }, burstFrames)
   );
   // Track the Stage-A FP-rate metric (INC-2 / ADAAAA-4325 slice 5): whether
   // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
@@ -1052,6 +1234,10 @@ export async function decideOnCandidate(
     eventType: decision.eventType,
     score: decision.score,
     reason: decision.reason,
+    // Increment F / ADAAAA-6465: near-miss surface at a lower score, labeled
+    // distinctly via the outcome/nearMiss flag on the highlight record.
+    outcome: decision.outcome,
+    nearMiss: decision.nearMiss,
     status: "pending",
     createdAt: new Date().toISOString(),
   };
@@ -1201,7 +1387,7 @@ export async function analyzeJob(
             // curve on the detail-first (VOD) pass.
             ...(cfg.decideWindowN !== undefined ? buildRichEvidence(run, res.candidate.timestamp) : {}),
           },
-          detailDecideOpts(cfg, run, anchoredImage, burstFrames)
+          detailDecideOpts(cfg, run, anchoredImage, { timestamp: res.candidate.timestamp, peakAudioTs: res.candidate.audio?.ts }, burstFrames)
         );
         if (decision.isHighlight) {
           const { clipId, clipUri } = await cut(res.candidate.timestamp);
@@ -1214,6 +1400,10 @@ export async function analyzeJob(
             eventType: decision.eventType,
             score: decision.score,
             reason: decision.reason,
+            // Increment F / ADAAAA-6465: near-miss surface at a lower score,
+            // labeled distinctly via the outcome/nearMiss flag.
+            outcome: decision.outcome,
+            nearMiss: decision.nearMiss,
             status: "pending",
             createdAt: new Date().toISOString(),
           };

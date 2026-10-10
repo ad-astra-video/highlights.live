@@ -452,6 +452,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         warmupSeconds: cfg.warmupSeconds,
         recheckIntervalSeconds: cfg.recheckIntervalSeconds,
         planMode: "live",
+        // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
+        // evidence). Live uses the default analysis_fps / windows.
+        analysisFps: cfg.analysisFps,
+        maxFramesPerAnalysis: cfg.maxFramesPerAnalysis,
+        preWindowS: cfg.analysisPreWindowS,
+        postWindowS: cfg.analysisPostWindowS,
       };
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
@@ -572,6 +578,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       warmupSeconds: cfg.warmupSeconds,
       recheckIntervalSeconds: cfg.recheckIntervalSeconds,
       planMode: "vod",
+      // Increment F / ADAAAA-6465: VOD gets the HIGHER-cap / longer-window
+      // detail-first frame-sequence assembly (speed secondary; detail-first).
+      analysisFps: cfg.vodAnalysisFps,
+      maxFramesPerAnalysis: cfg.vodMaxFramesPerAnalysis,
+      preWindowS: cfg.vodAnalysisPreWindowS,
+      postWindowS: cfg.vodAnalysisPostWindowS,
     };
     // Count candidates (video + audio) for the recorded decide/cost fields.
     let candidatesTriggered = 0;

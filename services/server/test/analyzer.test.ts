@@ -1,12 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   analyzeJob,
+  assembleFrameSequence,
   EvidenceTracker,
   LiveRunShared,
   decideOnCandidate,
   SessionLostError,
   pcmInt16ToWavB64,
   rmsNormalized,
+  DEFAULT_ANALYSIS_FPS,
+  DEFAULT_MAX_FRAMES_PER_ANALYSIS,
   type PipelineClient,
 } from "../src/analyzer";
 
@@ -719,7 +722,10 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
     expect(seen.imageB64).toBeDefined(); // anchored frame still present
   });
 
-  it("live baseline (no decideWindowN): decide sees only the anchored single image, no frames/audio", async () => {
+  it("live baseline (no decideWindowN): forwards the assembled capped frame sequence (increment F)", async () => {
+    // Increment F / ADAAAA-6465: frames are now the PRIMARY evidence on EVERY
+    // trigger (live + VOD). The live baseline no longer sends a bare anchored
+    // image — it assembles a capped frame sequence sampled at analysis_fps.
     let seen: any;
     const { client } = fakeClient({
       analyze: async () => ({
@@ -737,15 +743,18 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
       async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" }
     );
-    expect(seen.frames).toBeUndefined();
+    expect(seen.frames).toBeDefined(); // assembled sequence forwarded
+    expect(seen.frames!.length).toBeGreaterThanOrEqual(1);
+    expect(seen.frames![0]).toMatchObject({ role: "full" });
     expect(seen.audioB64).toBeUndefined();
-    expect(seen.imageB64).toBeDefined();
+    expect(seen.imageB64).toBeDefined(); // anchored frame still present
   });
 
-  it("live audio-context knob (audioContext): forwards the audio clip, no frames[] change", async () => {
+  it("live audio-context knob (audioContext): forwards the audio clip alongside the capped frame sequence", async () => {
     // ADAAAA-6314 Path 2: enabling LIVE_AUDIO_CONTEXT forwards the surrounding
     // audio clip for LIVE trigger candidates so the decide prompt gets ASR'd
-    // audio context, WITHOUT touching the live frame depth (no frames[]).
+    // audio context — while increment F still forwards the assembled capped
+    // frame sequence (frames are the primary evidence).
     let seen: any;
     const { client } = fakeClient({
       analyze: async () => ({
@@ -768,7 +777,7 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
       undefined,
       shared
     );
-    expect(seen.frames).toBeUndefined(); // live frame depth untouched
+    expect(seen.frames).toBeDefined(); // capped frame sequence still forwarded
     expect(seen.audioB64).toBeTruthy(); // audio clip forwarded for ASR context
     expect(seen.imageB64).toBeDefined(); // anchored frame still present
   });
@@ -883,7 +892,7 @@ describe("A — 60s rolling window + processed-frame/finding cache (ADAAAA-6029)
     expect(seen.priorContextText!.length).toBeLessThanOrEqual(2400 + 1);
   });
 
-  it("A2: live baseline carries priorContextText but frames/audio stay unchanged (no regression)", async () => {
+  it("A2: live baseline carries priorContextText plus the capped frame sequence (increment F)", async () => {
     let seen: any;
     const { client } = fakeClient({
       analyze: async () => ({
@@ -904,8 +913,9 @@ describe("A — 60s rolling window + processed-frame/finding cache (ADAAAA-6029)
     // A2 window facts are present and bounded...
     expect(typeof seen.priorContextText).toBe("string");
     expect(seen.priorContextText.length).toBeLessThanOrEqual(2400 + 1);
-    // ...while the live baseline's vision inputs are byte-for-byte unchanged.
-    expect(seen.frames).toBeUndefined();
+    // ...and the increment-F frame watcher always forwards the assembled capped
+    // sequence (frames are the PRIMARY evidence) on every trigger.
+    expect(seen.frames).toBeDefined();
     expect(seen.audioB64).toBeUndefined();
     expect(seen.imageB64).toBeDefined();
   });
@@ -1041,5 +1051,96 @@ describe("I7 / ADAAAA-6361: higher-FPS burst re-sample around a trigger", () => 
     );
     expect(seenEv.detections).toBeUndefined();
     expect(seenEv.audioLevels).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Increment F / ADAAAA-6465: frame-sequence assembler (plan §4.9A/§4.9D)
+// ---------------------------------------------------------------------------
+describe("frame-sequence assembler (increment F, ADAAAA-6465)", () => {
+  // Build `n` frames at `dt` seconds apart starting at `start`.
+  const mk = (start: number, dt: number, n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      timestamp: +(start + i * dt).toFixed(3),
+      imageB64: `img-${i}`,
+    }));
+
+  it("filters to the pre/post window around the trigger", () => {
+    // trigger at 10s, pre 2 / post 3 -> window [8, 13].
+    const res = assembleFrameSequence(mk(0, 1, 20), {
+      triggerTs: 10,
+      analysisFps: 5,
+      preWindowS: 2,
+      postWindowS: 3,
+    });
+    // Every returned frame sits inside [8,13].
+    for (const f of res) {
+      const t = Number(f.base64.replace("img-", ""));
+      expect(t).toBeGreaterThanOrEqual(8);
+      expect(t).toBeLessThanOrEqual(13);
+    }
+    expect(res.length).toBeGreaterThan(0);
+  });
+
+  it("returns the ImageRef shape gemma ask(frames=...) consumes, oldest->newest", () => {
+    const res = assembleFrameSequence(mk(0, 1, 12), { triggerTs: 5, analysisFps: 5, preWindowS: 1, postWindowS: 2 });
+    expect(res.length).toBeGreaterThan(0);
+    for (const f of res) expect(f).toMatchObject({ role: "full" });
+    const idxs = res.map((f) => Number(f.base64.replace("img-", "")));
+    expect([...idxs]).toEqual([...idxs].sort((a, b) => a - b)); // ascending (oldest -> newest)
+  });
+
+  it("HARD-CAP: a dense window never exceeds maxFramesPerAnalysis", () => {
+    // 100 dense frames (0.1s apart) across the window; cap = 12.
+    const res = assembleFrameSequence(mk(5, 0.1, 100), {
+      triggerTs: 10,
+      analysisFps: 5,
+      maxFramesPerAnalysis: 12,
+      preWindowS: 2,
+      postWindowS: 3,
+    });
+    expect(res.length).toBeLessThanOrEqual(12);
+  });
+
+  it("never exceeds the cap even when keyframes alone approach it", () => {
+    const res = assembleFrameSequence(mk(5, 0.1, 100), {
+      triggerTs: 10,
+      analysisFps: 5,
+      maxFramesPerAnalysis: 2, // keyframe set is 3 -> must still clamp to 2
+      preWindowS: 2,
+      postWindowS: 3,
+    });
+    expect(res.length).toBeLessThanOrEqual(2);
+  });
+
+  it("always includes the keyframe set (trigger-onset, peak-audio, window-end)", () => {
+    // frames indexed 0..19, timestamps 8.0..17.5 (0.5s apart).
+    const frames = mk(8, 0.5, 20);
+    const res = assembleFrameSequence(frames, {
+      triggerTs: 10,
+      analysisFps: 5,
+      maxFramesPerAnalysis: 10,
+      preWindowS: 2,
+      postWindowS: 3,
+      peakAudioTs: 11.2,
+    });
+    const present = new Set(res.map((f) => f.base64));
+    // In-window frames are indices 0 (ts 8.0) .. 10 (ts 13.0).
+    // trigger-onset -> nearest real frame to ts 10.0 is index 4.
+    expect(present.has("img-4")).toBe(true);
+    // peak-audio (11.2) -> nearest real frame is index 6 (ts 11.0).
+    expect(present.has("img-6")).toBe(true);
+    // window-end -> last in-window frame, index 10 (ts 13.0).
+    expect(present.has("img-10")).toBe(true);
+  });
+
+  it("empty window yields an empty sequence", () => {
+    const res = assembleFrameSequence(mk(0, 1, 5), {
+      triggerTs: 100,
+      analysisFps: 5,
+      preWindowS: 2,
+      postWindowS: 3,
+    });
+    expect(res).toEqual([]);
   });
 });
