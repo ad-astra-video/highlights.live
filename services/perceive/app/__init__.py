@@ -8,6 +8,7 @@ import logging
 import os
 import threading
 from time import monotonic
+from typing import Optional
 
 log = logging.getLogger("highlights.perceive.trickle")
 
@@ -29,6 +30,24 @@ from .ball_signal import BallSignalPipeline, is_ball_label
 from .zone_trigger import DetectionZoneTrigger, resolve_zones
 from .goal_plane import GoalLineDetector, GoalLineSpec
 from .scoreboard import parse_ocr_score, ScoreboardTracker
+from .tracking_plan import (
+    PLAN_VERSION,
+    SAFE_DEFAULT_ROLE,
+    VALID_ROLES,
+    LIVE_MAX_TRACKS,
+    VOD_MAX_TRACKS,
+    MODE_MAX_TRACKS,
+    DISCOVERY_METHODS,
+    FLORENCE_TASKS,
+    TrackingPlan,
+    clamp_max_tracks,
+    coerce_role,
+    label_trackable,
+    normalize,
+    plan_vocabulary,
+    validate,
+)
+from .discovery import discovery_block, run_discovery_pass  # noqa: E402  (increment C)
 
 # One live trickle session per perceive session (plan §0.1 session rule).
 _trickle: dict[str, TrickleSession] = {}
@@ -148,6 +167,12 @@ class AnalyzeRequest(BaseModel):
     # merged Florence-2 model dir. Carried on every /analyze (like gameHint)
     # so a fresh or re-reserved session is configured before frames run.
     loraRef: str = ""
+    # LLM TrackingPlan (ADAAAA-6463): optional plan dict (the plan §7 A/B
+    # contract). When present on /analyze, perceive applies the closed roster +
+    # zones + anchor to the session BEFORE the frame runs, so detect/seeding is
+    # scoped to plan targets (off-plan objects dropped). Mirrors the WS
+    # `configure` trackingPlan key.
+    trackingPlan: Optional[dict] = None
 
 
 class AudioChunkRequest(BaseModel):
@@ -248,7 +273,40 @@ def _ensure_goal_line_detector(state) -> GoalLineDetector | None:
     return state.goal_line_detector
 
 
-def _ensure_zone_trigger(state) -> DetectionZoneTrigger | None:
+def _plan_category(state) -> "str | None":
+    """The session TrackingPlan's `category` (str), else None. Passed through to
+    sport resolution so the plan's sport drives GOAL classification / zones on
+    the plan-first path (ADAAAA-6463)."""
+    plan = getattr(state, "tracking_plan", None)
+    if plan is None:
+        return None
+    cat = getattr(plan, "category", None) if not isinstance(plan, dict) else plan.get("category")
+    return str(cat).strip().lower() if cat else None
+
+
+def _apply_tracking_plan(state, raw_plan) -> "TrackingPlan":
+    """Apply an LLM TrackingPlan to a session (ADAAAA-6463, plan-first).
+
+    Never raises: TrackingPlan.from_dict normalizes/coerces malformed input. A
+    plan with no trackable targets yields an empty roster — the per-frame path
+    then degrades to the canned/safe-default roster via resolve_vocabulary. This
+    also reserves the plan anchor's primary slot (tracker.set_anchor) and
+    rebuilds the detection-in-zone trigger on the plan's zones.
+    """
+    plan = TrackingPlan.from_dict(raw_plan)
+    state.tracking_plan = plan
+    anchor = (plan.anchor or {}).get("label", "") if isinstance(plan.anchor, dict) else ""
+    _tracker = getattr(state, "tracker", None)
+    if _tracker is not None and hasattr(_tracker, "set_anchor"):
+        _tracker.set_anchor(anchor)
+    # The plan changes the active zones (or the sport for the canned fallback)
+    # -> rebuild the detection-in-zone trigger.
+    state.zone_trigger = None
+    _ensure_zone_trigger(state)
+    return plan
+
+
+def _ensure_zone_trigger(state) -> "DetectionZoneTrigger | None":
     """Lazily build this session's detection-in-zone Stage-A trigger.
 
     Zones are resolved from the session's current gameHint (soccer -> goal
@@ -258,7 +316,10 @@ def _ensure_zone_trigger(state) -> DetectionZoneTrigger | None:
     """
     if state.zone_trigger is not None:
         return state.zone_trigger
-    tr = DetectionZoneTrigger(zones=resolve_zones(state.game_hint))
+    # Plan-first (ADAAAA-6463): the session's TrackingPlan zones win when
+    # present; otherwise the gameHint's canned per-sport zones apply. Rebuilt on
+    # a gameHint/plan change so the goal regions track the sport.
+    tr = DetectionZoneTrigger(zones=resolve_zones(state.game_hint, plan=state.tracking_plan))
     state.zone_trigger = tr
     return tr
 
@@ -306,10 +367,12 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     detector = get_detector(state.lora_ref or None)
     if detector is not None:
         # Real Florence-2: identify objects + bboxes and feed them to the tracker.
-        # Scope the <OD> prompt to the session's closed vocabulary (preferLabels /
-        # gameHint) so boxes carry useful labels and weak/unlabeled detection is
-        # gated out inside florence._parse (no more fake 1.0-confidence boxes).
-        vocabulary = resolve_vocabulary(state.game_hint, state.prefer_labels)
+        # Scope the <OD> prompt to the session's closed vocabulary (plan roster /
+        # preferLabels / gameHint) so boxes carry useful labels and weak/unlabeled
+        # detection is gated out inside florence._parse (no more fake
+        # 1.0-confidence boxes). Plan-first (ADAAAA-6463): when a TrackingPlan is
+        # present its roster is the active vocabulary.
+        vocabulary = resolve_vocabulary(state.game_hint, state.prefer_labels, plan=state.tracking_plan)
         try:
             _s = monotonic()
             objects = detector.detect(state.last_rgb, vocabulary=vocabulary)
@@ -344,7 +407,7 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             if state.tracker._detect is None:
                 _d = detector
                 _v = (
-                    resolve_vocabulary(state.game_hint, state.prefer_labels)
+                    resolve_vocabulary(state.game_hint, state.prefer_labels, plan=state.tracking_plan)
                     if detector is not None
                     else None
                 )
@@ -468,8 +531,10 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # conflicts with the scene and the decide model hard-rejects it
         # ("this is soccer, not a KILL event"), so no GOAL clip is ever cut.
         # Classify the anchored candidate with the sport-specific event type
-        # (GOAL) now that the session knows gameHint.
-        event_type = sport_specific_event_type(state.game_hint, cand.event_type)
+        # (GOAL) now that the session knows gameHint / the plan's category.
+        event_type = sport_specific_event_type(
+            state.game_hint, cand.event_type, category=_plan_category(state)
+        )
         # Return a plain dict (JSON-serializable) so callers can embed it in a
         # response/ack without reaching into the dataclass.
         cand_dict = {
@@ -484,7 +549,9 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # No motion burst this frame, but the detection-in-zone trigger fired.
         # Classify to the sport (GOAL on a goal-scoring sport) so decide() sees
         # a plausible event type; carry ball velocity/possession corroboration.
-        event_type = sport_specific_event_type(state.game_hint, zone_cand["eventType"])
+        event_type = sport_specific_event_type(
+            state.game_hint, zone_cand["eventType"], category=_plan_category(state)
+        )
         cand_dict = {
             "eventType": event_type,
             "timestamp": zone_cand["timestamp"],
@@ -621,6 +688,15 @@ def handle_control(state, msg: dict) -> dict:
                 return {"type": "ack", "ok": False, "cmd": "configure", "error": "bad goalLine: need {axis, position, mouthMin, mouthMax}"}
             state.goal_line_spec = spec
             state.goal_line_detector = GoalLineDetector(spec)
+        # LLM TrackingPlan (ADAAAA-6463, plan-first): accept the decide brain's
+        # plan under `trackingPlan`. normalize() never raises, and a plan with
+        # no trackable targets degrades to the canned/safe-default roster (see
+        # resolve_vocabulary) — the per-frame path never crashes or goes
+        # open-domain. Applying the plan rebuilds the zone trigger (plan zones
+        # win) and reserves the anchor's primary slot on the tracker.
+        if msg.get("trackingPlan") is not None:
+            plan = _apply_tracking_plan(state, msg["trackingPlan"])
+            return {"type": "ack", "ok": True, "cmd": "configure", "preferLabels": state.prefer_labels, "sampleFps": state.sample_fps, "trackingPlan": {"roster": plan.vocabulary(), "anchor": plan.anchor, "zones": plan.zones}}
         return {"type": "ack", "ok": True, "cmd": "configure", "preferLabels": state.prefer_labels, "sampleFps": state.sample_fps}
     if ctype == "seed":
         bbox = msg.get("bbox")
@@ -741,6 +817,12 @@ def create_app() -> FastAPI:
         # this stream's detector at frame time (florence.get_detector(lora_ref)).
         if req.loraRef:
             state.lora_ref = req.loraRef
+        # LLM TrackingPlan (ADAAAA-6463, plan-first): when the worker carries a
+        # plan on /analyze, apply it BEFORE the frame runs so detect/seeding is
+        # scoped to plan targets (off-plan objects dropped). Same effect as the
+        # WS `configure` trackingPlan key.
+        if req.trackingPlan is not None:
+            _apply_tracking_plan(state, req.trackingPlan)
         # Live path: the worker reserved a session with a control URL, so this
         # first proxied call opens this session's trickle channels and the rail
         # starts consuming video-in frames (plan §3.2/§3.5). The orchestrator

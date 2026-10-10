@@ -52,6 +52,61 @@ _VERDICT_CRITERIA_KEYS = (
     "crowdErupted",
 )
 
+# Outcome taxonomy (plan §4.9C / increment F, ADAAAA-6465): the analysis
+# call's outcome is no longer a binary highlight/no-highlight read but a small
+# closed set the model MUST pick from. A near miss is NOT a scoring play but
+# can be notable — it surfaces at a lower score, labeled distinctly.
+OUTCOME_TAXONOMY = (
+    "scoring_play",  # frames show the ball/object crossing/converting (goal, TD, dunk, kill)
+    "near_miss",  # frames show a close call (post, save at the line, denial at the net) — NOT a scoring play
+    "big_play",  # non-scoring but clearly high-value (big save, big hit, clutch denial)
+    "not_highlight",  # nothing notable in the window
+)
+
+
+def normalize_outcome(value, *, is_highlight: bool | None = None) -> str:
+    """Coerce an arbitrary model ``outcome`` value to a valid taxonomy member.
+
+    Defaults to ``not_highlight`` when absent/garbage. When ``is_highlight`` is
+    supplied it is enforced for consistency: an outcome of ``scoring_play`` or
+    ``big_play`` is always surfaced (isHighlight true); ``not_highlight`` is
+    never surfaced (isHighlight false); ``near_miss`` is surfaced (a near miss
+    is notable). A conflicting pair is resolved toward the frames read (the
+    frames are the primary evidence — increment F), i.e. the taxonomy member
+    wins and ``is_highlight`` is reconciled here rather than left contradictory.
+    """
+    v = value if isinstance(value, str) else ""
+    v = v.strip().lower()
+    if v not in OUTCOME_TAXONOMY:
+        v = "not_highlight"
+    if is_highlight is None:
+        return v
+    # Taxonomy <-> isHighlight consistency (crowd-alone rule, both directions):
+    # a scoring/big/near-miss outcome is surfaced; not_highlight never is. We
+    # return the reconciled member and the caller sets isHighlight from it.
+    return v
+
+
+def outcome_is_highlight(outcome: str) -> bool:
+    """Whether an outcome taxonomy member surfaces as a highlight candidate.
+    scoring_play / big_play / near_miss are notable and surface; not_highlight
+    does not. A near miss is notable but NOT a scoring play (lower score)."""
+    return outcome in ("scoring_play", "big_play", "near_miss")
+
+
+def _rule_outcome(d) -> str:
+    """Map a deterministic rule decision to the outcome taxonomy member so the
+    fallback path returns the same shape as the Gemma path (increment F). The
+    rule is a score/threshold classifier, so a highlight maps to scoring_play or
+    big_play (we can't distinguish near_miss without the frames) and a non-
+    highlight maps to not_highlight. ``d`` is the decider return (has
+    ``is_highlight``)."""
+    try:
+        hl = bool(getattr(d, "is_highlight", False))
+    except Exception:  # noqa: BLE001
+        hl = bool(d) if isinstance(d, (bool, int)) else False
+    return "scoring_play" if hl else "not_highlight"
+
 
 def _as_text(value) -> str:
     """Coerce an arbitrary model field to a clean str ('' for anything but a
@@ -125,11 +180,38 @@ def parse_decision(text: str) -> dict | None:
     reason = obj.get("reason")
     if not isinstance(reason, str):
         reason = str(reason) if reason is not None else None
+    # Increment F / ADAAAA-6465: outcome taxonomy. Parse + reconcile so a
+    # model that says outcome=near_miss can never come back as a scored
+    # scoring_play. The taxonomy member is the primary read; is_highlight is
+    # reconciled from it (crowd-alone rule both directions: no frame evidence
+    # of the play => near_miss/not_highlight, never scoring_play). When the
+    # model supplied NO outcome field (legacy/pre-F reply), keep is_highlight
+    # as-is and derive the member from it so a true highlight is never demoted.
+    raw_outcome = obj.get("outcome")
+    if raw_outcome is None:
+        # Legacy/absent -> derive from the verdict, never overrule it.
+        outcome = "scoring_play" if is_hl else "not_highlight"
+    else:
+        outcome = normalize_outcome(raw_outcome)
+        if is_hl and outcome == "not_highlight":
+            is_hl = False
+        if not is_hl and outcome in ("scoring_play", "big_play", "near_miss"):
+            # Model said the play is notable but isHighlight=false: trust the
+            # taxonomy (frames read), surface it. This is the direction that a
+            # loud-crowd-but-no-play must NOT take scoring_play upward (it won't,
+            # because the model must ground scoring_play in the frames); this only
+            # surfaces a real near_miss/big_play the model noted but forgot to flag.
+            is_hl = True
     return {
         "isHighlight": is_hl,
         "score": score,
         "eventType": event_type,
         "reason": reason,
+        # Increment F / ADAAAA-6465: outcome taxonomy member (always present;
+        # defaults to not_highlight). near_miss is notable but NOT a scoring
+        # play — surfaced at a lower score, labeled distinctly below.
+        "outcome": outcome,
+        "nearMiss": outcome == "near_miss",
         # I1 reviewer-facing rationale (always present so the API response shape
         # is stable whether or not the model populated them).
         "reasoning": _as_text(obj.get("reasoning")),
@@ -426,11 +508,38 @@ def build_prompt(
         "the ball crossing the line). When no scoreboard change is reported, treat "
         "that as weak/absent evidence and NEVER let its absence alone force or block "
         "a goal verdict.\n"
+        "OUTCOME TAXONOMY — you must ALSO classify the outcome into EXACTLY one of "
+        "the four members below and return it in the `outcome` field (increment F):\n"
+        "- scoring_play: the frames show the ball/object actually crossing / "
+        "converting (goal, touchdown, dunk, basket, kill, objective taken). A real "
+        "score.\n"
+        "- near_miss: the frames show a CLOSE CALL — a shot that hit the post/bar, a "
+        "save at the line, an interception at the boundary, a denial right at the "
+        "net / by the last defender — but the ball did NOT score. A near miss is "
+        "NOT a scoring play, even when the crowd/commentary erupts. It IS notable "
+        "and surfaces, but at a lower score.\n"
+        "- big_play: non-scoring but clearly high-value — a big save, a big hit, a "
+        "clutch denial, a game-changing stop.\n"
+        "- not_highlight: nothing notable in the window (warm-up, lull, ordinary "
+        "build-up, no close call, no score).\n"
+        "FRAMES ARE THE PRIMARY EVIDENCE; audio is cheap and fallible. A crowd/ "
+        "commentary eruption, a replay, or a wrong call must NEVER make you call a "
+        "`scoring_play` — only the frames (ball crossing the line / into the net / "
+        "objective taken) can. If the frames show the ball was saved, hit the post, "
+        "was caught, or did not cross before the line, the outcome is `near_miss` "
+        "or `big_play` — NEVER `scoring_play` — whatever the audio did (conflict "
+        "resolves toward the frames). Conversely, do NOT upgrade a real score to "
+        "`not_highlight` just because the crowd stayed quiet (audio never flips a "
+        "near_miss into a scoring play, and never cancels a real one).\n"
+        "A near miss scores below a scoring play but above not_highlight: keep "
+        "`score` in a lower band (e.g. <60) for near_miss, and set `nearMiss`/the "
+        "flag so downstream assembly can label it distinctly.\n"
         "Context:\n- " + "\n- ".join(meta) + "\n\n"
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "
         "leading/trailing prose, exactly of this shape:\n"
         "{\"isHighlight\": true|false, \"score\": 0..100, \"eventType\": \"<type>\", "
         "\"reason\": \"<short grounded reason that names the deciding evidence>\", "
+        "\"outcome\": \"scoring_play|near_miss|big_play|not_highlight\", "
         "\"reasoning\": \"<2-4 sentences: what you independently observed FIRST, then "
         "how that tests the hypothesis>\", "
         "\"verdict\": {\"hypothesis\": \"<the candidate type you were testing>\", "
@@ -616,6 +725,10 @@ def decide_with_gemma(
             "score": d.score,
             "eventType": event_type,
             "reason": d.reason,
+            # Increment F / ADAAAA-6465: the deterministic rule also emits the
+            # outcome taxonomy so the response shape is identical on both paths.
+            "outcome": _rule_outcome(d),
+            "nearMiss": _rule_outcome(d) == "near_miss",
             "source": "rule-fallback",
         }
     # Per-highlight audio-context cost/latency readout. `path` reports which
@@ -630,3 +743,43 @@ def decide_with_gemma(
         "asrLatencyS": asr_latency_s,
     }
     return result
+
+
+def plan_tracking_with_gemma(
+    intent: str,
+    category: str,
+    frame: dict | None = None,
+    context: dict | None = None,
+    mode: str = "live",
+    url: str | None = None,
+    fallback: dict | None = None,
+    timeout_s: float = 180.0,
+    discovery_runner=None,
+) -> dict:
+    """What-to-track planner path (increment A — ADAAAA-6462): the decide
+    brain's SINGLE-SHOT call (intent, category, one representative frame,
+    context) -> a validated TrackingPlan, mirroring decide_with_gemma's
+    contract — on any planner failure the caller gets a fallback plan
+    (canned roster / safe default) with ``source: "planner-fallback"``, never
+    None and never an exception. Increment B wires perceive to consume the
+    plan; until then this is the audited call path only (no per-frame use —
+    plan §9 / §14.4).
+
+    ``discovery_runner`` (increment C — ADAAAA-6464), when provided, is a
+    zero-arg callable returning a discovery block; it is invoked exactly ONCE
+    at plan/re-plan cadence and its result is folded into the plan's
+    ``discovery`` field (the slow caption/region pass never runs per-frame).
+    """
+    from .planner import plan_with_discovery  # local: keeps gemma import-light
+
+    return plan_with_discovery(
+        intent,
+        category,
+        frame=frame,
+        context=context,
+        mode=mode,
+        url=url,
+        timeout_s=timeout_s,
+        fallback=fallback,
+        discovery_runner=discovery_runner,
+    )

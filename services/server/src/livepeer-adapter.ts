@@ -17,8 +17,10 @@ import type {
   DecisionResult,
   ObservationResult,
   PipelineClient,
+  PlanRequest,
   ReactionEvidence,
   ReserveResult,
+  TrackingPlanResult,
   TrainResult,
   TrainRunRequest,
 } from "./analyzer";
@@ -157,7 +159,7 @@ export class OrchestratorAdapter implements PipelineClient {
   async analyze(
     sessionId: string,
     frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
-    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string }
+    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string; trackingPlan?: Record<string, unknown> }
   ): Promise<ObservationResult> {
     const { status, data } = await this.client.appCall<any>(sessionId, "analyze", {
       method: "POST",
@@ -176,6 +178,10 @@ export class OrchestratorAdapter implements PipelineClient {
         // Per-stream LoRA injection (ADAAAA-5324): carry the stream-attached
         // merged model dir so perceive serves this stream's adapter variant.
         loraRef: opts?.loraRef || "",
+        // Increment D (ADAAAA-6467): the active what-to-track plan, delivered
+        // on every /analyze so detect/seeding stays scoped to the plan roster
+        // (and a re-reserved session inherits it on its first frame).
+        ...(opts?.trackingPlan ? { trackingPlan: opts.trackingPlan } : {}),
       }),
     });
     if (status >= 400) {
@@ -187,6 +193,50 @@ export class OrchestratorAdapter implements PipelineClient {
       throw new Error(`analyze failed: HTTP ${status}`);
     }
     return normalizeObservation(data);
+  }
+  /** Increment D (ADAAAA-6467): single-shot what-to-track planner call, routed
+   * through the same fixed-price decide runner as /highlight (one billable
+   * unit; 402 -> signer -> retry with the returned payment headers). Returns a
+   * validated TrackingPlan or a safe-default fallback — never throws. */
+  async plan(req: PlanRequest): Promise<TrackingPlanResult> {
+    const payerAddress = this.payerAddress;
+    const payload = {
+      sessionId: "job",
+      intent: req.intent || "",
+      category: req.category || "",
+      gameHint: req.gameHint || "",
+      mode: req.mode || "live",
+      context: req.context ?? {},
+      image: req.imageB64 || "",
+      reasoningEffort: "none",
+    };
+    const run = async (paymentHeaders?: Record<string, string>) => {
+      const { status, data } = await this.client.decide("plan", payload, {
+        payerAddress: payerAddress || undefined,
+        paymentHeaders,
+      });
+      if (status >= 400) throw new Error(`plan failed: HTTP ${status}`);
+      return (data ?? {}) as TrackingPlanResult;
+    };
+    try {
+      return await run();
+    } catch (err) {
+      if (!(err instanceof PaymentRequiredError) || !this.signer || !payerAddress) {
+        // Degrade to a safe-default plan on ANY failure (never a dead stream).
+        return { planVersion: 1, category: req.category || "", intent: req.intent || "", source: "planner-fallback", maxTracks: req.mode === "vod" ? 8 : 3, reason: "planner unavailable" };
+      }
+      const b64 = err.challenge?.paymentParams;
+      if (!b64) {
+        return { planVersion: 1, category: req.category || "", intent: req.intent || "", source: "planner-fallback", maxTracks: req.mode === "vod" ? 8 : 3, reason: "planner 402 without payment params" };
+      }
+      const manifestID = err.challenge?.manifestId;
+      const pmt = await this.signer.generateLivePayment(b64, null, {
+        app: ROUTES.decide,
+        type: "fixed",
+        manifestID: manifestID || undefined,
+      });
+      return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
+    }
   }
   async postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioCandidate | null> {
     // Pure-DSP audio gate on the perceive runner — no GPU on this path. Proxy
@@ -358,7 +408,7 @@ export class DirectAdapter implements PipelineClient {
   async analyze(
     sessionId: string,
     frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
-    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string }
+    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string; trackingPlan?: Record<string, unknown> }
   ): Promise<ObservationResult> {
     const r = await fetch(`${this.cfg.perceiveUrl}/app/analyze`, {
       method: "POST",
@@ -374,6 +424,8 @@ export class DirectAdapter implements PipelineClient {
         // Per-stream LoRA injection (ADAAAA-5324): carry the stream-attached
         // merged model dir so perceive serves this stream's adapter variant.
         loraRef: opts?.loraRef || "",
+        // Increment D (ADAAAA-6467): the active what-to-track plan.
+        ...(opts?.trackingPlan ? { trackingPlan: opts.trackingPlan } : {}),
       }),
     });
     if (!r.ok) {
@@ -381,6 +433,31 @@ export class DirectAdapter implements PipelineClient {
       throw new Error(`analyze failed: HTTP ${r.status}`);
     }
     return normalizeObservation(await r.json());
+  }
+  /** Increment D (ADAAAA-6467): single-shot what-to-track planner via the
+   * direct dev decide runner (/app/plan). Degrades to a safe-default plan on
+   * any failure — never throws, never a dead stream. */
+  async plan(req: PlanRequest): Promise<TrackingPlanResult> {
+    try {
+      const r = await fetch(`${this.cfg.decideUrl}/app/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: this.fakeSession,
+          intent: req.intent || "",
+          category: req.category || "",
+          gameHint: req.gameHint || "",
+          mode: req.mode || "live",
+          context: req.context ?? {},
+          image: req.imageB64 || "",
+          reasoningEffort: "none",
+        }),
+      });
+      if (!r.ok) throw new Error(`plan failed: HTTP ${r.status}`);
+      return (await r.json()) as TrackingPlanResult;
+    } catch {
+      return { planVersion: 1, category: req.category || "", intent: req.intent || "", source: "planner-fallback", maxTracks: req.mode === "vod" ? 8 : 3, reason: "planner unavailable" };
+    }
   }
   async postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioCandidate | null> {
     // Direct dev path: POST straight to perceive /app/audio (pure DSP, no GPU).

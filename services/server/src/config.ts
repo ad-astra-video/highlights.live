@@ -116,6 +116,25 @@ export interface ServerConfig {
    * `VOD_RESAMPLE_FPS` (default 8) / `VOD_RESAMPLE_WINDOW_S` (default 3). */
   vodResampleFps: number;
   vodResampleWindowS: number;
+  /** Increment F / ADAAAA-6465 (plan §4.9): analysis FPS cap for the frame
+   * sequence the LLM watches per trigger. Live default 5; the VOD pass uses the
+   * higher-cap `vodAnalysisFps` (detail-first; speed secondary). `ANALYSIS_FPS`
+   * / `VOD_ANALYSIS_FPS`. */
+  analysisFps: number;
+  vodAnalysisFps: number;
+  /** Hard cap on the number of frames that reach the LLM in ONE analysis call
+   * (never exceeded). Live default 30 (≈25 + 3 keyframes); VOD higher. `MAX_
+   * FRAMES_PER_ANALYSIS` / `VOD_MAX_FRAMES_PER_ANALYSIS`. */
+  maxFramesPerAnalysis: number;
+  vodMaxFramesPerAnalysis: number;
+  /** Pre/post window (seconds) around the trigger the assembler samples.
+   * Default 2 s pre / 3 s post; VOD may lengthen (detail-first). `ANALYSIS_PRE_
+   * WINDOW_S` / `ANALYSIS_POST_WINDOW_S` / `VOD_ANALYSIS_PRE_WINDOW_S` /
+   * `VOD_ANALYSIS_POST_WINDOW_S`. */
+  analysisPreWindowS: number;
+  analysisPostWindowS: number;
+  vodAnalysisPreWindowS: number;
+  vodAnalysisPostWindowS: number;
   /** ADAAAA-6314 Path 2: forward the surrounding audio clip for LIVE trigger
    * candidates so the gemma decide prompt gets ASR'd audio context. Default off
    * so the deployed live baseline sends no new payload until an operator enables
@@ -213,6 +232,22 @@ export interface ServerConfig {
    * more than ~1 sweep interval after its purge window elapses. Default: run
    * hourly (ADAAAA-5398 C4). */
   datasetPurgeSweepIntervalMs: number;
+  /**
+   * Increment D (ADAAAA-6467): the stream-start what-to-track warm-up window
+   * (seconds) — exactly ONE planner call must deliver a valid TrackingPlan
+   * within it before the per-frame loop begins steady-state tracking. The
+   * worker never blocks on the planner; a slow plan just applies late (the
+   * per-frame loop runs the canned/safe-default interim). `WARMUP_SECONDS`
+   * (default 3).
+   */
+  warmupSeconds: number;
+  /**
+   * Increment D (ADAAAA-6467): the out-of-band re-check cadence (seconds) —
+   * a scheduler samples a few frames OFF the per-frame path and re-plans,
+   * swapping the active TrackingPlan within (~) this interval on a mid-session
+   * type change. `RECHECK_INTERVAL_SECONDS` (default 10).
+   */
+  recheckIntervalSeconds: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -257,6 +292,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // vodResampleFps so the ball-goal-crossing instant is in the decide window.
     vodResampleFps: Number(env.VOD_RESAMPLE_FPS ?? 8),
     vodResampleWindowS: Number(env.VOD_RESAMPLE_WINDOW_S ?? 3),
+    // Increment F / ADAAAA-6465 (plan §4.9): analysis FPS cap + hard per-call
+    // frame cap + pre/post window. Live default 5 fps / 30 frames / 2s pre+3s
+    // post; VOD detail-first gets a higher cap / longer window (speed secondary).
+    analysisFps: Number(env.ANALYSIS_FPS ?? 5),
+    vodAnalysisFps: Number(env.VOD_ANALYSIS_FPS ?? 5),
+    maxFramesPerAnalysis: Number(env.MAX_FRAMES_PER_ANALYSIS ?? 30),
+    vodMaxFramesPerAnalysis: Number(env.VOD_MAX_FRAMES_PER_ANALYSIS ?? 40),
+    analysisPreWindowS: Number(env.ANALYSIS_PRE_WINDOW_S ?? 2),
+    analysisPostWindowS: Number(env.ANALYSIS_POST_WINDOW_S ?? 3),
+    vodAnalysisPreWindowS: Number(env.VOD_ANALYSIS_PRE_WINDOW_S ?? 3),
+    vodAnalysisPostWindowS: Number(env.VOD_ANALYSIS_POST_WINDOW_S ?? 5),
     // I4 / ADAAAA-6361: live-path decide() carries the surrounding audio clip so
     // Gemma gets auditory context, matching VOD. Opt out with LIVE_AUDIO_CONTEXT=0.
     audioContext: env.LIVE_AUDIO_CONTEXT !== "0",
@@ -301,5 +347,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     rejectTtlMs: Number(env.REJECTED_CLIP_TTL_MS ?? 24 * 60 * 60 * 1000),
     rejectSweepIntervalMs: Number(env.REJECTED_CLIP_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
     datasetPurgeSweepIntervalMs: Number(env.DATASET_PURGE_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
+    // Increment D (ADAAAA-6467): stream-start warm-up window + out-of-band
+    // re-check cadence for the what-to-track planner. See the ServerConfig
+    // field docs for the default rationale (3 s warm-up, 10 s recheck).
+    warmupSeconds: Number(env.WARMUP_SECONDS ?? 3),
+    recheckIntervalSeconds: Number(env.RECHECK_INTERVAL_SECONDS ?? 10),
   };
 }

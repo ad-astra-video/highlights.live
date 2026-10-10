@@ -74,6 +74,25 @@ CROSS_ATTN_TARGET_RE = re.compile(
     r"language_model\.model\.decoder\.layers\.\d+\.encoder_attn\.(q_proj|k_proj|v_proj|out_proj)$"
 )
 
+# The Florence-2 task tokens this fine-tune supports. A LoRA on the full
+# Florence-2-base model (vision encoder + text-decoder cross attention) is a
+# drop-in: it does NOT disable any base task, so the complete task table stays
+# available. The manifest records this so the planner seed reflects the active
+# model's task set, and records which task the fine-tune actually STRENGTHENED
+# (trainedTasks) so the brain knows where the small-model lift is.
+SUPPORTED_TASKS: list[str] = [
+    "<OD>",
+    "<CAPTION>",
+    "<DETAILED_CAPTION>",
+    "<MORE_DETAILED_CAPTION>",
+    "<DENSE_REGION_CAPTION>",
+    "<REGION_PROPOSAL>",
+    "<CAPTION_TO_PHRASE_GROUNDING>",
+    "<REFERRING_EXPRESSION_SEGMENTATION>",
+    "<OCR>",
+]
+TRAINED_TASKS: list[str] = ["<OD>"]
+
 
 # --- manifest (DetectionTrainingSample contract, mirror of detect_schema) ---
 
@@ -312,6 +331,57 @@ def save_checkpoints(model, processor, base_model: str, run_tag: str, out_dir: P
     return adapter_path, merged_dir
 
 
+# --- Fine-tune manifest (increment C — ADAAAA-6464, child of ADAAAA-6441) ---
+
+
+def write_finetune_manifest(
+    out_dir: Path,
+    merged_dir: Path,
+    vocab: list[str],
+    base_model: str,
+    run_tag: str,
+    lora_rank: int,
+    lora_alpha: int,
+) -> Path:
+    """Write ``finetune.json`` next to the LoRA artifact (increment C).
+
+    This is the manifest the planner reads when ``loraRef`` is present (see
+    services/decide/app/planner.py). It records the fine-tune's
+    ``detectedClasses`` (the closed vocabulary it was trained on) and its
+    ``supportedTasks`` (the Florence-2 task set it serves), so the planner
+    seed narrows to the detected-class manifest and reflects the supported
+    task set. ``detectedClasses`` is the same ``--vocab`` set the detector's
+    closed-vocab gate canonicalizes onto, so the planner only ever requests
+    classes the fine-tune actually detects.
+
+    Written in TWO places so the planner can locate it deterministically no
+    matter which path ``loraRef`` carries:
+      * ``out_dir / finetune.json``             — next to the named
+        ``Florence-2-base-finetuned-<run>.safetensors`` adapter artifact;
+      * ``merged_dir / finetune.json``          — inside the drop-in model
+        dir that ``FlorenceDetector(model_path=loraRef)`` loads, i.e. at
+        ``<loraRef>/finetune.json``.
+    """
+    manifest = {
+        "planVersion": 1,
+        "baseModel": base_model,
+        "run": run_tag,
+        "detectedClasses": [str(c).strip() for c in vocab if str(c).strip()],
+        "supportedTasks": list(SUPPORTED_TASKS),
+        "trainedTasks": list(TRAINED_TASKS),
+        "lora": {"rank": int(lora_rank), "alpha": int(lora_alpha)},
+        "modelPath": str(merged_dir),
+    }
+    payload = json.dumps(manifest, indent=2) + "\n"
+    root_path = out_dir / "finetune.json"
+    root_path.write_text(payload)
+    merged_path = merged_dir / "finetune.json"
+    merged_path.write_text(payload)
+    print(f"  [ckpt] fine-tune manifest -> {root_path}", flush=True)
+    print(f"  [ckpt] fine-tune manifest -> {merged_path}", flush=True)
+    return root_path
+
+
 # --- Eval ---
 
 def run_eval(dataset_val: FixtureDataset, merged_dir: Path, base_model: str,
@@ -519,6 +589,15 @@ def main() -> int:
     adapter_file, merged_dir = save_checkpoints(
         model, processor, args.base_model, args.run, out_dir
     )
+    finetune_path = write_finetune_manifest(
+        out_dir,
+        merged_dir,
+        args.vocab,
+        args.base_model,
+        args.run,
+        args.lora_rank,
+        args.lora_alpha,
+    )
 
     report_path = out_dir / f"eval_report-{args.run}.json"
     if args.skip_eval or val_ds is None:
@@ -541,12 +620,14 @@ def main() -> int:
     summary = {"status": "done", **stats, "eval": eval_report,
                "manifest": args.manifest, "val": args.val,
                "base_model": args.base_model, "device": device,
+               "finetune_manifest": str(finetune_path),
                "lora": {"rank": args.lora_rank, "alpha": args.lora_alpha}}
     summary_path = out_dir / f"summary-{args.run}.json"
     summary_path.write_text(json.dumps(summary, indent=2))
     print("\n==== TRAIN DONE ====")
     print(f"  adapter :  {adapter_file}")
     print(f"  merged  :  {merged_dir}")
+    print(f"  finetune:  {finetune_path}")
     print(f"  eval    :  {report_path}")
     print(f"  summary :  {summary_path}")
     print(f"  status  :  done")

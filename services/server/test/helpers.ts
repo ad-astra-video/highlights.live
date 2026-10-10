@@ -128,6 +128,11 @@ export function fakePipeline(): any {
     async decide() {
       return { isHighlight: true, score: 86, eventType: "KILL", reason: "test" };
     },
+    async plan(_req: any) {
+      // Increment D (ADAAAA-6467): the worker fires the warm-up / re-check
+      // planner; this returns a canned valid plan so the loop is unaffected.
+      return { planVersion: 1, category: "soccer", intent: "", source: "planner-fallback", maxTracks: 3, targets: [{ label: "player", role: "player" }], reason: "test" };
+    },
     async train(_req: any) {
       return { run: "train-smoke", checkpoint: "/runs/train-smoke/model.safetensors", epochs: 5, samples: 2,
         eval: { eval: "completed", precision: 0.91, recall: 0.88, f1: 0.895 } };
