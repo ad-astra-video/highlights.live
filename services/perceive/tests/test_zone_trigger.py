@@ -68,6 +68,52 @@ def test_resolve_zones_unknown_sport_is_inert():
     assert resolve_zones("") == []
 
 
+# --- ADAAAA-6463: plan-first zone resolution --------------------------------
+def test_resolve_zones_plan_zones_win_over_canned():
+    from app.tracking_plan import TrackingPlan
+    plan = TrackingPlan.from_dict({
+        "category": "soccer",
+        "anchor": {"label": "soccer ball", "role": "ball"},
+        "targets": [{"label": "soccer ball", "role": "ball", "slotPriority": 0}],
+        "zones": [{"name": "goal-mouth-right", "normalized": [0.7, 0.4, 1.0, 0.9], "purpose": "goal_detect"}],
+    })
+    z = resolve_zones("soccer", plan=plan)
+    assert z == [(0.7, 0.4, 1.0, 0.9)]
+    # Off-plan canned zones are NOT used when the plan declares zones.
+    assert z != DEFAULT_ZONES["soccer"]
+
+
+def test_resolve_zones_plan_without_zones_falls_back_to_canned_sport():
+    from app.tracking_plan import TrackingPlan
+    plan = TrackingPlan.from_dict({
+        "category": "soccer",
+        "anchor": {"label": "soccer ball", "role": "ball"},
+        "targets": [{"label": "soccer ball", "role": "ball", "slotPriority": 0}],
+        "zones": [],
+    })
+    assert resolve_zones("soccer", plan=plan) == DEFAULT_ZONES["soccer"]
+
+
+def test_resolve_zones_plan_unspecified_sport_is_inert():
+    from app.tracking_plan import TrackingPlan
+    plan = TrackingPlan.from_dict({
+        "category": "fps",
+        "anchor": {"label": "player", "role": "player"},
+        "targets": [{"label": "player", "role": "player", "slotPriority": 0}],
+        "zones": [],
+    })
+    assert resolve_zones("some-canned-unknown", plan=plan) == []
+
+
+def test_resolve_zones_raw_plan_dict_zone_boxes():
+    # Zones from a raw plan dict (already-normalized contract shape).
+    raw = {"category": "basketball", "zones": [{"name": "hoop", "normalized": [0.80, 0.10, 1.00, 0.45], "purpose": "goal"}]}
+    assert resolve_zones("basketball", plan=raw) == [(0.8, 0.1, 1.0, 0.45)]
+    # Invalid zone boxes are skipped, never crash.
+    bad = {"zones": [{"name": "x", "normalized": ["a", "b", "c", "d"]}, {"name": "y", "normalized": [0.1, 0.2, 0.3, 0.4]}]}
+    assert resolve_zones("basketball", plan=bad) == [(0.1, 0.2, 0.3, 0.4)]
+
+
 def test_detection_in_zone_finds_center_overlap():
     zones = [DEFAULT_ZONES["soccer"][0]]  # left goal mouth
     # track center at (0.05, 0.5) -> inside the left zone

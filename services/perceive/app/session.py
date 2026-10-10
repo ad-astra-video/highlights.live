@@ -19,6 +19,7 @@ from .audio_gate import AudioEnergyGate
 from .tracker import IoUTracker, LIVE_MAX_TRACKS, VOD_MAX_TRACKS
 from .sam_tracker import HybridTracker, make_tracker
 from .scoreboard import ScoreboardTracker
+from .tracking_plan import TrackingPlan
 
 RECENT_FRAMES = 30  # ~30 sampled frames kept for clip/confirm
 
@@ -84,6 +85,12 @@ class SessionState:
     # candidate can report whether the displayed score changed across the
     # candidate window. Bounded per-session state, never grows on long streams.
     scoreboard_tracker: ScoreboardTracker = field(default_factory=ScoreboardTracker)
+    # LLM TrackingPlan (ADAAAA-6463, child of ADAAAA-6441): the closed detection
+    # roster + zones + anchor + maxTracks the decide brain emitted for this
+    # session. Plan-first: when present, detect/seeding vocabulary, zone set and
+    # anchor-slot preference all come from it (with canned fallback when the
+    # plan is absent/empty). Set via control `configure` trackingPlan.
+    tracking_plan: Optional[TrackingPlan] = None
 
     @property
     def is_idle(self) -> bool:
@@ -97,7 +104,7 @@ class SessionRegistry:
         # Optional sync hook fired on drop (e.g. tear down a trickle rail).
         self.on_drop = None
 
-    def get_or_create(self, session_id: str, stream_id: str = "", clip_path: str = "") -> SessionState:
+    def get_or_create(self, session_id: str, stream_id: str = "", clip_path: str = "", anchor_label: str | None = None) -> SessionState:
         s = self._sessions.get(session_id)
         if s is None:
             if len(self._sessions) >= self.max_sessions:
@@ -107,13 +114,16 @@ class SessionRegistry:
             s = SessionState(session_id=session_id, stream_id=stream_id, clip_path=clip_path)
             # INC-6: bind SAM to this job's clip AND set the mode's track capacity
             # (3 live / 8 VOD) so the tracker instantiates with the right slots.
-            s.tracker = make_tracker(clip_path or None, capacity=mode_capacity(clip_path))
+            # ADAAAA-6463: when a plan/anchor is known up front, pass it so the
+            # tracker reserves the anchor's primary slot; otherwise it is applied
+            # later via control `configure` (set_anchor).
+            s.tracker = make_tracker(clip_path or None, capacity=mode_capacity(clip_path), anchor_label=anchor_label)
             self._sessions[session_id] = s
         elif clip_path and clip_path != s.clip_path:
             # A (new) clip was declared for an existing session -> (re)bind SAM
             # so the persistent session tracks THIS stream, not a stale/global one.
             s.clip_path = clip_path
-            s.tracker = make_tracker(clip_path or None, capacity=mode_capacity(clip_path))
+            s.tracker = make_tracker(clip_path or None, capacity=mode_capacity(clip_path), anchor_label=anchor_label)
         s.health_ts = time.time()
         return s
 
