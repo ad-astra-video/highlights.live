@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { GoalLineCalibration } from "./analyzer";
 
 export interface ServerConfig {
   port: number;
@@ -248,6 +249,25 @@ export interface ServerConfig {
    * type change. `RECHECK_INTERVAL_SECONDS` (default 10).
    */
   recheckIntervalSeconds: number;
+  /** Per-camera/per-clip goal-line calibration (ADAAAA-6489): a map keyed by
+   * job/clip id -> `{homography, goalLine}` a REAL image->field pitch homography
+   * + goal-line plane spec for that clip's camera. The detail-first/VOD server
+   * path resolves this per job and delivers it to the perceive session so the
+   * goal-line crossing signal (and the §8 near-miss verdict) is real, never a
+   * single static env value. A clip with no entry has no calibration -> perceive
+   * emits no ballOutcome and the metric reports not_captured (never fabricated).
+   * `GOAL_LINE_CALIBRATIONS` (JSON object keyed by clip/job id). */
+  goalLineCalibrations?: Record<string, GoalLineCalibration>;
+}
+
+function parseGoalLineCalibrations(raw: string | undefined): Record<string, GoalLineCalibration> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, GoalLineCalibration>) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -352,5 +372,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // field docs for the default rationale (3 s warm-up, 10 s recheck).
     warmupSeconds: Number(env.WARMUP_SECONDS ?? 3),
     recheckIntervalSeconds: Number(env.RECHECK_INTERVAL_SECONDS ?? 10),
+    // ADAAAA-6489: per-camera/per-clip goal-line calibration (none by default;
+    // a clip with no entry is reported not_captured, never fabricated).
+    goalLineCalibrations: parseGoalLineCalibrations(env.GOAL_LINE_CALIBRATIONS),
   };
 }

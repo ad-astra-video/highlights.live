@@ -446,6 +446,58 @@ describe("analyzeJob", () => {
     }
   });
 
+  it("delivers the per-camera/per-clip goal-line calibration to perceive on every analyze (ADAAAA-6489)", async () => {
+    const optsSeen: any[] = [];
+    const client = fakeClient({
+      reservePerceive: async () => ({ sessionId: "sess-cal", appUrl: "", controlUrl: "" }),
+      analyze: async (sid: string, _frame: any, opts: any) => {
+        optsSeen.push(opts || {});
+        return { observation: { tracks: [], seq: optsSeen.length - 1, timestamp: optsSeen.length - 1 } };
+      },
+      stopPerceive: async () => {},
+    });
+    // cfg.calibration is the per-clip/per-camera homography + goal-line spec.
+    await analyzeJob(
+      client.client,
+      frames(2),
+      async () => ({ clipId: "c", clipUri: "u" }),
+      {
+        jobId: "j",
+        clipBeforeS: 4,
+        clipAfterS: 4,
+        gameHint: "soccer",
+        calibration: { homography: [1, 0, 0, 0, 1, 0, 0, 0, 1], goalLine: { axis: "y", position: 0, mouthMin: 20, mouthMax: 48 } },
+      }
+    );
+    expect(optsSeen.length).toBe(2);
+    for (const o of optsSeen) {
+      expect(o.homography).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+      expect(o.goalLine).toEqual({ axis: "y", position: 0, mouthMin: 20, mouthMax: 48 });
+    }
+  });
+
+  it("does not send a calibration when the clip has none (not_captured, never fabricated) (ADAAAA-6489)", async () => {
+    const optsSeen: any[] = [];
+    const client = fakeClient({
+      reservePerceive: async () => ({ sessionId: "sess-nocal", appUrl: "", controlUrl: "" }),
+      analyze: async (sid: string, _frame: any, opts: any) => {
+        optsSeen.push(opts || {});
+        return { observation: { tracks: [], seq: optsSeen.length - 1, timestamp: optsSeen.length - 1 } };
+      },
+      stopPerceive: async () => {},
+    });
+    await analyzeJob(
+      client.client,
+      frames(2),
+      async () => ({ clipId: "c", clipUri: "u" }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" }
+    );
+    for (const o of optsSeen) {
+      expect(o.homography).toBeUndefined();
+      expect(o.goalLine).toBeUndefined();
+    }
+  });
+
   it("records max velocity + track count from observations", () => {
     const ev = new EvidenceTracker();
     ev.step({
