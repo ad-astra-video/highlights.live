@@ -267,13 +267,15 @@ def test_tracking_plan_round_trip_and_vocabulary():
     raw["targets"].append({"label": "end zone", "role": "zone", "slotPriority": 3})
     plan = TrackingPlan.from_dict(raw)
     assert plan.is_valid
-    # zones excluded from the detection roster; slotPriority order kept
-    assert plan.vocabulary() == ["soccer ball", "player", "goalkeeper"]
+    # zones excluded from the detection roster; slotPriority order kept.
+    # ADAAAA-6481: `goalkeeper` deduplicated as the same trackable class as
+    # `player` (Florence-2 boxes the keeper as a player) -> justified roster.
+    assert plan.vocabulary() == ["soccer ball", "player"]
     d = plan.to_dict()
     # normalize() canonicalizes every target to the full contract shape
     # (track defaults to True); zones keep name/normalized/purpose
     assert all(t["track"] is True for t in d["targets"])
-    assert {t["label"] for t in d["targets"]} == {t["label"] for t in raw["targets"]}
+    assert {t["label"] for t in d["targets"]} == {"soccer ball", "player", "end zone"}
     assert d["zones"] == raw["zones"]
     # round-trip is stable
     assert TrackingPlan.from_dict(d).to_dict() == d

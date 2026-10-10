@@ -369,6 +369,31 @@ def normalize(raw: Any) -> tuple[dict, list[str]]:
         if nt is not None:
             targets.append(nt)
 
+    # ADAAAA-6481 (§8 target_precision): the closed roster must name the
+    # DISTINCT trackable objects to expect. A `player` and a `goalkeeper`
+    # target are the same trackable class (Florence-2 boxes the keeper as a
+    # `player` track; both are role="player"), so requesting both over-requests
+    # one track the perceiver can only deliver once. Dedupe targets by
+    # trackable class (keep the first, lowest-slotPriority, non-zone target per
+    # class) so the plan and the perceiver agree on the roster — the justified
+    # 2-player roster for a soccer frame.
+    seen_classes: set[str] = set()
+    deduped: list[dict] = []
+    for t in targets:
+        if t["role"] == "zone":
+            deduped.append(t)
+            continue
+        cls = canonical_trackable_class(t["label"])
+        if cls in seen_classes:
+            warnings.append(
+                f"targets[] label {t['label']!r} duplicates trackable class "
+                f"{cls!r}; deduplicated (same class already in roster)"
+            )
+            continue
+        seen_classes.add(cls)
+        deduped.append(t)
+    targets = deduped
+
     anchor = _normalize_anchor(raw.get("anchor"), targets, warnings)
     zones = _normalize_zones(raw.get("zones"), warnings)
 
