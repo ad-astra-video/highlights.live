@@ -494,6 +494,72 @@ def plan_tracking(
     return plan
 
 
+# --- target-precision roster reification (ADAAAA-6481 / §8 target_precision) --
+# The planner must name the DISTINCT trackable objects to expect. A `player`
+# and a `goalkeeper` target are one trackable class (Florence-2 boxes the
+# keeper as a `player` track; both are role "player"), so requesting both
+# over-requests one object the perceiver can only deliver once — the measured
+# target_precision (delivered-trackable / planned-target) then under-counts.
+# Dedupe a non-zone target per trackable class (keep the first, lowest-slot
+# target per class) so the plan and the perceive closed-vocab roster agree on
+# the justified set (e.g. soccer ball + player), not an over-requested roster.
+# Self-contained (the slim decide image does not ship the perceive contract):
+# this mirrors services/perceive/app/tracking_plan.canonical_trackable_class.
+_TRACKABLE_CLASS_HINTS = (
+    ("ball", ("ball", "football", "basketball", "volleyball", "puck", "tennis ball")),
+    ("player", ("player", "goalkeeper", "goalie", "keeper", "person", "agent",
+                "referee", "footballer", "athlete", "man", "woman", "people")),
+    ("goal", ("goal", "net", "goalpost", "crossbar", "hoop")),
+)
+
+
+def _plan_target_class(t: Any) -> str:
+    label = (t.get("label") if isinstance(t, dict) else str(t))
+    low = str(label or "").strip().lower()
+    if not low:
+        return "unknown"
+    for cls, hints in _TRACKABLE_CLASS_HINTS:
+        if any(h in low for h in hints):
+            return cls
+    return low
+
+
+def _dedupe_targets_by_class(plan: Any) -> Any:
+    """Return a copy of ``plan`` whose non-zone ``targets`` are reified to one
+    entry per trackable class. Zone targets are preserved (regions, not object
+    tracks). The input is left untouched."""
+    if not isinstance(plan, dict):
+        return plan
+    out = dict(plan)
+    targets = out.get("targets") or []
+    seen: dict[str, int] = {}
+    deduped: list[Any] = []
+    dropped = 0
+    for t in targets:
+        role = (t.get("role") if isinstance(t, dict) else "") or ""
+        if role == "zone" or (isinstance(t, dict) and t.get("role") == "zone"):
+            deduped.append(t)
+            continue
+        cls = _plan_target_class(t)
+        if cls in seen:
+            dropped += 1
+            continue
+        seen[cls] = 1
+        deduped.append(t)
+    out["targets"] = deduped
+    if dropped:
+        prev = list(plan.get("_rosterDropped", []))
+        plan_note = plan.get("reason") or ""
+        plan_note = (plan_note + " " if plan_note else "") + (
+            f"roster reified: {dropped} plan target(s) over-requested a trackable "
+            "class already present (keeper==player); reduced to the justified "
+            "distinct-object set"
+        ).strip()
+        out["reason"] = plan_note.strip()
+    out["_rosterDeduped"] = dropped
+    return out
+
+
 def plan_with_fallback(
     intent: str,
     category: str,
@@ -519,7 +585,7 @@ def plan_with_fallback(
         timeout_s=timeout_s,
     )
     if plan is not None:
-        return plan
+        return _dedupe_targets_by_class(plan)
     if isinstance(fallback, dict):
         out = dict(fallback)
         if "maxTracks" in out and clamp_max_tracks is not None:
