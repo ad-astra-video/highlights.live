@@ -122,7 +122,8 @@ PLANNER_SEED: str = """You are the what-to-track planner for a live sports/espor
 5. NEVER request abstract targets (atmosphere, crowd energy, style, camera work, mood, narrative) — nothing a detector can box and a tracker can follow. Name concrete objects.
 6. Choose a SMALL, high-value, trackable set: the live pipeline clamps to 3 tracks and VOD to 8; propose maxTracks to fit (3 live / 8 VOD) and do not over-request. More targets than slots means eviction churn.
 7. Pick exactly ONE anchor: the single always-tracked-when-present target for this category. It must appear in targets. The anchor is re-electable (a re-plan can move it) — it is never once-locked.
-8. If a fine-tune is attached, its manifest narrows the target set: request only classes that fine-tune actually detects, and only tasks it supports.
+8. If a fine-tune is attached, its manifest narrows the target set: request only classes that fine-tune actually detects (the detected-class manifest), and use only the tasks it supports (the supported-task set) — the fine-tune may not serve every task in the table above. Fold the fine-tune's manifest into your discovery notes.
+9. Discovery runs at PLAN / RE-PLAN cadence only — one caption/region pass per plan/re-plan, and its candidates are folded into `discovery` (method + florenceTasks). NEVER run it per-frame.
 
 # Per-category guidance (anchor first; concrete, trackable labels only)
 

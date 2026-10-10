@@ -19,6 +19,7 @@ import json
 import os
 import re
 import time
+from typing import Any
 
 from . import planner_prompt
 
@@ -124,6 +125,171 @@ DEFAULT_PLANNER_TIMEOUT_S = 60.0
 # capped-sequence consumer, increment F).
 MAX_REPRESENTATIVE_FRAMES = 1
 
+# --- fine-tune manifest (increment C — ADAAAA-6464) --------------------------
+#
+# When a custom Florence-2 fine-tune is attached (loraRef), it ships a
+# finetune.json manifest (written by services/train/fine_tune_od.py next to
+# the LoRA artifact) recording the classes it detects (detectedClasses) and
+# the Florence-2 task set it serves (supportedTasks). The planner injects
+# this into the seed and narrows the plan to the detected-class manifest so
+# the brain only requests classes the fine-tune actually detects.
+
+FT_MANIFEST_FILENAME = "finetune.json"
+
+
+def normalize_finetune_manifest(raw: Any) -> dict | None:
+    """Coerce a finetune.json payload to {detectedClasses, supportedTasks}.
+
+    Returns None when the payload is empty/unparseable or carries neither a
+    detected-class list on a supported-task list (the two fields increment C
+    relies on). Never raises. detectedClasses/supportedTasks are deduped,
+    trimmed, non-empty strings.
+    """
+    if not isinstance(raw, dict):
+        return None
+    # Accept both the canonical keys (detectedClasses/supportedTasks) and the
+    # earlier shorthand (classes/tasks) for backward compatibility.
+    classes = _clean_ft_list(raw.get("detectedClasses") or raw.get("classes"))
+    tasks = _clean_ft_list(raw.get("supportedTasks") or raw.get("tasks"))
+    if not classes and not tasks:
+        return None
+    out: dict = {}
+    if classes:
+        out["detectedClasses"] = classes
+    if tasks:
+        out["supportedTasks"] = tasks
+    # Carry through any extra metadata (baseModel, trainedTasks, lora, ...).
+    for key in ("baseModel", "trainedTasks", "lora", "run", "modelPath"):
+        if raw.get(key) is not None:
+            out[key] = raw[key]
+    return out
+
+
+def _clean_ft_list(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    out: list[str] = []
+    for v in value:
+        s = str(v).strip() if v is not None else ""
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def load_finetune_manifest(lora_ref: str | None) -> dict | None:
+    """Read the fine-tune manifest for ``lora_ref`` (a merged model dir).
+
+    Tries, in order:
+      * ``<lora_ref>/finetune.json``        — manifest written inside the
+        drop-in dir that FlorenceDetector(model_path=loraRef) loads;
+      * ``<lora_ref>/../finetune.json``      — manifest next to the LoRA
+        artifact in the train output dir;
+      * ``<lora_ref>`` itself when lora_ref names a finetune.json.
+    Returns None on any failure (missing file, bad JSON, unparseable) — a
+    missing/absent manifest must never break planning; the caller falls back
+    to the base-model seed.
+    """
+    if not lora_ref:
+        return None
+    path = _Path(str(lora_ref))
+    candidates: list[Path] = []
+    if path.is_file():
+        if path.name == FT_MANIFEST_FILENAME:
+            candidates.append(path)
+        candidates.append(path.parent / FT_MANIFEST_FILENAME)
+        candidates.append(path / FT_MANIFEST_FILENAME)
+    else:
+        candidates.append(path / FT_MANIFEST_FILENAME)
+        candidates.append(path / ".." / FT_MANIFEST_FILENAME)
+        candidates.append(path.parent / FT_MANIFEST_FILENAME)
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                with open(cand, "r", encoding="utf-8") as fh:
+                    obj = json.load(fh)
+                manifest = normalize_finetune_manifest(obj)
+                if manifest is not None:
+                    return manifest
+        except Exception:  # noqa: BLE001  (bad manifest must never raise)
+            continue
+    return None
+
+
+def _resolve_finetune_manifest(context: dict | None) -> dict | None:
+    """Resolve the active fine-tune manifest from a planner context.
+
+    Prefers an explicitly-passed ``fineTuneManifest``; otherwise loads from
+    ``loraRef`` when present (the planner injects the manifest when a LoRA is
+    attached — plan §7 C).
+    """
+    ctx = context or {}
+    if ctx.get("fineTuneManifest"):
+        return normalize_finetune_manifest(ctx["fineTuneManifest"])
+    if ctx.get("loraRef"):
+        return load_finetune_manifest(str(ctx["loraRef"]))
+    return None
+
+
+def _stringify_ft_manifest(manifest: dict) -> str:
+    """Render a fine-tune manifest as a compact, seed-safe single line."""
+    classes = ", ".join(manifest.get("detectedClasses", [])) or "(none declared)"
+    tasks = ", ".join(manifest.get("supportedTasks", [])) or "(base set)"
+    return f"detected classes: [{classes}] ; supported tasks: [{tasks}]"
+
+
+def _finetune_narrow_plan(plan: dict, manifest: dict) -> dict:
+    """Narrow a normalized plan to the fine-tune's detected-class manifest.
+
+    When a fine-tune is attached the plan may ONLY request classes in its
+    detected-class manifest (plan §7 C). Targets whose label is not in the
+    manifest are dropped; the anchor is re-normalized so the invariant (anchor
+    in targets) holds. Returns a new plan dict; the input is left untouched.
+    """
+    classes = {str(c).strip().lower() for c in manifest.get("detectedClasses", [])}
+    if not classes:
+        return dict(plan)
+    targets = [
+        dict(t) for t in plan.get("targets", [])
+        if str(t.get("label", "")).strip().lower() in classes
+    ]
+    out = dict(plan)
+    out["targets"] = targets
+    if targets and _TRACKING_PLAN_AVAILABLE and _tp_normalize is not None:
+        norm, _ = _tp_normalize(out)
+        out = dict(norm)
+    # Discovery provenance should note the narrowing for QA auditing.
+    disc = dict(out.get("discovery") or {})
+    notes = [str(disc.get("notes", "")).strip()]
+    notes.append(f"narrowed to fine-tune detected-class manifest ({len(targets)} classes)")
+    disc["notes"] = "; ".join(n for n in notes if n)
+    out["discovery"] = disc or None
+    return out
+
+
+def _fold_discovery(plan: dict, discovery: Any) -> dict:
+    """Fold a discovery-pass result into the plan's ``discovery`` field.
+
+    ``discovery`` is the dict produced by perceive's discovery pass (increment
+    C): {method, florenceTasks, candidates, notes} or a normalized TrackingPlan
+    ``discovery`` block. The plan was generated AT PLAN CADENCE (the caller
+    never invokes the discovery pass from the per-frame hot path), so folding
+    the provenance here is an audit of which Florence-2 task produced the track
+    set. Never raises; an unparseable discovery is dropped (plan stays as-is).
+    """
+    if not isinstance(discovery, dict) or not discovery:
+        return dict(plan)
+    out = dict(plan)
+    disc = dict(discovery)
+    # Keep only the canonical audit keys.
+    for key in ("method", "florenceTasks", "notes", "candidates"):
+        if key in disc:
+            out["discovery"] = out.get("discovery") or {}
+            if isinstance(out["discovery"], dict):
+                out["discovery"][key] = disc[key]
+    if not out.get("discovery") and "discovery" in disc:
+        out["discovery"] = disc
+    return out
+
 
 def _strip_json_fence(text: str) -> str:
     """Remove markdown ```json ... ``` fences and surrounding prose (same
@@ -193,15 +359,23 @@ def build_planner_prompt(
     lines.append(f"video category: {category or 'general'}")
     if ctx.get("gameHint"):
         lines.append(f"game hint: {ctx['gameHint']}")
-    if ctx.get("fineTuneManifest"):
-        ft = ctx["fineTuneManifest"]
-        if isinstance(ft, str):
-            lines.append(f"attached fine-tune manifest: {ft}")
-        else:
-            try:
-                lines.append("attached fine-tune manifest: " + json.dumps(ft))
-            except Exception:
-                lines.append("attached fine-tune manifest: (unserializable; ignore)")
+    ft = _resolve_finetune_manifest(ctx)
+    if ft:
+        lines.append("attached fine-tune manifest: " + _stringify_ft_manifest(ft))
+        classes = ft.get("detectedClasses")
+        if classes:
+            lines.append(
+                "FINE-TUNE CONSTRAINT: request ONLY these detected classes — "
+                + ", ".join(str(c) for c in classes)
+                + " (do not request any class outside this manifest)."
+            )
+        tasks = ft.get("supportedTasks")
+        if tasks:
+            lines.append(
+                "fine-tune supported tasks: "
+                + ", ".join(str(t) for t in tasks)
+                + " — use only tasks in this set; the table below is bounded by it."
+            )
     if ctx.get("previousPlan"):
         lines.append("a previous plan is active; re-plan if the representative frame contradicts it:")
         try:
@@ -296,6 +470,21 @@ def plan_tracking(
         plan, _warnings = _tp_normalize(raw)
     else:
         plan = dict(raw)
+    # Fine-tune narrowing (plan §7 C): when a fine-tune manifest is attached,
+    # the plan may ONLY request classes the fine-tune actually detects.
+    ft = _resolve_finetune_manifest(context)
+    if ft:
+        plan = _finetune_narrow_plan(plan, ft)
+        # If narrowing emptied the roster (model proposed only out-of-manifest
+        # classes), the plan is invalid — reject so the caller degrades to the
+        # (narrowed) fallback rather than returning an empty plan.
+        if not plan.get("targets"):
+            return None
+    # Fold a discovery-pass result (method/tasks/candidates) into `discovery` —
+    # the caller runs the discovery pass at plan cadence, never per-frame.
+    disc = (context or {}).get("discovery")
+    if disc:
+        plan = _fold_discovery(plan, disc)
     # Server-side hard clamp (LLM proposes, clamp enforces) — applied here so
     # the plan that reaches perceive can never exceed the mode cap.
     if clamp_max_tracks is not None:
@@ -335,6 +524,11 @@ def plan_with_fallback(
         out = dict(fallback)
         if "maxTracks" in out and clamp_max_tracks is not None:
             out["maxTracks"] = clamp_max_tracks(out.get("maxTracks"), mode)
+        # Narrow the fallback to the fine-tune manifest too, so a degraded
+        # plan on a fine-tuned stream also stays in-class (plan §7 C).
+        ft = _resolve_finetune_manifest(context)
+        if ft:
+            out = _finetune_narrow_plan(out, ft)
         out["source"] = "planner-fallback"
         out["plannedAt"] = round(time.time(), 3)
         return out
@@ -351,3 +545,52 @@ def plan_with_fallback(
         "source": "planner-fallback",
         "plannedAt": round(time.time(), 3),
     }
+
+
+def plan_with_discovery(
+    intent: str,
+    category: str,
+    frame: dict | None = None,
+    context: dict | None = None,
+    mode: str = "live",
+    url: str | None = None,
+    timeout_s: float = DEFAULT_PLANNER_TIMEOUT_S,
+    fallback: dict | None = None,
+    discovery_runner=None,
+    discovery_task: str = "<DETAILED_CAPTION>",
+) -> dict:
+    """The planner's ONE-per-plan-cadence caption/region discovery pass.
+
+    Increment C (ADAAAA-6464): runs ``discovery_runner`` exactly once at PLAN /
+    RE-PLAN cadence to get candidate track targets (perceive's
+    ``run_discovery_pass`` bound to this session's Florence-2 + loraRef), then
+    folds the resulting discovery block into the plan's ``discovery`` field.
+
+    ``discovery_runner`` is a zero-arg callable returning a discovery block
+    ({method, florenceTasks, candidates, notes}) as produced by
+    ``services/perceive/app/discovery.run_discovery_pass``; in deployment it is
+    bound to the session/representative-frame so the slow Florence-2 task runs
+    once here, never per-frame. ``discovery_task`` documents/narrow the task
+    but is advisory (the runner is authoritative). When ``discovery_runner`` is
+    None no discovery pass runs (no candidate source) and planning proceeds
+    exactly as ``plan_with_fallback``. A discovery failure NEVER breaks
+    planning — it degrades to the same plan as if discovery had been skipped.
+    """
+    ctx = dict(context or {})
+    if discovery_runner is not None:
+        try:
+            disc = discovery_runner()
+            if isinstance(disc, dict):
+                ctx["discovery"] = disc
+        except Exception:  # noqa: BLE001  (discovery must never break planning)
+            pass
+    return plan_with_fallback(
+        intent,
+        category,
+        frame=frame,
+        context=ctx,
+        mode=mode,
+        url=url,
+        timeout_s=timeout_s,
+        fallback=fallback,
+    )
