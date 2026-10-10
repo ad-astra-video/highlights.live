@@ -239,10 +239,55 @@ def test_canonical_sport():
     assert florence.canonical_sport(None) is None
 
 
-def test_resolve_vocabulary_unknown_hint_is_none():
-    assert florence.resolve_vocabulary(game_hint="some-unknown-game") is None
-    assert florence.resolve_vocabulary() is None
-    assert florence.resolve_vocabulary(game_hint="") is None
+def test_resolve_vocabulary_unknown_hint_is_safe_default() -> None:
+    # ADAAAA-6463 (plan §7 A/B): a no-map/unknown category must NEVER silently
+    # degrade to open-domain <OD> — it degrades to a safe-default closed roster.
+    assert florence.resolve_vocabulary(game_hint="some-unknown-game") == ["player", "person", "vehicle", "ball"]
+    assert florence.resolve_vocabulary() == ["player", "person", "vehicle", "ball"]
+    assert florence.resolve_vocabulary(game_hint="") == ["player", "person", "vehicle", "ball"]
+
+def test_resolve_vocabulary_plan_roster_is_authoritative() -> None:
+    # Plan-first (ADAAAA-6463): when a TrackingPlan roster is present it is the
+    # active closed vocabulary, beating preferLabels and the canned gameHint map.
+    plan = {"targets": [{"label": "quarterback", "role": "player", "slotPriority": 0},
+                        {"label": "football", "role": "ball", "slotPriority": 1}]}
+    vocab = florence.resolve_vocabulary(game_hint="soccer", prefer_labels=["score"], plan=plan)
+    assert vocab == ["quarterback", "football"]
+
+def test_resolve_vocabulary_plan_vocabulary_takes_precedence_over_game_hint() -> None:
+    from app.tracking_plan import TrackingPlan
+    plan = TrackingPlan.from_dict({"targets": [{"label": "player", "role": "player", "slotPriority": 0}]})
+    vocab = florence.resolve_vocabulary(game_hint="soccer", plan=plan)
+    assert vocab == ["player"]
+
+def test_resolve_vocabulary_american_football_not_soccer() -> None:
+    # ADAAAA-6463: a US "football" game must NOT resolve to the soccer vocab.
+    vocab = florence.resolve_vocabulary(game_hint="football")
+    assert vocab is not None
+    assert "soccer ball" not in vocab
+    assert "football" in vocab
+    # League aliases resolve to American football too, not soccer.
+    for hint in ("NFL", "gridiron", "Super Bowl", "American football"):
+        v = florence.resolve_vocabulary(game_hint=hint)
+        assert "soccer ball" not in v, hint
+        assert "football" in v, hint
+    # Soccer still resolves to soccer (no regression).
+    assert "soccer ball" in florence.resolve_vocabulary(game_hint="soccer")
+
+def test_canonical_sport_american_football() -> None:
+    assert florence.canonical_sport("football") == "football"
+    assert florence.canonical_sport("NFL") == "american football"
+    assert florence.canonical_sport("soccer") == "soccer"
+    # Category (plan) drives sport resolution on the plan-first path.
+    assert florence.canonical_sport("football", category="soccer") == "soccer"
+    assert florence.canonical_sport("soccer", category="football") == "football"
+
+def test_sport_specific_event_american_football_is_not_goal() -> None:
+    # ADAAAA-6463: American football must never classify a strike as a soccer GOAL.
+    assert florence.sport_specific_event_type("football", "KILL") == "KILL"
+    assert florence.sport_specific_event_type("football", "MOVE", category="football") == "MOVE"
+    # Soccer still GOAL.
+    assert florence.sport_specific_event_type("football", "KILL", category="soccer") == "GOAL"
 
 
 def test_gate_stub_mode(monkeypatch):

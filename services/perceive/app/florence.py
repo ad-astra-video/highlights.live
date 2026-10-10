@@ -32,6 +32,8 @@ from typing import Optional
 
 import numpy as np
 
+from .tracking_plan import plan_vocabulary
+
 log = logging.getLogger("highlights.perceive.florence")
 
 # OpenVINO targets Intel suites (iGPU + PCIe Arc dGPU + NPU + CPU) behind one
@@ -55,13 +57,25 @@ _JUNK_LABELS = {
 # over this map when it is non-empty (it is the operator's explicit closed set).
 _GAME_VOCABULARIES: dict[str, list[str]] = {
     "soccer": ["soccer ball", "player", "goalkeeper", "goal", "referee"],
-    "football": ["soccer ball", "player", "goalkeeper", "goal", "referee"],
+    # American-football synonym fix (ADAAAA-6463, plan §7 B): a US "football"
+    # game must NOT resolve to the soccer vocabulary. "football" (and its
+    # league aliases) now maps to an American-football roster; soccer keeps the
+    # explicit "soccer" key + competition aliases ("football match", leagues).
+    "football": ["football", "player", "referee"],
+    "american football": ["football", "player", "referee"],
     "fa cup": ["soccer ball", "player", "goalkeeper", "goal", "referee"],
     "soccer ball": ["soccer ball", "player", "goalkeeper", "goal", "referee"],
     "basketball": ["basketball", "player", "hoop", "referee"],
     "tennis": ["tennis ball", "player", "racket", "net"],
     "valorant": ["player", "agent", "weapon", "head"],
 }
+
+# No-map categories (per plan §7 A/B: FPS/BR/MOBA/Esports/General) must NEVER
+# silently degrade to open-domain <OD>. When no plan roster and no canned
+# per-sport vocab apply, `resolve_vocabulary` returns this conservative
+# trackable roster (a generic closed set) instead of None/open-domain junk.
+# Every label here is something Florence-2 can box and the tracker can follow.
+SAFE_DEFAULT_VOCABULARY: list[str] = ["player", "person", "vehicle", "ball"]
 
 # Game hints that are synonyms/competitions for the same sport -> canonical key
 # (substring match, so "Premier League" and "FA Cup final" both hit soccer).
@@ -84,6 +98,14 @@ _GAME_HINT_ALIASES: dict[str, str] = {
     "football match": "soccer",
     "uefa": "soccer",
     "nba": "basketball",
+    # American-football synonyms/leagues -> the US football roster (ADAAAA-6463).
+    # A US "football" game must never fall into the soccer vocabulary.
+    "american football": "american football",
+    "nfl": "american football",
+    "ncaa": "american football",
+    "college football": "american football",
+    "super bowl": "american football",
+    "gridiron": "american football",
 }
 
 # Open-set <OD> labels rarely match the closed vocabulary verbatim (Florence-2
@@ -140,14 +162,19 @@ _LABEL_SUBTOKENS: dict[str, str] = {
 }
 
 
-def canonical_sport(game_hint: Optional[str] = None) -> Optional[str]:
-    """Resolve a raw game hint to its canonical sport key (or None if unknown).
+def canonical_sport(game_hint: Optional[str] = None, category: Optional[str] = None) -> Optional[str]:
+    """Resolve a raw game hint (or a plan category) to its canonical sport key
+    (or None if unknown).
 
-    e.g. "Premier League" / "FA Cup" -> "soccer". Mirrors the alias resolution
-    used by `resolve_vocabulary` so sport-specific candidate classification and
-    closed-vocabulary detection stay consistent.
+    e.g. "Premier League" / "FA Cup" -> "soccer"; "NFL" / "gridiron" ->
+    "american football". When `category` is supplied (the plan's category on
+    the plan-first path) it takes precedence over `game_hint`, so a stale or
+    ambiguous game hint ("football") cannot override the plan's actual sport.
+    Mirrors the alias resolution used by `resolve_vocabulary` so sport-specific
+    candidate classification and closed-vocabulary detection stay consistent.
     """
-    hint = (game_hint or "").strip().lower()
+    candidate = category if category is not None else game_hint
+    hint = (candidate or "").strip().lower()
     for alias, canonical in _GAME_HINT_ALIASES.items():
         if alias in hint:
             hint = canonical
@@ -166,13 +193,15 @@ def canonical_sport(game_hint: Optional[str] = None) -> Optional[str]:
 _GOAL_EVENT_SPORTS = {"soccer"}
 
 
-def sport_specific_event_type(game_hint: Optional[str] = None, generic_type: str = "MOVE") -> str:
+def sport_specific_event_type(game_hint: Optional[str] = None, generic_type: str = "MOVE", category: Optional[str] = None) -> str:
     """Map the tracker's generic candidate event type onto the active sport.
 
     A goal-scoring sport (soccer) classifies a fast-strike KILL/MOVE candidate
-    as a GOAL; every other sport keeps the raw generic type.
+    as a GOAL; every other sport keeps the raw generic type. When `category`
+    (the plan's category on the plan-first path) is supplied it drives the
+    sport resolution, so American football never classifies as a soccer GOAL.
     """
-    if canonical_sport(game_hint) in _GOAL_EVENT_SPORTS:
+    if canonical_sport(game_hint, category=category) in _GOAL_EVENT_SPORTS:
         return "GOAL"
     return generic_type
 
@@ -180,17 +209,30 @@ def sport_specific_event_type(game_hint: Optional[str] = None, generic_type: str
 def resolve_vocabulary(
     game_hint: Optional[str] = None,
     prefer_labels: Optional[list[str]] = None,
+    plan: Optional[object] = None,
 ) -> Optional[list[str]]:
     """Resolve the CLOSED detection vocabulary for a perceive session.
 
-    Priority:
-      1. `prefer_labels` — the operator's explicit closed label set (won).
-      2. a known `game_hint` -> its canned vocabulary (e.g. soccer).
-      3. None — fall back to open-domain `<OD>` (legacy best-effort labelling).
+    Priority (plan-first, plan §7 A/B):
+      1. an LLM `TrackingPlan`'s roster when present and non-empty — the plan is
+         the active closed vocabulary (detect/seeding is scoped to plan targets,
+         off-plan objects are dropped). The American-football fix: the plan's
+         own roster is authoritative, so a "Football" plan never leaks the
+         soccer vocab even if gameHint is a stale/ambiguous "football".
+      2. `prefer_labels` — the operator's explicit closed label set.
+      3. a known `game_hint` -> its canned vocabulary (e.g. soccer).
+      4. otherwise a safe-default roster for no-map/unknown categories —
+         NEVER None/open-domain junk (no-map categories must not silently
+         degrade to open-domain <OD>).
 
-    Only returns a vocabulary when one is actually known; an empty/unknown hint
-    returns None so detect() keeps the open-set prompt and never breaks callers.
+    Returns a non-empty roster in every case except when a caller explicitly
+    wants open-domain (no path does on the plan path). `plan` may be a
+    TrackingPlan or a raw plan dict.
     """
+    if plan is not None:
+        roster = plan_vocabulary(plan)
+        if roster:
+            return roster
     if prefer_labels:
         cleaned = [str(l).strip() for l in prefer_labels if str(l).strip()]
         if cleaned:
@@ -202,7 +244,10 @@ def resolve_vocabulary(
             break
     if hint in _GAME_VOCABULARIES:
         return _GAME_VOCABULARIES[hint]
-    return None
+    # No plan roster, no operator set, and no canned per-sport map (FPS/BR/
+    # MOBA/Esports/General or an unknown hint). Degrade to the safe default
+    # closed roster — never silent open-domain detection.
+    return list(SAFE_DEFAULT_VOCABULARY)
 
 
 def build_od_prompt(task: str = "<OD>", vocabulary: Optional[list[str]] = None) -> str:

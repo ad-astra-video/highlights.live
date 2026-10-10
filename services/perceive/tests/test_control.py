@@ -113,6 +113,88 @@ def test_ws_ping_and_configure_ack():
         assert ack["sampleFps"] == 2.0
 
 
+# --- ADAAAA-6463: configure accepts a TrackingPlan ----------------------------
+def test_configure_accepts_tracking_plan():
+    """`configure` with a `trackingPlan` key stores the normalized plan on the
+    session, reserves the anchor's primary slot on the tracker, rebuilds the
+    detection-in-zone trigger on the plan's zones, and acks the roster."""
+    from app import handle_control
+    from app.session import SessionState
+    from app.tracker import IoUTracker
+
+    state = SessionState(session_id="s-plan")
+    state.tracker = IoUTracker(capacity=3)
+    plan = {
+        "category": "soccer",
+        "anchor": {"label": "soccer ball", "role": "ball"},
+        "targets": [
+            {"label": "soccer ball", "role": "ball", "slotPriority": 0},
+            {"label": "player", "role": "player", "slotPriority": 1},
+        ],
+        "zones": [{"name": "goal-mouth", "normalized": [0.7, 0.4, 1.0, 0.9], "purpose": "goal_detect"}],
+        "maxTracks": 3,
+    }
+    ack = handle_control(state, {"type": "configure", "trackingPlan": plan})
+    assert ack["ok"] is True and ack["cmd"] == "configure"
+    assert state.tracking_plan is not None
+    assert state.tracking_plan.vocabulary() == ["soccer ball", "player"]
+    # Anchor-slot policy: the anchor label is applied to the tracker.
+    assert state.tracker.anchor_label == "soccer ball"
+    # Zone trigger rebuilt on the plan zones.
+    assert state.zone_trigger is not None
+    assert list(state.zone_trigger.zones) == [(0.7, 0.4, 1.0, 0.9)]
+    assert ack["trackingPlan"]["anchor"]["label"] == "soccer ball"
+    assert ack["trackingPlan"]["roster"] == ["soccer ball", "player"]
+
+
+def test_configure_bad_tracking_plan_degrades_not_crashes():
+    """A malformed plan never crashes the configure path; the session keeps a
+    normalized (possibly empty-roster) plan and the per-frame path falls back."""
+    from app import handle_control
+    from app.session import SessionState
+    from app.tracker import IoUTracker
+
+    state = SessionState(session_id="s-plan-bad")
+    state.tracker = IoUTracker(capacity=3)
+    # All targets untrackable -> normalize drops them -> empty roster plan.
+    ack = handle_control(state, {"type": "configure", "trackingPlan": {
+        "anchor": {"label": "mood", "role": "zone"},
+        "targets": [{"label": "scoreboard", "role": "entity"}],
+    }})
+    assert ack["ok"] is True
+    assert state.tracking_plan is not None
+    assert state.tracking_plan.vocabulary() == []
+
+
+def test_analyze_carries_tracking_plan_to_session():
+    """The /analyze front door carries a `trackingPlan`; perceive applies it to the
+    session (closed roster + anchor) BEFORE the frame runs (ADAAAA-6463)."""
+    import uuid
+    from app import app as _app
+
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    g = np.zeros((60, 80), dtype=np.float32)
+    plan = {
+        "category": "football",
+        "anchor": {"label": "football", "role": "ball"},
+        "targets": [
+            {"label": "football", "role": "ball", "slotPriority": 0},
+            {"label": "player", "role": "player", "slotPriority": 1},
+        ],
+        "maxTracks": 3,
+    }
+    client.post(
+        "/app/analyze",
+        json={"seq": 0, "timestamp": 0.0, "image": _frame_jpeg(g), "trackingPlan": plan},
+        headers={"X-Session-Id": sid},
+    )
+    state = _app.state.registry.get(sid)
+    assert state is not None
+    assert state.tracking_plan is not None
+    assert state.tracking_plan.vocabulary() == ["football", "player"]
+    assert state.tracker.anchor_label == "football"
+
+
 def test_ws_seed_lock_evict_ack():
     sid = _uuid_sid()
     _create_session(sid)
