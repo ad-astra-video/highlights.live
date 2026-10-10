@@ -287,6 +287,11 @@ export const HighlightDecisionSchema = z.object({
   score: z.number().min(0).max(100),
   eventType: z.string().optional(),
   reason: z.string().optional(),
+  // Increment F / ADAAAA-6465: outcome taxonomy member + near-miss flag. A
+  // near miss is notable but NOT a scoring play — surfaced at a lower score and
+  // flagged so downstream highlight assembly labels it distinctly.
+  outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
+  nearMiss: z.boolean().optional(),
   snapshot: ContextSnapshotSchema.optional(),
 });
 export type HighlightDecision = z.infer<typeof HighlightDecisionSchema>;
@@ -465,6 +470,11 @@ export const HighlightRecordSchema = z.object({
   eventType: z.string().optional(),
   score: z.number().min(0).max(100),
   reason: z.string().optional(),
+  // Increment F / ADAAAA-6465: outcome taxonomy member + near-miss flag, so a
+  // near miss surfaces at a lower score labeled distinctly (shorter clip / a
+  // distinct label downstream); a scoring play is the full highlight score.
+  outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
+  nearMiss: z.boolean().optional(),
   status: z.enum(["pending", "accepted", "rejected"]).default("pending"),
   // When the clip entered `rejected` (soft-delete undo grace start). Set on
   // reject, cleared on reject->accept (cancels pending TTL purge). Only

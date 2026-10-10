@@ -4,7 +4,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from fastapi.testclient import TestClient
 
-from app.gemma import build_prompt, decide_with_gemma, parse_decision, transcribe_audio
+from app.gemma import (
+    build_prompt,
+    decide_with_gemma,
+    normalize_outcome,
+    outcome_is_highlight,
+    parse_decision,
+    transcribe_audio,
+)
 
 
 # --- parse/build units ------------------------------------------------------
@@ -814,3 +821,79 @@ def test_build_prompt_no_detection_no_regression():
     assert "detection geometry:" not in p
     assert "audio energy level curve" not in p
     assert '"isHighlight"' in p
+
+
+# --- Increment F / ADAAAA-6465: outcome taxonomy ----------------------------
+
+def test_build_prompt_names_outcome_taxonomy():
+    p = build_prompt("GOAL", {"trackCount": 2, "maxVelocity": 0.4}, "soccer")
+    for member in ("scoring_play", "near_miss", "big_play", "not_highlight"):
+        assert member in p
+    # Frames are the primary evidence; audio is fallible (crowd-alone rule).
+    assert "FRAMES ARE THE PRIMARY EVIDENCE" in p
+    assert "audio is cheap and fallible" in p
+    assert '"outcome"' in p
+
+
+def test_parse_decision_near_miss_is_not_scoring_play():
+    # A near miss (post/save) with a loud crowd must NOT become a scoring_play.
+    d = parse_decision(
+        '{"isHighlight":true,"score":52,"eventType":"GOAL","reason":"hit the post",'
+        '"outcome":"near_miss"}'
+    )
+    assert d is not None
+    assert d["outcome"] == "near_miss"
+    assert d["nearMiss"] is True
+    assert d["score"] < 60  # surfaced at a lower score
+
+
+def test_parse_decision_crowd_without_frames_never_scoring_play():
+    # A loud audio swell but the frames show no play -> near_miss, never
+    # scoring_play (crowd-alone rule). The model emitted outcome=near_miss.
+    d = parse_decision(
+        '{"isHighlight":false,"score":20,"eventType":"GOAL",'
+        '"outcome":"near_miss","reason":"crowd erupted but ball stayed out"}'
+    )
+    assert d is not None
+    assert d["outcome"] == "near_miss"
+    # near_miss is notable -> surfaced (isHighlight reconciled to true).
+    assert d["isHighlight"] is True
+
+
+def test_parse_decision_not_highlight_deflates():
+    # Model said outcome=not_highlight but isHighlight=true -> deflated (no play).
+    d = parse_decision('{"isHighlight":true,"score":80,"eventType":"GOAL","outcome":"not_highlight"}')
+    assert d is not None
+    assert d["outcome"] == "not_highlight"
+    assert d["isHighlight"] is False
+
+
+def test_parse_decision_legacy_no_outcome_keeps_verdict():
+    # A pre-F reply (no outcome field) is not demoted: a true highlight stays.
+    d = parse_decision('{"isHighlight":true,"score":80,"eventType":"GOAL","reason":"goal"}')
+    assert d is not None
+    assert d["isHighlight"] is True
+    assert d["outcome"] == "scoring_play"
+    assert d["nearMiss"] is False
+
+
+def test_audio_does_not_flip_near_miss_to_scoring():
+    # The same near-miss footage with NO crowd reaction keeps the verdict:
+    # audio never flips a near_miss into a scoring_play.
+    d = parse_decision('{"isHighlight":true,"score":50,"eventType":"GOAL","outcome":"near_miss"}')
+    assert d is not None
+    assert d["outcome"] == "near_miss"
+    assert d["outcome"] != "scoring_play"
+
+
+def test_normalize_outcome_garbage_defaults():
+    assert normalize_outcome("") == "not_highlight"
+    assert normalize_outcome("goal") == "not_highlight"  # not a member
+    assert normalize_outcome("near_miss") == "near_miss"
+
+
+def test_outcome_is_highlight_surfaces_near_miss_but_not_not_highlight():
+    assert outcome_is_highlight("scoring_play") is True
+    assert outcome_is_highlight("near_miss") is True
+    assert outcome_is_highlight("big_play") is True
+    assert outcome_is_highlight("not_highlight") is False

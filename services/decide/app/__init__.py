@@ -8,7 +8,7 @@ from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
-from .gemma import apply_ball_outcome_gate, decide_with_gemma, plan_tracking_with_gemma
+from .gemma import apply_ball_outcome_gate, decide_with_gemma, plan_tracking_with_gemma, _rule_outcome
 
 
 class ReactionEvidence(BaseModel):
@@ -214,6 +214,12 @@ class HighlightDecision(BaseModel):
     eventType: Optional[str] = None
     reason: Optional[str] = None
     source: str = "rule"  # "rule" | "gemma" | "rule-fallback"
+    # Increment F / ADAAAA-6465: outcome taxonomy member + near-miss flag. The
+    # model picks one of scoring_play | near_miss | big_play | not_highlight; a
+    # near miss is notable but NOT a scoring play, surfaced at a lower score and
+    # flagged `nearMiss` so downstream highlight assembly labels it distinctly.
+    outcome: str = "not_highlight"
+    nearMiss: bool = False
     # Rule-path classifiers (pre-I1; returned by the deterministic rule so the
     # response contract stays backward compatible now that /highlight declares a
     # response_model — without them `extra=ignore` would silently drop them).
@@ -330,6 +336,9 @@ def create_app() -> FastAPI:
             "source": "rule",
             "eventClass": d.event_class,
             "corroborated": d.corroborated,
+            # Increment F / ADAAAA-6465: outcome taxonomy on the rule path too.
+            "outcome": _rule_outcome(d),
+            "nearMiss": False,
         }
 
     @router.post("/plan", response_model=TrackingPlanResponse)
