@@ -46,6 +46,7 @@ from .tracking_plan import (
     plan_vocabulary,
     validate,
 )
+from .discovery import discovery_block, run_discovery_pass  # noqa: E402  (increment C)
 
 # One live trickle session per perceive session (plan §0.1 session rule).
 _trickle: dict[str, TrickleSession] = {}
