@@ -7,7 +7,7 @@ from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
-from .gemma import apply_ball_outcome_gate, decide_with_gemma
+from .gemma import apply_ball_outcome_gate, decide_with_gemma, plan_tracking_with_gemma
 
 
 class ReactionEvidence(BaseModel):
