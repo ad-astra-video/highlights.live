@@ -25,6 +25,12 @@ function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
       log.push("decide");
       return { isHighlight: true, score: 80, eventType: "KILL" };
     },
+    // Increment D (ADAAAA-6467): the worker fires the warm-up / re-check
+    // planner; a canned valid plan keeps the loop unaffected.
+    plan: async () => {
+      log.push("plan");
+      return { planVersion: 1, category: "soccer", intent: "", source: "planner-fallback", maxTracks: 3, targets: [{ label: "player", role: "player" }], reason: "test" };
+    },
     stopPerceive: async () => {
       log.push("stop");
     },
@@ -65,7 +71,7 @@ describe("analyzeJob", () => {
       },
       { jobId: "job-1", clipBeforeS: 4, clipAfterS: 4, gameHint: "" }
     );
-    expect(log).toEqual(["reserve", "analyze", "analyze", "analyze", "stop"]);
+    expect(log).toEqual(["reserve", "plan", "analyze", "analyze", "analyze", "stop"]);
     expect(outcome.sessionId).toBe("sess-x");
     expect(outcome.framesAnalyzed).toBe(3);
   });
@@ -451,6 +457,40 @@ describe("analyzeJob", () => {
     });
     expect(ev.trackCount).toBe(1);
     expect(ev.maxVelocity).toBeGreaterThan(0);
+  });
+
+  it("delivers the what-to-track plan to perceive once warmed up (ADAAAA-6467)", async () => {
+    // Warm-up plan returns a valid roster; the controller delivers it on the
+    // per-frame /analyze opts so detect/seeding stays scoped to the plan.
+    const optsSeen: { trackingPlan?: Record<string, unknown> }[] = [];
+    const { client } = fakeClient({
+      plan: async () => ({
+        planVersion: 1,
+        category: "soccer",
+        intent: "",
+        source: "planner",
+        maxTracks: 3,
+        targets: [{ label: "player", role: "player" }, { label: "soccer ball", role: "ball" }],
+      }),
+      analyze: async (sid: string, _frame: any, opts: any) => {
+        optsSeen.push(opts || {});
+        return { observation: { tracks: [], seq: optsSeen.length - 1, timestamp: optsSeen.length - 1 } };
+      },
+      stopPerceive: async () => {},
+    });
+    await analyzeJob(client, frames(2), async (ts) => ({ clipId: `c${ts}`, clipUri: "/c.mp4" }), {
+      jobId: "j",
+      clipBeforeS: 4,
+      clipAfterS: 4,
+      gameHint: "soccer",
+    });
+    // The warm-up planner ran once and the active plan (roster) rode the
+    // per-frame /analyze opts.
+    expect(optsSeen.length).toBeGreaterThanOrEqual(1);
+    const plan = optsSeen[optsSeen.length - 1].trackingPlan as any;
+    expect(plan).toBeDefined();
+    expect(plan.maxTracks).toBe(3);
+    expect(plan.targets.map((t: any) => t.label)).toEqual(["player", "soccer ball"]);
   });
 });
 

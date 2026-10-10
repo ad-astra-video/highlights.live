@@ -447,6 +447,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // ADAAAA-6314 Path 2: live trigger candidates forward the surrounding
         // audio clip so the decide prompt gets ASR'd audio context (env-gated).
         audioContext: cfg.audioContext,
+        // Increment D (ADAAAA-6467): the what-to-track planner's warm-up window
+        // + out-of-band re-check cadence on the LIVE pass (cap 3).
+        warmupSeconds: cfg.warmupSeconds,
+        recheckIntervalSeconds: cfg.recheckIntervalSeconds,
+        planMode: "live",
       };
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
@@ -562,6 +567,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sampleFps: cfg.vodDetailFps,
       frameScale: cfg.vodFrameScale,
       decideWindowN: cfg.vodDecideWindowN,
+      // Increment D (ADAAAA-6467): the what-to-track planner's warm-up window
+      // + out-of-band re-check cadence on the VOD pass (cap 8).
+      warmupSeconds: cfg.warmupSeconds,
+      recheckIntervalSeconds: cfg.recheckIntervalSeconds,
+      planMode: "vod",
     };
     // Count candidates (video + audio) for the recorded decide/cost fields.
     let candidatesTriggered = 0;

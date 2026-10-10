@@ -164,13 +164,48 @@ export interface AudioCandidate {
     baselineEnergy: number;
   };
 }
+/** The decide brain's single-shot what-to-track plan (plan §4.4 / §7 D).
+ * Returned by PipelineClient.plan(). `maxTracks` arrives already clamped to
+ * the mode cap (3 live / 8 VOD) by the decide runner. */
+export interface TrackingPlanResult {
+  planVersion: number;
+  category: string;
+  intent: string;
+  source: "planner" | "planner-fallback";
+  plannedAt?: number;
+  anchor?: Record<string, unknown>;
+  targets?: { label: string; role?: string; slotPriority?: number; track?: boolean }[];
+  zones?: Record<string, unknown>[];
+  discovery?: Record<string, unknown> | null;
+  maxTracks: number;
+  reason?: string;
+  [k: string]: unknown;
+}
+
+export interface PlanRequest {
+  intent: string;
+  category: string;
+  gameHint?: string;
+  mode?: "live" | "vod";
+  context?: Record<string, unknown>;
+  /** ONE representative frame (base64 JPEG), never a sequence. */
+  imageB64?: string;
+}
+
 export interface PipelineClient {
   reservePerceive(): Promise<ReserveResult>;
   analyze(
     sessionId: string,
     frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
-    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string }
+    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string; trackingPlan?: Record<string, unknown> }
   ): Promise<ObservationResult>;
+  /** Single-shot what-to-track planner call (plan §4.4 / §7 D). The worker
+   * fires this at stream-start warm-up + out-of-band re-check cadence — NEVER
+   * from the per-frame hot path (the 1-5 s live budget rule). Priced like a
+   * decide /highlight call. Returns a validated TrackingPlan or, on ANY
+   * failure, a safe-default fallback (source "planner-fallback") — never an
+   * exception, so a bad planner reply never kills a stream. */
+  plan(req: PlanRequest): Promise<TrackingPlanResult>;
   /** Feed one audio chunk to the perceive session's Stage-A noise-change gate.
    * Pure DSP on the perceive side — never touches the detector/SAM/Gemma, so
    * this path bills no GPU. Fires a *candidate* only (returned to the caller so
@@ -323,6 +358,31 @@ export interface AnalyzerConfig {
    * beyond this we abort cleanly instead of spinning. Default 3.
    */
   maxReReserves?: number;
+  /**
+   * Increment D (ADAAAA-6467): the stream-start warm-up window (seconds)
+   * within which exactly ONE planner call must deliver a valid TrackingPlan
+   * before the per-frame loop begins steady-state tracking. The worker does
+   * NOT block the per-frame loop on the planner; it applies a safe-default
+   * interim roster (via the session's trackingPlan from perceive's canned
+   * map) until the plan lands. Exceeding the window just means the plan
+   * applies late — never a per-frame planner call. `WARMUP_SECONDS` (default
+   * 3).
+   */
+  warmupSeconds?: number;
+  /**
+   * Increment D (ADAAAA-6467): the out-of-band re-check cadence (seconds).
+   * A scheduler samples a few frames from the rolling frame window OFF the
+   * per-frame path and re-plans the TrackingPlan, swapping the active roster
+   * within (~) this interval when the brain detects a type change (scene cut
+   * / different feed). Default 10. `RECHECK_INTERVAL_SECONDS`.
+   */
+  recheckIntervalSeconds?: number;
+  /**
+   * The pass mode (live | vod), forwarded to the planner so it proposes
+   * within the correct cap (3 live / 8 VOD). The live path is "live"; the
+   * detail-first VOD path is "vod". Default "live".
+   */
+  planMode?: "live" | "vod";
 }
 
 /**
@@ -549,6 +609,13 @@ export class LiveRunShared {
   cachedFrameCount(): number {
     return this.frames.size;
   }
+  /** Timestamp of the newest cached frame (the representative frame for the
+   * out-of-band re-check sampler), or 0 when the window is empty. */
+  lastTimestamp(): number {
+    let max = 0;
+    for (const v of this.frames.values()) if (v.timestamp > max) max = v.timestamp;
+    return max;
+  }
   /** The rolling frame window as decide() `frames[]` ImageRefs (detail-first:
    * the temporal SEQUENCE Gemma reasons across). Ordered oldest -> newest, and
    * SLICED to the decide window length (legacy DECIDE_FRAME_WINDOW or the
@@ -750,6 +817,168 @@ function detailDecideOpts(
 }
 
 /**
+ * Increment D (ADAAAA-6467): the what-to-track plan orchestrator on the
+ * worker. Owns the SINGLE stream-start warm-up plan call and the out-of-band
+ * re-check cadence, and holds the active TrackingPlan that the per-frame
+ * /analyze path delivers to perceive (so detect/seeding stays scoped to the
+ * plan's roster). CRITICAL INVARIANT: it NEVER calls the planner from the
+ * per-frame loop — planner calls happen exactly at warm-up and on the
+ * re-check cadence, so per-frame planner/discovery invocations = 0 and the
+ * 1-5 s live detection budget is preserved.
+ *
+ * Guardrails (applied here + by perceive's TrackingPlan contract):
+ *  - maxTracks is clamped to the mode cap (3 live / 8 VOD) — both the decide
+ *    runner and here; a plan can never exceed the company cap.
+ *  - Narrow-only: a plan can only narrow the roster to what is detectable; it
+ *    may not widen past the closed-vocab gate. perceive already degrades any
+ *    untrackable/off-plan target, so a bad plan yields an empty roster ->
+ *    canned/safe-default. The controller additionally drops a plan whose
+ *    maxTracks exceeds the cap or whose targets are empty/untrackable.
+ *  - Degrade-to-canned/safe-default: on an absent/invalid planner reply the
+ *    controller keeps the previous plan (or no plan) and lets perceive run the
+ *    canned gameHint roster — never a dead stream, never a per-frame planner
+ *    retry.
+ */
+export class TrackingPlanController {
+  private activePlan: TrackingPlanResult | null = null;
+  private plannedAt = 0;
+  private warmup = false;
+  private recheckTimer: ReturnType<typeof setInterval> | null = null;
+  private stopped = false;
+  private readonly warmupSeconds: number;
+  private readonly recheckIntervalSeconds: number;
+  private readonly planMode: "live" | "vod";
+  /** Sequential re-check marker so overlapping re-plan calls cannot race. */
+  private replanning = false;
+  onPlan?: (plan: TrackingPlanResult | null, source: "warmup" | "recheck" | "candidate") => void;
+
+  constructor(cfg: { warmupSeconds?: number; recheckIntervalSeconds?: number; planMode?: "live" | "vod" }) {
+    this.warmupSeconds = cfg.warmupSeconds ?? 3;
+    this.recheckIntervalSeconds = cfg.recheckIntervalSeconds ?? 10;
+    this.planMode = cfg.planMode ?? "live";
+  }
+
+  get active(): TrackingPlanResult | null {
+    return this.activePlan;
+  }
+  get lastPlanAt(): number {
+    return this.plannedAt;
+  }
+  /** The plan dict to deliver on the next /analyze (or null for the canned
+   * /safe-default interim). `maxTracks` is already clamped. */
+  delivery(): Record<string, unknown> | null {
+    return this.activePlan ? { ...this.activePlan } : null;
+  }
+
+  private buildRequest(imageB64: string | undefined): PlanRequest {
+    return {
+      intent: "",
+      category: (this.activePlan?.category as string) || "",
+      gameHint: undefined,
+      mode: this.planMode,
+      imageB64,
+      context: this.activePlan ? { previousPlan: this.activePlan } : undefined,
+    };
+  }
+
+  private apply(plan: TrackingPlanResult | null): void {
+    if (plan && plan.maxTracks > (this.planMode === "vod" ? 8 : 3)) {
+      // Hard clamp — a plan can NEVER exceed the mode cap (company invariant).
+      plan = { ...plan, maxTracks: this.planMode === "vod" ? 8 : 3 };
+    }
+    this.activePlan = plan;
+    this.plannedAt = plan?.plannedAt ?? Date.now() / 1000;
+  }
+
+  /** Fire exactly ONE warm-up plan call (blocking the first frame's plan
+   * delivery, NOT the per-frame loop). Returns the plan or null. */
+  async warmUp(client: PipelineClient, imageB64?: string): Promise<TrackingPlanResult | null> {
+    if (this.warmup) return this.activePlan;
+    this.warmup = true;
+    const plan = await this.replan(client, imageB64, "warmup");
+    this.onPlan?.(plan, "warmup");
+    return plan;
+  }
+
+  /** Start the out-of-band re-check cadence. `sample` returns a representative
+   * in-window frame (imageB64) for the planner, or undefined when the window
+   * has none yet. Runs OFF the per-frame path; the timer never blocks a frame. */
+  startRecheck(client: PipelineClient, sample: () => string | undefined): void {
+    if (this.recheckTimer || this.stopped) return;
+    this.recheckTimer = setInterval(async () => {
+      if (this.stopped || this.replanning) return;
+      try {
+        const plan = await this.replan(client, sample(), "recheck");
+        if (plan) this.onPlan?.(plan, "recheck");
+      } catch {
+        /* re-check is best-effort — the last good plan stays active */
+      }
+    }, Math.max(1, this.recheckIntervalSeconds) * 1000);
+    // Let the timer not keep the process alive after the job ends.
+    if (typeof this.recheckTimer.unref === "function") this.recheckTimer.unref();
+  }
+
+  /** Immediate re-plan on a candidate event (out of band from the per-frame
+   * detection; invoked by the worker's candidate handler). */
+  async onCandidate(client: PipelineClient, imageB64?: string): Promise<void> {
+    if (this.stopped || this.replanning) return;
+    const plan = await this.replan(client, imageB64, "candidate");
+    if (plan) this.onPlan?.(plan, "candidate");
+  }
+
+  /** One planner call (warm-up / re-check / candidate). Never throws; on any
+   * failure keeps the current plan (perceive degrades to canned/safe-default
+   * if there is none). Bound so it never becomes a per-frame call. */
+  private async replan(
+    client: PipelineClient,
+    imageB64: string | undefined,
+    _why: string
+  ): Promise<TrackingPlanResult | null> {
+    if (this.replanning) return this.activePlan;
+    this.replanning = true;
+    try {
+      let res: TrackingPlanResult | null = null;
+      try {
+        res = await client.plan(this.buildRequest(imageB64));
+      } catch {
+        // planner call failed (unreachable / 4xx): keep the current plan, so
+        // perceive degrades to canned/safe-default if there is none. Never an
+        // unhandled rejection from the warm-up / re-check paths.
+        return this.activePlan;
+      }
+      if (!res || typeof res !== "object") return this.activePlan;
+      // Narrow-only guard: a plan with no trackable targets or an empty roster
+      // is dropped (perceive will run the canned/safe-default roster), unless
+      // it is an explicit safe-default fallback (source planner-fallback with
+      // empty targets is still valid — it means "degrade to canned").
+      const targets = Array.isArray(res.targets) ? res.targets : [];
+      const trackable = targets.some((t) => t && typeof t.label === "string" && t.label.trim() !== "");
+      if (!trackable && !targets.length) {
+        // empty roster — valid only as an explicit degrade signal; keep active
+        // plan unchanged so prior scoping is preserved, else hand the fallback.
+        if (res.source === "planner-fallback" && !this.activePlan && targets.length === 0) {
+          this.apply(res);
+          return this.activePlan;
+        }
+        return this.activePlan;
+      }
+      this.apply(res);
+      return this.activePlan;
+    } finally {
+      this.replanning = false;
+    }
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.recheckTimer) {
+      clearInterval(this.recheckTimer);
+      this.recheckTimer = null;
+    }
+  }
+}
+
+/**
  * Route ONE candidate through the decide stage on the anchored frame (INC-2 /
  * ADAAAA-4325 slice 4). Shared by the video /analyze leg and the Stage-A audio
  * tap leg so both: emit a live-console candidate, anchor the decide frame image
@@ -870,23 +1099,51 @@ export async function analyzeJob(
   const run = shared_ ?? new LiveRunShared();
   const evidence = run.evidence;
   const highlights = run.highlights;
+  // Increment D (ADAAAA-6467): the what-to-track plan orchestrator. Fires the
+  // SINGLE warm-up planner call near stream start and the out-of-band re-check
+  // cadence — never the planner from the per-frame loop. The resulting plan is
+  // delivered to perceive alongside gameHint/preferLabels on every /analyze
+  // (mirrors ADAAAA-4109 delivery so a re-reserved session inherits it too).
+  const planController = new TrackingPlanController({
+    warmupSeconds: cfg.warmupSeconds,
+    recheckIntervalSeconds: cfg.recheckIntervalSeconds,
+    planMode: cfg.planMode ?? "live",
+  });
   let framesAnalyzed = 0;
+  let planApplied = false;
   try {
     for await (const frame of iterFrames) {
       framesAnalyzed++;
       run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
       let res: ObservationResult;
       let reReserved = 0;
-      // The perceive live-runner's health can flap mid-pass; go-livepeer then
-      // marks it unavailable and releases all its sessions, so our next
-      // /analyze returns 404 "runner not found". Re-reserve a fresh session
-      // and retry this frame (the 404 frame was never processed) up to the
-      // bounded cap, then surface the error cleanly.
+      // Warm-up: fire exactly ONE planner call at stream start (on the first
+      // sampled frame, so the plan is grounded in the feed). The per-frame
+      // loop does NOT await the planner — it proceeds on the canned/safe-
+      // default interim (no trackingPlan yet) and the plan applies the moment
+      // it lands. Within the warm-up window the plan is applied before steady-
+      // state tracking (plan §7 D).
+      const planImage = run.anchor(frame.timestamp) ?? frame.imageB64;
+      if (!planApplied) {
+        void planController.warmUp(client, planImage).then(() => {
+          planApplied = true;
+        });
+        // Start the out-of-band re-check cadence (sampling the rolling window,
+        // off the per-frame path).
+        planController.startRecheck(client, () => run.anchor(run.lastTimestamp()));
+      }
       // Deliver the job's closed vocabulary (gameHint/preferLabels) on EVERY
       // /analyze (ADAAAA-4109): a fresh session — including one re-reserved
       // after a 404 session-lost — inherits the config the moment its first
       // frame runs, before resolve_vocabulary() gates the <OD> prompt.
-      const vocab = { gameHint: cfg.gameHint, preferLabels: cfg.preferLabels, loraRef: cfg.loraRef };
+      // The active TrackingPlan rides the same per-frame delivery so the
+      // detect/seeding stays scoped to the plan's roster.
+      const vocab = {
+        gameHint: cfg.gameHint,
+        preferLabels: cfg.preferLabels,
+        loraRef: cfg.loraRef,
+        trackingPlan: planController.delivery() ?? undefined,
+      };
       for (;;) {
         try {
           res = await client.analyze(sessionId, frame, vocab);
@@ -906,6 +1163,9 @@ export async function analyzeJob(
       // into the 60 s window. Reused by windowFactsText — never re-analyzed.
       run.setFindings(frame.seq, res.observation);
       if (res.candidate) {
+        // Immediate re-plan on a candidate event (out of band from the per-frame
+        // detection; never blocks the current candidate's decide()).
+        void planController.onCandidate(client, run.anchor(res.candidate.timestamp) ?? frame.imageB64);
         // Fold the candidate into the window's factual context (plan §A).
         run.addCandidate({ timestamp: res.candidate.timestamp, eventType: res.candidate.eventType });
         onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "candidate", candidate: res.candidate });
@@ -966,6 +1226,8 @@ export async function analyzeJob(
     // Stop / un-pay every session we reserved this pass. Sessions the server
     // already released are a no-op on the orchestrator but still drop their
     // adapter payment refiller, so stopping them is required to avoid leaks.
+    // Stop the planner's re-check timer so it cannot outlive the job.
+    planController.stop();
     for (const s of reserved) {
       await client.stopPerceive(s).catch(() => {});
     }
