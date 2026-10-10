@@ -9,7 +9,7 @@ from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
-from .gemma import apply_ball_outcome_gate, decide_with_gemma, plan_tracking_with_gemma, _rule_outcome
+from .gemma import apply_ball_outcome_gate, decide_with_gemma, plan_tracking_with_gemma, _rule_outcome, is_near_miss_ball_outcome, reconcile_outcome_with_ball_signal
 
 
 class ReactionEvidence(BaseModel):
@@ -276,8 +276,15 @@ def create_app() -> FastAPI:
             # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
             # goal-line ground-truth signal. A non-"goal" ballOutcome forces
             # rejection regardless of Gemma's verdict (deterministic, before the
-            # notable-only gate).
-            gate_ok, gate_reason = apply_ball_outcome_gate(req.evidence.model_dump())
+            # notable-only gate). ADAAAA-6481 near-miss reconciliation: a
+            # goal-bound shot that did NOT convert (blocked / off_target) is a
+            # NEAR-MISS, not a rejection — surface it (never as scoring_play).
+            ball_outcome = req.evidence.model_dump().get("ballOutcome")
+            if is_near_miss_ball_outcome(ball_outcome):
+                decision = reconcile_outcome_with_ball_signal(decision, ball_outcome)
+                gate_ok, gate_reason = True, None
+            else:
+                gate_ok, gate_reason = apply_ball_outcome_gate(req.evidence.model_dump())
             if not gate_ok and decision.get("isHighlight"):
                 decision["isHighlight"] = False
                 decision["reason"] = (
@@ -333,11 +340,16 @@ def create_app() -> FastAPI:
         )
         # Decide-leg I2 (ADAAAA-6359): HARD GATE — a non-"goal" perceived
         # ballOutcome forces rejection even on the deterministic rule path.
+        # ADAAAA-6481: a goal-bound-but-not-converted ballOutcome (blocked /
+        # off_target) is a near-miss, surfaced not rejected.
+        ball_outcome = req.evidence.model_dump().get("ballOutcome")
         gate_ok, gate_reason = apply_ball_outcome_gate(req.evidence.model_dump())
-        if not gate_ok:
+        if is_near_miss_ball_outcome(ball_outcome):
+            d.is_highlight = True
+        elif not gate_ok:
             d.is_highlight = False
             d.reason = ((d.reason or "") + "; " + (gate_reason or "")).strip("; ")
-        return {
+        dec = {
             "isHighlight": d.is_highlight,
             "score": d.score,
             "eventType": req.eventType,
@@ -349,6 +361,9 @@ def create_app() -> FastAPI:
             "outcome": _rule_outcome(d),
             "nearMiss": False,
         }
+        if is_near_miss_ball_outcome(ball_outcome):
+            dec = reconcile_outcome_with_ball_signal(dec, ball_outcome)
+        return dec
 
     @router.post("/plan", response_model=TrackingPlanResponse)
     async def plan(req: PlanRequest):

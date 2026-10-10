@@ -502,3 +502,81 @@ def plan_vocabulary(plan: Any) -> list[str]:
     if not isinstance(plan, dict) or "targets" not in plan:
         return []
     return TrackingPlan.from_dict(plan).vocabulary()
+
+
+# --- trackable-class normalization (ADAAAA-6481 / §8 target precision) ------
+#
+# A TrackingPlan can name two distinct labels (e.g. `player` and `goalkeeper`,
+# both role="player") that are the SAME trackable class on screen. Florence-2
+# boxes a goalkeeper as a player, so the perceiver delivers a single `player`
+# track even when the plan asks for both. Resolution must therefore reconcile
+# plan targets to delivered tracks at the TRACKABLE-CLASS level (ball class,
+# player class, goal class...), not by verbatim label, or a genuinely-present
+# plan target is wrongly counted as untracked (measured: target_precision
+# 0.611 instead of >= 0.90 on the labeled soccer set).
+
+_PLAYER_CLASS_TOKENS = (
+    "player", "goalkeeper", "goalie", "keeper", "person", "people",
+    "agent", "referee", "man", "woman", "men", "women", "footballer",
+    "soccer player", "athlete",
+)
+_BALL_CLASS_TOKENS = (
+    "ball", "soccer ball", "football", "basketball", "tennis ball",
+    "volleyball", "puck", "sports ball",
+)
+_GOAL_CLASS_TOKENS = ("goal", "net", "goalpost", "crossbar", "hoop", "rack ")
+
+
+def canonical_trackable_class(label: Any) -> str:
+    """Map a plan-target / delivered-track label to its trackable class.
+
+    Two labels in the same trackable class resolve to the same class token, so
+    a plan ``goalkeeper`` target and a delivered ``player`` track are counted
+    as the same object (they are one class on the field). Unknown/absent
+    labels map to ``unknown`` (never crash, never false-match).
+    """
+    low = str(label).strip().lower()
+    if not low:
+        return "unknown"
+    if any(tok in low for tok in _BALL_CLASS_TOKENS):
+        return "ball"
+    # goalkeeper is a player (Florence-2 boxes the keeper as `player`).
+    if any(tok in low for tok in _PLAYER_CLASS_TOKENS):
+        return "player"
+    if any(tok in low for tok in _GOAL_CLASS_TOKENS):
+        return "goal"
+    return low
+
+
+def target_classes(targets: list) -> list[str]:
+    """Trackable-class tokens for a plan's targets, in slotPriority order,
+    zone-role targets excluded (zones are regions, not track targets)."""
+    out: list[str] = []
+    for t in sorted(targets, key=lambda t: int(t.get("slotPriority", 0))):
+        if t.get("role") == "zone":
+            continue
+        cls = canonical_trackable_class(t.get("label"))
+        if cls and cls != "unknown":
+            out.append(cls)
+    return out
+
+
+def count_trackable_targets(targets: list, tracks: list) -> int:
+    """How many plan targets are resolved to a delivered track, reconciled at
+    the TRACKABLE-CLASS level (the perceiver may deliver a goalkeeper as a
+    `player` track; both are the player class). Each plan target is satisfied
+    when its class token is delivered by at least one track whose class matches
+    (set-based, so duplicate distinct plan targets of one class count only if
+    that many distinct tracks of the class are present — a 2-player plan target
+    with only one delivered player track resolves the first, not both)."""
+    delivered = [canonical_trackable_class(
+        (t.get("label") if isinstance(t, dict) else str(t))) for t in tracks]
+    from collections import Counter
+
+    have = Counter(c for c in delivered if c != "unknown")
+    got = 0
+    for cls in target_classes(targets):
+        if have.get(cls, 0) > 0:
+            have[cls] -= 1
+            got += 1
+    return got
