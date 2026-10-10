@@ -48,6 +48,47 @@ _JUNK_LABELS = {
     "thing",
 }
 
+# --- discovery-pass tasks (increment C — ADAAAA-6464) ------------------------
+# The caption/region Florence-2 tasks the planner may run at PLAN / RE-PLAN
+# cadence (never per-frame) to discover track candidates on a representative
+# frame. Each maps to a plan `discovery.method`.
+DISCOVERY_TASKS: tuple[str, ...] = (
+    "<DETAILED_CAPTION>",
+    "<MORE_DETAILED_CAPTION>",
+    "<DENSE_REGION_CAPTION>",
+    "<REGION_PROPOSAL>",
+)
+# Which discovery `method` a task implies (plan §4.1 discovery.method).
+_DISCOVERY_METHOD_BY_TASK: dict[str, str] = {
+    "<DETAILED_CAPTION>": "caption",
+    "<MORE_DETAILED_CAPTION>": "caption",
+    "<DENSE_REGION_CAPTION>": "region",
+    "<REGION_PROPOSAL>": "region",
+}
+# Tasks that yield per-region boxes (caption text trailing the <loc_…> tokens);
+# the rest are whole-frame caption tasks (no boxes).
+_DISCOVERY_REGION_TASKS: tuple[str, ...] = (
+    "<DENSE_REGION_CAPTION>",
+    "<REGION_PROPOSAL>",
+)
+
+
+def discovery_task(task: str | None) -> str | None:
+    """Validate/normalize a discovery task token; None if not a discovery task."""
+    if not task:
+        return None
+    t = str(task).strip()
+    return t if t in DISCOVERY_TASKS else None
+
+
+def discovery_method_for_task(task: str | None) -> str | None:
+    """The plan `discovery.method` implied by a discovery task (caption/region)."""
+    t = discovery_task(task)
+    if t is None:
+        return None
+    return _DISCOVERY_METHOD_BY_TASK.get(t, "mixed")
+
+
 # Closed detection vocabulary by game hint. Florence-2's open-set <OD> labels are
 # unreliable on untrained game/UI content (proven live: minimap -> "mobile phone",
 # timer -> "digital clock"), so when a session's gameHint is a known title we scope
@@ -461,6 +502,105 @@ class FlorenceDetector:
         text = self._processor.batch_decode(generated, skip_special_tokens=True)[0]
         return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
+    def discover(self, image: "np.ndarray", task: str = "<DETAILED_CAPTION>") -> dict:
+        """Run ONE Florence-2 caption/region discovery task on a frame.
+
+        This is the PLAN-CADENCE discovery pass (increment C — ADAAAA-6464): the
+        worker invokes it at plan/re-plan cadence ONLY, never from the per-frame
+        hot path — caption/region tasks are slower than ``<OD>`` and would break
+        the 1-5 s live budget (plan §4.2 / §7 C).
+
+        ``task`` must be a discovery task (``DISCOVERY_TASKS``);
+        ``<DETAILED_CAPTION>`` / ``<MORE_DETAILED_CAPTION>`` return a whole-frame
+        description; ``<DENSE_REGION_CAPTION>`` / ``<REGION_PROPOSAL>`` return
+        best-effort per-region boxes (with captions where present). Returns::
+
+            {"task": "<...>", "method": "caption|region",
+             "description": "<raw text>", "regions": [{"bbox": [..], "caption": "..."}],
+             "notes": "<provenance>"}
+
+        Best-effort: a bad/unknown task or any GPU/transport failure returns an
+        empty result (description "", regions []) tagged with the failure in
+        ``notes`` — never raises into the stream.
+        """
+        self.load()
+        task_fmt = discovery_task(task)
+        if task_fmt is None:
+            return {
+                "task": str(task or ""), "method": "mixed",
+                "description": "", "regions": [], "notes": f"invalid discovery task {task!r}",
+            }
+        from PIL import Image
+
+        if image.ndim == 2:
+            image = np.stack([image] * 3, axis=-1)
+        pil = Image.fromarray(image.astype(np.uint8)).convert("RGB")
+        prompt = task_fmt
+        inputs = self._processor(images=pil, text=prompt, return_tensors="pt")
+        try:
+            if self._ov_model is not None:
+                generated = self._ov_model.generate(
+                    input_ids=inputs["input_ids"],
+                    pixel_values=inputs["pixel_values"],
+                    num_beams=3,
+                    max_new_tokens=1024,
+                    do_sample=False,
+                )
+            else:
+                target = self._tdml.device() if self._tdml is not None else next(self._model.parameters()).device
+                inputs = {k: v.to(target) for k, v in inputs.items()}
+                with self._torch.no_grad():
+                    generated = self._model.generate(
+                        **inputs, num_beams=3, max_new_tokens=1024, do_sample=False
+                    )
+        except Exception as exc:  # noqa: BLE001  (discovery must never kill the stream)
+            return {
+                "task": task_fmt, "method": discovery_method_for_task(task_fmt),
+                "description": "", "regions": [], "notes": f"discovery inference failed: {exc}",
+            }
+        try:
+            text = self._processor.batch_decode(generated, skip_special_tokens=False)[0]
+        except Exception:  # noqa: BLE001
+            text = ""
+        is_region = task_fmt in _DISCOVERY_REGION_TASKS
+        regions = self._parse_discovery_regions(text) if is_region else []
+        description = text if not is_region else ""
+        return {
+            "task": task_fmt,
+            "method": discovery_method_for_task(task_fmt),
+            "description": description.strip(),
+            "regions": regions,
+            "notes": f"one {task_fmt} pass at plan cadence",
+        }
+
+    @staticmethod
+    def _parse_discovery_regions(text: str) -> list[dict]:
+        """Best-effort parse of a region-task reply into per-region dicts.
+
+        Florence-2 region replies emit ``<loc_…><loc_…><loc_…><loc_…>`` groups
+        (0-999 coords, normalized by 1000), optionally followed by a caption
+        until the next group. Returns ``[{"bbox": [x1,y1,x2,y2], "caption": str}]``;
+        drops junk/empty entries. Never raises.
+        """
+        out: list[dict] = []
+        if not text:
+            return out
+        # Region group: 4 <loc_N> tokens then optional text until the next group.
+        group_re = re.compile(
+            r"<loc_(\d+)><loc_(\d+)><loc_(\d+)><loc_(\d+)>(.*?)(?=<loc_|\Z)",
+            re.S,
+        )
+        for m in list(group_re.finditer(text))[:16]:
+            a, b, c, d = m.groups()[:4]
+            caption = m.group(5).strip() if m.lastindex and m.lastindex >= 5 else ""
+            caption = re.split(r"[<>]", caption)[-1].strip()
+            try:
+                box = [int(a) / 1000, int(b) / 1000, int(c) / 1000, int(d) / 1000]
+            except ValueError:
+                continue
+            out.append({"bbox": box, "caption": caption})
+        return out
+
     @staticmethod
     def _parse(text: str, vocabulary: Optional[list[str]] = None) -> list[dict]:
         """See _parse_with_stats; returns just the emitted objects (back-compat)."""
@@ -612,6 +752,38 @@ def get_detector(lora_ref: str | None = None) -> FlorenceDetector | None:
         d = FlorenceDetector(model_path=lora_ref)
         _detectors[lora_ref] = d
     return d
+
+
+def discover_candidates(
+    image: "np.ndarray", task: str = "<DETAILED_CAPTION>", lora_ref: str | None = None
+) -> dict:
+    """Run ONE discovery pass on a representative frame (increment C).
+
+    This is the PLAN-CADENCE discovery entry point: it selects the session's
+    detector (base or per-stream LoRA via ``lora_ref``) and runs a single
+    caption/region task, returning the candidate set the planner folds into the
+    plan's ``discovery`` field. It is a plan/re-plan-cadence helper only — it
+    is never invoked from the per-frame hot path (the ``detect`` method is the
+    per-frame primitive). Best-effort: any detector/transport failure returns
+    an empty result dict (``method``/``task`` set, ``regions``/``description``
+    empty, ``notes`` explaining) — never raises into the stream.
+    """
+    base = {
+        "task": str(task or ""),
+        "method": discovery_method_for_task(task) or "mixed",
+        "description": "",
+        "regions": [],
+        "notes": f"one {task} pass at plan cadence",
+    }
+    d = get_detector(lora_ref)
+    if d is None:
+        base["notes"] = f"discovery skipped: no florence detector (stub mode) for {task}"
+        return base
+    try:
+        return d.discover(image, task=task)
+    except Exception as exc:  # noqa: BLE001  (discovery never kills the stream)
+        base["notes"] = f"discovery inference failed: {exc}"
+        return base
 
 
 def detector_label() -> str:

@@ -641,6 +641,7 @@ def plan_tracking_with_gemma(
     url: str | None = None,
     fallback: dict | None = None,
     timeout_s: float = 180.0,
+    discovery_runner=None,
 ) -> dict:
     """What-to-track planner path (increment A — ADAAAA-6462): the decide
     brain's SINGLE-SHOT call (intent, category, one representative frame,
@@ -649,10 +650,16 @@ def plan_tracking_with_gemma(
     (canned roster / safe default) with ``source: "planner-fallback"``, never
     None and never an exception. Increment B wires perceive to consume the
     plan; until then this is the audited call path only (no per-frame use —
-    plan §9 / §14.4)."""
-    from .planner import plan_with_fallback  # local: keeps gemma import-light
+    plan §9 / §14.4).
 
-    return plan_with_fallback(
+    ``discovery_runner`` (increment C — ADAAAA-6464), when provided, is a
+    zero-arg callable returning a discovery block; it is invoked exactly ONCE
+    at plan/re-plan cadence and its result is folded into the plan's
+    ``discovery`` field (the slow caption/region pass never runs per-frame).
+    """
+    from .planner import plan_with_discovery  # local: keeps gemma import-light
+
+    return plan_with_discovery(
         intent,
         category,
         frame=frame,
@@ -661,4 +668,5 @@ def plan_tracking_with_gemma(
         url=url,
         timeout_s=timeout_s,
         fallback=fallback,
+        discovery_runner=discovery_runner,
     )
