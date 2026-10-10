@@ -630,3 +630,35 @@ def decide_with_gemma(
         "asrLatencyS": asr_latency_s,
     }
     return result
+
+
+def plan_tracking_with_gemma(
+    intent: str,
+    category: str,
+    frame: dict | None = None,
+    context: dict | None = None,
+    mode: str = "live",
+    url: str | None = None,
+    fallback: dict | None = None,
+    timeout_s: float = 180.0,
+) -> dict:
+    """What-to-track planner path (increment A — ADAAAA-6462): the decide
+    brain's SINGLE-SHOT call (intent, category, one representative frame,
+    context) -> a validated TrackingPlan, mirroring decide_with_gemma's
+    contract — on any planner failure the caller gets a fallback plan
+    (canned roster / safe default) with ``source: "planner-fallback"``, never
+    None and never an exception. Increment B wires perceive to consume the
+    plan; until then this is the audited call path only (no per-frame use —
+    plan §9 / §14.4)."""
+    from .planner import plan_with_fallback  # local: keeps gemma import-light
+
+    return plan_with_fallback(
+        intent,
+        category,
+        frame=frame,
+        context=context,
+        mode=mode,
+        url=url,
+        timeout_s=timeout_s,
+        fallback=fallback,
+    )

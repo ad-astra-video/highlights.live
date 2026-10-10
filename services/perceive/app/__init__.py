@@ -29,6 +29,23 @@ from .ball_signal import BallSignalPipeline, is_ball_label
 from .zone_trigger import DetectionZoneTrigger, resolve_zones
 from .goal_plane import GoalLineDetector, GoalLineSpec
 from .scoreboard import parse_ocr_score, ScoreboardTracker
+from .tracking_plan import (
+    PLAN_VERSION,
+    SAFE_DEFAULT_ROLE,
+    VALID_ROLES,
+    LIVE_MAX_TRACKS,
+    VOD_MAX_TRACKS,
+    MODE_MAX_TRACKS,
+    DISCOVERY_METHODS,
+    FLORENCE_TASKS,
+    TrackingPlan,
+    clamp_max_tracks,
+    coerce_role,
+    label_trackable,
+    normalize,
+    plan_vocabulary,
+    validate,
+)
 
 # One live trickle session per perceive session (plan §0.1 session rule).
 _trickle: dict[str, TrickleSession] = {}
