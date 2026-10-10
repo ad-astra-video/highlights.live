@@ -209,6 +209,22 @@ export interface ServerConfig {
    * more than ~1 sweep interval after its purge window elapses. Default: run
    * hourly (ADAAAA-5398 C4). */
   datasetPurgeSweepIntervalMs: number;
+  /**
+   * Increment D (ADAAAA-6467): the stream-start what-to-track warm-up window
+   * (seconds) — exactly ONE planner call must deliver a valid TrackingPlan
+   * within it before the per-frame loop begins steady-state tracking. The
+   * worker never blocks on the planner; a slow plan just applies late (the
+   * per-frame loop runs the canned/safe-default interim). `WARMUP_SECONDS`
+   * (default 3).
+   */
+  warmupSeconds: number;
+  /**
+   * Increment D (ADAAAA-6467): the out-of-band re-check cadence (seconds) —
+   * a scheduler samples a few frames OFF the per-frame path and re-plans,
+   * swapping the active TrackingPlan within (~) this interval on a mid-session
+   * type change. `RECHECK_INTERVAL_SECONDS` (default 10).
+   */
+  recheckIntervalSeconds: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -296,5 +312,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     rejectTtlMs: Number(env.REJECTED_CLIP_TTL_MS ?? 24 * 60 * 60 * 1000),
     rejectSweepIntervalMs: Number(env.REJECTED_CLIP_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
     datasetPurgeSweepIntervalMs: Number(env.DATASET_PURGE_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
+    // Increment D (ADAAAA-6467): stream-start warm-up window + out-of-band
+    // re-check cadence for the what-to-track planner. See the ServerConfig
+    // field docs for the default rationale (3 s warm-up, 10 s recheck).
+    warmupSeconds: Number(env.WARMUP_SECONDS ?? 3),
+    recheckIntervalSeconds: Number(env.RECHECK_INTERVAL_SECONDS ?? 10),
   };
 }
