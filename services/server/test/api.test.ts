@@ -355,8 +355,56 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     const hlList = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
     expect(hlList.length).toBe(1);
     expect(hlList[0].clipUri).toMatch(/^\/clips\//);
+    expect(hlList[0].clipError).toBeUndefined();
     const clipFile = path.join(cfg.dataDir, "clips", path.basename(hlList[0].clipUri));
     expect(existsSync(clipFile)).toBe(true);
+    await app.close();
+  });
+
+  it("browser capture: an unproducible recording surfaces clipError, never a silent empty clipUri (ADAAAA-6522)", async () => {
+    const { app, cfg } = await buildTestApp();
+    const token = await register(app, "bx@test.dev", "password123");
+
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser", gameHint: "Esports" },
+    });
+    expect(jr.statusCode).toBe(200);
+    const jobId = jr.json().job.id;
+
+    // a highlight exists (detection worked) with a deferred (empty) clipUri
+    const ing = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/ingest`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { seq: 0, timestamp: 0, image: "aGVsbG8=" },
+    });
+    expect(ing.statusCode).toBe(200);
+    const hl = ing.json().highlight;
+    expect(hl).toBeTruthy();
+    expect(hl.clipUri).toBe("");
+
+    // upload a CORRUPT "recording" (not a valid video) so cutClip must fail, and
+    // the miss is surfaced instead of silently leaving every highlight blank.
+    const rec = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/recording`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { base64: Buffer.from("this is not a real mp4 recording").toString("base64"), mime: "video/mp4" },
+    });
+    expect(rec.statusCode).toBe(200);
+
+    const st = await app.inject({ method: "POST", url: `/jobs/${jobId}/stop`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(st.statusCode).toBe(200);
+    expect(st.json().job.status).toBe("done");
+
+    const hlList = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
+    expect(hlList.length).toBe(1);
+    // No silent blank highlight card: the miss is surfaced (clipError set) and
+    // the clipUri is NOT a dangling empty string pretending a valid clip exists.
+    expect(hlList[0].clipError).toBeTruthy();
     await app.close();
   });
 

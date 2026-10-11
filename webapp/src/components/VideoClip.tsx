@@ -42,6 +42,10 @@ interface VideoClipProps {
   lazy?: boolean;
   /** Aspect box (Tailwind class) the player fills. */
   aspectClass?: string;
+  /** When set, the server could not produce this clip (missing/incomplete
+   *  recording or a cut failure); render a failure state instead of an empty
+   *  player so the card is never silently blank (ADAAAA-6522). */
+  error?: string;
 }
 
 /**
@@ -54,12 +58,23 @@ interface VideoClipProps {
  *   - accessible label via aria-label
  * Feed this the same clipUri used everywhere; playback config stays in one spot.
  */
-export function VideoClip({ src, label, poster, lazy = true, aspectClass = "aspect-video" }: VideoClipProps) {
+export function VideoClip({ src, label, poster, lazy = true, aspectClass = "aspect-video", error }: VideoClipProps) {
   const [ref, inView] = useInView<HTMLDivElement>("240px");
   const mounted = !lazy || inView;
   return (
     <div ref={ref} className={`relative w-full ${aspectClass} bg-black`}>
-      {mounted ? (
+      {error ? (
+        <div className="absolute inset-0 grid place-items-center px-3 text-center">
+          <div>
+            <div className="text-sm font-bold text-red">Clip unavailable</div>
+            <div className="mt-1 text-xs text-mut">{error}</div>
+          </div>
+        </div>
+      ) : !src ? (
+        // A highlight with no clip yet (still being cut) — never render a blank
+        // player for it either.
+        <div className="absolute inset-0 grid place-items-center text-xs text-mut">clip processing…</div>
+      ) : mounted ? (
         <video
           src={src}
           poster={poster}
