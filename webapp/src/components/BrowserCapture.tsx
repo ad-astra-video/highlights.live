@@ -34,6 +34,11 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   // stop / unmount). Consecutive reconnect attempts, reset on a successful open.
   const stoppingRef = useRef(false);
   const rcRef = useRef(0);
+  // In-flight MediaRecorder chunk uploads to the /recording rail. Finalize
+  // awaits these (plus the rec.stop() flush) BEFORE POST /stop so the recording
+  // is complete when the server cuts clips — the missing piece that left an
+  // empty clipUri on every highlight (ADAAAA-6522).
+  const pendingUploadsRef = useRef<Set<Promise<void>>>(new Set());
 
   /** Build the WebRTC offer -> answer + ICE signaling to the media server.
    *  The media server assigns the pcId on the offer round-trip, so candidates
@@ -172,6 +177,50 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     }, delay);
   }
 
+  // Upload one MediaRecorder chunk to the /recording rail, retrying on a
+  // transient failure (drop / network / base64) before surfacing. The promise is
+  // tracked so finalize can await every chunk before POST /stop, and a persistent
+  // failure is surfaced to the user instead of being silently swallowed
+  // (ADAAAA-6522).
+  function uploadRecordingChunk(b64: string, mime: string): Promise<void> {
+    const id = jobIdRef.current;
+    if (!id) return Promise.resolve();
+    const attempt = async (): Promise<boolean> => {
+      try {
+        await api(`/jobs/${id}/recording`, { body: { base64: b64, mime } });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const doRetry = async (): Promise<void> => {
+      for (let i = 0; i < 4; i++) {
+        if (await attempt()) return;
+        await sleep(400 * (i + 1));
+      }
+      // Persistent failure: surface rather than silently drop the chunk (a lost
+      // chunk means a truncated/absent recording -> empty clipUri at stop).
+      if (jobIdRef.current === id) {
+        setError("Recording upload failed — highlight clips may be incomplete. Check your connection and stop again.");
+      }
+    };
+    const p = doRetry().finally(() => pendingUploadsRef.current.delete(p));
+    pendingUploadsRef.current.add(p);
+    return p;
+  }
+
+  // Await every in-flight recording chunk upload, re-sampling so a chunk enqueued
+  // just after we sampled (e.g. the final rec.stop() flush) is also awaited, but
+  // bounded so finalize never hangs the UI if the network is down.
+  async function flushRecordingUploads() {
+    for (let i = 0; i < 20; i++) {
+      const pending = [...pendingUploadsRef.current];
+      if (pending.length === 0) return;
+      await Promise.race([Promise.allSettled(pending), sleep(250)]);
+      if (pendingUploadsRef.current.size === 0) return;
+    }
+  }
+
   useEffect(() => {
     const onUnmount = () => {
       stopInternal(false);
@@ -208,8 +257,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       rec.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
           blobToBase64(e.data).then((b64) => {
-            const id = jobIdRef.current;
-            if (id) api(`/jobs/${id}/recording`, { body: { base64: b64, mime: mime } }).catch(() => {});
+            uploadRecordingChunk(b64, mime);
           });
         }
       };
@@ -270,8 +318,21 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     wsRef.current = null;
     teardownRtc();
     modeRef.current = "pending";
-    if (recRef.current && recRef.current.state !== "inactive") {
-      recRef.current.stop();
+    const rec = recRef.current;
+    if (rec && rec.state !== "inactive") {
+      // Wait for the recorder's final dataavailable flush BEFORE POST /stop so
+      // every recording chunk (incl. the last one) reaches the server and the
+      // clip-cut sees a complete recording. Setting onstop before stop() so we
+      // never miss the stop event; the flush below re-samples to catch the final
+      // chunk's upload promise once blobToBase64 resolves (ADAAAA-6522).
+      const flushed = new Promise<void>((resolve) => {
+        rec.onstop = () => resolve();
+      });
+      rec.stop();
+      if (andNotify) {
+        await Promise.race([flushed, sleep(3000)]);
+        await flushRecordingUploads();
+      }
     }
     // stop the sampler + tracks
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -331,4 +392,8 @@ function blobToBase64(blob: Blob): Promise<string> {
     fr.onerror = reject;
     fr.readAsDataURL(blob);
   });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }

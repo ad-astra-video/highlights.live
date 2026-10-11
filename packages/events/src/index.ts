@@ -470,6 +470,12 @@ export const HighlightRecordSchema = z.object({
   eventType: z.string().optional(),
   score: z.number().min(0).max(100),
   reason: z.string().optional(),
+  // Set when a highlight's clip could NOT be cut from the source recording at
+  // finalize (missing/incomplete recording, or a cut failure). The UI renders a
+  // failure card instead of a silent empty player when clipUri is "" but
+  // clipError is present (ADAAAA-6522). An empty clipUri with no clipError means
+  // the clip is simply deferred until stop-time finalize.
+  clipError: z.string().optional(),
   // Increment F / ADAAAA-6465: outcome taxonomy member + near-miss flag, so a
   // near miss surfaces at a lower score labeled distinctly (shorter clip / a
   // distinct label downstream); a scoring play is the full highlight score.

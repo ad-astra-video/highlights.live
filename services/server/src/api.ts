@@ -388,6 +388,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));
   }
+  // The client flushes its final MediaRecorder chunk before POST /stop, but a
+  // chunk can still land a few hundred ms behind (base64 encode + retry over a
+  // flaky link). Wait a bounded window for the recording to materialize before
+  // giving up, so a short share's final chunk isn't clipped away by the stop
+  // race (ADAAAA-6522). Returns the path once it exists and is non-empty, else
+  // null after the window (caller surfaces the miss instead of silently
+  // producing an empty clipUri).
+  async function waitForRecording(jobId: string, timeoutMs: number): Promise<string | null> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const p = browserRecordingPath(jobId);
+      if (existsSync(p) && statSync(p).size > 0) return p;
+      if (Date.now() >= deadline) return existsSync(p) ? p : null;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
   // The same recording as the perceive runner sees it (shared volume): the
   // perceive container mounts this server's dataDir at cfg.perceiveClipRoot, so
   // hand perceive the in-container path and it SAM-tracks THAT stream in the
@@ -1581,22 +1597,35 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         await fetch(`${cfg.mediaServerUrl}/sessions/${bj.mediaSessionId}/close`, { method: "POST" }).catch(() => {});
         await db.clearMediaSession(job.id).catch(() => {});
       }
-      const recPath = browserRecordingPath(job.id);
-      if (existsSync(recPath)) {
-        const { mkdir } = await import("node:fs/promises");
-        const outDir = path.join(cfg.dataDir, "clips");
-        await mkdir(outDir, { recursive: true });
-        for (const h of store.highlightsForJob(job.id)) {
-          if (h.clipUri) continue;
-          try {
-            const name = `${job.id}-${Math.round(h.start * 10)}`;
-            const out = path.join(outDir, `${name}.mp4`);
-            await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), cfg.clipBeforeS + cfg.clipAfterS);
-            await store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4` });
-          } catch (e: any) {
-            console.error(`[browser:${job.id}] clip cut failed:`, String(e?.message || e));
-          }
+      const recPath = await waitForRecording(job.id, 4000);
+      const { mkdir } = await import("node:fs/promises");
+      const outDir = path.join(cfg.dataDir, "clips");
+      await mkdir(outDir, { recursive: true });
+      // Cut a clip for every highlight that doesn't already have one. If the
+      // recording is missing or a cut fails, surface the miss on the highlight
+      // (clipError) instead of silently leaving an empty clipUri -> blank card.
+      let missed = 0;
+      for (const h of store.highlightsForJob(job.id)) {
+        if (h.clipUri) continue;
+        if (!recPath) {
+          missed++;
+          await store.patchHighlight(h.id, {
+            clipError: "No screen-share recording was captured, so this highlight's clip could not be produced.",
+          });
+          continue;
         }
+        try {
+          const name = `${job.id}-${Math.round(h.start * 10)}`;
+          const out = path.join(outDir, `${name}.mp4`);
+          await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), cfg.clipBeforeS + cfg.clipAfterS);
+          await store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4` });
+        } catch (e: any) {
+          missed++;
+          await store.patchHighlight(h.id, { clipError: `Clip cut failed: ${String(e?.message || e)}` });
+        }
+      }
+      if (missed > 0) {
+        console.error(`[browser:${job.id}] ${missed} highlight(s) produced no clip (recording=${recPath ? "present" : "missing"})`);
       }
       browserJobs.delete(job.id);
       await store.patchJob(job.id, { status: "done" });
@@ -1750,7 +1779,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // so the server can cut highlight clips from it at stop.
   app.post<{ Params: { id: string }; Body: { base64?: string; mime?: string } }>(
     "/jobs/:id/recording",
-    { preHandler: authReq },
+    // Allow larger chunk bodies than Fastify's 1 MiB JSON default: a 1 s chunk of
+    // a 3 Mbps MediaRecorder stream base64-encodes well over that on a burst,
+    // and an over-limit chunk was silently 413'd + swallowed client-side, leaving
+    // a truncated/absent recording and empty clipUri at stop (ADAAAA-6522).
+    { preHandler: authReq, bodyLimit: 8 * 1024 * 1024 },
     async (req: any, reply) => {
       const job = store.getJob(req.params.id);
       if (!job) return reply.code(404).send({ error: "no job" });
