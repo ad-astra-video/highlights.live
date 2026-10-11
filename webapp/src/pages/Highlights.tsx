@@ -455,7 +455,7 @@ export function Highlights() {
           .filter((h) => h.status !== "rejected")
           .map((h) => (
             <div key={h.id} className="card card-hover overflow-hidden">
-              <VideoClip src={h.clipUri} label={h.eventType} />
+              <VideoClip src={h.clipUri} label={h.eventType} error={h.clipError} />
               <div className="p-4">
                 <div className="flex items-center justify-between">
                   <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">{h.eventType || "EVENT"}</span>
@@ -553,7 +553,7 @@ function RejectedSection({
             return (
               <div key={h.id} data-rejected-clip className="card card-hover overflow-hidden">
                 <div className="relative">
-                  <VideoClip src={h.clipUri} label={h.eventType} />
+                  <VideoClip src={h.clipUri} label={h.eventType} error={h.clipError} />
                   <span className="absolute right-2 top-2 rounded-full bg-void/80 px-2 py-0.5 text-xs font-bold text-ink">rejected</span>
                 </div>
                 <div className="p-4">

@@ -132,7 +132,7 @@ export class Store {
     return true;
   }
 
-  async patchHighlight(id: string, patch: Partial<Pick<HighlightRecord, "clipUri" | "start" | "end">>): Promise<HighlightRecord> {
+  async patchHighlight(id: string, patch: Partial<Pick<HighlightRecord, "clipUri" | "start" | "end" | "clipError">>): Promise<HighlightRecord> {
     const h = this.highlights.get(id);
     if (!h) throw new Error(`no highlight ${id}`);
     const next = HighlightRecordSchema.parse({ ...h, ...patch });
