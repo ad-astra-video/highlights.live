@@ -88,6 +88,10 @@ services:
       - HF_TOKEN=${HF_TOKEN:-}
       - HF_HOME=/models/hf-cache
       - PERCEIVE_SAM_CLIP=/clips
+      # ADAAAA-6525: app log level for the highlights.perceive.* loggers. INFO
+      # (default) logs lifecycle/salient events only; DEBUG adds the per-frame
+      # processing detail. Set it via docker/.env on the box — no rebuild.
+      - PERCEIVE_LOG_LEVEL=${PERCEIVE_LOG_LEVEL:-INFO}
     volumes:
       # HF cache (token + downloaded weights). Warm on the box at
       # /home/brad/.cache/huggingface, so a redeploy reuses cached weights.
@@ -233,6 +237,10 @@ services:
       # (Path 2) into a native OpenAI `input_audio` block the deployed QAT
       # gemma can ground on (no refusal). Default 0 keeps the ASR/text path.
       - GEMMA_SEND_AUDIO=${GEMMA_SEND_AUDIO:-0}
+      # ADAAAA-6525: app log level for the highlights.decide.* loggers. INFO
+      # (default) logs a decision summary per /highlight and /plan; DEBUG adds
+      # per-candidate + full gemma detail. Set it via docker/.env on the box.
+      - DECIDE_LOG_LEVEL=${DECIDE_LOG_LEVEL:-INFO}
       # ADAAAA-5778 notable-only knob. Data-landed default 60; override in prod
       # only after re-measuring on the real-feed eval set (evals/decide_discernment.py).
       - DECIDE_NOTABILITY_MIN=${DECIDE_NOTABILITY_MIN:-60}
