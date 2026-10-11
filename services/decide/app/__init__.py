@@ -281,6 +281,14 @@ def _log_highlight(mode: str, req: "HighlightRequest", decision: dict) -> None:
         decision.get("reason"),
         _is_corroborated(req.evidence),
     )
+    # ADAAAA-6524 board feedback: a highlight identified is a salient default
+    # event (INFO), distinct from the per-candidate DEBUG detail.
+    if decision.get("isHighlight"):
+        log.info(
+            "highlight identified session=%s event=%s score=%s outcome=%s event_out=%s",
+            req.sessionId, req.eventType, decision.get("score"),
+            decision.get("outcome"), decision.get("eventType"),
+        )
     log.debug(
         "highlight context session=%s event=%s frames=%d track_count=%d max_velocity=%.3f ocr=%d scoreboard=%s ball_outcome=%s goal_crossed=%s detections=%d audio_levels=%d",
         req.sessionId,
