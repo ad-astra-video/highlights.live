@@ -396,6 +396,10 @@ export interface Highlight {
   start: number;
   end: number;
   createdAt: string;
+  // Set when the server could NOT cut this highlight's clip at finalize
+  // (missing/incomplete recording or a cut failure). The UI renders a failure
+  // card instead of an empty player when clipUri is "" but clipError is set.
+  clipError?: string;
   // When the clip entered `rejected` (soft-delete undo-grace start). Set on
   // reject, cleared on reject->accept; only rejected clips with a rejectedAt
   // aged >= the server's rejection TTL are ever hard-deleted. Exposed by the
