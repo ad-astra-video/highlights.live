@@ -16,12 +16,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
 from typing import Any
 
 from . import planner_prompt
+
+log = logging.getLogger("highlights.decide.planner")
 
 # Import the contract from the perceive service. In the deployed shared-tree
 # topology (GPU boxes; see plan §14.1 file map) `services/perceive` sits next
@@ -458,13 +461,16 @@ def plan_tracking(
         resp = httpx.post(_planner_url(url).rstrip("/") + "/v1/chat/completions", json=payload, timeout=timeout_s)
         resp.raise_for_status()
         text = resp.json()["choices"][0]["message"]["content"]
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        log.error("planner gemma call failed intent=%s url=%s: %s", intent, _planner_url(url), e)
         return None
     raw = parse_plan(text)
     if raw is None:
+        log.error("planner gemma reply unparseable intent=%s reply=%r", intent, text[:500])
         return None
     ok, _issues = validate_plan(raw)
     if not ok:
+        log.error("planner plan failed validation intent=%s issues=%s", intent, _issues)
         return None
     if _TRACKING_PLAN_AVAILABLE and _tp_normalize is not None:
         plan, _warnings = _tp_normalize(raw)
