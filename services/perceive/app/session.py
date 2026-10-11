@@ -44,6 +44,10 @@ class SessionState:
     clip_path: str = ""
     prev_gray: Optional[np.ndarray] = None
     seq: int = 0
+    # ADAAAA-6525: monotonic count of frames run through process_frame, for the
+    # default-INFO heartbeat cadence (log the salient periodic event, not every
+    # frame — per-frame detail stays behind DEBUG).
+    frames_processed: int = 0
     health_ts: float = field(default_factory=time.time)
     recent_frames: Deque[dict] = field(default_factory=lambda: deque(maxlen=RECENT_FRAMES))
     subscribers: List[asyncio.Queue] = field(default_factory=list)
