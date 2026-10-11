@@ -20,11 +20,14 @@ so a reviewer can see *why* the decision was made, grounded in the evidence.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Optional
 
 from .decider import decide
+
+log = logging.getLogger("highlights.decide.gemma")
 
 DEFAULT_GEMMA_URL = "http://127.0.0.1:8088"
 
@@ -701,13 +704,22 @@ def ask(
     model = os.environ.get("GEMMA_MODEL")
     if model:
         payload["model"] = model
+    log.debug(
+        "gemma call event=%s frames=%d images=%d audio=%s effort=%s",
+        event_type, len(frames), len(images), bool(audio_b64), reasoning_effort,
+    )
     try:
         resp = httpx.post(url.rstrip("/") + "/v1/chat/completions", json=payload, timeout=timeout_s)
         resp.raise_for_status()
         text = resp.json()["choices"][0]["message"]["content"]
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        log.error("gemma call failed event=%s url=%s: %s", event_type, url, e)
         return None
-    return parse_decision(text)
+    result = parse_decision(text)
+    log.debug("gemma result event=%s parsed=%s", event_type, result)
+    if result is None:
+        log.error("gemma reply unparseable event=%s reply=%r", event_type, text[:500])
+    return result
 
 
 def decide_with_gemma(
@@ -794,6 +806,11 @@ def decide_with_gemma(
         "asrRan": asr_ran,
         "asrLatencyS": asr_latency_s,
     }
+    log.debug(
+        "gemma decide event=%s source=%s is_highlight=%s score=%s outcome=%s audio_path=%s",
+        event_type, result.get("source"), result.get("isHighlight"),
+        result.get("score"), result.get("outcome"), result.get("audioContext", {}).get("path"),
+    )
     return result
 
 

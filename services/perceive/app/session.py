@@ -8,12 +8,15 @@ per stream.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, List, Optional
 
 import numpy as np
+
+log = logging.getLogger("highlights.perceive.session")
 
 from .audio_gate import AudioEnergyGate
 from .tracker import IoUTracker, LIVE_MAX_TRACKS, VOD_MAX_TRACKS
@@ -119,6 +122,10 @@ class SessionRegistry:
             # later via control `configure` (set_anchor).
             s.tracker = make_tracker(clip_path or None, capacity=mode_capacity(clip_path), anchor_label=anchor_label)
             self._sessions[session_id] = s
+            log.info(
+                "session start id=%s stream=%s clip=%s capacity=%d active=%d",
+                session_id, stream_id, clip_path or "", s.tracker.capacity, len(self._sessions),
+            )
         elif clip_path and clip_path != s.clip_path:
             # A (new) clip was declared for an existing session -> (re)bind SAM
             # so the persistent session tracks THIS stream, not a stale/global one.
@@ -146,6 +153,8 @@ class SessionRegistry:
                 self.on_drop(session_id)
             except Exception:
                 pass
+        if s is not None:
+            log.info("session end id=%s active=%d", session_id, len(self._sessions))
         return s is not None
 
     def _evict_expired(self) -> None:

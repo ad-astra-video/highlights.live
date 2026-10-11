@@ -12,6 +12,13 @@ from typing import Optional
 
 log = logging.getLogger("highlights.perceive.trickle")
 
+from .logging_setup import configure_logging  # noqa: E402  (defines log above)
+
+# Wire the perceive log level from PERCEIVE_LOG_LEVEL (default INFO) at app
+# load so the highlights.perceive.* loggers actually emit. DEBUG enables the
+# per-frame detail in process_frame; the default logs lifecycle only.
+configure_logging()
+
 import numpy as np
 from fastapi import APIRouter, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
@@ -361,6 +368,12 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     """
     objects: list[dict] = []
     vocabulary: list[str] | None = None
+    # DEBUG per-frame entry (ADAAAA-6525): one line per sampled frame with the
+    # session + seq so it correlates to the rail/timeline. Only at DEBUG.
+    log.debug(
+        "frame enter session=%s seq=%s ts=%.2f stream=%s",
+        state.session_id, seq, timestamp, state.stream_id,
+    )
     # Per-stream LoRA injection (ADAAAA-5324): a session with an attached
     # adapter uses its own detector (base+LoRA-merged model); every other
     # session keeps the shared base detector.
@@ -380,6 +393,7 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         except Exception as e:  # keep the pipeline alive if the GPU hiccups
             objects = [{"label": "error", "confidence": 0.0, "bbox": [0, 0, 0.001, 0.001]}]
             state.last_florence_error = str(e)
+            log.error("florence detect failed session=%s seq=%s: %s", state.session_id, seq, e)
         # Carry each detection's in-roster label alongside its bbox so the
         # tracker seeds tracks with the gated label (not a hard-coded
         # "unknown" the user then sees on the box) — ADAAAA-5056.
@@ -544,6 +558,10 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             **ball_signal_fields,
             **goal_signal_fields,
         }
+        log.info(
+            "candidate emitted session=%s seq=%s event=%s ts=%.2f track=%s",
+            state.session_id, seq, event_type, cand.timestamp, cand.track_id,
+        )
         events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
     elif zone_cand is not None:
         # No motion burst this frame, but the detection-in-zone trigger fired.
@@ -559,6 +577,10 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             **ball_signal_fields,
             **goal_signal_fields,
         }
+        log.info(
+            "zone trigger fired session=%s seq=%s event=%s ts=%.2f trigger=%s",
+            state.session_id, seq, event_type, zone_cand["timestamp"], zone_cand.get("trigger"),
+        )
         events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
     # Scoreboard OCR / score-delta confirmation (ADAAAA-6360, decide-leg I3).
     # Bounded to candidate anchor frames (Stage-A cooldown) — never every frame
@@ -584,6 +606,20 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 q.put_nowait(e)
             except Exception:
                 pass
+    # DEBUG per-frame summary (ADAAAA-6525): detection labels/scores, track
+    # state, zone-trigger + ball/goal outcome, candidate id. Only at DEBUG.
+    log.debug(
+        "frame done session=%s seq=%s ts=%.2f detections=%s tracks=%s zone=%s ball=%s goal=%s candidate=%s",
+        state.session_id,
+        seq,
+        timestamp,
+        [(o.get("label"), round(float(o.get("confidence", 0.0)), 2)) for o in objects[:12]],
+        [(t.track_id, getattr(t, "kind", ""), getattr(t, "label", "")) for t in tracks[:MAX_TRACKS]],
+        (zone_cand or {}).get("trigger"),
+        ball_signal_fields,
+        goal_signal_fields,
+        (cand_dict or {}).get("eventType"),
+    )
     return obs, cand_dict
 
 
@@ -636,6 +672,10 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> dict |
         "seq": state.audio_seq,
         "audio": audio,
     }
+    log.info(
+        "audio trigger fired session=%s seq=%s kind=%s peak=%.4f baseline=%.4f",
+        state.session_id, state.audio_seq, audio.get("kind"), audio.get("peakEnergy", 0.0), audio.get("baselineEnergy", 0.0),
+    )
     for q in state.subscribers:
         try:
             q.put_nowait(cand)
@@ -894,6 +934,7 @@ def create_app() -> FastAPI:
         )
         q: asyncio.Queue = asyncio.Queue()
         state.subscribers.append(q)
+        log.info("subscription open session=%s subscribers=%d", sid, len(state.subscribers))
 
         async def gen():
             try:

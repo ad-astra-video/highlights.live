@@ -1,0 +1,31 @@
+feat(perceive,decide): env-gated structured logging for perceive and decide (ADAAAA-6525)
+
+Add PERCEIVE_LOG_LEVEL / DECIDE_LOG_LEVEL env wiring (default INFO) so the
+highlights.perceive.* / highlights.decide.* app loggers actually emit, and the
+runtime detail can be flipped to DEBUG without a rebuild.
+
+Perceive:
+- New logging_setup module configures the highlights.perceive namespace from
+  PERCEIVE_LOG_LEVEL; run.py drives uvicorn log_level from the same knob.
+- INFO (default): session start/end, trickle open, subscription open, candidate
+  emitted, zone + audio trigger fired, and detector errors (with seq context).
+- DEBUG: per-frame enter + done summary in process_frame for both HTTP and
+  trickle paths (session, seq, ts, detection labels/scores, track state,
+  zone-trigger + ball/goal outcome, candidate id).
+- Detector exceptions now log at ERROR with session + seq context.
+
+Decide:
+- New logging_setup module configures the highlights.decide namespace from
+  DECIDE_LOG_LEVEL; run.py drives uvicorn log_level from the same knob.
+- INFO (default): a per-request decision summary for /highlight (event, frames,
+  mode, score/outcome/reason, corroboration, final is_highlight) and /plan
+  (source, maxTracks, target count, reason).
+- DEBUG: per-candidate evidence detail plus the full gemma invocation/result
+  (and /plan roster detail).
+- gemma / planner call failures now log at ERROR.
+
+Logging only: no detection behavior, decide() outputs, event vocabulary, or the
+3-live / 8-VOD tracking limits changed. Tests: per-frame / per-candidate
+logging suppressed at default and emitted at DEBUG (caplog).
+
+Co-Authored-By: Paperclip <noreply@paperclip.ing>
