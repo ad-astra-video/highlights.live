@@ -62,6 +62,13 @@ _trickle: dict[str, TrickleSession] = {}
 # subscriber's worker thread share one Florence detector / SAM backend.
 _gpu_lock = threading.Lock()
 
+# ADAAAA-6525: default-INFO heartbeat cadence for frame processing. The operator
+# needs to see the pipeline is alive without per-frame spam, so every Nth frame
+# (plus the first) logs a single salient heartbeat line at INFO; per-frame
+# detail is emitted only at DEBUG.
+HEARTBEAT_EVERY = 30
+
+
 
 def _trickle_enabled() -> bool:
     return os.environ.get("PERCEIVE_TRICKLE", "1").lower() not in ("0", "false", "off")
@@ -475,6 +482,16 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     else:
         tracks = state.tracker.step(boxes, timestamp, labels=labels)
     state.seq = seq
+    # ADAAAA-6525: default-INFO heartbeat — one salient line every Nth frame
+    # (plus the first) so an operator sees the pipeline is alive, without the
+    # per-frame spam that stays behind DEBUG.
+    state.frames_processed = getattr(state, "frames_processed", 0) + 1
+    if state.frames_processed == 1 or state.frames_processed % HEARTBEAT_EVERY == 0:
+        log.info(
+            "frame heartbeat session=%s frames=%d seq=%s ts=%.2f tracks=%d active=%s",
+            state.session_id, state.frames_processed, seq, timestamp,
+            len(tracks), len(state.subscribers),
+        )
 
     # Ball-centric candidate signal (INC-2b): per-frame ball track ->
     # homography velocity + nearest-player possession, attached to the

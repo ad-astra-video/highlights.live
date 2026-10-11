@@ -38,6 +38,17 @@ def test_highlight_logs_decision_summary_at_info(caplog):
     )
 
 
+def test_highlight_identified_logged_at_info(caplog):
+    """A GOAL candidate that passes clears as a highlight; 'highlight identified'
+    is a salient default (INFO) event per ADAAAA-6524 board feedback."""
+    with caplog.at_level(logging.INFO, logger="highlights.decide"):
+        client.post("/app/highlight", json=_req())
+    assert any("highlight identified" in rec.getMessage() for rec in caplog.records), (
+        "a highlight identification should be logged at INFO"
+    )
+    assert any("highlight decision" in rec.getMessage() for rec in caplog.records)
+
+
 def test_highlight_per_candidate_detail_suppressed_at_default(caplog):
     """At default INFO, per-candidate frame/evidence detail is suppressed."""
     with caplog.at_level(logging.INFO, logger="highlights.decide"):
