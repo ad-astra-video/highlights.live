@@ -383,7 +383,40 @@ export class LivepeerClient {
    * `Livepeer-Payer-Address` is rejected by the orchestrator with
    * `402 invalid live runner payment signer address`.
    */
+  /**
+   * Serialize the capacity-1 decide runner. `runLiveJob` fires the video-leg
+   * decide, the audio-leg decide (`decideOnCandidate` via `audioLoop`) and the
+   * ST what-to-track planner **concurrently**; overlapping requests to a
+   * capacity-1 runner get `HTTP 503 no capacity available for runner`, which
+   * threw and failed the WHOLE live job before any highlight was persisted
+   * (ADAAAA-6521). A single in-flight decide/plan request means the runner's
+   * one slot is never over-subscribed, so live highlights keep flowing.
+   */
   async decide(
+    path: string,
+    body: unknown,
+    opts?: { headers?: Record<string, string>; payerAddress?: string; paymentHeaders?: Record<string, string> }
+  ): Promise<{ status: number; data: unknown }> {
+    return this.serializedDecide(() => this.decideUnserialized(path, body, opts));
+  }
+
+  /** Promise-chain gate of capacity 1 for decide-runner app calls. */
+  private decideChain: Promise<unknown> = Promise.resolve();
+  private async serializedDecide<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this.decideChain;
+    let release!: () => void;
+    this.decideChain = new Promise<void>((r) => {
+      release = r;
+    });
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  private async decideUnserialized(
     path: string,
     body: unknown,
     opts?: { headers?: Record<string, string>; payerAddress?: string; paymentHeaders?: Record<string, string> }
@@ -391,22 +424,39 @@ export class LivepeerClient {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts?.headers || {}) };
     if (opts?.payerAddress) headers["Livepeer-Payer-Address"] = opts.payerAddress;
     if (opts?.paymentHeaders) Object.assign(headers, opts.paymentHeaders);
-    const res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
-      headers,
-      body: JSON.stringify(body),
-    });
-    if (res.status === 402) {
-      const body2 = await res.json().catch(() => ({}));
-      throw new PaymentRequiredError(body2, livePaymentChallengeFromBody(body2));
+    // Guardrail: a transient `503 no capacity available for runner` (slot
+    // momentarily busy from another candidate/job) is retried a couple of times
+    // with backoff so a single 503 never fails the live job. A 503 means the
+    // request was NOT scheduled/processed, so a retry cannot double-bill or
+    // double-persist a highlight.
+    let lastStatus = 0;
+    for (let attempt = 0; ; attempt++) {
+      const res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (res.status !== 503) {
+        lastStatus = res.status;
+        if (res.status === 402) {
+          const body2 = await res.json().catch(() => ({}));
+          throw new PaymentRequiredError(body2, livePaymentChallengeFromBody(body2));
+        }
+        const text = await res.text();
+        let data: unknown = null;
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch {
+          data = text;
+        }
+        return { status: res.status, data };
+      }
+      lastStatus = res.status;
+      // drain the 503 body so the socket isn't left unread
+      await res.text().catch(() => "");
+      if (attempt >= 2) break;
+      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
     }
-    const text = await res.text();
-    let data: unknown = null;
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch {
-      data = text;
-    }
-    return { status: res.status, data };
+    return { status: lastStatus, data: null };
   }
 
   /**
