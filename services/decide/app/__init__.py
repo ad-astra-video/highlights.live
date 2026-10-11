@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from typing import Optional
 
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, ConfigDict, Field
+
+log = logging.getLogger("highlights.decide")
+
+from .logging_setup import configure_logging  # noqa: E402  (defines log above)
+
+# Wire the decide log level from DECIDE_LOG_LEVEL (default INFO) at app load so
+# the highlights.decide.* loggers actually emit. DEBUG adds per-candidate and
+# full gemma invocation/result detail; the default logs a per-request summary.
+configure_logging()
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
 from .gemma import apply_ball_outcome_gate, decide_with_gemma, plan_tracking_with_gemma, _rule_outcome, is_near_miss_ball_outcome, reconcile_outcome_with_ball_signal
@@ -237,6 +247,69 @@ def _is_gemma_mode() -> bool:
     return os.environ.get("DECIDE_MODE", "rule") == "gemma"
 
 
+def _is_corroborated(ev: "Evidence") -> bool:
+    """Whether the candidate carries any corroborating evidence beyond the bare
+    trigger (mirror of the decider's has_corroboration), for the INFO summary."""
+    return bool(
+        ev.trackCount > 0
+        or ev.maxVelocity > 0
+        or ev.ocrHits > 0
+        or ev.scoreBoardChanged
+        or (
+            ev.reaction
+            and (
+                ev.reaction.crowdEnergy > 0
+                or ev.reaction.humansInMotion > 0
+                or ev.reaction.ballSpeedMps > 0
+            )
+        )
+    )
+
+
+def _log_highlight(mode: str, req: "HighlightRequest", decision: dict) -> None:
+    """Decision summary (INFO) + candidate detail (DEBUG) for a /highlight call."""
+    log.info(
+        "highlight decision session=%s event=%s frames=%d mode=%s is_highlight=%s score=%s event_out=%s outcome=%s reason=%r corroborated=%s",
+        req.sessionId,
+        req.eventType,
+        len(req.frames),
+        mode,
+        decision.get("isHighlight"),
+        decision.get("score"),
+        decision.get("eventType"),
+        decision.get("outcome"),
+        decision.get("reason"),
+        _is_corroborated(req.evidence),
+    )
+    log.debug(
+        "highlight context session=%s event=%s frames=%d track_count=%d max_velocity=%.3f ocr=%d scoreboard=%s ball_outcome=%s goal_crossed=%s detections=%d audio_levels=%d",
+        req.sessionId,
+        req.eventType,
+        len(req.frames),
+        req.evidence.trackCount,
+        req.evidence.maxVelocity,
+        req.evidence.ocrHits,
+        req.evidence.scoreBoardChanged,
+        req.evidence.ballOutcome,
+        req.evidence.goalCrossed,
+        len(req.evidence.detections),
+        len(req.evidence.audioLevels),
+    )
+
+
+def _log_plan(mode: str, req: "PlanRequest", resp: "TrackingPlanResponse") -> None:
+    """Plan summary (INFO) + candidate roster detail (DEBUG) for a /plan call."""
+    log.info(
+        "plan decision session=%s mode=%s source=%s max_tracks=%d targets=%d reason=%r",
+        req.sessionId, mode, resp.source, resp.maxTracks, len(resp.targets), resp.reason,
+    )
+    labels = [t.get("label") if isinstance(t, dict) else t for t in resp.targets]
+    log.debug(
+        "plan roster session=%s mode=%s targets=%s zones=%s anchor=%s",
+        req.sessionId, mode, labels, resp.zones, resp.anchor,
+    )
+
+
 def create_app() -> FastAPI:
     router = APIRouter()
 
@@ -328,6 +401,7 @@ def create_app() -> FastAPI:
                         + "; rejected by notable-only bar: "
                         + "; ".join(rejects)
                     ).strip("; ")
+            _log_highlight("gemma", req, decision)
             return decision
         ev = req.evidence.reaction.model_dump() if req.evidence.reaction else None
         d = decide(
@@ -363,6 +437,7 @@ def create_app() -> FastAPI:
         }
         if is_near_miss_ball_outcome(ball_outcome):
             dec = reconcile_outcome_with_ball_signal(dec, ball_outcome)
+        _log_highlight("rule", req, dec)
         return dec
 
     @router.post("/plan", response_model=TrackingPlanResponse)
@@ -390,11 +465,13 @@ def create_app() -> FastAPI:
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
                 timeout_s=float(os.environ.get("PLANNER_TIMEOUT_S", "180")),
             )
-            return TrackingPlanResponse(**plan) if plan else TrackingPlanResponse(source="planner-fallback", reason="planner returned no plan")
+            resp = TrackingPlanResponse(**plan) if plan else TrackingPlanResponse(source="planner-fallback", reason="planner returned no plan")
+            _log_plan("gemma", req, resp)
+            return resp
         # Rule/stub mode: no Gemma; return a deterministic safe-default plan so
         # the worker still gets a valid, type-specific, non-empty-ish contract
         # (perceive degrades an empty roster to the canned gameHint map).
-        return TrackingPlanResponse(
+        resp = TrackingPlanResponse(
             category=req.category or "",
             intent=req.intent or "",
             source="planner-fallback",
@@ -402,6 +479,8 @@ def create_app() -> FastAPI:
             maxTracks=3 if req.mode == "live" else 8,
             reason="rule mode: no gemma planner; perceive uses canned/safe-default roster",
         )
+        _log_plan("rule", req, resp)
+        return resp
 
     app = FastAPI(title="highlights-decide", version="0.1.0")
     # Canonical at root (go-livepeer strips `/app`); `/app/*` alias for direct calls.
