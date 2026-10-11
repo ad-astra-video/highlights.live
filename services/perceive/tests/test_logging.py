@@ -55,6 +55,18 @@ def test_per_frame_logging_suppressed_at_default(caplog):
     assert not _frame_lines(caplog.records), "per-frame lines must be suppressed at default level"
 
 
+def test_frame_heartbeat_logged_at_default(caplog):
+    """ADAAAA-6524 board feedback: a periodic frame-processing heartbeat is a
+    default (INFO) event, distinct from the per-frame DEBUG detail."""
+    sid = "sess-dbg-heartbeat"
+    with caplog.at_level(logging.INFO, logger="highlights.perceive"):
+        r = _post(sid, 0)
+        assert r.status_code == 200
+    beats = [r for r in caplog.records if "frame heartbeat" in r.getMessage()]
+    assert beats, "a frame-processing heartbeat should be logged at default INFO"
+    assert any(sid in b.getMessage() for b in beats), "heartbeat should carry the session id"
+
+
 def test_per_frame_logging_emitted_at_debug(caplog):
     """At DEBUG, every frame produces a correlated per-frame entry."""
     sid = "sess-dbg-debug"
