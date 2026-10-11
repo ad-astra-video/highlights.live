@@ -424,24 +424,38 @@ export class LivepeerClient {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts?.headers || {}) };
     if (opts?.payerAddress) headers["Livepeer-Payer-Address"] = opts.payerAddress;
     if (opts?.paymentHeaders) Object.assign(headers, opts.paymentHeaders);
-    // Guardrail: a transient `503 no capacity available for runner` (slot
-    // momentarily busy from another candidate/job) is retried a couple of times
-    // with backoff so a single 503 never fails the live job. A 503 means the
-    // request was NOT scheduled/processed, so a retry cannot double-bill or
-    // double-persist a highlight.
+    // Guardrail: retry transient runner-availability failures on the capacity-1
+    // single-shot live decide runner so a single blip never fails the whole
+    // live job. Two transients are retried with backoff:
+    //   - `503 no capacity available for runner` — a momentary slot collision
+    //     from a concurrent candidate/job (ADAAAA-6521).
+    //   - `404 runner not found` — the orchestrator briefly unregisters the
+    //     runner during its ~2s `/health` flap, so a request lands while no
+    //     runner is routed (ADAAAA-6521 follow-up, found by live QA).
+    // In both cases the request was NOT routed/processed, so a retry cannot
+    // double-bill or double-persist a highlight.
     let lastStatus = 0;
     for (let attempt = 0; ; attempt++) {
       const res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
         headers,
         body: JSON.stringify(body),
       });
-      if (res.status !== 503) {
+      // Read the body up front: needed both to detect the transient "runner not
+      // found" 404 and to parse the 402 payment challenge, and to drain the
+      // socket on retried transients.
+      const text = await res.text().catch(() => "");
+      const runnerNotFound = res.status === 404 && /runner not found/i.test(text);
+      if (res.status !== 503 && !runnerNotFound) {
         lastStatus = res.status;
         if (res.status === 402) {
-          const body2 = await res.json().catch(() => ({}));
+          let body2: unknown = {};
+          try {
+            body2 = text ? JSON.parse(text) : {};
+          } catch {
+            body2 = {};
+          }
           throw new PaymentRequiredError(body2, livePaymentChallengeFromBody(body2));
         }
-        const text = await res.text();
         let data: unknown = null;
         try {
           data = text ? JSON.parse(text) : null;
@@ -451,9 +465,7 @@ export class LivepeerClient {
         return { status: res.status, data };
       }
       lastStatus = res.status;
-      // drain the 503 body so the socket isn't left unread
-      await res.text().catch(() => "");
-      if (attempt >= 2) break;
+      if (attempt >= 4) break;
       await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
     }
     return { status: lastStatus, data: null };

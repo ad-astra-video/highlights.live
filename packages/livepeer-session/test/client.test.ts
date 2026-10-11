@@ -82,6 +82,27 @@ describe("LivepeerClient", () => {
     expect(t.calls[0].method).toBe("POST");
   });
 
+  it("decide retries a transient 404 runner-not-found (orchestrator health flap) and returns the success", async () => {
+    const t = new MockTransport([
+      { status: 404, data: "runner not found" },
+      { status: 200, data: { isHighlight: true, score: 80 } },
+    ]);
+    const c = new LivepeerClient("http://orch", t);
+    const res = await c.decide("highlight", { eventType: "GOAL" });
+    expect((res.data as any).isHighlight).toBe(true);
+    expect(t.calls.length).toBe(2);
+    expect(t.calls[0].url).toBe(`/apps/${ROUTES.decide}/app/highlight`);
+    expect(t.calls[1].url).toBe(`/apps/${ROUTES.decide}/app/highlight`);
+  });
+
+  it("decide does NOT retry a genuine 404 (non runner-not-found) and returns it", async () => {
+    const t = new MockTransport([{ status: 404, data: { error: "unknown app route" } }]);
+    const c = new LivepeerClient("http://orch", t);
+    const res = await c.decide("nope", { eventType: "GOAL" });
+    expect(res.status).toBe(404);
+    expect(t.calls.length).toBe(1);
+  });
+
   it("stopPerceive handles 204", async () => {
     const t = new MockTransport([{ status: 204, data: "" }]);
     const c = new LivepeerClient("http://orch", t);
