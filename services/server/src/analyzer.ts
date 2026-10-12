@@ -1271,11 +1271,21 @@ export async function analyzeJob(
    * LiveRunShared so both legs share the frame-anchor window, video evidence,
    * and collected highlights. When absent (VOD), a private namespace is used
    * and behavior is unchanged. */
-  shared_?: LiveRunShared
+  shared_?: LiveRunShared,
+  /** Live-slot hooks (ADAAAA-6561). `onReserve` fires on every reservation
+   * (the initial session and each re-reserve) so the caller can track the job's
+   * CURRENT perceive session and release it synchronously from the stop path —
+   * independent of the in-flight GPU /analyze that analyzeJob's `finally`
+   * would otherwise wait for. `isStopped` tells the loop to stop re-reserving
+   * a fresh session once the job has been stopped (otherwise the stop-path
+   * slot release would make the in-flight analyze 404 and re-bind a new slot
+   * on a job that is already stopping). */
+  slotRef?: { onReserve?: (res: ReserveResult) => void; isStopped?: () => boolean }
 ): Promise<AnalyzeOutcome> {
   const maxReReserves = cfg.maxReReserves ?? 3;
   const first = initialSession ?? (await client.reservePerceive());
   let sessionId = first.sessionId;
+  slotRef?.onReserve?.(first);
   // Every session we reserved (initial + any re-reserves) must be stopped /
   // un-paid in `finally`, even the ones go-livepeer already released (the
   // server-side released ones still hold a payment refiller in the adapter).
@@ -1301,7 +1311,7 @@ export async function analyzeJob(
     for await (const frame of iterFrames) {
       framesAnalyzed++;
       run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
-      let res: ObservationResult;
+      let res!: ObservationResult;
       let reReserved = 0;
       // Warm-up: fire exactly ONE planner call at stream start (on the first
       // sampled frame, so the plan is grounded in the feed). The per-frame
@@ -1330,19 +1340,30 @@ export async function analyzeJob(
         loraRef: cfg.loraRef,
         trackingPlan: planController.delivery() ?? undefined,
       };
+      let stoppedRun = false;
       for (;;) {
         try {
           res = await client.analyze(sessionId, frame, vocab);
           break;
         } catch (err) {
+          // ADAAAA-6561: the stop path released the perceive slot synchronously,
+          // so the in-flight /analyze may now fail. On a stopped job do NOT
+          // re-reserve a fresh session (that would re-bind a capacity-1 slot to
+          // a job that is already stopping) — just exit the frame loop.
+          if (slotRef?.isStopped?.()) {
+            stoppedRun = true;
+            break;
+          }
           if (!(err instanceof SessionLostError)) throw err;
           if (reReserved >= maxReReserves) throw err;
           reReserved++;
           const fresh = await client.reservePerceive();
           sessionId = fresh.sessionId;
           reserved.add(fresh.sessionId);
+          slotRef?.onReserve?.(fresh);
         }
       }
+      if (stoppedRun) break;
       evidence.step(res.observation);
       onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "observation", observation: res.observation });
       // A1: cache this frame's already-computed findings (tracks/OCR/objects)
