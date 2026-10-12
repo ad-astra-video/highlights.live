@@ -229,4 +229,32 @@ describe("MediaOrchestrator on-chain: 402 -> paid reserve -> open channels", () 
     const orch = new MediaOrchestrator({ orchBase: "http://orch" }); // no signer
     await expect(orch.provision()).rejects.toThrow(/402 Payment Required/);
   });
+
+  it("releases the reserved perceive slot when provisioning fails AFTER reserve (open-channels error), so no billed orphan session leaks (ADAAAA-6545)", async () => {
+    // Reserve succeeds (slot now reserved + billed), but the post-reserve stats
+    // read returns no trickle channels -> provision throws. Before the fix this
+    // orphaned the reserved slot with no teardown. Now the slot must be
+    // released via the session's control/stop before the error propagates.
+    const appUrl = "http://orch/apps/highlights-perceive/session/sess-x";
+    const controlUrl = "http://orch/apps/highlights-perceive/session/sess-x/control";
+    const calls: Array<{ method: string; url: string }> = [];
+    const fn = vi.fn(async (input: any, init?: any) => {
+      const url = String(input);
+      calls.push({ method: (init?.method as string) || "GET", url });
+      if (url.endsWith("/apps/highlights-perceive/session")) {
+        return jsonResponse(200, { session_id: "sess-x", app_url: appUrl, control_url: controlUrl });
+      }
+      if (url.endsWith("/app/analyze")) return jsonResponse(200, { ok: true });
+      if (url.includes("/app/session/stats")) return jsonResponse(200, {}); // no trickle -> throws
+      if (url.endsWith("/stop")) return jsonResponse(204, {}); // released slot
+      return jsonResponse(404, { error: "nf" });
+    });
+    vi.stubGlobal("fetch", fn);
+
+    const orch = new MediaOrchestrator({ orchBase: "http://orch" }); // offchain, no signer
+    await expect(orch.provision()).rejects.toThrow(/open channels failed/);
+    // The reserved slot was released to the SAME orchestrator that issued it.
+    const released = calls.filter((c) => c.url.endsWith("/control/stop") && c.method === "POST");
+    expect(released).toHaveLength(1);
+  });
 });
