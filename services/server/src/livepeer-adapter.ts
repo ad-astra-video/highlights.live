@@ -128,16 +128,28 @@ export class OrchestratorAdapter implements PipelineClient {
     if (!signer || !orchInfo?.b64) return;
     if (this.payers.has(p.sessionId)) return;
     let signerState: RemotePaymentStateSig | null | undefined = paymentState;
+    // The OrchestratorInfo (base64 net.OrchestratorInfo) used for each refresh.
+    // When the remote signer returns 480 (the session's auth-token / ticket
+    // params expired), refreshPerceivePayment re-mints fresh info via
+    // /refresh-payment and returns it — adopt it so subsequent refreshes keep
+    // the reserved balance topped up past the ~10-min token window instead of
+    // draining into a force-release (ADAAAA-6575).
+    let orchB64 = orchInfo.b64;
+    const manifestID = orchInfo.sessionId;
     const refresh = async () => {
       const next = await this.client.refreshPerceivePayment(
         p.sessionId,
         p.controlUrl,
         signer,
-        orchInfo.b64,
+        orchB64,
         signerState,
-        orchInfo.sessionId
+        manifestID,
+        this.payerAddress
       );
-      if (next !== undefined && next !== null) signerState = next as RemotePaymentStateSig;
+      if (next) {
+        signerState = next.signerState as RemotePaymentStateSig | null;
+        if (next.orchInfoB64) orchB64 = next.orchInfoB64;
+      }
     };
     const ref = createPaymentRefresher({
       refresh,
