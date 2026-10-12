@@ -381,6 +381,20 @@ export interface AnalyzerConfig {
    */
   maxReReserves?: number;
   /**
+   * ADAAAA-6577: base delay (ms) of the bounded exponential backoff slept
+   * between a session-lost re-reserve and the next retry of the same frame.
+   * A flapping perceive runner 404s every /analyze; backing off (500ms -> 1s
+   * -> 2s -> …, capped) keeps the re-reserve cadence near ~1/sec and lets the
+   * pass ride through a brief runner recovery instead of hammering the
+   * orchestrator. Wired from `VOD_SESSION_RETRY_BACKOFF_MS` (default 500).
+   */
+  sessionRetryBackoffMs?: number;
+  /** ADAAAA-6577: upper bound (ms) of the exponential backoff above. The delay
+   * never exceeds this, so a long-lived flap still re-reserves at most
+   * `maxReReserves` times per frame at the capped cadence and then aborts.
+   * Wired from `VOD_SESSION_RETRY_BACKOFF_MAX_MS` (default 8000). */
+  sessionRetryBackoffMaxMs?: number;
+  /**
    * Increment D (ADAAAA-6467): the stream-start warm-up window (seconds)
    * within which exactly ONE planner call must deliver a valid TrackingPlan
    * before the per-frame loop begins steady-state tracking. The worker does
@@ -420,6 +434,20 @@ export class SessionLostError extends Error {
     super(msg);
     this.name = "SessionLostError";
   }
+}
+
+/** ADAAAA-6577: sleep `ms` milliseconds (returns when the timeout elapses).
+ * Pure async util so the bounded-backoff cadence is observable in tests. */
+export function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** ADAAAA-6577: bounded exponential backoff delay (ms) for the `attempt`-th
+ * re-reserve of a lost perceive session. `baseMs` doubles per attempt and is
+ * capped at `maxMs`, so a flapping runner never gets a request storm (base
+ * 500ms -> 1s -> 2s -> 4s, cap 8s). Pure function — trivially unit-testable. */
+export function backoffDelayMs(attempt: number, baseMs: number, maxMs: number): number {
+  return Math.min(baseMs * 2 ** Math.max(0, attempt), maxMs);
 }
 
 /** Compute per-job evidence from the observation stream. */
@@ -1274,6 +1302,13 @@ export async function analyzeJob(
   shared_?: LiveRunShared
 ): Promise<AnalyzeOutcome> {
   const maxReReserves = cfg.maxReReserves ?? 3;
+  // ADAAAA-6577: bounded exponential backoff between a perceive session-lost
+  // re-reserve and the retry of the same frame. A flapping perceive runner
+  // 404s every /analyze; backing off keeps the re-reserve cadence near
+  // ~1/sec at the base and lets the pass ride through a brief runner recovery
+  // instead of hammering the orchestrator (see backoffDelayMs).
+  const sessionRetryBackoffMs = cfg.sessionRetryBackoffMs ?? 500;
+  const sessionRetryBackoffMaxMs = cfg.sessionRetryBackoffMaxMs ?? 8000;
   const first = initialSession ?? (await client.reservePerceive());
   let sessionId = first.sessionId;
   // Every session we reserved (initial + any re-reserves) must be stopped /
@@ -1337,6 +1372,11 @@ export async function analyzeJob(
         } catch (err) {
           if (!(err instanceof SessionLostError)) throw err;
           if (reReserved >= maxReReserves) throw err;
+          // ADAAAA-6577: bounded exponential backoff before re-reserving so a
+          // flapping perceive runner (every /analyze 404s) doesn't get a
+          // request storm — ride through a brief recovery, then still abort
+          // cleanly once maxReReserves is exhausted.
+          await sleep(backoffDelayMs(reReserved, sessionRetryBackoffMs, sessionRetryBackoffMaxMs));
           reReserved++;
           const fresh = await client.reservePerceive();
           sessionId = fresh.sessionId;
