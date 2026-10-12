@@ -66,6 +66,12 @@ class FakeOrch {
     // session this fake orchestrator owns so assertions stay on session ids.
     this.closed.push(this.provisioned.sessionId);
   }
+  async releaseSession(sessionId: string, controlUrl?: string) {
+    // Mirror the NEW MediaOrchestrator.releaseSession API (ADAAAA-6545):
+    // idempotent release of the reserved perceive slot. Record the session so
+    // assertions on `closed` keep holding.
+    this.closed.push(sessionId);
+  }
 }
 
 const fake = new FakeOrch();
