@@ -292,6 +292,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
   // session.
   const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string }>();
+  // ADAAAA-6561: per live-ingest job, the CURRENT perceive session held by that
+  // job plus whether the job has been stopped. The stop path uses this to
+  // release the perceive slot SYNCHRONOUSLY (independent of the in-flight GPU
+  // /analyze that analyzeJob's `finally` would otherwise wait for), so a job
+  // started right after POST /jobs/:id/stop can re-reserve without a 503.
+  const livePerceiveSlots = new Map<string, { current?: { sessionId: string; appUrl: string; controlUrl: string }; stopped: boolean }>();
 
   // --- Resumable VOD upload sessions (ADAAAA-5714) ---
   // The single-shot POST /jobs/upload is served through a Cloudflare tunnel that
@@ -456,6 +462,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // both mark candidates on the same live session. analyzeJob() receives it
       // as `initialSession` and stops it (and any re-reserves) in its finally.
       const initial = await adapter.reservePerceive();
+      // ADAAAA-6561: track this job's current perceive session so the stop path
+      // can release the slot synchronously (see /jobs/:id/stop). `slot.stopped`
+      // is flipped by the stop route to stop analyzeJob re-reserving a fresh
+      // session once the slot has been released. `current` is kept up to date
+      // on every re-reserve via the slotRef.onReserve hook.
+      const slot = { current: initial, stopped: false };
+      livePerceiveSlots.set(job.id, slot);
       // Bind `ingest.cut` (it reads `this.cfg`): analyzeJob/decideOnCandidate
       // receive it as a plain function reference, so an unbound method loses
       // `this` and throws (job->failed) the moment a highlight needs a clip.
@@ -537,7 +550,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         }
       })();
 
-      const outcome = await analyzeJob(adapter, ingest.frames(), cut, anaCfg, onEvent, initial, shared);
+      const outcome = await analyzeJob(adapter, ingest.frames(), cut, anaCfg, onEvent, initial, shared, {
+        onReserve: (res) => {
+          slot.current = res;
+        },
+        isStopped: () => slot.stopped,
+      });
       // Terminate ingest (kills both ffmpeg procs); the audio tap drains and
       // the loop resolves any in-flight candidates. Highlights from BOTH legs
       // (video + audio) were already persisted + billed at DECISION time via
@@ -565,6 +583,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     } finally {
       await ingest.stop();
       liveSessions.delete(job.id);
+      livePerceiveSlots.delete(job.id);
     }
   }
 
@@ -1583,6 +1602,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (ing) {
       ing.stop();
       liveSessions.delete(job.id);
+      // ADAAAA-6561: release the perceive slot NOW (synchronously from the
+      // stop path) instead of waiting for analyzeJob's `finally`, which only
+      // runs after the in-flight GPU /analyze completes (~1.4s). A live job
+      // started right after this stop can then re-reserve the capacity-1 slot
+      // without a 503. Idempotent — analyzeJob's `finally` re-leases as a no-op,
+      // and the slotRef.isStopped flag prevents it re-reserving a fresh session.
+      const slot = livePerceiveSlots.get(job.id);
+      livePerceiveSlots.delete(job.id);
+      if (slot) {
+        slot.stopped = true;
+        if (slot.current) await adapter.stopPerceive(slot.current.sessionId).catch(() => {});
+      }
       return reply.send({ ok: true, job: store.getJob(job.id) });
     }
     // Browser capture job: release the perceive session, then cut clips for any
