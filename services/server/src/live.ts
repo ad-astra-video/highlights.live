@@ -208,6 +208,13 @@ export class LiveIngest {
         /* dir not ready yet */
       }
       for (const f of files) {
+        // ADAAAA-6556: if stop() was called while we were draining this batch
+        // of already-captured frames, exit promptly so the analyzeJob() finally
+        // can release the perceive session. Without this check a long-running
+        // live job (N frames at 1fps → N × ~10 s GPU analyze calls) delays
+        // slot release by minutes and the capacity-1 slot stays reserved with
+        // its payment refiller still running (HTTP 480/482 spam).
+        if (!this.running) break;
         if (seen.has(f)) continue;
         seen.add(f);
         const b64 = (await readFile(path.join(this.frameDir, f))).toString("base64");
