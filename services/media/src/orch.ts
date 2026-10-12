@@ -234,29 +234,62 @@ export class MediaOrchestrator {
     const { sessionId, appUrl, controlUrl } = res;
     if (!sessionId) throw new Error("reserve returned no session_id");
 
-    // Seed analyze -> the perceive runner opens its trickle channels.
-    const seed = opts?.seedImageB64 ?? this.opts.seedImageB64;
-    await this.safeAnalyze(appUrl, sessionId, seed);
+    // From here on the slot IS RESERVED on the orchestrator and billing is
+    // running. Any later failure (a transient network blip on the seed channel
+    // open or the stats read -> "open channels failed") throws BEFORE the
+    // caller adds this stream to `active`, so no teardown would ever run and
+    // the capacity-1 perceive slot stays billed with no active job — the exact
+    // orphan-session leak (ADAAAA-6545). Release the reserved slot on any
+    // post-reserve failure before propagating the error.
+    try {
+      // Seed analyze -> the perceive runner opens its trickle channels.
+      const seed = opts?.seedImageB64 ?? this.opts.seedImageB64;
+      await this.safeAnalyze(appUrl, sessionId, seed);
 
-    // Read the channel URLs the runner created.
-    const stats = await this._req("GET", `${appUrl}/app/session/stats`, {});
-    const body: any = await stats.json();
-    const t = body?.trickle;
-    if (!t?.video_in || !t?.events_out) {
-      throw new Error(`open channels failed: no trickle endpoints in stats: ${JSON.stringify(body)}`);
+      // Read the channel URLs the runner created.
+      const stats = await this._req("GET", `${appUrl}/app/session/stats`, {});
+      const body: any = await stats.json();
+      const t = body?.trickle;
+      if (!t?.video_in || !t?.events_out) {
+        throw new Error(`open channels failed: no trickle endpoints in stats: ${JSON.stringify(body)}`);
+      }
+      const p: ProvisionedSession = {
+        sessionId,
+        appUrl,
+        controlUrl,
+        videoIn: t.video_in,
+        eventsOut: t.events_out,
+        control: t.control || "",
+        paymentState: signerState,
+        orchInfoB64: orchInfo?.b64,
+        orchInfoSessionId: orchInfo?.sessionId,
+      };
+      return p;
+    } catch (err) {
+      // Idempotent release of the reserved slot so a provisioning error never
+      // strands a billed perceive session. Best-effort: if the release itself
+      // fails we still surface the provisioning error to the caller.
+      await this.releaseSession(sessionId, controlUrl, base).catch(() => {});
+      throw err;
     }
-    const p: ProvisionedSession = {
-      sessionId,
-      appUrl,
-      controlUrl,
-      videoIn: t.video_in,
-      eventsOut: t.events_out,
-      control: t.control || "",
-      paymentState: signerState,
-      orchInfoB64: orchInfo?.b64,
-      orchInfoSessionId: orchInfo?.sessionId,
-    };
-    return p;
+  }
+
+  /**
+   * Idempotent release of a perceive slot on the orchestrator that issued it.
+   * `controlUrl` (a `{control_url}` from the reserve) targets the exact
+   * orchestrator + session; `fallbackBase` is the reserve base used when no
+   * control URL was returned. A stop on a non-existent/already-released session
+   * is a no-op on the orchestrator, so this is safe to call repeatedly.
+   */
+  async releaseSession(sessionId: string, controlUrl: string, fallbackBase?: string): Promise<void> {
+    if (controlUrl) {
+      await this._req("POST", `${controlUrl.replace(/\/$/, "")}/stop`, {}).catch(() => {});
+      return;
+    }
+    if (sessionId) {
+      const base = (fallbackBase || this.orchBase).replace(/\/$/, "");
+      await this._req("POST", `${base}/apps/${this.app}/session/${sessionId}/stop`, {}).catch(() => {});
+    }
   }
 
   /** Seed the runner so it opens channels; tolerate the (expected) bad-image error
