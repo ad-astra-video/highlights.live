@@ -404,8 +404,10 @@ export class MediaServer {
     }
     // 3) release the paid slot / perceive session. Target the orchestrator that
     // issued the session via its control URL (correct even when it is not the
-    // configured orchBase, e.g. a discovered orchestrator).
-    await this.orch.closeSession(stream.provisioned.controlUrl).catch(() => {});
+    // configured orchBase, e.g. a discovered orchestrator). releaseSession is
+    // idempotent and falls back to the session-stop path when no control URL
+    // was returned, so an empty control_url can never leave the slot billed.
+    await this.orch.releaseSession(stream.provisioned.sessionId, stream.provisioned.controlUrl).catch(() => {});
     this.active.delete(sid);
   }
 }
