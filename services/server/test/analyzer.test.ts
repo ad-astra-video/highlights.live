@@ -631,6 +631,60 @@ describe("decideOnCandidate (INC-2 / ADAAAA-4325 slice 4: audio candidate -> dec
     expect(events.map((e) => e.type)).toEqual(["candidate"]); // candidate only, no highlight
   });
 
+  // ADAAAA-6598: a near_miss / big_play frame read must NOT be accepted as a
+  // scoring GOAL highlight on the board, even when the decide verdict sets
+  // isHighlight=true (defense-in-depth gate at the server layer).
+  it.each([
+    ["near_miss", "shot saved; ball does not enter the net"],
+    ["big_play", "ball is being saved; does not enter the net"],
+  ])("does NOT cut/record a %s verdict as a scoring highlight", async (outcome, reason) => {
+    const { client } = fakeClient({
+      decide: async () => ({ isHighlight: true, score: 45, eventType: "GOAL", outcome: outcome as "near_miss" | "big_play", reason }),
+    });
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    const cuts: number[] = [];
+    const events: any[] = [];
+    await decideOnCandidate(
+      client,
+      shared,
+      async (ts) => {
+        cuts.push(ts);
+        return { clipId: "c", clipUri: "u" };
+      },
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" },
+      { eventType: "AUDIO", timestamp: 0, seq: 1 },
+      (ev) => events.push(ev)
+    );
+    expect(cuts).toEqual([]);
+    expect(shared.highlights).toHaveLength(0);
+    expect(events.map((e) => e.type)).toEqual(["candidate"]); // no highlight emitted
+  });
+
+  it("records a scoring_play verdict as a board highlight (true-goal recall not regressed)", async () => {
+    const { client } = fakeClient({
+      decide: async () => ({ isHighlight: true, score: 80, eventType: "GOAL", outcome: "scoring_play", reason: "ball crossed the line into the net" }),
+    });
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    const cuts: number[] = [];
+    const events: any[] = [];
+    await decideOnCandidate(
+      client,
+      shared,
+      async (ts) => {
+        cuts.push(ts);
+        return { clipId: "c", clipUri: "u" };
+      },
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" },
+      { eventType: "AUDIO", timestamp: 0, seq: 1 },
+      (ev) => events.push(ev)
+    );
+    expect(cuts).toEqual([0]);
+    expect(shared.highlights).toHaveLength(1);
+    expect(shared.highlights[0]).toMatchObject({ eventType: "GOAL", outcome: "scoring_play", status: "pending" });
+  });
+
   it("LiveRunShared: video + audio legs accumulate highlights into the SAME array (runLiveJob wiring)", async () => {
     let call = 0;
     const { client } = fakeClient({

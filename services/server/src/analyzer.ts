@@ -140,6 +140,20 @@ export interface DecisionResult {
   outcome?: "scoring_play" | "near_miss" | "big_play" | "not_highlight";
   nearMiss?: boolean;
 }
+/**
+ * ADAAAA-6598: the single server-side accept gate. ONLY a frame-confirmed
+ * scoring_play is a board-accepted GOAL highlight. A near_miss / big_play /
+ * not_highlight read is never surfaced as a scoring highlight, even when a
+ * rogue/misconfigured decide verdict sets isHighlight=true — so no false
+ * positive reaches the board. A legacy verdict with no `outcome` is treated
+ * per its isHighlight (backward compatible). This is defense-in-depth on top of
+ * the decide service's own finalize_goal_acceptance.
+ */
+export function isAcceptedHighlight(d: DecisionResult): boolean {
+  if (!d.isHighlight) return false;
+  if (d.outcome === undefined) return true; // legacy verdict, trust isHighlight
+  return d.outcome === "scoring_play";
+}
 /** One audio chunk fed to the Stage-A noise-change gate (INC-2 / ADAAAA-4325).
  * Owned by the server's ffmpeg audio tap: short (default ~100 ms) mono int16
  * little-endian PCM, base64-encoded, matched to perceive's AudioChunkRequest. */
@@ -1251,7 +1265,10 @@ export async function decideOnCandidate(
   // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
   // reported onset latency. Feeds job.stageAMetrics fpRate = rejected / total.
   shared.stageA.recordOutcome(decision.isHighlight, candidate.audio?.onsetLatencyS);
-  if (!decision.isHighlight) return;
+  // ADAAAA-6598: accept gate — only a frame-confirmed scoring_play is a board
+  // highlight. A near_miss / big_play read is recorded distinctly (outcome
+  // preserved) but never cut as a GOAL highlight/clip.
+  if (!isAcceptedHighlight(decision)) return;
   const { clipId, clipUri } = await cut(candidate.timestamp);
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -1450,7 +1467,7 @@ export async function analyzeJob(
           },
           detailDecideOpts(cfg, run, anchoredImage, { timestamp: res.candidate.timestamp, peakAudioTs: res.candidate.audio?.ts }, burstFrames)
         );
-        if (decision.isHighlight) {
+        if (isAcceptedHighlight(decision)) {
           const { clipId, clipUri } = await cut(res.candidate.timestamp);
           const rec: HighlightRecord = {
             id: randomUUID(),
