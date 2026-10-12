@@ -82,31 +82,30 @@ OUTCOME_TAXONOMY = (
 def normalize_outcome(value, *, is_highlight: bool | None = None) -> str:
     """Coerce an arbitrary model ``outcome`` value to a valid taxonomy member.
 
-    Defaults to ``not_highlight`` when absent/garbage. When ``is_highlight`` is
-    supplied it is enforced for consistency: an outcome of ``scoring_play`` or
-    ``big_play`` is always surfaced (isHighlight true); ``not_highlight`` is
-    never surfaced (isHighlight false); ``near_miss`` is surfaced (a near miss
-    is notable). A conflicting pair is resolved toward the frames read (the
-    frames are the primary evidence — increment F), i.e. the taxonomy member
-    wins and ``is_highlight`` is reconciled here rather than left contradictory.
+    Defaults to ``not_highlight`` when absent/garbage. The ``is_highlight``
+    argument is accepted for backward compatibility only; surfacing is decided
+    by `outcome_is_highlight` (ADAAAA-6598: ONLY `scoring_play` is a
+    board-accepted goal highlight; a near_miss/big_play read is never a score).
     """
     v = value if isinstance(value, str) else ""
     v = v.strip().lower()
     if v not in OUTCOME_TAXONOMY:
         v = "not_highlight"
-    if is_highlight is None:
-        return v
-    # Taxonomy <-> isHighlight consistency (crowd-alone rule, both directions):
-    # a scoring/big/near-miss outcome is surfaced; not_highlight never is. We
-    # return the reconciled member and the caller sets isHighlight from it.
     return v
 
 
 def outcome_is_highlight(outcome: str) -> bool:
-    """Whether an outcome taxonomy member surfaces as a highlight candidate.
-    scoring_play / big_play / near_miss are notable and surface; not_highlight
-    does not. A near miss is notable but NOT a scoring play (lower score)."""
-    return outcome in ("scoring_play", "big_play", "near_miss")
+    """Whether an outcome taxonomy member is a board-accepted GOAL highlight.
+
+    ONLY ``scoring_play`` (a frame-confirmed goal/score) is accepted as a
+    scoring highlight on the board. ``near_miss`` and ``big_play`` are notable
+    but are NOT a score — they must never surface as a scoring highlight
+    (ADAAAA-6598: the spurious GOAL list was full of near_miss/big_play reads
+    whose own reason said the ball did NOT enter the net). A near-miss /
+    big-play may be recorded distinctly (outcome/nearMiss preserved on the
+    decision) but is gated out of the accepted set by the caller.
+    """
+    return outcome == "scoring_play"
 
 
 def _rule_outcome(d) -> str:
@@ -197,26 +196,22 @@ def parse_decision(text: str) -> dict | None:
         reason = str(reason) if reason is not None else None
     # Increment F / ADAAAA-6465: outcome taxonomy. Parse + reconcile so a
     # model that says outcome=near_miss can never come back as a scored
-    # scoring_play. The taxonomy member is the primary read; is_highlight is
-    # reconciled from it (crowd-alone rule both directions: no frame evidence
-    # of the play => near_miss/not_highlight, never scoring_play). When the
-    # model supplied NO outcome field (legacy/pre-F reply), keep is_highlight
-    # as-is and derive the member from it so a true highlight is never demoted.
+    # scoring_play. ADAAAA-6598: ONLY a frame-confirmed scoring_play is a
+    # board-accepted GOAL highlight — a near_miss / big_play / not_highlight
+    # read NEVER surfaces as a scoring highlight, even when the model (or a
+    # later gate) set isHighlight=true, because the taxonomy is the
+    # authoritative frame read and IS the accept gate here.
     raw_outcome = obj.get("outcome")
     if raw_outcome is None:
         # Legacy/absent -> derive from the verdict, never overrule it.
         outcome = "scoring_play" if is_hl else "not_highlight"
     else:
         outcome = normalize_outcome(raw_outcome)
-        if is_hl and outcome == "not_highlight":
-            is_hl = False
-        if not is_hl and outcome in ("scoring_play", "big_play", "near_miss"):
-            # Model said the play is notable but isHighlight=false: trust the
-            # taxonomy (frames read), surface it. This is the direction that a
-            # loud-crowd-but-no-play must NOT take scoring_play upward (it won't,
-            # because the model must ground scoring_play in the frames); this only
-            # surfaces a real near_miss/big_play the model noted but forgot to flag.
-            is_hl = True
+        # The taxonomy member is the frame read and governs acceptance: only
+        # scoring_play is a board highlight; near_miss/big_play/not_highlight
+        # are rejected as scoring highlights regardless of the model's
+        # isHighlight field (which is where the spurious GOALs came from).
+        is_hl = outcome_is_highlight(outcome)
     return {
         "isHighlight": is_hl,
         "score": score,
@@ -320,7 +315,10 @@ def reconcile_outcome_with_ball_signal(decision: dict, ball_outcome: Optional[st
     (ADAAAA-6481). When `ball_outcome` is a near-miss class the verdict is
     `near_miss` regardless of the model's read (Gemma often dismisses a
     near-goal as `not_highlight`); it is NEVER `scoring_play` (the ball did
-    not go in). Mutates and returns `decision`.
+    not go in). ADAAAA-6598: a near-miss is recorded DISTINCTLY (outcome /
+    nearMiss preserved) but is NOT a board-accepted GOAL highlight, so
+    `isHighlight` is forced to False — it must never surface as a score on
+    the board. Mutates and returns `decision`.
 
     Only acts when the signal is a near-miss class; otherwise `decision` is
     returned unchanged (no regression for goals / no-signal / non-events)."""
@@ -328,20 +326,44 @@ def reconcile_outcome_with_ball_signal(decision: dict, ball_outcome: Optional[st
         return decision
     decision["outcome"] = "near_miss"
     decision["nearMiss"] = True
-    # A near-miss is notable and surfaces, but at a lower score band than a
-    # scoring play (never treated as a goal).
+    # A near-miss is notable and recorded distinctly, but is NEVER accepted as
+    # a scoring/GOAL highlight on the board (ADAAAA-6598).
+    decision["isHighlight"] = False
     try:
         sc = float(decision.get("score") or 0.0)
     except (TypeError, ValueError):
         sc = 0.0
     if sc >= 60.0:
         decision["score"] = 55.0
-    decision["isHighlight"] = True
     decision["reason"] = (
         (decision.get("reason") or "")
         + "; goal-line signal: goal-bound shot did not convert (near-miss)"
     ).strip("; ")
     decision["eventType"] = decision.get("eventType") or "NEAR_MISS"
+    return decision
+
+
+def finalize_goal_acceptance(decision: dict) -> dict:
+    """ADAAAA-6598: the SINGLE accept gate at the top of the decide route.
+
+    ONLY a frame-confirmed `scoring_play` is a board-accepted GOAL highlight.
+    A `near_miss` / `big_play` / `not_highlight` outcome is never surfaced as a
+    scoring highlight, regardless of what the model, the I2 ball-outcome gate,
+    the scoreboard force, or the notable-only apply_gate set `isHighlight` to.
+    This closes the loop on the two verified false positives (a near_miss at
+    t=1821s and a big_play at t=1954.9s whose own reason said the ball did NOT
+    enter the net) and on the high-value (GOAL) waiver that accepted a
+    corroborated-but-not-a-goal candidate. Mutates and returns `decision`."""
+    if decision.get("outcome") != "scoring_play":
+        decision["isHighlight"] = False
+        decision.setdefault(
+            "reason",
+            "",
+        )
+        decision["reason"] = (
+            (decision.get("reason") or "")
+            + f"; outcome={decision.get('outcome')} is not a scoring highlight"
+        ).strip("; ")
     return decision
 
 

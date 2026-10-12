@@ -779,9 +779,11 @@ def test_highlight_rule_mode_hard_gate_rejects_non_goal():
     assert r.status_code == 200
     body = r.json()
     # off_target now surfaces as a near-miss (not a rejection, not a goal).
+    # ADAAAA-6598: a near-miss is recorded distinctly but is NOT accepted as a
+    # GOAL highlight on the board (isHighlight stays false).
     assert body["outcome"] == "near_miss"
     assert body["nearMiss"] is True
-    assert body["isHighlight"] is True
+    assert body["isHighlight"] is False
     assert body["outcome"] != "scoring_play"
 
 
@@ -919,8 +921,9 @@ def test_parse_decision_crowd_without_frames_never_scoring_play():
     )
     assert d is not None
     assert d["outcome"] == "near_miss"
-    # near_miss is notable -> surfaced (isHighlight reconciled to true).
-    assert d["isHighlight"] is True
+    # ADAAAA-6598: a near_miss read is NOT accepted as a GOAL highlight on the
+    # board (isHighlight stays false); it is recorded distinctly, never scored.
+    assert d["isHighlight"] is False
 
 
 def test_parse_decision_not_highlight_deflates():
@@ -955,8 +958,11 @@ def test_normalize_outcome_garbage_defaults():
     assert normalize_outcome("near_miss") == "near_miss"
 
 
-def test_outcome_is_highlight_surfaces_near_miss_but_not_not_highlight():
+def test_outcome_is_highlight_only_scoring_play_surfaces():
+    # ADAAAA-6598: ONLY a frame-confirmed scoring_play is a board-accepted
+    # GOAL highlight. near_miss / big_play are notable-but-not-a-score and must
+    # never surface as a scoring highlight on the board.
     assert outcome_is_highlight("scoring_play") is True
-    assert outcome_is_highlight("near_miss") is True
-    assert outcome_is_highlight("big_play") is True
+    assert outcome_is_highlight("near_miss") is False
+    assert outcome_is_highlight("big_play") is False
     assert outcome_is_highlight("not_highlight") is False

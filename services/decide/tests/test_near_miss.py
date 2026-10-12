@@ -28,7 +28,9 @@ def test_reconcile_upgrades_not_highlight_to_near_miss():
     out = reconcile_outcome_with_ball_signal(d, "blocked")
     assert out["outcome"] == "near_miss"
     assert out["nearMiss"] is True
-    assert out["isHighlight"] is True
+    # ADAAAA-6598: a near-miss is recorded distinctly (outcome/nearMiss) but is
+    # NOT accepted as a GOAL highlight on the board (isHighlight stays false).
+    assert out["isHighlight"] is False
     assert out["outcome"] != "scoring_play"
 
 

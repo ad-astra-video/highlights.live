@@ -19,7 +19,7 @@ from .logging_setup import configure_logging  # noqa: E402  (defines log above)
 configure_logging()
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
-from .gemma import apply_ball_outcome_gate, decide_with_gemma, plan_tracking_with_gemma, _rule_outcome, is_near_miss_ball_outcome, reconcile_outcome_with_ball_signal
+from .gemma import apply_ball_outcome_gate, decide_with_gemma, finalize_goal_acceptance, plan_tracking_with_gemma, _rule_outcome, is_near_miss_ball_outcome, reconcile_outcome_with_ball_signal
 
 
 class ReactionEvidence(BaseModel):
@@ -376,11 +376,15 @@ def create_app() -> FastAPI:
             # event is a hard, independent confirmation — force isHighlight=true
             # regardless of the model's read (skipped when the I2 ball-outcome
             # gate already rejected). Absence is weak/absent evidence and never
-            # forces a goal (scoreboard_forces_goal is false).
+            # forces a goal (scoreboard_forces_goal is false). ADAAAA-6598: a
+            # scoreboard-confirmed goal is a REAL goal, so it is upgraded to
+            # scoring_play so the single accept gate (finalize_goal_acceptance)
+            # keeps it accepted even when the model leaned near_miss.
             elif scoreboard_forces_goal(
                 req.evidence.scoreBoardChanged, decision.get("eventType") or req.eventType
             ):
                 decision["isHighlight"] = True
+                decision["outcome"] = "scoring_play"
                 decision["reason"] = (
                     (decision.get("reason") or "")
                     + "; scoreboard score change confirmed"
@@ -409,6 +413,11 @@ def create_app() -> FastAPI:
                         + "; rejected by notable-only bar: "
                         + "; ".join(rejects)
                     ).strip("; ")
+            # ADAAAA-6598: single accept gate — ONLY a scoring_play is a
+            # board-accepted GOAL highlight. This overrides any earlier gate
+            # (high-value waiver, model isHighlight) for a near_miss/big_play/
+            # not_highlight read so no false positive reaches the board.
+            decision = finalize_goal_acceptance(decision)
             _log_highlight("gemma", req, decision)
             return decision
         ev = req.evidence.reaction.model_dump() if req.evidence.reaction else None
@@ -445,6 +454,10 @@ def create_app() -> FastAPI:
         }
         if is_near_miss_ball_outcome(ball_outcome):
             dec = reconcile_outcome_with_ball_signal(dec, ball_outcome)
+        # ADAAAA-6598: single accept gate — ONLY a scoring_play is a
+        # board-accepted GOAL highlight (a rule-path highlight maps to
+        # scoring_play; a near-miss read is rejected).
+        dec = finalize_goal_acceptance(dec)
         _log_highlight("rule", req, dec)
         return dec
 
