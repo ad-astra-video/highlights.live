@@ -335,3 +335,68 @@ def test_highlight_accepts_rich_detection_evidence():
     assert r.status_code < 400
     body = r.json()
     assert "isHighlight" in body
+
+
+# --- ADAAAA-6543 (ADAAAA-6538 pivot_vlm_judgment) ---------------------------
+# The goal-line / homography corroboration must NOT be a required accept gate.
+# A real goal is judged from the frames + audio-noise trigger directly, so an
+# ABSENT ballOutcome / goalCrossed (no field homography configured) must not
+# block acceptance; a non-goal with no corroboration must still be rejected
+# (false-positive guard) — the pivot must not become accept-all.
+
+
+def test_real_goal_no_homography_is_accepted():
+    # Criterion 1: a real GOAL candidate with NO ballOutcome (no homography
+    # configured) and an audio-noise-trigger reaction is accepted.
+    r = client.post(
+        "/app/highlight",
+        json={
+            "sessionId": "sess-6543-goal",
+            "eventType": "GOAL",
+            "timestamp": 12.0,
+            "evidence": {
+                "trackCount": 2,
+                "maxVelocity": 0.4,
+                "ocrHits": 0,
+                "scoreBoardChanged": False,
+                # NO ballOutcome / goalCrossed — no field homography configured.
+                "reaction": {
+                    "crowdEnergy": 0.93,
+                    "audioKind": "swell",
+                    "humansInMotion": 6,
+                    "ballSpeedMps": 21.4,
+                    "ballPossessionId": "t2",
+                },
+            },
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["isHighlight"] is True
+    assert "isHighlight" in body
+    assert "goal-line" not in body.get("reason", "").lower() or "not available" not in body.get("reason", "")
+
+
+def test_non_goal_un_corroborated_is_rejected():
+    # Criterion 2 (false-positive guard): a non-goal candidate with no
+    # corroboration (no tracks / velocity / reaction) is still rejected. The
+    # pivot must not turn decide into accept-all.
+    r = client.post(
+        "/app/highlight",
+        json={
+            "sessionId": "sess-6543-nongoal",
+            "eventType": "GOAL",
+            "timestamp": 12.0,
+            "evidence": {
+                "trackCount": 0,
+                "maxVelocity": 0.0,
+                "ocrHits": 0,
+                "scoreBoardChanged": False,
+                # no reaction — bare / mid-field trigger.
+            },
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["isHighlight"] is False
+
