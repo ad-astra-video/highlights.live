@@ -248,6 +248,21 @@ export interface ServerConfig {
    * type change. `RECHECK_INTERVAL_SECONDS` (default 10).
    */
   recheckIntervalSeconds: number;
+  /**
+   * ADAAAA-6577: base delay (ms) of the bounded exponential backoff slept
+   * between a perceive session-lost (HTTP 404 "runner not found") re-reserve
+   * and the next retry of the same frame in the analyzeJob pass. A flapping
+   * perceive runner 404s every /analyze; backing off (500ms -> 1s -> 2s -> …,
+   * capped) keeps the re-reserve cadence near ~1/sec and lets the pass ride
+   * through a brief runner recovery instead of hammering the orchestrator.
+   * `VOD_SESSION_RETRY_BACKOFF_MS` (default 500).
+   */
+  vodSessionRetryBackoffMs: number;
+  /** ADAAAA-6577: upper bound (ms) of that exponential backoff. The delay never
+   * exceeds this, so a long-lived flap still re-reserves at most every
+   * `maxReReserves` times per frame at the capped cadence and then aborts.
+   * `VOD_SESSION_RETRY_BACKOFF_MAX_MS` (default 8000). */
+  vodSessionRetryBackoffMaxMs: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -352,5 +367,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // field docs for the default rationale (3 s warm-up, 10 s recheck).
     warmupSeconds: Number(env.WARMUP_SECONDS ?? 3),
     recheckIntervalSeconds: Number(env.RECHECK_INTERVAL_SECONDS ?? 10),
+    // ADAAAA-6577: bounded exponential backoff between perceive session-lost
+    // re-reserve/retry attempts (shared analyzeJob loop; see the ServerConfig
+    // field docs for the recovery rationale).
+    vodSessionRetryBackoffMs: Number(env.VOD_SESSION_RETRY_BACKOFF_MS ?? 500),
+    vodSessionRetryBackoffMaxMs: Number(env.VOD_SESSION_RETRY_BACKOFF_MAX_MS ?? 8000),
   };
 }
