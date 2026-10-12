@@ -517,12 +517,43 @@ export class LivepeerClient {
   }
 
   /**
+   * Re-obtain fresh OrchestratorInfo for an EXISTING live-runner session so the
+   * payer can keep re-funding it. go-livepeer's remote signer returns HTTP 480
+   * ("refresh session for remote signer", remote_signer.go shouldRefreshSession)
+   * once the OrchestratorInfo's auth token / ticket params expire; the payer
+   * must mint fresh info for the SAME session (same manifest/session id) and
+   * re-sign. POST /refresh-payment (rpc.go RefreshPayment) returns a fresh
+   * challenge whose manifest_id equals the session's original manifest, so the
+   * session is preserved (ADAAAA-6575).
+   */
+  async refreshPaymentSession(
+    sender: string,
+    manifestID: string
+  ): Promise<{ paymentParams?: string; manifestId?: string; orchestrator?: string }> {
+    const res = await this.transport.request("POST", "/refresh-payment", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender, manifest_id: manifestID }),
+    });
+    if (res.status !== 200) {
+      throw new Error(`refresh payment session failed: HTTP ${res.status}`);
+    }
+    return (await res.json()) as { paymentParams?: string; manifestId?: string; orchestrator?: string };
+  }
+
+  /**
    * Interval payment refresh. No-op offchain (sessions are unpaid); no-op when
    * no signer. `orchInfoB64` is the base64 protobuf of the orchestrator's
    * `net.OrchestratorInfo` the signer needs to (re)issue a ticket; `signerState`
    * is the opaque signed state blob from the previous payment (null on first);
    * `manifestID` must equal the orchestrator's AuthToken.SessionId (else the
    * orchestrator returns `403 mismatched manifest and auth token`).
+   *
+   * On HTTP 480 from the signer (session needs a refresh so it can keep issuing
+   * fresh tickets), mints fresh OrchestratorInfo via `/refresh-payment` and
+   * re-signs once with it, so the reserved balance keeps topping up past the
+   * auth-token / ticket-params expiry instead of draining into a force-release
+   * (ADAAAA-6575). Returns the updated signerState AND the (possibly refreshed)
+   * orchestrator info so the caller persists the freshest one for the next tick.
    */
   async refreshPerceivePayment(
     sessionId: string,
@@ -530,23 +561,44 @@ export class LivepeerClient {
     signer?: SignerClient,
     orchInfoB64?: string,
     signerState?: RemotePaymentStateSig | null,
-    manifestID?: string
-  ): Promise<unknown> {
+    manifestID?: string,
+    payerAddress?: string
+  ): Promise<{ signerState: unknown; orchInfoB64: string } | null> {
     if (!signer) return null;
     if (!orchInfoB64) throw new Error("payment refresh requires orchestrator info (orchInfoB64)");
-    const paid = await signer.generateLivePayment(orchInfoB64, signerState ?? null, {
-      // The signer validates `state.App == req.App` on every refresh (remote
-      // signer `GenerateLivePayment`): omitting `app` sends "" and the signer
-      // rejects with `400 app mismatch` once state has been established by the
-      // paid reserve (which set app=ROUTES.perceive). Keep it stable.
-      app: ROUTES.perceive,
-      type: "live",
-      manifestID,
-    });
-    const res = await this.transport.request("POST", `${controlUrl}/payment`, {
-      headers: { "Livepeer-Payment": paid.payment, "Livepeer-Segment": paid.segCreds },
-    });
-    if (res.status >= 400) throw new Error(`payment refresh failed: HTTP ${res.status}`);
-    return paid.signerState;
+    const doSign = async (infoB64: string) => {
+      let paid: LivePayment;
+      try {
+        paid = await signer.generateLivePayment(infoB64, signerState ?? null, {
+          // The signer validates `state.App == req.App` on every refresh (remote
+          // signer `GenerateLivePayment`): omitting `app` sends "" and the signer
+          // rejects with `400 app mismatch` once state has been established by the
+          // paid reserve (which set app=ROUTES.perceive). Keep it stable.
+          app: ROUTES.perceive,
+          type: "live",
+          manifestID,
+        });
+      } catch (err) {
+        // A 480 from the signer means its session's OrchestratorInfo auth-token /
+        // ticket-params expired and it wants a session refresh (fresh info), not a
+        // new payment. Let the caller re-mint info and retry (ADAAAA-6575).
+        if (isSessionRefreshError(err) && payerAddress && manifestID) {
+          const fresh = await this.refreshPaymentSession(payerAddress, manifestID);
+          if (fresh?.paymentParams) return await doSign(fresh.paymentParams);
+        }
+        throw err;
+      }
+      const res = await this.transport.request("POST", `${controlUrl}/payment`, {
+        headers: { "Livepeer-Payment": paid.payment, "Livepeer-Segment": paid.segCreds },
+      });
+      if (res.status >= 400) throw new Error(`payment refresh failed: HTTP ${res.status}`);
+      return { signerState: paid.signerState, orchInfoB64: infoB64 };
+    };
+    return await doSign(orchInfoB64);
   }
+}
+
+/** True when the remote signer asks the payer to refresh the session (HTTP 480). */
+function isSessionRefreshError(err: unknown): boolean {
+  return err instanceof Error && /\bHTTP 480\b/.test(err.message);
 }
