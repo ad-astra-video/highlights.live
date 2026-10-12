@@ -479,6 +479,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         clipAfterS: cfg.clipAfterS,
         gameHint: job.gameHint || cfg.gameHintDefault,
         preferLabels: job.preferLabels,
+        // ADAAAA-6577: bounded exponential backoff between a perceive
+        // session-lost re-reserve and the retry of the same frame.
+        sessionRetryBackoffMs: cfg.vodSessionRetryBackoffMs,
+        sessionRetryBackoffMaxMs: cfg.vodSessionRetryBackoffMaxMs,
         // ADAAAA-6314 Path 2: live trigger candidates forward the surrounding
         // audio clip so the decide prompt gets ASR'd audio context (env-gated).
         audioContext: cfg.audioContext,
@@ -609,6 +613,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       clipAfterS: cfg.clipAfterS,
       gameHint: job.gameHint || cfg.gameHintDefault,
       preferLabels: job.preferLabels,
+      // ADAAAA-6577: bounded exponential backoff between a perceive session-
+      // lost re-reserve and the retry of the same frame (shared analyzeJob
+      // loop; default 500ms base / 8000ms cap).
+      sessionRetryBackoffMs: cfg.vodSessionRetryBackoffMs,
+      sessionRetryBackoffMaxMs: cfg.vodSessionRetryBackoffMaxMs,
       // Detail-first knobs (ADAAAA-4954): deeper than live (2 fps / 640p / 24
       // frame window). Opt into the temporal frames[] + audio decide payload.
       sampleFps: cfg.vodDetailFps,

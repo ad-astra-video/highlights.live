@@ -8,6 +8,8 @@ import {
   SessionLostError,
   pcmInt16ToWavB64,
   rmsNormalized,
+  sleep,
+  backoffDelayMs,
   DEFAULT_ANALYSIS_FPS,
   DEFAULT_MAX_FRAMES_PER_ANALYSIS,
   type PipelineClient,
@@ -334,7 +336,7 @@ describe("analyzeJob", () => {
       client.client,
       frames(3),
       async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
-      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" }
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", sessionRetryBackoffMs: 0, sessionRetryBackoffMaxMs: 0 }
     );
     // 2 reserves (initial + one re-reserve), 4 analyze invocations (3 frames,
     // with the 2nd frame's lost-session 404 retried once on the fresh session),
@@ -362,7 +364,7 @@ describe("analyzeJob", () => {
         client.client,
         frames(2),
         async (ts) => ({ clipId: "c", clipUri: "u" }),
-        { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", maxReReserves: 2 }
+        { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", maxReReserves: 2, sessionRetryBackoffMs: 0, sessionRetryBackoffMaxMs: 0 }
       )
     ).rejects.toBeInstanceOf(SessionLostError);
     // 1 initial + maxReReserves=2 retries (the 3rd analyze throws straight out).
@@ -390,6 +392,42 @@ describe("analyzeJob", () => {
       })
     ).rejects.toThrow("HTTP 503");
     expect(reserveCalls).toBe(1);
+  });
+
+  it("sleeps bounded exponential backoff between session-lost re-reserves (ADAAAA-6577)", async () => {
+    // Stub setTimeout to record the requested delay and resolve immediately via
+    // microtask, so the loop proceeds without real waiting while we capture the
+    // backoff cadence. Only the sleep() backoff uses setTimeout on this path
+    // (the plan controller re-check uses setInterval), so `delays` is exact.
+    const delays: number[] = [];
+    const spy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation(((cb: () => void, ms: number) => {
+        delays.push(ms);
+        queueMicrotask(cb);
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }) as typeof setTimeout);
+    const client = fakeClient({
+      analyze: async () => {
+        throw new SessionLostError();
+      },
+      reservePerceive: async () => ({ sessionId: "sess-r", appUrl: "", controlUrl: "" }),
+    });
+    await expect(
+      analyzeJob(client.client, frames(1), async (ts) => ({ clipId: "c", clipUri: "u" }), {
+        jobId: "j",
+        clipBeforeS: 4,
+        clipAfterS: 4,
+        gameHint: "",
+        maxReReserves: 3,
+        sessionRetryBackoffMs: 500,
+        sessionRetryBackoffMaxMs: 8000,
+      })
+    ).rejects.toBeInstanceOf(SessionLostError);
+    spy.mockRestore();
+    // One backoff sleep per re-reserve, doubling then capped: 500 -> 1000 -> 2000
+    // (maxReReserves=3, base 500ms, cap 8000ms). No request storm.
+    expect(delays).toEqual([500, 1000, 2000]);
   });
 
   it("delivers the job's closed vocabulary to perceive on every analyze (ADAAAA-4109)", async () => {
@@ -1142,5 +1180,29 @@ describe("frame-sequence assembler (increment F, ADAAAA-6465)", () => {
       postWindowS: 3,
     });
     expect(res).toEqual([]);
+  });
+});
+
+describe("bounded exponential backoff helpers (ADAAAA-6577)", () => {
+  it("backoffDelayMs doubles per attempt from the base and caps at max", () => {
+    // Defaults: base 500ms, cap 8000ms -> 500, 1s, 2s, 4s, then capped at 8s.
+    expect(backoffDelayMs(0, 500, 8000)).toBe(500);
+    expect(backoffDelayMs(1, 500, 8000)).toBe(1000);
+    expect(backoffDelayMs(2, 500, 8000)).toBe(2000);
+    expect(backoffDelayMs(3, 500, 8000)).toBe(4000);
+    expect(backoffDelayMs(4, 500, 8000)).toBe(8000);
+    // Cap holds so a long-lived flap never exceeds the max cadence.
+    expect(backoffDelayMs(5, 500, 8000)).toBe(8000);
+    expect(backoffDelayMs(100, 500, 8000)).toBe(8000);
+  });
+
+  it("backoffDelayMs clamps a negative attempt to the base (no negative delay)", () => {
+    expect(backoffDelayMs(-1, 500, 8000)).toBe(500);
+  });
+
+  it("sleep resolves after roughly the requested delay", async () => {
+    const t0 = Date.now();
+    await sleep(20);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(15);
   });
 });
