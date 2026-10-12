@@ -205,4 +205,48 @@ describe("LivepeerClient", () => {
       orchInfoB64: "ZnJlc2g=",
     });
   });
+
+  it("refreshPerceivePayment treats signer HTTP 482 (no new tickets needed) as a benign no-op, not a failure (ADAAAA-6588)", async () => {
+    // 482 = the signer's committed reserve already covers the orchestrator's
+    // minimum credit for the billable window; nothing new to POST to the
+    // orchestrator. Must NOT throw and must NOT hit the <controlUrl>/payment
+    // endpoint (there is no fresh ticket to deliver).
+    const t = new MockTransport([]);
+    const c = new LivepeerClient("http://orch", t);
+    const signer: SignerClient = {
+      async discover() {
+        return [];
+      },
+      async signOrchInfo() {
+        return { a: 1 };
+      },
+      async generateLivePayment() {
+        throw new Error("signer generateLivePayment failed: HTTP 482");
+      },
+    };
+    const out = await c.refreshPerceivePayment("s1", "http://c", signer, "b3JjaA==", null, "sess-1", "0xabc");
+    // Benign no-op: no payment POST, fresh state not advanced (caller keeps the
+    // last known-good state so the next tick still carries the funded reserves).
+    expect(out).toBeNull();
+    expect(t.calls.length).toBe(0);
+  });
+
+  it("refreshPerceivePayment treats signer HTTP 481 (price over ceiling) as a benign no-op, not a failure (ADAAAA-6588)", async () => {
+    const t = new MockTransport([]);
+    const c = new LivepeerClient("http://orch", t);
+    const signer: SignerClient = {
+      async discover() {
+        return [];
+      },
+      async signOrchInfo() {
+        return { a: 1 };
+      },
+      async generateLivePayment() {
+        throw new Error("signer generateLivePayment failed: HTTP 481");
+      },
+    };
+    const out = await c.refreshPerceivePayment("s1", "http://c", signer, "b3JjaA==", null, "sess-1", "0xabc");
+    expect(out).toBeNull();
+    expect(t.calls.length).toBe(0);
+  });
 });
