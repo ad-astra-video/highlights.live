@@ -19,7 +19,7 @@ update-ca-certificates >/dev/null 2>&1 || true
 set -- livepeer \
   -remoteSigner \
   -remoteDiscovery \
-  -network arbitrum-one \
+  -network ${NETWORK:-arbitrum-one-mainnet} \
   -httpAddr "$HTTP_ADDR" \
   -cliAddr "$CLI_ADDR" \
   -ethUrl "$ARBITRUM_RPC" \
