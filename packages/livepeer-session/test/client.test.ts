@@ -137,11 +137,116 @@ describe("LivepeerClient", () => {
     // The 4th arg is now the base64 net.OrchestratorInfo (go-livepeer requires
     // it in every /generate-live-payment call); the 5th is the opaque state.
     const out = await c.refreshPerceivePayment("s1", "http://c", signer, "b3JjaA==", null);
-    expect(out).toMatchObject({ State: "c3RhdGU=", Sig: "c2ln" });
+    // ADAAAA-6575: refresh returns both the new signerState AND the OrchestratorInfo
+    // it was signed against, so the caller can keep re-funding the same session.
+    expect(out).toMatchObject({
+      signerState: { State: "c3RhdGU=", Sig: "c2ln" },
+      orchInfoB64: "b3JjaA==",
+    });
     expect(t.calls[0].url).toBe("http://c/payment");
     expect(t.calls[0].headers).toMatchObject({ "Livepeer-Payment": "P", "Livepeer-Segment": "S" });
     // Refresh must restate the app (ROUTES.perceive) or the signer rejects the
     // established state with `400 app mismatch`.
     expect(refreshOpts).toEqual([{ app: ROUTES.perceive, type: "live", manifestID: undefined }]);
+  });
+
+  it("refreshPerceivePayment re-mints fresh info via /refresh-payment on signer HTTP 480 and re-signs", async () => {
+    // First transport call = /refresh-payment (returns a fresh OrchestratorInfo);
+    // second = the re-sign's POST to <controlUrl>/payment.
+    const t = new MockTransport([
+      // The orchestrator returns the challenge in the SAME snake_case shape as the
+      // 402 reserve body (liveRunnerPaymentChallengeResponse: `payment_params`,
+      // `manifest_id`, `orchestrator`). Parse it, don't cast to camelCase.
+      { status: 200, data: { payment_params: "ZnJlc2g=", manifest_id: "sess-1", orchestrator: "http://orch" } },
+      { status: 200, data: { ok: true } },
+    ]);
+    const c = new LivepeerClient("http://orch", t);
+    const signedB64: string[] = [];
+    const refreshOpts: unknown[] = [];
+    let first = true;
+    const signer: SignerClient = {
+      async discover() {
+        return [];
+      },
+      async signOrchInfo() {
+        return { a: 1 };
+      },
+      async generateLivePayment(b64: string, _prev: unknown, opts: unknown = {}) {
+        signedB64.push(b64);
+        refreshOpts.push(opts);
+        // First sign on the expired OrchestratorInfo -> the signer asks the payer
+        // to refresh the session (HTTP 480); the caller re-mints info and tries once.
+        if (first) {
+          first = false;
+          throw new Error("signer generateLivePayment failed: HTTP 480");
+        }
+        return { payment: "P", segCreds: "S", signerState: { State: "c3RhdGU=", Sig: "c2ln" } };
+      },
+    };
+    const out = await c.refreshPerceivePayment(
+      "s1",
+      "http://c",
+      signer,
+      "b3JjaA==",
+      null,
+      "sess-1",
+      "0xabc"
+    );
+    // The first sign (with the expired info) threw 480 -> /refresh-payment minted a
+    // fresh OrchestratorInfo (ZnJlc2g=) -> the retry signed with it.
+    expect(signedB64).toEqual(["b3JjaA==", "ZnJlc2g="]);
+    expect(t.calls[0].url).toBe("/refresh-payment");
+    expect(JSON.parse(t.calls[0].body as string)).toEqual({ sender: "0xabc", manifest_id: "sess-1" });
+    expect(t.calls[1].url).toBe("http://c/payment");
+    // The freshest OrchestratorInfo is returned so the caller persists it for the
+    // next tick instead of re-using the expired one.
+    expect(out).toMatchObject({
+      signerState: { State: "c3RhdGU=", Sig: "c2ln" },
+      orchInfoB64: "ZnJlc2g=",
+    });
+  });
+
+  it("refreshPerceivePayment treats signer HTTP 482 (no new tickets needed) as a benign no-op, not a failure (ADAAAA-6588)", async () => {
+    // 482 = the signer's committed reserve already covers the orchestrator's
+    // minimum credit for the billable window; nothing new to POST to the
+    // orchestrator. Must NOT throw and must NOT hit the <controlUrl>/payment
+    // endpoint (there is no fresh ticket to deliver).
+    const t = new MockTransport([]);
+    const c = new LivepeerClient("http://orch", t);
+    const signer: SignerClient = {
+      async discover() {
+        return [];
+      },
+      async signOrchInfo() {
+        return { a: 1 };
+      },
+      async generateLivePayment() {
+        throw new Error("signer generateLivePayment failed: HTTP 482");
+      },
+    };
+    const out = await c.refreshPerceivePayment("s1", "http://c", signer, "b3JjaA==", null, "sess-1", "0xabc");
+    // Benign no-op: no payment POST, fresh state not advanced (caller keeps the
+    // last known-good state so the next tick still carries the funded reserves).
+    expect(out).toBeNull();
+    expect(t.calls.length).toBe(0);
+  });
+
+  it("refreshPerceivePayment treats signer HTTP 481 (price over ceiling) as a benign no-op, not a failure (ADAAAA-6588)", async () => {
+    const t = new MockTransport([]);
+    const c = new LivepeerClient("http://orch", t);
+    const signer: SignerClient = {
+      async discover() {
+        return [];
+      },
+      async signOrchInfo() {
+        return { a: 1 };
+      },
+      async generateLivePayment() {
+        throw new Error("signer generateLivePayment failed: HTTP 481");
+      },
+    };
+    const out = await c.refreshPerceivePayment("s1", "http://c", signer, "b3JjaA==", null, "sess-1", "0xabc");
+    expect(out).toBeNull();
+    expect(t.calls.length).toBe(0);
   });
 });

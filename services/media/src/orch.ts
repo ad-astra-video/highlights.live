@@ -356,16 +356,26 @@ export class MediaOrchestrator {
         "startPayment requires orchestrator info (orchInfoB64) from a paid reserve's 402 challenge"
       );
     }
+    // The OrchestratorInfo used for each refresh. On a 480 from the remote
+    // signer (the session's auth-token / ticket-params expired) the refresher
+    // re-mints fresh info via /refresh-payment and returns it — adopt it so the
+    // balance keeps topping up past the ~10-min token window (ADAAAA-6575).
+    let orchB64 = orchInfoB64;
+    const payerAddress = this.opts.payerAddress;
     const refresh = async () => {
       const next = await this.clientFor(p.controlUrl).refreshPerceivePayment(
         p.sessionId,
         p.controlUrl,
         signer,
-        orchInfoB64,
+        orchB64,
         signerState,
-        manifestID
+        manifestID,
+        payerAddress
       );
-      if (next !== undefined && next !== null) signerState = next as RemotePaymentStateSig;
+      if (next) {
+        signerState = next.signerState as RemotePaymentStateSig | null;
+        if (next.orchInfoB64) orchB64 = next.orchInfoB64;
+      }
     };
     const ref = createPaymentRefresher({
       refresh,
