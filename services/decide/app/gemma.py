@@ -15,6 +15,18 @@ changed / crowd erupted), and (c) return isHighlight=false when a required
 criterion is unverifiable or explicitly contradicted. The response carries a
 structured `verdict` + `evidenceAttested` (plus the independent `reasoning`)
 so a reviewer can see *why* the decision was made, grounded in the evidence.
+
+ADAAAA-6543 (ADAAAA-6538 pivot_vlm_judgment): the goal-line / homography
+corroboration is de-emphasized from a hard accept gate to OPTIONAL
+corroboration. A real goal is judged directly from the frames + the
+audio-noise trigger, and an absent `ballOutcome`/line-crossing (no field
+homography configured, or the instant not captured at the sampled frame) is
+NOT a rejection by itself. Rejection is reserved for frames that EXPLICITLY
+CONTRADICT a goal (ball did not enter the net). The deterministic
+`apply_ball_outcome_gate`/`apply_gate` post-processing still only ever gates
+on *present* measured evidence, never on its absence (see ADAAAA-6533 root
+cause: 0 accepted highlights because every live candidate carried no
+homography and the prompt conservatively rejected).
 """
 
 from __future__ import annotations
@@ -517,11 +529,12 @@ def build_prompt(
         "full read of the frames, audio, and context; never let reaction alone "
         "override a clear read of the play.\n"
         "For soccer (game hint contains 'soccer'), the candidate is a GOAL and "
-        "the clip is a highlight ONLY if you can verify a goal was actually "
-        "scored. Explicit goal criteria - verify each against the frames/audio, "
-        "and mark a criterion false when the ball plainly did NOT enter the net "
-        "or a goal was plainly NOT scored, and leave it null (unverifiable) when "
-        "you cannot tell:\n"
+        "the clip is a highlight when the frames + audio show the team actually "
+        "SCORED. Judge the goal from the full visual + audio read (frames + "
+        "audio-noise trigger), NOT from the geometric goal-line corroboration "
+        "alone. Explicit goal signals - assess each against the frames/audio, "
+        "mark it true when you plainly see it, false when the frames plainly "
+        "show it did NOT happen, and null (unverifiable) when you cannot tell:\n"
         "- ballCrossedLineBetweenPosts: you plainly see the ball cross the goal "
         "line between the uprights;\n"
         "- ballInNet: the ball is in the net / the net ripples / the keeper is "
@@ -529,10 +542,16 @@ def build_prompt(
         "- scoreboardChanged: the scoreboard / score readout changes to reflect "
         "a goal;\n"
         "- crowdErupted: the crowd/commentary erupts consistent with a goal.\n"
-        "A GOAL counts as verified (isHighlight=true) only when the required "
-        "ball criteria (ballCrossedLineBetweenPosts AND ballInNet) are true, with "
-        "the reaction criteria consistent. Do NOT flag a soccer clip as a "
-        "highlight when it shows:\n"
+        "A GOAL is confirmed (isHighlight=true) when the aggregate evidence "
+        "supports it: the ball ends in the net / the net ripples / the keeper is "
+        "beaten AND the crowd/commentary erupts consistent with a goal. The "
+        "goal-line / homography corroboration (ballOutcome, "
+        "ballCrossedLineBetweenPosts) is OPTIONAL corroboration, NOT a required "
+        "gate: when it is absent (no field homography configured, or the "
+        "line-crossing instant is not captured at the sampled frame) judge the "
+        "goal DIRECTLY from the frames + audio-noise trigger, and do NOT reject "
+        "just because you could not confirm the exact line crossing. Do NOT flag "
+        "a soccer clip as a highlight when it shows:\n"
         "- a yellow card, red card, booking, foul, tackle, or any disciplinary "
         "incident (referee showing a card, players confronting, a player sent "
         "off);\n"
@@ -540,13 +559,17 @@ def build_prompt(
         "blocked shot, or any chance in which the ball does NOT enter the net;\n"
         "- only open play, build-up, players running, warm-ups, or a celebration "
         "with no ball in the net.\n"
-        "When a required goal criterion is UNVERIFIABLE (you cannot confirm the "
-        "ball crossed the line / is in the net) or is EXPLICITLY CONTRADICTED by "
-        "what you see (e.g. you see the ball hit the post, go over the bar, be "
-        "saved, or the clip is warm-ups/lull with no strike), you MUST return "
-        "isHighlight=false and name the contradicting evidence in `reason` and in "
-        "verdict.contradictedBy. NEVER infer a goal from the candidate event "
-        "type, from players celebrating, or from crowd/commentary alone.\n"
+        "Goal-line corroboration that is UNVERIFIABLE (you cannot confirm the "
+        "ball crossed the line / is in the net because the instant was not "
+        "captured or no homography is configured) is NOT a rejection by itself - "
+        "decide on your full read of the frames + audio. You MUST return "
+        "isHighlight=false ONLY when the frames EXPLICITLY CONTRADICT a goal - "
+        "you plainly see the ball did NOT enter the net (it hit the post or bar, "
+        "was saved, went over or wide, or the ball stays in midfield / the clip "
+        "is warm-up or lull with no strike) - and name the contradicting evidence "
+        "in `reason` and in verdict.contradictedBy. NEVER infer a goal from the "
+        "candidate event type, or from players celebrating / crowd erupting ALONE "
+        "when the frames show the ball did NOT enter the net.\n"
         "HARD GATE — perceived goal-line ground truth: when the context reports a "
         "`ballOutcome` (goal-line ground-truth from perceive's homography), it is "
         "a decisive measurement of whether the ball entered the goal. If "
