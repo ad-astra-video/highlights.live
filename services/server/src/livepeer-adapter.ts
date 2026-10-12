@@ -11,6 +11,7 @@ import {
 } from "@highlights/livepeer-session";
 import type { ServerConfig } from "./config";
 import { createPaymentRefresher, type PaymentRefresher } from "./payment";
+import type { PerceiveSessionLedger } from "./perceive-ledger";
 import type {
   AudioCandidate,
   AudioChunk,
@@ -50,6 +51,10 @@ export interface PaidOrchestratorOptions {
   payerAddress?: string;
   /** Payment-refresh interval in ms (default 10_000). */
   paymentIntervalMs?: number;
+  /** Durable ledger of funded perceive sessions, so a server restart can
+   * release any the previous process left funded instead of letting the
+   * orchestrator bill-and-force-release them (ADAAAA-6586). */
+  ledger?: PerceiveSessionLedger;
 }
 
 export class OrchestratorAdapter implements PipelineClient {
@@ -60,12 +65,15 @@ export class OrchestratorAdapter implements PipelineClient {
   private app = "highlights-perceive";
   /** Per-session payment refreshers (on-chain only). */
   private payers = new Map<string, PaymentRefresher>();
+  /** Durable ledger of funded sessions (survives a server restart). */
+  private ledger?: PerceiveSessionLedger;
 
   constructor(cfg: ServerConfig, opts: PaidOrchestratorOptions = {}) {
     this.client = new LivepeerClient(cfg.orchestratorUrl);
     this.signer = opts.signer;
     this.payerAddress = opts.payerAddress;
     this.paymentIntervalMs = opts.paymentIntervalMs ?? 10_000;
+    this.ledger = opts.ledger;
   }
 
   /**
@@ -167,6 +175,12 @@ export class OrchestratorAdapter implements PipelineClient {
     });
     this.payers.set(p.sessionId, ref);
     ref.start();
+    // Persist the funded session so a server restart (which drops the in-memory
+    // refreshers) knows to release it instead of letting the orchestrator
+    // account it to `insufficient balance` and force-release it (ADAAAA-6586).
+    this.ledger?.register(p.sessionId).catch((e) =>
+      console.error(`[adapter] ledger register ${p.sessionId} failed:`, (e as Error)?.message || e)
+    );
   }
   async analyze(
     sessionId: string,
@@ -408,6 +422,12 @@ export class OrchestratorAdapter implements PipelineClient {
       this.payers.delete(sessionId);
     }
     await this.client.stopPerceive(sessionId);
+    // Drop the durable ledger entry only once the orchestrator confirmed the
+    // stop (or already-absent session -> 404 = success), so a failed release
+    // stays registered for a later boot reconcile retry (ADAAAA-6586).
+    this.ledger?.unregister(sessionId).catch((e) =>
+      console.error(`[adapter] ledger unregister ${sessionId} failed:`, (e as Error)?.message || e)
+    );
   }
 }
 
@@ -581,11 +601,11 @@ function normalizeObservation(body: any): ObservationResult {
   return { observation: body };
 }
 
-export function makeAdapter(cfg: ServerConfig): PipelineClient {
+export function makeAdapter(cfg: ServerConfig, opts?: { ledger?: PerceiveSessionLedger }): PipelineClient {
   if (cfg.perceiveUrl && cfg.decideUrl) return new DirectAdapter(cfg);
   // On-chain: wire the remote signer + payer address so VOD submissions can pay
   // the orchestrator (mirrors the live media-server payer). Offchain (no signer)
   // this is the old unpaid path and the orchestrator never 402s.
   const signer = cfg.signerUrl ? new HttpSignerClient(cfg.signerUrl, undefined, cfg.signerAuthToken) : undefined;
-  return new OrchestratorAdapter(cfg, { signer, payerAddress: cfg.payerAddress });
+  return new OrchestratorAdapter(cfg, { signer, payerAddress: cfg.payerAddress, ledger: opts?.ledger });
 }

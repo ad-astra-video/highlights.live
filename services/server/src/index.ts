@@ -1,4 +1,5 @@
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { loadConfig } from "./config";
 import { Store } from "./store";
 import { openDb } from "./db";
@@ -10,6 +11,7 @@ import { makeAdapter } from "./livepeer-adapter";
 import { makeMailer } from "./mailer";
 import { runRejectSweep } from "./lifecycle";
 import { runDatasetPurgeSweep, scheduleDatasetsPurgeForOwner } from "./dataset-lifecycle";
+import { filePerceiveSessionLedger, releaseOrphanedPerceiveSessions } from "./perceive-ledger";
 import Stripe from "stripe";
 
 /** Schedule the rejected-clip TTL sweep (runs at least once per `interval`,
@@ -104,10 +106,37 @@ async function main() {
     console.log("clip auto-publish: ON — generated clips go straight to the public /feed (admin review off).");
   }
 
-  const adapter = makeAdapter(cfg);
+  // Durable ledger of on-chain funded perceive sessions (ADAAAA-6586). Only
+  // meaningful on the on-chain orchestrator path (signer + payer); a session
+  // with no running payment refresher is never force-released.
+  const perceiveLedger =
+    cfg.signerUrl && cfg.payerAddress
+      ? filePerceiveSessionLedger(join(cfg.dataDir, "perceive-sessions.json"))
+      : undefined;
+  const adapter = makeAdapter(cfg, { ledger: perceiveLedger });
   const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements, mailer: mailer ?? undefined });
   scheduleRejectSweep(cfg, store);
   scheduleDatasetPurgeSweep(cfg, db);
+  // A container recreate mid-VOD drops the in-memory payment refreshers, so a
+  // perceive session the orchestrator still holds stops being funded and would
+  // be force-released with `insufficient balance`. Release any the previous
+  // process left funded before serving new work; release is idempotent on the
+  // orchestrator, and a failure logs + stays in the ledger for the next boot.
+  if (perceiveLedger) {
+    try {
+      const { released, failed } = await releaseOrphanedPerceiveSessions(adapter, perceiveLedger);
+      if (released.length || failed.length) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `perceive-ledger: released ${released.length} orphaned perceive session(s)` +
+            (failed.length ? `, ${failed.length} failed (kept for retry)` : "")
+        );
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("perceive-ledger reconcile error:", e);
+    }
+  }
   await app.listen({ port: cfg.port, host: "0.0.0.0" });
   // eslint-disable-next-line no-console
   console.log(`highlights server on :${cfg.port} (orchestrator=${cfg.orchestratorUrl})`);
