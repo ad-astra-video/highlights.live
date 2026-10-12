@@ -154,7 +154,10 @@ describe("LivepeerClient", () => {
     // First transport call = /refresh-payment (returns a fresh OrchestratorInfo);
     // second = the re-sign's POST to <controlUrl>/payment.
     const t = new MockTransport([
-      { status: 200, data: { paymentParams: "ZnJlc2g=", manifestId: "sess-1" } },
+      // The orchestrator returns the challenge in the SAME snake_case shape as the
+      // 402 reserve body (liveRunnerPaymentChallengeResponse: `payment_params`,
+      // `manifest_id`, `orchestrator`). Parse it, don't cast to camelCase.
+      { status: 200, data: { payment_params: "ZnJlc2g=", manifest_id: "sess-1", orchestrator: "http://orch" } },
       { status: 200, data: { ok: true } },
     ]);
     const c = new LivepeerClient("http://orch", t);

@@ -537,7 +537,21 @@ export class LivepeerClient {
     if (res.status !== 200) {
       throw new Error(`refresh payment session failed: HTTP ${res.status}`);
     }
-    return (await res.json()) as { paymentParams?: string; manifestId?: string; orchestrator?: string };
+    // `/refresh-payment` (and `/payment`) return the challenge in the SAME
+    // snake_case shape as the 402 reserve body (`liveRunnerPaymentChallengeResponse`:
+    // `payment_params`, `manifest_id`, `orchestrator`). We previously cast to
+    // camelCase (`paymentParams`), so the fresh OrchestratorInfo was always
+    // `undefined` and the 480 recovery re-threw the 480 — leaving the perceive
+    // session to drain into a force-release (~every 9m45s). Reuse
+    // `livePaymentChallengeFromBody` so the field mapping stays in one place
+    // (ADAAAA-6575).
+    const body = (await res.json()) as Record<string, unknown>;
+    const challenge = livePaymentChallengeFromBody(body);
+    return {
+      paymentParams: challenge?.paymentParams,
+      manifestId: challenge?.manifestId ?? manifestID,
+      orchestrator: typeof body?.orchestrator === "string" ? (body.orchestrator as string) : undefined,
+    };
   }
 
   /**
