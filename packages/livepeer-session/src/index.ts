@@ -302,6 +302,25 @@ export class HttpSignerClient implements SignerClient {
       headers: this.authHeaders({ "Content-Type": "application/json" }),
       body,
     });
+    if (res.status === 482) {
+      // go-livepeer returns 482 "no new tickets needed", but (ADAAAA-6609) the
+      // response body now ALSO carries the re-signed, fee-accounted state. Surface
+      // it on the thrown error so `refreshPerceivePayment` persists the DRAINED
+      // balance and the signer mints a refill before the orchestrator's reserved
+      // balance reaches the fee trough. No payment is POSTed this tick (482 still
+      // means "no new tickets").
+      let drained: RemotePaymentStateSig | null = null;
+      try {
+        drained = ((await res.json()) as RemotePaymentResponse).state ?? null;
+      } catch {
+        drained = null;
+      }
+      const err = new Error(`signer generateLivePayment failed: HTTP ${res.status}`) as Error & {
+        signerState?: RemotePaymentStateSig | null;
+      };
+      err.signerState = drained;
+      throw err;
+    }
     if (res.status !== 200) throw new Error(`signer generateLivePayment failed: HTTP ${res.status}`);
     const parsed = (await res.json()) as RemotePaymentResponse;
     return {
@@ -606,10 +625,15 @@ export class LivepeerClient {
         // This is an EXPECTED state (a long-lived session sits in it most of the
         // time), not a payment failure — treat it as a benign no-op so the
         // refresher does not misclassify an already-funded session as a broken
-        // one and spam `payment refresh failed` (ADAAAA-6588). We deliberately do
-        // NOT return a value here (null => caller keeps the freshest state and
-        // stays funded for the next tick).
-        if (isNoTicketsError(err)) return null;
+        // one and spam `payment refresh failed` (ADAAAA-6588). BUT (ADAAAA-6609)
+        // the signer's 482 body now carries the re-signed, fee-accounted state;
+        // persist it so the next tick sees the DRAINED balance and the signer
+        // mints a refill before the orchestrator's reserved balance reaches the
+        // fee trough. We deliberately do NOT POST a new payment here.
+        if (isNoTicketsError(err)) {
+          const drained = (err as Error & { signerState?: RemotePaymentStateSig | null }).signerState;
+          return { signerState: drained ?? signerState ?? null, orchInfoB64: infoB64 };
+        }
         // 481 = "orchestrator price exceeds ceiling": the signer refuses to mint
         // above `maxPricePerUnit`; the session is already funded at the agreed
         // price, so a refresh that would exceed the ceiling is also a benign no-op
