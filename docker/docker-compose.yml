@@ -461,6 +461,12 @@ services:
       - ETH_PASSWORD=${SIGNER_PASSWORD:-testbroadcaster}
       - SIGNER_AUTH_TOKEN=${SIGNER_AUTH_TOKEN:-}
       - MAX_PRICE_PER_UNIT=${MAX_PRICE_PER_UNIT:-}
+      # The signer binds its REST HTTP API on the private `hl` network so the
+      # server/media containers can reach it at http://signer:7936. The Dockerfile
+      # default is 127.0.0.1 (loopback inside the signer container), which is
+      # unreachable from other containers — override to 0.0.0.0 (ADAAAA-6609). The
+      # signer service publishes NO host ports, so this stays private-network-only.
+      - HTTP_ADDR=${HTTP_ADDR:-0.0.0.0:7936}
     volumes:
       # Copy the go-livepeer keystore 'wallet' file (from the app-pipelines
       # reference) into docker/keystore/ to run the signer locally.
