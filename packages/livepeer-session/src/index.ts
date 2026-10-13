@@ -465,22 +465,29 @@ export class LivepeerClient {
     // live job. Two transients are retried with backoff:
     //   - `503 no capacity available for runner` — a momentary slot collision
     //     from a concurrent candidate/job (ADAAAA-6521).
-    //   - `404 runner not found` — the orchestrator briefly unregisters the
+    //   - `404 runner not found` / `404 runner session not found` / `404
+    //     session not found` — the orchestrator briefly unregisters the
     //     runner during its ~2s `/health` flap, so a request lands while no
-    //     runner is routed (ADAAAA-6521 follow-up, found by live QA).
-    // In both cases the request was NOT routed/processed, so a retry cannot
-    // double-bill or double-persist a highlight.
+    //     runner is routed (ADAAAA-6521 follow-up) OR go-livepeer released the
+    //     runner's session on a flap / orchestrator restart (ADAAAA-6623),
+    //     which turns the proxied app call into the session-lost 404. The
+    //     `session not found` phrasing does NOT match the old `/runner not
+    //     found/i` regex (the word `session` sits between `runner` and `not
+    //     found`), so that 404 returned immediately and dropped the candidate
+    //     — the same class of symptom the perceive path fix (ADAAAA-6577)
+    //     targeted. A 404 means the request was NOT routed/processed, so a
+    //     retry cannot double-bill or double-persist a highlight.
     let lastStatus = 0;
     for (let attempt = 0; ; attempt++) {
       const res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
         headers,
         body: JSON.stringify(body),
       });
-      // Read the body up front: needed both to detect the transient "runner not
-      // found" 404 and to parse the 402 payment challenge, and to drain the
-      // socket on retried transients.
+      // Read the body up front: needed both to detect the transient
+      // "runner not found" / "session not found" 404 and to parse the 402
+      // payment challenge, and to drain the socket on retried transients.
       const text = await res.text().catch(() => "");
-      const runnerNotFound = res.status === 404 && /runner not found/i.test(text);
+      const runnerNotFound = res.status === 404 && /(runner not found|session not found)/i.test(text);
       if (res.status !== 503 && !runnerNotFound) {
         lastStatus = res.status;
         if (res.status === 402) {
