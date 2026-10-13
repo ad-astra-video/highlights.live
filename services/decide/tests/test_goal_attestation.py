@@ -55,6 +55,41 @@ def test_is_bare_templated_reason_needs_both_markers():
     ) is False
 
 
+def test_verb_stem_variant_is_templated_and_rejected():
+    # ADAAAA-6610 E2E (VOD t=73): the SOLE accepted GOAL of the run was a
+    # broadcast OPEN-PLAY false positive (Doku, ball nowhere near a net) whose
+    # confabulated reason used "ENTERING the net" — the old "enters the net"
+    # literal marker missed it, so the gate let it through. The verb-stem regex
+    # must now catch the whole family and, with no attested criterion, reject it.
+    reasons = [
+        "The ball is seen entering the net, and the crowd and players are reacting with high-motion celebration.",
+        "The ball enters the net, and the crowd and players celebrate.",
+        "The ball clearly enters the net, and players erupt in celebration.",
+        "The ball was seen to have crossed the goal line, and the crowd erupts.",
+    ]
+    for reason in reasons:
+        assert is_bare_templated_reason(reason) is True, reason
+        decision = {
+            "isHighlight": True,
+            "outcome": "scoring_play",
+            "eventType": "GOAL",
+            "reason": reason,
+        }
+        ok, gate_reason = apply_goal_attestation_gate(decision, {}, "GOAL")
+        assert ok is False, reason
+        assert gate_reason is not None
+        assert "no attested goal criterion" in gate_reason
+    # An attested version of the same reason is kept (true goals still captured).
+    attested = {
+        "isHighlight": True,
+        "outcome": "scoring_play",
+        "eventType": "GOAL",
+        "reason": "The ball is seen entering the net, and the crowd and players are reacting with high-motion celebration.",
+    }
+    ok, _ = apply_goal_attestation_gate(attested, {"scoreBoardChanged": True}, "GOAL")
+    assert ok is True
+
+
 def test_rejects_templated_goal_with_no_attestation():
     decision = {
         "isHighlight": True,
