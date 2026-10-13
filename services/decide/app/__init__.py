@@ -19,7 +19,16 @@ from .logging_setup import configure_logging  # noqa: E402  (defines log above)
 configure_logging()
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
-from .gemma import apply_ball_outcome_gate, decide_with_gemma, finalize_goal_acceptance, plan_tracking_with_gemma, _rule_outcome, is_near_miss_ball_outcome, reconcile_outcome_with_ball_signal
+from .gemma import (  # noqa: F401
+    apply_ball_outcome_gate,
+    apply_goal_attestation_gate,
+    decide_with_gemma,
+    finalize_goal_acceptance,
+    plan_tracking_with_gemma,
+    _rule_outcome,
+    is_near_miss_ball_outcome,
+    reconcile_outcome_with_ball_signal,
+)
 
 
 class ReactionEvidence(BaseModel):
@@ -389,6 +398,23 @@ def create_app() -> FastAPI:
                     (decision.get("reason") or "")
                     + "; scoreboard score change confirmed"
                 ).strip("; ")
+            # Goal-verification attestation gate (ADAAAA-6610 / ADAAAA-6588
+            # crit 2/3 residual): the model CONFABULATES templated
+            # `scoring_play` on non-goal frames. Reject an ACCEPTED goal whose
+            # reason is bare templated AND which carries no attested
+            # independent goal criterion (ballOutcome=goal / goalCrossed /
+            # scoreboard change). Deliberately narrow: an attested goal or a
+            # specific frame-grounded reason always passes (ADAAAA-6543 recall
+            # behavior preserved).
+            att_ok, att_reason = apply_goal_attestation_gate(
+                decision, req.evidence.model_dump(), req.eventType
+            )
+            if not att_ok and decision.get("isHighlight"):
+                decision["isHighlight"] = False
+                decision["reason"] = (
+                    (decision.get("reason") or "")
+                    + "; " + (att_reason or "")
+                ).strip("; ")
             # Notable-only gate on the Gemma verdict (ADAAAA-5778). Pure
             # post-process over signals we already have — isHighlight, score,
             # classified eventType, evidence — so it adds NO inference (same
@@ -458,6 +484,17 @@ def create_app() -> FastAPI:
         # board-accepted GOAL highlight (a rule-path highlight maps to
         # scoring_play; a near-miss read is rejected).
         dec = finalize_goal_acceptance(dec)
+        # Goal-verification attestation gate (ADAAAA-6610) on the rule path too
+        # (mirror of the gemma path): an accepted goal with a bare templated
+        # reason and no attested goal criterion is rejected. On the rule path
+        # the reason is deterministic (never templated), so this is a no-op
+        # consistency guard.
+        att_ok, att_reason = apply_goal_attestation_gate(
+            dec, req.evidence.model_dump(), req.eventType
+        )
+        if not att_ok and dec.get("isHighlight"):
+            dec["isHighlight"] = False
+            dec["reason"] = ((dec.get("reason") or "") + "; " + (att_reason or "")).strip("; ")
         _log_highlight("rule", req, dec)
         return dec
 

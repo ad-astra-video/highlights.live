@@ -288,6 +288,104 @@ def apply_ball_outcome_gate(evidence: Optional[dict]) -> tuple[bool, str | None]
     return False, f"perceived ballOutcome={outcome} (not a goal); hard-gate rejection"
 
 
+# --- goal-verification attestation gate (ADAAAA-6610 / ADAAAA-6588 crit 2/3) ---
+#
+# The accept path trusts the model's self-reported `outcome` (scoring_play-only
+# gate). The model CONFABULATES templated `scoring_play` on non-goal frames, so
+# a GOAL accept whose reason is bare boilerplate AND which carries NO
+# independent, *measured* goal criterion (perceive `ballOutcome=goal` /
+# `goalCrossed` / a scoreboard score change) is a templated false positive and
+# is REJECTED. This is deliberately narrow, preserving ADAAAA-6533 / ADAAAA-6543
+# (which kept a goal accept alive on the ABSENCE of a homography so recall must
+# NOT collapse): we only gate on a goal that is BOTH templated-reason AND
+# unattested — never on a specific, frame-grounded reason, and never on a goal
+# an independent criterion actually attested.
+GOAL_CRITERION_OUTCOME = "goal"
+
+# Independent, measured goal criteria. Only perceive's measured signals count —
+# NEVER the model's self-reported verdict/criteria fields, because that is
+# precisely the confabulation this gate defends against.
+def attested_goal_criterion(evidence: Optional[dict]) -> bool:
+    e = evidence or {}
+    return (
+        (e.get("ballOutcome") or "") == GOAL_CRITERION_OUTCOME
+        or e.get("goalCrossed") is True
+        or bool(e.get("scoreBoardChanged"))
+    )
+
+
+# Detected templated-reason markers (ADAAAA-6610). The model reaches for the
+# same boilerplate regardless of the actual frames: a net-entry phrase AND a
+# crowd/celebration phrase together. Matching is deliberately precise — the
+# gate only ever REJECTS when the reason is templated AND nothing attested, so
+# a specific frame-grounded goal reason is never caught by this heuristic.
+_TEMPLATED_NET_MARKERS = (
+    "clearly enters the net",
+    "enters the back of the net",
+    "enters the net",
+    "ball crosses the line",
+    "ball crosses the goal line",
+)
+_TEMPLATED_REACTION_MARKERS = (
+    "crowd/players",
+    "the crowd and players",
+    "players erupt",
+    "celebrat",
+)
+
+
+def is_bare_templated_reason(reason: Optional[str]) -> bool:
+    """True when the reason is the model's bare boilerplate goal template (a
+    net-entry phrase combined with a crowd/celebration phrase) rather than a
+    specific, frame-grounded description. Empty/None is never templated."""
+    if not reason:
+        return False
+    r = reason.lower()
+    net = any(m in r for m in _TEMPLATED_NET_MARKERS)
+    reaction = any(m in r for m in _TEMPLATED_REACTION_MARKERS)
+    return net and reaction
+
+
+def is_goal_accept(decision: dict, event_type: Optional[str] = None) -> bool:
+    """Whether the decision is an ACCEPTED goal: the model surfaced it
+    (isHighlight true) for a goal event, or — when the candidate carries no
+    event type at all — for a scoring_play outcome. The gate is scoped to goal
+    events so a scoring_play outcome in another sport (a DUNK scoring play) is
+    never caught by goal verification."""
+    if not decision.get("isHighlight"):
+        return False
+    evt = str(event_type or "").upper().strip()
+    if evt in ("GOAL", "GOL"):
+        return True
+    if not evt:
+        return str(decision.get("outcome") or "").strip().lower() == "scoring_play"
+    return False
+
+
+def apply_goal_attestation_gate(
+    decision: dict, evidence: Optional[dict], event_type: Optional[str] = None
+) -> tuple[bool, str | None]:
+    """Deterministic post-gate over the *model's* accept (ADAAAA-6610).
+
+    Returns (ok, reason). Rejects ONLY an accepted goal whose reason is bare
+    templated AND which has no attested independent goal criterion. Everything
+    else passes (no regression) — crucially an ATTESTED goal (ballOutcome=goal /
+    goalCrossed / scoreboard change) is never rejected even if its reason is
+    templated, and a specific non-templated reason is never rejected even if no
+    criterion was measured (keeps the ADAAAA-6543 recall behavior).
+    """
+    if not is_goal_accept(decision, event_type):
+        return True, None
+    if attested_goal_criterion(evidence):
+        return True, None
+    if is_bare_templated_reason(decision.get("reason")):
+        return False, (
+            "bare templated reason with no attested goal criterion "
+            "(ballOutcome=goal / goalCrossed / scoreboard change); goal not independently verified"
+        )
+    return True, None
+
+
 # --- near-miss reconciliation (ADAAAA-6481 / §8 near_miss_recall) ----------
 #
 # A goal-bound shot that does NOT convert is a NEAR-MISS, not a non-event:
