@@ -112,6 +112,28 @@ describe("LivepeerClient", () => {
     expect(t.calls[1].url).toBe(`/apps/${ROUTES.decide}/app/highlight`);
   });
 
+  it("decide retries a transient 404 session not found (session-lost, ADAAAA-6623) and returns the success", async () => {
+    // go-livepeer released the decide runner's session on a flap / orchestrator
+    // restart -> 404 "runner session not found". The old `/runner not found/i`
+    // regex did NOT match this phrasing (the word `session` sits between
+    // `runner` and `not found`), so the decide call returned immediately and
+    // dropped the candidate — the same class of symptom the perceive path fix
+    // (ADAAAA-6577) targeted. A 404 means the request was not routed/processed,
+    // so retrying with bounded backoff cannot double-bill or double-persist a
+    // highlight.
+    const t = new MockTransport([
+      { status: 404, data: "runner session not found" },
+      { status: 404, data: "session not found" },
+      { status: 200, data: { isHighlight: true, score: 80 } },
+    ]);
+    const c = new LivepeerClient("http://orch", t);
+    const res = await c.decide("highlight", { eventType: "GOAL" });
+    expect((res.data as any).isHighlight).toBe(true);
+    expect(t.calls.length).toBe(3);
+    expect(t.calls[0].url).toBe(`/apps/${ROUTES.decide}/app/highlight`);
+    expect(t.calls[2].url).toBe(`/apps/${ROUTES.decide}/app/highlight`);
+  });
+
   it("decide does NOT retry a genuine 404 (non runner-not-found) and returns it", async () => {
     const t = new MockTransport([{ status: 404, data: { error: "unknown app route" } }]);
     const c = new LivepeerClient("http://orch", t);
