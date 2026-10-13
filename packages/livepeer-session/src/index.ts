@@ -349,25 +349,42 @@ export class LivepeerClient {
     const headers: Record<string, string> = {};
     if (opts?.payerAddress) headers["Livepeer-Payer-Address"] = opts.payerAddress;
     if (opts?.paymentHeaders) Object.assign(headers, opts.paymentHeaders);
-    const res = await this.transport.request("POST", `/apps/${ROUTES.perceive}/session`, { headers });
-    if (res.status === 402) {
-      // The orchestrator's 402 reserve response carries the payment challenge
-      // in its BODY (liveRunnerPaymentChallengeResponse): payment_params
-      // (base64 net.OrchestratorInfo) + manifest_id (AuthToken.SessionId). The
-      // payer forwards these to the remote signer to obtain tickets — it does
-      // NOT need to call gRPC GetOrchestrator on the orchestrator directly.
-      const body = await res.json().catch(() => ({}));
-      throw new PaymentRequiredError(body, livePaymentChallengeFromBody(body));
+    // Guardrail (ADAAAA-6619): retry transient `503 no capacity available for
+    // runner` on the capacity-1 perceive runner with bounded backoff, mirroring
+    // the `decide` single-shot retry (ADAAAA-6521). Reserving a perceive session
+    // for a fresh VOD/live job was NOT retried, so a momentary slot collision
+    // (a second concurrent job, or an overlapped re-reserve) failed the WHOLE
+    // job at reserve time. A 503 means the request was NOT routed/processed by
+    // the runner, so a retry cannot double-reserve or double-bill the session.
+    let lastStatus = 0;
+    for (let attempt = 0; ; attempt++) {
+      const res = await this.transport.request("POST", `/apps/${ROUTES.perceive}/session`, { headers });
+      if (res.status === 402) {
+        // The orchestrator's 402 reserve response carries the payment challenge
+        // in its BODY (liveRunnerPaymentChallengeResponse): payment_params
+        // (base64 net.OrchestratorInfo) + manifest_id (AuthToken.SessionId). The
+        // payer forwards these to the remote signer to obtain tickets — it does
+        // NOT need to call gRPC GetOrchestrator on the orchestrator directly.
+        const body = await res.json().catch(() => ({}));
+        throw new PaymentRequiredError(body, livePaymentChallengeFromBody(body));
+      }
+      if (res.status === 503) {
+        lastStatus = res.status;
+        if (attempt >= 4) break;
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+        continue;
+      }
+      if (res.status !== 200) {
+        throw new Error(`reserve perceive failed: HTTP ${res.status} ${await res.text()}`);
+      }
+      const body = (await res.json()) as { session_id?: string; app_url?: string; control_url?: string; id?: string };
+      return {
+        sessionId: body.session_id || (body as { id?: string }).id || "",
+        appUrl: body.app_url || "",
+        controlUrl: body.control_url || "",
+      };
     }
-    if (res.status !== 200) {
-      throw new Error(`reserve perceive failed: HTTP ${res.status} ${await res.text()}`);
-    }
-    const body = (await res.json()) as { session_id?: string; app_url?: string; control_url?: string; id?: string };
-    return {
-      sessionId: body.session_id || (body as { id?: string }).id || "",
-      appUrl: body.app_url || "",
-      controlUrl: body.control_url || "",
-    };
+    throw new Error(`reserve perceive failed: HTTP ${lastStatus} no capacity available for runner`);
   }
 
   /** Proxy a request to the perceive runner over the persistent session. */
