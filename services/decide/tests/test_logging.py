@@ -24,6 +24,7 @@ def _req(event_type="GOAL", track=1, vel=0.3):
             "trackCount": track,
             "maxVelocity": vel,
             "ocrHits": 0,
+            "scoreBoardChanged": True,
         },
     }
 
@@ -40,7 +41,9 @@ def test_highlight_logs_decision_summary_at_info(caplog):
 
 def test_highlight_identified_logged_at_info(caplog):
     """A GOAL candidate that passes clears as a highlight; 'highlight identified'
-    is a salient default (INFO) event per ADAAAA-6524 board feedback."""
+    is a salient default (INFO) event per ADAAAA-6524 board feedback.
+    The candidate is attested (scoreBoardChanged) so the ADAAAA-6610 gate lets it
+    through."""
     with caplog.at_level(logging.INFO, logger="highlights.decide"):
         client.post("/app/highlight", json=_req())
     assert any("highlight identified" in rec.getMessage() for rec in caplog.records), (
