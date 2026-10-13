@@ -717,7 +717,7 @@ describe("decideOnCandidate (INC-2 / ADAAAA-4325 slice 4: audio candidate -> dec
       shared,
       async (ts) => ({ clipId: `a${ts}`, clipUri: `/clips/a${ts}.mp4` }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
-      { eventType: "AUDIO", timestamp: 0, seq: 1 }
+      { eventType: "AUDIO", timestamp: 60, seq: 1 }
     );
     expect(shared.highlights.length).toBe(2);
   });

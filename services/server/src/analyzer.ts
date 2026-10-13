@@ -433,6 +433,12 @@ export interface AnalyzerConfig {
    * detail-first VOD path is "vod". Default "live".
    */
   planMode?: "live" | "vod";
+  /**
+   * ADAAAA-6610 GOAL burst-suppression window (seconds) for this pass. At most
+   * one GOAL highlight is accepted per this window so a start-of-clip burst of
+   * confabulated goals cannot flood the accepted list. Default 30.
+   */
+  goalBurstWindowS?: number;
 }
 
 /**
@@ -515,6 +521,10 @@ export const CACHE_MAX_FRAMES = 60;
  * ~500–600 tokens; the prior-context the decide prompt is augmented with never
  * exceeds this. Content beyond the cap is dropped oldest-first at assembly. */
 export const WINDOW_FACTS_MAX_CHARS = 2400;
+/** ADAAAA-6610 temporal burst suppression window (seconds): at most one GOAL
+ * highlight is accepted per this window in a run, so a start-of-clip burst of
+ * confabulated goals cannot flood the accepted list. */
+export const DEFAULT_GOAL_BURST_SUPPRESS_S = 30;
 
 // ---------------------------------------------------------------------------
 // Increment F / ADAAAA-6465: frame-watching assembler (plan §4.9C).
@@ -730,13 +740,20 @@ export class LiveRunShared {
    * Defaults to the live baseline (DECIDE_FRAME_WINDOW); the VOD knob
    * `decideWindowN` raises it (ADAAAA-4954). */
   private readonly windowN: number;
+  /** GOAL burst-suppression window (seconds, ADAAAA-6610). Default 30. */
+  private readonly goalBurstWindowS: number;
   /** Raw mono 16 kHz int16 PCM taps (base64 per ~100 ms chunk) + end timestamp,
    * kept as a short rolling clip so the surrounding audio can be handed to
    * decide() (ADAAAA-4954 detail-first). */
   private audio: { ts: number; samples: string }[] = [];
+  /** Timestamp of the last ACCEPTED GOAL highlight in this run (ADAAAA-6610
+   * burst suppression). Used to drop a GOAL accepted within `goalBurstWindowS`
+   * of a prior one. */
+  private lastGoalHighlightTs: number | null = null;
 
-  constructor(opts: { decideWindowN?: number } = {}) {
+  constructor(opts: { decideWindowN?: number; goalBurstWindowS?: number } = {}) {
     this.windowN = opts.decideWindowN ?? DECIDE_FRAME_WINDOW;
+    this.goalBurstWindowS = opts.goalBurstWindowS ?? DEFAULT_GOAL_BURST_SUPPRESS_S;
   }
 
   /** Record a sampled frame into the rolling window. The window is
@@ -788,6 +805,25 @@ export class LiveRunShared {
   addCandidate(c: WindowCandidate): void {
     this.candidates.push(c);
     if (this.candidates.length > CACHE_MAX_FRAMES) this.candidates.shift();
+  }
+  /**
+   * ADAAAA-6610 temporal burst suppression: at most ONE GOAL highlight is
+   * accepted per `goalBurstWindowS` (default 30 s). The observed false-positive
+   * run accepted 26 GOAL highlights, all templated, all within the first ~30 s
+   * of a VOD (start-of-clip burst). Call ONLY for an already model-accepted
+   * highlight (after `decision.isHighlight`): returns true when this GOAL is a
+   * burst duplicate within the window and should be DROPPED (it does NOT
+   * advance the last-accepted reference, so a burst cannot extend itself). A
+   * non-GOAL event is never suppressed.
+   */
+  suppressIfGoalBurst(ts: number, eventType?: string): boolean {
+    const ev = (eventType || "").toUpperCase().trim();
+    if (ev !== "GOAL" && ev !== "GOL") return false;
+    if (this.lastGoalHighlightTs != null && ts - this.lastGoalHighlightTs < this.goalBurstWindowS) {
+      return true;
+    }
+    this.lastGoalHighlightTs = ts;
+    return false;
   }
   /** Drop frames (and stale candidates) outside the 60 s window and enforce the
    * hard size cap. Oldest entries are removed first. */
@@ -1269,6 +1305,20 @@ export async function decideOnCandidate(
   // highlight. A near_miss / big_play read is recorded distinctly (outcome
   // preserved) but never cut as a GOAL highlight/clip.
   if (!isAcceptedHighlight(decision)) return;
+  // ADAAAA-6610 temporal burst suppression: at most one GOAL highlight per
+  // window. A GOAL accepted within `goalBurstWindowS` of a previous one is a
+  // burst duplicate (start-of-clip confabulated-goal flood) and is dropped,
+  // not recorded.
+  if (shared.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType)) {
+    onEvent?.({
+      seq: evSeq,
+      timestamp: evTs,
+      type: "candidateBlocked",
+      candidate: { eventType: decision.eventType ?? candidate.eventType, timestamp: candidate.timestamp },
+      reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
+    });
+    return;
+  }
   const { clipId, clipUri } = await cut(candidate.timestamp);
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -1344,7 +1394,7 @@ export async function analyzeJob(
   const reserved = new Set<string>([first.sessionId]);
   // Live path shares frame window / evidence / highlights with the audio tap so
   // decide sees the anchored moment; VOD path gets a private namespace.
-  const run = shared_ ?? new LiveRunShared();
+  const run = shared_ ?? new LiveRunShared({ decideWindowN: cfg.decideWindowN, goalBurstWindowS: cfg.goalBurstWindowS });
   const evidence = run.evidence;
   const highlights = run.highlights;
   // Increment D (ADAAAA-6467): the what-to-track plan orchestrator. Fires the
@@ -1468,25 +1518,38 @@ export async function analyzeJob(
           detailDecideOpts(cfg, run, anchoredImage, { timestamp: res.candidate.timestamp, peakAudioTs: res.candidate.audio?.ts }, burstFrames)
         );
         if (isAcceptedHighlight(decision)) {
-          const { clipId, clipUri } = await cut(res.candidate.timestamp);
-          const rec: HighlightRecord = {
-            id: randomUUID(),
-            jobId: cfg.jobId,
-            clipUri,
-            start: Math.max(0, res.candidate.timestamp - cfg.clipBeforeS),
-            end: res.candidate.timestamp + cfg.clipAfterS,
-            eventType: decision.eventType,
-            score: decision.score,
-            reason: decision.reason,
-            // Increment F / ADAAAA-6465: near-miss surface at a lower score,
-            // labeled distinctly via the outcome/nearMiss flag.
-            outcome: decision.outcome,
-            nearMiss: decision.nearMiss,
-            status: "pending",
-            createdAt: new Date().toISOString(),
-          };
-          highlights.push(rec);
-          onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "highlight", highlight: rec });
+          // ADAAAA-6610 temporal burst suppression (see decideOnCandidate): a
+          // GOAL accepted within `goalBurstWindowS` of a previous one is a
+          // start-of-clip burst duplicate and is dropped, not recorded.
+          if (run.suppressIfGoalBurst(res.candidate.timestamp, decision.eventType ?? res.candidate.eventType)) {
+            onEvent?.({
+              seq: frame.seq,
+              timestamp: frame.timestamp,
+              type: "candidateBlocked",
+              candidate: { eventType: decision.eventType ?? res.candidate.eventType, timestamp: res.candidate.timestamp },
+              reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
+            });
+          } else {
+            const { clipId, clipUri } = await cut(res.candidate.timestamp);
+            const rec: HighlightRecord = {
+              id: randomUUID(),
+              jobId: cfg.jobId,
+              clipUri,
+              start: Math.max(0, res.candidate.timestamp - cfg.clipBeforeS),
+              end: res.candidate.timestamp + cfg.clipAfterS,
+              eventType: decision.eventType,
+              score: decision.score,
+              reason: decision.reason,
+              // Increment F / ADAAAA-6465: near-miss surface at a lower score,
+              // labeled distinctly via the outcome/nearMiss flag.
+              outcome: decision.outcome,
+              nearMiss: decision.nearMiss,
+              status: "pending",
+              createdAt: new Date().toISOString(),
+            };
+            highlights.push(rec);
+            onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "highlight", highlight: rec });
+          }
         }
       }
     }
