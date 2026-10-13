@@ -316,21 +316,23 @@ def attested_goal_criterion(evidence: Optional[dict]) -> bool:
 
 # Detected templated-reason markers (ADAAAA-6610). The model reaches for the
 # same boilerplate regardless of the actual frames: a net-entry phrase AND a
-# crowd/celebration phrase together. Matching is deliberately precise — the
-# gate only ever REJECTS when the reason is templated AND nothing attested, so
-# a specific frame-grounded goal reason is never caught by this heuristic.
-_TEMPLATED_NET_MARKERS = (
-    "clearly enters the net",
-    "enters the back of the net",
-    "enters the net",
-    "ball crosses the line",
-    "ball crosses the goal line",
+# crowd/celebration phrase together. Exact-substring matching was too brittle —
+# the model varies the verb ("enter / enters / entering / entered", "cross /
+# crosses / crossing") and a broadcast false positive was accepted as a goal
+# because "The ball is seen ENTERING the net..." escaped the "enters the net"
+# literal (ADAAAA-6610 E2E, VOD t=73). Matching is verb-stem regex so the whole
+# confabulated-family is caught, while the gate still only ever REJECTS when the
+# reason is templated AND nothing is attested (so a specific, frame-grounded goal
+# reason with an attested criterion, or a genuinely specific description, is
+# never caught by this heuristic).
+_TEMPLATED_NET_RE = re.compile(
+    r"\b(?:enter|enters|entering|entered)\s+the\s+(?:back\s+of\s+the\s+)?net\b"
+    r"|\b(?:ball\s+)?(?:cross|crosses|crossing|crossed)\s+the\s+(?:goal\s+)?line\b",
+    re.IGNORECASE,
 )
-_TEMPLATED_REACTION_MARKERS = (
-    "crowd/players",
-    "the crowd and players",
-    "players erupt",
-    "celebrat",
+_TEMPLATED_REACTION_RE = re.compile(
+    r"crowd/players|the crowd and players|players erupt|celebrat|reacting with|erupt",
+    re.IGNORECASE,
 )
 
 
@@ -340,9 +342,9 @@ def is_bare_templated_reason(reason: Optional[str]) -> bool:
     specific, frame-grounded description. Empty/None is never templated."""
     if not reason:
         return False
-    r = reason.lower()
-    net = any(m in r for m in _TEMPLATED_NET_MARKERS)
-    reaction = any(m in r for m in _TEMPLATED_REACTION_MARKERS)
+    r = reason
+    net = bool(_TEMPLATED_NET_RE.search(r))
+    reaction = bool(_TEMPLATED_REACTION_RE.search(r))
     return net and reaction
 
 
