@@ -34,6 +34,23 @@ describe("LivepeerClient", () => {
     expect(t.calls[0]).toMatchObject({ method: "POST", url: `/apps/${ROUTES.perceive}/session` });
   });
 
+  it("reservePerceive retries a transient 503 no-capacity and succeeds (ADAAAA-6619)", async () => {
+    // The capacity-1 perceive runner is momentarily contended by a concurrent
+    // job -> `503 no capacity available for runner`. This is a momentary slot
+    // collision (request NOT routed), so the reserve is retried with backoff
+    // rather than failing the whole VOD/live job at reserve time.
+    const t = new MockTransport([
+      { status: 503, data: "no capacity available for runner" },
+      { status: 200, data: { session_id: "sess-1", app_url: "http://x/apps/highlights-perceive/session/sess-1", control_url: "http://x/apps/highlights-perceive/session/sess-1/control" } },
+    ]);
+    const c = new LivepeerClient("http://orch:8935", t);
+    const r = await c.reservePerceive();
+    expect(r.sessionId).toBe("sess-1");
+    expect(t.calls.length).toBe(2);
+    expect(t.calls[0].url).toBe(`/apps/${ROUTES.perceive}/session`);
+    expect(t.calls[1].url).toBe(`/apps/${ROUTES.perceive}/session`);
+  });
+
   it("throws PaymentRequiredError on 402 with the challenge parsed from the body", async () => {
     const t = new MockTransport([
       {
