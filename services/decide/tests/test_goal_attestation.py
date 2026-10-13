@@ -8,9 +8,14 @@ goal whose reason is bare templated AND which carries no attested independent
 goal criterion (perceive ballOutcome=goal / goalCrossed / scoreboard score
 change) must be REJECTED.
 
-Deliberately narrow (ADAAAA-6533/6543 recall contract): an ATTESTED goal and a
-specific frame-grounded reason both always pass — never collapse recall by
-gating on the mere ABSENCE of a homography.
+Deliberately the OPPOSITE of the old recall-preserving behavior (ADAAAA-6543 no
+longer holds): an accepted goal whose reason is "specific" but which carries NO
+attested independent goal criterion (perceive ballOutcome=goal / goalCrossed /
+scoreboard score change) is ALSO rejected, because the E2E proved the model
+confabulates a specific "ball clearly seen inside the net, goalkeeper beaten"
+reason on a frame with no goal. An ACCEPTED goal requires the independent
+attestation — the model's reason alone, templated or specific, is never
+sufficient.
 """
 from app.gemma import (
     attested_goal_criterion,
@@ -116,15 +121,52 @@ def test_attested_templated_goal_is_kept():
         assert ok is True
 
 
-def test_specific_reason_without_attestation_is_kept():
-    # ADAAAA-6543 recall contract: never gate on the ABSENCE of a homography.
+def test_specific_reason_without_attestation_is_rejected():
+    # ADAAAA-6610 E2E: a "specific" reason is NOT sufficient — the model
+    # confabulates a specific goal-sounding reason on non-goal frames (open
+    # play / keeper holding the ball) with no independent attestation, so it
+    # must be rejected rather than accepted on the model's word.
     decision = {
         "isHighlight": True,
         "outcome": "scoring_play",
         "eventType": "GOAL",
         "reason": "Striker slots it low into the far corner past the keeper.",
     }
-    ok, _ = apply_goal_attestation_gate(decision, {}, "GOAL")
+    ok, reason = apply_goal_attestation_gate(decision, {}, "GOAL")
+    assert ok is False
+    assert reason is not None
+    assert "no attested goal criterion" in reason
+
+
+def test_confabulated_specific_goal_reason_is_rejected():
+    # ADAAAA-6610 fresh full-VOD E2E (job 0c4f578f): two accepted GOALs were
+    # frame-confirmed FALSE POSITIVES (clip = goalkeeper holding the ball
+    # outside the net; source VOD t=175 = open-play penalty-area scramble, ball
+    # in the air) whose confabulated reasons used "inside the net / entering the
+    # net" + "goalkeeper beaten" — no crowd/celebration marker, so the verb-stem
+    # template did NOT catch them. Unattested specific reasons must be rejected.
+    for reason in (
+        "The ball is clearly seen inside the net, and the goalkeeper has been beaten.",
+        "The ball is clearly seen entering the net, and the goalkeeper is beaten.",
+        "The ball is clearly inside the net, and the goalkeeper is beaten.",
+    ):
+        decision = {
+            "isHighlight": True,
+            "outcome": "scoring_play",
+            "eventType": "GOAL",
+            "reason": reason,
+        }
+        ok, _ = apply_goal_attestation_gate(decision, {}, "GOAL")
+        assert ok is False, reason
+    # An attested version of the same confabulated phrasing is kept (a real goal
+    # the oracle measured is still accepted).
+    attested = {
+        "isHighlight": True,
+        "outcome": "scoring_play",
+        "eventType": "GOAL",
+        "reason": "The ball is clearly seen inside the net, and the goalkeeper has been beaten.",
+    }
+    ok, _ = apply_goal_attestation_gate(attested, {"scoreBoardChanged": True}, "GOAL")
     assert ok is True
 
 

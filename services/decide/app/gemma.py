@@ -369,23 +369,28 @@ def apply_goal_attestation_gate(
 ) -> tuple[bool, str | None]:
     """Deterministic post-gate over the *model's* accept (ADAAAA-6610).
 
-    Returns (ok, reason). Rejects ONLY an accepted goal whose reason is bare
-    templated AND which has no attested independent goal criterion. Everything
-    else passes (no regression) — crucially an ATTESTED goal (ballOutcome=goal /
-    goalCrossed / scoreboard change) is never rejected even if its reason is
-    templated, and a specific non-templated reason is never rejected even if no
-    criterion was measured (keeps the ADAAAA-6543 recall behavior).
+    Returns (ok, reason). An ACCEPTED goal is allowed ONLY when an independent,
+    *measured* goal criterion is present (perceive ballOutcome=goal /
+    goalCrossed / scoreboard score change). The model's self-reported reason —
+    whether templated OR a "specific" description — is NEVER sufficient on its
+    own, because the E2E proved the model confabulates both (a specific
+    "ball clearly seen inside the net, goalkeeper beaten" reason was produced on
+    an open-play / keeper-has-the-ball frame with no goal). Template enumeration
+    cannot be exhaustive, so the only trustworthy gate over the model's accept is
+    the independent attestation.
+
+    True goals whose oracle didn't fire are also rejected (recall is validated
+    by the fresh full-VOD E2E against real goal timestamps); this is the
+    deliberate cost of not letting a confabulated reason be the sole evidence.
     """
     if not is_goal_accept(decision, event_type):
         return True, None
     if attested_goal_criterion(evidence):
         return True, None
-    if is_bare_templated_reason(decision.get("reason")):
-        return False, (
-            "bare templated reason with no attested goal criterion "
-            "(ballOutcome=goal / goalCrossed / scoreboard change); goal not independently verified"
-        )
-    return True, None
+    return False, (
+        "no attested goal criterion (ballOutcome=goal / goalCrossed / "
+        "scoreboard change); model reason alone is not sufficient to accept a goal"
+    )
 
 
 # --- near-miss reconciliation (ADAAAA-6481 / §8 near_miss_recall) ----------

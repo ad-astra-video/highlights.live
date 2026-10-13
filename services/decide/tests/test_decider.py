@@ -345,13 +345,18 @@ def test_highlight_accepts_rich_detection_evidence():
 # (false-positive guard) — the pivot must not become accept-all.
 
 
-def test_real_goal_no_homography_is_accepted():
-    # Criterion 1: a real GOAL candidate with NO ballOutcome (no homography
-    # configured) and an audio-noise-trigger reaction is accepted.
+def test_real_goal_no_attestation_is_rejected():
+    # ADAAAA-6610 PRECEDENCE over ADAAAA-6543: the old recall contract accepted
+    # a "real" goal judged from frames + audio reaction with NO homography /
+    # NO scoreboard attestation. The fresh full-VOD E2E proved that judgment is
+    # exactly what gets confabulated — an open-play / keeper-has-the-ball frame
+    # was accepted as scoring_play on a "ball in net" reason. So a GOAL accept
+    # now REQUIRES an independent attested criterion; a crowded-reaction but
+    # unattested candidate is REJECTED (not accepted on the model's word).
     r = client.post(
         "/app/highlight",
         json={
-            "sessionId": "sess-6543-goal",
+            "sessionId": "sess-6610-nohomography",
             "eventType": "GOAL",
             "timestamp": 12.0,
             "evidence": {
@@ -359,7 +364,36 @@ def test_real_goal_no_homography_is_accepted():
                 "maxVelocity": 0.4,
                 "ocrHits": 0,
                 "scoreBoardChanged": False,
-                # NO ballOutcome / goalCrossed — no field homography configured.
+                # NO ballOutcome / goalCrossed / score change — unattested.
+                "reaction": {
+                    "crowdEnergy": 0.93,
+                    "audioKind": "swell",
+                    "humansInMotion": 6,
+                    "ballSpeedMps": 21.4,
+                    "ballPossessionId": "t2",
+                },
+            },
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["isHighlight"] is False
+
+
+def test_real_goal_with_scoreboard_attestation_is_accepted():
+    # A real goal the oracle measured (scoreboard score change) is accepted even
+    # without a homography — true goals still captured when attested.
+    r = client.post(
+        "/app/highlight",
+        json={
+            "sessionId": "sess-6610-attested",
+            "eventType": "GOAL",
+            "timestamp": 12.0,
+            "evidence": {
+                "trackCount": 2,
+                "maxVelocity": 0.4,
+                "ocrHits": 0,
+                "scoreBoardChanged": True,
                 "reaction": {
                     "crowdEnergy": 0.93,
                     "audioKind": "swell",
@@ -373,8 +407,6 @@ def test_real_goal_no_homography_is_accepted():
     assert r.status_code == 200
     body = r.json()
     assert body["isHighlight"] is True
-    assert "isHighlight" in body
-    assert "goal-line" not in body.get("reason", "").lower() or "not available" not in body.get("reason", "")
 
 
 def test_non_goal_un_corroborated_is_rejected():
