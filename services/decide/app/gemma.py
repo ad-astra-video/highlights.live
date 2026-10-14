@@ -1,11 +1,13 @@
-"""Gemma 12B (llama.cpp llama-server) integration for the decide step.
+"""Gemma 12B (vLLM OpenAI-compat server) integration for the decide step.
 
-Activates when DECIDE_MODE=gemma and GEMMA_URL points at a llama.cpp
-`llama-server` (with mmproj for vision). Sends the ContextSnapshot + up to a
-few JPEGs (full frame + track crops) as a multimodal chat request and asks for
-a strict JSON HighlightDecision. Parses + validates the reply; on any failure
-falls back to the deterministic rule so the pipeline never dies on a model
-glitch (plan §9: health must not flap, a bad Gemma reply must not kill the job).
+Activates when DECIDE_MODE=gemma and GEMMA_URL points at an OpenAI-compatible
+/ vLLM `chat/completions` server serving cyankiwi/gemma-4-12B-it-qat-AWQ-INT4
+(ADAAAA-6695; this replaced the llama.cpp llama-server + mmproj). Sends the
+ContextSnapshot + up to a few JPEGs (full frame + track crops) as a multimodal
+chat request and asks for a strict JSON HighlightDecision. Parses + validates
+the reply; on any failure falls back to the deterministic rule so the pipeline
+never dies on a model glitch (plan §9: health must not flap, a bad Gemma reply
+must not kill the job).
 
 ADAAAA-6358 (I1): the decide prompt is de-anchored. The candidate event type
 is framed as a *hypothesis to test*, not a fact, and the model must (a) first
@@ -770,12 +772,15 @@ def ask(
     timeout_s: float = 180.0,
     transcript: str = "",
 ) -> dict | None:
-    """Call llama-server multimodal completion. Returns a parsed/validated
-    HighlightDecision dict, or None on any transport/parse failure.
+    """Call the gemma multimodal completion (vLLM OpenAI-compat server). Returns
+    a parsed/validated HighlightDecision dict, or None on any transport/parse
+    failure.
 
     Follows the Gemma 4 12B video+audio modality-order guidance: all image
     content (temporal frame sequence + crops) comes BEFORE the text prompt,
-    and any audio comes AFTER the text. Audio is mono 16 kHz float32 (wav)."""
+    and any audio comes AFTER the text. Audio is mono 16 kHz float32 (wav).
+    The `model` field is sent when GEMMA_MODEL is set (vLLM requires it to
+    match the served model name)."""
     import httpx
 
     frames = frames or []
@@ -836,8 +841,12 @@ def ask(
     # (verified on llama.cpp build 10920: it otherwise burns ~1.5K chars of
     # reasoning_content before the JSON — think=476 tok/5.9s vs off=53 tok/0.8s —
     # and an empty 'content' until thinking ends forced the rule fallback).
-    # OpenAI's "thinking": {"enabled": false} is NOT honored by llama.cpp; the
-    # OpenRouter-style reasoning_effort param is.
+    # Under vLLM (ADAAAA-6695) Gemma 4 reasoning is disabled BY DEFAULT, and
+    # the OpenAI-compat server maps `reasoning_effort: "none"` to
+    # chat_template_kwargs enable_thinking=false. We ALSO set
+    # chat_template_kwargs.enable_thinking=false explicitly (the documented
+    # vLLM channel) so strict JSON returns immediately regardless of the vLLM
+    # version's default / auto-injection behaviour; it can never ENABLE thinking.
     payload = {
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.0,
@@ -846,6 +855,10 @@ def ask(
         # long chain of thought ends (see decide tests for the ordering of the
         # image/text/audio modalities).
         "reasoning_effort": reasoning_effort,
+        # vLLM-equivalent thinking-off knob (Gemma 4 template exposes
+        # enable_thinking). Explicit so a vLLM build that keeps thinking on by
+        # default still returns the JSON immediately.
+        "chat_template_kwargs": {"enable_thinking": False},
         "max_tokens": 1200,
         "stream": False,
     }

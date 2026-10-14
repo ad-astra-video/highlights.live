@@ -122,70 +122,104 @@ services:
       retries: 30
     networks: [hl]
 
-  # Gemma 4 12B QAT (google/gemma-4-12B-it-qat-q4_0-gguf) — the DECIDE VLM and
-  # (future) browser-available "context engine". llama.cpp `llama-server`
-  # exposes OpenAI /v1/chat/completions natively (what services/decide's
-  # gemma.py calls), with the mmproj vision projector so it sees the frame
-  # sequence + audio per the Gemma 4 12B video/audio modality-order guidance.
-  # SMALL/dense q4_0 QAT fits an RTX 5060 Ti on .6 with a decent ctx.
+  # Gemma 4 12B — the DECIDE VLM and (future) browser-available "context
+  # engine". Served by **vLLM** (replaces the old llama.cpp `llama-server` +
+  # mmproj) running the compressed-tensors INT4 checkpoint
+  # cyankiwi/gemma-4-12B-it-qat-AWQ-INT4 (arch Gemma4UnifiedForConditionalGeneration,
+  # encoder-free image+audio+video via `gemma4_mm`). vLLM exposes the SAME
+  # OpenAI /v1/chat/completions endpoint services/decide/app/gemma.py calls,
+  # with continuous batching so up to GEMMA_MAX_CONCURRENCY simultaneous decide
+  # sequences are served at once (supersedes llama.cpp `--parallel 2`).
   #
-  # Blackwell (sm_120/121) note: stock llama.cpp CUDA images may lack Blackwell
-  # kernels — if the prebuilt image fails to load, build from source like the
-  # video-creator gemma-worker.Dockerfile (llama-cpp-python, CMAKE_CUDA_ARCHS
-  # for the card). Operator bind-mounts the already-downloaded GGUF + mmproj at
-  # ./models/ (see docs/plan/03-decide-runner.md).
+  # VRAM gate (ADAAAA-6695 / parent ADAAAA-6693 risk #1): the INT4 weights are
+  # ~10.45 GB. At gpu_memory_utilization 0.90 on the 16 GB RTX 5070 Ti (GPU 1)
+  # that leaves ~3.9 GB for the KV cache. The live decide pass sends up to
+  # 30 frames (~280 soft tokens/image => ~8.4K KV tokens/req), so 4 TRULY-
+  # concurrent 30-frame sequences do NOT fit on this card at the default
+  # vision-token budget. GEMMA_MAX_CONCURRENCY / GEMMA_MAX_SOFT_TOKENS /
+  # GEMMA_MAX_MODEL_LEN / GEMMA_GPU_ID are the ENV knobs that size the fit
+  # without a code change; a larger GPU or reallocation is the documented
+  # fallback (compute/cost decision escalated to CEO — see the issue).
+  #
+  # The operator pre-downloads the checkpoint into ./models/ as a HF-layout
+  # dir (consistent with the old bind-mounted-GGUF convention):
+  #   huggingface-cli download cyankiwi/gemma-4-12B-it-qat-AWQ-INT4 \
+  #     --local-dir ./models/gemma-4-12b-it-qat-AWQ-INT4
+  # See docs/plan/03-decide-runner.md.
   gemma:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    # vLLM OpenAI server. Override with a pinned version / the box-prebuilt
+    # image once the exact vLLM build supporting gemma4_unified is confirmed.
+    image: ${GEMMA_IMAGE:-vllm/vllm-openai:latest}
     container_name: highlights-gemma
-    entrypoint: ["/app/llama-server"]
     command:
-      - --model
-      - /models/gemma-4-12b-it-qat-q4_0.gguf
-      - --mmproj
-      - /models/mmproj-gemma-4-12b-it-qat-q4_0.gguf
+      # Serve the local checkpoint dir (mounted at /models). Serving a local
+      # path avoids a runtime HF pull (no gated/token dependency).
+      - /models/gemma-4-12b-it-qat-AWQ-INT4
+      - --served-model-name
+      # Served model name == decide's GEMMA_MODEL (kept in sync so the request
+      # `model` field matches the served model).
+      - ${GEMMA_MODEL:-cyankiwi/gemma-4-12B-it-qat-AWQ-INT4}
       - --host
       - 0.0.0.0
       - --port
       - "8088"
-      - --n-gpu-layers
-      - "99"
-      # Max-out config for a 16 GB card (RTX 5070 Ti / 5060 Ti) with CONCURRENCY:
-      #   KV/token = 48 layers * 2 * 8 kv-heads * 256 head_dim = 196,608 el (~0.39MB f16)
-      #   Model q4_0 ~7.2GB -> ~7.3GB free for KV.
-      #   **total KV = ctx-size x -np** (each parallel slot holds a full ctx), so the
-      #   two trade off on one card. 16K x 2 slots only fits if KV is quantized, which
-      #   is exactly what --kv-cache-unified + q8 cache type enables (6.4GB vs 12.9GB f16).
-      #   -np 2  = conservative concurrent-decides this card processes at once.
-      # Validate on first load: llama-server prints actual KV memory; if it OOMs,
-      # drop --ctx-size to 8192 or the build's KV type.
-      - --ctx-size
-      - "131072"
-      - --parallel
-      - "2"
-      - --kv-unified
-      - --kv-unified-per-slot
-      - "131072"
-      - --cache-type-k
-      - q8_0
-      - --cache-type-v
-      - q8_0
+      # CONCURRENCY KNOB (CEO ask): maps straight to vLLM --max-num-seqs
+      # (continuous-batching simultaneous sequences). Changing this ENV changes
+      # effective concurrency with no code change. Default 4.
+      - --max-num-seqs
+      - "${GEMMA_MAX_CONCURRENCY:-4}"
+      # Per-sequence length ceiling. Sized so a 30-frame + crops + audio +
+      # 1200-token-output decide request fits; the KV budget (not this) is the
+      # real concurrency constraint on this card. ENV-overridable.
+      - --max-model-len
+      - "${GEMMA_MAX_MODEL_LEN:-32768}"
+      # Fraction of card VRAM for weights + KV. 0.90 leaves ~1 GB for the CUDA
+      # context / multimodal profiling headroom on the 16 GB card.
+      - --gpu-memory-utilization
+      - "${GEMMA_GPU_MEM_UTIL:-0.90}"
+      # FP8 KV-cache quantization (CEO, ADAAAA-6695): halves the KV-cache bytes
+      # vs f16 so 4 concurrent 30-frame sequences fit the 16 GB RTX 5070 Ti. On
+      # Blackwell (sm_120) vLLM supports fp8 KV via this dtype; fall back to a
+      # lower --gpu-memory-utilization / --max-num-seqs if a given card OOMs.
+      - --kv-cache-dtype
+      - "${GEMMA_KV_CACHE_DTYPE:-fp8}"
+      # Multimodal budget per request: up to 64 images (30 frames + crops), 1
+      # audio (the trigger window), no video. vLLM profiles KV for this max.
+      # Fixed by the decide payload contract (up to ~30 frames + crops + one
+      # audio window), so it is a literal, not an ENV knob — this avoids a
+      # brace-in-`${VAR:-...}`-default that Compose interpolation mis-parses.
+      - --limit-mm-per-prompt
+      - '{"image": 64, "audio": 1, "video": 0}'
+      # Per-image vision soft-token budget. The main lever for fitting 4
+      # concurrent 30-frame seqs on the 16 GB card: lower it to cut KV/req at
+      # the cost of vision detail (re-run the decide eval gate before lowering
+      # in prod). Default 280 (vLLM default).
+      - --mm-processor-kwargs
+      - "{\"max_soft_tokens\": ${GEMMA_MAX_SOFT_TOKENS:-280}}"
+      # Gemma4Unified is a remote-code HF arch; required for vLLM to load it.
+      - --trust-remote-code
     volumes:
       - ./models:/models:ro
     expose: ["8088"] # only on the private hl network (decide talks to it)
     healthcheck:
+      # vLLM returns 200 on /health once the model is loaded + the server can
+      # answer. vLLM model load (10 GB INT4 weights + eager multimodal
+      # embedders) takes minutes on this card, so start_period is generous and
+      # retries are high so a slow first load is not mistaken for a crash.
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8088/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 60s
+      interval: 15s
+      timeout: 15s
+      retries: 40
+      start_period: 240s
     deploy:
       resources:
         reservations:
           devices:
-            # Gemma (llama.cpp VLM) pinned to GPU 1 = RTX 5070 Ti only, so the
-            # model offloads (--n-gpu-layers 99) onto a single card.
+            # Gemma pinned to GPU 1 (RTX 5070 Ti) by default; GEMMA_GPU_ID lets
+            # an operator relocate it (e.g. to GPU 0 / a larger card) without a
+            # compose edit once the compute decision is made.
             - driver: nvidia
-              device_ids: ["1"]
+              device_ids: ["${GEMMA_GPU_ID:-1}"]
               capabilities: [gpu]
     networks: [hl]
 
@@ -224,7 +258,11 @@ services:
     environment:
       - DECIDE_MODE=${DECIDE_MODE:-gemma}
       - GEMMA_URL=${GEMMA_URL:-http://gemma:8088}
-      - GEMMA_MODEL=${GEMMA_MODEL:-gemma-4-12b-it-qat-q4_0}
+      # GEMMA_MODEL is BOTH the decide request `model` field AND the vLLM
+      # --served-model-name (see the gemma service), so a single ENV keeps them
+      # in sync. Default now names the INT4 checkpoint vLLM serves; changing it
+      # in docker/.env changes both sides with no code change.
+      - GEMMA_MODEL=${GEMMA_MODEL:-cyankiwi/gemma-4-12B-it-qat-AWQ-INT4}
       # ADAAAA-6314 Path 2: the cheap ASR endpoint decide POSTs the
       # trigger-window audio to (POST {ASR_URL}/transcribe -> {text}). Empty
       # (or unreachable) => decide runs text-only with no audio context and a
