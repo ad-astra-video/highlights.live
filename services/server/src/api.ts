@@ -604,6 +604,36 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // the per-video cost/volume fields (§4.5) so the FP-rate + budget gate are
   // measured on VOD exactly as on live. The GPU eval run itself is spend-gated
   // (PO budget-gate approval); this only wires + records the compute.
+  /**
+   * ADAAAA-6694: ride out a momentary `503 no capacity available for runner`
+   * on the capacity-1 perceive slot instead of failing the VOD job instantly.
+   * reservePerceive() itself already retries 4x (~4s) for the transient; this
+   * wraps it in a bounded exponential backoff over the WHOLE reserve so a VOD
+   * submitted while another job holds the slot stays `active`/queued and
+   * eventually processes once the slot frees. The job is already `active` when
+   * runVodJob starts, so it reads as processing/queued while we wait. If the
+   * slot is STILL unavailable after the bounded window (e.g. a genuinely stuck
+   * session), throw so the job fails loudly with a clear message instead of
+   * hanging forever.
+   */
+  async function reservePerceiveWithBackoff() {
+    const maxMs = cfg.vodReserveRetryTotalMs;
+    const t0 = Date.now();
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await adapter.reservePerceive();
+      } catch (e) {
+        const msg = String(e?.message || e);
+        // Only the no-capacity transient is ride-out; any other reserve failure
+        // (402 payment, network, 4xx/5xx) should surface immediately.
+        if (!/no capacity available for runner/i.test(msg)) throw e;
+        if (Date.now() - t0 >= maxMs) throw e;
+        const delay = Math.min(1000 * 2 ** attempt, 8000);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+
   async function runVodJob(job: { id: string; gameHint?: string; preferLabels?: string[] }, videoPath: string, user: any, sub: any) {
     const jobId = job.id;
     const scheduledAt = new Date().toISOString();
@@ -689,7 +719,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // Stage-A audio /audio tap (same pattern as runLiveJob); analyzeJob stops
     // it (and any re-reserves) in its finally. The shared LiveRunShared is
     // passed so both legs anchor to the SAME frame window + evidence.
-    const initial = await adapter.reservePerceive();
+    // ADAAAA-6694: use the no-capacity backoff wrapper so a VOD submitted while
+    // the capacity-1 perceive slot is held stays queued and eventually runs.
+    const initial = await reservePerceiveWithBackoff();
+    // ADAAAA-6694: track this VOD job's current perceive session so the stop
+    // path can release the capacity-1 slot synchronously (mirroring the live
+    // path ADAAAA-6561). `slot.stopped` is flipped by the stop route to stop
+    // analyzeJob re-reserving a fresh session once the slot has been released.
+    const slot = { current: initial, stopped: false };
+    livePerceiveSlots.set(job.id, slot);
     const shared = new LiveRunShared({ decideWindowN: cfg.vodDecideWindowN });
     // Drive the Stage-A audio tap from the VOD file's audio track in parallel
     // with the video pass. Best-effort: no audio track or a dropped chunk never
@@ -724,9 +762,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     })();
     let outcome: AnalyzeOutcome;
     try {
-      outcome = await analyzeJob(adapter, iter, cut, anaCfg, onEvent, initial, shared);
+      outcome = await analyzeJob(adapter, iter, cut, anaCfg, onEvent, initial, shared, {
+        onReserve: (res) => {
+          slot.current = res;
+        },
+        isStopped: () => slot.stopped,
+      });
     } finally {
       await audioLoop;
+      livePerceiveSlots.delete(job.id);
     }
     // Every accepted highlight was already persisted + billed + quota-debited
     // at DECISION time by the onEvent `highlight` hook above (ADAAAA-6352),
@@ -1623,6 +1667,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         slot.stopped = true;
         if (slot.current) await adapter.stopPerceive(slot.current.sessionId).catch(() => {});
       }
+      return reply.send({ ok: true, job: store.getJob(job.id) });
+    }
+    // VOD `file` job (background analyze via runVodJob): release the capacity-1
+    // perceive slot synchronously (mirroring the live stop path ADAAAA-6561)
+    // and flip `slot.stopped` so analyzeJob's frame loop breaks on the next
+    // /analyze/ session failure instead of re-reserving a fresh session once the
+    // slot has been released. The job's own flow records the terminal status.
+    // ADAAAA-6694: without this a stuck VOD job permanently squats the single
+    // perceive slot and every subsequent VOD 503s on reserve.
+    if (job.source === "file" && livePerceiveSlots.has(job.id)) {
+      const slot = livePerceiveSlots.get(job.id)!;
+      livePerceiveSlots.delete(job.id);
+      slot.stopped = true;
+      if (slot.current) await adapter.stopPerceive(slot.current.sessionId).catch(() => {});
       return reply.send({ ok: true, job: store.getJob(job.id) });
     }
     // Browser capture job: release the perceive session, then cut clips for any
