@@ -199,6 +199,28 @@ def test_decide_sends_thinking_off():
     assert mock.requests[0]["temperature"] == 0.0
 
 
+def test_decide_sends_vllm_thinking_off(monkeypatch):
+    # ADAAAA-6695 (vLLM): the OpenAI-compat server disables Gemma 4 reasoning by
+    # default, but the explicit `chat_template_kwargs.enable_thinking=false` is
+    # the documented vLLM channel that guarantees thinking stays off (so strict
+    # JSON returns immediately, no reasoning_content burn / empty content ->
+    # rule fallback). Both channels must be present on every decide call.
+    mock = MockLlama('{"isHighlight":false,"score":10,"eventType":"NONE","reason":"quiet"}')
+    try:
+        decide_with_gemma(
+            "NONE",
+            {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0},
+            url=f"http://127.0.0.1:{mock.port}",
+        )
+    finally:
+        mock.stop()
+    req = mock.requests[0]
+    assert req["reasoning_effort"] == "none"
+    assert req.get("chat_template_kwargs", {}).get("enable_thinking") is False
+    assert req["temperature"] == 0.0
+
+
+
 def test_decide_with_gemma_uses_model():
     mock = MockLlama('{"isHighlight":true,"score":90,"eventType":"KILL","reason":"model saw it"}')
     try:
