@@ -263,6 +263,13 @@ export interface ServerConfig {
    * `maxReReserves` times per frame at the capped cadence and then aborts.
    * `VOD_SESSION_RETRY_BACKOFF_MAX_MS` (default 8000). */
   vodSessionRetryBackoffMaxMs: number;
+  /** ADAAAA-6694: total bounded window (ms) the VOD background-analyze path
+   * keeps retrying the INITIAL perceive reserve on `503 no capacity available
+   * for runner`. The shared reserve helper already retries 4x (~4s); a longer
+   * ride-out here lets a VOD submitted while the capacity-1 perceive slot is
+   * held by another job stay `active`/queued and eventually process instead of
+   * failing instantly. `VOD_RESERVE_RETRY_TOTAL_MS` (default 120000 = 2 min). */
+  vodReserveRetryTotalMs: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -372,5 +379,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // field docs for the recovery rationale).
     vodSessionRetryBackoffMs: Number(env.VOD_SESSION_RETRY_BACKOFF_MS ?? 500),
     vodSessionRetryBackoffMaxMs: Number(env.VOD_SESSION_RETRY_BACKOFF_MAX_MS ?? 8000),
+    vodReserveRetryTotalMs: Number(env.VOD_RESERVE_RETRY_TOTAL_MS ?? 120000),
   };
 }
