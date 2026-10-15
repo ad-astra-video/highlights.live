@@ -147,6 +147,15 @@ export interface ServerConfig {
    * so the deployed live baseline sends no new payload until an operator enables
    * it. `LIVE_AUDIO_CONTEXT`. */
   audioContext: boolean;
+  /** ADAAAA-6742 G5: drive the LIVE job path through the decide runner's
+   * watcher / depth-router / deep-investigation / clip-stash instead of the
+   * legacy per-frame candidate loop (server-side cut()). When ON, the live path
+   * POSTs /watcher/start + /stash/start, feeds the rail via /watcher/ingest +
+   * /stash/ingest, steps pass-1 + pass-2, invokes deep investigation on a
+   * depth-router flag, and accepts the decide-uploaded clip; perceive is
+   * passive analysis only. Default OFF so current live behavior is preserved.
+   * `LIVE_WATCHER_FIRST`. */
+  liveWatcherFirst: boolean;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -346,6 +355,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // I4 / ADAAAA-6361: live-path decide() carries the surrounding audio clip so
     // Gemma gets auditory context, matching VOD. Opt out with LIVE_AUDIO_CONTEXT=0.
     audioContext: env.LIVE_AUDIO_CONTEXT !== "0",
+    // ADAAAA-6742 G5: live watcher-first drive. Default OFF — the deployed live
+    // baseline is byte-for-byte the legacy per-frame candidate loop until an
+    // operator enables it (needs CEO compute sign-off per plan Part 4).
+    liveWatcherFirst: env.LIVE_WATCHER_FIRST === "1" || env.LIVE_WATCHER_FIRST === "true",
     // ADAAAA-5342: live sampling driven from the runner's measured capability
     // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
     // headroom so capable GPUs accelerate toward the chartered cadence while

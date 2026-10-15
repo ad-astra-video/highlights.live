@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { HighlightRecord, TrackObservation } from "@highlights/events";
 import { StageAMetrics } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
+import type { DecideWatcherClient, StashIngestReq, WatcherStepResponse } from "./watch-client";
 
 export interface ReserveResult {
   sessionId: string;
@@ -453,6 +454,19 @@ export interface AnalyzerConfig {
    * confabulated goals cannot flood the accepted list. Default 30.
    */
   goalBurstWindowS?: number;
+  /**
+   * ADAAAA-6742 G5: live watcher-first. When true (and a `decideWatcher` is
+   * supplied), analyzeJob drives the decide runner's watcher / depth-router /
+   * deep-investigation / clip-stash instead of the legacy per-frame candidate
+   * loop + server-side cut(). Perceive becomes passive analysis only (its
+   * candidate/event-type relabel is NOT a trigger). Default false — the legacy
+   * live path is byte-for-byte unchanged. Wired from the `LIVE_WATCHER_FIRST`
+   * server config flag.
+   */
+  liveWatcherFirst?: boolean;
+  /** ADAAAA-6742 G5: the live stream id handed to the decide watcher/stash
+   * (== the live job id). Only read when `liveWatcherFirst` is set. */
+  streamId?: string;
 }
 
 /**
@@ -1365,6 +1379,167 @@ export interface AnalyzeEvent {
   reason?: string;
 }
 
+// ---------------------------------------------------------------------------
+// ADAAAA-6742 G5 "Live watcher-first". The live job path (when
+// `cfg.liveWatcherFirst` is set and a `decideWatcher` is supplied) drives the
+// decide runner's pass-1 watcher / pass-2 depth router / deep investigation /
+// clip stash instead of the legacy per-frame candidate loop + server-side
+// cut(). Perceive stays a passive continuous analysis session (its candidate /
+// event-type relabel is NOT a trigger). The decide stash builds + uploads
+// confirmed clips straight to the server (POST /jobs/:id/clips), which persists
+// and publishes them on the feed — so this loop does NOT cut clips itself.
+// ---------------------------------------------------------------------------
+
+/** Cadence (seconds) between pass-1 watcher ticks / pass-2 depth-router steps
+ * (plan Part 2: 3 s tick over a 10 s rolling window). */
+export const WATCHER_TICK_S = 3;
+
+/** Feed one analyzed live frame to the decide watcher rail + clip stash.
+ * `players`/`objects`/`caption`/audio are mapped from the perceive observation
+ * (audio defaults to 0 on the frame rail; the Stage-A audio tap is separate). */
+async function feedWatcherRail(
+  watcher: DecideWatcherClient,
+  frame: { seq: number; timestamp: number; imageB64: string },
+  obs: ObservationResult["observation"],
+  cfg: AnalyzerConfig
+): Promise<void> {
+  await watcher.watcherIngest({
+    ts: frame.timestamp,
+    seq: frame.seq,
+    players: obs.tracks ?? [],
+    objects: obs.objects ?? [],
+    caption: (obs.ocr ?? []).join(" ") ?? "",
+    audioPeak: 0.0,
+    audioBaseline: 0.0,
+  });
+  const stashReq: StashIngestReq = {
+    ts: frame.timestamp,
+    seq: frame.seq,
+    jpeg: frame.imageB64,
+    audio: "",
+    audioMime: "",
+  };
+  await watcher.stashIngest(stashReq);
+}
+
+/** Drive one 3 s tick: pass-1 summary (`/watcher/step`), then the pass-2 depth
+ * router (`/watcher/step2`). When the depth router flags a moment, invoke
+ * `/deep/investigate {flagTs}`. `/watcher/step2` already auto-investigates and
+ * stash-builds the flag, so we only issue an explicit `/deep/investigate` for a
+ * flag that step2 did not already deep-verdict (avoids a duplicate deep pass /
+ * duplicate clip upload on the decide side). */
+async function driveWatcherTick(
+  watcher: DecideWatcherClient,
+  tickTs: number
+): Promise<void> {
+  const stepRes: WatcherStepResponse = await watcher.watcherStep({ tickTs });
+  const step2Res: WatcherStepResponse = await watcher.watcherStep2({ tickTs });
+  const flagTs = step2Res?.flag?.ts ?? stepRes?.flag?.ts;
+  if (flagTs == null) return;
+  const alreadyDeep = (step2Res?.deepVerdicts ?? []).some(
+    (v: { flagTs?: number; window?: { start?: number } }) =>
+      v?.flagTs != null
+        ? Math.abs(v.flagTs - flagTs) < 1e-6
+        : v?.window?.start != null && Math.abs(v.window.start - flagTs) < 1e-6
+  );
+  if (alreadyDeep) return;
+  await watcher.deepInvestigate({ flagTs });
+}
+
+/** Open the decide watcher + clip stash at live stream start. */
+async function startWatcher(
+  watcher: DecideWatcherClient,
+  sessionId: string,
+  cfg: AnalyzerConfig
+): Promise<void> {
+  const streamId = cfg.streamId ?? cfg.jobId;
+  await watcher.watcherStart({ sessionId, streamId, traceJobId: cfg.jobId, config: {} });
+  await watcher.stashStart({ sessionId, streamId, jobId: cfg.jobId, config: {} });
+}
+
+interface WatcherFirstArgs {
+  client: PipelineClient;
+  iterFrames: AsyncIterable<{ seq: number; timestamp: number; imageB64: string }>;
+  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>;
+  cfg: AnalyzerConfig;
+  onEvent?: (ev: AnalyzeEvent) => void;
+  decideWatcher: DecideWatcherClient;
+  initialSession?: ReserveResult;
+  slotRef?: { onReserve?: (res: ReserveResult) => void; isStopped?: () => boolean };
+  shared_?: LiveRunShared;
+}
+
+/** The watcher-first live loop. Keeps the same perceive session re-reserve /
+ * stop semantics (the passive /analyze still feeds the shared frame window and
+ * persists analysis data) but never treats a perceive candidate or event-type
+ * relabel as a trigger — the decide depth router owns triggering. */
+async function runWatcherFirstLive(args: WatcherFirstArgs): Promise<AnalyzeOutcome> {
+  const { client, iterFrames, cfg, onEvent, decideWatcher, initialSession, slotRef, shared_ } = args;
+  const maxReReserves = cfg.maxReReserves ?? 3;
+  const sessionRetryBackoffMs = cfg.sessionRetryBackoffMs ?? 500;
+  const sessionRetryBackoffMaxMs = cfg.sessionRetryBackoffMaxMs ?? 8000;
+  const first = initialSession ?? (await client.reservePerceive());
+  let sessionId = first.sessionId;
+  slotRef?.onReserve?.(first);
+  const reserved = new Set<string>([first.sessionId]);
+  const run: LiveRunShared = shared_ ?? new LiveRunShared({ decideWindowN: cfg.decideWindowN, goalBurstWindowS: cfg.goalBurstWindowS });
+  const evidence = run.evidence;
+  let framesAnalyzed = 0;
+  let lastTickTs: number | null = null;
+  await startWatcher(decideWatcher, sessionId, cfg);
+  try {
+    for await (const frame of iterFrames) {
+      framesAnalyzed++;
+      run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
+      let res!: ObservationResult;
+      let reReserved = 0;
+      let stoppedRun = false;
+      for (;;) {
+        try {
+          res = await client.analyze(sessionId, frame, {
+            gameHint: cfg.gameHint,
+            preferLabels: cfg.preferLabels,
+            loraRef: cfg.loraRef,
+          });
+          break;
+        } catch (err) {
+          if (slotRef?.isStopped?.()) {
+            stoppedRun = true;
+            break;
+          }
+          if (!(err instanceof SessionLostError)) throw err;
+          if (reReserved >= maxReReserves) throw err;
+          await sleep(backoffDelayMs(reReserved, sessionRetryBackoffMs, sessionRetryBackoffMaxMs));
+          reReserved++;
+          const fresh = await client.reservePerceive();
+          sessionId = fresh.sessionId;
+          reserved.add(fresh.sessionId);
+          slotRef?.onReserve?.(fresh);
+        }
+      }
+      if (stoppedRun) break;
+      // Perceive is passive analysis only: feed the evidence/window + persist
+      // the observation, but do NOT forward a proactive trigger.
+      evidence.step(res.observation);
+      onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "observation", observation: res.observation });
+      run.setFindings(frame.seq, res.observation);
+      // Feed the live rail to the decide watcher + clip stash.
+      await feedWatcherRail(decideWatcher, frame, res.observation, cfg);
+      // Drive a pass-1 summary + pass-2 depth-router step every 3 s tick.
+      if (lastTickTs === null || frame.timestamp - lastTickTs >= WATCHER_TICK_S) {
+        lastTickTs = frame.timestamp;
+        await driveWatcherTick(decideWatcher, frame.timestamp);
+      }
+    }
+  } finally {
+    for (const s of reserved) {
+      await client.stopPerceive(s).catch(() => {});
+    }
+  }
+  return { sessionId, highlights: run.highlights, framesAnalyzed };
+}
+
+
 export async function analyzeJob(
   client: PipelineClient,
   iterFrames: AsyncIterable<{ seq: number; timestamp: number; imageB64: string }>,
@@ -1389,8 +1564,29 @@ export async function analyzeJob(
    * a fresh session once the job has been stopped (otherwise the stop-path
    * slot release would make the in-flight analyze 404 and re-bind a new slot
    * on a job that is already stopping). */
-  slotRef?: { onReserve?: (res: ReserveResult) => void; isStopped?: () => boolean }
+  slotRef?: { onReserve?: (res: ReserveResult) => void; isStopped?: () => boolean },
+  /** ADAAAA-6742 G5: decide watcher / depth-router / deep-investigation /
+   * clip-stash client for the live watcher-first path. Only used when
+   * `cfg.liveWatcherFirst` is set; otherwise the legacy per-frame candidate
+   * loop runs unchanged. */
+  decideWatcher?: DecideWatcherClient
 ): Promise<AnalyzeOutcome> {
+  // ADAAAA-6742 G5: live watcher-first — drive the decide watcher instead of
+  // the legacy per-frame candidate loop. Config-gated (default OFF) so the
+  // deployed live baseline is byte-for-byte unchanged.
+  if (cfg.liveWatcherFirst && decideWatcher) {
+    return runWatcherFirstLive({
+      client,
+      iterFrames,
+      cut,
+      cfg,
+      onEvent,
+      decideWatcher,
+      initialSession,
+      slotRef,
+      shared_,
+    });
+  }
   const maxReReserves = cfg.maxReReserves ?? 3;
   // ADAAAA-6577: bounded exponential backoff between a perceive session-lost
   // re-reserve and the retry of the same frame. A flapping perceive runner
