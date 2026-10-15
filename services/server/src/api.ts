@@ -31,6 +31,9 @@ import {
 import {
   DatasetSchema,
   DetectionTrainingSampleSchema,
+  AnalysisEventSchema,
+  AnalysisSessionTraceSchema,
+  type AnalysisEvent,
   type Dataset,
   type DetectionTrainingSample,
   type HighlightRecord,
@@ -1644,6 +1647,36 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!job) return reply.code(404).send({ error: "not found" });
     if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
     return { job, highlights: store.highlightsForJob(job.id) };
+  });
+
+  // ADAAAA-6738 G1 (watcher plan): the webapp relays perceive's persistent-
+  // session analysis data and updated requests to the server for durable
+  // persistence (analysis_events + analysis_session_traces). Owner-scoped like
+  // every other job route; the write is capped/batched per request so it is
+  // not a per-frame firehose.
+  app.post<{ Params: { id: string }; Body: { events?: unknown[] } }>("/jobs/:id/analysis/events", { preHandler: authReq }, async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    const raw = Array.isArray(req.body?.events) ? req.body.events : [];
+    const cap = Math.min(raw.length, 200);
+    const events: AnalysisEvent[] = [];
+    for (let i = 0; i < cap; i++) {
+      const parsed = AnalysisEventSchema.safeParse({ id: randomUUID(), jobId: job.id, ...(raw[i] as object) });
+      if (parsed.success) events.push(parsed.data);
+    }
+    if (events.length) await store.persistAnalysisEvents(events);
+    return { ok: true, persisted: events.length };
+  });
+
+  app.post<{ Params: { id: string }; Body: { trace?: unknown } }>("/jobs/:id/analysis/trace", { preHandler: authReq }, async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    const parsed = AnalysisSessionTraceSchema.safeParse({ id: randomUUID(), jobId: job.id, ...((req.body?.trace as object) ?? {}) });
+    if (!parsed.success) return reply.code(422).send({ error: "invalid trace" });
+    await store.appendAnalysisTrace(parsed.data);
+    return { ok: true };
   });
 
   app.post<{ Params: { id: string } }>("/jobs/:id/stop", { preHandler: authReq }, async (req: any, reply) => {

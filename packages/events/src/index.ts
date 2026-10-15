@@ -491,6 +491,52 @@ export const HighlightRecordSchema = z.object({
 });
 export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
 
+// --- watcher / analysis-session persistence (ADAAAA-6738 G1) ----------------
+// The perceive persistent-session analysis state and the decide<->perceive
+// request trace are relayed to the webapp and persisted by the server. Each
+// row is a JSON record (id + job_id + created_at + record blob), mirroring
+// jobs/highlights, so one DDL serves SQLite (dev) and Postgres (prod).
+//
+// AnalysisEventSchema: one perceive analysis-data sample / windowed tool
+// result (audio energy, tracked objects, captions, detections, tool result).
+// The payload is bounded and capped/batched at the write site (not a
+// per-frame firehose).
+export const AnalysisEventSchema = z.object({
+  id: z.string(),
+  jobId: z.string(),
+  /** Media stream id (when the job maps to a live stream). */
+  streamId: z.string().optional(),
+  /** The perceive session id the data came from. */
+  sessionId: z.string().optional(),
+  /** Seconds from stream start. */
+  timestamp: z.number(),
+  kind: z.enum(["audio_energy", "tracked_objects", "caption", "detection", "tool_result", "control"]),
+  /** Kind-specific payload (bounded). */
+  data: z.record(z.unknown()),
+});
+export type AnalysisEvent = z.infer<typeof AnalysisEventSchema>;
+
+// AnalysisSessionTraceSchema: one decide -> perceive request, its
+// updated/accepted form, and its result — the timeline-ordered analysis-
+// session trace the server persists so the operator can replay what the
+// analysis session did, when, and why.
+export const AnalysisSessionTraceSchema = z.object({
+  id: z.string(),
+  jobId: z.string(),
+  streamId: z.string().optional(),
+  sessionId: z.string().optional(),
+  /** Epoch ms when the request was issued. */
+  at: z.number(),
+  /** Tool name for a windowed query (get_audio_levels | ... ) or a control instruction. */
+  tool: z.string().optional(),
+  /** The window the query refers to (when windowed). */
+  window: z.record(z.unknown()).optional(),
+  request: z.record(z.unknown()),
+  response: z.record(z.unknown()).optional(),
+  updated: z.record(z.unknown()).optional(),
+});
+export type AnalysisSessionTrace = z.infer<typeof AnalysisSessionTraceSchema>;
+
 // --- training pipeline re-exports (ADAAAA-5164) -----------------------------
 // The dataset-curation pipeline (perceptual-hash bucketing, coverage, split,
 // JSONL manifests) ships in ./training. Re-exported here so consumers use one

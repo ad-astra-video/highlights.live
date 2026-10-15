@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { HighlightRecordSchema, JobSchema, type HighlightRecord, type Job } from "@highlights/events";
+import { HighlightRecordSchema, JobSchema, type HighlightRecord, type Job, type AnalysisEvent, type AnalysisSessionTrace } from "@highlights/events";
 import type { Db, DatasetRecord } from "./db";
 
 export interface StoredObservation {
@@ -202,6 +202,41 @@ export class Store {
     this.datasets.delete(id);
     if (this.db) await this.db.deleteDataset(id);
     return true;
+  }
+
+  // --- watcher analysis-data + analysis-session trace (ADAAAA-6738 G1) ---
+  // Append-heavy streams; write-through to the Db (the durable store) and read
+  // straight back from it rather than caching in memory, so the working set
+  // does not grow unbounded with the per-stream analysis firehose. Writes are
+  // capped/batched by the caller (not a per-frame write).
+  /** Persist a batch of perceive analysis-data samples / tool results. */
+  async persistAnalysisEvents(events: AnalysisEvent[]): Promise<void> {
+    if (!this.db) return;
+    for (const e of events) await this.db.appendAnalysisEvent(e);
+  }
+
+  /** Analysis events for a job, oldest first. */
+  async listAnalysisEvents(jobId: string, limit?: number): Promise<AnalysisEvent[]> {
+    if (!this.db) return [];
+    return this.db.listAnalysisEvents(jobId, limit);
+  }
+
+  /** Append one decide -> perceive request trace row. */
+  async appendAnalysisTrace(t: AnalysisSessionTrace): Promise<void> {
+    if (!this.db) return;
+    await this.db.appendAnalysisTrace(t);
+  }
+
+  /** Analysis-session traces for a job, oldest first. */
+  async listAnalysisTraces(jobId: string, limit?: number): Promise<AnalysisSessionTrace[]> {
+    if (!this.db) return [];
+    return this.db.listAnalysisTraces(jobId, limit);
+  }
+
+  /** Retention: delete analysis events + traces created before the cutoff. */
+  async purgeAnalysisBefore(cutoff: string): Promise<void> {
+    if (!this.db) return;
+    await this.db.purgeAnalysisBefore(cutoff);
   }
 }
 
