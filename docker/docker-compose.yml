@@ -282,11 +282,21 @@ services:
       # ADAAAA-5778 notable-only knob. Data-landed default 60; override in prod
       # only after re-measuring on the real-feed eval set (evals/decide_discernment.py).
       - DECIDE_NOTABILITY_MIN=${DECIDE_NOTABILITY_MIN:-60}
+      # ADAAAA-6739 G2: route decide's windowed queries + control instructions
+      # THROUGH the media server broker to the active perceive session (media
+      # provisions/fronts the perceive session and owns the media session). The
+      # broker traces each decide->perceive request + result server-side. When
+      # unset decide falls back to a direct PERCEIVE_URL call, and when neither
+      # is set the watcher uses the frames' own signals (no broker trace, so no
+      # runtime analysis-session trace — see the G2 Part 3 gate).
+      - MEDIA_BROKER_URL=${MEDIA_BROKER_URL:-http://media:4070}
     depends_on:
       gemma:
         condition: service_healthy
       asr:
         condition: service_healthy
+      media:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8081/health')"]
       interval: 5s
