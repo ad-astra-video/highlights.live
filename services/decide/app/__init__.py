@@ -6,7 +6,7 @@ import os
 import time
 from typing import Optional
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger("highlights.decide")
@@ -19,6 +19,7 @@ from .logging_setup import configure_logging  # noqa: E402  (defines log above)
 configure_logging()
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
+from .watcher import Frame as WatcherFrame, WatcherConfig, WatcherSession
 from .gemma import (  # noqa: F401
     apply_ball_outcome_gate,
     apply_goal_attestation_gate,
@@ -180,6 +181,41 @@ class HighlightRequest(BaseModel):
     reasoningEffort: str = Field(default="none")
 
 
+class WatcherStartRequest(BaseModel):
+    """Open a decide watcher session (ADAAAA-6738 G1c). VOD-first: the caller
+    drives the stream with ingest/step; config is optional (defaults are the
+    Pass 1 gate values: 3 s tick, 10 s window, 3 fps, <=30 frames, >=50 % overlap)."""
+
+    model_config = ConfigDict(extra="ignore")
+    sessionId: str = ""
+    streamId: str = ""
+    # Optional: when set (with TRACE_BASE), the watcher POSTs each decide->
+    # perceive tool call/result to the server's analysis-session trace route.
+    traceJobId: str = ""
+    config: dict = Field(default_factory=dict)
+
+
+class WatcherIngestRequest(BaseModel):
+    """One frame to ingest into the watcher's rolling buffer."""
+
+    model_config = ConfigDict(extra="ignore")
+    ts: float
+    seq: int = 0
+    players: list = Field(default_factory=list)
+    objects: list = Field(default_factory=list)
+    caption: str = ""
+    audioPeak: float = 0.0
+    audioBaseline: float = 0.0
+
+
+class WatcherStepRequest(BaseModel):
+    """Advance one 3 s tick, emitting a timestamped summary row for the rolling
+    10 s window ending at ``tickTs`` (stream seconds)."""
+
+    model_config = ConfigDict(extra="ignore")
+    tickTs: float
+
+
 # --- Response contract ------------------------------------------------------
 # ADAAAA-6358 (I1): the decide response now carries a reviewer-facing rationale
 # on top of the verdict so a board/CTO reviewer can see *why* a clip was kept or
@@ -325,6 +361,57 @@ def _log_plan(mode: str, req: "PlanRequest", resp: "TrackingPlanResponse") -> No
         "plan roster session=%s mode=%s targets=%s zones=%s anchor=%s",
         req.sessionId, mode, labels, resp.zones, resp.anchor,
     )
+
+
+def _make_perceive_client(session_id: str):
+    """Return a decide->perceive windowed-tool callable bound to ``session_id``,
+    or None when PERCEIVE_URL is unset (then the watcher brain uses the frames'
+    own signals). Talks to ``{PERCEIVE_URL}/analysis/{tool}`` with the same
+    bounded window envelope the perceive service returns. """
+    base = os.environ.get("PERCEIVE_URL", "").strip().rstrip("/")
+    if not base:
+        return None
+    import httpx
+
+    def call(tool: str, start: float, end: float, max_points: int) -> Optional[dict]:
+        try:
+            r = httpx.post(
+                f"{base}/analysis/{tool}",
+                params={"start": start, "end": end, "maxPoints": max_points},
+                headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
+                timeout=10.0,
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:  # noqa: BLE001  a perceive hiccup must not drop a tick
+            log.debug("watcher perceive %s failed: %s", tool, e)
+            return None
+
+    return call
+
+
+def _make_trace_sink(trace_job_id: str):
+    """Return an analysis_session_traces sink that POSTs each record to the
+    server's ``POST /jobs/:id/analysis/trace`` route (ADAAAA-6738 G1). Returns
+    None (records dropped, logged at DEBUG) when TRACE_BASE is unset."""
+    base = os.environ.get("TRACE_BASE", "").strip().rstrip("/")
+    if not base or not trace_job_id:
+        return None
+    import httpx
+
+    def sink(record: dict) -> None:
+        try:
+            r = httpx.post(
+                f"{base}/jobs/{trace_job_id}/analysis/trace",
+                json={"trace": record},
+                timeout=5.0,
+            )
+            if r.status_code >= 400:
+                log.debug("watcher trace POST failed: %s", r.status_code)
+        except Exception as e:  # noqa: BLE001
+            log.debug("watcher trace POST error: %s", e)
+
+    return sink
 
 
 def create_app() -> FastAPI:
@@ -549,6 +636,57 @@ def create_app() -> FastAPI:
         )
         _log_plan("rule", req, resp)
         return resp
+
+    @router.get("/watcher/state")
+    async def watcher_state():
+        sess = getattr(app.state, "watcher", None)
+        if sess is None:
+            return {"active": False}
+        return {"active": True, **sess.state()}
+
+    @router.post("/watcher/start")
+    async def watcher_start(req: WatcherStartRequest):
+        perceive_client = _make_perceive_client(req.sessionId)
+        trace_sink = _make_trace_sink(req.traceJobId)
+        sess = WatcherSession(
+            session_id=req.sessionId,
+            stream_id=req.streamId,
+            config=WatcherConfig(**req.config),
+            perceive=perceive_client,
+            trace=trace_sink,
+        )
+        app.state.watcher = sess
+        return {"ok": True, "state": sess.state()}
+
+    @router.post("/watcher/ingest")
+    async def watcher_ingest(req: WatcherIngestRequest):
+        sess = getattr(app.state, "watcher", None)
+        if sess is None:
+            raise HTTPException(status_code=409, detail="no watcher session; call /watcher/start first")
+        sess.ingest(WatcherFrame(
+            ts=req.ts, seq=req.seq, players=req.players or [], objects=req.objects or [],
+            caption=req.caption or "", audio_peak=req.audioPeak or 0.0, audio_baseline=req.audioBaseline or 0.0,
+        ))
+        return {"ok": True}
+
+    @router.post("/watcher/step")
+    async def watcher_step(req: WatcherStepRequest):
+        sess = getattr(app.state, "watcher", None)
+        if sess is None:
+            raise HTTPException(status_code=409, detail="no watcher session; call /watcher/start first")
+        row = sess.step(req.tickTs)
+        return {
+            "summary": row.to_dict(),
+            "context": sess.summaries_context_dicts(),
+            "state": sess.state(),
+        }
+
+    @router.get("/watcher/summaries")
+    async def watcher_summaries():
+        sess = getattr(app.state, "watcher", None)
+        if sess is None:
+            return {"summaries": []}
+        return {"summaries": sess.summaries_context_dicts()}
 
     app = FastAPI(title="highlights-decide", version="0.1.0")
     # Canonical at root (go-livepeer strips `/app`); `/app/*` alias for direct calls.
