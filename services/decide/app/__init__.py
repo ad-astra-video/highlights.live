@@ -192,6 +192,12 @@ class WatcherStartRequest(BaseModel):
     # Optional: when set (with TRACE_BASE), the watcher POSTs each decide->
     # perceive tool call/result to the server's analysis-session trace route.
     traceJobId: str = ""
+    # ADAAAA-6748 G1b-2: server-service token the trace sink presents so the
+    # server's /jobs/:id/analysis/trace route accepts the POST (that route is
+    # otherwise user-Bearer-only, which would 401 the unauthenticated sink and
+    # drop every VOD trace). Empty => sink sends no Authorization header (live
+    # path relies on the media-broker -> webapp WS relay instead).
+    traceToken: str = ""
     config: dict = Field(default_factory=dict)
 
 
@@ -466,20 +472,32 @@ def _make_control_sender(session_id: str):
     return send
 
 
-def _make_trace_sink(trace_job_id: str):
+def _make_trace_sink(trace_job_id: str, trace_token: str = ""):
     """Return an analysis_session_traces sink that POSTs each record to the
     server's ``POST /jobs/:id/analysis/trace`` route (ADAAAA-6738 G1). Returns
-    None (records dropped, logged at DEBUG) when TRACE_BASE is unset."""
+    None (records dropped, logged at DEBUG) when TRACE_BASE is unset.
+
+    ADAAAA-6748 G1b-2: when ``trace_token`` is provided (the server passes a
+    service token when it drives the VOD watcher) the sink presents it as a
+    Bearer header, because the server trace route is otherwise user-Bearer-only
+    and would 401 the unauthenticated POST (dropping every VOD trace). Without a
+    token the sink stays unauthenticated (the live path relies on the
+    media-broker -> webapp WS relay instead)."""
     base = os.environ.get("TRACE_BASE", "").strip().rstrip("/")
     if not base or not trace_job_id:
         return None
     import httpx
+
+    headers = {}
+    if trace_token:
+        headers["Authorization"] = f"Bearer {trace_token}"
 
     def sink(record: dict) -> None:
         try:
             r = httpx.post(
                 f"{base}/jobs/{trace_job_id}/analysis/trace",
                 json={"trace": record},
+                headers=headers or None,
                 timeout=5.0,
             )
             if r.status_code >= 400:
@@ -723,7 +741,7 @@ def create_app() -> FastAPI:
     @router.post("/watcher/start")
     async def watcher_start(req: WatcherStartRequest):
         perceive_client = _make_perceive_client(req.sessionId)
-        trace_sink = _make_trace_sink(req.traceJobId)
+        trace_sink = _make_trace_sink(req.traceJobId, req.traceToken)
         sess = WatcherSession(
             session_id=req.sessionId,
             stream_id=req.streamId,

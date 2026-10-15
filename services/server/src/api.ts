@@ -278,6 +278,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const authReq = authRequired(auth);
   const adminReq = adminRequired(auth);
   const adminReadOnlyReq = adminReadonlyRequired(auth);
+  // ADAAAA-6748 G1b-2: the analysis-session trace ingest accepts either a
+  // valid user (live path: the webapp relays the media-broker trace) OR the
+  // shared TRACE_SERVICE_TOKEN secret (VOD path: the decide watcher posts its
+  // decide->perceive tool-call traces straight back to the server). Without the
+  // service-token branch the unauthenticated decide sink 401s and every VOD
+  // trace is dropped. `cfg.traceServiceToken` empty => user-only (current
+  // behaviour).
+  const traceIngestAuth = async (req: any, reply: any) => {
+    const hdr = (req.headers.authorization as string) || "";
+    const token = hdr.replace(/^Bearer\s+/i, "");
+    if (cfg.traceServiceToken && token && token === cfg.traceServiceToken) {
+      (req as any).serviceAuth = true;
+      return;
+    }
+    const user = await auth.verify(hdr);
+    if (!user) return reply.code(401).send({ error: "unauthorized" });
+    (req as any).user = user;
+  };
   const train = createTrainService(db, adapter, cfg);
 
   // Public auth endpoints share one anti-abuse budget per IP (login, register,
@@ -779,6 +797,49 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       { tool: "get_captioning", kind: "caption" },
     ];
     const analysisStop = { stopped: false };
+    // ADAAAA-6748 G1b-2: drive the decide watcher for this VOD so its
+    // decide->perceive tool calls are traced into analysis_session_traces. The
+    // decide watcher queries the live perceive session (through the G2 media
+    // broker) and POSTs each tool-call trace back to the server via its
+    // TRACE_BASE sink (now authed with the TRACE_SERVICE_TOKEN). The watcher
+    // records a trace for every tool call it ISSUES, so traces land even when
+    // a perceive/broker blip returns no result. Best-effort + capped: a missing
+    // decideUrl / token / perceive blip logs and never stalls the frame pass.
+    const decideBase = (cfg.decideUrl || "").replace(/\/+$/, "");
+    const watcher = { started: false, lastStepTs: -Infinity };
+    const decidePost = async (path: string, body: object) => {
+      if (!decideBase) return;
+      try {
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 5000);
+        const resp = await fetch(`${decideBase}${path}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: ctl.signal,
+        }).catch((e) => {
+          clearTimeout(timer);
+          throw e;
+        });
+        clearTimeout(timer);
+        if (resp.status >= 400) {
+          console.error(`[vod:${jobId}] decide watcher ${path} returned ${resp.status}`);
+        }
+      } catch {
+        /* best-effort: a decide blip never stalls the pass */
+      }
+    };
+    const startDecideWatcher = async (sid: string) => {
+      if (!decideBase || watcher.started) return;
+      await decidePost("/app/watcher/start", {
+        sessionId: sid,
+        streamId: jobId,
+        traceJobId: jobId,
+        traceToken: cfg.traceServiceToken,
+        config: {},
+      });
+      watcher.started = true;
+    };
     const analysisLoop = (async () => {
       // Defensive: the PipelineClient contract declares analysisState/Query,
       // but a test fake (or an older in-flight adapter) may not. Degrade to a
@@ -807,6 +868,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         }
         idle = 0;
         const end = lastTs;
+        // ADAAAA-6748 G1b-2: advance the decide watcher at the capped analysis
+        // cadence so its windowed tool calls (and their persisted traces) land
+        // while the perceive session is alive.
+        if (decideBase && end - watcher.lastStepTs >= cfg.vodAnalysisSampleStepS) {
+          await startDecideWatcher(sid);
+          await decidePost("/app/watcher/step", { tickTs: end });
+          watcher.lastStepTs = end;
+        }
         const batch: AnalysisEvent[] = [];
         for (const { tool, kind } of ANALYSIS_TOOLS) {
           if (samples + batch.length >= cfg.vodAnalysisMaxSamples) break;
@@ -1748,10 +1817,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return { ok: true, persisted: events.length };
   });
 
-  app.post<{ Params: { id: string }; Body: { trace?: unknown } }>("/jobs/:id/analysis/trace", { preHandler: authReq }, async (req: any, reply) => {
+  app.post<{ Params: { id: string }; Body: { trace?: unknown } }>("/jobs/:id/analysis/trace", { preHandler: traceIngestAuth }, async (req: any, reply) => {
     const job = store.getJob(req.params.id);
     if (!job) return reply.code(404).send({ error: "not found" });
-    if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    // A service token (VOD decide watcher) may write trace rows without a user
+    // scope; a user must own the job (or be admin).
+    if (!req.serviceAuth && job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
     const parsed = AnalysisSessionTraceSchema.safeParse({ id: randomUUID(), jobId: job.id, ...((req.body?.trace as object) ?? {}) });
     if (!parsed.success) return reply.code(422).send({ error: "invalid trace" });
     await store.appendAnalysisTrace(parsed.data);

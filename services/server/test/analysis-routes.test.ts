@@ -119,3 +119,55 @@ describe("analysis persistence routes (ADAAAA-6738 G1)", () => {
     expect(denied.statusCode).toBe(403);
   });
 });
+
+
+// ADAAAA-6748 G1b-2: the VOD decide watcher posts its analysis_session_traces
+// straight back to POST /jobs/:id/analysis/trace signed with a shared service
+// token (TRACE_SERVICE_TOKEN) - that route is otherwise user-Bearer-only, which
+// 401s the unauthenticated sink and drops every VOD trace.
+describe("analysis trace service-token ingest (ADAAAA-6748 G1b-2)", () => {
+  let app: any;
+  let store: any;
+  let job: any;
+
+  beforeAll(async () => {
+    const built = await buildTestApp({ TRACE_SERVICE_TOKEN: "svc-trace-token" });
+    app = built.app;
+    store = built.store;
+    const reg = await app.inject({ method: "POST", url: "/auth/register", payload: { email: "g1-svc@test.dev", password: "password123" } });
+    const token = reg.json().token as string;
+    const me = await app.inject({ method: "GET", url: "/auth/me", headers: { authorization: "Bearer " + token } });
+    job = await store.createJob({ ownerId: me.json().user.id, source: "browser" });
+  });
+  afterAll(async () => {
+    if (app) await app.close();
+  });
+
+  it("accepts a trace ingest signed with the service token (no user scope)", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/jobs/" + job.id + "/analysis/trace",
+      headers: { authorization: "Bearer svc-trace-token" },
+      payload: { trace: { at: 3000, tool: "get_captioning", request: { tool: "get_captioning" }, response: { text: "GOAL" } } },
+    });
+    expect(r.statusCode).toBe(200);
+    expect(await store.listAnalysisTraces(job.id)).toHaveLength(1);
+  });
+
+  it("rejects a wrong service token with 401 (still no anonymous write)", async () => {
+    const wrong = await app.inject({
+      method: "POST",
+      url: "/jobs/" + job.id + "/analysis/trace",
+      headers: { authorization: "Bearer wrong-token" },
+      payload: { trace: { at: 4000, tool: "detect_objects", request: {} } },
+    });
+    expect(wrong.statusCode).toBe(401);
+    const anonymous = await app.inject({
+      method: "POST",
+      url: "/jobs/" + job.id + "/analysis/trace",
+      payload: { trace: { at: 5000, tool: "get_audio_levels", request: {} } },
+    });
+    expect(anonymous.statusCode).toBe(401);
+    expect(await store.listAnalysisTraces(job.id)).toHaveLength(1);
+  });
+});
