@@ -689,8 +689,11 @@ export class LivepeerClient {
   }
 }
 
-/** True when the remote signer asks the payer to refresh the session (HTTP 480). */
-function isSessionRefreshError(err: unknown): boolean {
+/** True when the remote signer asks the payer to refresh the session (HTTP 480).
+ * Exported so the server's VOD/live FRESH-reserve path (which signs with a null
+ * prior state) can detect a stale-signer 480 and recover the same way
+ * `refreshPerceivePayment` does, instead of failing the job (ADAAAA-6705). */
+export function isSessionRefreshError(err: unknown): boolean {
   return err instanceof Error && /\bHTTP 480\b/.test(err.message);
 }
 
