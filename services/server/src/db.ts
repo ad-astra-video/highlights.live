@@ -20,6 +20,24 @@ import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { Pool } from "pg";
 import type { Pool as PoolType } from "pg";
 
+/**
+ * Robustly parse a persisted JSON `record` column (jobs/highlights/train_runs/
+ * datasets). A row caught mid-write — or otherwise corrupted — would make the
+ * raw `JSON.parse` throw a `SyntaxError`, which propagates out of
+ * `Store.load()` / the `list*` reads and aborts the whole server at boot
+ * (ADAAAA-6713). This helper returns `null` and logs once per bad row so a
+ * single malformed record is skipped instead of taking the server down.
+ */
+function parseJsonRecord<T>(encoded: unknown, table: string): T | null {
+  try {
+    return JSON.parse(encoded as string) as T;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[db] skipping malformed ${table} record: ${msg}`);
+    return null;
+  }
+}
+
 export interface User {
   id: string;
   email: string;
@@ -571,12 +589,14 @@ export class SqliteDb implements Db {
 
   async getJob(id: string): Promise<Job | undefined> {
     const r = this.db.prepare("SELECT record FROM jobs WHERE id = ?").get(id);
-    return r ? (JSON.parse((r as any).record) as Job) : undefined;
+    return r ? (parseJsonRecord<Job>((r as any).record, "job") ?? undefined) : undefined;
   }
 
   async listJobs(): Promise<Job[]> {
     const rows = this.db.prepare("SELECT record FROM jobs").all() as { record: string }[];
-    return rows.map((r) => JSON.parse(r.record) as Job);
+    return rows
+      .map((r) => parseJsonRecord<Job>(r.record, "job"))
+      .filter((j): j is Job => j !== null);
   }
 
   async saveHighlight(h: HighlightRecord): Promise<void> {
@@ -592,12 +612,14 @@ export class SqliteDb implements Db {
 
   async getHighlight(id: string): Promise<HighlightRecord | undefined> {
     const r = this.db.prepare("SELECT record FROM highlights WHERE id = ?").get(id);
-    return r ? (JSON.parse((r as any).record) as HighlightRecord) : undefined;
+    return r ? (parseJsonRecord<HighlightRecord>((r as any).record, "highlight") ?? undefined) : undefined;
   }
 
   async listHighlights(): Promise<HighlightRecord[]> {
     const rows = this.db.prepare("SELECT record FROM highlights").all() as { record: string }[];
-    return rows.map((r) => JSON.parse(r.record) as HighlightRecord);
+    return rows
+      .map((r) => parseJsonRecord<HighlightRecord>(r.record, "highlight"))
+      .filter((h): h is HighlightRecord => h !== null);
   }
 
   async deleteHighlight(id: string): Promise<void> {
@@ -617,7 +639,7 @@ export class SqliteDb implements Db {
 
   async getTrainRun(id: string): Promise<TrainRun | undefined> {
     const r = this.db.prepare("SELECT record FROM train_runs WHERE id = ?").get(id);
-    return r ? (JSON.parse((r as any).record) as TrainRun) : undefined;
+    return r ? (parseJsonRecord<TrainRun>((r as any).record, "train_run") ?? undefined) : undefined;
   }
 
   async listTrainRuns(ownerId?: string): Promise<TrainRun[]> {
@@ -626,7 +648,9 @@ export class SqliteDb implements Db {
         ? this.db.prepare("SELECT record, created_at FROM train_runs WHERE owner_id = ? ORDER BY created_at DESC").all(ownerId)
         : this.db.prepare("SELECT record, created_at FROM train_runs ORDER BY created_at DESC").all()
     ) as { record: string }[];
-    return rows.map((r) => JSON.parse(r.record) as TrainRun);
+    return rows
+      .map((r) => parseJsonRecord<TrainRun>(r.record, "train_run"))
+      .filter((t): t is TrainRun => t !== null);
   }
 
   async saveDataset(d: Dataset, purgingAt: string | null = null): Promise<void> {
@@ -645,7 +669,7 @@ export class SqliteDb implements Db {
 
   async getDataset(id: string): Promise<DatasetRecord | undefined> {
     const r = this.db.prepare("SELECT record, purging_at FROM datasets WHERE id = ?").get(id) as { record: string; purging_at: string | null } | undefined;
-    return r ? { ...(JSON.parse(r.record) as Dataset), purgingAt: r.purging_at } : undefined;
+    return r ? { ...(parseJsonRecord<Dataset>(r.record, "dataset") ?? ({} as Dataset)), purgingAt: r.purging_at } : undefined;
   }
 
   async listDatasets(ownerId?: string): Promise<DatasetRecord[]> {
@@ -654,7 +678,12 @@ export class SqliteDb implements Db {
         ? this.db.prepare("SELECT record, purging_at FROM datasets WHERE owner_id = ? ORDER BY created_at DESC").all(ownerId)
         : this.db.prepare("SELECT record, purging_at FROM datasets ORDER BY created_at DESC").all()
     ) as { record: string; purging_at: string | null }[];
-    return rows.map((r) => ({ ...(JSON.parse(r.record) as Dataset), purgingAt: r.purging_at }));
+    return rows
+      .map((r) => {
+        const d = parseJsonRecord<Dataset>(r.record, "dataset");
+        return d ? { ...d, purgingAt: r.purging_at } : null;
+      })
+      .filter((d): d is DatasetRecord => d !== null);
   }
 
   async deleteDataset(id: string): Promise<void> {
@@ -1131,12 +1160,14 @@ export class PgDb implements Db {
 
   async getJob(id: string): Promise<Job | undefined> {
     const r = await this.pool.query("SELECT record FROM jobs WHERE id = $1", [id]);
-    return r.rows[0] ? (JSON.parse(r.rows[0].record) as Job) : undefined;
+    return r.rows[0] ? (parseJsonRecord<Job>(r.rows[0].record, "job") ?? undefined) : undefined;
   }
 
   async listJobs(): Promise<Job[]> {
     const r = await this.pool.query("SELECT record FROM jobs");
-    return r.rows.map((row) => JSON.parse(row.record) as Job);
+    return r.rows
+      .map((row) => parseJsonRecord<Job>(row.record, "job"))
+      .filter((j): j is Job => j !== null);
   }
 
   async saveHighlight(h: HighlightRecord): Promise<void> {
@@ -1151,12 +1182,14 @@ export class PgDb implements Db {
 
   async getHighlight(id: string): Promise<HighlightRecord | undefined> {
     const r = await this.pool.query("SELECT record FROM highlights WHERE id = $1", [id]);
-    return r.rows[0] ? (JSON.parse(r.rows[0].record) as HighlightRecord) : undefined;
+    return r.rows[0] ? (parseJsonRecord<HighlightRecord>(r.rows[0].record, "highlight") ?? undefined) : undefined;
   }
 
   async listHighlights(): Promise<HighlightRecord[]> {
     const r = await this.pool.query("SELECT record FROM highlights");
-    return r.rows.map((row) => JSON.parse(row.record) as HighlightRecord);
+    return r.rows
+      .map((row) => parseJsonRecord<HighlightRecord>(row.record, "highlight"))
+      .filter((h): h is HighlightRecord => h !== null);
   }
 
   async deleteHighlight(id: string): Promise<void> {
@@ -1175,7 +1208,7 @@ export class PgDb implements Db {
 
   async getTrainRun(id: string): Promise<TrainRun | undefined> {
     const r = await this.pool.query("SELECT record FROM train_runs WHERE id = $1", [id]);
-    return r.rows[0] ? (JSON.parse(r.rows[0].record) as TrainRun) : undefined;
+    return r.rows[0] ? (parseJsonRecord<TrainRun>(r.rows[0].record, "train_run") ?? undefined) : undefined;
   }
 
   async listTrainRuns(ownerId?: string): Promise<TrainRun[]> {
@@ -1185,7 +1218,9 @@ export class PgDb implements Db {
           [ownerId]
         )
       : await this.pool.query("SELECT record FROM train_runs ORDER BY created_at DESC");
-    return r.rows.map((row) => JSON.parse(row.record) as TrainRun);
+    return r.rows
+      .map((row) => parseJsonRecord<TrainRun>(row.record, "train_run"))
+      .filter((t): t is TrainRun => t !== null);
   }
 
   async saveDataset(d: Dataset, purgingAt: string | null = null): Promise<void> {
@@ -1202,14 +1237,21 @@ export class PgDb implements Db {
 
   async getDataset(id: string): Promise<DatasetRecord | undefined> {
     const r = await this.pool.query("SELECT record, purging_at FROM datasets WHERE id = $1", [id]);
-    return r.rows[0] ? { ...(JSON.parse(r.rows[0].record) as Dataset), purgingAt: r.rows[0].purging_at } : undefined;
+    return r.rows[0]
+      ? { ...(parseJsonRecord<Dataset>(r.rows[0].record, "dataset") ?? ({} as Dataset)), purgingAt: r.rows[0].purging_at }
+      : undefined;
   }
 
   async listDatasets(ownerId?: string): Promise<DatasetRecord[]> {
     const r = ownerId
       ? await this.pool.query("SELECT record, purging_at FROM datasets WHERE owner_id = $1 ORDER BY created_at DESC", [ownerId])
       : await this.pool.query("SELECT record, purging_at FROM datasets ORDER BY created_at DESC");
-    return r.rows.map((row) => ({ ...(JSON.parse(row.record) as Dataset), purgingAt: row.purging_at }));
+    return r.rows
+      .map((row) => {
+        const d = parseJsonRecord<Dataset>(row.record, "dataset");
+        return d ? { ...d, purgingAt: row.purging_at } : null;
+      })
+      .filter((d): d is DatasetRecord => d !== null);
   }
 
   async deleteDataset(id: string): Promise<void> {
