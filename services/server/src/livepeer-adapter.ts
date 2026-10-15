@@ -303,10 +303,13 @@ export class OrchestratorAdapter implements PipelineClient {
         return { planVersion: 1, category: req.category || "", intent: req.intent || "", source: "planner-fallback", maxTracks: req.mode === "vod" ? 8 : 3, reason: "planner 402 without payment params" };
       }
       const manifestID = err.challenge?.manifestId;
-      const pmt = await this.signer.generateLivePayment(b64, null, {
+      // Reuse the one-shot 480 recovery (ADAAAA-6705) so a reused session that
+      // returns signer HTTP 480 on this single-shot fixed-price call is
+      // re-minted via /refresh-payment and re-signed once instead of failing
+      // the run hard (ADAAAA-6710).
+      const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
         app: ROUTES.decide,
         type: "fixed",
-        manifestID: manifestID || undefined,
       });
       return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
     }
@@ -411,10 +414,13 @@ export class OrchestratorAdapter implements PipelineClient {
         );
       }
       const manifestID = err.challenge?.manifestId;
-      const pmt = await this.signer.generateLivePayment(b64, null, {
+      // Reuse the one-shot 480 recovery (ADAAAA-6705) so a reused session that
+      // returns signer HTTP 480 on this single-shot fixed-price call is
+      // re-minted via /refresh-payment and re-signed once instead of failing
+      // the run hard (ADAAAA-6710).
+      const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
         app: ROUTES.decide,
         type: "fixed",
-        manifestID: manifestID || undefined,
       });
       return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
     }
@@ -452,10 +458,13 @@ export class OrchestratorAdapter implements PipelineClient {
         );
       }
       const manifestID = err.challenge?.manifestId;
-      const pmt = await this.signer.generateLivePayment(b64, null, {
+      // Reuse the one-shot 480 recovery (ADAAAA-6705) so a reused session that
+      // returns signer HTTP 480 on this single-shot fixed-price call is
+      // re-minted via /refresh-payment and re-signed once instead of failing
+      // the run hard (ADAAAA-6710).
+      const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
         app: ROUTES.train,
         type: "fixed",
-        manifestID: manifestID || undefined,
       });
       return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
     }
