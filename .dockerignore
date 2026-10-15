@@ -14,3 +14,16 @@ infrastructure
 *.log
 **/__pycache__
 **/.pytest_cache
+# Runtime data/artifact mounts (ADAAAA-6694). These live on the box as container
+# volume mounts (see the deploy skill) — they must NOT be baked into any image.
+# Including docker/data (44G), docker/models* (35G) and docker/runs (4G) in the
+# `COPY . .` context blew the box disk during a server rebuild ("no space left
+# on device") and made every image build transfer tens of GB. Excluding them
+# keeps images small and the deploy fast. Runtime content still mounts in.
+docker/data
+docker/data-smoke
+docker/models
+docker/models-ad6695
+docker/runs
+docker/lpdata-orch
+docker/signer-data

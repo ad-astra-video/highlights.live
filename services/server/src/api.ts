@@ -622,7 +622,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     for (let attempt = 0; ; attempt++) {
       try {
         return await adapter.reservePerceive();
-      } catch (e) {
+      } catch (e: any) {
         const msg = String(e?.message || e);
         // Only the no-capacity transient is ride-out; any other reserve failure
         // (402 payment, network, 4xx/5xx) should surface immediately.
