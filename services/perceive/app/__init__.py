@@ -563,6 +563,16 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> dict |
     AudioSignal evidence (kind, onset ts, firedAt, onsetLatencyS, peakEnergy,
     baselineEnergy) and enqueues it onto any SSE subscribers. It does NOT
     decide a highlight — the decide stage (Gemma) runs later, on candidates.
+
+    ADAAAA-6738 G1 (de-trigger) NOTE — intentionally retained: the G1 de-trigger
+    stripped the VISION/goal candidate paths (motion-burst, detection-in-zone,
+    ball/goal signal, scoreboard) and the sport-specific event typing
+    (`sport_specific_event_type` / `_GOAL_EVENT_SPORTS`). This audio-gate path is
+    a SEPARATE retained INC-2 Stage-A audio-highlight feature: it emits the
+    generic `eventType: "AUDIO"` (never a sport-specific / GOAL label) and does
+    NOT decide an event type — decide assigns the real eventType from the
+    anchored frame. It therefore does not violate the G1 "no autonomous
+    sport-specific candidate / event typing is decide-only" contract.
     """
     samples = _decode_audio(samples_b64)
     sig = state.audio_gate.update(samples, ts=timestamp)
