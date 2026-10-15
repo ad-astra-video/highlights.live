@@ -334,7 +334,8 @@ export class HttpSignerClient implements SignerClient {
 export class LivepeerClient {
   constructor(
     public readonly orchBase: string,
-    private transport: Transport = new HttpTransport(orchBase)
+    private transport: Transport = new HttpTransport(orchBase),
+    private opts: { decideBackoffBaseMs?: number; decideMaxAttempts?: number } = {}
   ) {}
 
   /**
@@ -478,6 +479,16 @@ export class LivepeerClient {
     //     targeted. A 404 means the request was NOT routed/processed, so a
     //     retry cannot double-bill or double-persist a highlight.
     let lastStatus = 0;
+    // ADAAAA-6709: bounded exponential backoff for the repeatable transients
+    // (503 no-capacity, 404 runner/session not found). The previous linear
+    // `400 * (attempt+1)` cadence let a flapping decide runner burn requests
+    // fast against the SAME 404; the parent ADAAAA-6707 saw a "long loop of
+    // very fast retries". Exponential 500ms -> 1s -> 2s -> 4s (cap 8s) idles
+    // near ~1 req/sec instead of hammering the orchestrator, and the loop
+    // still aborts cleanly after `maxAttempts` with a clear error rather than
+    // silently returning a generic HTTP status.
+    const maxAttempts = this.opts.decideMaxAttempts ?? 5; // 1 initial call + 4 retries
+    const backoffBaseMs = this.opts.decideBackoffBaseMs ?? 500;
     for (let attempt = 0; ; attempt++) {
       const res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
         headers,
@@ -508,10 +519,13 @@ export class LivepeerClient {
         return { status: res.status, data };
       }
       lastStatus = res.status;
-      if (attempt >= 4) break;
-      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      if (attempt >= maxAttempts - 1) break;
+      await new Promise((r) => setTimeout(r, Math.min(backoffBaseMs * 2 ** attempt, 8000)));
     }
-    return { status: lastStatus, data: null };
+    const detail = lastStatus === 404
+      ? "runner not found / session not found (lost decide runner)"
+      : "no capacity available for runner";
+    throw new Error(`decide runner unavailable after ${maxAttempts} attempts (last HTTP ${lastStatus}: ${detail})`);
   }
 
   /**
