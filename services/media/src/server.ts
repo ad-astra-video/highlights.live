@@ -32,6 +32,20 @@ interface ActiveStream {
    *  Lazily created on the first muxed chunk; the container's own PTS is the
    *  authoritative clock for clip cutting AND for feeding the analysis rails. */
   recording?: { path: string; mime: string; stream: WriteStream };
+  /** Live-analysis relay (perceive persistent-session data + state -> webapp).
+   *  Owns the capped-cadence poll timers and the incremental relay cursor. */
+  analysis?: {
+    stateTimer?: NodeJS.Timeout;
+    eventTimer?: NodeJS.Timeout;
+    running?: boolean;
+    /** Set once after a perceive fetch error, so an unreachable/app-erroring
+     *  perceiver is logged once per session instead of spamming each cadence. */
+    warned?: boolean;
+    /** Last known stream timestamp (seconds) from the state poll. */
+    lastTs?: number;
+    /** End (seconds) of the last analysis window already relayed. */
+    lastEventTs?: number;
+  };
 }
 
 export interface MediaServerOptions {
@@ -73,6 +87,13 @@ export interface MediaServerOptions {
   tmpDir?: string;
   /** WebRTC ingest JPEG sample cadence (fps). Default 1.0. */
   rtcSampleFps?: number;
+  /** Live-analysis state poll cadence (ms). Default 1000. Bounded; not a
+   *  per-frame firehose. */
+  analysisStateCadenceMs?: number;
+  /** Live-analysis event (windowed tool) poll cadence (ms). Default 2000. */
+  analysisEventCadenceMs?: number;
+  /** Disable the live-analysis relay entirely (default enabled). */
+  analysisEnabled?: boolean;
 }
 
 const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
@@ -123,6 +144,13 @@ export class MediaServer {
         closed: false,
       };
       this.active.set(p.sessionId, stream);
+      // Relay perceive's persistent-session live analysis data + state to the
+      // webapp over this stream's WS sockets, on a capped cadence (not a
+      // per-frame firehose). Starts as soon as the stream exists so a VOD/live
+      // job gets analysis from the frame-by-frame AnalysisSession without
+      // needing an explicit /analyze call; a browser attaching later simply
+      // starts receiving on the next tick.
+      this.startAnalysisRelay(stream);
       // Pay the orchestrator for as long as the stream is open (no-op offchain).
       this.orch.startPayment(p);
       // Release the slot if the browser never connects (e.g. provision succeeded
@@ -213,6 +241,10 @@ export class MediaServer {
       stream.sockets.add(connection);
       this.clearGrace(req.params.sid); // a reconnect within the grace window cancels pending teardown
       this.clearNoClient(req.params.sid); // a browser connected, so the no-client timeout is moot
+      // A browser attached: kick an immediate state + event relay so the client
+      // gets live analysis right away (the capped-cadence timers keep it fresh).
+      void this.relayAnalysisState(stream);
+      void this.relayAnalysisEvent(stream);
       connection.on("data", (buf: Buffer) => {
         void this.handleFrame(stream, connection, buf).catch((e) => console.error("[media] frame err", e));
       });
@@ -297,6 +329,106 @@ export class MediaServer {
 
   private relay(stream: ActiveStream, socket: any, obs: any) {
     const payload = JSON.stringify({ type: "observation", observation: obs });
+    this.writeSockets(stream, payload);
+  }
+
+  /**
+   * Start the capped-cadence live-analysis relay for a stream (idempotent):
+   * poll perceive's persistent AnalysisSession state ~1/s and a windowed tool
+   * (~1/2s) and write the results over the stream's WS sockets with a
+   * `type:"analysis"` prefix so the webapp can distinguish them from
+   * observations. Best-effort: an unreachable/erroring perceive is logged once
+   * per session and retried next cadence — it never breaks frame relay.
+   */
+  private startAnalysisRelay(stream: ActiveStream) {
+    if (this.opts.analysisEnabled === false) return;
+    const a = (stream.analysis ??= { lastEventTs: 0 });
+    if (a.running) return;
+    a.running = true;
+    const stateMs = this.opts.analysisStateCadenceMs ?? 1000;
+    const eventMs = this.opts.analysisEventCadenceMs ?? 2000;
+    a.stateTimer = setInterval(() => void this.relayAnalysisState(stream), stateMs);
+    a.eventTimer = setInterval(() => void this.relayAnalysisEvent(stream), eventMs);
+  }
+
+  /**
+   * Poll perceive's `/analysis/state` and relay the live-analysis state to the
+   * webapp. Bounded: once per cadence, and only while a browser socket is
+   * attached (no work when nobody is listening).
+   */
+  private async relayAnalysisState(stream: ActiveStream) {
+    if (stream.closed || stream.sockets.size === 0) return;
+    const state = await this.analysisFetch(stream, "GET", "/analysis/state");
+    if (!state || typeof state !== "object") return;
+    if (typeof state.lastTs === "number") (stream.analysis ??= {}).lastTs = state.lastTs;
+    this.writeSockets(
+      stream,
+      JSON.stringify({ type: "analysis", status: "state", state, at: Date.now() })
+    );
+  }
+
+  /**
+   * Query a windowed analysis tool over the un-replayed window and relay the
+   * bounded result as an analysis event. One increment per cadence (~1/2s);
+   * the perceive side caps points (maxPoints=5) so this is never a firehose.
+   */
+  private async relayAnalysisEvent(stream: ActiveStream) {
+    if (stream.closed || stream.sockets.size === 0) return;
+    const a = (stream.analysis ??= { lastEventTs: 0 });
+    if (typeof a.lastEventTs !== "number") a.lastEventTs = 0;
+    const start = a.lastEventTs;
+    const q = `start=${start}&maxPoints=5` + (typeof a.lastTs === "number" ? `&end=${a.lastTs}` : "");
+    const envelope = await this.analysisFetch(stream, "POST", `/analysis/get_audio_levels?${q}`);
+    if (!envelope || !Array.isArray(envelope?.data)) return;
+    const end = typeof envelope?.window?.end === "number" ? envelope.window.end : start;
+    a.lastEventTs = Math.max(end, start);
+    const event = {
+      jobId: stream.jobId,
+      sessionId: stream.provisioned.sessionId,
+      streamId: stream.streamId,
+      timestamp: end,
+      kind: "audio_energy",
+      data: envelope,
+    };
+    this.writeSockets(stream, JSON.stringify({ type: "analysis", status: "event", event }));
+  }
+
+  /**
+   * Fetch a perceive analysis endpoint, sending the `x-session-id` header the
+   * runner requires to bind the request to the persistent AnalysisSession.
+   * Returns parsed JSON on 200, null on error/404. Best-effort: a transient
+   * perceive outage is logged once per session and retried next cadence.
+   */
+  private async analysisFetch(
+    stream: ActiveStream,
+    method: "GET" | "POST",
+    path: string
+  ): Promise<any | null> {
+    const appUrl = (stream.provisioned.appUrl || "").replace(/\/$/, "");
+    if (!appUrl) return null;
+    try {
+      const res = await fetch(`${appUrl}${path}`, {
+        method,
+        headers: { "x-session-id": stream.provisioned.sessionId },
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (e: any) {
+      const a = (stream.analysis ??= {});
+      if (!a.warned) {
+        a.warned = true;
+        console.error(
+          "[media] analysis relay: perceive unreachable for stream %s: %s",
+          stream.streamId,
+          String(e?.message || e)
+        );
+      }
+      return null;
+    }
+  }
+
+  /** Write a JSON string to every live WS socket (best-effort per socket). */
+  private writeSockets(stream: ActiveStream, payload: string) {
     for (const s of stream.sockets) {
       try {
         s.write(payload);
@@ -378,6 +510,12 @@ export class MediaServer {
     const stream = this.active.get(sid);
     if (!stream || stream.closed) return;
     stream.closed = true;
+    // Stop the live-analysis relay timers (no more perceived state/event polls).
+    if (stream.analysis) {
+      if (stream.analysis.stateTimer) clearInterval(stream.analysis.stateTimer);
+      if (stream.analysis.eventTimer) clearInterval(stream.analysis.eventTimer);
+      stream.analysis = undefined;
+    }
     // Close the reassembled muxed recording (flush pending chunk bytes).
     if (stream.recording) {
       try {
