@@ -6,6 +6,8 @@ import {
   LivepeerClient,
   PaymentRequiredError,
   ROUTES,
+  isSessionRefreshError,
+  type LivePayment,
   type RemotePaymentStateSig,
   type SignerClient,
 } from "@highlights/livepeer-session";
@@ -107,14 +109,17 @@ export class OrchestratorAdapter implements PipelineClient {
       const manifestID = err.challenge?.manifestId;
       // go-livepeer requires manifestID == orchestrator AuthToken.SessionId
       // (the 402 challenge's manifest_id), else reserve returns
-      // `403 mismatched manifest and auth token`.
-      const pmt = await this.signer.generateLivePayment(b64, null, {
+      // `403 mismatched manifest and auth token`. A signer HTTP 480 on this
+      // INITIAL sign (stale per-session/`manifest_id` payment state carried
+      // across a job that never released, or a reused OrchestratorInfo
+      // auth-token) is recovered by re-minting fresh info and re-signing so it
+      // does NOT fail the whole VOD/live job (ADAAAA-6705).
+      const { pmt, infoB64 } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
         app: this.app,
         type: "live",
-        manifestID: manifestID || undefined,
       });
       signerState = pmt.signerState;
-      orchInfo = { b64, sessionId: manifestID };
+      orchInfo = { b64: infoB64, sessionId: manifestID };
       const res = await this.client.reservePerceive({
         payerAddress,
         paymentHeaders: { "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds },
@@ -124,6 +129,48 @@ export class OrchestratorAdapter implements PipelineClient {
     // Pay the orchestrator for as long as the session stays open (on-chain only).
     if (this.signer && payerAddress) this.startPayment(r, orchInfo, signerState);
     return r;
+  }
+
+  /**
+   * Generate a live-payment ticket for the (base64 OrchestratorInfo) `b64` on a
+   * FRESH reserve — i.e. with a NULL prior signer state. The remote signer
+   * (go-livepeer `-remoteSigner`) carries per-session/`manifest_id` payment
+   * state that is NOT cleared between jobs; if the same `manifest_id` /
+   * OrchestratorInfo auth-token is reused across a stale-active job that never
+   * released or a server restart, its persisted `shouldRefreshSession` flag
+   * makes even a null-state generate-live-payment return HTTP 480 (the
+   * "session needs a refresh" signal). That used to fail the WHOLE VOD/live job
+   * at the initial sign. This mirrors the interval `refreshPerceivePayment`
+   * recovery (ADAAAA-6575): on 480, re-mint fresh OrchestratorInfo for the same
+   * manifest/session via `/refresh-payment` and re-sign ONCE with it, so a 480
+   * on the initial sign does NOT fail the job (ADAAAA-6705). A second 480, or a
+   * refresh that yields no fresh info (no payer address / manifest id), is a
+   * genuine failure and propagates. Returns the re-signed ticket plus the
+   * (possibly refreshed) OrchestratorInfo so the interval refresher persists
+   * the freshest one instead of re-using the expired info.
+   */
+  private async generateLivePaymentRecovering480(
+    b64: string,
+    manifestID: string | undefined,
+    opts: { app: string; type: "live" | "lv2v" | "fixed" }
+  ): Promise<{ pmt: LivePayment; infoB64: string }> {
+    const sign = async (infoB64: string) =>
+      this.signer!.generateLivePayment(infoB64, null, {
+        app: opts.app,
+        type: opts.type,
+        manifestID: manifestID || undefined,
+      });
+    try {
+      return { pmt: await sign(b64), infoB64: b64 };
+    } catch (err) {
+      if (!isSessionRefreshError(err)) throw err;
+      // Recovery needs the payer address + the 402 challenge's manifest id to
+      // re-mint fresh info for the SAME session; without them the 480 is fatal.
+      if (!this.payerAddress || !manifestID) throw err;
+      const fresh = await this.client.refreshPaymentSession(this.payerAddress, manifestID);
+      if (!fresh?.paymentParams) throw err;
+      return { pmt: await sign(fresh.paymentParams), infoB64: fresh.paymentParams };
+    }
   }
 
   /** Interval refresher for a paid session; mirrors the media server's payer. */

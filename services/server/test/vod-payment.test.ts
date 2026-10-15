@@ -32,12 +32,12 @@ function jsonResponse(status: number, body: unknown) {
 function fakeFetch(opts: { paidReserve?: boolean; paidDecide?: boolean; challengeBody?: any } = {}) {
   let reserveCalls = 0;
   let decideCalls = 0;
-  const log: Array<{ url: string; headers: Record<string, string>; method: string }> = [];
+  const log: Array<{ url: string; headers: Record<string, string>; method: string; body?: string }> = [];
   return {
     fn: vi.fn(async (input: any, init?: any) => {
       const url = String(input);
       const headers = { ...((init?.headers as any) || {}) };
-      log.push({ url, headers, method: init?.method || "GET" });
+      log.push({ url, headers, method: init?.method || "GET", body: (init?.body as string) || undefined });
       if (url.endsWith("/apps/highlights-perceive/session")) {
         reserveCalls++;
         if (reserveCalls === 1 && !opts.paidReserve) {
@@ -59,6 +59,8 @@ function fakeFetch(opts: { paidReserve?: boolean; paidDecide?: boolean; challeng
         return jsonResponse(200, { decision: "make_clip" });
       }
       if (url.includes("/payment")) return jsonResponse(200, { ok: true });
+      if (url.includes("/refresh-payment"))
+        return jsonResponse(200, { payment_params: "ZnJlc2g=", manifest_id: "sess-abc", orchestrator: "http://orch" });
       if (url.endsWith("/stop")) return new Response(null, { status: 204 });
       return jsonResponse(404, { error: "nf" });
     }),
@@ -136,6 +138,69 @@ describe("OrchestratorAdapter (VOD) on-chain payment", () => {
     await adapter.stopPerceive(r.sessionId);
     const stops = log.filter((c) => c.url.endsWith(`/apps/highlights-perceive/session/${r.sessionId}/stop`));
     expect(stops.length).toBeGreaterThan(0);
+  });
+
+  it("recovers a fresh reserve whose initial sign returns HTTP 480 by re-minting info via /refresh-payment and re-signing, instead of failing the job (ADAAAA-6705)", async () => {
+    const { fn, log } = fakeFetch({ paidReserve: false, challengeBody: CHALLENGE });
+    vi.stubGlobal("fetch", fn);
+
+    // The signer carries a stale per-session / manifest_id state: even a null-state
+    // generate-live-payment on the FRESH reserve returns HTTP 480 ("session needs a
+    // refresh"). The adapter must re-mint fresh OrchestratorInfo (via /refresh-payment)
+    // and re-sign once, then complete the reserve — never fail the whole VOD job.
+    const sigCalls: Array<{ b64: string; prev: unknown; opts: any }> = [];
+    let signCount = 0;
+    const signer480: SignerClient = {
+      async discover() {
+        return [];
+      },
+      async signOrchInfo() {
+        return {};
+      },
+      async generateLivePayment(orchInfoB64: string, prev: unknown, opts: any = {}): Promise<LivePayment> {
+        sigCalls.push({ b64: orchInfoB64, prev, opts });
+        signCount++;
+        // First sign (the fresh reserve's initial attempt) throws 480; after
+        // /refresh-payment re-mints fresh info the re-sign (and any refresher
+        // ticks) succeed.
+        if (signCount === 1) throw new Error("signer generateLivePayment failed: HTTP 480");
+        return {
+          payment: "livepeer-payment-ticket",
+          segCreds: "segment-creds",
+          signerState: { State: "c3RhdGU=", Sig: "c2ln" },
+        };
+      },
+    };
+
+    const adapter = new OrchestratorAdapter(cfg(), {
+      signer: signer480,
+      payerAddress: PAYER,
+    });
+
+    const r = await adapter.reservePerceive();
+
+    // The job does NOT fail: the reserve completed despite the initial 480.
+    expect(r.sessionId).toBe("sess-pay");
+
+    // The initial sign used the 402 challenge's (stale) orch info and got 480;
+    // the recovery re-signed with the FRESH info minted by /refresh-payment.
+    expect(sigCalls.length).toBeGreaterThanOrEqual(2);
+    expect(sigCalls[0].b64).toBe("b3JjaC1pbmZv");
+    expect(sigCalls[0].prev).toBe(null);
+    expect(sigCalls[1].b64).toBe("ZnJlc2g=");
+    expect(sigCalls[1].prev).toBe(null);
+
+    // /refresh-payment was hit once with the payer + the 402 challenge's manifest id.
+    const refreshCalls = log.filter((c) => c.url.includes("/refresh-payment"));
+    expect(refreshCalls).toHaveLength(1);
+    expect(JSON.parse(refreshCalls[0].body as string)).toEqual({ sender: PAYER, manifest_id: "sess-abc" });
+
+    // The paid reserve retry carried the RE-SIGNED ticket so the orchestrator
+    // accepted it (2 reserve calls: the 402 probe + the paid retry).
+    const reserves = log.filter((c) => c.url.endsWith("/apps/highlights-perceive/session"));
+    expect(reserves).toHaveLength(2);
+    expect(reserves[1].headers["Livepeer-Payment"]).toBe("livepeer-payment-ticket");
+    expect(reserves[1].headers["Livepeer-Segment"]).toBe("segment-creds");
   });
 
   it("stays offchain (one unpaid reserve, no payer) when no signer is configured", async () => {
