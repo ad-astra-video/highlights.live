@@ -269,6 +269,33 @@ export class MediaServer {
       return { ok: true };
     });
 
+    // ---- ADAAAA-6739 G2 brokered decide -> perceive requests --------------
+    // Decide sends its windowed tool queries and control instructions to the
+    // MEDIA SERVER (the natural broker: it provisions/fronts the active
+    // perceive session and owns the media session it belongs to). The media
+    // server forwards the request to the perceive session's analysis/control
+    // endpoint, echoes the request + updated/accepted form + result to the
+    // webapp over the bidirectional connection (status "trace" so the webapp
+    // relays it to the server for analysis-session tracing), and returns the
+    // confirmed result to the caller. A request that targets a session that no
+    // longer exists (unknown sid, closed stream, or perceive 404) errors
+    // visibly instead of being silently dropped.
+    app.post<{ Params: { sid: string }; Body: any }>("/sessions/:sid/analysis/query", async (req, reply) => {
+      const stream = this.active.get(req.params.sid);
+      if (!stream || stream.closed) return reply.code(404).send({ error: "no such session" });
+      const r = await this.brokerForward(stream, "query", req.body ?? {});
+      if (!r.ok) return reply.code(r.status ?? 500).send({ error: r.error || "broker query failed" });
+      return { ok: true, result: r.result, trace: r.trace };
+    });
+
+    app.post<{ Params: { sid: string }; Body: any }>("/sessions/:sid/analysis/control", async (req, reply) => {
+      const stream = this.active.get(req.params.sid);
+      if (!stream || stream.closed) return reply.code(404).send({ error: "no such session" });
+      const r = await this.brokerForward(stream, "control", req.body ?? {});
+      if (!r.ok) return reply.code(r.status ?? 500).send({ error: r.error || "broker control failed" });
+      return { ok: true, result: r.result, trace: r.trace };
+    });
+
     app.get("/health", async () => ({ status: "ok" }));
     return app;
   }
@@ -425,6 +452,79 @@ export class MediaServer {
       }
       return null;
     }
+  }
+
+  /**
+   * Broker one decide -> perceive request for a stream. Forwards a windowed
+   * tool query to the perceive session's `/analysis/{tool}` endpoint (or a
+   * control instruction to its `/control` endpoint), builds a timeline-ordered
+   * analysis-session trace record {at, jobId, sessionId, streamId, tool,
+   * window, request, response, updated}, echoes it to the webapp over the
+   * bidirectional connection (type:"analysis", status:"trace") for server-side
+   * tracing, and returns the confirmed result. Never silently drops: a
+   * perceive failure / missing session surfaces a visible error.
+   */
+  private async brokerForward(
+    stream: ActiveStream,
+    kind: "query" | "control",
+    payload: any
+  ): Promise<{ ok: boolean; status?: number; result?: any; error?: string; trace?: any }> {
+    const p = stream.provisioned;
+    const appUrl = (p.appUrl || "").replace(/\/$/, "");
+    if (!appUrl) return { ok: false, status: 400, error: "perceive app url unavailable" };
+    let path: string;
+    if (kind === "query") {
+      const tool = payload?.tool;
+      if (!tool) return { ok: false, status: 400, error: "tool required" };
+      const qs = new URLSearchParams();
+      if (typeof payload.start === "number") qs.set("start", String(payload.start));
+      if (typeof payload.end === "number") qs.set("end", String(payload.end));
+      if (typeof payload.maxPoints === "number") qs.set("maxPoints", String(payload.maxPoints));
+      path = `/analysis/${tool}${qs.toString() ? `?${qs}` : ""}`;
+    } else {
+      path = "/control";
+    }
+    let res: Response;
+    try {
+      res = await fetch(`${appUrl}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-session-id": p.sessionId },
+        body: kind === "control" ? JSON.stringify(payload.instruction ?? payload) : undefined,
+      });
+    } catch (e: any) {
+      return { ok: false, status: 502, error: `perceive unreachable: ${String(e?.message || e)}` };
+    }
+    if (!res.ok) {
+      // A 404 (the perceive session no longer exists) is asserted here so the
+      // caller returns a VISIBLE error rather than silently dropping the
+      // request — the broker contract.
+      return { ok: false, status: res.status, error: `perceive returned ${res.status}` };
+    }
+    let result: any = null;
+    try {
+      result = await res.json();
+    } catch {
+      result = null;
+    }
+    const trace = {
+      at: Date.now(),
+      jobId: stream.jobId,
+      sessionId: p.sessionId,
+      streamId: stream.streamId,
+      tool: kind === "query" ? payload?.tool : "control",
+      window:
+        typeof payload?.start === "number" || typeof payload?.end === "number"
+          ? { start: payload.start, end: payload.end }
+          : undefined,
+      request: payload,
+      response: result ?? undefined,
+      updated: result ?? undefined,
+    };
+    // Echo the request + updated/accepted form + result to the webapp over the
+    // bidirectional connection; the webapp relays it to the server for the
+    // analysis-session trace.
+    this.writeSockets(stream, JSON.stringify({ type: "analysis", status: "trace", trace }));
+    return { ok: true, result, trace };
   }
 
   /** Write a JSON string to every live WS socket (best-effort per socket). */

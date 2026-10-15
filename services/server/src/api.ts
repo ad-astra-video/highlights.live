@@ -1758,6 +1758,25 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return { ok: true };
   });
 
+  // ADAAAA-6739 G2: the analysis-session trace and analysis-data stream are
+  // queryable/inspectable — bound to the stream/job whose media session they
+  // belong to. Owner-scoped like every other job route; oldest first.
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>("/jobs/:id/analysis/trace", { preHandler: authReq }, async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    const limit = req.query?.limit ? Math.min(Number(req.query.limit) || 1000, 1000) : undefined;
+    return { traces: await store.listAnalysisTraces(job.id, limit) };
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>("/jobs/:id/analysis/events", { preHandler: authReq }, async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    const limit = req.query?.limit ? Math.min(Number(req.query.limit) || 1000, 1000) : undefined;
+    return { events: await store.listAnalysisEvents(job.id, limit) };
+  });
+
   app.post<{ Params: { id: string } }>("/jobs/:id/stop", { preHandler: authReq }, async (req: any, reply) => {
     const job = store.getJob(req.params.id);
     if (!job) return reply.code(404).send({ error: "not found" });

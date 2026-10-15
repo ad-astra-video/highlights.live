@@ -365,18 +365,49 @@ def _log_plan(mode: str, req: "PlanRequest", resp: "TrackingPlanResponse") -> No
 
 def _make_perceive_client(session_id: str):
     """Return a decide->perceive windowed-tool callable bound to ``session_id``,
-    or None when PERCEIVE_URL is unset (then the watcher brain uses the frames'
-    own signals). Talks to ``{PERCEIVE_URL}/analysis/{tool}`` with the same
-    bounded window envelope the perceive service returns. """
-    base = os.environ.get("PERCEIVE_URL", "").strip().rstrip("/")
-    if not base:
-        return None
+    or None when neither PERCEIVE_URL nor MEDIA_BROKER_URL is set (then the
+    watcher brain uses the frames' own signals).
+
+    ADAAAA-6739 G2: routes the tool query through the MEDIA SERVER broker (the
+    media server provisions/fronts the active perceive session and owns the
+    media session the call belongs to). When MEDIA_BROKER_URL is set the query
+    is POSTed to ``{MEDIA_BROKER_URL}/sessions/{session_id}/analysis/query``;
+    otherwise it falls back to a direct ``{PERCEIVE_URL}/analysis/{tool}`` call
+    (VOD / no-broker topology). Returns the bounded envelope, or None on any
+    failure (never fatal to a tick).
+    """
     import httpx
+
+    media = os.environ.get("MEDIA_BROKER_URL", "").strip().rstrip("/")
+    perceive = os.environ.get("PERCEIVE_URL", "").strip().rstrip("/")
+    if media:
+        def call(tool: str, start: float, end: float, max_points: int) -> Optional[dict]:
+            try:
+                r = httpx.post(
+                    f"{media}/sessions/{session_id}/analysis/query",
+                    json={"tool": tool, "start": start, "end": end, "maxPoints": max_points},
+                    headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
+                    timeout=12.0,
+                )
+                r.raise_for_status()
+                body = r.json()
+                # The broker wraps the perceive envelope in {ok, result, trace};
+                # the trace is echoed to the webapp/server by the media server, so
+                # decide only consumes the tool result. A visible broker error is
+                # treated as a tool failure (None) — never drops a watcher tick.
+                return body.get("result") if isinstance(body, dict) else body
+            except Exception as e:  # noqa: BLE001  a perceive hiccup must not drop a tick
+                log.debug("watcher perceive %s via broker failed: %s", tool, e)
+                return None
+        return call
+
+    if not perceive:
+        return None
 
     def call(tool: str, start: float, end: float, max_points: int) -> Optional[dict]:
         try:
             r = httpx.post(
-                f"{base}/analysis/{tool}",
+                f"{perceive}/analysis/{tool}",
                 params={"start": start, "end": end, "maxPoints": max_points},
                 headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
                 timeout=10.0,
@@ -388,6 +419,51 @@ def _make_perceive_client(session_id: str):
             return None
 
     return call
+
+
+def _make_control_sender(session_id: str):
+    """Return a decide->perceive control-instruction sender bound to
+    ``session_id``, or None when no broker/perceive base is configured.
+
+    ADAAAA-6739 G2: instructions (track new object / drop tracking / adjust
+    sampling rate) are sent to the perceive session THROUGH the media server
+    broker (``{MEDIA_BROKER_URL}/sessions/{session_id}/analysis/control``) and
+    applied/confirmed there; the broker traces the request + confirmation. Falls
+    back to a direct ``{PERCEIVE_URL}/control`` call. Returns the perceive ack,
+    or None on any failure.
+    """
+    import httpx
+
+    media = os.environ.get("MEDIA_BROKER_URL", "").strip().rstrip("/")
+    perceive = os.environ.get("PERCEIVE_URL", "").strip().rstrip("/")
+
+    def send(instruction: dict) -> Optional[dict]:
+        try:
+            if media:
+                r = httpx.post(
+                    f"{media}/sessions/{session_id}/analysis/control",
+                    json={"instruction": instruction},
+                    headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
+                    timeout=12.0,
+                )
+                r.raise_for_status()
+                body = r.json()
+                return body.get("result") if isinstance(body, dict) else body
+            if perceive:
+                r = httpx.post(
+                    f"{perceive}/control",
+                    json=instruction,
+                    headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
+                    timeout=10.0,
+                )
+                r.raise_for_status()
+                return r.json()
+            return None
+        except Exception as e:  # noqa: BLE001  a control hiccup must not break the flow
+            log.debug("watcher control %s failed: %s", instruction, e)
+            return None
+
+    return send
 
 
 def _make_trace_sink(trace_job_id: str):
