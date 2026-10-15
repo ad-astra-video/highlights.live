@@ -64,9 +64,30 @@ single-shot `/highlight`:
 Gates measured in `evals/decide_watcher_deep_investigation.py` (Pass 2 +
 deep-investigation): depth-router recall >= 80 %, false-positive flag rate
 <= 5/min, deep verdict truth (precision/recall), no clip on discard, and the
-audio-noise false-positive rate (bounded via `get_audio_levels`). The 120 s
-stash + clip build/discard on the decide runner is G4 (ADAAAA-6741); G3 produces
-the verdict and the discard decision, not yet the stash/clip media.
+audio-noise false-positive rate (bounded via `get_audio_levels`).
+
+## Decide-runner clip stash + build-or-discard (ADAAAA-6741 G4 — implemented)
+The 120 s frame+audio ring now lives on the decide runner:
+- **`app/clip_stash.py`** (`ClipStash`): a continuous 120 s in-memory ring
+  (`StashConfig.ring_duration_s`) of small JPEG frames (+ optional tiny audio
+  segments), fed by the media/orchestrator rail through **`POST /stash/ingest`**
+  (`/stash/start` opens it). `preclip(trigger)` assembles the **20 s-before /
+  10 s-after** window straight from the stash, and `build_clip` re-encodes an
+  MP4 from the stashed JPEGs via local ffmpeg (`libx264`) — CPU work, no GPU,
+  no source re-read.
+- **Build-or-discard** (`build_or_discard`): a **confirmed** highlight
+  (`is_highlight && !discarded`) is built from the stash window and uploaded to
+  the server; a **discarded/refuted** moment frees the stash (no clip, no server
+  record). Auto-driven from the deep-investigation verdict (`/deep/investigate`,
+  `/watcher/step2`) when a stash is open — `stashAction` in those responses.
+- **Upload**: `app/clip_upload.py` posts the built MP4 to the server's new
+  **`POST /jobs/:id/clips`** route (multipart), which persists an `accepted`
+  highlight and publishes it to the public feed. The server no longer runs the
+  ffmpeg clip cut.
+- Gates verified: `services/decide/tests/test_clip_stash.py` (ring eviction,
+  pre-clip 20/10, real ffmpeg MP4 build, confirm→build+upload, refute→free,
+  multipart upload contract) + `services/server/test/clip-upload.test.ts`
+  (record builder, persist, GET /feed visibility).
 
 ## Deployment requirement (user criterion)
 Deploy a vLLM OpenAI server for the decide model on 192.168.1.6 (GPU 1 / RTX 5070 Ti, 16 GB).

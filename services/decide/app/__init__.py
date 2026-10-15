@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
+import tempfile
 import time
 from typing import Optional
 
@@ -22,6 +24,8 @@ from .decider import apply_gate, decide, scoreboard_forces_goal
 from .watcher import Frame as WatcherFrame, WatcherConfig, WatcherSession
 from .depth_router import DepthRouter, DepthRouterConfig
 from .deep_investigation import DeepInvestigator, DeepInvestigationConfig
+from .clip_stash import ClipStash, StashConfig
+from .clip_upload import make_upload_client, upload_base_from_env
 from .gemma import (  # noqa: F401
     apply_ball_outcome_gate,
     apply_goal_attestation_gate,
@@ -227,6 +231,57 @@ class DeepInvestigateRequest(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
     flagTs: float | None = None
+
+
+class StashStartRequest(BaseModel):
+    """Open the decide-runner clip stash (ADAAAA-6741 G4).
+
+    The stash is the decide runner's own 120 s frame+audio ring, fed by the
+    media/orchestrator rail via ``/stash/ingest``. ``jobId`` is used to tag the
+    uploaded clip; ``config`` is optional (defaults: 120 s ring, 20 s-before /
+    10 s-after pre-clip)."""
+
+    model_config = ConfigDict(extra="ignore")
+    sessionId: str = ""
+    streamId: str = ""
+    jobId: str = ""
+    config: dict = Field(default_factory=dict)
+
+
+class StashIngestRequest(BaseModel):
+    """One rail frame (small JPEG + optional audio segment) into the stash."""
+
+    model_config = ConfigDict(extra="ignore")
+    ts: float
+    seq: int = 0
+    jpeg: str = ""           # base64 JPEG
+    audio: str = ""          # base64 audio segment (optional)
+    audioMime: str = ""
+
+
+class StashPreclipRequest(BaseModel):
+    """Assemble the 20 s-before / 10 s-after pre-clip for a trigger moment."""
+
+    model_config = ConfigDict(extra="ignore")
+    triggerTs: float
+    beforeS: float | None = None
+    afterS: float | None = None
+
+
+class StashBuildRequest(BaseModel):
+    """Build + upload a clip for a trigger moment from the stash.
+
+    ``action`` mirrors build-or-discard: on ``confirm`` (is_highlight &&
+    not discarded) the clip is built and uploaded; on ``discard`` the stash is
+    freed with no clip. When no upload base is configured, the clip is still
+    built locally (and ``uploadResult`` reports the missing base)."""
+
+    model_config = ConfigDict(extra="ignore")
+    triggerTs: float
+    isHighlight: bool = True
+    discarded: bool = False
+    # If true, upload the built clip to the server; else build locally only.
+    upload: bool = True
 
 
 # --- Response contract ------------------------------------------------------
@@ -819,12 +874,22 @@ def create_app() -> FastAPI:
             if hasattr(sess, "_frames_in"):
                 v = deep.investigate(flag, lambda start, end: sess._frames_in(start, end))
                 verdicts.append(v.to_dict())
+        stash_actions = []
+        if verdicts:
+            sa = _stash_build_or_discard(
+                getattr(app.state, "stash", None),
+                getattr(app.state, "stashJobId", "") or "",
+                verdicts[-1],
+            )
+            if sa is not None:
+                stash_actions.append(sa)
         return {
             "summary": row.to_dict(),
             "context": sess.summaries_context_dicts(),
             "state": sess.state(),
             "flag": flag.to_dict() if flag else None,
             "deepVerdicts": verdicts,
+            "stashActions": stash_actions,
         }
 
     # --- Pass 2 / deep-investigation surface (ADAAAA-6740 G3) --------------
@@ -860,7 +925,12 @@ def create_app() -> FastAPI:
         if sess is None or not hasattr(sess, "_frames_in"):
             raise HTTPException(status_code=409, detail="watcher session has no frame buffer")
         v = deep.investigate(flag, lambda start, end: sess._frames_in(start, end))
-        return {"verdict": v.to_dict(), "state": deep.state()}
+        stash_action = _stash_build_or_discard(
+            getattr(app.state, "stash", None),
+            getattr(app.state, "stashJobId", "") or "",
+            v.to_dict(),
+        )
+        return {"verdict": v.to_dict(), "state": deep.state(), "stashAction": stash_action}
 
     @router.get("/deep/state")
     async def deep_state():
@@ -875,6 +945,127 @@ def create_app() -> FastAPI:
         if deep is None:
             return {"verdicts": []}
         return {"verdicts": deep.verdicts_dicts()}
+
+    # --- Decide-runner clip stash: 120 s ring + pre-clip + build-or-discard --
+    # (ADAAAA-6741 G4). The stash is the decide runner's own frame+audio ring fed
+    # by the media/orchestrator rail (/stash/ingest). A confirmed highlight is
+    # built from the stash and uploaded to the server; a discarded moment frees
+    # the stash with no clip.
+    def _stash_upload(job_id: str):
+        base = upload_base_from_env()
+        client = make_upload_client(base) if base else None
+        def upload(clip_path: str, metadata: dict) -> dict:
+            if client is None:
+                return {"ok": False, "error": "no CLIP_UPLOAD_BASE configured"}
+            return client(clip_path, metadata)
+        return upload
+
+    def _stash_build_or_discard(stash, job_id: str, verdict: dict) -> Optional[dict]:
+        """Auto-run build-or-discard for a deep verdict when a stash is open.
+
+        A confirmed (is_highlight && not discarded) verdict builds the clip from
+        the stash window and uploads it; a discarded verdict frees the stash.
+        Returns ``None`` when there is no stash to act on (no rail feed yet), so
+        the deep path reports the verdict without fabricating a clip."""
+        if stash is None or stash.state()["frameCount"] == 0:
+            return None
+        flag_ts = float(verdict.get("flagTs") or verdict.get("window", {}).get("start") or 0.0)
+        meta = {
+            "jobId": job_id,
+            "eventType": verdict.get("event", "") or verdict.get("eventType", ""),
+            "score": float(verdict.get("score") or 0.0),
+            "reason": verdict.get("reason", ""),
+            "outcome": verdict.get("outcome", ""),
+            "nearMiss": bool(verdict.get("nearMiss", False)),
+        }
+        out = os.path.join(tempfile.gettempdir(), f"hlclip-{job_id}-{int(flag_ts*1000)}.mp4")
+        res = stash.build_or_discard(
+            trigger_ts=flag_ts,
+            is_highlight=bool(verdict.get("isHighlight")),
+            discarded=bool(verdict.get("discarded")),
+            out_path=out,
+            upload=_stash_upload(job_id),
+            metadata=meta,
+        )
+        if not os.path.exists(res.get("clipPath", "")):
+            res.pop("clipPath", None)
+        return res
+
+    @router.post("/stash/start")
+    async def stash_start(req: StashStartRequest):
+        app.state.stash = ClipStash(StashConfig(**req.config))
+        app.state.stashJobId = req.jobId
+        return {"ok": True, "state": app.state.stash.state()}
+
+    @router.post("/stash/ingest")
+    async def stash_ingest(req: StashIngestRequest):
+        stash = getattr(app.state, "stash", None)
+        if stash is None:
+            raise HTTPException(status_code=409, detail="no stash; call /stash/start first")
+        jpeg = base64.b64decode(req.jpeg) if req.jpeg else None
+        audio = base64.b64decode(req.audio) if req.audio else None
+        stash.ingest(req.ts, seq=req.seq, jpeg=jpeg, audio=audio, audio_mime=req.audioMime or None)
+        return {"ok": True}
+
+    @router.post("/stash/preclip")
+    async def stash_preclip(req: StashPreclipRequest):
+        stash = getattr(app.state, "stash", None)
+        if stash is None:
+            raise HTTPException(status_code=409, detail="no stash; call /stash/start first")
+        video, audio, start, end = stash.preclip(req.triggerTs, before_s=req.beforeS, after_s=req.afterS)
+        return {
+            "triggerTs": req.triggerTs,
+            "window": {"start": round(start, 3), "end": round(end, 3)},
+            "frames": len(video),
+            "audioFrames": len(audio),
+            "fps": stash.estimate_fps(video),
+            "state": stash.state(),
+        }
+
+    @router.post("/stash/build")
+    async def stash_build(req: StashBuildRequest):
+        stash = getattr(app.state, "stash", None)
+        if stash is None:
+            raise HTTPException(status_code=409, detail="no stash; call /stash/start first")
+        job_id = getattr(app.state, "stashJobId", "") or ""
+        verdict = {
+            "flagTs": req.triggerTs,
+            "isHighlight": req.isHighlight,
+            "discarded": req.discarded,
+            "event": "",
+            "score": 0.0,
+            "reason": "",
+            "outcome": "scoring_play" if req.isHighlight and not req.discarded else "not_highlight",
+            "nearMiss": False,
+        }
+        upload_fn = _stash_upload(job_id) if req.upload else None
+        result = stash.build_or_discard(
+            trigger_ts=req.triggerTs,
+            is_highlight=req.isHighlight,
+            discarded=req.discarded,
+            out_path=os.path.join(tempfile.gettempdir(), f"hlclip-{job_id}-{int(req.triggerTs*1000)}.mp4"),
+            upload=upload_fn,
+            metadata=verdict,
+        )
+        result.pop("uploadResult", None)  # may be large; surface the summary below
+        if not os.path.exists(result.get("clipPath", "")):
+            result.pop("clipPath", None)
+        return {**result, "state": stash.state()}
+
+    @router.post("/stash/discard")
+    async def stash_discard():
+        stash = getattr(app.state, "stash", None)
+        if stash is None:
+            return {"ok": False, "error": "no stash"}
+        stash.discard()
+        return {"ok": True, "state": stash.state()}
+
+    @router.get("/stash/state")
+    async def stash_state():
+        stash = getattr(app.state, "stash", None)
+        if stash is None:
+            return {"active": False}
+        return {"active": True, **stash.state()}
 
     @router.get("/watcher/summaries")
     async def watcher_summaries():
