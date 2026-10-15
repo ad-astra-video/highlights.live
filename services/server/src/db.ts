@@ -9,7 +9,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
-import type { Dataset, Job, HighlightRecord } from "@highlights/events";
+import type { Dataset, Job, HighlightRecord, AnalysisEvent, AnalysisSessionTrace } from "@highlights/events";
 
 // `node:sqlite` is experimental and not in Vite/vitest's builtin external
 // list, so load it via createRequire at runtime instead of a static ESM import
@@ -420,6 +420,17 @@ export interface Db {
   recordChannelSpend(channel: string, spendUsd: number, note?: string | null): Promise<ChannelSpend>;
   /** All per-channel spend entries (for admin inspection). */
   listChannelSpend(): Promise<ChannelSpend[]>;
+  // --- watcher analysis-data + analysis-session trace (ADAAAA-6738 G1) ---
+  /** Append one perceive analysis-data sample / windowed tool result. */
+  appendAnalysisEvent(e: AnalysisEvent): Promise<void>;
+  /** Analysis events for a job, oldest first, capped at `limit`. */
+  listAnalysisEvents(jobId: string, limit?: number): Promise<AnalysisEvent[]>;
+  /** Append one decide -> perceive request trace row. */
+  appendAnalysisTrace(t: AnalysisSessionTrace): Promise<void>;
+  /** Analysis-session traces for a job, oldest first, capped at `limit`. */
+  listAnalysisTraces(jobId: string, limit?: number): Promise<AnalysisSessionTrace[]>;
+  /** Retention: delete analysis events (and traces) created before the cutoff. */
+  purgeAnalysisBefore(cutoff: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +681,38 @@ export class SqliteDb implements Db {
   async listDatasetPurgeLog(limit = 100): Promise<DatasetPurgeLogEntry[]> {
     const rows = this.db.prepare("SELECT * FROM dataset_purge_log ORDER BY purged_at DESC LIMIT ?").all(limit) as any[];
     return rows.map(rowToDatasetPurgeLog);
+  }
+
+  // --- watcher analysis-data + analysis-session trace (ADAAAA-6738 G1) ---
+  async appendAnalysisEvent(e: AnalysisEvent): Promise<void> {
+    this.db
+      .prepare("INSERT INTO analysis_events (id, job_id, record, created_at) VALUES (?,?,?,?)")
+      .run(e.id, e.jobId, JSON.stringify(e), new Date().toISOString());
+  }
+
+  async listAnalysisEvents(jobId: string, limit = 1000): Promise<AnalysisEvent[]> {
+    const rows = this.db
+      .prepare("SELECT record FROM analysis_events WHERE job_id = ? ORDER BY created_at ASC, id ASC LIMIT ?")
+      .all(jobId, limit) as { record: string }[];
+    return rows.map((r) => JSON.parse(r.record) as AnalysisEvent);
+  }
+
+  async appendAnalysisTrace(t: AnalysisSessionTrace): Promise<void> {
+    this.db
+      .prepare("INSERT INTO analysis_session_traces (id, job_id, record, created_at) VALUES (?,?,?,?)")
+      .run(t.id, t.jobId, JSON.stringify(t), new Date(t.at).toISOString());
+  }
+
+  async listAnalysisTraces(jobId: string, limit = 1000): Promise<AnalysisSessionTrace[]> {
+    const rows = this.db
+      .prepare("SELECT record FROM analysis_session_traces WHERE job_id = ? ORDER BY created_at ASC, id ASC LIMIT ?")
+      .all(jobId, limit) as { record: string }[];
+    return rows.map((r) => JSON.parse(r.record) as AnalysisSessionTrace);
+  }
+
+  async purgeAnalysisBefore(cutoff: string): Promise<void> {
+    this.db.prepare("DELETE FROM analysis_events WHERE created_at < ?").run(cutoff);
+    this.db.prepare("DELETE FROM analysis_session_traces WHERE created_at < ?").run(cutoff);
   }
 
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
@@ -1228,6 +1271,42 @@ export class PgDb implements Db {
     return r.rows.map(rowToDatasetPurgeLog);
   }
 
+  // --- watcher analysis-data + analysis-session trace (ADAAAA-6738 G1) ---
+  async appendAnalysisEvent(e: AnalysisEvent): Promise<void> {
+    await this.pool.query(
+      "INSERT INTO analysis_events (id, job_id, record, created_at) VALUES ($1,$2,$3,$4)",
+      [e.id, e.jobId, JSON.stringify(e), new Date().toISOString()]
+    );
+  }
+
+  async listAnalysisEvents(jobId: string, limit = 1000): Promise<AnalysisEvent[]> {
+    const r = await this.pool.query(
+      "SELECT record FROM analysis_events WHERE job_id = $1 ORDER BY created_at ASC, id ASC LIMIT $2",
+      [jobId, limit]
+    );
+    return r.rows.map((row) => JSON.parse(row.record) as AnalysisEvent);
+  }
+
+  async appendAnalysisTrace(t: AnalysisSessionTrace): Promise<void> {
+    await this.pool.query(
+      "INSERT INTO analysis_session_traces (id, job_id, record, created_at) VALUES ($1,$2,$3,$4)",
+      [t.id, t.jobId, JSON.stringify(t), new Date(t.at).toISOString()]
+    );
+  }
+
+  async listAnalysisTraces(jobId: string, limit = 1000): Promise<AnalysisSessionTrace[]> {
+    const r = await this.pool.query(
+      "SELECT record FROM analysis_session_traces WHERE job_id = $1 ORDER BY created_at ASC, id ASC LIMIT $2",
+      [jobId, limit]
+    );
+    return r.rows.map((row) => JSON.parse(row.record) as AnalysisSessionTrace);
+  }
+
+  async purgeAnalysisBefore(cutoff: string): Promise<void> {
+    await this.pool.query("DELETE FROM analysis_events WHERE created_at < $1", [cutoff]);
+    await this.pool.query("DELETE FROM analysis_session_traces WHERE created_at < $1", [cutoff]);
+  }
+
   async addWaitlistEmail(email: string): Promise<{ registered: boolean }> {
     const r = await this.pool.query(
       "INSERT INTO waitlist (id,email,created_at) VALUES ($1,$2,$3) ON CONFLICT (email) DO NOTHING",
@@ -1658,6 +1737,20 @@ const SCHEMA_SQLITE = `
     set_by TEXT,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS analysis_events (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_analysis_events_job ON analysis_events (job_id, created_at);
+  CREATE TABLE IF NOT EXISTS analysis_session_traces (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_analysis_traces_job ON analysis_session_traces (job_id, created_at);
   CREATE TABLE IF NOT EXISTS _schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -1805,6 +1898,20 @@ const SCHEMA_PG = `
     set_by TEXT,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS analysis_events (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_analysis_events_job ON analysis_events (job_id, created_at);
+  CREATE TABLE IF NOT EXISTS analysis_session_traces (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_analysis_traces_job ON analysis_session_traces (job_id, created_at);
   CREATE TABLE IF NOT EXISTS _schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -1951,6 +2058,40 @@ const MIGRATIONS: Migration[] = [
       // placements are distinguishable in the CAC drilldown.
       if (!(await hasColumn("users", "utm_medium"))) await exec("ALTER TABLE users ADD COLUMN utm_medium TEXT");
       if (!(await hasColumn("users", "utm_content"))) await exec("ALTER TABLE users ADD COLUMN utm_content TEXT");
+    },
+  },
+  {
+    version: 7,
+    name: "analysis-events-and-traces",
+    up: async (exec) => {
+      // ADAAAA-6738 G1 (watcher plan Part 0d): the perceive persistent-session
+      // analysis-data stream and the decide<->perceive request trace are
+      // persisted server-side. Fresh DBs create both via the idempotent
+      // baseline; this brings pre-existing on-disk DBs (prod Postgres, local
+      // SQLite) up to shape on next boot. TEXT types are valid in both SQLite
+      // and Postgres, so one statement serves both backends.
+      await exec(
+        `CREATE TABLE IF NOT EXISTS analysis_events (
+          id TEXT PRIMARY KEY,
+          job_id TEXT NOT NULL,
+          record TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        )`
+      );
+      await exec(
+        `CREATE INDEX IF NOT EXISTS idx_analysis_events_job ON analysis_events (job_id, created_at)`
+      );
+      await exec(
+        `CREATE TABLE IF NOT EXISTS analysis_session_traces (
+          id TEXT PRIMARY KEY,
+          job_id TEXT NOT NULL,
+          record TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        )`
+      );
+      await exec(
+        `CREATE INDEX IF NOT EXISTS idx_analysis_traces_job ON analysis_session_traces (job_id, created_at)`
+      );
     },
   },
 ];
