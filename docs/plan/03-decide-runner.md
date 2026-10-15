@@ -38,6 +38,36 @@ request already carries, so it adds NO inference (same Gemma call budget).
   reasoning off so strict JSON returns immediately.
 - Clip on CPU via server ffmpeg: DONE (server cutClip).
 
+## Watcher / depth router / deep investigation (ADAAAA-6738 G1c, ADAAAA-6740 G3)
+The decide runner also exposes the *watcher* pipeline in addition to the
+single-shot `/highlight`:
+
+- **Pass 1 — watcher** (`/watcher/start|ingest|step|summaries`): a 3 s-tick /
+  10 s window / 3 fps chunk that emits a timestamped summary row and carries the
+  last-30 s summary list. `app/watcher.py` (`WatcherSession`).
+- **Pass 2 — depth router** (`/depth/state|flags`): the **sole trigger
+  authority**. It keeps a rolling dialog of the pass-1 rows and flags a moment
+  for deep investigation when the dialog shows a high-signal moment (high-value
+  event or a strong crowd reaction) that cleared an **audio-noise-reliability
+  gate** (decide queries `get_audio_levels` and requires a real baseline-relative
+  rise, so gemma is NOT fired for silence/audio-noise). A cooldown bounds the
+  flag rate (target <= 5 flags/min). `app/depth_router.py` (`DepthRouter`).
+  Perceive emits no candidate/trigger — only windowed tool envelopes.
+- **Deep investigation** (`/deep/investigate|state|verdicts`, and auto-run via
+  `/watcher/step2`): for each flagged moment, a deeper verdict over the
+  **3 s-forward / 12 s-back** window (video + audio) with perceive tools as
+  windowed corroborating evidence. Resolves through the single accept gate
+  (`finalize_goal_acceptance` — only a `scoring_play` is accepted); a refuted /
+  non-highlight moment is discarded (no clip). `app/deep_investigation.py`
+  (`DeepInvestigator`).
+
+Gates measured in `evals/decide_watcher_deep_investigation.py` (Pass 2 +
+deep-investigation): depth-router recall >= 80 %, false-positive flag rate
+<= 5/min, deep verdict truth (precision/recall), no clip on discard, and the
+audio-noise false-positive rate (bounded via `get_audio_levels`). The 120 s
+stash + clip build/discard on the decide runner is G4 (ADAAAA-6741); G3 produces
+the verdict and the discard decision, not yet the stash/clip media.
+
 ## Deployment requirement (user criterion)
 Deploy a vLLM OpenAI server for the decide model on 192.168.1.6 (GPU 1 / RTX 5070 Ti, 16 GB).
 INT4 weights ≈ 10.45 GB; the decide pass sends up to ~30 frames (~8.4K KV tokens/req)

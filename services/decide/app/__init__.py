@@ -20,6 +20,8 @@ configure_logging()
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
 from .watcher import Frame as WatcherFrame, WatcherConfig, WatcherSession
+from .depth_router import DepthRouter, DepthRouterConfig
+from .deep_investigation import DeepInvestigator, DeepInvestigationConfig
 from .gemma import (  # noqa: F401
     apply_ball_outcome_gate,
     apply_goal_attestation_gate,
@@ -214,6 +216,17 @@ class WatcherStepRequest(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
     tickTs: float
+
+
+class DeepInvestigateRequest(BaseModel):
+    """Run a deep investigation over a flagged moment (ADAAAA-6740 G3).
+
+    ``flagTs`` is the moment the depth router flagged; the deep window is
+    ``[flagTs - deep_back_s, flagTs + deep_forward_s]``. When ``flagTs`` is
+    omitted, the last flag emitted by the depth router is investigated."""
+
+    model_config = ConfigDict(extra="ignore")
+    flagTs: float | None = None
 
 
 # --- Response contract ------------------------------------------------------
@@ -724,14 +737,33 @@ def create_app() -> FastAPI:
     async def watcher_start(req: WatcherStartRequest):
         perceive_client = _make_perceive_client(req.sessionId)
         trace_sink = _make_trace_sink(req.traceJobId)
+        # watcher config is the pass-1 subset; depth/deep sub-configs are
+        # extracted separately (ADAAAA-6740 G3) so an unknown key never 500s.
+        base_config = {k: v for k, v in req.config.items() if k not in ("depth", "deep")}
         sess = WatcherSession(
             session_id=req.sessionId,
             stream_id=req.streamId,
-            config=WatcherConfig(**req.config),
+            config=WatcherConfig(**base_config),
             perceive=perceive_client,
             trace=trace_sink,
         )
         app.state.watcher = sess
+        # Pass 2 depth router (sole trigger authority) + deep investigator
+        # share the same tool client and trace sink as pass 1 (ADAAAA-6740 G3).
+        app.state.depth = DepthRouter(
+            session_id=req.sessionId,
+            stream_id=req.streamId,
+            config=DepthRouterConfig(**req.config.get("depth", {})),
+            perceive=perceive_client,
+            trace=trace_sink,
+        )
+        app.state.deep = DeepInvestigator(
+            session_id=req.sessionId,
+            stream_id=req.streamId,
+            config=DeepInvestigationConfig(**req.config.get("deep", {})),
+            perceive=perceive_client,
+            trace=trace_sink,
+        )
         return {"ok": True, "state": sess.state()}
 
     @router.post("/watcher/ingest")
@@ -751,11 +783,98 @@ def create_app() -> FastAPI:
         if sess is None:
             raise HTTPException(status_code=409, detail="no watcher session; call /watcher/start first")
         row = sess.step(req.tickTs)
+        # Feed pass 2 (depth router); it may flag a moment for deep investigation.
+        depth = getattr(app.state, "depth", None)
+        flag = None
+        if depth is not None:
+            depth.observe(row)
+            flag = depth.step(req.tickTs)
         return {
             "summary": row.to_dict(),
             "context": sess.summaries_context_dicts(),
             "state": sess.state(),
+            "flag": flag.to_dict() if flag else None,
         }
+
+    @router.post("/watcher/step2")
+    async def watcher_step2(req: WatcherStepRequest):
+        """Advance pass 1 + pass 2 and auto-run deep investigation on any flag.
+
+        Returned ``deepVerdicts`` lists the deep-investigation verdict(s) for any
+        moment flagged this tick. The deep window is read from the watcher's
+        frame buffer, so the caller must have ingested frames through
+        ``flagTs + deep_forward_s`` for a full window (VOD pre-ingest)."""
+        sess = getattr(app.state, "watcher", None)
+        if sess is None:
+            raise HTTPException(status_code=409, detail="no watcher session; call /watcher/start first")
+        row = sess.step(req.tickTs)
+        depth = getattr(app.state, "depth", None)
+        deep = getattr(app.state, "deep", None)
+        flag = None
+        verdicts = []
+        if depth is not None:
+            depth.observe(row)
+            flag = depth.step(req.tickTs)
+        if flag is not None and deep is not None:
+            if hasattr(sess, "_frames_in"):
+                v = deep.investigate(flag, lambda start, end: sess._frames_in(start, end))
+                verdicts.append(v.to_dict())
+        return {
+            "summary": row.to_dict(),
+            "context": sess.summaries_context_dicts(),
+            "state": sess.state(),
+            "flag": flag.to_dict() if flag else None,
+            "deepVerdicts": verdicts,
+        }
+
+    # --- Pass 2 / deep-investigation surface (ADAAAA-6740 G3) --------------
+    @router.get("/depth/state")
+    async def depth_state():
+        depth = getattr(app.state, "depth", None)
+        if depth is None:
+            return {"active": False}
+        return {"active": True, **depth.state()}
+
+    @router.get("/depth/flags")
+    async def depth_flags():
+        depth = getattr(app.state, "depth", None)
+        if depth is None:
+            return {"flags": []}
+        return {"flags": depth.flags_dicts()}
+
+    @router.post("/deep/investigate")
+    async def deep_investigate(req: DeepInvestigateRequest):
+        sess = getattr(app.state, "watcher", None)
+        depth = getattr(app.state, "depth", None)
+        deep = getattr(app.state, "deep", None)
+        if deep is None:
+            raise HTTPException(status_code=409, detail="no deep-investigation session; call /watcher/start first")
+        if req.flagTs is None:
+            if depth is None or not depth.flags:
+                raise HTTPException(status_code=422, detail="no flag to investigate (provide flagTs)")
+            flag = depth.flags[-1]
+        else:
+            flag = next((f for f in (depth.flags if depth else []) if abs(f.ts - req.flagTs) < 1e-6), None)
+            if flag is None:
+                raise HTTPException(status_code=404, detail=f"no flag at ts {req.flagTs}")
+        if sess is None or not hasattr(sess, "_frames_in"):
+            raise HTTPException(status_code=409, detail="watcher session has no frame buffer")
+        v = deep.investigate(flag, lambda start, end: sess._frames_in(start, end))
+        return {"verdict": v.to_dict(), "state": deep.state()}
+
+    @router.get("/deep/state")
+    async def deep_state():
+        deep = getattr(app.state, "deep", None)
+        if deep is None:
+            return {"active": False}
+        return {"active": True, **deep.state()}
+
+    @router.get("/deep/verdicts")
+    async def deep_verdicts():
+        deep = getattr(app.state, "deep", None)
+        if deep is None:
+            return {"verdicts": []}
+        return {"verdicts": deep.verdicts_dicts()}
 
     @router.get("/watcher/summaries")
     async def watcher_summaries():
