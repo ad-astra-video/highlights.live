@@ -261,6 +261,70 @@ describe("OrchestratorAdapter (VOD) on-chain payment", () => {
 
     expect(res).toEqual({ decision: "make_clip" });
   });
+
+  it("recovers a 480 on the single-shot decide path by re-minting info via /refresh-payment and re-signing once, instead of failing the run (ADAAAA-6710)", async () => {
+    const { fn, log } = fakeFetch({ paidReserve: true, challengeBody: CHALLENGE });
+    vi.stubGlobal("fetch", fn);
+
+    // Like the fresh-reserve case (ADAAAA-6705), a reused session makes the
+    // signer return HTTP 480 on the FIRST sign of the single-shot fixed-price
+    // decide call. The adapter must re-mint fresh OrchestratorInfo (via
+    // /refresh-payment) and re-sign ONCE, then the paid retry succeeds — the
+    // single-shot decide run must NOT hard-fail on that benign 480.
+    const sigCalls: Array<{ b64: string; prev: unknown; opts: any }> = [];
+    let signCount = 0;
+    const signer480: SignerClient = {
+      async discover() {
+        return [];
+      },
+      async signOrchInfo() {
+        return {};
+      },
+      async generateLivePayment(orchInfoB64: string, prev: unknown, opts: any = {}): Promise<LivePayment> {
+        sigCalls.push({ b64: orchInfoB64, prev, opts });
+        signCount++;
+        if (signCount === 1) throw new Error("signer generateLivePayment failed: HTTP 480");
+        return {
+          payment: "livepeer-payment-ticket",
+          segCreds: "segment-creds",
+          signerState: { State: "c3RhdGU=", Sig: "c2ln" },
+        };
+      },
+    };
+
+    const adapter = new OrchestratorAdapter(cfg(), {
+      signer: signer480,
+      payerAddress: PAYER,
+    });
+
+    const res = await adapter.decide(
+      { eventType: "KILL", trackCount: 1, maxVelocity: 0, ocrHits: 0 },
+      { gameHint: "final" }
+    );
+
+    // The single-shot decide run completed despite the initial 480.
+    expect(res).toEqual({ decision: "make_clip" });
+
+    // First sign used the 402 challenge's (stale) orch info and got 480; the
+    // recovery re-signed with the FRESH info minted by /refresh-payment.
+    const fixed = sigCalls.filter((c) => c.opts.type === "fixed");
+    expect(fixed.length).toBeGreaterThanOrEqual(2);
+    expect(fixed[0].b64).toBe("b3JjaC1pbmZv");
+    expect(fixed[0].prev).toBe(null);
+    expect(fixed[1].b64).toBe("ZnJlc2g=");
+    expect(fixed[1].prev).toBe(null);
+
+    // /refresh-payment was hit once with the payer + the 402 challenge's manifest id.
+    const refreshCalls = log.filter((c) => c.url.includes("/refresh-payment"));
+    expect(refreshCalls).toHaveLength(1);
+    expect(JSON.parse(refreshCalls[0].body as string)).toEqual({ sender: PAYER, manifest_id: "sess-abc" });
+
+    // The paid retry carried the RE-SIGNED ticket so the runner accepted it.
+    const decideCalls = log.filter((c) => c.url.endsWith("/apps/highlights-decide/app/highlight"));
+    expect(decideCalls).toHaveLength(2);
+    expect(decideCalls[1].headers["Livepeer-Payment"]).toBe("livepeer-payment-ticket");
+    expect(decideCalls[1].headers["Livepeer-Segment"]).toBe("segment-creds");
+  });
 });
 
 // ADAAAA-3250: a live perceive session's payment refresher must never strand on
