@@ -21,6 +21,7 @@ import {
   type PipelineClient,
 } from "./analyzer";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
+import { makeDecideWatcherClient } from "./watch-client";
 import { cutClip, extractBurstFrames, extractFrames } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
@@ -553,6 +554,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         maxFramesPerAnalysis: cfg.maxFramesPerAnalysis,
         preWindowS: cfg.analysisPreWindowS,
         postWindowS: cfg.analysisPostWindowS,
+        // ADAAAA-6742 G5: live watcher-first. When the server flag is ON, the
+        // live path drives the decide watcher instead of the legacy per-frame
+        // candidate loop. Default OFF — the deployed live baseline is unchanged.
+        liveWatcherFirst: cfg.liveWatcherFirst,
+        streamId: job.id,
       };
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
@@ -615,7 +621,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           slot.current = res;
         },
         isStopped: () => slot.stopped,
-      });
+      }, cfg.liveWatcherFirst ? (makeDecideWatcherClient(cfg) ?? undefined) : undefined);
       // Terminate ingest (kills both ffmpeg procs); the audio tap drains and
       // the loop resolves any in-flight candidates. Highlights from BOTH legs
       // (video + audio) were already persisted + billed at DECISION time via
