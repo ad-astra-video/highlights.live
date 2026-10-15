@@ -15,7 +15,9 @@ locked by each component's own tests in slices 2-4):
   * an UNcalibrated pipeline degrades gracefully (homography: false, no crash);
   * a loose ball (player beyond the threshold) -> possessingPlayerId "none";
   * no ball -> no velocity / no possession, never a crash;
-  * process_frame wiring actually attaches both fields to the candidate.
+  * process_frame wiring (ADAAAA-6745 G1a de-trigger) emits NO autonomous
+    candidate, so the ball / goal signal no longer attaches to any candidate —
+    the decide runner decides event typing from the windowed tools.
 """
 import numpy as np
 
@@ -205,65 +207,18 @@ class _FakeDetector:
         return []
 
 
-def test_process_frame_attaches_ball_signal_to_candidate(monkeypatch):
-    """End-to-end wiring: with a ball + moving player + calibration, a fired
-    CandidateEvent carries ballVelocity + ballPossession (decide() context)."""
-    from app.session import SessionState
-    from app.tracker import IoUTracker
-
-    state = SessionState(session_id="s-slice5")
-    state.tracker = IoUTracker()
-    state.homography = H
-
-    # Per-frame Florence objects: a fast-moving PLAYER (silhouette) triggers the
-    # tracker candidate; the ball moves on the pitch throughout.
-    objects_per_frame = []
-    player_center = 0.15
-    ball_field = np.array([10.0, 20.0])
-    n = 12
-    for k in range(n):
-        player_box = [player_center * 1000 - 60, 350, player_center * 1000 + 60, 600]
-        img = project_points(H_FI, [ball_field])[0]
-        ball_box = [img[0] * 1000 - 5, img[1] * 1000 - 5, img[0] * 1000 + 5, img[1] * 1000 + 5]
-        objects_per_frame.append([
-            {"label": "player", "confidence": 0.9, "bbox": player_box},
-            {"label": "soccer ball", "confidence": 0.9, "bbox": ball_box},
-        ])
-        player_center += 0.18
-        ball_field = ball_field + np.array([12.0, 5.0]) * DT
-
-    fake = _FakeDetector(objects_per_frame)
-    monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: fake)
-
-    saw_candidate = False
-    for k in range(n):
-        _obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
-        if cand is not None:
-            saw_candidate = True
-            assert "ballVelocity" in cand, "candidate must carry ballVelocity"
-            assert cand["ballVelocity"]["homography"] is True
-            assert cand["ballVelocity"]["speedMps"] >= 0
-            assert "ballPossession" in cand, "candidate must carry ballPossession"
-            # Contract field present with a valid assignment ("<track-id>" or
-            # "none" for a loose ball -- possession correctness is unit-tested
-            # in the pipeline tests; here we verify it flows onto the event).
-            assert isinstance(cand["ballPossession"]["possessingPlayerId"], str)
-            break
-    assert saw_candidate, "expected at least one candidate from the fast-moving player"
-
-
-def test_process_frame_attaches_goal_outcome_to_candidate(monkeypatch):
-    """Decide-leg I2 (ADAAAA-6359) wiring: with a goal-line spec + calibration,
-    a fired CandidateEvent carries goalCrossed / ballOutcome from the goal-plane
-    classifier (forwarded first-class to decide). No spec -> no fields."""
+def test_process_frame_detrigger_no_ball_or_goal_candidate(monkeypatch):
+    """ADAAAA-6745 G1a (de-trigger): process_frame returns (obs, None) and emits
+    no autonomous candidate, so the INC-2b ball signal and decide-leg I2 goal
+    outcome are no longer attached to any candidate. The decide runner decides
+    event typing from the windowed analysis tools instead."""
     from app.session import SessionState
     from app.tracker import IoUTracker
     from app.goal_plane import GoalLineSpec
 
-    state = SessionState(session_id="s-i2")
+    state = SessionState(session_id="s-detrigger-bs")
     state.tracker = IoUTracker()
     state.homography = H
-    # Goal at the right end-line: plane at X=11, mouth spans Y in [15,25].
     state.goal_line_spec = GoalLineSpec(axis="x", position=11.0,
                                         mouth_min=15.0, mouth_max=25.0)
 
@@ -285,48 +240,32 @@ def test_process_frame_attaches_goal_outcome_to_candidate(monkeypatch):
     fake = _FakeDetector(objects_per_frame)
     monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: fake)
 
-    saw_outcome = False
+    sub = _Subscriber()
+    state.subscribers.append(sub)
+
     for k in range(n):
-        _obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
-        if cand is not None and "ballOutcome" in cand:
-            saw_outcome = True
-            assert isinstance(cand["goalCrossed"], bool)
-            assert cand["ballOutcome"] in {"goal", "off_target", "blocked", "no_shot", "cross"}
-            break
-    assert saw_outcome, "expected a fired candidate to carry goalCrossed / ballOutcome"
+        obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
+        assert cand is None, "process_frame must never return a candidate"
+        assert obs["type"] == "observation"
+        # ball/goal signals must no longer surface on an emitted event.
+        assert "ballVelocity" not in obs and "goalCrossed" not in obs
+
+    # Zero autonomous candidate events; observation emission is kept.
+    assert not any(e.get("type") == "candidate" for e in sub.items), \
+        "perceive must emit zero autonomous candidate events"
+    assert any(e.get("type") == "observation" for e in sub.items), \
+        "observation emission must be kept"
 
 
-def test_process_frame_no_goal_line_spec_no_fields(monkeypatch):
-    """Without a goal-line spec the candidate carries no goal fields (no crash)."""
-    from app.session import SessionState
-    from app.tracker import IoUTracker
+class _Subscriber:
+    """Minimal SSE-bound sink recording every event process_frame enqueues."""
 
-    state = SessionState(session_id="s-i2-nospec")
-    state.tracker = IoUTracker()
-    state.homography = H
+    def __init__(self):
+        self.items: list = []
 
-    objects_per_frame = []
-    player_center = 0.15
-    ball_field = np.array([10.9, 20.0])
-    for k in range(12):
-        player_box = [player_center * 1000 - 60, 350, player_center * 1000 + 60, 600]
-        img = project_points(H_FI, [ball_field])[0]
-        ball_box = [img[0] * 1000 - 5, img[1] * 1000 - 5, img[0] * 1000 + 5, img[1] * 1000 + 5]
-        objects_per_frame.append([
-            {"label": "player", "confidence": 0.9, "bbox": player_box},
-            {"label": "soccer ball", "confidence": 0.9, "bbox": ball_box},
-        ])
-        player_center += 0.20
-        ball_field = ball_field + np.array([12.0, 5.0]) * DT
+    def put_nowait(self, item):
+        self.items.append(item)
 
-    fake = _FakeDetector(objects_per_frame)
-    monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: fake)
-
-    for k in range(12):
-        _obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
-        if cand is not None:
-            assert "goalCrossed" not in cand
-            assert "ballOutcome" not in cand
 
 
 # ------------------------------------------------------- ADAAAA-5488 empty-seed fix

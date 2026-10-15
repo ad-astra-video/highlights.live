@@ -16,9 +16,11 @@ Module-level cases (pure, synthetic boxes):
   * cooldown suppresses a second candidate;
   * unknown sport / empty zones -> inert (no crash, no candidate);
 
-Integration (process_frame wiring):
-  * a detection-in-zone candidate fires through process_frame, carries the
-    sport-classified eventType + ball signal fields, and is a candidate only.
+Integration (process_frame wiring, ADAAAA-6745 G1a de-trigger):
+  * process_frame returns (obs, None) and emits NO autonomous candidate even
+    with a player in a goal-mouth scoring zone (regression test below); the
+    zone trigger is no longer wired into the frame path. The event typing /
+    highlight decision belongs to the decide runner via the windowed tools.
 """
 import numpy as np
 
@@ -247,31 +249,54 @@ class _FakeDetector:
         return []
 
 
-def test_process_frame_fires_detection_in_zone_candidate(monkeypatch):
-    """A player standing in the (left) goal mouth triggers a Stage-A candidate
-    through process_frame — classified GOAL on soccer, carrying the ball signal
-    fields, and WITHOUT any motion burst (no tracker jump)."""
+class _Subscriber:
+    """Minimal SSE-bound sink: records every event process_frame enqueues so we
+    can assert NO autonomous candidate was emitted."""
+
+    def __init__(self):
+        self.items: list = []
+
+    def put_nowait(self, item):
+        self.items.append(item)
+
+
+def test_process_frame_detrigger_no_candidate_even_in_scoring_zone(monkeypatch):
+    """ADAAAA-6745 G1a (de-trigger) regression: process_frame returns (obs, None)
+    and emits NO autonomous candidate event for a soccer stream — even with a
+    player parked in the goal-mouth scoring zone, which previously fired a GOAL
+    candidate via the detection-in-zone trigger. Event typing / highlight
+    selection is decided only in the decide runner via the windowed tools; the
+    persistent analysis-session recording must still happen."""
     from app.session import SessionState
     from app.tracker import IoUTracker
 
-    state = SessionState(session_id="s-inc3")
+    state = SessionState(session_id="s-detrigger")
     state.tracker = IoUTracker()
     state.game_hint = "soccer"
 
     # Player parked in the left goal mouth all frames; slow, no motion burst.
+    # On the pre-de-trigger path this fired a GOAL candidate through the zone
+    # trigger — now it must emit nothing.
     objects_per_frame = [[{"label": "player", "confidence": 0.9, "bbox": [30, 400, 130, 650]}]]
     fake = _FakeDetector(objects_per_frame)
     monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: fake)
 
-    saw_candidate = False
+    sub = _Subscriber()
+    state.subscribers.append(sub)
+
     for k in range(4):
-        _obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
-        if cand is not None:
-            saw_candidate = True
-            assert cand["eventType"] == "GOAL"  # sport-classified
-            assert cand["trigger"] in ("zone", "ball_speed")
-            break
-    assert saw_candidate, "expected a detection-in-zone candidate on soccer"
+        obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
+        assert cand is None, "process_frame must never return a candidate"
+        assert obs["type"] == "observation"
+        assert obs["sessionId"] == "s-detrigger"
+
+    # Persistent analysis-session recording is kept (windowed tools answer from it).
+    assert state.analysis.last_ts is not None, "frame analysis must still be recorded"
+    # Zero autonomous candidate events; observation emission is kept.
+    assert not any(e.get("type") == "candidate" for e in sub.items), \
+        "perceive must emit zero autonomous candidate events"
+    assert any(e.get("type") == "observation" for e in sub.items), \
+        "observation emission must be kept"
 
 
 def test_process_frame_no_candidate_when_center_field_and_no_trigger(monkeypatch):
