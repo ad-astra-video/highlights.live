@@ -374,6 +374,32 @@ def test_audio_burst_emits_candidate_with_audio_signal():
     assert audio["baselineEnergy"] > 0.0
 
 
+def test_audio_candidate_is_always_generic_non_sport():
+    """ADAAAA-6738 G1 guardrail: the retained INC-2 Stage-A audio-gate candidate
+    must carry ONLY the generic ``AUDIO`` event type. Perceive must never emit a
+    sport-specific / GOAL event-type label on the audio path — event typing is
+    decide-only (the G1 de-trigger contract). Assert both a burst and a sustained
+    rise candidate never name a goal/sport type and never carry the
+    ``_GOAL_EVENT_SPORTS`` / ``sport_specific_event_type`` fields.
+    """
+    forbidden = {"_GOAL_EVENT_SPORTS", "sport_specific_event_type", "GOAL"}
+    for sid, fn in (("grd-burst", "burst"), ("grd-swell", "sustained_rise")):
+        _warm_audio_gate(sid)
+        cand = None
+        for i in range(60):
+            t = 10.0 + i * 0.1
+            r = _post_audio(t, _pcm(0.05 if fn == "burst" else 0.015), sid=sid)
+            assert r.status_code == 200
+            cand = r.json()["candidate"]
+            if cand is not None:
+                break
+        assert cand is not None, f"{fn} should emit a candidate"
+        assert cand["eventType"] == "AUDIO"
+        assert cand["eventType"] not in forbidden
+        for key in ("sport_specific_event_type", "_GOAL_EVENT_SPORTS"):
+            assert key not in cand, f"{key} leaked into audio candidate"
+
+
 def test_audio_sustained_rise_emits_candidate():
     sid = "audio-sess-swell"
     _warm_audio_gate(sid)
