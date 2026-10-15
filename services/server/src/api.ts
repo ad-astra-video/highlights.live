@@ -243,6 +243,59 @@ export async function persistLiveHighlight(
   return stored;
 }
 
+/** The metadata the decide runner sends alongside the built clip (ADAAAA-6741
+ * G4) as the `metadata` multipart field (a JSON string). */
+export interface ClipUploadMetadata {
+  jobId?: string;
+  eventType?: string;
+  score?: number;
+  reason?: string;
+  start?: number;
+  end?: number;
+  // The decide runner may send an unclassified/empty string; the record builder
+  // coerces it to a valid enum or omits it. Keep the transport type string.
+  outcome?: string;
+  nearMiss?: boolean;
+}
+
+/** Build the HighlightRecord persisted when the decide runner uploads a built
+ * clip for a job (ADAAAA-6741 G4). Pure + exported so it is unit-testable
+ * without a multipart request. Clamps score to [0,100], defaults numeric fields
+ * to 0 and event type/reason to "", and marks the record `accepted` so it
+ * immediately appears on the public feed (GET /feed reads
+ * store.acceptedHighlights()). */
+export function buildClipHighlightRecord(
+  jobId: string,
+  clipId: string,
+  metadata: ClipUploadMetadata | undefined
+): HighlightRecord {
+  const m = metadata ?? {};
+  const clamp = (v: number) => Math.max(0, Math.min(100, v));
+  // `outcome` is a closed enum on HighlightRecordSchema (scoring_play |
+  // near_miss | big_play | not_highlight). The decide runner may send an empty
+  // string or an unclassified outcome; omit it (it is optional) rather than
+  // failing schema validation at persist, which would 500 the upload.
+  const outcome = (m.outcome ?? "").trim();
+  const validOutcome: "scoring_play" | "near_miss" | "big_play" | "not_highlight" | undefined =
+    ["scoring_play", "near_miss", "big_play", "not_highlight"].includes(outcome)
+      ? (outcome as "scoring_play" | "near_miss" | "big_play" | "not_highlight")
+      : undefined;
+  return {
+    id: clipId,
+    jobId,
+    clipUri: `/clips/${clipId}.mp4`,
+    start: m.start ?? 0,
+    end: m.end ?? 0,
+    eventType: m.eventType ?? "",
+    score: clamp(Number(m.score) || 0),
+    reason: m.reason ?? "",
+    outcome: validOutcome,
+    nearMiss: !!m.nearMiss,
+    status: "accepted",
+    createdAt: new Date().toISOString(),
+  };
+}
+
 export function buildApp(deps: ApiDeps): FastifyInstance {
   const { cfg, store, adapter, db, auth, billing, entitlements, mailer } = deps;
   const app = Fastify({ logger: false });
@@ -2029,6 +2082,65 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         if (existsSync(p) && (await stat(p)).size > 0) await appendFile(p, buf);
         else await writeFile(p, buf);
         return { ok: true, bytes: buf.length };
+      } catch (e: any) {
+        return reply.code(500).send({ error: String(e?.message || e) });
+      }
+    }
+  );
+
+  // ADAAAA-6741 G4: the decide runner builds the clip (server no longer cuts it
+  // via ffmpeg cutClip) and uploads the finished .mp4 for a job. Internal
+  // callback route — NO user auth, mirroring /jobs/:id/observe. Persists the
+  // clip to the clips dir and writes an accepted HighlightRecord so it shows on
+  // the public feed (GET /feed reads store.acceptedHighlights()).
+  app.post<{ Params: { id: string } }>(
+    "/jobs/:id/clips",
+    // No preHandler: internal decide runner, not a user. Mirror the recording
+    // rail's body limit so a multi-second mp4 doesn't get 413'd.
+    { bodyLimit: 8 * 1024 * 1024 },
+    async (req: any, reply) => {
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "no job" });
+      if (!req.isMultipart()) return reply.code(400).send({ error: "multipart required" });
+      try {
+        let clipBuf: Buffer | null = null;
+        let metaRaw: string | undefined;
+        // Iterate parts so we capture both the file and the metadata field
+        // regardless of order (req.file() only returns the fields that precede
+        // the file part).
+        for await (const part of req.parts()) {
+          if (part.type === "file") {
+            if (part.fieldname === "clip") {
+              const buf = await part.toBuffer();
+              if (buf.length > 0) clipBuf = buf;
+            } else {
+              part.file.resume();
+            }
+          } else if (part.fieldname === "metadata") {
+            metaRaw = part.value;
+          }
+        }
+        if (!clipBuf) return reply.code(400).send({ error: "clip file part required" });
+
+        let metadata: ClipUploadMetadata | undefined;
+        if (metaRaw !== undefined) {
+          try {
+            metadata = JSON.parse(metaRaw);
+          } catch {
+            return reply.code(400).send({ error: "metadata must be valid JSON" });
+          }
+        }
+
+        const clipId = randomUUID();
+        const { mkdir, writeFile } = await import("node:fs/promises");
+        const clipDir = path.join(cfg.dataDir, "clips");
+        await mkdir(clipDir, { recursive: true });
+        await writeFile(path.join(clipDir, `${clipId}.mp4`), clipBuf);
+
+        const rec = buildClipHighlightRecord(job.id, clipId, metadata);
+        await store.addHighlight(rec);
+
+        return { ok: true, id: clipId, clipUri: `/clips/${clipId}.mp4` };
       } catch (e: any) {
         return reply.code(500).send({ error: String(e?.message || e) });
       }
