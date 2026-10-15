@@ -142,6 +142,47 @@ describe("LivepeerClient", () => {
     expect(t.calls.length).toBe(1);
   });
 
+  it("decide backs off exponentially 500ms->1s->2s->4s on runner-not-found (ADAAAA-6709)", async () => {
+    // ADAAAA-6709 fidelity: a flapping decide runner 404s every call; the retry
+    // must idle near ~1 req/sec (exponential doubling from 500ms, cap 8s) rather
+    // than hammering the orchestrator. We capture the scheduled setTimeout delay
+    // and re-schedule at 0ms so the test runs fast but still asserts the cadence.
+    const orig = globalThis.setTimeout;
+    const delays: number[] = [];
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn: any, ms?: number, ...rest: any[]) => {
+      if (typeof fn === "function") delays.push(Number(ms));
+      return orig(fn as any, 0, ...rest) as any;
+    });
+    try {
+      const t = new MockTransport([
+        { status: 404, data: "runner not found" },
+        { status: 404, data: "runner not found" },
+        { status: 404, data: "runner not found" },
+        { status: 404, data: "runner not found" },
+        { status: 200, data: { isHighlight: true, score: 80 } },
+      ]);
+      const c = new LivepeerClient("http://orch", t, { decideBackoffBaseMs: 500, decideMaxAttempts: 5 });
+      const res = await c.decide("highlight", { eventType: "GOAL" });
+      expect((res.data as any).isHighlight).toBe(true);
+      expect(t.calls.length).toBe(5);
+      expect(delays).toEqual([500, 1000, 2000, 4000]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("decide aborts cleanly with a clear error after bounded runner-not-found retries (ADAAAA-6709)", async () => {
+    // All calls 404 "runner not found": the loop must NOT spin past the bound.
+    // It should issue at most `decideMaxAttempts` requests and then throw a
+    // clear error (so the job aborts without a tight/endless retry loop).
+    const t = new MockTransport(Array.from({ length: 8 }, () => ({ status: 404, data: "runner not found" })));
+    const c = new LivepeerClient("http://orch", t, { decideBackoffBaseMs: 1, decideMaxAttempts: 5 });
+    await expect(c.decide("highlight", { eventType: "GOAL" })).rejects.toThrow(
+      /decide runner unavailable after 5 attempts .*runner not found/
+    );
+    expect(t.calls.length).toBe(5);
+  });
+
   it("stopPerceive handles 204", async () => {
     const t = new MockTransport([{ status: 204, data: "" }]);
     const c = new LivepeerClient("http://orch", t);
