@@ -53,3 +53,82 @@ def test_plan_route_response_schema_is_valid():
     parsed = TrackingPlanResponse.model_validate(plan)
     assert parsed.source in ("planner", "planner-fallback")
     assert parsed.maxTracks in (3, 8)
+
+
+# --- ADAAAA-6709: /health must stay responsive during a gemma /plan inference ---
+
+
+def test_health_responds_during_plan_inference(monkeypatch):
+    """ADAAAA-6709: a slow /plan gemma inference must NOT block /health.
+
+    Root cause of the decide 404 loop (ADAAAA-6707): the /plan handler called
+    ``plan_tracking_with_gemma`` synchronously, stalling uvicorn's single event
+    loop for the whole planner inference (up to PLANNER_TIMEOUT_S), so the
+    go-livepeer health probe (health_url=/health) timed out and marked the decide
+    runner unavailable -> later decide calls 404 "runner not found". The fix
+    wraps the planner in ``asyncio.to_thread`` (mirroring the /highlight branch),
+    so this test asserts /health returns 200 ok well within the probe timeout
+    while a long planner inference is genuinely in-flight.
+    """
+    import json
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    PLAN_SLEEP_S = 5.0  # planner inference duration the fake model "takes"
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("content-length", 0))
+            self.rfile.read(n)
+            # Simulate the long planner inference.
+            time.sleep(PLAN_SLEEP_S)
+            plan = json.dumps(
+                {"maxTracks": 3, "targets": [{"label": "player0", "zone": "mid"}], "reason": "ok"}
+            )
+            body = json.dumps({"choices": [{"message": {"content": plan}}]}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    port = srv.server_address[1]
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        monkeypatch.setenv("DECIDE_MODE", "gemma")
+        monkeypatch.setenv("GEMMA_URL", f"http://127.0.0.1:{port}")
+        client = TestClient(create_app())
+
+        result = {}
+
+        def do_plan():
+            st = time.time()
+            r = client.post(
+                "/plan",
+                json={"intent": "goal scoring", "category": "soccer", "mode": "live", "image": "aGk="},
+            )
+            result["plan_status"] = r.status_code
+            result["plan_elapsed"] = time.time() - st
+
+        th = threading.Thread(target=do_plan, daemon=True)
+        th.start()
+        # Give the /plan request time to reach the planner and start its sleep.
+        time.sleep(1.0)
+        # /health must answer fast while the inference is in flight.
+        hst = time.time()
+        hr = client.get("/health")
+        h_elapsed = time.time() - hst
+        th.join(timeout=30)
+        assert hr.status_code == 200
+        assert hr.json().get("status") == "ok"
+        assert h_elapsed < 1.0, f"/health took {h_elapsed:.3f}s during plan inference"
+        assert result.get("plan_status") == 200
+        assert result.get("plan_elapsed", 0) >= PLAN_SLEEP_S  # inference really ran
+    finally:
+        srv.shutdown()
+
