@@ -13,6 +13,8 @@ function mkClient(over: Partial<PipelineClient> = {}): { client: PipelineClient;
     },
     postAudio: async () => null,
     controlForward: async () => {},
+    analysisQuery: async () => null,
+    analysisState: async () => null,
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     stopPerceive: async () => {},
     ...over,
