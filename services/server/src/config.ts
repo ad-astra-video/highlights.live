@@ -142,6 +142,12 @@ export interface ServerConfig {
    * (default 5), `VOD_ANALYSIS_MAX_SAMPLES` (default 80). */
   vodAnalysisSampleStepS: number;
   vodAnalysisMaxSamples: number;
+  /** ADAAAA-6748 G1b-2: shared secret the decide watcher trace sink presents
+   * so the server's `POST /jobs/:id/analysis/trace` accepts the VOD trace
+   * ingest. That route is otherwise user-Bearer-only, which would 401 the
+   * unauthenticated decide sink and drop every VOD analysis_session_trace.
+   * `TRACE_SERVICE_TOKEN`; empty => VOD trace ingest stays disabled. */
+  traceServiceToken: string;
   /** ADAAAA-6314 Path 2: forward the surrounding audio clip for LIVE trigger
    * candidates so the gemma decide prompt gets ASR'd audio context. Default off
    * so the deployed live baseline sends no new payload until an operator enables
@@ -343,6 +349,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodAnalysisPostWindowS: Number(env.VOD_ANALYSIS_POST_WINDOW_S ?? 5),
     vodAnalysisSampleStepS: Number(env.VOD_ANALYSIS_SAMPLE_STEP_S ?? 5),
     vodAnalysisMaxSamples: Number(env.VOD_ANALYSIS_MAX_SAMPLES ?? 80),
+    traceServiceToken: env.TRACE_SERVICE_TOKEN ?? "",
     // I4 / ADAAAA-6361: live-path decide() carries the surrounding audio clip so
     // Gemma gets auditory context, matching VOD. Opt out with LIVE_AUDIO_CONTEXT=0.
     audioContext: env.LIVE_AUDIO_CONTEXT !== "0",

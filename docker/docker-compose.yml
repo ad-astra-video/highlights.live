@@ -290,6 +290,11 @@ services:
       # is set the watcher uses the frames' own signals (no broker trace, so no
       # runtime analysis-session trace — see the G2 Part 3 gate).
       - MEDIA_BROKER_URL=${MEDIA_BROKER_URL:-http://media:4070}
+      # ADAAAA-6748 G1b-2: the decide VOD watcher POSTs each decide->perceive
+      # tool-call trace to the server's POST /jobs/:id/analysis/trace. Point the
+      # sink at the compose server (hl network) so the trace rows land during a
+      # VOD. When unset the sink is inactive (no decide watcher trace rows).
+      - TRACE_BASE=${TRACE_BASE:-http://server:3000}
     depends_on:
       gemma:
         condition: service_healthy
@@ -347,6 +352,12 @@ services:
       # falls back to the server's own relative path -> 404 `decide failed`. Default to the
       # compose decide service so it survives a server recreate; config.ts is left unchanged.
       - DECIDE_URL=${DECIDE_URL:-http://decide:8081}
+      # ADAAAA-6748 G1b-2: shared secret the decide VOD watcher presents when it
+      # POSTs analysis_session_traces back to POST /jobs/:id/analysis/trace (the
+      # route is otherwise user-Bearer-only). Must match the value the server
+      # sends in the /app/watcher/start traceToken field. Empty => VOD trace
+      # ingest stays disabled (no trace rows during a VOD).
+      - TRACE_SERVICE_TOKEN=${TRACE_SERVICE_TOKEN:-}
       # ADAAAA-6314 Path 2 (live): forward the surrounding audio clip on LIVE
       # trigger candidates so the decide prompt gets ASR'd audio context. Off by
       # default so the deployed live baseline sends no new payload until an

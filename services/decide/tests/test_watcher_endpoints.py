@@ -45,3 +45,42 @@ def test_watcher_summaries_empty_then_populated():
     c.post("/watcher/start", json={"sessionId": "s", "streamId": "st"})
     c.post("/watcher/step", json={"tickTs": 3.0})
     assert len(c.get("/watcher/summaries").json()["summaries"]) == 1
+
+
+def test_trace_sink_presents_service_token_header(monkeypatch):
+    """ADAAAA-6748 G1b-2: the decide VOD watcher trace sink must present the
+    TRACE_SERVICE_TOKEN the server hands it on /watcher/start, so the server's
+    user-Bearer-only POST /jobs/:id/analysis/trace does not 401 and drop the
+    trace. Without a token the sink stays unauthenticated (live path uses the
+    media-broker -> webapp relay)."""
+    import httpx
+    from app import _make_trace_sink
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        class R:
+            status_code = 200
+        return R()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setenv("TRACE_BASE", "http://server:3000")
+
+    sink = _make_trace_sink("job-1", "svc-secret-123")
+    assert sink is not None
+    sink({"type": "watcher_tool_call", "tool": "get_captioning", "result": None, "resultOk": False})
+    assert captured["url"] == "http://server:3000/jobs/job-1/analysis/trace"
+    assert captured["headers"] == {"Authorization": "Bearer svc-secret-123"}
+    assert captured["json"] == {"trace": {"type": "watcher_tool_call", "tool": "get_captioning", "result": None, "resultOk": False}}
+
+    # No token => no Authorization header.
+    sink0 = _make_trace_sink("job-1", "")
+    sink0({"type": "watcher_tool_call", "tool": "detect_objects"})
+    assert captured["headers"] in (None, {})
+
+    # No TRACE_BASE/no job => no sink.
+    monkeypatch.delenv("TRACE_BASE")
+    assert _make_trace_sink("", "") is None
