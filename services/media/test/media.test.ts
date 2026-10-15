@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
 import { execFileSync } from "node:child_process";
+import { createServer, type Server } from "node:http";
 import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -364,5 +365,114 @@ describe("media server WebRTC ingest (C1)", () => {
   it("falls through to 404 for unknown sessions on the RTC offer route", async () => {
     const res = await app.inject({ method: "POST", url: "/sessions/nope/rtc/offer", payload: { offer: {} } });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("media server live-analysis relay (G1b)", () => {
+  it("relays perceive analysis state and a bounded event to the webapp WS", async () => {
+    // Tiny local stub standing in for the perceive runner's persistent-session
+    // analysis HTTP endpoints. Serves the state object and a bounded windowed
+    // tool envelope exactly like services/perceive's /analysis/state and
+    // /analysis/{tool} routes (see services/perceive/app/__init__.py ~1235).
+    const state = {
+      sessionId: "sess-an",
+      streamId: "stream-an",
+      startedTs: 0.0,
+      lastTs: 3.5,
+      audioSamples: 12,
+      frameSnapshots: 4,
+      captionLines: 2,
+      active: true,
+      windowMaxSeconds: 120,
+      tools: ["get_audio_levels"],
+    };
+    const envelope = {
+      tool: "get_audio_levels",
+      sessionId: "sess-an",
+      streamId: "stream-an",
+      window: { start: 0, end: 3.5, seconds: 3.5 },
+      count: 1,
+      total: 1,
+      truncated: false,
+      data: [{ ts: 1.0, peakEnergy: 0.5, baselineEnergy: 0.1 }],
+    };
+    // Track the x-session-id header the media server must send to bind the
+    // windowed query to the persistent session.
+    const seenHeaders: string[] = [];
+    const stub = createServer((req, res) => {
+      res.setHeader("Content-Type", "application/json");
+      const sid = req.headers["x-session-id"];
+      if (typeof sid === "string") seenHeaders.push(sid);
+      if (req.url?.startsWith("/analysis/state")) {
+        res.end(JSON.stringify(state));
+      } else if (req.url?.startsWith("/analysis/get_audio_levels")) {
+        res.end(JSON.stringify(envelope));
+      } else {
+        res.statusCode = 404;
+        res.end("{}");
+      }
+    });
+    await new Promise<void>((r) => stub.listen(0, "127.0.0.1", r));
+    const stubBase = `http://127.0.0.1:${(stub.address() as any).port}`;
+
+    const g = new FakeOrch("sess-an");
+    g.provisioned.appUrl = stubBase; // perceive analysis live at the stub
+    const ms = new MediaServer(
+      {
+        orchBase: "http://orch",
+        reconnectGraceMs: 1000,
+        // Short cadences keep the test bounded and deterministic.
+        analysisStateCadenceMs: 40,
+        analysisEventCadenceMs: 40,
+      },
+      g as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    try {
+      const prov = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-an" } });
+      expect(prov.statusCode).toBe(200);
+      const sid = prov.json().sessionId;
+
+      const ws = await wsConnect(`${sBase.replace("http", "ws")}/stream/${sid}`);
+      const got: any[] = [];
+      ws.on("message", (d: any) => {
+        try {
+          got.push(JSON.parse(String(d)));
+        } catch {
+          /* ignore non-JSON */
+        }
+      });
+
+      const deadline = Date.now() + 2000;
+      let sawState = false;
+      let sawEvent = false;
+      while (Date.now() < deadline && !(sawState && sawEvent)) {
+        await new Promise((r) => setTimeout(r, 50));
+        sawState = got.some((m) => m.type === "analysis" && m.status === "state");
+        sawEvent = got.some((m) => m.type === "analysis" && m.status === "event");
+      }
+
+      expect(sawState).toBe(true);
+      const stateMsg = got.find((m) => m.type === "analysis" && m.status === "state");
+      expect(stateMsg.state.sessionId).toBe("sess-an");
+      expect(stateMsg.state.windowMaxSeconds).toBe(120);
+      expect(typeof stateMsg.at).toBe("number");
+
+      expect(sawEvent).toBe(true);
+      const evMsg = got.find((m) => m.type === "analysis" && m.status === "event");
+      expect(evMsg.event.kind).toBe("audio_energy");
+      expect(evMsg.event.jobId).toBe("job-an");
+      expect(evMsg.event.sessionId).toBe("sess-an");
+      expect(Array.isArray(evMsg.event.data.data)).toBe(true); // bounded points
+
+      // The media server bound the windowed query to the session via the header.
+      expect(seenHeaders).toContain("sess-an");
+      ws.close();
+    } finally {
+      await srv.close();
+      await new Promise<void>((r) => stub.close(() => r()));
+    }
   });
 });

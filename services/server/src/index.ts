@@ -67,6 +67,31 @@ function scheduleDatasetPurgeSweep(
   return t;
 }
 
+/** Schedule the analysis-data retention purge sweep (ADAAAA-6746 G1b). Runs at
+ * least once per `interval`, plus a startup run, hard-deleting analysis_events
+ * + analysis_session_traces rows older than `analysisRetentionMs`. Unref'd
+ * timer. */
+function scheduleAnalysisPurgeSweep(
+  cfg: ReturnType<typeof loadConfig>,
+  store: Store
+): NodeJS.Timeout {
+  const run = async () => {
+    try {
+      const cutoff = new Date(Date.now() - cfg.analysisRetentionMs).toISOString();
+      await store.purgeAnalysisBefore(cutoff);
+      // eslint-disable-next-line no-console
+      console.log(`analysis-purge swept rows older than ${cutoff}`);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("analysis-purge error:", e);
+    }
+  };
+  void run();
+  const t = setInterval(() => void run(), cfg.analysisPurgeSweepIntervalMs);
+  t.unref();
+  return t;
+}
+
 async function main() {
   const cfg = loadConfig();
   await mkdir(cfg.dataDir, { recursive: true });
@@ -117,6 +142,7 @@ async function main() {
   const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements, mailer: mailer ?? undefined });
   scheduleRejectSweep(cfg, store);
   scheduleDatasetPurgeSweep(cfg, db);
+  scheduleAnalysisPurgeSweep(cfg, store);
   // A container recreate mid-VOD drops the in-memory payment refreshers, so a
   // perceive session the orchestrator still holds stops being funded and would
   // be force-released with `insufficient balance`. Release any the previous

@@ -232,6 +232,15 @@ export interface ServerConfig {
    * more than ~1 sweep interval after its purge window elapses. Default: run
    * hourly (ADAAAA-5398 C4). */
   datasetPurgeSweepIntervalMs: number;
+  /** Analysis data (analysis_events + analysis_session_traces) retention, ms.
+   * The scheduled sweep hard-deletes rows older than this. Default 7 days.
+   * `ANALYSIS_RETENTION_MS`. */
+  analysisRetentionMs: number;
+  /** How often the analysis-data retention purge sweep runs (ms). Must be <=
+   * analysisRetentionMs so stale analysis rows are removed no more than ~1
+   * sweep interval after their window elapses. Default: hourly.
+   * `ANALYSIS_PURGE_SWEEP_INTERVAL_MS`. */
+  analysisPurgeSweepIntervalMs: number;
   /**
    * Increment D (ADAAAA-6467): the stream-start what-to-track warm-up window
    * (seconds) — exactly ONE planner call must deliver a valid TrackingPlan
@@ -369,6 +378,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     rejectTtlMs: Number(env.REJECTED_CLIP_TTL_MS ?? 24 * 60 * 60 * 1000),
     rejectSweepIntervalMs: Number(env.REJECTED_CLIP_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
     datasetPurgeSweepIntervalMs: Number(env.DATASET_PURGE_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
+    analysisRetentionMs: Number(env.ANALYSIS_RETENTION_MS ?? 7 * 24 * 60 * 60 * 1000),
+    analysisPurgeSweepIntervalMs: Number(env.ANALYSIS_PURGE_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
     // Increment D (ADAAAA-6467): stream-start warm-up window + out-of-band
     // re-check cadence for the what-to-track planner. See the ServerConfig
     // field docs for the default rationale (3 s warm-up, 10 s recheck).
