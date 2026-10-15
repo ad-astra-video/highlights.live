@@ -31,7 +31,7 @@ from . import preload  # noqa: E402  (startup model preload)
 from .audio_gate import AudioEnergyGate, frame_energy
 from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
-from .florence import capability, get_detector, record_analyze, resolve_vocabulary, sport_specific_event_type
+from .florence import capability, get_detector, record_analyze, resolve_vocabulary
 from .sam_tracker import HybridTracker
 from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
@@ -68,7 +68,6 @@ _gpu_lock = threading.Lock()
 # (plus the first) logs a single salient heartbeat line at INFO; per-frame
 # detail is emitted only at DEBUG.
 HEARTBEAT_EVERY = 30
-
 
 
 def _trickle_enabled() -> bool:
@@ -257,48 +256,6 @@ def _env_homography() -> np.ndarray | None:
         return None
 
 
-def _ensure_ball_signal(state) -> BallSignalPipeline | None:
-    """Lazily build this session's ball-signal pipeline (idempotent).
-
-    Uses the session's homography when set (control `configure`), else the env
-    default. Returns the pipeline; it never raises -- a calibration problem
-    degrades the signal, never the frame/candidate path.
-    """
-    if state.ball_signal is not None:
-        return state.ball_signal
-    H = state.homography if state.homography is not None else _env_homography()
-    state.homography = H
-    state.ball_signal = BallSignalPipeline(H=H)
-    return state.ball_signal
-
-
-def _ensure_goal_line_detector(state) -> GoalLineDetector | None:
-    """Lazily build this session's goal-line / ball-outcome detector (I2).
-
-    Uses the session's goal-line spec (control `configure`) else the env
-    default. Returns the detector, or None when no spec is configured (then the
-    candidate carries no goalCrossed/ballOutcome). Never raises.
-    """
-    if state.goal_line_spec is None:
-        state.goal_line_spec = _env_goal_line()
-    if state.goal_line_spec is None:
-        return None
-    if state.goal_line_detector is None:
-        state.goal_line_detector = GoalLineDetector(state.goal_line_spec)
-    return state.goal_line_detector
-
-
-def _plan_category(state) -> "str | None":
-    """The session TrackingPlan's `category` (str), else None. Passed through to
-    sport resolution so the plan's sport drives GOAL classification / zones on
-    the plan-first path (ADAAAA-6463)."""
-    plan = getattr(state, "tracking_plan", None)
-    if plan is None:
-        return None
-    cat = getattr(plan, "category", None) if not isinstance(plan, dict) else plan.get("category")
-    return str(cat).strip().lower() if cat else None
-
-
 def _apply_tracking_plan(state, raw_plan) -> "TrackingPlan":
     """Apply an LLM TrackingPlan to a session (ADAAAA-6463, plan-first).
 
@@ -407,11 +364,17 @@ def _record_frame_analysis(state, seq: int, timestamp: float, objects: list[dict
 
 def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[dict, dict | None]:
     """Run one sampled frame through the shared perceive pipeline: Florence or
-    background-diff detection -> tracker.step -> observation (+ candidate).
+    background-diff detection -> tracker.step -> observation.
+
+    ADAAAA-6745 G1a (de-trigger): process_frame records this frame's analysis
+    into the persistent analysis session and emits ONLY the frame observation.
+    It no longer emits an autonomous highlight candidate nor an event-type
+    label — event typing / highlight selection are decided only in the decide
+    runner, which queries the windowed analysis tools instead.
 
     The SAME function backs HTTP /analyze, control `analyze-still`, and (future)
     trickle `video-in` — one `session.step(frame)` per front door (plan §3.5).
-    Returns (observation_dict, candidate_dict|None). Enqueues both onto any SSE
+    Returns (observation_dict, None). Enqueues the observation onto any SSE
     subscribers bound to the session.
     """
     objects: list[dict] = []
@@ -493,43 +456,6 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             len(tracks), len(state.subscribers),
         )
 
-    # Ball-centric candidate signal (INC-2b): per-frame ball track ->
-    # homography velocity + nearest-player possession, attached to the
-    # CandidateEvent as corroborating decide() context (NOT the highlight
-    # arbiter). Fully optional and fault-tolerant: any failure drops the
-    # signal for this frame, never the frame observation or the candidate.
-    ball_signal_fields: dict = {}
-    pipe = _ensure_ball_signal(state)
-    if pipe is not None:
-        try:
-            _bf = pipe.step(objects, _player_tracks(tracks), timestamp)
-            if _bf.velocity is not None:
-                ball_signal_fields["ballVelocity"] = _bf.velocity
-            if _bf.possession is not None:
-                ball_signal_fields["ballPossession"] = _bf.possession
-        except Exception as e:  # noqa: BLE001
-            log.warning("ball signal skipped for frame %s: %s", seq, e)
-
-    # Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome ground-truth signal.
-    # Feed the on-pitch ball position (INC-2b homography velocity) through the
-    # goal-plane classifier and attach goalCrossed / ballOutcome to the
-    # candidate as first-class evidence. Optional and fault-tolerant: no goal-
-    # line spec (or no ball position) => no fields on the candidate.
-    goal_signal_fields: dict = {}
-    goal_det = _ensure_goal_line_detector(state)
-    if goal_det is not None:
-        try:
-            _vel = ball_signal_fields.get("ballVelocity") or {}
-            _pos = None
-            if _vel.get("posXm") is not None and _vel.get("posYm") is not None:
-                _pos = (float(_vel["posXm"]), float(_vel["posYm"]))
-            _gl = goal_det.update(_pos, _vel.get("speedMps"), timestamp)
-            if _gl is not None:
-                goal_signal_fields["goalCrossed"] = bool(_gl.goalCrossed)
-                goal_signal_fields["ballOutcome"] = _gl.ballOutcome
-        except Exception as e:  # noqa: BLE001
-            log.warning("goal-line signal skipped for frame %s: %s", seq, e)
-
     obs = {
         "type": "observation",
         "sessionId": state.session_id,
@@ -588,104 +514,30 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     # detector's top-N; the ring buffer itself is FIFO-capped. Never raises.
     _record_frame_analysis(state, seq, timestamp, objects, tracks)
 
+    # ADAAAA-6745 G1a (de-trigger): perceive NO LONGER emits autonomous
+    # highlight candidates or event-type labels. Event typing and highlight
+    # selection are decided only in the decide runner, which asks the windowed
+    # analysis tools (get_audio_levels / get_tracked_players / detect_objects /
+    # get_captioning) for a bounded window instead. process_frame records the
+    # analysis above and emits only the frame observation.
     events: list[dict] = [obs]
-    # INC-3 / ADAAAA-4327: a detection-in-zone (or ball-velocity-spike) Stage-A
-    # trigger can fire its own candidate independent of the motion-burst gate.
-    # Both are cheap (no GPU), both mark a *candidate only* — the decide()
-    # stage (Gemma) runs later on candidates. The zone trigger folds the INC-2b
-    # ball velocity/possession signals in; each candidate carries them too.
-    zone_trigger = _ensure_zone_trigger(state)
-    zone_cand = None
-    if zone_trigger is not None:
-        try:
-            zone_cand = zone_trigger.update(tracks, ball_signal_fields or None, timestamp, ball_objects=objects)
-        except Exception as e:  # noqa: BLE001  (a zone hiccup never drops a frame)
-            log.warning("zone trigger skipped for frame %s: %s", seq, e)
-
-    cand = state.tracker.candidate(ts=timestamp)
-    cand_dict = None
-    if cand is not None:
-        # ADAAAA-4222/4193: the tracker anchors the strike but emits a generic
-        # KILL/MOVE motion type. On a goal-scoring sport (soccer) that label
-        # conflicts with the scene and the decide model hard-rejects it
-        # ("this is soccer, not a KILL event"), so no GOAL clip is ever cut.
-        # Classify the anchored candidate with the sport-specific event type
-        # (GOAL) now that the session knows gameHint / the plan's category.
-        event_type = sport_specific_event_type(
-            state.game_hint, cand.event_type, category=_plan_category(state)
-        )
-        # Return a plain dict (JSON-serializable) so callers can embed it in a
-        # response/ack without reaching into the dataclass.
-        cand_dict = {
-            "eventType": event_type,
-            "timestamp": cand.timestamp,
-            "trackId": cand.track_id,
-            **ball_signal_fields,
-            **goal_signal_fields,
-        }
-        log.info(
-            "candidate emitted session=%s seq=%s event=%s ts=%.2f track=%s",
-            state.session_id, seq, event_type, cand.timestamp, cand.track_id,
-        )
-        events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
-    elif zone_cand is not None:
-        # No motion burst this frame, but the detection-in-zone trigger fired.
-        # Classify to the sport (GOAL on a goal-scoring sport) so decide() sees
-        # a plausible event type; carry ball velocity/possession corroboration.
-        event_type = sport_specific_event_type(
-            state.game_hint, zone_cand["eventType"], category=_plan_category(state)
-        )
-        cand_dict = {
-            "eventType": event_type,
-            "timestamp": zone_cand["timestamp"],
-            "trigger": zone_cand["trigger"],
-            **ball_signal_fields,
-            **goal_signal_fields,
-        }
-        log.info(
-            "zone trigger fired session=%s seq=%s event=%s ts=%.2f trigger=%s",
-            state.session_id, seq, event_type, zone_cand["timestamp"], zone_cand.get("trigger"),
-        )
-        events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
-    # Scoreboard OCR / score-delta confirmation (ADAAAA-6360, decide-leg I3).
-    # Bounded to candidate anchor frames (Stage-A cooldown) — never every frame
-    # — so it adds per-candidate GPU only. A change in the displayed score
-    # across the candidate window is a hard, independent goal confirmation; its
-    # presence/absence is forwarded to decide. OCR failure degrades to [] (weak
-    # / absent evidence); it never drops the frame or the candidate.
-    if cand_dict is not None and detector is not None and state.last_rgb is not None:
-        try:
-            ocr_lines = detector.ocr(state.last_rgb) or []
-        except Exception as e:  # noqa: BLE001
-            log.warning("scoreboard OCR skipped for frame %s: %s", seq, e)
-            ocr_lines = []
-        obs["ocr"] = ocr_lines
-        cand_ts = float(cand_dict["timestamp"])
-        score = parse_ocr_score(ocr_lines)
-        state.scoreboard_tracker.record(cand_ts, score)
-        if state.scoreboard_tracker.changed(cand_ts):
-            cand_dict["scoreBoardChanged"] = True
     for q in state.subscribers:
         for e in events:
             try:
                 q.put_nowait(e)
             except Exception:
                 pass
-    # DEBUG per-frame summary (ADAAAA-6525): detection labels/scores, track
-    # state, zone-trigger + ball/goal outcome, candidate id. Only at DEBUG.
+    # DEBUG per-frame summary (ADAAAA-6525): detection labels/scores + track
+    # state. Only at DEBUG.
     log.debug(
-        "frame done session=%s seq=%s ts=%.2f detections=%s tracks=%s zone=%s ball=%s goal=%s candidate=%s",
+        "frame done session=%s seq=%s ts=%.2f detections=%s tracks=%s",
         state.session_id,
         seq,
         timestamp,
         [(o.get("label"), round(float(o.get("confidence", 0.0)), 2)) for o in objects[:12]],
         [(t.track_id, getattr(t, "kind", ""), getattr(t, "label", "")) for t in tracks[:MAX_TRACKS]],
-        (zone_cand or {}).get("trigger"),
-        ball_signal_fields,
-        goal_signal_fields,
-        (cand_dict or {}).get("eventType"),
     )
-    return obs, cand_dict
+    return obs, None
 
 
 def _decode_audio(b64: str) -> np.ndarray:
