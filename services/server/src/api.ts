@@ -763,6 +763,83 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         /* tap ended early — video leg unaffected */
       }
     })();
+    // ADAAAA-6748 G1b-2: persist the perceive persistent-session per-stream
+    // analysis to analysis_events during the VOD pass, with NO webapp hop (a
+    // VOD has no browser capture). Mirrors the media-server live relay: poll
+    // /analysis/state to advance a cursor, then query each windowed tool over
+    // the un-replayed window and write bounded batches via
+    // store.persistAnalysisEvents. Best-effort + load-capped: a perceive blip
+    // logs and never stalls the frame pass; total rows are capped at
+    // vodAnalysisMaxSamples. The pass runs on a real GPU behind a slow /analyze
+    // (~1.4s/frame), so this loop ticks many times over a VOD.
+    const ANALYSIS_TOOLS: { tool: string; kind: AnalysisEvent["kind"] }[] = [
+      { tool: "get_audio_levels", kind: "audio_energy" },
+      { tool: "get_tracked_players", kind: "tracked_objects" },
+      { tool: "detect_objects", kind: "detection" },
+      { tool: "get_captioning", kind: "caption" },
+    ];
+    const analysisStop = { stopped: false };
+    const analysisLoop = (async () => {
+      // Defensive: the PipelineClient contract declares analysisState/Query,
+      // but a test fake (or an older in-flight adapter) may not. Degrade to a
+      // no-op rather than throw out of the VOD pass's analysis loop.
+      if (
+        typeof (adapter as any)?.analysisState !== "function" ||
+        typeof (adapter as any)?.analysisQuery !== "function"
+      ) {
+        return;
+      }
+      let samples = 0;
+      let lastEnd = 0;
+      let idle = 0;
+      while (!analysisStop.stopped && samples < cfg.vodAnalysisMaxSamples) {
+        const sid = slot.current?.sessionId;
+        if (analysisStop.stopped || slot.stopped || !sid) break;
+        const state = await adapter.analysisState(sid).catch(() => null);
+        const lastTs = typeof state?.lastTs === "number" ? state.lastTs : 0;
+        if (lastTs <= lastEnd) {
+          // Session has not advanced past the cursor yet. A brief real-time
+          // backoff lets the video leg keep recording; bounded so a stalled
+          // session (or an already-finished pass) never spins forever.
+          if (++idle > 80) break;
+          await new Promise((r) => setTimeout(r, 250));
+          continue;
+        }
+        idle = 0;
+        const end = lastTs;
+        const batch: AnalysisEvent[] = [];
+        for (const { tool, kind } of ANALYSIS_TOOLS) {
+          if (samples + batch.length >= cfg.vodAnalysisMaxSamples) break;
+          const env = await adapter
+            .analysisQuery(sid, tool, { start: lastEnd, end, maxPoints: 8 })
+            .catch(() => null);
+          if (env && typeof env === "object") {
+            batch.push({
+              id: randomUUID(),
+              jobId,
+              sessionId: sid,
+              streamId: jobId,
+              timestamp: typeof (env as any)?.window?.end === "number" ? (env as any).window.end : end,
+              kind,
+              data: env,
+            });
+          }
+        }
+        if (batch.length) {
+          try {
+            await store.persistAnalysisEvents(batch);
+            samples += batch.length;
+          } catch (e) {
+            console.error(`[vod:${jobId}] persist analysis events failed: ${(e as Error)?.message || e}`);
+          }
+        }
+        lastEnd = Math.max(lastEnd, end);
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      if (samples > 0) {
+        console.log(`[vod:${jobId}] persisted ${samples} analysis_event rows (windowed VOD analysis)`);
+      }
+    })();
     let outcome: AnalyzeOutcome;
     try {
       outcome = await analyzeJob(adapter, iter, cut, anaCfg, onEvent, initial, shared, {
@@ -772,6 +849,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         isStopped: () => slot.stopped,
       });
     } finally {
+      analysisStop.stopped = true;
+      await analysisLoop;
       await audioLoop;
       livePerceiveSlots.delete(job.id);
     }

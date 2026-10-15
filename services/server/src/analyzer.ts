@@ -239,6 +239,20 @@ export interface PipelineClient {
    * a 404 (fresh session after re-reserve) is dropped, never fatal.
    */
   controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<void>;
+  /** ADAAAA-6748 G1b-2: query the perceive persistent AnalysisSession with a
+   * bounded windowed analysis tool (get_audio_levels / get_tracked_players /
+   * detect_objects / get_captioning). Mirrors the media-server live relay so a
+   * VOD (no webapp hop) can persist per-stream analysis. Returns the tool's
+   * schema-stable envelope {tool, window, count, truncated, data} or null on
+   * any failure (never fatal to the frame pass). */
+  analysisQuery(
+    sessionId: string,
+    tool: string,
+    window: { start: number; end: number; maxPoints: number }
+  ): Promise<any | null>;
+  /** Live AnalysisSession state snapshot (perceive `/analysis/state`) — the
+   * current lastTs/buffer-occupancy used to advance the VOD sampling cursor. */
+  analysisState(sessionId: string): Promise<any | null>;
   /**
    * Decide whether a candidate is a highlight. `imageB64` is the candidate
    * frame so the Gemma 12B QAT decide runner sees the actual moment (vision),

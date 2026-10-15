@@ -135,6 +135,13 @@ export interface ServerConfig {
   analysisPostWindowS: number;
   vodAnalysisPreWindowS: number;
   vodAnalysisPostWindowS: number;
+  /** ADAAAA-6748 G1b-2: VOD per-stream analysis persistence. The windowed
+   * tools are sampled in bounded stream-time steps (`vodAnalysisSampleStepS`)
+   * over the recorded window, and capped at `vodAnalysisMaxSamples` rows so a
+   * long VOD never fires a per-frame write. `VOD_ANALYSIS_SAMPLE_STEP_S`
+   * (default 5), `VOD_ANALYSIS_MAX_SAMPLES` (default 80). */
+  vodAnalysisSampleStepS: number;
+  vodAnalysisMaxSamples: number;
   /** ADAAAA-6314 Path 2: forward the surrounding audio clip for LIVE trigger
    * candidates so the gemma decide prompt gets ASR'd audio context. Default off
    * so the deployed live baseline sends no new payload until an operator enables
@@ -334,6 +341,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     analysisPostWindowS: Number(env.ANALYSIS_POST_WINDOW_S ?? 3),
     vodAnalysisPreWindowS: Number(env.VOD_ANALYSIS_PRE_WINDOW_S ?? 3),
     vodAnalysisPostWindowS: Number(env.VOD_ANALYSIS_POST_WINDOW_S ?? 5),
+    vodAnalysisSampleStepS: Number(env.VOD_ANALYSIS_SAMPLE_STEP_S ?? 5),
+    vodAnalysisMaxSamples: Number(env.VOD_ANALYSIS_MAX_SAMPLES ?? 80),
     // I4 / ADAAAA-6361: live-path decide() carries the surrounding audio clip so
     // Gemma gets auditory context, matching VOD. Opt out with LIVE_AUDIO_CONTEXT=0.
     audioContext: env.LIVE_AUDIO_CONTEXT !== "0",
