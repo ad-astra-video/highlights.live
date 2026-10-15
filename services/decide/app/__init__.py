@@ -514,7 +514,17 @@ def create_app() -> FastAPI:
             ctx = dict(req.context or {})
             if req.gameHint and "gameHint" not in ctx:
                 ctx["gameHint"] = req.gameHint
-            plan = plan_tracking_with_gemma(
+            # ADAAAA-6709: the planner inference is a blocking sync call
+            # (httpx to the vLLM server). Called directly it stalls uvicorn's
+            # single event loop for the whole run (up to PLANNER_TIMEOUT_S),
+            # so the go-livepeer orchestrator's /health probe (runners.json
+            # health_url=/health) times out and marks the decide runner
+            # `unavailable` -> decide requests intermittently 404 "runner not
+            # found". Run it in a worker thread so /health stays responsive
+            # during inference, exactly like the /highlight gemma branch
+            # (ADAAAA-6373) does.
+            plan = await asyncio.to_thread(
+                plan_tracking_with_gemma,
                 intent=req.intent,
                 category=req.category,
                 frame={"base64": req.image} if req.image else None,
