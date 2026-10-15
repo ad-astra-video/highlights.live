@@ -20,14 +20,15 @@ from .logging_setup import configure_logging  # noqa: E402  (defines log above)
 configure_logging()
 
 import numpy as np
-from fastapi import APIRouter, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from .analysis_session import AnalysisSession
 from . import preload  # noqa: E402  (startup model preload)
-from .audio_gate import AudioEnergyGate
+from .audio_gate import AudioEnergyGate, frame_energy
 from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
 from .florence import capability, get_detector, record_analyze, resolve_vocabulary, sport_specific_event_type
@@ -364,6 +365,46 @@ def _player_tracks(tracks) -> dict:
     return out
 
 
+def _record_frame_analysis(state, seq: int, timestamp: float, objects: list[dict], tracks) -> None:
+    """Record one frame's analysis state into the session's persistent
+    analysis buffers (ADAAAA-6738 G1). Fault-tolerant: any failure is logged
+    and swallowed — analysis recording must never drop a frame or a candidate.
+
+    - objects: the raw detector detections (label/confidence/bbox), passed
+      through as-is but capped to the first 16 per frame (schema-stable).
+    - players: the on-screen player tracks (ball excluded) as bounded
+      {trackId, bbox, label} dicts, capped to 8 per frame.
+    """
+    try:
+        player_boxes = _player_tracks(tracks)
+        players = [
+            {
+                "trackId": tid,
+                "bbox": [float(v) for v in box[:4]],
+            }
+            for tid, box in list(player_boxes.items())[:8]
+        ]
+        # Keep the label alongside the box when the track carries one (the
+        # in-roster label the user sees) so a windowed query can answer
+        # "which players" by name, not just a box.
+        _labels = {getattr(t, "track_id", None): (getattr(t, "label", "") or "") for t in tracks}
+        for p in players:
+            _lab = _labels.get(p["trackId"])
+            if _lab:
+                p["label"] = _lab
+        objs = [
+            {
+                "label": str(o.get("label", "") or ""),
+                "confidence": float(o.get("confidence", 0.0) or 0.0),
+                "bbox": list(o.get("bbox") or [])[:4],
+            }
+            for o in (objects or [])[:16]
+        ]
+        state.analysis.record_frame(float(timestamp), int(seq), players=players, objects=objs)
+    except Exception as e:  # noqa: BLE001  (analysis recording never drops a frame)
+        log.debug("analysis frame record skipped session=%s seq=%s: %s", state.session_id, seq, e)
+
+
 def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[dict, dict | None]:
     """Run one sampled frame through the shared perceive pipeline: Florence or
     background-diff detection -> tracker.step -> observation (+ candidate).
@@ -540,6 +581,13 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     }
     state.recent_frames.append({"seq": seq, "timestamp": timestamp, "tracks": obs["tracks"]})
 
+    # ADAAAA-6738 G1: record this frame's analysis into the persistent
+    # analysis session so the windowed tools (detect_objects /
+    # get_tracked_players) can answer bounded window queries. Bounded: players
+    # are capped by _player_tracks (non-ball, area-filtered) and objects by the
+    # detector's top-N; the ring buffer itself is FIFO-capped. Never raises.
+    _record_frame_analysis(state, seq, timestamp, objects, tracks)
+
     events: list[dict] = [obs]
     # INC-3 / ADAAAA-4327: a detection-in-zone (or ball-velocity-spike) Stage-A
     # trigger can fire its own candidate independent of the motion-burst gate.
@@ -667,6 +715,20 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> dict |
     samples = _decode_audio(samples_b64)
     sig = state.audio_gate.update(samples, ts=timestamp)
     state.audio_seq = seq if seq >= 0 else state.audio_seq + 1
+    # ADAAAA-6738 G1: record this chunk's audio-energy state into the persistent
+    # analysis session (continuous curve, not just fire events) so the
+    # get_audio_levels windowed tool answers the stream's energy over any
+    # window. Pure DSP read of what the gate already computed — never touches
+    # the GPU. Never raises (a recording hiccup must not drop the gate path).
+    try:
+        state.analysis.record_audio(
+            float(timestamp),
+            frame_energy(samples),
+            float(state.audio_gate.baseline) if state.audio_gate.baseline is not None else 0.0,
+            kind=(sig.kind if sig is not None else ""),
+        )
+    except Exception as e:  # noqa: BLE001
+        log.debug("analysis audio record skipped session=%s seq=%s: %s", state.session_id, seq, e)
     if sig is None:
         return None
     # AudioSignalSchema (packages/events) camelCase keys.
@@ -815,6 +877,29 @@ def handle_control(state, msg: dict) -> dict:
     if ctype == "clip":
         # Clip cutting is CPU/worker-side (server ffmpeg); runner just acks.
         return {"type": "ack", "ok": True, "cmd": "clip", "start": msg.get("start"), "end": msg.get("end")}
+    if ctype == "caption":
+        # ADAAAA-6738 G1: feed an ASR/scoreboard caption line into the
+        # persistent analysis session so the get_captioning windowed tool has a
+        # stream-bound caption window. Best-effort + fault-tolerant: a bad
+        # payload is reported, never fatal. `lines` may be a single {ts,text}
+        # or a small bounded list (one ASR window).
+        raw = msg.get("lines")
+        if isinstance(raw, (dict, list)):
+            items = raw if isinstance(raw, list) else [raw]
+            added = 0
+            for it in items[:32]:
+                if not isinstance(it, dict):
+                    continue
+                try:
+                    text = str(it.get("text", "") or "")
+                    ts = float(it.get("ts", msg.get("timestamp", 0.0)) or 0.0)
+                except Exception:
+                    continue
+                if text:
+                    state.analysis.record_caption(ts, text)
+                    added += 1
+            return {"type": "ack", "ok": True, "cmd": "caption", "added": added}
+        return {"type": "ack", "ok": False, "cmd": "caption", "error": "lines required: {ts, text} or [{ts, text}, ...]"}
     return {"type": "ack", "ok": False, "cmd": ctype or "?", "error": "unknown control type"}
 
 
@@ -1054,6 +1139,113 @@ def create_app() -> FastAPI:
             registry.drop(sid)
             await _stop_trickle(sid)
         return {"closed": sid}
+
+    # ------------------------------------------------------------------
+    # ADAAAA-6738 G1: persistent-session windowed query tools + live state.
+    # The four tools (get_audio_levels / get_tracked_players / detect_objects /
+    # get_captioning) answer a requested [start, end] window with a bounded,
+    # schema-stable result. This is the recurrent-call shape the decide watcher
+    # and the operator UI use INSTEAD of perceive emitting autonomous
+    # candidates — the consumer asks "what did the stream look/sound like in
+    # these N seconds?" and gets a capped answer. /analysis/state surfaces the
+    # live analysis state for the webapp.
+    # ------------------------------------------------------------------
+    _ANALYSIS_TOOLS = ("get_audio_levels", "get_tracked_players", "detect_objects", "get_captioning")
+    _WINDOW_MAX_SECONDS = 120.0  # hard cap on a query window; a wider ask is clamped
+
+    def _analysis_window(state, start: float | None, end: float | None) -> tuple[float, float]:
+        """Resolve a [start, end] window in stream seconds.
+
+        Defaults (when a bound is omitted): a trailing 10 s window ending at
+        the session's last-seen timestamp (falling back to `now`-ish 0 when the
+        session has seen nothing). A window wider than `_WINDOW_MAX_SECONDS` is
+        clamped (start moves up) so a tool is never handed an unbounded span.
+        """
+        last = state.analysis.last_ts
+        last = last if (last is not None and last > 0) else 0.0
+        if end is None:
+            end = last
+        if start is None:
+            start = max(0.0, end - 10.0)
+        start = float(start)
+        end = float(end)
+        if end < start:
+            start, end = end, start
+        if end - start > _WINDOW_MAX_SECONDS:
+            start = end - _WINDOW_MAX_SECONDS
+        return start, end
+
+    @router.get("/analysis/tools")
+    async def analysis_tools():
+        """Schema-stable catalog of the windowed analysis tools (for the
+        webapp / decide watcher to render the available tools)."""
+        return {
+            "tools": [
+                {
+                    "name": "get_audio_levels",
+                    "description": "Audio-energy curve (peak + baseline RMS, 0..1) over the window.",
+                    "pointShape": {"ts": "float", "peakEnergy": "float", "baselineEnergy": "float", "kind": "str?"},
+                },
+                {
+                    "name": "get_tracked_players",
+                    "description": "Per-frame on-screen player tracks (ball excluded) over the window.",
+                    "pointShape": {"ts": "float", "seq": "int", "players": "[{trackId, bbox, label?}]", "count": "int"},
+                },
+                {
+                    "name": "detect_objects",
+                    "description": "Per-frame object detections (label/confidence/bbox) over the window.",
+                    "pointShape": {"ts": "float", "seq": "int", "objects": "[{label, confidence, bbox}]", "count": "int"},
+                },
+                {
+                    "name": "get_captioning",
+                    "description": "ASR / scoreboard caption lines over the window.",
+                    "pointShape": {"ts": "float", "text": "str"},
+                },
+            ]
+        }
+
+    @router.post("/analysis/{tool}")
+    async def analysis_tool(
+        tool: str,
+        livepeer_session_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+        start: float | None = Query(default=None),
+        end: float | None = Query(default=None),
+        maxPoints: int | None = Query(default=None),
+    ):
+        """Run one windowed analysis tool for a reserved perceive session.
+
+        Binds to an EXISTING session (same rule as /ws / /control). Body/query
+        carries the requested window + optional point cap; the response is the
+        tool's bounded, schema-stable envelope (tool, window, count,
+        truncated, data). Unknown tool -> 404; missing session -> 404.
+        """
+        if tool not in _ANALYSIS_TOOLS:
+            raise HTTPException(status_code=404, detail=f"unknown analysis tool: {tool}")
+        sid = _read_session_id(livepeer_session_id, x_session_id)
+        state = registry.get(sid) if sid else None
+        if state is None:
+            raise HTTPException(status_code=404, detail="no such session")
+        s, e = _analysis_window(state, start, end)
+        fn = getattr(state.analysis, tool)
+        if maxPoints is None:
+            return fn(s, e)
+        return fn(s, e, max_points=maxPoints)
+
+    @router.get("/analysis/state")
+    async def analysis_state(
+        livepeer_session_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ):
+        """Live analysis state for the webapp (buffer occupancy + window bounds)."""
+        sid = _read_session_id(livepeer_session_id, x_session_id)
+        state = registry.get(sid) if sid else None
+        if state is None:
+            raise HTTPException(status_code=404, detail="no such session")
+        st = state.analysis.state()
+        st["windowMaxSeconds"] = _WINDOW_MAX_SECONDS
+        st["tools"] = list(_ANALYSIS_TOOLS)
+        return st
 
     from contextlib import asynccontextmanager
 
