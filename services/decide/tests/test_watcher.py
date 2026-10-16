@@ -134,7 +134,7 @@ def test_watcher_decides_tools_and_only_decide_seeds_hypothesis():
     assert s.hypotheses_seeded == 1
     # every tool call was traced to the (fake) server sink
     assert len(traces) == len(row.tools_called)
-    assert all(t["type"] == "watcher_tool_call" and t["resultOk"] for t in traces)
+    assert all(t["at"] >= 0 and isinstance(t["request"], dict) and "response" in t for t in traces)
 
 
 # --- Gate: event typing only in decide (rule brain); no tool-only event ----
@@ -155,6 +155,8 @@ def test_trace_record_shape_roundtrips_through_to_dict():
     s.ingest_many(_frames_through(6.0))
     s.step(6.0)
     rec = traces[0]
-    assert rec["type"] == "watcher_tool_call"
+    assert isinstance(rec["at"], int) and rec["at"] >= 0
+    assert isinstance(rec["request"], dict) and rec["request"]["tool"] == rec["tool"]
+    assert isinstance(rec["window"], dict) and "start" in rec["window"] and "end" in rec["window"]
+    assert "response" in rec
     assert rec["tool"] in ("get_audio_levels", "get_tracked_players", "detect_objects", "get_captioning")
-    assert isinstance(rec["resultOk"], bool)

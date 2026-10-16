@@ -331,7 +331,7 @@ class WatcherSession:
                     result = None
             tool_results[tool] = result
             if self._trace is not None:
-                self._trace(self._trace_record(tool, start, end, result))
+                self._trace(self._trace_record(tool, start, end, cfg.max_frame_count, result))
 
         event, event_class, is_highlight, score, hypothesis, text = self._brain(picked, tool_results, cfg)
         if event != "NO_EVENT":
@@ -394,14 +394,19 @@ class WatcherSession:
         }
 
     # -- trace -------------------------------------------------------------
-    def _trace_record(self, tool: str, start: float, end: float, result: Optional[Dict]) -> Dict:
+    def _trace_record(self, tool: str, start: float, end: float, max_points: int, result: Optional[Dict]) -> Dict:
+        # ADAAAA-6748 G1b-2: emit the AnalysisSessionTrace shape the server's
+        # trace-ingest schema (packages/events AnalysisSessionTraceSchema) requires:
+        # `at` = epoch ms + a `request` envelope. The earlier {type, ts, result,
+        # resultOk} shape lacked those, so the server 422'd and dropped every VOD
+        # trace (ADAAAA-6753). Extra keys (resultOk) are stripped by zod.
         return {
-            "type": "watcher_tool_call",
             "sessionId": self.session_id,
             "streamId": self.stream_id,
             "tool": tool,
             "window": {"start": start, "end": end},
-            "ts": time.time(),
-            "result": result,
+            "at": int(time.time() * 1000),
+            "request": {"tool": tool, "start": start, "end": end, "maxPoints": max_points},
+            "response": result,
             "resultOk": result is not None,
         }
