@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildTestApp } from "./helpers";
+import { buildTestApp, waitForJob } from "./helpers";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-test-"));
 const videoPath = path.join(tmp, "test.mp4");
@@ -43,11 +43,17 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
       headers: { authorization: `Bearer ${userToken}` },
       payload: { videoPath, gameHint: "valorant" },
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(202);
     const body = res.json();
-    expect(body.framesAnalyzed).toBeGreaterThan(0);
-    expect(body.job.status).toBe("done");
+    expect(body.accepted).toBe(true);
+    expect(["queued", "active"]).toContain(body.job.status);
     expect(body.job.ownerId).toBeTruthy();
+    expect(body.job.id).toBeTruthy();
+    // ADAAAA-6760: the job is dispatched fire-and-forget; poll to a terminal
+    // state before asserting the pipeline's output.
+    const done = await waitForJob(app, body.job.id, userToken);
+    expect(done.job.status).toBe("done");
+    expect(done.job.framesAnalyzed).toBeGreaterThan(0);
 
     // user sees their highlights
     const hl = await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${userToken}` } });
@@ -122,7 +128,10 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
       headers: { authorization: `Bearer ${userToken}` },
       payload: { videoPath, gameHint: "valorant" },
     });
-    expect(gen.statusCode).toBe(200);
+    expect(gen.statusCode).toBe(202);
+    expect(gen.json().accepted).toBe(true);
+    // ADAAAA-6760: wait for the background pipeline so the clip is persisted.
+    await waitForJob(app, gen.json().job.id, userToken);
     const myhl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${userToken}` } })).json().highlights;
     expect(myhl.length).toBe(1);
 
@@ -206,8 +215,12 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
       headers: { authorization: `Bearer ${userToken}` },
       payload: { videoPath, gameHint: "valorant" },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().job.status).toBe("done");
+    expect(res.statusCode).toBe(202);
+    const jobBody = res.json();
+    expect(jobBody.accepted).toBe(true);
+    expect(["queued", "active"]).toContain(jobBody.job.status);
+    // Wait for the background pipeline so the clip is published to /feed.
+    await waitForJob(app, jobBody.job.id, userToken);
 
     // No admin review performed — the clip is already published.
     const feed = await app.inject({ method: "GET", url: "/feed" });
@@ -228,8 +241,11 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
       headers: { authorization: `Bearer ${userToken}` },
       payload: { videoPath, gameHint: "valorant" },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().job.status).toBe("done");
+    expect(res.statusCode).toBe(202);
+    const jobBody = res.json();
+    expect(jobBody.accepted).toBe(true);
+    // Wait for the background pipeline so the pending clip is persisted.
+    await waitForJob(app, jobBody.job.id, userToken);
 
     const feed = await app.inject({ method: "GET", url: "/feed" });
     expect(feed.json().highlights.length).toBe(0); // not published without review
@@ -281,6 +297,8 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
       payload: { videoPath },
     });
     const jobId = job.json().job.id;
+    // ADAAAA-6760: wait for the background pipeline before reading observations/frames.
+    await waitForJob(app, jobId, token);
 
     const obs = await app.inject({ method: "GET", url: `/jobs/${jobId}/observations`, headers: { authorization: `Bearer ${token}` } });
     expect(obs.statusCode).toBe(200);
@@ -556,13 +574,19 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
       headers: { authorization: `Bearer ${token}`, "content-type": contentType },
       payload,
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(202);
     const body = res.json();
-    expect(body.framesAnalyzed).toBeGreaterThan(0);
-    expect(body.job.status).toBe("done");
+    expect(body.accepted).toBe(true);
+    expect(["queued", "active"]).toContain(body.job.status);
     expect(body.job.source).toBe("file");
+    expect(body.job.ownerId).toBeTruthy();
+    expect(body.job.id).toBeTruthy();
     // File landed at dataDir/uploads/<jobId>/<safe-filename> (spaces kept, no path traversal).
     expect(existsSync(path.join(cfg.dataDir, "uploads", body.job.id, "my clip.mp4"))).toBe(true);
+    // ADAAAA-6760: wait for the background pipeline to finish before asserting output.
+    const done = await waitForJob(app, body.job.id, token);
+    expect(done.job.status).toBe("done");
+    expect(done.job.framesAnalyzed).toBeGreaterThan(0);
     // Generated a highlight through the same pipeline as a local path source.
     const hl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
     expect(hl.length).toBe(1);
@@ -620,9 +644,10 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
       headers: { authorization: `Bearer ${token}`, "content-type": contentType },
       payload,
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(202);
     const body = res.json();
-    expect(body.framesAnalyzed).toBeGreaterThan(0);
+    expect(body.accepted).toBe(true);
+    expect(body.job.id).toBeTruthy();
     const stored = path.join(cfg.dataDir, "uploads", body.job.id, "nearcap.mp4");
     expect(existsSync(stored)).toBe(true);
     expect(statSync(stored).size).toBe(sent.length); // no truncation of a below-cap file
@@ -649,9 +674,10 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
       headers: { authorization: `Bearer ${token}`, "content-type": contentType },
       payload,
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(202);
     const body = res.json();
-    expect(body.framesAnalyzed).toBeGreaterThan(0);
+    expect(body.accepted).toBe(true);
+    expect(body.job.id).toBeTruthy();
     const stored = path.join(cfg.dataDir, "uploads", body.job.id, "big clip.mp4");
     expect(statSync(stored).size).toBe(sent.length); // NOT truncated to 1,048,576
     await app.close();
@@ -702,7 +728,8 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
       headers: { authorization: `Bearer ${token}`, "content-type": contentType },
       payload,
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(202);
+    expect(res.json().accepted).toBe(true);
     const jobId = res.json().job.id;
     expect(existsSync(path.join(cfg.dataDir, "uploads", jobId, "evil.mp4"))).toBe(true);
     await app.close();
@@ -743,8 +770,11 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { videoPath: winPath, gameHint: "valorant" },
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(202);
     const body = res.json();
+    expect(body.accepted).toBe(true);
+    // ADAAAA-6760: wait for the background pipeline so the trimmed clip exists.
+    await waitForJob(app, body.job.id, token);
     const hl = (await app.inject({
       method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` },
     })).json().highlights;
@@ -834,10 +864,10 @@ describe("VOD resumable/chunked upload rail (init/chunk/complete, ADAAAA-5714)",
     // (never blocks past the edge request timeout); the pipeline runs in the
     // background. Assert it returned an active job, then poll to a terminal
     // state — the same contract the webapp relies on.
-    expect(done.statusCode).toBe(200);
+    expect(done.statusCode).toBe(202);
     const body = done.json();
+    expect(body.accepted).toBe(true);
     expect(["active", "queued", "done"]).toContain(body.job.status);
-    expect(body.status).toBe("active");
     // Reassembled file is byte-for-byte identical to the source.
     const stored = path.join(cfg.dataDir, "uploads", uploadId, "chunked clip.mp4");
     expect(statSync(stored).size).toBe(sent.length);
@@ -931,6 +961,61 @@ describe("VOD resumable/chunked upload rail (init/chunk/complete, ADAAAA-5714)",
     const res = await app.inject({ method: "GET", url: "/config" });
     expect(res.statusCode).toBe(200);
     expect(res.json().vodChunkBytes).toBe(4096);
+    await app.close();
+  });
+});
+
+describe("GET /jobs (async-VOD job queue, ADAAAA-6760)", () => {
+  it("returns only the caller's jobs, newest first, capped on limit", async () => {
+    const { app } = await buildTestApp();
+    const a = await register(app, "getjobs-a@test.dev", "password123");
+    const b = await register(app, "getjobs-b@test.dev", "password123");
+
+    // userA submits two jobs (dispatched fire-and-forget -> 202), userB one.
+    const j1 = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${a}` },
+      payload: { videoPath, gameHint: "valorant" },
+    });
+    expect(j1.statusCode).toBe(202);
+    const j2 = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${a}` },
+      payload: { videoPath, gameHint: "dota" },
+    });
+    expect(j2.statusCode).toBe(202);
+    await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${b}` },
+      payload: { videoPath, gameHint: "csgo" },
+    });
+
+    // userA sees exactly its own two jobs, newest first, no userB leak.
+    const ra = await app.inject({ method: "GET", url: "/jobs", headers: { authorization: `Bearer ${a}` } });
+    expect(ra.statusCode).toBe(200);
+    const jobsA = ra.json().jobs;
+    expect(jobsA.length).toBe(2);
+    expect(jobsA.every((j: any) => j.ownerId)).toBe(true);
+    const idsA = jobsA.map((j: any) => j.id);
+    expect(idsA).toContain(j1.json().job.id);
+    expect(idsA).toContain(j2.json().job.id);
+    // Newest first: the second submission is the newest.
+    expect(idsA[0]).toBe(j2.json().job.id);
+
+    // userB sees only its own job, never userA's.
+    const rb = await app.inject({ method: "GET", url: "/jobs", headers: { authorization: `Bearer ${b}` } });
+    expect(rb.statusCode).toBe(200);
+    const jobsB = rb.json().jobs;
+    expect(jobsB.length).toBe(1);
+    expect(jobsB[0].ownerId).toBeTruthy();
+    expect(idsA).not.toContain(jobsB[0].id);
+
+    // limit caps the response (default 50; explicitly cap small).
+    const rl = await app.inject({ method: "GET", url: "/jobs?limit=1", headers: { authorization: `Bearer ${a}` } });
+    expect(rl.json().jobs.length).toBe(1);
     await app.close();
   });
 });

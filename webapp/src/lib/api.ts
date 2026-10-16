@@ -189,47 +189,12 @@ async function uploadVideoChunked<T = any>({ file, gameHint, preferLabels, onPro
     body: JSON.stringify({ uploadId: init.uploadId, size: file.size }),
   });
   if (!compRes.ok) throw await httpError(compRes, token);
-  // The server finalizes the file + creates the job and returns immediately
-  // (running the analyze pipeline synchronously would outlast the edge request
-  // timeout on a long VOD). Poll GET /jobs/:id to a terminal state so the
-  // caller still gets the fully-processed job — same contract as single-shot.
-  const submitted = (await compRes.json()) as any;
-  const st = submitted?.job?.status;
-  if (st === "done" || st === "failed" || st === "cancelled") return submitted as T;
-  return (await pollJob<T>(submitted?.job?.id, token)) as T;
-}
-
-/** Poll a job until it reaches a terminal state. Timing out (rather than the
- * request blocking server-side) keeps the upload from tripping the edge
- * request timeout; a long VOD processes in the background and we return once
- * it's done, or throw a clear error if it failed. */
-async function pollJob<T = any>(jobId: string, token: string | null): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (token) headers["authorization"] = `Bearer ${token}`;
-  const startedAt = Date.now();
-  const timeoutMs = 45 * 60 * 1000; // same ballpark as the single-shot pipeline
-  while (Date.now() - startedAt < timeoutMs) {
-    await new Promise((r) => setTimeout(r, 2000));
-    const res = await fetch(`/jobs/${jobId}`, { headers });
-    if (!res.ok) throw await httpError(res, token);
-    const data = (await res.json()) as any;
-    const st = data?.job?.status;
-    if (st === "done") return data as T;
-    if (st === "failed") {
-      const err = new Error("Upload finished but the video couldn't be analyzed — try again or paste a download URL instead.") as ApiError;
-      err.status = 0;
-      throw err;
-    }
-    if (st === "cancelled") {
-      const err = new Error("Upload was cancelled.") as ApiError;
-      err.status = 0;
-      throw err;
-    }
-    // still active/queued -> keep polling
-  }
-  const err = new Error("Upload is still processing — check your highlights shortly.") as ApiError;
-  err.status = 0;
-  throw err;
+  // The server finalizes the file + creates the async VOD job and returns 202
+  // { job, accepted: true } immediately — the analyze pipeline runs in the
+  // background (ADAAAA-6760). Resolve on the submitted body right away so the
+  // upload card is freed and the Processing-jobs surface tracks the job from
+  // the job queue (no client-side polling to a terminal state here).
+  return (await compRes.json()) as T;
 }
 
 /** POST one blob as a multipart `file` part to the session append endpoint; the
@@ -406,9 +371,32 @@ export interface Highlight {
   // backend (ADAAAA-5168) so the UI can show a recovery deadline.
   rejectedAt?: string;
 }
+// Async-VOD job record (ADAAAA-6760). Mirrors packages/events JobSchema (the
+// shared contract) so the webapp's processing-jobs surface can render a job's
+// id, source, status, progress, and terminal metrics without another type.
+export type JobStatus = "queued" | "active" | "done" | "failed";
 export interface Job {
   id: string;
-  status: string;
+  ownerId?: string;
+  source: string;
+  sourceUrl?: string;
   gameHint?: string;
+  preferLabels?: string[];
+  status: JobStatus;
+  perceiveSessionId?: string;
+  sampleFps?: number;
+  stageAMetrics?: Record<string, unknown>;
+  frameScale?: string;
+  decideWindowN?: number;
   framesAnalyzed?: number;
+  candidatesTriggered?: number;
+  decideCalls?: number;
+  perceiveSessionS?: number;
+  costUsd?: number;
+  scheduledAt?: string;
+  completedAt?: string;
+  // Async-VOD progress (0-100) + human label, updated at stage boundaries.
+  progress?: number;
+  progressLabel?: string;
+  createdAt: string;
 }

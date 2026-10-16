@@ -450,6 +450,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       }
     };
   }
+  // Emit + persist a job progress update (ADAAAA-6760). Fanned over the SAME
+  // jobEventHook/SSE channel as other job events (an additive `progress` event),
+  // so an open LiveConsole gets sub-second updates; the job record carries the
+  // latest value for the polling backstop. Best-effort: a failed persist never
+  // stops the (already dispatched) job.
+  function emitJobProgress(jobId: string, progress: number, label: string) {
+    store
+      .patchJob(jobId, { progress, progressLabel: label })
+      .catch((e: any) => console.error(`[vod:${jobId}] progress persist failed:`, String(e?.message || e)));
+    emitJobEvent(jobId, { type: "progress", progress, progressLabel: label } as any);
+  }
   async function runLiveJob(
     ingest: LiveIngest,
     job: { id: string; gameHint?: string; preferLabels?: string[] },
@@ -637,6 +648,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   async function runVodJob(job: { id: string; gameHint?: string; preferLabels?: string[] }, videoPath: string, user: any, sub: any) {
     const jobId = job.id;
     const scheduledAt = new Date().toISOString();
+    // Async-VOD progress (ADAAAA-6760): the POST returns the job as `queued`;
+    // mark it active now that processing actually begins, then drive 0..100 at
+    // the stage boundaries below.
+    await store.patchJob(jobId, { status: "active" });
+    emitJobProgress(jobId, 0, "uploading");
     const anaCfg: AnalyzerConfig = {
       jobId,
       clipBeforeS: cfg.clipBeforeS,
@@ -688,6 +704,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     };
     const frameDir = path.join(cfg.dataDir, "frames", jobId);
     const sampleFps = cfg.vodDetailFps;
+    emitJobProgress(jobId, 5, "extracting frames");
     await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps, cfg.vodFrameScale);
     // I7 / ADAAAA-6361: re-sample a higher-FPS burst of frames around each
     // trigger so the ball-goal-crossing instant is present in the decide window
@@ -708,12 +725,37 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
     const clipDir = path.join(cfg.dataDir, "clips");
     const cut = async (ts: number) => {
+      emitJobProgress(jobId, 90, "cutting clips");
       const clipId = randomUUID();
       const out = path.join(clipDir, `${clipId}.mp4`);
       await cutClip(cfg.ffmpegPath, videoPath, out, Math.max(0, ts - cfg.clipBeforeS), cfg.clipBeforeS + cfg.clipAfterS);
       return { clipId, clipUri: `/clips/${clipId}.mp4` };
     };
-    const iter = buildAnalyzeFrames(frameDir, sampleFps)();
+    // Async-VOD progress: wrap the frame iterator so analyzeJob's frame pull
+    // drives a throttled `analyzing (frame i/N)` progress (ADAAAA-6760). We
+    // count the pre-extracted frames for N, and emit ~every 25 frames / 500 ms
+    // so the SSE overlay + polling stay within ~1s without spamming the store.
+    const { readdir } = await import("node:fs/promises");
+    let totalFrames = 0;
+    try {
+      totalFrames = (await readdir(frameDir)).filter((f) => f.startsWith("frame_")).length;
+    } catch {
+      totalFrames = 0;
+    }
+    let processedFrames = 0;
+    let lastProgressEmit = 0;
+    const baseIter = buildAnalyzeFrames(frameDir, sampleFps)();
+    const iter = (async function* () {
+      for await (const f of baseIter) {
+        processedFrames++;
+        if (totalFrames > 0 && (processedFrames % 25 === 0 || Date.now() - lastProgressEmit >= 500)) {
+          lastProgressEmit = Date.now();
+          const pct = Math.round(20 + 69 * Math.min(1, processedFrames / totalFrames));
+          emitJobProgress(jobId, pct, `analyzing (frame ${processedFrames}/${totalFrames})`);
+        }
+        yield f;
+      }
+    })();
     const t0 = Date.now();
     // Reserve ONE perceive session shared by the video /analyze leg and the
     // Stage-A audio /audio tap (same pattern as runLiveJob); analyzeJob stops
@@ -799,7 +841,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       costUsd: Number(costUsd.toFixed(4)),
       scheduledAt,
       completedAt: new Date().toISOString(),
+      progress: 100,
+      progressLabel: "done",
     });
+    emitJobProgress(jobId, 100, "done");
     if (stageA.totalCandidates > 0) {
       console.log(
         `[vod:${jobId}] stageA fpRate=${stageA.fpRate} (${stageA.rejected}/${stageA.totalCandidates} rejected), ` +
@@ -1343,20 +1388,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         runLiveJob(ingest, job, user, sub).catch(() => {});
         return { job: store.getJob(job.id), status: "ingesting", framesAnalyzed: 0 };
       }
-      try {
-        const out = await runVodJob(job, videoPath!, user, sub);
-        return out;
-      } catch (e: any) {
-        await store.patchJob(job.id, { status: "failed" });
-        const raw = String(e?.message || e);
-        // A remote URL source that ffmpeg can't fetch (404/403/406, unreachable,
-        // hotlink-protected, or not a directly downloadable file) gets a human
-        // message; the ffmpeg detail stays in `detail` for diagnosis.
-        if (/^https?:\/\//i.test(req.body?.videoPath || "") && /^ffmpeg:/i.test(raw)) {
-          return reply.code(422).send({ error: "Video not available for download", detail: raw });
+      // ADAAAA-6760: the file/URL source leg is now async — spawn runVodJob
+      // fire-and-forget and return 202 { job, accepted: true } immediately so
+      // the upload POST never blocks on the (multi-minute) analyze pipeline
+      // and the edge request timeout can't hand the browser a 5xx. The job
+      // flows queued -> active -> done|failed; progress/status stream over the
+      // job's existing SSE channel and the webapp polls GET /jobs as a backstop.
+      runVodJob(job, videoPath!, user, sub).catch(async (e: any) => {
+        try {
+          await store.patchJob(job.id, { status: "failed" });
+        } catch {
+          /* ignore — job record gone */
         }
-        return reply.code(500).send({ error: raw });
-      }
+        const raw = String(e?.message || e);
+        console.error(`[vod:${job.id}] background analyze failed: ${raw}`);
+      });
+      return reply.code(202).send({ job: store.getJob(job.id), accepted: true });
     }
   );
 
@@ -1478,12 +1525,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     });
     await store.patchJob(job.id, { status: "active" });
     await recordJobFunnel(db, user.id, priorJobs, firstJobAt, cfg.funnelRetainDays);
-    try {
-      return await runVodJob(job, finalPath, user, sub);
-    } catch (e: any) {
-      await store.patchJob(job.id, { status: "failed" });
-      return reply.code(500).send({ error: String(e?.message || e) });
-    }
+    // ADAAAA-6760: dispatch the analyze pipeline fire-and-forget and return
+    // 202 { job, accepted: true } immediately (the file is already landed at
+    // dataDir/uploads/<jobId>/<name>). The old synchronous await blocked the
+    // request for minutes on a long VOD, which outlasted the edge request
+    // timeout and handed the browser a 5xx — same fix as the resumable rail.
+    runVodJob(job, finalPath, user, sub).catch(async (e: any) => {
+      try {
+        await store.patchJob(job.id, { status: "failed" });
+      } catch {
+        /* ignore — job record gone */
+      }
+      console.error(`[vod:${job.id}] background analyze failed:`, String(e?.message || e));
+    });
+    return reply.code(202).send({ job: store.getJob(job.id), accepted: true });
   });
 
   // --- Resumable VOD upload rail (ADAAAA-5714) ---
@@ -1635,7 +1690,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       }
       console.error(`[vod:${job.id}] background analyze failed:`, String(e?.message || e));
     });
-    return { job: store.getJob(job.id), framesAnalyzed: 0, status: "active", queued: true };
+    return reply.code(202).send({ job: store.getJob(job.id), accepted: true });
+  });
+
+  // List the caller's jobs (ADAAAA-6760) for the webapp's processing-jobs
+  // surface. Newest first, default 50, capped at 200. Caller-scoped: an admin
+  // sees every job in this instance; any other role sees only its own, so one
+  // user can never read another user's jobs. (This server instance is the
+  // company scope, so the query is inherently company-scoped.)
+  app.get("/jobs", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user;
+    const limitRaw = Number(req.query?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(1, Math.floor(limitRaw)), 200) : 50;
+    const ownerId = user.role === "admin" ? undefined : user.id;
+    return { jobs: store.listJobsForOwner(ownerId, limit) };
   });
 
   app.get("/jobs/:id", { preHandler: authReq }, async (req: any, reply) => {

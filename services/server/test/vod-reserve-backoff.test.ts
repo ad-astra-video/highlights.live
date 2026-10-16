@@ -114,7 +114,8 @@ async function dispatchBgVod(app: any, token: string): Promise<string> {
     headers: { authorization: `Bearer ${token}` },
     payload: { uploadId },
   });
-  expect(done.statusCode).toBe(200);
+  expect(done.statusCode).toBe(202);
+  expect(done.json().accepted).toBe(true);
   return uploadId as string;
 }
 

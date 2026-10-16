@@ -77,6 +77,15 @@ async function main() {
   // (users, jobs, highlights, entitlements) survives restarts.
   const store = new Store(db);
   await store.load();
+  // Boot-time sweep (ADAAAA-6760): no in-flight run survives a restart, so any
+  // job left in `active` (no completedAt) is stranded. Reap it to `failed` so
+  // the new processing-jobs surface doesn't show a perpetually-spinning row.
+  try {
+    const reaped = await store.sweepStrandedJobs();
+    if (reaped > 0) console.log(`[boot] swept ${reaped} stranded active job(s) -> failed`);
+  } catch (e: any) {
+    console.error("[boot] stranded-job sweep failed:", String(e?.message || e));
+  }
   const mailer = makeMailer(cfg);
   if (mailer) console.log(`mailer: email-sender @ ${cfg.emailSenderUrl}`);
   else console.log("mailer: not configured (EMAIL_SENDER_URL unset) — transactional emails skipped.");

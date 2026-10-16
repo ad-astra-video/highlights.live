@@ -106,6 +106,31 @@ export async function buildTestApp(
   return { app, cfg, db, auth, billing, store, stripeCalls, mailer };
 }
 
+/** Poll GET /jobs/:id until the job reaches a terminal state (done/failed),
+ * so async-202 tests can wait for the background pipeline to finish
+ * (ADAAAA-6760). Returns the full /jobs/:id payload. */
+export async function waitForJob(
+  app: FastifyInstance,
+  jobId: string,
+  token: string,
+  timeoutMs = 30000
+): Promise<any> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const res = await app.inject({
+      method: "GET",
+      url: `/jobs/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (res.statusCode !== 200) throw new Error(`GET /jobs/${jobId} -> ${res.statusCode}`);
+    const data = res.json();
+    const st = data?.job?.status;
+    if (st === "done" || st === "failed") return data;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`job ${jobId} did not reach a terminal state within ${timeoutMs}ms`);
+}
+
 export function fakePipeline(): any {
   let n = 0;
   return {

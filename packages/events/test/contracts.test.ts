@@ -314,4 +314,34 @@ describe("Job + StageAMetricsSnapshot (INC-2 / ADAAAA-4325 slice 5: FP-rate metr
     // Old records without the fields still parse (no version bump).
     expect(JobSchema.parse({ id: "j", source: "file", createdAt: "2026-09-24T00:00:00Z" }).costUsd).toBeUndefined();
   });
+
+  describe("JobSchema async-VOD progress (ADAAAA-6760)", () => {
+    it("accepts optional progress (0-100) + progressLabel, both additive", () => {
+      const j = JobSchema.parse({
+        id: "job-async",
+        source: "file",
+        status: "active",
+        createdAt: "2026-10-16T00:00:00Z",
+        progress: 45,
+        progressLabel: "analyzing (frame 12/48)",
+      });
+      expect(j.progress).toBe(45);
+      expect(j.progressLabel).toBe("analyzing (frame 12/48)");
+    });
+
+    it("omits progress fields for legacy/live records (no version bump)", () => {
+      const j = JobSchema.parse({ id: "job-legacy", source: "rtmp", status: "done", createdAt: "2026-09-20T00:00:00Z" });
+      expect(j.progress).toBeUndefined();
+      expect(j.progressLabel).toBeUndefined();
+    });
+
+    it("rejects progress outside 0..100", () => {
+      expect(() =>
+        JobSchema.parse({ id: "j", source: "file", createdAt: "2026-10-16T00:00:00Z", progress: 101 })
+      ).toThrow();
+      expect(() =>
+        JobSchema.parse({ id: "j", source: "file", createdAt: "2026-10-16T00:00:00Z", progress: -1 })
+      ).toThrow();
+    });
+  });
 });

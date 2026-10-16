@@ -456,6 +456,11 @@ export const JobSchema = z.object({
   costUsd: z.number().min(0).optional(),
   scheduledAt: z.string().optional(),
   completedAt: z.string().optional(),
+  // Async-VOD job progress (ADAAAA-6760): additive optional 0-100 progress +
+  // human label, updated by runVodJob at stage boundaries. No contract version
+  // bump — both are purely additive and absent on older records / live jobs.
+  progress: z.number().min(0).max(100).optional(),
+  progressLabel: z.string().optional(),
   createdAt: z.string(),
 });
 export type Job = z.infer<typeof JobSchema>;
