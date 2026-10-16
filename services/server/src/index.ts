@@ -117,6 +117,10 @@ async function main() {
   const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements, mailer: mailer ?? undefined });
   scheduleRejectSweep(cfg, store);
   scheduleDatasetPurgeSweep(cfg, db);
+  // Durable server-driven VOD retry worker (ADAAAA-6763): periodically re-runs
+  // session-404'd VOD jobs whose retry window passed, up to maxAttempts.
+  const vodRetryWorker = (app as any).vodRetryWorker;
+  vodRetryWorker?.start();
   // A container recreate mid-VOD drops the in-memory payment refreshers, so a
   // perceive session the orchestrator still holds stops being funded and would
   // be force-released with `insufficient balance`. Release any the previous

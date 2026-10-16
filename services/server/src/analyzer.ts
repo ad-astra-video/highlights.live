@@ -1,7 +1,7 @@
 // Worker orchestration: one persistent perceive session per job, sample 1fps,
 // feed frames to perceive, compute evidence, call decide on candidates, cut a
 // clip on each highlight, and stop the session in `finally`.
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { HighlightRecord, TrackObservation } from "@highlights/events";
 import { StageAMetrics } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
@@ -454,6 +454,15 @@ export class SessionLostError extends Error {
     super(msg);
     this.name = "SessionLostError";
   }
+}
+
+/** Deterministic highlight identity (ADAAAA-6763). A retried VOD pass re-plays
+ * the SAME (job, eventType, timestamp) candidate, so the highlight must carry
+ * the SAME id for the persist path to dedupe a re-persist / re-bill / re-quota
+ * debit. Two genuinely distinct moments never share a (job, eventType,
+ * timestamp) tuple, so the identity is unique within a job. */
+export function highlightId(jobId: string, eventType: string | undefined, ts: number): string {
+  return createHash("sha1").update(`${jobId}:${eventType ?? ""}:${ts}`).digest("hex").slice(0, 32);
 }
 
 /** ADAAAA-6577: sleep `ms` milliseconds (returns when the timeout elapses).
@@ -1321,7 +1330,7 @@ export async function decideOnCandidate(
   }
   const { clipId, clipUri } = await cut(candidate.timestamp);
   const rec: HighlightRecord = {
-    id: randomUUID(),
+    id: highlightId(cfg.jobId, decision.eventType ?? candidate.eventType, candidate.timestamp),
     jobId: cfg.jobId,
     clipUri,
     start: Math.max(0, candidate.timestamp - cfg.clipBeforeS),
@@ -1532,7 +1541,7 @@ export async function analyzeJob(
           } else {
             const { clipId, clipUri } = await cut(res.candidate.timestamp);
             const rec: HighlightRecord = {
-              id: randomUUID(),
+              id: highlightId(cfg.jobId, decision.eventType ?? res.candidate.eventType, res.candidate.timestamp),
               jobId: cfg.jobId,
               clipUri,
               start: Math.max(0, res.candidate.timestamp - cfg.clipBeforeS),

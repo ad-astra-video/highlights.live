@@ -110,6 +110,17 @@ export interface ServerConfig {
    * `frames[]` so Gemma reasons across a longer SEQUENCE per trigger.
    * `VOD_DECIDE_WINDOW_N`. */
   vodDecideWindowN: number;
+  /** Max VOD job retry attempts for a perceive-runner/session 404 before the
+   * job is permanently failed (ADAAAA-6763). Default 5. `VOD_RETRY_MAX_ATTEMPTS`. */
+  vodRetryMaxAttempts: number;
+  /** Base backoff for VOD job retry scheduling (ms); doubles per attempt up to
+   * `vodRetryMaxDelayMs`. Default 15000 (15s). `VOD_RETRY_BASE_DELAY_MS`. */
+  vodRetryBaseDelayMs: number;
+  /** Cap for VOD job retry backoff (ms). Default 60000 (60s). `VOD_RETRY_MAX_DELAY_MS`. */
+  vodRetryMaxDelayMs: number;
+  /** How often the server worker sweeps for due VOD retries (ms). Default 5000
+   * (5s). `VOD_RETRY_SWEEP_INTERVAL_MS`. */
+  vodRetrySweepIntervalMs: number;
   /** I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
    * Frames within +/- `vodResampleWindowS` of a candidate are re-extracted at
    * `vodResampleFps` so the ball-goal-crossing instant is in the decide window.
@@ -309,6 +320,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 2),
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
+    // Durable server-driven retry for session-404'd VOD jobs (ADAAAA-6763).
+    vodRetryMaxAttempts: Number(env.VOD_RETRY_MAX_ATTEMPTS ?? 5),
+    vodRetryBaseDelayMs: Number(env.VOD_RETRY_BASE_DELAY_MS ?? 15000),
+    vodRetryMaxDelayMs: Number(env.VOD_RETRY_MAX_DELAY_MS ?? 60000),
+    vodRetrySweepIntervalMs: Number(env.VOD_RETRY_SWEEP_INTERVAL_MS ?? 5000),
     // I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
     // Frames within +/- vodResampleWindowS of a candidate are re-extracted at
     // vodResampleFps so the ball-goal-crossing instant is in the decide window.
