@@ -370,6 +370,110 @@ describe("analyzeJob", () => {
     expect(client.log.filter((x) => x === "stop").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("live path: a persistent session-lost past the fast re-reserve enters the lenient reconnect loop and resumes without double-persisting (ADAAAA-6764)", async () => {
+    // Fake backoff so this runs instantly (no real 30-60 s timers); the lenient
+    // cadence itself is asserted separately below via the computed delays.
+    let analyzeCalls = 0;
+    let reserveCalls = 0;
+    const decideHighlights: string[] = [];
+    const client = fakeClient({
+      reservePerceive: async () => {
+        reserveCalls++;
+        return { sessionId: `sess-${reserveCalls}`, appUrl: "", controlUrl: "" };
+      },
+      analyze: async (sid) => {
+        analyzeCalls++;
+        // The perceive runner is DOWN for the first 4 /analyze attempts
+        // (session-lost 404 across the fast re-reserve + first lenient
+        // reconnect), then RECOVERS on the 5th — the live job must stay active.
+        if (analyzeCalls <= 4) throw new SessionLostError();
+        // ONLY the recovered frame (analyze call 5, i.e. frame 0 re-analyzed on
+        // the fresh session) carries a candidate, so decision happens exactly
+        // once for it — proving the reconnect did not double-persist/decide it.
+        const base: any = { observation: { tracks: [], seq: analyzeCalls - 1, timestamp: analyzeCalls - 1 } };
+        if (analyzeCalls === 5) base.candidate = { eventType: "GOAL", timestamp: analyzeCalls - 1 };
+        return base;
+      },
+      decide: async () => {
+        decideHighlights.push("GOAL");
+        return { isHighlight: true, score: 90, eventType: "GOAL" };
+      },
+      stopPerceive: async () => {},
+    });
+    // planMode "live" enables the lenient reconnect loop; tiny backoffs + a fake
+    // sleep keep the test fast.
+    const outcome = await analyzeJob(
+      client.client,
+      frames(2),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      {
+        jobId: "j",
+        clipBeforeS: 2,
+        clipAfterS: 2,
+        gameHint: "",
+        planMode: "live",
+        maxReReserves: 2,
+        sessionRetryBackoffBaseMs: 1,
+        sessionRetryBackoffMaxMs: 4,
+        liveReconnectBackoffMs: 1,
+        liveMaxReconnects: 3,
+      },
+      undefined,
+      undefined,
+      undefined,
+      async () => {} // fake backoffSleep: no real timers
+    );
+    // The live job did NOT go to failed: it stayed active through the persistent
+    // 404, re-reserved a fresh session, and resumed analysis on the stream.
+    expect(outcome.framesAnalyzed).toBe(2);
+    // resumed: frame 0 (recovered) fired a candidate and was decided exactly
+    // once — no highlight double-persisted across the reconnect.
+    expect(decideHighlights).toEqual(["GOAL"]);
+    expect(outcome.highlights).toHaveLength(1);
+  });
+
+  it("live path: aborts cleanly once the lenient reconnect bound is exhausted (no infinite spin) (ADAAAA-6764)", async () => {
+    let analyzeCalls = 0;
+    let reserveCalls = 0;
+    const client = fakeClient({
+      reservePerceive: async () => {
+        reserveCalls++;
+        return { sessionId: `sess-${reserveCalls}`, appUrl: "", controlUrl: "" };
+      },
+      analyze: async () => {
+        analyzeCalls++;
+        // Runner never recovers: every attempt 404s.
+        throw new SessionLostError();
+      },
+    });
+    await expect(
+      analyzeJob(
+        client.client,
+        frames(1),
+        async (ts) => ({ clipId: "c", clipUri: "u" }),
+        {
+          jobId: "j",
+          clipBeforeS: 2,
+          clipAfterS: 2,
+          gameHint: "",
+          planMode: "live",
+          maxReReserves: 2,
+          sessionRetryBackoffBaseMs: 1,
+          sessionRetryBackoffMaxMs: 4,
+          liveReconnectBackoffMs: 1,
+          liveMaxReconnects: 2,
+        },
+        undefined,
+        undefined,
+        undefined,
+        async () => {} // fake backoffSleep
+      )
+    ).rejects.toBeInstanceOf(SessionLostError);
+    // 1 initial + (maxReReserves=2 fast) + (liveMaxReconnects=2 lenient) = 5
+    // reserves, then the bound is hit and the job aborts cleanly.
+    expect(reserveCalls).toBe(5);
+  });
+
   it("does not re-reserve on a non-404 analyze error — the pass aborts", async () => {
     let reserveCalls = 0;
     const client = fakeClient({

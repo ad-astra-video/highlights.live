@@ -474,6 +474,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         warmupSeconds: cfg.warmupSeconds,
         recheckIntervalSeconds: cfg.recheckIntervalSeconds,
         planMode: "live",
+        // ADAAAA-6764: lenient bounded reconnect loop — after the fast in-pass
+        // re-reserve is exhausted on a persistent session-lost (404), the live
+        // job sleeps liveReconnectBackoffMs (30 s) before re-reserving a fresh
+        // perceive session, up to liveMaxReconnects times, instead of going
+        // `failed` on a transient perceive-runner outage.
+        liveReconnectBackoffMs: cfg.liveReconnectBackoffMs,
+        liveMaxReconnects: cfg.liveMaxReconnects,
         // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
         // evidence). Live uses the default analysis_fps / windows.
         analysisFps: cfg.analysisFps,
@@ -606,6 +613,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       maxFramesPerAnalysis: cfg.vodMaxFramesPerAnalysis,
       preWindowS: cfg.vodAnalysisPreWindowS,
       postWindowS: cfg.vodAnalysisPostWindowS,
+      // ADAAAA-6577: bounded exponential backoff between a session-lost (404)
+      // and the next perceive re-reserve/retry (env-tunable, no redeploy).
+      sessionRetryBackoffBaseMs: cfg.vodSessionRetryBackoffBaseMs,
+      sessionRetryBackoffMaxMs: cfg.vodSessionRetryBackoffMaxMs,
     };
     // Count candidates (video + audio) for the recorded decide/cost fields.
     let candidatesTriggered = 0;
