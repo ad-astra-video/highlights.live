@@ -399,14 +399,19 @@ class WatcherSession:
         # trace-ingest schema (packages/events AnalysisSessionTraceSchema) requires:
         # `at` = epoch ms + a `request` envelope. The earlier {type, ts, result,
         # resultOk} shape lacked those, so the server 422'd and dropped every VOD
-        # trace (ADAAAA-6753). Extra keys (resultOk) are stripped by zod.
-        return {
+        # trace (ADAAAA-6753). Also never emit response:null — the schema treats a
+        # present-but-null response as invalid and 422s it; omit it when the tool
+        # result is None (e.g. a broker/perceive blip), so traces persist even
+        # for failed tool calls. Extra keys (resultOk) are stripped by zod.
+        rec = {
             "sessionId": self.session_id,
             "streamId": self.stream_id,
             "tool": tool,
             "window": {"start": start, "end": end},
             "at": int(time.time() * 1000),
             "request": {"tool": tool, "start": start, "end": end, "maxPoints": max_points},
-            "response": result,
-            "resultOk": result is not None,
         }
+        if result is not None:
+            rec["response"] = result
+        rec["resultOk"] = result is not None
+        return rec
