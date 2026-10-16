@@ -19,6 +19,12 @@ from .logging_setup import configure_logging  # noqa: E402  (defines log above)
 configure_logging()
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
+from .confirm import (  # noqa: F401
+    ConfirmRequest,
+    ConfirmDecision,
+    confirm_enabled,
+    run_confirmation_pass,
+)
 from .gemma import (  # noqa: F401
     apply_ball_outcome_gate,
     apply_goal_attestation_gate,
@@ -777,6 +783,25 @@ def create_app() -> FastAPI:
         # Rule / fallback path: Gemma unavailable, rule mode, or a null reply —
         # return a deterministic title; the caller still has its own fallback.
         return TitleResponse(title=_rule_title(req))
+    @router.post("/confirm", response_model=ConfirmDecision)
+    async def confirm(req: ConfirmRequest):
+        """Stage-2 goal/near-miss confirmation pass (ADAAAA-6797).
+
+        A deep frame dive that runs ONLY for goal-type candidates carrying no
+        independent attestation. It presents the Stage-1 verdict + reason back,
+        tests the contradictory hypothesis over denser frames / trajectory /
+        optical-flow / audio context, and emits a structured ``goalConfirmed``
+        verdict that is deterministically reconciled. The whole pass is gated by
+        ``DECIDE_CONFIRM_ENABLED`` (default off, VOD-first); when disabled or on
+        any model/parse failure it returns a passthrough that leaves the Stage-1
+        verdict unchanged, so the server can call it safely. The gemma inference
+        is a blocking sync call (httpx) — run it in a worker thread so /health
+        stays responsive during inference (same pattern as /highlight)."""
+        result = await asyncio.to_thread(
+            run_confirmation_pass,
+            req.model_dump(),
+        )
+        return ConfirmDecision(**result)
 
     app = FastAPI(title="highlights-decide", version="0.1.0")
     # Canonical at root (go-livepeer strips `/app`); `/app/*` alias for direct calls.
