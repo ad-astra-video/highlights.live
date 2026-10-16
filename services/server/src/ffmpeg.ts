@@ -114,6 +114,18 @@ export async function extractFrames(
   return files.map((f) => path.join(outDir, f));
 }
 
+/** Whether `outDir` already holds extracted frame JPEGs (ADAAAA-6763). A
+ * retried VOD pass reuses the already-extracted frames — skipping re-running
+ * ffmpeg — and only extracts when they are absent. */
+export async function framesExtracted(outDir: string): Promise<boolean> {
+  try {
+    const files = await readdir(outDir);
+    return files.some((f) => f.startsWith("frame_") && f.endsWith(".jpg"));
+  } catch {
+    return false;
+  }
+}
+
 export async function cutClip(
   ffmpegPath: string,
   source: string,

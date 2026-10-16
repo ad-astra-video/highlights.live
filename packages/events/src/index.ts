@@ -456,6 +456,16 @@ export const JobSchema = z.object({
   costUsd: z.number().min(0).optional(),
   scheduledAt: z.string().optional(),
   completedAt: z.string().optional(),
+  // Durable server-driven retry state for a session-404'd VOD job (ADAAAA-6763).
+  // Additive, all optional — no contract version bump. `retryAttempts` counts
+  // retries already performed beyond the initial running attempt;
+  // `maxRetryAttempts` is the cap before permanent failure; `nextRetryAt` is the
+  // ISO time before which the job must NOT be re-claimed (lenient exponential
+  // backoff); `lastError` holds the most recent failure for GET /jobs/:id.
+  retryAttempts: z.number().int().min(0).optional(),
+  maxRetryAttempts: z.number().int().min(1).optional(),
+  nextRetryAt: z.string().optional(),
+  lastError: z.string().optional(),
   createdAt: z.string(),
 });
 export type Job = z.infer<typeof JobSchema>;

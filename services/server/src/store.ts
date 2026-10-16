@@ -79,6 +79,11 @@ export class Store {
     return this.jobs.get(id);
   }
 
+  /** All jobs (for the periodic sweep to scan retryable ones; ADAAAA-6763). */
+  listJobs(): Job[] {
+    return [...this.jobs.values()];
+  }
+
   async patchJob(id: string, patch: Partial<Omit<Job, "id">>): Promise<Job> {
     const j = this.jobs.get(id);
     if (!j) throw new Error(`no job ${id}`);

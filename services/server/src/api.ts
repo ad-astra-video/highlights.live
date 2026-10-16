@@ -21,7 +21,7 @@ import {
   type PipelineClient,
 } from "./analyzer";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
-import { cutClip, extractBurstFrames, extractFrames } from "./ffmpeg";
+import { cutClip, extractBurstFrames, extractFrames, framesExtracted } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
 import {
@@ -52,6 +52,7 @@ import { enqueueBestEffort, type Mailer } from "./mailer";
 import { composeInviteEmail } from "./invites";
 import { createTrainService, TrainValidationError } from "./train";
 import { inspectCuratedManifests, loadCuratedManifest } from "./train-curated";
+import { createVodRetryWorker, recordVodFailure } from "./vod-retry";
 import { prepareArtifactDownload } from "./train-artifacts";
 
 /** Human-readable size for the oversized-file message, e.g. "2 GB". Byte-exact:
@@ -227,6 +228,13 @@ export async function persistLiveHighlight(
   sub: Subscription,
   highlight: HighlightRecord
 ): Promise<HighlightRecord> {
+  // Idempotent retry (ADAAAA-6763): a retried VOD pass re-runs the same frames
+  // and re-fires the same highlight event. The highlight carries a
+  // deterministic id (job+eventType+timestamp), so if it was already persisted
+  // on an earlier attempt we return the stored record WITHOUT re-persisting,
+  // re-billing, or re-debiting quota.
+  const existing = deps.store.getHighlight(highlight.id);
+  if (existing) return existing;
   const stored = await deps.store.addHighlight({
     ...highlight,
     ownerId: user.id,
@@ -688,7 +696,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     };
     const frameDir = path.join(cfg.dataDir, "frames", jobId);
     const sampleFps = cfg.vodDetailFps;
-    await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps, cfg.vodFrameScale);
+    // ADAAAA-6763 idempotency: a retried VOD pass reuses the already-extracted
+    // frames dir (skip re-running ffmpeg) instead of re-extracting from the
+    // source; only the FIRST run extracts.
+    if (!(await framesExtracted(frameDir))) {
+      await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps, cfg.vodFrameScale);
+    }
     // I7 / ADAAAA-6361: re-sample a higher-FPS burst of frames around each
     // trigger so the ball-goal-crossing instant is present in the decide window
     // (the detail-first pass samples at `sampleFps`, which can skip it). Bounded:
@@ -799,6 +812,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       costUsd: Number(costUsd.toFixed(4)),
       scheduledAt,
       completedAt: new Date().toISOString(),
+      // ADAAAA-6763: a successful run clears any prior retry watermark so a
+      // later health flap on the same job doesn't inherit a stale backoff.
+      retryAttempts: 0,
+      nextRetryAt: undefined,
+      lastError: undefined,
     });
     if (stageA.totalCandidates > 0) {
       console.log(
@@ -1347,8 +1365,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         const out = await runVodJob(job, videoPath!, user, sub);
         return out;
       } catch (e: any) {
-        await store.patchJob(job.id, { status: "failed" });
+        // ADAAAA-6763: a session-404'd VOD job is parked into a retryable state
+        // (backoff `nextRetryAt`) and the server worker re-runs it on an
+        // interval; only a non-retryable failure surfaces as a terminal 500.
+        const rec = await recordVodFailure({ store, cfg }, job.id, e);
         const raw = String(e?.message || e);
+        if (rec.retryable) {
+          return reply.code(202).send({
+            job: store.getJob(job.id),
+            error: raw,
+            retry: true,
+            retryInMs: rec.delayMs,
+            retryAttempts: rec.attempts,
+            maxRetryAttempts: rec.maxAttempts,
+          });
+        }
         // A remote URL source that ffmpeg can't fetch (404/403/406, unreachable,
         // hotlink-protected, or not a directly downloadable file) gets a human
         // message; the ffmpeg detail stays in `detail` for diagnosis.
@@ -1481,8 +1512,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     try {
       return await runVodJob(job, finalPath, user, sub);
     } catch (e: any) {
-      await store.patchJob(job.id, { status: "failed" });
-      return reply.code(500).send({ error: String(e?.message || e) });
+      // ADAAAA-6763: a session-404'd VOD job is parked into a retryable state
+      // (backoff `nextRetryAt`) so the server worker can re-run it; only a
+      // non-retryable failure surfaces as a terminal 500.
+      const rec = await recordVodFailure({ store, cfg }, job.id, e);
+      const raw = String(e?.message || e);
+      if (rec.retryable) {
+        return reply.code(202).send({
+          job: store.getJob(job.id),
+          error: raw,
+          retry: true,
+          retryInMs: rec.delayMs,
+          retryAttempts: rec.attempts,
+          maxRetryAttempts: rec.maxAttempts,
+        });
+      }
+      return reply.code(500).send({ error: raw });
     }
   });
 
@@ -1629,7 +1674,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // GET /jobs/:id to a terminal state instead (ADAAAA-5714).
     runVodJob(job, session.finalPath, user, sub).catch(async (e: any) => {
       try {
-        await store.patchJob(job.id, { status: "failed" });
+        // ADAAAA-6763: park the job into a retryable state (backoff
+        // `nextRetryAt`) so the server worker can re-run it; only a
+        // non-retryable failure stays permanently failed.
+        await recordVodFailure({ store, cfg }, job.id, e);
       } catch {
         /* ignore — job record gone */
       }
@@ -2269,6 +2317,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   // Serve the built webapp (SPA) for any unmatched GET; API routes above win.
   attachSpaServing(app, cfg);
+
+  // Durable server-driven VOD retry worker (ADAAAA-6763): a periodic sweep that
+  // claims session-404'd VOD jobs whose `nextRetryAt` passed and re-runs them
+  // (idempotent — reuses extracted frames + dedupes highlights), up to
+  // maxAttempts. Created here where runVodJob's closure lives; index.ts starts
+  // it (reject/dataset sweep pattern) and tests drive it directly via tick().
+  const vodRetryWorker = createVodRetryWorker({
+    store,
+    cfg,
+    db,
+    runVod: runVodJob,
+  });
+  (app as any).vodRetryWorker = vodRetryWorker;
+  app.addHook("onClose", async () => {
+    vodRetryWorker.stop();
+  });
 
   return app;
 }
