@@ -79,6 +79,36 @@ export class Store {
     return this.jobs.get(id);
   }
 
+  /** All jobs currently held in memory. */
+  listAllJobs(): Job[] {
+    return [...this.jobs.values()];
+  }
+
+  /** Jobs belonging to `ownerId` (or every job when `ownerId` is omitted/undefined
+   * — the admin case), newest first, capped at `limit`. This is the data path for
+   * the new GET /jobs surface so the webapp can render processing/done/failed
+   * rows without ever leaking another user's jobs. */
+  listJobsForOwner(ownerId?: string, limit = 50): Job[] {
+    let arr = [...this.jobs.values()];
+    if (ownerId) arr = arr.filter((j) => j.ownerId === ownerId);
+    arr.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    return arr.slice(0, limit);
+  }
+
+  /** Reap jobs stranded in `active` (no `completedAt`) to `failed` at boot. No
+   * in-flight run survives a server restart, so an active row at startup is dead
+   * (ADAAAA-6760 boot-time sweep). Returns the number reaped. */
+  async sweepStrandedJobs(): Promise<number> {
+    let reaped = 0;
+    for (const j of [...this.jobs.values()]) {
+      if (j.status === "active" && !j.completedAt) {
+        await this.patchJob(j.id, { status: "failed" });
+        reaped++;
+      }
+    }
+    return reaped;
+  }
+
   async patchJob(id: string, patch: Partial<Omit<Job, "id">>): Promise<Job> {
     const j = this.jobs.get(id);
     if (!j) throw new Error(`no job ${id}`);

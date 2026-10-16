@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildTestApp } from "./helpers";
+import { buildTestApp, waitForJob } from "./helpers";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-vodfeed-"));
@@ -47,16 +47,24 @@ describe("VOD decision-time publish + HTTP fallback (ADAAAA-6352)", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { videoPath, gameHint: "valorant" },
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(202);
     const body = res.json();
-    expect(body.job.status).toBe("done");
-    const userId = body.job.ownerId as string;
+    expect(body.accepted).toBe(true);
+    expect(["queued", "active"]).toContain(body.job.status);
+    expect(body.job.id).toBeTruthy();
+    expect(body.job.ownerId).toBeTruthy();
+    // ADAAAA-6760: wait for the background pipeline to finish (it now runs
+    // fire-and-forget after the 202) before asserting the end-state highlight.
+    const done = await waitForJob(app, body.job.id, token);
+    expect(done.job.status).toBe("done");
+    const userId = done.job.ownerId as string;
+    const jobId = done.job.id;
 
     // HTTP fallback: GET /jobs/:id returns the FULL highlight set once the job
     // finished (persisted at decision time, so it is present at end).
     const jobRes = await app.inject({
       method: "GET",
-      url: `/jobs/${body.job.id}`,
+      url: `/jobs/${jobId}`,
       headers: { authorization: `Bearer ${token}` },
     });
     expect(jobRes.statusCode).toBe(200);
@@ -73,7 +81,7 @@ describe("VOD decision-time publish + HTTP fallback (ADAAAA-6352)", () => {
     // The in-memory store holds exactly one highlight (no duplicate persist
     // from a leftover end-of-job loop would double the byJob list).
     expect(store.allHighlights().length).toBe(1);
-    expect(store.highlightsForJob(body.job.id).length).toBe(1);
+    expect(store.highlightsForJob(jobId).length).toBe(1);
 
     // Billing + quota debit exactly once per accepted highlight — no
     // double-count between SSE stream and the final response.
@@ -133,7 +141,8 @@ describe("VOD SSE streaming (ADAAAA-6352)", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { uploadId, size: sent.length },
     });
-    expect(done.statusCode).toBe(200);
+    expect(done.statusCode).toBe(202);
+    expect(done.json().accepted).toBe(true);
     const jobId = done.json().job.id as string;
 
     // Listen on a real port and read the SSE stream. The background job is

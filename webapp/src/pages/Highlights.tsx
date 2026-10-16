@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X, ChevronDown, ChevronRight } from "lucide-react";
-import { api, getToken, type Highlight, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
+import { api, getToken, type Highlight, type Job, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { isOverLimit, oversizedHelp } from "../lib/vodUpload";
 import { DEFAULT_REJECTED_CLIP_TTL_MS, isRecoverable, recoverLabel } from "../lib/rejected";
 import { useAuth } from "../lib/auth";
+import { useProcessingJobs, isInFlight, jobProgressPct } from "../lib/vodJobs";
 import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
 import { BrowserCapture } from "../components/BrowserCapture";
@@ -43,6 +44,9 @@ const GAME_DEFAULTS: Record<string, string> = {
 
 export function Highlights() {
   const { billing, refreshBilling } = useAuth();
+  // Async-VOD processing-jobs queue (ADAAAA-6760): fetched + polled + SSE-streamed
+  // by the hook; the new "Processing jobs" section below renders its rows.
+  const { jobs: processingJobs, refresh: refreshProcessingJobs } = useProcessingJobs();
   const [source, setSource] = useState("file");
   const [videoPath, setVideoPath] = useState("/data/test_vod.mp4");
   const [gameHint, setGameHint] = useState("Esports");
@@ -50,6 +54,10 @@ export function Highlights() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<any>(null);
+  // Async-VOD upload acceptance (ADAAAA-6760): set to the submitted job id right
+  // after a file upload returns 202 { job, accepted: true }, so the card frees
+  // immediately and the next line shows "Upload complete — processing started".
+  const [acceptedUploadId, setAcceptedUploadId] = useState<string | null>(null);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   // VOD "Upload / file" source: the picked local file, whether the user chose
   // the "paste a URL" fallback instead, upload progress (0..1), and the server
@@ -176,6 +184,7 @@ export function Highlights() {
     setBusy(true);
     setError(null);
     setJob(null);
+    setAcceptedUploadId(null);
     setVodJobId(null);
     // VOD "Upload / file" source with a local file chosen (not the URL
     // fallback): pre-check size client-side, then multipart upload with
@@ -198,11 +207,14 @@ export function Highlights() {
         });
         setUploadPct(null);
         setJob(r.job);
+        setAcceptedUploadId(r.job?.id ?? null);
         setDebugJob(r.job.id);
-        // VOD feed surface: subscribe to the job's SSE feed only while it is
-        // still processing (the synchronous single-shot POST completes within
-        // this request, so there is nothing to stream there).
-        if (r.job?.status !== "done" && r.job?.status !== "failed") setVodJobId(r.job.id);
+        // Async VOD (ADAAAA-6760): the upload resolves on the 202
+        // { job, accepted: true } immediately, so the job is still processing —
+        // subscribe to its SSE feed for live highlights and refresh the
+        // Processing-jobs queue so the new row appears right away.
+        if (isInFlight(r.job?.status)) setVodJobId(r.job.id);
+        refreshProcessingJobs().catch(() => {});
         refreshBilling().catch(() => {});
       } catch (e: any) {
         setUploadPct(null);
@@ -242,9 +254,11 @@ export function Highlights() {
         setJob(r.job);
         setDebugJob(r.job.id);
         // VOD feed surface: subscribe to the job's SSE feed only while it is
-        // still processing (the path/URL POST /jobs completes within this
-        // request, so there is nothing to stream there).
-        if (r.job?.status !== "done" && r.job?.status !== "failed") setVodJobId(r.job.id);
+        // still processing. POST /jobs now returns 202 { job, accepted: true }
+        // immediately (ADAAAA-6760) and the pipeline runs in the background, so
+        // a VOD job is still in flight here — mirror the upload path.
+        if (isInFlight(r.job?.status)) setVodJobId(r.job.id);
+        refreshProcessingJobs().catch(() => {});
       }
       // A submitted job may have (or will) consume quota — refresh the billing
       // snapshot so the remaining-quota banner stays accurate.
@@ -438,11 +452,23 @@ export function Highlights() {
         )}
         {error && <div className="mt-4 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{error}</div>}
         {job && !isLive && (
-          <div className="mt-4 text-sm text-green">
-            Job <span className="font-mono">{job.id.slice(0, 8)}</span> — <span className="uppercase">{job.status}</span>
+          <div className="mt-4 text-sm text-green" data-upload-processing>
+            {acceptedUploadId ? (
+              <>
+                Upload complete — processing started for job <span className="font-mono">{job.id.slice(0, 8)}</span>
+              </>
+            ) : (
+              <>
+                Job <span className="font-mono">{job.id.slice(0, 8)}</span> — <span className="uppercase">{job.status}</span>
+              </>
+            )}
           </div>
         )}
       </div>
+
+      {processingJobs.length > 0 && (
+        <ProcessingJobs jobs={processingJobs} onDebug={(id) => setDebugJob(id)} />
+      )}
 
       {debugJob && <FrameDebugger jobId={debugJob} />}
 
@@ -503,6 +529,116 @@ export function Highlights() {
         onRecover={(id) => review(id, "accepted")}
         onError={setError}
       />
+    </div>
+  );
+}
+
+/**
+ * Async-VOD "Processing jobs" surface (ADAAAA-6760). One row per job from the
+ * GET /jobs queue (sourced from useProcessingJobs): 8-char id, a status chip,
+ * a progress bar + label while the job is queued/active, and terminal detail on
+ * done rows (frames analyzed, cost, decide calls, highlight count + a Frame
+ * debugger link) or a clear error line on failed rows.
+ */
+const SOURCE_LABELS: Record<string, string> = {
+  file: "File",
+  rtmp: "RTMP",
+  webrtc: "WebRTC",
+  screenshare: "Screen share",
+  browser: "Browser",
+  "file-sim": "File (sim)",
+};
+
+function sourceLabel(source: string | undefined): string {
+  return (source && SOURCE_LABELS[source]) || source || "Unknown";
+}
+
+function statusChipClass(status: string): string {
+  switch (status) {
+    case "queued":
+      return "border-mut/40 bg-mut/10 text-mut";
+    case "active":
+      return "border-neon/40 bg-neon/10 text-neon";
+    case "done":
+      return "border-green/40 bg-green/10 text-green";
+    case "failed":
+      return "border-red/40 bg-red/10 text-red";
+    default:
+      return "border-mut/40 bg-mut/10 text-mut";
+  }
+}
+
+function ProcessingJobs({ jobs, onDebug }: { jobs: Job[]; onDebug: (id: string) => void }) {
+  return (
+    <section className="mt-8" data-processing-jobs>
+      <h2 className="text-2xl font-black">Processing jobs</h2>
+      <div className="mt-3 flex flex-col gap-3">
+        {jobs.map((j) => (
+          <ProcessingJobRow key={j.id} job={j} onDebug={onDebug} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ProcessingJobRow({ job, onDebug }: { job: Job; onDebug: (id: string) => void }) {
+  // A done job's highlight count is not on the Job record; fetch it from
+  // GET /jobs/:id (which returns { job, highlights }) once the job is done.
+  const [highlightCount, setHighlightCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (job.status !== "done") return;
+    let live = true;
+    api<{ highlights?: Highlight[] }>(`/jobs/${job.id}`)
+      .then((r) => {
+        if (live) setHighlightCount(r.highlights?.length ?? 0);
+      })
+      .catch(() => {
+        if (live) setHighlightCount(0);
+      });
+    return () => {
+      live = false;
+    };
+  }, [job.id, job.status]);
+
+  const pct = jobProgressPct(job);
+  return (
+    <div className="card px-4 py-3" data-processing-job>
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="font-mono text-sm text-ink">{job.id.slice(0, 8)}</span>
+        <span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusChipClass(job.status)}`}>
+          {job.status}
+        </span>
+        <span className="text-xs text-mut">{sourceLabel(job.source)}</span>
+        {job.status === "done" || job.status === "failed" ? null : (
+          <span className="text-xs text-mut">{job.progressLabel || "queued"}</span>
+        )}
+        {job.status === "done" && (
+          <button type="button" className="chip ml-auto" onClick={() => onDebug(job.id)} data-job-debug>
+            Frame debugger
+          </button>
+        )}
+      </div>
+      {isInFlight(job.status) && (
+        <div className="mt-2 flex items-center gap-2" data-job-progress>
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-mut/20">
+            <div className="h-full rounded-full bg-neon" style={{ width: `${pct}%` }} />
+          </div>
+          <span className="text-xs text-mut">{Math.round(pct)}%</span>
+        </div>
+      )}
+      {job.status === "done" && (
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-mut" data-job-done-metrics>
+          <span>{job.framesAnalyzed ?? 0} frames</span>
+          <span>${(job.costUsd ?? 0).toFixed(2)}</span>
+          <span>{job.decideCalls ?? 0} decide calls</span>
+          <span>{highlightCount ?? "…"} highlights</span>
+        </div>
+      )}
+      {job.status === "failed" && (
+        <div className="mt-2 text-xs text-red" data-job-failed-line>
+          Processing failed — check the video source and try again.
+        </div>
+      )}
     </div>
   );
 }

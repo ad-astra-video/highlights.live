@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildTestApp } from "./helpers";
+import { buildTestApp, waitForJob } from "./helpers";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-ent-"));
 const videoPath = path.join(tmp, "test.mp4");
@@ -126,8 +126,11 @@ describe("per-user monthly clip quota (entitlement ledger)", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { videoPath, gameHint: "Esports" },
     });
-    expect(ok.statusCode).toBe(200);
-    expect(ok.json().job.status).toBe("done");
+    expect(ok.statusCode).toBe(202);
+    expect(ok.json().accepted).toBe(true);
+    // ADAAAA-6760: the job is dispatched fire-and-forget; wait for it to finish
+    // before the decision-time quota debit is asserted.
+    await waitForJob(app, ok.json().job.id, token);
     expect((await db.getQuota(userId, period)).valueOf()).toBe(1);
 
     // A failing job never created a highlight -> it debits nothing (no double-decrement).
@@ -137,7 +140,12 @@ describe("per-user monthly clip quota (entitlement ledger)", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { videoPath: "/does/not/exist.mp4" },
     });
-    expect([400, 422, 500]).toContain(fail.statusCode);
+    // ADAAAA-6760: submission is accepted immediately (202) and the job is
+    // dispatched in the background, where it fails; no highlight is persisted.
+    expect(fail.statusCode).toBe(202);
+    expect(fail.json().accepted).toBe(true);
+    const failed = await waitForJob(app, fail.json().job.id, token);
+    expect(failed.job.status).toBe("failed");
     expect((await db.getQuota(userId, period)).valueOf()).toBe(1);
     await app.close();
   });
