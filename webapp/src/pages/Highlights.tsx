@@ -636,7 +636,9 @@ function ProcessingJobRow({ job, onDebug }: { job: Job; onDebug: (id: string) =>
       )}
       {job.status === "failed" && (
         <div className="mt-2 text-xs text-red" data-job-failed-line>
-          Processing failed — check the video source and try again.
+          {job.error?.trim()
+            ? job.error
+            : "Processing failed — check the video source and try again."}
         </div>
       )}
     </div>
