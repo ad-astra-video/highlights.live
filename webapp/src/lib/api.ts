@@ -383,6 +383,9 @@ export interface Job {
   gameHint?: string;
   preferLabels?: string[];
   status: JobStatus;
+  // Server-side error text for a failed (status === "failed") job; surfaced on
+  // the row instead of the generic client string (ADAAAA-6781).
+  error?: string;
   perceiveSessionId?: string;
   sampleFps?: number;
   stageAMetrics?: Record<string, unknown>;

@@ -593,7 +593,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         );
       }
     } catch (e) {
-      await store.patchJob(job.id, { status: "failed" });
+      await markJobFailed(job.id, e);
       console.error(`[live:${job.id}]`, e);
     } finally {
       await ingest.stop();
@@ -642,6 +642,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         const delay = Math.min(1000 * 2 ** attempt, 8000);
         await new Promise((r) => setTimeout(r, delay));
       }
+    }
+  }
+
+  // ADAAAA-6781: persist the server-side error text (truncated) on a failed
+  // job so GET /jobs / GET /jobs/:id and the webapp processing-jobs surface
+  // render the real reason instead of the generic client string. `error` lives
+  // on the shared Job contract (packages/events); patchJob writes it through to
+  // the durable record. Shared by the runLiveJob + all VOD failure paths.
+  const JOB_ERROR_MAX_CHARS = 500;
+  function jobErrorMessage(e: unknown): string {
+    const raw = e instanceof Error ? e.message : String(e);
+    return raw.trim().slice(0, JOB_ERROR_MAX_CHARS);
+  }
+  async function markJobFailed(jobId: string, e: unknown): Promise<void> {
+    try {
+      await store.patchJob(jobId, { status: "failed", error: jobErrorMessage(e) });
+    } catch {
+      /* ignore — job record gone */
     }
   }
 
@@ -1395,11 +1413,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // flows queued -> active -> done|failed; progress/status stream over the
       // job's existing SSE channel and the webapp polls GET /jobs as a backstop.
       runVodJob(job, videoPath!, user, sub).catch(async (e: any) => {
-        try {
-          await store.patchJob(job.id, { status: "failed" });
-        } catch {
-          /* ignore — job record gone */
-        }
+        await markJobFailed(job.id, e);
         const raw = String(e?.message || e);
         console.error(`[vod:${job.id}] background analyze failed: ${raw}`);
       });
@@ -1531,11 +1545,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // request for minutes on a long VOD, which outlasted the edge request
     // timeout and handed the browser a 5xx — same fix as the resumable rail.
     runVodJob(job, finalPath, user, sub).catch(async (e: any) => {
-      try {
-        await store.patchJob(job.id, { status: "failed" });
-      } catch {
-        /* ignore — job record gone */
-      }
+      await markJobFailed(job.id, e);
       console.error(`[vod:${job.id}] background analyze failed:`, String(e?.message || e));
     });
     return reply.code(202).send({ job: store.getJob(job.id), accepted: true });
@@ -1683,11 +1693,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // background and return the active job immediately; the webapp polls
     // GET /jobs/:id to a terminal state instead (ADAAAA-5714).
     runVodJob(job, session.finalPath, user, sub).catch(async (e: any) => {
-      try {
-        await store.patchJob(job.id, { status: "failed" });
-      } catch {
-        /* ignore — job record gone */
-      }
+      await markJobFailed(job.id, e);
       console.error(`[vod:${job.id}] background analyze failed:`, String(e?.message || e));
     });
     return reply.code(202).send({ job: store.getJob(job.id), accepted: true });

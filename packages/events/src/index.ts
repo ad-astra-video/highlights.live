@@ -435,6 +435,10 @@ export const JobSchema = z.object({
   gameHint: z.string().optional(),
   preferLabels: z.array(z.string()).default([]),
   status: z.enum(["queued", "active", "done", "failed"]).default("queued"),
+  // Set when the job fails (status === "failed") to the server-side error text
+  // so GET /jobs / GET /jobs/:id and the webapp processing-jobs surface render
+  // the real reason instead of a generic client string (ADAAAA-6781).
+  error: z.string().optional(),
   perceiveSessionId: z.string().optional(),
   // Per-job VOD sampling override (ADAAAA-5059). When present, overrides the
   // `vodSampleFpsDefault` config for this job; still bounded by runner
