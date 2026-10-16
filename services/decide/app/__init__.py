@@ -386,6 +386,27 @@ def _make_perceive_client(session_id: str):
 
     media = os.environ.get("MEDIA_BROKER_URL", "").strip().rstrip("/")
     perceive = os.environ.get("PERCEIVE_URL", "").strip().rstrip("/")
+
+    def direct_call(tool: str, start: float, end: float, max_points: int) -> Optional[dict]:
+        """Windowed-tool query straight to the perceive runner (VOD / no-broker
+        topology). The runner binds the request to its active persistent
+        AnalysisSession via the session header; returns the bounded envelope, or
+        None on any failure (never fatal to a tick)."""
+        if not perceive:
+            return None
+        try:
+            r = httpx.post(
+                f"{perceive}/analysis/{tool}",
+                params={"start": start, "end": end, "maxPoints": max_points},
+                headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
+                timeout=10.0,
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:  # noqa: BLE001  a perceive hiccup must not drop a tick
+            log.debug("watcher perceive %s via PERCEIVE_URL failed: %s", tool, e)
+            return None
+
     if media:
         def call(tool: str, start: float, end: float, max_points: int) -> Optional[dict]:
             try:
@@ -395,6 +416,18 @@ def _make_perceive_client(session_id: str):
                     headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
                     timeout=12.0,
                 )
+            except Exception as e:  # noqa: BLE001  a perceive hiccup must not drop a tick
+                log.debug("watcher perceive %s via broker failed: %s", tool, e)
+                return direct_call(tool, start, end, max_points)
+            # ADAAAA-6785: the media broker only registers sessions IT fronts
+            # (live). A VOD perceive session is provisioned by the server's own
+            # adapter, so it is NOT in the broker's session map and the broker
+            # answers 404 "no such session". Fall back to a direct PERCEIVE_URL
+            # call so the VOD still gets a perceive result (instead of a
+            # request-only trace), then resolve the result the normal way.
+            if r.status_code == 404:
+                return direct_call(tool, start, end, max_points)
+            try:
                 r.raise_for_status()
                 body = r.json()
                 # The broker wraps the perceive envelope in {ok, result, trace};
@@ -411,18 +444,7 @@ def _make_perceive_client(session_id: str):
         return None
 
     def call(tool: str, start: float, end: float, max_points: int) -> Optional[dict]:
-        try:
-            r = httpx.post(
-                f"{perceive}/analysis/{tool}",
-                params={"start": start, "end": end, "maxPoints": max_points},
-                headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
-                timeout=10.0,
-            )
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:  # noqa: BLE001  a perceive hiccup must not drop a tick
-            log.debug("watcher perceive %s failed: %s", tool, e)
-            return None
+        return direct_call(tool, start, end, max_points)
 
     return call
 
@@ -444,6 +466,22 @@ def _make_control_sender(session_id: str):
     perceive = os.environ.get("PERCEIVE_URL", "").strip().rstrip("/")
 
     def send(instruction: dict) -> Optional[dict]:
+        def direct(inst: dict) -> Optional[dict]:
+            if not perceive:
+                return None
+            try:
+                r = httpx.post(
+                    f"{perceive}/control",
+                    json=inst,
+                    headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
+                    timeout=10.0,
+                )
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:  # noqa: BLE001  a control hiccup must not break the flow
+                log.debug("watcher control %s via PERCEIVE_URL failed: %s", inst, e)
+                return None
+
         try:
             if media:
                 r = httpx.post(
@@ -452,6 +490,12 @@ def _make_control_sender(session_id: str):
                     headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
                     timeout=12.0,
                 )
+                # ADAAAA-6785: a VOD perceive session is not registered with the
+                # media broker, so the broker answers 404 "no such session".
+                # Fall back to a direct PERCEIVE_URL control so the VOD path can
+                # still apply the instruction.
+                if r.status_code == 404:
+                    return direct(instruction)
                 r.raise_for_status()
                 body = r.json()
                 return body.get("result") if isinstance(body, dict) else body
