@@ -63,6 +63,16 @@ class WatcherConfig:
     summary_max_rows: int = 15         # always >= 10 rows available
     frame_max_entries: int = 480       # bounded ingest buffer (~160 s at 3 fps)
     max_velocity_for_rule: float = 0.0
+    # --- G6 Part-4 cost knobs (ADAAAA-6743) -------------------------------
+    # Downsample the watcher chunk (plan Part 4): a cheaper chunk (2 fps ->
+    # 20 frames) is the KV-cost multiplier; frame_count is the per-call cost.
+    # Kept separate from the Pass-1 gate defaults (3 fps / 30 frames) so a
+    # cost-tuned profile can be selected without changing the gate shape.
+    tool_gate: bool = False             # cost-gated tool policy (opt-in; default off keeps G5 pass-1 all-four-tools behavior)
+    tool_gate_peak: float = 0.30        # audio peak that unlocks the deep tools
+    tool_gate_motion: int = 1           # tracked-object/motion frames that unlock the deep tools
+    trace_write_rate: float = 1.0       # 1.0 = trace every tool call; lower = downsample the trace write rate
+
 
 
 @dataclass
@@ -139,6 +149,50 @@ def _default_tool_policy(window_start: float, window_end: float) -> List[str]:
     signal picture; a real policy can narrow it (e.g. only audio + caption when
     the last summary saw no motion)."""
     return ["get_audio_levels", "get_tracked_players", "detect_objects", "get_captioning"]
+
+
+# Tools that are cheap (CPU / audio-derived) and safe to call every tick.
+_CHEAP_TOOLS = {"get_audio_levels", "get_captioning"}
+# Tools that are expensive (deep perceive analysis, more GPU work) and should
+# only fire when a cheap pre-signal suggests something is happening.
+_DEEP_TOOLS = {"get_tracked_players", "detect_objects"}
+
+
+def _window_has_cheap_signal(frames: List[Frame], cfg: "WatcherConfig") -> bool:
+    """A cheap, low-cost pre-signal that says the window may be notable.
+
+    Used by the G6 cost-gated tool policy: the deep perceive tools
+    (tracked players / object detection) run only after this cheap CPU/audio
+    signal fires, so the expensive tool calls stay sparse instead of every tick.
+    ``peak`` is a per-frame audio peak/energy, so a motion frame (a live player /
+    object) or an audio spike is enough to unlock the deep tools."""
+    peak = max((f.audio_peak for f in frames), default=0.0)
+    if peak >= cfg.tool_gate_peak:
+        return True
+    motion = sum(1 for f in frames if f.players or f.objects)
+    return motion >= cfg.tool_gate_motion
+
+
+def cost_gated_tool_policy(
+    frames: List[Frame], cfg: "WatcherConfig", base: Optional[List[str]] = None,
+) -> List[str]:
+    """G6 cost-gated windowed-tool policy (plan Part 4).
+
+    Always call the cheap CPU/audio tools; call the deep perceive tools only when
+    a cheap pre-signal (audio peak / motion) fired in the window. This bounds the
+    tool-call rate (and thus the perceive GPU work + trace write rate) so a quiet
+    window costs far less than a full four-tool sweep, while a notable window
+    still gets full evidence. The caller may supply ``base`` to extend/override
+    the tool set; the gate only ever NARROWS it (never widens), so an explicit
+    config that asks for a tool still respects the cost gate unless ``base`` is
+    provided by the caller as deliberate."""
+    if not cfg.tool_gate:
+        return list(base) if base else _default_tool_policy(0.0, 0.0)
+    chosen = [t for t in (base if base else _default_tool_policy(0.0, 0.0))]
+    if _window_has_cheap_signal(frames, cfg):
+        return chosen
+    return [t for t in chosen if t in _CHEAP_TOOLS]
+
 
 
 def _extract_event_token(text: str) -> Optional[str]:
@@ -268,6 +322,12 @@ class WatcherSession:
         self._last_tick_ts: Optional[float] = None
         self.ticks = 0
         self.hypotheses_seeded = 0   # only decide seeds hypotheses (counted here)
+        # --- G6 cost accounting (ADAAAA-6743) ------------------------------
+        # Measures the per-tick cost driver (frames reaching the brain / tool
+        # calls / trace writes) so the Part-4 knob effect is quantified.
+        self._cost: Dict[str, float] = {
+            "ticks": 0, "brain_frames": 0, "tool_calls": 0, "trace_records": 0,
+        }
 
     # -- ingest ------------------------------------------------------------
     def ingest(self, frame: Frame) -> None:
@@ -320,7 +380,10 @@ class WatcherSession:
         frames = self._frames_in(start, end)
         picked, truncated = self._cap_frames(frames, cfg.max_frame_count)
         # decide-owns-tool-calls: resolve which tools to invoke for this window.
-        tools = self._tool_policy(start, end)
+        # G6 cost gate: when `tool_gate` is on, the expensive deep tools only run
+        # after a cheap CPU/audio pre-signal, bounding the tool-call rate.
+        base = self._tool_policy(start, end)
+        tools = cost_gated_tool_policy(picked, cfg, base)
         tool_results: Dict[str, Optional[Dict]] = {}
         for tool in tools:
             result = None
@@ -330,12 +393,18 @@ class WatcherSession:
                 except Exception:  # noqa: BLE001  a tool failure must not drop the tick
                     result = None
             tool_results[tool] = result
-            if self._trace is not None:
+            self._cost["tool_calls"] += 1
+            # G6 trace-write-rate knob: downsample the analysis-session-trace
+            # write rate without losing the trace (1.0 = every call).
+            if self._trace is not None and self._should_trace():
                 self._trace(self._trace_record(tool, start, end, result))
+                self._cost["trace_records"] += 1
 
         event, event_class, is_highlight, score, hypothesis, text = self._brain(picked, tool_results, cfg)
         if event != "NO_EVENT":
             self.hypotheses_seeded += 1
+        self._cost["ticks"] += 1
+        self._cost["brain_frames"] += len(picked)
 
         overlap = self._overlap_fraction(self._last_window, (start, end), cfg.window_s)
         row = SummaryRow(
@@ -391,7 +460,39 @@ class WatcherSession:
             "summaryRows": len(self._summaries),
             "summaryWindowS": self.config.summary_window_s,
             "hypothesesSeeded": self.hypotheses_seeded,
+            "cost": self.cost(),
         }
+
+    # -- G6 cost accounting (ADAAAA-6743) ---------------------------------
+    def _should_trace(self) -> bool:
+        """G6 trace-write-rate knob: 1.0 traces every tool call; < 1.0
+        downsamples the analysis-session-trace write rate (a deterministic
+        stride so the trace is representative, not just sparse)."""
+        rate = getattr(self.config, "trace_write_rate", 1.0)
+        if rate >= 1.0:
+            return True
+        n = int(round(1.0 / rate)) if rate > 0 else 1
+        if n <= 1:
+            return True
+        return (self._cost.get("tool_calls", 0) % n) == 0
+
+    def cost(self) -> Dict:
+        """Aggregated cost drivers over the session (frames per brain call,
+        tool-call rate, trace-write rate) so the Part-4 knob effect can be
+        measured against the gate defaults."""
+        c = dict(self._cost)
+        frames_per_call = (c["brain_frames"] / c["ticks"]) if c["ticks"] else 0.0
+        tools_per_tick = (c["tool_calls"] / c["ticks"]) if c["ticks"] else 0.0
+        return {
+            "ticks": int(c["ticks"]),
+            "brain_frames": int(c["brain_frames"]),
+            "tool_calls": int(c["tool_calls"]),
+            "trace_records": int(c["trace_records"]),
+            "frames_per_brain_call": round(frames_per_call, 3),
+            "tool_calls_per_tick": round(tools_per_tick, 3),
+            "trace_per_tick": round(c["trace_records"] / c["ticks"], 3) if c["ticks"] else 0.0,
+        }
+
 
     # -- trace -------------------------------------------------------------
     def _trace_record(self, tool: str, start: float, end: float, result: Optional[Dict]) -> Dict:

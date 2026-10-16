@@ -244,6 +244,53 @@ describe("ADAAAA-6742 G5 live watcher-first", () => {
     // No clip was cut server-side in the watcher-first path.
     expect(outcome.highlights).toHaveLength(0);
   });
+
+  it("G6 cost knobs: passes the cost-tuned watcher config (downsample / tool gate / trace rate) on watcherStart", async () => {
+    // ADAAAA-6743 (plan Part 4): when the operator sets the watcher cost knobs,
+    // startWatcher forwards them to decide's /watcher/start config so a cost-tuned
+    // profile (2 fps -> 20 frames, cost-gated tool policy, trace-write rate) is
+    // selected live. Undefined knobs are dropped (decide keeps its gate defaults).
+    const { client } = fakePipeline();
+    const w = fakeWatcher([{ summary: { t: 0 }, flag: null, deepVerdicts: [] }]);
+    await analyzeJob(client, frames([0, 1]), cut, {
+      jobId: "job-cost",
+      clipBeforeS: 4,
+      clipAfterS: 4,
+      gameHint: "soccer",
+      liveWatcherFirst: true,
+      streamId: "stream-cost",
+      watcherTickS: 3,
+      watcherFps: 2,
+      watcherMaxFrameCount: 20,
+      watcherToolGate: true,
+      watcherTraceWriteRate: 0.25,
+    }, undefined, undefined, undefined, undefined, w.client);
+
+    const start = w.log.find((c) => c.method === "watcherStart")!;
+    expect(start.req.config).toMatchObject({
+      tick_s: 3,
+      fps: 2,
+      max_frame_count: 20,
+      tool_gate: true,
+      trace_write_rate: 0.25,
+    });
+  });
+
+  it("G6 cost knobs: undefined watcher config yields an empty config (decide uses gate defaults)", async () => {
+    const { client } = fakePipeline();
+    const w = fakeWatcher([{ summary: { t: 0 }, flag: null, deepVerdicts: [] }]);
+    await analyzeJob(client, frames([0, 1]), cut, {
+      jobId: "job-cost2",
+      clipBeforeS: 4,
+      clipAfterS: 4,
+      gameHint: "soccer",
+      liveWatcherFirst: true,
+      streamId: "stream-cost2",
+      // no watcher cost knobs set
+    }, undefined, undefined, undefined, undefined, w.client);
+    const start = w.log.find((c) => c.method === "watcherStart")!;
+    expect(start.req.config).toEqual({});
+  });
 });
 
 // ---------------------------------------------------------------------------

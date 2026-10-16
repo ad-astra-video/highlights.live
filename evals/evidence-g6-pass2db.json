@@ -1,0 +1,160 @@
+{
+  "config": {
+    "tick_s": 3.0,
+    "window_s": 10.0,
+    "deep_back_s": 12.0,
+    "deep_forward_s": 3.0,
+    "cooldown_s": 12.0
+  },
+  "stream": {
+    "total_s": 120.0,
+    "frame_count": 361,
+    "ground_truth_moments": [
+      15.0,
+      40.0,
+      65.0,
+      90.0,
+      110.0
+    ],
+    "noise_blips": [
+      25.0,
+      55.0,
+      80.0,
+      100.0
+    ]
+  },
+  "gates": {
+    "flags_emitted": 6,
+    "ground_truth_moments": 5,
+    "recalled_moments": 5,
+    "depth_router_recall": 1.0,
+    "depth_router_recall_ge_80pct": true,
+    "min_flag_rate_per_min": 3.0,
+    "fp_flags": 0,
+    "fp_rate_per_min": 0.0,
+    "fp_rate_le_5_per_min": true,
+    "deep_confirmed": 6,
+    "deep_precision": 1.0,
+    "deep_recall": 1.0,
+    "deep_discards": 0,
+    "no_clip_on_discard": true,
+    "deep_gated_discards": 0,
+    "deep_calls": 6,
+    "gated_discard_calls": 0,
+    "audio_noise_fp_flags": 0,
+    "audio_noise_fp_rate_per_min": 0.0
+  },
+  "flags": [
+    {
+      "ts": 15.0,
+      "window": [
+        3.0,
+        18.0
+      ],
+      "event": "GOAL",
+      "score": 126.0,
+      "audioOk": true
+    },
+    {
+      "ts": 39.0,
+      "window": [
+        27.0,
+        42.0
+      ],
+      "event": "GOAL",
+      "score": 126.0,
+      "audioOk": true
+    },
+    {
+      "ts": 51.0,
+      "window": [
+        39.0,
+        54.0
+      ],
+      "event": "GOAL",
+      "score": 126.0,
+      "audioOk": true
+    },
+    {
+      "ts": 66.0,
+      "window": [
+        54.0,
+        69.0
+      ],
+      "event": "GOAL",
+      "score": 126.0,
+      "audioOk": true
+    },
+    {
+      "ts": 90.0,
+      "window": [
+        78.0,
+        93.0
+      ],
+      "event": "GOAL",
+      "score": 126.0,
+      "audioOk": true
+    },
+    {
+      "ts": 111.0,
+      "window": [
+        99.0,
+        114.0
+      ],
+      "event": "GOAL",
+      "score": 126.0,
+      "audioOk": true
+    }
+  ],
+  "verdicts": [
+    {
+      "flagTs": 15.0,
+      "event": "GOAL",
+      "outcome": "scoring_play",
+      "isHighlight": true,
+      "discarded": false,
+      "gated": false
+    },
+    {
+      "flagTs": 39.0,
+      "event": "GOAL",
+      "outcome": "scoring_play",
+      "isHighlight": true,
+      "discarded": false,
+      "gated": false
+    },
+    {
+      "flagTs": 51.0,
+      "event": "GOAL",
+      "outcome": "scoring_play",
+      "isHighlight": true,
+      "discarded": false,
+      "gated": false
+    },
+    {
+      "flagTs": 66.0,
+      "event": "GOAL",
+      "outcome": "scoring_play",
+      "isHighlight": true,
+      "discarded": false,
+      "gated": false
+    },
+    {
+      "flagTs": 90.0,
+      "event": "GOAL",
+      "outcome": "scoring_play",
+      "isHighlight": true,
+      "discarded": false,
+      "gated": false
+    },
+    {
+      "flagTs": 111.0,
+      "event": "GOAL",
+      "outcome": "scoring_play",
+      "isHighlight": true,
+      "discarded": false,
+      "gated": false
+    }
+  ],
+  "trace_records": 196
+}
