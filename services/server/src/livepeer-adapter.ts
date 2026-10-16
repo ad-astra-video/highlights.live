@@ -17,6 +17,8 @@ import type { PerceiveSessionLedger } from "./perceive-ledger";
 import type {
   AudioCandidate,
   AudioChunk,
+  ConfirmDecision,
+  ConfirmRequest,
   DecisionResult,
   ObservationResult,
   PipelineClient,
@@ -425,6 +427,60 @@ export class OrchestratorAdapter implements PipelineClient {
       return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
     }
   }
+  /** Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). Mirrors `decide`:
+   * one fixed-price decide-runner app call to `/apps/highlights-decide/app/confirm`,
+   * with the same 402 -> signer -> retry payment flow on-chain. Slides the
+   * payload = the ConfirmRequest fields the /confirm endpoint consumes. The
+   * runner returns a passthrough (goalConfirmed null) when disabled or
+   * unparseable; a transport failure rejects so the caller keeps the Stage-1
+   * verdict. */
+  async confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string }): Promise<ConfirmDecision> {
+    const payerAddress = this.payerAddress;
+    const payload = {
+      sessionId: "job",
+      eventType: req.eventType,
+      timestamp: req.timestamp,
+      gameHint: req.gameHint || "",
+      reasoningEffort: opts?.reasoningEffort || "none",
+      stage1: req.stage1,
+      frames: req.frames ?? [],
+      keyframes: req.keyframes ?? [],
+      trajectories: req.trajectories ?? [],
+      opticalFlowMagnitude: req.opticalFlowMagnitude ?? 0,
+      flowMagnitudes: req.flowMagnitudes ?? [],
+      audioLevels: req.audioLevels ?? [],
+      audioB64: req.audioB64 ?? "",
+      audioSampleRate: 16_000,
+      ballOutcome: req.ballOutcome ?? null,
+      goalCrossed: req.goalCrossed ?? null,
+      scoreBoardChanged: req.scoreBoardChanged ?? false,
+    };
+    const run = async (paymentHeaders?: Record<string, string>) => {
+      const { status, data } = await this.client.decide("confirm", payload, {
+        payerAddress: payerAddress || undefined,
+        paymentHeaders,
+      });
+      if (status >= 400) throw new Error(`confirm failed: HTTP ${status}`);
+      return data as ConfirmDecision;
+    };
+    try {
+      return await run();
+    } catch (err) {
+      if (!(err instanceof PaymentRequiredError) || !this.signer || !payerAddress) throw err;
+      const b64 = err.challenge?.paymentParams;
+      if (!b64) {
+        throw new Error(
+          "on-chain confirm 402 challenge carried no payment_params (orchestrator info) to forward to the signer; cannot obtain tickets"
+        );
+      }
+      const manifestID = err.challenge?.manifestId;
+      const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
+        app: ROUTES.decide,
+        type: "fixed",
+      });
+      return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
+    }
+  }
   /** Submit a single-shot fine-tune to the highlights-train runner, mirroring
    * `decide`: one fixed-price live-runner app call, with the 402 -> signer ->
    * retry payment flow on-chain. The payload maps TrainRunRequest fields to the
@@ -620,6 +676,37 @@ export class DirectAdapter implements PipelineClient {
     });
     if (!r.ok) throw new Error(`decide failed: HTTP ${r.status}`);
     return (await r.json()) as DecisionResult;
+  }
+  /** Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). Direct dev path:
+   * POST straight to decide `/app/confirm`. The runner returns a passthrough
+   * (goalConfirmed null) when disabled/unparseable; a transport failure rejects
+   * so the caller keeps the Stage-1 verdict. */
+  async confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string }): Promise<ConfirmDecision> {
+    const r = await fetch(`${this.cfg.decideUrl}/app/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: this.fakeSession,
+        eventType: req.eventType,
+        timestamp: req.timestamp,
+        gameHint: req.gameHint || "",
+        reasoningEffort: opts?.reasoningEffort || "none",
+        stage1: req.stage1,
+        frames: req.frames ?? [],
+        keyframes: req.keyframes ?? [],
+        trajectories: req.trajectories ?? [],
+        opticalFlowMagnitude: req.opticalFlowMagnitude ?? 0,
+        flowMagnitudes: req.flowMagnitudes ?? [],
+        audioLevels: req.audioLevels ?? [],
+        audioB64: req.audioB64 ?? "",
+        audioSampleRate: 16_000,
+        ballOutcome: req.ballOutcome ?? null,
+        goalCrossed: req.goalCrossed ?? null,
+        scoreBoardChanged: req.scoreBoardChanged ?? false,
+      }),
+    });
+    if (!r.ok) throw new Error(`confirm failed: HTTP ${r.status}`);
+    return (await r.json()) as ConfirmDecision;
   }
   async train(request: TrainRunRequest): Promise<TrainResult> {
     // Direct dev path: requires a reachable TRAIN_URL exposing /app/train (the

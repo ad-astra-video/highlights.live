@@ -154,6 +154,66 @@ export function isAcceptedHighlight(d: DecisionResult): boolean {
   if (d.outcome === undefined) return true; // legacy verdict, trust isHighlight
   return d.outcome === "scoring_play";
 }
+
+// ---------------------------------------------------------------------------
+// Stage-2 goal/near-miss CONFIRMATION pass (ADAAAA-6797) — server-side VOD
+// driver. The decide /confirm endpoint (services/decide/app/confirm.py) is the
+// owner of the actual deep-frame-dive verdict; this file only (1) detects the
+// trigger population (goal-type + no independent attestation + Stage-1
+// scoring_play accept), (2) assembles the higher-fidelity confirm context from
+// data the server already holds (cached frame window / trajectories / audio
+// tap), (3) routes the candidate through the adapter `confirm()` call, and
+// (4) adopts the reconciled decision (or keeps Stage-1 on passthrough / any
+// failure). It is gated by `cfg.confirmEnabled` (VOD-first; the live pass
+// never sets it) so the flag-off path is a strict no-op.
+// ---------------------------------------------------------------------------
+
+/** The Stage-2 confirmation-pass response (mirror of ConfirmDecision). */
+export interface ConfirmDecision {
+  /** Was the pass enabled on the decide side. */
+  enabled: boolean;
+  /** Structured verdict: confirmed_goal | near_miss | not_goal, or null on the
+   * passthrough path (disabled / unparseable). */
+  goalConfirmed?: "confirmed_goal" | "near_miss" | "not_goal" | null;
+  /** Model self-confidence 0..1. */
+  confidence: number;
+  /** Short grounded reason naming the deciding evidence. */
+  reason: string;
+  /** Per-evidence tri-state read (true / false / null). */
+  evidence: Record<string, boolean | null>;
+  /** Whether this pass corrected the Stage-1 read (the core value metric). */
+  stage1Disagreed: boolean;
+  /** The reconciled HighlightDecision-shaped dict to adopt in place of the
+   * Stage-1 verdict. On passthrough it is the (unchanged) Stage-1 verdict. */
+  decision: DecisionResult;
+}
+
+/** The confirmation-pass request the adapter forwards to decide `/confirm`. */
+export interface ConfirmRequest {
+  eventType: string;
+  timestamp: number;
+  gameHint: string;
+  /** Stage-1 primary-pass verdict, presented back to the model. */
+  stage1: DecisionResult;
+  /** Denser temporal frame window (~10-15 fps) around the event instant. */
+  frames: { role: string; base64: string }[];
+  /** Precise pre-event / event-instant / post-event keyframes. */
+  keyframes: { role: string; base64: string }[];
+  /** Object/ball trajectory tracks: { label, trackId, path: [[t,x,y],..] }. */
+  trajectories: { label: string; trackId: string; path: number[][] }[];
+  /** Motion / optical-flow magnitude at the event (0 when unavailable). */
+  opticalFlowMagnitude: number;
+  /** Motion magnitude series across the sample ([] when unavailable). */
+  flowMagnitudes: number[];
+  /** Short RMS audio-energy envelope ([] when unavailable). */
+  audioLevels: number[];
+  /** Surrounding audio clip (mono 16 kHz WAV base64) — "" when unavailable. */
+  audioB64: string;
+  /** Optional independent corroboration — INPUT only, never a gate. */
+  ballOutcome?: string;
+  goalCrossed?: boolean;
+  scoreBoardChanged?: boolean;
+}
 /** One audio chunk fed to the Stage-A noise-change gate (INC-2 / ADAAAA-4325).
  * Owned by the server's ffmpeg audio tap: short (default ~100 ms) mono int16
  * little-endian PCM, base64-encoded, matched to perceive's AudioChunkRequest. */
@@ -285,11 +345,16 @@ export interface PipelineClient {
     }
   ): Promise<DecisionResult>;
   /**
-   * Submit a single-shot fine-tune job to the highlights-train runner
-   * (Florence-2 <OD> LoRA). The runner blocks until the job finishes and the
-   * 200 body carries the trained checkpoint path + eval delta report, which the
-   * server folds into the surfaced TrainRun result.
+   * Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). For a goal-type
+   * candidate that carried no independent attestation and read as a Stage-1
+   * scoring_play, run the decide `/confirm` deep frame dive with the Stage-1
+   * verdict + the higher-fidelity confirm context, and return the reconciled
+   * verdict. Reuses the same fixed-price decide-runner path as `decide`/`
+   * /highlight` (1 billable unit; 402 -> signer -> retry). The runner returns a
+   * passthrough (goalConfirmed null) when disabled/unparseable, and a transport
+   * failure is a rejected promise — either way the caller keeps Stage-1.
    */
+  confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string }): Promise<ConfirmDecision>;
   train(request: TrainRunRequest): Promise<TrainResult>;
   stopPerceive(sessionId: string): Promise<void>;
 }
@@ -352,6 +417,13 @@ export interface AnalyzerConfig {
    sampleFps?: number;
    frameScale?: string;
    decideWindowN?: number;
+   /** ADAAAA-6797: run the Stage-2 goal/near-miss confirmation pass on this
+    * pass. Only the VOD path sets it (from `DECIDE_CONFIRM_ENABLED`); the live
+    * pass leaves it unset so live is untouched during VOD-first rollout. When
+    * set, an un-attested goal-type candidate whose Stage-1 read is a
+    * scoring_play accept is routed through the decide `/confirm` deep frame
+    * dive and the reconciled verdict is adopted in its place. */
+   confirmEnabled?: boolean;
    /** I7 / ADAAAA-6361: higher-FPS re-sample around a trigger. When set (detail-
     * first VOD), the decide call site re-samples frames around the candidate
     * timestamp at a higher FPS so the ball-goal-crossing instant is actually in
@@ -728,6 +800,11 @@ export class LiveRunShared {
    * Every audio candidate routed through decideOnCandidate() records its
    * outcome here; the job runner snapshots it onto the job at completion. */
   readonly stageA = new StageAMetrics();
+  /** Stage-1 vs Stage-2 confirmation-pass metric (ADAAAA-6797). Every confirm
+   * dive attempted records its outcome here; runVodJob snapshots it onto the
+   * job at completion as `confirmMetrics` (disagreement rate = disagreed /
+   * totalRuns). */
+  readonly confirmMetrics = { totalRuns: 0, disagreed: 0 };
   /** Rolling window of cached frames + their already-computed findings (plan
    * §A). Time-bounded to DECIDE_WINDOW_SECONDS and hard-capped at
    * CACHE_MAX_FRAMES, so it never grows on long streams. Findings are REUSED
@@ -988,12 +1065,78 @@ export class LiveRunShared {
     const [x1, y1, x2, y2] = ball.bbox;
     return [(x1 + x2) / 2, (y1 + y2) / 2];
   }
+  /** Record one confirmation-pass dive into the Stage-1 vs Stage-2 metric
+   * (ADAAAA-6797). `stage1Disagreed` is only counted when a real reconciled
+   * verdict came back (a transport failure / passthrough records a run with no
+   * disagreement). */
+  recordConfirm(result: { stage1Disagreed?: boolean }): void {
+    this.confirmMetrics.totalRuns++;
+    if (result.stage1Disagreed === true) this.confirmMetrics.disagreed++;
+  }
+  /** Sampled frames inside [ts-windowS, ts+windowS] as raw {timestamp, imageB64}
+   * pairs (oldest -> newest), for the Stage-2 denser window / keyframes. Uses
+   * the already-cached frame window — no new GPU. [] when nothing cached. */
+  framesNear(timestamp: number, windowS: number): { timestamp: number; imageB64: string }[] {
+    return [...this.frames.values()]
+      .filter((f) => f.imageB64 && f.timestamp >= timestamp - windowS && f.timestamp <= timestamp + windowS)
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map((f) => ({ timestamp: f.timestamp, imageB64: f.imageB64 }));
+  }
+  /** Build the Stage-2 object/ball trajectory tracks + motion/optical-flow
+   * magnitude (ADAAAA-6797) from the ALREADY-COMPUTED cached findings — no new
+   * GPU inference. For each tracked object it assembles a per-timestep
+   * [t, cx, cy] center path across the in-window frames; `opticalFlowMagnitude`
+   * is the max single-step center displacement (a motion proxy) and
+   * `flowMagnitudes` is the per-frame max displacement series. Empty / 0 when
+   * no track findings are cached in the window. */
+  motionContext(timestamp: number): {
+    trajectories: { label: string; trackId: string; path: number[][] }[];
+    opticalFlowMagnitude: number;
+    flowMagnitudes: number[];
+  } {
+    const frames = [...this.frames.values()]
+      .filter((f) => f.findings && f.timestamp >= timestamp - CONFIRM_MOTION_WINDOW_S && f.timestamp <= timestamp + CONFIRM_MOTION_WINDOW_S)
+      .sort((a, b) => a.timestamp - b.timestamp);
+    const byTrack = new Map<string, { label: string; path: number[][] }>();
+    const prevPos = new Map<string, [number, number]>();
+    let opticalFlowMagnitude = 0;
+    const flowMagnitudes: number[] = [];
+    for (const f of frames) {
+      let frameMax = 0;
+      for (const t of f.findings!.tracks) {
+        const bbox = t.bbox as number[];
+        if (!bbox || bbox.length < 4) continue;
+        const cx = (bbox[0] + bbox[2]) / 2;
+        const cy = (bbox[1] + bbox[3]) / 2;
+        const key = t.trackId || t.label || "obj";
+        const entry = byTrack.get(key) ?? { label: t.label || "object", path: [] };
+        entry.path.push([f.timestamp, cx, cy]);
+        byTrack.set(key, entry);
+        const prev = prevPos.get(key);
+        if (prev) {
+          const d = Math.hypot(cx - prev[0], cy - prev[1]);
+          if (d > frameMax) frameMax = d;
+          if (d > opticalFlowMagnitude) opticalFlowMagnitude = d;
+        }
+        prevPos.set(key, [cx, cy]);
+      }
+      flowMagnitudes.push(frameMax);
+    }
+    const trajectories = [...byTrack.values()]
+      .map((e) => ({ label: e.label, trackId: e.label, path: e.path }))
+      .slice(0, 8);
+    return { trajectories, opticalFlowMagnitude, flowMagnitudes };
+  }
 }
 
 /** Seconds of audio tap kept for the decide() surrounding-audio clip
  * (ADAAAA-4954 detail-first; bounded so a long VOD pass doesn't grow unbounded).
  * Roughly the clip-relevant window around a trigger. */
 export const AUDIO_CLIP_KEEP_S = 10;
+/** Stage-2 confirmation-pass motion-context window (s on each side of the
+ * event instant) the server samples cached track findings from (ADAAAA-6797).
+ * Roughly the dense-dive window; no new GPU (reuses cached findings). */
+export const CONFIRM_MOTION_WINDOW_S = 5;
 
 /** Wrap a run of base64 mono 16 kHz int16 PCM samples into a RIFF/WAVE file and
  * return it as base64. Pure + deterministic so it is unit-testable. The decide
@@ -1238,6 +1381,170 @@ export class TrackingPlanController {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Stage-2 confirmation-pass driver (ADAAAA-6797): trigger detection + confirm
+// context assembly + reconcile adoption. Pure/helpers are unit-testable.
+// ---------------------------------------------------------------------------
+
+/** Goal-type event categories eligible for the confirmation pass. A near-miss
+ * as a GOAL is the user-facing false positive the pass guards against. */
+const GOAL_TYPE_EVENTS = new Set(["GOAL", "GOL", "TOUCHDOWN", "BASKET", "KILL"]);
+
+/** Is `eventType` a goal-type event (goal / touchdown / basket / kill)? */
+export function isGoalTypeEvent(eventType: string | undefined): boolean {
+  return GOAL_TYPE_EVENTS.has((eventType || "").toUpperCase().trim());
+}
+
+/** Whether a candidate carries INDEPENDENT attestation of the goal: perceive
+ * `ballOutcome=goal`, `goalCrossed`, or a scoreboard score change. When any is
+ * present the candidate is already independently confirmed and the Stage-2
+ * dive is NOT needed — this is exactly the exclusion that keeps the confirm
+ * pass scoped to the un-attested population. */
+export function hasIndependentAttestation(c: {
+  ballOutcome?: string;
+  goalCrossed?: boolean;
+  scoreBoardChanged?: boolean;
+}): boolean {
+  if (typeof c.ballOutcome === "string" && /^goal$/i.test(c.ballOutcome.trim())) return true;
+  if (c.goalCrossed === true) return true;
+  if (c.scoreBoardChanged === true) return true;
+  return false;
+}
+
+/** The Stage-2 trigger: only an un-attested goal-type candidate whose Stage-1
+ * read is a scoring_play accept (goal-shaped) enters the confirmation dive.
+ * Everything else (non-goal type, attested, or a Stage-1 non-accept) keeps the
+ * existing 1-5 s path unchanged. `cfg.confirmEnabled` is the VOD-first config
+ * gate — when off this is a strict no-op. */
+export function shouldRunConfirm(
+  cfg: AnalyzerConfig,
+  candidate: { eventType: string; ballOutcome?: string; goalCrossed?: boolean; scoreBoardChanged?: boolean },
+  stage1Decision: DecisionResult
+): boolean {
+  if (!cfg.confirmEnabled) return false;
+  if (!isGoalTypeEvent(candidate.eventType)) return false;
+  if (hasIndependentAttestation(candidate)) return false;
+  return isAcceptedHighlight(stage1Decision);
+}
+
+/** Select the precise pre-event / event-instant / post-event keyframes from a
+ * dense frame list (nearest frame to each target timestamp). Returns [] when no
+ * frame matches. Deterministic + pure so it is unit-testable. */
+export function selectConfirmKeyframes(
+  frames: { timestamp: number; imageB64: string }[],
+  eventTs: number,
+  preS: number,
+  postS: number
+): { role: string; base64: string }[] {
+  const targets = [eventTs - preS, eventTs, eventTs + postS];
+  const out: { role: string; base64: string }[] = [];
+  for (const t of targets) {
+    let best: { timestamp: number; imageB64: string } | undefined;
+    let bestDiff = Infinity;
+    for (const f of frames) {
+      const d = Math.abs(f.timestamp - t);
+      if (d < bestDiff) {
+        bestDiff = d;
+        best = f;
+      }
+    }
+    if (best && best.imageB64) out.push({ role: "full", base64: best.imageB64 });
+  }
+  return out;
+}
+
+/** Assemble the higher-fidelity Stage-2 confirm context (ADAAAA-6797): a denser
+ * temporal frame window + precise pre/event/post keyframes + object/ball
+ * trajectory tracks + motion/optical-flow magnitude + audio-energy envelope.
+ * Wherever a tool is unavailable, send the empty default — the decide /confirm
+ * endpoint handles absent context (no crash, no regression). */
+export async function buildConfirmContext(
+  shared: LiveRunShared,
+  cfg: AnalyzerConfig,
+  candidate: { timestamp: number },
+  stage1: DecisionResult
+): Promise<Omit<ConfirmRequest, "eventType" | "timestamp" | "gameHint" | "stage1">> {
+  // Denser frame window: prefer the detail-first higher-FPS burst re-sample
+  // (I7 / ADAAAA-6361) around the trigger; else the cached window; else [].
+  let dense: { timestamp: number; imageB64: string }[] = [];
+  if (cfg.resampleFrames) {
+    try {
+      dense = (await cfg.resampleFrames(candidate.timestamp)) ?? [];
+    } catch {
+      dense = [];
+    }
+  }
+  if (!dense.length) dense = shared.framesNear(candidate.timestamp, CONFIRM_MOTION_WINDOW_S);
+  const frames = dense.map((f) => ({ role: "full", base64: f.imageB64 }));
+  const keyframes = selectConfirmKeyframes(
+    dense,
+    candidate.timestamp,
+    cfg.preWindowS ?? DEFAULT_PRE_WINDOW_S,
+    cfg.postWindowS ?? DEFAULT_POST_WINDOW_S
+  );
+  const motion = shared.motionContext(candidate.timestamp);
+  const audioLevels = shared.audioLevelSeries();
+  const audioB64 = shared.audioClipB64();
+  return {
+    frames,
+    keyframes,
+    trajectories: motion.trajectories,
+    opticalFlowMagnitude: motion.opticalFlowMagnitude,
+    flowMagnitudes: motion.flowMagnitudes,
+    audioLevels,
+    audioB64,
+  };
+}
+
+/** Run the Stage-2 confirmation dive (if the trigger fires) and return the
+ * effective decision to use downstream. On the no-trigger / flag-off path the
+ * Stage-1 verdict is returned unchanged (strict no-op). On a real dive it
+ * adopts the reconciled `decision` when the pass produced one (goalConfirmed
+ * non-null); on passthrough (disabled/unparseable) or any transport failure it
+ * keeps the Stage-1 verdict (no behavior change). Also records the disagreement
+ * metric on `shared`. */
+export async function confirmReconcile(
+  client: PipelineClient,
+  shared: LiveRunShared,
+  cfg: AnalyzerConfig,
+  stage1: DecisionResult,
+  candidate: {
+    eventType: string;
+    timestamp: number;
+    ballOutcome?: string;
+    goalCrossed?: boolean;
+    scoreBoardChanged?: boolean;
+  }
+): Promise<{ decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision }> {
+  if (!shouldRunConfirm(cfg, candidate, stage1)) {
+    return { decision: stage1, confirmRan: false };
+  }
+  const ctx = await buildConfirmContext(shared, cfg, candidate, stage1);
+  try {
+    const confirm = await client.confirm({
+      eventType: candidate.eventType,
+      timestamp: candidate.timestamp,
+      gameHint: cfg.gameHint,
+      stage1,
+      ...ctx,
+      ballOutcome: candidate.ballOutcome,
+      goalCrossed: candidate.goalCrossed,
+      scoreBoardChanged: candidate.scoreBoardChanged,
+    } as ConfirmRequest);
+    shared.recordConfirm({ stage1Disagreed: confirm.stage1Disagreed === true });
+    // Adopt the reconciled verdict only when the pass actually produced one; on
+    // passthrough (goalConfirmed null) keep the Stage-1 verdict unchanged.
+    if (confirm.goalConfirmed && confirm.decision && typeof confirm.decision === "object") {
+      return { decision: confirm.decision, confirmRan: true, confirm };
+    }
+    return { decision: stage1, confirmRan: true, confirm };
+  } catch {
+    // Transport failure — keep the Stage-1 verdict (no behavior change).
+    shared.recordConfirm({ stage1Disagreed: false });
+    return { decision: stage1, confirmRan: true };
+  }
+}
+
 /**
  * Route ONE candidate through the decide stage on the anchored frame (INC-2 /
  * ADAAAA-4325 slice 4). Shared by the video /analyze leg and the Stage-A audio
@@ -1281,7 +1588,7 @@ export async function decideOnCandidate(
     eventType: candidate.eventType,
     reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
   });
-  const decision = await client.decide(
+  const stage1 = await client.decide(
     {
       eventType: candidate.eventType,
       trackCount: shared.evidence.trackCount,
@@ -1300,7 +1607,12 @@ export async function decideOnCandidate(
   // Track the Stage-A FP-rate metric (INC-2 / ADAAAA-4325 slice 5): whether
   // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
   // reported onset latency. Feeds job.stageAMetrics fpRate = rejected / total.
-  shared.stageA.recordOutcome(decision.isHighlight, candidate.audio?.onsetLatencyS);
+  shared.stageA.recordOutcome(stage1.isHighlight, candidate.audio?.onsetLatencyS);
+  // ADAAAA-6797: Stage-2 confirmation dive — for an un-attested goal-type
+  // candidate whose Stage-1 read is a scoring_play accept, run the decide
+  // /confirm deep frame dive and adopt the reconciled verdict in its place. No
+  // behavior change when the trigger doesn't fire or the flag is off.
+  const { decision, confirm } = await confirmReconcile(client, shared, cfg, stage1, candidate);
   // ADAAAA-6598: accept gate — only a frame-confirmed scoring_play is a board
   // highlight. A near_miss / big_play read is recorded distinctly (outcome
   // preserved) but never cut as a GOAL highlight/clip.
@@ -1333,6 +1645,9 @@ export async function decideOnCandidate(
     // distinctly via the outcome/nearMiss flag on the highlight record.
     outcome: decision.outcome,
     nearMiss: decision.nearMiss,
+    // Stage-2 confirmation verdict (ADAAAA-6797), set when the trigger fired.
+    goalConfirmed: confirm?.goalConfirmed ?? undefined,
+    stage1Disagreed: confirm?.stage1Disagreed ?? undefined,
     status: "pending",
     createdAt: new Date().toISOString(),
   };
@@ -1501,7 +1816,7 @@ export async function analyzeJob(
             /* degrade to rolling window */
           }
         }
-        const decision = await client.decide(
+        const stage1 = await client.decide(
           {
             eventType: res.candidate.eventType,
             trackCount: evidence.trackCount,
@@ -1517,6 +1832,11 @@ export async function analyzeJob(
           },
           detailDecideOpts(cfg, run, anchoredImage, { timestamp: res.candidate.timestamp, peakAudioTs: res.candidate.audio?.ts }, burstFrames)
         );
+        // ADAAAA-6797: Stage-2 confirmation dive — for an un-attested goal-type
+        // candidate whose Stage-1 read is a scoring_play accept, run the decide
+        // /confirm deep frame dive and adopt the reconciled verdict. No change
+        // when the trigger doesn't fire or the config flag is off.
+        const { decision, confirm } = await confirmReconcile(client, run, cfg, stage1, res.candidate);
         if (isAcceptedHighlight(decision)) {
           // ADAAAA-6610 temporal burst suppression (see decideOnCandidate): a
           // GOAL accepted within `goalBurstWindowS` of a previous one is a
@@ -1544,6 +1864,10 @@ export async function analyzeJob(
               // labeled distinctly via the outcome/nearMiss flag.
               outcome: decision.outcome,
               nearMiss: decision.nearMiss,
+              // Stage-2 confirmation verdict (ADAAAA-6797), set when the
+              // trigger fired.
+              goalConfirmed: confirm?.goalConfirmed ?? undefined,
+              stage1Disagreed: confirm?.stage1Disagreed ?? undefined,
               status: "pending",
               createdAt: new Date().toISOString(),
             };
