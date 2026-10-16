@@ -194,6 +194,12 @@ export interface ServerConfig {
   freeHighlights: number;
   /** Fixed fee per decide call (single shot, USD). Default $0.01. */
   decideFee: number;
+  /** Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). When true, the
+   * VOD pass runs the decide `/confirm` deep-frame-dive for un-attested
+   * goal-type candidates and adopts the reconciled verdict. Wired from
+   * `DECIDE_CONFIRM_ENABLED` (default "0"). VOD-first: only the VOD pass reads
+   * this flag (the live pass never sets `confirmEnabled`), so rollout is safe. */
+  decideConfirmEnabled: boolean;
   /** Free plan included decide calls before gating (dev-friendly). */
   freeDecides: number;
   /** Dev-only: wireframe billing (no real Stripe). Enables /dev/billing/*. */
@@ -360,6 +366,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     publicBaseUrl: env.PUBLIC_BASE_URL ?? "http://127.0.0.1:3000",
     freeHighlights: Number(env.FREE_HIGHLIGHTS ?? 10),
     decideFee: Number(env.DECIDE_FEE ?? 0.01),
+    // Stage-2 goal/near-miss confirmation pass config flag (ADAAAA-6797).
+    // Default OFF (VOD-first rollout); the VOD pass reads it. Only when "1" do
+    // the VOD candidates go through the decide /confirm deep frame dive.
+    decideConfirmEnabled: env.DECIDE_CONFIRM_ENABLED === "1",
     freeDecides: Number(env.FREE_DECIDES ?? 5),
     billingWireframe: env.BILLING_WIREFRAME === "1" || env.BILLING_WIREFRAME === "true",
     betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),
