@@ -66,8 +66,8 @@ Already applied by G1–G5 (verified, no change needed):
 PROFILE  | fps  maxF  toolGate  traceRate | frames/call  tools/tick  trace/tick
   A      | 3.0   30     no        1.00     |      29.18       4.00     4.000   (G5 gate default)
   B      | 2.0   20     no        1.00     |      19.40       4.00     4.000   (chunk downsample)
-  C      | 2.0   20     yes       1.00     |      19.40       3.20     3.200   (+ tool gate)
-  D      | 2.0   20     yes       0.25     |      19.40       3.20     0.800   (+ trace-write rate)
+  C      | 2.0   20     yes       1.00     |      19.40       2.20     2.200   (+ tool gate)
+  D      | 2.0   20     yes       0.25     |      19.40       2.20     0.550   (+ trace-write rate)
 ```
 
 Knob effects (relative to profile A):
@@ -75,10 +75,14 @@ Knob effects (relative to profile A):
 - Chunk downsample `3 fps/30 -> 2 fps/20` lowers **frames per brain call by 33.5 %**
   — frame count is the per-call KV-cost multiplier, so this is the headline cost
   lever on the watcher pass.
-- Cost-gated tool policy lowers **tool calls per tick by 20 %** (and the deep
+- **Cost-gated tool policy** lowers **tool calls per tick by 45 %** (and the deep
   perceive GPU work behind `get_tracked_players` / `detect_objects`) on a
-  quiet-dominant stream (a 150 s non-event stream would show far more; motion/audio
-  frames keep the full four-tool sweep when something is happening).
+  quiet-dominant stream — measured on the genuine quiet-dominant case after a
+  QA follow-up (ADAAAA-6769) bounded the post-event tracked object to the event
+  window (a persistent object had kept the gate open ~71s of the 120s and
+  under-stated the effect at 20 %). Motion/audio windows still keep the full
+  four-tool sweep when something is happening; hypotheses seeded is unchanged
+  (event detection unaffected).
 - Trace-write-rate `0.25` lowers **trace records per tick by 75 %** (persistence
   write rate), without dropping tool calls.
 

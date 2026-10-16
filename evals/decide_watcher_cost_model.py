@@ -44,7 +44,11 @@ def synthesize_stream(total_s: float, fps: float, event_ts: float = 50.0) -> lis
     while t <= total_s + 1e-6:
         dt = abs(t - event_ts)
         in_event = dt <= 1.5
-        obj = [{"label": "ball", "confidence": 0.9, "bbox": [0.45, 0.45, 0.5, 0.5]}] if t >= event_ts - 1.0 else []
+        # QA follow-up (ADAAAA-6769): bound the tracked object to the event
+        # window like players/audio, so the stream is genuinely quiet-dominant
+        # and the cost-gate effect is measured on the stated case (a persistent
+        # post-event object kept the gate open ~71s of 120s and under-stated it).
+        obj = [{"label": "ball", "confidence": 0.9, "bbox": [0.45, 0.45, 0.5, 0.5]}] if in_event else []
         players = [{"trackId": "p1", "bbox": [0.3, 0.3, 0.4, 0.4], "label": "player"}] if in_event else []
         caption = "GOAL! crowd erupts" if in_event else ""
         audio_peak = 0.95 if in_event else 0.08
