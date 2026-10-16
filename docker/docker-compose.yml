@@ -290,6 +290,14 @@ services:
       # is set the watcher uses the frames' own signals (no broker trace, so no
       # runtime analysis-session trace — see the G2 Part 3 gate).
       - MEDIA_BROKER_URL=${MEDIA_BROKER_URL:-http://media:4070}
+      # ADAAAA-6785: direct perceive fallback for the decide watcher. The media
+      # broker only fronts sessions it provisions (live); a VOD perceive session
+      # is NOT registered there, so the broker answers 404 for it. When that
+      # happens the decide watcher falls back to this direct PERCEIVE_URL (the
+      # compose perceive runner on the hl network, serving its own analysis API
+      # on :8080) so the VOD still gets a perceive result instead of a
+      # request-only trace.
+      - PERCEIVE_URL=${PERCEIVE_URL:-http://perceive:8080}
       # ADAAAA-6748 G1b-2: the decide VOD watcher POSTs each decide->perceive
       # tool-call trace to the server's POST /jobs/:id/analysis/trace. Point the
       # sink at the compose server (hl network) so the trace rows land during a
