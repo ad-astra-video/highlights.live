@@ -54,6 +54,9 @@ function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
     // ADAAAA-5262 fine-tune trigger: not exercised in these unit tests, but
     // required on the PipelineClient interface.
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
+    // Stage-2 confirmation pass (ADAAAA-6797): not exercised in these unit
+    // tests, but required on the PipelineClient interface.
+    confirm: async () => ({ enabled: false, goalConfirmed: null, confidence: 0, reason: "", evidence: {}, stage1Disagreed: false, decision: { isHighlight: false, score: 0, eventType: "KILL" } }),
     ...over,
   };
   return { client, log };
