@@ -82,9 +82,9 @@ export function formatBytes(bytes: number): string {
  * interval and bound it only by `vodSampleMaxFps`.
  */
 export interface SampleFpsOpts {
-  /** Base per-job FPS override (VOD passed its `vodSampleFpsDefault`). For
-   * live it is absent, so the configured `sampleIntervalSec` cadence is the
-   * base AND the floor (keeps ~1 fps CPU runners from regressing). */
+  /** Base per-job FPS override (VOD passes `vodSampleFpsDefault`; the live
+   * route passes `liveSampleBaseFps`, ADAAAA-6796). When absent the configured
+   * `sampleIntervalSec` cadence is the base AND the floor. */
   defaultFps?: number;
   /** Hard ceiling on the resolved sampling fps. VOD's bound is
    * `vodSampleMaxFps` (default 8); live passes `liveSampleMaxFps` (default 10). */
@@ -99,11 +99,13 @@ export interface SampleFpsOpts {
  * reachable directly) else the configured interval.
  *
  * ADAAAA-5342: live mirrors the VOD mechanism (ADAAAA-3726) that drives
- * sampling from perceive's reported `sample_interval_s`. The base cadence
- * (the configured `sampleIntervalSec`, ~1 fps for live) is a FLOOR: a headroom
- * < 1 must never push a low-capability runner below its incumbent rate, so a
- * CPU runner (which reports interval >= 1.0) stays at ≈1 fps while a GPU
- * accelerates toward the chartered cadence bounded by the live cap.
+ * sampling from perceive's reported `sample_interval_s`. The base cadence is a
+ * FLOOR: a headroom < 1 must never push a low-capability runner below its
+ * incumbent rate. ADAAAA-6796 (Stage 1) raises the live base to
+ * `liveSampleBaseFps` (default 3 fps) so the decide read samples the dense
+ * crossing/conversion window for every live job; a CPU runner (which reports
+ * interval >= 1.0) samples at the 3 fps baseline while a GPU accelerates toward
+ * the chartered cadence bounded by the live cap.
  */
 export async function resolveSampleFps(
   cfg: ServerConfig,
@@ -1389,7 +1391,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // its sustained max, and floored at the base cadence so ~1 fps CPU
         // runners never regress. The resolved rate is recorded on the job so
         // it surfaces in job/stream metrics for verification.
+        // ADAAAA-6796 (Stage 1): the live primary-pass baseline is raised to
+        // 3 fps (liveSampleBaseFps) so the decide read samples the dense
+        // crossing/conversion window for every live job; the capability cap
+        // (liveSampleMaxFps) bounds cost per deployment.
         const sampleFps = await resolveSampleFps(cfg, {
+          defaultFps: cfg.liveSampleBaseFps,
           maxFps: cfg.liveSampleMaxFps,
           headroom: cfg.liveSampleHeadroom,
         });

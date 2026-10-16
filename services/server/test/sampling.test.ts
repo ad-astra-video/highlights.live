@@ -58,10 +58,11 @@ describe("resolveSampleFps (VOD source sampling)", () => {
     expect(await resolveSampleFps(cfg, { defaultFps: cfg.vodSampleFpsDefault })).toBeCloseTo(5.0);
   });
 
-  it("keeps the live path at the sampleIntervalSec-derived cadence (no VOD default)", async () => {
+  it("raises the live primary-pass baseline to the 3 fps default (ADAAAA-6796)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
-    const cfg = testCfg({ SAMPLE_INTERVAL_SEC: "1.0" }); // live default
-    expect(await resolveSampleFps(cfg)).toBeCloseTo(1.0);
+    const cfg = testCfg({}); // liveSampleBaseFps default = 3
+    expect(cfg.liveSampleBaseFps).toBe(3);
+    expect(await resolveSampleFps(cfg, { defaultFps: cfg.liveSampleBaseFps })).toBeCloseTo(3.0);
   });
 
   it("honors a per-job sampleFps override for VOD, still capped by vodSampleMaxFps", async () => {
@@ -74,18 +75,20 @@ describe("resolveSampleFps (VOD source sampling)", () => {
   });
 });
 
-describe("resolveSampleFps (live sampling, ADAAAA-5342)", () => {
+describe("resolveSampleFps (live sampling, ADAAAA-5342 / ADAAAA-6796)", () => {
   const liveOpts = (cfg: ReturnType<typeof testCfg>) => ({
+    defaultFps: cfg.liveSampleBaseFps, // ADAAAA-6796: 3 fps primary-pass baseline
     maxFps: cfg.liveSampleMaxFps,
     headroom: cfg.liveSampleHeadroom,
   });
   const liveCfg = (extra: Record<string, string> = {}) =>
     testCfg({ PERCEIVE_URL: "http://perceive", SAMPLE_INTERVAL_SEC: "1.0", ...extra });
 
-  it("defaults the live cap to 10 and headroom to 0.9", () => {
+  it("defaults the live cap to 10, headroom to 0.9, and baseline to 3", () => {
     const cfg = testCfg({});
     expect(cfg.liveSampleMaxFps).toBe(10);
     expect(cfg.liveSampleHeadroom).toBeCloseTo(0.9);
+    expect(cfg.liveSampleBaseFps).toBe(3);
   });
 
   it("resolves a capable GPU to min(10, runnerMaxFps * 0.9) for live", async () => {
@@ -94,28 +97,28 @@ describe("resolveSampleFps (live sampling, ADAAAA-5342)", () => {
     const fps = await resolveSampleFps(cfg, liveOpts(cfg));
     // 13 * 0.9 = 11.7 -> capped at 10
     expect(fps).toBeCloseTo(10.0);
-    // A 5 fps-capable GPU: 5 * 0.9 = 4.5, above the 1 fps floor
+    // A 5 fps-capable GPU: 5 * 0.9 = 4.5, above the 3 fps baseline
     stubHealth(0.2); // 5 fps
     expect(await resolveSampleFps(cfg, liveOpts(cfg))).toBeCloseTo(4.5);
   });
 
-  it("keeps a ~1 fps CPU runner at ~1 fps (base-cadence floor beats headroom)", async () => {
+  it("floors a slow/CPU runner at the 3 fps primary-pass baseline (not the old 1 fps)", async () => {
     const cfg = liveCfg({ LIVE_SAMPLE_HEADROOM: "0.9" });
     stubHealth(1.0); // CPU runner: 1 fps
-    // 1 * 0.9 = 0.9, but the base cadence floor (SAMPLE_INTERVAL_SEC=1.0) holds it at ~1
-    expect(await resolveSampleFps(cfg, liveOpts(cfg))).toBeCloseTo(1.0);
+    // 1 * 0.9 = 0.9, but the ADAAAA-6796 baseline floor raises it to 3 fps
+    expect(await resolveSampleFps(cfg, liveOpts(cfg))).toBeCloseTo(3.0);
   });
 
-  it("stays at the base cadence when perceive is unreachable even with headroom", async () => {
+  it("stays at the 3 fps baseline when perceive is unreachable even with headroom", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
     const cfg = liveCfg({ LIVE_SAMPLE_HEADROOM: "0.9" });
-    expect(await resolveSampleFps(cfg, liveOpts(cfg))).toBeCloseTo(1.0);
+    expect(await resolveSampleFps(cfg, liveOpts(cfg))).toBeCloseTo(3.0);
   });
 
-  it("does not regress below the incumbent live cadence for a low-but-reported runner", async () => {
+  it("floors a low-but-reported runner up to the 3 fps baseline", async () => {
     const cfg = liveCfg({ SAMPLE_INTERVAL_SEC: "1.0", LIVE_SAMPLE_HEADROOM: "0.9" });
     stubHealth(1.2); // runner slower than 1 fps (interval 1.2s)
-    // (1 / 1.2) * 0.9 = 0.75 -> floored back up to the 1 fps base cadence
-    expect(await resolveSampleFps(cfg, liveOpts(cfg))).toBeCloseTo(1.0);
+    // (1 / 1.2) * 0.9 = 0.75 -> floored back up to the 3 fps baseline
+    expect(await resolveSampleFps(cfg, liveOpts(cfg))).toBeCloseTo(3.0);
   });
 });

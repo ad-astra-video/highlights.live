@@ -94,6 +94,16 @@ export interface ServerConfig {
    * above the VOD ceiling because live holds the runner open for a stream and
    * samples its own cadence. `LIVE_SAMPLE_MAX_FPS` = 10. */
   liveSampleMaxFps: number;
+  /** ADAAAA-6796 (Stage 1): LIVE primary-pass frame-sampling BASELINE for the
+   * decide read (frames/second) that every live job samples at least. The live
+   * rail previously floored at the `sampleIntervalSec` cadence (~1 fps), so the
+   * cached frame window the decide assembler samples was coarse and the
+   * crossing/conversion instant could fall between frames (near-miss-as-goal
+   * leaks). This raises the live baseline to 3 fps for ALL live jobs — the
+   * decide read now sees ~3 fps (the assembler caps at `analysisFps`), so the
+   * goal-vs-near-miss call is materially better on the first pass. Configurable
+   * per deployment (tunable ceiling); `LIVE_SAMPLE_BASE_FPS` = 3. */
+  liveSampleBaseFps: number;
   /** Headroom (0..1) applied to the runner's measured LIVE max fps so the
    * runner never sits at its sustained ceiling (frame-queue latency backs up
    * inside the 1-5s budget). ADAAAA-5342: live samples at
@@ -335,6 +345,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // >= 1.0) stays at ~1 fps via the base-cadence floor. Tunable without a
     // redeploy via LIVE_SAMPLE_MAX_FPS / LIVE_SAMPLE_HEADROOM.
     liveSampleMaxFps: Number(env.LIVE_SAMPLE_MAX_FPS ?? 10),
+    // ADAAAA-6796 (Stage 1): LIVE primary-pass decide-read sampling baseline.
+    // Raised to 3 fps (from the ~1 fps sampleIntervalSec floor) so the decide
+    // read sees the crossing/conversion instant for every live job. Tunable per
+    // deployment via LIVE_SAMPLE_BASE_FPS.
+    liveSampleBaseFps: Number(env.LIVE_SAMPLE_BASE_FPS ?? 3),
     liveSampleHeadroom: Number(env.LIVE_SAMPLE_HEADROOM ?? 0.9),
     jwtSecret: env.JWT_SECRET ?? "dev-insecure-secret-change-me",
     resetTokenTtlSec: Number(env.RESET_TOKEN_TTL_SEC ?? 3600),
