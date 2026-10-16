@@ -160,3 +160,16 @@ def test_trace_record_shape_roundtrips_through_to_dict():
     assert isinstance(rec["window"], dict) and "start" in rec["window"] and "end" in rec["window"]
     assert "response" in rec
     assert rec["tool"] in ("get_audio_levels", "get_tracked_players", "detect_objects", "get_captioning")
+
+
+# --- trace record: a None tool result must NOT emit response:null (ADAAAA-6753) ---
+def test_trace_record_omits_response_when_result_none():
+    s = WatcherSession(config=CFG, perceive=lambda *a, **k: None)
+    traces = []
+    s._trace = traces.append  # noqa: SLF001
+    s.ingest_many(_frames_through(6.0))
+    s.step(6.0)
+    rec = traces[0]
+    assert "response" not in rec
+    assert rec["resultOk"] is False
+    assert isinstance(rec["at"], int) and isinstance(rec["request"], dict)
