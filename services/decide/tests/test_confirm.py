@@ -1,0 +1,232 @@
+"""ADAAAA-6797 — Stage-2 goal/near-miss confirmation pass unit tests.
+
+Locks the confirmation-pass contract: (1) the pass is gated by
+``DECIDE_CONFIRM_ENABLED`` (default off -> passthrough, no regression); (2) the
+contradictory-hypothesis prompt and the structured ``goalConfirmed`` parse; (3)
+the deterministic reconcile (confirmed_goal -> scoring_play goal highlight;
+near_miss -> near_miss, never a board goal; not_goal -> not a highlight); and
+(4) the Stage-1 vs Stage-2 disagreement rate flag. Runs with no real gemma
+server (``_call_gemma`` is monkeypatched).
+"""
+import os
+
+import pytest
+
+from app import app
+from app import confirm as cf
+from app.confirm import (
+    ConfirmDecision,
+    parse_confirm,
+    reconcile_confirmed_goal,
+    run_confirmation_pass,
+    stage1_disagrees,
+    _norm_evidence,
+)
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+
+
+# --- disabled / passthrough -------------------------------------------------
+
+
+def test_disabled_by_default_passthrough(monkeypatch):
+    monkeypatch.delenv("DECIDE_CONFIRM_ENABLED", raising=False)
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 72, "reason": "stage1 reason", "eventType": "GOAL"}
+    req = {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]}
+    resp = run_confirmation_pass(req)
+    assert resp["enabled"] is False
+    assert resp["goalConfirmed"] is None
+    # decision passes the Stage-1 verdict through unchanged.
+    assert resp["decision"] == stage1
+
+
+def test_endpoint_confirm_disabled_returns_passthrough(monkeypatch):
+    monkeypatch.delenv("DECIDE_CONFIRM_ENABLED", raising=False)
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 75, "reason": "r", "eventType": "GOAL"}
+    data = client.post(
+        "/confirm",
+        json={"eventType": "GOAL", "stage1": stage1, "frames": [{"base64": "x"}]},
+    )
+    assert data.status_code == 200
+    body = data.json()
+    assert body["enabled"] is False
+    assert body["goalConfirmed"] is None
+    assert body["decision"] == stage1
+
+
+# --- parse ----------------------------------------------------------------
+
+
+def test_parse_confirm_accepts_closed_set():
+    for val in ("confirmed_goal", "near_miss", "not_goal"):
+        parsed = parse_confirm(
+            '{"goalConfirmed": "%s", "confidence": 0.9, "reason": "r", '
+            '"evidence": {"ballInNet": true, "audioErupted": null}}' % val
+        )
+        assert parsed is not None
+        assert parsed["goalConfirmed"] == val
+        # tri-state: a bool stays, a non-bool/null becomes None.
+        ev = parsed["evidence"]
+        assert ev["ballInNet"] is True
+        assert ev["audioErupted"] is None
+
+
+def test_parse_confirm_rejects_bad_verdict():
+    assert parse_confirm('{"goalConfirmed": "maybe_goal", "confidence": 0.5}') is None
+    assert parse_confirm('{"confidence": 0.5}') is None
+    assert parse_confirm("not json at all") is None
+    # fenced JSON still parses.
+    parsed = parse_confirm('```json\n{"goalConfirmed": "near_miss", "confidence": 0.7}\n```')
+    assert parsed is not None
+    assert parsed["goalConfirmed"] == "near_miss"
+
+
+def test_norm_evidence_coerces_tristate():
+    ev = _norm_evidence(
+        {"ballTrajectoryCrossedLine": True, "ballInNet": False, "sustainedScoringMotion": "yes"}
+    )
+    assert ev["ballTrajectoryCrossedLine"] is True
+    assert ev["ballInNet"] is False
+    assert ev["sustainedScoringMotion"] is None
+
+
+# --- disagreement ----------------------------------------------------------
+
+
+def test_stage1_disagrees():
+    # Stage-1 said goal, confirm refutes -> disagree.
+    assert stage1_disagrees({"outcome": "scoring_play"}, "near_miss") is True
+    assert stage1_disagrees({"outcome": "scoring_play"}, "not_goal") is True
+    # Stage-1 said goal, confirm confirms -> agree.
+    assert stage1_disagrees({"outcome": "scoring_play"}, "confirmed_goal") is False
+    # Stage-1 said not-goal, confirm confirms goal -> disagree (a corrected reject).
+    assert stage1_disagrees({"outcome": "not_highlight"}, "confirmed_goal") is True
+    assert stage1_disagrees({"outcome": "near_miss"}, "confirmed_goal") is True
+    # Stage-1 said near_miss, confirm says near_miss -> agree.
+    assert stage1_disagrees({"outcome": "near_miss"}, "near_miss") is False
+
+
+# --- reconcile -------------------------------------------------------------
+
+
+def test_reconcile_confirmed_goal_is_scoring_play():
+    d = reconcile_confirmed_goal("confirmed_goal", {"outcome": "near_miss", "score": 40, "eventType": "GOAL"}, comment="ball crossed the line")
+    assert d["outcome"] == "scoring_play"
+    assert d["isHighlight"] is True
+    assert d["nearMiss"] is False
+    assert d["score"] >= 60  # confirmed goal never sits below the scoring bar
+    assert "confirmed" in d["reason"]
+
+
+def test_reconcile_near_miss_is_not_board_goal():
+    d = reconcile_confirmed_goal("near_miss", {"outcome": "scoring_play", "score": 80, "eventType": "GOAL"})
+    assert d["outcome"] == "near_miss"
+    assert d["nearMiss"] is True
+    assert d["isHighlight"] is False  # ADAAAA-6598: a near miss is never a board goal
+    assert d["score"] < 60
+
+
+def test_reconcile_not_goal_is_not_highlight():
+    d = reconcile_confirmed_goal("not_goal", {"outcome": "scoring_play", "score": 88, "eventType": "GOAL"})
+    assert d["outcome"] == "not_highlight"
+    assert d["isHighlight"] is False
+    assert d["nearMiss"] is False
+
+
+def test_reconcile_never_raises_on_bad_stage1():
+    d = reconcile_confirmed_goal("near_miss", {"score": "not-a-number"})
+    assert d["outcome"] == "near_miss"
+    assert d["isHighlight"] is False
+
+
+# --- end-to-end run with a mocked gemma call --------------------------------
+
+
+def test_run_pass_confirms_goal_and_disagrees(monkeypatch):
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "stage1 templated"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.95, '
+        '"reason": "dense frames show the ball crossing the line and in the net", '
+        '"evidence": {"ballTrajectoryCrossedLine": true, "ballInNet": true, "audioErupted": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass({"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]})
+    assert resp["enabled"] is True
+    assert resp["goalConfirmed"] == "confirmed_goal"
+    assert resp["confidence"] == 0.95
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
+    # Stage-1 already said goal, so confirm-agree means NO disagreement.
+    assert resp["stage1Disagreed"] is False
+
+
+def test_run_pass_refutes_goal_and_disagrees(monkeypatch):
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 74, "eventType": "GOAL", "reason": "templated"}
+    canned = (
+        '{"goalConfirmed": "near_miss", "confidence": 0.8, '
+        '"reason": "trajectory shows the shot hitting the post; ball did not cross the line", '
+        '"evidence": {"ballTrajectoryCrossedLine": false, "sustainedScoringMotion": false}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass({"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]})
+    assert resp["enabled"] is True
+    assert resp["goalConfirmed"] == "near_miss"
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False  # never a board goal
+    assert resp["stage1Disagreed"] is True  # confirmation CORRECTED the primary read
+
+
+def test_run_pass_unparseable_passthrough(monkeypatch):
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "r"}
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: "not valid json")
+    resp = run_confirmation_pass({"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]})
+    assert resp["enabled"] is True
+    assert resp["goalConfirmed"] is None
+    assert resp["decision"] == stage1  # passthrough, no crash
+
+
+def test_run_pass_gemma_transport_failure_passthrough(monkeypatch):
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "r"}
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: None)
+    resp = run_confirmation_pass({"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]})
+    assert resp["enabled"] is True
+    assert resp["goalConfirmed"] is None
+    assert resp["decision"] == stage1
+
+
+def test_prompt_tests_contradictory_hypothesis():
+    p = cf.build_confirm_prompt(
+        event_type="GOAL",
+        game_hint="soccer",
+        stage1={"outcome": "scoring_play", "reason": "templated", "score": 80},
+        n_frames=12,
+        n_keyframes=3,
+        trajectories=[{"label": "ball", "trackId": "t1", "path": [[0, 0.5, 0.5], [1, 0.6, 0.4]]}],
+        optical_flow=1.5,
+        flow_magnitudes=[0.1, 0.2, 0.3],
+        audio_levels=[0.2, 0.5, 0.9],
+        transcript="commentary erupts",
+        ball_outcome=None,
+        goal_crossed=None,
+        scoreboard_changed=False,
+    )
+    # The contradictory hypothesis is explicit.
+    assert "CONTRADICTORY HYPOTHESIS" in p
+    assert "near miss" in p.lower()
+    # Stage-1 verdict + reason are presented back.
+    assert "stage-1 (primary pass) verdict" in p
+    assert "templated" in p
+    # Denser context is rendered (frames, keyframes, trajectory, optical flow).
+    assert "dense frame window" in p
+    assert "precise keyframes" in p
+    assert "ball" in p and "path" in p
+    assert "optical-flow" in p
+    # Corroboration is presented as INPUT, never a gate.
+    assert "INPUT ONLY, never a gate" in p
+    # The structured goalConfirmed is required.
+    assert "goalConfirmed" in p
