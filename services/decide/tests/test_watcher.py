@@ -158,3 +158,52 @@ def test_trace_record_shape_roundtrips_through_to_dict():
     assert rec["type"] == "watcher_tool_call"
     assert rec["tool"] in ("get_audio_levels", "get_tracked_players", "detect_objects", "get_captioning")
     assert isinstance(rec["resultOk"], bool)
+
+
+# --- G6 cost knobs (ADAAAA-6743) -----------------------------------------
+def test_cost_gate_narrows_to_cheap_tools_on_a_quiet_window_only():
+    from app.watcher import cost_gated_tool_policy
+
+    quiet = [Frame(ts=1.0, seq=0, audio_peak=0.05), Frame(ts=2.0, seq=1, audio_peak=0.10)]
+    cfg = WatcherConfig(tool_gate=True)
+    assert cost_gated_tool_policy(quiet, cfg) == ["get_audio_levels", "get_captioning"]
+
+    # A cheap pre-signal (audio spike) unlocks the deep tools.
+    loud = [Frame(ts=1.0, seq=0, audio_peak=0.9), Frame(ts=2.0, seq=1, audio_peak=0.9)]
+    assert set(cost_gated_tool_policy(loud, cfg)) == {"get_audio_levels", "get_tracked_players", "detect_objects", "get_captioning"}
+
+    # A motion frame (a tracked player) also unlocks the deep tools.
+    moving = [Frame(ts=1.0, seq=0, players=[{"trackId": "p0"}]), Frame(ts=2.0, seq=1, audio_peak=0.05)]
+    assert set(cost_gated_tool_policy(moving, cfg)) == {"get_audio_levels", "get_tracked_players", "detect_objects", "get_captioning"}
+
+    # Gate off keeps the full all-four-tools policy on a quiet window.
+    assert cost_gated_tool_policy(quiet, WatcherConfig(tool_gate=False)) == ["get_audio_levels", "get_tracked_players", "detect_objects", "get_captioning"]
+
+
+def test_cost_trace_write_rate_downsampled_and_reported():
+    """The G6 trace-write-rate knob downsamples the analysis-session-trace write
+    rate (not the tool call), and the session reports the aggregated cost."""
+    called = []
+
+    def fake_perceive(tool, start, end, max_points):
+        called.append(tool)
+        return {"tool": tool, "window": {"start": start, "end": end}, "count": 0, "total": 0, "truncated": False, "data": []}
+
+    traces = []
+    cfg = WatcherConfig(tick_s=3.0, window_s=10.0, fps=3.0, max_frame_count=30,
+                        tool_gate=False, trace_write_rate=0.25)
+    s = WatcherSession(config=cfg, perceive=fake_perceive, trace=lambda rec: traces.append(rec))
+    s.ingest_many(_frames_through(30.0))
+    rows = []
+    tick = 3.0
+    while tick <= 30.0 + 1e-6:
+        rows.append(s.step(tick))
+        tick = round(tick + 3.0, 3)
+    # 4 tools/tick * 10 ticks = 40 tool calls; at rate 0.25 only 1-in-4 traced.
+    assert s.cost()["tool_calls"] == 40
+    assert s.cost()["trace_records"] == 10
+    assert len(traces) == 10
+    assert s.cost()["trace_per_tick"] == 1.0
+    # frames-per-brain-call reported (30-frame chunk) -> cost driver quantified.
+    assert s.cost()["frames_per_brain_call"] > 0
+    assert s.cost()["ticks"] == 10

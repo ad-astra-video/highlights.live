@@ -1,0 +1,85 @@
+{
+  "config": {
+    "A_gate_default": {
+      "fps": 3.0,
+      "maxFrames": 30,
+      "toolGate": false,
+      "traceRate": 1.0
+    },
+    "B_downsample": {
+      "fps": 2.0,
+      "maxFrames": 20,
+      "toolGate": false,
+      "traceRate": 1.0
+    },
+    "C_downsample_gate": {
+      "fps": 2.0,
+      "maxFrames": 20,
+      "toolGate": true,
+      "traceRate": 1.0
+    },
+    "D_full_cost": {
+      "fps": 2.0,
+      "maxFrames": 20,
+      "toolGate": true,
+      "traceRate": 0.25
+    }
+  },
+  "profiles": {
+    "A": {
+      "ticks": 40,
+      "brain_frames": 1167,
+      "tool_calls": 160,
+      "trace_records": 160,
+      "frames_per_brain_call": 29.175,
+      "tool_calls_per_tick": 4.0,
+      "trace_per_tick": 4.0,
+      "trace_records_total": 160,
+      "hypotheses_seeded": 4
+    },
+    "B": {
+      "ticks": 40,
+      "brain_frames": 776,
+      "tool_calls": 160,
+      "trace_records": 160,
+      "frames_per_brain_call": 19.4,
+      "tool_calls_per_tick": 4.0,
+      "trace_per_tick": 4.0,
+      "trace_records_total": 160,
+      "hypotheses_seeded": 4
+    },
+    "C": {
+      "ticks": 40,
+      "brain_frames": 776,
+      "tool_calls": 128,
+      "trace_records": 128,
+      "frames_per_brain_call": 19.4,
+      "tool_calls_per_tick": 3.2,
+      "trace_per_tick": 3.2,
+      "trace_records_total": 128,
+      "hypotheses_seeded": 4
+    },
+    "D": {
+      "ticks": 40,
+      "brain_frames": 776,
+      "tool_calls": 128,
+      "trace_records": 32,
+      "frames_per_brain_call": 19.4,
+      "tool_calls_per_tick": 3.2,
+      "trace_per_tick": 0.8,
+      "trace_records_total": 32,
+      "hypotheses_seeded": 4
+    }
+  },
+  "knob_effects": {
+    "downsample_brain_frames_pct": 33.5,
+    "tool_gate_tool_calls_pct": 20.0,
+    "trace_rate_trace_pct": 75.0,
+    "frames_per_brain_call_A": 29.175,
+    "frames_per_brain_call_B": 19.4,
+    "tool_calls_per_tick_B": 4.0,
+    "tool_calls_per_tick_C": 3.2,
+    "trace_per_tick_C": 3.2,
+    "trace_per_tick_D": 0.8
+  }
+}

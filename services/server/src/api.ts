@@ -559,6 +559,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // candidate loop. Default OFF — the deployed live baseline is unchanged.
         liveWatcherFirst: cfg.liveWatcherFirst,
         streamId: job.id,
+        // ADAAAA-6743 G6: cost-tuned watcher profile (plan Part 4). These carry
+        // the chunk-downsample / cost-gated tool / trace-write-rate knobs to the
+        // decide watcher on the live watcher-first path.
+        watcherTickS: cfg.watcherTickS,
+        watcherFps: cfg.watcherFps,
+        watcherMaxFrameCount: cfg.watcherMaxFrameCount,
+        watcherToolGate: cfg.watcherToolGate,
+        watcherTraceWriteRate: cfg.watcherTraceWriteRate,
       };
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while

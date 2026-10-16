@@ -156,6 +156,19 @@ export interface ServerConfig {
    * passive analysis only. Default OFF so current live behavior is preserved.
    * `LIVE_WATCHER_FIRST`. */
   liveWatcherFirst: boolean;
+  /** ADAAAA-6743 G6 cost knobs (plan Part 4) for the decide watcher. These
+   * select the cost-tuned watcher profile on the live watcher-first path:
+   * a cheaper chunk (2 fps -> 20 frames) is the KV-cost multiplier, the cost
+   * gate bounds the deep perceive tool calls to a cheap CPU/audio pre-signal,
+   * and the trace-write-rate downsamples the analysis-session-trace write rate.
+   * Defaults preserve the G5 gate shape (3 fps / 30 frames, open tool policy,
+   * trace every call). `WATCHER_TICK_S` / `WATCHER_FPS` /
+   * `WATCHER_MAX_FRAME_COUNT` / `WATCHER_TOOL_GATE` / `WATCHER_TRACE_WRITE_RATE`. */
+  watcherTickS: number;
+  watcherFps: number;
+  watcherMaxFrameCount: number;
+  watcherToolGate: boolean;
+  watcherTraceWriteRate: number;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -359,6 +372,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // baseline is byte-for-byte the legacy per-frame candidate loop until an
     // operator enables it (needs CEO compute sign-off per plan Part 4).
     liveWatcherFirst: env.LIVE_WATCHER_FIRST === "1" || env.LIVE_WATCHER_FIRST === "true",
+    // ADAAAA-6743 G6 watcher cost knobs (plan Part 4). Defaults preserve the
+    // G5 gate shape; set these via env to select a cost-tuned live profile.
+    watcherTickS: Number(env.WATCHER_TICK_S ?? 3),
+    watcherFps: Number(env.WATCHER_FPS ?? 3),
+    watcherMaxFrameCount: Number(env.WATCHER_MAX_FRAME_COUNT ?? 30),
+    watcherToolGate: env.WATCHER_TOOL_GATE === "1" || env.WATCHER_TOOL_GATE === "true",
+    watcherTraceWriteRate: Number(env.WATCHER_TRACE_WRITE_RATE ?? 1.0),
     // ADAAAA-5342: live sampling driven from the runner's measured capability
     // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
     // headroom so capable GPUs accelerate toward the chartered cadence while

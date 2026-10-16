@@ -464,6 +464,14 @@ export interface AnalyzerConfig {
    * server config flag.
    */
   liveWatcherFirst?: boolean;
+  /** ADAAAA-6743 G6 cost knobs for the decide watcher on the live watcher-first
+   * path (plan Part 4). See ServerConfig; defaults preserve the G5 gate shape.
+   * Only read when `liveWatcherFirst` is set. */
+  watcherTickS?: number;
+  watcherFps?: number;
+  watcherMaxFrameCount?: number;
+  watcherToolGate?: boolean;
+  watcherTraceWriteRate?: number;
   /** ADAAAA-6742 G5: the live stream id handed to the decide watcher/stash
    * (== the live job id). Only read when `liveWatcherFirst` is set. */
   streamId?: string;
@@ -1453,7 +1461,22 @@ async function startWatcher(
   cfg: AnalyzerConfig
 ): Promise<void> {
   const streamId = cfg.streamId ?? cfg.jobId;
-  await watcher.watcherStart({ sessionId, streamId, traceJobId: cfg.jobId, config: {} });
+  // ADAAAA-6743 G6: pass the cost-tuned watcher profile (plan Part 4) — chunk
+  // downsample (2 fps -> 20 frames), cost-gated tool policy, trace-write rate.
+  // All optional: when absent decide uses its pass-1 gate defaults.
+  const watcherConfig: Record<string, unknown> = {
+    tick_s: cfg.watcherTickS,
+    fps: cfg.watcherFps,
+    max_frame_count: cfg.watcherMaxFrameCount,
+    tool_gate: cfg.watcherToolGate,
+    trace_write_rate: cfg.watcherTraceWriteRate,
+  };
+  // Drop undefined keys so decide's WatcherConfig(**config) only receives values
+  // the operator actually set (it would 500 on a bare undefined for a Numeric?
+  // — WatcherConfig is a plain dataclass, so filter conservatively).
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(watcherConfig)) if (v !== undefined) clean[k] = v;
+  await watcher.watcherStart({ sessionId, streamId, traceJobId: cfg.jobId, config: clean });
   await watcher.stashStart({ sessionId, streamId, jobId: cfg.jobId, config: {} });
 }
 
