@@ -135,6 +135,29 @@ export interface ServerConfig {
   analysisPostWindowS: number;
   vodAnalysisPreWindowS: number;
   vodAnalysisPostWindowS: number;
+  /**
+   * ADAAAA-6577: base (ms) delay of the bounded exponential backoff between a
+   * session-lost (404) and the next perceive re-reserve/retry of the SAME
+   * frame (VOD + live analyze passes). Default 500. `VOD_SESSION_RETRY_BACKOFF_MS`.
+   */
+  vodSessionRetryBackoffBaseMs: number;
+  /**
+   * ADAAAA-6577: hard cap (ms) on the session-lost re-reserve backoff.
+   * Default 8000. `VOD_SESSION_RETRY_BACKOFF_MAX_MS`.
+   */
+  vodSessionRetryBackoffMaxMs: number;
+  /**
+   * ADAAAA-6764: lenient (ms) backoff between LIVE-path reconnect attempts
+   * after the fast in-pass re-reserve is exhausted on a persistent
+   * session-lost (404). Default 30000 (30 s). `LIVE_RECONNECT_BACKOFF_MS`.
+   */
+  liveReconnectBackoffMs: number;
+  /**
+   * ADAAAA-6764: bound on the number of LENIENT LIVE reconnects before the
+   * live job aborts cleanly (`failed`) instead of spinning forever.
+   * Default 4. `LIVE_MAX_RECONNECTS`.
+   */
+  liveMaxReconnects: number;
   /** ADAAAA-6314 Path 2: forward the surrounding audio clip for LIVE trigger
    * candidates so the gemma decide prompt gets ASR'd audio context. Default off
    * so the deployed live baseline sends no new payload until an operator enables
@@ -303,6 +326,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     analysisPostWindowS: Number(env.ANALYSIS_POST_WINDOW_S ?? 3),
     vodAnalysisPreWindowS: Number(env.VOD_ANALYSIS_PRE_WINDOW_S ?? 3),
     vodAnalysisPostWindowS: Number(env.VOD_ANALYSIS_POST_WINDOW_S ?? 5),
+    // ADAAAA-6577: bounded exponential backoff between a session-lost (404)
+    // and the next perceive re-reserve/retry of the same frame. Keeps a
+    // flapping runner from getting a re-reserve request storm. Base 500 ms,
+    // cap 8000 ms; tunable without redeploy. The retry loop is shared between
+    // the live and VOD analyzeJob passes, so one pair tunes both.
+    vodSessionRetryBackoffBaseMs: Number(env.VOD_SESSION_RETRY_BACKOFF_MS ?? 500),
+    vodSessionRetryBackoffMaxMs: Number(env.VOD_SESSION_RETRY_BACKOFF_MAX_MS ?? 8000),
+    // ADAAAA-6764: lenient bounded reconnect loop for the LIVE path — after the
+    // fast in-pass re-reserve is exhausted on a persistent session-lost (404),
+    // the live job sleeps LIVE_RECONNECT_BACKOFF_MS (30 s) before re-reserving
+    // a fresh perceive session, up to LIVE_MAX_RECONNECTS (4) times, instead of
+    // going `failed` on a transient perceive-runner outage.
+    liveReconnectBackoffMs: Number(env.LIVE_RECONNECT_BACKOFF_MS ?? 30000),
+    liveMaxReconnects: Number(env.LIVE_MAX_RECONNECTS ?? 4),
     // I4 / ADAAAA-6361: live-path decide() carries the surrounding audio clip so
     // Gemma gets auditory context, matching VOD. Opt out with LIVE_AUDIO_CONTEXT=0.
     audioContext: env.LIVE_AUDIO_CONTEXT !== "0",

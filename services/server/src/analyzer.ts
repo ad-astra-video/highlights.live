@@ -381,6 +381,46 @@ export interface AnalyzerConfig {
    */
   maxReReserves?: number;
   /**
+   * ADAAAA-6577: base (millisecond) delay of the bounded exponential backoff
+   * between a session-lost (404) and the next re-reserve/retry of the SAME
+   * frame. The delay grows `base * 2^attempt` (hard-capped at
+   * `sessionRetryBackoffMaxMs`) so a flapping perceive runner — where every
+   * `/analyze` 404s — is NOT hammered by a tight re-reserve/retry request
+   * storm. A VOD pass can ride through a brief runner recovery instead of
+   * spinning; if the runner stays down past `maxReReserves` the pass still
+   * aborts cleanly with the SessionLostError (no infinite spin).
+   * Default 500 ms. `VOD_SESSION_RETRY_BACKOFF_MS`.
+   */
+  sessionRetryBackoffBaseMs?: number;
+  /**
+   * ADAAAA-6577: hard cap (millisecond) on the session-lost re-reserve
+   * backoff delay — `base * 2^attempt` never exceeds this. Default 8000 ms.
+   * `VOD_SESSION_RETRY_BACKOFF_MAX_MS`.
+   */
+  sessionRetryBackoffMaxMs?: number;
+  /**
+   * ADAAAA-6764: lenient (millisecond) backoff between LIVE-path reconnect
+   * attempts. After the FAST in-pass re-reserve (`maxReReserves` tight
+   * attempts at `sessionRetryBackoffBaseMs` exponential) is exhausted on a
+   * persistent session-lost (404), the live job enters a LENIENT reconnect
+   * loop that sleeps `liveReconnectBackoffMs` then re-reserves a fresh
+   * perceive session and retries the frame — so a persistent perceive-runner
+   * outage does NOT fail the live job. The sleep gives a restarting runner
+   * time to come back before we give up. Default 30000 (30 s).
+   * `LIVE_RECONNECT_BACKOFF_MS`.
+   */
+  liveReconnectBackoffMs?: number;
+  /**
+   * ADAAAA-6764: bound on the number of LENIENT reconnect attempts for the
+   * LIVE path. After that many `liveReconnectBackoffMs` intervals are still
+   * session-lost, the job aborts cleanly (throws SessionLostError -> job
+   * `failed`) instead of spinning forever — a runner genuinely down past
+   * ~2-4 min (default 4 × 30-60 s) is a real failure. Default 4.
+   * `LIVE_MAX_RECONNECTS`. The VOD pass keeps the tight `maxReReserves`-only
+   * behavior (no lenient loop).
+   */
+  liveMaxReconnects?: number;
+  /**
    * Increment D (ADAAAA-6467): the stream-start warm-up window (seconds)
    * within which exactly ONE planner call must deliver a valid TrackingPlan
    * before the per-frame loop begins steady-state tracking. The worker does
@@ -420,6 +460,30 @@ export class SessionLostError extends Error {
     super(msg);
     this.name = "SessionLostError";
   }
+}
+
+/** Simple promise sleep (ADAAAA-6577). Exported so the backoff cadence is
+ * unit-testable and injectable (tests pass a fake to avoid real timers). */
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * ADAAAA-6577: the bounded exponential backoff delay (ms) for the Nth
+ * session-lost re-reserve/retry of a frame. `base * 2^(attempt - 1)` — so with
+ * the 500 ms default the cadence is 500 -> 1000 -> 2000 -> 4000 ms, hard-capped
+ * at `maxMs`. This is what keeps a flapping perceive runner (every `/analyze`
+ * 404s) from being hammered by a tight re-reserve/retry request storm: with the
+ * defaults a single frame's re-reserves are spread ~500ms / ~1s / ~2s apart,
+ * i.e. well under ~1 re-reserve/sec. `attempt` is the 1-based re-reserve
+ * ordinal (1 = first retry).
+ */
+export function sessionRetryBackoffMs(attempt: number, baseMs: number, maxMs: number): number {
+  const n = Math.max(1, Math.floor(attempt));
+  const exp = Math.max(0, n - 1);
+  // 2^exp for exp < 53 is exact; beyond that the cap has long since dominated.
+  const delay = baseMs * 2 ** exp;
+  return Math.min(maxMs, delay);
 }
 
 /** Compute per-job evidence from the observation stream. */
@@ -1271,9 +1335,22 @@ export async function analyzeJob(
    * LiveRunShared so both legs share the frame-anchor window, video evidence,
    * and collected highlights. When absent (VOD), a private namespace is used
    * and behavior is unchanged. */
-  shared_?: LiveRunShared
+  shared_?: LiveRunShared,
+  /** ADAAAA-6577: injectable backoff sleep (default the real `sleep`). Tests
+   * pass a fake to assert the exponential cadence without real timers. */
+  backoffSleep?: (ms: number) => Promise<void>
 ): Promise<AnalyzeOutcome> {
   const maxReReserves = cfg.maxReReserves ?? 3;
+  // ADAAAA-6577: bounded exponential backoff between a session-lost (404) and
+  // the next re-reserve/retry. Configurable via AnalyzerConfig (env:
+  // VOD_SESSION_RETRY_BACKOFF_MS / VOD_SESSION_RETRY_BACKOFF_MAX_MS); defaults
+  // 500 ms base / 8000 ms cap. A flapping runner 404s every /analyze, so a
+  // tight re-reserve/retry loop would storm the orchestrator; the backoff
+  // spreads the retries (500ms / 1s / 2s …, capped) so the pass rides through
+  // a brief recovery instead of spinning. Still bounded by maxReReserves.
+  const backoffBaseMs = cfg.sessionRetryBackoffBaseMs ?? 500;
+  const backoffMaxMs = cfg.sessionRetryBackoffMaxMs ?? 8000;
+  const sleepFn = backoffSleep ?? sleep;
   const first = initialSession ?? (await client.reservePerceive());
   let sessionId = first.sessionId;
   // Every session we reserved (initial + any re-reserves) must be stopped /
@@ -1330,14 +1407,45 @@ export async function analyzeJob(
         loraRef: cfg.loraRef,
         trackingPlan: planController.delivery() ?? undefined,
       };
+      // ADAAAA-6764: two-stage reconnect. The FAST in-pass re-reserve
+      // (`maxReReserves` tight attempts at base*2^(n-1) backoff) rides through
+      // a brief session/runner flap. If the runner stays down past that, the
+      // LIVE path enters a LENIENT reconnect loop (sleep `liveReconnectBackoffMs`
+      // — 30-60 s — then re-reserve a fresh perceive session and retry the
+      // frame) so a persistent perceive-runner outage does NOT fail the live
+      // job. Bounded by `liveMaxReconnects`; past the bound it aborts cleanly
+      // (throws the SessionLostError -> job `failed`) instead of spinning.
+      // The VOD pass (planMode "vod") keeps the tight maxReReserves-only
+      // behavior (lenient loop is live-only).
+      const isLive = cfg.planMode === "live";
+      const lenientMax = isLive ? (cfg.liveMaxReconnects ?? 4) : 0;
       for (;;) {
         try {
           res = await client.analyze(sessionId, frame, vocab);
           break;
         } catch (err) {
           if (!(err instanceof SessionLostError)) throw err;
-          if (reReserved >= maxReReserves) throw err;
-          reReserved++;
+          if (reReserved < maxReReserves) {
+            // FAST in-pass re-reserve: tight bounded exponential backoff.
+            reReserved++;
+            // ADAAAA-6577: back off before re-reserving + retrying the SAME frame.
+            // Bounded exponential (base * 2^(n-1), capped) so a flapping runner
+            // 404ing every /analyze is not hammered with a tight request storm.
+            // Sleep BEFORE the re-reserve: the cadence between re-reserves is
+            // base, base*2, base*4, … (500 / 1s / 2s by default).
+            const delayMs = sessionRetryBackoffMs(reReserved, backoffBaseMs, backoffMaxMs);
+            await sleepFn(delayMs);
+          } else if (reReserved >= maxReReserves + lenientMax) {
+            // Fast stage exhausted + lenient bound reached -> abort cleanly.
+            throw err;
+          } else {
+            // FAST stage exhausted -> LENIENT reconnect loop (live only):
+            // sleep ~30-60 s to let a restarting perceive runner come back,
+            // then re-reserve a fresh session and resume.
+            reReserved++;
+            const delayMs = cfg.liveReconnectBackoffMs ?? 30000;
+            await sleepFn(delayMs);
+          }
           const fresh = await client.reservePerceive();
           sessionId = fresh.sessionId;
           reserved.add(fresh.sessionId);
