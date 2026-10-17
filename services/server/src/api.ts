@@ -240,6 +240,35 @@ export async function persistLiveHighlight(
   return stored;
 }
 
+/** Remove a deleted job's on-disk artifacts (ADAAAA-6838). Best-effort: every
+ * path is removed with `force` and any failure (e.g. a dir that never existed)
+ * is swallowed. Removes the VOD upload dir, the extracted-frames dir, the live
+ * capture dir, and every clip this job produced under `dataDir/clips` (matched
+ * via its highlight `clipUri` values, plus the `<jobId>-*` browser-clip naming). */
+async function removeJobArtifacts(dataDir: string, jobId: string, clipUris: string[]): Promise<void> {
+  const dirs = [path.join(dataDir, "uploads", jobId), path.join(dataDir, "frames", jobId), path.join(dataDir, "live", jobId)];
+  for (const d of dirs) {
+    await rm(d, { recursive: true, force: true }).catch(() => {});
+  }
+  const clipDir = path.join(dataDir, "clips");
+  const clipFiles = new Set<string>();
+  for (const uri of clipUris) {
+    // clipUri is a web path like "/clips/<file>.mp4"; strip the leading /clips/.
+    const m = /^\/clips\/(.+)$/.exec(uri);
+    if (m) clipFiles.add(m[1]);
+  }
+  try {
+    for (const f of readdirSync(clipDir)) {
+      if (f.startsWith(`${jobId}-`)) clipFiles.add(f);
+    }
+  } catch {
+    /* no clips dir — nothing to do */
+  }
+  for (const f of clipFiles) {
+    await rm(path.join(clipDir, f), { force: true }).catch(() => {});
+  }
+}
+
 export function buildApp(deps: ApiDeps): FastifyInstance {
   const { cfg, store, adapter, db, auth, billing, entitlements, mailer } = deps;
   const app = Fastify({ logger: false });
@@ -845,6 +874,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // per call + the perceive session's hourly list price for its duration.
     const decideCalls = candidatesTriggered;
     const costUsd = cfg.decideFee * decideCalls + (perceiveSessionS / 3600) * PERCEIVE_PER_HOUR_USD;
+    // Source runtime (D-I2.2 / ADAAAA-6838): probe the media duration so the
+    // completed result card can show it. Best-effort (ms; null on probe failure).
+    const durationS = await probeDuration(cfg.ffmpegPath, videoPath).catch(() => null);
     await store.patchJob(jobId, {
       status: "done",
       perceiveSessionId: outcome.sessionId,
@@ -861,6 +893,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       completedAt: new Date().toISOString(),
       progress: 100,
       progressLabel: "done",
+      durationMs: durationS ? Math.round(durationS * 1000) : undefined,
     });
     emitJobProgress(jobId, 100, "done");
     if (stageA.totalCandidates > 0) {
@@ -1718,6 +1751,51 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!job) return reply.code(404).send({ error: "not found" });
     if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
     return { job, highlights: store.highlightsForJob(job.id) };
+  });
+
+  // Delete a job (ADAAAA-6838, increment 2). Owner-or-admin; 404 if missing,
+  // 403 if another user. For a VOD `file` job we release any held Livepeer
+  // perceive slot synchronously (mirroring the stop path) so deleting never
+  // strands a session or squats the capacity-1 slot, then hard-delete the job
+  // row + its highlights + media_sessions and remove its on-disk artifacts.
+  // A live/browser job still holding an active ingest session returns 409 and
+  // the caller must POST /jobs/:id/stop first.
+  app.delete<{ Params: { id: string } }>("/jobs/:id", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user;
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+
+    // Live/browser ingest still holding an active session -> 409; caller stops first.
+    const liveKinds = ["rtmp", "webrtc", "screenshare", "browser", "file-sim"];
+    if (liveKinds.includes(job.source) && (liveSessions.has(job.id) || browserJobs.has(job.id))) {
+      return reply.code(409).send({ error: "live/browser ingest still active; use POST /jobs/:id/stop first" });
+    }
+
+    // Release any held perceive slot synchronously (mirror the stop path) so
+    // deleting never strands a Livepeer session or squats the capacity-1 slot.
+    // Idempotent: analyzeJob's `finally` re-leases as a no-op.
+    const slot = livePerceiveSlots.get(job.id);
+    if (slot) {
+      livePerceiveSlots.delete(job.id);
+      slot.stopped = true;
+      if (slot.current) await adapter.stopPerceive(slot.current.sessionId).catch(() => {});
+    }
+    if (job.perceiveSessionId) await adapter.stopPerceive(job.perceiveSessionId).catch(() => {});
+    // Tear down any lingering live/browser session map entry for a done/failed job.
+    const ing = liveSessions.get(job.id);
+    if (ing) {
+      ing.stop();
+      liveSessions.delete(job.id);
+    }
+    if (browserJobs.has(job.id)) browserJobs.delete(job.id);
+
+    // Remove on-disk artifacts (best-effort) and hard-delete the job + cascade.
+    const clipUris = store.highlightsForJob(job.id).map((h) => h.clipUri).filter(Boolean);
+    await removeJobArtifacts(cfg.dataDir, job.id, clipUris);
+    await store.deleteJob(job.id);
+
+    return { deleted: job.id };
   });
 
   app.post<{ Params: { id: string } }>("/jobs/:id/stop", { preHandler: authReq }, async (req: any, reply) => {
