@@ -504,6 +504,96 @@ export const HighlightRecordSchema = z.object({
 });
 export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
 
+// --- job detail / per-candidate decide persistence (ADAAAA-6851) ------------
+// Every decide evaluation is persisted (accepted highlight, burst-suppressed,
+// near-miss, not-highlight) so the full-screen Job detail can show the decide
+// LLM's note on EVERY trigger, not just accepted clips. All types below are
+// additive: no existing required field changed, no contract version bump.
+export const JobCandidateSchema = z.object({
+  id: z.string(),
+  jobId: z.string(),
+  ownerId: z.string().optional(),
+  /** The sampled frame seq the candidate was anchored to (0 when unknown). */
+  seq: z.number().int().min(0).default(0),
+  /** Trigger timestamp (s from stream start) the decide LLM reasoned over. */
+  timestamp: z.number(),
+  eventType: z.string(),
+  score: z.number().min(0).max(100),
+  /** Whether the decide verdict itself said this is a highlight (before the
+   * server accept gate / burst suppression). */
+  isHighlight: z.boolean(),
+  /** Outcome taxonomy from the decide verdict (mirrors HighlightDecision.outcome). */
+  outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
+  nearMiss: z.boolean().optional(),
+  reason: z.string().optional(),
+  /** Why this evaluation did/didn't become a highlight record:
+   *   accepted   -> cut as an accepted highlight (surfaces as a HighlightRecord)
+   *   suppressed -> model accepted but the Goal burst-suppression window dropped it
+   *   rejected   -> not an accepted scoring highlight (near-miss / not-highlight) */
+  status: z.enum(["accepted", "suppressed", "rejected"]).default("rejected"),
+  createdAt: z.string(),
+});
+export type JobCandidate = z.infer<typeof JobCandidateSchema>;
+
+/** One aggregated tracked-object identity for a job (ADAAAA-6851 Inc 3). */
+export const JobTraceSchema = z.object({
+  trackId: z.string(),
+  slot: z.number().int().min(0),
+  kind: TrackKindSchema,
+  label: z.string().optional(),
+  /** Number of sampled frames the track appeared on. */
+  onScreen: z.number().int().min(0),
+  ontoFrames: z.number().int().min(0).optional(),
+  lostFrames: z.number().int().min(0).optional(),
+  accuracy: z.number().min(0).max(1).optional(),
+  selected: z.boolean().optional(),
+});
+export type JobTrace = z.infer<typeof JobTraceSchema>;
+
+/** A decide note surfaced in a 3 s frame section (ADAAAA-6851 Inc 2). */
+export const DecideNoteSchema = z.object({
+  seq: z.number().int().min(0),
+  timestamp: z.number(),
+  eventType: z.string(),
+  score: z.number().min(0).max(100),
+  outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
+  nearMiss: z.boolean().optional(),
+  isHighlight: z.boolean(),
+  status: z.enum(["accepted", "suppressed", "rejected"]),
+  reason: z.string().optional(),
+});
+export type DecideNote = z.infer<typeof DecideNoteSchema>;
+
+/** Metadata for one frame in a section (image bytes stay lazy via /frames/:seq). */
+export const JobDetailFrameSchema = z.object({
+  seq: z.number().int().min(0),
+  timestamp: z.number(),
+  uri: z.string(),
+  tracks: z.array(TrackObservationSchema).default([]),
+});
+export type JobDetailFrame = z.infer<typeof JobDetailFrameSchema>;
+
+/** A fixed 3 s bucket of frames + the decide notes whose trigger falls in it. */
+export const FrameSectionSchema = z.object({
+  index: z.number().int().min(0),
+  startS: z.number(),
+  endS: z.number(),
+  frames: z.array(JobDetailFrameSchema).default([]),
+  decideNotes: z.array(DecideNoteSchema).default([]),
+});
+export type FrameSection = z.infer<typeof FrameSectionSchema>;
+
+/** Composite payload of GET /jobs/:id/detail (ADAAAA-6851 Inc 3). */
+export const JobDetailSchema = z.object({
+  job: JobSchema,
+  highlights: z.array(HighlightRecordSchema).default([]),
+  traces: z.array(JobTraceSchema).default([]),
+  sections: z.array(FrameSectionSchema).default([]),
+  /** Capacity budget the job ran under (3 live / 8 VOD) so the UI can show headroom. */
+  maxTraces: z.number().int().min(0),
+});
+export type JobDetail = z.infer<typeof JobDetailSchema>;
+
 // --- training pipeline re-exports (ADAAAA-5164) -----------------------------
 // The dataset-curation pipeline (perceptual-hash bucketing, coverage, split,
 // JSONL manifests) ships in ./training. Re-exported here so consumers use one

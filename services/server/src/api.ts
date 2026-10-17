@@ -31,10 +31,13 @@ import {
 import {
   DatasetSchema,
   DetectionTrainingSampleSchema,
+  JobDetailSchema,
   type Dataset,
   type DetectionTrainingSample,
   type HighlightRecord,
+  type JobCandidate,
 } from "@highlights/events";
+import { buildSections, buildTraces, maxTracesForSource } from "./job-detail";
 import {
   datasetAccessActive,
   scheduleDatasetsPurgeForOwner,
@@ -473,11 +476,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return (ev: AnalyzeEvent) => {
       emitJobEvent(jobId, ev);
       if (ev.type === "observation" && ev.observation) {
-        store.recordObservation(jobId, {
-          seq: ev.seq,
-          timestamp: ev.timestamp,
-          tracks: ev.observation.tracks,
-        });
+        // ADAAAA-6851 Inc 1: durable write-through so per-frame perceive data
+        // survives a server restart (memory is updated synchronously first).
+        store
+          .recordObservation(jobId, {
+            seq: ev.seq,
+            timestamp: ev.timestamp,
+            tracks: ev.observation.tracks,
+          })
+          .catch((e: any) => console.error(`[obs:${jobId}] persist failed:`, e?.message || e));
       }
     };
   }
@@ -492,6 +499,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       .catch((e: any) => console.error(`[vod:${jobId}] progress persist failed:`, String(e?.message || e)));
     emitJobEvent(jobId, { type: "progress", progress, progressLabel: label } as any);
   }
+  // ADAAAA-6851 Inc 2: durable write-through for every decide evaluation
+  // (accepted highlight, burst-suppressed, near-miss, not-highlight). Wired into
+  // the AnalyzerConfig `onDecision` hook for both the live and VOD passes.
+  const persistDecision = (cand: JobCandidate): void => {
+    store.recordJobCandidate(cand).catch((e: any) =>
+      console.error(`[decide-note:${cand.jobId}] persist failed:`, e?.message || e)
+    );
+  };
   async function runLiveJob(
     ingest: LiveIngest,
     job: { id: string; gameHint?: string; preferLabels?: string[] },
@@ -533,6 +548,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         warmupSeconds: cfg.warmupSeconds,
         recheckIntervalSeconds: cfg.recheckIntervalSeconds,
         planMode: "live",
+        // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
+        onDecision: persistDecision,
         // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
         // evidence). Live uses the default analysis_fps / windows.
         analysisFps: cfg.analysisFps,
@@ -723,6 +740,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       warmupSeconds: cfg.warmupSeconds,
       recheckIntervalSeconds: cfg.recheckIntervalSeconds,
       planMode: "vod",
+      // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
+      onDecision: persistDecision,
       // Increment F / ADAAAA-6465: VOD gets the HIGHER-cap / longer-window
       // detail-first frame-sequence assembly (speed secondary; detail-first).
       analysisFps: cfg.vodAnalysisFps,
@@ -1758,6 +1777,36 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!job) return reply.code(404).send({ error: "not found" });
     if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
     return { job, highlights: store.highlightsForJob(job.id) };
+  });
+
+  // Composite job-detail payload (ADAAAA-6851 Inc 3): { job, highlights, traces,
+  // sections }. Frames are grouped into fixed 3 s buckets (section index =
+  // floor(timestamp/3)); a frame belongs to exactly one section (partition, no
+  // duplicate seq across sections). Decide notes attach to the section that
+  // contains their trigger timestamp. Frames are metadata-only (image bytes stay
+  // lazy via /jobs/:id/frames/:seq). Owner-or-admin scoped like GET /jobs/:id.
+  app.get<{ Params: { id: string } }>("/jobs/:id/detail", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user;
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+
+    // Capacity budget the job ran under: live 3 / VOD 8 (plan: traces <= capacity).
+    const maxTraces = maxTracesForSource(job.source);
+
+    const obs = store.observationsForJob(job.id);
+    const candidates = store.candidatesForJob(job.id);
+
+    const sectionList = buildSections(obs, candidates, job.id);
+    const traces = buildTraces(obs);
+
+    return JobDetailSchema.parse({
+      job,
+      highlights: store.highlightsForJob(job.id),
+      traces,
+      sections: sectionList,
+      maxTraces,
+    });
   });
 
   // Delete a job (ADAAAA-6838, increment 2). Owner-or-admin; 404 if missing,
