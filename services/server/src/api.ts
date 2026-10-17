@@ -38,6 +38,7 @@ import {
   type Dataset,
   type DetectionTrainingSample,
   type HighlightRecord,
+  type MediaResultEvent,
 } from "@highlights/events";
 import {
   datasetAccessActive,
@@ -2046,15 +2047,96 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // wiring is the next increment — the runner currently publishes observation
   // without a candidate on events-out.)
   app.post<{ Params: { id: string } }>("/jobs/:id/observe", async (req: any, reply) => {
+    // Phase 0 (ADAAAA-6865): the media server reports TYPED MediaResultEvent
+    // results back over this callback. Server stays the DB-owner and persists
+    // observations (evidence + frame debugger), candidates, highlights (feed),
+    // stage-A metrics, and cost. Accepts any existing job (media-served VOD/live
+    // handoff jobs included) — not just browser-capture.
     const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "no job" });
     const bj = browserJobs.get(req.params.id);
-    if (!job || job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
-    const obs = req.body;
-    if (!obs || typeof obs !== "object") return reply.code(400).send({ error: "observation required" });
-    const seq = typeof obs.seq === "number" ? obs.seq : 0;
-    const timestamp = typeof obs.timestamp === "number" ? obs.timestamp : 0;
-    bj.evidence.step(obs);
-    emitJobEvent(req.params.id, { seq, timestamp, type: "observation", observation: obs });
+    const body = req.body;
+    if (!body || typeof body !== "object")
+      return reply.code(400).send({ error: "result event required" });
+
+    // Parse the typed union; fall back to a legacy bare observation envelope
+    // (the pre-Phase-0 browser rail sent `{seq,timestamp,...tracks}`) so
+    // existing clients keep working.
+    let parsed: MediaResultEvent | null = null;
+    const res = MediaResultEventSchema.safeParse(body);
+    if (res.success) {
+      parsed = res.data;
+    } else {
+      const legacy = MediaResultEventSchema.safeParse({
+        type: "observation",
+        seq: typeof body.seq === "number" ? body.seq : 0,
+        timestamp: typeof body.timestamp === "number" ? body.timestamp : 0,
+        observation: body,
+      });
+      if (legacy.success) parsed = legacy.data;
+    }
+    if (!parsed)
+      return reply.code(400).send({
+        error: "invalid result event",
+        issues: res.error?.issues,
+      });
+
+    const seq = parsed.seq ?? 0;
+    const timestamp = parsed.timestamp ?? 0;
+    switch (parsed.type) {
+      case "observation": {
+        // Feed the browser job's evidence rail + persist the frame (unchanged
+        // behavior for the browser-capture path).
+        if (bj) bj.evidence.step(parsed.observation);
+        store.recordObservation(req.params.id, {
+          seq,
+          timestamp,
+          tracks: parsed.observation.tracks ?? [],
+        });
+        emitJobEvent(req.params.id, {
+          seq,
+          timestamp,
+          type: "observation",
+          observation: { tracks: parsed.observation.tracks ?? [] },
+        });
+        break;
+      }
+      case "candidate": {
+        emitJobEvent(req.params.id, {
+          seq,
+          timestamp,
+          type: "candidate",
+          candidate: {
+            eventType: parsed.candidate.eventType,
+            timestamp: parsed.candidate.timestamp,
+          },
+        });
+        break;
+      }
+      case "highlight": {
+        const rec = await store.addHighlight(parsed.highlight);
+        emitJobEvent(req.params.id, {
+          seq,
+          timestamp,
+          type: "highlight",
+          highlight: rec,
+        });
+        break;
+      }
+      case "stageAMetrics": {
+        await store.patchJob(req.params.id, { stageAMetrics: parsed.metrics }).catch(() => {});
+        break;
+      }
+      case "cost": {
+        const patch: { costUsd: number; perceiveSessionS?: number } = {
+          costUsd: parsed.costUsd,
+        };
+        if (typeof parsed.perceiveSessionS === "number")
+          patch.perceiveSessionS = parsed.perceiveSessionS;
+        await store.patchJob(req.params.id, patch).catch(() => {});
+        break;
+      }
+    }
     return { ok: true };
   });
 
