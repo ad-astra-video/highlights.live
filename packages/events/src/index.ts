@@ -469,6 +469,11 @@ export const JobSchema = z.object({
   // job so the webapp result card can show the clip's source duration. Additive
   // optional — absent on live jobs and older records.
   durationMs: z.number().min(0).optional(),
+  // ADAAAA-6874 (Phase 2): number of highlights persisted for this job so far.
+  // Bumped at DECISION time as each highlight lands (never gated on job
+  // completion) so GET /jobs/:id shows the live highlight count. Additive
+  // optional, defaulted to 0 for older/queued records.
+  highlightsFound: z.number().int().min(0).default(0),
   createdAt: z.string(),
 });
 export type Job = z.infer<typeof JobSchema>;
@@ -477,6 +482,12 @@ export const HighlightRecordSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
   jobId: z.string(),
+  // ADAAAA-6874 (Phase 2): deterministic per-highlight idempotency key derived
+  // from (jobId, candidate seq, eventType). A re-claimed/resumed job that
+  // re-decides the same candidate must not double-persist or double-bill. The
+  // store's addHighlight dedups on this key (first insert wins; billing/debit
+  // only on first insert). Additive optional — older rows carry none.
+  idempotencyKey: z.string().optional(),
   clipUri: z.string(),
   start: z.number(),
   end: z.number(),

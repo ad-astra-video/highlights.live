@@ -15,6 +15,7 @@ import {
   EvidenceTracker,
   LiveRunShared,
   decideOnCandidate,
+  highlightIdempotencyKey,
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
@@ -232,17 +233,29 @@ export async function persistLiveHighlight(
   sub: Subscription,
   highlight: HighlightRecord
 ): Promise<HighlightRecord> {
-  const stored = await deps.store.addHighlight({
+  const { record, created } = await deps.store.addHighlight({
     ...highlight,
     ownerId: user.id,
     status: deps.cfg.autoPublishHighlights ? "accepted" : "pending",
   });
-  await deps.billing.onHighlightCreated(user, sub);
-  // A clip generated successfully debits the quota once.
-  await deps.entitlements.onClipGenerated(user);
-  // Funnel stage 3: generate (a highlight was produced). Idempotent per user.
-  await recordGenerateFunnel(deps.db, user.id);
-  return stored;
+  // ADAAAA-6874 (Phase 2): idempotency — bill/debit/funnel only on the FIRST
+  // insert. A re-claimed/resumed job that re-persists the same idempotencyKey
+  // returns `created: false` and must NOT re-bill, re-debit quota, or double
+  // count the highlight.
+  if (created) {
+    await deps.billing.onHighlightCreated(user, sub);
+    // A clip generated successfully debits the quota once.
+    await deps.entitlements.onClipGenerated(user);
+    // Funnel stage 3: generate (a highlight was produced). Idempotent per user.
+    await recordGenerateFunnel(deps.db, user.id);
+    // ADAAAA-6874 (Phase 2): surface the live highlight count on the job the
+    // instant a highlight lands (never gated on job completion). Guarded on the
+    // job being present in this store instance so an edge case (job already
+    // deleted / not hydrated here) never fails highlight persistence itself.
+    const job = deps.store.getJob(record.jobId);
+    if (job) await deps.store.patchJob(record.jobId, { highlightsFound: (job.highlightsFound ?? 0) + 1 });
+  }
+  return record;
 }
 
 /** Remove a deleted job's on-disk artifacts (ADAAAA-6838). Best-effort: every
@@ -2011,6 +2024,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               id: randomUUID(),
               jobId: job.id,
               ownerId: job.ownerId,
+              // ADAAAA-6874 (Phase 2): deterministic idempotency key so a
+              // re-claimed/resumed job can't double-persist or double-debit the
+              // same candidate highlight.
+              idempotencyKey: highlightIdempotencyKey(job.id, Math.round(timestamp), d.eventType),
               clipUri: "",
               start: Math.max(0, timestamp - cfg.clipBeforeS),
               end: timestamp + cfg.clipAfterS,
@@ -2020,13 +2037,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               status: cfg.autoPublishHighlights ? "accepted" : "pending",
               createdAt: new Date().toISOString(),
             };
-            await store.addHighlight(highlight);
-            // A browser-capture highlight generated successfully debits the
-            // quota once (like VOD/live). Board-capture jobs must also count
-            // toward the monthly clip quota.
-            await entitlements.onClipGenerated(duser);
-            // Funnel stage 3: generate (a highlight was produced).
-            await recordGenerateFunnel(db, duser.id);
+            const added = await store.addHighlight(highlight);
+            if (added.created) {
+              // A browser-capture highlight generated successfully debits the
+              // quota once (like VOD/live). Board-capture jobs must also count
+              // toward the monthly clip quota. Guarded on first insert so an
+              // idempotent retry never double-debits.
+              await entitlements.onClipGenerated(duser);
+              // Funnel stage 3: generate (a highlight was produced).
+              await recordGenerateFunnel(db, duser.id);
+              const j = store.getJob(job.id);
+              if (j) await store.patchJob(job.id, { highlightsFound: (j.highlightsFound ?? 0) + 1 });
+            }
             emitJobEvent(req.params.id, { seq, timestamp, type: "highlight", highlight });
           }
         }

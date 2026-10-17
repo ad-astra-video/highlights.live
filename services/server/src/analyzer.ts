@@ -1290,6 +1290,14 @@ function buildCandidateNote(
  * The candidate marks a possible highlight only; only ``decide()`` decides.
  * ``emit`` carries the caller's seq/timestamp for live-console events.
  */
+/** ADAAAA-6874 (Phase 2): deterministic per-highlight idempotency key anchored
+ * on the job + candidate frame seq + event type. A re-claimed/resumed job that
+ * re-decides the same candidate produces the SAME key, so the server's
+ * addHighlight dedup prevents double-persist and double-billing. */
+export function highlightIdempotencyKey(jobId: string, seq: number, eventType?: string): string {
+  return `hl:${jobId}:${seq}:${eventType ?? "highlight"}`;
+}
+
 export async function decideOnCandidate(
   client: PipelineClient,
   shared: LiveRunShared,
@@ -1374,6 +1382,9 @@ export async function decideOnCandidate(
   const rec: HighlightRecord = {
     id: randomUUID(),
     jobId: cfg.jobId,
+    // ADAAAA-6874 (Phase 2): deterministic idempotency key so a resumed job that
+    // re-decides the same candidate cannot double-persist/double-bill.
+    idempotencyKey: highlightIdempotencyKey(cfg.jobId, evSeq, decision.eventType ?? candidate.eventType),
     clipUri,
     start: Math.max(0, candidate.timestamp - cfg.clipBeforeS),
     end: candidate.timestamp + cfg.clipAfterS,
