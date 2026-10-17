@@ -18,6 +18,7 @@ import {
 } from "../lib/vodJobs";
 import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
+import { JobDetailPanel } from "../components/JobDetail";
 import { BrowserCapture } from "../components/BrowserCapture";
 import { VideoClip } from "../components/VideoClip";
 
@@ -97,6 +98,10 @@ export function Highlights() {
   const [failedOpen, setFailedOpen] = useState(false);
   const [confirmDeleteJob, setConfirmDeleteJob] = useState<Job | null>(null);
   const [debugJob, setDebugJob] = useState<string | null>(null);
+  // Increment 3 T2 (ADAAAA-6871): the job whose detail panel is open. Any
+  // job row/card opens the shared Job detail panel; the Delete control stops
+  // propagation so deleting never opens it.
+  const [detailJob, setDetailJob] = useState<Job | null>(null);
   // rejected-clips lifecycle (ADAAAA-5168/5204): the server's recovery TTL (for
   // "recover until" deadlines), whether the collapsed rejected section is open,
   // and a ticking `now` so relative deadlines stay accurate while the section
@@ -338,6 +343,12 @@ export function Highlights() {
     });
   }
 
+  // Increment 3 T2 (ADAAAA-6871): open the shared Job detail panel for a job
+  // (row/card click or its "Details" chip).
+  function openDetail(job: Job) {
+    setDetailJob(job);
+  }
+
   const sourceInputLabel = source === "screenshare" || source === "file" ? null
     : "RTMP / stream URL";
 
@@ -525,7 +536,7 @@ export function Highlights() {
       {(inFlightJobs.length > 0 || completedJobs.length > 0 || failedJobs.length > 0) && (
         <div className="mt-8 space-y-8" data-job-surfaces>
           {inFlightJobs.length > 0 && (
-            <ProcessingJobs jobs={inFlightJobs} onDebug={(id) => setDebugJob(id)} onDelete={setConfirmDeleteJob} />
+            <ProcessingJobs jobs={inFlightJobs} onDebug={(id) => setDebugJob(id)} onDelete={setConfirmDeleteJob} onOpenDetail={openDetail} />
           )}
           {completedJobs.length > 0 && (
             <CompletedJobs
@@ -534,6 +545,7 @@ export function Highlights() {
               onDebug={(id) => setDebugJob(id)}
               onDelete={setConfirmDeleteJob}
               onViewHighlights={viewJobHighlights}
+              onOpenDetail={openDetail}
             />
           )}
           {failedJobs.length > 0 && (
@@ -543,6 +555,7 @@ export function Highlights() {
               onToggle={() => setFailedOpen((o) => !o)}
               onDebug={(id) => setDebugJob(id)}
               onDelete={setConfirmDeleteJob}
+              onOpenDetail={openDetail}
             />
           )}
         </div>
@@ -621,6 +634,10 @@ export function Highlights() {
       {confirmDeleteJob && (
         <DeleteJobDialog job={confirmDeleteJob} onCancel={() => setConfirmDeleteJob(null)} onConfirm={confirmDelete} />
       )}
+
+      {detailJob && (
+        <JobDetailPanel jobId={detailJob.id} initialJob={detailJob} onClose={() => setDetailJob(null)} />
+      )}
     </div>
   );
 }
@@ -687,10 +704,12 @@ function HighlightCard({ highlight, onReview }: { highlight: Highlight; onReview
   );
 }
 
-/** Per-row/card Delete affordance (ADAAAA-6837). */
+/** Per-row/card Delete affordance (ADAAAA-6837). Stops click propagation so a
+ * Delete click never bubbles into an enclosing openable row/card (ADAAAA-6871:
+ * Delete must NOT open the Job detail panel). */
 function DeleteButton({ onClick }: { onClick: () => void }) {
   return (
-    <button type="button" className="chip" onClick={onClick} data-job-delete>
+    <button type="button" className="chip" onClick={(e) => { e.stopPropagation(); onClick(); }} data-job-delete>
       <Trash2 className="mr-1 inline h-4 w-4" /> Delete
     </button>
   );
@@ -698,14 +717,15 @@ function DeleteButton({ onClick }: { onClick: () => void }) {
 
 /** In-flight "Processing jobs" surface (ADAAAA-6760): one row per queued/active
  * job (8-char id, status chip, source, progress bar + label) plus a Delete
- * control on each row (ADAAAA-6837). */
-function ProcessingJobs({ jobs, onDebug, onDelete }: { jobs: Job[]; onDebug: (id: string) => void; onDelete: (job: Job) => void }) {
+ * control on each row (ADAAAA-6837). ADAAAA-6871: each row is clickable to open
+ * the Job detail panel (with a "Details" chip); Delete stops propagation. */
+function ProcessingJobs({ jobs, onDebug, onDelete, onOpenDetail }: { jobs: Job[]; onDebug: (id: string) => void; onDelete: (job: Job) => void; onOpenDetail: (job: Job) => void }) {
   return (
     <section data-processing-jobs>
       <h2 className="text-2xl font-black">Processing jobs</h2>
       <div className="mt-3 flex flex-col gap-3">
         {jobs.map((j) => (
-          <div key={j.id} className="card px-4 py-3" data-processing-job>
+          <div key={j.id} className="card cursor-pointer px-4 py-3 transition hover:border-neon/40" data-processing-job onClick={() => onOpenDetail(j)}>
             <div className="flex flex-wrap items-center gap-3">
               <span className="font-mono text-sm text-ink">{j.id.slice(0, 8)}</span>
               <span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusChipClass(j.status)}`}>
@@ -713,7 +733,10 @@ function ProcessingJobs({ jobs, onDebug, onDelete }: { jobs: Job[]; onDebug: (id
               </span>
               <span className="text-xs text-mut">{sourceLabel(j.source)}</span>
               <span className="text-xs text-mut">{j.progressLabel || "queued"}</span>
-              <span className="ml-auto">
+              <span className="ml-auto flex items-center gap-2">
+                <button type="button" className="chip" onClick={() => onOpenDetail(j)} data-job-details>
+                  Details
+                </button>
                 <DeleteButton onClick={() => onDelete(j)} />
               </span>
             </div>
@@ -733,13 +756,18 @@ function ProcessingJobs({ jobs, onDebug, onDelete }: { jobs: Job[]; onDebug: (id
 /** Completed result cards (ADAAAA-6837). One card per `done` job: source label,
  * scheduled/completed times, span/duration, frames analyzed, decide calls, cost,
  * highlight count, a thumbnail strip from the job's clipUris, links to its
- * grouped highlights + Frame debugger, and a Delete control. */
-function CompletedJobs({ jobs, highlights, onDebug, onDelete, onViewHighlights }: {
+ * grouped highlights + Frame debugger, and a Delete control. ADAAAA-6871: the
+ * card is clickable to open the Job detail panel (which embeds the frame
+ * overlay for a done job); the Frame debugger / View highlights / Delete
+ * controls keep their existing behavior and stop propagation so they never
+ * trigger the panel-open card click. */
+function CompletedJobs({ jobs, highlights, onDebug, onDelete, onViewHighlights, onOpenDetail }: {
   jobs: Job[];
   highlights: Highlight[];
   onDebug: (id: string) => void;
   onDelete: (job: Job) => void;
   onViewHighlights: (jobId: string) => void;
+  onOpenDetail: (job: Job) => void;
 }) {
   return (
     <section data-completed-jobs>
@@ -752,7 +780,7 @@ function CompletedJobs({ jobs, highlights, onDebug, onDelete, onViewHighlights }
           const scheduled = formatJobTime(job.scheduledAt);
           const completed = formatJobTime(job.completedAt);
           return (
-            <div key={job.id} className="card card-hover p-4" data-completed-job>
+            <div key={job.id} className="card card-hover cursor-pointer p-4" data-completed-job onClick={() => onOpenDetail(job)}>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="rounded-full border border-green/40 bg-green/10 px-2 py-0.5 text-xs font-bold uppercase text-green">done</span>
@@ -782,14 +810,17 @@ function CompletedJobs({ jobs, highlights, onDebug, onDelete, onViewHighlights }
                 </div>
               )}
               <div className="mt-3 flex flex-wrap gap-2">
-                <button type="button" className="chip" onClick={() => onDebug(job.id)} data-job-debug>
+                <button type="button" className="chip" onClick={(e) => { e.stopPropagation(); onDebug(job.id); }} data-job-debug>
                   Frame debugger
                 </button>
                 {jobHighlights.length > 0 && (
-                  <button type="button" className="chip" onClick={() => onViewHighlights(job.id)} data-job-view-highlights>
+                  <button type="button" className="chip" onClick={(e) => { e.stopPropagation(); onViewHighlights(job.id); }} data-job-view-highlights>
                     View highlights
                   </button>
                 )}
+                <button type="button" className="chip" onClick={() => onOpenDetail(job)} data-job-details>
+                  Details
+                </button>
                 <span className="ml-auto" />
                 <DeleteButton onClick={() => onDelete(job)} />
               </div>
@@ -803,13 +834,16 @@ function CompletedJobs({ jobs, highlights, onDebug, onDelete, onViewHighlights }
 
 /** Failed jobs — a separate, collapsed (expandable) section (ADAAAA-6837).
  * Default collapsed; the header shows the failed count. Expand to see each
- * failed job's server error text. Each row has a Delete control. */
-function FailedJobs({ jobs, open, onToggle, onDebug, onDelete }: {
+ * failed job's server error text. Each row has a Delete control. ADAAAA-6871:
+ * each failed row is also clickable to open the Job detail panel (which shows
+ * the error + persisted trail); Delete / Frame debugger stop propagation. */
+function FailedJobs({ jobs, open, onToggle, onDebug, onDelete, onOpenDetail }: {
   jobs: Job[];
   open: boolean;
   onToggle: () => void;
   onDebug: (id: string) => void;
   onDelete: (job: Job) => void;
+  onOpenDetail: (job: Job) => void;
 }) {
   if (jobs.length === 0) return null;
   return (
@@ -830,14 +864,17 @@ function FailedJobs({ jobs, open, onToggle, onDebug, onDelete }: {
       {open && (
         <div className="mt-3 flex flex-col gap-3">
           {jobs.map((job) => (
-            <div key={job.id} className="card px-4 py-3" data-failed-job>
+            <div key={job.id} className="card cursor-pointer px-4 py-3 transition hover:border-red/40" data-failed-job onClick={() => onOpenDetail(job)}>
               <div className="flex flex-wrap items-center gap-3">
                 <span className="font-mono text-sm text-ink">{job.id.slice(0, 8)}</span>
                 <span className="rounded-full border border-red/40 bg-red/10 px-2 py-0.5 text-xs font-bold uppercase text-red">failed</span>
                 <span className="text-xs text-mut">{sourceLabel(job.source)}</span>
                 <span className="ml-auto flex gap-2">
-                  <button type="button" className="chip" onClick={() => onDebug(job.id)} data-job-debug>
+                  <button type="button" className="chip" onClick={(e) => { e.stopPropagation(); onDebug(job.id); }} data-job-debug>
                     Frame debugger
+                  </button>
+                  <button type="button" className="chip" onClick={() => onOpenDetail(job)} data-job-details>
+                    Details
                   </button>
                   <DeleteButton onClick={() => onDelete(job)} />
                 </span>
