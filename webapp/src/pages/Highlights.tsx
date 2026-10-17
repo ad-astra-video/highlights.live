@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X, ChevronDown, ChevronRight, Trash2, List, LayoutGrid } from "lucide-react";
+import { useNavigate, Link } from "react-router-dom";
+import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X, ChevronDown, ChevronRight, Trash2, List, LayoutGrid, Plus } from "lucide-react";
 import { api, getToken, type Highlight, type Job, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { isOverLimit, oversizedHelp } from "../lib/vodUpload";
@@ -54,6 +55,7 @@ const GAME_DEFAULTS: Record<string, string> = {
 
 export function Highlights() {
   const { billing, refreshBilling } = useAuth();
+  const navigate = useNavigate();
   // Async-VOD processing-jobs queue (ADAAAA-6760): fetched + polled + SSE-streamed
   // by the hook; the new "Processing jobs" section below renders its rows.
   const { jobs: processingJobs, refresh: refreshProcessingJobs, removeJob } = useProcessingJobs();
@@ -522,84 +524,24 @@ export function Highlights() {
         )}
       </div>
 
-      {(inFlightJobs.length > 0 || completedJobs.length > 0 || failedJobs.length > 0) && (
-        <div className="mt-8 space-y-8" data-job-surfaces>
-          {inFlightJobs.length > 0 && (
-            <ProcessingJobs jobs={inFlightJobs} onDebug={(id) => setDebugJob(id)} onDelete={setConfirmDeleteJob} />
-          )}
-          {completedJobs.length > 0 && (
-            <CompletedJobs
-              jobs={completedJobs}
-              highlights={highlights}
-              onDebug={(id) => setDebugJob(id)}
-              onDelete={setConfirmDeleteJob}
-              onViewHighlights={viewJobHighlights}
-            />
-          )}
-          {failedJobs.length > 0 && (
-            <FailedJobs
-              jobs={failedJobs}
-              open={failedOpen}
-              onToggle={() => setFailedOpen((o) => !o)}
-              onDebug={(id) => setDebugJob(id)}
-              onDelete={setConfirmDeleteJob}
-            />
-          )}
+      {(processingJobs.length > 0) && (
+        <div className="mt-8" data-job-grid>
+          <h2 className="text-2xl font-black">Jobs</h2>
+          <div className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {processingJobs.map((job) => (
+              <JobTile
+                key={job.id}
+                job={job}
+                highlightCount={highlights.filter((h) => h.jobId === job.id && h.status !== "rejected").length}
+                onOpen={() => navigate(`/app/jobs/${job.id}`)}
+                onDelete={setConfirmDeleteJob}
+              />
+            ))}
+          </div>
         </div>
       )}
 
       {debugJob && <FrameDebugger jobId={debugJob} />}
-
-      <h2 className="mt-10 text-2xl font-black">Your highlights</h2>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          data-active={!flatHighlights}
-          onClick={() => setFlatHighlights(false)}
-          className="chip flex items-center gap-2"
-        >
-          <LayoutGrid className="h-4 w-4" /> Grouped by job
-        </button>
-        <button
-          type="button"
-          data-active={flatHighlights}
-          onClick={() => setFlatHighlights(true)}
-          className="chip flex items-center gap-2"
-        >
-          <List className="h-4 w-4" /> Show all / flat
-        </button>
-      </div>
-      {flatHighlights ? (
-        <div className="mt-4 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {nonRejectedCount === 0 && (
-            <div className="text-mut">Nothing yet — run a detection above.</div>
-          )}
-          {highlights
-            .filter((h) => h.status !== "rejected")
-            .map((h) => (
-              <HighlightCard key={h.id} highlight={h} onReview={review} />
-            ))}
-        </div>
-      ) : (
-        <div className="mt-4 space-y-10">
-          {nonRejectedCount === 0 && (
-            <div className="text-mut">Nothing yet — run a detection above.</div>
-          )}
-          {groupedHighlights.map((g) => (
-            <section key={g.key} data-highlight-group={g.key} data-job-id={g.jobId ?? "none"}>
-              <div className="mb-3 flex items-center gap-2">
-                <h3 className="text-lg font-black text-ink">{g.label}</h3>
-                <span className="rounded-full bg-ink/15 px-2 py-0.5 text-xs font-bold text-ink">{g.highlights.length}</span>
-              </div>
-              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                {g.highlights.map((h) => (
-                  <HighlightCard key={h.id} highlight={h} onReview={review} />
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
 
       {/* Rejected clips live in a separate, collapsed section shown BELOW the
           accepted/published feed so the user can inspect them before the 24h
@@ -850,6 +792,88 @@ function FailedJobs({ jobs, open, onToggle, onDebug, onDelete }: {
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Job tile (ADAAAA-6852 Inc 4): one tile per job on the /app surface. Shows the
+ * source type, 8-char id, status chip, progress while in flight, and on done:
+ * frames analyzed, decide calls, cost, highlight count + a thumbnail strip.
+ * Clicking the tile opens the full-screen detail at /app/jobs/:id. A Delete
+ * control sits in the corner (ADAAAA-6838) without navigating.
+ */
+function JobTile({ job, highlightCount, onOpen, onDelete }: {
+  job: Job;
+  highlightCount: number;
+  onOpen: () => void;
+  onDelete: (job: Job) => void;
+}) {
+  const inFlight = isInFlight(job.status);
+  const span = jobSpanLabel(job);
+  return (
+    <div
+      className="card card-hover cursor-pointer p-4"
+      data-job-tile
+      data-job-tile-id={job.id}
+      data-job-tile-status={job.status}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusChipClass(job.status)}`}>
+            {job.status}
+          </span>
+          <span className="font-mono text-sm text-ink">{job.id.slice(0, 8)}</span>
+        </div>
+        <button
+          type="button"
+          className="chip"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(job);
+          }}
+          data-job-delete
+        >
+          <Trash2 className="mr-1 inline h-4 w-4" /> Delete
+        </button>
+      </div>
+      <div className="mt-1 text-xs text-mut" data-job-tile-source>{sourceLabel(job.source)}</div>
+
+      {inFlight ? (
+        <div className="mt-3" data-job-progress>
+          <div className="h-2 overflow-hidden rounded-full bg-mut/20">
+            <div className="h-full rounded-full bg-neon" style={{ width: `${jobProgressPct(job)}%` }} />
+          </div>
+          <div className="mt-1 flex justify-between text-xs text-mut">
+            <span>{job.progressLabel || job.status}</span>
+            <span>{Math.round(jobProgressPct(job))}%</span>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-mut" data-job-tile-metrics>
+          <span>{job.framesAnalyzed ?? 0} frames</span>
+          <span>${(job.costUsd ?? 0).toFixed(2)}</span>
+          <span>{job.decideCalls ?? 0} decide</span>
+          <span>{highlightCount} highlights</span>
+          {span && <span data-job-span>{span}</span>}
+        </div>
+      )}
+
+      <div className="mt-3 flex items-center justify-between">
+        <span className="text-xs text-mut">{formatJobTime(job.completedAt || job.createdAt) || ""}</span>
+        <Link to={`/app/jobs/${job.id}`} className="chip" onClick={(e) => e.stopPropagation()}>
+          Open detail
+        </Link>
+      </div>
+    </div>
   );
 }
 
