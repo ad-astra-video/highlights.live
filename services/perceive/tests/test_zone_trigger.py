@@ -94,6 +94,22 @@ def test_resolve_zones_plan_without_zones_falls_back_to_canned_sport():
     assert resolve_zones("soccer", plan=plan) == DEFAULT_ZONES["soccer"]
 
 
+def test_resolve_zones_unknown_plan_category_falls_back_to_game_hint():
+    # ADAAAA-6835: the planner seeds category="" / defaults to "general", which
+    # is not a recognized goal sport, so canonical_sport(category=...) let the
+    # category shadow the valid game_hint and resolved to None -> resolve_zones
+    # returned [] -> the zone trigger was inert -> 0 video-leg GOAL candidates.
+    # The canned soccer zones must be restored from the raw game_hint.
+    from app.tracking_plan import TrackingPlan
+    plan = TrackingPlan.from_dict({
+        "category": "general",
+        "anchor": {"label": "soccer ball", "role": "ball"},
+        "targets": [{"label": "soccer ball", "role": "ball", "slotPriority": 0}],
+        "zones": [],
+    })
+    assert resolve_zones("soccer", plan=plan) == DEFAULT_ZONES["soccer"]
+
+
 def test_resolve_zones_plan_unspecified_sport_is_inert():
     from app.tracking_plan import TrackingPlan
     plan = TrackingPlan.from_dict({

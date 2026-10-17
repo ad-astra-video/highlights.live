@@ -86,6 +86,13 @@ def resolve_zones(game_hint: Optional[str] = None, plan: Optional[Any] = None) -
         # A plan exists but declares no zones -> degrade to the sport's canned
         # zones when that sport is known (no regression for goal sports).
         sport = canonical_sport(game_hint, category=_plan_category(plan))
+        if sport is None:
+            # The plan's `category` (e.g. the default "general") is not a
+            # recognized goal sport, so canonical_sport lets it shadow
+            # `game_hint` and resolves to None, discarding the canned zones
+            # (ADAAAA-6835: 0 video-leg GOAL candidates). Fall back to the raw
+            # game hint (e.g. "soccer") so the canned zones are restored.
+            sport = canonical_sport(game_hint)
         if sport is not None:
             return DEFAULT_ZONES.get(sport, [])
         return []
