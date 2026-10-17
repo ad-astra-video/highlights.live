@@ -162,6 +162,21 @@ export class Store {
     return true;
   }
 
+  /** Hard-remove a job (DB row + in-memory working set) and cascade to every
+   * highlight + `media_sessions` row that belongs to it (ADAAAA-6838). Used by
+   * DELETE /jobs/:id so deleting a completed/failed VOD job also removes its
+   * highlights and frees the perceive slot. Idempotent: deleting an already-
+   * removed job is a no-op. */
+  async deleteJob(id: string): Promise<boolean> {
+    if (!this.jobs.has(id)) return false;
+    this.jobs.delete(id);
+    const hids = this.byJob.get(id) ?? [];
+    for (const hid of hids) this.highlights.delete(hid);
+    this.byJob.delete(id);
+    if (this.db) await this.db.deleteJob(id);
+    return true;
+  }
+
   async patchHighlight(id: string, patch: Partial<Pick<HighlightRecord, "clipUri" | "start" | "end" | "clipError">>): Promise<HighlightRecord> {
     const h = this.highlights.get(id);
     if (!h) throw new Error(`no highlight ${id}`);
