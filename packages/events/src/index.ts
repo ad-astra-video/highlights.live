@@ -465,6 +465,10 @@ export const JobSchema = z.object({
   // bump — both are purely additive and absent on older records / live jobs.
   progress: z.number().min(0).max(100).optional(),
   progressLabel: z.string().optional(),
+  // Source-media runtime in ms (ADAAAA-6838 / D-I2.2): set on a completed VOD
+  // job so the webapp result card can show the clip's source duration. Additive
+  // optional — absent on live jobs and older records.
+  durationMs: z.number().min(0).optional(),
   createdAt: z.string(),
 });
 export type Job = z.infer<typeof JobSchema>;

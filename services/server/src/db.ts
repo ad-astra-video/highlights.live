@@ -306,6 +306,9 @@ export interface Db {
   listHighlights(): Promise<HighlightRecord[]>;
   /** Permanently remove a highlight row (TTL purge of rejected clips). */
   deleteHighlight(id: string): Promise<void>;
+  /** Permanently remove a job row and cascade to its highlights + media_sessions
+   * rows in one transaction (ADAAAA-6838 / DELETE /jobs/:id). */
+  deleteJob(id: string): Promise<void>;
   /** Persist a fine-tune train run record (full JSON upsert by id). */
   saveTrainRun(r: TrainRun): Promise<void>;
   getTrainRun(id: string): Promise<TrainRun | undefined>;
@@ -602,6 +605,21 @@ export class SqliteDb implements Db {
 
   async deleteHighlight(id: string): Promise<void> {
     this.db.prepare("DELETE FROM highlights WHERE id = ?").run(id);
+  }
+
+  async deleteJob(id: string): Promise<void> {
+    // ADAAAA-6838: remove the job row and cascade to its highlights + media_sessions
+    // in one transaction so a DELETE never leaves orphaned rows behind.
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("DELETE FROM highlights WHERE job_id = ?").run(id);
+      this.db.prepare("DELETE FROM media_sessions WHERE job_id = ?").run(id);
+      this.db.prepare("DELETE FROM jobs WHERE id = ?").run(id);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
   }
 
   async saveTrainRun(r: TrainRun): Promise<void> {
@@ -1161,6 +1179,24 @@ export class PgDb implements Db {
 
   async deleteHighlight(id: string): Promise<void> {
     await this.pool.query("DELETE FROM highlights WHERE id = $1", [id]);
+  }
+
+  async deleteJob(id: string): Promise<void> {
+    // ADAAAA-6838: remove the job row and cascade to its highlights + media_sessions
+    // in one transaction so a DELETE never leaves orphaned rows behind.
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM highlights WHERE job_id = $1", [id]);
+      await client.query("DELETE FROM media_sessions WHERE job_id = $1", [id]);
+      await client.query("DELETE FROM jobs WHERE id = $1", [id]);
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   async saveTrainRun(r: TrainRun): Promise<void> {
