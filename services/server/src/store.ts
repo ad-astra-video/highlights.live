@@ -190,6 +190,48 @@ export class Store {
     return (this.byJob.get(jobId) ?? []).map((id) => this.highlights.get(id)!).filter(Boolean);
   }
 
+  /** All jobs currently held in memory (durable worker re-claim + drain,
+   * ADAAAA-6873). Distinct from listAllJobs() which the worker uses for the
+   * same purpose; kept as a thin alias for the drain loop. */
+  allJobs(): Job[] {
+    return [...this.jobs.values()];
+  }
+
+  /** Terminal job statuses (Phase 1 state machine, ADAAAA-6873). A job in any
+   * other status is non-terminal and is re-claimed by the durable worker. */
+  static isTerminalStatus(status: Job["status"]): boolean {
+    return status === "done" || status === "failed" || status === "cancelled";
+  }
+
+  /** Non-terminal jobs (queued/active/extracting/analyzing/finalizing). The
+   * durable VOD worker re-claims these at boot so a restart never strands a
+   * job (ADAAAA-6873). */
+  listNonTerminalJobs(): Job[] {
+    return [...this.jobs.values()].filter((j) => !Store.isTerminalStatus(j.status));
+  }
+
+  /** Patch job progress with a monotonic no-regress guarantee (ADAAAA-6873).
+   * `framesAnalyzed`, `framesPct`, and `highlightsFound` never decrease, so a
+   * worker that reports a lower watermark (e.g. after a resume) cannot regress
+   * persisted progress. Returns the job. */
+  async patchJobProgress(
+    id: string,
+    patch: Partial<Pick<Job, "framesAnalyzed" | "framesPct" | "highlightsFound" | "progress">> & Partial<Job>
+  ): Promise<Job> {
+    const j = this.jobs.get(id);
+    if (!j) throw new Error(`no job ${id}`);
+    const next: any = { ...j, ...patch };
+    for (const k of ["framesAnalyzed", "highlightsFound"] as const) {
+      if (patch[k] != null) next[k] = Math.max(j[k] ?? 0, patch[k]);
+    }
+    if (patch.framesPct != null) next.framesPct = Math.max(j.framesPct ?? 0, patch.framesPct);
+    if (patch.progress != null) next.progress = Math.max(j.progress ?? 0, patch.progress);
+    const parsed = JobSchema.parse(next);
+    this.jobs.set(id, parsed);
+    if (this.db) await this.db.saveJob(parsed);
+    return parsed;
+  }
+
   allHighlights(): HighlightRecord[] {
     return [...this.highlights.values()];
   }

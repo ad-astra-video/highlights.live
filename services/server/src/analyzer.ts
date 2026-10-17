@@ -1411,7 +1411,13 @@ export async function analyzeJob(
    * a fresh session once the job has been stopped (otherwise the stop-path
    * slot release would make the in-flight analyze 404 and re-bind a new slot
    * on a job that is already stopping). */
-  slotRef?: { onReserve?: (res: ReserveResult) => void; isStopped?: () => boolean }
+  slotRef?: { onReserve?: (res: ReserveResult) => void; isStopped?: () => boolean },
+  /** Progress hook (ADAAAA-6873): fires with the running frames-processed count
+   * after each frame is fed to the pipeline, so the durable worker can persist
+   * a throttled, monotonic progress snapshot without waiting for job
+   * completion. Optional and trailing so existing positional callers are
+   * unaffected. */
+  onProgress?: (framesAnalyzed: number) => void
 ): Promise<AnalyzeOutcome> {
   const maxReReserves = cfg.maxReReserves ?? 3;
   // ADAAAA-6577: bounded exponential backoff between a perceive session-lost
@@ -1448,6 +1454,7 @@ export async function analyzeJob(
   try {
     for await (const frame of iterFrames) {
       framesAnalyzed++;
+      onProgress?.(framesAnalyzed);
       run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
       let res!: ObservationResult;
       let reReserved = 0;

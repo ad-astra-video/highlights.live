@@ -434,7 +434,12 @@ export const JobSchema = z.object({
   sourceUrl: z.string().optional(),
   gameHint: z.string().optional(),
   preferLabels: z.array(z.string()).default([]),
-  status: z.enum(["queued", "active", "done", "failed"]).default("queued"),
+  // Durable lifecycle state machine (ADAAAA-6873): a VOD job moves
+  // queued -> extracting -> analyzing -> finalizing -> done | failed, plus
+  // cancelled. "active" is kept for live/browser-capture jobs and older rows.
+  status: z
+    .enum(["queued", "active", "extracting", "analyzing", "finalizing", "done", "failed", "cancelled"])
+    .default("queued"),
   // Set when the job fails (status === "failed") to the server-side error text
   // so GET /jobs / GET /jobs/:id and the webapp processing-jobs surface render
   // the real reason instead of a generic client string (ADAAAA-6781).
@@ -454,6 +459,17 @@ export const JobSchema = z.object({
   frameScale: z.string().optional(),
   decideWindowN: z.number().int().positive().optional(),
   framesAnalyzed: z.number().int().min(0).optional(),
+  // Durable job progress (ADAAAA-6873). Throttled + monotonic (never regresses);
+  // `stage` mirrors the processing statuses; `framesAnalyzed` tracks frames fed
+  // to the pipeline; `highlightsFound` increments the moment a highlight is
+  // decided; `attempts` counts worker re-claims so a restart never double-debits.
+  stage: z.string().optional(),
+  framesTotal: z.number().int().min(0).optional(),
+  framesPct: z.number().min(0).max(100).optional(),
+  highlightsFound: z.number().int().min(0).optional(),
+  startedAt: z.string().optional(),
+  finishedAt: z.string().optional(),
+  attempts: z.number().int().min(0).optional(),
   candidatesTriggered: z.number().int().min(0).optional(),
   decideCalls: z.number().int().min(0).optional(),
   perceiveSessionS: z.number().min(0).optional(),

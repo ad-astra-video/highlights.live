@@ -697,11 +697,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   async function runVodJob(job: { id: string; gameHint?: string; preferLabels?: string[] }, videoPath: string, user: any, sub: any) {
     const jobId = job.id;
     const scheduledAt = new Date().toISOString();
-    // Async-VOD progress (ADAAAA-6760): the POST returns the job as `queued`;
-    // mark it active now that processing actually begins, then drive 0..100 at
-    // the stage boundaries below.
-    await store.patchJob(jobId, { status: "active" });
-    emitJobProgress(jobId, 0, "uploading");
+    // Durable lifecycle (ADAAAA-6873): claim the job off the request path and
+    // persist the extracting transition so status + progress survive a
+    // refresh/restart. `attempts` increments on every re-claim so a restart
+    // resumes exactly once and the idempotent onEvent never re-debits quota.
+    const prior = store.getJob(jobId);
+    await store.patchJob(jobId, {
+      status: "extracting",
+      stage: "extracting",
+      startedAt: new Date().toISOString(),
+      attempts: (prior?.attempts ?? 0) + 1,
+    });
+    emitJobProgress(jobId, 0, "extracting frames");
     const anaCfg: AnalyzerConfig = {
       jobId,
       clipBeforeS: cfg.clipBeforeS,
@@ -733,23 +740,78 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // Count candidates (video + audio) for the recorded decide/cost fields.
     let candidatesTriggered = 0;
     const baseHook = jobEventHook(jobId);
+
+    // Durable idempotent resume (ADAAAA-6873): highlights already persisted for
+    // this job are NOT re-added and their quota is NOT re-debited, so a stale
+    // re-claim (restart) never duplicates a clip or double-charges. Key =
+    // start|eventType. `highlightsFound` counts the job's total highlights and
+    // starts from the on-disk count so a resume keeps the running tally.
+    const existingHl = new Set(
+      store.highlightsForJob(jobId).map((h) => `${Math.round(h.start)}|${h.eventType}`)
+    );
+    let highlightsFound = store.highlightsForJob(jobId).length;
+
+    // Throttled, monotonic progress persistence (ADAAAA-6873). We persist at most
+    // once per second (or force on a highlight/terminal write) and never let
+    // framesAnalyzed/framesPct regress, so a resume from a lower watermark can
+    // only move progress forward. `framesTotal` is filled in after frame
+    // extraction below.
+    let lastProgressAt = 0;
+    let framesTotal = 0;
+    const persistProgress = async (framesAnalyzed: number, force = false) => {
+      const now = Date.now();
+      if (!force && now - lastProgressAt < 1000) return;
+      lastProgressAt = now;
+      const cur = store.getJob(jobId);
+      if ((cur?.framesAnalyzed ?? 0) >= framesAnalyzed) return; // never regress
+      const pct = framesTotal > 0 ? Math.min(100, Math.round((framesAnalyzed / framesTotal) * 100)) : 0;
+      await store.patchJobProgress(jobId, {
+        status: "analyzing",
+        stage: "analyzing",
+        framesAnalyzed,
+        framesTotal,
+        framesPct: pct,
+        highlightsFound,
+        progress: Math.min(100, Math.max(1, pct)),
+        progressLabel: `analyzing (frame ${framesAnalyzed}/${framesTotal})`,
+      });
+      emitJobEvent(jobId, {
+        type: "progress",
+        progress: Math.min(100, Math.max(1, pct)),
+        progressLabel: `analyzing (frame ${framesAnalyzed}/${framesTotal})`,
+      } as any);
+    };
+
     const onEvent: (ev: AnalyzeEvent) => void = (ev) => {
-      if (ev.type === "candidate") candidatesTriggered++;
-      baseHook(ev);
+      if (ev.type === "candidate") {
+        candidatesTriggered++;
+        baseHook(ev);
+        return;
+      }
       // ADAAAA-6352: persist + bill + quota-debit each accepted highlight at
       // DECISION time (mirror the live publish-at-decision ADAAAA-5777) via the
       // same write-through helper. jobEventHook already fanned the `highlight`
-      // event to SSE subscribers, so an active SSE connection sees it as it is
-      // found; this write-through is what surfaces it on the VOD feed surface
-      // (GET /highlights, /jobs/:id). Billing/quota debit happen exactly once
-      // here — the old end-of-job batch loop was removed so nothing
-      // double-counts between the SSE stream and the final response.
-      // Best-effort: a failure logs and never stalls the frame loop.
+      // event to SSE subscribers. ADAAAA-6873: guard against double-persist on a
+      // re-claim — a highlight keyed by start|eventType that is already on disk
+      // is skipped so its quota is never re-debited.
       if (ev.type === "highlight" && ev.highlight) {
-        persistLiveHighlight({ store, cfg, billing, entitlements, db }, user, sub, ev.highlight).catch((e) =>
-          console.error(`[vod:${jobId}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
-        );
+        const key = `${Math.round(ev.highlight.start)}|${ev.highlight.eventType}`;
+        if (existingHl.has(key)) {
+          baseHook(ev);
+          return; // already persisted on an earlier attempt — no re-debit
+        }
+        existingHl.add(key);
+        highlightsFound++;
+        persistLiveHighlight({ store, cfg, billing, entitlements, db }, user, sub, ev.highlight)
+          .then(() => persistProgress(store.getJob(jobId)?.framesAnalyzed ?? 0, true))
+          .catch((e) => console.error(`[vod:${jobId}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e));
+        baseHook(ev);
+        return;
       }
+      baseHook(ev);
+    };
+    const onProgress: (framesAnalyzed: number) => void = (n) => {
+      persistProgress(n).catch((e) => console.error(`[vod:${jobId}] progress`, String(e?.message || e)));
     };
     const frameDir = path.join(cfg.dataDir, "frames", jobId);
     const sampleFps = cfg.vodDetailFps;
@@ -791,6 +853,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     } catch {
       totalFrames = 0;
     }
+    // Durable framesTotal (ADAAAA-6873): the pre-extracted frame count, used by
+    // the monotonic progress snapshot to derive framesPct.
+    framesTotal = totalFrames;
     let processedFrames = 0;
     let lastProgressEmit = 0;
     const baseIter = buildAnalyzeFrames(frameDir, sampleFps)();
@@ -853,12 +918,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     })();
     let outcome: AnalyzeOutcome;
     try {
+      // ADAAAA-6873: advance to analyzing + persist framesTotal (durable), then
+      // pass the onProgress hook so the worker persists a throttled, monotonic
+      // progress snapshot per frame (the `slotRef` drives the stop-path slot
+      // release; onProgress is a trailing optional param).
+      await store.patchJob(jobId, { status: "analyzing", stage: "analyzing", framesTotal });
       outcome = await analyzeJob(adapter, iter, cut, anaCfg, onEvent, initial, shared, {
         onReserve: (res) => {
           slot.current = res;
         },
         isStopped: () => slot.stopped,
-      });
+      }, onProgress);
     } finally {
       await audioLoop;
       livePerceiveSlots.delete(job.id);
@@ -879,19 +949,27 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // Source runtime (D-I2.2 / ADAAAA-6838): probe the media duration so the
     // completed result card can show it. Best-effort (ms; null on probe failure).
     const durationS = await probeDuration(cfg.ffmpegPath, videoPath).catch(() => null);
+    // Durable finalizing transition (ADAAAA-6873 state machine) before done.
+    await store.patchJob(jobId, { status: "finalizing", stage: "finalizing" });
+    const doneFramesPct = framesTotal > 0 ? Math.min(100, Math.round((outcome.framesAnalyzed / framesTotal) * 100)) : 0;
     await store.patchJob(jobId, {
       status: "done",
+      stage: "done",
       perceiveSessionId: outcome.sessionId,
       stageAMetrics: stageA,
       sampleFps,
       frameScale: cfg.vodFrameScale,
       decideWindowN: cfg.vodDecideWindowN,
       framesAnalyzed: outcome.framesAnalyzed,
+      framesTotal,
+      framesPct: doneFramesPct,
+      highlightsFound,
       candidatesTriggered,
       decideCalls,
       perceiveSessionS: Number(perceiveSessionS.toFixed(1)),
       costUsd: Number(costUsd.toFixed(4)),
       scheduledAt,
+      finishedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
       progress: 100,
       progressLabel: "done",
@@ -906,6 +984,95 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       );
     }
     return { job: store.getJob(jobId), framesAnalyzed: outcome.framesAnalyzed, costUsd, stageA };
+  }
+
+  // -------------------------------------------------------------------------
+  // Durable VOD queue + worker (ADAAAA-6873). POST /jobs, /jobs/upload and
+  // /jobs/upload/complete now enqueue a file/URL VOD job and return 202
+  // immediately; a worker claims queued jobs and runs the pipeline off the
+  // request path, so a refresh / disconnect / restart never abandons a job.
+  // Non-terminal jobs left by a prior process are re-claimed on boot so
+  // nothing is stranded (the persisted state machine makes the restart resume
+  // exactly once, and the idempotent onEvent never re-debits quota).
+  // -------------------------------------------------------------------------
+  const vodJobPaths = new Map<string, string>(); // jobId -> videoPath
+  const vodProcessing = new Set<string>(); // jobIds currently running
+  const vodDraining = { running: false };
+
+  function enqueueVodJob(jobId: string, videoPath: string): void {
+    vodJobPaths.set(jobId, videoPath);
+    // Fire-and-forget: kick the drain loop if it isn't already running.
+    drainVodQueue().catch((e) => console.error(`[vod:${jobId}] drain`, e));
+  }
+
+  async function drainVodQueue(): Promise<void> {
+    if (vodDraining.running) return;
+    vodDraining.running = true;
+    try {
+      // Claim up to `vodWorkerConcurrency` queued jobs and run each off the
+      // request path. When a claimed job finishes its finally re-kicks the
+      // drain, so a newly-queued or remaining job is never left stranded.
+      const queued = store
+        .allJobs()
+        .filter((j) => j.status === "queued" && !vodProcessing.has(j.id))
+        .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+      for (const job of queued.slice(0, cfg.vodWorkerConcurrency)) {
+        const videoPath = vodJobPaths.get(job.id) ?? job.sourceUrl;
+        if (!videoPath) continue;
+        vodProcessing.add(job.id);
+        processVodJob(job.id, videoPath)
+          .catch((e) => console.error(`[vod:${job.id}] worker`, e))
+          .finally(() => {
+            vodProcessing.delete(job.id);
+            drainVodQueue().catch(() => {});
+          });
+      }
+    } finally {
+      vodDraining.running = false;
+    }
+  }
+
+  async function processVodJob(jobId: string, videoPath: string): Promise<void> {
+    const job = store.getJob(jobId);
+    if (!job) return;
+    const user = job.ownerId ? await db.getUserById(job.ownerId) : undefined;
+    if (!user) {
+      await store
+        .patchJob(jobId, { status: "failed", stage: "failed", finishedAt: new Date().toISOString() })
+        .catch(() => {});
+      return;
+    }
+    const sub = await db.getSubscription(user.id);
+    try {
+      await runVodJob(job, videoPath, user, sub);
+    } catch (e: any) {
+      console.error(`[vod:${jobId}] failed`, e);
+      await markJobFailed(jobId, e).catch(() => {});
+    }
+  }
+
+  /** Re-claim non-terminal jobs left over from a prior process (a restart or a
+   * crash mid-pipeline): queue them again so the worker resumes them exactly
+   * once. Highlights already persisted are skipped by the idempotent onEvent,
+   * so no duplicate clip and no double quota debit. */
+  async function recoverStaleVodJobs(): Promise<void> {
+    for (const job of store.allJobs()) {
+      if (
+        job.status === "queued" ||
+        job.status === "extracting" ||
+        job.status === "analyzing" ||
+        job.status === "finalizing"
+      ) {
+        const videoPath = job.sourceUrl;
+        if (!videoPath) continue;
+        if (!vodJobPaths.has(job.id)) vodJobPaths.set(job.id, videoPath);
+        // Re-queue a stuck non-terminal job (extracting/analyzing/finalizing).
+        if (job.status !== "queued") {
+          await store.patchJob(job.id, { status: "queued", stage: "queued" }).catch(() => {});
+        }
+      }
+    }
+    await drainVodQueue();
   }
 
   app.get("/health", async () => ({ status: "ok", billing: billing.enabled ? "live" : "disabled" }));
@@ -1405,7 +1572,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         preferLabels: req.body.preferLabels ?? [],
         sampleFps: req.body.sampleFps,
       });
-      await store.patchJob(job.id, { status: "active" });
+      // File/URL VOD jobs stay `queued` and are claimed by the durable worker
+      // (ADAAAA-6873 non-blocking submit); live / browser-capture flip to active.
+      if (req.body.source === "browser" || live) await store.patchJob(job.id, { status: "active" });
       await recordJobFunnel(db, user.id, priorJobs, firstJobAt, cfg.funnelRetainDays);
       if (req.body.source === "browser") {
         // Client-side capture (screen share / element capture): the client posts
@@ -1446,18 +1615,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         runLiveJob(ingest, job, user, sub).catch(() => {});
         return { job: store.getJob(job.id), status: "ingesting", framesAnalyzed: 0 };
       }
-      // ADAAAA-6760: the file/URL source leg is now async — spawn runVodJob
-      // fire-and-forget and return 202 { job, accepted: true } immediately so
-      // the upload POST never blocks on the (multi-minute) analyze pipeline
-      // and the edge request timeout can't hand the browser a 5xx. The job
-      // flows queued -> active -> done|failed; progress/status stream over the
-      // job's existing SSE channel and the webapp polls GET /jobs as a backstop.
-      runVodJob(job, videoPath!, user, sub).catch(async (e: any) => {
-        await markJobFailed(job.id, e);
-        const raw = String(e?.message || e);
-        console.error(`[vod:${job.id}] background analyze failed: ${raw}`);
+      // Durable non-blocking submit (ADAAAA-6873): enqueue the file/URL VOD job
+      // for the durable worker and return 202 immediately so the upload POST
+      // never blocks on the (multi-minute) analyze pipeline and the edge
+      // request timeout can't hand the browser a 5xx. The worker claims the job
+      // and drives queued -> extracting -> analyzing -> finalizing -> done|
+      // failed; progress/status stream over the job's SSE channel and the
+      // webapp polls GET /jobs / GET /jobs/:id as a backstop.
+      enqueueVodJob(job.id, videoPath!);
+      const q = store.getJob(job.id)!;
+      return reply.code(202).send({
+        job: q,
+        accepted: true,
+        status: "queued",
+        progress: { stage: "queued", framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
       });
-      return reply.code(202).send({ job: store.getJob(job.id), accepted: true });
     }
   );
 
@@ -1577,18 +1749,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       preferLabels,
       sampleFps,
     });
-    await store.patchJob(job.id, { status: "active" });
     await recordJobFunnel(db, user.id, priorJobs, firstJobAt, cfg.funnelRetainDays);
-    // ADAAAA-6760: dispatch the analyze pipeline fire-and-forget and return
-    // 202 { job, accepted: true } immediately (the file is already landed at
+    // Durable non-blocking submit (ADAAAA-6873): enqueue the landed file for
+    // the durable worker and return 202 immediately (the file is already at
     // dataDir/uploads/<jobId>/<name>). The old synchronous await blocked the
     // request for minutes on a long VOD, which outlasted the edge request
     // timeout and handed the browser a 5xx — same fix as the resumable rail.
-    runVodJob(job, finalPath, user, sub).catch(async (e: any) => {
-      await markJobFailed(job.id, e);
-      console.error(`[vod:${job.id}] background analyze failed:`, String(e?.message || e));
+    enqueueVodJob(job.id, finalPath);
+    const q = store.getJob(job.id)!;
+    return reply.code(202).send({
+      job: q,
+      accepted: true,
+      status: "queued",
+      progress: { stage: "queued", framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
     });
-    return reply.code(202).send({ job: store.getJob(job.id), accepted: true });
   });
 
   // --- Resumable VOD upload rail (ADAAAA-5714) ---
@@ -1724,19 +1898,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       preferLabels: session.preferLabels,
       sampleFps: session.sampleFps,
     });
-    await store.patchJob(job.id, { status: "active" });
     await recordJobFunnel(db, user.id, priorJobs, firstJobAt, cfg.funnelRetainDays);
-    // The full file is already reassembled on origin; running the rebuild+
-    // analyze pipeline SYNCHRONOUSLY here blocks this request for minutes on a
-    // long VOD, which outlasts the Cloudflare/tunnel edge request timeout and
-    // hands the browser a Cloudflare 5xx (HTML) page. Dispatch it in the
-    // background and return the active job immediately; the webapp polls
-    // GET /jobs/:id to a terminal state instead (ADAAAA-5714).
-    runVodJob(job, session.finalPath, user, sub).catch(async (e: any) => {
-      await markJobFailed(job.id, e);
-      console.error(`[vod:${job.id}] background analyze failed:`, String(e?.message || e));
+    // Durable non-blocking submit (ADAAAA-6873): the full file is already
+    // reassembled on origin; enqueue it for the durable worker and return 202
+    // immediately. The old synchronous awaited runVodJob blocked this request
+    // for minutes on a long VOD, which outlasted the Cloudflare/tunnel edge
+    // request timeout and handed the browser a Cloudflare 5xx (HTML) page; the
+    // webapp polls GET /jobs/:id to a terminal state instead (ADAAAA-5714).
+    enqueueVodJob(job.id, session.finalPath);
+    const q = store.getJob(job.id)!;
+    return reply.code(202).send({
+      job: q,
+      accepted: true,
+      status: "queued",
+      progress: { stage: "queued", framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
     });
-    return reply.code(202).send({ job: store.getJob(job.id), accepted: true });
   });
 
   // List the caller's jobs (ADAAAA-6760) for the webapp's processing-jobs
@@ -1757,7 +1933,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const job = store.getJob(req.params.id);
     if (!job) return reply.code(404).send({ error: "not found" });
     if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
-    return { job, highlights: store.highlightsForJob(job.id) };
+    // Stable progress projection (ADAAAA-6873) so a full browser refresh
+    // re-hydrates the persisted state machine + accumulated progress from
+    // GET /jobs/:id, and the durable progress fields roll up into one object.
+    const progress = {
+      stage: job.stage ?? job.status,
+      framesAnalyzed: job.framesAnalyzed ?? 0,
+      framesTotal: job.framesTotal ?? 0,
+      framesPct: job.framesPct ?? 0,
+      highlightsFound: job.highlightsFound ?? 0,
+    };
+    return { job, highlights: store.highlightsForJob(job.id), progress };
   });
 
   // Delete a job (ADAAAA-6838, increment 2). Owner-or-admin; 404 if missing,
@@ -2428,6 +2614,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   // Serve the built webapp (SPA) for any unmatched GET; API routes above win.
   attachSpaServing(app, cfg);
+
+  // Boot-time durable VOD re-claim (ADAAAA-6873): the store was hydrated by
+  // server/index.ts before buildApp, so re-claim any non-terminal job left by a
+  // prior process (restart/crash). Fire-and-forget so the listener starts
+  // immediately; the drain re-queues stranded jobs and resumes them exactly
+  // once (idempotent onEvent prevents duplicate clips / double quota debit).
+  recoverStaleVodJobs().catch((e) => console.error(`[vod] boot re-claim failed:`, String(e?.message || e)));
 
   return app;
 }
