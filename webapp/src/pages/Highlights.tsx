@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
-import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X, ChevronDown, ChevronRight } from "lucide-react";
+import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X, ChevronDown, ChevronRight, Trash2, List, LayoutGrid } from "lucide-react";
 import { api, getToken, type Highlight, type Job, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { isOverLimit, oversizedHelp } from "../lib/vodUpload";
 import { DEFAULT_REJECTED_CLIP_TTL_MS, isRecoverable, recoverLabel } from "../lib/rejected";
 import { useAuth } from "../lib/auth";
-import { useProcessingJobs, isInFlight, jobProgressPct } from "../lib/vodJobs";
+import {
+  useProcessingJobs,
+  isInFlight,
+  jobProgressPct,
+  partitionJobs,
+  groupHighlightsByJob,
+  deleteJob,
+  formatJobTime,
+  jobSpanLabel,
+  sourceLabel,
+} from "../lib/vodJobs";
 import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
 import { BrowserCapture } from "../components/BrowserCapture";
@@ -46,7 +56,7 @@ export function Highlights() {
   const { billing, refreshBilling } = useAuth();
   // Async-VOD processing-jobs queue (ADAAAA-6760): fetched + polled + SSE-streamed
   // by the hook; the new "Processing jobs" section below renders its rows.
-  const { jobs: processingJobs, refresh: refreshProcessingJobs } = useProcessingJobs();
+  const { jobs: processingJobs, refresh: refreshProcessingJobs, removeJob } = useProcessingJobs();
   const [source, setSource] = useState("file");
   const [videoPath, setVideoPath] = useState("/data/test_vod.mp4");
   const [gameHint, setGameHint] = useState("Esports");
@@ -76,6 +86,16 @@ export function Highlights() {
   // within the POST, so it is left null there — the response refresh already
   // surfaced the full set).
   const [vodJobId, setVodJobId] = useState<string | null>(null);
+  // Increment 2 (ADAAAA-6837):
+  // - `flatHighlights` toggles "Your highlights" between the default per-job
+  //   grouped view and the opt-in flat ("Show all") grid.
+  // - `failedOpen` tracks whether the collapsed Failed section is expanded
+  //   (default collapsed).
+  // - `confirmDeleteJob` holds the job selected for deletion so the confirm
+  //   dialog can render; null when no delete is pending.
+  const [flatHighlights, setFlatHighlights] = useState(false);
+  const [failedOpen, setFailedOpen] = useState(false);
+  const [confirmDeleteJob, setConfirmDeleteJob] = useState<Job | null>(null);
   const [debugJob, setDebugJob] = useState<string | null>(null);
   // rejected-clips lifecycle (ADAAAA-5168/5204): the server's recovery TTL (for
   // "recover until" deadlines), whether the collapsed rejected section is open,
@@ -288,8 +308,44 @@ export function Highlights() {
     }
   }
 
+  // Delete a job (ADAAAA-6837): call DELETE /jobs/:id, then drop the job from
+  // the queue (client-side, immediately) and remove its highlights from the
+  // feed (server cascades them). The server also releases any held perceive
+  // slot and clears on-disk artifacts.
+  async function confirmDelete(jobToDelete: Job) {
+    try {
+      await deleteJob(jobToDelete.id);
+      removeJob(jobToDelete.id);
+      setHighlights((prev) => prev.filter((h) => h.jobId !== jobToDelete.id));
+      setConfirmDeleteJob(null);
+      // Deleting may free clip-quota slots consumed by the job's highlights.
+      refreshBilling().catch(() => {});
+      refreshProcessingJobs().catch(() => {});
+    } catch (e: any) {
+      setError(`Delete failed: ${e.message}`);
+      setConfirmDeleteJob(null);
+    }
+  }
+
+  // Completed-card "View highlights" affordance: switch to the grouped view and
+  // scroll to that job's highlight group.
+  function viewJobHighlights(jobId: string) {
+    setFlatHighlights(false);
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-highlight-group="${CSS.escape(jobId)}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   const sourceInputLabel = source === "screenshare" || source === "file" ? null
     : "RTMP / stream URL";
+
+  // Increment 2 (ADAAAA-6837): split the queue into the three job surfaces and
+  // precompute the grouped highlight feed for "Your highlights".
+  const { inFlight: inFlightJobs, completed: completedJobs, failed: failedJobs } = partitionJobs(processingJobs);
+  const groupedHighlights = groupHighlightsByJob(highlights, processingJobs);
+  const nonRejectedCount = highlights.filter((h) => h.status !== "rejected").length;
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -466,52 +522,84 @@ export function Highlights() {
         )}
       </div>
 
-      {processingJobs.length > 0 && (
-        <ProcessingJobs jobs={processingJobs} onDebug={(id) => setDebugJob(id)} />
+      {(inFlightJobs.length > 0 || completedJobs.length > 0 || failedJobs.length > 0) && (
+        <div className="mt-8 space-y-8" data-job-surfaces>
+          {inFlightJobs.length > 0 && (
+            <ProcessingJobs jobs={inFlightJobs} onDebug={(id) => setDebugJob(id)} onDelete={setConfirmDeleteJob} />
+          )}
+          {completedJobs.length > 0 && (
+            <CompletedJobs
+              jobs={completedJobs}
+              highlights={highlights}
+              onDebug={(id) => setDebugJob(id)}
+              onDelete={setConfirmDeleteJob}
+              onViewHighlights={viewJobHighlights}
+            />
+          )}
+          {failedJobs.length > 0 && (
+            <FailedJobs
+              jobs={failedJobs}
+              open={failedOpen}
+              onToggle={() => setFailedOpen((o) => !o)}
+              onDebug={(id) => setDebugJob(id)}
+              onDelete={setConfirmDeleteJob}
+            />
+          )}
+        </div>
       )}
 
       {debugJob && <FrameDebugger jobId={debugJob} />}
 
       <h2 className="mt-10 text-2xl font-black">Your highlights</h2>
-      <div className="mt-4 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-        {highlights.filter((h) => h.status !== "rejected").length === 0 && (
-          <div className="text-mut">Nothing yet — run a detection above.</div>
-        )}
-        {highlights
-          .filter((h) => h.status !== "rejected")
-          .map((h) => (
-            <div key={h.id} className="card card-hover overflow-hidden">
-              <VideoClip src={h.clipUri} label={h.eventType} error={h.clipError} />
-              <div className="p-4">
-                <div className="flex items-center justify-between">
-                  <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">{h.eventType || "EVENT"}</span>
-                  <span className={`text-xs ${h.status === "accepted" ? "text-green" : h.status === "rejected" ? "text-red" : "text-yellow"}`}>
-                    {h.status}
-                  </span>
-                </div>
-                <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
-                <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
-                <div className="text-xs text-mut">T+{Math.round(h.start)}s → T+{Math.round(h.end)}s</div>
-                <div className="mt-3 flex gap-2">
-                  <button
-                    className="btn-neon flex-1"
-                    disabled={h.status === "accepted"}
-                    onClick={() => review(h.id, "accepted")}
-                  >
-                    <Check className="mr-1 inline h-4 w-4" /> Accept
-                  </button>
-                  <button
-                    className="btn-neon btn-pink flex-1"
-                    disabled={h.status === "rejected"}
-                    onClick={() => review(h.id, "rejected")}
-                  >
-                    <X className="mr-1 inline h-4 w-4" /> Reject
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          data-active={!flatHighlights}
+          onClick={() => setFlatHighlights(false)}
+          className="chip flex items-center gap-2"
+        >
+          <LayoutGrid className="h-4 w-4" /> Grouped by job
+        </button>
+        <button
+          type="button"
+          data-active={flatHighlights}
+          onClick={() => setFlatHighlights(true)}
+          className="chip flex items-center gap-2"
+        >
+          <List className="h-4 w-4" /> Show all / flat
+        </button>
       </div>
+      {flatHighlights ? (
+        <div className="mt-4 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {nonRejectedCount === 0 && (
+            <div className="text-mut">Nothing yet — run a detection above.</div>
+          )}
+          {highlights
+            .filter((h) => h.status !== "rejected")
+            .map((h) => (
+              <HighlightCard key={h.id} highlight={h} onReview={review} />
+            ))}
+        </div>
+      ) : (
+        <div className="mt-4 space-y-10">
+          {nonRejectedCount === 0 && (
+            <div className="text-mut">Nothing yet — run a detection above.</div>
+          )}
+          {groupedHighlights.map((g) => (
+            <section key={g.key} data-highlight-group={g.key} data-job-id={g.jobId ?? "none"}>
+              <div className="mb-3 flex items-center gap-2">
+                <h3 className="text-lg font-black text-ink">{g.label}</h3>
+                <span className="rounded-full bg-ink/15 px-2 py-0.5 text-xs font-bold text-ink">{g.highlights.length}</span>
+              </div>
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {g.highlights.map((h) => (
+                  <HighlightCard key={h.id} highlight={h} onReview={review} />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
 
       {/* Rejected clips live in a separate, collapsed section shown BELOW the
           accepted/published feed so the user can inspect them before the 24h
@@ -529,6 +617,10 @@ export function Highlights() {
         onRecover={(id) => review(id, "accepted")}
         onError={setError}
       />
+
+      {confirmDeleteJob && (
+        <DeleteJobDialog job={confirmDeleteJob} onCancel={() => setConfirmDeleteJob(null)} onConfirm={confirmDelete} />
+      )}
     </div>
   );
 }
@@ -540,19 +632,6 @@ export function Highlights() {
  * done rows (frames analyzed, cost, decide calls, highlight count + a Frame
  * debugger link) or a clear error line on failed rows.
  */
-const SOURCE_LABELS: Record<string, string> = {
-  file: "File",
-  rtmp: "RTMP",
-  webrtc: "WebRTC",
-  screenshare: "Screen share",
-  browser: "Browser",
-  "file-sim": "File (sim)",
-};
-
-function sourceLabel(source: string | undefined): string {
-  return (source && SOURCE_LABELS[source]) || source || "Unknown";
-}
-
 function statusChipClass(status: string): string {
   switch (status) {
     case "queued":
@@ -568,79 +647,234 @@ function statusChipClass(status: string): string {
   }
 }
 
-function ProcessingJobs({ jobs, onDebug }: { jobs: Job[]; onDebug: (id: string) => void }) {
+/**
+ * Increment 2 (ADAAAA-6837): shared highlight card used by both the grouped
+ * and flat "Your highlights" views (clip player + accept/reject controls).
+ */
+function HighlightCard({ highlight, onReview }: { highlight: Highlight; onReview: (id: string, status: "accepted" | "rejected") => void }) {
+  const h = highlight;
   return (
-    <section className="mt-8" data-processing-jobs>
+    <div className="card card-hover overflow-hidden" data-highlight-card>
+      <VideoClip src={h.clipUri} label={h.eventType} error={h.clipError} />
+      <div className="p-4">
+        <div className="flex items-center justify-between">
+          <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">{h.eventType || "EVENT"}</span>
+          <span className={`text-xs ${h.status === "accepted" ? "text-green" : h.status === "rejected" ? "text-red" : "text-yellow"}`}>
+            {h.status}
+          </span>
+        </div>
+        <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
+        <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
+        <div className="text-xs text-mut">T+{Math.round(h.start)}s → T+{Math.round(h.end)}s</div>
+        <div className="mt-3 flex gap-2">
+          <button
+            className="btn-neon flex-1"
+            disabled={h.status === "accepted"}
+            onClick={() => onReview(h.id, "accepted")}
+          >
+            <Check className="mr-1 inline h-4 w-4" /> Accept
+          </button>
+          <button
+            className="btn-neon btn-pink flex-1"
+            disabled={h.status === "rejected"}
+            onClick={() => onReview(h.id, "rejected")}
+          >
+            <X className="mr-1 inline h-4 w-4" /> Reject
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Per-row/card Delete affordance (ADAAAA-6837). */
+function DeleteButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" className="chip" onClick={onClick} data-job-delete>
+      <Trash2 className="mr-1 inline h-4 w-4" /> Delete
+    </button>
+  );
+}
+
+/** In-flight "Processing jobs" surface (ADAAAA-6760): one row per queued/active
+ * job (8-char id, status chip, source, progress bar + label) plus a Delete
+ * control on each row (ADAAAA-6837). */
+function ProcessingJobs({ jobs, onDebug, onDelete }: { jobs: Job[]; onDebug: (id: string) => void; onDelete: (job: Job) => void }) {
+  return (
+    <section data-processing-jobs>
       <h2 className="text-2xl font-black">Processing jobs</h2>
       <div className="mt-3 flex flex-col gap-3">
         {jobs.map((j) => (
-          <ProcessingJobRow key={j.id} job={j} onDebug={onDebug} />
+          <div key={j.id} className="card px-4 py-3" data-processing-job>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="font-mono text-sm text-ink">{j.id.slice(0, 8)}</span>
+              <span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusChipClass(j.status)}`}>
+                {j.status}
+              </span>
+              <span className="text-xs text-mut">{sourceLabel(j.source)}</span>
+              <span className="text-xs text-mut">{j.progressLabel || "queued"}</span>
+              <span className="ml-auto">
+                <DeleteButton onClick={() => onDelete(j)} />
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-2" data-job-progress>
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-mut/20">
+                <div className="h-full rounded-full bg-neon" style={{ width: `${jobProgressPct(j)}%` }} />
+              </div>
+              <span className="text-xs text-mut">{Math.round(jobProgressPct(j))}%</span>
+            </div>
+          </div>
         ))}
       </div>
     </section>
   );
 }
 
-function ProcessingJobRow({ job, onDebug }: { job: Job; onDebug: (id: string) => void }) {
-  // A done job's highlight count is not on the Job record; fetch it from
-  // GET /jobs/:id (which returns { job, highlights }) once the job is done.
-  const [highlightCount, setHighlightCount] = useState<number | null>(null);
-  useEffect(() => {
-    if (job.status !== "done") return;
-    let live = true;
-    api<{ highlights?: Highlight[] }>(`/jobs/${job.id}`)
-      .then((r) => {
-        if (live) setHighlightCount(r.highlights?.length ?? 0);
-      })
-      .catch(() => {
-        if (live) setHighlightCount(0);
-      });
-    return () => {
-      live = false;
-    };
-  }, [job.id, job.status]);
-
-  const pct = jobProgressPct(job);
+/** Completed result cards (ADAAAA-6837). One card per `done` job: source label,
+ * scheduled/completed times, span/duration, frames analyzed, decide calls, cost,
+ * highlight count, a thumbnail strip from the job's clipUris, links to its
+ * grouped highlights + Frame debugger, and a Delete control. */
+function CompletedJobs({ jobs, highlights, onDebug, onDelete, onViewHighlights }: {
+  jobs: Job[];
+  highlights: Highlight[];
+  onDebug: (id: string) => void;
+  onDelete: (job: Job) => void;
+  onViewHighlights: (jobId: string) => void;
+}) {
   return (
-    <div className="card px-4 py-3" data-processing-job>
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="font-mono text-sm text-ink">{job.id.slice(0, 8)}</span>
-        <span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusChipClass(job.status)}`}>
-          {job.status}
-        </span>
-        <span className="text-xs text-mut">{sourceLabel(job.source)}</span>
-        {job.status === "done" || job.status === "failed" ? null : (
-          <span className="text-xs text-mut">{job.progressLabel || "queued"}</span>
-        )}
-        {job.status === "done" && (
-          <button type="button" className="chip ml-auto" onClick={() => onDebug(job.id)} data-job-debug>
-            Frame debugger
-          </button>
-        )}
+    <section data-completed-jobs>
+      <h2 className="text-2xl font-black">Completed</h2>
+      <div className="mt-3 grid gap-5 sm:grid-cols-2">
+        {jobs.map((job) => {
+          const jobHighlights = highlights.filter((h) => h.jobId === job.id && h.status !== "rejected");
+          const thumbnails = jobHighlights.map((h) => h.clipUri).filter(Boolean);
+          const span = jobSpanLabel(job);
+          const scheduled = formatJobTime(job.scheduledAt);
+          const completed = formatJobTime(job.completedAt);
+          return (
+            <div key={job.id} className="card card-hover p-4" data-completed-job>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full border border-green/40 bg-green/10 px-2 py-0.5 text-xs font-bold uppercase text-green">done</span>
+                  <span className="font-mono text-sm text-ink">{job.id.slice(0, 8)}</span>
+                </div>
+                <span className="text-xs text-mut">{sourceLabel(job.source)}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-mut" data-job-done-metrics>
+                <span>{job.framesAnalyzed ?? 0} frames</span>
+                <span>${(job.costUsd ?? 0).toFixed(2)}</span>
+                <span>{job.decideCalls ?? 0} decide calls</span>
+                <span>{jobHighlights.length} highlights</span>
+                {span && <span data-job-span>{span}</span>}
+              </div>
+              {(scheduled || completed) && (
+                <div className="mt-1 text-xs text-mut" data-job-times>
+                  {scheduled && <span>Scheduled {scheduled}</span>}
+                  {scheduled && completed && <span> · </span>}
+                  {completed && <span>Completed {completed}</span>}
+                </div>
+              )}
+              {thumbnails.length > 0 && (
+                <div className="mt-3 flex gap-1 overflow-hidden" data-job-thumbnails>
+                  {thumbnails.slice(0, 5).map((uri, i) => (
+                    <img key={i} src={uri} alt="" className="h-14 w-24 flex-shrink-0 rounded object-cover" />
+                  ))}
+                </div>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" className="chip" onClick={() => onDebug(job.id)} data-job-debug>
+                  Frame debugger
+                </button>
+                {jobHighlights.length > 0 && (
+                  <button type="button" className="chip" onClick={() => onViewHighlights(job.id)} data-job-view-highlights>
+                    View highlights
+                  </button>
+                )}
+                <span className="ml-auto" />
+                <DeleteButton onClick={() => onDelete(job)} />
+              </div>
+            </div>
+          );
+        })}
       </div>
-      {isInFlight(job.status) && (
-        <div className="mt-2 flex items-center gap-2" data-job-progress>
-          <div className="h-2 flex-1 overflow-hidden rounded-full bg-mut/20">
-            <div className="h-full rounded-full bg-neon" style={{ width: `${pct}%` }} />
-          </div>
-          <span className="text-xs text-mut">{Math.round(pct)}%</span>
+    </section>
+  );
+}
+
+/** Failed jobs — a separate, collapsed (expandable) section (ADAAAA-6837).
+ * Default collapsed; the header shows the failed count. Expand to see each
+ * failed job's server error text. Each row has a Delete control. */
+function FailedJobs({ jobs, open, onToggle, onDebug, onDelete }: {
+  jobs: Job[];
+  open: boolean;
+  onToggle: () => void;
+  onDebug: (id: string) => void;
+  onDelete: (job: Job) => void;
+}) {
+  if (jobs.length === 0) return null;
+  return (
+    <section data-failed-section>
+      <button
+        type="button"
+        onClick={onToggle}
+        data-failed-section-toggle
+        className="flex w-full items-center justify-between rounded-lg border border-red/40 bg-card/70 px-4 py-3 text-left transition hover:border-red/60 hover:bg-card"
+      >
+        <span className="flex items-center gap-2 text-lg font-black text-ink">
+          {open ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
+          Failed
+          <span className="rounded-full bg-ink/15 px-2 py-0.5 text-xs font-bold text-ink">{jobs.length}</span>
+        </span>
+        <span className="text-xs text-mut">Click to {open ? "collapse" : "expand"}</span>
+      </button>
+      {open && (
+        <div className="mt-3 flex flex-col gap-3">
+          {jobs.map((job) => (
+            <div key={job.id} className="card px-4 py-3" data-failed-job>
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="font-mono text-sm text-ink">{job.id.slice(0, 8)}</span>
+                <span className="rounded-full border border-red/40 bg-red/10 px-2 py-0.5 text-xs font-bold uppercase text-red">failed</span>
+                <span className="text-xs text-mut">{sourceLabel(job.source)}</span>
+                <span className="ml-auto flex gap-2">
+                  <button type="button" className="chip" onClick={() => onDebug(job.id)} data-job-debug>
+                    Frame debugger
+                  </button>
+                  <DeleteButton onClick={() => onDelete(job)} />
+                </span>
+              </div>
+              <div className="mt-2 text-xs text-red" data-job-failed-line>
+                {job.error?.trim() ? job.error : "Processing failed — check the video source and try again."}
+              </div>
+            </div>
+          ))}
         </div>
       )}
-      {job.status === "done" && (
-        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-mut" data-job-done-metrics>
-          <span>{job.framesAnalyzed ?? 0} frames</span>
-          <span>${(job.costUsd ?? 0).toFixed(2)}</span>
-          <span>{job.decideCalls ?? 0} decide calls</span>
-          <span>{highlightCount ?? "…"} highlights</span>
+    </section>
+  );
+}
+
+/** Confirmation dialog before a destructive job delete (ADAAAA-6837). Alerts
+ * the user that deleting the job also removes its highlights. */
+function DeleteJobDialog({ job, onCancel, onConfirm }: { job: Job; onCancel: () => void; onConfirm: (job: Job) => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-void/60 p-4" data-delete-job-dialog>
+      <div className="card w-full max-w-md p-6">
+        <h3 className="flex items-center gap-2 text-lg font-black text-ink">
+          <Trash2 className="h-5 w-5 text-red" /> Delete this job?
+        </h3>
+        <p className="mt-2 text-sm text-mut">
+          This permanently deletes job <span className="font-mono">{job.id.slice(0, 8)}</span> and its highlights,
+          including the clips they reference. This cannot be undone.
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" className="chip" onClick={onCancel} data-delete-job-cancel>
+            Cancel
+          </button>
+          <button type="button" className="btn-neon btn-pink" onClick={() => onConfirm(job)} data-delete-job-confirm>
+            <Trash2 className="mr-1 inline h-4 w-4" /> Delete job
+          </button>
         </div>
-      )}
-      {job.status === "failed" && (
-        <div className="mt-2 text-xs text-red" data-job-failed-line>
-          {job.error?.trim()
-            ? job.error
-            : "Processing failed — check the video source and try again."}
-        </div>
-      )}
+      </div>
     </div>
   );
 }
