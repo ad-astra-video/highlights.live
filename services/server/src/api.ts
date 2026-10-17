@@ -33,6 +33,7 @@ import {
   DetectionTrainingSampleSchema,
   AnalysisEventSchema,
   AnalysisSessionTraceSchema,
+  MediaResultEventSchema,
   type AnalysisEvent,
   type Dataset,
   type DetectionTrainingSample,
