@@ -318,6 +318,9 @@ export interface Db {
   observationsForJob(jobId: string): Promise<StoredObservation[]>;
   /** Every observation across all jobs (hydrates the Store on boot). */
   listObservations(): Promise<{ jobId: string; observation: StoredObservation }[]>;
+  /** Keep at most `max` NEWEST observations for a job (oldest-first trim), so a
+   * pathological job can't bloat the table (ADAAAA-6870 Increment 3 T1). */
+  trimJobObservations(jobId: string, max: number): Promise<void>;
   /** Persist a per-candidate decide note (full JSON upsert by id). */
   saveJobCandidate(c: JobCandidate): Promise<void>;
   /** All decide notes for a job, ordered by trigger timestamp. */
@@ -662,6 +665,17 @@ export class SqliteDb implements Db {
       .prepare("SELECT job_id, seq, timestamp, tracks FROM job_observations ORDER BY job_id, seq")
       .all() as { job_id: string; seq: number; timestamp: number; tracks: string }[];
     return rows.map((r) => ({ jobId: r.job_id, observation: { seq: r.seq, timestamp: r.timestamp, tracks: JSON.parse(r.tracks) } }));
+  }
+
+  async trimJobObservations(jobId: string, max: number): Promise<void> {
+    // Keep only the `max` NEWEST seq rows for the job (oldest-first trim).
+    this.db
+      .prepare(
+        `DELETE FROM job_observations WHERE job_id = ? AND seq NOT IN (
+           SELECT seq FROM job_observations WHERE job_id = ? ORDER BY seq DESC LIMIT ?
+         )`
+      )
+      .run(jobId, jobId, max);
   }
 
   async saveJobCandidate(c: JobCandidate): Promise<void> {
@@ -1287,6 +1301,16 @@ export class PgDb implements Db {
   async listObservations(): Promise<{ jobId: string; observation: StoredObservation }[]> {
     const r = await this.pool.query("SELECT job_id, seq, timestamp, tracks FROM job_observations ORDER BY job_id, seq");
     return r.rows.map((row) => ({ jobId: row.job_id, observation: { seq: row.seq, timestamp: row.timestamp, tracks: JSON.parse(row.tracks) } }));
+  }
+
+  async trimJobObservations(jobId: string, max: number): Promise<void> {
+    // Keep only the `max` NEWEST seq rows for the job (oldest-first trim).
+    await this.pool.query(
+      `DELETE FROM job_observations WHERE job_id = $1 AND seq NOT IN (
+         SELECT seq FROM job_observations WHERE job_id = $1 ORDER BY seq DESC LIMIT $2
+       )`,
+      [jobId, max]
+    );
   }
 
   async saveJobCandidate(c: JobCandidate): Promise<void> {
