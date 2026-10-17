@@ -110,6 +110,37 @@ def outcome_is_highlight(outcome: str) -> bool:
     return outcome == "scoring_play"
 
 
+# ADAAAA-6855: map job-requested highlight labels (preferLabels) to the outcome
+# taxonomy members they authorize for export. A requested non-goal class may be
+# exported as a DISTINCT highlight (outcome/eventType preserved, never relabeled
+# as a goal) even though it is not a scoring play. The map is conservative — it
+# never widens goal acceptance — and it mirrors the server-side map in
+# services/server/src/analyzer.ts (keep the two in sync).
+NON_GOAL_LABEL_OUTCOMES: dict[str, frozenset[str]] = {
+    "goals": frozenset({"scoring_play"}),
+    "near-misses": frozenset({"near_miss"}),
+    "saves": frozenset({"near_miss", "big_play"}),
+    "red cards": frozenset({"big_play"}),
+    "counter-attacks": frozenset({"big_play"}),
+}
+
+
+def normalize_prefer_label(label) -> str:
+    return (label or "").strip().lower()
+
+
+def requested_outcomes(prefer_labels) -> set[str]:
+    """The outcome taxonomy members the job's preferLabels authorize for export.
+    Empty set when no labels are requested, which preserves the default
+    scoring-only gate (backward compatible)."""
+    out: set[str] = set()
+    for lab in prefer_labels or []:
+        norm = normalize_prefer_label(lab)
+        if norm in NON_GOAL_LABEL_OUTCOMES:
+            out |= NON_GOAL_LABEL_OUTCOMES[norm]
+    return out
+
+
 def _rule_outcome(d) -> str:
     """Map a deterministic rule decision to the outcome taxonomy member so the
     fallback path returns the same shape as the Gemma path (increment F). The
@@ -450,7 +481,7 @@ def reconcile_outcome_with_ball_signal(decision: dict, ball_outcome: Optional[st
     return decision
 
 
-def finalize_goal_acceptance(decision: dict) -> dict:
+def finalize_goal_acceptance(decision: dict, prefer_labels: list[str] | None = None) -> dict:
     """ADAAAA-6598: the SINGLE accept gate at the top of the decide route.
 
     ONLY a frame-confirmed `scoring_play` is a board-accepted GOAL highlight.
@@ -460,17 +491,31 @@ def finalize_goal_acceptance(decision: dict) -> dict:
     This closes the loop on the two verified false positives (a near_miss at
     t=1821s and a big_play at t=1954.9s whose own reason said the ball did NOT
     enter the net) and on the high-value (GOAL) waiver that accepted a
-    corroborated-but-not-a-goal candidate. Mutates and returns `decision`."""
-    if decision.get("outcome") != "scoring_play":
-        decision["isHighlight"] = False
-        decision.setdefault(
-            "reason",
-            "",
-        )
-        decision["reason"] = (
-            (decision.get("reason") or "")
-            + f"; outcome={decision.get('outcome')} is not a scoring highlight"
-        ).strip("; ")
+    corroborated-but-not-a-goal candidate. Mutates and returns `decision`.
+
+    ADAAAA-6855: when the job explicitly requested a non-goal class in
+    `prefer_labels` (near-misses/saves/red-cards/counter-attacks), a
+    correctly-detected instance of that class is ACCEPTED and exported as a
+    DISTINCT highlight (outcome / eventType preserved — never relabeled as a
+    goal, so goal precision is unaffected). When no non-goal label is requested
+    the default scoring-only gate is unchanged.
+    """
+    outcome = decision.get("outcome")
+    if outcome == "scoring_play":
+        return decision
+    # Explicitly-requested non-goal class -> accept as a distinct highlight.
+    if outcome in requested_outcomes(prefer_labels):
+        decision["isHighlight"] = True
+        return decision
+    decision["isHighlight"] = False
+    decision.setdefault(
+        "reason",
+        "",
+    )
+    decision["reason"] = (
+        (decision.get("reason") or "")
+        + f"; outcome={decision.get('outcome')} is not a scoring highlight"
+    ).strip("; ")
     return decision
 
 

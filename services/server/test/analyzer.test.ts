@@ -685,6 +685,38 @@ describe("decideOnCandidate (INC-2 / ADAAAA-4325 slice 4: audio candidate -> dec
     expect(shared.highlights[0]).toMatchObject({ eventType: "GOAL", outcome: "scoring_play", status: "pending" });
   });
 
+  // ADAAAA-6855: a near_miss / big_play frame read IS cut & recorded when the
+  // job explicitly requested that non-goal class in preferLabels (exported as a
+  // DISTINCT highlight, never a goal).
+  it.each([
+    ["near_miss", "shot saved; ball does not enter the net", ["near-misses"]],
+    ["big_play", "ball is being saved; does not enter the net", ["saves"]],
+  ])("cuts/records a requested %s verdict as a distinct highlight", async (outcome, reason, preferLabels) => {
+    const { client } = fakeClient({
+      decide: async () => ({ isHighlight: true, score: 45, eventType: "GOAL", outcome: outcome as "near_miss" | "big_play", reason }),
+    });
+    const shared = new LiveRunShared();
+    shared.addFrame(0, 0, "img0");
+    const cuts: number[] = [];
+    const events: any[] = [];
+    await decideOnCandidate(
+      client,
+      shared,
+      async (ts) => {
+        cuts.push(ts);
+        return { clipId: "c", clipUri: "u" };
+      },
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", preferLabels },
+      { eventType: "AUDIO", timestamp: 0, seq: 1 },
+      (ev) => events.push(ev)
+    );
+    expect(cuts).toEqual([0]);
+    expect(shared.highlights).toHaveLength(1);
+    // Preserved as a distinct non-goal highlight — never relabeled as a goal.
+    expect(shared.highlights[0].outcome).toBe(outcome);
+    expect(events.map((e) => e.type)).toEqual(["candidate", "highlight"]);
+  });
+
   it("LiveRunShared: video + audio legs accumulate highlights into the SAME array (runLiveJob wiring)", async () => {
     let call = 0;
     const { client } = fakeClient({

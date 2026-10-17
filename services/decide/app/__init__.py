@@ -178,6 +178,12 @@ class HighlightRequest(BaseModel):
     # Frontend-selectable; defaults to "none" (thinking off = fast single-shot
     # JSON). Other values (low/medium/high) are passed to llama.cpp verbatim.
     reasoningEffort: str = Field(default="none")
+    # ADAAAA-6855: the job's requested highlight labels (e.g.
+    # ["goals","saves","near-misses","red cards","counter-attacks"]). When a
+    # non-goal class is requested, a correctly-detected instance of that class
+    # is accepted and exported as a distinct highlight rather than being
+    # swallowed by the scoring-only accept gate. Empty == default gate.
+    preferLabels: list[str] = Field(default_factory=list)
 
 
 # --- Response contract ------------------------------------------------------
@@ -443,7 +449,9 @@ def create_app() -> FastAPI:
             # board-accepted GOAL highlight. This overrides any earlier gate
             # (high-value waiver, model isHighlight) for a near_miss/big_play/
             # not_highlight read so no false positive reaches the board.
-            decision = finalize_goal_acceptance(decision)
+            # ADAAAA-6855: a non-goal class explicitly requested in
+            # preferLabels is accepted as a DISTINCT highlight (never a goal).
+            decision = finalize_goal_acceptance(decision, req.preferLabels)
             _log_highlight("gemma", req, decision)
             return decision
         ev = req.evidence.reaction.model_dump() if req.evidence.reaction else None
@@ -482,8 +490,10 @@ def create_app() -> FastAPI:
             dec = reconcile_outcome_with_ball_signal(dec, ball_outcome)
         # ADAAAA-6598: single accept gate — ONLY a scoring_play is a
         # board-accepted GOAL highlight (a rule-path highlight maps to
-        # scoring_play; a near-miss read is rejected).
-        dec = finalize_goal_acceptance(dec)
+        # scoring_play; a near-miss read is rejected). ADAAAA-6855: a non-goal
+        # class explicitly requested in preferLabels is accepted as a DISTINCT
+        # highlight (never a goal).
+        dec = finalize_goal_acceptance(dec, req.preferLabels)
         # Goal-verification attestation gate (ADAAAA-6610) on the rule path too
         # (mirror of the gemma path): an accepted goal with a bare templated
         # reason and no attested goal criterion is rejected. On the rule path

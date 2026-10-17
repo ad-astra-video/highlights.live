@@ -370,6 +370,9 @@ export class OrchestratorAdapter implements PipelineClient {
       reasoningEffort?: string;
       frames?: { role: string; base64: string }[];
       audioB64?: string;
+      // ADAAAA-6855: the job's requested highlight labels, forwarded so the
+      // decide runner exports a requested non-goal class as a distinct highlight.
+      preferLabels?: string[];
     }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -381,6 +384,8 @@ export class OrchestratorAdapter implements PipelineClient {
       reasoningEffort: opts?.reasoningEffort || "none",
       evidence,
       images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
+      // ADAAAA-6855: thread the job's requested highlight labels verbatim.
+      preferLabels: opts?.preferLabels ?? [],
       // Detail-first (ADAAAA-4954): the temporal frame SEQUENCE + surrounding
       // audio clip the Gemma runner reasons across. Absent on the live baseline.
       frames: opts?.frames ?? [],

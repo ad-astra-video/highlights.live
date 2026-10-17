@@ -140,6 +140,28 @@ export interface DecisionResult {
   outcome?: "scoring_play" | "near_miss" | "big_play" | "not_highlight";
   nearMiss?: boolean;
 }
+// ADAAAA-6855: map job-requested highlight labels (preferLabels) to the
+// outcome taxonomy members they authorize for export. A requested non-goal
+// class may be recorded as a DISTINCT highlight even though it is not a
+// scoring play. Conservative — never widens goal acceptance. Mirrors the
+// decide service's NON_GOAL_LABEL_OUTCOMES in gemma.py (keep in sync).
+const NON_GOAL_LABEL_OUTCOMES: Record<string, Set<string>> = {
+  goals: new Set(["scoring_play"]),
+  "near-misses": new Set(["near_miss"]),
+  saves: new Set(["near_miss", "big_play"]),
+  "red cards": new Set(["big_play"]),
+  "counter-attacks": new Set(["big_play"]),
+};
+
+function requestedOutcomes(preferLabels?: string[]): Set<string> {
+  const out = new Set<string>();
+  for (const lab of preferLabels ?? []) {
+    const mapped = NON_GOAL_LABEL_OUTCOMES[lab.trim().toLowerCase()];
+    if (mapped) for (const m of mapped) out.add(m);
+  }
+  return out;
+}
+
 /**
  * ADAAAA-6598: the single server-side accept gate. ONLY a frame-confirmed
  * scoring_play is a board-accepted GOAL highlight. A near_miss / big_play /
@@ -148,11 +170,17 @@ export interface DecisionResult {
  * positive reaches the board. A legacy verdict with no `outcome` is treated
  * per its isHighlight (backward compatible). This is defense-in-depth on top of
  * the decide service's own finalize_goal_acceptance.
+ *
+ * ADAAAA-6855: when the job explicitly requested a non-goal class in
+ * `preferLabels`, that class is accepted as a DISTINCT highlight (outcome /
+ * eventType preserved, never a goal) so a correctly-detected near-miss / save /
+ * red-card / counter-attack is exported rather than swallowed.
  */
-export function isAcceptedHighlight(d: DecisionResult): boolean {
+export function isAcceptedHighlight(d: DecisionResult, preferLabels?: string[]): boolean {
   if (!d.isHighlight) return false;
   if (d.outcome === undefined) return true; // legacy verdict, trust isHighlight
-  return d.outcome === "scoring_play";
+  if (d.outcome === "scoring_play") return true; // goal always a highlight
+  return requestedOutcomes(preferLabels).has(d.outcome);
 }
 /** One audio chunk fed to the Stage-A noise-change gate (INC-2 / ADAAAA-4325).
  * Owned by the server's ffmpeg audio tap: short (default ~100 ms) mono int16
@@ -1036,6 +1064,7 @@ function detailDecideOpts(
   imageB64: string | undefined;
   frames?: { role: string; base64: string }[];
   audioB64?: string;
+  preferLabels?: string[];
   priorContextText?: string;
 } {
   const opts: {
@@ -1043,11 +1072,16 @@ function detailDecideOpts(
     imageB64: string | undefined;
     frames?: { role: string; base64: string }[];
     audioB64?: string;
+    preferLabels?: string[];
     priorContextText?: string;
   } = {
     gameHint: cfg.gameHint,
     imageB64: anchoredImage,
   };
+  // ADAAAA-6855: forward the job's requested highlight labels so the decide
+  // runner's accept gate exports a requested non-goal class as a distinct
+  // highlight instead of swallowing it.
+  if (cfg.preferLabels?.length) opts.preferLabels = cfg.preferLabels;
   // A2: every decide call for an in-window candidate carries the current 60 s
   // window's facts as bounded text tokens (pure server assembly; cached
   // findings, no re-analysis). Included unconditionally — live and detail-first
@@ -1303,8 +1337,10 @@ export async function decideOnCandidate(
   shared.stageA.recordOutcome(decision.isHighlight, candidate.audio?.onsetLatencyS);
   // ADAAAA-6598: accept gate — only a frame-confirmed scoring_play is a board
   // highlight. A near_miss / big_play read is recorded distinctly (outcome
-  // preserved) but never cut as a GOAL highlight/clip.
-  if (!isAcceptedHighlight(decision)) return;
+  // preserved) but never cut as a GOAL highlight/clip. ADAAAA-6855: a non-goal
+  // class explicitly requested in the job's preferLabels is exported as a
+  // DISTINCT highlight (never a goal).
+  if (!isAcceptedHighlight(decision, cfg.preferLabels)) return;
   // ADAAAA-6610 temporal burst suppression: at most one GOAL highlight per
   // window. A GOAL accepted within `goalBurstWindowS` of a previous one is a
   // burst duplicate (start-of-clip confabulated-goal flood) and is dropped,
@@ -1517,7 +1553,7 @@ export async function analyzeJob(
           },
           detailDecideOpts(cfg, run, anchoredImage, { timestamp: res.candidate.timestamp, peakAudioTs: res.candidate.audio?.ts }, burstFrames)
         );
-        if (isAcceptedHighlight(decision)) {
+        if (isAcceptedHighlight(decision, cfg.preferLabels)) {
           // ADAAAA-6610 temporal burst suppression (see decideOnCandidate): a
           // GOAL accepted within `goalBurstWindowS` of a previous one is a
           // start-of-clip burst duplicate and is dropped, not recorded.
