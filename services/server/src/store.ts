@@ -16,6 +16,12 @@ export interface StoredObservation {
   tracks: TrackObservation[];
 }
 
+/** Per-job cap on durable per-frame observations (ADAAAA-6870, Increment 3 T1).
+ * The VOD detail-first pass emits ~one observation per analyzed frame (2 fps), so
+ * a 10-min VOD ≈ 1200 rows; 2000 bounds the `job_observations` table so a
+ * pathological job can't bloat it while keeping a completed job's recent traces. */
+export const MAX_OBSERVATIONS_PER_JOB = 2000;
+
 /**
  * Durable store for jobs + highlights.
  *
@@ -227,12 +233,24 @@ export class Store {
 
   /** Record a per-frame perceive observation and write it through to the durable
    * sink (ADAAAA-6851 Inc 1) so the job detail survives a server restart. The
-   * in-memory working set is updated synchronously; the DB write is awaited. */
+   * in-memory working set is updated synchronously; the DB write is awaited.
+   *
+   * ADAAAA-6870 (Increment 3 T1): enforce a per-job cap (~MAX_OBSERVATIONS_PER_JOB,
+   * oldest-first trim) so a pathological job can't bloat the `job_observations`
+   * table. The in-memory window and the DB rows are both kept at the cap. */
   async recordObservation(jobId: string, obs: StoredObservation): Promise<void> {
     const list = this.observations.get(jobId) ?? [];
     list.push(obs);
+    let overflowed = false;
+    while (list.length > MAX_OBSERVATIONS_PER_JOB) {
+      list.shift();
+      overflowed = true;
+    }
     this.observations.set(jobId, list);
-    if (this.db) await this.db.saveObservation(jobId, obs);
+    if (this.db) {
+      await this.db.saveObservation(jobId, obs);
+      if (overflowed) await this.db.trimJobObservations(jobId, MAX_OBSERVATIONS_PER_JOB);
+    }
   }
 
   observationsForJob(jobId: string): StoredObservation[] {

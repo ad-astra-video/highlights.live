@@ -36,6 +36,7 @@ import {
   type DetectionTrainingSample,
   type HighlightRecord,
   type JobCandidate,
+  type JobDecision,
 } from "@highlights/events";
 import { buildSections, buildTraces, maxTracesForSource } from "./job-detail";
 import {
@@ -751,9 +752,59 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     };
     // Count candidates (video + audio) for the recorded decide/cost fields.
     let candidatesTriggered = 0;
+    // ADAAAA-6870 (Increment 3 T1): accumulate the live decision trail as a
+    // bounded ordered `candidates` array on the job record (candidate trigger ->
+    // accepted highlight). Appended here via the onEvent hook and persisted with
+    // a throttled `patchJob` (mirroring the progress emitter — NOT per-frame:
+    // candidates/highlights are sparse scoring plays). This both feeds the
+    // in-flight SSE view (jobEventHook already fans the raw events) and survives
+    // a server restart on the completed job.
+    const jobTrail: JobDecision[] = [];
+    const MAX_TRAIL = 500;
+    const TRAIL_FLUSH_MS = 500;
+    let trailDirty = false;
+    let lastTrailFlush = 0;
+    const flushTrail = () => {
+      if (!trailDirty) return;
+      trailDirty = false;
+      // Bound the array (oldest-first trim) so it cannot grow without bound.
+      while (jobTrail.length > MAX_TRAIL) jobTrail.shift();
+      store
+        .patchJob(jobId, { candidates: [...jobTrail] })
+        .catch((e: any) => console.error(`[vod:${jobId}] candidate trail persist failed:`, e?.message || e));
+    };
+    const scheduleTrailFlush = () => {
+      trailDirty = true;
+      const now = Date.now();
+      if (now - lastTrailFlush >= TRAIL_FLUSH_MS) {
+        lastTrailFlush = now;
+        flushTrail();
+      } else {
+        setTimeout(() => {
+          if (!trailDirty) return;
+          lastTrailFlush = Date.now();
+          flushTrail();
+        }, TRAIL_FLUSH_MS - (now - lastTrailFlush));
+      }
+    };
+    const recordTrailDecision = (ev: AnalyzeEvent) => {
+      if (ev.type === "candidate" && ev.candidate) {
+        jobTrail.push({ seq: ev.seq, ts: ev.timestamp, eventType: ev.candidate.eventType, decision: "candidate" });
+      } else if (ev.type === "highlight" && ev.highlight) {
+        jobTrail.push({
+          seq: ev.seq,
+          ts: ev.timestamp,
+          eventType: ev.highlight.eventType ?? "highlight",
+          decision: ev.highlight.outcome ?? ev.highlight.status,
+          highlightId: ev.highlight.id,
+        });
+      }
+      scheduleTrailFlush();
+    };
     const baseHook = jobEventHook(jobId);
     const onEvent: (ev: AnalyzeEvent) => void = (ev) => {
       if (ev.type === "candidate") candidatesTriggered++;
+      if (ev.type === "candidate" || ev.type === "highlight") recordTrailDecision(ev);
       baseHook(ev);
       // ADAAAA-6352: persist + bill + quota-debit each accepted highlight at
       // DECISION time (mirror the live publish-at-decision ADAAAA-5777) via the
@@ -915,6 +966,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       progress: 100,
       progressLabel: "done",
       durationMs: durationS ? Math.round(durationS * 1000) : undefined,
+      // ADAAAA-6870 (Increment 3 T1): persist the full decision trail on the
+      // completed job record so it survives a server restart.
+      candidates: [...jobTrail],
     });
     emitJobProgress(jobId, 100, "done");
     if (stageA.totalCandidates > 0) {

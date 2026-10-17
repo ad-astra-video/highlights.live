@@ -424,6 +424,23 @@ export const StageAMetricsSnapshotSchema = z.object({
 });
 export type StageAMetricsSnapshot = z.infer<typeof StageAMetricsSnapshotSchema>;
 
+// --- live decision-trail entry (ADAAAA-6870, Increment 3 T1) ---------------
+// One entry in the bounded `candidates` array carried on the Job record. It is
+// the additive, persisted in-flight decision trail (candidate trigger ->
+// accepted highlight) that a subscribed SSE client sees live AND that survives
+// a server restart on the completed job. Distinct from JobCandidate (the
+// per-candidate decide note persisted in `job_candidates`): this is the compact
+// ordered trail on the job record itself. All fields optional on the parent Job
+// so older records parse unchanged (no contract version bump).
+export const JobDecisionSchema = z.object({
+  seq: z.number().int().min(0),
+  ts: z.number(),
+  eventType: z.string(),
+  decision: z.string(),
+  highlightId: z.string().optional(),
+});
+export type JobDecision = z.infer<typeof JobDecisionSchema>;
+
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -469,6 +486,10 @@ export const JobSchema = z.object({
   // job so the webapp result card can show the clip's source duration. Additive
   // optional — absent on live jobs and older records.
   durationMs: z.number().min(0).optional(),
+  // Live decision trail (ADAAAA-6870, Increment 3 T1): bounded ordered array of
+  // candidate/highlight decisions appended by runVodJob via the onEvent hook
+  // (throttled patchJob). Additive optional — absent on older records.
+  candidates: z.array(JobDecisionSchema).optional(),
   createdAt: z.string(),
 });
 export type Job = z.infer<typeof JobSchema>;
