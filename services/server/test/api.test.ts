@@ -408,6 +408,113 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     await app.close();
   });
 
+  it("observe: media server reports typed candidate/highlight/stageAMetrics/cost; server persists (ADAAAA-6865)", async () => {
+    const { app } = await buildTestApp();
+    const token = await register(app, "obs@test.dev", "password123");
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser", gameHint: "Esports" },
+    });
+    expect(jr.statusCode).toBe(200);
+    const jobId = jr.json().job.id;
+    const ownerId = jr.json().job.ownerId;
+
+    // Legacy full observation envelope still accepted (pre-Phase-0 browser rail
+    // / media-server callback sends a complete FrameObservation).
+    const obs = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/observe`,
+      payload: { type: "observation", seq: 0, timestamp: 0, sessionId: "s1", tracks: [], objects: [], ocr: [] },
+    });
+    expect(obs.statusCode).toBe(200);
+
+    // candidate
+    const cand = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/observe`,
+      payload: {
+        type: "candidate",
+        seq: 5,
+        timestamp: 3,
+        candidate: { type: "candidate", sessionId: "s1", eventType: "GOAL", timestamp: 3, seq: 5 },
+      },
+    });
+    expect(cand.statusCode).toBe(200);
+
+    // highlight -> persisted
+    const hlRes = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/observe`,
+      payload: {
+        type: "highlight",
+        seq: 5,
+        timestamp: 3,
+        highlight: {
+          id: "obs-hl-1",
+          jobId,
+          ownerId,
+          clipUri: "/clips/obs-hl-1.mp4",
+          start: 2,
+          end: 6,
+          eventType: "GOAL",
+          score: 90,
+          status: "accepted",
+          createdAt: "2026-10-17T00:00:00.000Z",
+        },
+      },
+    });
+    expect(hlRes.statusCode).toBe(200);
+
+    // stage-A metrics + cost -> persisted onto the job record
+    const sa = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/observe`,
+      payload: {
+        type: "stageAMetrics",
+        metrics: {
+          totalCandidates: 1,
+          accepted: 1,
+          rejected: 0,
+          fpRate: 0,
+          meanOnsetLatencyS: 1.2,
+          maxOnsetLatencyS: 1.5,
+          fpRateWithinBudget: true,
+        },
+      },
+    });
+    expect(sa.statusCode).toBe(200);
+    const cost = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/observe`,
+      payload: { type: "cost", costUsd: 0.42, perceiveSessionS: 90 },
+    });
+    expect(cost.statusCode).toBe(200);
+
+    // Persisted: highlight present for the job + job carries stageA + cost.
+    const got = await app.inject({
+      method: "GET",
+      url: `/jobs/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(got.statusCode).toBe(200);
+    const body = got.json();
+    expect(body.highlights.some((h: any) => h.id === "obs-hl-1")).toBe(true);
+    expect(body.job.stageAMetrics.fpRate).toBe(0);
+    expect(body.job.costUsd).toBe(0.42);
+    expect(body.job.perceiveSessionS).toBe(90);
+
+    // Invalid event rejected.
+    const bad = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/observe`,
+      payload: { type: "highlight" }, // missing highlight payload
+    });
+    expect(bad.statusCode).toBe(400);
+    await app.close();
+  });
+
   it("NO 402 from a full lifetime usage_events counter while the current-period ledger has room (ADAAAA-5129)", async () => {
     const { app, db } = await buildTestApp();
     const token = await register(app, "c@test.dev", "password123");
