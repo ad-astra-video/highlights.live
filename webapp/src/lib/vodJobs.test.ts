@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { VOD_POLL_MS, isInFlight, jobProgressPct, mergeJobLists } from "./vodJobs";
+import { VOD_POLL_MS, isInFlight, jobProgressPct, mergeJobLists, monotonicProgress } from "./vodJobs";
 import type { Job } from "./api";
 
 // Increment 2 (ADAAAA-6837) delete-wiring test: `deleteJob` must issue a DELETE
@@ -90,6 +90,31 @@ describe("jobProgressPct (done/error row progress-bar helper)", () => {
     expect(jobProgressPct(undefined)).toBe(0);
     expect(jobProgressPct({})).toBe(0);
     expect(jobProgressPct({ progress: NaN })).toBe(0);
+  });
+});
+
+// Phase 3 (ADAAAA-6875) AC — "progress never regresses". An in-flight job's
+// displayed progress must be monotonic even when an SSE `progress` event races
+// a GET /jobs poll merge (or the server returns a lower persisted value).
+describe("monotonicProgress (Phase 3: in-flight progress never regresses)", () => {
+  it("keeps the larger value when an out-of-order update arrives lower", () => {
+    expect(monotonicProgress(60, 55)).toBe(60);
+  });
+  it("advances to a higher incoming value", () => {
+    expect(monotonicProgress(55, 60)).toBe(60);
+  });
+  it("tracks a normal forward increment", () => {
+    expect(monotonicProgress(20, 30)).toBe(30);
+  });
+  it("falls back to the prior value when the incoming value is non-finite", () => {
+    expect(monotonicProgress(80, NaN)).toBe(80);
+    expect(monotonicProgress(80, undefined)).toBe(80);
+  });
+  it("adopts the first value when there is no prior value", () => {
+    expect(monotonicProgress(undefined, 45)).toBe(45);
+  });
+  it("returns undefined when there is nothing to show", () => {
+    expect(monotonicProgress(undefined, undefined)).toBeUndefined();
   });
 });
 
