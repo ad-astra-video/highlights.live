@@ -115,6 +115,9 @@ export interface ServerConfig {
    * `frameScale`, default 640:360 — higher-res than live 320:180).
    * `VOD_FRAME_SCALE`. */
   vodFrameScale: string;
+  /** Max VOD jobs a worker drains concurrently (ADAAAA-6873). Each running job
+   * holds one perceive session, so this gates GPU concurrency. `VOD_WORKER_CONCURRENCY`. */
+  vodWorkerConcurrency: number;
   /** Detail-first VOD decide temporal window length (spec knob
    * `decideWindowN`, default 24 > live 16). Frames forwarded to decide()'s
    * `frames[]` so Gemma reasons across a longer SEQUENCE per trigger.
@@ -318,6 +321,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodSampleMaxFps: Number(env.VOD_SAMPLE_MAX_FPS ?? 8),
     vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 2),
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
+    vodWorkerConcurrency: Number(env.VOD_WORKER_CONCURRENCY ?? 1),
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
     // I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
     // Frames within +/- vodResampleWindowS of a candidate are re-extracted at
