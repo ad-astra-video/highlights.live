@@ -353,6 +353,11 @@ export interface Plan {
 }
 export interface Highlight {
   id: string;
+  // Source VOD/live job that produced this highlight (ADAAAA-6837). Present on
+  // highlights recorded under the async-VOD job queue; the "Your highlights"
+  // feed attributes each clip to its job via this field. Absent on legacy /
+  // job-less records, which pool under an "Other" group.
+  jobId?: string;
   clipUri: string;
   eventType?: string;
   score: number;

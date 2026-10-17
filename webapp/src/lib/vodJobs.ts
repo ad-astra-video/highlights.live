@@ -9,7 +9,7 @@
 // Pure helpers (isInFlight, mergeJobLists) are exported separately so they are
 // unit-testable without a DOM or React (see vodJobs.test.ts).
 import { useEffect, useRef, useState, useCallback } from "react";
-import { api, getToken, type Job } from "./api";
+import { api, getToken, type Job, type Highlight } from "./api";
 import { readSSE } from "./sse";
 
 /** Poll cadence for GET /jobs while any job is queued/active (ms). The SSE
@@ -45,11 +45,136 @@ export function mergeJobLists(prev: Job[], next: Job[]): Job[] {
   });
 }
 
+// --- Increment 2 (ADAAAA-6837): three-surface partition + attribution helpers ---
+
+/** Human label for a job's `source` enum (e.g. "file" -> "File"). */
+const SOURCE_LABELS: Record<string, string> = {
+  file: "File",
+  rtmp: "RTMP",
+  webrtc: "WebRTC",
+  screenshare: "Screen share",
+  browser: "Browser",
+  "file-sim": "File (sim)",
+};
+
+export function sourceLabel(source: string | undefined): string {
+  return (source && SOURCE_LABELS[source]) || source || "Unknown";
+}
+
+export interface JobPartition {
+  /** Still processing (queued/active) — rendered as plain rows. */
+  inFlight: Job[];
+  /** Terminal success (done) — rendered as completed result cards. */
+  completed: Job[];
+  /** Terminal failure (failed) — rendered in the collapsed Failed section. */
+  failed: Job[];
+}
+
+/** Split the GET /jobs queue into the three Increment-2 surfaces. Order is
+ * preserved from the (newest-first) queue. */
+export function partitionJobs(jobs: Job[]): JobPartition {
+  return {
+    inFlight: jobs.filter((j) => isInFlight(j.status)),
+    completed: jobs.filter((j) => j.status === "done"),
+    failed: jobs.filter((j) => j.status === "failed"),
+  };
+}
+
+export interface HighlightGroup {
+  /** Job id this bucket came from, or "none" for un-attributed highlights. */
+  key: string;
+  jobId?: string;
+  /** Sub-header label, resolved from the job's source when known. */
+  label: string;
+  highlights: Highlight[];
+}
+
+function newestHighlightAt(hs: Highlight[]): string {
+  return hs.reduce((acc, h) => (h.createdAt > acc ? h.createdAt : acc), "");
+}
+
+/** Group non-rejected highlights by their source job (`h.jobId`). This is the
+ * default "grouped" view of "Your highlights" — every VOD highlight is
+ * attributed to the job that produced it. Buckets are ordered newest-first by
+ * the job's createdAt (falling back to the newest highlight), and highlights
+ * with no jobId (legacy / job-less records) pool under an "Other" group so no
+ * clip is dropped. */
+export function groupHighlightsByJob(highlights: Highlight[], jobs: Job[]): HighlightGroup[] {
+  const buckets = new Map<string, Highlight[]>();
+  for (const h of highlights) {
+    if (h.status === "rejected") continue;
+    const key = h.jobId || "none";
+    const list = buckets.get(key) ?? [];
+    list.push(h);
+    buckets.set(key, list);
+  }
+  const byId = new Map(jobs.map((j) => [j.id, j]));
+  return [...buckets.entries()]
+    .map(([key, hs]) => {
+      const job = key !== "none" ? byId.get(key) : undefined;
+      const label = job
+        ? `${sourceLabel(job.source)} · ${job.id.slice(0, 8)}`
+        : key === "none"
+        ? "Other"
+        : `Job ${key.slice(0, 8)}`;
+      return { key, jobId: key !== "none" ? key : undefined, label, highlights: hs };
+    })
+    .sort((a, b) => {
+      const aJob = a.jobId ? byId.get(a.jobId) : undefined;
+      const bJob = b.jobId ? byId.get(b.jobId) : undefined;
+      const aAt = aJob?.createdAt ?? newestHighlightAt(a.highlights);
+      const bAt = bJob?.createdAt ?? newestHighlightAt(b.highlights);
+      return bAt < aAt ? -1 : bAt > aAt ? 1 : 0;
+    });
+}
+
+/** Human duration (e.g. "1m 30s") from a millisecond span; "" for non-finite
+ * or negative spans so a card can omit a missing/zero duration cleanly. */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const s = Math.round(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+/** The completed-job card's "span/duration" label (completedAt - scheduledAt),
+ * or null when either timestamp is absent/unparseable. */
+export function jobSpanLabel(job: Job): string | null {
+  const start = job.scheduledAt ? Date.parse(job.scheduledAt) : NaN;
+  const end = job.completedAt ? Date.parse(job.completedAt) : NaN;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end - start < 0) return null;
+  return formatDuration(end - start);
+}
+
+/** Localized timestamp label for a completed-job card (scheduled/completed),
+ * or null when the ISO string is absent/unparseable. */
+export function formatJobTime(iso?: string): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString();
+}
+
+/** Delete a VOD job (and, server-side, its highlights + on-disk artifacts)
+ * via the new `DELETE /jobs/:id` endpoint (ADAAAA-6838). Returns once the
+ * server has removed it, so the webapp can drop it from the queue + feed. */
+export async function deleteJob(id: string): Promise<void> {
+  await api(`/jobs/${id}`, { method: "DELETE" });
+}
+
 export interface ProcessingJobsState {
   jobs: Job[];
   /** Force a GET /jobs refresh (e.g. right after submitting a new upload so the
    * new job appears immediately rather than at the next poll tick). */
   refresh: () => Promise<Job[]>;
+  /** Remove a job from the queue client-side right after a successful
+   * `DELETE /jobs/:id` (ADAAAA-6837), so the row/card disappears immediately
+   * rather than waiting for the next poll (which merges, never removes). */
+  removeJob: (id: string) => void;
 }
 
 /**
@@ -84,6 +209,17 @@ export function useProcessingJobs(): ProcessingJobsState {
   const patchJob = useCallback((id: string, patch: Partial<Job>) => {
     setJobs((prev) => {
       const next = prev.map((j) => (j.id === id ? { ...j, ...patch } : j));
+      jobsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  // Client-side removal of a deleted job (ADAAAA-6837). The poll backstop
+  // merges (never removes) jobs, so a `DELETE /jobs/:id` must drop the job from
+  // the list here to hide its row/card immediately.
+  const removeJob = useCallback((id: string) => {
+    setJobs((prev) => {
+      const next = prev.filter((j) => j.id !== id);
       jobsRef.current = next;
       return next;
     });
@@ -152,5 +288,5 @@ export function useProcessingJobs(): ProcessingJobsState {
     };
   }, []);
 
-  return { jobs, refresh };
+  return { jobs, refresh, removeJob };
 }
