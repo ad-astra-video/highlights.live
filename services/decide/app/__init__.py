@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
+import tempfile
 import time
 from typing import Optional
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger("highlights.decide")
@@ -19,6 +21,11 @@ from .logging_setup import configure_logging  # noqa: E402  (defines log above)
 configure_logging()
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
+from .watcher import Frame as WatcherFrame, WatcherConfig, WatcherSession
+from .depth_router import DepthRouter, DepthRouterConfig
+from .deep_investigation import DeepInvestigator, DeepInvestigationConfig
+from .clip_stash import ClipStash, StashConfig
+from .clip_upload import make_upload_client, upload_base_from_env
 from .gemma import (  # noqa: F401
     apply_ball_outcome_gate,
     apply_goal_attestation_gate,
@@ -186,6 +193,103 @@ class HighlightRequest(BaseModel):
     preferLabels: list[str] = Field(default_factory=list)
 
 
+class WatcherStartRequest(BaseModel):
+    """Open a decide watcher session (ADAAAA-6738 G1c). VOD-first: the caller
+    drives the stream with ingest/step; config is optional (defaults are the
+    Pass 1 gate values: 3 s tick, 10 s window, 3 fps, <=30 frames, >=50 % overlap)."""
+
+    model_config = ConfigDict(extra="ignore")
+    sessionId: str = ""
+    streamId: str = ""
+    # Optional: when set (with TRACE_BASE), the watcher POSTs each decide->
+    # perceive tool call/result to the server's analysis-session trace route.
+    traceJobId: str = ""
+    config: dict = Field(default_factory=dict)
+
+
+class WatcherIngestRequest(BaseModel):
+    """One frame to ingest into the watcher's rolling buffer."""
+
+    model_config = ConfigDict(extra="ignore")
+    ts: float
+    seq: int = 0
+    players: list = Field(default_factory=list)
+    objects: list = Field(default_factory=list)
+    caption: str = ""
+    audioPeak: float = 0.0
+    audioBaseline: float = 0.0
+
+
+class WatcherStepRequest(BaseModel):
+    """Advance one 3 s tick, emitting a timestamped summary row for the rolling
+    10 s window ending at ``tickTs`` (stream seconds)."""
+
+    model_config = ConfigDict(extra="ignore")
+    tickTs: float
+
+
+class DeepInvestigateRequest(BaseModel):
+    """Run a deep investigation over a flagged moment (ADAAAA-6740 G3).
+
+    ``flagTs`` is the moment the depth router flagged; the deep window is
+    ``[flagTs - deep_back_s, flagTs + deep_forward_s]``. When ``flagTs`` is
+    omitted, the last flag emitted by the depth router is investigated."""
+
+    model_config = ConfigDict(extra="ignore")
+    flagTs: float | None = None
+
+
+class StashStartRequest(BaseModel):
+    """Open the decide-runner clip stash (ADAAAA-6741 G4).
+
+    The stash is the decide runner's own 120 s frame+audio ring, fed by the
+    media/orchestrator rail via ``/stash/ingest``. ``jobId`` is used to tag the
+    uploaded clip; ``config`` is optional (defaults: 120 s ring, 20 s-before /
+    10 s-after pre-clip)."""
+
+    model_config = ConfigDict(extra="ignore")
+    sessionId: str = ""
+    streamId: str = ""
+    jobId: str = ""
+    config: dict = Field(default_factory=dict)
+
+
+class StashIngestRequest(BaseModel):
+    """One rail frame (small JPEG + optional audio segment) into the stash."""
+
+    model_config = ConfigDict(extra="ignore")
+    ts: float
+    seq: int = 0
+    jpeg: str = ""           # base64 JPEG
+    audio: str = ""          # base64 audio segment (optional)
+    audioMime: str = ""
+
+
+class StashPreclipRequest(BaseModel):
+    """Assemble the 20 s-before / 10 s-after pre-clip for a trigger moment."""
+
+    model_config = ConfigDict(extra="ignore")
+    triggerTs: float
+    beforeS: float | None = None
+    afterS: float | None = None
+
+
+class StashBuildRequest(BaseModel):
+    """Build + upload a clip for a trigger moment from the stash.
+
+    ``action`` mirrors build-or-discard: on ``confirm`` (is_highlight &&
+    not discarded) the clip is built and uploaded; on ``discard`` the stash is
+    freed with no clip. When no upload base is configured, the clip is still
+    built locally (and ``uploadResult`` reports the missing base)."""
+
+    model_config = ConfigDict(extra="ignore")
+    triggerTs: float
+    isHighlight: bool = True
+    discarded: bool = False
+    # If true, upload the built clip to the server; else build locally only.
+    upload: bool = True
+
+
 # --- Response contract ------------------------------------------------------
 # ADAAAA-6358 (I1): the decide response now carries a reviewer-facing rationale
 # on top of the verdict so a board/CTO reviewer can see *why* a clip was kept or
@@ -331,6 +435,133 @@ def _log_plan(mode: str, req: "PlanRequest", resp: "TrackingPlanResponse") -> No
         "plan roster session=%s mode=%s targets=%s zones=%s anchor=%s",
         req.sessionId, mode, labels, resp.zones, resp.anchor,
     )
+
+
+def _make_perceive_client(session_id: str):
+    """Return a decide->perceive windowed-tool callable bound to ``session_id``,
+    or None when neither PERCEIVE_URL nor MEDIA_BROKER_URL is set (then the
+    watcher brain uses the frames' own signals).
+
+    ADAAAA-6739 G2: routes the tool query through the MEDIA SERVER broker (the
+    media server provisions/fronts the active perceive session and owns the
+    media session the call belongs to). When MEDIA_BROKER_URL is set the query
+    is POSTed to ``{MEDIA_BROKER_URL}/sessions/{session_id}/analysis/query``;
+    otherwise it falls back to a direct ``{PERCEIVE_URL}/analysis/{tool}`` call
+    (VOD / no-broker topology). Returns the bounded envelope, or None on any
+    failure (never fatal to a tick).
+    """
+    import httpx
+
+    media = os.environ.get("MEDIA_BROKER_URL", "").strip().rstrip("/")
+    perceive = os.environ.get("PERCEIVE_URL", "").strip().rstrip("/")
+    if media:
+        def call(tool: str, start: float, end: float, max_points: int) -> Optional[dict]:
+            try:
+                r = httpx.post(
+                    f"{media}/sessions/{session_id}/analysis/query",
+                    json={"tool": tool, "start": start, "end": end, "maxPoints": max_points},
+                    headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
+                    timeout=12.0,
+                )
+                r.raise_for_status()
+                body = r.json()
+                # The broker wraps the perceive envelope in {ok, result, trace};
+                # the trace is echoed to the webapp/server by the media server, so
+                # decide only consumes the tool result. A visible broker error is
+                # treated as a tool failure (None) — never drops a watcher tick.
+                return body.get("result") if isinstance(body, dict) else body
+            except Exception as e:  # noqa: BLE001  a perceive hiccup must not drop a tick
+                log.debug("watcher perceive %s via broker failed: %s", tool, e)
+                return None
+        return call
+
+    if not perceive:
+        return None
+
+    def call(tool: str, start: float, end: float, max_points: int) -> Optional[dict]:
+        try:
+            r = httpx.post(
+                f"{perceive}/analysis/{tool}",
+                params={"start": start, "end": end, "maxPoints": max_points},
+                headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
+                timeout=10.0,
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:  # noqa: BLE001  a perceive hiccup must not drop a tick
+            log.debug("watcher perceive %s failed: %s", tool, e)
+            return None
+
+    return call
+
+
+def _make_control_sender(session_id: str):
+    """Return a decide->perceive control-instruction sender bound to
+    ``session_id``, or None when no broker/perceive base is configured.
+
+    ADAAAA-6739 G2: instructions (track new object / drop tracking / adjust
+    sampling rate) are sent to the perceive session THROUGH the media server
+    broker (``{MEDIA_BROKER_URL}/sessions/{session_id}/analysis/control``) and
+    applied/confirmed there; the broker traces the request + confirmation. Falls
+    back to a direct ``{PERCEIVE_URL}/control`` call. Returns the perceive ack,
+    or None on any failure.
+    """
+    import httpx
+
+    media = os.environ.get("MEDIA_BROKER_URL", "").strip().rstrip("/")
+    perceive = os.environ.get("PERCEIVE_URL", "").strip().rstrip("/")
+
+    def send(instruction: dict) -> Optional[dict]:
+        try:
+            if media:
+                r = httpx.post(
+                    f"{media}/sessions/{session_id}/analysis/control",
+                    json={"instruction": instruction},
+                    headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
+                    timeout=12.0,
+                )
+                r.raise_for_status()
+                body = r.json()
+                return body.get("result") if isinstance(body, dict) else body
+            if perceive:
+                r = httpx.post(
+                    f"{perceive}/control",
+                    json=instruction,
+                    headers={"X-Session-Id": session_id, "Livepeer-Session-Id": session_id},
+                    timeout=10.0,
+                )
+                r.raise_for_status()
+                return r.json()
+            return None
+        except Exception as e:  # noqa: BLE001  a control hiccup must not break the flow
+            log.debug("watcher control %s failed: %s", instruction, e)
+            return None
+
+    return send
+
+
+def _make_trace_sink(trace_job_id: str):
+    """Return an analysis_session_traces sink that POSTs each record to the
+    server's ``POST /jobs/:id/analysis/trace`` route (ADAAAA-6738 G1). Returns
+    None (records dropped, logged at DEBUG) when TRACE_BASE is unset."""
+    base = os.environ.get("TRACE_BASE", "").strip().rstrip("/")
+    if not base or not trace_job_id:
+        return None
+    import httpx
+
+    def sink(record: dict) -> None:
+        try:
+            r = httpx.post(
+                f"{base}/jobs/{trace_job_id}/analysis/trace",
+                json={"trace": record},
+                timeout=5.0,
+            )
+            if r.status_code >= 400:
+                log.debug("watcher trace POST failed: %s", r.status_code)
+        except Exception as e:  # noqa: BLE001
+            log.debug("watcher trace POST error: %s", e)
+
+    return sink
 
 
 def create_app() -> FastAPI:
@@ -559,6 +790,299 @@ def create_app() -> FastAPI:
         )
         _log_plan("rule", req, resp)
         return resp
+
+    @router.get("/watcher/state")
+    async def watcher_state():
+        sess = getattr(app.state, "watcher", None)
+        if sess is None:
+            return {"active": False}
+        return {"active": True, **sess.state()}
+
+    @router.post("/watcher/start")
+    async def watcher_start(req: WatcherStartRequest):
+        perceive_client = _make_perceive_client(req.sessionId)
+        trace_sink = _make_trace_sink(req.traceJobId)
+        # watcher config is the pass-1 subset; depth/deep sub-configs are
+        # extracted separately (ADAAAA-6740 G3) so an unknown key never 500s.
+        base_config = {k: v for k, v in req.config.items() if k not in ("depth", "deep")}
+        sess = WatcherSession(
+            session_id=req.sessionId,
+            stream_id=req.streamId,
+            config=WatcherConfig(**base_config),
+            perceive=perceive_client,
+            trace=trace_sink,
+        )
+        app.state.watcher = sess
+        # Pass 2 depth router (sole trigger authority) + deep investigator
+        # share the same tool client and trace sink as pass 1 (ADAAAA-6740 G3).
+        app.state.depth = DepthRouter(
+            session_id=req.sessionId,
+            stream_id=req.streamId,
+            config=DepthRouterConfig(**req.config.get("depth", {})),
+            perceive=perceive_client,
+            trace=trace_sink,
+        )
+        app.state.deep = DeepInvestigator(
+            session_id=req.sessionId,
+            stream_id=req.streamId,
+            config=DeepInvestigationConfig(**req.config.get("deep", {})),
+            perceive=perceive_client,
+            trace=trace_sink,
+        )
+        return {"ok": True, "state": sess.state()}
+
+    @router.post("/watcher/ingest")
+    async def watcher_ingest(req: WatcherIngestRequest):
+        sess = getattr(app.state, "watcher", None)
+        if sess is None:
+            raise HTTPException(status_code=409, detail="no watcher session; call /watcher/start first")
+        sess.ingest(WatcherFrame(
+            ts=req.ts, seq=req.seq, players=req.players or [], objects=req.objects or [],
+            caption=req.caption or "", audio_peak=req.audioPeak or 0.0, audio_baseline=req.audioBaseline or 0.0,
+        ))
+        return {"ok": True}
+
+    @router.post("/watcher/step")
+    async def watcher_step(req: WatcherStepRequest):
+        sess = getattr(app.state, "watcher", None)
+        if sess is None:
+            raise HTTPException(status_code=409, detail="no watcher session; call /watcher/start first")
+        row = sess.step(req.tickTs)
+        # Feed pass 2 (depth router); it may flag a moment for deep investigation.
+        depth = getattr(app.state, "depth", None)
+        flag = None
+        if depth is not None:
+            depth.observe(row)
+            flag = depth.step(req.tickTs)
+        return {
+            "summary": row.to_dict(),
+            "context": sess.summaries_context_dicts(),
+            "state": sess.state(),
+            "flag": flag.to_dict() if flag else None,
+        }
+
+    @router.post("/watcher/step2")
+    async def watcher_step2(req: WatcherStepRequest):
+        """Advance pass 1 + pass 2 and auto-run deep investigation on any flag.
+
+        Returned ``deepVerdicts`` lists the deep-investigation verdict(s) for any
+        moment flagged this tick. The deep window is read from the watcher's
+        frame buffer, so the caller must have ingested frames through
+        ``flagTs + deep_forward_s`` for a full window (VOD pre-ingest)."""
+        sess = getattr(app.state, "watcher", None)
+        if sess is None:
+            raise HTTPException(status_code=409, detail="no watcher session; call /watcher/start first")
+        row = sess.step(req.tickTs)
+        depth = getattr(app.state, "depth", None)
+        deep = getattr(app.state, "deep", None)
+        flag = None
+        verdicts = []
+        if depth is not None:
+            depth.observe(row)
+            flag = depth.step(req.tickTs)
+        if flag is not None and deep is not None:
+            if hasattr(sess, "_frames_in"):
+                v = deep.investigate(flag, lambda start, end: sess._frames_in(start, end))
+                verdicts.append(v.to_dict())
+        stash_actions = []
+        if verdicts:
+            sa = _stash_build_or_discard(
+                getattr(app.state, "stash", None),
+                getattr(app.state, "stashJobId", "") or "",
+                verdicts[-1],
+            )
+            if sa is not None:
+                stash_actions.append(sa)
+        return {
+            "summary": row.to_dict(),
+            "context": sess.summaries_context_dicts(),
+            "state": sess.state(),
+            "flag": flag.to_dict() if flag else None,
+            "deepVerdicts": verdicts,
+            "stashActions": stash_actions,
+        }
+
+    # --- Pass 2 / deep-investigation surface (ADAAAA-6740 G3) --------------
+    @router.get("/depth/state")
+    async def depth_state():
+        depth = getattr(app.state, "depth", None)
+        if depth is None:
+            return {"active": False}
+        return {"active": True, **depth.state()}
+
+    @router.get("/depth/flags")
+    async def depth_flags():
+        depth = getattr(app.state, "depth", None)
+        if depth is None:
+            return {"flags": []}
+        return {"flags": depth.flags_dicts()}
+
+    @router.post("/deep/investigate")
+    async def deep_investigate(req: DeepInvestigateRequest):
+        sess = getattr(app.state, "watcher", None)
+        depth = getattr(app.state, "depth", None)
+        deep = getattr(app.state, "deep", None)
+        if deep is None:
+            raise HTTPException(status_code=409, detail="no deep-investigation session; call /watcher/start first")
+        if req.flagTs is None:
+            if depth is None or not depth.flags:
+                raise HTTPException(status_code=422, detail="no flag to investigate (provide flagTs)")
+            flag = depth.flags[-1]
+        else:
+            flag = next((f for f in (depth.flags if depth else []) if abs(f.ts - req.flagTs) < 1e-6), None)
+            if flag is None:
+                raise HTTPException(status_code=404, detail=f"no flag at ts {req.flagTs}")
+        if sess is None or not hasattr(sess, "_frames_in"):
+            raise HTTPException(status_code=409, detail="watcher session has no frame buffer")
+        v = deep.investigate(flag, lambda start, end: sess._frames_in(start, end))
+        stash_action = _stash_build_or_discard(
+            getattr(app.state, "stash", None),
+            getattr(app.state, "stashJobId", "") or "",
+            v.to_dict(),
+        )
+        return {"verdict": v.to_dict(), "state": deep.state(), "stashAction": stash_action}
+
+    @router.get("/deep/state")
+    async def deep_state():
+        deep = getattr(app.state, "deep", None)
+        if deep is None:
+            return {"active": False}
+        return {"active": True, **deep.state()}
+
+    @router.get("/deep/verdicts")
+    async def deep_verdicts():
+        deep = getattr(app.state, "deep", None)
+        if deep is None:
+            return {"verdicts": []}
+        return {"verdicts": deep.verdicts_dicts()}
+
+    # --- Decide-runner clip stash: 120 s ring + pre-clip + build-or-discard --
+    # (ADAAAA-6741 G4). The stash is the decide runner's own frame+audio ring fed
+    # by the media/orchestrator rail (/stash/ingest). A confirmed highlight is
+    # built from the stash and uploaded to the server; a discarded moment frees
+    # the stash with no clip.
+    def _stash_upload(job_id: str):
+        base = upload_base_from_env()
+        client = make_upload_client(base) if base else None
+        def upload(clip_path: str, metadata: dict) -> dict:
+            if client is None:
+                return {"ok": False, "error": "no CLIP_UPLOAD_BASE configured"}
+            return client(clip_path, metadata)
+        return upload
+
+    def _stash_build_or_discard(stash, job_id: str, verdict: dict) -> Optional[dict]:
+        """Auto-run build-or-discard for a deep verdict when a stash is open.
+
+        A confirmed (is_highlight && not discarded) verdict builds the clip from
+        the stash window and uploads it; a discarded verdict frees the stash.
+        Returns ``None`` when there is no stash to act on (no rail feed yet), so
+        the deep path reports the verdict without fabricating a clip."""
+        if stash is None or stash.state()["frameCount"] == 0:
+            return None
+        flag_ts = float(verdict.get("flagTs") or verdict.get("window", {}).get("start") or 0.0)
+        meta = {
+            "jobId": job_id,
+            "eventType": verdict.get("event", "") or verdict.get("eventType", ""),
+            "score": float(verdict.get("score") or 0.0),
+            "reason": verdict.get("reason", ""),
+            "outcome": verdict.get("outcome", ""),
+            "nearMiss": bool(verdict.get("nearMiss", False)),
+        }
+        out = os.path.join(tempfile.gettempdir(), f"hlclip-{job_id}-{int(flag_ts*1000)}.mp4")
+        res = stash.build_or_discard(
+            trigger_ts=flag_ts,
+            is_highlight=bool(verdict.get("isHighlight")),
+            discarded=bool(verdict.get("discarded")),
+            out_path=out,
+            upload=_stash_upload(job_id),
+            metadata=meta,
+        )
+        if not os.path.exists(res.get("clipPath", "")):
+            res.pop("clipPath", None)
+        return res
+
+    @router.post("/stash/start")
+    async def stash_start(req: StashStartRequest):
+        app.state.stash = ClipStash(StashConfig(**req.config))
+        app.state.stashJobId = req.jobId
+        return {"ok": True, "state": app.state.stash.state()}
+
+    @router.post("/stash/ingest")
+    async def stash_ingest(req: StashIngestRequest):
+        stash = getattr(app.state, "stash", None)
+        if stash is None:
+            raise HTTPException(status_code=409, detail="no stash; call /stash/start first")
+        jpeg = base64.b64decode(req.jpeg) if req.jpeg else None
+        audio = base64.b64decode(req.audio) if req.audio else None
+        stash.ingest(req.ts, seq=req.seq, jpeg=jpeg, audio=audio, audio_mime=req.audioMime or None)
+        return {"ok": True}
+
+    @router.post("/stash/preclip")
+    async def stash_preclip(req: StashPreclipRequest):
+        stash = getattr(app.state, "stash", None)
+        if stash is None:
+            raise HTTPException(status_code=409, detail="no stash; call /stash/start first")
+        video, audio, start, end = stash.preclip(req.triggerTs, before_s=req.beforeS, after_s=req.afterS)
+        return {
+            "triggerTs": req.triggerTs,
+            "window": {"start": round(start, 3), "end": round(end, 3)},
+            "frames": len(video),
+            "audioFrames": len(audio),
+            "fps": stash.estimate_fps(video),
+            "state": stash.state(),
+        }
+
+    @router.post("/stash/build")
+    async def stash_build(req: StashBuildRequest):
+        stash = getattr(app.state, "stash", None)
+        if stash is None:
+            raise HTTPException(status_code=409, detail="no stash; call /stash/start first")
+        job_id = getattr(app.state, "stashJobId", "") or ""
+        verdict = {
+            "flagTs": req.triggerTs,
+            "isHighlight": req.isHighlight,
+            "discarded": req.discarded,
+            "event": "",
+            "score": 0.0,
+            "reason": "",
+            "outcome": "scoring_play" if req.isHighlight and not req.discarded else "not_highlight",
+            "nearMiss": False,
+        }
+        upload_fn = _stash_upload(job_id) if req.upload else None
+        result = stash.build_or_discard(
+            trigger_ts=req.triggerTs,
+            is_highlight=req.isHighlight,
+            discarded=req.discarded,
+            out_path=os.path.join(tempfile.gettempdir(), f"hlclip-{job_id}-{int(req.triggerTs*1000)}.mp4"),
+            upload=upload_fn,
+            metadata=verdict,
+        )
+        result.pop("uploadResult", None)  # may be large; surface the summary below
+        if not os.path.exists(result.get("clipPath", "")):
+            result.pop("clipPath", None)
+        return {**result, "state": stash.state()}
+
+    @router.post("/stash/discard")
+    async def stash_discard():
+        stash = getattr(app.state, "stash", None)
+        if stash is None:
+            return {"ok": False, "error": "no stash"}
+        stash.discard()
+        return {"ok": True, "state": stash.state()}
+
+    @router.get("/stash/state")
+    async def stash_state():
+        stash = getattr(app.state, "stash", None)
+        if stash is None:
+            return {"active": False}
+        return {"active": True, **stash.state()}
+
+    @router.get("/watcher/summaries")
+    async def watcher_summaries():
+        sess = getattr(app.state, "watcher", None)
+        if sess is None:
+            return {"summaries": []}
+        return {"summaries": sess.summaries_context_dicts()}
 
     app = FastAPI(title="highlights-decide", version="0.1.0")
     # Canonical at root (go-livepeer strips `/app`); `/app/*` alias for direct calls.

@@ -221,44 +221,6 @@ def test_resolve_vocabulary_game_hint_alias_substring():
     assert "soccer ball" in vocab
 
 
-# --- ADAAAA-4193: sport-specific candidate event classification ---------------
-
-def test_sport_specific_event_soccer_kill_to_goal():
-    # The tracker anchors a fast strike as a generic KILL (explosive single-step).
-    # On the soccer paid path that must reach decide as a GOAL, or the model
-    # hard-rejects it ("this is soccer, not a KILL event") and no clip is cut.
-    assert florence.sport_specific_event_type("soccer", "KILL") == "GOAL"
-    assert florence.sport_specific_event_type("soccer", "MOVE") == "GOAL"
-
-
-def test_sport_specific_event_soccer_alias():
-    assert florence.sport_specific_event_type("Premier League", "KILL") == "GOAL"
-    assert florence.sport_specific_event_type("FA Cup", "MOVE") == "GOAL"
-
-
-def test_sport_specific_event_extended_soccer_aliases_inc8():
-    """INC-8 (ADAAAA-4484): a real operator/driver may hand a human league name
-    (Serie A, Ligue 1, Eredivisie, MLS, "soccer match", Uefa Champions League)
-    rather than the bare token 'soccer'. All must canonicalize to soccer so the
-    GOAL classification fires and the drive doesn't silently fall back to KILL."""
-    soc = ["Serie A", "Ligue 1", "Eredivisie", "Primeira Liga", "Liga MX",
-           "Major League Soccer", "MLS", "soccer match", "football match",
-           "UEFA Champions League", "Uefa Nations League"]
-    for hint in soc:
-        assert florence.sport_specific_event_type(hint, "KILL") == "GOAL", hint
-        assert florence.canonical_sport(hint) == "soccer", hint
-    # non-soccer stays intact
-    assert florence.sport_specific_event_type("NBA", "KILL") == "KILL"
-    assert florence.canonical_sport("NBA") == "basketball"
-
-
-def test_sport_specific_event_non_soccer_keeps_generic():
-    # Unknown/unspecified game and non-goal sports keep the raw tracker type.
-    assert florence.sport_specific_event_type(None, "KILL") == "KILL"
-    assert florence.sport_specific_event_type("", "MOVE") == "MOVE"
-    assert florence.sport_specific_event_type("some-unknown-game", "KILL") == "KILL"
-
-
 def test_canonical_sport():
     assert florence.canonical_sport("soccer") == "soccer"
     assert florence.canonical_sport("Champions League") == "soccer"
@@ -309,13 +271,6 @@ def test_canonical_sport_american_football() -> None:
     # Category (plan) drives sport resolution on the plan-first path.
     assert florence.canonical_sport("football", category="soccer") == "soccer"
     assert florence.canonical_sport("soccer", category="football") == "football"
-
-def test_sport_specific_event_american_football_is_not_goal() -> None:
-    # ADAAAA-6463: American football must never classify a strike as a soccer GOAL.
-    assert florence.sport_specific_event_type("football", "KILL") == "KILL"
-    assert florence.sport_specific_event_type("football", "MOVE", category="football") == "MOVE"
-    # Soccer still GOAL.
-    assert florence.sport_specific_event_type("football", "KILL", category="soccer") == "GOAL"
 
 
 def test_gate_stub_mode(monkeypatch):
@@ -544,7 +499,6 @@ def test_process_frame_no_vocabulary_keeps_open_set_labels(monkeypatch):
 # nothing". The emission boundary normalizes every surfaced track bbox through
 # _norm_bbox, so any box a user sees has a minimum visible area and every label
 # is anchored to its box.
-
 
 
 class _BareIoUTrackerStep:

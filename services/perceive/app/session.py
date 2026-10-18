@@ -23,6 +23,7 @@ from .tracker import IoUTracker, LIVE_MAX_TRACKS, VOD_MAX_TRACKS
 from .sam_tracker import HybridTracker, make_tracker
 from .scoreboard import ScoreboardTracker
 from .tracking_plan import TrackingPlan
+from .analysis_session import AnalysisSession
 
 RECENT_FRAMES = 30  # ~30 sampled frames kept for clip/confirm
 
@@ -98,6 +99,15 @@ class SessionState:
     # anchor-slot preference all come from it (with canned fallback when the
     # plan is absent/empty). Set via control `configure` trackingPlan.
     tracking_plan: Optional[TrackingPlan] = None
+    # ADAAAA-6738 G1: the persistent analysis session. Bounded per-stream ring
+    # buffers recording the session's continuous frame-by-frame analysis
+    # (audio-energy, tracked players, object detections, captions) so the four
+    # windowed query tools (get_audio_levels / get_tracked_players /
+    # detect_objects / get_captioning) can answer bounded, schema-stable
+    # window queries. Fed from the frame/audio hot path; memory-bounded (FIFO),
+    # never a durable log (the server's analysis_events table is the durable
+    # copy via the webapp relay).
+    analysis: AnalysisSession = field(default_factory=AnalysisSession)
 
     @property
     def is_idle(self) -> bool:
@@ -119,6 +129,10 @@ class SessionRegistry:
                 # But avoid unbounded growth: drop a single expired session.
                 self._evict_expired()
             s = SessionState(session_id=session_id, stream_id=stream_id, clip_path=clip_path)
+            # ADAAAA-6738 G1: tag the persistent analysis session so its windowed
+            # tools report which session/stream the window belongs to.
+            s.analysis.session_id = session_id
+            s.analysis.stream_id = stream_id
             # INC-6: bind SAM to this job's clip AND set the mode's track capacity
             # (3 live / 8 VOD) so the tracker instantiates with the right slots.
             # ADAAAA-6463: when a plan/anchor is known up front, pass it so the

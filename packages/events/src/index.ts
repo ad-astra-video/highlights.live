@@ -630,6 +630,137 @@ export const JobDetailSchema = z.object({
   maxTraces: z.number().int().min(0),
 });
 export type JobDetail = z.infer<typeof JobDetailSchema>;
+// --- watcher / analysis-session persistence (ADAAAA-6738 G1) ----------------
+// The perceive persistent-session analysis state and the decide<->perceive
+// request trace are relayed to the webapp and persisted by the server. Each
+// row is a JSON record (id + job_id + created_at + record blob), mirroring
+// jobs/highlights, so one DDL serves SQLite (dev) and Postgres (prod).
+//
+// AnalysisEventSchema: one perceive analysis-data sample / windowed tool
+// result (audio energy, tracked objects, captions, detections, tool result).
+// The payload is bounded and capped/batched at the write site (not a
+// per-frame firehose).
+export const AnalysisEventSchema = z.object({
+  id: z.string(),
+  jobId: z.string(),
+  /** Media stream id (when the job maps to a live stream). */
+  streamId: z.string().optional(),
+  /** The perceive session id the data came from. */
+  sessionId: z.string().optional(),
+  /** Seconds from stream start. */
+  timestamp: z.number(),
+  kind: z.enum(["audio_energy", "tracked_objects", "caption", "detection", "tool_result", "control"]),
+  /** Kind-specific payload (bounded). */
+  data: z.record(z.unknown()),
+});
+export type AnalysisEvent = z.infer<typeof AnalysisEventSchema>;
+
+// AnalysisSessionTraceSchema: one decide -> perceive request, its
+// updated/accepted form, and its result — the timeline-ordered analysis-
+// session trace the server persists so the operator can replay what the
+// analysis session did, when, and why.
+export const AnalysisSessionTraceSchema = z.object({
+  id: z.string(),
+  jobId: z.string(),
+  streamId: z.string().optional(),
+  sessionId: z.string().optional(),
+  /** Epoch ms when the request was issued. */
+  at: z.number(),
+  /** Tool name for a windowed query (get_audio_levels | ... ) or a control instruction. */
+  tool: z.string().optional(),
+  /** The window the query refers to (when windowed). */
+  window: z.record(z.unknown()).optional(),
+  request: z.record(z.unknown()),
+  response: z.record(z.unknown()).optional(),
+  updated: z.record(z.unknown()).optional(),
+});
+export type AnalysisSessionTrace = z.infer<typeof AnalysisSessionTraceSchema>;
+
+// --- Phase 0 media-server job + result-event contract (ADAAAA-6865) ---------
+// The workload-split plan (ADAAAA-6714 §6 Phase 0) makes the main server a pure
+// negotiator / DB-owner and the media server the stream terminus + Orchestrator
+// connection (perceive/decide session, payment refresh, payer) + all ffmpeg
+// media work. This is the contract both sides build on. The server POSTs a
+// MediaJobRequest to the media server to hand a job off (VOD file/url or a
+// live stream); the media server runs the media work + per-candidate Gemma
+// decide and streams typed MediaResultEvents back over the extended
+// POST /jobs/:id/observe callback for the server to persist.
+
+// Media-server job handoff request (plan deliverable: job request contract for
+// VOD + live).
+export const MediaJobSourceSchema = z.enum([
+  // VOD handoff
+  "file",
+  "url",
+  // Live ingest handoff
+  "rtmp",
+  "webrtc",
+  "screenshare",
+  "browser",
+  "file-sim",
+]);
+export type MediaJobSource = z.infer<typeof MediaJobSourceSchema>;
+
+export const MediaJobRequestSchema = z.object({
+  jobId: z.string(),
+  source: MediaJobSourceSchema,
+  /** Local filesystem/upload path on the media node (source=file). */
+  inputPath: z.string().optional(),
+  /** Fetchable URL for VOD decode (source=url). */
+  inputUrl: z.string().optional(),
+  gameHint: z.string().optional(),
+  preferLabels: z.array(z.string()).default([]),
+  /** Detail-fps knobs + clip window (plan §4 handoff contract). */
+  sampleFps: z.number().positive().optional(),
+  detailFps: z.number().positive().optional(),
+  /** Number of decide window frames (detail-first VOD pass). */
+  decideWindowN: z.number().int().positive().optional(),
+  frameScale: z.string().optional(),
+  clipBeforeS: z.number().min(0).optional(),
+  clipAfterS: z.number().min(0).optional(),
+  /** Frontend-selectable decide reasoning effort. */
+  reasoningEffort: z.enum(["none", "low", "medium", "high"]).optional(),
+});
+export type MediaJobRequest = z.infer<typeof MediaJobRequestSchema>;
+
+// Typed result events the media server reports back for a media-served job.
+// The server (DB-owner) persists them: observations step the per-job evidence
+// feed, candidates/highlights become HighlightRecords, and stage-A metrics +
+// cost land on the job record. `seq`/`timestamp` are the stream sequence /
+// seconds-from-stream-start of the trigger, when known.
+export const MediaResultEventSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("observation"),
+    seq: z.number().int().min(0).optional(),
+    timestamp: z.number().optional(),
+    observation: FrameObservationSchema,
+  }),
+  z.object({
+    type: z.literal("candidate"),
+    seq: z.number().int().min(0).optional(),
+    timestamp: z.number().optional(),
+    candidate: CandidateEventSchema,
+  }),
+  z.object({
+    type: z.literal("highlight"),
+    seq: z.number().int().min(0).optional(),
+    timestamp: z.number().optional(),
+    highlight: HighlightRecordSchema,
+    decide: HighlightDecisionSchema.optional(),
+  }),
+  z.object({
+    type: z.literal("stageAMetrics"),
+    timestamp: z.number().optional(),
+    metrics: StageAMetricsSnapshotSchema,
+  }),
+  z.object({
+    type: z.literal("cost"),
+    timestamp: z.number().optional(),
+    costUsd: z.number().min(0),
+    perceiveSessionS: z.number().min(0).optional(),
+  }),
+]);
+export type MediaResultEvent = z.infer<typeof MediaResultEventSchema>;
 
 // --- training pipeline re-exports (ADAAAA-5164) -----------------------------
 // The dataset-curation pipeline (perceptual-hash bucketing, coverage, split,

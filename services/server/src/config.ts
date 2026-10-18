@@ -154,6 +154,13 @@ export interface ServerConfig {
   analysisPostWindowS: number;
   vodAnalysisPreWindowS: number;
   vodAnalysisPostWindowS: number;
+  /** ADAAAA-6748 G1b-2: VOD per-stream analysis persistence. The windowed
+   * tools are sampled in bounded stream-time steps (`vodAnalysisSampleStepS`)
+   * over the recorded window, and capped at `vodAnalysisMaxSamples` rows so a
+   * long VOD never fires a per-frame write. `VOD_ANALYSIS_SAMPLE_STEP_S`
+   * (default 5), `VOD_ANALYSIS_MAX_SAMPLES` (default 80). */
+  vodAnalysisSampleStepS: number;
+  vodAnalysisMaxSamples: number;
   /** ADAAAA-6314 Path 2: forward the surrounding audio clip for LIVE trigger
    * candidates so the gemma decide prompt gets ASR'd audio context. Default off
    * so the deployed live baseline sends no new payload until an operator enables
@@ -251,6 +258,15 @@ export interface ServerConfig {
    * more than ~1 sweep interval after its purge window elapses. Default: run
    * hourly (ADAAAA-5398 C4). */
   datasetPurgeSweepIntervalMs: number;
+  /** Analysis data (analysis_events + analysis_session_traces) retention, ms.
+   * The scheduled sweep hard-deletes rows older than this. Default 7 days.
+   * `ANALYSIS_RETENTION_MS`. */
+  analysisRetentionMs: number;
+  /** How often the analysis-data retention purge sweep runs (ms). Must be <=
+   * analysisRetentionMs so stale analysis rows are removed no more than ~1
+   * sweep interval after their window elapses. Default: hourly.
+   * `ANALYSIS_PURGE_SWEEP_INTERVAL_MS`. */
+  analysisPurgeSweepIntervalMs: number;
   /**
    * Increment D (ADAAAA-6467): the stream-start what-to-track warm-up window
    * (seconds) — exactly ONE planner call must deliver a valid TrackingPlan
@@ -348,6 +364,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     analysisPostWindowS: Number(env.ANALYSIS_POST_WINDOW_S ?? 3),
     vodAnalysisPreWindowS: Number(env.VOD_ANALYSIS_PRE_WINDOW_S ?? 3),
     vodAnalysisPostWindowS: Number(env.VOD_ANALYSIS_POST_WINDOW_S ?? 5),
+    vodAnalysisSampleStepS: Number(env.VOD_ANALYSIS_SAMPLE_STEP_S ?? 5),
+    vodAnalysisMaxSamples: Number(env.VOD_ANALYSIS_MAX_SAMPLES ?? 80),
     // I4 / ADAAAA-6361: live-path decide() carries the surrounding audio clip so
     // Gemma gets auditory context, matching VOD. Opt out with LIVE_AUDIO_CONTEXT=0.
     audioContext: env.LIVE_AUDIO_CONTEXT !== "0",
@@ -397,6 +415,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     rejectTtlMs: Number(env.REJECTED_CLIP_TTL_MS ?? 24 * 60 * 60 * 1000),
     rejectSweepIntervalMs: Number(env.REJECTED_CLIP_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
     datasetPurgeSweepIntervalMs: Number(env.DATASET_PURGE_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
+    analysisRetentionMs: Number(env.ANALYSIS_RETENTION_MS ?? 7 * 24 * 60 * 60 * 1000),
+    analysisPurgeSweepIntervalMs: Number(env.ANALYSIS_PURGE_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
     // Increment D (ADAAAA-6467): stream-start warm-up window + out-of-band
     // re-check cadence for the what-to-track planner. See the ServerConfig
     // field docs for the default rationale (3 s warm-up, 10 s recheck).

@@ -35,6 +35,28 @@ export interface MediaConfig {
   publicBaseUrl?: string;
   /** Release a provisioned-but-never-used perceive slot after this many ms. */
   provisionNoClientMs?: number;
+  /**
+   * Gemma decide runner base URL (Phase 0b / ADAAAA-6880). When set, the media
+   * server fires one per-candidate decide POST to `${decideUrl}/app/highlight`
+   * (mirroring the server-side DirectAdapter.decide) and on acceptance cuts a
+   * clip from its recorded session. When unset, candidates are relayed only.
+   */
+  decideUrl?: string;
+  /** Optional bearer token sent as `Authorization: Bearer` on every decide
+   * call (the decide runner may be gated; mirrors the signer-auth pattern). */
+  decideAuthToken?: string;
+  /** Cost of one Gemma decide call (USD), for the `cost` result event. */
+  decideFee?: number;
+  /** Perceive runner cost (USD/hour) for the `cost` result event. */
+  perceivePerHourUsd?: number;
+  /** Clip window: seconds before the candidate anchor timestamp. Default 5. */
+  clipBeforeS?: number;
+  /** Clip window: seconds after the candidate anchor timestamp. Default 10. */
+  clipAfterS?: number;
+  /** Directory where cut highlight clips are written (default <tmpdir>/hl-clips). */
+  clipsDir?: string;
+  /** ffmpeg binary path used to cut clips (default "ffmpeg"). */
+  ffmpegPath?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
@@ -49,5 +71,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     paymentIntervalMs: env.PAYMENT_INTERVAL_MS ? Number(env.PAYMENT_INTERVAL_MS) : 10_000,
     publicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,
     provisionNoClientMs: env.MEDIA_PROVISION_NO_CLIENT_MS ? Number(env.MEDIA_PROVISION_NO_CLIENT_MS) : 60_000,
+    decideUrl: env.DECIDE_URL,
+    decideAuthToken: env.DECIDE_AUTH_TOKEN,
+    decideFee: env.DECIDE_FEE ? Number(env.DECIDE_FEE) : 0.05,
+    perceivePerHourUsd: env.PERCEIVE_PER_HOUR_USD ? Number(env.PERCEIVE_PER_HOUR_USD) : 0.1,
+    clipBeforeS: env.MEDIA_CLIP_BEFORE_S ? Number(env.MEDIA_CLIP_BEFORE_S) : 5,
+    clipAfterS: env.MEDIA_CLIP_AFTER_S ? Number(env.MEDIA_CLIP_AFTER_S) : 10,
+    clipsDir: env.MEDIA_CLIPS_DIR,
+    ffmpegPath: env.FFMPEG_PATH || "ffmpeg",
   };
 }
