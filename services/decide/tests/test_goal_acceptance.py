@@ -7,6 +7,7 @@ not_highlight frame read must NEVER be accepted as a board GOAL highlight
 (true-goal recall is not regressed).
 """
 from app.gemma import (
+    event_type_for_outcome,
     finalize_goal_acceptance,
     normalize_outcome,
     outcome_is_highlight,
@@ -152,3 +153,41 @@ def test_finalize_keeps_real_goal_even_without_labels():
     d = {"isHighlight": True, "outcome": "scoring_play", "score": 80}
     out = finalize_goal_acceptance(d, prefer_labels=None)
     assert out["isHighlight"] is True
+
+
+# --- ADAAAA-6969: non-goal highlight label never defaults to GOAL -----------
+def test_finalize_accepts_near_miss_with_non_goal_label():
+    # A requested near-miss/save accepted as a distinct highlight must carry a
+    # non-GOAL eventType (NEAR_MISS), even when the model/candidate verdict said
+    # GOAL. outcome + nearMiss preserved; only the label changes.
+    d = {"isHighlight": False, "outcome": "near_miss", "eventType": "GOAL",
+         "score": 55, "reason": "keeper save at the line", "nearMiss": True}
+    out = finalize_goal_acceptance(d, prefer_labels=["saves"])
+    assert out["isHighlight"] is True
+    assert out["outcome"] == "near_miss"
+    assert out["nearMiss"] is True
+    assert out["eventType"] == "NEAR_MISS"
+    assert out["eventType"] != "GOAL"
+
+
+def test_finalize_accepts_big_play_with_big_play_label():
+    d = {"isHighlight": False, "outcome": "big_play", "eventType": "GOAL", "score": 45}
+    out = finalize_goal_acceptance(d, prefer_labels=["saves"])
+    assert out["isHighlight"] is True
+    assert out["eventType"] == "BIG_PLAY"
+    assert out["eventType"] != "GOAL"
+
+
+def test_finalize_keeps_goal_label_for_scoring_play():
+    # AC2: a true scoring_play still emits eventType "GOAL" (no regression).
+    d = {"isHighlight": True, "outcome": "scoring_play", "eventType": "GOAL", "score": 80}
+    out = finalize_goal_acceptance(d, prefer_labels=["goals"])
+    assert out["isHighlight"] is True
+    assert out["eventType"] == "GOAL"
+
+
+def test_event_type_for_outcome_never_goal_for_non_scoring():
+    # AC4: near_miss-vs-scoring confusion stays 0 for the label too.
+    assert event_type_for_outcome("near_miss", "GOAL") == "NEAR_MISS"
+    assert event_type_for_outcome("big_play", "GOAL") == "BIG_PLAY"
+    assert event_type_for_outcome("scoring_play", "GOAL") == "GOAL"
