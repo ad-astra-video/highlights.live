@@ -1,27 +1,23 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X, ChevronDown, ChevronRight, Trash2, List, LayoutGrid, Plus } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Trash2 } from "lucide-react";
 import { api, getToken, type Highlight, type Job, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { isOverLimit, oversizedHelp } from "../lib/vodUpload";
-import { DEFAULT_REJECTED_CLIP_TTL_MS, isRecoverable, recoverLabel } from "../lib/rejected";
 import { useAuth } from "../lib/auth";
 import {
   useProcessingJobs,
   isInFlight,
   jobProgressPct,
-  partitionJobs,
-  groupHighlightsByJob,
   deleteJob,
   formatJobTime,
   jobSpanLabel,
   sourceLabel,
+  jobTitle,
 } from "../lib/vodJobs";
 import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
-import { JobDetailPanel } from "../components/JobDetail";
 import { BrowserCapture } from "../components/BrowserCapture";
-import { VideoClip } from "../components/VideoClip";
 
 const SOURCES = [
   { id: "file", label: "Upload / file", icon: Upload },
@@ -92,27 +88,12 @@ export function Highlights() {
   // surfaced the full set).
   const [vodJobId, setVodJobId] = useState<string | null>(null);
   // Increment 2 (ADAAAA-6837):
-  // - `flatHighlights` toggles "Your highlights" between the default per-job
-  //   grouped view and the opt-in flat ("Show all") grid.
-  // - `failedOpen` tracks whether the collapsed Failed section is expanded
-  //   (default collapsed).
   // - `confirmDeleteJob` holds the job selected for deletion so the confirm
   //   dialog can render; null when no delete is pending.
-  const [flatHighlights, setFlatHighlights] = useState(false);
-  const [failedOpen, setFailedOpen] = useState(false);
   const [confirmDeleteJob, setConfirmDeleteJob] = useState<Job | null>(null);
   const [debugJob, setDebugJob] = useState<string | null>(null);
-  // Increment 3 T2 (ADAAAA-6871): the job whose detail panel is open. Any
-  // job row/card opens the shared Job detail panel; the Delete control stops
-  // propagation so deleting never opens it.
-  const [detailJob, setDetailJob] = useState<Job | null>(null);
-  // rejected-clips lifecycle (ADAAAA-5168/5204): the server's recovery TTL (for
-  // "recover until" deadlines), whether the collapsed rejected section is open,
-  // and a ticking `now` so relative deadlines stay accurate while the section
-  // is visible (a rejected clip's recovery clock is real-time, not render-time).
-  const [rejectedTtlMs, setRejectedTtlMs] = useState<number>(DEFAULT_REJECTED_CLIP_TTL_MS);
-  const [rejectedOpen, setRejectedOpen] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
+
+  const navigate = useNavigate();
 
   const isLive = source !== "file";
 
@@ -120,37 +101,16 @@ export function Highlights() {
     const r = await api<{ highlights: Highlight[] }>("/highlights");
     setHighlights(r.highlights);
   }
-  async function review(id: string, status: "accepted" | "rejected") {
-    try {
-      await api(`/highlights/${id}/review`, { body: { status } });
-      refreshHighlights().catch(() => {});
-      // Accepting/rejecting changes which clips consume the clip-count quota, so
-      // refresh the billing snapshot so the quota banner reflects accepted-only
-      // immediately after a review (a rejected clip releases its slot).
-      refreshBilling().catch(() => {});
-    } catch (e: any) {
-      setError(e.message);
-    }
-  }
   useEffect(() => {
     refreshHighlights().catch(() => {});
     // Keep the client-side upload cap in sync with the server's
     // VOD_MAX_UPLOAD_BYTES so a pre-flight >cap rejection matches the 413.
-    api<{ vodMaxUploadBytes?: number; rejectedClipTtlMs?: number }>("/config")
+    api<{ vodMaxUploadBytes?: number }>("/config")
       .then((c) => {
         if (c?.vodMaxUploadBytes && c.vodMaxUploadBytes > 0) setVodMax(c.vodMaxUploadBytes);
-        if (c?.rejectedClipTtlMs && c.rejectedClipTtlMs > 0) setRejectedTtlMs(c.rejectedClipTtlMs);
       })
       .catch(() => {});
   }, []);
-
-  // Tick the rejected-clip recovery clock while the section is expanded so the
-  // relative "recover until" deadlines and the Recover affordance stay live.
-  useEffect(() => {
-    if (!rejectedOpen) return;
-    const iv = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(iv);
-  }, [rejectedOpen]);
 
   // Poll a running live job until it finishes.
   useEffect(() => {
@@ -336,31 +296,17 @@ export function Highlights() {
     }
   }
 
-  // Completed-card "View highlights" affordance: switch to the grouped view and
-  // scroll to that job's highlight group.
-  function viewJobHighlights(jobId: string) {
-    setFlatHighlights(false);
-    requestAnimationFrame(() => {
-      document
-        .querySelector(`[data-highlight-group="${CSS.escape(jobId)}"]`)
-        ?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }
-
-  // Increment 3 T2 (ADAAAA-6871): open the shared Job detail panel for a job
-  // (row/card click or its "Details" chip).
+  // Increment 3 T2 (ADAAAA-6871): open the full-screen detail for a job
+  // (row/card click or its "Details" chip). ADAAAA-6888 (Inc 3-4): the plan/AC
+  // require the tile click to open the full-screen detail at /app/jobs/:id
+  // (which surfaces the LLM title and the per-highlight trigger), so we
+  // navigate to that route instead of an inline panel.
   function openDetail(job: Job) {
-    setDetailJob(job);
+    navigate(`/app/jobs/${job.id}`);
   }
 
   const sourceInputLabel = source === "screenshare" || source === "file" ? null
     : "RTMP / stream URL";
-
-  // Increment 2 (ADAAAA-6837): split the queue into the three job surfaces and
-  // precompute the grouped highlight feed for "Your highlights".
-  const { inFlight: inFlightJobs, completed: completedJobs, failed: failedJobs } = partitionJobs(processingJobs);
-  const groupedHighlights = groupHighlightsByJob(highlights, processingJobs);
-  const nonRejectedCount = highlights.filter((h) => h.status !== "rejected").length;
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -545,7 +491,8 @@ export function Highlights() {
               <JobTile
                 key={job.id}
                 job={job}
-                highlightCount={highlights.filter((h) => h.jobId === job.id && h.status !== "rejected").length}
+                acceptedCount={highlights.filter((h) => h.jobId === job.id && h.status !== "rejected").length}
+                rejectedCount={highlights.filter((h) => h.jobId === job.id && h.status === "rejected").length}
                 onOpen={() => openDetail(job)}
                 onDelete={setConfirmDeleteJob}
               />
@@ -556,29 +503,8 @@ export function Highlights() {
 
       {debugJob && <FrameDebugger jobId={debugJob} />}
 
-      {/* Rejected clips live in a separate, collapsed section shown BELOW the
-          accepted/published feed so the user can inspect them before the 24h
-          TTL purge (ADAAAA-5163/5204 / ADAAAA-5261). While a clip is within its
-          undo window we show a live "Recover until …" deadline + a Recover
-          affordance; once past TTL (or hard-deleted by the sweep) the indicator
-          and affordance disappear and the section reflects the API's current
-          lifecycle. */}
-      <RejectedSection
-        highlights={highlights}
-        now={now}
-        ttlMs={rejectedTtlMs}
-        open={rejectedOpen}
-        onToggle={() => setRejectedOpen((o) => !o)}
-        onRecover={(id) => review(id, "accepted")}
-        onError={setError}
-      />
-
       {confirmDeleteJob && (
         <DeleteJobDialog job={confirmDeleteJob} onCancel={() => setConfirmDeleteJob(null)} onConfirm={confirmDelete} />
-      )}
-
-      {detailJob && (
-        <JobDetailPanel jobId={detailJob.id} initialJob={detailJob} onClose={() => setDetailJob(null)} />
       )}
     </div>
   );
@@ -606,231 +532,6 @@ function statusChipClass(status: string): string {
   }
 }
 
-/**
- * Increment 2 (ADAAAA-6837): shared highlight card used by both the grouped
- * and flat "Your highlights" views (clip player + accept/reject controls).
- */
-function HighlightCard({ highlight, onReview }: { highlight: Highlight; onReview: (id: string, status: "accepted" | "rejected") => void }) {
-  const h = highlight;
-  return (
-    <div className="card card-hover overflow-hidden" data-highlight-card>
-      <VideoClip src={h.clipUri} label={h.eventType} error={h.clipError} />
-      <div className="p-4">
-        <div className="flex items-center justify-between">
-          <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">{h.eventType || "EVENT"}</span>
-          <span className={`text-xs ${h.status === "accepted" ? "text-green" : h.status === "rejected" ? "text-red" : "text-yellow"}`}>
-            {h.status}
-          </span>
-        </div>
-        <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
-        <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
-        <div className="text-xs text-mut">T+{Math.round(h.start)}s → T+{Math.round(h.end)}s</div>
-        <div className="mt-3 flex gap-2">
-          <button
-            className="btn-neon flex-1"
-            disabled={h.status === "accepted"}
-            onClick={() => onReview(h.id, "accepted")}
-          >
-            <Check className="mr-1 inline h-4 w-4" /> Accept
-          </button>
-          <button
-            className="btn-neon btn-pink flex-1"
-            disabled={h.status === "rejected"}
-            onClick={() => onReview(h.id, "rejected")}
-          >
-            <X className="mr-1 inline h-4 w-4" /> Reject
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** Per-row/card Delete affordance (ADAAAA-6837). Stops click propagation so a
- * Delete click never bubbles into an enclosing openable row/card (ADAAAA-6871:
- * Delete must NOT open the Job detail panel). */
-function DeleteButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button type="button" className="chip" onClick={(e) => { e.stopPropagation(); onClick(); }} data-job-delete>
-      <Trash2 className="mr-1 inline h-4 w-4" /> Delete
-    </button>
-  );
-}
-
-/** In-flight "Processing jobs" surface (ADAAAA-6760): one row per queued/active
- * job (8-char id, status chip, source, progress bar + label) plus a Delete
- * control on each row (ADAAAA-6837). ADAAAA-6871: each row is clickable to open
- * the Job detail panel (with a "Details" chip); Delete stops propagation. */
-function ProcessingJobs({ jobs, onDebug, onDelete, onOpenDetail }: { jobs: Job[]; onDebug: (id: string) => void; onDelete: (job: Job) => void; onOpenDetail: (job: Job) => void }) {
-  return (
-    <section data-processing-jobs>
-      <h2 className="text-2xl font-black">Processing jobs</h2>
-      <div className="mt-3 flex flex-col gap-3">
-        {jobs.map((j) => (
-          <div key={j.id} className="card cursor-pointer px-4 py-3 transition hover:border-neon/40" data-processing-job onClick={() => onOpenDetail(j)}>
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="font-mono text-sm text-ink">{j.id.slice(0, 8)}</span>
-              <span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusChipClass(j.status)}`}>
-                {j.status}
-              </span>
-              <span className="text-xs text-mut">{sourceLabel(j.source)}</span>
-              <span className="text-xs text-mut">{j.progressLabel || "queued"}</span>
-              <span className="ml-auto flex items-center gap-2">
-                <button type="button" className="chip" onClick={() => onOpenDetail(j)} data-job-details>
-                  Details
-                </button>
-                <DeleteButton onClick={() => onDelete(j)} />
-              </span>
-            </div>
-            <div className="mt-2 flex items-center gap-2" data-job-progress>
-              <div className="h-2 flex-1 overflow-hidden rounded-full bg-mut/20">
-                <div className="h-full rounded-full bg-neon" style={{ width: `${jobProgressPct(j)}%` }} />
-              </div>
-              <span className="text-xs text-mut">{Math.round(jobProgressPct(j))}%</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-/** Completed result cards (ADAAAA-6837). One card per `done` job: source label,
- * scheduled/completed times, span/duration, frames analyzed, decide calls, cost,
- * highlight count, a thumbnail strip from the job's clipUris, links to its
- * grouped highlights + Frame debugger, and a Delete control. ADAAAA-6871: the
- * card is clickable to open the Job detail panel (which embeds the frame
- * overlay for a done job); the Frame debugger / View highlights / Delete
- * controls keep their existing behavior and stop propagation so they never
- * trigger the panel-open card click. */
-function CompletedJobs({ jobs, highlights, onDebug, onDelete, onViewHighlights, onOpenDetail }: {
-  jobs: Job[];
-  highlights: Highlight[];
-  onDebug: (id: string) => void;
-  onDelete: (job: Job) => void;
-  onViewHighlights: (jobId: string) => void;
-  onOpenDetail: (job: Job) => void;
-}) {
-  return (
-    <section data-completed-jobs>
-      <h2 className="text-2xl font-black">Completed</h2>
-      <div className="mt-3 grid gap-5 sm:grid-cols-2">
-        {jobs.map((job) => {
-          const jobHighlights = highlights.filter((h) => h.jobId === job.id && h.status !== "rejected");
-          const thumbnails = jobHighlights.map((h) => h.clipUri).filter(Boolean);
-          const span = jobSpanLabel(job);
-          const scheduled = formatJobTime(job.scheduledAt);
-          const completed = formatJobTime(job.completedAt);
-          return (
-            <div key={job.id} className="card card-hover cursor-pointer p-4" data-completed-job onClick={() => onOpenDetail(job)}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="rounded-full border border-green/40 bg-green/10 px-2 py-0.5 text-xs font-bold uppercase text-green">done</span>
-                  <span className="font-mono text-sm text-ink">{job.id.slice(0, 8)}</span>
-                </div>
-                <span className="text-xs text-mut">{sourceLabel(job.source)}</span>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-mut" data-job-done-metrics>
-                <span>{job.framesAnalyzed ?? 0} frames</span>
-                <span>${(job.costUsd ?? 0).toFixed(2)}</span>
-                <span>{job.decideCalls ?? 0} decide calls</span>
-                <span>{jobHighlights.length} highlights</span>
-                {span && <span data-job-span>{span}</span>}
-              </div>
-              {(scheduled || completed) && (
-                <div className="mt-1 text-xs text-mut" data-job-times>
-                  {scheduled && <span>Scheduled {scheduled}</span>}
-                  {scheduled && completed && <span> · </span>}
-                  {completed && <span>Completed {completed}</span>}
-                </div>
-              )}
-              {thumbnails.length > 0 && (
-                <div className="mt-3 flex gap-1 overflow-hidden" data-job-thumbnails>
-                  {thumbnails.slice(0, 5).map((uri, i) => (
-                    <img key={i} src={uri} alt="" className="h-14 w-24 flex-shrink-0 rounded object-cover" />
-                  ))}
-                </div>
-              )}
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button type="button" className="chip" onClick={(e) => { e.stopPropagation(); onDebug(job.id); }} data-job-debug>
-                  Frame debugger
-                </button>
-                {jobHighlights.length > 0 && (
-                  <button type="button" className="chip" onClick={(e) => { e.stopPropagation(); onViewHighlights(job.id); }} data-job-view-highlights>
-                    View highlights
-                  </button>
-                )}
-                <button type="button" className="chip" onClick={() => onOpenDetail(job)} data-job-details>
-                  Details
-                </button>
-                <span className="ml-auto" />
-                <DeleteButton onClick={() => onDelete(job)} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-/** Failed jobs — a separate, collapsed (expandable) section (ADAAAA-6837).
- * Default collapsed; the header shows the failed count. Expand to see each
- * failed job's server error text. Each row has a Delete control. ADAAAA-6871:
- * each failed row is also clickable to open the Job detail panel (which shows
- * the error + persisted trail); Delete / Frame debugger stop propagation. */
-function FailedJobs({ jobs, open, onToggle, onDebug, onDelete, onOpenDetail }: {
-  jobs: Job[];
-  open: boolean;
-  onToggle: () => void;
-  onDebug: (id: string) => void;
-  onDelete: (job: Job) => void;
-  onOpenDetail: (job: Job) => void;
-}) {
-  if (jobs.length === 0) return null;
-  return (
-    <section data-failed-section>
-      <button
-        type="button"
-        onClick={onToggle}
-        data-failed-section-toggle
-        className="flex w-full items-center justify-between rounded-lg border border-red/40 bg-card/70 px-4 py-3 text-left transition hover:border-red/60 hover:bg-card"
-      >
-        <span className="flex items-center gap-2 text-lg font-black text-ink">
-          {open ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
-          Failed
-          <span className="rounded-full bg-ink/15 px-2 py-0.5 text-xs font-bold text-ink">{jobs.length}</span>
-        </span>
-        <span className="text-xs text-mut">Click to {open ? "collapse" : "expand"}</span>
-      </button>
-      {open && (
-        <div className="mt-3 flex flex-col gap-3">
-          {jobs.map((job) => (
-            <div key={job.id} className="card cursor-pointer px-4 py-3 transition hover:border-red/40" data-failed-job onClick={() => onOpenDetail(job)}>
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="font-mono text-sm text-ink">{job.id.slice(0, 8)}</span>
-                <span className="rounded-full border border-red/40 bg-red/10 px-2 py-0.5 text-xs font-bold uppercase text-red">failed</span>
-                <span className="text-xs text-mut">{sourceLabel(job.source)}</span>
-                <span className="ml-auto flex gap-2">
-                  <button type="button" className="chip" onClick={(e) => { e.stopPropagation(); onDebug(job.id); }} data-job-debug>
-                    Frame debugger
-                  </button>
-                  <button type="button" className="chip" onClick={() => onOpenDetail(job)} data-job-details>
-                    Details
-                  </button>
-                  <DeleteButton onClick={() => onDelete(job)} />
-                </span>
-              </div>
-              <div className="mt-2 text-xs text-red" data-job-failed-line>
-                {job.error?.trim() ? job.error : "Processing failed — check the video source and try again."}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
 
 /**
  * Job tile (ADAAAA-6852 Inc 4): one tile per job on the /app surface. Shows the
@@ -839,14 +540,16 @@ function FailedJobs({ jobs, open, onToggle, onDebug, onDelete, onOpenDetail }: {
  * Clicking the tile opens the full-screen detail at /app/jobs/:id. A Delete
  * control sits in the corner (ADAAAA-6838) without navigating.
  */
-function JobTile({ job, highlightCount, onOpen, onDelete }: {
+function JobTile({ job, acceptedCount, rejectedCount, onOpen, onDelete }: {
   job: Job;
-  highlightCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
   onOpen: () => void;
   onDelete: (job: Job) => void;
 }) {
   const inFlight = isInFlight(job.status);
   const span = jobSpanLabel(job);
+  const title = jobTitle(job, acceptedCount);
   return (
     <div
       className="card card-hover cursor-pointer p-4"
@@ -863,12 +566,15 @@ function JobTile({ job, highlightCount, onOpen, onDelete }: {
         }
       }}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusChipClass(job.status)}`}>
-            {job.status}
-          </span>
-          <span className="font-mono text-sm text-ink">{job.id.slice(0, 8)}</span>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-base font-black text-ink" data-job-tile-title>{title}</div>
+          <div className="mt-1 flex items-center gap-2">
+            <span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusChipClass(job.status)}`}>
+              {job.status}
+            </span>
+            <span className="font-mono text-xs text-mut">{job.id.slice(0, 8)}</span>
+          </div>
         </div>
         <button
           type="button"
@@ -899,7 +605,8 @@ function JobTile({ job, highlightCount, onOpen, onDelete }: {
           <span>{job.framesAnalyzed ?? 0} frames</span>
           <span>${(job.costUsd ?? 0).toFixed(2)}</span>
           <span>{job.decideCalls ?? 0} decide</span>
-          <span>{highlightCount} highlights</span>
+          <span data-job-tile-accepted>{acceptedCount} accepted</span>
+          {rejectedCount > 0 && <span className="text-mut" data-job-tile-rejected>{rejectedCount} rejected</span>}
           {span && <span data-job-span>{span}</span>}
         </div>
       )}
@@ -936,100 +643,6 @@ function DeleteJobDialog({ job, onCancel, onConfirm }: { job: Job; onCancel: () 
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-/** Collapsed-by-default "Rejected" section on the highlight list. Rejected
- * clips render here (not in the published feed) with a live recovery deadline
- * while they are still within the undo window before the server's TTL purge. */
-function RejectedSection({
-  highlights,
-  now,
-  ttlMs,
-  open,
-  onToggle,
-  onRecover,
-  onError,
-}: {
-  highlights: Highlight[];
-  now: number;
-  ttlMs: number;
-  open: boolean;
-  onToggle: () => void;
-  onRecover: (id: string) => void;
-  onError: (msg: string) => void;
-}) {
-  const rejected = highlights.filter((h) => h.status === "rejected");
-  if (rejected.length === 0) return null;
-
-  return (
-    <div className="mt-10">
-      <button
-        type="button"
-        onClick={onToggle}
-        data-rejected-section-toggle
-        className="flex w-full items-center justify-between rounded-lg border border-purple/40 bg-card/70 px-4 py-3 text-left transition hover:border-neon/50 hover:bg-card"
-      >
-        <span className="flex items-center gap-2 text-lg font-black text-ink">
-          {open ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
-          Rejected
-          <span className="rounded-full bg-ink/15 px-2 py-0.5 text-xs font-bold text-ink">{rejected.length}</span>
-        </span>
-        <span className="text-xs text-mut">Recoverable until auto-deleted</span>
-      </button>
-      {open && (
-        <div className="mt-4 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {rejected.map((h) => {
-            const label = recoverLabel(h.rejectedAt, ttlMs, now);
-            const recoverable = isRecoverable(h.rejectedAt, ttlMs, now);
-            return (
-              <div key={h.id} data-rejected-clip className="card card-hover overflow-hidden">
-                <div className="relative">
-                  <VideoClip src={h.clipUri} label={h.eventType} error={h.clipError} />
-                  <span className="absolute right-2 top-2 rounded-full bg-void/80 px-2 py-0.5 text-xs font-bold text-ink">rejected</span>
-                </div>
-                <div className="p-4">
-                  <div className="flex items-center justify-between">
-                    <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">{h.eventType || "EVENT"}</span>
-                    <span className="text-xs text-ink">{h.status}</span>
-                  </div>
-                  <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
-                  <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
-                  <div className="text-xs text-mut">T+{Math.round(h.start)}s → T+{Math.round(h.end)}s</div>
-                  {recoverable && label ? (
-                    <div data-recover-until className="mt-3 rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-2 text-sm font-semibold text-yellow">
-                      {label}
-                      <span className="mt-0.5 block text-xs font-normal text-mut">Reject→Accept restores this clip before the deadline.</span>
-                    </div>
-                  ) : (
-                    <div className="mt-3 rounded-lg border border-mut/30 bg-mut/10 px-3 py-2 text-sm text-mut">
-                      Recovery window expired — this clip will be deleted.
-                    </div>
-                  )}
-                  <div className="mt-3 flex gap-2">
-                    <button
-                      data-recover-button
-                      className="btn-neon flex-1"
-                      disabled={!recoverable}
-                      onClick={() => {
-                        try {
-                          onRecover(h.id);
-                        } catch (e: any) {
-                          onError(e?.message || "Recover failed");
-                        }
-                      }}
-                    >
-                      <Check className="mr-1 inline h-4 w-4" /> Recover
-                    </button>
-                    <span className="flex-1" />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
