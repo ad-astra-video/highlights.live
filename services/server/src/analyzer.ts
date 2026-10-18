@@ -387,6 +387,17 @@ export interface AnalyzerConfig {
     * timestamped frames (always >= 1); a throw/[] degrades to the rolling window. */
    resampleFrames?: (timestamp: number) => Promise<{ timestamp: number; imageB64: string }[]>;
   /**
+   * ADAAAA-6854: bounded decide concurrency for the VOD pass. `analyzeJob` runs
+   * up to this many candidate decide() calls in flight at once (the vLLM decide
+   * runner is already sized for 4-way concurrency), while delivering the accept
+   * side-effects (goal-burst suppression, clip cut, highlight record, SSE event
+   * -> decision-time billing) strictly in candidate timestamp order. Default 2;
+   * set to 1 to preserve today's fully-serial VOD behavior. Live never sets this
+   * (the live/decideWindowN=undefined path stays serial at 1 to keep the 1-5 s
+   * latency budget). `VOD_DECIDE_CONCURRENCY`.
+   */
+   decideConcurrency?: number;
+  /**
    * ADAAAA-6314 Path 2: forward the surrounding audio clip on the LIVE baseline
    * too (bounded to trigger candidates — never every frame; no `frames[]`
    * change, so live frame depth is untouched). The go-livepeer decide runner
@@ -1273,6 +1284,254 @@ export class TrackingPlanController {
 }
 
 /**
+ * ADAAAA-6854: bounded-concurrency decide dispatcher for the VOD pass.
+ *
+ * Runs up to `w` candidate decide() calls in flight at once — the vLLM decide
+ * runner is already sized for `GEMMA_MAX_CONCURRENCY=4`, so overlapping the
+ * expensive inference is exactly the throughput win the runner was provisioned
+ * for. The DECIDE calls run concurrently, but every ACCEPT side-effect
+ * (goal-burst suppression, clip cut, highlight record, SSE `highlight` event ->
+ * decision-time persist + bill + quota-debit) is delivered strictly in
+ * candidate timestamp order via an ordered reorder buffer — so parallelising
+ * the inference never reorders clip assembly, never accepts/suppresses a goal
+ * out of date order, and never double-bills (each accepted candidate fires
+ * exactly one `highlight` event).
+ *
+ * Live never uses this (w=1 / the `decideWindowN`-unset path in `analyzeJob`
+ * stays fully serial), so the live 1-5 s latency budget is untouched.
+ */
+export class OrderedDecidePipeline {
+  private readonly w: number;
+  private readonly client: PipelineClient;
+  private readonly accept: (
+    candidate: { eventType: string; timestamp: number; seq?: number; audio?: AudioCandidate["audio"]; goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean },
+    emit: { seq: number; timestamp: number },
+    decision: DecisionResult
+  ) => Promise<void>;
+  private queue: { index: number; evidence: Parameters<PipelineClient["decide"]>[0]; opts: Parameters<PipelineClient["decide"]>[1]; candidate: any; emit: { seq: number; timestamp: number } }[] = [];
+  /** In-flight decide() calls (the only thing that runs concurrently). */
+  private active = 0;
+  /** Successful decide results, keyed by submission index, awaiting their turn to
+   * be accepted (a reorder buffer: a result is only accepted once every earlier
+   * result has been accepted/discarded). */
+  private results = new Map<number, { decision: DecisionResult; candidate: any; emit: { seq: number; timestamp: number } }>();
+  /** Next result index to accept (accepted strictly in submission/timestamp order). */
+  private nextAccept = 0;
+  private total = 0;
+  /** True while one accept side-effect is running — accepts are serialized, so
+   * clip cut / highlight record / SSE event / billing never reorder. */
+  private accepting = false;
+  /** Set on the first decide or accept failure. Once set the pipeline stops
+   * launching decides and delivering accepts, and `drain()` rejects — mirroring
+   * the serial path where a decide/accept failure aborts the whole job. */
+  private aborting = false;
+  private firstError?: Error;
+  private settleResolve?: () => void;
+  private settled = false;
+
+  constructor(
+    client: PipelineClient,
+    w: number,
+    accept: (candidate: any, emit: { seq: number; timestamp: number }, decision: DecisionResult) => Promise<void>
+  ) {
+    this.client = client;
+    this.w = Math.max(1, w);
+    this.accept = accept;
+  }
+
+  /** Enqueue one candidate decide. Returns immediately (does NOT block the
+   * frame-analysis loop); the decide + ordered accept run in the pipeline. */
+  submit(
+    candidate: { eventType: string; timestamp: number; seq?: number; audio?: AudioCandidate["audio"]; goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean },
+    emit: { seq: number; timestamp: number },
+    evidence: Parameters<PipelineClient["decide"]>[0],
+    opts: Parameters<PipelineClient["decide"]>[1]
+  ): void {
+    if (this.aborting) return; // after a failure nothing is launched or accepted
+    const index = this.total++;
+    this.queue.push({ index, evidence, opts, candidate, emit });
+    this.pump();
+  }
+
+  /** True once any decide or accept failed — the frame loop checks this to stop
+   * analyzing the rest of the job (mirrors the serial path, which aborts on the
+   * first failure). */
+  get aborted(): boolean {
+    return this.aborting;
+  }
+
+  private pump(): void {
+    while (!this.aborting && this.active < this.w && this.queue.length > 0) {
+      const job = this.queue.shift()!;
+      this.active++;
+      void this.runJob(job);
+    }
+  }
+
+  private async runJob(job: { index: number; evidence: any; opts: any; candidate: any; emit: { seq: number; timestamp: number } }): Promise<void> {
+    try {
+      const decision = await this.client.decide(job.evidence, job.opts);
+      this.results.set(job.index, { decision, candidate: job.candidate, emit: job.emit });
+    } catch (e) {
+      this.abort(e);
+    } finally {
+      this.active--;
+      this.pump();
+      this.drainReady();
+      this.maybeSettle();
+    }
+  }
+
+  /** Settle the pipeline with `err`, drop anything not yet accepted, and stop
+   * launching/accepting further work. In-flight decides are left to finish (so
+   * `drain()` can resolve once they settle); their results are discarded, never
+   * accepted, because a decide failure aborts the whole job (as in the serial
+   * path). `nextAccept` is set to `total` so settlement cannot be blocked by a
+   * failed index that never lands a result. */
+  private abort(err: unknown): void {
+    if (!this.firstError) this.firstError = err instanceof Error ? err : new Error(String(err));
+    this.aborting = true;
+    this.queue.length = 0;
+    this.results.clear();
+    this.nextAccept = this.total;
+    this.maybeSettle();
+  }
+
+  /** Deliver accepted highlights in candidate (submission/timestamp) order,
+   * one at a time. Results that arrive out of order are buffered until their
+   * predecessor has been accepted; a failure stops delivery. */
+  private drainReady(): void {
+    if (this.accepting || this.aborting) return;
+    if (!this.results.has(this.nextAccept)) return;
+    const r = this.results.get(this.nextAccept)!;
+    this.results.delete(this.nextAccept);
+    this.nextAccept++;
+    this.accepting = true;
+    this.accept(r.candidate, r.emit, r.decision)
+      .catch((e) => this.abort(e))
+      .finally(() => {
+        this.accepting = false;
+        this.drainReady();
+        this.maybeSettle();
+      });
+  }
+
+  private maybeSettle(): void {
+    if (this.settled) return;
+    const allDecidesDone = this.queue.length === 0 && this.active === 0;
+    const allAccepted = this.aborting || this.nextAccept >= this.total;
+    if (allDecidesDone && allAccepted && !this.accepting) {
+      this.settled = true;
+      this.settleResolve?.();
+    }
+  }
+
+  /** Wait for every submitted decide + ordered accept to complete. Rejects if
+   * any decide or accept failed (mirrors the serial path: a decide failure
+   * aborts the job). Never hangs: a failure settles the pipeline (see `abort`). */
+  async drain(): Promise<void> {
+    if (this.queue.length === 0 && this.active === 0 && this.results.size === 0 && !this.accepting) {
+      if (this.firstError) throw this.firstError;
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      this.settleResolve = resolve;
+    });
+    if (this.firstError) throw this.firstError;
+  }
+}
+
+/** Build the decide() evidence + opts for a single candidate, exactly as the
+ * serial paths produce it so parallelisation never changes an individual
+ * verdict (ADAAAA-6854). The (slow, optional) burst re-sample + window reads
+ * happen here — at dispatch time — so the payload is a faithful snapshot
+ * regardless of how many later frames stream in while the decide is in flight. */
+async function buildVideoDecideRequest(
+  cfg: AnalyzerConfig,
+  run: LiveRunShared,
+  evidenceTracker: EvidenceTracker,
+  candidate: NonNullable<ObservationResult["candidate"]>,
+  observation: ObservationResult["observation"],
+  anchoredImage: string | undefined
+): Promise<{ evidence: Parameters<PipelineClient["decide"]>[0]; opts: Parameters<PipelineClient["decide"]>[1] }> {
+  // I7 / ADAAAA-6361: re-sample a higher-FPS burst around the trigger on the
+  // detail-first VOD pass so the crossing instant is in the decide window.
+  let burstFrames: { role: string; base64: string }[] | undefined;
+  if (cfg.decideWindowN !== undefined && cfg.resampleFrames) {
+    try {
+      const burst = await cfg.resampleFrames(candidate.timestamp);
+      if (burst?.length) burstFrames = burst.map((f) => ({ role: "full", base64: f.imageB64 }));
+    } catch {
+      /* degrade to rolling window */
+    }
+  }
+  const evidence: Parameters<PipelineClient["decide"]>[0] = {
+    eventType: candidate.eventType,
+    trackCount: evidenceTracker.trackCount,
+    maxVelocity: evidenceTracker.maxVelocity,
+    ocrHits: observation?.ocr?.length ?? 0,
+    reaction: buildReactionEvidence(candidate, evidenceTracker.trackCount),
+    goalCrossed: candidate.goalCrossed,
+    ballOutcome: candidate.ballOutcome,
+    scoreBoardChanged: candidate?.scoreBoardChanged,
+    // I4 / ADAAAA-6361: forward per-detection geometry + audio level curve on
+    // the detail-first (VOD) pass.
+    ...(cfg.decideWindowN !== undefined ? buildRichEvidence(run, candidate.timestamp) : {}),
+  };
+  const opts = detailDecideOpts(cfg, run, anchoredImage, { timestamp: candidate.timestamp, peakAudioTs: candidate.audio?.ts }, burstFrames);
+  return { evidence, opts };
+}
+
+/** Accept (or suppress) a decided candidate with exactly the serial semantics:
+ * goal-burst suppression applied in timestamp order, then cut + record + SSE
+ * `highlight` event (which drives decision-time persist/bill/quota exactly
+ * once). Shared by the serial (live / w=1) inline path and the ordered VOD
+ * pipeline so both are byte-for-byte identical. */
+async function acceptVideoDecision(
+  run: LiveRunShared,
+  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cfg: AnalyzerConfig,
+  onEvent: ((ev: AnalyzeEvent) => void) | undefined,
+  emit: { seq: number; timestamp: number },
+  candidate: { eventType: string; timestamp: number },
+  decision: DecisionResult
+): Promise<void> {
+  if (!isAcceptedHighlight(decision, cfg.preferLabels)) return;
+  // ADAAAA-6610 temporal burst suppression (see decideOnCandidate): a GOAL
+  // accepted within `goalBurstWindowS` of a previous one is a start-of-clip
+  // burst duplicate and is dropped, not recorded.
+  if (run.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType)) {
+    onEvent?.({
+      seq: emit.seq,
+      timestamp: emit.timestamp,
+      type: "candidateBlocked",
+      candidate: { eventType: decision.eventType ?? candidate.eventType, timestamp: candidate.timestamp },
+      reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
+    });
+    return;
+  }
+  const { clipId, clipUri } = await cut(candidate.timestamp);
+  const rec: HighlightRecord = {
+    id: randomUUID(),
+    jobId: cfg.jobId,
+    clipUri,
+    start: Math.max(0, candidate.timestamp - cfg.clipBeforeS),
+    end: candidate.timestamp + cfg.clipAfterS,
+    eventType: decision.eventType,
+    score: decision.score,
+    reason: decision.reason,
+    // Increment F / ADAAAA-6465: near-miss surface at a lower score, labeled
+    // distinctly via the outcome/nearMiss flag.
+    outcome: decision.outcome,
+    nearMiss: decision.nearMiss,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+  };
+  run.highlights.push(rec);
+  onEvent?.({ seq: emit.seq, timestamp: emit.timestamp, type: "highlight", highlight: rec });
+}
+
+/**
  * Route ONE candidate through the decide stage on the anchored frame (INC-2 /
  * ADAAAA-4325 slice 4). Shared by the video /analyze leg and the Stage-A audio
  * tap leg so both: emit a live-console candidate, anchor the decide frame image
@@ -1443,10 +1702,27 @@ export async function analyzeJob(
     recheckIntervalSeconds: cfg.recheckIntervalSeconds,
     planMode: cfg.planMode ?? "live",
   });
+  // ADAAAA-6854: bounded decide concurrency for the VOD pass. The frame loop
+  // dispatches candidate decides into a W-wide pool (default 2) without
+  // awaiting them, so the next frames' perceive analysis overlaps the in-flight
+  // vLLM decide. Accept side-effects (burst suppression, cut, record, SSE
+  // event -> billing) are delivered in candidate timestamp order. Live never
+  // sets decideConcurrency and its `decideWindowN` is undefined, so it stays on
+  // the fully-serial inline path below (W=1) — the 1-5 s latency budget holds.
+  const decidePipeline = new OrderedDecidePipeline(
+    client,
+    cfg.decideConcurrency ?? 1,
+    (candidate, emit, decision) => acceptVideoDecision(run, cut, cfg, onEvent, emit, candidate, decision)
+  );
   let framesAnalyzed = 0;
   let planApplied = false;
   try {
     for await (const frame of iterFrames) {
+      // ADAAAA-6854: fail fast on a decide/accept failure — stop analyzing the
+      // rest of the job (the pipeline has aborted; `drain()` will reject below).
+      // The previous frame's `await client.analyze` yielded to the event loop, so
+      // the async abort has landed by the time we reach here.
+      if (decidePipeline.aborted) break;
       framesAnalyzed++;
       run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
       let res!: ObservationResult;
@@ -1526,66 +1802,28 @@ export async function analyzeJob(
         // so resolve that frame's image from the rolling window — a candidate
         // fired on the late post-strike frame must still be judged on the strike.
         const anchoredImage = run.anchor(res.candidate.timestamp) ?? frame.imageB64;
-        // I7 / ADAAAA-6361: re-sample a higher-FPS burst around the trigger on the
-        // detail-first VOD pass so the crossing instant is in the decide window.
-        let burstFrames: { role: string; base64: string }[] | undefined;
-        if (cfg.decideWindowN !== undefined && cfg.resampleFrames) {
-          try {
-            const burst = await cfg.resampleFrames(res.candidate.timestamp);
-            if (burst?.length) burstFrames = burst.map((f) => ({ role: "full", base64: f.imageB64 }));
-          } catch {
-            /* degrade to rolling window */
-          }
-        }
-        const decision = await client.decide(
-          {
-            eventType: res.candidate.eventType,
-            trackCount: evidence.trackCount,
-            maxVelocity: evidence.maxVelocity,
-            ocrHits: res.observation?.ocr?.length ?? 0,
-            reaction: buildReactionEvidence(res.candidate, evidence.trackCount),
-            goalCrossed: res.candidate.goalCrossed,
-            ballOutcome: res.candidate.ballOutcome,
-            scoreBoardChanged: res.candidate?.scoreBoardChanged,
-            // I4 / ADAAAA-6361: forward per-detection geometry + audio level
-            // curve on the detail-first (VOD) pass.
-            ...(cfg.decideWindowN !== undefined ? buildRichEvidence(run, res.candidate.timestamp) : {}),
-          },
-          detailDecideOpts(cfg, run, anchoredImage, { timestamp: res.candidate.timestamp, peakAudioTs: res.candidate.audio?.ts }, burstFrames)
+        // Build the decide payload (evidence + opts) as a faithful snapshot at
+        // dispatch time, then either dispatch it to the bounded pool (VOD
+        // concurrency) or run it inline (live / w=1) — byte-identical verdict
+        // either way (AC2).
+        const { evidence: decideEvidence, opts: decideOpts } = await buildVideoDecideRequest(
+          cfg,
+          run,
+          evidence,
+          res.candidate,
+          res.observation,
+          anchoredImage
         );
-        if (isAcceptedHighlight(decision, cfg.preferLabels)) {
-          // ADAAAA-6610 temporal burst suppression (see decideOnCandidate): a
-          // GOAL accepted within `goalBurstWindowS` of a previous one is a
-          // start-of-clip burst duplicate and is dropped, not recorded.
-          if (run.suppressIfGoalBurst(res.candidate.timestamp, decision.eventType ?? res.candidate.eventType)) {
-            onEvent?.({
-              seq: frame.seq,
-              timestamp: frame.timestamp,
-              type: "candidateBlocked",
-              candidate: { eventType: decision.eventType ?? res.candidate.eventType, timestamp: res.candidate.timestamp },
-              reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
-            });
-          } else {
-            const { clipId, clipUri } = await cut(res.candidate.timestamp);
-            const rec: HighlightRecord = {
-              id: randomUUID(),
-              jobId: cfg.jobId,
-              clipUri,
-              start: Math.max(0, res.candidate.timestamp - cfg.clipBeforeS),
-              end: res.candidate.timestamp + cfg.clipAfterS,
-              eventType: decision.eventType,
-              score: decision.score,
-              reason: decision.reason,
-              // Increment F / ADAAAA-6465: near-miss surface at a lower score,
-              // labeled distinctly via the outcome/nearMiss flag.
-              outcome: decision.outcome,
-              nearMiss: decision.nearMiss,
-              status: "pending",
-              createdAt: new Date().toISOString(),
-            };
-            highlights.push(rec);
-            onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "highlight", highlight: rec });
-          }
+        if (cfg.decideWindowN !== undefined && (cfg.decideConcurrency ?? 1) > 1) {
+          // ADAAAA-6854: VOD bounded-concurrency path — do NOT await the decide;
+          // the ordered pipeline runs it in the W-wide pool and delivers accept
+          // side-effects in candidate timestamp order (clips/billing exactly
+          // once, burst suppression in order).
+          decidePipeline.submit(res.candidate, { seq: frame.seq, timestamp: frame.timestamp }, decideEvidence, decideOpts);
+        } else {
+          // Live (decideWindowN unset) / w=1 opt-out: fully serial, unchanged.
+          const decision = await client.decide(decideEvidence, decideOpts);
+          await acceptVideoDecision(run, cut, cfg, onEvent, { seq: frame.seq, timestamp: frame.timestamp }, res.candidate, decision);
         }
       }
     }
@@ -1599,5 +1837,9 @@ export async function analyzeJob(
       await client.stopPerceive(s).catch(() => {});
     }
   }
+  // ADAAAA-6854: wait for every in-flight VOD decide + ordered accept (cut,
+  // record, SSE `highlight` -> decision-time billing) before returning. Throws
+  // if any decide/accept failed, aborting the job like the serial path.
+  await decidePipeline.drain();
   return { sessionId, highlights, framesAnalyzed };
 }
