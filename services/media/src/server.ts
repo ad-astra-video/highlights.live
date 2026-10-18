@@ -19,6 +19,11 @@ import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
 import { WebRtcIngestSession } from "./rtc";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import type { CandidateEvent, HighlightRecord, MediaResultEvent } from "@highlights/events";
+
+const exec = promisify(execFile);
 
 interface ActiveStream {
   streamId: string;
@@ -46,6 +51,23 @@ interface ActiveStream {
     /** End (seconds) of the last analysis window already relayed. */
     lastEventTs?: number;
   };
+  /** Phase 0b (ADAAAA-6880) per-candidate decide + result-event accumulator:
+   *  counts decides accepted/rejected and tracks the perceive session wall
+   *  clock for the `cost` result event. Lazily initialized on the first
+   *  candidate so unset never wastes memory on plain observation streams. */
+  phase0?: Phase0Accumulator;
+}
+
+/** Per-session Phase 0b state: candidate/decide tallies + perceive session clock
+ *  for the stage-A metrics and cost result events. */
+interface Phase0Accumulator {
+  totalCandidates: number;
+  accepted: number;
+  rejected: number;
+  /** Onset->fire latency samples (s) reported on audio-gate candidates. */
+  latencySamples: number[];
+  /** Epoch ms when the perceive session was provisioned (cost basis). */
+  perceivedStartedAt: number;
 }
 
 export interface MediaServerOptions {
@@ -94,6 +116,29 @@ export interface MediaServerOptions {
   analysisEventCadenceMs?: number;
   /** Disable the live-analysis relay entirely (default enabled). */
   analysisEnabled?: boolean;
+  /**
+   * Gemma decide runner base URL (Phase 0b / ADAAAA-6880). When set, the media
+   * server fires one per-candidate decide POST to `${decideUrl}/app/highlight`
+   * (mirroring the server-side DirectAdapter.decide) and on acceptance cuts a
+   * clip from the media server's recorded session and reports a typed
+   * `highlight` result event back over the observe callback. When unset,
+   * candidates are relayed only (no decide fired).
+   */
+  decideUrl?: string;
+  /** Optional bearer token sent as `Authorization: Bearer` on decide calls. */
+  decideAuthToken?: string;
+  /** Cost of one Gemma decide call (USD) for the `cost` result event (default 0.05). */
+  decideFee?: number;
+  /** Perceive runner cost (USD/hour) for the `cost` result event (default 0.10). */
+  perceivePerHourUsd?: number;
+  /** Clip window: seconds before the candidate anchor (default 5). */
+  clipBeforeS?: number;
+  /** Clip window: seconds after the candidate anchor (default 10). */
+  clipAfterS?: number;
+  /** Directory where cut highlight clips are written (default <tmpdir>/hl-clips). */
+  clipsDir?: string;
+  /** ffmpeg binary path used to cut clips (default "ffmpeg"). */
+  ffmpegPath?: string;
 }
 
 const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
@@ -297,6 +342,27 @@ export class MediaServer {
     });
 
     app.get("/health", async () => ({ status: "ok" }));
+
+    // Phase 0b (ADAAAA-6880): serve cut highlight clips from the media node so
+    // a reported highlight clipUri is a real, fetchable URI. Path-traversal
+    // guarded: only a bare `<id>.<ext>` filename is resolved inside clipsDir.
+    app.get<{ Params: { file: string } }>("/clips/:file", async (req, reply) => {
+      const name = path.basename(req.params.file);
+      if (name !== req.params.file || !/^[A-Za-z0-9._-]+$/.test(name)) {
+        return reply.code(400).send({ error: "invalid clip name" });
+      }
+      const dir = this.opts.clipsDir || path.join(tmpdir(), "hl-clips");
+      const filePath = path.join(dir, name);
+      try {
+        const { stat } = await import("node:fs/promises");
+        const s = await stat(filePath);
+        if (!s.isFile()) return reply.code(404).send({ error: "no such clip" });
+        reply.type("application/octet-stream");
+        return reply.send(await (await import("node:fs/promises")).readFile(filePath));
+      } catch {
+        return reply.code(404).send({ error: "no such clip" });
+      }
+    });
     return app;
   }
 
@@ -347,7 +413,14 @@ export class MediaServer {
       const obs = await this.orch.readObservation(p, seq).catch(() => null);
       if (obs) {
         this.relay(stream, socket, obs);
-        void this.callback(stream, obs);
+        // Phase 0b (ADAAAA-6880): a perceive candidate published on the
+        // events-out rail drives the per-candidate decide + typed result events
+        // on the media node. Plain observations keep the legacy bare relay.
+        if (this.isCandidate(obs)) {
+          void this.handleCandidate(stream, obs);
+        } else {
+          void this.callback(stream, obs);
+        }
         return;
       }
       await sleep(250);
@@ -565,6 +638,235 @@ export class MediaServer {
       });
     } catch {
       /* observe relay is best-effort */
+    }
+  }
+
+  // ---- Phase 0b (ADAAAA-6880): per-candidate decide + typed result events ----
+
+  /** A perceive observation is a candidate when it is a typed CandidateEvent
+   *  (mode of the events-out rail) or carries a candidate envelope. Reuses the
+   *  perceive signal (eventType / trigger) rather than a parallel pipeline. */
+  private isCandidate(obs: any): boolean {
+    if (!obs || typeof obs !== "object") return false;
+    if (obs.type === "candidate") return true;
+    if (obs.candidate && typeof obs.candidate === "object") return true;
+    return false;
+  }
+
+  /**
+   * Drive one perceive candidate through the decide stage on the media node.
+   * Reports a typed `candidate` result event, fires exactly one per-candidate
+   * Gemma decide POST to `${decideUrl}/app/highlight`, and on acceptance cuts a
+   * clip from the media server's recorded session and reports a typed
+   * `highlight` result event (with a real clip URI) plus the decide verdict.
+   * Also reports cumulative `stageAMetrics` and `cost` result events.
+   * Best-effort: a decide failure never tears the stream down — it is logged
+   * and the candidate is tallied as rejected.
+   */
+  private async handleCandidate(stream: ActiveStream, obs: any) {
+    const seq = typeof obs?.seq === "number" ? obs.seq : 0;
+    const ts = typeof obs?.timestamp === "number" ? obs.timestamp : 0;
+    // Report the candidate first (typed), so the server can surface it even if
+    // no decide runner is configured (relay-only mode).
+    await this.postResult(stream, {
+      type: "candidate",
+      seq,
+      timestamp: ts,
+      candidate: obs as CandidateEvent,
+    } satisfies MediaResultEvent);
+
+    // No decide URL configured -> relay-only mode: stop here.
+    if (!this.opts.decideUrl) return;
+
+    const p0 = (stream.phase0 ??= {
+      totalCandidates: 0,
+      accepted: 0,
+      rejected: 0,
+      latencySamples: [],
+      perceivedStartedAt: Date.now(),
+    });
+    p0.totalCandidates += 1;
+    const onLat = obs?.audio?.onsetLatencyS;
+    if (typeof onLat === "number" && Number.isFinite(onLat)) p0.latencySamples.push(onLat);
+
+    let decision: any;
+    try {
+      decision = await this.fireDecide(stream, obs, seq, ts);
+    } catch (e: any) {
+      console.error("[media] decide failed for stream %s: %s", stream.streamId, String(e?.message || e));
+      decision = { isHighlight: false, score: 0 };
+    }
+
+    if (decision?.isHighlight) {
+      p0.accepted += 1;
+      let clipUri = "";
+      let clipError: string | undefined;
+      try {
+        const clip = await this.cutClipFor(stream, ts);
+        clipUri = clip.clipUri;
+        clipError = clip.error;
+      } catch (e: any) {
+        clipError = String(e?.message || e);
+      }
+      const rec: HighlightRecord = {
+        id: randomUUID(),
+        jobId: stream.jobId,
+        clipUri,
+        start: Math.max(0, ts - (this.opts.clipBeforeS ?? 5)),
+        end: ts + (this.opts.clipAfterS ?? 10),
+        eventType: decision.eventType ?? obs.eventType,
+        score: decision.score ?? 0,
+        reason: decision.reason,
+        outcome: decision.outcome,
+        nearMiss: decision.nearMiss,
+        status: "pending",
+        ...(clipError ? { clipError } : {}),
+        createdAt: new Date().toISOString(),
+      };
+      await this.postResult(stream, {
+        type: "highlight",
+        seq,
+        timestamp: ts,
+        highlight: rec,
+        decide: decision,
+      } satisfies MediaResultEvent);
+    } else {
+      p0.rejected += 1;
+    }
+
+    await this.postResult(stream, {
+      type: "stageAMetrics",
+      timestamp: ts,
+      metrics: this.stageAMetricsSnapshot(p0),
+    } satisfies MediaResultEvent);
+    await this.postResult(stream, {
+      type: "cost",
+      timestamp: ts,
+      costUsd: this.costUsd(stream, p0),
+      perceiveSessionS: (Date.now() - p0.perceivedStartedAt) / 1000,
+    } satisfies MediaResultEvent);
+  }
+
+  /**
+   * Fire the Gemma decide runner for one candidate, mirroring the server-side
+   * DirectAdapter.decide POST to `${decideUrl}/app/highlight`. Returns the
+   * parsed verdict; throws when the runner is unreachable or answers non-2xx.
+   */
+  private async fireDecide(
+    stream: ActiveStream,
+    obs: any,
+    _seq: number,
+    _ts: number
+  ): Promise<{ isHighlight: boolean; score?: number; eventType?: string; reason?: string; outcome?: string; nearMiss?: boolean }> {
+    const url = `${(this.opts.decideUrl || "").replace(/\/$/, "")}/app/highlight`;
+    const payload: Record<string, unknown> = {
+      sessionId: stream.provisioned.sessionId,
+      eventType: obs?.eventType || "AUDIO",
+      timestamp: typeof obs?.timestamp === "number" ? obs.timestamp : 0,
+      gameHint: "",
+      reasoningEffort: "none",
+      evidence: {
+        eventType: obs?.eventType || "AUDIO",
+        trackCount: 0,
+        maxVelocity: 0,
+        ocrHits: 0,
+        goalCrossed: obs?.goalCrossed,
+        ballOutcome: obs?.ballOutcome,
+        scoreBoardChanged: obs?.scoreBoardChanged,
+      },
+      images: [],
+      frames: [],
+      audioB64: "",
+      audioSampleRate: 16_000,
+    };
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.opts.decideAuthToken) headers["Authorization"] = `Bearer ${this.opts.decideAuthToken}`;
+    const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+    if (!r.ok) throw new Error(`decide failed: HTTP ${r.status}`);
+    return (await r.json()) as any;
+  }
+
+  /** Cut a highlight clip from the media server's recorded session via ffmpeg.
+   *  Returns the clip URI (segment served from /clips) or an error — a missing
+   *  recording / cut failure degrades to an explicit clipError (never a silent
+   *  empty clipUri, mirroring the server-side cut contract). */
+  private async cutClipFor(
+    stream: ActiveStream,
+    ts: number
+  ): Promise<{ clipUri: string; error?: string }> {
+    const rec = stream.recording;
+    if (!rec) {
+      return { clipUri: "", error: "no session recording to cut from" };
+    }
+    const ext = EXT_BY_MIME[rec.mime] ?? "webm";
+    const clipId = randomUUID();
+    const clipsDir = this.opts.clipsDir || path.join(tmpdir(), "hl-clips");
+    mkdirSync(clipsDir, { recursive: true });
+    const outPath = path.join(clipsDir, `${clipId}.${ext}`);
+    const startS = Math.max(0, ts - (this.opts.clipBeforeS ?? 5));
+    const durationS = Math.max(1, (this.opts.clipAfterS ?? 10) + (this.opts.clipBeforeS ?? 5));
+    await exec(this.opts.ffmpegPath || "ffmpeg", [
+      "-y",
+      "-ss", String(startS),
+      "-t", String(durationS),
+      "-i", rec.path,
+      "-c", "copy",
+      "-avoid_negative_ts", "make_zero",
+      outPath,
+    ]);
+    const clipUri = `${(this.opts.publicBaseUrl || "").replace(/\/$/, "")}/clips/${clipId}.${ext}`;
+    return { clipUri };
+  }
+
+  /** Stage-A metrics snapshot from the per-session accumulator (INC-2 contract:
+   *  accepted/rejected/fpRate over the candidates the decide stage judged). */
+  private stageAMetricsSnapshot(p0: Phase0Accumulator) {
+    const totalCandidates = p0.totalCandidates;
+    const accepted = p0.accepted;
+    const rejected = p0.rejected;
+    const judged = accepted + rejected;
+    const fpRate = judged > 0 ? rejected / judged : 0;
+    const lat = p0.latencySamples.length
+      ? p0.latencySamples.reduce((a, b) => a + b, 0) / p0.latencySamples.length
+      : 0;
+    const maxLat = p0.latencySamples.length ? Math.max(...p0.latencySamples) : 0;
+    const sorted = [...p0.latencySamples].sort((a, b) => a - b);
+    const pct = (q: number) =>
+      sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : 0;
+    return {
+      totalCandidates,
+      accepted,
+      rejected,
+      fpRate: Math.round(fpRate * 1000) / 1000,
+      meanOnsetLatencyS: Math.round(lat * 1000) / 1000,
+      maxOnsetLatencyS: Math.round(maxLat * 1000) / 1000,
+      p50LatencyS: Math.round(pct(0.5) * 1000) / 1000,
+      p95LatencyS: Math.round(pct(0.95) * 1000) / 1000,
+      gemmaFpRate: Math.round(fpRate * 1000) / 1000,
+      fpRateWithinBudget: fpRate <= 0.6,
+    };
+  }
+
+  /** Cost of the Phase 0b pass so far (decide fee X calls + perceive session
+   *  time), mirroring the server-side cost model. */
+  private costUsd(stream: ActiveStream, p0: Phase0Accumulator): number {
+    const decideFee = this.opts.decideFee ?? 0.05;
+    const perHour = this.opts.perceivePerHourUsd ?? 0.1;
+    const perceiveSessionS = Math.max(0, (Date.now() - p0.perceivedStartedAt) / 1000);
+    return Math.round((decideFee * p0.totalCandidates + (perceiveSessionS / 3600) * perHour) * 10000) / 10000;
+  }
+
+  /** POST a typed MediaResultEvent to `{callbackBase}/jobs/{jobId}/observe`. */
+  private async postResult(stream: ActiveStream, ev: MediaResultEvent) {
+    if (!this.opts.callbackBase || !stream.jobId) return;
+    try {
+      await fetch(`${this.opts.callbackBase}/jobs/${stream.jobId}/observe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ev),
+      });
+    } catch {
+      /* result relay is best-effort */
     }
   }
 

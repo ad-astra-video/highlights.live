@@ -482,6 +482,16 @@ services:
       - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-https://highlights-media.dpn.gg}
       # Release a provisioned-but-never-used perceive slot after this long.
       - MEDIA_PROVISION_NO_CLIENT_MS=${MEDIA_PROVISION_NO_CLIENT_MS:-60000}
+      # Phase 0b (ADAAAA-6880): the media server fires per-candidate Gemma
+      # decide calls to DECIDE_URL (mirroring the server's DirectAdapter.decide)
+      # and cuts clips from its recorded session. Optional bearer token for a
+      # gated decide runner; clip window + cost knobs for the result events.
+      - DECIDE_URL=${DECIDE_URL:-http://decide:8081}
+      - DECIDE_AUTH_TOKEN=${DECIDE_AUTH_TOKEN:-}
+      - MEDIA_CLIP_BEFORE_S=${MEDIA_CLIP_BEFORE_S:-5}
+      - MEDIA_CLIP_AFTER_S=${MEDIA_CLIP_AFTER_S:-10}
+      - DECIDE_FEE=${DECIDE_FEE:-0.05}
+      - PERCEIVE_PER_HOUR_USD=${PERCEIVE_PER_HOUR_USD:-0.1}
     ports:
       - "4070:4070"
     depends_on:
