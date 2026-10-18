@@ -45,6 +45,25 @@ export interface DrawTrack {
   label?: string;
   selected?: boolean;
   accuracy?: number;
+  // ADAAAA-6966/6967: a track whose object is not present on this frame must not
+  // have its stale last-known box drawn. `lostFrames` is the number of
+  // consecutive frames the perception tracker failed to match the object (the
+  // tracker keeps a lost track alive for `lost_before_evict` frames and re-emits
+  // its last-known bbox), and `onScreen: false` is the explicit off-screen flag.
+  // Both optional so callers/observations without these fields keep the pre-fix
+  // behavior (box always drawn).
+  lostFrames?: number;
+  onScreen?: boolean;
+}
+
+// ADAAAA-6966/6967: a detection box may only be drawn while its object is on
+// screen. An object with `lostFrames > 0` (or an explicit `onScreen === false`)
+// is no longer present on this frame, so its last-known box is stale and must
+// not trail onto post-exit frames. Returns true when the object is on screen /
+// the track has no loss signal (preserves legacy behaviour for shapes without
+// these fields).
+export function isTrackOnScreen(t: { lostFrames?: number; onScreen?: boolean }): boolean {
+  return (t.lostFrames ?? 0) <= 0 && t.onScreen !== false;
 }
 
 export const PALETTE = ["#22d3ee", "#f472b6", "#a3e635", "#fbbf24", "#a78bfa", "#fb7185", "#38bdf8", "#fb923c"];
@@ -97,6 +116,10 @@ export function drawFrameWithBoxes(
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(img, 0, 0, w, h);
   tracks.forEach((t) => {
+    // ADAAAA-6966/6967: don't stroke the stale last-known box once the object is
+    // no longer on this frame (lostFrames > 0 or onScreen === false). The frame
+    // itself is still drawn; only the stale box is suppressed.
+    if (!isTrackOnScreen(t)) return;
     const [x1, y1, x2, y2] = t.bbox;
     const selected = !!t.selected;
     const color = selected ? "#fbbf24" : PALETTE[t.slot % PALETTE.length];
@@ -109,6 +132,74 @@ export function drawFrameWithBoxes(
     const shown = resolveTrackLabel(t);
     const text = `${shown}#${t.slot}${selected ? " ●" : ""}${acc}`;
     drawLabel(ctx, text, x1 * w, y1 * h, color, fontPx, w, h);
+  });
+}
+
+// ADAAAA-6974: cover-crop transform for the enlarged lightbox so the frame
+// fills the full modal viewport edge-to-edge (no letterbox bars). The image is
+// scaled by the larger of its two axis ratios and centered, cropping whichever
+// axis overflows. This is the canvas equivalent of `object-fit: cover`.
+export interface CoverTransform {
+  scale: number;
+  dx: number;
+  dy: number;
+  imgW: number; // natural width of the source image (px)
+  imgH: number; // natural height of the source image (px)
+}
+
+export function coverTransform(imgW: number, imgH: number, w: number, h: number): CoverTransform {
+  const scale = Math.max(w / imgW, h / imgH);
+  const drawW = imgW * scale;
+  const drawH = imgH * scale;
+  return { scale, dx: (w - drawW) / 2, dy: (h - drawH) / 2, imgW, imgH };
+}
+
+// Map a normalized image-space point (u,v in 0..1) into the canvas coordinate
+// space under `ct` (cover-crop transform). Used to keep detection-box hit-testing
+// aligned with the full-bleed rendered image.
+export function coverPoint(ct: CoverTransform, u: number, v: number): { x: number; y: number } {
+  return { x: ct.dx + u * ct.imgW * ct.scale, y: ct.dy + v * ct.imgH * ct.scale };
+}
+
+// Full-bleed renderer for the enlarged lightbox (ADAAAA-6974): draws the frame
+// covering the entire `w x h` viewport with `object-fit: cover` semantics, then
+// draws every detection box + legible label positioned relative to the covered
+// (possibly cropped) image so boxes/labels stay correctly aligned and legible.
+export function drawFrameFullBleed(
+  canvas: HTMLCanvasElement,
+  img: HTMLImageElement,
+  tracks: DrawTrack[],
+  w: number,
+  h: number,
+  fontPx: number,
+  pixelRatio: number,
+  withLabels = true
+) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const imgW = img.naturalWidth || img.width || w;
+  const imgH = img.naturalHeight || img.height || h;
+  const ct = coverTransform(imgW, imgH, w, h);
+  ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  // Draw the image to cover the canvas (centered crop of the overflow).
+  ctx.drawImage(img, ct.dx, ct.dy, imgW * ct.scale, imgH * ct.scale);
+  tracks.forEach((t) => {
+    const [x1, y1, x2, y2] = t.bbox;
+    const selected = !!t.selected;
+    const color = selected ? "#fbbf24" : PALETTE[t.slot % PALETTE.length];
+    const topLeft = coverPoint(ct, x1, y1);
+    const bottomRight = coverPoint(ct, x2, y2);
+    const bw = bottomRight.x - topLeft.x;
+    const bh = bottomRight.y - topLeft.y;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = selected ? 3 : 2;
+    ctx.strokeRect(topLeft.x, topLeft.y, bw, bh);
+    if (!withLabels) return;
+    const acc = t.accuracy !== undefined && t.accuracy !== null ? ` ${Math.round(t.accuracy * 100)}%` : "";
+    const shown = resolveTrackLabel(t);
+    const text = `${shown}#${t.slot}${selected ? " ●" : ""}${acc}`;
+    drawLabel(ctx, text, topLeft.x, topLeft.y, color, fontPx, w, h);
   });
 }
 

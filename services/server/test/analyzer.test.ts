@@ -5,6 +5,7 @@ import {
   EvidenceTracker,
   LiveRunShared,
   decideOnCandidate,
+  eventTypeForOutcome,
   SessionLostError,
   pcmInt16ToWavB64,
   rmsNormalized,
@@ -595,6 +596,64 @@ describe("analyzeJob", () => {
     expect(plan).toBeDefined();
     expect(plan.maxTracks).toBe(3);
     expect(plan.targets.map((t: any) => t.label)).toEqual(["player", "soccer ball"]);
+  });
+});
+
+describe("ADAAAA-6969: non-goal highlight label never defaults to GOAL", () => {
+  it("eventTypeForOutcome derives the true label from the outcome class", () => {
+    expect(eventTypeForOutcome("scoring_play", "GOAL")).toBe("GOAL");
+    expect(eventTypeForOutcome("near_miss", "GOAL")).toBe("NEAR_MISS");
+    expect(eventTypeForOutcome("big_play", "GOAL")).toBe("BIG_PLAY");
+    // Unknown / absent outcome defers to the candidate/model label.
+    expect(eventTypeForOutcome(undefined, "GOAL")).toBe("GOAL");
+  });
+
+  it("records a requested near-miss highlight with eventType NEAR_MISS, not GOAL", async () => {
+    const { client } = fakeClient({
+      decide: async () =>
+        ({ isHighlight: true, score: 45, eventType: "GOAL", outcome: "near_miss", nearMiss: true } as any),
+    });
+    const shared = new LiveRunShared();
+    for (let i = 0; i <= 4; i++) shared.addFrame(i, i, `img${i}`);
+    shared.evidence.step({ tracks: [{ trackId: "a", slot: 0, bbox: [0, 0, 0.1, 0.1], kind: "player", lostFrames: 0 }] as any });
+    await decideOnCandidate(
+      client,
+      shared,
+      async () => ({ clipId: "c", clipUri: "/clips/c.mp4" }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", preferLabels: ["saves"] },
+      { eventType: "GOAL", timestamp: 3, seq: 99 },
+      undefined,
+      { seq: 99, timestamp: 3 }
+    );
+    expect(shared.highlights).toHaveLength(1);
+    // AC1: label reflects the near_miss outcome — never a stale candidate GOAL.
+    expect(shared.highlights[0]).toMatchObject({
+      eventType: "NEAR_MISS",
+      outcome: "near_miss",
+      nearMiss: true,
+      status: "pending",
+    });
+    expect(shared.highlights[0].eventType).not.toBe("GOAL");
+  });
+
+  it("still records a true scoring_play highlight with eventType GOAL (no regression)", async () => {
+    const { client } = fakeClient({
+      decide: async () =>
+        ({ isHighlight: true, score: 80, eventType: "GOAL", outcome: "scoring_play" } as any),
+    });
+    const shared = new LiveRunShared();
+    for (let i = 0; i <= 4; i++) shared.addFrame(i, i, `img${i}`);
+    await decideOnCandidate(
+      client,
+      shared,
+      async () => ({ clipId: "c", clipUri: "/clips/c.mp4" }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", preferLabels: ["goals"] },
+      { eventType: "GOAL", timestamp: 3, seq: 99 },
+      undefined,
+      { seq: 99, timestamp: 3 }
+    );
+    expect(shared.highlights).toHaveLength(1);
+    expect(shared.highlights[0]).toMatchObject({ eventType: "GOAL", outcome: "scoring_play" });
   });
 });
 

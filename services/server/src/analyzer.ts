@@ -216,6 +216,38 @@ function requestedOutcomes(preferLabels?: string[]): Set<string> {
   return out;
 }
 
+/** ADAAAA-6969: derive the TRUE public `eventType` label from the outcome
+ * taxonomy member. A non-scoring highlight (`near_miss` / `big_play`) is never
+ * published as "GOAL" — the label reflects the outcome class (NEAR_MISS /
+ * BIG_PLAY), so a keeper save / near-miss surfaces as a distinct non-goal
+ * highlight. A frame-confirmed `scoring_play` stays "GOAL". Any other / unknown
+ * outcome defers to `fallback` (the candidate/model label).
+ *
+ * Kept in sync with `event_type_for_outcome` in services/decide/app/gemma.py
+ * (ADAAAA-6969) so the public label and the decide-note always agree. */
+export function eventTypeForOutcome(
+  outcome: DecisionResult["outcome"],
+  fallback?: string
+): string | undefined {
+  switch (outcome) {
+    case "scoring_play":
+      return "GOAL";
+    case "near_miss":
+      return "NEAR_MISS";
+    case "big_play":
+      return "BIG_PLAY";
+    default:
+      return fallback;
+  }
+}
+
+/** ADAAAA-6969: the eventType a highlight carries: the outcome-derived label
+ * when the outcome is known (never a stale candidate/model "GOAL" on a
+ * non-scoring class), else the decision's own eventType / candidate type. */
+function highlightEventType(decision: DecisionResult, fallback?: string): string {
+  return eventTypeForOutcome(decision.outcome, decision.eventType ?? fallback) ?? "";
+}
+
 /**
  * ADAAAA-6598: the single server-side accept gate. ONLY a frame-confirmed
  * scoring_play is a board-accepted GOAL highlight. A near_miss / big_play /
@@ -1554,7 +1586,7 @@ function buildCandidateNote(
       jobId: cfg.jobId,
       seq: candidate.seq ?? 0,
       timestamp: candidate.timestamp,
-      eventType: decision.eventType ?? candidate.eventType,
+      eventType: highlightEventType(decision, candidate.eventType),
       score: decision.score,
       isHighlight: decision.isHighlight,
       outcome: decision.outcome,
@@ -1823,7 +1855,7 @@ async function acceptVideoDecision(
       seq: emit.seq,
       timestamp: emit.timestamp,
       type: "candidateBlocked",
-      candidate: { eventType: decision.eventType ?? candidate.eventType, timestamp: candidate.timestamp },
+      candidate: { eventType: highlightEventType(decision, candidate.eventType), timestamp: candidate.timestamp },
       reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
     });
     return;
@@ -1836,7 +1868,7 @@ async function acceptVideoDecision(
     clipUri,
     start: Math.max(0, candidate.timestamp - cfg.clipBeforeS),
     end: candidate.timestamp + cfg.clipAfterS,
-    eventType: decision.eventType,
+    eventType: highlightEventType(decision),
     score: decision.score,
     reason: decision.reason,
     // Increment F / ADAAAA-6465: near-miss surface at a lower score, labeled
@@ -2113,7 +2145,7 @@ export async function decideOnCandidate(
       seq: evSeq,
       timestamp: evTs,
       type: "candidateBlocked",
-      candidate: { eventType: decision.eventType ?? candidate.eventType, timestamp: candidate.timestamp },
+      candidate: { eventType: highlightEventType(decision, candidate.eventType), timestamp: candidate.timestamp },
       reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
     });
     return;
@@ -2126,7 +2158,7 @@ export async function decideOnCandidate(
     clipUri,
     start: Math.max(0, candidate.timestamp - cfg.clipBeforeS),
     end: candidate.timestamp + cfg.clipAfterS,
-    eventType: decision.eventType,
+    eventType: highlightEventType(decision),
     score: decision.score,
     reason: decision.reason,
     // Increment F / ADAAAA-6465: near-miss surface at a lower score, labeled

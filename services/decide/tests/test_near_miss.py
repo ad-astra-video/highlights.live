@@ -7,6 +7,7 @@ scoring_play (confusion stays 0).
 """
 from app.gemma import (
     apply_ball_outcome_gate,
+    event_type_for_outcome,
     is_near_miss_ball_outcome,
     reconcile_outcome_with_ball_signal,
 )
@@ -55,6 +56,28 @@ def test_reconcile_no_evidence_no_change():
     d = {"outcome": "not_highlight", "nearMiss": False, "isHighlight": False}
     out = reconcile_outcome_with_ball_signal(d, None)
     assert out == d
+
+
+# --- ADAAAA-6969: non-scoring highlight label must never be GOAL -------------
+def test_reconcile_relabels_stale_goal_to_near_miss():
+    # The verified FP: a keeper save whose model/candidate verdict carried
+    # eventType=GOAL. Reconcile must relabel to NEAR_MISS, not keep "GOAL".
+    d = {"outcome": "scoring_play", "eventType": "GOAL", "nearMiss": False,
+         "isHighlight": True, "score": 60}
+    out = reconcile_outcome_with_ball_signal(d, "blocked")
+    assert out["outcome"] == "near_miss"
+    assert out["nearMiss"] is True
+    assert out["eventType"] == "NEAR_MISS"  # label reflects outcome class
+    assert out["isHighlight"] is False
+
+
+def test_event_type_for_outcome_mapping():
+    assert event_type_for_outcome("scoring_play") == "GOAL"
+    assert event_type_for_outcome("near_miss") == "NEAR_MISS"
+    assert event_type_for_outcome("big_play") == "BIG_PLAY"
+    # Unknown / absent outcome defers to the candidate/model label (fallback).
+    assert event_type_for_outcome(None, "GOAL") == "GOAL"
+    assert event_type_for_outcome("not_highlight", "RED_CARD") == "RED_CARD"
 
 
 def test_apply_ball_outcome_gate_still_rejects_non_near_miss_non_goal():
