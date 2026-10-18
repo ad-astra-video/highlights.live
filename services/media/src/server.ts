@@ -18,10 +18,11 @@ import path from "node:path";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
+import { MediaLiveIngest, type MediaLiveKind, type MediaLiveSpec } from "./live";
 import { WebRtcIngestSession } from "./rtc";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { CandidateEvent, HighlightRecord, MediaResultEvent } from "@highlights/events";
+import type { CandidateEvent, HighlightRecord, MediaJobRequest, MediaResultEvent } from "@highlights/events";
 
 const exec = promisify(execFile);
 
@@ -56,6 +57,9 @@ interface ActiveStream {
    *  clock for the `cost` result event. Lazily initialized on the first
    *  candidate so unset never wastes memory on plain observation streams. */
   phase0?: Phase0Accumulator;
+  /** Phase 2 (ADAAAA-6867) live push/screen ingest. Present only on live
+   *  jobs started via POST /jobs; torn down with the session. */
+  ingest?: MediaLiveIngest;
 }
 
 /** Per-session Phase 0b state: candidate/decide tallies + perceive session clock
@@ -139,9 +143,19 @@ export interface MediaServerOptions {
   clipsDir?: string;
   /** ffmpeg binary path used to cut clips (default "ffmpeg"). */
   ffmpegPath?: string;
+  /** Phase 2 (ADAAAA-6867) live-source ingest factory. When set, this is used
+   *  to build the MediaLiveIngest for a live push/screen job (test seam);
+   *  defaults to a real MediaLiveIngest that spawns ffmpeg pull/grab. */
+  liveIngestFactory?: (jobId: string, spec: MediaLiveSpec) => MediaLiveIngest;
 }
 
-const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
+const EXT_BY_MIME: Record<string, string> = {
+  "video/webm": "webm",
+  "video/mp4": "mp4",
+  "video/mp2t": "ts",
+  "video/mpegts": "ts",
+  "video/x-mpegts": "ts",
+};
 
 const DEFAULT_RECONNECT_GRACE_MS = 8000;
 
@@ -149,6 +163,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class MediaServer {
   private active = new Map<string, ActiveStream>(); // keyed by sessionId
+  // Phase 2 (ADAAAA-6867): live push/screen jobs keyed by jobId -> sessionId,
+  // so POST /jobs/:jobId/stop can tear down the media-served live ingest.
+  private liveJobs = new Map<string, string>();
   // Pending teardowns during the reconnect grace window (keyed by sessionId).
   private graceTimers = new Map<string, NodeJS.Timeout>();
   // Pending teardowns for provisioned sessions that never got a browser WS.
@@ -342,6 +359,76 @@ export class MediaServer {
     });
 
     app.get("/health", async () => ({ status: "ok" }));
+
+    // ---- Phase 2 (ADAAAA-6867): live push / screen ingest handoff -------
+    // The server gates + creates the job and hands it to the media server via
+    // a MediaJobRequest (source: rtmp | file-sim | screenshare). The media
+    // server runs the whole live ingest ON the media node: ffmpeg pull/grab,
+    // records the session, samples frames, runs the Stage-A audio tap, reserves
+    // + pays for the perceive session, runs the per-candidate decide, and cuts
+    // clips from its recorded session. Observations / highlights / clip URIs
+    // stream back to the server via the /jobs/:id/observe callback.
+    app.post<{ Body: MediaJobRequest }>(
+      "/jobs",
+      async (req, reply) => {
+        const body = req.body ?? ({} as any);
+        const source = body.source as string;
+        const isLive = source === "rtmp" || source === "file-sim" || source === "screenshare" || source === "screen";
+        if (!isLive)
+          return reply.code(400).send({
+            error: "Phase 2 media server accepts only live sources (rtmp / file-sim / screenshare)",
+          });
+        const jobId = body.jobId;
+        if (!jobId) return reply.code(400).send({ error: "jobId required" });
+        // Idempotent: a repeat handoff for the same job reuses the live stream.
+        if (this.liveJobs.has(jobId)) {
+          const sid = this.liveJobs.get(jobId)!;
+          return { jobId, sessionId: sid, status: "ingesting" };
+        }
+        const kind: MediaLiveKind = source === "screenshare" || source === "screen" ? "screen" : (source as MediaLiveKind);
+        const sampleFps = body.sampleFps && body.sampleFps > 0 ? body.sampleFps : 1;
+        const p = await this.orch.provision();
+        const stream: ActiveStream = {
+          streamId: randomUUID(),
+          jobId,
+          provisioned: p,
+          sockets: new Set(),
+          closed: false,
+        };
+        this.active.set(p.sessionId, stream);
+        this.liveJobs.set(jobId, p.sessionId);
+        // Pay the orchestrator for as long as the live stream is open.
+        this.orch.startPayment(p);
+        const ingest = this.makeLiveIngest(jobId, {
+          kind,
+          url: body.inputUrl ?? body.inputPath,
+          sampleInterval: 1 / sampleFps,
+        });
+        stream.ingest = ingest;
+        // ffmpeg writes the seekable session.ts; cutClipFor reads it. No
+        // client write-stream owns the file, so a no-op end() is all teardown
+        // needs (ffmpeg itself is stopped via ingest.stop in teardown).
+        stream.recording = {
+          path: ingest.sessionPath,
+          mime: "video/mp2t",
+          stream: { end: () => {} } as any,
+        };
+        await ingest.start();
+        // Drive frames + Stage-A audio into the perceive session in parallel.
+        void this.runLive(stream, ingest);
+        return { jobId, sessionId: p.sessionId, status: "ingesting" };
+      }
+    );
+
+    // Stop path: `POST /jobs/:id/stop` on the server -> the server tells the
+    // media server to tear down the live ingest (release slot, stop payment).
+    app.post<{ Params: { jobId: string } }>("/jobs/:jobId/stop", async (req, reply) => {
+      const sid = this.liveJobs.get(req.params.jobId);
+      if (!sid) return reply.code(404).send({ error: "no such live job" });
+      await this.teardown(sid);
+      this.liveJobs.delete(req.params.jobId);
+      return { ok: true };
+    });
 
     // Phase 0b (ADAAAA-6880): serve cut highlight clips from the media node so
     // a reported highlight clipUri is a real, fetchable URI. Path-traversal
@@ -870,6 +957,56 @@ export class MediaServer {
     }
   }
 
+  // ---- Phase 2 (ADAAAA-6867): media-node live push/screen ingest ----
+
+  /** Build the MediaLiveIngest for a live job (test seam via liveIngestFactory;
+   *  defaults to a real ffmpeg pull/grab ingest on the media node). */
+  private makeLiveIngest(jobId: string, spec: MediaLiveSpec): MediaLiveIngest {
+    if (this.opts.liveIngestFactory) return this.opts.liveIngestFactory(jobId, spec);
+    return new MediaLiveIngest(
+      {
+        ffmpegPath: this.opts.ffmpegPath || "ffmpeg",
+        tmpDir: this.opts.tmpDir || tmpdir(),
+        clipBeforeS: this.opts.clipBeforeS ?? 5,
+        clipAfterS: this.opts.clipAfterS ?? 10,
+      },
+      jobId,
+      spec
+    );
+  }
+
+  /** Drive a live push/screen ingest into the perceive session. Runs the frame
+   *  pass (publishAndObserve → candidate → decide on the media node) and the
+   *  Stage-A audio tap (postAudio → candidate → decide) in parallel. Both
+   *  loops end when the ingest is stopped by teardown (the stop path). */
+  private async runLive(stream: ActiveStream, ingest: MediaLiveIngest) {
+    const p = stream.provisioned;
+    const frameLoop = (async () => {
+      try {
+        for await (const fr of ingest.frames()) {
+          await this.publishAndObserve(stream, fr.seq, Buffer.from(fr.imageB64, "base64"), fr.timestamp);
+        }
+      } catch (e: any) {
+        console.error("[media-live:job] frame loop error: %s", String(e?.message || e));
+      }
+    })();
+    const audioLoop = (async () => {
+      try {
+        for await (const c of ingest.audioChunks()) {
+          const cand = await this.orch
+            .postAudio(p, { seq: c.seq, timestamp: c.timestamp, samples: c.samples, streamId: stream.jobId })
+            .catch(() => null);
+          if (cand) {
+            await this.handleCandidate(stream, { ...(cand as object), seq: c.seq, timestamp: c.timestamp });
+          }
+        }
+      } catch (e: any) {
+        console.error("[media-live:job] audio loop error: %s", String(e?.message || e));
+      }
+    })();
+    await Promise.all([frameLoop, audioLoop]);
+  }
+
   /** Start the reconnect grace countdown (replacing any pending one). */
   private armGrace(sid: string) {
     this.clearGrace(sid);
@@ -917,6 +1054,12 @@ export class MediaServer {
       if (stream.analysis.stateTimer) clearInterval(stream.analysis.stateTimer);
       if (stream.analysis.eventTimer) clearInterval(stream.analysis.eventTimer);
       stream.analysis = undefined;
+    }
+    // Phase 2: stop the live push/screen ingest (kills its ffmpeg pull/grab +
+    // audio-tap procs). Best-effort; also releases the recording file handles.
+    if (stream.ingest) {
+      await stream.ingest.stop().catch(() => {});
+      stream.ingest = undefined;
     }
     // Close the reassembled muxed recording (flush pending chunk bytes).
     if (stream.recording) {
