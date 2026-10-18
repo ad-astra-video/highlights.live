@@ -211,4 +211,41 @@ describe("VOD decide concurrency (ADAAAA-6854)", () => {
       )
     ).rejects.toThrow("mock: serial decide failed");
   });
+
+  it("AC1 throughput: a job with 4 candidates completes materially faster at W=2 than W=1 (fixed per-decide latency)", async () => {
+    // 4 non-GOAL candidates (never burst-suppressed), each decide taking 300 ms
+    // (~ the slow vLLM inference that W=2 overlaps). Serial it is ~4x300=1200 ms;
+    // W=2 runs two in flight so ~2x300=600 ms. Assert the W=2 job finishes in
+    // well under the serial time (>=30% faster) and with NO extra decide calls.
+    const DECIDE_MS = 300;
+    const candidateFrames = new Map<number, { eventType: string; timestamp: number }>(
+      [0, 1, 2, 3].map((i) => [i, { eventType: "BIG_SAVE", timestamp: i }])
+    );
+    async function run(w: number) {
+      const obs: number[] = [];
+      const client = concurrencyClient({ candidateFrames, decideDelayMs: () => DECIDE_MS, decideVerdict: () => ({ isHighlight: true, score: 80, eventType: "BIG_SAVE" }), observedConcurrency: obs });
+      const { events, onEvent } = recordEvents();
+      const t0 = Date.now();
+      await analyzeJob(
+        client,
+        frameSeq(4) as any,
+        async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+        { jobId: `job-ac1-w${w}`, clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 24, decideConcurrency: w },
+        onEvent
+      );
+      return { ms: Date.now() - t0, maxInflight: Math.max(...obs, 1), highlights: events.filter((e) => e.type === "highlight").length };
+    }
+    const serial = await run(1);
+    const conc = await run(2);
+    // Both must accept the same 4 candidates (AC3 exactly-once; no lost clips).
+    expect(serial.highlights).toBe(4);
+    expect(conc.highlights).toBe(4);
+    // Concurrency really overlapped the decides.
+    expect(conc.maxInflight).toBeGreaterThanOrEqual(2);
+    expect(serial.maxInflight).toBe(1);
+    // AC1: >=30% faster. Use a generous margin for the fixed per-frame overhead.
+    expect(conc.ms).toBeLessThan(serial.ms * 0.7);
+    // eslint-disable-next-line no-console
+    console.log(`AC1 measured: serial(W=1)=${serial.ms}ms, concurrent(W=2)=${conc.ms}ms, ratio=${(conc.ms / serial.ms).toFixed(2)}`);
+  });
 });
