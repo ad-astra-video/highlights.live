@@ -293,6 +293,34 @@ export interface PlanRequest {
   imageB64?: string;
 }
 
+/** ADAAAA-6935: one Stage-A candidate trigger accumulated within a 3 s frame
+ * group, carrying its own decide-evidence snapshot so a single merged group
+ * review can return a per-trigger verdict (per-trigger accept / exactly-once
+ * billing preserved, AC7). */
+export interface GroupCandidate {
+  /** The frame-group partition key: timestamp of the frame that fired it. */
+  timestamp: number;
+  eventType: string;
+  /** Decide evidence snapshot captured at candidate fire time. */
+  evidence: Parameters<PipelineClient["decide"]>[0];
+}
+
+/** ADAAAA-6935: the payload of ONE merged decide review over a 3 s frame
+ * group. `frames` is the group's frame sequence (temporal order); the decide
+ * service runs a SINGLE gemma review over them + every `candidates` entry and
+ * returns one verdict per candidate (in order), so decide GPU calls drop from
+ * ~#triggers to ~#groups-with-a-trigger. */
+export interface GroupDecodeRequest {
+  gameHint?: string;
+  preferLabels?: string[];
+  reasoningEffort?: string;
+  /** The whole group's frame sequence (full frames, temporal order). */
+  frames?: { role: string; base64: string }[];
+  /** Surrounding audio clip (mono 16 kHz WAV, base64) for the group. */
+  audioB64?: string;
+  candidates: GroupCandidate[];
+}
+
 export interface PipelineClient {
   reservePerceive(): Promise<ReserveResult>;
   analyze(
@@ -366,6 +394,18 @@ export interface PipelineClient {
       priorContextText?: string;
     }
   ): Promise<DecisionResult>;
+  /**
+   * Decide ALL candidates in one 3 s frame group with a SINGLE gemma review
+   * (ADAAAA-6935). `req.frames` is the group's frame sequence; the decide
+   * service runs ONE inference over them + every `req.candidates` entry and
+   * returns a verdict per candidate, in candidate order. Per-trigger accept
+   * side-effects (cut / highlight record / billing exactly once) are applied
+   * by the caller, so merged grouping never drops a genuine highlight or
+   * double-bills (AC7). Optional: a client (or test fake) that does not
+   * implement the merged review falls back to a per-candidate `decide` loop,
+   * preserving the old per-trigger behavior with no regression.
+   */
+  decideGroup?(req: GroupDecodeRequest): Promise<{ verdicts: DecisionResult[] }>;
   /**
    * Submit a single-shot fine-tune job to the highlights-train runner
    * (Florence-2 <OD> LoRA). The runner blocks until the job finishes and the
@@ -598,6 +638,15 @@ export interface AnalyzeOutcome {
  * frame's image — not the late post-strike frame — to judge the actual moment.
  */
 const DECIDE_FRAME_WINDOW = 16;
+
+/** ADAAAA-6935: frame-group length (s) that ONE merged decide review covers.
+ * Anchored to the job-detail partition unit `SECTION_WINDOW = 3`
+ * (services/server/src/job-detail.ts) — the same 3 s bucket that groups job
+ * detail frames. All Stage-A candidate triggers inside one 3 s group are
+ * merged into a SINGLE decide() call at the group boundary (instead of one
+ * decide per trigger), so decide GPU calls drop from ~#triggers to
+ * ~#groups-with-a-trigger (Livepeer gate: no added GPU per group). */
+export const DECIDE_FRAME_GROUP_S = 3;
 
 /** Rolling cache window (seconds) — the "current-context buffer" (plan §A,
  * ADAAAA-6029). Frames (and their already-computed findings) older than this
@@ -1861,6 +1910,61 @@ export async function analyzeJob(
   );
   let framesAnalyzed = 0;
   let planApplied = false;
+  // ADAAAA-6935: frame-group accumulator. Candidate triggers fire per trigger;
+  // we group all triggers inside one 3 s frame group and run ONE merged decide
+  // review at the group boundary (AC2/AC3/AC5). The group is a partition — each
+  // frame appears in exactly one group's decide context (AC4).
+  let currentGroupOf = -1;
+  let pendingCandidates: {
+    seq: number;
+    timestamp: number;
+    /** The candidate's ANCHORED (peak-motion / strike) timestamp — the cut
+     * point and the candidate descriptor timestamp — distinct from the frame
+     * timestamp that keys the group partition. */
+    candidateTs: number;
+    eventType: string;
+    evidence: Parameters<PipelineClient["decide"]>[0];
+    opts: Parameters<PipelineClient["decide"]>[1];
+  }[] = [];
+  let groupFrames: { role: string; base64: string }[] = [];
+  /** Run the ONE merged decide review for the just-completed 3 s group, then
+   * apply per-trigger accept side-effects in timestamp order (a qualifying
+   * trigger in the group still yields its own accepted highlight with
+   * exactly-once billing — AC7). No-op when the group had no candidate. When
+   * the client implements `decideGroup`, the whole group is one gemma review;
+   * otherwise (legacy / test fakes) it falls back to a per-candidate
+   * `decide`, preserving the old per-trigger behavior. */
+  const flushGroupDecide = async () => {
+    if (pendingCandidates.length === 0) return;
+    const cands = pendingCandidates;
+    const frames = groupFrames;
+    let verdicts: DecisionResult[] = [];
+    if (client.decideGroup) {
+      const res = await client.decideGroup({
+        gameHint: cfg.gameHint,
+        preferLabels: cfg.preferLabels,
+        reasoningEffort: "none",
+        frames,
+        candidates: cands.map((c) => ({ timestamp: c.candidateTs, eventType: c.eventType, evidence: c.evidence })),
+      });
+      verdicts = res.verdicts;
+    } else {
+      for (const c of cands) verdicts.push(await client.decide(c.evidence, c.opts));
+    }
+    for (let i = 0; i < cands.length; i++) {
+      const c = cands[i];
+      const verdict = verdicts[i];
+      if (!verdict) continue;
+      await acceptVideoDecision(
+        run, cut, cfg, onEvent,
+        { seq: c.seq, timestamp: c.timestamp },
+        { eventType: c.eventType, timestamp: c.candidateTs },
+        verdict
+      );
+    }
+    pendingCandidates = [];
+    groupFrames = [];
+  };
   try {
     for await (const frame of iterFrames) {
       // ADAAAA-6854: fail fast on a decide/accept failure — stop analyzing the
@@ -1871,6 +1975,18 @@ export async function analyzeJob(
       framesAnalyzed++;
       onProgress?.(framesAnalyzed);
       run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
+      // ADAAAA-6935: frame-group boundary (AC2). When the frame crosses into a
+      // new 3 s group, the previous group is complete — run its single merged
+      // decide review, then start the new group with this frame. Skipped on the
+      // first frame (currentGroupOf === -1).
+      const groupOf = Math.floor(frame.timestamp / DECIDE_FRAME_GROUP_S);
+      if (currentGroupOf !== groupOf) {
+        if (currentGroupOf !== -1) await flushGroupDecide();
+        currentGroupOf = groupOf;
+        groupFrames = [];
+        pendingCandidates = [];
+      }
+      groupFrames.push({ role: "full", base64: frame.imageB64 });
       let res!: ObservationResult;
       let reReserved = 0;
       // Warm-up: fire exactly ONE planner call at stream start (on the first
@@ -1969,12 +2085,27 @@ export async function analyzeJob(
           // order).
           decidePipeline.submit(res.candidate, { seq: frame.seq, timestamp: frame.timestamp }, decideEvidence, decideOpts);
         } else {
-          // Live (decideWindowN unset): fully serial inline decide, unchanged.
-          const decision = await client.decide(decideEvidence, decideOpts);
-          await acceptVideoDecision(run, cut, cfg, onEvent, { seq: frame.seq, timestamp: frame.timestamp }, res.candidate, decision);
+          // Live (decideWindowN unset) / w=1 opt-out: instead of firing a
+          // decide() per trigger (the redundant-GPU root cause, ADAAAA-6935),
+          // accumulate this trigger's decide-evidence snapshot into the group
+          // and let flushGroupDecide() run ONE merged decide review at the
+          // 3 s group boundary (AC2/AC3/AC5). The group's frames are carried by
+          // `groupFrames`; the per-candidate `decideEvidence` snapshot stays
+          // faithful to this trigger (AC7).
+          pendingCandidates.push({
+            seq: frame.seq,
+            timestamp: frame.timestamp,
+            candidateTs: res.candidate.timestamp,
+            eventType: res.candidate.eventType,
+            evidence: decideEvidence,
+            opts: decideOpts,
+          });
         }
       }
     }
+    // ADAAAA-6935: flush the final (partial) group's candidates — the feed
+    // ended before the next group boundary, so decide them now.
+    await flushGroupDecide();
   } finally {
     // Stop / un-pay every session we reserved this pass. Sessions the server
     // already released are a no-op on the orchestrator but still drop their

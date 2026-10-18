@@ -22,6 +22,7 @@ from .decider import apply_gate, decide, scoreboard_forces_goal
 from .gemma import (  # noqa: F401
     apply_ball_outcome_gate,
     apply_goal_attestation_gate,
+    decide_group_with_gemma,
     decide_with_gemma,
     finalize_goal_acceptance,
     plan_tracking_with_gemma,
@@ -109,6 +110,23 @@ class ImageRef(BaseModel):
     base64: str = ""
 
 
+class GroupCandidate(BaseModel):
+    """One Stage-A candidate trigger inside a 3 s frame group (group mode).
+
+    The server's live analyzer groups all Stage-A candidate triggers that fall
+    inside one 3 s frame window and sends a single `/highlight` request carrying
+    a ``candidates`` array plus the group's ``frames``. Each candidate has its
+    own eventType / timestamp / evidence; the ONE merged gemma review returns a
+    verdict PER candidate. ``extra=ignore`` so a newer upstream field never 422s
+    the group call.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    eventType: str
+    timestamp: float = 0.0
+    evidence: Evidence = Field(default_factory=Evidence)
+
+
 class PlanRequest(BaseModel):
     """Single-shot what-to-track planner request (plan §4.4 / §7 D).
 
@@ -185,6 +203,11 @@ class HighlightRequest(BaseModel):
     # is accepted and exported as a distinct highlight rather than being
     # swallowed by the scoring-only accept gate. Empty == default gate.
     preferLabels: list[str] = Field(default_factory=list)
+    # Group mode: when the server's live analyzer groups all Stage-A candidate
+    # triggers inside one 3 s frame window, it sends them here (one per
+    # candidate, in order). Empty == the existing single-candidate call, whose
+    # behavior is unchanged (byte-for-byte).
+    candidates: list[GroupCandidate] = Field(default_factory=list)
 
 
 # --- Response contract ------------------------------------------------------
@@ -257,6 +280,10 @@ class HighlightDecision(BaseModel):
     verdict: Optional[Verdict] = None
     evidenceAttested: list[str] = Field(default_factory=list)
     audioContext: Optional[AudioContext] = None
+    # Group mode: one verdict dict per candidate, in the same order as the
+    # request's `candidates` array. Empty for single-candidate calls, whose
+    # behavior is unchanged.
+    verdicts: list[dict] = Field(default_factory=list)
 
 
 def _is_gemma_mode() -> bool:
@@ -370,6 +397,128 @@ def _rule_title(req: TitleRequest) -> str:
     return " · ".join(parts)
 
 
+def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, prefer_labels: list[str]) -> dict:
+    """Apply the DRY post-processing gates to ONE per-candidate gemma verdict
+    (group mode), mirroring the single-candidate gemma path exactly:
+    ball_outcome gate -> scoreboard force -> goal attestation -> notable-only ->
+    finalize_goal_acceptance. Mutates and returns ``decision``."""
+    ball_outcome = evidence.get("ballOutcome")
+    if is_near_miss_ball_outcome(ball_outcome):
+        decision = reconcile_outcome_with_ball_signal(decision, ball_outcome)
+        gate_ok, gate_reason = True, None
+    else:
+        gate_ok, gate_reason = apply_ball_outcome_gate(evidence)
+    if not gate_ok and decision.get("isHighlight"):
+        decision["isHighlight"] = False
+        decision["reason"] = (
+            (decision.get("reason") or "") + "; " + (gate_reason or "")
+        ).strip("; ")
+    elif scoreboard_forces_goal(
+        bool(evidence.get("scoreBoardChanged", False)), decision.get("eventType") or event_type
+    ):
+        decision["isHighlight"] = True
+        decision["outcome"] = "scoring_play"
+        decision["reason"] = (
+            (decision.get("reason") or "") + "; scoreboard score change confirmed"
+        ).strip("; ")
+    att_ok, att_reason = apply_goal_attestation_gate(decision, evidence, event_type)
+    if not att_ok and decision.get("isHighlight"):
+        decision["isHighlight"] = False
+        decision["reason"] = (
+            (decision.get("reason") or "") + "; " + (att_reason or "")
+        ).strip("; ")
+    if decision.get("isHighlight"):
+        ok, rejects = apply_gate(
+            score=float(decision.get("score") or 0.0),
+            event_type=decision.get("eventType") or event_type,
+            track_count=evidence.get("trackCount", 0),
+            max_velocity=evidence.get("maxVelocity", 0),
+            ocr_hits=evidence.get("ocrHits", 0),
+            reaction=evidence.get("reaction") or {},
+            score_board_changed=evidence.get("scoreBoardChanged", False),
+        )
+        if not ok:
+            decision["isHighlight"] = False
+            decision["reason"] = (
+                (decision.get("reason") or "")
+                + "; rejected by notable-only bar: "
+                + "; ".join(rejects)
+            ).strip("; ")
+    decision = finalize_goal_acceptance(decision, prefer_labels)
+    return decision
+
+
+def _rule_verdict(cand: "GroupCandidate", prefer_labels: list[str]) -> dict:
+    """DRY per-candidate rule-path verdict (group mode), mirroring the
+    single-candidate rule path: decide() -> ball_outcome gate -> near-miss
+    reconcile -> finalize_goal_acceptance -> goal attestation guard."""
+    evidence = cand.evidence.model_dump()
+    d = decide(
+        event_type=cand.eventType,
+        track_count=cand.evidence.trackCount,
+        max_velocity=cand.evidence.maxVelocity,
+        ocr_hits=cand.evidence.ocrHits,
+        reaction=cand.evidence.reaction.model_dump() if cand.evidence.reaction else None,
+        score_board_changed=cand.evidence.scoreBoardChanged,
+    )
+    ball_outcome = evidence.get("ballOutcome")
+    gate_ok, gate_reason = apply_ball_outcome_gate(evidence)
+    if is_near_miss_ball_outcome(ball_outcome):
+        d.is_highlight = True
+    elif not gate_ok:
+        d.is_highlight = False
+        d.reason = ((d.reason or "") + "; " + (gate_reason or "")).strip("; ")
+    dec = {
+        "isHighlight": d.is_highlight,
+        "score": d.score,
+        "eventType": cand.eventType,
+        "reason": d.reason,
+        "source": "rule",
+        "eventClass": d.event_class,
+        "corroborated": d.corroborated,
+        "outcome": _rule_outcome(d),
+        "nearMiss": False,
+    }
+    if is_near_miss_ball_outcome(ball_outcome):
+        dec = reconcile_outcome_with_ball_signal(dec, ball_outcome)
+    dec = finalize_goal_acceptance(dec, prefer_labels)
+    att_ok, att_reason = apply_goal_attestation_gate(dec, evidence, cand.eventType)
+    if not att_ok and dec.get("isHighlight"):
+        dec["isHighlight"] = False
+        dec["reason"] = ((dec.get("reason") or "") + "; " + (att_reason or "")).strip("; ")
+    return dec
+
+
+async def _handle_group(req: "HighlightRequest") -> dict:
+    """Group mode: ONE merged review for the whole 3 s frame group returns a
+    verdict per candidate (same order as ``req.candidates``). The top-level
+    response ``decision`` fields are taken from the FIRST verdict for backward
+    compatibility; ``verdicts`` carries the full per-candidate list."""
+    if _is_gemma_mode():
+        raw = await asyncio.to_thread(
+            decide_group_with_gemma,
+            candidates=[c.model_dump() for c in req.candidates],
+            game_hint=req.gameHint,
+            images=[img.model_dump() for img in req.images],
+            frames=[fr.model_dump() for fr in req.frames],
+            audio_b64=req.audioB64,
+            audio_sample_rate=req.audioSampleRate,
+            reasoning_effort=req.reasoningEffort,
+            url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
+        )
+        verdicts = [
+            _postprocess_gemma_verdict(v, c.evidence.model_dump(), c.eventType, req.preferLabels)
+            for v, c in zip(raw, req.candidates)
+        ]
+    else:
+        verdicts = [_rule_verdict(c, req.preferLabels) for c in req.candidates]
+    top = dict(verdicts[0])
+    top["verdicts"] = verdicts
+    _log_highlight("gemma" if _is_gemma_mode() else "rule", req, top)
+    return top
+
+
+
 def create_app() -> FastAPI:
     router = APIRouter()
 
@@ -385,6 +534,13 @@ def create_app() -> FastAPI:
 
     @router.post("/highlight", response_model=HighlightDecision)
     async def highlight(req: HighlightRequest):
+        # Group mode (ADAAAA-6935): when the server's live analyzer grouped the
+        # Stage-A candidates inside a 3 s frame window into a single merged call
+        # (`candidates` non-empty), run ONE review for the whole group and return
+        # a verdict per candidate. The existing single-candidate path (candidates
+        # empty) is unchanged byte-for-byte below.
+        if req.candidates:
+            return await _handle_group(req)
         if _is_gemma_mode():
             # ADAAAA-6373: the gemma inference is a blocking sync call (httpx).
             # Called directly it stalls uvicorn's single event loop for the

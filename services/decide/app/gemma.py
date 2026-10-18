@@ -1118,3 +1118,258 @@ def title_with_gemma(
     if not title:
         return None
     return title[:120]
+def _strip_json_fence_array(text: str) -> str:
+    """Extract the first JSON array (```json ... ```-fenced or bare) from a
+    group gemma reply, stripping surrounding prose. Returns '' when none."""
+
+    def _first_array(s: str) -> str:
+        lo = s.find("[")
+        hi = s.rfind("]")
+        if lo == -1 or hi == -1 or hi <= lo:
+            return ""
+        return s[lo : hi + 1]
+
+    m = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
+    if m:
+        return _first_array(m.group(1))
+    return _first_array(text)
+
+
+def parse_verdicts(text: str) -> list | None:
+    """Parse a GROUP gemma reply into a list of per-candidate verdict dicts.
+
+    Robust to code fences and prose. Accepts either a top-level JSON array of
+    verdict objects, or a JSON object carrying a ``verdicts``/``verdict`` list.
+    Returns None on any parse/shape failure so the caller can fall back to one
+    single-candidate decide per candidate (a genuine highlight is never silently
+    dropped)."""
+    raw: list | None = None
+    seg = _strip_json_fence_array(text)
+    if seg:
+        try:
+            raw = json.loads(seg)
+        except Exception:
+            raw = None
+    if raw is None:
+        # Try a JSON object (e.g. {"verdicts": [...]}).
+        obj = None
+        try:
+            obj = json.loads(_strip_json_fence(text))
+        except Exception:
+            obj = None
+        if isinstance(obj, dict):
+            for key in ("verdicts", "verdict", "candidates", "results"):
+                vs = obj.get(key)
+                if isinstance(vs, list):
+                    raw = vs
+                    break
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for v in raw:
+        if not isinstance(v, dict):
+            return None  # malformed element -> fall back
+        out.append(v)
+    return out
+
+
+def build_group_prompt(
+    candidates: list,
+    game_hint: str = "",
+    n_frames: int = 1,
+    has_audio: bool = False,
+    transcript: str = "",
+) -> str:
+    """The group-mode decide prompt. Lists every candidate (index, eventType,
+    timestamp, evidence summary) and asks for a JSON ARRAY of verdicts, one per
+    candidate, in order. Candidates are dicts shaped ``{eventType, timestamp,
+    evidence}`` (the GroupCandidate model_dump)."""
+    lines: list[str] = []
+    for i, c in enumerate(candidates):
+        ev = c.get("evidence") or {}
+        if not isinstance(ev, dict):
+            ev = {}
+        reaction = ev.get("reaction") or {}
+        if not isinstance(reaction, dict):
+            reaction = {}
+        lines.append(
+            f"Candidate {i}: eventType={c.get('eventType')} timestamp={c.get('timestamp')} "
+            f"trackCount={ev.get('trackCount', 0)} maxVelocity={ev.get('maxVelocity', 0)} "
+            f"ocrHits={ev.get('ocrHits', 0)} scoreBoardChanged={ev.get('scoreBoardChanged')} "
+            f"ballOutcome={ev.get('ballOutcome')} goalCrossed={ev.get('goalCrossed')} "
+            f"audioReaction={reaction.get('crowdEnergy') or 0} humansInMotion={reaction.get('humansInMotion') or 0}"
+        )
+    candidates_block = "\n".join(lines)
+    transcript = (transcript or "").strip()
+    extra = ""
+    if transcript:
+        extra += "\naudio commentary transcript (ASR):\n  " + transcript[:500]
+    return (
+        "You are a sports/esports highlight judge. You are shown a temporal "
+        "SEQUENCE of frames (extracted at 1 FPS) spanning a single 3-second "
+        f"frame group ({n_frames} frames), plus, when available, the accompanying "
+        "audio.\n"
+        "This group may contain MULTIPLE candidate trigger events (Stage-A "
+        "upstream detections). Each candidate is a HYPOTHESIS to test, NOT a "
+        "fact. You must review the same frames + audio once for the WHOLE group "
+        "and return an independent verdict PER candidate.\n"
+        "Candidates (in order):\n" + candidates_block + "\n"
+        "For each candidate, judge independently from the frames + audio whether "
+        "it is a genuine highlight (scoring_play) or not. Use the same "
+        "outcome taxonomy as a single review: scoring_play | near_miss | "
+        "big_play | not_highlight. A GOAL is isHighlight=true only when the "
+        "frames show the ball actually entered the net; absent/contradicting "
+        "evidence means false.\n"
+        "VERDICT COUNT IS CRITICAL: reply with EXACTLY one verdict object per "
+        "candidate, in the same order as the candidate list above.\n" + extra +
+        "\nNow answer with ONLY a JSON array, no markdown, no preamble, no "
+        "trailing prose, exactly of this shape (one object per candidate, in "
+        "order):\n"
+        '[{"isHighlight": true|false, "score": 0..100, "eventType": "<type>", '
+        '"reason": "<short grounded reason>", "outcome": "scoring_play|near_miss|big_play|not_highlight", '
+        '"nearMiss": true|false}]'
+    )
+
+
+def ask_group(
+    url: str,
+    candidates: list,
+    game_hint: str = "",
+    images: list | None = None,
+    frames: list | None = None,
+    audio_b64: str = "",
+    audio_sample_rate: int = 16000,
+    reasoning_effort: str = "none",
+    timeout_s: float = 180.0,
+    transcript: str = "",
+) -> list | None:
+    """Call the gemma multimodal completion ONCE for the whole frame group and
+    return the parsed per-candidate verdict list (or None on any failure). Same
+    modality order as ``ask`` (all images BEFORE the text prompt, audio AFTER)."""
+    import httpx
+
+    frames = frames or []
+    images = images or []
+    send_audio = bool(audio_b64) and os.environ.get("GEMMA_SEND_AUDIO", "0") == "1"
+
+    def _img(part: dict) -> dict | None:
+        b64 = part.get("base64") or part.get("image") or ""
+        if not b64:
+            return None
+        return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+
+    content: list = [i for i in (_img(p) for p in frames + images) if i is not None]
+    content.append(
+        {
+            "type": "text",
+            "text": build_group_prompt(
+                candidates,
+                game_hint,
+                n_frames=len(frames),
+                has_audio=bool(send_audio or transcript),
+                transcript=transcript,
+            ),
+        }
+    )
+    if send_audio:
+        content.append(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": audio_b64, "format": "wav"},
+            }
+        )
+    payload = {
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0.0,
+        "reasoning_effort": reasoning_effort,
+        "chat_template_kwargs": {"enable_thinking": False},
+        "max_tokens": 2400,
+        "stream": False,
+    }
+    model = os.environ.get("GEMMA_MODEL")
+    if model:
+        payload["model"] = model
+    log.debug("gemma group call candidates=%d frames=%d audio=%s", len(candidates), len(frames), bool(audio_b64))
+    try:
+        resp = httpx.post(url.rstrip("/") + "/v1/chat/completions", json=payload, timeout=timeout_s)
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:  # noqa: BLE001
+        log.error("gemma group call failed candidates=%d url=%s: %s", len(candidates), url, e)
+        return None
+    result = parse_verdicts(text)
+    if result is None:
+        log.error("gemma group reply unparseable candidates=%d reply=%r", len(candidates), text[:500])
+    return result
+
+
+def decide_group_with_gemma(
+    candidates: list,
+    game_hint: str = "",
+    images: list | None = None,
+    frames: list | None = None,
+    audio_b64: str = "",
+    audio_sample_rate: int = 16000,
+    reasoning_effort: str = "none",
+    url: str | None = None,
+    score_board_changed: bool = False,
+) -> list[dict]:
+    """Group mode: ONE gemma review of the whole 3 s frame group returns a
+    verdict per candidate (same order as ``candidates``). Candidates are dicts
+    shaped ``{eventType, timestamp, evidence}``.
+
+    SAFETY (AC7): when the group reply cannot be parsed, or the returned array
+    length does not equal the candidate count, FALL BACK to calling the existing
+    single-candidate ``decide_with_gemma`` once per candidate — so a genuine
+    highlight is never silently dropped. This is a rare path, documented."""
+
+    u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
+    n = len(candidates)
+    transcript = ""
+    asr_latency_s = 0.0
+    asr_ran = False
+    if (
+        audio_b64
+        and not (os.environ.get("GEMMA_SEND_AUDIO", "0") == "1")
+        and os.environ.get("AUDIO_CONTEXT", "1") == "1"
+    ):
+        asr_url = _asr_url()
+        if asr_url:
+            transcript, asr_latency_s = transcribe_audio(asr_url, audio_b64, audio_sample_rate)
+            asr_ran = True
+    g = ask_group(
+        u,
+        candidates,
+        game_hint,
+        images,
+        frames,
+        audio_b64,
+        audio_sample_rate,
+        reasoning_effort=reasoning_effort,
+        transcript=transcript,
+    )
+    if g is not None and len(g) == n:
+        results = g
+    else:
+        # Rare safety fallback (AC7): one single-candidate gemma decide per
+        # candidate so a genuine highlight is never silently dropped.
+        log.warning("gemma group verdict malformed (n=%d got=%s); falling back to per-candidate decide", n, None if g is None else len(g))
+        results = []
+        for c in candidates:
+            ev = c.get("evidence") or {}
+            if not isinstance(ev, dict):
+                ev = {}
+            v = decide_with_gemma(
+                event_type=c.get("eventType", ""),
+                evidence=ev,
+                game_hint=game_hint,
+                images=images,
+                frames=frames,
+                audio_b64=audio_b64,
+                audio_sample_rate=audio_sample_rate,
+                reasoning_effort=reasoning_effort,
+                url=u,
+                score_board_changed=bool(ev.get("scoreBoardChanged", False)),
+            )
+            results.append(v)
+    return results

@@ -216,7 +216,11 @@ describe("analyzeJob", () => {
       (ev) => events.push(ev)
     );
     const types = events.map((e) => e.type);
-    expect(types).toEqual(["observation", "observation", "candidate", "highlight", "observation"]);
+    // ADAAAA-6935: a candidate's decide now runs at the 3 s group boundary, so
+    // the highlight is emitted after the group's frames are observed, not
+    // immediately after the candidate. The 3 frames here never cross a boundary,
+    // so the highlight lands in the end-of-feed flush.
+    expect(types).toEqual(["observation", "observation", "candidate", "observation", "highlight"]);
     const cand = events.find((e) => e.type === "candidate");
     expect(cand.candidate).toEqual({ eventType: "KILL", timestamp: 1 });
     const hl = events.find((e) => e.type === "highlight");
@@ -242,15 +246,18 @@ describe("analyzeJob", () => {
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" },
       (ev) => events.push(ev)
     );
-    // Each accepted highlight is emitted IMMEDIATELY after its candidate's
-    // decide inside the frame loop (not deferred until all frames are done): the
-    // event stream interleaves candidate->highlight with the surrounding
-    // observations, and there is no trailing batch of highlights at the end.
+    // ADAAAA-6935: each accepted highlight is emitted at its 3 s group boundary
+    // (not per-trigger). Group0 (t=0..2) holds the frame-2 candidate, decided
+    // when frame 4 (t=3, group1) opens the boundary; the frame-4 candidate lives
+    // in group1 and is flushed at end-of-feed. Highlights are emitted during the
+    // run, never batched until all frames are done.
     expect(events.map((e) => e.type)).toEqual([
       "observation", // frame 1
-      "observation", "candidate", "highlight", // frame 2 (accepted)
+      "observation", "candidate", // frame 2 (group0 trigger, decide deferred)
       "observation", // frame 3
-      "observation", "candidate", "highlight", // frame 4 (accepted)
+      "highlight", // group0 decide at the t=3 boundary
+      "observation", "candidate", // frame 4 (group1 trigger)
+      "highlight", // group1 decide at end-of-feed flush
     ]);
     expect(events.filter((e) => e.type === "highlight")).toHaveLength(2);
     expect(outcome.highlights).toHaveLength(2);
@@ -289,6 +296,59 @@ describe("analyzeJob", () => {
     // clip cut centered at the anchored strike timestamp, not the late frame
     expect(cuts).toEqual([2]);
     expect(outcome.highlights[0]).toMatchObject({ eventType: "GOAL", start: Math.max(0, 2 - 4), end: 2 + 4 });
+  });
+
+  it("groups candidate triggers per 3 s frame group and runs ONE merged decide per group (ADAAAA-6935)", async () => {
+    // Feed 9 frames across three 3 s groups (0-2, 3-5, 6-8), with FOUR candidate
+    // triggers: two in group0 (t=1, t=2), one in group1 (t=4), one in group2
+    // (t=7). With the old per-trigger path this was 4 decide() calls; grouped it
+    // must be exactly 3 decideGroup calls (one per group that has a trigger).
+    const frameFeed = [
+      { seq: 0, timestamp: 0, imageB64: "img0" },
+      { seq: 1, timestamp: 1, imageB64: "img1" },
+      { seq: 2, timestamp: 2, imageB64: "img2" },
+      { seq: 3, timestamp: 3, imageB64: "img3" },
+      { seq: 4, timestamp: 4, imageB64: "img4" },
+      { seq: 5, timestamp: 5, imageB64: "img5" },
+      { seq: 6, timestamp: 6, imageB64: "img6" },
+      { seq: 7, timestamp: 7, imageB64: "img7" },
+      { seq: 8, timestamp: 8, imageB64: "img8" },
+    ];
+    const candidateTimestamps = new Set([1, 2, 4, 7]);
+    const groupCalls: { frames: string[]; candTs: number[] }[] = [];
+    const { client } = fakeClient({
+      analyze: async (_s: any, frame: any) => {
+        if (candidateTimestamps.has(frame.timestamp)) {
+          return { observation: { tracks: [], seq: frame.seq, timestamp: frame.timestamp }, candidate: { eventType: "KILL", timestamp: frame.timestamp } };
+        }
+        return { observation: { tracks: [], seq: frame.seq, timestamp: frame.timestamp } };
+      },
+      decideGroup: async (req: any) => {
+        groupCalls.push({ frames: (req.frames ?? []).map((f: any) => f.base64), candTs: req.candidates.map((c: any) => c.timestamp) });
+        // One verdict per candidate — every trigger in the group is a highlight.
+        return { verdicts: req.candidates.map((c: any) => ({ isHighlight: true, score: 80, eventType: c.eventType, outcome: "scoring_play" as const })) };
+      },
+    });
+    const cuts: number[] = [];
+    const outcome = await analyzeJob(
+      client,
+      (async function* () { for (const f of frameFeed) yield f; })(),
+      async (ts) => { cuts.push(ts); return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }; },
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" }
+    );
+    // AC5: one merged decide per group-with-a-trigger (3), not one per trigger (4).
+    expect(groupCalls).toHaveLength(3);
+    // AC4 partition: each group's decide context is exactly that group's frames,
+    // no overlap / no duplicate frame seq across groups.
+    expect(groupCalls[0].frames).toEqual(["img0", "img1", "img2"]);
+    expect(groupCalls[1].frames).toEqual(["img3", "img4", "img5"]);
+    expect(groupCalls[2].frames).toEqual(["img6", "img7", "img8"]);
+    // AC3: the two group0 triggers are merged into ONE decide call's candidate list.
+    expect(groupCalls[0].candTs).toEqual([1, 2]);
+    // AC7: every qualifying trigger still yields its own accepted highlight with
+    // a clip cut at its own timestamp — no dropped trigger, no duplicate billing.
+    expect(cuts).toEqual([1, 2, 4, 7]);
+    expect(outcome.highlights).toHaveLength(4);
   });
 
   it("does NOT cut when decide returns isHighlight=false", async () => {
