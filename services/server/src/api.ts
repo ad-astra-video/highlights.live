@@ -2023,13 +2023,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     async (req: any, reply) => {
       const job = store.getJob(req.params.id);
       if (!job) return reply.code(404).send({ error: "no job" });
-      // Phase 3 (ADAAAA-6868): the server-side direct /ingest rail is retired once
-      // parity is verified on the media server. Browser media now flows browser ->
-      // media-server WebRTC/WS -> orchestrator video-in; this is gone.
+      const bj = browserJobs.get(req.params.id);
+      // A non-browser (e.g. VOD/file) job is not a browser capture job, so it
+      // gets 409 regardless of the retire flag — a retired rail must not change
+      // the non-browser error contract (ADAAAA-6868 Phase 3 review, Low).
+      if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
+      // Phase 3 (ADAAAA-6868): the server-side direct /ingest rail is retired;
+      // browser media now flows browser -> media-server WebRTC/WS -> orchestrator
+      // video-in, so this rail is gone.
       if (cfg.retireBrowserIngestRail)
         return reply.code(410).send({ error: "browser ingest rail retired; connect to the media server over WebRTC/WS" });
-      const bj = browserJobs.get(req.params.id);
-      if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
       const { seq = 0, timestamp = 0, image } = req.body ?? {};
       if (!image) return reply.code(400).send({ error: "image required" });
       try {
@@ -2253,13 +2256,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     async (req: any, reply) => {
       const job = store.getJob(req.params.id);
       if (!job) return reply.code(404).send({ error: "no job" });
+      const bj = browserJobs.get(req.params.id);
+      // Non-browser job -> 409 regardless of the retire flag (ADAAAA-6868
+      // Phase 3 review, Low): a retired rail must not change the error contract.
+      if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
       // Phase 3 (ADAAAA-6868): recording chunks now stream to the media server
       // over its WebSocket and are reassembled + cut there (on the media node).
       // The server-side recording rail is retired: media bytes never land here.
       if (cfg.retireBrowserIngestRail)
         return reply.code(410).send({ error: "browser recording rail retired; recording chunks now stream to the media server" });
-      const bj = browserJobs.get(req.params.id);
-      if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
       const { base64, mime } = req.body ?? {};
       if (!base64) return reply.code(400).send({ error: "base64 required" });
       try {

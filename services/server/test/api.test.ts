@@ -309,7 +309,7 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
   });
 
   it("browser capture: ingest frames -> highlight, recording -> stop cuts the clip", async () => {
-    const { app, cfg } = await buildTestApp();
+    const { app, cfg } = await buildTestApp({ RETIRE_BROWSER_INGEST_RAIL: "0" });
     const token = await register(app, "bz@test.dev", "password123");
 
     const jr = await app.inject({
@@ -362,7 +362,7 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
   });
 
   it("browser capture: an unproducible recording surfaces clipError, never a silent empty clipUri (ADAAAA-6522)", async () => {
-    const { app, cfg } = await buildTestApp();
+    const { app, cfg } = await buildTestApp({ RETIRE_BROWSER_INGEST_RAIL: "0" });
     const token = await register(app, "bx@test.dev", "password123");
 
     const jr = await app.inject({
@@ -1118,23 +1118,70 @@ describe("retired browser-capture rails (Phase 3 / ADAAAA-6868)", () => {
     await app.close();
   });
 
-  it("with the flag off the legacy server rail still works (default behaviour preserved)", async () => {
-    const { app } = await buildTestApp();
+  it("with the flag EXPLICITLY off (RETIRE_BROWSER_INGEST_RAIL=0) the legacy server rail still works (rollback path)", async () => {
+    const { app } = await buildTestApp({ RETIRE_BROWSER_INGEST_RAIL: "0" });
     const token = await register(app, "ret-on@test.dev", "password123");
     const jr = await app.inject({
       method: "POST",
       url: "/jobs",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `bearer ${token}` },
       payload: { source: "browser", gameHint: "Esports" },
     });
     const jobId = jr.json().job.id;
     const ing = await app.inject({
       method: "POST",
       url: `/jobs/${jobId}/ingest`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `bearer ${token}` },
       payload: { seq: 0, timestamp: 0, image: "aGVsbG8=" },
     });
     expect(ing.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("the rails are retired by DEFAULT (flag unset) to match the Phase 3 acceptance criterion", async () => {
+    // The webapp browser path is unconditional (browser -> media server
+    // WebRTC/WS), so the server rails must be retired unless an operator
+    // explicitly opts back into the legacy rails (ADAAAA-6868 review, High).
+    const { app } = await buildTestApp();
+    const token = await register(app, "ret-def@test.dev", "password123");
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `bearer ${token}` },
+      payload: { source: "browser", gameHint: "Esports" },
+    });
+    const jobId = jr.json().job.id;
+    const ing = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/ingest`,
+      headers: { authorization: `bearer ${token}` },
+      payload: { seq: 0, timestamp: 0, image: "aGVsbG8=" },
+    });
+    expect(ing.statusCode).toBe(410);
+    const rec = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/recording`,
+      headers: { authorization: `bearer ${token}` },
+      payload: { base64: Buffer.from("x").toString("base64"), mime: "video/mp4" },
+    });
+    expect(rec.statusCode).toBe(410);
+    await app.close();
+  });
+
+  it("a non-browser job hitting a retired rail keeps its 409 contract, not 410 (ADAAAA-6868 review, Low)", async () => {
+    const { app, store } = await buildTestApp();
+    const token = await register(app, "ret-nonb@test.dev", "password123");
+    // A file/VOD job, not a browser capture job — seed it directly so we don't
+    // trigger the (synchronous) VOD pipeline on a fake path.
+    const job = await store.createJob({ ownerId: "seed-owner", source: "file", sourceUrl: "/data/some.mp4", gameHint: "Esports" });
+    const ing = await app.inject({
+      method: "POST",
+      url: `/jobs/${job.id}/ingest`,
+      headers: { authorization: `bearer ${token}` },
+      payload: { seq: 0, timestamp: 0, image: "aGVsbG8=" },
+    });
+    // 409 (not a browser capture job), never 410 from the retired rail.
+    expect(ing.statusCode).toBe(409);
     await app.close();
   });
 });
