@@ -146,6 +146,61 @@ function sourceLabel(source: string | undefined): string {
 }
 
 /**
+ * One identified/accepted highlight on the per-job detail surface. Renders the
+ * clip player (VideoClip) so the highlight shows its video, plus the metadata
+ * and Accept/Reject review controls. Extracted from the JobDetail card so the
+ * highlight card (and its clip-player mount) is independently testable.
+ * ADAAAA-6948: the per-job card previously imported VideoClip but never rendered
+ * it, so identified highlights showed no video.
+ */
+export interface HighlightCardProps {
+  highlight: JobDetailHighlight;
+  onDecision: (h: JobDetailHighlight, status: "accepted" | "rejected") => void;
+}
+
+export function HighlightCard({ highlight: h, onDecision }: HighlightCardProps) {
+  return (
+    <div className="card card-hover overflow-hidden" data-detail-highlight>
+      <VideoClip src={h.clipUri} label={h.eventType} error={h.clipError} />
+      <div className="p-4">
+        <div className="flex items-center justify-between">
+          <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">
+            {h.eventType || "EVENT"}
+          </span>
+          <span className="text-xs text-ink">{h.status}</span>
+        </div>
+        <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
+        <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
+        <div className="text-xs text-mut">
+          T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
+        </div>
+        <div className="mt-1 rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut" data-detail-trigger>
+          Trigger: <span className="font-bold text-ink">{triggerLabel(h.trigger)}</span>
+        </div>
+        <div className="mt-3 flex gap-2">
+          <button
+            className="btn-neon flex-1"
+            disabled={h.status === "accepted"}
+            onClick={() => onDecision(h, "accepted")}
+            data-detail-accept
+          >
+            <Check className="mr-1 inline h-4 w-4" /> Accept
+          </button>
+          <button
+            className="btn-neon btn-pink flex-1"
+            disabled={h.status === "rejected"}
+            onClick={() => onDecision(h, "rejected")}
+            data-detail-reject
+          >
+            <X className="mr-1 inline h-4 w-4" /> Reject
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Full-screen Job detail (ADAAAA-6852 Inc 4). Route /app/jobs/:id. Covers the
  * start-new-job surface: header (job metadata), Highlights, Traces (with
  * capacity budget), and the 3 s-sectioned frame timeline with perceive overlays
@@ -326,42 +381,7 @@ export function JobDetail() {
           <div className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {detail.highlights.length === 0 && <div className="text-mut" data-detail-no-highlights>No highlights for this job.</div>}
             {detail.highlights.map((h) => (
-              <div key={h.id} className="card card-hover overflow-hidden" data-detail-highlight>
-                <div className="p-4">
-                  <div className="flex items-center justify-between">
-                    <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">
-                      {h.eventType || "EVENT"}
-                    </span>
-                    <span className="text-xs text-ink">{h.status}</span>
-                  </div>
-                  <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
-                  <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
-                  <div className="text-xs text-mut">
-                    T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
-                  </div>
-                  <div className="mt-1 rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut" data-detail-trigger>
-                    Trigger: <span className="font-bold text-ink">{triggerLabel(h.trigger)}</span>
-                  </div>
-                  <div className="mt-3 flex gap-2">
-                    <button
-                      className="btn-neon flex-1"
-                      disabled={h.status === "accepted"}
-                      onClick={() => review(h, "accepted")}
-                      data-detail-accept
-                    >
-                      <Check className="mr-1 inline h-4 w-4" /> Accept
-                    </button>
-                    <button
-                      className="btn-neon btn-pink flex-1"
-                      disabled={h.status === "rejected"}
-                      onClick={() => review(h, "rejected")}
-                      data-detail-reject
-                    >
-                      <X className="mr-1 inline h-4 w-4" /> Reject
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <HighlightCard key={h.id} highlight={h} onDecision={review} />
             ))}
           </div>
 
