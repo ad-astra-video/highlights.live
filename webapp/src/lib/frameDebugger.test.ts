@@ -5,6 +5,9 @@ import {
   placeLabel,
   collectFrameSeqs,
   drawFrameWithBoxes,
+  coverTransform,
+  coverPoint,
+  drawFrameFullBleed,
 } from "./frameDebugger";
 
 // ADAAAA-6943/6946: click-to-enlarge + multi-select enlarge + legible
@@ -126,5 +129,85 @@ describe("drawFrameWithBoxes withLabels (labels only in the enlarged view)", () 
     const { canvas, calls } = fakeCtx();
     drawFrameWithBoxes(canvas, {} as HTMLImageElement, tracks, 960, 540, 24, 2);
     expect(calls).toContain("fillText");
+  });
+});
+
+// ADAAAA-6974: the enlarged lightbox must fill the full modal area (no
+// letterbox bars). coverTransform is the canvas equivalent of object-fit:cover.
+describe("coverTransform (full-bleed enlarge, no letterbox bars)", () => {
+  // 16:9 source in a wider viewport → scale by width, crop the vertical overflow
+  // (no horizontal bars). 
+  it("fills a wide viewport by width and crops vertically", () => {
+    const ct = coverTransform(1920, 1080, 3000, 1000);
+    expect(ct.scale).toBeCloseTo(3000 / 1920, 5);
+    // The drawn image spans the full width, so there are no horizontal bars:
+    // dx centers the (equal-width) draw, dy shifts the cropped height.
+    expect(ct.dx).toBeCloseTo(0, 3);
+    expect(ct.dy).toBeLessThan(0); // vertical overflow cropped (centered)
+  });
+  it("fills a tall viewport by height and crops horizontally", () => {
+    const ct = coverTransform(1920, 1080, 1000, 3000);
+    expect(ct.scale).toBeCloseTo(3000 / 1080, 5);
+    expect(ct.dy).toBeCloseTo(0, 3);
+    expect(ct.dx).toBeLessThan(0); // horizontal overflow cropped (centered)
+  });
+  it("is a no-crop identity scale when the aspect ratios match", () => {
+    const ct = coverTransform(1920, 1080, 1920, 1080);
+    expect(ct.scale).toBeCloseTo(1, 5);
+    expect(ct.dx).toBeCloseTo(0, 3);
+    expect(ct.dy).toBeCloseTo(0, 3);
+  });
+  it("coverPoint maps a normalized image point into the cropped canvas space", () => {
+    const ct = coverTransform(1920, 1080, 3000, 1000);
+    // center of the image maps to the center of the canvas horizontally (no
+    // horizontal offset) and stays vertically within the visible band.
+    const p = coverPoint(ct, 0.5, 0.5);
+    expect(p.x).toBeCloseTo(1500, 0);
+    expect(p.y).toBeGreaterThanOrEqual(0);
+    expect(p.y).toBeLessThanOrEqual(1000);
+  });
+});
+
+describe("drawFrameFullBleed (boxes/labels aligned with the covered image)", () => {
+  function fakeTrackCtx() {
+    const strokes: number[][] = [];
+    const texts: string[] = [];
+    const ctx: any = {
+      setTransform: () => {},
+      clearRect: () => {},
+      drawImage: () => {},
+      strokeRect: (...a: number[]) => strokes.push(a),
+      fillRect: () => {},
+      fillText: (t: string) => texts.push(t),
+      measureText: (t: string) => ({ width: t.length * 6 }),
+      font: "",
+      fillStyle: "",
+      strokeStyle: "",
+      lineWidth: 0,
+    };
+    const canvas = { getContext: () => ctx } as unknown as HTMLCanvasElement;
+    return { canvas, strokes, texts };
+  }
+  const tracks = [{ bbox: [0.5, 0.5, 0.6, 0.6], slot: 0, kind: "ball", label: "soccer ball 0" }];
+
+  it("draws the box at the cover-mapped position (no letterbox offset)", () => {
+    const { canvas, strokes, texts } = fakeTrackCtx();
+    const img = { naturalWidth: 1920, naturalHeight: 1080 } as HTMLImageElement;
+    drawFrameFullBleed(canvas, img, tracks, 3000, 1000, 28, 2);
+    // For 3000x1000 viewport + 1920x1080 image: scale=3000/1920, dy=-343.75.
+    // Box [0.5,0.5] -> (1500, 500); [0.6,0.6] -> (1800, 668.75).
+    const r = strokes[0];
+    expect(r[0]).toBeCloseTo(1500, 0);
+    expect(r[1]).toBeCloseTo(500, 0);
+    expect(r[2]).toBeCloseTo(300, 0);
+    expect(r[3]).toBeCloseTo(168.75, 0);
+    expect(texts.length).toBeGreaterThan(0); // labels drawn in the enlarged view
+  });
+
+  it("still draws the legible label over the full-bleed image", () => {
+    const { canvas, texts } = fakeTrackCtx();
+    const img = { naturalWidth: 1920, naturalHeight: 1080 } as HTMLImageElement;
+    drawFrameFullBleed(canvas, img, tracks, 3000, 1000, 28, 2);
+    expect(texts.join(" ")).toContain("soccer ball 0");
   });
 });
