@@ -62,18 +62,29 @@ function recordEvents() {
   return { events, onEvent };
 }
 
-const DECIDE_CFG = { jobId: "job-vod", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 24, decideConcurrency: 2 } as const;
+/** VOD (detail-first) analyzer config: `decideWindowN` set. ADAAAA-6903 removed
+ * the app-side decide-concurrency toggle, so there is NO `decideConcurrency`
+ * field here — the VOD path dispatches every candidate decide concurrently and
+ * the go-livepeer orchestrator (runner `capacity`) bounds the concurrency. */
+const DECIDE_CFG = { clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 24 } as const;
 
-describe("VOD decide concurrency (ADAAAA-6854)", () => {
-  it("runs two candidate decide calls concurrently (W=2) and fires exactly one highlight event per accepted candidate (AC3 billing exactly-once)", async () => {
-    // Two non-GOAL candidates (never burst-suppressed) close in time.
+/** Live (baseline) analyzer config: `decideWindowN` unset, so the frame loop
+ * stays on the fully-serial inline decide path (W=1). Unchanged by ADAAAA-6903. */
+const LIVE_CFG = { clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" } as const;
+
+describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)", () => {
+  it("dispatches every VOD candidate decide concurrently with NO app-side cap (ADAAAA-6903) and fires exactly one highlight event per accepted candidate (AC3 billing exactly-once)", async () => {
+    // Four non-GOAL candidates (never burst-suppressed) close in time. The old
+    // W=2 app-side cap would have held at most 2 in flight; with the toggle
+    // removed the pipeline launches them all, so 3+ are in flight at once —
+    // proving the concurrency is no longer bounded by an app knob (only the
+    // orchestrator runner `capacity` is).
     const obs: number[] = [];
     const client = concurrencyClient({
-      candidateFrames: new Map([
-        [0, { eventType: "BIG_SAVE", timestamp: 2 }],
-        [1, { eventType: "BIG_SAVE", timestamp: 8 }],
-      ]),
-      decideDelayMs: () => 60,
+      candidateFrames: new Map(
+        [0, 1, 2, 3].map((i) => [i, { eventType: "BIG_SAVE", timestamp: i }])
+      ),
+      decideDelayMs: () => 40,
       decideVerdict: () => ({ isHighlight: true, score: 80, eventType: "BIG_SAVE" }),
       observedConcurrency: obs,
     });
@@ -81,7 +92,7 @@ describe("VOD decide concurrency (ADAAAA-6854)", () => {
     const cuts: number[] = [];
     const outcome = await analyzeJob(
       client,
-      frameSeq(3) as any,
+      frameSeq(4) as any,
       async (ts) => {
         cuts.push(ts);
         return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
@@ -90,13 +101,14 @@ describe("VOD decide concurrency (ADAAAA-6854)", () => {
       onEvent
     );
     const maxInflight = Math.max(...obs, 1);
-    expect(maxInflight).toBe(2); // both decides were in flight at once
+    // Beyond the old app-side cap of 2 → the concurrency toggle is gone.
+    expect(maxInflight).toBeGreaterThanOrEqual(3);
     const highlights = events.filter((e) => e.type === "highlight");
     const blocked = events.filter((e) => e.type === "candidateBlocked");
-    expect(highlights).toHaveLength(2); // exactly-once billing: one event each
+    expect(highlights).toHaveLength(4); // exactly-once billing: one event each
     expect(blocked).toHaveLength(0);
-    expect(cuts).toHaveLength(2);
-    expect(outcome.highlights).toHaveLength(2);
+    expect(cuts).toHaveLength(4);
+    expect(outcome.highlights).toHaveLength(4);
   });
 
   it("delivers accept side-effects in candidate timestamp order even when a later candidate's decide completes first (AC3 burst suppression / AC6 ordering)", async () => {
@@ -136,7 +148,7 @@ describe("VOD decide concurrency (ADAAAA-6854)", () => {
     expect(outcome.highlights).toHaveLength(1);
   });
 
-  it("preserves serial behavior when W=1 (operator opt-out): candidates decided one at a time, no overlap", async () => {
+  it("keeps the live/serial path fully serial (decideWindowN unset → W=1): candidates decided one at a time, no overlap (unchanged)", async () => {
     const obs: number[] = [];
     const client = concurrencyClient({
       candidateFrames: new Map([
@@ -156,7 +168,7 @@ describe("VOD decide concurrency (ADAAAA-6854)", () => {
         cuts.push(ts);
         return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
       },
-      { jobId: "job-w1", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 24, decideConcurrency: 1 },
+      { ...LIVE_CFG, jobId: "job-live-serial" },
       onEvent
     );
     const maxInflight = Math.max(...obs, 1);
@@ -166,9 +178,10 @@ describe("VOD decide concurrency (ADAAAA-6854)", () => {
   });
 
   it("aborts (rejects, never hangs) when an EARLY candidate's decide fails under concurrency while a later one succeeds (AC3 exactly-once / AC5 stability on failure)", async () => {
-    // W=2 with two candidates. Call 0 (the earlier candidate) throws; call 1
-    // (the later candidate) succeeds and buffers. Prior to the abort fix this
-    // deadlocked the reorder buffer forever; the job must instead reject.
+    // Two candidates submitted concurrently. Call 0 (the earlier candidate)
+    // throws; call 1 (the later candidate) succeeds and buffers. Prior to the
+    // abort fix this deadlocked the reorder buffer forever; the job must instead
+    // reject.
     const obs: number[] = [];
     const client = concurrencyClient({
       candidateFrames: new Map([
@@ -186,13 +199,13 @@ describe("VOD decide concurrency (ADAAAA-6854)", () => {
         client,
         frameSeq(2) as any,
         async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
-        { jobId: "job-fail", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 24, decideConcurrency: 2 },
+        { ...DECIDE_CFG, jobId: "job-fail" },
         onEvent
       )
     ).rejects.toThrow("mock: decide runner failed");
   });
 
-  it("rejects on a decide failure in the W=1 serial path too (unchanged semantics)", async () => {
+  it("rejects on a decide failure in the live/serial path too (unchanged semantics)", async () => {
     const obs: number[] = [];
     const client = concurrencyClient({
       candidateFrames: new Map([[0, { eventType: "GOAL", timestamp: 0 }]]),
@@ -206,22 +219,24 @@ describe("VOD decide concurrency (ADAAAA-6854)", () => {
         client,
         frameSeq(1) as any,
         async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
-        { jobId: "job-w1fail", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 24, decideConcurrency: 1 },
+        { ...LIVE_CFG, jobId: "job-live-serial-fail" },
         () => {}
       )
     ).rejects.toThrow("mock: serial decide failed");
   });
 
-  it("AC1 throughput: a job with 4 candidates completes materially faster at W=2 than W=1 (fixed per-decide latency)", async () => {
+  it("AC1 throughput: the VOD concurrent-dispatch path completes materially faster than the live serial path (fixed per-decide latency, no app-side W knob)", async () => {
     // 4 non-GOAL candidates (never burst-suppressed), each decide taking 300 ms
-    // (~ the slow vLLM inference that W=2 overlaps). Serial it is ~4x300=1200 ms;
-    // W=2 runs two in flight so ~2x300=600 ms. Assert the W=2 job finishes in
-    // well under the serial time (>=30% faster) and with NO extra decide calls.
+    // (~ the slow vLLM inference). The live serial path awaits each decide
+    // inline → ~4x300=1200 ms. The VOD path dispatches every candidate decide
+    // concurrently (bounded by the orchestrator runner `capacity`, not an
+    // app-side toggle) → ~1x300=300 ms. Assert the concurrent job finishes well
+    // under the serial time (>=30% faster) and with NO extra decide calls.
     const DECIDE_MS = 300;
     const candidateFrames = new Map<number, { eventType: string; timestamp: number }>(
       [0, 1, 2, 3].map((i) => [i, { eventType: "BIG_SAVE", timestamp: i }])
     );
-    async function run(w: number) {
+    async function run(vod: boolean) {
       const obs: number[] = [];
       const client = concurrencyClient({ candidateFrames, decideDelayMs: () => DECIDE_MS, decideVerdict: () => ({ isHighlight: true, score: 80, eventType: "BIG_SAVE" }), observedConcurrency: obs });
       const { events, onEvent } = recordEvents();
@@ -230,22 +245,22 @@ describe("VOD decide concurrency (ADAAAA-6854)", () => {
         client,
         frameSeq(4) as any,
         async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
-        { jobId: `job-ac1-w${w}`, clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 24, decideConcurrency: w },
+        vod ? { ...DECIDE_CFG, jobId: "job-ac1-vod" } : { ...LIVE_CFG, jobId: "job-ac1-live" },
         onEvent
       );
       return { ms: Date.now() - t0, maxInflight: Math.max(...obs, 1), highlights: events.filter((e) => e.type === "highlight").length };
     }
-    const serial = await run(1);
-    const conc = await run(2);
+    const serial = await run(false); // live: serial inline decide
+    const conc = await run(true); // VOD: concurrent dispatch
     // Both must accept the same 4 candidates (AC3 exactly-once; no lost clips).
     expect(serial.highlights).toBe(4);
     expect(conc.highlights).toBe(4);
-    // Concurrency really overlapped the decides.
+    // Concurrency really overlapped the decides; the live path stayed serial.
     expect(conc.maxInflight).toBeGreaterThanOrEqual(2);
     expect(serial.maxInflight).toBe(1);
     // AC1: >=30% faster. Use a generous margin for the fixed per-frame overhead.
     expect(conc.ms).toBeLessThan(serial.ms * 0.7);
     // eslint-disable-next-line no-console
-    console.log(`AC1 measured: serial(W=1)=${serial.ms}ms, concurrent(W=2)=${conc.ms}ms, ratio=${(conc.ms / serial.ms).toFixed(2)}`);
+    console.log(`AC1 measured: serial(live)=${serial.ms}ms, concurrent(VOD)=${conc.ms}ms, ratio=${(conc.ms / serial.ms).toFixed(2)}`);
   });
 });

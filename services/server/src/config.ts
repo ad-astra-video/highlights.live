@@ -120,12 +120,6 @@ export interface ServerConfig {
    * `frames[]` so Gemma reasons across a longer SEQUENCE per trigger.
    * `VOD_DECIDE_WINDOW_N`. */
   vodDecideWindowN: number;
-  /** ADAAAA-6854: bounded decide concurrency for the VOD pass (W). The server's
-   * VOD `analyzeJob` runs up to this many candidate decide() calls in flight at
-   * once, overlapping the (slow) vLLM inference with the next frames' perceive
-   * analysis. Default 2 (the decide GPU is sized for 4); set to 1 to preserve
-   * the fully-serial behavior. `VOD_DECIDE_CONCURRENCY`. */
-  vodDecideConcurrency: number;
   /** I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
    * Frames within +/- `vodResampleWindowS` of a candidate are re-extracted at
    * `vodResampleFps` so the ball-goal-crossing instant is in the decide window.
@@ -325,9 +319,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 2),
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
-    // ADAAAA-6854: bounded decide concurrency (W) for the VOD pass. Default 2;
-    // 1 preserves the fully-serial behavior. `VOD_DECIDE_CONCURRENCY`.
-    vodDecideConcurrency: Number(env.VOD_DECIDE_CONCURRENCY ?? 2),
     // I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
     // Frames within +/- vodResampleWindowS of a candidate are re-extracted at
     // vodResampleFps so the ball-goal-crossing instant is in the decide window.
