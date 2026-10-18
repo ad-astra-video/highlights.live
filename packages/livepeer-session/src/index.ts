@@ -335,7 +335,16 @@ export class LivepeerClient {
   constructor(
     public readonly orchBase: string,
     private transport: Transport = new HttpTransport(orchBase),
-    private opts: { decideBackoffBaseMs?: number; decideMaxAttempts?: number } = {}
+    private opts: {
+      decideBackoffBaseMs?: number;
+      decideMaxAttempts?: number;
+      /** ADAAAA-6911: max concurrent decide app-calls the client will keep in
+       * flight. Defaults to the decide runner capacity (2) so the unbounded VOD
+       * dispatch (ADAAAA-6903) actually overlaps decide inference instead of
+       * being silently serialized to 1; oversubscription is absorbed by the
+       * orchestrator's `503 no capacity` + this client's backoff/retry. */
+      decideConcurrency?: number;
+    } = {}
   ) {}
 
   /**
@@ -434,22 +443,36 @@ export class LivepeerClient {
     body: unknown,
     opts?: { headers?: Record<string, string>; payerAddress?: string; paymentHeaders?: Record<string, string> }
   ): Promise<{ status: number; data: unknown }> {
-    return this.serializedDecide(() => this.decideUnserialized(path, body, opts));
+    return this.decideGate(() => this.decideUnserialized(path, body, opts));
   }
 
-  /** Promise-chain gate of capacity 1 for decide-runner app calls. */
-  private decideChain: Promise<unknown> = Promise.resolve();
-  private async serializedDecide<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = this.decideChain;
-    let release!: () => void;
-    this.decideChain = new Promise<void>((r) => {
-      release = r;
-    });
-    await prev;
+  /** Bounded-concurrency gate for decide-runner app calls (ADAAAA-6911).
+   * Previously a strict capacity-1 promise chain (`serializedDecide`), which
+   * silently serialized EVERY decide call to one at a time and therefore
+   * defeated the ADAAAA-6903 "unbounded VOD dispatch" — the decide runner's
+   * capacity-2 admission was never used and no concurrent-decide throughput
+   * existed. Now bounded by `decideConcurrency` (default = runner capacity 2),
+   * and oversubscription is absorbed by the orchestrator's `503 no capacity`
+   * which `decideUnserialized` retries with backoff (the increment's stated
+   * admission-backpressure design). */
+  private activeDecides = 0;
+  private decideWaiters: (() => void)[] = [];
+  private get decideConcurrency(): number {
+    return Math.max(1, this.opts.decideConcurrency ?? 2);
+  }
+  private async decideGate<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.activeDecides < this.decideConcurrency) {
+      this.activeDecides++;
+    } else {
+      await new Promise<void>((r) => this.decideWaiters.push(r));
+      this.activeDecides++;
+    }
     try {
       return await fn();
     } finally {
-      release();
+      this.activeDecides--;
+      const next = this.decideWaiters.shift();
+      if (next) next();
     }
   }
 
