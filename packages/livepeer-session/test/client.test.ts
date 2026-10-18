@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { LivepeerClient, PaymentRequiredError, ROUTES, type SignerClient, type Transport } from "../src/index";
+import {
+  HttpTransport,
+  LivepeerClient,
+  PaymentRequiredError,
+  ROUTES,
+  type SignerClient,
+  type Transport,
+} from "../src/index";
 
 class MockTransport implements Transport {
   calls: { method: string; url: string; headers?: Record<string, string>; body?: unknown }[] = [];
@@ -407,5 +414,37 @@ describe("LivepeerClient", () => {
     const out = await c.refreshPerceivePayment("s1", "http://c", signer, "b3JjaA==", null, "sess-1", "0xabc");
     expect(out).toBeNull();
     expect(t.calls.length).toBe(0);
+  });
+});
+
+describe("HttpTransport timeout (ADAAAA-6957)", () => {
+  it("rejects a request whose response never arrives within the bound, with a clear error", async () => {
+    const originalFetch = globalThis.fetch;
+    // A decide/analyze response that never returns (the VOD `analyzing` hang):
+    // real fetch rejects once the AbortSignal.timeout fires. Mock it to reject
+    // with a TimeoutError on abort.
+    globalThis.fetch = vi.fn((_url: any, init: any) => {
+      return new Promise((_resolve, reject) => {
+        const signal = init?.signal;
+        const onAbort = () =>
+          reject(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }));
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    }) as any;
+    try {
+      const t = new HttpTransport("http://orch:8935", { requestTimeoutMs: 75 });
+      let err: any;
+      try {
+        await t.request("POST", "/apps/highlights-decide/app/foo");
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(Error);
+      // The clear, greppable error that lands on the failed job's `error` field.
+      expect(String(err?.message)).toMatch(/timed out after 75ms/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

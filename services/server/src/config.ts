@@ -17,6 +17,11 @@ export interface ServerConfig {
    * runner capacity 2); set to 1 to reproduce the capacity-1 serial baseline
    * for the AC1 on-box measurement. */
   decideConcurrency?: number;
+  /** ADAAAA-6957: per-request timeout (ms) for livepeer-session HTTP calls
+   * (`LIVEPEER_REQUEST_TIMEOUT_MS`), so a stalled decide / frame-analyze /
+   * payment request rejects instead of parking a VOD job at `analyzing`. Left
+   * unset -> the client's default (90s). Bounds both `HttpTransport` fetches. */
+  livepeerRequestTimeoutMs?: number;
   /** When set, bypass the orchestrator and call the train runner directly (dev).
    * No train container ships with the local stack today, so this stays unset
    * and direct train calls fail with a clear error until a TRAIN_URL is wired. */
@@ -298,6 +303,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     perceiveUrl: env.PERCEIVE_URL,
     decideUrl: env.DECIDE_URL,
     decideConcurrency: env.DECIDE_CONCURRENCY ? Number(env.DECIDE_CONCURRENCY) : undefined,
+    livepeerRequestTimeoutMs: env.LIVEPEER_REQUEST_TIMEOUT_MS ? Number(env.LIVEPEER_REQUEST_TIMEOUT_MS) : undefined,
     trainUrl: env.TRAIN_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
     signerUrl: env.SIGNER_URL,
