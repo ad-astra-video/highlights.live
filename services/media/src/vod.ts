@@ -149,6 +149,9 @@ export class MediaVodRunner {
         timestamp: 0,
         costUsd,
         perceiveSessionS: Number(perceiveSessionS.toFixed(1)),
+        // ADAAAA-6895 Phase 1b: report the session id the media node reserved so
+        // the server can record perceiveSessionId on the job record.
+        perceiveSessionId: provisioned.sessionId,
       } satisfies MediaResultEvent);
 
       return {
