@@ -21,7 +21,9 @@ import { MediaOrchestrator, type ProvisionedSession } from "./orch";
 import { WebRtcIngestSession } from "./rtc";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { CandidateEvent, HighlightRecord, MediaResultEvent } from "@highlights/events";
+import type { CandidateEvent, HighlightRecord, MediaJobRequest, MediaResultEvent } from "@highlights/events";
+import { MediaJobRequestSchema } from "@highlights/events";
+import { MediaVodRunner } from "./vod";
 
 const exec = promisify(execFile);
 
@@ -139,6 +141,11 @@ export interface MediaServerOptions {
   clipsDir?: string;
   /** ffmpeg binary path used to cut clips (default "ffmpeg"). */
   ffmpegPath?: string;
+  /** VOD frame-sampling cadence (fps) default for a MediaJobRequest that does
+   *  not carry its own detailFps/sampleFps (Phase 1 / ADAAAA-6866). Default 2. */
+  vodSampleFps?: number;
+  /** VOD frame-scale string default when a MediaJobRequest omits frameScale. */
+  vodFrameScale?: string;
 }
 
 const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
@@ -363,7 +370,58 @@ export class MediaServer {
         return reply.code(404).send({ error: "no such clip" });
       }
     });
+
+    // ---- Phase 1 (ADAAAA-6866): VOD job handoff -------------------------
+    // The negotiating server POSTs a MediaJobRequest (source=file/url) to hand
+    // the VOD job to the media node. The media node runs the whole VOD path
+    // (ffmpeg frame extraction + Stage-A audio tap + perceive session
+    // reservation/payment + per-candidate decide + clip cut from the SOURCE
+    // file) and reports typed MediaResultEvents back over the callback, plus a
+    // final `cost` completion signal. The server stays the DB-owner/biller.
+    app.post<{ Body: MediaJobRequest }>("/jobs/vod", async (req, reply) => {
+      const parsed = MediaJobRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid MediaJobRequest", issues: parsed.error.issues });
+      }
+      const jobReq = parsed.data;
+      const runner = new MediaVodRunner(this.orch, {
+        ffmpegPath: this.opts.ffmpegPath,
+        decideUrl: this.opts.decideUrl,
+        decideAuthToken: this.opts.decideAuthToken,
+        decideFee: this.opts.decideFee,
+        perceivePerHourUsd: this.opts.perceivePerHourUsd,
+        clipBeforeS: this.opts.clipBeforeS,
+        clipAfterS: this.opts.clipAfterS,
+        clipsDir: this.opts.clipsDir,
+        tmpDir: this.opts.tmpDir,
+        publicBaseUrl: this.opts.publicBaseUrl,
+        sampleFps: this.opts.vodSampleFps,
+        frameScale: this.opts.vodFrameScale,
+        report: (jobId, ev) => this.postResultForJob(jobId, ev),
+      });
+      // Run in the background; the media node reports typed result events (and
+      // the final cost/completion) back over the callback.
+      void runner
+        .run(jobReq)
+        .catch((e) => console.error(`[media-vod] job ${jobReq.jobId} failed:`, String(e?.message || e)));
+      return { ok: true, jobId: jobReq.jobId };
+    });
+
     return app;
+  }
+
+  /** POST a typed MediaResultEvent to the negotiating server for a job. */
+  private async postResultForJob(jobId: string, ev: MediaResultEvent): Promise<void> {
+    if (!this.opts.callbackBase || !jobId) return;
+    try {
+      await fetch(`${this.opts.callbackBase}/jobs/${jobId}/observe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ev),
+      });
+    } catch {
+      /* result relay is best-effort */
+    }
   }
 
   private async handleFrame(stream: ActiveStream, socket: any, raw: any) {
