@@ -3,6 +3,7 @@
 import { readFile } from "node:fs/promises";
 import {
   HttpSignerClient,
+  HttpTransport,
   LivepeerClient,
   PaymentRequiredError,
   ROUTES,
@@ -74,7 +75,9 @@ export class OrchestratorAdapter implements PipelineClient {
   constructor(cfg: ServerConfig, opts: PaidOrchestratorOptions = {}) {
     this.client = new LivepeerClient(
       cfg.orchestratorUrl,
-      undefined,
+      // ADAAAA-6957: bound every orchestrator HTTP request so a stalled decide /
+      // frame-analyze rejects instead of parking a VOD job at `analyzing`.
+      new HttpTransport(cfg.orchestratorUrl, { requestTimeoutMs: cfg.livepeerRequestTimeoutMs }),
       cfg.decideConcurrency !== undefined ? { decideConcurrency: cfg.decideConcurrency } : undefined
     );
     this.signer = opts.signer;

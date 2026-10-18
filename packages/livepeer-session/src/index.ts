@@ -192,6 +192,22 @@ export class NotAuthorizedError extends Error {
 
 // --- Transport ---------------------------------------------------------------
 
+/**
+ * ADAAAA-6957: bound every livepeer-session HTTP request so a stalled decide /
+ * frame-analyze / payment call rejects instead of parking the job at
+ * `analyzing`. The previous bare `fetch(...)` had no AbortController/timeout,
+ * so a decide (or accept, or frame `/analyze`) request whose response never
+ * returned wedged the whole VOD pipeline: `await decidePipeline.drain()` never
+ * settled and the job sat at `analyzing` indefinitely (server idled ~20 min on
+ * job `3be6d382` before self-recovering). With a per-request timeout `fetch`
+ * rejects with a `TimeoutError`, `HttpSignerClient`/`LivepeerClient` callers'
+ * catches run, and `OrderedDecidePipeline.runJob` aborts -> `drain()` rejects
+ * -> `processVodJob` marks the job `failed` and releases the capacity-1
+ * perceive slot. Default 90s (configurable via `requestTimeoutMs`/env
+ * `LIVEPEER_REQUEST_TIMEOUT_MS`).
+ */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
+
 export interface Transport {
   request(method: string, url: string, init?: { headers?: Record<string, string>; body?: any }): Promise<{
     status: number;
@@ -203,16 +219,37 @@ export interface Transport {
 
 export class HttpTransport implements Transport {
   private tlsReject: boolean;
-  constructor(private base: string, opts?: { rejectUnauthorized?: boolean }) {
+  private requestTimeoutMs: number;
+  constructor(
+    private base: string,
+    opts?: { rejectUnauthorized?: boolean; requestTimeoutMs?: number }
+  ) {
     this.tlsReject = opts?.rejectUnauthorized ?? true;
+    this.requestTimeoutMs = opts?.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
   async request(method: string, url: string, init: { headers?: Record<string, string>; body?: any } = {}) {
     const headers = { ...(init.headers || {}) };
-    const res = await fetch(new URL(url, this.base).toString(), {
-      method,
-      headers,
-      body: init.body,
-    });
+    let res: Response;
+    try {
+      res = await fetch(new URL(url, this.base).toString(), {
+        method,
+        headers,
+        body: init.body,
+        // ADAAAA-6957: reject once the response fails to arrive within the bound,
+        // so a decide/analyze/payment request can never hang the job forever.
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      });
+    } catch (err: any) {
+      // ADAAAA-6957: surface a CLEAR error so the job-failure log / job.error
+      // names the real cause (a stalled request) instead of the bare DOMException
+      // "The operation was aborted due to timeout" that fetch throws on abort.
+      if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+        throw new Error(
+          `livepeer-session ${method} ${new URL(url, this.base).toString()} timed out after ${this.requestTimeoutMs}ms`
+        );
+      }
+      throw err;
+    }
     return {
       status: res.status,
       headers: res.headers,
