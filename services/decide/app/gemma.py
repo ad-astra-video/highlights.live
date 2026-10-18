@@ -129,6 +129,29 @@ def normalize_prefer_label(label) -> str:
     return (label or "").strip().lower()
 
 
+def event_type_for_outcome(outcome: str | None, fallback: str = "") -> str:
+    """ADAAAA-6969: derive the TRUE public ``eventType`` label from the outcome
+    taxonomy member.
+
+    A non-scoring highlight (``near_miss`` / ``big_play``) must never be
+    published as ``GOAL`` — the label reflects the outcome class (``NEAR_MISS`` /
+    ``BIG_PLAY``), so a keeper save / near-miss surfaces as a distinct non-goal
+    highlight. A frame-confirmed ``scoring_play`` stays ``GOAL``. Any other /
+    unknown outcome defers to ``fallback`` (the candidate/model label).
+
+    Kept in sync with the server-side ``eventTypeForOutcome`` in
+    ``services/server/src/analyzer.ts`` (ADAAAA-6969) so the public label and
+    the decide-note always agree.
+    """
+    if outcome == "scoring_play":
+        return "GOAL"
+    if outcome == "near_miss":
+        return "NEAR_MISS"
+    if outcome == "big_play":
+        return "BIG_PLAY"
+    return fallback
+
+
 def requested_outcomes(prefer_labels) -> set[str]:
     """The outcome taxonomy members the job's preferLabels authorize for export.
     Empty set when no labels are requested, which preserves the default
@@ -477,7 +500,9 @@ def reconcile_outcome_with_ball_signal(decision: dict, ball_outcome: Optional[st
         (decision.get("reason") or "")
         + "; goal-line signal: goal-bound shot did not convert (near-miss)"
     ).strip("; ")
-    decision["eventType"] = decision.get("eventType") or "NEAR_MISS"
+    # ADAAAA-6969: the outcome was forced to near_miss, so the public label
+    # MUST reflect that class — never leave a stale candidate/model "GOAL".
+    decision["eventType"] = event_type_for_outcome("near_miss", decision.get("eventType") or "")
     return decision
 
 
@@ -506,6 +531,10 @@ def finalize_goal_acceptance(decision: dict, prefer_labels: list[str] | None = N
     # Explicitly-requested non-goal class -> accept as a distinct highlight.
     if outcome in requested_outcomes(prefer_labels):
         decision["isHighlight"] = True
+        # ADAAAA-6969: a non-scoring highlight's label reflects the outcome
+        # class (NEAR_MISS / BIG_PLAY) — never the candidate/model's "GOAL".
+        # outcome & nearMiss are preserved; only the label changes.
+        decision["eventType"] = event_type_for_outcome(outcome, decision.get("eventType") or "")
         return decision
     decision["isHighlight"] = False
     decision.setdefault(
