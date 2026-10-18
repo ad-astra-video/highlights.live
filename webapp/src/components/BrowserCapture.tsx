@@ -9,7 +9,7 @@ import {
   type AnalysisTrace,
 } from "../lib/analysisRelay";
 
-const MAX_RECONNECT = 6; // consecutive media reconnect attempts before falling back to /ingest
+const MAX_RECONNECT = 6; // consecutive media reconnect attempts before surfacing an error (no /ingest fallback)
 
 // Client-side capture: getDisplayMedia (screen / tab / window). The REAL pixels
 // never leave the browser as a big stream:
@@ -17,11 +17,13 @@ const MAX_RECONNECT = 6; // consecutive media reconnect attempts before falling 
 //     WebRTC connection to the media server, which decodes + samples the stream
 //     onto the orchestrator video-in rail (C1). No canvas sampling happens in
 //     the browser.
-//   - WS / HTTP fallbacks: if the media server has no WebRTC ingest yet, we
-//     fall back to the previous behaviour (sample the preview to a small canvas
-//     and push JPEG frames over the media-server WS, else the /ingest rail).
-// In every mode a MediaRecorder recording is chunked up so clips can be cut
-// server-side.
+//   - WS fallback: if the media server has no WebRTC ingest yet, we fall back to
+//     the previous behaviour (sample the preview to a small canvas and push JPEG
+//     frames over the media-server WS). There is no server /ingest fallback
+//     (retired in Phase 3 / ADAAAA-6868); the browser connects to the media
+//     server only.
+// In every mode a MediaRecorder recording is chunked up and streamed to the
+// media server (Phase 3 / ADAAAA-6868) so clips are cut ON the media node.
 export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone: () => void }) {
   const { reasoningEffort } = useSettings();
   const [sharing, setSharing] = useState(false);
@@ -46,16 +48,16 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   const analysisRcRef = useRef(0); // consecutive analysis reconnect attempts
   const batcherRef = useRef<ReturnType<typeof makeAnalysisBatcher> | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
-  const modeRef = useRef<"ingest" | "ws" | "rtc" | "pending">("pending");
+  const modeRef = useRef<"ws" | "rtc" | "pending">("pending");
   // True while we're intentionally stopping (so reconnects never fire on user
   // stop / unmount). Consecutive reconnect attempts, reset on a successful open.
   const stoppingRef = useRef(false);
   const rcRef = useRef(0);
-  // In-flight MediaRecorder chunk uploads to the /recording rail. Finalize
-  // awaits these (plus the rec.stop() flush) BEFORE POST /stop so the recording
-  // is complete when the server cuts clips — the missing piece that left an
-  // empty clipUri on every highlight (ADAAAA-6522).
-  const pendingUploadsRef = useRef<Set<Promise<void>>>(new Set());
+  // MediaRecorder recording chunks now stream to the MEDIA SERVER over its
+  // WebSocket ({type:"media",...}), where they are reassembled + cut on the
+  // media node (Phase 3 / ADAAAA-6868) — they never hit the server /recording
+  // rail. The finalize settle below gives the last chunk a beat to flush before
+  // POST /stop (which tears the media session down).
 
   /** Build the WebRTC offer -> answer + ICE signaling to the media server.
    *  The media server assigns the pcId on the offer round-trip, so candidates
@@ -126,10 +128,11 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     }
   }
 
-  // Open the media-server ingest path: prefer WebRTC (C1), else the media WS,
-  // else the HTTP /ingest rail. On any unexpected failure we re-ask the server
-  // for the current / freshly-rerouted details (it reuses the session from the
-  // DB, or re-provisions on a healthy node) and reconnect — seamless.
+  // Open the media-server ingest path: prefer WebRTC (C1), else the media WS.
+  // The server-side /ingest HTTP rail is retired (Phase 3 / ADAAAA-6868), so on
+  // any unexpected failure we re-ask the server for the current / freshly-
+  // rerouted details (it reuses the session from the DB, or re-provisions on a
+  // healthy node) and reconnect — never through the server's frame rail.
   function openMedia(jobId: string, stream: MediaStream): Promise<void> {
     return api<{ wsUrl?: string; mediaOrigin?: string; mediaSessionId?: string; rtc?: boolean }>(
       `/jobs/${jobId}/media`,
@@ -178,10 +181,15 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
             ws.addEventListener("error", () => resolve(), { once: true });
           });
         }
-        modeRef.current = "ingest";
+        // No media-server ingest endpoint available. The server-side /ingest
+        // rail is retired (Phase 3 / ADAAAA-6868): surface a real error instead
+        // of silently routing browser media through the server.
+        throw new Error("No media-server ingest endpoint (WebRTC/WS) is available for this job");
       })
-      .catch(() => {
-        modeRef.current = "ingest";
+      .catch((e) => {
+        // Media path unavailable (e.g. media node down / MEDIA_SERVER_URL unset).
+        // Phase 3: do NOT fall back to the server /ingest rail.
+        throw e;
       });
   }
 
@@ -267,59 +275,45 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   function scheduleReconnect(jobId: string) {
     if (stoppingRef.current || !streamRef.current) return;
     if (rcRef.current >= MAX_RECONNECT) {
-      modeRef.current = "ingest";
+      modeRef.current = "pending";
+      // No server /ingest rail to fall back to (Phase 3 / ADAAAA-6868).
+      setError("Could not reconnect to the media server — capture stopped. Check your connection and start again.");
       return;
     }
     const delay = Math.min(800 * 2 ** rcRef.current, 5000);
     rcRef.current += 1;
     modeRef.current = "pending";
     setTimeout(() => {
-      if (!stoppingRef.current && streamRef.current) void openMedia(jobId, streamRef.current);
+      if (!stoppingRef.current && streamRef.current) {
+        openMedia(jobId, streamRef.current).catch((e) => {
+          console.error("media reconnect failed", e);
+          setError(String((e as any)?.message || e));
+        });
+      }
     }, delay);
   }
 
-  // Upload one MediaRecorder chunk to the /recording rail, retrying on a
-  // transient failure (drop / network / base64) before surfacing. The promise is
-  // tracked so finalize can await every chunk before POST /stop, and a persistent
-  // failure is surfaced to the user instead of being silently swallowed
-  // (ADAAAA-6522).
-  function uploadRecordingChunk(b64: string, mime: string): Promise<void> {
-    const id = jobIdRef.current;
-    if (!id) return Promise.resolve();
-    const attempt = async (): Promise<boolean> => {
-      try {
-        await api(`/jobs/${id}/recording`, { body: { base64: b64, mime } });
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    const doRetry = async (): Promise<void> => {
-      for (let i = 0; i < 4; i++) {
-        if (await attempt()) return;
-        await sleep(400 * (i + 1));
-      }
-      // Persistent failure: surface rather than silently drop the chunk (a lost
-      // chunk means a truncated/absent recording -> empty clipUri at stop).
-      if (jobIdRef.current === id) {
-        setError("Recording upload failed — highlight clips may be incomplete. Check your connection and stop again.");
-      }
-    };
-    const p = doRetry().finally(() => pendingUploadsRef.current.delete(p));
-    pendingUploadsRef.current.add(p);
-    return p;
-  }
-
-  // Await every in-flight recording chunk upload, re-sampling so a chunk enqueued
-  // just after we sampled (e.g. the final rec.stop() flush) is also awaited, but
-  // bounded so finalize never hangs the UI if the network is down.
-  async function flushRecordingUploads() {
-    for (let i = 0; i < 20; i++) {
-      const pending = [...pendingUploadsRef.current];
-      if (pending.length === 0) return;
-      await Promise.race([Promise.allSettled(pending), sleep(250)]);
-      if (pendingUploadsRef.current.size === 0) return;
+  // Stream one MediaRecorder chunk to the media server over its open media WS
+  // ({type:"media"} muxed video+audio). The media server reassembles the muxed
+  // recording ON the media node and cuts clips from it — recording bytes never
+  // route through the server (Phase 3 / ADAAAA-6868). No per-chunk retry/ack:
+  // the WS is the transport; a transient drop leaves the media server's
+  // reconnect-grace teardown in play and the next chunk resumes the recording.
+  function sendMediaChunk(b64: string, mime: string) {
+    const ws =
+      (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && wsRef.current) ||
+      (analysisWsRef.current && analysisWsRef.current.readyState === WebSocket.OPEN && analysisWsRef.current) ||
+      null;
+    if (!ws) {
+      // No media WS open: the media server can't reassemble this chunk, so a
+      // clip cut from the recording would be truncated. Surface it rather than
+      // silently dropping bytes (was: empty clipUri at stop, ADAAAA-6522).
+      setError("Recording is not reaching the media server — highlight clips may be incomplete. Check your connection and stop again.");
+      return;
     }
+    // Reassembly is arrival-order on the media node; the container PTS is the
+    // authoritative clock for clip cutting, so seq/timestamp are not consumed.
+    ws.send(JSON.stringify({ type: "media", data: b64, mime, seq: 0, timestamp: 0 }));
   }
 
   useEffect(() => {
@@ -358,7 +352,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
 
       // Media-server handshake: stream the live video track over WebRTC
       // (browser -> media server -> orchestrator video-in), with transparent
-      // reconnect + reroute on node failover. Falls back to WS / HTTP /ingest.
+      // reconnect + reroute on node failover (WebRTC main, WS fallback).
       stoppingRef.current = false;
       rcRef.current = 0;
       await openMedia(job.job.id, stream);
@@ -368,17 +362,21 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       rec.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
           blobToBase64(e.data).then((b64) => {
-            uploadRecordingChunk(b64, mime);
+            // Stream the muxed chunk to the media server (Phase 3): it
+            // reassembles the recording on the media node for clip cutting.
+            sendMediaChunk(b64, mime);
           });
         }
       };
       rec.start(1000); // 1s chunks keep the uploads small
       recRef.current = rec;
 
-      // WS / HTTP fallback only: sample the shared video element -> JPEG ->
-      // push to the media-server WS (or /ingest). In RTC mode the media server
-      // decodes the live track itself, so no sampling happens here.
-      if (modeRef.current === "ws" || modeRef.current === "ingest") {
+      // WS fallback only: sample the shared video element -> JPEG -> push to the
+      // media-server WS at ~1fps. In RTC mode the media server decodes the live
+      // track itself, so no sampling happens. The server-side /ingest rail is
+      // retired (Phase 3 / ADAAAA-6868) — browser media never routes through the
+      // server, so there is no HTTP frame fallback here.
+      if (modeRef.current === "ws") {
         ivRef.current = setInterval(() => {
           const v = videoRef.current;
           if (!v || !v.videoWidth) return;
@@ -389,15 +387,8 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
           ctx.drawImage(v, 0, 0, cv.width, cv.height);
           const image = cv.toDataURL("image/jpeg", 0.6).split(",")[1];
           const seq = seqRef.current++;
-          const id = jobIdRef.current;
-          if (modeRef.current === "ws") {
-            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({ seq, timestamp: seq, image, reasoningEffort }));
-            }
-          } else if (id) {
-            api(`/jobs/${id}/ingest`, {
-              body: { seq, timestamp: seq, image, reasoningEffort },
-            }).catch(() => {});
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ seq, timestamp: seq, image, reasoningEffort }));
           }
         }, 1000);
       }
@@ -419,16 +410,32 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     rcRef.current = 0;
     if (ivRef.current) clearInterval(ivRef.current);
     ivRef.current = null;
-    // Media path: closing the WebRTC/WS (after a short reconnect grace on the
-    // media server) stops paying + releases the perceive slot; /stop is idempotent.
+    // Phase 3 (ADAAAA-6868): recording chunks stream to the media server over its
+    // WS. Stop the MediaRecorder FIRST so its final dataavailable fires and the
+    // last muxed chunk is sent to the media node over the STILL-OPEN media WS —
+    // then give it a beat to flush before we close the WS and POST /stop (which
+    // tears the media session down + flushes the reassembled recording).
+    const rec = recRef.current;
+    let flushed: Promise<void> = Promise.resolve();
+    if (rec && rec.state !== "inactive") {
+      // Set onstop before stop() so we never miss the stop event (ADAAAA-6522).
+      flushed = new Promise<void>((resolve) => {
+        rec.onstop = () => resolve();
+      });
+      rec.stop();
+    }
+    if (andNotify) {
+      await Promise.race([flushed, sleep(3000)]);
+      await sleep(250); // bound; let the final chunk flush over the WS
+    }
+    // Now close the media WS connections (frame + analysis) and stop sampling.
     try {
       wsRef.current?.close();
     } catch {
       /* noop */
     }
     wsRef.current = null;
-    // Close the dedicated analysis WS and flush any buffered analysis events
-    // (best-effort) so nothing is lost on stop.
+    // Flush any buffered analysis events (best-effort) so nothing is lost.
     try {
       analysisWsRef.current?.close();
     } catch {
@@ -442,22 +449,6 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     batcherRef.current = null;
     teardownRtc();
     modeRef.current = "pending";
-    const rec = recRef.current;
-    if (rec && rec.state !== "inactive") {
-      // Wait for the recorder's final dataavailable flush BEFORE POST /stop so
-      // every recording chunk (incl. the last one) reaches the server and the
-      // clip-cut sees a complete recording. Setting onstop before stop() so we
-      // never miss the stop event; the flush below re-samples to catch the final
-      // chunk's upload promise once blobToBase64 resolves (ADAAAA-6522).
-      const flushed = new Promise<void>((resolve) => {
-        rec.onstop = () => resolve();
-      });
-      rec.stop();
-      if (andNotify) {
-        await Promise.race([flushed, sleep(3000)]);
-        await flushRecordingUploads();
-      }
-    }
     // stop the sampler + tracks
     streamRef.current?.getTracks().forEach((t) => t.stop());
     const id = jobIdRef.current;

@@ -1970,35 +1970,42 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         await fetch(`${cfg.mediaServerUrl}/sessions/${bj.mediaSessionId}/close`, { method: "POST" }).catch(() => {});
         await db.clearMediaSession(job.id).catch(() => {});
       }
-      const recPath = await waitForRecording(job.id, 4000);
-      const { mkdir } = await import("node:fs/promises");
-      const outDir = path.join(cfg.dataDir, "clips");
-      await mkdir(outDir, { recursive: true });
-      // Cut a clip for every highlight that doesn't already have one. If the
-      // recording is missing or a cut fails, surface the miss on the highlight
-      // (clipError) instead of silently leaving an empty clipUri -> blank card.
-      let missed = 0;
-      for (const h of store.highlightsForJob(job.id)) {
-        if (h.clipUri) continue;
-        if (!recPath) {
-          missed++;
-          await store.patchHighlight(h.id, {
-            clipError: "No screen-share recording was captured, so this highlight's clip could not be produced.",
-          });
-          continue;
+      // Phase 3 (ADAAAA-6868): when the server-side browser rail is retired, the
+      // media node cuts clips from its own reassembled recording and reports them
+      // over /jobs/:id/observe -> typed highlight result events. The server's
+      // server-side clip cut (waitForRecording + cutClip) is skipped so no
+      // recording/clip work happens on the server.
+      if (!cfg.retireBrowserIngestRail) {
+        const recPath = await waitForRecording(job.id, 4000);
+        const { mkdir } = await import("node:fs/promises");
+        const outDir = path.join(cfg.dataDir, "clips");
+        await mkdir(outDir, { recursive: true });
+        // Cut a clip for every highlight that doesn't already have one. If the
+        // recording is missing or a cut fails, surface the miss on the highlight
+        // (clipError) instead of silently leaving an empty clipUri -> blank card.
+        let missed = 0;
+        for (const h of store.highlightsForJob(job.id)) {
+          if (h.clipUri) continue;
+          if (!recPath) {
+            missed++;
+            await store.patchHighlight(h.id, {
+              clipError: "No screen-share recording was captured, so this highlight's clip could not be produced.",
+            });
+            continue;
+          }
+          try {
+            const name = `${job.id}-${Math.round(h.start * 10)}`;
+            const out = path.join(outDir, `${name}.mp4`);
+            await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), cfg.clipBeforeS + cfg.clipAfterS);
+            await store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4` });
+          } catch (e: any) {
+            missed++;
+            await store.patchHighlight(h.id, { clipError: `Clip cut failed: ${String(e?.message || e)}` });
+          }
         }
-        try {
-          const name = `${job.id}-${Math.round(h.start * 10)}`;
-          const out = path.join(outDir, `${name}.mp4`);
-          await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), cfg.clipBeforeS + cfg.clipAfterS);
-          await store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4` });
-        } catch (e: any) {
-          missed++;
-          await store.patchHighlight(h.id, { clipError: `Clip cut failed: ${String(e?.message || e)}` });
+        if (missed > 0) {
+          console.error(`[browser:${job.id}] ${missed} highlight(s) produced no clip (recording=${recPath ? "present" : "missing"})`);
         }
-      }
-      if (missed > 0) {
-        console.error(`[browser:${job.id}] ${missed} highlight(s) produced no clip (recording=${recPath ? "present" : "missing"})`);
       }
       browserJobs.delete(job.id);
       await store.patchJob(job.id, { status: "done" });
@@ -2016,6 +2023,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     async (req: any, reply) => {
       const job = store.getJob(req.params.id);
       if (!job) return reply.code(404).send({ error: "no job" });
+      // Phase 3 (ADAAAA-6868): the server-side direct /ingest rail is retired once
+      // parity is verified on the media server. Browser media now flows browser ->
+      // media-server WebRTC/WS -> orchestrator video-in; this is gone.
+      if (cfg.retireBrowserIngestRail)
+        return reply.code(410).send({ error: "browser ingest rail retired; connect to the media server over WebRTC/WS" });
       const bj = browserJobs.get(req.params.id);
       if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
       const { seq = 0, timestamp = 0, image } = req.body ?? {};
@@ -2241,6 +2253,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     async (req: any, reply) => {
       const job = store.getJob(req.params.id);
       if (!job) return reply.code(404).send({ error: "no job" });
+      // Phase 3 (ADAAAA-6868): recording chunks now stream to the media server
+      // over its WebSocket and are reassembled + cut there (on the media node).
+      // The server-side recording rail is retired: media bytes never land here.
+      if (cfg.retireBrowserIngestRail)
+        return reply.code(410).send({ error: "browser recording rail retired; recording chunks now stream to the media server" });
       const bj = browserJobs.get(req.params.id);
       if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
       const { base64, mime } = req.body ?? {};

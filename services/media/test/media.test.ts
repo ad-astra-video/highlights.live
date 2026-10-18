@@ -204,6 +204,31 @@ describe("media server handshake (b)", () => {
     await srv.close();
   });
 
+  it("names the reassembled recording by container, stripping MediaRecorder codec params (Phase 3 / ADAAAA-6868)", async () => {
+    const g = new FakeOrch("sess-mpt");
+    const tmp = mkdtempSync(path.join(tmpdir(), "hl-media-"));
+    const ms = new MediaServer(
+      { orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", reconnectGraceMs: 1000, tmpDir: tmp },
+      g as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    const res = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-mpt" } });
+    const sid = res.json().sessionId;
+    const ws = await wsConnect(`${sBase.replace("http", "ws")}/stream/${sid}`);
+    // The browser negotiates param-bearing mimes (e.g. video/mp4;codecs=avc1).
+    // The media server must record as .mp4 (not default .webm) so cutClipFor
+    // outputs the right container.
+    ws.send(JSON.stringify({ type: "media", mime: "video/mp4;codecs=avc1", seq: 0, timestamp: 0, data: Buffer.from("AA").toString("base64") }));
+    await new Promise((r) => setTimeout(r, 150));
+    await srv.inject({ method: "POST", url: `/sessions/${sid}/close` });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(readFileSync(path.join(tmp, `${sid}.mp4`)).toString()).toBe("AA");
+    ws.close();
+    await srv.close();
+  });
+
   it("pays the orchestrator while the stream is open and stops paying on teardown", async () => {
     expect(fake.startedPayments).toContain("sess-fake"); // provision started payment
     expect(fake.stoppedPayments).toContain("sess-fake"); // the close above stopped it

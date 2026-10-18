@@ -1041,3 +1041,100 @@ describe("VOD resumable/chunked upload rail (init/chunk/complete, ADAAAA-5714)",
     await app.close();
   });
 });
+
+describe("retired browser-capture rails (Phase 3 / ADAAAA-6868)", () => {
+  it("RETIRE_BROWSER_INGEST_RAIL=1 disables /ingest + /recording and skips server-side clip cutting", async () => {
+    const { app, cfg } = await buildTestApp({ RETIRE_BROWSER_INGEST_RAIL: "1", MEDIA_SERVER_URL: "http://media" });
+    const token = await register(app, "ret3@test.dev", "password123");
+
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser", gameHint: "Esports" },
+    });
+    expect(jr.statusCode).toBe(200);
+    const jobId = jr.json().job.id;
+    const ownerId = jr.json().job.ownerId;
+    // browser media bytes cannot route through the server.
+    const ing = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/ingest`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { seq: 0, timestamp: 0, image: "aGVsbG8=" },
+    });
+    expect(ing.statusCode).toBe(410);
+
+    // The server-side recording rail is retired too.
+    const rec = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/recording`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { base64: Buffer.from("x").toString("base64"), mime: "video/mp4" },
+    });
+    expect(rec.statusCode).toBe(410);
+
+    // A highlight reported by the media node (typed result over /observe) is
+    // persisted; on stop the server must NOT cut a clip from a server recording
+    // (the media node owns clip cutting), so the clipUri stays as reported and
+    // no clip file is written under the server data dir.
+    const hl = {
+      id: "hl-retire",
+      jobId,
+      ownerId,
+      clipUri: "",
+      start: 0,
+      end: 1,
+      eventType: "KILL",
+      score: 0.9,
+      reason: "test",
+      status: "accepted",
+      createdAt: new Date().toISOString(),
+    };
+    const obs = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/observe`,
+      payload: { type: "highlight", seq: 0, timestamp: 0, highlight: hl },
+    });
+    expect(obs.statusCode).toBe(200);
+
+    const st = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/stop`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {},
+    });
+    expect(st.statusCode).toBe(200);
+    expect(st.json().job.status).toBe("done");
+
+    const got = (await app.inject({ method: "GET", url: `/jobs/${jobId}`, headers: { authorization: `Bearer ${token}` } })).json();
+    const served = got.highlights.find((h: any) => h.id === "hl-retire");
+    expect(served).toBeTruthy();
+    // Not server-cut: clipUri remains exactly what the media node reported.
+    expect(served.clipUri).toBe("");
+    expect(served.clipError).toBeUndefined();
+    // No clip file was written by the retired server-side clip-cut path.
+    expect(existsSync(path.join(cfg.dataDir, "clips"))).toBe(false);
+    await app.close();
+  });
+
+  it("with the flag off the legacy server rail still works (default behaviour preserved)", async () => {
+    const { app } = await buildTestApp();
+    const token = await register(app, "ret-on@test.dev", "password123");
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser", gameHint: "Esports" },
+    });
+    const jobId = jr.json().job.id;
+    const ing = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/ingest`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { seq: 0, timestamp: 0, image: "aGVsbG8=" },
+    });
+    expect(ing.statusCode).toBe(200);
+    await app.close();
+  });
+});
