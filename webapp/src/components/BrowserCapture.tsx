@@ -10,6 +10,11 @@ import {
 } from "../lib/analysisRelay";
 
 const MAX_RECONNECT = 6; // consecutive media reconnect attempts before surfacing an error (no /ingest fallback)
+// Bound on buffered outbound media chunks (1/s chunks; well above any reconnect
+// window, and far short of runaway memory). If the queue overflows the media
+// socket has been down for a long stretch — surface it rather than silently
+// dropping bytes (ADAAAA-6868 Phase 3 review, Medium).
+const MAX_MEDIA_QUEUE = 500;
 
 // Client-side capture: getDisplayMedia (screen / tab / window). The REAL pixels
 // never leave the browser as a big stream:
@@ -53,6 +58,16 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   // stop / unmount). Consecutive reconnect attempts, reset on a successful open.
   const stoppingRef = useRef(false);
   const rcRef = useRef(0);
+  // Dedicated media-server WS (for MediaRecorder chunks): opened in BOTH rtc and
+  // ws modes so recording bytes never ride the analysis socket (ADAAAA-6868
+  // Phase 3 review, Medium). Its URL is stashed so a short drop can reopen just
+  // the recording socket (RTC mode) without tearing down the RTC connection.
+  const mediaWsUrlRef = useRef<string | null>(null);
+  // Outbound media-chunk queue: chunks are buffered and flushed over the media
+  // socket, so a brief reconnect window does not drop recording bytes (they
+  // resume on reopen instead of being lost), and the queue is drained before the
+  // socket is closed at stop (ADAAAA-6868 Phase 3 review, Medium).
+  const mediaQueueRef = useRef<Array<{ b64: string; mime: string }>>([]);
   // MediaRecorder recording chunks now stream to the MEDIA SERVER over its
   // WebSocket ({type:"media",...}), where they are reassembled + cut on the
   // media node (Phase 3 / ADAAAA-6868) — they never hit the server /recording
@@ -128,6 +143,53 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     }
   }
 
+  // Open the dedicated media-server WS that carries the MediaRecorder recording
+  // chunks. Opened in BOTH rtc and ws modes so recording bytes never ride the
+  // analysis socket (ADAAAA-6868 Phase 3 review, Medium). On an unexpected
+  // close: in WS mode the whole media path is re-handshaken; in RTC mode the
+  // recording socket is reopened in place (keeping the live RTC video going).
+  function openMediaSocket(wsUrl: string, jobId: string): Promise<void> {
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+    ws.onopen = () => {
+      rcRef.current = 0;
+      // Flush any media chunks buffered while the socket was reconnecting.
+      flushMediaChunks();
+    };
+    ws.onerror = () => {
+      try {
+        ws.close();
+      } catch {
+        /* noop */
+      }
+    };
+    ws.onclose = () => {
+      if (wsRef.current === ws) wsRef.current = null;
+      if (stoppingRef.current) return;
+      if (modeRef.current === "ws") scheduleReconnect(jobId);
+      else if (modeRef.current === "rtc") scheduleRecordingReconnect(jobId);
+    };
+    return new Promise<void>((resolve) => {
+      ws.addEventListener("open", () => resolve(), { once: true });
+      ws.addEventListener("error", () => resolve(), { once: true });
+    });
+  }
+
+  // Reopen just the recording socket in RTC mode (the live video stays on the
+  // RTC connection). Bounded; on exhaustion the chunks stop arriving but the
+  // RTC live feed is unaffected.
+  function scheduleRecordingReconnect(jobId: string) {
+    if (stoppingRef.current) return;
+    if (rcRef.current >= MAX_RECONNECT) return;
+    const delay = Math.min(800 * 2 ** rcRef.current, 5000);
+    rcRef.current += 1;
+    setTimeout(() => {
+      if (stoppingRef.current) return;
+      const url = mediaWsUrlRef.current;
+      if (url && modeRef.current === "rtc") void openMediaSocket(url, jobId);
+    }, delay);
+  }
+
   // Open the media-server ingest path: prefer WebRTC (C1), else the media WS.
   // The server-side /ingest HTTP rail is retired (Phase 3 / ADAAAA-6868), so on
   // any unexpected failure we re-ask the server for the current / freshly-
@@ -144,11 +206,17 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
         // WebRTC path and no frame WS is opened) — so the webapp receives the
         // media-server analysis messages (ADAAAA-6746 G1b).
         if (media?.wsUrl) openAnalysisWs(media.wsUrl, jobId);
+        if (media?.wsUrl) mediaWsUrlRef.current = media.wsUrl;
         if (media?.rtc && media.mediaOrigin && media.mediaSessionId) {
           modeRef.current = "rtc";
           try {
             await establishRtc(media.mediaOrigin, media.mediaSessionId, stream);
             rcRef.current = 0;
+            // RTC mode: the LIVE video rides WebRTC, but the MediaRecorder
+            // recording chunks still need a dedicated media WS. Open it here so
+            // recording bytes never fall through to the analysis socket
+            // (ADAAAA-6868 Phase 3 review, Medium).
+            if (media?.wsUrl) await openMediaSocket(media.wsUrl, jobId);
             return;
           } catch (e) {
             // RTC establishment failed (e.g. older media server has no RTC
@@ -159,27 +227,8 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
         }
         if (media?.wsUrl) {
           modeRef.current = "ws";
-          const ws = new WebSocket(media.wsUrl);
-          wsRef.current = ws;
-          ws.onopen = () => {
-            rcRef.current = 0;
-          };
-          ws.onerror = () => {
-            try {
-              ws.close();
-            } catch {
-              /* noop */
-            }
-          };
-          ws.onclose = () => {
-            if (wsRef.current === ws) wsRef.current = null;
-            if (stoppingRef.current || modeRef.current !== "ws") return;
-            scheduleReconnect(jobId);
-          };
-          return new Promise<void>((resolve) => {
-            ws.addEventListener("open", () => resolve(), { once: true });
-            ws.addEventListener("error", () => resolve(), { once: true });
-          });
+          await openMediaSocket(media.wsUrl, jobId);
+          return;
         }
         // No media-server ingest endpoint available. The server-side /ingest
         // rail is retired (Phase 3 / ADAAAA-6868): surface a real error instead
@@ -293,27 +342,41 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     }, delay);
   }
 
-  // Stream one MediaRecorder chunk to the media server over its open media WS
-  // ({type:"media"} muxed video+audio). The media server reassembles the muxed
-  // recording ON the media node and cuts clips from it — recording bytes never
-  // route through the server (Phase 3 / ADAAAA-6868). No per-chunk retry/ack:
-  // the WS is the transport; a transient drop leaves the media server's
-  // reconnect-grace teardown in play and the next chunk resumes the recording.
-  function sendMediaChunk(b64: string, mime: string) {
-    const ws =
-      (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && wsRef.current) ||
-      (analysisWsRef.current && analysisWsRef.current.readyState === WebSocket.OPEN && analysisWsRef.current) ||
-      null;
-    if (!ws) {
-      // No media WS open: the media server can't reassemble this chunk, so a
-      // clip cut from the recording would be truncated. Surface it rather than
-      // silently dropping bytes (was: empty clipUri at stop, ADAAAA-6522).
-      setError("Recording is not reaching the media server — highlight clips may be incomplete. Check your connection and stop again.");
-      return;
+  // Flush buffered MediaRecorder chunks over the DEDICATED media WS. There is no
+  // per-chunk ack over a raw WebSocket, but the queue + flush-on-open means a
+  // brief reconnect window does not drop recording bytes — they resume on reopen
+  // (ADAAAA-6868 Phase 3 review, Medium). Reassembly is arrival-order on the
+  // media node; the container PTS is the authoritative clock for clip cutting,
+  // so seq/timestamp are not consumed.
+  function flushMediaChunks() {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    while (mediaQueueRef.current.length) {
+      const p = mediaQueueRef.current[0];
+      try {
+        ws.send(JSON.stringify({ type: "media", data: p.b64, mime: p.mime, seq: 0, timestamp: 0 }));
+        mediaQueueRef.current.shift();
+      } catch {
+        // Socket died mid-send: stop flushing; the reconnect flushes the rest.
+        return;
+      }
     }
-    // Reassembly is arrival-order on the media node; the container PTS is the
-    // authoritative clock for clip cutting, so seq/timestamp are not consumed.
-    ws.send(JSON.stringify({ type: "media", data: b64, mime, seq: 0, timestamp: 0 }));
+  }
+
+  // Queue one MediaRecorder chunk (muxed video+audio) for the media server. The
+  // media server reassembles the muxed recording ON the media node and cuts
+  // clips from it — recording bytes never route through the server (Phase 3 /
+  // ADAAAA-6868). A transient socket drop buffers the chunk for flush on reopen
+  // instead of losing it.
+  function sendMediaChunk(b64: string, mime: string) {
+    mediaQueueRef.current.push({ b64, mime });
+    if (mediaQueueRef.current.length > MAX_MEDIA_QUEUE) {
+      // Only reachable if the media socket has been down for a long stretch;
+      // surface it rather than silently dropping bytes (was: empty clipUri at
+      // stop, ADAAAA-6522).
+      setError("Recording is not reaching the media server — highlight clips may be incomplete. Check your connection and stop again.");
+    }
+    flushMediaChunks();
   }
 
   useEffect(() => {
@@ -427,6 +490,11 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     if (andNotify) {
       await Promise.race([flushed, sleep(3000)]);
       await sleep(250); // bound; let the final chunk flush over the WS
+      // Drain the media-chunk queue so the last chunk (and any buffered during a
+      // reconnect) is on the wire before the media WS is closed (ADAAAA-6868
+      // Phase 3 review, Medium).
+      flushMediaChunks();
+      await sleep(50);
     }
     // Now close the media WS connections (frame + analysis) and stop sampling.
     try {

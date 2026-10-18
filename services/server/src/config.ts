@@ -21,13 +21,19 @@ export interface ServerConfig {
    * the server's /jobs/:id/ingest HTTP rail. */
   mediaServerUrl?: string;
   /**
-   * Phase 3 (ADAAAA-6868): retire the server-side browser-capture rails once
-   * parity is verified on the media server. When true, POST /jobs/:id/ingest and
-   * POST /jobs/:id/recording are disabled (410 Gone) and the browser stop path
-   * stops cutting clips server-side (clips are cut on the media controller node
-   * and reported over /jobs/:id/observe -> /jobs/:id/clips). Enable only after
-   * MEDIA_SERVER_URL is serving browser capture end-to-end (recordings live on
-   * the media node, not the server).
+   * Phase 3 (ADAAAA-6868): retire the server-side browser-capture rails. The
+   * webapp browser path is UNCONDITIONAL — it always connects the browser to the
+   * media server over WebRTC (main) / WS (fallback) and streams recording chunks
+   * straight to the media node, so the server's /jobs/:id/ingest and
+   * /jobs/:id/recording rails carry NO browser media bytes. This therefore
+   * defaults to ON (retired) to match the acceptance criterion: the server side
+   * is retired by default. When true, POST /jobs/:id/ingest and
+   * /jobs/:id/recording are disabled (410 Gone) and the browser stop path does
+   * NOT cut clips server-side (clips are cut on the media controller node and
+   * reported over /jobs/:id/observe -> /jobs/:id/clips).
+   * Set RETIRE_BROWSER_INGEST_RAIL=0 ONLY as an explicit rollback to the legacy
+   * server-side rails for a rolled-back webapp bundle that still POSTs to
+   * /ingest and /recording.
    */
   retireBrowserIngestRail: boolean;
   /** go-livepeer remote signer base URL (on-chain). Internal-only on Railway. */
@@ -307,7 +313,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     decideUrl: env.DECIDE_URL,
     trainUrl: env.TRAIN_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
-    retireBrowserIngestRail: /^(1|true|yes)$/i.test(env.RETIRE_BROWSER_INGEST_RAIL || ""),
+    // Phase 3 (ADAAAA-6868): retired by default. The webapp browser path is
+    // unconditional (browser -> media server WebRTC/WS only), so the server rails
+    // carry no browser bytes; default ON to match the acceptance criterion. Set
+    // RETIRE_BROWSER_INGEST_RAIL=0 to restore the legacy rails as a rollback.
+    retireBrowserIngestRail: !/^(0|false|no)$/i.test(env.RETIRE_BROWSER_INGEST_RAIL || ""),
     signerUrl: env.SIGNER_URL,
     signerAuthToken: env.SIGNER_AUTH_TOKEN,
     payerAddress: env.PAYER_ADDRESS,
