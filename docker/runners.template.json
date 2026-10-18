@@ -1,0 +1,73 @@
+{
+  "runners": [
+    {
+      "label": "highlights-perceive",
+      "routing": "label",
+      "runner_url": "http://perceive:8080",
+      "health_url": "/health",
+      "healthy_status_code": 200,
+      "app": "highlights-live/perceive",
+      "version": "0.1.0",
+      "metadata": "{\"maxTracks\": 2, \"models\": \"florence-sam\"}",
+      "mode": "persistent",
+      "capacity": 1,
+      "proxy": true,
+      "gpu": {
+        "id": "0",
+        "name": "NVIDIA GeForce RTX 3090 Ti",
+        "vram_mb": 24564
+      },
+      "price_info": {
+        "price": 0.01,
+        "currency": "usd",
+        "unit": "hour"
+      }
+    },
+    {
+      "label": "highlights-decide",
+      "routing": "label",
+      "runner_url": "http://decide:8081",
+      "health_url": "/health",
+      "healthy_status_code": 200,
+      "app": "highlights-live/decide",
+      "version": "0.1.0",
+      "metadata": "{\"model\": \"cyankiwi/gemma-4-12B-it-qat-AWQ-INT4\", \"engine\": \"vllm\", \"quantization\": \"compressed-tensors INT4\", \"maxConcurrency\": 4}",
+      "mode": "single-shot",
+      "capacity": 21127,
+      "proxy": true,
+      "gpu": {
+        "id": "1",
+        "name": "NVIDIA GeForce RTX 5070 Ti",
+        "vram_mb": 16303
+      },
+      "price_info": {
+        "price": 0.01,
+        "currency": "usd",
+        "unit": "fixed"
+      }
+    },
+    {
+      "label": "highlights-train",
+      "routing": "label",
+      "runner_url": "http://train:8083",
+      "health_url": "/health",
+      "healthy_status_code": 200,
+      "app": "highlights-live/train",
+      "version": "0.1.0",
+      "metadata": "{\"task\": \"florence2-od-lora\", \"baseModel\": \"microsoft/Florence-2-base\", \"loraRank\": 16, \"loraAlpha\": 32}",
+      "mode": "single-shot",
+      "capacity": 1,
+      "proxy": false,
+      "gpu": {
+        "id": "0",
+        "name": "NVIDIA GeForce RTX 3090 Ti",
+        "vram_mb": 24564
+      },
+      "price_info": {
+        "price": 0.01,
+        "currency": "usd",
+        "unit": "fixed"
+      }
+    }
+  ]
+}
