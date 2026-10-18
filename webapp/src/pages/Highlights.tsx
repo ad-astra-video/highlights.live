@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X, ChevronDown, ChevronRight, Trash2, List, LayoutGrid, Plus } from "lucide-react";
 import { api, getToken, type Highlight, type Job, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
 import { readSSE } from "../lib/sse";
@@ -56,7 +56,9 @@ const GAME_DEFAULTS: Record<string, string> = {
 
 export function Highlights() {
   const { billing, refreshBilling } = useAuth();
-  const navigate = useNavigate();
+  // Increment 3 T2/6906: the VOD job grid opens the shared JobDetailPanel via
+  // openDetail (setDetailJob) instead of the /app/jobs/:id full-page route, so
+  // the I3-B live Decision trail is observable on the actual user path.
   // Async-VOD processing-jobs queue (ADAAAA-6760): fetched + polled + SSE-streamed
   // by the hook; the new "Processing jobs" section below renders its rows.
   const { jobs: processingJobs, refresh: refreshProcessingJobs, removeJob } = useProcessingJobs();
@@ -544,7 +546,7 @@ export function Highlights() {
                 key={job.id}
                 job={job}
                 highlightCount={highlights.filter((h) => h.jobId === job.id && h.status !== "rejected").length}
-                onOpen={() => navigate(`/app/jobs/${job.id}`)}
+                onOpen={() => openDetail(job)}
                 onDelete={setConfirmDeleteJob}
               />
             ))}
