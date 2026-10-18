@@ -18,6 +18,7 @@ import type {
   AudioCandidate,
   AudioChunk,
   DecisionResult,
+  GroupDecodeRequest,
   ObservationResult,
   PipelineClient,
   PlanRequest,
@@ -434,6 +435,53 @@ export class OrchestratorAdapter implements PipelineClient {
       return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
     }
   }
+  /** ADAAAA-6935: ONE merged decide review for all candidates inside a 3 s
+   * frame group. Sends the group's frame sequence + every candidate (with its
+   * own evidence snapshot) as a single fixed-price /highlight call and returns
+   * a verdict per candidate. Mirrors `decide`'s 402 -> signer -> retry payment
+   * flow so the merged group call is priced the same as one decide. */
+  async decideGroup(req: GroupDecodeRequest): Promise<{ verdicts: DecisionResult[] }> {
+    const payerAddress = this.payerAddress;
+    const payload = {
+      sessionId: "job",
+      eventType: req.candidates[0]?.eventType ?? "",
+      timestamp: req.candidates[0]?.timestamp ?? 0,
+      gameHint: req.gameHint || "",
+      reasoningEffort: req.reasoningEffort || "none",
+      // ADAAAA-6935: the merged group-review payload (one gemma call).
+      candidates: req.candidates.map((c) => ({ eventType: c.eventType, timestamp: c.timestamp, evidence: c.evidence })),
+      images: [],
+      preferLabels: req.preferLabels ?? [],
+      frames: req.frames ?? [],
+      audioB64: req.audioB64 ?? "",
+      audioSampleRate: 16_000,
+    };
+    const run = async (paymentHeaders?: Record<string, string>) => {
+      const { status, data } = await this.client.decide("highlight", payload, {
+        payerAddress: payerAddress || undefined,
+        paymentHeaders,
+      });
+      if (status >= 400) throw new Error(`decide group failed: HTTP ${status}`);
+      return data as { verdicts?: DecisionResult[] };
+    };
+    try {
+      const data = await run();
+      return { verdicts: (data.verdicts ?? []).map((v) => v as DecisionResult) };
+    } catch (err) {
+      if (!(err instanceof PaymentRequiredError) || !this.signer || !payerAddress) throw err;
+      const b64 = err.challenge?.paymentParams;
+      if (!b64) {
+        throw new Error("on-chain decide 402 challenge carried no payment_params (orchestrator info) to forward to the signer; cannot obtain tickets");
+      }
+      const manifestID = err.challenge?.manifestId;
+      const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
+        app: ROUTES.decide,
+        type: "fixed",
+      });
+      const data = await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
+      return { verdicts: (data.verdicts ?? []).map((v) => v as DecisionResult) };
+    }
+  }
   /** Submit a single-shot fine-tune to the highlights-train runner, mirroring
    * `decide`: one fixed-price live-runner app call, with the 402 -> signer ->
    * retry payment flow on-chain. The payload maps TrainRunRequest fields to the
@@ -629,6 +677,29 @@ export class DirectAdapter implements PipelineClient {
     });
     if (!r.ok) throw new Error(`decide failed: HTTP ${r.status}`);
     return (await r.json()) as DecisionResult;
+  }
+  async decideGroup(req: GroupDecodeRequest): Promise<{ verdicts: DecisionResult[] }> {
+    const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: this.fakeSession,
+        eventType: req.candidates[0]?.eventType ?? "",
+        timestamp: req.candidates[0]?.timestamp ?? 0,
+        gameHint: req.gameHint || "",
+        reasoningEffort: req.reasoningEffort || "none",
+        // ADAAAA-6935: merged group review (one gemma call) — every candidate
+        // in the 3 s group + the group's frame sequence.
+        candidates: req.candidates.map((c) => ({ eventType: c.eventType, timestamp: c.timestamp, evidence: c.evidence })),
+        images: [],
+        frames: req.frames ?? [],
+        audioB64: req.audioB64 ?? "",
+        audioSampleRate: 16_000,
+      }),
+    });
+    if (!r.ok) throw new Error(`decide group failed: HTTP ${r.status}`);
+    const data = (await r.json()) as { verdicts?: DecisionResult[] };
+    return { verdicts: (data.verdicts ?? []).map((v) => v as DecisionResult) };
   }
   async train(request: TrainRunRequest): Promise<TrainResult> {
     // Direct dev path: requires a reachable TRAIN_URL exposing /app/train (the
