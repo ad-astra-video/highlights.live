@@ -4,6 +4,7 @@ import {
   orderGallerySeqs,
   placeLabel,
   collectFrameSeqs,
+  drawFrameWithBoxes,
 } from "./frameDebugger";
 
 // ADAAAA-6943/6946: click-to-enlarge + multi-select enlarge + legible
@@ -90,5 +91,40 @@ describe("collectFrameSeqs (multi-select enlarge across per-job detail sections)
   });
   it("returns empty when there are no sections", () => {
     expect(collectFrameSeqs([])).toEqual([]);
+  });
+});
+
+// ADAAAA-6946 board feedback: thumbnails stay small with boxes only; the
+// legible label is drawn only on the enlarged frame. drawFrameWithBoxes takes
+// `withLabels` so the same renderer can suppress labels for the inline tile.
+describe("drawFrameWithBoxes withLabels (labels only in the enlarged view)", () => {
+  function fakeCtx() {
+    const calls: string[] = [];
+    const ctx: any = {
+      setTransform: () => {},
+      clearRect: () => {},
+      drawImage: () => {},
+      strokeRect: () => {},
+      fillRect: () => {},
+      fillText: () => calls.push("fillText"),
+      measureText: (t: string) => ({ width: t.length * 6 }),
+      font: "",
+      fillStyle: "",
+      strokeStyle: "",
+      lineWidth: 0,
+    };
+    const canvas = { getContext: () => ctx } as unknown as HTMLCanvasElement;
+    return { canvas, calls };
+  }
+  const tracks = [{ bbox: [0.1, 0.1, 0.5, 0.5], slot: 0, kind: "ball", label: "soccer ball 0" }];
+  it("draws the box but no label when withLabels=false (inline thumbnail)", () => {
+    const { canvas, calls } = fakeCtx();
+    drawFrameWithBoxes(canvas, {} as HTMLImageElement, tracks, 160, 90, 12, 2, false);
+    expect(calls).not.toContain("fillText");
+  });
+  it("draws the legible label when withLabels defaults true (enlarged view)", () => {
+    const { canvas, calls } = fakeCtx();
+    drawFrameWithBoxes(canvas, {} as HTMLImageElement, tracks, 960, 540, 24, 2);
+    expect(calls).toContain("fillText");
   });
 });
