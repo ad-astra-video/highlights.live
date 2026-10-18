@@ -2609,7 +2609,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         issues: res.error?.issues,
       });
 
-    const seq = parsed.seq ?? 0;
+    // `seq` exists only on the observation/candidate/highlight variants of the
+    // MediaResultEvent union (stageAMetrics/cost report no trigger sequence), so
+    // narrow with `in` before reading it. `timestamp` is present on all variants.
+    const seq = "seq" in parsed ? parsed.seq ?? 0 : 0;
     const timestamp = parsed.timestamp ?? 0;
     switch (parsed.type) {
       case "observation": {
