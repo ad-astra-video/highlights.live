@@ -25,6 +25,7 @@ import {
   type CoverTransform,
 } from "../lib/frameDebugger";
 import { jobTitle } from "../lib/vodJobs";
+import { startDetailPoll } from "../lib/detailPoll";
 
 // Inline thumbnail stays small (original 160x90) so the filmstrip doesn't
 // crowd the page; box strokes are drawn at 2x backing for crispness. Labels
@@ -411,10 +412,17 @@ export function JobDetail() {
   const [pendingReview, setPendingReview] = useState<{ id: string; status: "accepted" | "rejected" } | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aliveRef = useRef(true);
+  // Guards against overlapping detail fetches: the 5s poll and the SSE-debounced
+  // refresh (and a user review re-fetch) can race, so `load` no-ops while a
+  // request is already in flight. This prevents request stacking + out-of-order
+  // detail overwrites and keeps the interval from piling up on a slow backend.
+  const loadInFlightRef = useRef(false);
   const token = getToken();
 
   const load = useCallback(
     async (initial = false) => {
+      if (loadInFlightRef.current) return;
+      loadInFlightRef.current = true;
       try {
         const d = await fetchJobDetail(id);
         if (!aliveRef.current) return;
@@ -429,6 +437,7 @@ export function JobDetail() {
         else if (e?.status === 403) setError("You do not have access to this job.");
         else setError(e?.message || String(e));
       } finally {
+        loadInFlightRef.current = false;
         if (aliveRef.current && initial) setLoading(false);
       }
     },
@@ -463,6 +472,29 @@ export function JobDetail() {
       ac.abort();
     };
   }, [id, token, terminal, scheduleRefresh]);
+
+  // Realtime reconciling poll (ADAAAA-6984, AC-1/AC-2/AC-3/AC-5/AC-7). While the
+  // job is still in flight, re-fetch its detail every VOD_DETAIL_POLL_MS (5 s)
+  // to update status/progress/highlights/traces in place — no full reload. The
+  // SSE channel above remains the fast path; this interval guarantees a server
+  // status transition shows within one poll cycle even if an SSE event is
+  // missed or the socket drops. One timer per open detail view: it is torn down
+  // on unmount/close (cleanup) and on a terminal state (the effect re-runs with
+  // `terminal` true and returns early), so no interval leaks and no post-close
+  // polls run (AC-2). `load` keeps the current view on a transient failure and
+  // the next tick retries (AC-6); a terminal state fetched after errors still
+  // renders and stops the poll (AC-3).
+  useEffect(() => {
+    if (terminal || !id) return;
+    const poll = startDetailPoll({
+      // Keep polling only while mounted and still in flight. The effect also
+      // re-runs (and clears the timer) on `terminal`, so a done/failed job stops
+      // polling at the next reconciliation.
+      shouldContinue: () => aliveRef.current,
+      onTick: () => load(false),
+    });
+    return () => poll.stop();
+  }, [terminal, id, load]);
 
   // Aligned requirement: no duplicate frame across sections. Re-assert the
   // server partition on every render so a bug can never show a frame twice.
