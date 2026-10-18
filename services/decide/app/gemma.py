@@ -420,6 +420,13 @@ def is_goal_accept(decision: dict, event_type: Optional[str] = None) -> bool:
     return False
 
 
+def _confirm_pass_enabled() -> bool:
+    """Whether the Stage-2 confirmation pass (ADAAAA-6797) is on for this
+    deployment. Mirrors ``confirm.confirm_enabled`` without a circular import
+    (confirm.py imports from gemma.py)."""
+    return os.environ.get("DECIDE_CONFIRM_ENABLED", "0") == "1"
+
+
 def apply_goal_attestation_gate(
     decision: dict, evidence: Optional[dict], event_type: Optional[str] = None
 ) -> tuple[bool, str | None]:
@@ -435,13 +442,24 @@ def apply_goal_attestation_gate(
     cannot be exhaustive, so the only trustworthy gate over the model's accept is
     the independent attestation.
 
-    True goals whose oracle didn't fire are also rejected (recall is validated
-    by the fresh full-VOD E2E against real goal timestamps); this is the
-    deliberate cost of not letting a confabulated reason be the sole evidence.
+    ADAAAA-6973 (Option 1): when the Stage-2 confirmation pass is ENABLED
+    (``DECIDE_CONFIRM_ENABLED=1``), defer the attestation to the confirm
+    deep-frame dive instead of hard-rejecting here. An accepted goal-type
+    candidate that carries no independent attestation PASSES so the server's
+    ``shouldRunConfirm`` fires and ``/confirm`` becomes the attestation
+    (``goalConfirmed=confirmed_goal`` → accept; ``near_miss``/``not_goal`` →
+    reject). The anti-confabulation property moves to the verifier stage rather
+    than being dropped. When the confirmation pass is OFF (live / flag-off
+    path), keep the strict reject so the model alone is never trusted — the
+    pre-existing behavior is byte-for-byte preserved.
     """
     if not is_goal_accept(decision, event_type):
         return True, None
     if attested_goal_criterion(evidence):
+        return True, None
+    if _confirm_pass_enabled():
+        # Defer to the Stage-2 confirm deep-frame dive (goal attestation at the
+        # verifier stage); the candidate is a Stage-1 scoring_play accept.
         return True, None
     return False, (
         "no attested goal criterion (ballOutcome=goal / goalCrossed / "

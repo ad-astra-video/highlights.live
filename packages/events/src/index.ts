@@ -440,6 +440,20 @@ export const JobDecisionSchema = z.object({
   highlightId: z.string().optional(),
 });
 export type JobDecision = z.infer<typeof JobDecisionSchema>;
+// Stage-2 goal/near-miss confirmation-pass metric snapshot (ADAAAA-6797).
+// Recorded on the job when the VOD pass routes un-attested goal-type candidates
+// through the decide /confirm deep frame dive. Additive + optional on Job (no
+// contract version bump); absent on non-confirm / older records.
+export const ConfirmMetricsSnapshotSchema = z.object({
+  // Confirm passes actually run (dive attempted).
+  totalRuns: z.number().int().min(0),
+  // Runs where the confirmation pass corrected the Stage-1 read.
+  disagreed: z.number().int().min(0),
+  // Stage-1 vs Stage-2 disagreement rate = disagreed / totalRuns (0..1; 0 when
+  // totalRuns is 0). The core value metric for the feature.
+  gapRate: z.number().min(0).max(1),
+});
+export type ConfirmMetricsSnapshot = z.infer<typeof ConfirmMetricsSnapshotSchema>;
 
 export const JobSchema = z.object({
   id: z.string(),
@@ -475,6 +489,9 @@ export const JobSchema = z.object({
   // Stage-A audio-gate metric snapshot (INC-2 / ADAAAA-4325); absent on VOD /
   // non-audio jobs and on older records.
   stageAMetrics: StageAMetricsSnapshotSchema.optional(),
+  // Stage-2 goal/near-miss confirmation-pass metric snapshot (ADAAAA-6797);
+  // absent when no VOD confirm dive ran and on older records.
+  confirmMetrics: ConfirmMetricsSnapshotSchema.optional(),
   // Detail-first VOD knobs + build-phase cost/volume record (ADAAAA-4954, spec
   // §4.5). All optional on Job — additive, no contract version bump. Persisted
   // by runVodJob so the per-video cost + FP gate are measurable exactly as on
@@ -572,6 +589,12 @@ export const HighlightRecordSchema = z.object({
   // distinct label downstream); a scoring play is the full highlight score.
   outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
   nearMiss: z.boolean().optional(),
+  // Stage-2 confirmation-pass verdict (ADAAAA-6797): set on a goal-type
+  // highlight that went through the /confirm deep frame dive. null on the
+  // passthrough path. Additive + optional.
+  goalConfirmed: z.enum(["confirmed_goal", "near_miss", "not_goal"]).optional(),
+  // Stage-1 vs Stage-2 disagreement flag for this highlight (ADAAAA-6797).
+  stage1Disagreed: z.boolean().optional(),
   status: z.enum(["pending", "accepted", "rejected"]).default("pending"),
   // ADAAAA-6798 Inc 2: link the highlight to the JobCandidate that started it,
   // and de-normalize that candidate's trigger metadata so GET /highlights and
