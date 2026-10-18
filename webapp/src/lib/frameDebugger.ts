@@ -76,6 +76,11 @@ export function drawLabel(
 // the given `w x h` CSS coordinate space. `pixelRatio` scales the backing store
 // so box strokes + text stay crisp on high-density displays. Used by BOTH the
 // inline canvas and the enlarged lightbox so they render identically.
+//
+// `withLabels` defaults to true so the enlarged lightbox still draws the full
+// legible label (ADAAAA-6943/6946). The inline thumbnail passes false: the
+// board prefers small thumbnails with boxes only, labels on the enlarged frame
+// (see ADAAAA-6946 board feedback "only show the labels on the enlarged frame").
 export function drawFrameWithBoxes(
   canvas: HTMLCanvasElement,
   img: HTMLImageElement,
@@ -83,7 +88,8 @@ export function drawFrameWithBoxes(
   w: number,
   h: number,
   fontPx: number,
-  pixelRatio: number
+  pixelRatio: number,
+  withLabels = true
 ) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -97,6 +103,7 @@ export function drawFrameWithBoxes(
     ctx.strokeStyle = color;
     ctx.lineWidth = selected ? 3 : 2;
     ctx.strokeRect(x1 * w, y1 * h, (x2 - x1) * w, (y2 - y1) * h);
+    if (!withLabels) return;
     const acc = t.accuracy !== undefined && t.accuracy !== null ? ` ${Math.round(t.accuracy * 100)}%` : "";
     // ADAAAA-5056: prefer the in-roster detector label over the coarse kind.
     const shown = resolveTrackLabel(t);

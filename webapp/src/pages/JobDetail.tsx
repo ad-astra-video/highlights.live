@@ -19,10 +19,12 @@ import {
 import { drawFrameWithBoxes, orderGallerySeqs, collectFrameSeqs } from "../lib/frameDebugger";
 import { jobTitle } from "../lib/vodJobs";
 
-// Inline tile is drawn at 2x internally so box strokes + labels stay crisp.
-const FRAME_W = 320;
-const FRAME_H = 180;
-const INLINE_FONT = 12; // CSS px — legible on the 320x180 inline tile
+// Inline thumbnail stays small (original 160x90) so the filmstrip doesn't
+// crowd the page; box strokes are drawn at 2x backing for crispness. Labels
+// are shown ONLY on the enlarged frame (board feedback on ADAAAA-6946).
+const FRAME_W = 160;
+const FRAME_H = 90;
+const INLINE_FONT = 12; // CSS px in the enlarged view; inline draws boxes only
 const INLINE_SCALE = 2;
 const ENLARGE_W = 960;
 const ENLARGE_H = 540;
@@ -64,7 +66,7 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
     const img = new Image();
     img.onload = () => {
       if (canvasRef.current !== canvas) return;
-      drawFrameWithBoxes(canvas, img, frame.tracks, FRAME_W, FRAME_H, INLINE_FONT, INLINE_SCALE);
+      drawFrameWithBoxes(canvas, img, frame.tracks, FRAME_W, FRAME_H, INLINE_FONT, INLINE_SCALE, false);
     };
     img.src = objUrl;
     return () => {
@@ -84,7 +86,7 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
         selectMode && selected ? "border-neon" : "border-transparent hover:border-mut/40"
       }`}
     >
-      <canvas ref={canvasRef} width={FRAME_W * INLINE_SCALE} height={FRAME_H * INLINE_SCALE} className="block rounded-lg border border-mut/30 bg-black" />
+      <canvas ref={canvasRef} width={FRAME_W * INLINE_SCALE} height={FRAME_H * INLINE_SCALE} style={{ width: FRAME_W, height: FRAME_H }} className="block rounded-lg border border-mut/30 bg-black" />
       <figcaption className="mt-0.5 text-center text-[10px] text-mut">
         T+{frame.timestamp.toFixed(1)}s<span className="ml-1 text-mut/70">·{frame.tracks.length} trk</span>
       </figcaption>
