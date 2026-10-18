@@ -39,6 +39,7 @@ import {
   type JobDecision,
 } from "@highlights/events";
 import { buildSections, buildTraces, maxTracesForSource } from "./job-detail";
+import { applyJobTitle } from "./job-title";
 import {
   datasetAccessActive,
   scheduleDatasetsPurgeForOwner,
@@ -508,6 +509,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       console.error(`[decide-note:${cand.jobId}] persist failed:`, e?.message || e)
     );
   };
+
+  // --- LLM job title (ADAAAA-6798 Inc 1) ------------------------------------
+  // Title helpers live in ./job-title so the exactly-one-call / fallback /
+  // non-blocking logic is unit-testable without driving the pipeline. Here we
+  // only invoke it fire-and-forget at each completion point. `GET /jobs` /
+  // `GET /jobs/:id` / `GET /jobs/:id/detail` return the title (it rides the Job
+  // object), and title generation NEVER blocks or fails the job.
+
   async function runLiveJob(
     ingest: LiveIngest,
     job: { id: string; gameHint?: string; preferLabels?: string[] },
@@ -635,6 +644,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         perceiveSessionId: outcome.sessionId,
         stageAMetrics: stageA,
       });
+      // ADAAAA-6798 Inc 1: generate the LLM job title once the job reaches
+      // `done` (fire-and-forget; fallback title on any failure; never blocks).
+      void applyJobTitle(store, cfg, job.id);
       if (stageA.totalCandidates > 0) {
         console.log(
           `[live:${job.id}] stageA fpRate=${stageA.fpRate} (${stageA.rejected}/${stageA.totalCandidates} rejected), ` +
@@ -1054,6 +1066,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // completed job record so it survives a server restart.
       candidates: [...jobTrail],
     });
+    // ADAAAA-6798 Inc 1: generate the LLM job title once the job reaches `done`
+    // (fire-and-forget; fallback title on any failure; never blocks the job).
+    void applyJobTitle(store, cfg, jobId);
     emitJobProgress(jobId, 100, "done");
     if (stageA.totalCandidates > 0) {
       console.log(

@@ -2,7 +2,7 @@
 // feed frames to perceive, compute evidence, call decide on candidates, cut a
 // clip on each highlight, and stop the session in `finally`.
 import { randomUUID } from "node:crypto";
-import type { HighlightRecord, JobCandidate, TrackObservation } from "@highlights/events";
+import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation } from "@highlights/events";
 import { StageAMetrics } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
 
@@ -116,6 +116,60 @@ export function buildReactionEvidence(
     ballPossessionId: candidate.ballPossession?.possessingPlayerId ?? "",
   };
 }
+/**
+ * The candidate signal shape a trigger is derived from (ADAAAA-6798 Inc 2).
+ * Mirrors the candidate object produced by perceive / the video + audio legs so
+ * the trigger provenance is a pure function of the candidate — no re-inference.
+ */
+export interface CandidateSignal {
+  eventType: string;
+  timestamp: number;
+  seq?: number;
+  audio?: AudioCandidate["audio"];
+  ballVelocity?: { speedMps?: number };
+  ballPossession?: { possessingPlayerId?: string };
+  goalCrossed?: boolean;
+  ballOutcome?: string;
+  scoreBoardChanged?: boolean;
+}
+
+/**
+ * Derive the trigger metadata for a candidate from the signal already computed
+ * at decision time (ADAAAA-6798 Inc 2). Deterministic and purely derived from the
+ * candidate object — NO new inference, no re-analysis. The `kind` is the
+ * dominant trigger (or `corroborated` when >= 2 independent signals are present);
+ * the raw reaction evidence is carried alongside so the UI can show provenance.
+ */
+export function deriveHighlightTrigger(c: CandidateSignal): HighlightTrigger {
+  const audioKind = c.audio?.kind ?? "";
+  const goalCrossed = c.goalCrossed === true;
+  const scoreChanged = c.scoreBoardChanged === true;
+  const ballSpeed = c.ballVelocity?.speedMps ?? 0;
+  const ballPos = c.ballPossession?.possessingPlayerId ?? "";
+  const signals: string[] = [];
+  if (audioKind === "burst") signals.push("audio_burst");
+  else if (audioKind === "swell") signals.push("audio_swell");
+  if (goalCrossed) signals.push("goal_line");
+  if (scoreChanged) signals.push("score_change");
+  if (ballSpeed > 0 || ballPos) signals.push("ball_signal");
+  let kind: HighlightTrigger["kind"];
+  if (signals.length >= 2) kind = "corroborated";
+  else if (signals.length === 1) kind = signals[0] as HighlightTrigger["kind"];
+  else kind = "motion";
+  return {
+    kind,
+    timestamp: c.timestamp,
+    eventType: c.eventType,
+    crowdEnergy: clamp01(c.audio?.peakEnergy) || undefined,
+    audioKind: audioKind || undefined,
+    ballSpeedMps: ballSpeed > 0 ? ballSpeed : undefined,
+    ballPossessionId: ballPos || undefined,
+    goalCrossed: goalCrossed || undefined,
+    ballOutcome: c.ballOutcome || undefined,
+    scoreBoardChanged: scoreChanged || undefined,
+  };
+}
+
 /** I4 / ADAAAA-6361: assemble the per-detection geometry + ball position +
  * audio-energy level curve for a candidate at `timestamp`, from the shared
  * window's cached findings and buffered audio taps (no re-analysis, no extra
@@ -1300,14 +1354,16 @@ export class TrackingPlanController {
  * never fails the frame loop. */
 function buildCandidateNote(
   cfg: AnalyzerConfig,
-  candidate: { eventType: string; timestamp: number; seq?: number },
+  candidate: CandidateSignal,
   decision: DecisionResult,
-  status: "accepted" | "suppressed" | "rejected"
+  status: "accepted" | "suppressed" | "rejected",
+  candidateId: string,
+  trigger: HighlightTrigger
 ): void {
   if (!cfg.onDecision) return;
   try {
     cfg.onDecision({
-      id: randomUUID(),
+      id: candidateId,
       jobId: cfg.jobId,
       seq: candidate.seq ?? 0,
       timestamp: candidate.timestamp,
@@ -1318,6 +1374,7 @@ function buildCandidateNote(
       nearMiss: decision.nearMiss,
       reason: decision.reason,
       status,
+      trigger,
       createdAt: new Date().toISOString(),
     });
   } catch (e: any) {
@@ -1535,22 +1592,28 @@ async function acceptVideoDecision(
   cfg: AnalyzerConfig,
   onEvent: ((ev: AnalyzeEvent) => void) | undefined,
   emit: { seq: number; timestamp: number },
-  candidate: { eventType: string; timestamp: number },
+  candidate: CandidateSignal,
   decision: DecisionResult
 ): Promise<void> {
+  // ADAAAA-6798 Inc 2: derive the trigger provenance ONCE from the candidate
+  // (pure function, no inference) and share one candidateId across the
+  // persisted JobCandidate and the HighlightRecord so the trigger kind +
+  // timestamp match the candidate with zero drift.
+  const trigger = deriveHighlightTrigger(candidate);
+  const candidateId = randomUUID();
   // ADAAAA-6851 Inc 2: persist EVERY decide evaluation — accepted highlight,
   // burst-suppressed, near-miss, not-highlight. This runs on both the serial
   // (live / w=1) path and the ordered pipeline accept path (ADAAAA-6854), so
   // the decision-time note trail stays identical either way.
   if (!isAcceptedHighlight(decision, cfg.preferLabels)) {
-    buildCandidateNote(cfg, candidate, decision, "rejected");
+    buildCandidateNote(cfg, candidate, decision, "rejected", candidateId, trigger);
     return;
   }
   // ADAAAA-6610 temporal burst suppression (see decideOnCandidate): a GOAL
   // accepted within `goalBurstWindowS` of a previous one is a start-of-clip
   // burst duplicate and is dropped, not recorded.
   if (run.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType)) {
-    buildCandidateNote(cfg, candidate, decision, "suppressed");
+    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger);
     onEvent?.({
       seq: emit.seq,
       timestamp: emit.timestamp,
@@ -1560,7 +1623,7 @@ async function acceptVideoDecision(
     });
     return;
   }
-  buildCandidateNote(cfg, candidate, decision, "accepted");
+  buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger);
   const { clipId, clipUri } = await cut(candidate.timestamp);
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -1576,6 +1639,10 @@ async function acceptVideoDecision(
     outcome: decision.outcome,
     nearMiss: decision.nearMiss,
     status: "pending",
+    // ADAAAA-6798 Inc 2: link the highlight to the candidate that started it
+    // and carry that candidate's trigger provenance (no read-time join).
+    candidateId,
+    trigger,
     createdAt: new Date().toISOString(),
   };
   run.highlights.push(rec);
@@ -1597,13 +1664,19 @@ export async function decideOnCandidate(
   shared: LiveRunShared,
   cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
   cfg: AnalyzerConfig,
-  candidate: { eventType: string; timestamp: number; seq?: number; audio?: AudioCandidate["audio"]; goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean },
+  candidate: CandidateSignal,
   onEvent?: (ev: AnalyzeEvent) => void,
   emit?: { seq: number; timestamp: number }
 ): Promise<void> {
   const evSeq = emit?.seq ?? candidate.seq ?? 0;
   const evTs = emit?.timestamp ?? candidate.timestamp;
   onEvent?.({ seq: evSeq, timestamp: evTs, type: "candidate", candidate });
+  // ADAAAA-6798 Inc 2: derive the trigger provenance ONCE from the candidate
+  // (pure function, no inference); share one candidateId across the persisted
+  // JobCandidate and the HighlightRecord so the trigger kind + timestamp match
+  // the candidate with zero drift.
+  const trigger = deriveHighlightTrigger(candidate);
+  const candidateId = randomUUID();
   const anchoredImage = shared.anchor(candidate.timestamp);
   // I7 / ADAAAA-6361: on the detail-first VOD pass, re-sample a higher-FPS burst
   // of frames around the trigger so the ball-goal-crossing instant is present in
@@ -1655,7 +1728,7 @@ export async function decideOnCandidate(
   // class explicitly requested in the job's preferLabels is exported as a
   // DISTINCT highlight (never a goal).
   if (!acceptedDecision) {
-    buildCandidateNote(cfg, candidate, decision, "rejected");
+    buildCandidateNote(cfg, candidate, decision, "rejected", candidateId, trigger);
     return;
   }
   // ADAAAA-6610 temporal burst suppression: at most one GOAL highlight per
@@ -1663,7 +1736,7 @@ export async function decideOnCandidate(
   // burst duplicate (start-of-clip confabulated-goal flood) and is dropped,
   // not recorded.
   if (shared.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType)) {
-    buildCandidateNote(cfg, candidate, decision, "suppressed");
+    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger);
     onEvent?.({
       seq: evSeq,
       timestamp: evTs,
@@ -1673,7 +1746,7 @@ export async function decideOnCandidate(
     });
     return;
   }
-  buildCandidateNote(cfg, candidate, decision, "accepted");
+  buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger);
   const { clipId, clipUri } = await cut(candidate.timestamp);
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -1689,6 +1762,10 @@ export async function decideOnCandidate(
     outcome: decision.outcome,
     nearMiss: decision.nearMiss,
     status: "pending",
+    // ADAAAA-6798 Inc 2: link the highlight to the candidate that started it
+    // and carry that candidate's trigger provenance (no read-time join).
+    candidateId,
+    trigger,
     createdAt: new Date().toISOString(),
   };
   shared.highlights.push(rec);
