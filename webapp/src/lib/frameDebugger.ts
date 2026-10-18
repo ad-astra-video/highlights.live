@@ -45,6 +45,25 @@ export interface DrawTrack {
   label?: string;
   selected?: boolean;
   accuracy?: number;
+  // ADAAAA-6966/6967: a track whose object is not present on this frame must not
+  // have its stale last-known box drawn. `lostFrames` is the number of
+  // consecutive frames the perception tracker failed to match the object (the
+  // tracker keeps a lost track alive for `lost_before_evict` frames and re-emits
+  // its last-known bbox), and `onScreen: false` is the explicit off-screen flag.
+  // Both optional so callers/observations without these fields keep the pre-fix
+  // behavior (box always drawn).
+  lostFrames?: number;
+  onScreen?: boolean;
+}
+
+// ADAAAA-6966/6967: a detection box may only be drawn while its object is on
+// screen. An object with `lostFrames > 0` (or an explicit `onScreen === false`)
+// is no longer present on this frame, so its last-known box is stale and must
+// not trail onto post-exit frames. Returns true when the object is on screen /
+// the track has no loss signal (preserves legacy behaviour for shapes without
+// these fields).
+export function isTrackOnScreen(t: { lostFrames?: number; onScreen?: boolean }): boolean {
+  return (t.lostFrames ?? 0) <= 0 && t.onScreen !== false;
 }
 
 export const PALETTE = ["#22d3ee", "#f472b6", "#a3e635", "#fbbf24", "#a78bfa", "#fb7185", "#38bdf8", "#fb923c"];
@@ -91,6 +110,10 @@ export function drawFrameWithBoxes(
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(img, 0, 0, w, h);
   tracks.forEach((t) => {
+    // ADAAAA-6966/6967: don't stroke the stale last-known box once the object is
+    // no longer on this frame (lostFrames > 0 or onScreen === false). The frame
+    // itself is still drawn; only the stale box is suppressed.
+    if (!isTrackOnScreen(t)) return;
     const [x1, y1, x2, y2] = t.bbox;
     const selected = !!t.selected;
     const color = selected ? "#fbbf24" : PALETTE[t.slot % PALETTE.length];

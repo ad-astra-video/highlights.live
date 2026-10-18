@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getToken, api } from "../lib/api";
-import { resolveTrackLabel, orderGallerySeqs, placeLabel } from "../lib/frameDebugger";
+import { resolveTrackLabel, orderGallerySeqs, placeLabel, isTrackOnScreen } from "../lib/frameDebugger";
 
 interface ObsTrack {
   trackId: string;
@@ -94,6 +94,9 @@ function drawFrameWithBoxes(
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(img, 0, 0, w, h);
   tracks.forEach((t) => {
+    // ADAAAA-6966/6967: don't stroke the stale last-known box once the object is
+    // no longer on this frame (lostFrames > 0 or onScreen === false).
+    if (!isTrackOnScreen(t)) return;
     const [x1, y1, x2, y2] = t.bbox;
     const selected = !!t.selected;
     const color = selected ? "#fbbf24" : PALETTE[t.slot % PALETTE.length];
