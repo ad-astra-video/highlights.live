@@ -15,6 +15,7 @@ function mkClient(over: Partial<PipelineClient> = {}): { client: PipelineClient;
     controlForward: async () => {},
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     stopPerceive: async () => {},
+    confirm: async () => ({ enabled: false, goalConfirmed: null, confidence: 0, reason: "", evidence: {}, stage1Disagreed: false, decision: { isHighlight: false, score: 0, eventType: "KILL" } }),
     ...over,
   };
   return { client: base, calls };

@@ -768,6 +768,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       maxFramesPerAnalysis: cfg.vodMaxFramesPerAnalysis,
       preWindowS: cfg.vodAnalysisPreWindowS,
       postWindowS: cfg.vodAnalysisPostWindowS,
+      // ADAAAA-6797: Stage-2 goal/near-miss confirmation pass. VOD-first: only
+      // the VOD pass ever sets `confirmEnabled` (from the server config flag
+      // DECIDE_CONFIRM_ENABLED, default off), so the live pass is untouched and
+      // the flag-off path is a strict no-op.
+      confirmEnabled: cfg.decideConfirmEnabled,
     };
     // Count candidates (video + audio) for the recorded decide/cost fields.
     let candidatesTriggered = 0;
@@ -1026,6 +1031,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // populated, so the full set is present once processing ends.
     const perceiveSessionS = (Date.now() - t0) / 1000;
     const stageA = shared.stageA.snapshot();
+    // ADAAAA-6797: Stage-1 vs Stage-2 confirmation-pass metric (disagreement
+    // rate = disagreed / totalRuns). The core value metric for the feature —
+    // how often the deep frame dive corrects the primary read.
+    const confirmTotal = shared.confirmMetrics.totalRuns;
+    const confirmDisagreed = shared.confirmMetrics.disagreed;
+    const confirmMetrics = {
+      totalRuns: confirmTotal,
+      disagreed: confirmDisagreed,
+      gapRate: confirmTotal > 0 ? confirmDisagreed / confirmTotal : 0,
+    };
     // Each candidate (video or audio) is judged by exactly one Gemma decide()
     // call here, so decideCalls == candidatesTriggered. Cost = fixed decide fee
     // per call + the perceive session's hourly list price for its duration.
@@ -1042,6 +1057,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       stage: "done",
       perceiveSessionId: outcome.sessionId,
       stageAMetrics: stageA,
+      confirmMetrics,
       sampleFps,
       frameScale: cfg.vodFrameScale,
       decideWindowN: cfg.vodDecideWindowN,
@@ -1072,6 +1088,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         `[vod:${jobId}] stageA fpRate=${stageA.fpRate} (${stageA.rejected}/${stageA.totalCandidates} rejected), ` +
           `latency mean/max=${stageA.meanOnsetLatencyS}/${stageA.maxOnsetLatencyS}s, withinBudget=${stageA.fpRateWithinBudget}, ` +
           `costUsd=${costUsd.toFixed(4)} (${decideCalls} decide @ $${cfg.decideFee}, ${perceiveSessionS.toFixed(0)}s perceive)`
+      );
+    }
+    if (confirmTotal > 0) {
+      console.log(
+        `[vod:${jobId}] stage2 confirm=${confirmTotal} run(s), disagreed=${confirmDisagreed}, ` +
+          `disagreementRate=${confirmMetrics.gapRate.toFixed(3)}`
       );
     }
     return { job: store.getJob(jobId), framesAnalyzed: outcome.framesAnalyzed, costUsd, stageA };
