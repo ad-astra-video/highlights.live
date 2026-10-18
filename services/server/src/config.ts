@@ -12,6 +12,11 @@ export interface ServerConfig {
   /** When set, bypass the orchestrator and call runners directly (dev). */
   perceiveUrl?: string;
   decideUrl?: string;
+  /** ADAAAA-6911: server-side knob for the livepeer-session decide-runner gate
+   * (`DECIDE_CONCURRENCY`). Left unset -> the client keeps its default (decide
+   * runner capacity 2); set to 1 to reproduce the capacity-1 serial baseline
+   * for the AC1 on-box measurement. */
+  decideConcurrency?: number;
   /** When set, bypass the orchestrator and call the train runner directly (dev).
    * No train container ships with the local stack today, so this stays unset
    * and direct train calls fail with a clear error until a TRAIN_URL is wired. */
@@ -292,6 +297,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     orchestratorUrl: env.ORCHESTRATOR_URL ?? "http://127.0.0.1:8935",
     perceiveUrl: env.PERCEIVE_URL,
     decideUrl: env.DECIDE_URL,
+    decideConcurrency: env.DECIDE_CONCURRENCY ? Number(env.DECIDE_CONCURRENCY) : undefined,
     trainUrl: env.TRAIN_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
     signerUrl: env.SIGNER_URL,
