@@ -440,18 +440,7 @@ export interface AnalyzerConfig {
     * the decide window (a 1 FPS / low-fps sample can skip it). Returns absolute-
     * timestamped frames (always >= 1); a throw/[] degrades to the rolling window. */
    resampleFrames?: (timestamp: number) => Promise<{ timestamp: number; imageB64: string }[]>;
-  /**
-   * ADAAAA-6854: bounded decide concurrency for the VOD pass. `analyzeJob` runs
-   * up to this many candidate decide() calls in flight at once (the vLLM decide
-   * runner is already sized for 4-way concurrency), while delivering the accept
-   * side-effects (goal-burst suppression, clip cut, highlight record, SSE event
-   * -> decision-time billing) strictly in candidate timestamp order. Default 2;
-   * set to 1 to preserve today's fully-serial VOD behavior. Live never sets this
-   * (the live/decideWindowN=undefined path stays serial at 1 to keep the 1-5 s
-   * latency budget). `VOD_DECIDE_CONCURRENCY`.
-   */
-   decideConcurrency?: number;
-  /**
+   /**
    * ADAAAA-6314 Path 2: forward the surrounding audio clip on the LIVE baseline
    * too (bounded to trigger candidates — never every frame; no `frames[]`
    * change, so live frame depth is untouched). The go-livepeer decide runner
@@ -1383,12 +1372,21 @@ function buildCandidateNote(
 }
 
 /**
- * ADAAAA-6854: bounded-concurrency decide dispatcher for the VOD pass.
+ * ADAAAA-6854 / ADAAAA-6903: concurrent decide dispatcher for the VOD pass.
  *
- * Runs up to `w` candidate decide() calls in flight at once — the vLLM decide
- * runner is already sized for `GEMMA_MAX_CONCURRENCY=4`, so overlapping the
- * expensive inference is exactly the throughput win the runner was provisioned
- * for. The DECIDE calls run concurrently, but every ACCEPT side-effect
+ * The frame loop dispatches EVERY candidate decide() call into this pipeline
+ * without awaiting it, so the (slow) vLLM inference overlaps the next frames'
+ * perceive analysis. There is NO app-side concurrency cap here — decide
+ * concurrency is bounded only by the go-livepeer orchestrator runner `capacity`
+ * (docker/runners.json): the orchestrator admits only `capacity` concurrent
+ * sessions and answers a further request with `503 no capacity`, which the
+ * livepeer-session client retries with backoff before giving up. The app tier
+ * therefore submits candidate decides and relies on orchestrator admission
+ * (503 backpressure) to bound concurrency, rather than gating it with a
+ * separate environment knob (ADAAAA-6903 removed the `VOD_DECIDE_CONCURRENCY`
+ * toggle).
+ *
+ * The DECIDE calls run concurrently, but every ACCEPT side-effect
  * (goal-burst suppression, clip cut, highlight record, SSE `highlight` event ->
  * decision-time persist + bill + quota-debit) is delivered strictly in
  * candidate timestamp order via an ordered reorder buffer — so parallelising
@@ -1396,11 +1394,10 @@ function buildCandidateNote(
  * out of date order, and never double-bills (each accepted candidate fires
  * exactly one `highlight` event).
  *
- * Live never uses this (w=1 / the `decideWindowN`-unset path in `analyzeJob`
- * stays fully serial), so the live 1-5 s latency budget is untouched.
+ * Live never uses this (the `decideWindowN`-unset path in `analyzeJob` stays
+ * fully serial), so the live 1-5 s latency budget is untouched.
  */
 export class OrderedDecidePipeline {
-  private readonly w: number;
   private readonly client: PipelineClient;
   private readonly accept: (
     candidate: { eventType: string; timestamp: number; seq?: number; audio?: AudioCandidate["audio"]; goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean },
@@ -1430,11 +1427,9 @@ export class OrderedDecidePipeline {
 
   constructor(
     client: PipelineClient,
-    w: number,
     accept: (candidate: any, emit: { seq: number; timestamp: number }, decision: DecisionResult) => Promise<void>
   ) {
     this.client = client;
-    this.w = Math.max(1, w);
     this.accept = accept;
   }
 
@@ -1459,8 +1454,13 @@ export class OrderedDecidePipeline {
     return this.aborting;
   }
 
+  /** Launch every queued decide. There is no app-side in-flight cap — the
+   * go-livepeer orchestrator bounds decide concurrency via runner `capacity`
+   * (ADAAAA-6903), so a request beyond admitted capacity is admitted by the
+   * orchestrator's own 503-backoff retry rather than gated here. Accepts stay
+   * serialized by `drainReady`. */
   private pump(): void {
-    while (!this.aborting && this.active < this.w && this.queue.length > 0) {
+    while (!this.aborting && this.queue.length > 0) {
       const job = this.queue.shift()!;
       this.active++;
       void this.runJob(job);
@@ -1845,16 +1845,18 @@ export async function analyzeJob(
     recheckIntervalSeconds: cfg.recheckIntervalSeconds,
     planMode: cfg.planMode ?? "live",
   });
-  // ADAAAA-6854: bounded decide concurrency for the VOD pass. The frame loop
-  // dispatches candidate decides into a W-wide pool (default 2) without
+  // ADAAAA-6854 / ADAAAA-6903: concurrent decide dispatch for the VOD pass. The
+  // frame loop submits candidate decides into the ordered pipeline WITHOUT
   // awaiting them, so the next frames' perceive analysis overlaps the in-flight
-  // vLLM decide. Accept side-effects (burst suppression, cut, record, SSE
-  // event -> billing) are delivered in candidate timestamp order. Live never
-  // sets decideConcurrency and its `decideWindowN` is undefined, so it stays on
-  // the fully-serial inline path below (W=1) — the 1-5 s latency budget holds.
+  // vLLM decide. There is no app-side concurrency cap: the go-livepeer
+  // orchestrator bounds decide concurrency via runner `capacity`
+  // (docker/runners.json), and over-admission is handled by the client's 503
+  // no-capacity backoff. Accept side-effects (burst suppression, cut, record,
+  // SSE event -> billing) are delivered in candidate timestamp order. Live's
+  // `decideWindowN` is undefined, so it stays on the fully-serial inline path
+  // below — the 1-5 s latency budget holds.
   const decidePipeline = new OrderedDecidePipeline(
     client,
-    cfg.decideConcurrency ?? 1,
     (candidate, emit, decision) => acceptVideoDecision(run, cut, cfg, onEvent, emit, candidate, decision)
   );
   let framesAnalyzed = 0;
@@ -1947,9 +1949,9 @@ export async function analyzeJob(
         // fired on the late post-strike frame must still be judged on the strike.
         const anchoredImage = run.anchor(res.candidate.timestamp) ?? frame.imageB64;
         // Build the decide payload (evidence + opts) as a faithful snapshot at
-        // dispatch time, then either dispatch it to the bounded pool (VOD
-        // concurrency) or run it inline (live / w=1) — byte-identical verdict
-        // either way (AC2).
+        // dispatch time, then either dispatch it to the ordered pipeline (VOD,
+        // detail-first) or run it inline (live, serial) — byte-identical
+        // verdict either way (AC2).
         const { evidence: decideEvidence, opts: decideOpts } = await buildVideoDecideRequest(
           cfg,
           run,
@@ -1958,17 +1960,16 @@ export async function analyzeJob(
           res.observation,
           anchoredImage
         );
-        if (cfg.decideWindowN !== undefined && (cfg.decideConcurrency ?? 1) > 1) {
-          // ADAAAA-6854: VOD bounded-concurrency path — do NOT await the decide;
-          // the ordered pipeline runs it in the W-wide pool and delivers accept
-          // side-effects in candidate timestamp order (clips/billing exactly
-          // once, burst suppression in order). Each decide evaluation is still
-          // persisted via buildCandidateNote (ADAAAA-6851 Inc 2) inside
-          // acceptVideoDecision, so the accept path stays byte-identical to the
-          // serial path (AC2).
+        if (cfg.decideWindowN !== undefined) {
+          // ADAAAA-6854 / ADAAAA-6903: VOD concurrent-dispatch path — do NOT
+          // await the decide; the ordered pipeline runs candidate decides
+          // concurrently (bounded by the orchestrator runner `capacity`, not an
+          // app-side cap) and delivers accept side-effects in candidate
+          // timestamp order (clips/billing exactly once, burst suppression in
+          // order).
           decidePipeline.submit(res.candidate, { seq: frame.seq, timestamp: frame.timestamp }, decideEvidence, decideOpts);
         } else {
-          // Live (decideWindowN unset) / w=1 opt-out: fully serial, unchanged.
+          // Live (decideWindowN unset): fully serial inline decide, unchanged.
           const decision = await client.decide(decideEvidence, decideOpts);
           await acceptVideoDecision(run, cut, cfg, onEvent, { seq: frame.seq, timestamp: frame.timestamp }, res.candidate, decision);
         }
