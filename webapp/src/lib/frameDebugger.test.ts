@@ -4,6 +4,7 @@ import {
   orderGallerySeqs,
   placeLabel,
   collectFrameSeqs,
+  isTrackOnScreen,
 } from "./frameDebugger";
 
 // ADAAAA-6943/6946: click-to-enlarge + multi-select enlarge + legible
@@ -69,6 +70,26 @@ describe("placeLabel (no off-canvas / clipped text at small sizes)", () => {
   it("keeps the label within the bottom of the canvas", () => {
     const { ly } = placeLabel(40, 100, 179, w, h, fontPx);
     expect(ly).toBeLessThanOrEqual(h);
+  });
+});
+
+describe("isTrackOnScreen (ADAAAA-6966/6967: stale detection boxes on post-exit frames)", () => {
+  it("returns true for an object still present on the frame (lostFrames 0)", () => {
+    expect(isTrackOnScreen({ lostFrames: 0 })).toBe(true);
+  });
+  it("returns false once the object has been lost for >=1 frame", () => {
+    expect(isTrackOnScreen({ lostFrames: 1 })).toBe(false);
+    expect(isTrackOnScreen({ lostFrames: 8 })).toBe(false);
+  });
+  it("returns false when the track is explicitly off screen", () => {
+    expect(isTrackOnScreen({ onScreen: false })).toBe(false);
+  });
+  it("returns true for an explicitly on-screen track even if lostFrames is absent", () => {
+    expect(isTrackOnScreen({ onScreen: true })).toBe(true);
+  });
+  it("preserves legacy behavior for tracks without loss/on-screen signals", () => {
+    expect(isTrackOnScreen({})).toBe(true);
+    expect(isTrackOnScreen({ lostFrames: undefined, onScreen: undefined })).toBe(true);
   });
 });
 
