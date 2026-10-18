@@ -189,3 +189,48 @@ def test_event_type_goal_alone_triggers_gate():
     ok, reason = apply_goal_attestation_gate(decision, {}, "GOAL")
     assert ok is False
     assert reason is not None
+
+
+def test_confirm_enabled_defers_unattested_goal_to_confirm(monkeypatch):
+    # ADAAAA-6973 (Option 1): when the Stage-2 confirmation pass is ENABLED
+    # (DECIDE_CONFIRM_ENABLED=1), an un-attested goal accept must NOT be
+    # hard-rejected at Stage-A — it passes through so the server's
+    # shouldRunConfirm fires and the /confirm deep-frame dive becomes the
+    # attestation (goalConfirmed=confirmed_goal). The final highlight is gated by
+    # that dive, not dropped here.
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    for reason in (
+        TEMPLATED,
+        "The ball clearly enters the net, and the crowd and players react.",  # templated + reaction
+        "Striker slots it low into the far corner past the keeper.",  # "specific" but unattested
+    ):
+        decision = {
+            "isHighlight": True,
+            "outcome": "scoring_play",
+            "eventType": "GOAL",
+            "reason": reason,
+        }
+        ok, gate_reason = apply_goal_attestation_gate(decision, {}, "GOAL")
+        assert ok is True, reason
+        assert gate_reason is None, reason
+
+
+def test_confirm_disabled_still_rejects_unattested_goal(monkeypatch):
+    # With the confirmation pass OFF (default / live flag-off path), the strict
+    # attestation gate is byte-for-byte preserved: an un-attested goal accept is
+    # rejected (the model alone is never trusted).
+    monkeypatch.delenv("DECIDE_CONFIRM_ENABLED", raising=False)
+    for reason in (
+        TEMPLATED,
+        "Striker slots it low into the far corner past the keeper.",
+    ):
+        decision = {
+            "isHighlight": True,
+            "outcome": "scoring_play",
+            "eventType": "GOAL",
+            "reason": reason,
+        }
+        ok, gate_reason = apply_goal_attestation_gate(decision, {}, "GOAL")
+        assert ok is False, reason
+        assert gate_reason is not None
+        assert "no attested goal criterion" in gate_reason
