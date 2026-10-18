@@ -408,7 +408,15 @@ export interface Highlight {
 // Async-VOD job record (ADAAAA-6760). Mirrors packages/events JobSchema (the
 // shared contract) so the webapp's processing-jobs surface can render a job's
 // id, source, status, progress, and terminal metrics without another type.
-export type JobStatus = "queued" | "active" | "done" | "failed";
+export type JobStatus =
+  | "queued"
+  | "active"
+  | "extracting"
+  | "analyzing"
+  | "finalizing"
+  | "done"
+  | "failed"
+  | "cancelled";
 export interface Job {
   id: string;
   ownerId?: string;
