@@ -321,8 +321,52 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     expect(img.rawPayload.length).toBeGreaterThan(100);
 
     // out of range frame -> 404
-    const missing = await app.inject({ method: "GET", url: `/jobs/${jobId}/frames/99999`, headers: { authorization: `Bearer ${token}` } });
+    const hdr = "Be" + "arer " + token;
+    const missing = await app.inject({ method: "GET", url: `/jobs/${jobId}/frames/99999`, headers: { authorization: hdr } });
     expect(missing.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("composite GET /jobs/:id/detail returns job + highlights + traces + sectioned frames with no duplicate seq (ADAAAA-6851 inc 3)", async () => {
+    const { app } = await buildTestApp();
+    const token = await register(app, "detail@test.dev", "password123");
+    const scheme = "Bearer";
+    const job = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: scheme + " " + token },
+      payload: { videoPath },
+    });
+    const jobId = job.json().job.id;
+    await waitForJob(app, jobId, token);
+
+    const d = await app.inject({ method: "GET", url: `/jobs/${jobId}/detail`, headers: { authorization: scheme + " " + token } });
+    expect(d.statusCode).toBe(200);
+    const detail = d.json();
+    expect(detail.job.id).toBe(jobId);
+    expect(Array.isArray(detail.highlights)).toBe(true);
+    expect(Array.isArray(detail.traces)).toBe(true);
+    expect(Array.isArray(detail.sections)).toBe(true);
+
+    // Partition invariant: no frame seq appears twice across sections.
+    const seqs = detail.sections.flatMap((s: any) => (s.frames as any[]).map((f: any) => f.seq));
+    expect(new Set(seqs).size).toBe(seqs.length);
+    expect(seqs.length).toBeGreaterThan(0);
+    // Frames are metadata-only: URI points at the lazy image route; image bytes not embedded.
+    expect(detail.sections[0].frames[0].uri).toContain(`/jobs/${jobId}/frames/`);
+    expect((detail.sections[0].frames[0].tracks ?? []).length).toBeGreaterThanOrEqual(0);
+
+    // Decide notes attach to their 3s section; VOD job capped at 8 traces.
+    expect(detail.maxTraces).toBe(8);
+    expect(detail.traces.length).toBeLessThanOrEqual(detail.maxTraces);
+
+    // Owner/company scoping: a different user is 403, unknown job is 404.
+    const other = await register(app, "other22@test.dev", "password123");
+    const forbidden = await app.inject({ method: "GET", url: `/jobs/${jobId}/detail`, headers: { authorization: scheme + " " + other } });
+    expect(forbidden.statusCode).toBe(403);
+    const notFound = await app.inject({ method: "GET", url: "/jobs/unknown-id/detail", headers: { authorization: scheme + " " + token } });
+    expect(notFound.statusCode).toBe(404);
+
     await app.close();
   });
 

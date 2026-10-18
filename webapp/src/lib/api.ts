@@ -406,5 +406,23 @@ export interface Job {
   // Async-VOD progress (0-100) + human label, updated at stage boundaries.
   progress?: number;
   progressLabel?: string;
+  // Live decision trail (ADAAAA-6870, Increment 3 T1): bounded ordered array of
+  // candidate/highlight decisions appended by runVodJob. Additive optional —
+  // absent on older records and live jobs.
+  candidates?: JobDecision[];
   createdAt: string;
+}
+
+// One entry in the bounded `candidates` decision-trail array carried on the Job
+// record (ADAAAA-6870, Increment 3 T1). Mirrors packages/events JobDecision so
+// the Job detail panel can render the in-flight + persisted trail without
+// depending on a dedicated contract import. `decision` is "candidate" for a
+// candidate trigger; for a highlight it is the parser/decide verdict
+// (accepted/rejected/...). All optional on the parent Job (additive).
+export interface JobDecision {
+  seq: number;
+  ts: number;
+  eventType: string;
+  decision: string;
+  highlightId?: string;
 }

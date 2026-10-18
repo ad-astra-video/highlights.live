@@ -44,7 +44,7 @@
       "id": "soc-goal-01",
       "phase": "goal",
       "mode": "live",
-      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/c57b67f0-e538-4286-ade5-5cc7fe37443a.mp4",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/4d9a37d0-6640-4ee3-90cd-8f26a0296e33.mp4",
       "startS": 0.0,
       "endS": 8.0,
       "groundTruth": {
@@ -59,13 +59,14 @@
         "onScreenPctLabel": 1.0,
         "speedErrorLabelPct": null,
         "possessorGroundTruth": "striker"
-      }
+      },
+      "reprovenance": "ADAAAA-6847 re-source: HF infactory-ai/soccer-events event_type=Goal (Hellas Verona v Inter); frame-verified goal"
     },
     {
       "id": "soc-goal-02",
       "phase": "goal",
       "mode": "live",
-      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/8e0d65ca-466e-495d-b7ee-a1aabb32b4b3.mp4",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/85e5f604-2956-4f48-8cc9-4ed1f0214616.mp4",
       "startS": 0.0,
       "endS": 12.0,
       "groundTruth": {
@@ -80,13 +81,14 @@
         "onScreenPctLabel": 1.0,
         "speedErrorLabelPct": null,
         "possessorGroundTruth": "striker"
-      }
+      },
+      "reprovenance": "ADAAAA-6847 re-source: HF infactory-ai/soccer-events event_type=Goal (Hellas Verona v Atalanta); frame-verified goal celebration"
     },
     {
       "id": "soc-goal-03",
       "phase": "goal",
       "mode": "vod",
-      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/a11ca3bc-3284-42f7-ab5f-03cb355d5767.mp4",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/d174cd7e-1216-4915-9735-f4c459d58a4e.mp4",
       "startS": 0.0,
       "endS": 12.0,
       "groundTruth": {
@@ -101,13 +103,14 @@
         "onScreenPctLabel": 1.0,
         "speedErrorLabelPct": null,
         "possessorGroundTruth": "striker"
-      }
+      },
+      "reprovenance": "ADAAAA-6847 re-source: HF infactory-ai/soccer-events event_type=Goal (Cagliari v Parma); frame-verified goal"
     },
     {
       "id": "soc-goal-04",
       "phase": "goal",
       "mode": "vod",
-      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/9b35c577-aef8-49dd-92c3-5d4431134c43.mp4",
+      "source": "host:livepeer-ai-x99:/home/brad/highlights.live/docker/data/clips/81e00499-a733-4c1e-b941-59a6f276830c.mp4",
       "startS": 0.0,
       "endS": 10.1,
       "groundTruth": {
@@ -122,7 +125,8 @@
         "onScreenPctLabel": 1.0,
         "speedErrorLabelPct": null,
         "possessorGroundTruth": "striker"
-      }
+      },
+      "reprovenance": "ADAAAA-6847 re-source: HF infactory-ai/soccer-events event_type=Goal (Udinese v Fiorentina); frame-verified goal"
     },
     {
       "id": "soc-near-01",

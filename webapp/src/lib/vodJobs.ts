@@ -31,6 +31,18 @@ export function jobProgressPct(job: Pick<Job, "progress"> | undefined): number {
   return Math.max(0, Math.min(100, p));
 }
 
+/** Monotonic progress for an in-flight job (ADAAAA-6875 Phase 3 AC: "progress
+ * never regresses"). The server emits monotonic progress, but the webapp can
+ * receive out-of-order updates (an SSE `progress` event racing a GET /jobs
+ * poll merge for the same job), which would visually tick the bar backwards.
+ * Returns the larger of the last-seen and incoming value, so the displayed
+ * progress for a job that is still running never decreases. */
+export function monotonicProgress(prev: number | undefined, next: number | undefined): number | undefined {
+  if (next === undefined || !Number.isFinite(next)) return prev;
+  if (prev === undefined || !Number.isFinite(prev)) return next;
+  return Math.max(prev, next);
+}
+
 /** Merge a polling/SSE refresh `next` into `prev`, deduped by id (the freshest
  * record wins) and sorted newest-first by createdAt. Newest-first mirrors the
  * server's GET /jobs ordering so the queue keeps a stable, human-sensible
@@ -193,7 +205,17 @@ export function useProcessingJobs(): ProcessingJobsState {
   const refresh = useCallback(async (): Promise<Job[]> => {
     try {
       const r = await api<{ jobs: Job[] }>("/jobs");
-      const next = mergeJobLists(jobsRef.current, r.jobs ?? []);
+      const next = mergeJobLists(jobsRef.current, r.jobs ?? []).map((j) => {
+        // Phase 3 monotonic guard: for a job that is still in flight, a polling
+        // refresh (which can race/lag an SSE progress patch, or return a
+        // persisted progress lower than the live value) must never tick the
+        // bar backwards. Done/failed jobs keep their persisted progress.
+        const old = jobsRef.current.find((o) => o.id === j.id);
+        if (isInFlight(j.status) && old && Number.isFinite(j.progress)) {
+          return { ...j, progress: monotonicProgress(old.progress, j.progress) };
+        }
+        return j;
+      });
       jobsRef.current = next;
       setJobs(next);
       return next;
@@ -205,10 +227,19 @@ export function useProcessingJobs(): ProcessingJobsState {
   }, []);
 
   // Apply an in-place patch (e.g. an SSE progress update) to one job without a
-  // full queue refresh, so progress stays smooth between poll ticks.
+  // full queue refresh, so progress stays smooth between poll ticks. Phase 3:
+  // an in-flight job's `progress` is never allowed to regress (an SSE update
+  // arriving after a higher poll merge, or vice versa).
   const patchJob = useCallback((id: string, patch: Partial<Job>) => {
     setJobs((prev) => {
-      const next = prev.map((j) => (j.id === id ? { ...j, ...patch } : j));
+      const next = prev.map((j) => {
+        if (j.id !== id) return j;
+        const merged = { ...j, ...patch };
+        if (isInFlight(merged.status) && Number.isFinite(patch.progress)) {
+          return { ...merged, progress: monotonicProgress(j.progress, patch.progress) };
+        }
+        return merged;
+      });
       jobsRef.current = next;
       return next;
     });
