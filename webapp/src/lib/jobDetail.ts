@@ -98,7 +98,21 @@ export interface JobDetail {
     sourceUrl?: string;
     gameHint?: string;
     preferLabels?: string[];
-    status: "queued" | "active" | "done" | "failed";
+    // ADAAAA-6989: VOD jobs are NOT just queued/active during processing. The
+    // server (runVodJob) persists distinct processing stages as the job status —
+    // `extracting` → `analyzing` → `finalizing` — before `done`/`failed`, and the
+    // detail endpoint returns that raw status. Mirror the full events contract
+    // (packages/events JobSchema) so every non-terminal stage keeps the poll +
+    // SSE alive while the job is in flight.
+    status:
+      | "queued"
+      | "active"
+      | "extracting"
+      | "analyzing"
+      | "finalizing"
+      | "done"
+      | "failed"
+      | "cancelled";
     error?: string;
     // Short human-readable job title (ADAAAA-6798 Inc 1); absent on legacy jobs
     // where the UI falls back to `<gameHint/source> · <n> highlights · <date>`.
@@ -128,9 +142,25 @@ export async function fetchJobDetail(id: string): Promise<JobDetail> {
   return api<JobDetail>(`/jobs/${id}/detail`);
 }
 
-/** True while a job still has background work outstanding (not terminal). */
+/**
+ * True while a job still has background work outstanding (not terminal).
+ *
+ * ADAAAA-6989: the server persists distinct VOD processing stages as the job
+ * status (`extracting` → `analyzing` → `finalizing`) between `active` and
+ * `done`. A job in any of those stages is still in flight — the detail view
+ * must keep its SSE subscription + 5s reconciling poll alive so progress and
+ * the eventual terminal status render without a manual refresh. Only the
+ * terminal states (`done`, `failed`) stop the poll/SSE. `undefined` (legacy /
+ * missing status) is treated as not in flight.
+ */
 export function isJobInFlight(status: string | undefined): boolean {
-  return status === "queued" || status === "active";
+  return (
+    status === "queued" ||
+    status === "active" ||
+    status === "extracting" ||
+    status === "analyzing" ||
+    status === "finalizing"
+  );
 }
 
 /**
