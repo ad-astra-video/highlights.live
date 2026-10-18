@@ -45,6 +45,8 @@ function concurrencyClient(opts: {
       reason: "test",
     }),
     postAudio: async () => null,
+    analysisQuery: async (_sid: string, _tool: string, _window: { start: number; end: number; maxPoints: number }) => null,
+    analysisState: async (_sid: string) => null,
     controlForward: async () => {},
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     stopPerceive: async () => {},
