@@ -1785,14 +1785,21 @@ async function buildVideoDecideRequest(
  * once). Shared by the serial (live / w=1) inline path and the ordered VOD
  * pipeline so both are byte-for-byte identical. */
 async function acceptVideoDecision(
+  client: PipelineClient,
   run: LiveRunShared,
   cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
   cfg: AnalyzerConfig,
   onEvent: ((ev: AnalyzeEvent) => void) | undefined,
   emit: { seq: number; timestamp: number },
   candidate: CandidateSignal,
-  decision: DecisionResult
+  stage1: DecisionResult
 ): Promise<void> {
+  // ADAAAA-6797: Stage-2 confirmation dive — for an un-attested goal-type
+  // candidate whose Stage-1 read is a scoring_play accept, run the decide
+  // /confirm deep frame dive and adopt the reconciled verdict in its place.
+  // Strict no-op when the trigger doesn't fire or the flag (confirmEnabled) is
+  // off; the Stage-1 verdict is kept on passthrough / transport failure.
+  const { decision, confirm } = await confirmReconcile(client, run, cfg, stage1, candidate);
   // ADAAAA-6798 Inc 2: derive the trigger provenance ONCE from the candidate
   // (pure function, no inference) and share one candidateId across the
   // persisted JobCandidate and the HighlightRecord so the trigger kind +
@@ -1836,6 +1843,9 @@ async function acceptVideoDecision(
     // distinctly via the outcome/nearMiss flag.
     outcome: decision.outcome,
     nearMiss: decision.nearMiss,
+    // Stage-2 confirmation verdict (ADAAAA-6797), set when the trigger fired.
+    goalConfirmed: confirm?.goalConfirmed ?? undefined,
+    stage1Disagreed: confirm?.stage1Disagreed ?? undefined,
     status: "pending",
     // ADAAAA-6798 Inc 2: link the highlight to the candidate that started it
     // and carry that candidate's trigger provenance (no read-time join).
@@ -2219,15 +2229,7 @@ export async function analyzeJob(
   // below — the 1-5 s latency budget holds.
   const decidePipeline = new OrderedDecidePipeline(
     client,
-    async (candidate, emit, decision) => {
-      // ADAAAA-6797: Stage-2 confirmation dive — for an un-attested goal-type
-      // candidate whose Stage-1 read is a scoring_play accept, run the decide
-      // /confirm deep frame dive and adopt the reconciled verdict in its place.
-      // Strict no-op when the trigger doesn't fire or the flag (confirmEnabled)
-      // is off.
-      const { decision: stage2 } = await confirmReconcile(client, run, cfg, decision, candidate);
-      return acceptVideoDecision(run, cut, cfg, onEvent, emit, candidate, stage2);
-    }
+    (candidate, emit, decision) => acceptVideoDecision(client, run, cut, cfg, onEvent, emit, candidate, decision)
   );
   let framesAnalyzed = 0;
   let planApplied = false;
@@ -2277,6 +2279,7 @@ export async function analyzeJob(
       const verdict = verdicts[i];
       if (!verdict) continue;
       await acceptVideoDecision(
+        client,
         run, cut, cfg, onEvent,
         { seq: c.seq, timestamp: c.timestamp },
         { eventType: c.eventType, timestamp: c.candidateTs },
