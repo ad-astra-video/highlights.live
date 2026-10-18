@@ -3,6 +3,7 @@ import {
   resolveTrackLabel,
   orderGallerySeqs,
   placeLabel,
+  collectFrameSeqs,
 } from "./frameDebugger";
 
 // ADAAAA-6943/6946: click-to-enlarge + multi-select enlarge + legible
@@ -68,5 +69,26 @@ describe("placeLabel (no off-canvas / clipped text at small sizes)", () => {
   it("keeps the label within the bottom of the canvas", () => {
     const { ly } = placeLabel(40, 100, 179, w, h, fontPx);
     expect(ly).toBeLessThanOrEqual(h);
+  });
+});
+
+describe("collectFrameSeqs (multi-select enlarge across per-job detail sections)", () => {
+  it("collects every frame seq in section filmstrip order", () => {
+    const sections = [
+      { index: 0, frames: [{ seq: 1 }, { seq: 2 }] },
+      { index: 1, frames: [{ seq: 3 }, { seq: 4 }] },
+    ];
+    expect(collectFrameSeqs(sections)).toEqual([1, 2, 3, 4]);
+  });
+  it("orders the multi-select gallery with orderGallerySeqs over collected seqs", () => {
+    const sections = [
+      { index: 0, frames: [{ seq: 1 }, { seq: 2 }] },
+      { index: 1, frames: [{ seq: 3 }, { seq: 4 }] },
+    ];
+    const ordered = orderGallerySeqs(collectFrameSeqs(sections), [4, 2]);
+    expect(ordered).toEqual([2, 4]);
+  });
+  it("returns empty when there are no sections", () => {
+    expect(collectFrameSeqs([])).toEqual([]);
   });
 });
