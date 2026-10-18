@@ -71,7 +71,11 @@ export class OrchestratorAdapter implements PipelineClient {
   private ledger?: PerceiveSessionLedger;
 
   constructor(cfg: ServerConfig, opts: PaidOrchestratorOptions = {}) {
-    this.client = new LivepeerClient(cfg.orchestratorUrl);
+    this.client = new LivepeerClient(
+      cfg.orchestratorUrl,
+      undefined,
+      cfg.decideConcurrency !== undefined ? { decideConcurrency: cfg.decideConcurrency } : undefined
+    );
     this.signer = opts.signer;
     this.payerAddress = opts.payerAddress;
     this.paymentIntervalMs = opts.paymentIntervalMs ?? 10_000;
