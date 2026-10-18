@@ -187,9 +187,15 @@ function sourceLabel(source: string | undefined): string {
 export interface HighlightCardProps {
   highlight: JobDetailHighlight;
   onDecision: (h: JobDetailHighlight, status: "accepted" | "rejected") => void;
+  /** Which review action is currently in-flight for this card (drives the
+   * per-control loading state; disables both controls while pending). */
+  pendingStatus?: "accepted" | "rejected" | null;
 }
 
-export function HighlightCard({ highlight: h, onDecision }: HighlightCardProps) {
+export function HighlightCard({ highlight: h, onDecision, pendingStatus = null }: HighlightCardProps) {
+  const pending = pendingStatus !== null;
+  const busyAccept = pendingStatus === "accepted";
+  const busyReject = pendingStatus === "rejected";
   return (
     <div className="card card-hover overflow-hidden" data-detail-highlight>
       <VideoClip src={h.clipUri} label={h.eventType} error={h.clipError} />
@@ -198,7 +204,9 @@ export function HighlightCard({ highlight: h, onDecision }: HighlightCardProps) 
           <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">
             {h.eventType || "EVENT"}
           </span>
-          <span className="text-xs text-ink">{h.status}</span>
+          <span className={`text-xs font-bold ${h.status === "rejected" ? "text-red" : "text-ink"}`} data-detail-status>
+            {h.status}
+          </span>
         </div>
         <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
         <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
@@ -211,21 +219,28 @@ export function HighlightCard({ highlight: h, onDecision }: HighlightCardProps) 
         <div className="mt-3 flex gap-2">
           <button
             className="btn-neon flex-1"
-            disabled={h.status === "accepted"}
+            disabled={h.status === "accepted" || pending}
             onClick={() => onDecision(h, "accepted")}
             data-detail-accept
           >
-            <Check className="mr-1 inline h-4 w-4" /> Accept
+            {busyAccept ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Check className="mr-1 inline h-4 w-4" />}
+            {busyAccept ? "Accepting…" : "Accept"}
           </button>
           <button
             className="btn-neon btn-pink flex-1"
-            disabled={h.status === "rejected"}
+            disabled={h.status === "rejected" || pending}
             onClick={() => onDecision(h, "rejected")}
             data-detail-reject
           >
-            <X className="mr-1 inline h-4 w-4" /> Reject
+            {busyReject ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <X className="mr-1 inline h-4 w-4" />}
+            {busyReject ? "Rejecting…" : "Reject"}
           </button>
         </div>
+        {h.status === "rejected" && (
+          <div className="mt-2 rounded-lg border border-red/40 bg-red/10 px-2 py-1 text-xs text-red" data-detail-rejected>
+            Rejected — the highlight leaves the accepted feed. Accept to restore within the recover window.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -351,6 +366,8 @@ export function JobDetail() {
   const [error, setError] = useState<string | null>(null);
   const [terminal, setTerminal] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Which review action is in-flight for which highlight id (per-control loading).
+  const [pendingReview, setPendingReview] = useState<{ id: string; status: "accepted" | "rejected" } | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aliveRef = useRef(true);
   const token = getToken();
@@ -469,9 +486,15 @@ export function JobDetail() {
   }
 
   async function review(h: JobDetailHighlight, status: "accepted" | "rejected") {
+    // Guard against double-submit while a review is already in-flight for this card.
+    if (pendingReview) return;
+    setPendingReview({ id: h.id, status });
     try {
       await api(`/highlights/${h.id}/review`, { body: { status } });
       // Reflect the review in the detail's highlight list without a full reload.
+      // A rejected highlight flips to `rejected` and leaves the accepted feed on
+      // the next render (see the accepted/rejected split below); an accepted
+      // highlight moves into the accepted feed.
       setDetail((d) =>
         d
           ? {
@@ -480,8 +503,24 @@ export function JobDetail() {
             }
           : d
       );
+      // Re-fetch the authoritative payload so the server-persisted status wins
+      // over any concurrent SSE-triggered refresh that could have read a stale
+      // pre-review snapshot — this is what makes the reject/accept state change
+      // stick and never appear to "do nothing".
+      try {
+        const fresh = await fetchJobDetail(id);
+        if (aliveRef.current) {
+          setDetail(fresh);
+          setError(null);
+        }
+      } catch {
+        /* keep the optimistic local update; the next refresh reconciles */
+      }
     } catch (e: any) {
+      // Surface validation/API failures explicitly — no silent no-op.
       setError(e?.message || String(e));
+    } finally {
+      if (aliveRef.current) setPendingReview(null);
     }
   }
 
@@ -568,14 +607,47 @@ export function JobDetail() {
             )}
           </div>
 
-          {/* Highlights */}
+          {/* Highlights — accepted feed. Rejected clips move out of this feed
+              into the Rejected presentation below (recoverable via Accept). */}
           <h3 className="mt-8 text-2xl font-black">Highlights</h3>
           <div className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {detail.highlights.length === 0 && <div className="text-mut" data-detail-no-highlights>No highlights for this job.</div>}
-            {detail.highlights.map((h) => (
-              <HighlightCard key={h.id} highlight={h} onDecision={review} />
-            ))}
+            {detail.highlights.filter((h) => h.status !== "rejected").length === 0 && (
+              <div className="text-mut" data-detail-no-highlights>No accepted highlights for this job.</div>
+            )}
+            {detail.highlights
+              .filter((h) => h.status !== "rejected")
+              .map((h) => (
+                <HighlightCard
+                  key={h.id}
+                  highlight={h}
+                  onDecision={review}
+                  pendingStatus={pendingReview?.id === h.id ? pendingReview.status : null}
+                />
+              ))}
           </div>
+
+          {/* Rejected presentation (ADAAAA-6953): rejected clips leave the
+              accepted feed and appear here so the user can still recover
+              (reject → accept within the window restores the clip). */}
+          {detail.highlights.filter((h) => h.status === "rejected").length > 0 && (
+            <>
+              <h3 className="mt-8 text-2xl font-black" data-detail-rejected-heading>
+                Rejected
+              </h3>
+              <div className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {detail.highlights
+                  .filter((h) => h.status === "rejected")
+                  .map((h) => (
+                    <HighlightCard
+                      key={h.id}
+                      highlight={h}
+                      onDecision={review}
+                      pendingStatus={pendingReview?.id === h.id ? pendingReview.status : null}
+                    />
+                  ))}
+              </div>
+            </>
+          )}
 
           {/* Traces */}
           <h3 className="mt-8 text-2xl font-black">Traces</h3>
