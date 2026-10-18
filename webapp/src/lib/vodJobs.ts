@@ -73,6 +73,30 @@ export function sourceLabel(source: string | undefined): string {
   return (source && SOURCE_LABELS[source]) || source || "Unknown";
 }
 
+/**
+ * Job display title (ADAAAA-6798 Inc 4), LLM-first with a deterministic
+ * fallback: `job.title` when present; else `<gameHint/source> · <n> highlights ·
+ * <date>` mirroring the server's fallbackJobTitle; else the 8-char id for a
+ * legacy job with no metadata. `nonRejectedCount` is the accepted-plus-pending
+ * highlight count (rejected clips are excluded from the count, matching the
+ * server's title fallback). `dateIso` is injectable so the fallback string is
+ * deterministic under test; defaults to today.
+ */
+export function jobTitle(
+  job: { id: string; title?: string; gameHint?: string; source?: string },
+  nonRejectedCount: number,
+  dateIso?: string
+): string {
+  const t = job.title?.trim();
+  if (t) return t;
+  const who = job.gameHint || job.source;
+  if (who) {
+    const date = dateIso ?? new Date().toISOString().slice(0, 10);
+    return `${who} · ${nonRejectedCount} highlight${nonRejectedCount === 1 ? "" : "s"} · ${date}`;
+  }
+  return job.id.slice(0, 8);
+}
+
 export interface JobPartition {
   /** Still processing (queued/active) — rendered as plain rows. */
   inFlight: Job[];
