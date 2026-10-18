@@ -758,6 +758,10 @@ export const MediaResultEventSchema = z.discriminatedUnion("type", [
     timestamp: z.number().optional(),
     costUsd: z.number().min(0),
     perceiveSessionS: z.number().min(0).optional(),
+    // The perceive session id the media node reserved for this job, reported so
+    // the server (DB-owner) can record it on the job record (ADAAAA-6895 Phase 1b
+    // server-side handoff). Additive optional — absent on earlier events.
+    perceiveSessionId: z.string().optional(),
   }),
 ]);
 export type MediaResultEvent = z.infer<typeof MediaResultEventSchema>;

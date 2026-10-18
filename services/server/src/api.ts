@@ -41,6 +41,7 @@ import {
   type HighlightRecord,
   type JobCandidate,
   type JobDecision,
+  type MediaJobRequest,
   type MediaResultEvent,
 } from "@highlights/events";
 import { buildSections, buildTraces, maxTracesForSource } from "./job-detail";
@@ -1221,6 +1222,69 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     drainVodQueue().catch((e) => console.error(`[vod:${jobId}] drain`, e));
   }
 
+  // -------------------------------------------------------------------------
+  // Phase 1b (ADAAAA-6895): server-side VOD handoff to the media node. The main
+  // server becomes a pure negotiator/persister for VOD: it POSTs a
+  // MediaJobRequest to the media server (which runs ffmpeg frame extraction, the
+  // Stage-A audio tap, the perceive session reserve/pay, per-candidate decide and
+  // clip cut) and then waits for the media node to report typed MediaResultEvents
+  // back over POST /jobs/:id/observe. The server never runs ffmpeg and never
+  // reserves a perceive session on this path.
+  // -------------------------------------------------------------------------
+
+  /** POST a MediaJobRequest for a VOD job to the media server. */
+  async function postMediaVodJob(job: any): Promise<void> {
+    if (!cfg.mediaServerUrl) throw new Error("media server not configured (MEDIA_SERVER_URL)");
+    const mediaOrigin = cfg.mediaServerUrl.replace(/\/+$/, "");
+    const reqBody: MediaJobRequest = {
+      jobId: job.id,
+      // The server-side VOD submit path is source=file (uploaded/local path) or
+      // source=url (fetchable URL). Live/browser do not go through this helper.
+      source: (job.source === "url" ? "url" : "file") as MediaJobRequest["source"],
+      ...(job.source === "url" ? { inputUrl: job.sourceUrl } : { inputPath: job.sourceUrl }),
+      gameHint: job.gameHint,
+      preferLabels: job.preferLabels ?? [],
+      sampleFps: job.sampleFps,
+      detailFps: cfg.vodDetailFps,
+      frameScale: cfg.vodFrameScale,
+      decideWindowN: cfg.vodDecideWindowN,
+      clipBeforeS: cfg.clipBeforeS,
+      clipAfterS: cfg.clipAfterS,
+    };
+    const r = await fetch(`${mediaOrigin}/jobs/vod`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(reqBody),
+    });
+    if (r.status !== 200) throw new Error(`media handoff failed: HTTP ${r.status} ${await r.text()}`);
+  }
+
+  /** Hand a VOD job to the media server (Phase 1b) when MEDIA_SERVER_URL is
+   *  configured; otherwise fall back to the legacy in-process runVodJob worker.
+   *  Returns true when the job was handed to the media server (job set `active`,
+   *  results arrive later over /jobs/:id/observe), false when it was enqueued
+   *  for the local worker. A media handoff failure logs and falls back to the
+   *  local worker so a transient media outage never strands a user's VOD. */
+  async function maybeHandoffVodToMedia(job: any, videoPath: string): Promise<boolean> {
+    if (!cfg.mediaServerUrl) {
+      enqueueVodJob(job.id, videoPath);
+      return false;
+    }
+    try {
+      await postMediaVodJob(job);
+      await store.patchJob(job.id, {
+        status: "active",
+        stage: "extracting",
+        startedAt: new Date().toISOString(),
+      });
+      return true;
+    } catch (e: any) {
+      console.error(`[vod:${job.id}] media handoff failed; falling back to in-process worker:`, e?.message || e);
+      enqueueVodJob(job.id, videoPath);
+      return false;
+    }
+  }
+
   async function drainVodQueue(): Promise<void> {
     if (vodDraining.running) return;
     vodDraining.running = true;
@@ -1838,13 +1902,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // and drives queued -> extracting -> analyzing -> finalizing -> done|
       // failed; progress/status stream over the job's SSE channel and the
       // webapp polls GET /jobs / GET /jobs/:id as a backstop.
-      enqueueVodJob(job.id, videoPath!);
+      // Phase 1b (ADAAAA-6895): hand the file/URL VOD job to the media server
+      // (which runs ffmpeg + perceive + decide + clip) and return immediately;
+      // the server stays the negotiator/persister. When MEDIA_SERVER_URL is
+      // unset (or the handoff fails) we fall back to the legacy in-process
+      // worker. Either way the submit returns 202 immediately and the job's
+      // status/progress reflect the actual path taken.
+      await maybeHandoffVodToMedia(job, videoPath!);
       const q = store.getJob(job.id)!;
       return reply.code(202).send({
         job: q,
         accepted: true,
-        status: "queued",
-        progress: { stage: "queued", framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
+        status: q.status,
+        progress: { stage: q.stage ?? q.status, framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
       });
     }
   );
@@ -1971,13 +2041,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // dataDir/uploads/<jobId>/<name>). The old synchronous await blocked the
     // request for minutes on a long VOD, which outlasted the edge request
     // timeout and handed the browser a 5xx — same fix as the resumable rail.
-    enqueueVodJob(job.id, finalPath);
+    // Phase 1b (ADAAAA-6895): hand the uploaded file to the media server when
+    // configured; otherwise fall back to the legacy in-process worker.
+    await maybeHandoffVodToMedia(job, finalPath);
     const q = store.getJob(job.id)!;
     return reply.code(202).send({
       job: q,
       accepted: true,
-      status: "queued",
-      progress: { stage: "queued", framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
+      status: q.status,
+      progress: { stage: q.stage ?? q.status, framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
     });
   });
 
@@ -2121,13 +2193,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // for minutes on a long VOD, which outlasted the Cloudflare/tunnel edge
     // request timeout and handed the browser a Cloudflare 5xx (HTML) page; the
     // webapp polls GET /jobs/:id to a terminal state instead (ADAAAA-5714).
-    enqueueVodJob(job.id, session.finalPath);
+    // Phase 1b (ADAAAA-6895): hand the reassembled file to the media server when
+    // configured; otherwise fall back to the legacy in-process worker.
+    await maybeHandoffVodToMedia(job, session.finalPath);
     const q = store.getJob(job.id)!;
     return reply.code(202).send({
       job: q,
       accepted: true,
-      status: "queued",
-      progress: { stage: "queued", framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
+      status: q.status,
+      progress: { stage: q.stage ?? q.status, framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
     });
   });
 
@@ -2568,7 +2642,33 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         break;
       }
       case "highlight": {
-        const rec = await store.addHighlight(parsed.highlight);
+        // Phase 1b (ADAAAA-6895): a media-reported highlight lands on the
+        // server. Persist + bill (billing.onHighlightCreated) + quota-debit
+        // (entitlements.onClipGenerated) exactly once per accepted highlight,
+        // mirroring persistLiveHighlight. A media retry re-delivers the same
+        // highlight id; skip re-persist/re-debit when it is already recorded so
+        // quota is never double-spent (ADAAAA-6874 idempotent persistence).
+        if (store.getHighlight(parsed.highlight.id)) {
+          emitJobEvent(req.params.id, {
+            seq,
+            timestamp,
+            type: "highlight",
+            highlight: store.getHighlight(parsed.highlight.id)!,
+          });
+          break;
+        }
+        const user = job.ownerId ? await db.getUserById(job.ownerId) : undefined;
+        let rec: HighlightRecord;
+        if (user) {
+          const sub = await db.getSubscription(user.id);
+          rec = await persistLiveHighlight({ store, cfg, billing, entitlements, db }, user, sub, parsed.highlight);
+        } else {
+          rec = await store.addHighlight({
+            ...parsed.highlight,
+            ownerId: job.ownerId,
+            status: cfg.autoPublishHighlights ? "accepted" : "pending",
+          });
+        }
         emitJobEvent(req.params.id, {
           seq,
           timestamp,
@@ -2582,11 +2682,26 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         break;
       }
       case "cost": {
-        const patch: { costUsd: number; perceiveSessionS?: number } = {
+        // Phase 1b (ADAAAA-6895): the final `cost` result event is the media
+        // node's completion signal. Record the reported cost + perceive session
+        // id and set the job `done` once, so a media-served VOD reaches a
+        // terminal state without the server running ffmpeg/reserving anything.
+        const patch: {
+          costUsd: number;
+          perceiveSessionS?: number;
+          perceiveSessionId?: string;
+          status: "done";
+          stage: string;
+          finishedAt: string;
+        } = {
           costUsd: parsed.costUsd,
+          status: "done",
+          stage: "done",
+          finishedAt: new Date().toISOString(),
         };
         if (typeof parsed.perceiveSessionS === "number")
           patch.perceiveSessionS = parsed.perceiveSessionS;
+        if (parsed.perceiveSessionId) patch.perceiveSessionId = parsed.perceiveSessionId;
         await store.patchJob(req.params.id, patch).catch(() => {});
         break;
       }
