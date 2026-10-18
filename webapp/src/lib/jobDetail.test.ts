@@ -2,7 +2,7 @@
 // acceptance metric is "each frame in exactly one 3 s section" — assert it here
 // so a rendering or backend overlap can never ship as a silent duplication.
 import { describe, it, expect } from "vitest";
-import { assertFramePartition, sectionFrameCount, type FrameSection } from "./jobDetail";
+import { assertFramePartition, sectionFrameCount, triggerLabel, type FrameSection } from "./jobDetail";
 
 function frame(seq: number, timestamp: number) {
   return { seq, timestamp, uri: `/jobs/j1/frames/${seq}`, tracks: [] };
@@ -55,5 +55,27 @@ describe("assertFramePartition (each frame in exactly one 3s section)", () => {
     const r = assertFramePartition(sections);
     expect(r.total).toBe(3);
     expect(sectionFrameCount(sections)).toBe(3);
+  });
+});
+
+// ADAAAA-6798 Inc 2: per-highlight trigger provenance label. New highlights carry
+// a persisted `trigger` (kind + timestamp + eventType); legacy rows without one
+// degrade to "trigger unknown".
+describe("triggerLabel (per-highlight trigger provenance)", () => {
+  it("renders the trigger kind + timestamp + eventType", () => {
+    expect(triggerLabel({ kind: "audio_burst", timestamp: 12.4, eventType: "KILL" })).toBe("audio burst @ T+12.4s · KILL");
+  });
+
+  it("renders a computed label for a ball-signal trigger", () => {
+    expect(triggerLabel({ kind: "motion", timestamp: 33, eventType: "DUNK" })).toBe("motion @ T+33.0s · DUNK");
+  });
+
+  it("omits the eventType when it is absent", () => {
+    expect(triggerLabel({ kind: "score_change", timestamp: 5, eventType: "" })).toBe("score change @ T+5.0s");
+  });
+
+  it("degrades to 'trigger unknown' when the trigger is absent (legacy row)", () => {
+    expect(triggerLabel(undefined)).toBe("trigger unknown");
+    expect(triggerLabel(null as any)).toBe("trigger unknown");
   });
 });

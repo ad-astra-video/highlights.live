@@ -3,17 +3,20 @@ import { useNavigate, useParams, Link } from "react-router-dom";
 import { ArrowLeft, Play, Check, X, Loader2 } from "lucide-react";
 import { api, getToken } from "../lib/api";
 import { readSSE } from "../lib/sse";
+import { VideoClip } from "../components/VideoClip";
 import {
   fetchJobDetail,
   isJobInFlight,
   assertFramePartition,
   sectionLabel,
+  triggerLabel,
   authFetchFrame,
   type JobDetail,
   type JobDetailHighlight,
   type FrameSection,
   type JobDetailFrame,
 } from "../lib/jobDetail";
+import { jobTitle } from "../lib/vodJobs";
 
 const FRAME_W = 160;
 const FRAME_H = 90;
@@ -215,6 +218,8 @@ export function JobDetail() {
   // server partition on every render so a bug can never show a frame twice.
   const partition = useMemo(() => (detail ? assertFramePartition(detail.sections) : null), [detail]);
   const frameCount = useMemo(() => (detail ? detail.sections.reduce((n, s) => n + s.frames.length, 0) : 0), [detail]);
+  const acceptedCount = useMemo(() => (detail ? detail.highlights.filter((h) => h.status !== "rejected").length : 0), [detail]);
+  const title = useMemo(() => (detail ? jobTitle(detail.job, acceptedCount) : ""), [detail, acceptedCount]);
 
   async function review(h: JobDetailHighlight, status: "accepted" | "rejected") {
     try {
@@ -271,11 +276,14 @@ export function JobDetail() {
         <>
           {/* Header: job metadata */}
           <div className="card card-accent p-5">
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-mut">Job</div>
-                <div className="font-mono text-lg font-bold text-ink">{detail.job.id.slice(0, 8)}</div>
-              </div>
+            <div className="flex flex-wrap items-center gap-3" data-detail-title>
+              <h2 className="text-xl font-black text-ink">{title}</h2>
+              <span className="font-mono text-sm text-mut">{detail.job.id.slice(0, 8)}</span>
+              <span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusChip(detail.job.status)}`}>
+                {detail.job.status}
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2">
               <div>
                 <div className="text-xs uppercase tracking-wide text-mut">Source</div>
                 <div>{sourceLabel(detail.job.source)}</div>
@@ -330,6 +338,9 @@ export function JobDetail() {
                   <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
                   <div className="text-xs text-mut">
                     T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
+                  </div>
+                  <div className="mt-1 rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut" data-detail-trigger>
+                    Trigger: <span className="font-bold text-ink">{triggerLabel(h.trigger)}</span>
                   </div>
                   <div className="mt-3 flex gap-2">
                     <button

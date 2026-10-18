@@ -8,7 +8,7 @@
 // Types are mirrored locally (NOT imported from @highlights/events) so the
 // webapp stays self-contained and compiles against any backend state. They are
 // additive-only, so no contract version bump.
-import { api } from "./api";
+import { api, type HighlightTrigger } from "./api";
 
 export type BBox = [number, number, number, number]; // [x1,y1,x2,y2] normalized 0..1
 
@@ -82,6 +82,12 @@ export interface JobDetailHighlight {
   status: string;
   clipError?: string;
   createdAt: string;
+  // ADAAAA-6798 Inc 2: link to the JobCandidate that started this highlight and
+  // the de-normalized trigger metadata (kind + timestamp + eventType) so the
+  // detail can show "what trigger started this". Absent on legacy rows without
+  // a candidate — those degrade to "trigger unknown".
+  candidateId?: string;
+  trigger?: HighlightTrigger;
 }
 
 export interface JobDetail {
@@ -94,6 +100,9 @@ export interface JobDetail {
     preferLabels?: string[];
     status: "queued" | "active" | "done" | "failed";
     error?: string;
+    // Short human-readable job title (ADAAAA-6798 Inc 1); absent on legacy jobs
+    // where the UI falls back to `<gameHint/source> · <n> highlights · <date>`.
+    title?: string;
     sampleFps?: number;
     framesAnalyzed?: number;
     candidatesTriggered?: number;
@@ -166,6 +175,19 @@ export function sectionFrameCount(sections: FrameSection[]): number {
 
 export function sectionLabel(s: FrameSection): string {
   return `T+${s.startS.toFixed(0)}s – T+${s.endS.toFixed(0)}s`;
+}
+
+/**
+ * Human label for the trigger that started an analysis (ADAAAA-6798 Inc 2),
+ * e.g. `audio burst @ T+12.4s · KILL`. Absent/null on legacy rows without a
+ * persisted candidate → `trigger unknown`.
+ */
+export function triggerLabel(trigger: HighlightTrigger | undefined): string {
+  if (!trigger) return "trigger unknown";
+  const kind = trigger.kind.replace(/_/g, " ");
+  const where = ` @ T+${trigger.timestamp.toFixed(1)}s`;
+  const what = trigger.eventType ? ` · ${trigger.eventType}` : "";
+  return `${kind}${where}${what}`;
 }
 
 /**
