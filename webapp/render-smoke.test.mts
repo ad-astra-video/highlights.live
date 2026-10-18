@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import React from "react";
 import { Dataset } from "./src/pages/Dataset";
 import { Train } from "./src/pages/Train";
+import { JobDetail } from "./src/pages/JobDetail";
 
 function renderPage(El: React.ComponentType) {
   return renderToString(
@@ -42,4 +43,21 @@ describe("fine-tune help sidebar + walkthrough (ADAAAA-5327)", () => {
       expect(html).not.toContain("[LINK]");
     });
   }
+});
+
+describe("Job detail full-screen page (ADAAAA-6852 Inc 4)", () => {
+  it("renders the loading shell without crashing under SSR", () => {
+    const html = renderToString(
+      React.createElement(
+        MemoryRouter,
+        { initialEntries: ["/app/jobs/abc12345"] },
+        React.createElement(
+          Routes,
+          null,
+          React.createElement(Route, { path: "/app/jobs/:id", element: React.createElement(JobDetail) })
+        )
+      )
+    );
+    expect(html).toContain("Loading job");
+  });
 });
