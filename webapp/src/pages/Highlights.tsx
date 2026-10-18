@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Check, X, ChevronDown, ChevronRight, Trash2, List, LayoutGrid, Plus } from "lucide-react";
 import { api, getToken, type Highlight, type Job, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
 import { readSSE } from "../lib/sse";
@@ -906,9 +905,16 @@ function JobTile({ job, highlightCount, onOpen, onDelete }: {
 
       <div className="mt-3 flex items-center justify-between">
         <span className="text-xs text-mut">{formatJobTime(job.completedAt || job.createdAt) || ""}</span>
-        <Link to={`/app/jobs/${job.id}`} className="chip" onClick={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          className="chip"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+        >
           Open detail
-        </Link>
+        </button>
       </div>
     </div>
   );
