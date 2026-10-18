@@ -1,12 +1,26 @@
 import { createHash, randomUUID } from "node:crypto";
-import { HighlightRecordSchema, JobSchema, type HighlightRecord, type Job } from "@highlights/events";
+import {
+  HighlightRecordSchema,
+  JobSchema,
+  JobCandidateSchema,
+  type HighlightRecord,
+  type Job,
+  type JobCandidate,
+  type TrackObservation,
+} from "@highlights/events";
 import type { Db, DatasetRecord } from "./db";
 
 export interface StoredObservation {
   seq: number;
   timestamp: number;
-  tracks: { trackId: string; slot: number; bbox: number[]; kind: string; lostFrames: number }[];
+  tracks: TrackObservation[];
 }
+
+/** Per-job cap on durable per-frame observations (ADAAAA-6870, Increment 3 T1).
+ * The VOD detail-first pass emits ~one observation per analyzed frame (2 fps), so
+ * a 10-min VOD ≈ 1200 rows; 2000 bounds the `job_observations` table so a
+ * pathological job can't bloat it while keeping a completed job's recent traces. */
+export const MAX_OBSERVATIONS_PER_JOB = 2000;
 
 /**
  * Durable store for jobs + highlights.
@@ -27,6 +41,7 @@ export class Store {
   private highlights = new Map<string, HighlightRecord>();
   private byJob = new Map<string, string[]>();
   private observations = new Map<string, StoredObservation[]>();
+  private candidates = new Map<string, JobCandidate[]>();
   private datasets = new Map<string, DatasetRecord>();
   private readonly db: Db | null;
 
@@ -38,14 +53,18 @@ export class Store {
    * re-loading (e.g. after a restart) restores full prior state. */
   async load(): Promise<void> {
     if (!this.db) return;
-    const [jobs, highlights, datasets] = await Promise.all([
+    const [jobs, highlights, datasets, observations, candidates] = await Promise.all([
       this.db.listJobs(),
       this.db.listHighlights(),
       this.db.listDatasets(),
+      this.db.listObservations(),
+      this.db.listJobCandidates(),
     ]);
     this.jobs.clear();
     this.highlights.clear();
     this.byJob.clear();
+    this.observations.clear();
+    this.candidates.clear();
     this.datasets.clear();
     for (const j of jobs) this.jobs.set(j.id, j);
     for (const h of highlights) {
@@ -53,6 +72,16 @@ export class Store {
       const list = this.byJob.get(h.jobId) ?? [];
       list.push(h.id);
       this.byJob.set(h.jobId, list);
+    }
+    for (const { jobId, observation } of observations) {
+      const list = this.observations.get(jobId) ?? [];
+      list.push(observation);
+      this.observations.set(jobId, list);
+    }
+    for (const c of candidates) {
+      const list = this.candidates.get(c.jobId) ?? [];
+      list.push(c);
+      this.candidates.set(c.jobId, list);
     }
     for (const d of datasets) this.datasets.set(d.id, d);
   }
@@ -173,6 +202,8 @@ export class Store {
     const hids = this.byJob.get(id) ?? [];
     for (const hid of hids) this.highlights.delete(hid);
     this.byJob.delete(id);
+    this.observations.delete(id);
+    this.candidates.delete(id);
     if (this.db) await this.db.deleteJob(id);
     return true;
   }
@@ -242,14 +273,46 @@ export class Store {
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   }
 
-  recordObservation(jobId: string, obs: StoredObservation): void {
+  /** Record a per-frame perceive observation and write it through to the durable
+   * sink (ADAAAA-6851 Inc 1) so the job detail survives a server restart. The
+   * in-memory working set is updated synchronously; the DB write is awaited.
+   *
+   * ADAAAA-6870 (Increment 3 T1): enforce a per-job cap (~MAX_OBSERVATIONS_PER_JOB,
+   * oldest-first trim) so a pathological job can't bloat the `job_observations`
+   * table. The in-memory window and the DB rows are both kept at the cap. */
+  async recordObservation(jobId: string, obs: StoredObservation): Promise<void> {
     const list = this.observations.get(jobId) ?? [];
     list.push(obs);
+    let overflowed = false;
+    while (list.length > MAX_OBSERVATIONS_PER_JOB) {
+      list.shift();
+      overflowed = true;
+    }
     this.observations.set(jobId, list);
+    if (this.db) {
+      await this.db.saveObservation(jobId, obs);
+      if (overflowed) await this.db.trimJobObservations(jobId, MAX_OBSERVATIONS_PER_JOB);
+    }
   }
 
   observationsForJob(jobId: string): StoredObservation[] {
     return this.observations.get(jobId) ?? [];
+  }
+
+  /** Persist one decide evaluation (accepted highlight, burst-suppressed,
+   * near-miss, not-highlight) with its trigger timestamp + reason/score/outcome
+   * (ADAAAA-6851 Inc 2). Write-through like jobs/highlights. */
+  async recordJobCandidate(cand: JobCandidate): Promise<JobCandidate> {
+    const parsed = JobCandidateSchema.parse(cand);
+    const list = this.candidates.get(parsed.jobId) ?? [];
+    list.push(parsed);
+    this.candidates.set(parsed.jobId, list);
+    if (this.db) await this.db.saveJobCandidate(parsed);
+    return parsed;
+  }
+
+  candidatesForJob(jobId: string): JobCandidate[] {
+    return this.candidates.get(jobId) ?? [];
   }
 
   // --- datasets (ADAAAA-5391 C3/C4/C5): plan-gated persistence + 30-day purge

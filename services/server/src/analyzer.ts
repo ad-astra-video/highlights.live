@@ -2,7 +2,7 @@
 // feed frames to perceive, compute evidence, call decide on candidates, cut a
 // clip on each highlight, and stop the session in `finally`.
 import { randomUUID } from "node:crypto";
-import type { HighlightRecord, TrackObservation } from "@highlights/events";
+import type { HighlightRecord, JobCandidate, TrackObservation } from "@highlights/events";
 import { StageAMetrics } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
 
@@ -467,6 +467,15 @@ export interface AnalyzerConfig {
    * confabulated goals cannot flood the accepted list. Default 30.
    */
   goalBurstWindowS?: number;
+  /**
+   * ADAAAA-6851 Inc 2: persist EVERY decide evaluation (accepted highlight,
+   * burst-suppressed, near-miss, not-highlight) with its trigger timestamp +
+   * reason/score/eventType/outcome. Wired in the server to a durable store
+   * write-through so the full-screen job detail can show decide notes on every
+   * trigger after a restart. Best-effort: a throwing callback is caught and
+   * logged by the caller, never allowed to fail the frame loop.
+   */
+  onDecision?: (cand: JobCandidate) => void;
 }
 
 /**
@@ -1272,6 +1281,39 @@ export class TrackingPlanController {
   }
 }
 
+/** Build + emit a persisted decide note for one evaluation (ADAAAA-6851 Inc 2).
+ * `status` captures why the trigger did/didn't become a highlight record
+ * (accepted / suppressed / rejected). Called at the SAME decision point that
+ * builds the HighlightRecord, so every decide() result is recorded, not just
+ * accepted ones. Best-effort: a throwing onDecision is caught + logged and
+ * never fails the frame loop. */
+function buildCandidateNote(
+  cfg: AnalyzerConfig,
+  candidate: { eventType: string; timestamp: number; seq?: number },
+  decision: DecisionResult,
+  status: "accepted" | "suppressed" | "rejected"
+): void {
+  if (!cfg.onDecision) return;
+  try {
+    cfg.onDecision({
+      id: randomUUID(),
+      jobId: cfg.jobId,
+      seq: candidate.seq ?? 0,
+      timestamp: candidate.timestamp,
+      eventType: decision.eventType ?? candidate.eventType,
+      score: decision.score,
+      isHighlight: decision.isHighlight,
+      outcome: decision.outcome,
+      nearMiss: decision.nearMiss,
+      reason: decision.reason,
+      status,
+      createdAt: new Date().toISOString(),
+    });
+  } catch (e: any) {
+    console.error(`[decide-note:${cfg.jobId}] persist failed:`, String(e?.message || e));
+  }
+}
+
 /**
  * Route ONE candidate through the decide stage on the anchored frame (INC-2 /
  * ADAAAA-4325 slice 4). Shared by the video /analyze leg and the Stage-A audio
@@ -1335,17 +1377,25 @@ export async function decideOnCandidate(
   // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
   // reported onset latency. Feeds job.stageAMetrics fpRate = rejected / total.
   shared.stageA.recordOutcome(decision.isHighlight, candidate.audio?.onsetLatencyS);
+  // ADAAAA-6851 Inc 2: persist EVERY decide evaluation — accepted highlight,
+  // burst-suppressed, near-miss, not-highlight — before the accept gate so no
+  // non-accepted decision is lost.
+  const acceptedDecision = isAcceptedHighlight(decision, cfg.preferLabels);
   // ADAAAA-6598: accept gate — only a frame-confirmed scoring_play is a board
   // highlight. A near_miss / big_play read is recorded distinctly (outcome
   // preserved) but never cut as a GOAL highlight/clip. ADAAAA-6855: a non-goal
   // class explicitly requested in the job's preferLabels is exported as a
   // DISTINCT highlight (never a goal).
-  if (!isAcceptedHighlight(decision, cfg.preferLabels)) return;
+  if (!acceptedDecision) {
+    buildCandidateNote(cfg, candidate, decision, "rejected");
+    return;
+  }
   // ADAAAA-6610 temporal burst suppression: at most one GOAL highlight per
   // window. A GOAL accepted within `goalBurstWindowS` of a previous one is a
   // burst duplicate (start-of-clip confabulated-goal flood) and is dropped,
   // not recorded.
   if (shared.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType)) {
+    buildCandidateNote(cfg, candidate, decision, "suppressed");
     onEvent?.({
       seq: evSeq,
       timestamp: evTs,
@@ -1355,6 +1405,7 @@ export async function decideOnCandidate(
     });
     return;
   }
+  buildCandidateNote(cfg, candidate, decision, "accepted");
   const { clipId, clipUri } = await cut(candidate.timestamp);
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -1560,20 +1611,26 @@ export async function analyzeJob(
           },
           detailDecideOpts(cfg, run, anchoredImage, { timestamp: res.candidate.timestamp, peakAudioTs: res.candidate.audio?.ts }, burstFrames)
         );
-        if (isAcceptedHighlight(decision, cfg.preferLabels)) {
+        // ADAAAA-6851 Inc 2: persist EVERY decide evaluation — accepted
+        // highlight, burst-suppressed, near-miss, not-highlight.
+        const acceptedDecision = isAcceptedHighlight(decision, cfg.preferLabels);
+        if (!acceptedDecision) {
+          buildCandidateNote(cfg, res.candidate, decision, "rejected");
+        } else if (run.suppressIfGoalBurst(res.candidate.timestamp, decision.eventType ?? res.candidate.eventType)) {
           // ADAAAA-6610 temporal burst suppression (see decideOnCandidate): a
           // GOAL accepted within `goalBurstWindowS` of a previous one is a
           // start-of-clip burst duplicate and is dropped, not recorded.
-          if (run.suppressIfGoalBurst(res.candidate.timestamp, decision.eventType ?? res.candidate.eventType)) {
-            onEvent?.({
-              seq: frame.seq,
-              timestamp: frame.timestamp,
-              type: "candidateBlocked",
-              candidate: { eventType: decision.eventType ?? res.candidate.eventType, timestamp: res.candidate.timestamp },
-              reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
-            });
-          } else {
-            const { clipId, clipUri } = await cut(res.candidate.timestamp);
+          buildCandidateNote(cfg, res.candidate, decision, "suppressed");
+          onEvent?.({
+            seq: frame.seq,
+            timestamp: frame.timestamp,
+            type: "candidateBlocked",
+            candidate: { eventType: decision.eventType ?? res.candidate.eventType, timestamp: res.candidate.timestamp },
+            reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
+          });
+        } else {
+          buildCandidateNote(cfg, res.candidate, decision, "accepted");
+          const { clipId, clipUri } = await cut(res.candidate.timestamp);
             const rec: HighlightRecord = {
               id: randomUUID(),
               jobId: cfg.jobId,
@@ -1593,7 +1650,6 @@ export async function analyzeJob(
             highlights.push(rec);
             onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "highlight", highlight: rec });
           }
-        }
       }
     }
   } finally {

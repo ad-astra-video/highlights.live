@@ -9,7 +9,8 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
-import type { Dataset, Job, HighlightRecord } from "@highlights/events";
+import type { Dataset, Job, HighlightRecord, JobCandidate } from "@highlights/events";
+import type { StoredObservation } from "./store";
 
 // `node:sqlite` is experimental and not in Vite/vitest's builtin external
 // list, so load it via createRequire at runtime instead of a static ESM import
@@ -309,6 +310,23 @@ export interface Db {
   /** Permanently remove a job row and cascade to its highlights + media_sessions
    * rows in one transaction (ADAAAA-6838 / DELETE /jobs/:id). */
   deleteJob(id: string): Promise<void>;
+  // --- per-frame perceive observations + per-candidate decide notes
+  //     (ADAAAA-6851, durable job-detail data) ---
+  /** Persist one per-frame perceive observation (write-through from Store). */
+  saveObservation(jobId: string, obs: StoredObservation): Promise<void>;
+  /** All observations for a job, ordered by frame seq. */
+  observationsForJob(jobId: string): Promise<StoredObservation[]>;
+  /** Every observation across all jobs (hydrates the Store on boot). */
+  listObservations(): Promise<{ jobId: string; observation: StoredObservation }[]>;
+  /** Keep at most `max` NEWEST observations for a job (oldest-first trim), so a
+   * pathological job can't bloat the table (ADAAAA-6870 Increment 3 T1). */
+  trimJobObservations(jobId: string, max: number): Promise<void>;
+  /** Persist a per-candidate decide note (full JSON upsert by id). */
+  saveJobCandidate(c: JobCandidate): Promise<void>;
+  /** All decide notes for a job, ordered by trigger timestamp. */
+  jobCandidatesForJob(jobId: string): Promise<JobCandidate[]>;
+  /** Every decide note across all jobs (hydrates the Store on boot). */
+  listJobCandidates(): Promise<JobCandidate[]>;
   /** Persist a fine-tune train run record (full JSON upsert by id). */
   saveTrainRun(r: TrainRun): Promise<void>;
   getTrainRun(id: string): Promise<TrainRun | undefined>;
@@ -614,12 +632,73 @@ export class SqliteDb implements Db {
     try {
       this.db.prepare("DELETE FROM highlights WHERE job_id = ?").run(id);
       this.db.prepare("DELETE FROM media_sessions WHERE job_id = ?").run(id);
+      this.db.prepare("DELETE FROM job_observations WHERE job_id = ?").run(id);
+      this.db.prepare("DELETE FROM job_candidates WHERE job_id = ?").run(id);
       this.db.prepare("DELETE FROM jobs WHERE id = ?").run(id);
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
       throw e;
     }
+  }
+
+  async saveObservation(jobId: string, obs: StoredObservation): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO job_observations (job_id, seq, timestamp, tracks, created_at)
+         VALUES (?,?,?,?,?)
+         ON CONFLICT(job_id, seq) DO UPDATE SET timestamp=excluded.timestamp,
+           tracks=excluded.tracks, created_at=excluded.created_at`
+      )
+      .run(jobId, obs.seq, obs.timestamp, JSON.stringify(obs.tracks), new Date().toISOString());
+  }
+
+  async observationsForJob(jobId: string): Promise<StoredObservation[]> {
+    const rows = this.db
+      .prepare("SELECT seq, timestamp, tracks FROM job_observations WHERE job_id = ? ORDER BY seq")
+      .all(jobId) as { seq: number; timestamp: number; tracks: string }[];
+    return rows.map((r) => ({ seq: r.seq, timestamp: r.timestamp, tracks: JSON.parse(r.tracks) }));
+  }
+
+  async listObservations(): Promise<{ jobId: string; observation: StoredObservation }[]> {
+    const rows = this.db
+      .prepare("SELECT job_id, seq, timestamp, tracks FROM job_observations ORDER BY job_id, seq")
+      .all() as { job_id: string; seq: number; timestamp: number; tracks: string }[];
+    return rows.map((r) => ({ jobId: r.job_id, observation: { seq: r.seq, timestamp: r.timestamp, tracks: JSON.parse(r.tracks) } }));
+  }
+
+  async trimJobObservations(jobId: string, max: number): Promise<void> {
+    // Keep only the `max` NEWEST seq rows for the job (oldest-first trim).
+    this.db
+      .prepare(
+        `DELETE FROM job_observations WHERE job_id = ? AND seq NOT IN (
+           SELECT seq FROM job_observations WHERE job_id = ? ORDER BY seq DESC LIMIT ?
+         )`
+      )
+      .run(jobId, jobId, max);
+  }
+
+  async saveJobCandidate(c: JobCandidate): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO job_candidates (id, job_id, record, owner_id, created_at)
+         VALUES (?,?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET job_id=excluded.job_id, record=excluded.record,
+           owner_id=excluded.owner_id, created_at=excluded.created_at`
+      )
+      .run(c.id, c.jobId, JSON.stringify(c), c.ownerId ?? null, c.createdAt);
+  }
+
+  async jobCandidatesForJob(jobId: string): Promise<JobCandidate[]> {
+    const rows = this.db
+      .prepare("SELECT record FROM job_candidates WHERE job_id = ? ORDER BY json_extract(record, '$.timestamp')")
+      .all(jobId) as { record: string }[];
+    return rows.map((r) => JSON.parse(r.record) as JobCandidate);
+  }
+
+  async listJobCandidates(): Promise<JobCandidate[]> {
+    const rows = this.db.prepare("SELECT record FROM job_candidates").all() as { record: string }[];
+    return rows.map((r) => JSON.parse(r.record) as JobCandidate);
   }
 
   async saveTrainRun(r: TrainRun): Promise<void> {
@@ -1189,6 +1268,8 @@ export class PgDb implements Db {
       await client.query("BEGIN");
       await client.query("DELETE FROM highlights WHERE job_id = $1", [id]);
       await client.query("DELETE FROM media_sessions WHERE job_id = $1", [id]);
+      await client.query("DELETE FROM job_observations WHERE job_id = $1", [id]);
+      await client.query("DELETE FROM job_candidates WHERE job_id = $1", [id]);
       await client.query("DELETE FROM jobs WHERE id = $1", [id]);
       await client.query("COMMIT");
     } catch (e) {
@@ -1197,6 +1278,62 @@ export class PgDb implements Db {
     } finally {
       client.release();
     }
+  }
+
+  async saveObservation(jobId: string, obs: StoredObservation): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO job_observations (job_id, seq, timestamp, tracks, created_at)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (job_id, seq) DO UPDATE SET timestamp=EXCLUDED.timestamp,
+         tracks=EXCLUDED.tracks, created_at=EXCLUDED.created_at`,
+      [jobId, obs.seq, obs.timestamp, JSON.stringify(obs.tracks), new Date().toISOString()]
+    );
+  }
+
+  async observationsForJob(jobId: string): Promise<StoredObservation[]> {
+    const r = await this.pool.query(
+      "SELECT seq, timestamp, tracks FROM job_observations WHERE job_id = $1 ORDER BY seq",
+      [jobId]
+    );
+    return r.rows.map((row) => ({ seq: row.seq, timestamp: row.timestamp, tracks: JSON.parse(row.tracks) }));
+  }
+
+  async listObservations(): Promise<{ jobId: string; observation: StoredObservation }[]> {
+    const r = await this.pool.query("SELECT job_id, seq, timestamp, tracks FROM job_observations ORDER BY job_id, seq");
+    return r.rows.map((row) => ({ jobId: row.job_id, observation: { seq: row.seq, timestamp: row.timestamp, tracks: JSON.parse(row.tracks) } }));
+  }
+
+  async trimJobObservations(jobId: string, max: number): Promise<void> {
+    // Keep only the `max` NEWEST seq rows for the job (oldest-first trim).
+    await this.pool.query(
+      `DELETE FROM job_observations WHERE job_id = $1 AND seq NOT IN (
+         SELECT seq FROM job_observations WHERE job_id = $1 ORDER BY seq DESC LIMIT $2
+       )`,
+      [jobId, max]
+    );
+  }
+
+  async saveJobCandidate(c: JobCandidate): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO job_candidates (id, job_id, record, owner_id, created_at)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (id) DO UPDATE SET job_id=EXCLUDED.job_id, record=EXCLUDED.record,
+         owner_id=EXCLUDED.owner_id, created_at=EXCLUDED.created_at`,
+      [c.id, c.jobId, JSON.stringify(c), c.ownerId ?? null, c.createdAt]
+    );
+  }
+
+  async jobCandidatesForJob(jobId: string): Promise<JobCandidate[]> {
+    const r = await this.pool.query(
+      "SELECT record FROM job_candidates WHERE job_id = $1 ORDER BY (record->>'timestamp')::float",
+      [jobId]
+    );
+    return r.rows.map((row) => JSON.parse(row.record) as JobCandidate);
+  }
+
+  async listJobCandidates(): Promise<JobCandidate[]> {
+    const r = await this.pool.query("SELECT record FROM job_candidates");
+    return r.rows.map((row) => JSON.parse(row.record) as JobCandidate);
   }
 
   async saveTrainRun(r: TrainRun): Promise<void> {
@@ -1644,6 +1781,21 @@ const SCHEMA_SQLITE = `
     status TEXT,
     created_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS job_observations (
+    job_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    timestamp REAL NOT NULL,
+    tracks TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, seq)
+  );
+  CREATE TABLE IF NOT EXISTS job_candidates (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    created_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS train_runs (
     id TEXT PRIMARY KEY,
     record TEXT NOT NULL,
@@ -1789,6 +1941,21 @@ const SCHEMA_PG = `
     record TEXT NOT NULL,
     owner_id TEXT,
     status TEXT,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS job_observations (
+    job_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    timestamp REAL NOT NULL,
+    tracks TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, seq)
+  );
+  CREATE TABLE IF NOT EXISTS job_candidates (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    owner_id TEXT,
     created_at TEXT
   );
   CREATE TABLE IF NOT EXISTS train_runs (
