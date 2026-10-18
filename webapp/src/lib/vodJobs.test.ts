@@ -28,6 +28,11 @@ describe("isInFlight (queued/active are processing; done/failed are terminal)", 
     expect(isInFlight("queued")).toBe(true);
     expect(isInFlight("active")).toBe(true);
   });
+  it("treats the VOD processing stages as in flight (ADAAAA-6989)", () => {
+    expect(isInFlight("extracting")).toBe(true);
+    expect(isInFlight("analyzing")).toBe(true);
+    expect(isInFlight("finalizing")).toBe(true);
+  });
   it("treats done and failed as terminal (not in flight)", () => {
     expect(isInFlight("done")).toBe(false);
     expect(isInFlight("failed")).toBe(false);

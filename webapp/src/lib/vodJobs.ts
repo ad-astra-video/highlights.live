@@ -18,9 +18,20 @@ import { readSSE } from "./sse";
  * as dedicated SSE events. */
 export const VOD_POLL_MS = 15_000;
 
-/** True while a job still has background work outstanding (not yet terminal). */
+/** True while a job still has background work outstanding (not yet terminal).
+ * ADAAAA-6989: the server persists distinct VOD processing stages as the job
+ * status (`extracting` → `analyzing` → `finalizing`) between `active` and
+ * `done`; a job in any of them is still in flight, so the queue keeps polling
+ * + streaming its SSE progress and `partitionJobs` keeps it in the in-flight
+ * bucket. Only `done`/`failed` are terminal. */
 export function isInFlight(status: string | undefined): boolean {
-  return status === "queued" || status === "active";
+  return (
+    status === "queued" ||
+    status === "active" ||
+    status === "extracting" ||
+    status === "analyzing" ||
+    status === "finalizing"
+  );
 }
 
 /** Clamp a job's progress into 0..100 for a progress bar; defaults to 0 when
