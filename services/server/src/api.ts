@@ -31,12 +31,17 @@ import {
 import {
   DatasetSchema,
   DetectionTrainingSampleSchema,
+  AnalysisEventSchema,
+  AnalysisSessionTraceSchema,
   JobDetailSchema,
+  MediaResultEventSchema,
+  type AnalysisEvent,
   type Dataset,
   type DetectionTrainingSample,
   type HighlightRecord,
   type JobCandidate,
   type JobDecision,
+  type MediaResultEvent,
 } from "@highlights/events";
 import { buildSections, buildTraces, maxTracesForSource } from "./job-detail";
 import {
@@ -273,6 +278,59 @@ async function removeJobArtifacts(dataDir: string, jobId: string, clipUris: stri
   for (const f of clipFiles) {
     await rm(path.join(clipDir, f), { force: true }).catch(() => {});
   }
+}
+
+/** The metadata the decide runner sends alongside the built clip (ADAAAA-6741
+ * G4) as the `metadata` multipart field (a JSON string). */
+export interface ClipUploadMetadata {
+  jobId?: string;
+  eventType?: string;
+  score?: number;
+  reason?: string;
+  start?: number;
+  end?: number;
+  // The decide runner may send an unclassified/empty string; the record builder
+  // coerces it to a valid enum or omits it. Keep the transport type string.
+  outcome?: string;
+  nearMiss?: boolean;
+}
+
+/** Build the HighlightRecord persisted when the decide runner uploads a built
+ * clip for a job (ADAAAA-6741 G4). Pure + exported so it is unit-testable
+ * without a multipart request. Clamps score to [0,100], defaults numeric fields
+ * to 0 and event type/reason to "", and marks the record `accepted` so it
+ * immediately appears on the public feed (GET /feed reads
+ * store.acceptedHighlights()). */
+export function buildClipHighlightRecord(
+  jobId: string,
+  clipId: string,
+  metadata: ClipUploadMetadata | undefined
+): HighlightRecord {
+  const m = metadata ?? {};
+  const clamp = (v: number) => Math.max(0, Math.min(100, v));
+  // `outcome` is a closed enum on HighlightRecordSchema (scoring_play |
+  // near_miss | big_play | not_highlight). The decide runner may send an empty
+  // string or an unclassified outcome; omit it (it is optional) rather than
+  // failing schema validation at persist, which would 500 the upload.
+  const outcome = (m.outcome ?? "").trim();
+  const validOutcome: "scoring_play" | "near_miss" | "big_play" | "not_highlight" | undefined =
+    ["scoring_play", "near_miss", "big_play", "not_highlight"].includes(outcome)
+      ? (outcome as "scoring_play" | "near_miss" | "big_play" | "not_highlight")
+      : undefined;
+  return {
+    id: clipId,
+    jobId,
+    clipUri: `/clips/${clipId}.mp4`,
+    start: m.start ?? 0,
+    end: m.end ?? 0,
+    eventType: m.eventType ?? "",
+    score: clamp(Number(m.score) || 0),
+    reason: m.reason ?? "",
+    outcome: validOutcome,
+    nearMiss: !!m.nearMiss,
+    status: "accepted",
+    createdAt: new Date().toISOString(),
+  };
 }
 
 export function buildApp(deps: ApiDeps): FastifyInstance {
@@ -992,6 +1050,83 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         /* tap ended early — video leg unaffected */
       }
     })();
+    // ADAAAA-6748 G1b-2: persist the perceive persistent-session per-stream
+    // analysis to analysis_events during the VOD pass, with NO webapp hop (a
+    // VOD has no browser capture). Mirrors the media-server live relay: poll
+    // /analysis/state to advance a cursor, then query each windowed tool over
+    // the un-replayed window and write bounded batches via
+    // store.persistAnalysisEvents. Best-effort + load-capped: a perceive blip
+    // logs and never stalls the frame pass; total rows are capped at
+    // vodAnalysisMaxSamples. The pass runs on a real GPU behind a slow /analyze
+    // (~1.4s/frame), so this loop ticks many times over a VOD.
+    const ANALYSIS_TOOLS: { tool: string; kind: AnalysisEvent["kind"] }[] = [
+      { tool: "get_audio_levels", kind: "audio_energy" },
+      { tool: "get_tracked_players", kind: "tracked_objects" },
+      { tool: "detect_objects", kind: "detection" },
+      { tool: "get_captioning", kind: "caption" },
+    ];
+    const analysisStop = { stopped: false };
+    const analysisLoop = (async () => {
+      // Defensive: the PipelineClient contract declares analysisState/Query,
+      // but a test fake (or an older in-flight adapter) may not. Degrade to a
+      // no-op rather than throw out of the VOD pass's analysis loop.
+      if (
+        typeof (adapter as any)?.analysisState !== "function" ||
+        typeof (adapter as any)?.analysisQuery !== "function"
+      ) {
+        return;
+      }
+      let samples = 0;
+      let lastEnd = 0;
+      let idle = 0;
+      while (!analysisStop.stopped && samples < cfg.vodAnalysisMaxSamples) {
+        const sid = slot.current?.sessionId;
+        if (analysisStop.stopped || slot.stopped || !sid) break;
+        const state = await adapter.analysisState(sid).catch(() => null);
+        const lastTs = typeof state?.lastTs === "number" ? state.lastTs : 0;
+        if (lastTs <= lastEnd) {
+          // Session has not advanced past the cursor yet. A brief real-time
+          // backoff lets the video leg keep recording; bounded so a stalled
+          // session (or an already-finished pass) never spins forever.
+          if (++idle > 80) break;
+          await new Promise((r) => setTimeout(r, 250));
+          continue;
+        }
+        idle = 0;
+        const end = lastTs;
+        const batch: AnalysisEvent[] = [];
+        for (const { tool, kind } of ANALYSIS_TOOLS) {
+          if (samples + batch.length >= cfg.vodAnalysisMaxSamples) break;
+          const env = await adapter
+            .analysisQuery(sid, tool, { start: lastEnd, end, maxPoints: 8 })
+            .catch(() => null);
+          if (env && typeof env === "object") {
+            batch.push({
+              id: randomUUID(),
+              jobId,
+              sessionId: sid,
+              streamId: jobId,
+              timestamp: typeof (env as any)?.window?.end === "number" ? (env as any).window.end : end,
+              kind,
+              data: env,
+            });
+          }
+        }
+        if (batch.length) {
+          try {
+            await store.persistAnalysisEvents(batch);
+            samples += batch.length;
+          } catch (e) {
+            console.error(`[vod:${jobId}] persist analysis events failed: ${(e as Error)?.message || e}`);
+          }
+        }
+        lastEnd = Math.max(lastEnd, end);
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      if (samples > 0) {
+        console.log(`[vod:${jobId}] persisted ${samples} analysis_event rows (windowed VOD analysis)`);
+      }
+    })();
     let outcome: AnalyzeOutcome;
     try {
       // ADAAAA-6873: advance to analyzing + persist framesTotal (durable), then
@@ -1006,6 +1141,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         isStopped: () => slot.stopped,
       }, onProgress);
     } finally {
+      analysisStop.stopped = true;
+      await analysisLoop;
       await audioLoop;
       livePerceiveSlots.delete(job.id);
     }
@@ -2100,6 +2237,55 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return { deleted: job.id };
   });
 
+  // ADAAAA-6738 G1 (watcher plan): the webapp relays perceive's persistent-
+  // session analysis data and updated requests to the server for durable
+  // persistence (analysis_events + analysis_session_traces). Owner-scoped like
+  // every other job route; the write is capped/batched per request so it is
+  // not a per-frame firehose.
+  app.post<{ Params: { id: string }; Body: { events?: unknown[] } }>("/jobs/:id/analysis/events", { preHandler: authReq }, async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    const raw = Array.isArray(req.body?.events) ? req.body.events : [];
+    const cap = Math.min(raw.length, 200);
+    const events: AnalysisEvent[] = [];
+    for (let i = 0; i < cap; i++) {
+      const parsed = AnalysisEventSchema.safeParse({ id: randomUUID(), jobId: job.id, ...(raw[i] as object) });
+      if (parsed.success) events.push(parsed.data);
+    }
+    if (events.length) await store.persistAnalysisEvents(events);
+    return { ok: true, persisted: events.length };
+  });
+
+  app.post<{ Params: { id: string }; Body: { trace?: unknown } }>("/jobs/:id/analysis/trace", { preHandler: authReq }, async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    const parsed = AnalysisSessionTraceSchema.safeParse({ id: randomUUID(), jobId: job.id, ...((req.body?.trace as object) ?? {}) });
+    if (!parsed.success) return reply.code(422).send({ error: "invalid trace" });
+    await store.appendAnalysisTrace(parsed.data);
+    return { ok: true };
+  });
+
+  // ADAAAA-6739 G2: the analysis-session trace and analysis-data stream are
+  // queryable/inspectable — bound to the stream/job whose media session they
+  // belong to. Owner-scoped like every other job route; oldest first.
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>("/jobs/:id/analysis/trace", { preHandler: authReq }, async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    const limit = req.query?.limit ? Math.min(Number(req.query.limit) || 1000, 1000) : undefined;
+    return { traces: await store.listAnalysisTraces(job.id, limit) };
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>("/jobs/:id/analysis/events", { preHandler: authReq }, async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    const limit = req.query?.limit ? Math.min(Number(req.query.limit) || 1000, 1000) : undefined;
+    return { events: await store.listAnalysisEvents(job.id, limit) };
+  });
+
   app.post<{ Params: { id: string } }>("/jobs/:id/stop", { preHandler: authReq }, async (req: any, reply) => {
     const job = store.getJob(req.params.id);
     if (!job) return reply.code(404).send({ error: "not found" });
@@ -2315,15 +2501,96 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // wiring is the next increment — the runner currently publishes observation
   // without a candidate on events-out.)
   app.post<{ Params: { id: string } }>("/jobs/:id/observe", async (req: any, reply) => {
+    // Phase 0 (ADAAAA-6865): the media server reports TYPED MediaResultEvent
+    // results back over this callback. Server stays the DB-owner and persists
+    // observations (evidence + frame debugger), candidates, highlights (feed),
+    // stage-A metrics, and cost. Accepts any existing job (media-served VOD/live
+    // handoff jobs included) — not just browser-capture.
     const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "no job" });
     const bj = browserJobs.get(req.params.id);
-    if (!job || job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
-    const obs = req.body;
-    if (!obs || typeof obs !== "object") return reply.code(400).send({ error: "observation required" });
-    const seq = typeof obs.seq === "number" ? obs.seq : 0;
-    const timestamp = typeof obs.timestamp === "number" ? obs.timestamp : 0;
-    bj.evidence.step(obs);
-    emitJobEvent(req.params.id, { seq, timestamp, type: "observation", observation: obs });
+    const body = req.body;
+    if (!body || typeof body !== "object")
+      return reply.code(400).send({ error: "result event required" });
+
+    // Parse the typed union; fall back to a legacy bare observation envelope
+    // (the pre-Phase-0 browser rail sent `{seq,timestamp,...tracks}`) so
+    // existing clients keep working.
+    let parsed: MediaResultEvent | null = null;
+    const res = MediaResultEventSchema.safeParse(body);
+    if (res.success) {
+      parsed = res.data;
+    } else {
+      const legacy = MediaResultEventSchema.safeParse({
+        type: "observation",
+        seq: typeof body.seq === "number" ? body.seq : 0,
+        timestamp: typeof body.timestamp === "number" ? body.timestamp : 0,
+        observation: body,
+      });
+      if (legacy.success) parsed = legacy.data;
+    }
+    if (!parsed)
+      return reply.code(400).send({
+        error: "invalid result event",
+        issues: res.error?.issues,
+      });
+
+    const seq = parsed.seq ?? 0;
+    const timestamp = parsed.timestamp ?? 0;
+    switch (parsed.type) {
+      case "observation": {
+        // Feed the browser job's evidence rail + persist the frame (unchanged
+        // behavior for the browser-capture path).
+        if (bj) bj.evidence.step(parsed.observation);
+        store.recordObservation(req.params.id, {
+          seq,
+          timestamp,
+          tracks: parsed.observation.tracks ?? [],
+        });
+        emitJobEvent(req.params.id, {
+          seq,
+          timestamp,
+          type: "observation",
+          observation: { tracks: parsed.observation.tracks ?? [] },
+        });
+        break;
+      }
+      case "candidate": {
+        emitJobEvent(req.params.id, {
+          seq,
+          timestamp,
+          type: "candidate",
+          candidate: {
+            eventType: parsed.candidate.eventType,
+            timestamp: parsed.candidate.timestamp,
+          },
+        });
+        break;
+      }
+      case "highlight": {
+        const rec = await store.addHighlight(parsed.highlight);
+        emitJobEvent(req.params.id, {
+          seq,
+          timestamp,
+          type: "highlight",
+          highlight: rec,
+        });
+        break;
+      }
+      case "stageAMetrics": {
+        await store.patchJob(req.params.id, { stageAMetrics: parsed.metrics }).catch(() => {});
+        break;
+      }
+      case "cost": {
+        const patch: { costUsd: number; perceiveSessionS?: number } = {
+          costUsd: parsed.costUsd,
+        };
+        if (typeof parsed.perceiveSessionS === "number")
+          patch.perceiveSessionS = parsed.perceiveSessionS;
+        await store.patchJob(req.params.id, patch).catch(() => {});
+        break;
+      }
+    }
     return { ok: true };
   });
 
@@ -2352,6 +2619,65 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         if (existsSync(p) && (await stat(p)).size > 0) await appendFile(p, buf);
         else await writeFile(p, buf);
         return { ok: true, bytes: buf.length };
+      } catch (e: any) {
+        return reply.code(500).send({ error: String(e?.message || e) });
+      }
+    }
+  );
+
+  // ADAAAA-6741 G4: the decide runner builds the clip (server no longer cuts it
+  // via ffmpeg cutClip) and uploads the finished .mp4 for a job. Internal
+  // callback route — NO user auth, mirroring /jobs/:id/observe. Persists the
+  // clip to the clips dir and writes an accepted HighlightRecord so it shows on
+  // the public feed (GET /feed reads store.acceptedHighlights()).
+  app.post<{ Params: { id: string } }>(
+    "/jobs/:id/clips",
+    // No preHandler: internal decide runner, not a user. Mirror the recording
+    // rail's body limit so a multi-second mp4 doesn't get 413'd.
+    { bodyLimit: 8 * 1024 * 1024 },
+    async (req: any, reply) => {
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "no job" });
+      if (!req.isMultipart()) return reply.code(400).send({ error: "multipart required" });
+      try {
+        let clipBuf: Buffer | null = null;
+        let metaRaw: string | undefined;
+        // Iterate parts so we capture both the file and the metadata field
+        // regardless of order (req.file() only returns the fields that precede
+        // the file part).
+        for await (const part of req.parts()) {
+          if (part.type === "file") {
+            if (part.fieldname === "clip") {
+              const buf = await part.toBuffer();
+              if (buf.length > 0) clipBuf = buf;
+            } else {
+              part.file.resume();
+            }
+          } else if (part.fieldname === "metadata") {
+            metaRaw = part.value;
+          }
+        }
+        if (!clipBuf) return reply.code(400).send({ error: "clip file part required" });
+
+        let metadata: ClipUploadMetadata | undefined;
+        if (metaRaw !== undefined) {
+          try {
+            metadata = JSON.parse(metaRaw);
+          } catch {
+            return reply.code(400).send({ error: "metadata must be valid JSON" });
+          }
+        }
+
+        const clipId = randomUUID();
+        const { mkdir, writeFile } = await import("node:fs/promises");
+        const clipDir = path.join(cfg.dataDir, "clips");
+        await mkdir(clipDir, { recursive: true });
+        await writeFile(path.join(clipDir, `${clipId}.mp4`), clipBuf);
+
+        const rec = buildClipHighlightRecord(job.id, clipId, metadata);
+        await store.addHighlight(rec);
+
+        return { ok: true, id: clipId, clipUri: `/clips/${clipId}.mp4` };
       } catch (e: any) {
         return reply.code(500).send({ error: String(e?.message || e) });
       }

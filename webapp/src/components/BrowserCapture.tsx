@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Square, Play, Share2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useSettings } from "../lib/settings";
+import {
+  makeAnalysisBatcher,
+  type AnalysisEvent,
+  type AnalysisSessionState,
+  type AnalysisTrace,
+} from "../lib/analysisRelay";
 
 const MAX_RECONNECT = 6; // consecutive media reconnect attempts before falling back to /ingest
 
@@ -21,6 +27,10 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   const [sharing, setSharing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Live analysis state snapshot + recent event kinds, surfaced in a small
+  // panel while capturing (ADAAAA-6746 G1b).
+  const [analysis, setAnalysis] = useState<AnalysisSessionState | null>(null);
+  const [recentKinds, setRecentKinds] = useState<string[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recRef = useRef<MediaRecorder | null>(null);
@@ -28,6 +38,13 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   const seqRef = useRef(0);
   const ivRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  // Dedicated analysis WebSocket: always opened on the media handshake (BOTH
+  // rtc and ws modes) so analysis messages are received even when video rides
+  // the WebRTC path. Kept separate from the frame `wsRef`.
+  const analysisWsRef = useRef<WebSocket | null>(null);
+  const analysisWsUrlRef = useRef<string | null>(null);
+  const analysisRcRef = useRef(0); // consecutive analysis reconnect attempts
+  const batcherRef = useRef<ReturnType<typeof makeAnalysisBatcher> | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const modeRef = useRef<"ingest" | "ws" | "rtc" | "pending">("pending");
   // True while we're intentionally stopping (so reconnects never fire on user
@@ -119,6 +136,11 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       { method: "POST", body: {} }
     )
       .then(async (media) => {
+        // Open a DEDICATED analysis WebSocket on the same media WS url as soon
+        // as the handshake succeeds — even in RTC mode (where video rides the
+        // WebRTC path and no frame WS is opened) — so the webapp receives the
+        // media-server analysis messages (ADAAAA-6746 G1b).
+        if (media?.wsUrl) openAnalysisWs(media.wsUrl, jobId);
         if (media?.rtc && media.mediaOrigin && media.mediaSessionId) {
           modeRef.current = "rtc";
           try {
@@ -161,6 +183,85 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       .catch(() => {
         modeRef.current = "ingest";
       });
+  }
+
+  // Open the dedicated analysis WebSocket to the media server. Mirrors the
+  // frame WS handling: bounded reconnect on unexpected close, never on a user
+  // stop. In RTC mode this is the ONLY WS the webapp opens (the frame sampler
+  // path is skipped), so it carries the full analysis feed.
+  function openAnalysisWs(wsUrl: string, jobId: string) {
+    if (stoppingRef.current || !wsUrl) return;
+    analysisWsUrlRef.current = wsUrl;
+    // Drop any previous analysis WS (e.g. after a media handshake reroute).
+    const existing = analysisWsRef.current;
+    if (existing) {
+      try {
+        existing.close();
+      } catch {
+        /* noop */
+      }
+      analysisWsRef.current = null;
+    }
+    const ws = new WebSocket(wsUrl);
+    analysisWsRef.current = ws;
+    ws.onopen = () => {
+      analysisRcRef.current = 0;
+    };
+    ws.onmessage = (e) => handleAnalysisMessage(e, jobId);
+    ws.onerror = () => {
+      try {
+        ws.close();
+      } catch {
+        /* noop */
+      }
+    };
+    ws.onclose = () => {
+      if (analysisWsRef.current === ws) analysisWsRef.current = null;
+      if (stoppingRef.current) return;
+      scheduleAnalysisReconnect(jobId);
+    };
+  }
+
+  // Relay one media-server analysis message: update the live state, buffer
+  // events for batched persistence, or POST a sparse trace. Best-effort: any
+  // persistence failure is swallowed so it never fails the capture.
+  function handleAnalysisMessage(e: MessageEvent, jobId: string) {
+    let msg: any;
+    try {
+      msg = JSON.parse(String(e.data));
+    } catch {
+      return;
+    }
+    if (!msg || msg.type !== "analysis") return;
+    if (msg.status === "state" && msg.state) {
+      setAnalysis(msg.state as AnalysisSessionState);
+      return;
+    }
+    if (msg.status === "event" && msg.event) {
+      const ev = msg.event as AnalysisEvent;
+      if (ev?.kind) {
+        // Track the last few distinct event kinds for the panel (deduped,
+        // most-recent first, capped at 5).
+        setRecentKinds((prev) => [ev.kind, ...prev.filter((k) => k !== ev.kind)].slice(0, 5));
+      }
+      batcherRef.current?.push(ev);
+      return;
+    }
+    if (msg.status === "trace" && msg.trace) {
+      api(`/jobs/${jobId}/analysis/trace`, { body: { trace: msg.trace as AnalysisTrace } }).catch(() => {});
+    }
+  }
+
+  function scheduleAnalysisReconnect(jobId: string) {
+    if (stoppingRef.current) return;
+    if (analysisRcRef.current >= MAX_RECONNECT) return;
+    const delay = Math.min(800 * 2 ** analysisRcRef.current, 5000);
+    analysisRcRef.current += 1;
+    setTimeout(() => {
+      if (stoppingRef.current) return;
+      const url = analysisWsUrlRef.current;
+      if (url) openAnalysisWs(url, jobId);
+    }, delay);
   }
 
   function scheduleReconnect(jobId: string) {
@@ -245,6 +346,16 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       const job = await api<{ job: { id: string } }>("/jobs", { body: { source: "browser", gameHint } });
       jobIdRef.current = job.job.id;
 
+      // Analysis-event relay: buffer media-server events and flush them in
+      // capped (200) batches to POST /jobs/:id/analysis/events. Best-effort.
+      batcherRef.current = makeAnalysisBatcher((events) => {
+        const id = jobIdRef.current;
+        if (!id) return;
+        void api(`/jobs/${id}/analysis/events`, { body: { events } }).catch(() => {});
+      });
+      setAnalysis(null);
+      setRecentKinds([]);
+
       // Media-server handshake: stream the live video track over WebRTC
       // (browser -> media server -> orchestrator video-in), with transparent
       // reconnect + reroute on node failover. Falls back to WS / HTTP /ingest.
@@ -316,6 +427,19 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       /* noop */
     }
     wsRef.current = null;
+    // Close the dedicated analysis WS and flush any buffered analysis events
+    // (best-effort) so nothing is lost on stop.
+    try {
+      analysisWsRef.current?.close();
+    } catch {
+      /* noop */
+    }
+    analysisWsRef.current = null;
+    analysisWsUrlRef.current = null;
+    analysisRcRef.current = 0;
+    batcherRef.current?.flush();
+    batcherRef.current?.stop();
+    batcherRef.current = null;
     teardownRtc();
     modeRef.current = "pending";
     const rec = recRef.current;
@@ -381,6 +505,37 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
         </div>
       </div>
       {error && <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{error}</div>}
+      {sharing && (
+        <div className="mt-3 rounded-lg border border-neon/40 bg-black/40 px-3 py-2 text-xs text-mut">
+          <div className="mb-1 flex items-center gap-2 font-bold uppercase tracking-wide text-neon">
+            <span className={`h-2 w-2 animate-pulse rounded-full ${analysis?.active ? "bg-green" : "bg-mut"}`} />
+            Live analysis
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-4">
+            <span>
+              audio <span className="text-ink">{analysis?.audioSamples ?? "—"}</span>
+            </span>
+            <span>
+              frames <span className="text-ink">{analysis?.frameSnapshots ?? "—"}</span>
+            </span>
+            <span>
+              captions <span className="text-ink">{analysis?.captionLines ?? "—"}</span>
+            </span>
+            <span>
+              last <span className="text-ink">{formatAnalysisTs(analysis?.lastTs ?? analysis?.startedTs)}</span>
+            </span>
+          </div>
+          {recentKinds.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {recentKinds.map((k) => (
+                <span key={k} className="rounded-full border border-neon/40 px-1.5 py-0.5 text-[10px] leading-none text-neon">
+                  {k}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -396,4 +551,10 @@ function blobToBase64(blob: Blob): Promise<string> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// Format an epoch-ms analysis timestamp for the panel; "—" when unknown.
+function formatAnalysisTs(ms?: number): string {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  return new Date(ms).toLocaleTimeString();
 }

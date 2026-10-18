@@ -337,28 +337,6 @@ def canonical_sport(game_hint: Optional[str] = None, category: Optional[str] = N
     return None
 
 
-# Goal-scoring sports whose fast-strike tracker candidate (a generic KILL/MOVE
-# motion primitive) must be classified as a GOAL so the decide model judges and
-# auto-cuts it as a highlight. The tracker is sport-agnostic (KILL = explosive
-# single-step >= FAST_STEP, MOVE = large accumulated move); on a soccer paid
-# path those labels conflict with the scene (the decide model hard-rejects
-# "this is soccer, not a KILL event"), so the candidate is re-labelled here.
-_GOAL_EVENT_SPORTS = {"soccer"}
-
-
-def sport_specific_event_type(game_hint: Optional[str] = None, generic_type: str = "MOVE", category: Optional[str] = None) -> str:
-    """Map the tracker's generic candidate event type onto the active sport.
-
-    A goal-scoring sport (soccer) classifies a fast-strike KILL/MOVE candidate
-    as a GOAL; every other sport keeps the raw generic type. When `category`
-    (the plan's category on the plan-first path) is supplied it drives the
-    sport resolution, so American football never classifies as a soccer GOAL.
-    """
-    if canonical_sport(game_hint, category=category) in _GOAL_EVENT_SPORTS:
-        return "GOAL"
-    return generic_type
-
-
 def resolve_vocabulary(
     game_hint: Optional[str] = None,
     prefer_labels: Optional[list[str]] = None,

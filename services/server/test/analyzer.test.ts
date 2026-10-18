@@ -51,6 +51,10 @@ function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
     controlForward: async () => {
       log.push("control");
     },
+    // ADAAAA-6748 windowed analysis query + state: not exercised in these unit
+    // tests, but required on the PipelineClient interface.
+    analysisQuery: async () => null,
+    analysisState: async () => null,
     // ADAAAA-5262 fine-tune trigger: not exercised in these unit tests, but
     // required on the PipelineClient interface.
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),

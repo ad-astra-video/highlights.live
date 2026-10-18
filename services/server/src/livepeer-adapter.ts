@@ -347,6 +347,27 @@ export class OrchestratorAdapter implements PipelineClient {
     });
     if (status >= 500) throw new Error(`controlForward failed: HTTP ${status}`);
   }
+  /** ADAAAA-6748 G1b-2: query the perceive persistent AnalysisSession windowed
+   * tool through the same orchestrator session as /analyze (the orchestrator
+   * injects the Livepeer-Session-Id header the perceive runner binds to). */
+  async analysisQuery(
+    sessionId: string,
+    tool: string,
+    window: { start: number; end: number; maxPoints: number }
+  ): Promise<any | null> {
+    const q = `start=${window.start}&end=${window.end}&maxPoints=${window.maxPoints}`;
+    const { status, data } = await this.client.appCall<any>(sessionId, `analysis/${tool}?${q}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    return status >= 200 && status < 300 ? (data ?? null) : null;
+  }
+  async analysisState(sessionId: string): Promise<any | null> {
+    const { status, data } = await this.client.appCall<any>(sessionId, "analysis/state", {
+      method: "GET",
+    });
+    return status >= 200 && status < 300 ? (data ?? null) : null;
+  }
   async decide(
     evidence: {
       eventType: string;
@@ -581,6 +602,28 @@ export class DirectAdapter implements PipelineClient {
       body: JSON.stringify(control),
     });
     if (r.status >= 500) throw new Error(`controlForward failed: HTTP ${r.status}`);
+  }
+  /** ADAAAA-6748 G1b-2: direct dev path queries perceive /app/analysis/<tool>. */
+  async analysisQuery(
+    sessionId: string,
+    tool: string,
+    window: { start: number; end: number; maxPoints: number }
+  ): Promise<any | null> {
+    const q = `start=${window.start}&end=${window.end}&maxPoints=${window.maxPoints}`;
+    const r = await fetch(`${this.cfg.perceiveUrl}/app/analysis/${tool}?${q}`, {
+      method: "POST",
+      headers: { "X-Session-Id": sessionId || this.fakeSession },
+    });
+    if (r.status < 200 || r.status >= 300) return null;
+    return (await r.json().catch(() => null)) ?? null;
+  }
+  async analysisState(sessionId: string): Promise<any | null> {
+    const r = await fetch(`${this.cfg.perceiveUrl}/app/analysis/state`, {
+      method: "GET",
+      headers: { "X-Session-Id": sessionId || this.fakeSession },
+    });
+    if (r.status < 200 || r.status >= 300) return null;
+    return (await r.json().catch(() => null)) ?? null;
   }
   async decide(
     evidence: {
