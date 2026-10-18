@@ -2,7 +2,7 @@
 // acceptance metric is "each frame in exactly one 3 s section" — assert it here
 // so a rendering or backend overlap can never ship as a silent duplication.
 import { describe, it, expect } from "vitest";
-import { assertFramePartition, sectionFrameCount, triggerLabel, type FrameSection } from "./jobDetail";
+import { assertFramePartition, sectionFrameCount, triggerLabel, isJobInFlight, type FrameSection } from "./jobDetail";
 
 function frame(seq: number, timestamp: number) {
   return { seq, timestamp, uri: `/jobs/j1/frames/${seq}`, tracks: [] };
@@ -55,6 +55,35 @@ describe("assertFramePartition (each frame in exactly one 3s section)", () => {
     const r = assertFramePartition(sections);
     expect(r.total).toBe(3);
     expect(sectionFrameCount(sections)).toBe(3);
+  });
+});
+
+// ADAAAA-6989: the JobDetail view keeps its SSE subscription + 5s reconciling
+// poll alive only while the job is in flight. The VOD pipeline persists four
+// non-terminal statuses (`queued`, `active`, `extracting`, `analyzing`,
+// `finalizing`) — a job in ANY of them must be treated as in flight, or the
+// detail view stops polling/streaming mid-processing.
+describe("isJobInFlight (poll + SSE lifecycle)", () => {
+  it("treats queued and active as in flight", () => {
+    expect(isJobInFlight("queued")).toBe(true);
+    expect(isJobInFlight("active")).toBe(true);
+  });
+
+  it("treats the VOD processing stages as in flight (ADAAAA-6989)", () => {
+    expect(isJobInFlight("extracting")).toBe(true);
+    expect(isJobInFlight("analyzing")).toBe(true);
+    expect(isJobInFlight("finalizing")).toBe(true);
+  });
+
+  it("treats terminal states as NOT in flight", () => {
+    expect(isJobInFlight("done")).toBe(false);
+    expect(isJobInFlight("failed")).toBe(false);
+    expect(isJobInFlight("cancelled")).toBe(false);
+  });
+
+  it("treats a missing status as not in flight", () => {
+    expect(isJobInFlight(undefined)).toBe(false);
+    expect(isJobInFlight("")).toBe(false);
   });
 });
 

@@ -161,6 +161,10 @@ function statusChip(status: string): string {
     case "queued":
       return "border-mut/40 bg-mut/10 text-mut";
     case "active":
+    case "extracting":
+    case "analyzing":
+    case "finalizing":
+      // ADAAAA-6989: VOD processing stages are in-flight; render like `active`.
       return "border-neon/40 bg-neon/10 text-neon";
     case "done":
       return "border-green/40 bg-green/10 text-green";
