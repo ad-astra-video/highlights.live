@@ -16,7 +16,14 @@ import {
   type FrameSection,
   type JobDetailFrame,
 } from "../lib/jobDetail";
-import { drawFrameWithBoxes, orderGallerySeqs, collectFrameSeqs } from "../lib/frameDebugger";
+import {
+  drawFrameWithBoxes,
+  drawFrameFullBleed,
+  coverTransform,
+  orderGallerySeqs,
+  collectFrameSeqs,
+  type CoverTransform,
+} from "../lib/frameDebugger";
 import { jobTitle } from "../lib/vodJobs";
 
 // Inline thumbnail stays small (original 160x90) so the filmstrip doesn't
@@ -26,9 +33,6 @@ const FRAME_W = 160;
 const FRAME_H = 90;
 const INLINE_FONT = 12; // CSS px in the enlarged view; inline draws boxes only
 const INLINE_SCALE = 2;
-const ENLARGE_W = 960;
-const ENLARGE_H = 540;
-const ENLARGE_FONT = 24;
 /** SSE events that mean the detail payload changed and should be re-fetched. */
 const REFRESH_EVENTS = ["observation", "candidate", "candidateBlocked", "highlight", "progress"];
 
@@ -276,7 +280,14 @@ function EnlargeGallery({
   const seq = gallery[galIndex];
   const frame = framesBySeq.get(seq);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // ADAAAA-6978: the cover-crop transform currently applied to the enlarged
+  // canvas, so a click on a detection box over the full-bleed image hit-tests in
+  // the same (cropped) coordinate space the image was drawn in.
+  const enlCoverRef = useRef<CoverTransform | null>(null);
   const [objUrl, setObjUrl] = useState<string | null>(null);
+  // Bumped on window resize while the lightbox is open so the enlarged canvas
+  // re-draws at the new viewport dimensions.
+  const [enlTick, setEnlTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -300,55 +311,83 @@ function EnlargeGallery({
     const img = new Image();
     img.onload = () => {
       if (canvasRef.current !== canvas) return;
+      // ADAAAA-6978: draw the enlarged frame with object-fit:cover semantics so
+      // it fills the entire modal area edge-to-edge (no letterbox bars), with
+      // detection boxes + labels positioned relative to the covered image.
+      const vw = canvas.clientWidth || window.innerWidth;
+      const vh = canvas.clientHeight || window.innerHeight;
       const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
-      drawFrameWithBoxes(canvas, img, frame.tracks, ENLARGE_W, ENLARGE_H, ENLARGE_FONT, dpr);
+      canvas.width = vw * dpr;
+      canvas.height = vh * dpr;
+      // Scale the label with the viewport so it stays legible on a full-screen
+      // enlarged frame (roughly proportional to the smaller dimension).
+      const fontPx = Math.max(20, Math.min(34, Math.round(Math.min(vw, vh) / 32)));
+      const imgW = img.naturalWidth || img.width || vw;
+      const imgH = img.naturalHeight || img.height || vh;
+      enlCoverRef.current = coverTransform(imgW, imgH, vw, vh);
+      drawFrameFullBleed(canvas, img, frame.tracks, vw, vh, fontPx, dpr);
     };
     img.src = objUrl;
     return () => {
       img.onload = null;
     };
-  }, [objUrl, frame]);
+  }, [objUrl, frame, enlTick]);
+
+  // Re-draw the enlarged frame on window resize so it keeps filling the full
+  // viewport instead of stretching the old backing store.
+  useEffect(() => {
+    const onResize = () => setEnlTick((t) => t + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   function onCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
     if (!frame) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const nx = (e.clientX - rect.left) / rect.width;
-    const ny = (e.clientY - rect.top) / rect.height;
+    let nx = (e.clientX - rect.left) / rect.width;
+    let ny = (e.clientY - rect.top) / rect.height;
+    // Inverse-map the click from canvas px into image-normalized space so the
+    // box hit-test matches the full-bleed (cover-cropped) image.
+    const cover = enlCoverRef.current;
+    if (cover) {
+      nx = (e.clientX - rect.left - cover.dx) / (cover.imgW * cover.scale);
+      ny = (e.clientY - rect.top - cover.dy) / (cover.imgH * cover.scale);
+    }
     const hit = frame.tracks.find((t) => {
       const [x1, y1, x2, y2] = t.bbox;
       return nx >= x1 && nx <= x2 && ny >= y1 && ny <= y2;
     });
     if (hit) onBoxTrack(frame, hit);
+    else onClose();
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} data-enlarge-overlay>
-      <div className="relative max-h-full max-w-full overflow-auto rounded-lg bg-black/90 p-3">
-        <div className="mb-2 flex items-center gap-3 text-sm text-mut">
-          <span>
-            seq {seq} — {(frame?.tracks.length ?? 0)} track(s) {gallery.length > 1 ? `(${galIndex + 1}/${gallery.length})` : ""}
-          </span>
-          <div className="ml-auto flex items-center gap-1">
-            {gallery.length > 1 && (
-              <>
-                <button type="button" data-gallery-prev="true" onClick={onPrev} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-neon">‹ prev</button>
-                <button type="button" data-gallery-next="true" onClick={onNext} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-neon">next ›</button>
-              </>
-            )}
-            <button type="button" data-gallery-close="true" onClick={onClose} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-red">✕ close</button>
-          </div>
+    <div className="fixed inset-0 z-50 bg-black/90" data-enlarge-overlay>
+      <canvas
+        ref={canvasRef}
+        className="block h-full w-full cursor-crosshair"
+        onClick={onCanvasClick}
+      />
+      {/* Top control bar overlays the full-bleed image so the frame fills the
+          whole modal area edge-to-edge (ADAAAA-6978). */}
+      <div className="absolute inset-x-0 top-0 z-10 flex items-center gap-3 bg-gradient-to-b from-black/80 to-transparent px-4 py-3 text-sm text-mut">
+        <span>
+          seq {seq} — {(frame?.tracks.length ?? 0)} track(s) {gallery.length > 1 ? `(${galIndex + 1}/${gallery.length})` : ""}
+        </span>
+        <div className="ml-auto flex items-center gap-1">
+          {gallery.length > 1 && (
+            <>
+              <button type="button" data-gallery-prev="true" onClick={onPrev} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-neon">‹ prev</button>
+              <button type="button" data-gallery-next="true" onClick={onNext} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-neon">next ›</button>
+            </>
+          )}
+          <button type="button" data-gallery-close="true" onClick={onClose} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-red">✕ close</button>
         </div>
-        <canvas
-          ref={canvasRef}
-          width={ENLARGE_W * 2}
-          height={ENLARGE_H * 2}
-          style={{ width: ENLARGE_W, height: ENLARGE_H }}
-          onClick={onCanvasClick}
-          className="cursor-crosshair rounded bg-black"
-        />
-        <div className="mt-1 text-[11px] text-mut">click a box in the enlarged view to follow that object</div>
+      </div>
+      <div className="pointer-events-none absolute inset-x-0 bottom-2 z-10 text-center text-[11px] text-mut/80">
+        click a box in the enlarged view to follow that object · click empty area to close
       </div>
     </div>
   );
