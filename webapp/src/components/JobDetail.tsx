@@ -19,7 +19,7 @@ import {
   formatJobTime,
   jobSpanLabel,
 } from "../lib/vodJobs";
-import { trailFromJob, trailFromEvent, mergeTrail, hasCandidateTrigger, type TrailEntry } from "../lib/jobTrail";
+import { trailFromJob, trailFromEvent, mergeTrail, hasCandidateTrigger, reconcileTrail, type TrailEntry } from "../lib/jobTrail";
 import { FrameDebugger } from "./FrameDebugger";
 
 function statusChipClass(status: string): string {
@@ -88,10 +88,13 @@ export function JobDetailPanel({ jobId, initialJob, onClose }: { jobId: string; 
         if (cancelled) return;
         setJob(r.job);
         setHighlights(r.highlights ?? []);
-        // The persisted candidates array is the source of truth; the 15s poll
-        // reconciles (re-seeds) the trail so SSE-streamed frames that have not
-        // yet flushed to the job record are still represented.
-        setTrail(trailFromJob(r.job));
+        // Reconcile the trail against the persisted snapshot without wiping the
+        // live SSE-appended frames: for an in-flight live job `job.candidates`
+        // is empty (persistDecision does not populate it), so re-seeding from
+        // that empty snapshot dropped the trail to "No decisions yet". Keep the
+        // SSE trail when the snapshot is empty and merge (dedupe) when it is
+        // non-empty (the VOD `file` path) so the 15s poll preserves both.
+        setTrail((prev) => reconcileTrail(prev, trailFromJob(r.job)));
         setLoading(false);
         return r;
       } catch (e: any) {
