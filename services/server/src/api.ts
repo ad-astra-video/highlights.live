@@ -1914,9 +1914,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // reported over /jobs/:id/observe stay persisted.
     const mediaLive = mediaLiveJobs.get(job.id);
     if (mediaLive) {
+      // Tell the media node to tear down. No request body, so don't set a JSON
+      // Content-Type — Fastify rejects `application/json` with an empty body
+      // (FST_ERR_CTP_EMPTY_JSON_BODY), which would silently drop the teardown.
       await fetch(`${mediaLive.mediaOrigin}/jobs/${encodeURIComponent(job.id)}/stop`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
       }).catch(() => {});
       mediaLiveJobs.delete(job.id);
       await db.clearMediaSession(job.id).catch(() => {});
