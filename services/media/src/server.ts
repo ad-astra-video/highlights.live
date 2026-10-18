@@ -157,6 +157,15 @@ const EXT_BY_MIME: Record<string, string> = {
   "video/x-mpegts": "ts",
 };
 
+/** Strip MediaRecorder codec params (e.g. `video/mp4;codecs=avc1`) so the
+ *  container-name lookup matches. Phase 3 (ADAAAA-6868): the browser records
+ *  with the param-bearing mime it negotiated, so exact-key lookups would misname
+ *  an mp4 recording as webm and cut the wrong container. */
+function extForMime(mime: string): string {
+  const base = (mime || "").split(";")[0].trim().toLowerCase();
+  return EXT_BY_MIME[base] ?? "webm";
+}
+
 const DEFAULT_RECONNECT_GRACE_MS = 8000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -708,7 +717,7 @@ export class MediaServer {
     if (!stream.recording) {
       const dir = this.opts.tmpDir || tmpdir();
       mkdirSync(dir, { recursive: true });
-      const ext = EXT_BY_MIME[mime] ?? "webm";
+      const ext = extForMime(mime);
       const recPath = path.join(dir, `${stream.provisioned.sessionId}.${ext}`);
       stream.recording = { path: recPath, mime, stream: createWriteStream(recPath, { flags: "a" }) };
     }
@@ -885,7 +894,7 @@ export class MediaServer {
     if (!rec) {
       return { clipUri: "", error: "no session recording to cut from" };
     }
-    const ext = EXT_BY_MIME[rec.mime] ?? "webm";
+    const ext = extForMime(rec.mime);
     const clipId = randomUUID();
     const clipsDir = this.opts.clipsDir || path.join(tmpdir(), "hl-clips");
     mkdirSync(clipsDir, { recursive: true });

@@ -20,6 +20,16 @@ export interface ServerConfig {
    * frames route browser -> media-server WS -> orchestrator video-in instead of
    * the server's /jobs/:id/ingest HTTP rail. */
   mediaServerUrl?: string;
+  /**
+   * Phase 3 (ADAAAA-6868): retire the server-side browser-capture rails once
+   * parity is verified on the media server. When true, POST /jobs/:id/ingest and
+   * POST /jobs/:id/recording are disabled (410 Gone) and the browser stop path
+   * stops cutting clips server-side (clips are cut on the media controller node
+   * and reported over /jobs/:id/observe -> /jobs/:id/clips). Enable only after
+   * MEDIA_SERVER_URL is serving browser capture end-to-end (recordings live on
+   * the media node, not the server).
+   */
+  retireBrowserIngestRail: boolean;
   /** go-livepeer remote signer base URL (on-chain). Internal-only on Railway. */
   signerUrl?: string;
   /** Shared bearer token the remote signer requires (sealed SIGNER_AUTH_TOKEN).
@@ -297,6 +307,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     decideUrl: env.DECIDE_URL,
     trainUrl: env.TRAIN_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
+    retireBrowserIngestRail: /^(1|true|yes)$/i.test(env.RETIRE_BROWSER_INGEST_RAIL || ""),
     signerUrl: env.SIGNER_URL,
     signerAuthToken: env.SIGNER_AUTH_TOKEN,
     payerAddress: env.PAYER_ADDRESS,
