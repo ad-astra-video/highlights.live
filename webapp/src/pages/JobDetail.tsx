@@ -16,16 +16,30 @@ import {
   type FrameSection,
   type JobDetailFrame,
 } from "../lib/jobDetail";
+import { drawFrameWithBoxes, orderGallerySeqs, collectFrameSeqs } from "../lib/frameDebugger";
 import { jobTitle } from "../lib/vodJobs";
 
-const FRAME_W = 160;
-const FRAME_H = 90;
-const PALETTE = ["#22d3ee", "#f472b6", "#a3e635", "#fbbf24", "#a78bfa", "#fb7185", "#38bdf8", "#fb923c"];
+// Inline tile is drawn at 2x internally so box strokes + labels stay crisp.
+const FRAME_W = 320;
+const FRAME_H = 180;
+const INLINE_FONT = 12; // CSS px — legible on the 320x180 inline tile
+const INLINE_SCALE = 2;
+const ENLARGE_W = 960;
+const ENLARGE_H = 540;
+const ENLARGE_FONT = 24;
 /** SSE events that mean the detail payload changed and should be re-fetched. */
 const REFRESH_EVENTS = ["observation", "candidate", "candidateBlocked", "highlight", "progress"];
 
-/** One frame with its perceive boxes drawn on a canvas (lazy, auth-fetched). */
-function FrameTile({ frame, token }: { frame: JobDetailFrame; token: string | null }) {
+interface FrameTileProps {
+  frame: JobDetailFrame;
+  token: string | null;
+  selectMode: boolean;
+  selected: boolean;
+  onFrameClick: (seq: number) => void;
+}
+
+/** One frame with its perceive boxes + legible labels drawn on a canvas (lazy, auth-fetched). */
+function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTileProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [objUrl, setObjUrl] = useState<string | null>(null);
 
@@ -47,20 +61,10 @@ function FrameTile({ frame, token }: { frame: JobDetailFrame; token: string | nu
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !objUrl) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, FRAME_W, FRAME_H);
     const img = new Image();
     img.onload = () => {
-      ctx.drawImage(img, 0, 0, FRAME_W, FRAME_H);
-      frame.tracks.forEach((t, i) => {
-        const [x1, y1, x2, y2] = t.bbox;
-        const selected = !!t.selected;
-        const color = selected ? "#fbbf24" : PALETTE[t.slot % PALETTE.length];
-        ctx.strokeStyle = color;
-        ctx.lineWidth = selected ? 3 : 1.5;
-        ctx.strokeRect(x1 * FRAME_W, y1 * FRAME_H, (x2 - x1) * FRAME_W, (y2 - y1) * FRAME_H);
-      });
+      if (canvasRef.current !== canvas) return;
+      drawFrameWithBoxes(canvas, img, frame.tracks, FRAME_W, FRAME_H, INLINE_FONT, INLINE_SCALE);
     };
     img.src = objUrl;
     return () => {
@@ -69,17 +73,35 @@ function FrameTile({ frame, token }: { frame: JobDetailFrame; token: string | nu
   }, [objUrl, frame]);
 
   return (
-    <figure className="shrink-0" data-detail-frame>
-      <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} className="rounded-lg border border-mut/30 bg-black" />
+    <button
+      type="button"
+      data-detail-frame
+      data-selected-multi={selectMode && selected ? "true" : undefined}
+      data-select-mode={selectMode ? "true" : undefined}
+      onClick={() => onFrameClick(frame.seq)}
+      title={selectMode ? (selected ? "Deselect frame" : "Select frame") : `Enlarge frame (T+${frame.timestamp.toFixed(1)}s)`}
+      className={`shrink-0 rounded-lg border-2 transition ${
+        selectMode && selected ? "border-neon" : "border-transparent hover:border-mut/40"
+      }`}
+    >
+      <canvas ref={canvasRef} width={FRAME_W * INLINE_SCALE} height={FRAME_H * INLINE_SCALE} className="block rounded-lg border border-mut/30 bg-black" />
       <figcaption className="mt-0.5 text-center text-[10px] text-mut">
         T+{frame.timestamp.toFixed(1)}s<span className="ml-1 text-mut/70">·{frame.tracks.length} trk</span>
       </figcaption>
-    </figure>
+    </button>
   );
 }
 
-/** A 3 s section: frames filmstrip (with perceive boxes) + decide-note banners. */
-function SectionBlock({ section, token }: { section: FrameSection; token: string | null }) {
+interface SectionBlockProps {
+  section: FrameSection;
+  token: string | null;
+  selectMode: boolean;
+  selectedSeqs: Set<number>;
+  onFrameClick: (seq: number) => void;
+}
+
+/** A 3 s section: frames filmstrip (with perceive boxes + labels) + decide-note banners. */
+function SectionBlock({ section, token, selectMode, selectedSeqs, onFrameClick }: SectionBlockProps) {
   return (
     <section className="rounded-xl border border-purple/30 bg-black/30 p-3" data-frame-section data-section-index={section.index}>
       <div className="mb-2 flex items-center justify-between">
@@ -111,7 +133,16 @@ function SectionBlock({ section, token }: { section: FrameSection; token: string
         {section.frames.length === 0 ? (
           <div className="text-xs text-mut">No frames in this section.</div>
         ) : (
-          section.frames.map((f) => <FrameTile key={f.seq} frame={f} token={token} />)
+          section.frames.map((f) => (
+            <FrameTile
+              key={f.seq}
+              frame={f}
+              token={token}
+              selectMode={selectMode}
+              selected={selectedSeqs.has(f.seq)}
+              onFrameClick={onFrameClick}
+            />
+          ))
         )}
       </div>
     </section>
@@ -201,6 +232,112 @@ export function HighlightCard({ highlight: h, onDecision }: HighlightCardProps) 
 }
 
 /**
+ * Enlarged lightbox: renders a single frame or a prev/next gallery across a
+ * selected set of frames, drawing the SAME renderer as the inline tile so
+ * boxes/labels/palette/selection highlight are identical (A4). Clicking a box
+ * in the enlarged view issues find-and-track via /jobs/:id/control.
+ */
+function EnlargeGallery({
+  gallery,
+  galIndex,
+  framesBySeq,
+  token,
+  onClose,
+  onPrev,
+  onNext,
+  onBoxTrack,
+}: {
+  gallery: number[];
+  galIndex: number;
+  framesBySeq: Map<number, JobDetailFrame>;
+  token: string | null;
+  onClose: () => void;
+  onPrev: () => void;
+  onNext: () => void;
+  onBoxTrack: (frame: JobDetailFrame, t: NonNullable<JobDetailFrame["tracks"]>[number]) => void;
+}) {
+  const seq = gallery[galIndex];
+  const frame = framesBySeq.get(seq);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [objUrl, setObjUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    let url: string | null = null;
+    if (!frame) return;
+    authFetchFrame(frame.uri, token)
+      .then((u) => {
+        url = u;
+        if (alive) setObjUrl(u);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [frame, token]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !objUrl || !frame) return;
+    const img = new Image();
+    img.onload = () => {
+      if (canvasRef.current !== canvas) return;
+      const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+      drawFrameWithBoxes(canvas, img, frame.tracks, ENLARGE_W, ENLARGE_H, ENLARGE_FONT, dpr);
+    };
+    img.src = objUrl;
+    return () => {
+      img.onload = null;
+    };
+  }, [objUrl, frame]);
+
+  function onCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (!frame) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const nx = (e.clientX - rect.left) / rect.width;
+    const ny = (e.clientY - rect.top) / rect.height;
+    const hit = frame.tracks.find((t) => {
+      const [x1, y1, x2, y2] = t.bbox;
+      return nx >= x1 && nx <= x2 && ny >= y1 && ny <= y2;
+    });
+    if (hit) onBoxTrack(frame, hit);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} data-enlarge-overlay>
+      <div className="relative max-h-full max-w-full overflow-auto rounded-lg bg-black/90 p-3">
+        <div className="mb-2 flex items-center gap-3 text-sm text-mut">
+          <span>
+            seq {seq} — {(frame?.tracks.length ?? 0)} track(s) {gallery.length > 1 ? `(${galIndex + 1}/${gallery.length})` : ""}
+          </span>
+          <div className="ml-auto flex items-center gap-1">
+            {gallery.length > 1 && (
+              <>
+                <button type="button" data-gallery-prev="true" onClick={onPrev} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-neon">‹ prev</button>
+                <button type="button" data-gallery-next="true" onClick={onNext} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-neon">next ›</button>
+              </>
+            )}
+            <button type="button" data-gallery-close="true" onClick={onClose} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-red">✕ close</button>
+          </div>
+        </div>
+        <canvas
+          ref={canvasRef}
+          width={ENLARGE_W * 2}
+          height={ENLARGE_H * 2}
+          style={{ width: ENLARGE_W, height: ENLARGE_H }}
+          onClick={onCanvasClick}
+          className="cursor-crosshair rounded bg-black"
+        />
+        <div className="mt-1 text-[11px] text-mut">click a box in the enlarged view to follow that object</div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Full-screen Job detail (ADAAAA-6852 Inc 4). Route /app/jobs/:id. Covers the
  * start-new-job surface: header (job metadata), Highlights, Traces (with
  * capacity budget), and the 3 s-sectioned frame timeline with perceive overlays
@@ -275,6 +412,61 @@ export function JobDetail() {
   const frameCount = useMemo(() => (detail ? detail.sections.reduce((n, s) => n + s.frames.length, 0) : 0), [detail]);
   const acceptedCount = useMemo(() => (detail ? detail.highlights.filter((h) => h.status !== "rejected").length : 0), [detail]);
   const title = useMemo(() => (detail ? jobTitle(detail.job, acceptedCount) : ""), [detail, acceptedCount]);
+
+  // ADAAAA-6943/6946: click-to-enlarge + multi-select enlarge. `framesBySeq`
+  // maps a frame seq to its full frame for the enlarged lightbox; `gallery` is
+  // the ordered set of seqs currently enlarged (single = [seq], multi = ordered
+  // selected set through the filmstrip order helper).
+  const framesBySeq = useMemo(() => {
+    const m = new Map<number, JobDetailFrame>();
+    detail?.sections.forEach((s) => s.frames.forEach((f) => m.set(f.seq, f)));
+    return m;
+  }, [detail]);
+  const selectableSeqs = useMemo(() => (detail ? collectFrameSeqs(detail.sections) : []), [detail]);
+
+  const [selectMode, setSelectMode] = useState(false);
+  const [multiSeqs, setMultiSeqs] = useState<number[]>([]);
+  const [gallery, setGallery] = useState<number[] | null>(null);
+  const [galIndex, setGalIndex] = useState(0);
+
+  function openSingle(seq: number) {
+    setGallery([seq]);
+    setGalIndex(0);
+  }
+  function openMulti() {
+    const ordered = orderGallerySeqs(selectableSeqs, multiSeqs);
+    if (ordered.length === 0) return;
+    setGallery(ordered);
+    setGalIndex(0);
+    setSelectMode(false);
+    setMultiSeqs([]);
+  }
+  function toggleSelectMode() {
+    setSelectMode((v) => !v);
+    setMultiSeqs([]);
+  }
+  function toggleMulti(seq: number) {
+    setMultiSeqs((prev) => (prev.includes(seq) ? prev.filter((s) => s !== seq) : [...prev, seq]));
+  }
+  function onFrameClick(seq: number) {
+    if (selectMode) toggleMulti(seq);
+    else openSingle(seq);
+  }
+  function shiftGallery(dir: number) {
+    if (!gallery || gallery.length <= 1) return;
+    const next = (galIndex + dir + gallery.length) % gallery.length;
+    setGalIndex(next);
+  }
+
+  async function trackBox(frame: JobDetailFrame, t: NonNullable<JobDetailFrame["tracks"]>[number]) {
+    try {
+      await api(`/jobs/${id}/control`, {
+        body: { type: "track", args: { bbox: t.bbox, label: t.label?.trim() || t.kind, slot: t.slot } },
+      });
+    } catch (e: any) {
+      setError(`find-and-track: ${String(e?.message || e)}`);
+    }
+  }
 
   async function review(h: JobDetailHighlight, status: "accepted" | "rejected") {
     try {
@@ -426,17 +618,61 @@ export function JobDetail() {
           </div>
 
           {/* Frames timeline */}
-          <h3 className="mt-8 text-2xl font-black">Frames</h3>
+          <div className="mt-8 flex items-center gap-3">
+            <h3 className="text-2xl font-black">Frames</h3>
+            <span className="text-xs text-mut">click any frame to enlarge · {frameCount} frame(s)</span>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                data-select-mode={selectMode ? "true" : undefined}
+                onClick={toggleSelectMode}
+                className="rounded border border-mut/40 px-2 py-1 text-[11px] text-mut hover:border-neon hover:text-neon"
+              >
+                {selectMode ? "Cancel select" : "Select"}
+              </button>
+              {selectMode && (
+                <button
+                  type="button"
+                  data-enlarge-multi={multiSeqs.length >= 2 ? "true" : undefined}
+                  disabled={multiSeqs.length < 2}
+                  onClick={openMulti}
+                  className="rounded border border-neon/60 px-2 py-1 text-[11px] text-neon disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Enlarge ({multiSeqs.length})
+                </button>
+              )}
+            </div>
+          </div>
           {frameCount === 0 ? (
             <div className="mt-3 text-mut" data-detail-no-frames>No frames for this job.</div>
           ) : (
             <div className="mt-3 flex flex-col gap-3" data-detail-frames>
               {detail.sections.map((s) => (
-                <SectionBlock key={s.index} section={s} token={token} />
+                <SectionBlock
+                  key={s.index}
+                  section={s}
+                  token={token}
+                  selectMode={selectMode}
+                  selectedSeqs={new Set(multiSeqs)}
+                  onFrameClick={onFrameClick}
+                />
               ))}
             </div>
           )}
         </>
+      )}
+
+      {gallery !== null && gallery.length > 0 && (
+        <EnlargeGallery
+          gallery={gallery}
+          galIndex={galIndex}
+          framesBySeq={framesBySeq}
+          token={token}
+          onClose={() => setGallery(null)}
+          onPrev={() => shiftGallery(-1)}
+          onNext={() => shiftGallery(1)}
+          onBoxTrack={trackBox}
+        />
       )}
     </div>
   );
