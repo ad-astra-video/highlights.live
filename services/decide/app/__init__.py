@@ -25,6 +25,7 @@ from .gemma import (  # noqa: F401
     decide_with_gemma,
     finalize_goal_acceptance,
     plan_tracking_with_gemma,
+    title_with_gemma,
     _rule_outcome,
     is_near_miss_ball_outcome,
     reconcile_outcome_with_ball_signal,
@@ -333,6 +334,42 @@ def _log_plan(mode: str, req: "PlanRequest", resp: "TrackingPlanResponse") -> No
     )
 
 
+class TitleRequest(BaseModel):
+    """Compact summary for the text-only job-title call (ADAAAA-6798 Inc 1).
+
+    Lightweight (no images/audio) — the one small Gemma inference per completed
+    job. The server/worker sends gameHint + the job's eventTypes + the accepted
+    highlight reasons + the accepted count; the decide brain returns a short
+    human-readable title string."""
+
+    model_config = ConfigDict(extra="ignore")
+    gameHint: str = ""
+    eventTypes: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    highlightCount: int = 0
+
+
+class TitleResponse(BaseModel):
+    title: str
+
+
+def _rule_title(req: TitleRequest) -> str:
+    """Deterministic fallback title when Gemma is unavailable / in rule mode.
+    Mirrors the server's own fallback shape so a completed job still has a
+    sensible title even when the model is down (never blocks or fails the job)."""
+    parts = []
+    if req.gameHint:
+        parts.append(req.gameHint)
+    kinds = list(dict.fromkeys(req.eventTypes or []))
+    if kinds:
+        parts.append(", ".join(kinds[:3]))
+    if req.highlightCount:
+        parts.append(f"{req.highlightCount} highlight{'s' if req.highlightCount != 1 else ''}")
+    if not parts:
+        parts.append("Highlight reel")
+    return " · ".join(parts)
+
+
 def create_app() -> FastAPI:
     router = APIRouter()
 
@@ -559,6 +596,31 @@ def create_app() -> FastAPI:
         )
         _log_plan("rule", req, resp)
         return resp
+
+    @router.post("/title", response_model=TitleResponse)
+    async def title(req: TitleRequest):
+        """Text-only job-title generation (ADAAAA-6798 Inc 1). One lightweight
+        Gemma call per completed job: takes a compact summary (gameHint +
+        eventTypes + accepted-highlight reasons + count) and returns a short
+        human-readable title. Runs the inference in a worker thread (like the
+        /highlight gemma branch, ADAAAA-6373) so /health stays responsive. On
+        any failure (Gemma down / unparseable) returns a deterministic rule
+        title so the caller never has to block the job on it."""
+        if _is_gemma_mode():
+            t = await asyncio.to_thread(
+                title_with_gemma,
+                game_hint=req.gameHint,
+                event_types=req.eventTypes,
+                reasons=req.reasons,
+                highlight_count=req.highlightCount,
+                url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
+                timeout_s=float(os.environ.get("TITLE_TIMEOUT_S", "5")),
+            )
+            if t:
+                return TitleResponse(title=t)
+        # Rule / fallback path: Gemma unavailable, rule mode, or a null reply —
+        # return a deterministic title; the caller still has its own fallback.
+        return TitleResponse(title=_rule_title(req))
 
     app = FastAPI(title="highlights-decide", version="0.1.0")
     # Canonical at root (go-livepeer strips `/app`); `/app/*` alias for direct calls.

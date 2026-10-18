@@ -1060,3 +1060,61 @@ def plan_tracking_with_gemma(
         fallback=fallback,
         discovery_runner=discovery_runner,
     )
+
+
+def title_with_gemma(
+    game_hint: str = "",
+    event_types: list[str] | None = None,
+    reasons: list[str] | None = None,
+    highlight_count: int = 0,
+    url: str | None = None,
+    timeout_s: float = 5.0,
+) -> str | None:
+    """Generate a short, human-readable job title with a TEXT-ONLY Gemma call
+    (ADAAAA-6798 Inc 1). Takes a compact summary (gameHint + the job's
+    eventTypes + accepted-highlight reasons, plus the accepted count) and
+    returns a short title string (e.g. \"Soccer — 3 goals, 1 near miss\"), or
+    None on any transport/parse failure so the caller can apply its own
+    fallback title. No images and no audio — this is the one lightweight
+    text-only inference per completed job; it must never gate or fail the job.
+
+    The FastAPI layer runs this in a worker thread (like the /highlight gemma
+    branch, ADAAAA-6373) so /health stays responsive during the inference.
+    """
+    import httpx
+
+    event_types = [str(x) for x in (event_types or [])]
+    reasons = [str(x) for x in (reasons or [])]
+    prompt = (
+        "You write a short title for a sports/gaming highlight reel. "
+        "Return ONLY one short human-readable title (<= 12 words, no quotes, "
+        "no leading/trailing punctuation).\n"
+        f"Sport/game: {game_hint or 'unknown'}\n"
+        f"Highlight event types: {', '.join(event_types) or 'none'}\n"
+        f"Accepted highlight count: {highlight_count}\n"
+        f"Highlight reasons: {'; '.join(r for r in reasons[:6]) or 'none'}\n"
+        "Title:"
+    )
+    payload = {
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "reasoning_effort": "none",
+        "chat_template_kwargs": {"enable_thinking": False},
+        "max_tokens": 64,
+        "stream": False,
+    }
+    model = os.environ.get("GEMMA_MODEL")
+    if model:
+        payload["model"] = model
+    u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
+    try:
+        resp = httpx.post(u.rstrip("/") + "/v1/chat/completions", json=payload, timeout=timeout_s)
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:  # noqa: BLE001
+        log.error("gemma title call failed url=%s: %s", u, e)
+        return None
+    title = (text or "").strip().strip('"').strip()
+    if not title:
+        return None
+    return title[:120]

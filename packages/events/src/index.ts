@@ -444,6 +444,12 @@ export type JobDecision = z.infer<typeof JobDecisionSchema>;
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
+  // Short human-readable job title (ADAAAA-6798 Inc 1). Generated once at job
+  // completion by a single text-only `/app/title` decide call; falls back to a
+  // deterministic `<gameHint or source> · <n> highlights · <date>` when the
+  // decide service is unavailable. Additive optional — absent on older records
+  // and on jobs that predate title generation (no contract version bump).
+  title: z.string().optional(),
   // `file-sim` = loop a local file at real-time rate as a synthetic live source
   // (LiveIngest kind `file-sim`); used by QA/dev to run the live pipeline
   // deterministically without an RTMP encoder or a display (ADAAAA-5777).
@@ -510,6 +516,41 @@ export const JobSchema = z.object({
 });
 export type Job = z.infer<typeof JobSchema>;
 
+// --- per-highlight trigger metadata (ADAAAA-6798 Inc 2) ---------------------
+// The decide stage already computes the trigger signal that started a candidate
+// (audio gate, ball signal, scoreboard change, goal-line crossing, ...). This
+// additive type persists that signal onto both the JobCandidate and the
+// HighlightRecord so the UI can show "what trigger started this highlight".
+// Populated from the candidate object at decision time — NO new inference.
+// Absent on legacy rows without a candidate; those degrade to "trigger unknown"
+// (the highlight's own anchored eventType/timestamp) with no re-inference.
+export const HighlightTriggerSchema = z.object({
+  kind: z.enum([
+    "audio_burst",
+    "audio_swell",
+    "motion",
+    "ball_signal",
+    "score_change",
+    "goal_line",
+    "corroborated",
+  ]),
+  /** Trigger timestamp (s from stream start) the candidate was anchored to. */
+  timestamp: z.number().min(0),
+  /** The event class that fired the trigger (KILL | GOAL | DUNK | ...). */
+  eventType: z.string(),
+  // Reaction evidence derived from the same candidate object (all optional/
+  // absent when the signal was not present). These mirror the decide evidence
+  // fields so no re-inference is required to display the trigger provenance.
+  crowdEnergy: z.number().min(0).optional(),
+  audioKind: z.string().optional(),
+  ballSpeedMps: z.number().min(0).optional(),
+  ballPossessionId: z.string().optional(),
+  goalCrossed: z.boolean().optional(),
+  ballOutcome: z.string().optional(),
+  scoreBoardChanged: z.boolean().optional(),
+});
+export type HighlightTrigger = z.infer<typeof HighlightTriggerSchema>;
+
 export const HighlightRecordSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -532,6 +573,13 @@ export const HighlightRecordSchema = z.object({
   outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
   nearMiss: z.boolean().optional(),
   status: z.enum(["pending", "accepted", "rejected"]).default("pending"),
+  // ADAAAA-6798 Inc 2: link the highlight to the JobCandidate that started it,
+  // and de-normalize that candidate's trigger metadata so GET /highlights and
+  // GET /jobs/:id/detail can show "what trigger started this highlight" with
+  // zero drift and no read-time join. Both additive optional — legacy rows
+  // without a candidate degrade to the highlight's own anchored metadata.
+  candidateId: z.string().optional(),
+  trigger: HighlightTriggerSchema.optional(),
   // When the clip entered `rejected` (soft-delete undo grace start). Set on
   // reject, cleared on reject->accept (cancels pending TTL purge). Only
   // `rejected` clips with a `rejectedAt` aged >= rejectTtlMs are ever purge
@@ -568,6 +616,11 @@ export const JobCandidateSchema = z.object({
    *   suppressed -> model accepted but the Goal burst-suppression window dropped it
    *   rejected   -> not an accepted scoring highlight (near-miss / not-highlight) */
   status: z.enum(["accepted", "suppressed", "rejected"]).default("rejected"),
+  // ADAAAA-6798 Inc 2: the trigger signal that started this candidate, derived
+  // from the candidate object at decision time and persisted so the UI can show
+  // its provenance with no re-inference. Additive optional — absent on legacy
+  // rows (which predate trigger persistence).
+  trigger: HighlightTriggerSchema.optional(),
   createdAt: z.string(),
 });
 export type JobCandidate = z.infer<typeof JobCandidateSchema>;
