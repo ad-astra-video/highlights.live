@@ -111,6 +111,7 @@ describe("Phase 1 media VOD driver (ADAAAA-6866)", () => {
       inputPath: srcPath,
       detailFps: 1,
       gameHint: "Esports",
+      preferLabels: [],
     });
 
     // A real perceive session was reserved on the media node (payer path).
