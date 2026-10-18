@@ -325,6 +325,34 @@ export class MediaOrchestrator {
     return r.json();
   }
 
+  /** Feed one Stage-A audio chunk to the perceive `/audio` noise-change gate
+   * (INC-2). Mirrors the server-side OrchestratorAdapter.postAudio but posts
+   * directly to the perceived session's app URL with `x-session-id`, the same
+   * header the media server's analysis relay already uses. Returns the gate's
+   * CandidateEvent (or null) so the caller can route an audio-triggered
+   * candidate to the media-node decide stage. Best-effort like the server: a
+   * dropped chunk or a 404 just yields no candidate — never fatal. */
+  async postAudio(
+    p: ProvisionedSession,
+    chunk: { seq: number; timestamp: number; samples: string; streamId?: string }
+  ): Promise<any | null> {
+    const appUrl = (p.appUrl || "").replace(/\/$/, "");
+    if (!appUrl) return null;
+    const r = await this._req("POST", `${appUrl}/audio`, {
+      headers: { "Content-Type": "application/json", "x-session-id": p.sessionId },
+      body: JSON.stringify({
+        seq: chunk.seq,
+        timestamp: chunk.timestamp,
+        samples: chunk.samples,
+        stream_id: chunk.streamId || "",
+      }),
+    });
+    if (r.status >= 500) throw new Error(`postAudio failed: HTTP ${r.status}`);
+    if (r.status < 200 || r.status >= 300) return null;
+    const data: any = await r.json();
+    return data?.candidate ?? null;
+  }
+
   /**
    * Release the paid slot / perceive session. Posts `{controlUrl}/stop` so it
    * targets the SAME orchestrator that issued the session (correct in both the

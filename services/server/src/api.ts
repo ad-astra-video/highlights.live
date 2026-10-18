@@ -38,6 +38,7 @@ import {
   type Dataset,
   type DetectionTrainingSample,
   type HighlightRecord,
+  type MediaJobRequest,
   type MediaResultEvent,
 } from "@highlights/events";
 import {
@@ -345,6 +346,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // live job can be stopped explicitly; ends the frame iterator -> analyzeJob
   // returns -> the job is marked done.
   const liveSessions = new Map<string, LiveIngest>();
+  // Phase 2 (ADAAAA-6867): live push/screen jobs handed off to the media server.
+  // Keyed by job id -> the media session + node, so POST /jobs/:id/stop can tell
+  // the media node to tear down (release slot, stop payment) instead of the
+  // server running its own LiveIngest.
+  const mediaLiveJobs = new Map<string, { sessionId: string; mediaOrigin: string }>();
   // Browser-capture (client-side screen share / element capture) jobs: the
   // CLIENT streams sampled frames in via POST /jobs/:id/ingest and a recording
   // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
@@ -1438,7 +1444,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const firstJobAt = priorJobs > 0 ? await db.firstJobAt(user.id) : null;
       const job = await store.createJob({
         ownerId: user.id,
-        source: (req.body.source ?? "file") as any,
+        // Normalize the legacy `screen` live source to the JobSchema-valid
+        // `screenshare` so the job persists and the media-server handoff (which
+        // only accepts rtmp/screenshare/file-sim) accepts it too (ADAAAA-6867).
+        source: (req.body.source === "screen" ? "screenshare" : (req.body.source ?? "file")) as any,
         sourceUrl: videoPath,
         gameHint: req.body.gameHint || cfg.gameHintDefault,
         preferLabels: req.body.preferLabels ?? [],
@@ -1454,6 +1463,68 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         return { job: store.getJob(job.id), status: "ready" };
       }
       if (live) {
+        if (cfg.mediaServerUrl) {
+          // Phase 2 (ADAAAA-6867): the media server runs the WHOLE live ingest
+          // (ffmpeg RTMP pull / screen grab, session recording, frame sampling,
+          // Stage-A audio tap, perceive session reservation + payment, per-
+          // candidate decide, and clip-from-session cutting). The server is the
+          // negotiator/persister: it handshakes the job with a MediaJobRequest and
+          // persists the typed result events the media node streams back over
+          // /jobs/:id/observe. The job is stopped via POST /jobs/:id/stop which
+          // tells the media node to tear down (release slot, stop payment).
+          const mediaOrigin = cfg.mediaServerUrl.replace(/\/+$/, "");
+          const sampleFps = await resolveSampleFps(cfg, {
+            maxFps: cfg.liveSampleMaxFps,
+            headroom: cfg.liveSampleHeadroom,
+          });
+          await store.patchJob(job.id, { sampleFps });
+          // Server live sources map onto the media-server contract: screen ->
+          // screenshare; file-sim / rtmp pass through (browser is handled by the
+          // client-capture path, not here).
+          const mediaSource = req.body.source === "screen" ? "screenshare" : (req.body.source as string);
+          const reqBody: MediaJobRequest = {
+            jobId: job.id,
+            source: mediaSource as MediaJobRequest["source"],
+            inputUrl: videoPath,
+            gameHint: job.gameHint,
+            preferLabels: job.preferLabels ?? [],
+            sampleFps,
+            clipBeforeS: cfg.clipBeforeS,
+            clipAfterS: cfg.clipAfterS,
+          };
+          let r: Response;
+          try {
+            r = await fetch(`${mediaOrigin}/jobs`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(reqBody),
+            });
+          } catch (e: any) {
+            await store.patchJob(job.id, { status: "failed" });
+            return reply.code(502).send({ error: "media server unreachable", detail: String(e?.message || e) });
+          }
+          const mediaRes: any = await r.json().catch(() => null);
+          if (r.status !== 200 || !mediaRes?.sessionId) {
+            await store.patchJob(job.id, { status: "failed" });
+            return reply.code(502).send({
+              error: "media server failed to start live ingest",
+              detail: mediaRes?.error ?? `HTTP ${r.status}`,
+            });
+          }
+          const now = new Date().toISOString();
+          await db.setMediaSession({
+            jobId: job.id,
+            sessionId: mediaRes.sessionId,
+            streamId: mediaRes.streamId ?? "",
+            wsUrl: "",
+            mediaOrigin,
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          });
+          mediaLiveJobs.set(job.id, { sessionId: mediaRes.sessionId, mediaOrigin });
+          return { job: store.getJob(job.id), status: "ingesting", media: true };
+        }
         // Live ingest: capture/pull the stream, record it to disk, and sample
         // frames into the analyzer rail. Runs in the background; the job is
         // stopped via POST /jobs/:id/stop.
@@ -1837,6 +1908,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!job) return reply.code(404).send({ error: "not found" });
     if (job.ownerId !== req.user.id && req.user.role !== "admin")
       return reply.code(403).send({ error: "forbidden" });
+    // Phase 2 (ADAAAA-6867): live push/screen job handed to the media server.
+    // Tell the media node to tear down the ingest (stop payment + release the
+    // perceive slot) and forget the session; the highlights/clips it already
+    // reported over /jobs/:id/observe stay persisted.
+    const mediaLive = mediaLiveJobs.get(job.id);
+    if (mediaLive) {
+      await fetch(`${mediaLive.mediaOrigin}/jobs/${encodeURIComponent(job.id)}/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }).catch(() => {});
+      mediaLiveJobs.delete(job.id);
+      await db.clearMediaSession(job.id).catch(() => {});
+      await store.patchJob(job.id, { status: "done" });
+      emitJobEvent(job.id, { seq: -1, timestamp: -1, type: "observation", observation: { tracks: [] } }); // wake SSE
+      return reply.send({ ok: true, job: store.getJob(job.id) });
+    }
     const ing = liveSessions.get(job.id);
     if (ing) {
       ing.stop();
@@ -2081,8 +2168,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         issues: res.error?.issues,
       });
 
-    const seq = parsed.seq ?? 0;
-    const timestamp = parsed.timestamp ?? 0;
+    const seq = (parsed as { seq?: number }).seq ?? 0;
+    const timestamp = (parsed as { timestamp?: number }).timestamp ?? 0;
     switch (parsed.type) {
       case "observation": {
         // Feed the browser job's evidence rail + persist the frame (unchanged
