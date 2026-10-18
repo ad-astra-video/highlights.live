@@ -10,7 +10,7 @@
       "version": "0.1.0",
       "metadata": "{\"maxTracks\": 2, \"models\": \"florence-sam\"}",
       "mode": "persistent",
-      "capacity": 1,
+      "capacity": 21128,
       "proxy": true,
       "gpu": {
         "id": "0",
