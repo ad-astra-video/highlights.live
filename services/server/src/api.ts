@@ -718,9 +718,6 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sampleFps: cfg.vodDetailFps,
       frameScale: cfg.vodFrameScale,
       decideWindowN: cfg.vodDecideWindowN,
-      // ADAAAA-6854: bounded decide concurrency (W) for the VOD pass. Default 2
-      // (the pipeline overlaps in-flight vLLM decides); 1 = fully serial.
-      decideConcurrency: cfg.vodDecideConcurrency,
       // Increment D (ADAAAA-6467): the what-to-track planner's warm-up window
       // + out-of-band re-check cadence on the VOD pass (cap 8).
       warmupSeconds: cfg.warmupSeconds,
