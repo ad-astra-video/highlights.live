@@ -7,6 +7,7 @@ import {
   PaymentRequiredError,
   ROUTES,
   isSessionRefreshError,
+  isTicketParamsExpiredText,
   type LivePayment,
   type RemotePaymentStateSig,
   type SignerClient,
@@ -49,6 +50,12 @@ export function buildAnalyzeFrames(frameDir: string, sampleFps = 1) {
   };
 }
 
+/** Short pre-retry backoff so the orchestrator has time to cycle its payment
+ * params after an expired-params rejection (ADAAAA-6993). */
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface PaidOrchestratorOptions {
   /** Remote signer used to generate Livepeer-Payment on 402 (on-chain only). */
   signer?: SignerClient;
@@ -60,6 +67,11 @@ export interface PaidOrchestratorOptions {
    * release any the previous process left funded instead of letting the
    * orchestrator bill-and-force-release them (ADAAAA-6586). */
   ledger?: PerceiveSessionLedger;
+  /** ADAAAA-6993: short backoff (ms) before retrying a single-shot
+   * decide/plan/train after the orchestrator rejects a ticket minted against
+   * expired payment params with HTTP 400 `TicketParams expired` (default 1000).
+   * Gives the orchestrator time to cycle its params before the re-sign/retry. */
+  ticketParamsRetryBackoffMs?: number;
 }
 
 export class OrchestratorAdapter implements PipelineClient {
@@ -72,6 +84,7 @@ export class OrchestratorAdapter implements PipelineClient {
   private payers = new Map<string, PaymentRefresher>();
   /** Durable ledger of funded sessions (survives a server restart). */
   private ledger?: PerceiveSessionLedger;
+  private ticketParamsRetryBackoffMs: number;
 
   constructor(cfg: ServerConfig, opts: PaidOrchestratorOptions = {}) {
     this.client = new LivepeerClient(
@@ -83,6 +96,7 @@ export class OrchestratorAdapter implements PipelineClient {
     this.payerAddress = opts.payerAddress;
     this.paymentIntervalMs = opts.paymentIntervalMs ?? 10_000;
     this.ledger = opts.ledger;
+    this.ticketParamsRetryBackoffMs = opts.ticketParamsRetryBackoffMs ?? 1000;
   }
 
   /**
@@ -177,6 +191,61 @@ export class OrchestratorAdapter implements PipelineClient {
       const fresh = await this.client.refreshPaymentSession(this.payerAddress, manifestID);
       if (!fresh?.paymentParams) throw err;
       return { pmt: await sign(fresh.paymentParams), infoB64: fresh.paymentParams };
+    }
+  }
+
+  /**
+   * ADAAAA-6993: build the HTTP error for a single-shot decide/plan/train
+   * request and mark a `TicketParams expired` rejection (orchestrator HTTP 400
+   * whose body names the signal) so the caller can trigger the recovery below.
+   */
+  private httpError(status: number, data: unknown, label: string): Error & { ticketParamsExpired?: boolean } {
+    const err = new Error(`${label} failed: HTTP ${status}`) as Error & { ticketParamsExpired?: boolean };
+    if (status === 400 && isTicketParamsExpiredText(JSON.stringify(data))) err.ticketParamsExpired = true;
+    return err;
+  }
+
+  /**
+   * ADAAAA-6993: fixed-price single-shot decide/plan/train recovery. Signs a
+   * ticket for the 402 challenge's OrchestratorInfo, runs the paid request, and
+   * on an orchestrator HTTP 400 `TicketParams expired` — a recoverable refresh
+   * signal — re-issues the request WITHOUT payment headers to get a FRESH 402
+   * challenge (new payment_params / manifest_id), re-signs against the fresh
+   * params so the stale OrchestratorInfo is never reused, and retries the paid
+   * request once after a short backoff. A second expired rejection throws
+   * without looping (the caller decides whether to degrade).
+   */
+  private async retryPaidSingleShot(
+    probeUnpaid: () => Promise<unknown>,
+    initial: { b64: string; manifestID?: string },
+    signOpts: { app: string; type: "live" | "lv2v" | "fixed" },
+    runPaid: (headers: Record<string, string>) => Promise<unknown>
+  ): Promise<unknown> {
+    const first = await this.generateLivePaymentRecovering480(initial.b64, initial.manifestID, signOpts);
+    try {
+      return await runPaid({ "Livepeer-Payment": first.pmt.payment, "Livepeer-Segment": first.pmt.segCreds });
+    } catch (err) {
+      if (!(err as { ticketParamsExpired?: boolean })?.ticketParamsExpired) throw err;
+      // Re-issue WITHOUT payment headers to get a fresh 402 challenge (new params):
+      // the orchestrator only re-mints fresh OrchestratorInfo when the request is
+      // unpaid (it 402s), so the stale info is never reused.
+      let fresh: unknown;
+      try {
+        const got = await probeUnpaid();
+        // Unpaid probe unexpectedly succeeded (offchain / no charge) -> use it.
+        return got;
+      } catch (e) {
+        if (!(e instanceof PaymentRequiredError)) throw err;
+        fresh = e;
+      }
+      const freshB64 = (fresh as PaymentRequiredError).challenge?.paymentParams;
+      const freshManifest = (fresh as PaymentRequiredError).challenge?.manifestId;
+      if (freshB64 && freshManifest) {
+        await sleepMs(this.ticketParamsRetryBackoffMs);
+        const again = await this.generateLivePaymentRecovering480(freshB64, freshManifest, signOpts);
+        return await runPaid({ "Livepeer-Payment": again.pmt.payment, "Livepeer-Segment": again.pmt.segCreds });
+      }
+      throw err;
     }
   }
 
@@ -295,7 +364,8 @@ export class OrchestratorAdapter implements PipelineClient {
         payerAddress: payerAddress || undefined,
         paymentHeaders,
       });
-      if (status >= 400) throw new Error(`plan failed: HTTP ${status}`);
+      const err = this.httpError(status, data, "plan");
+      if (status >= 400) throw err;
       return (data ?? {}) as TrackingPlanResult;
     };
     try {
@@ -313,12 +383,20 @@ export class OrchestratorAdapter implements PipelineClient {
       // Reuse the one-shot 480 recovery (ADAAAA-6705) so a reused session that
       // returns signer HTTP 480 on this single-shot fixed-price call is
       // re-minted via /refresh-payment and re-signed once instead of failing
-      // the run hard (ADAAAA-6710).
-      const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
-        app: ROUTES.decide,
-        type: "fixed",
-      });
-      return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
+      // the run hard (ADAAAA-6710). ADAAAA-6993 adds the orchestrator HTTP 400
+      // `TicketParams expired` recovery (fresh 402 challenge + re-sign).
+      try {
+        const res = await this.retryPaidSingleShot(
+          () => this.client.decide("plan", payload, { payerAddress: payerAddress || undefined }),
+          { b64, manifestID: manifestID || undefined },
+          { app: ROUTES.decide, type: "fixed" },
+          (h) => run(h)
+        );
+        return (res ?? {}) as TrackingPlanResult;
+      } catch {
+        // Degrade to a safe-default plan on any failure (never a dead stream).
+        return { planVersion: 1, category: req.category || "", intent: req.intent || "", source: "planner-fallback", maxTracks: req.mode === "vod" ? 8 : 3, reason: "planner unavailable" };
+      }
     }
   }
   async postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioCandidate | null> {
@@ -412,7 +490,8 @@ export class OrchestratorAdapter implements PipelineClient {
         payerAddress: payerAddress || undefined,
         paymentHeaders,
       });
-      if (status >= 400) throw new Error(`decide failed: HTTP ${status}`);
+      const err = this.httpError(status, data, "decide");
+      if (status >= 400) throw err;
       return data as DecisionResult;
     };
     try {
@@ -429,12 +508,17 @@ export class OrchestratorAdapter implements PipelineClient {
       // Reuse the one-shot 480 recovery (ADAAAA-6705) so a reused session that
       // returns signer HTTP 480 on this single-shot fixed-price call is
       // re-minted via /refresh-payment and re-signed once instead of failing
-      // the run hard (ADAAAA-6710).
-      const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
-        app: ROUTES.decide,
-        type: "fixed",
-      });
-      return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
+      // the run hard (ADAAAA-6710). ADAAAA-6993 adds the orchestrator HTTP 400
+      // `TicketParams expired` recovery: re-issue WITHOUT payment headers for a
+      // fresh 402 challenge and re-sign once so the stale OrchestratorInfo is
+      // never reused (retryPaidSingleShot).
+      const res = await this.retryPaidSingleShot(
+        () => this.client.decide("highlight", payload, { payerAddress: payerAddress || undefined }),
+        { b64, manifestID: manifestID || undefined },
+        { app: ROUTES.decide, type: "fixed" },
+        (h) => run(h)
+      );
+      return res as DecisionResult;
     }
   }
   /** ADAAAA-6935: ONE merged decide review for all candidates inside a 3 s
@@ -463,7 +547,8 @@ export class OrchestratorAdapter implements PipelineClient {
         payerAddress: payerAddress || undefined,
         paymentHeaders,
       });
-      if (status >= 400) throw new Error(`decide group failed: HTTP ${status}`);
+      const err = this.httpError(status, data, "decide group");
+      if (status >= 400) throw err;
       return data as { verdicts?: DecisionResult[] };
     };
     try {
@@ -476,12 +561,17 @@ export class OrchestratorAdapter implements PipelineClient {
         throw new Error("on-chain decide 402 challenge carried no payment_params (orchestrator info) to forward to the signer; cannot obtain tickets");
       }
       const manifestID = err.challenge?.manifestId;
-      const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
-        app: ROUTES.decide,
-        type: "fixed",
-      });
-      const data = await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
-      return { verdicts: (data.verdicts ?? []).map((v) => v as DecisionResult) };
+      // ADAAAA-6993: recover an orchestrator HTTP 400 `TicketParams expired` on
+      // the paid decide-group retry by re-issuing WITHOUT payment headers (fresh
+      // 402 challenge) and re-signing once, so the stale OrchestratorInfo is
+      // never reused (retryPaidSingleShot).
+      const res = (await this.retryPaidSingleShot(
+        () => this.client.decide("highlight", payload, { payerAddress: payerAddress || undefined }),
+        { b64, manifestID: manifestID || undefined },
+        { app: ROUTES.decide, type: "fixed" },
+        (h) => run(h)
+      )) as { verdicts?: DecisionResult[] };
+      return { verdicts: (res.verdicts ?? []).map((v) => v as DecisionResult) };
     }
   }
   /** Submit a single-shot fine-tune to the highlights-train runner, mirroring
@@ -557,7 +647,8 @@ export class OrchestratorAdapter implements PipelineClient {
         payerAddress: payerAddress || undefined,
         paymentHeaders,
       });
-      if (status >= 400) throw new Error(`train failed: HTTP ${status}`);
+      const err = this.httpError(status, data, "train");
+      if (status >= 400) throw err;
       return data as TrainResult;
     };
     try {
@@ -574,12 +665,14 @@ export class OrchestratorAdapter implements PipelineClient {
       // Reuse the one-shot 480 recovery (ADAAAA-6705) so a reused session that
       // returns signer HTTP 480 on this single-shot fixed-price call is
       // re-minted via /refresh-payment and re-signed once instead of failing
-      // the run hard (ADAAAA-6710).
-      const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
-        app: ROUTES.train,
-        type: "fixed",
-      });
-      return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
+      // the run hard (ADAAAA-6710). ADAAAA-6993 adds the orchestrator HTTP 400
+      // `TicketParams expired` recovery (fresh 402 challenge + re-sign).
+      return (await this.retryPaidSingleShot(
+        () => this.client.train("train", payload, { payerAddress: payerAddress || undefined }),
+        { b64, manifestID: manifestID || undefined },
+        { app: ROUTES.train, type: "fixed" },
+        (h) => run(h)
+      )) as TrainResult;
     }
   }
   async stopPerceive(sessionId: string): Promise<void> {
