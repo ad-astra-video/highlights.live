@@ -697,6 +697,12 @@ export interface AnalyzerConfig {
    * `VOD_OBSERVE_LOOP` (server config). */
   observeLoop?: boolean;
   /**
+   * ADAAAA-6999 PO decision: Gemma `reasoning_effort` to send on VOD detail-first
+   * decide requests. Default "medium"; live stays at "none" regardless (so the
+   * live 1-5s detect budget is untouched). Wired from `VOD_DECIDE_REASONING_EFFORT`.
+   */
+  vodDecideReasoningEffort?: string;
+  /**
    * ADAAAA-7007: observe-loop cadence (content seconds) between decide
    * invocations. Default 3 (`OBSERVE_CADENCE_S`). Optional so the flag-on path
    * can be tuned without code change.
@@ -1847,7 +1853,10 @@ export function buildObserveDecideRequest(
   };
   const opts: Parameters<PipelineClient["decide"]>[1] = {
     gameHint: cfg.gameHint,
-    reasoningEffort: "none",
+    // ADAAAA-6999 PO decision: VOD detail-first decide requests carry Gemma
+    // reasoning (`reasoning_effort`, default "medium"); live stays at "none" so
+    // the live 1-5s detect budget is untouched. `decideWindowN` set -> VOD pass.
+    reasoningEffort: cfg.decideWindowN !== undefined ? (cfg.vodDecideReasoningEffort ?? "medium") : "none",
     frames: payload.frames.map((f) => ({ role: "full", base64: f.imageB64 })),
   };
   return { evidence, opts };

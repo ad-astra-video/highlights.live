@@ -128,6 +128,12 @@ export interface ServerConfig {
    * `frames[]` so Gemma reasons across a longer SEQUENCE per trigger.
    * `VOD_DECIDE_WINDOW_N`. */
   vodDecideWindowN: number;
+  /** Gemma reasoning effort sent on VOD detail-first decide requests (ADAAAA-6999
+   * PO decision). "none" keeps the live 1-5s detect budget; the VOD pass is
+   * detail-first and accepts a higher per-decide latency. The VOD decide request
+   * carries this value and forwards it to llama.cpp/vLLM as `reasoning_effort`.
+   * Live stay at "none" regardless. `VOD_DECIDE_REASONING_EFFORT`. */
+  vodDecideReasoningEffort: string;
   /** I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
    * Frames within +/- `vodResampleWindowS` of a candidate are re-extracted at
    * `vodResampleFps` so the ball-goal-crossing instant is in the decide window.
@@ -348,6 +354,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
     vodWorkerConcurrency: Number(env.VOD_WORKER_CONCURRENCY ?? 1),
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
+    // ADAAAA-6999 PO decision: VOD detail-first decide requests carry Gemma
+    // reasoning (`reasoning_effort`). Default "medium"; live stays "none".
+    vodDecideReasoningEffort: env.VOD_DECIDE_REASONING_EFFORT ?? "medium",
     // I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
     // Frames within +/- vodResampleWindowS of a candidate are re-extracted at
     // vodResampleFps so the ball-goal-crossing instant is in the decide window.

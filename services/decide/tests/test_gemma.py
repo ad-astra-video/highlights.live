@@ -220,6 +220,27 @@ def test_decide_sends_vllm_thinking_off(monkeypatch):
     assert req["temperature"] == 0.0
 
 
+def test_decide_enables_thinking_for_reasoning_effort(monkeypatch):
+    # ADAAAA-6999: a non-"none" reasoning effort on a VOD decide must ENABLE
+    # thinking — the payload's chat_template_kwargs.enable_thinking must be True,
+    # never forced off, so the model reasons before answering. Live stays "none"
+    # (enable_thinking False, covered above).
+    mock = MockLlama('{"isHighlight":false,"score":10,"eventType":"NONE","reason":"quiet"}')
+    try:
+        decide_with_gemma(
+            "NONE",
+            {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0},
+            reasoning_effort="medium",
+            url=f"http://127.0.0.1:{mock.port}",
+        )
+    finally:
+        mock.stop()
+    req = mock.requests[0]
+    assert req["reasoning_effort"] == "medium"
+    assert req.get("chat_template_kwargs", {}).get("enable_thinking") is True
+    assert req["temperature"] == 0.0
+
+
 
 def test_decide_with_gemma_uses_model():
     mock = MockLlama('{"isHighlight":true,"score":90,"eventType":"KILL","reason":"model saw it"}')
