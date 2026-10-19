@@ -99,6 +99,10 @@ class SessionState:
     # candidate can report whether the displayed score changed across the
     # candidate window. Bounded per-session state, never grows on long streams.
     scoreboard_tracker: ScoreboardTracker = field(default_factory=ScoreboardTracker)
+    # Geometry-agnostic "ball-in-net" goal-attestation detector (ADAAAA-7044).
+    # Optional: absent (no env config) -> the candidate carries no ballInNet
+    # field (never fabricated). Built lazily in __init__._ensure_goal_attestation.
+    goal_attestation: Optional[object] = None
     # LLM TrackingPlan (ADAAAA-6463, child of ADAAAA-6441): the closed detection
     # roster + zones + anchor + maxTracks the decide brain emitted for this
     # session. Plan-first: when present, detect/seeding vocabulary, zone set and

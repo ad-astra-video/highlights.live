@@ -565,6 +565,12 @@ def attested_goal_criterion(evidence: Optional[dict]) -> bool:
         (e.get("ballOutcome") or "") == GOAL_CRITERION_OUTCOME
         or e.get("goalCrossed") is True
         or bool(e.get("scoreBoardChanged"))
+        # ADAAAA-7044 (geometry-agnostic re-scope): `ballInNet` is the additional
+        # independent, measured goal criterion the fine-tuned "ball-in-net"
+        # detector emits. It requires no field-line geometry / homography, so it
+        # attests goals on small-sided cage/court content where no standard-pitch
+        # homography is honestly derivable (no fabrication, ADAAAA-6485 §8).
+        or e.get("ballInNet") is True
     )
 
 
