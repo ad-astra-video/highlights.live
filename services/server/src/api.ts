@@ -1061,10 +1061,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       disagreed: confirmDisagreed,
       gapRate: confirmTotal > 0 ? confirmDisagreed / confirmTotal : 0,
     };
-    // Each candidate (video or audio) is judged by exactly one Gemma decide()
-    // call here, so decideCalls == candidatesTriggered. Cost = fixed decide fee
-    // per call + the perceive session's hourly list price for its duration.
-    const decideCalls = candidatesTriggered;
+    // ADAAAA-7007: under the observe architecture (CEO directive, ADAAAA-7000
+    // rev 4) decide invocations are the cadence-driven observer calls
+    // (`vodObserveMetrics.decideCalls`), NOT one per candidate — candidates are
+    // recorded as bias hints / provenance, never the decide on/off gate. So the
+    // per-job decide spend uses the observer's actual call count when the
+    // observe path ran, and falls back to the legacy one-decide-per-candidate
+    // count (decideCalls == candidatesTriggered) otherwise.
+    const decideCalls = outcome.vodObserveMetrics?.decideCalls ?? candidatesTriggered;
     const costUsd = cfg.decideFee * decideCalls + (perceiveSessionS / 3600) * PERCEIVE_PER_HOUR_USD;
     // Source runtime (D-I2.2 / ADAAAA-6838): probe the media duration so the
     // completed result card can show it. Best-effort (ms; null on probe failure).
