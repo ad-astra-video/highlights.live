@@ -15,6 +15,21 @@ import {
 import type { ServerConfig } from "./config";
 import { createPaymentRefresher, type PaymentRefresher } from "./payment";
 import type { PerceiveSessionLedger } from "./perceive-ledger";
+
+/**
+ * ADAAAA-7003: an orchestrator HTTP 400 on a fixed-price single-shot
+ * decide/plan/train request whose body names a payment rejection other than
+ * `TicketParams expired` — either the ticket price no longer matches the
+ * runner's advertised price (`price does not match live runner price`) or the
+ * ticket cannot be redeemed (`insufficient funds for transfer`). These come
+ * from a stale/mismatched pricing OrchestratorInfo that survives a long
+ * single-shot drain; they are recoverable by re-minting fresh params and
+ * re-signing, so they are routed into the same recovery as a params expiry
+ * instead of aborting the whole job.
+ */
+function isSingleShotPaymentRejectionText(body: string): boolean {
+  return /price does not match live runner price|insufficient funds for transfer|invalid .* runner payment signer address/.test(body);
+}
 import type {
   AudioCandidate,
   AudioChunk,
@@ -198,10 +213,21 @@ export class OrchestratorAdapter implements PipelineClient {
    * ADAAAA-6993: build the HTTP error for a single-shot decide/plan/train
    * request and mark a `TicketParams expired` rejection (orchestrator HTTP 400
    * whose body names the signal) so the caller can trigger the recovery below.
+   *
+   * ADAAAA-7003: a fixed-price single-shot decide is ALSO rejected at HTTP 400
+   * for other payment reasons — `payment price does not match live runner
+   * price` / `insufficient funds for transfer` (a stale/mismatched pricing
+   * ticket after a long zero-cadence drain). These are recoverable by the same
+   * re-mint-fresh-params + re-sign path below, so mark them recoverable too
+   * instead of aborting the whole VOD pass. A malformed request on this path
+   * returns 422 (not 400), so a 400 here is always a payment rejection.
    */
   private httpError(status: number, data: unknown, label: string): Error & { ticketParamsExpired?: boolean } {
     const err = new Error(`${label} failed: HTTP ${status}`) as Error & { ticketParamsExpired?: boolean };
-    if (status === 400 && isTicketParamsExpiredText(JSON.stringify(data))) err.ticketParamsExpired = true;
+    if (status === 400) {
+      const body = JSON.stringify(data);
+      if (isTicketParamsExpiredText(body) || isSingleShotPaymentRejectionText(body)) err.ticketParamsExpired = true;
+    }
     return err;
   }
 
