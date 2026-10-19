@@ -508,6 +508,8 @@ export class OrchestratorAdapter implements PipelineClient {
       // ADAAAA-6855: the job's requested highlight labels, forwarded so the
       // decide runner exports a requested non-goal class as a distinct highlight.
       preferLabels?: string[];
+      jobId?: string;
+      groupKey?: string;
     }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -517,6 +519,8 @@ export class OrchestratorAdapter implements PipelineClient {
       timestamp: 0,
       gameHint: opts?.gameHint || "",
       reasoningEffort: opts?.reasoningEffort || "none",
+      jobId: opts?.jobId,
+      groupKey: opts?.groupKey,
       evidence,
       images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
       // ADAAAA-6855: thread the job's requested highlight labels verbatim.
@@ -879,6 +883,8 @@ export class DirectAdapter implements PipelineClient {
       reasoningEffort?: string;
       frames?: { role: string; base64: string }[];
       audioB64?: string;
+      jobId?: string;
+      groupKey?: string;
     }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
@@ -890,6 +896,8 @@ export class DirectAdapter implements PipelineClient {
         timestamp: 0,
         gameHint: opts?.gameHint || "",
         reasoningEffort: opts?.reasoningEffort || "none",
+        jobId: opts?.jobId,
+        groupKey: opts?.groupKey,
         evidence,
         images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
         frames: opts?.frames ?? [],

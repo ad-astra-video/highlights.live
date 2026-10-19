@@ -170,7 +170,13 @@ export function deriveHighlightTrigger(c: CandidateSignal): HighlightTrigger {
     scoreBoardChanged: scoreChanged || undefined,
   };
 }
-
+/** ADAAAA-7028 Inc 2: the frame-group partition key for a candidate timestamp.
+ * Mirrors the plan's 3 s frame-group window (FRAME_GROUP_WINDOW_S=3) so each
+ * decide call resolves to a stable (sessionId, groupKey) and, once the
+ * grouped-decide path lands, one decide_audit row per frame group. */
+export function decideGroupKey(timestamp: number): string {
+  return `g${Math.floor(timestamp / 3)}`;
+}
 export interface DecisionResult {
   isHighlight: boolean;
   score: number;
@@ -491,6 +497,10 @@ export interface PipelineClient {
        * re-analysis. The decide-runner contract add (ADAAAA-6030) wires this
        * into the prompt; empty when the window has nothing to add. */
       priorContextText?: string;
+      /** ADAAAA-7028 Inc 2 audit identity forwarded so the decide audit
+       * descriptor keys the durable index by (sessionId, groupKey). */
+      jobId?: string;
+      groupKey?: string;
     }
   ): Promise<DecisionResult>;
   /**
@@ -727,6 +737,11 @@ export interface AnalyzerConfig {
    * Wired from `LIVE_OBSERVE_LOOP` (server config).
    */
   liveObserveLoop?: boolean;
+  /** ADAAAA-7028 Inc 2: persist the decide audit descriptor returned on the
+   * decision (`_audit`) so the durable decide_audit index + decision-trail has
+   * one row per frame group. Best-effort: a throwing onDecideAudit is caught
+   * + logged, never a pipeline failure. */
+  onDecideAudit?: (desc: unknown) => void;
 }
 
 /**
@@ -1863,6 +1878,12 @@ export function buildObserveDecideRequest(
     gameHint: cfg.gameHint,
     reasoningEffort: "none",
     frames: payload.frames.map((f) => ({ role: "full", base64: f.imageB64 })),
+    // ADAAAA-7028 Inc 2: audit identity — forward the job + frame-group
+    // partition key so the decide service's `_audit` descriptor keys the
+    // durable decide_audit index by (sessionId, groupKey). One row per frame
+    // group regardless of how many decide invocations the group spans.
+    jobId: cfg.jobId,
+    groupKey: decideGroupKey(center),
   };
   return { evidence, opts };
 }
@@ -1938,6 +1959,20 @@ export async function observeOnDecide(
       evidence = rebuilt.evidence;
       opts = rebuilt.opts;
       decision = await client.decide(evidence, opts);
+    }
+  }
+  // ADAAAA-7028 Inc 2: ingest the decide audit descriptor into the durable
+  // decide_audit index (best-effort; never a pipeline failure). Gated by
+  // `cfg.onDecideAudit` (wired to recordDecideAudit in the server). Captured
+  // ONCE here, after any on-demand recall re-decide settles, using the final
+  // `decision` — so exactly one row is persisted per frame group (the
+  // (sessionId, groupKey) upsert in recordDecideAudit also makes it idempotent
+  // across repeated decide invocations for the same group).
+  if (cfg.onDecideAudit) {
+    try {
+      cfg.onDecideAudit((decision as any).audit);
+    } catch (e: any) {
+      console.error(`[decide-audit:${cfg.jobId}] onDecideAudit failed:`, String(e?.message || e));
     }
   }
   // ADAAAA-7021 fix: the window's goal-attestation signals (folded from the
