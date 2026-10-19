@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildObserveDecideRequest,
   foldWindowAttestation,
+  observeEmitSeq,
   LiveRunShared,
 } from "../src/analyzer";
 import type { ObserveDecidePayload, PerFrameSeed } from "../src/observe-loop";
@@ -63,5 +64,23 @@ describe("observe goal-attestation forwarding (ADAAAA-7021 adverse-finding fix)"
 
   it("returns {} when no hint carries an attestation (provenance-only window)", () => {
     expect(foldWindowAttestation([{ eventType: "SPORTING_EVENT", ts: 5 }])).toEqual({});
+  });
+});
+
+describe("observeEmitSeq (ADAAAA-7007 seq schema fix)", () => {
+  it("derives a monotonic non-negative frame seq from centerTs at the window fps", () => {
+    expect(observeEmitSeq(15, 2)).toBe(30);
+    expect(observeEmitSeq(7.25, 2)).toBe(15); // round to frame index
+    expect(observeEmitSeq(3, 5)).toBe(15);
+  });
+
+  it("never returns a negative seq, even for a zero/negative anchored moment", () => {
+    expect(observeEmitSeq(0, 2)).toBe(0);
+    expect(observeEmitSeq(-1, 2)).toBe(0); // clamped
+  });
+
+  it("falls back to the default content fps when fps is invalid/zero", () => {
+    expect(observeEmitSeq(15, 0)).toBe(30); // OBSERVE_CONTENT_FPS=2
+    expect(observeEmitSeq(15, NaN)).toBe(30);
   });
 });
