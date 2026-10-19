@@ -303,8 +303,8 @@ export class LiveObserver {
    * fires a decide candidate only; the observer still runs decide on the
    * cadence regardless of whether a trigger fired (recall not limited by
    * trigger-FP gating). */
-  addHint(eventType: string, ts: number): void {
-    this.biasHints.push({ eventType, ts });
+  addHint(eventType: string, ts: number, attest?: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean }): void {
+    this.biasHints.push({ eventType, ts, ...(attest ?? {}) });
     if (this.biasHints.length > 30) this.biasHints.shift();
   }
 
@@ -397,8 +397,11 @@ export interface ObserveDecidePayload {
   /** Perceive-seeded per-frame context, aligned to the window frames. */
   seeds: PerFrameSeed[];
   /** Per-window bias hints / provenance from perceive trigger signals — NOT the
-   * on/off switch. When non-empty, decide treats them as evidence to weigh. */
-  biasHints: { eventType: string; ts: number }[];
+   * on/off switch. When non-empty, decide treats them as evidence to weigh. A
+   * hint may carry the candidate's goal-attestation signals (goalCrossed /
+   * ballOutcome / scoreBoardChanged) so the decide goal-attestation gate can
+   * attest a `scoring_play` (ADAAAA-7021 adverse-finding fix). */
+  biasHints: ObserveBiasHint[];
   capped: boolean;
   droppedCount: number;
 }
@@ -426,6 +429,15 @@ export function alignSeeds(
 export interface ObserveBiasHint {
   eventType: string;
   ts: number;
+  /** Perceive candidate goal-attestation signals (I2/I3 ground-truth, ADAAAA-6359
+   * / ADAAAA-6360). Folded from the perceive candidate so the decide
+   * goal-attestation gate can independently attest a `scoring_play` — without
+   * these the decide runner rejects every goal ("model reason alone is not
+   * sufficient") and goal recall collapses to 0 (ADAAAA-7021 adverse finding).
+   * Absent/undefined = provenance only, never a false attestation. */
+  goalCrossed?: boolean;
+  ballOutcome?: string;
+  scoreBoardChanged?: boolean;
 }
 
 /**
@@ -592,6 +604,8 @@ export class ObserveDecider {
   /** Accumulated per-call decide input-size + accept report. */
   private readonly reportTicks: number[] = [];
   private accepts = 0;
+  /** Calls where the max-frames cap forced a subsample (ADAAAA-7007 AC). */
+  private subsampledCalls = 0;
 
   constructor(opts: {
     cadenceS?: number;
@@ -616,9 +630,12 @@ export class ObserveDecider {
   }
 
   /** Add a perceive candidate trigger signal as a per-window bias hint
-   * (provenance / metadata — never the on/off switch). */
-  addHint(eventType: string, ts: number): void {
-    this.biasHints.push({ eventType, ts });
+   * (provenance / metadata — never the on/off switch). `attest` carries the
+   * candidate's goal-attestation signals (goalCrossed / ballOutcome /
+   * scoreBoardChanged) so the decide goal-attestation gate can attest a
+   * `scoring_play` instead of rejecting it (ADAAAA-7021 adverse finding). */
+  addHint(eventType: string, ts: number, attest?: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean }): void {
+    this.biasHints.push({ eventType, ts, ...(attest ?? {}) });
     if (this.biasHints.length > 30) this.biasHints.shift();
   }
 
@@ -647,12 +664,18 @@ export class ObserveDecider {
     const inWindow = this.biasHints.filter((h) => h.ts >= lo && h.ts <= hi);
     const payload = buildObservePayload(win, this.findings, inWindow);
     this.reportTicks.push(payload.frames.length);
+    if (payload.capped) this.subsampledCalls++;
     if (this.onDecide && (await this.onDecide(payload))) this.accepts++;
   }
 
   /** Per-call decide input size (frame count) for the cost report. */
   inputSizeSamples(): number[] {
     return [...this.reportTicks];
+  }
+  /** Number of decide calls where the max-frames cap forced a subsample
+   * (ADAAAA-7007 AC: the <=30-frame cap is exercised — >0 means it was hit). */
+  subsampledCallCount(): number {
+    return this.subsampledCalls;
   }
   /** Per-job decide spend: number of decide invocations (each 1 billable unit). */
   decideCalls(): number {

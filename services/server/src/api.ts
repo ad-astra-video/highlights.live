@@ -1077,6 +1077,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       decideCalls,
       perceiveSessionS: Number(perceiveSessionS.toFixed(1)),
       costUsd: Number(costUsd.toFixed(4)),
+      // ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot so
+      // the acceptance criteria (<=30-frame cap exercised, per-call decide size,
+      // -67% cost measure) are readable per job from the completed record.
+      ...(outcome.vodObserveMetrics ? { vodObserveMetrics: outcome.vodObserveMetrics } : {}),
       scheduledAt,
       finishedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
