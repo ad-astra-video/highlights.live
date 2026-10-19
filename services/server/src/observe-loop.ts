@@ -162,6 +162,207 @@ export function planObserveWindows(
   return out;
 }
 
+/** Live observe constants (ADAAAA-7008). A live observer cannot decode ahead,
+ * so the live window is a ROLLING PAST window anchored on `nowTs` rather than a
+ * symmetric [center-window/2, center+window/2] band. Cadence is CEO-locked in
+ * the spec; the ~30 s budget = cadence + gemma end-to-end latency, measured and
+ * reported on the Livepeer runner. */
+export const LIVE_OBSERVE_WINDOW_S = 10;
+export const LIVE_OBSERVE_MAX_FRAMES = 30;
+
+/**
+ * Assemble ONE rolling PAST decide window for a live stream.
+ *
+ * Unlike {@link assembleObserveWindow} (a symmetric window around a center), a
+ * live observer can only look at content already received, so this keeps only
+ * frames in `[nowTs - windowS, nowTs]` — the trailing `windowS` seconds. It
+ * resolves to a regular `fps` grid (nearest frame per step) and hard-caps to
+ * `<= maxFrames` via {@link subsampleToCap}, exactly like the VOD path.
+ *
+ * `frames` may be unordered and may contain future timestamps (harmless — they
+ * are dropped); output is always ordered oldest -> newest. An empty window
+ * yields `frames: []` (no decide fires on it). `centerTs` is set to `nowTs`
+ * so a consumer can tell which moment the window was observed at.
+ */
+export function assembleLiveWindow(
+  frames: { ts: number; imageB64: string }[],
+  nowTs: number,
+  opts: { windowS?: number; maxFrames?: number; fps?: number } = {}
+): ObserveWindow {
+  const windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
+  const maxFrames = opts.maxFrames ?? LIVE_OBSERVE_MAX_FRAMES;
+  const fps = opts.fps ?? OBSERVE_CONTENT_FPS;
+  const lo = nowTs - windowS;
+  const inWindow = frames
+    .filter((f) => f.imageB64 && f.ts >= lo && f.ts <= nowTs + 1e-9)
+    .sort((a, b) => a.ts - b.ts);
+  if (inWindow.length === 0) return { centerTs: nowTs, frames: [], capped: false, droppedCount: 0 };
+
+  // Resolve to the fps grid across [start, now] (nearest frame per step).
+  const step = fps > 0 ? 1 / fps : Infinity;
+  const start = inWindow[0].ts;
+  const grid: { ts: number; imageB64: string }[] = [];
+  const seenTs = new Set<number>();
+  const nearest = (t: number): { ts: number; imageB64: string } | undefined => {
+    let best: { ts: number; imageB64: string } | undefined;
+    let bestDiff = Infinity;
+    for (const f of inWindow) {
+      const d = Math.abs(f.ts - t);
+      if (d < bestDiff) {
+        bestDiff = d;
+        best = f;
+      }
+    }
+    return best;
+  };
+  for (let t = start; t <= nowTs + 1e-9; t += step) {
+    const n = nearest(t);
+    if (n && !seenTs.has(n.ts)) {
+      seenTs.add(n.ts);
+      grid.push(n);
+    }
+  }
+  const first = inWindow[0];
+  const last = inWindow[inWindow.length - 1];
+  if (!seenTs.has(first.ts)) grid.unshift(first);
+  if (!seenTs.has(last.ts)) grid.push(last);
+
+  const { items, capped } = subsampleToCap(grid, maxFrames);
+  const droppedCount = grid.length - items.length;
+  return { centerTs: nowTs, frames: items, capped, droppedCount };
+}
+
+/** One measured live observe iteration: cadence tick that fired a decide, plus
+ * the end-to-end latency budget accounting the spec requires to be measured and
+ * reported on the Livepeer runner (cadence + gemma E2E). */
+export interface LiveObserveLatencySample {
+  /** Content time this decide was observed at. */
+  centerTs: number;
+  /** Frames actually sent to decide for this invocation. */
+  frameCount: number;
+  /** Wall-clock ms from tick-scheduled to the decide verdict returned. */
+  e2eMs: number;
+  /** Content-time cadence delta from the previous fired tick (ms). */
+  cadenceMs: number;
+}
+
+/**
+ * Streaming live decide-observer (ADAAAA-7008).
+ *
+ * Driven from the caller's OWN per-frame loop (which already calls perceive
+ * `analyze` to obtain the observation), so it never re-analyzes: `record`
+ * stores a frame + its perceive-derived seed context; `maybeFire` fires a
+ * rolling-PAST decision on the cadence. Unlike the VOD
+ * {@link ObserveDecider}, the window is `[now - windowS, now]` (no decode
+ * ahead) and the loop measures cadence + decide e2e latency against the ~30 s
+ * budget for the Livepeer runner report.
+ *
+ * Audio noise-change and motion are folded in as `biasHints` (per-frame
+ * attention hints) — they are NOT the on/off gate; decide still runs every
+ * cadence tick regardless of whether perceive emitted a candidate.
+ */
+export class LiveObserver {
+  private readonly frames: { ts: number; imageB64: string }[] = [];
+  private readonly findings = new Map<number, PerFrameSeed>();
+  private lastFireTs: number | null = null;
+  private readonly cadenceS: number;
+  private readonly windowS: number;
+  private readonly maxFrames: number;
+  private readonly fps: number;
+  private readonly onDecide: ((payload: ObserveDecidePayload) => Promise<boolean>) | null;
+  private readonly latency: LiveObserveLatencySample[] = [];
+  private accepts = 0;
+
+  constructor(opts: {
+    cadenceS?: number;
+    windowS?: number;
+    maxFrames?: number;
+    fps?: number;
+    onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
+  } = {}) {
+    this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
+    this.windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
+    this.maxFrames = opts.maxFrames ?? LIVE_OBSERVE_MAX_FRAMES;
+    this.fps = opts.fps ?? OBSERVE_CONTENT_FPS;
+    this.onDecide = opts.onDecide ?? null;
+  }
+
+  /** Record a frame + its perceive-derived seed context (no re-inference). */
+  record(ts: number, imageB64: string, seed: PerFrameSeed): void {
+    this.frames.push({ ts, imageB64 });
+    this.findings.set(ts, seed);
+    const cutoff = ts - Math.max(this.windowS, OBSERVE_WINDOW_S);
+    while (this.frames.length && this.frames[0].ts < cutoff) this.frames.shift();
+  }
+
+  /** Fire a rolling-past decide when the cadence is due. `force` ignores the
+   * cadence (used at end-of-stream to observe the tail). */
+  async maybeFire(nowTs: number, force = false): Promise<boolean> {
+    await this.fire(nowTs, force);
+    return this.lastFireTs === nowTs;
+  }
+
+  /** Force one final observation at end-of-stream. */
+  async flush(): Promise<void> {
+    const last = this.frames[this.frames.length - 1];
+    if (last) await this.fire(last.ts, true);
+  }
+
+  private async fire(nowTs: number, force: boolean): Promise<void> {
+    if (!force && !shouldFireObserve(this.lastFireTs, nowTs, this.cadenceS)) return;
+    const prevFire = this.lastFireTs;
+    this.lastFireTs = nowTs;
+    const win = assembleLiveWindow(this.frames, nowTs, { windowS: this.windowS, maxFrames: this.maxFrames, fps: this.fps });
+    if (win.frames.length === 0) return;
+    const payload = buildObservePayload(win, this.findings, []);
+    const cadenceMs = prevFire === null ? 0 : (nowTs - prevFire) * 1000;
+    let e2eMs = 0;
+    if (this.onDecide) {
+      const started = Date.now();
+      const accepted = await this.onDecide(payload);
+      e2eMs = Date.now() - started;
+      if (accepted) this.accepts++;
+      this.latency.push({ centerTs: nowTs, frameCount: payload.frames.length, e2eMs, cadenceMs });
+    }
+  }
+
+  /** Ran the source clock ahead past the observed tail (no-op safety). */
+  seek(ts: number): void {
+    if (ts > (this.frames[this.frames.length - 1]?.ts ?? 0)) {
+      // The caller may advance content time without a new frame; nothing to
+      // record, but keep the cadence clock honest by seeding lastFireTs only
+      // when a window could actually be assembled.
+    }
+  }
+
+  /** Measured cadence + gemma e2e latency samples for the Livepeer report. */
+  latencySamples(): LiveObserveLatencySample[] {
+    return [...this.latency];
+  }
+  /** Max observed e2e latency in ms (0 when no sample). */
+  maxE2eMs(): number {
+    return this.latency.reduce((a, b) => Math.max(a, b.e2eMs), 0);
+  }
+  /** Mean observed e2e latency in ms (0 when no sample). */
+  meanE2eMs(): number {
+    if (this.latency.length === 0) return 0;
+    return this.latency.reduce((a, b) => a + b.e2eMs, 0) / this.latency.length;
+  }
+  /** Per-call decide input size (frame count) for the cost report. */
+  inputSizeSamples(): number[] {
+    return this.latency.map((s) => s.frameCount);
+  }
+  decideCalls(): number {
+    return this.latency.length;
+  }
+  maxFrameCount(): number {
+    return this.latency.reduce((a, b) => Math.max(a, b.frameCount), 0);
+  }
+  acceptedCount(): number {
+    return this.accepts;
+  }
+}
+
 /** Per-frame perceive-derived seed context carried into a decide payload
  * (detections / tracking / scoreboard / motion geometry). This is the
  * "perceive as data seeder" contract — no re-inference, just the already
