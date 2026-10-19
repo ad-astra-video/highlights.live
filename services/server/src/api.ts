@@ -761,6 +761,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sampleFps: cfg.vodDetailFps,
       frameScale: cfg.vodFrameScale,
       decideWindowN: cfg.vodDecideWindowN,
+      // ADAAAA-6999 PO decision: VOD detail-first decide requests carry Gemma
+      // reasoning (`reasoning_effort`, default "medium"); live stays at "none".
+      vodDecideReasoningEffort: cfg.vodDecideReasoningEffort,
       // ADAAAA-7007/7011: drive the VOD decide-observer on the detail-first pass
       // (config-gated). When on, decide runs on the ~3 s cadence regardless of
       // whether perceive emitted a candidate.

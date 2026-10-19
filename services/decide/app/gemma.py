@@ -947,10 +947,12 @@ def ask(
         # long chain of thought ends (see decide tests for the ordering of the
         # image/text/audio modalities).
         "reasoning_effort": reasoning_effort,
-        # vLLM-equivalent thinking-off knob (Gemma 4 template exposes
-        # enable_thinking). Explicit so a vLLM build that keeps thinking on by
-        # default still returns the JSON immediately.
-        "chat_template_kwargs": {"enable_thinking": False},
+        # vLLM-equivalent thinking knob (Gemma 4 template exposes enable_thinking).
+        # ADAAAA-6999: when the caller requests reasoning (VOD decide, effort !=
+        # "none"), ENABLE thinking so the model reasons before answering; this
+        # never forces thinking OFF for a non-"none" request. Explicit so a vLLM
+        # build that keeps thinking on/off by default still matches the request.
+        "chat_template_kwargs": {"enable_thinking": reasoning_effort != "none"},
         "max_tokens": 1200,
         "stream": False,
     }
@@ -1329,7 +1331,9 @@ def ask_group(
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.0,
         "reasoning_effort": reasoning_effort,
-        "chat_template_kwargs": {"enable_thinking": False},
+        # ADAAAA-6999: ENABLE thinking when the caller requests reasoning
+        # (non-"none" effort), so group VOD decides can reason before answering.
+        "chat_template_kwargs": {"enable_thinking": reasoning_effort != "none"},
         "max_tokens": 2400,
         "stream": False,
     }
