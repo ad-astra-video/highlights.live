@@ -344,6 +344,13 @@ export class LivepeerClient {
        * being silently serialized to 1; oversubscription is absorbed by the
        * orchestrator's `503 no capacity` + this client's backoff/retry. */
       decideConcurrency?: number;
+      /** ADAAAA-6993: short backoff (ms) before retrying a `/payment` (or the
+       * matching single-shot request) after the orchestrator rejects a ticket
+       * minted against expired payment params with HTTP 400 `TicketParams
+       * expired`. Gives the orchestrator time to cycle its params before the
+       * re-sign/retry — distinct from the benign 480/482/481 cases, which need
+       * no orchestrator round-trip. */
+      ticketParamsRetryBackoffMs?: number;
     } = {}
   ) {}
 
@@ -660,7 +667,7 @@ export class LivepeerClient {
   ): Promise<{ signerState: unknown; orchInfoB64: string } | null> {
     if (!signer) return null;
     if (!orchInfoB64) throw new Error("payment refresh requires orchestrator info (orchInfoB64)");
-    const doSign = async (infoB64: string) => {
+    const doSign = async (infoB64: string, refreshed = false) => {
       let paid: LivePayment;
       try {
         paid = await signer.generateLivePayment(infoB64, signerState ?? null, {
@@ -678,7 +685,7 @@ export class LivepeerClient {
         // new payment. Let the caller re-mint info and retry (ADAAAA-6575).
         if (isSessionRefreshError(err) && payerAddress && manifestID) {
           const fresh = await this.refreshPaymentSession(payerAddress, manifestID);
-          if (fresh?.paymentParams) return await doSign(fresh.paymentParams);
+          if (fresh?.paymentParams) return await doSign(fresh.paymentParams, true);
         }
         // 482 = "no new tickets needed": the signer's committed reserve already
         // covers the orchestrator's minimum credit for the billable window, so
@@ -705,6 +712,31 @@ export class LivepeerClient {
       const res = await this.transport.request("POST", `${controlUrl}/payment`, {
         headers: { "Livepeer-Payment": paid.payment, "Livepeer-Segment": paid.segCreds },
       });
+      // ADAAAA-6993: the orchestrator rejects a ticket minted against EXPIRED
+      // payment params with HTTP 400 `TicketParams expired`. That is a recoverable
+      // refresh signal (mirrors the signer-480 recovery above), not a fatal
+      // payment failure: re-mint fresh OrchestratorInfo for the SAME session via
+      // /refresh-payment, re-sign the ticket against the fresh params, and retry
+      // the /payment POST once. Never reuse the stale `infoB64`. Give the
+      // orchestrator time to cycle its params with a short backoff (distinct from
+      // the benign 480/481/482 cases, which need no orchestrator round-trip).
+      if (res.status === 400) {
+        const bodyText = await res.text().catch(() => "");
+        if (isTicketParamsExpiredText(bodyText)) {
+          // Recoverable (never reuse the stale info): re-mint fresh OrchestratorInfo,
+          // re-sign, and retry /payment ONCE. If we have already recovered (refreshed)
+          // or cannot re-mint, give up WITHOUT looping and surface the expired signal
+          // so the caller can classify it.
+          if (!refreshed && payerAddress && manifestID) {
+            const fresh = await this.refreshPaymentSession(payerAddress, manifestID);
+            if (fresh?.paymentParams) {
+              await sleep(this.opts.ticketParamsRetryBackoffMs ?? 1500);
+              return await doSign(fresh.paymentParams, true);
+            }
+          }
+          throw new Error(`payment refresh failed: HTTP 400 TicketParams expired`);
+        }
+      }
       if (res.status >= 400) throw new Error(`payment refresh failed: HTTP ${res.status}`);
       return { signerState: paid.signerState, orchInfoB64: infoB64 };
     };
@@ -732,4 +764,20 @@ function isNoTicketsError(err: unknown): boolean {
  * refresh (ADAAAA-6588). */
 function isPriceExceededError(err: unknown): boolean {
   return err instanceof Error && /\bHTTP 481\b/.test(err.message);
+}
+
+/** True when an orchestrator error body says the ticket params expired (HTTP
+ * 400 `TicketParams expired`). The ticket the signer minted against the stale
+ * OrchestratorInfo was rejected, so the payer must re-mint fresh info AND
+ * re-sign before retrying — never reuse the stale info. Exported so the
+ * server's single-shot decide/plan/train payer can detect the same signal and
+ * recover instead of failing the job (ADAAAA-6993). */
+export function isTicketParamsExpiredText(body: unknown): boolean {
+  return typeof body === "string" && /TicketParams expired/.test(body);
+}
+
+/** Short pre-retry backoff so the orchestrator has time to cycle its payment
+ * params after an expired-params rejection (ADAAAA-6993). */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
