@@ -953,7 +953,11 @@ def ask(
         # never forces thinking OFF for a non-"none" request. Explicit so a vLLM
         # build that keeps thinking on/off by default still matches the request.
         "chat_template_kwargs": {"enable_thinking": reasoning_effort != "none"},
-        "max_tokens": 1200,
+        # ADAAAA-6999: when reasoning is on (VOD), raise the token budget so the
+        # think chain AND the JSON both fit — the old fixed-1200 budget competes
+        # with the CoT and returns empty content -> rule fallback. "none" (live)
+        # keeps the tight budget so content returns immediately.
+        "max_tokens": 4096 if reasoning_effort != "none" else 1200,
         "stream": False,
     }
     # llama-server is fine without "model"; OpenAI-compatible servers (Ollama)
@@ -1334,7 +1338,8 @@ def ask_group(
         # ADAAAA-6999: ENABLE thinking when the caller requests reasoning
         # (non-"none" effort), so group VOD decides can reason before answering.
         "chat_template_kwargs": {"enable_thinking": reasoning_effort != "none"},
-        "max_tokens": 2400,
+        # ADAAAA-6999: raise the budget when reasoning is on (see ask()).
+        "max_tokens": 4096 if reasoning_effort != "none" else 2400,
         "stream": False,
     }
     model = os.environ.get("GEMMA_MODEL")
