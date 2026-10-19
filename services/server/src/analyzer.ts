@@ -1715,6 +1715,18 @@ export function isTicketParamsExpired(err: unknown): boolean {
   return !!err && typeof err === "object" && (err as { ticketParamsExpired?: boolean }).ticketParamsExpired === true;
 }
 
+// ADAAAA-7022: clamp observer-built evidence to the decide service's schema
+// caps before sending. A real multi-object broadcast window exceeds both
+// bounds, and because decide is now the SOLE driver of the live loop a 422
+// aborts the whole live job (`decide failed: HTTP 422`). These mirror the
+// decide contract (services/decide/app/__init__.py: Evidence.trackCount le=8,
+// Evidence.detections max_length=16, Detection.bbox max_length=4,
+// Detection.confidence ge=0 le=1) so the observer never produces a payload the
+// decide schema rejects.
+export const DECIDE_MAX_TRACK_COUNT = 8;
+export const DECIDE_MAX_DETECTIONS = 16;
+export const DECIDE_MAX_DETECTION_BBOX = 4;
+
 /** Build the decide() evidence + opts for an observe window. The temporal
  * window frames + the perceive-seeded per-frame context are the primary
  * evidence; candidate triggers inside the window are folded as bias hints
@@ -1731,16 +1743,25 @@ export function buildObserveDecideRequest(
   // Fold the window's perceive-derived context into the scalar evidence the
   // decide contract expects (track count / OCR / reaction) from the seeds.
   const seeds = payload.seeds;
-  let trackCount = 0;
+  let maxTrackCount = 0;
   let ocrHits = 0;
   for (const s of seeds) {
-    trackCount = Math.max(trackCount, s.tracks?.length ?? 0);
+    maxTrackCount = Math.max(maxTrackCount, s.tracks?.length ?? 0);
     ocrHits += s.ocr?.length ?? 0;
   }
+  // ADAAAA-7022: clamp to the decide Evidence schema caps so a multi-object
+  // window never builds a payload decide rejects (trackCount le=8).
+  const trackCount = Math.min(maxTrackCount, DECIDE_MAX_TRACK_COUNT);
   const detections: DetectionEvidence[] = [];
   for (const s of seeds) {
     for (const o of s.objects ?? []) {
-      detections.push({ label: o.label, confidence: o.confidence ?? 0, bbox: o.bbox ?? [], trackId: "" });
+      detections.push({
+        label: o.label,
+        confidence: o.confidence ?? 0,
+        // ADAAAA-7022: Detection.bbox is max_length=4 and confidence ge=0 le=1.
+        bbox: (o.bbox ?? []).slice(0, DECIDE_MAX_DETECTION_BBOX),
+        trackId: "",
+      });
     }
   }
   const evidence: Parameters<PipelineClient["decide"]>[0] = {
@@ -1750,7 +1771,9 @@ export function buildObserveDecideRequest(
     ocrHits,
     reaction: buildReactionEvidence({}, trackCount),
     // Perceive-derived per-detection geometry + audio level curve (I4).
-    detections,
+    // ADAAAA-7022: keep the FIRST DECIDE_MAX_DETECTIONS (oldest frames) so the
+    // payload never breaches Evidence.detections max_length=16.
+    detections: detections.slice(0, DECIDE_MAX_DETECTIONS),
     scoreBoardChanged: false,
   };
   const opts: Parameters<PipelineClient["decide"]>[1] = {
