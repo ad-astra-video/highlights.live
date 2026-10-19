@@ -50,6 +50,13 @@ class SessionState:
     frames_processed: int = 0
     health_ts: float = field(default_factory=time.time)
     recent_frames: Deque[dict] = field(default_factory=lambda: deque(maxlen=RECENT_FRAMES))
+    # ADAAAA-7008 / ADAAAA-7012: per-frame derived-context cache (the "data
+    # seeder" contract). Keys are frame timestamps (content seconds); values are
+    # the compact seed already computed by process_frame (tracks / objects / ocr)
+    # so the on-demand `/app/evidence` recall endpoint can serve it WITHOUT
+    # re-running the detector. Bounded to RECENT_FRAMES so it never grows on a
+    # long stream. Absent timestamp -> no evidence (explicit no-signal).
+    frame_seeds: dict[float, dict] = field(default_factory=dict)
     subscribers: List[asyncio.Queue] = field(default_factory=list)
     # Raw RGB of the most recent sampled frame + its image b64, so a control
     # `analyze-still` can force a fresh Florence+SAM3 pass on the current frame.

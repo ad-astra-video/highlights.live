@@ -7,6 +7,7 @@ import { StageAMetrics } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
 import {
   ObserveDecider,
+  applyOnDemandRecall,
   type ObserveDecidePayload,
   type PerFrameSeed,
   type ObserveBiasHint,
@@ -200,6 +201,11 @@ export interface DecisionResult {
   // flagged so the highlight-clip is labeled distinctly downstream.
   outcome?: "scoring_play" | "near_miss" | "big_play" | "not_highlight";
   nearMiss?: boolean;
+  // ADAAAA-7008 / ADAAAA-7012: when the verdict is uncertain and asks for MORE
+  // evidence for this moment before finalizing, the server calls perceive
+  // on-demand (`recallPerceive`) and folds the fresh context into the payload.
+  // Absent / false => no recall (default). Optional + backward compatible.
+  recall?: boolean;
 }
 // ADAAAA-6855: map job-requested highlight labels (preferLabels) to the
 // outcome taxonomy members they authorize for export. A requested non-goal
@@ -448,6 +454,20 @@ export interface PipelineClient {
    * a 404 (fresh session after re-reserve) is dropped, never fatal.
    */
   controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<void>;
+  /**
+   * On-demand perceive recall (ADAAAA-7008 / ADAAAA-7012). When a decide verdict
+   * requests more evidence for a moment, the server asks perceive for the
+   * per-frame derived context (tracks / objects / ocr) ALREADY computed by
+   * process_frame — WITHOUT re-running the detector — and the caller folds it
+   * into the payload via `applyOnDemandRecall` before finalizing. `seeds` is `[]`
+   * on a no-op (nothing cached / best-effort failure), which the caller treats
+   * as "no new evidence" so a recall never regresses a decision. Optional so a
+   * client/FAKE without recall support simply never recalls (no regression).
+   */
+  recallPerceive?(
+    sessionId: string,
+    req: { centerTs?: number; windowS?: number; startTs?: number; endTs?: number }
+  ): Promise<{ centerTs?: number; seeds: PerFrameSeed[] }>;
   /**
    * Decide whether a candidate is a highlight. `imageB64` is the candidate
    * frame so the Gemma 12B QAT decide runner sees the actual moment (vision),
@@ -2036,6 +2056,31 @@ export function buildObserveDecideRequest(
   return { evidence, opts };
 }
 
+/**
+ * Run the on-demand perceive recall for an observe payload (ADAAAA-7008 /
+ * ADAAAA-7012). When a decide verdict requests more evidence for a moment, the
+ * server calls perceive on demand (`recall` callback -> adapter -> perceive
+ * `/app/evidence`) and folds the freshly derived per-frame context into the
+ * payload via {@link applyOnDemandRecall} BEFORE finalizing.
+ *
+ * `recall` is the injectable transport (the adapter's `recallPerceive`); it
+ * returns the recall's seeds (empty `[]` / undefined on a no-op). A no-op
+ * recall returns the SAME payload object unmodified, so a recall can never
+ * regress a decision — the caller checks `!== payload` to decide whether to
+ * re-decide with the richer payload.
+ */
+export async function applyObserveRecall(
+  payload: ObserveDecidePayload,
+  recall: (centerTs: number, windowS?: number) => Promise<{ centerTs?: number; seeds: PerFrameSeed[] } | undefined>
+): Promise<ObserveDecidePayload> {
+  if (!payload) return payload;
+  const result = await recall(payload.centerTs, undefined);
+  // A no-op recall (nothing new) returns the SAME payload object, so a recall
+  // can never regress a decision.
+  if (!result || result.seeds.length === 0) return payload;
+  return applyOnDemandRecall(payload, { centerTs: result.centerTs ?? payload.centerTs, seeds: result.seeds });
+}
+
 // ---------------------------------------------------------------------------
 // Stage-2 confirmation-pass driver (ADAAAA-6797): trigger detection + confirm
 // context assembly + reconcile adoption. Pure/helpers are unit-testable.
@@ -2424,7 +2469,7 @@ export async function analyzeJob(
           maxFrames: cfg.observeMaxFrames ?? OBSERVE_MAX_FRAMES,
           fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
           onDecide: async (payload) => {
-            const { evidence, opts } = buildObserveDecideRequest(cfg, run, payload);
+            let { evidence, opts } = buildObserveDecideRequest(cfg, run, payload);
             let decision: DecisionResult;
             try {
               decision = await client.decide(evidence, opts);
@@ -2434,6 +2479,24 @@ export async function analyzeJob(
                 return false;
               }
               throw e;
+            }
+            // ADAAAA-7008 / ADAAAA-7012: on-demand perceive recall. When the
+            // verdict asks for MORE evidence for this moment, call perceive on
+            // demand (per-frame derived context already computed by the frame
+            // pipeline — no detector re-run), fold it into the payload via
+            // applyOnDemandRecall, and re-decide before finalizing. A no-op
+            // recall returns the SAME payload (refreshed === payload), so we
+            // keep the original decision — a recall can never regress it.
+            if (decision.recall && client.recallPerceive) {
+              const refreshed = await applyObserveRecall(payload, (centerTs, windowS) =>
+                client.recallPerceive!(first.sessionId, { centerTs, windowS })
+              );
+              if (refreshed !== payload) {
+                const rebuilt = buildObserveDecideRequest(cfg, run, refreshed);
+                evidence = rebuilt.evidence;
+                opts = rebuilt.opts;
+                decision = await client.decide(evidence, opts);
+              }
             }
             const candidate: CandidateSignal = {
               eventType: payload.biasHints[0]?.eventType ?? observeDefaultEventType(payload),

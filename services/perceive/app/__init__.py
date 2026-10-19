@@ -28,7 +28,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from . import preload  # noqa: E402  (startup model preload)
 from .audio_gate import AudioEnergyGate
-from .session import SessionRegistry
+from .session import RECENT_FRAMES, SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
 from .florence import capability, get_detector, record_analyze, resolve_vocabulary, sport_specific_event_type
 from .sam_tracker import HybridTracker
@@ -208,6 +208,24 @@ class AudioChunkRequest(BaseModel):
 
 class SessionCloseResponse(BaseModel):
     closed: str | None = None
+
+
+class EvidenceRequest(BaseModel):
+    """On-demand perceive recall window (ADAAAA-7008 / ADAAAA-7012).
+
+    Requests the per-frame derived context ALREADY computed by process_frame
+    (tracks / detections / ocr) for a moment or window, WITHOUT re-running the
+    detector. Time bounds are content seconds. At least one of ``centerTs`` /
+    ``startTs``+``endTs`` should be set; ``centerTs`` + ``windowS`` forms a
+    symmetric ``[center - windowS/2, center + windowS/2]`` band. When nothing is
+    cached in range the endpoint returns ``seeds: []`` (an explicit no-op — a
+    no-op recall must never regress a decision).
+    """
+
+    centerTs: float | None = None
+    windowS: float | None = None
+    startTs: float | None = None
+    endTs: float | None = None
 
 
 def _read_session_id(
@@ -617,6 +635,19 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         state.scoreboard_tracker.record(cand_ts, score)
         if state.scoreboard_tracker.changed(cand_ts):
             cand_dict["scoreBoardChanged"] = True
+    # ADAAAA-7008 / ADAAAA-7012: cache this frame's derived context (the "data
+    # seeder" contract) so the on-demand `/app/evidence` recall endpoint can serve
+    # it WITHOUT re-running the detector. Compact seed (tracks / objects / ocr) —
+    # the decide `seeds` vocabulary; captured AFTER the scoreboard OCR pass so
+    # `ocr` is final. Bounded to RECENT_FRAMES so a long stream never grows it.
+    state.frame_seeds[timestamp] = {
+        "ts": timestamp,
+        "tracks": obs["tracks"],
+        "objects": obs.get("objects", []),
+        "ocr": obs.get("ocr", []),
+    }
+    while len(state.frame_seeds) > RECENT_FRAMES:
+        state.frame_seeds.pop(min(state.frame_seeds))
     for q in state.subscribers:
         for e in events:
             try:
@@ -1020,6 +1051,47 @@ def create_app() -> FastAPI:
         if not sid or registry.get(sid) is None:
             raise HTTPException(status_code=404, detail="no such session")
         return handle_control(registry.get(sid), payload)
+
+    @router.post("/evidence")
+    async def evidence(
+        req: EvidenceRequest,
+        livepeer_session_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ):
+        """On-demand perceive recall (ADAAAA-7008 / ADAAAA-7012).
+
+        Returns the per-frame derived context ALREADY computed by ``process_frame``
+        (tracks / detections / ocr) for the requested moment or window, WITHOUT
+        re-running the detector — this is the "decide calls perceive on demand"
+        path. ``centerTs`` + ``windowS`` selects a symmetric band; ``startTs`` +
+        ``endTs`` an explicit one. Frames with no cached evidence are simply
+        absent; when nothing is cached in range ``seeds: []`` is returned (an
+        explicit no-op — a no-op recall never regresses a decision). A missing /
+        unknown session also returns ``seeds: []`` (no fabrication). Does NOT
+        widen the live tracking cap (LIVE_MAX_TRACKS=3 stays).
+        """
+        sid = _read_session_id(livepeer_session_id, x_session_id)
+        if not sid:
+            raise HTTPException(status_code=400, detail="missing session id (Livepeer-Session-Id or X-Session-Id)")
+        state = registry.get(sid)
+        if state is None:
+            return {"centerTs": req.centerTs, "seeds": []}
+        lo = req.startTs
+        hi = req.endTs
+        if req.centerTs is not None:
+            half = (req.windowS if req.windowS is not None else 10.0) / 2.0
+            if lo is None:
+                lo = req.centerTs - half
+            if hi is None:
+                hi = req.centerTs + half
+        seeds = [
+            s
+            for ts, s in state.frame_seeds.items()
+            if (lo is None or ts >= lo) and (hi is None or ts <= hi)
+        ]
+        seeds.sort(key=lambda s: float(s.get("ts", 0)))
+        return {"centerTs": req.centerTs, "seeds": seeds}
+
 
     @router.get("/session/stats")
     async def stats(
