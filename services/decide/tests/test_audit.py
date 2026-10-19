@@ -146,3 +146,53 @@ def test_ask_emits_one_record_and_replay_byte_matches():
         else:
             os.environ["DECIDE_AUDIT_DIR"] = old
         _clean()
+
+
+def test_audit_descriptor_emitted_compact_on_decision():
+    """ADAAAA-7028 Inc 2: the decision returned by ask() carries a compact
+    `audit` descriptor the server can index (group identity + prompt + media
+    content hashes + raw reply + verdicts + params), NEVER the base64 media
+    bytes, and it is replayable (messages+params present)."""
+    _clean()
+    old = os.environ.get("DECIDE_AUDIT_DIR")
+    os.environ["DECIDE_AUDIT_DIR"] = AUDIT_DIR
+    try:
+        srv, url = _start_server()
+        try:
+            res = ask(
+                url,
+                "GOAL",
+                {"trackCount": 2, "maxVelocity": 0.5},
+                game_hint="soccer",
+                frames=[{"role": "t", "base64": "aGVsbG8="}],
+                audit_ctx={"sessionId": "job-1", "jobId": "job-1", "groupKey": "g5", "frameCount": 1, "candidateCount": 1},
+            )
+            assert res is not None
+        finally:
+            srv.shutdown()
+        audit = res["audit"]
+        # group identity preserved
+        assert audit["sessionId"] == "job-1"
+        assert audit["jobId"] == "job-1"
+        assert audit["groupKey"] == "g5"
+        assert audit["frameCount"] == 1
+        assert audit["candidateCount"] == 1
+        assert audit["systemPromptVersion"] == SYSTEM_PROMPT_VERSION
+        # prompt text present (verbatim system + user)
+        assert SYSTEM_PROMPT in audit["promptText"]
+        # media represented by content hash refs only (no base64 bytes)
+        img = [m for m in audit["mediaHashes"] if m["type"] == "image"]
+        assert img and len(img[0]["sha256"]) == 64
+        assert "data:image" not in json.dumps(audit)
+        # raw reply + parsed verdicts + params + replayable marker
+        assert '"isHighlight":true' in audit["rawReply"]
+        assert audit["verdicts"]["isHighlight"] is True
+        assert audit["params"]["temperature"] == 0.0
+        assert audit["replayable"] is True
+        assert audit["fallback"] is False
+    finally:
+        if old is None:
+            os.environ.pop("DECIDE_AUDIT_DIR", None)
+        else:
+            os.environ["DECIDE_AUDIT_DIR"] = old
+        _clean()

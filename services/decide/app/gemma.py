@@ -187,6 +187,54 @@ def load_audit_records(path: str | None = None) -> list:
     return recs
 
 
+def _audit_descriptor(record: dict) -> dict | None:
+    """Compact audit descriptor emitted on the decide response so the server can
+    index it (ADAAAA-7028 Increment 2). Unlike the full record written to
+    DECIDE_AUDIT_DIR, this strips the base64 image bytes (which stay in the
+    audit dir / blobs, addressable by sha256) and keeps only what the server
+    index + decision-trail needs: group identity, prompt text, media content
+    hashes, model params, raw reply, parsed verdicts, timings, fallback flag.
+    Returns None when the record carries no messages/params (not replayable)."""
+    msgs = record.get("messages", [])
+    texts: list[str] = []
+    for m in msgs:
+        if isinstance(m.get("content"), str):
+            texts.append(m["content"])
+        elif isinstance(m.get("content"), list):
+            for part in m["content"]:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    texts.append(part.get("text", ""))
+    media: list[dict] = []
+    for r in record.get("contentRefs", []):
+        if r.get("type") == "image":
+            media.append({"type": "image", "sha256": r.get("sha256"), "mime": r.get("mime", "image/jpeg")})
+        elif r.get("type") == "audio":
+            media.append({"type": "audio", "format": r.get("format", "wav")})
+    if not msgs:
+        return None
+    parsed = record.get("parsed")
+    verdicts = dict(parsed) if isinstance(parsed, dict) else parsed
+    return {
+        "version": record.get("version", 1),
+        "systemPromptVersion": record.get("systemPromptVersion"),
+        "mode": record.get("mode"),
+        "sessionId": record.get("sessionId"),
+        "jobId": record.get("jobId"),
+        "groupKey": record.get("groupKey") or record.get("groupId"),
+        "frameCount": record.get("frameCount"),
+        "candidateCount": record.get("candidateCount"),
+        "promptText": "\n".join(t for t in texts if t) or None,
+        "mediaHashes": media,
+        "params": record.get("params"),
+        "rawReply": record.get("rawReply"),
+        "verdicts": verdicts,
+        "timings": record.get("timings"),
+        "fallback": bool(record.get("fallback")),
+        "replayable": True,
+        "createdAt": record.get("createdAt"),
+    }
+
+
 def rebuild_payload(record: dict) -> dict:
     """Rebuild the exact chat/completions payload from an audit record (for
     replay). The record stores the verbatim messages + params, so this is a
@@ -1039,18 +1087,22 @@ def ask(
     log.debug("gemma result event=%s parsed=%s", event_type, result)
     if result is None:
         log.error("gemma reply unparseable event=%s reply=%r", event_type, text[:500])
-    _emit_audit(
-        _audit_record(
-            audit_ctx=audit_ctx,
-            mode="single",
-            content=content,
-            payload=payload,
-            raw_reply=text,
-            parsed=result,
-            fallback=False,
-            started_at=started_at,
-        )
+    _record = _audit_record(
+        audit_ctx=audit_ctx,
+        mode="single",
+        content=content,
+        payload=payload,
+        raw_reply=text,
+        parsed=result,
+        fallback=False,
+        started_at=started_at,
     )
+    _emit_audit(_record)
+    # Emit the compact audit descriptor on the decision (ADAAAA-7028 Inc 2) so
+    # the server can index it. The descriptor is attached to the returned dict;
+    # it never carries the base64 media bytes (those stay in the audit dir).
+    if result is not None:
+        result["audit"] = _audit_descriptor(_record)
     return result
 
 
@@ -1065,6 +1117,7 @@ def decide_with_gemma(
     reasoning_effort: str = "none",
     url: str | None = None,
     score_board_changed: bool = False,
+    audit_ctx: dict | None = None,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision.
@@ -1102,6 +1155,7 @@ def decide_with_gemma(
         audio_sample_rate,
         reasoning_effort=reasoning_effort,
         transcript=transcript,
+        audit_ctx=audit_ctx,
     )
     if g is not None:
         result = g

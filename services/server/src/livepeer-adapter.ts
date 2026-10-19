@@ -370,6 +370,8 @@ export class OrchestratorAdapter implements PipelineClient {
       reasoningEffort?: string;
       frames?: { role: string; base64: string }[];
       audioB64?: string;
+      jobId?: string;
+      groupKey?: string;
     }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -379,6 +381,8 @@ export class OrchestratorAdapter implements PipelineClient {
       timestamp: 0,
       gameHint: opts?.gameHint || "",
       reasoningEffort: opts?.reasoningEffort || "none",
+      jobId: opts?.jobId,
+      groupKey: opts?.groupKey,
       evidence,
       images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
       // Detail-first (ADAAAA-4954): the temporal frame SEQUENCE + surrounding
@@ -600,6 +604,8 @@ export class DirectAdapter implements PipelineClient {
       reasoningEffort?: string;
       frames?: { role: string; base64: string }[];
       audioB64?: string;
+      jobId?: string;
+      groupKey?: string;
     }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
@@ -611,6 +617,8 @@ export class DirectAdapter implements PipelineClient {
         timestamp: 0,
         gameHint: opts?.gameHint || "",
         reasoningEffort: opts?.reasoningEffort || "none",
+        jobId: opts?.jobId,
+        groupKey: opts?.groupKey,
         evidence,
         images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
         frames: opts?.frames ?? [],
