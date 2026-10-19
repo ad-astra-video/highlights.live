@@ -5,6 +5,13 @@ import { randomUUID } from "node:crypto";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation } from "@highlights/events";
 import { StageAMetrics } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
+import {
+  ObserveDecider,
+  type ObserveDecidePayload,
+  type PerFrameSeed,
+  type ObserveBiasHint,
+  OBSERVE_MAX_FRAMES,
+} from "./observe-loop";
 
 export interface ReserveResult {
   sessionId: string;
@@ -680,6 +687,33 @@ export interface AnalyzerConfig {
    * scoring_play accept is routed through the decide `/confirm` deep frame
    * dive and the reconciled verdict is adopted in its place. */
   confirmEnabled?: boolean;
+  /**
+   * ADAAAA-7007: enable the VOD decide-observer architecture. When set (with
+   * `decideWindowN` also set, i.e. the VOD detail-first pass), the vision LLM
+   * becomes the primary observer: decide is invoked on a ~3 s cadence with a
+   * ~10 s overlapping reference window (<=30 frames), and perceive becomes a
+   * data seeder + on-demand provider rather than the candidate on/off gate.
+   * Default off; the candidate-gated path stays the live/default behavior until
+   * the observer pass is validated end-to-end. Wired from
+   * `VOD_OBSERVE_LOOP` (server config). */
+  observeLoop?: boolean;
+  /**
+   * ADAAAA-7007: observe-loop cadence (content seconds) between decide
+   * invocations. Default 3 (`OBSERVE_CADENCE_S`). Optional so the flag-on path
+   * can be tuned without code change.
+   */
+  observeCadenceS?: number;
+  /**
+   * ADAAAA-7007: observe reference window length (content seconds) assembled
+   * around the current moment. Default 10 (`OBSERVE_WINDOW_S`). Decides only
+   * fire after the window cadence elapses so consecutive windows overlap.
+   */
+  observeWindowS?: number;
+  /**
+   * ADAAAA-7007: observe hard frame cap per decide invocation. Default 30
+   * (`OBSERVE_MAX_FRAMES`). A denser window is subsampled to this cap.
+   */
+  observeMaxFrames?: number;
 }
 
 /**
@@ -1938,6 +1972,71 @@ async function acceptVideoDecision(
 }
 
 // ---------------------------------------------------------------------------
+// ADAAAA-7007: decide-observer request builders + helpers. The vision LLM is
+// the primary observer; perceive-derived per-frame context (seeds) + per-window
+// bias hints (provenance) ride the payload, and candidate triggers never gate.
+// ---------------------------------------------------------------------------
+
+/** A generic observe-window event label used when the window carries no bias
+ * hint (a moment with no perceived trigger). The outcome enum still governs
+ * whether it can be a GOAL — never published as GOAL unless scoring_play. */
+export function observeDefaultEventType(_payload: ObserveDecidePayload): string {
+  return "SPORTING_EVENT";
+}
+
+/** True when an unknown error is the recoverable-but-unpayable TicketParams
+ * expiry (ADAAAA-7003). Mirrors the OrderedDecidePipeline guard. */
+export function isTicketParamsExpired(err: unknown): boolean {
+  return !!err && typeof err === "object" && (err as { ticketParamsExpired?: boolean }).ticketParamsExpired === true;
+}
+
+/** Build the decide() evidence + opts for an observe window. The temporal
+ * window frames + the perceive-seeded per-frame context are the primary
+ * evidence; candidate triggers inside the window are folded as bias hints
+ * (provenance), and the frozen candidate/event vocabulary is preserved.
+ * Deterministic per payload so the decision is reproducible. */
+export function buildObserveDecideRequest(
+  cfg: AnalyzerConfig,
+  run: LiveRunShared,
+  payload: ObserveDecidePayload
+): { evidence: Parameters<PipelineClient["decide"]>[0]; opts: Parameters<PipelineClient["decide"]>[1] } {
+  const bias = payload.biasHints[0] as ObserveBiasHint | undefined;
+  const eventType = bias?.eventType ?? observeDefaultEventType(payload);
+  const center = payload.centerTs;
+  // Fold the window's perceive-derived context into the scalar evidence the
+  // decide contract expects (track count / OCR / reaction) from the seeds.
+  const seeds = payload.seeds;
+  let trackCount = 0;
+  let ocrHits = 0;
+  for (const s of seeds) {
+    trackCount = Math.max(trackCount, s.tracks?.length ?? 0);
+    ocrHits += s.ocr?.length ?? 0;
+  }
+  const detections: DetectionEvidence[] = [];
+  for (const s of seeds) {
+    for (const o of s.objects ?? []) {
+      detections.push({ label: o.label, confidence: o.confidence ?? 0, bbox: o.bbox ?? [], trackId: "" });
+    }
+  }
+  const evidence: Parameters<PipelineClient["decide"]>[0] = {
+    eventType,
+    trackCount,
+    maxVelocity: run.evidence.maxVelocity,
+    ocrHits,
+    reaction: buildReactionEvidence({}, trackCount),
+    // Perceive-derived per-detection geometry + audio level curve (I4).
+    detections,
+    scoreBoardChanged: false,
+  };
+  const opts: Parameters<PipelineClient["decide"]>[1] = {
+    gameHint: cfg.gameHint,
+    reasoningEffort: "none",
+    frames: payload.frames.map((f) => ({ role: "full", base64: f.imageB64 })),
+  };
+  return { evidence, opts };
+}
+
+// ---------------------------------------------------------------------------
 // Stage-2 confirmation-pass driver (ADAAAA-6797): trigger detection + confirm
 // context assembly + reconcile adoption. Pure/helpers are unit-testable.
 // ---------------------------------------------------------------------------
@@ -2311,6 +2410,40 @@ export async function analyzeJob(
     client,
     (candidate, emit, decision) => acceptVideoDecision(client, run, cut, cfg, onEvent, emit, candidate, decision)
   );
+  // ADAAAA-7007: decide-observer architecture for the VOD detail-first pass.
+  // When enabled, decide is invoked on a ~3 s cadence with a ~10 s overlapping
+  // window (<=30 frames) and perceive is a data seeder + on-demand provider,
+  // NOT the candidate on/off gate. Candidate trigger signals inside the window
+  // are folded in as per-window bias hints (provenance metadata). The decision
+  // path is shared with the candidate-gated one via acceptVideoDecision.
+  const observeDecider =
+    cfg.observeLoop && cfg.decideWindowN !== undefined
+      ? new ObserveDecider({
+          cadenceS: cfg.observeCadenceS,
+          windowS: cfg.observeWindowS,
+          maxFrames: cfg.observeMaxFrames ?? OBSERVE_MAX_FRAMES,
+          fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
+          onDecide: async (payload) => {
+            const { evidence, opts } = buildObserveDecideRequest(cfg, run, payload);
+            let decision: DecisionResult;
+            try {
+              decision = await client.decide(evidence, opts);
+            } catch (e) {
+              if (isTicketParamsExpired(e)) {
+                console.error(`[observe] decide @${payload.centerTs} skipped (TicketParams expired)`);
+                return false;
+              }
+              throw e;
+            }
+            const candidate: CandidateSignal = {
+              eventType: payload.biasHints[0]?.eventType ?? observeDefaultEventType(payload),
+              timestamp: payload.centerTs,
+            };
+            await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: -1, timestamp: payload.centerTs }, candidate, decision);
+            return isAcceptedHighlight(decision, cfg.preferLabels);
+          },
+        })
+      : null;
   let framesAnalyzed = 0;
   let planApplied = false;
   // ADAAAA-6935: frame-group accumulator. Candidate triggers fire per trigger;
