@@ -33,10 +33,14 @@ homography and the prompt conservatively rejected).
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import os
+import pathlib
 import re
+import time
 from typing import Optional
 
 from .decider import decide
@@ -44,6 +48,152 @@ from .decider import decide
 log = logging.getLogger("highlights.decide.gemma")
 
 DEFAULT_GEMMA_URL = "http://127.0.0.1:8088"
+
+# --- decide audit (ADAAAA-7027 / ADAAAA-7028) ---------------------------------
+# Versioned system prompt so an audit record can re-create the EXACT request the
+# model saw. Additive relative to the pre-audit user-only request: the current
+# user prompt text (build_prompt / build_group_prompt) is preserved unchanged.
+SYSTEM_PROMPT_VERSION = "1"
+SYSTEM_PROMPT = (
+    "You are a video highlight review agent in a sports broadcast pipeline. "
+    "You will be given a candidate event and a sequence of frames (and possibly "
+    "audio context). Follow the user's instructions exactly and respond ONLY with "
+    "the requested strict JSON. Do not add commentary, markdown fences, or any "
+    "text outside the JSON object."
+)
+
+
+def _audit_sha256(b64: str) -> str:
+    """Content-addressed SHA-256 for a base64 media part (used as the media ref)."""
+    if not b64:
+        return ""
+    try:
+        raw = base64.b64decode(b64, validate=False)
+    except Exception:  # noqa: BLE001
+        return hashlib.sha256(b64.encode("utf-8")).hexdigest()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _content_ref(part: dict) -> dict | None:
+    """For an image-content part, return a compact ref {sha256, mime, dataUrl}
+    without duplicating the base64 bytes in the record (they live in the audit
+    dir / blobs, addressable by sha256)."""
+    b64 = part.get("base64") or part.get("image") or ""
+    if not b64:
+        return None
+    return {
+        "sha256": _audit_sha256(b64),
+        "mime": "image/jpeg",
+        "dataUrl": f"data:image/jpeg;base64,{b64}",
+    }
+
+
+def _messages(mode: str, content: list, *, with_system: bool = True) -> list:
+    """The ordered message array actually sent to gemma: optional system slot
+    (role=system) then the single user message carrying the multimodal content."""
+    msgs: list = []
+    if with_system:
+        msgs.append({"role": "system", "content": SYSTEM_PROMPT})
+    msgs.append({"role": "user", "content": content})
+    return msgs
+
+
+def _audit_record(
+    *,
+    audit_ctx: dict | None,
+    mode: str,
+    content: list,
+    payload: dict,
+    raw_reply: str,
+    parsed: object,
+    fallback: bool,
+    started_at: float,
+    asr_latency_s: float = 0.0,
+) -> dict:
+    """Assemble the audit record for one gemma decide call. Content images are
+    represented by content refs (sha256 + data url) so the record stays compact
+    while still being able to re-attach the exact bytes. Include group identity
+    (sessionId/jobId/groupKey) verbatim from audit_ctx when the caller passes it."""
+    ctx = audit_ctx or {}
+    # ordered multimodal refs for the user content
+    refs: list = []
+    for part in content:
+        if part.get("type") == "image_url":
+            ref = _content_ref({"base64": part["image_url"]["url"].split(",", 1)[1] if "," in part["image_url"]["url"] else ""})
+            refs.append({"type": "image", **ref} if ref else {"type": "image"})
+        elif part.get("type") == "input_audio":
+            refs.append({"type": "audio", "format": part.get("input_audio", {}).get("format", "wav")})
+        elif part.get("type") == "text":
+            refs.append({"type": "text", "text": part["text"]})
+    params = {k: v for k, v in payload.items() if k != "messages"}
+    return {
+        "version": 1,
+        "systemPromptVersion": SYSTEM_PROMPT_VERSION,
+        "mode": mode,
+        "groupId": ctx.get("groupKey") or ctx.get("groupId") or None,
+        "groupKey": ctx.get("groupKey") or None,
+        "sessionId": ctx.get("sessionId") or None,
+        "jobId": ctx.get("jobId") or None,
+        "frameCount": ctx.get("frameCount"),
+        "candidateCount": ctx.get("candidateCount"),
+        "candidates": ctx.get("candidates"),
+        "messages": payload.get("messages", []),
+        "contentRefs": refs,
+        "params": params,
+        "rawReply": raw_reply,
+        "parsed": parsed,
+        "fallback": bool(fallback),
+        "timings": {
+            "elapsedMs": round((time.time() - started_at) * 1000.0, 3),
+            "asrLatencyS": asr_latency_s,
+        },
+        "createdAt": round(time.time(), 3),
+    }
+
+
+def _emit_audit(record: dict) -> None:
+    """Append one audit record as a JSONL line to DECIDE_AUDIT_DIR (if set).
+    Side-effect-free: never raises, never fails a decide call. When the env is
+    unset this is a no-op (existing behaviour unchanged)."""
+    d = os.environ.get("DECIDE_AUDIT_DIR")
+    if not d:
+        return
+    try:
+        path = pathlib.Path(d) / "decide-audit.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except Exception as e:  # noqa: BLE001
+        log.warning("decide audit write failed (ignored): %s", e)
+
+
+def load_audit_records(path: str | None = None) -> list:
+    """Read back every audit record from DECIDE_AUDIT_DIR/decide-audit.jsonl."""
+    d = path or os.environ.get("DECIDE_AUDIT_DIR")
+    if not d:
+        return []
+    f = pathlib.Path(d) / "decide-audit.jsonl"
+    if not f.exists():
+        return []
+    recs: list = []
+    for line in f.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            recs.append(json.loads(line))
+        except Exception:  # noqa: BLE001
+            continue
+    return recs
+
+
+def rebuild_payload(record: dict) -> dict:
+    """Rebuild the exact chat/completions payload from an audit record (for
+    replay). The record stores the verbatim messages + params, so this is a
+    faithful reconstruction that byte-matches the original request (which is
+    what the acceptance control assertion checks)."""
+    return dict(record.get("params", {}) | {"messages": record.get("messages", [])})
+
 
 
 def _strip_json_fence(text: str) -> str:
@@ -771,6 +921,7 @@ def ask(
     reasoning_effort: str = "none",
     timeout_s: float = 180.0,
     transcript: str = "",
+    audit_ctx: dict | None = None,
 ) -> dict | None:
     """Call the gemma multimodal completion (vLLM OpenAI-compat server). Returns
     a parsed/validated HighlightDecision dict, or None on any transport/parse
@@ -780,9 +931,15 @@ def ask(
     content (temporal frame sequence + crops) comes BEFORE the text prompt,
     and any audio comes AFTER the text. Audio is mono 16 kHz float32 (wav).
     The `model` field is sent when GEMMA_MODEL is set (vLLM requires it to
-    match the served model name)."""
+    match the served model name).
+
+    When ``audit_ctx`` is given (sessionId/jobId/groupKey/candidates), the
+    exact request and raw reply are also captured into an audit record
+    written to DECIDE_AUDIT_DIR (see _audit_record / _emit_audit) so the
+    model's input+output can be re-created and replayed later."""
     import httpx
 
+    started_at = time.time()
     frames = frames or []
     images = images or []
 
@@ -848,7 +1005,7 @@ def ask(
     # vLLM channel) so strict JSON returns immediately regardless of the vLLM
     # version's default / auto-injection behaviour; it can never ENABLE thinking.
     payload = {
-        "messages": [{"role": "user", "content": content}],
+        "messages": _messages("single", content),
         "temperature": 0.0,
         # Frontend-selectable; "none" (the default) turns OFF gemma-4 QAT thinking
         # so content comes back as the JSON immediately instead of empty until a
@@ -882,6 +1039,18 @@ def ask(
     log.debug("gemma result event=%s parsed=%s", event_type, result)
     if result is None:
         log.error("gemma reply unparseable event=%s reply=%r", event_type, text[:500])
+    _emit_audit(
+        _audit_record(
+            audit_ctx=audit_ctx,
+            mode="single",
+            content=content,
+            payload=payload,
+            raw_reply=text,
+            parsed=result,
+            fallback=False,
+            started_at=started_at,
+        )
+    )
     return result
 
 
