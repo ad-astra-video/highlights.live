@@ -438,12 +438,22 @@ export class LivepeerClient {
    */
   /**
    * Serialize the capacity-1 decide runner. `runLiveJob` fires the video-leg
-   * decide, the audio-leg decide (`decideOnCandidate` via `audioLoop`) and the
+   * decide, the audio-leg decide (via `audioLoop`) and the
    * ST what-to-track planner **concurrently**; overlapping requests to a
    * capacity-1 runner get `HTTP 503 no capacity available for runner`, which
    * threw and failed the WHOLE live job before any highlight was persisted
    * (ADAAAA-6521). A single in-flight decide/plan request means the runner's
    * one slot is never over-subscribed, so live highlights keep flowing.
+   */
+  /**
+   * Live decide-observer (ADAAAA-7008): on the live path the server fires this
+   * single-shot decide on the ~3 s cadence (`OBSERVE_CADENCE_S`) over a
+   * rolling-PAST ~10 s window (`LIVE_OBSERVE_WINDOW_S`), capped at <=30 frames
+   * (`LIVE_OBSERVE_MAX_FRAMES`). Each invocation is still a single paid
+   * `unit: fixed` call, so the cadence at which the SERVER calls `decide()` is
+   * the only thing that changes — this client's single-shot payment mechanics
+   * are unchanged. The cadence + gemma end-to-end latency is measured by the
+   * server-side `LiveObserver`, not by this client.
    */
   async decide(
     path: string,

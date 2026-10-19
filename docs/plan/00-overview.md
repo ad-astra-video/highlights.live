@@ -27,6 +27,20 @@ Headers the runner MUST read: `Livepeer-Session-Id`, `Livepeer-Session-Token`, `
 - Two live-runners, not one process with two devices. Pin with `CUDA_VISIBLE_DEVICES`.
 - Session mapping: streamId → perceiveSessionId (persistent) + decideRequestId (ephemeral).
 
+## Live decide-observer (primary observer, ADAAAA-7008)
+In the LIVE path `decide` (the vision LLM) is the **primary observer** of the
+stream, not a candidate-gated post-process. The server drives a
+`LiveObserver` (`services/server/src/observe-loop.ts`) that fires a decide on a
+**~3 s cadence** (`OBSERVE_CADENCE_S`) over a **rolling PAST ~10 s window**
+(`LIVE_OBSERVE_WINDOW_S` = `[now-10s, now]`, because a live observer cannot
+decode ahead), hard-capped at **<=30 frames** (`LIVE_OBSERVE_MAX_FRAMES`).
+`perceive` is the **data seeder** (per-frame detections / tracking / scoreboard /
+geometry folded in as `seeds`) plus an **on-demand provider** (recall); its
+trigger signals (audio noise-change, motion) are **bias hints** — never the
+on/off gate. Live tracking stays **<=3 objects** (`LIVE_MAX_TRACKS`). The ~30 s
+flag budget and how it is measured/reported are in
+[`09-live-observer-latency-report.md`](09-live-observer-latency-report.md).
+
 ## Remote signer (§0.4)
 - `go-livepeer -remoteSigner` beside the API, loopback :7936, network arbitrum-one. Cannot use `-network offchain`.
 - Server talks to signer (`/discover-orchestrators`, `/sign-orchestrator-info`, `/generate-live-payment`) + orchestrator public URL only, never `runner_url`, never holds a keystore.

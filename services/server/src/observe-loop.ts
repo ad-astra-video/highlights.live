@@ -271,6 +271,9 @@ export class LiveObserver {
   private readonly fps: number;
   private readonly onDecide: ((payload: ObserveDecidePayload) => Promise<boolean>) | null;
   private readonly latency: LiveObserveLatencySample[] = [];
+  /** Perceive candidate triggers folded into each window as bias hints
+   * (provenance metadata) — never the on/off switch. */
+  private readonly biasHints: ObserveBiasHint[] = [];
   private accepts = 0;
 
   constructor(opts: {
@@ -295,6 +298,16 @@ export class LiveObserver {
     while (this.frames.length && this.frames[0].ts < cutoff) this.frames.shift();
   }
 
+  /** Fold a perceive candidate trigger into the window as a bias hint
+   * (per-window provenance / metadata) — never the on/off switch. A trigger
+   * fires a decide candidate only; the observer still runs decide on the
+   * cadence regardless of whether a trigger fired (recall not limited by
+   * trigger-FP gating). */
+  addHint(eventType: string, ts: number): void {
+    this.biasHints.push({ eventType, ts });
+    if (this.biasHints.length > 30) this.biasHints.shift();
+  }
+
   /** Fire a rolling-past decide when the cadence is due. `force` ignores the
    * cadence (used at end-of-stream to observe the tail). */
   async maybeFire(nowTs: number, force = false): Promise<boolean> {
@@ -314,7 +327,9 @@ export class LiveObserver {
     this.lastFireTs = nowTs;
     const win = assembleLiveWindow(this.frames, nowTs, { windowS: this.windowS, maxFrames: this.maxFrames, fps: this.fps });
     if (win.frames.length === 0) return;
-    const payload = buildObservePayload(win, this.findings, []);
+    const lo = nowTs - this.windowS;
+    const inWindow = this.biasHints.filter((h) => h.ts >= lo && h.ts <= nowTs + 1e-9);
+    const payload = buildObservePayload(win, this.findings, inWindow);
     const cadenceMs = prevFire === null ? 0 : (nowTs - prevFire) * 1000;
     let e2eMs = 0;
     if (this.onDecide) {
@@ -567,6 +582,7 @@ export function applyOnDemandRecall(
 export class ObserveDecider {
   private readonly frames: { ts: number; imageB64: string }[] = [];
   private readonly findings = new Map<number, PerFrameSeed>();
+  private readonly biasHints: ObserveBiasHint[] = [];
   private lastFireTs: number | null = null;
   private readonly cadenceS: number;
   private readonly windowS: number;
@@ -599,6 +615,13 @@ export class ObserveDecider {
     while (this.frames.length && this.frames[0].ts < cutoff) this.frames.shift();
   }
 
+  /** Add a perceive candidate trigger signal as a per-window bias hint
+   * (provenance / metadata — never the on/off switch). */
+  addHint(eventType: string, ts: number): void {
+    this.biasHints.push({ eventType, ts });
+    if (this.biasHints.length > 30) this.biasHints.shift();
+  }
+
   /** Wait for a pending decide to settle before proceeding. */
   async flush(): Promise<void> {
     await this.fire(this.frames[this.frames.length - 1]?.ts ?? 0, true);
@@ -619,7 +642,10 @@ export class ObserveDecider {
     this.lastFireTs = currentTs;
     const win = assembleObserveWindow(this.frames, currentTs, { windowS: this.windowS, maxFrames: this.maxFrames, fps: this.fps });
     if (win.frames.length === 0) return;
-    const payload = buildObservePayload(win, this.findings, []);
+    const lo = currentTs - this.windowS / 2;
+    const hi = currentTs + this.windowS / 2;
+    const inWindow = this.biasHints.filter((h) => h.ts >= lo && h.ts <= hi);
+    const payload = buildObservePayload(win, this.findings, inWindow);
     this.reportTicks.push(payload.frames.length);
     if (this.onDecide && (await this.onDecide(payload))) this.accepts++;
   }
