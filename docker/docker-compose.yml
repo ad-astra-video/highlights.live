@@ -282,6 +282,11 @@ services:
       # ADAAAA-5778 notable-only knob. Data-landed default 60; override in prod
       # only after re-measuring on the real-feed eval set (evals/decide_discernment.py).
       - DECIDE_NOTABILITY_MIN=${DECIDE_NOTABILITY_MIN:-60}
+      # ADAAAA-6973: gates the Stage-2 goal/near-miss confirm pass in the decide
+      # service (gemma attestation-defer). Default OFF (0) so the gate-safe path
+      # is the live default; the box docker/.env sets 1 only for a gate-proving
+      # measurement.
+      - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-0}
     depends_on:
       gemma:
         condition: service_healthy
@@ -337,6 +342,10 @@ services:
       # falls back to the server's own relative path -> 404 `decide failed`. Default to the
       # compose decide service so it survives a server recreate; config.ts is left unchanged.
       - DECIDE_URL=${DECIDE_URL:-http://decide:8081}
+      # ADAAAA-6973: server config.decideConfirmEnabled gates shouldRunConfirm
+      # (the VOD Stage-2 confirm driver). Default OFF (0); the box docker/.env
+      # sets 1 only for a gate-proving measurement.
+      - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-0}
       # ADAAAA-6314 Path 2 (live): forward the surrounding audio clip on LIVE
       # trigger candidates so the decide prompt gets ASR'd audio context. Off by
       # default so the deployed live baseline sends no new payload until an
