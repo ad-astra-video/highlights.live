@@ -1854,9 +1854,9 @@ export function buildObserveDecideRequest(
   const opts: Parameters<PipelineClient["decide"]>[1] = {
     gameHint: cfg.gameHint,
     // ADAAAA-6999 PO decision: VOD detail-first decide requests carry Gemma
-    // reasoning (`reasoning_effort`, default "medium"); live stays at "none" so
+    // reasoning (`reasoning_effort`, default "low"); live stays at "none" so
     // the live 1-5s detect budget is untouched. `decideWindowN` set -> VOD pass.
-    reasoningEffort: cfg.decideWindowN !== undefined ? (cfg.vodDecideReasoningEffort ?? "medium") : "none",
+    reasoningEffort: cfg.decideWindowN !== undefined ? (cfg.vodDecideReasoningEffort ?? "low") : "none",
     frames: payload.frames.map((f) => ({ role: "full", base64: f.imageB64 })),
   };
   return { evidence, opts };
