@@ -327,7 +327,7 @@ services:
       - ADMIN_EMAIL=admin@highlights.local
       - ADMIN_PASSWORD=admin
       - FREE_HIGHLIGHTS=3
-      - DECIDE_FEE=${DECIDE_FEE:-0.01}
+      - DECIDE_FEE=${DECIDE_FEE:-0.0033}
       - FREE_DECIDES=${FREE_DECIDES:-5}
       - BILLING_WIREFRAME=1
       # Production-shaped stack: server persists to the separate Postgres
