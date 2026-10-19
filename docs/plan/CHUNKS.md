@@ -13,5 +13,8 @@ them in order; verify (tests) before moving on.
 | 04 | 04-server-worker.md | 4 | server: offline job, live path, payment loop |
 | 05 | 05-frontend.md | 5 | operator console, review, overlay, live console |
 | 06 | 06-deploy-e2e.md | 7, this-week | deploy orchestrator/perceive/decide/llama-cpp to 192.168.1.6; run webapp+server e2e |
+| 07 | 07-browser-stream-rail.md | 3.5, 5 | browser stream rail (WebSocket trickle re-architecture) |
+| 08 | 08-tracking-plan-latency-cost.md | 7 D, 8, 14.4 | tracking-plan → perceive latency & cost accounting |
+| 09 | 09-live-observer-latency-report.md | 11, live | live decide-observer latency surface & ~30 s flag budget |
 
 Definition of done + risks live in 00-overview's tail (plan §8/§9).

@@ -38,6 +38,62 @@ request already carries, so it adds NO inference (same Gemma call budget).
   reasoning off so strict JSON returns immediately.
 - Clip on CPU via server ffmpeg: DONE (server cutClip).
 
+## Decision observer contract (ADAAAA-7007)
+The VOD pass has moved from candidate-gated decide to a **decide-observer** loop.
+`decide` is now the primary observer of the timeline:
+- **Cadence ~3 s** of content time (`OBSERVE_CADENCE_S`), not gated on a perceive
+  candidate.
+- **Reference window ~10 s** (`OBSERVE_WINDOW_S`) of frames assembled around the
+  current moment (`services/server/src/observe-loop.ts` `assembleObserveWindow`).
+- **Overlap retained** between consecutive windows because the window (10 s) is
+  longer than the cadence (3 s) — consecutive windows share ~7 s of content.
+- **<=30-frame hard cap** (`OBSERVE_MAX_FRAMES`); a denser window is subsampled
+  to the cap (`subsampleToCap`). Never send more than 30 frames in one call.
+- **perceive = data seeder + on-demand provider**, not the candidate gate. Every
+  decide payload carries perceive-derived per-frame context (detections /
+  tracking / scoreboard / motion/geometry) as `seeds`, plus the window's
+  candidate triggers as **bias hints / provenance** (`biasHints`) — never the
+  on/off switch. On-demand perceive recall: when decide needs more evidence for
+  a moment it recalls perceive before finalizing (`applyOnDemandRecall`).
+- **Finalize**: decide returns `isHighlight` + score; on accept the server cuts a
+  clip. Only `scoring_play` outcome is a board `GOAL`; `near_miss`/`big_play` are
+  never published as GOAL (`isAcceptedHighlight`).
+- The candidate/event **vocabulary is frozen** (`packages/events` outcome enum,
+  `eventTypeForOutcome`, `isAcceptedHighlight`).
+
+The server wires the loop via `ObserveDecider` (per-frame loop integration seam)
+and `runObserveLoop` (streaming driver). Per-call decide input size + per-job
+decide spend are surfaced by `inputSizeSamples()` / `decideCalls()` to feed the
+-67% cost measure in the companion issue.
+
+## Live decide-observer (ADAAAA-7008)
+The LIVE path uses the same observer architecture, but the window is a **rolling
+PAST** window because a live observer cannot decode ahead. `LiveObserver`
+(`services/server/src/observe-loop.ts`) replaces the VOD `ObserveDecider`:
+- **Cadence ~3 s** (`OBSERVE_CADENCE_S`), CEO-locked, fired via `maybeFire` /
+  `shouldFireObserve`.
+- **Rolling PAST window ~10 s** (`LIVE_OBSERVE_WINDOW_S`): the window is
+  `[now-10s, now]` (`assembleLiveWindow`), NOT the symmetric `[center±5s]` band
+  the VOD path uses. Consecutive windows still overlap because the window (10 s)
+  is longer than the cadence (3 s).
+- **<=30-frame hard cap** (`LIVE_OBSERVE_MAX_FRAMES`), subsampled via the shared
+  `subsampleToCap`. Never send more than 30 frames in one call.
+- **perceive = data seeder + on-demand provider**, same as VOD. Every payload
+  carries `seeds` (per-frame detections / tracking / scoreboard / geometry) +
+  `biasHints` (folded perceive triggers). On live, perceive's **audio
+  noise-change** and **motion** are **bias hints** only — decide still runs every
+  cadence tick regardless of whether perceive emitted a candidate.
+- **Finalize** unchanged: `isHighlight` + score; only `scoring_play` is a board
+  `GOAL` (`isAcceptedHighlight`); `near_miss`/`big_play` never published as
+  GOAL.
+- Each fired decide is a paid **single-shot** `unit: fixed` call through
+  `packages/livepeer-session` `decide()` — the observer cadence directly drives
+  live decide spend.
+
+The measurement/report surface (cadence + gemma end-to-end per invocation, the
+~30 s flag budget, and how it is reported on the Livepeer runner) is documented
+in [`09-live-observer-latency-report.md`](09-live-observer-latency-report.md).
+
 ## Deployment requirement (user criterion)
 Deploy a vLLM OpenAI server for the decide model on 192.168.1.6 (GPU 1 / RTX 5070 Ti, 16 GB).
 INT4 weights ≈ 10.45 GB; the decide pass sends up to ~30 frames (~8.4K KV tokens/req)
