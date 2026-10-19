@@ -790,6 +790,11 @@ export interface AnalyzeOutcome {
    * LiveObserver.latencySamples() so the Livepeer runner shows the ~30 s budget
    * utilization (cadence + gemma E2E). */
   observeMetrics?: LiveObserveMetricsSnapshot;
+  /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot
+   * (absent when the VOD observer was not enabled). Populated from
+   * ObserveDecider so the VOD job record carries the <=30-frame cap-exercised
+   * count + per-call decide input size for the -67% cost measure. */
+  vodObserveMetrics?: VodObserveMetricsSnapshot;
 }
 
 /** ADAAAA-7011: live decide-observer cadence + decide gemma E2E latency
@@ -811,6 +816,36 @@ export interface LiveObserveMetricsSnapshot {
   meanCadenceMs: number;
   /** Max content-time cadence between consecutive fired ticks (ms). */
   maxCadenceMs: number;
+}
+
+/** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
+ * onto the VOD job so the acceptance criteria are inspectable per job: the
+ * <=30-frame cap actually exercised (`subsampledCalls>0`) and the per-call
+ * decide input-size distribution (`framesPerCall`, the -67% cost-measure
+ * input). Mirrors the live {@link LiveObserveMetricsSnapshot} convention. */
+export interface VodObserveMetricsSnapshot {
+  /** Number of decide invocations that fired on the cadence. */
+  decideCalls: number;
+  /** Decisions that became an accepted highlight. */
+  accepted: number;
+  /** Max frames in a single decide payload (<= OBSERVE_MAX_FRAMES = 30). */
+  maxFrames: number;
+  /** Calls where the max-frames cap forced a subsample (proves cap exercised). */
+  subsampledCalls: number;
+  /** Per-call decide input-size distribution (frame count per invocation). */
+  framesPerCall: number[];
+}
+
+/** Build the VOD decide-observer per-call input-size + cap snapshot from the
+ * decider's report ticks (pure aggregation of {@link ObserveDecider}). */
+export function buildVodObserveMetrics(obs: ObserveDecider): VodObserveMetricsSnapshot {
+  return {
+    decideCalls: obs.decideCalls(),
+    accepted: obs.acceptedCount(),
+    maxFrames: obs.maxFrameCount(),
+    subsampledCalls: obs.subsampledCallCount(),
+    framesPerCall: obs.inputSizeSamples(),
+  };
 }
 
 /** Build the live decide-observer latency/cadence snapshot from the observer's
@@ -1727,6 +1762,24 @@ export const DECIDE_MAX_TRACK_COUNT = 8;
 export const DECIDE_MAX_DETECTIONS = 16;
 export const DECIDE_MAX_DETECTION_BBOX = 4;
 
+/** Fold the goal-attestation signals (goalCrossed / ballOutcome /
+ * scoreBoardChanged) carried by a set of in-window bias hints into a single
+ * window-level attestation. Any hint carrying a true attestation attests the
+ * window; the strongest signal wins (a goal attestation stands over a
+ * near-miss / absent). Returns `{}` when nothing attests — the correct
+ * "no attestation, provenance-only" case. Pure + deterministic (ADAAAA-7021). */
+export function foldWindowAttestation(
+  hints: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean }[] | ReadonlyArray<ObserveBiasHint>
+): { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean } {
+  const out: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean } = {};
+  for (const h of hints) {
+    if (h.goalCrossed === true) out.goalCrossed = true;
+    if (typeof h.ballOutcome === "string" && /^goal$/i.test(h.ballOutcome.trim())) out.ballOutcome = h.ballOutcome;
+    if (h.scoreBoardChanged === true) out.scoreBoardChanged = true;
+  }
+  return out;
+}
+
 /** Build the decide() evidence + opts for an observe window. The temporal
  * window frames + the perceive-seeded per-frame context are the primary
  * evidence; candidate triggers inside the window are folded as bias hints
@@ -1764,6 +1817,13 @@ export function buildObserveDecideRequest(
       });
     }
   }
+  // ADAAAA-7021 fix: fold the perceive candidate's goal-attestation signals that
+  // rode the in-window bias hints (goalCrossed / ballOutcome / scoreBoardChanged).
+  // Any hint in the window carrying a true attestation attests the whole window;
+  // the strongest signal (goal attests over near-miss) wins. Absent everywhere =
+  // no attestation (provenance only). This keeps the goal-attestation gate able
+  // to independently confirm a scoring_play instead of rejecting every goal.
+  const windowAttestation = foldWindowAttestation(payload.biasHints);
   const evidence: Parameters<PipelineClient["decide"]>[0] = {
     eventType,
     trackCount,
@@ -1774,7 +1834,16 @@ export function buildObserveDecideRequest(
     // ADAAAA-7022: keep the FIRST DECIDE_MAX_DETECTIONS (oldest frames) so the
     // payload never breaches Evidence.detections max_length=16.
     detections: detections.slice(0, DECIDE_MAX_DETECTIONS),
-    scoreBoardChanged: false,
+    // ADAAAA-7021 fix: forward the perceive candidate's goal-attestation signals
+    // (folded into the in-window bias hints) FIRST-CLASS so the decide
+    // goal-attestation gate can independently attest a `scoring_play`. Previously
+    // scoreBoardChanged was hardcoded false and goalCrossed/ballOutcome were never
+    // forwarded, so the decide runner rejected every goal ("model reason alone is
+    // not sufficient") — collapsing goal recall to 0% (ADAAAA-7021). Absent/undefined
+    // = no attestation (provenance only), never a fabricated false attestation.
+    goalCrossed: windowAttestation.goalCrossed || undefined,
+    ballOutcome: windowAttestation.ballOutcome || undefined,
+    scoreBoardChanged: windowAttestation.scoreBoardChanged || undefined,
   };
   const opts: Parameters<PipelineClient["decide"]>[1] = {
     gameHint: cfg.gameHint,
@@ -1857,9 +1926,18 @@ export async function observeOnDecide(
       decision = await client.decide(evidence, opts);
     }
   }
+  // ADAAAA-7021 fix: the window's goal-attestation signals (folded from the
+  // in-window bias hints) ride the candidate too, so acceptVideoDecision's
+  // Stage-2 confirm reconcile + deriveHighlightTrigger see the attestation
+  // (hasIndependentAttestation excludes an attested goal from the un-attested
+  // confirm dive) rather than treating the goal as un-attested.
+  const windowAttestation = { ...foldWindowAttestation(payload.biasHints) };
   const candidate: CandidateSignal = {
     eventType: payload.biasHints[0]?.eventType ?? observeDefaultEventType(payload),
     timestamp: payload.centerTs,
+    goalCrossed: windowAttestation.goalCrossed,
+    ballOutcome: windowAttestation.ballOutcome,
+    scoreBoardChanged: windowAttestation.scoreBoardChanged,
   };
   await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: -1, timestamp: payload.centerTs }, candidate, decision);
   return isAcceptedHighlight(decision, cfg.preferLabels);
@@ -2219,8 +2297,19 @@ export async function analyzeJob(
         // for VOD, LiveObserver for live) drives every decide on the ~3 s cadence
         // below regardless of whether perceive emitted a candidate, so trigger-FP
         // gating no longer limits recall. Perceive is a data seeder here.
-        observeDecider?.addHint(res.candidate.eventType, res.candidate.timestamp);
-        liveObserver?.addHint(res.candidate.eventType, res.candidate.timestamp);
+        // ADAAAA-7021 fix: the candidate's goal-attestation signals (goalCrossed /
+        // ballOutcome / scoreBoardChanged) are folded into the hint so the decide
+        // goal-attestation gate can attest a `scoring_play` rather than reject it.
+        observeDecider?.addHint(res.candidate.eventType, res.candidate.timestamp, {
+          goalCrossed: res.candidate.goalCrossed,
+          ballOutcome: res.candidate.ballOutcome,
+          scoreBoardChanged: res.candidate.scoreBoardChanged,
+        });
+        liveObserver?.addHint(res.candidate.eventType, res.candidate.timestamp, {
+          goalCrossed: res.candidate.goalCrossed,
+          ballOutcome: res.candidate.ballOutcome,
+          scoreBoardChanged: res.candidate.scoreBoardChanged,
+        });
       }
       // ADAAAA-7007/7008: drive the decide-observer on cadence, feeding EVERY
       // frame's perceive-derived context (tracks / objects / ocr) as the payload
@@ -2263,5 +2352,6 @@ export async function analyzeJob(
     highlights,
     framesAnalyzed,
     ...(liveObserver ? { observeMetrics: buildLiveObserveMetrics(liveObserver) } : {}),
+    ...(observeDecider ? { vodObserveMetrics: buildVodObserveMetrics(observeDecider) } : {}),
   };
 }

@@ -473,8 +473,27 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // Mean / max content-time cadence between consecutive fired ticks (ms).
   meanCadenceMs: z.number().min(0),
   maxCadenceMs: z.number().min(0),
+  // ADAAAA-7007: VOD decide-observer per-call input-size + cap report. Additive
+  // optional (absent on live-only / older records). `subsampledCalls>0` proves
+  // the <=30-frame cap was actually exercised; `framesPerCall` is the per-call
+  // decide input-size distribution (the -67% cost measure input).
+  subsampledCalls: z.number().int().min(0).optional(),
+  framesPerCall: z.array(z.number().int().min(0)).optional(),
 });
 export type ObserveMetricsSnapshot = z.infer<typeof ObserveMetricsSnapshotSchema>;
+
+// ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot. Additive
+// optional on Job. `subsampledCalls>0` proves the <=30-frame cap was actually
+// exercised on the VOD pass; `framesPerCall` is the per-call decide input-size
+// distribution (the -67% per-call cost-measure input).
+export const VodObserveMetricsSnapshotSchema = z.object({
+  decideCalls: z.number().int().min(0),
+  accepted: z.number().int().min(0),
+  maxFrames: z.number().int().min(0),
+  subsampledCalls: z.number().int().min(0),
+  framesPerCall: z.array(z.number().int().min(0)),
+});
+export type VodObserveMetricsSnapshot = z.infer<typeof VodObserveMetricsSnapshotSchema>;
 
 export const JobSchema = z.object({
   id: z.string(),
@@ -517,6 +536,10 @@ export const JobSchema = z.object({
   // (ADAAAA-7011); absent when the live observer was not enabled / on VOD and
   // on older records.
   observeMetrics: ObserveMetricsSnapshotSchema.optional(),
+  // ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot
+  // (decideCalls / maxFrames / subsampledCalls / framesPerCall); absent when the
+  // VOD observer was not enabled and on older records.
+  vodObserveMetrics: VodObserveMetricsSnapshotSchema.optional(),
   // Detail-first VOD knobs + build-phase cost/volume record (ADAAAA-4954, spec
   // §4.5). All optional on Job — additive, no contract version bump. Persisted
   // by runVodJob so the per-video cost + FP gate are measurable exactly as on
