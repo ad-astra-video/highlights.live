@@ -14,6 +14,7 @@ import {
   type ObserveBiasHint,
   OBSERVE_MAX_FRAMES,
   LIVE_OBSERVE_MAX_FRAMES,
+  OBSERVE_CONTENT_FPS,
 } from "./observe-loop";
 
 export interface ReserveResult {
@@ -1744,6 +1745,19 @@ export function observeDefaultEventType(_payload: ObserveDecidePayload): string 
   return "SPORTING_EVENT";
 }
 
+/** Derive a monotonic, schema-valid frame sequence for an observe-window decide
+ * emit (ADAAAA-7007). The observe payload frames carry only `ts`/`imageB64`
+ * (no per-frame seq), so we derive the anchor's frame index from `centerTs` at
+ * the content fps used to assemble the window. Clamped to 0 so a zero-anchored
+ * timeline never yields a negative seq — the candidate / JobDecision trail
+ * schema requires `seq >= 0` (packages/events). Replaces the previous hardcoded
+ * `seq: -1`, which made every observe-loop highlight hit a ZodError
+ * (`candidates[N].seq` must be >= 0) and fail the VOD job before it completed. */
+export function observeEmitSeq(centerTs: number, fps: number): number {
+  const f = Number.isFinite(fps) && fps > 0 ? fps : OBSERVE_CONTENT_FPS;
+  return Math.max(0, Math.round(centerTs * f));
+}
+
 /** True when an unknown error is the recoverable-but-unpayable TicketParams
  * expiry (ADAAAA-7003). Mirrors the OrderedDecidePipeline guard. */
 export function isTicketParamsExpired(err: unknown): boolean {
@@ -1939,7 +1953,7 @@ export async function observeOnDecide(
     ballOutcome: windowAttestation.ballOutcome,
     scoreBoardChanged: windowAttestation.scoreBoardChanged,
   };
-  await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: -1, timestamp: payload.centerTs }, candidate, decision);
+  await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, decision);
   return isAcceptedHighlight(decision, cfg.preferLabels);
 }
 
