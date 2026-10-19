@@ -414,6 +414,10 @@ export function JobDetail() {
   const [loading, setLoading] = useState(true);
   // Which review action is in-flight for which highlight id (per-control loading).
   const [pendingReview, setPendingReview] = useState<{ id: string; status: "accepted" | "rejected" } | null>(null);
+  // ADAAAA-7045 (Inc 2, follow-up to ADAAAA-7039): durable decide_audit rows for
+  // this job (one per frame group), surfaced as the "Decide LLM audit" section.
+  // Best-effort: a failed fetch just leaves the section empty.
+  const [audits, setAudits] = useState<any[]>([]);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aliveRef = useRef(true);
   // Guards against overlapping detail fetches: the 5s poll and the SSE-debounced
@@ -422,6 +426,18 @@ export function JobDetail() {
   // detail overwrites and keeps the interval from piling up on a slow backend.
   const loadInFlightRef = useRef(false);
   const token = getToken();
+
+  // ADAAAA-7045: re-fetch the decide_audit rows so an in-flight job shows them
+  // grow as each frame group is decided, and a just-completed job shows all of
+  // them on the next refresh. Best-effort (leaves the section empty on failure).
+  const loadAudits = useCallback(async () => {
+    try {
+      const r = await api<{ audits: any[] }>(`/jobs/${id}/decide-audit`);
+      if (aliveRef.current) setAudits(r.audits ?? []);
+    } catch {
+      /* best-effort */
+    }
+  }, [id]);
 
   const load = useCallback(
     async (initial = false) => {
@@ -432,6 +448,8 @@ export function JobDetail() {
         if (!aliveRef.current) return;
         setDetail(d);
         setError(null);
+        // Refresh the durable decide-audit rows alongside the detail payload.
+        loadAudits();
         if (!isJobInFlight(d.job?.status)) setTerminal(true);
         else setTerminal(false);
       } catch (e: any) {
@@ -808,6 +826,55 @@ export function JobDetail() {
               ))}
             </div>
           )}
+
+          {/* Decide LLM audit — ADAAAA-7045 (Inc 2, follow-up to ADAAAA-7039):
+              durable decide_audit rows for this job (one per frame group). The
+              Inc 2 UI originally added this to the dead `components/JobDetail`
+              panel which the router never renders; move it onto this routed
+              surface so it actually shows. */}
+          <div className="mt-8" data-decide-audit-section>
+            <div className="mb-2 flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-mut">
+              <span className="h-3 w-3 rounded-full bg-mut/40" />
+              Decide LLM audit
+              <span className="rounded-full bg-ink/15 px-2 py-0.5 text-xs font-bold text-ink" data-decide-audit-count>{audits.length}</span>
+            </div>
+            {audits.length === 0 ? (
+              <div className="text-sm text-mut" data-decide-audit-empty>No decide LLM audit recorded for this job.</div>
+            ) : (
+              <ul className="flex flex-col gap-2" data-decide-audit-list>
+                {audits.map((a) => (
+                  <li
+                    key={a.id}
+                    data-decide-audit-row
+                    data-decide-audit-group={a.groupKey}
+                    data-decide-audit-replayable={String(a.replayable)}
+                    className="rounded-lg border border-mut/30 bg-mut/5 px-3 py-2 text-sm"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs text-mut">{a.groupKey}</span>
+                      <span className="rounded-full border border-mut/30 px-2 py-0.5 text-xs uppercase text-mut">
+                        {a.systemPromptVersion ? `sys v${a.systemPromptVersion}` : "sys"}
+                      </span>
+                      <span className="ml-auto text-xs text-mut">
+                        {a.frameCount ?? 0} frames · {a.candidateCount ?? 0} candidate{Number(a.candidateCount) === 1 ? "" : "s"} · {a.replayable ? "replayable" : "not replayable"}
+                      </span>
+                    </div>
+                    {a.rawReply && (
+                      <div className="mt-1 truncate font-mono text-xs text-mut" data-decide-audit-reply>
+                        reply: {a.rawReply}
+                      </div>
+                    )}
+                    {Array.isArray(a.mediaHashes) && a.mediaHashes.length > 0 && (
+                      <div className="mt-1 font-mono text-xs text-mut" data-decide-audit-media>
+                        media: {a.mediaHashes.map((m: any) => `#${(m.sha256 || "").slice(0, 8)}`).join(" ")}
+                      </div>
+                    )}
+                    {a.fallback && <div className="mt-1 text-xs text-red">fell back to rule</div>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </>
       )}
 
