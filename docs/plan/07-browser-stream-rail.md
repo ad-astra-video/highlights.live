@@ -131,8 +131,19 @@ the main server). Control path = Fastify + Orchestrator
   (crowd/announcer spike) → scalar evidence the decide stage can weigh.
 
 ### 5. Decide
+- **Live decide-observer (ADAAAA-7008)**: decide is the primary observer of the
+  live stream, not a candidate-gated post-process. A `LiveObserver` fires a
+  single-shot decide on the ~3 s cadence (`OBSERVE_CADENCE_S`) over the
+  rolling-PAST ~10 s window (`LIVE_OBSERVE_WINDOW_S` = `[now-10s, now]`),
+  hard-capped at <=30 frames (`LIVE_OBSERVE_MAX_FRAMES`). perceive is the data
+  seeder (`seeds`) + on-demand provider; its audio noise-change and motion
+  signals are **bias hints** (`biasHints`), never the on/off gate.
 - TODO: fuse audio-burst + visual evidence (track count/velocity/ocrHits) into the
-  `HighlightDecision`.
+  `HighlightDecision` — these arrive as perceive-derived `seeds` / `biasHints`,
+  not as a candidate gate.
+- The observer records cadence + gemma end-to-end latency per invocation against
+  the ~30 s flag budget (see
+  [`09-live-observer-latency-report.md`](09-live-observer-latency-report.md)).
 
 ## Constraints / honest notes
 - WebSocket transport is net-new on the gateway (server has no WS media endpoint

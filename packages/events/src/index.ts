@@ -455,6 +455,27 @@ export const ConfirmMetricsSnapshotSchema = z.object({
 });
 export type ConfirmMetricsSnapshot = z.infer<typeof ConfirmMetricsSnapshotSchema>;
 
+// Live decide-observer cadence + decide gemma E2E latency snapshot (ADAAAA-7011).
+// Recorded on a live job when the decide-observer is enabled, so the cadence +
+// gemma end-to-end latency (the ~30 s budget = ~3 s cadence + gemma E2E) is
+// inspectable on the Livepeer runner. Additive + optional on Job (no contract
+// version bump); absent when the observer was not enabled and on older records.
+export const ObserveMetricsSnapshotSchema = z.object({
+  // Decide invocations that fired on the cadence.
+  decideCalls: z.number().int().min(0),
+  // Decisions that became an accepted highlight.
+  accepted: z.number().int().min(0),
+  // Max frames in a single decide payload (<= the 30-frame cap).
+  maxFrames: z.number().int().min(0),
+  // Mean / max decide gemma end-to-end latency (ms).
+  meanE2eMs: z.number().min(0),
+  maxE2eMs: z.number().min(0),
+  // Mean / max content-time cadence between consecutive fired ticks (ms).
+  meanCadenceMs: z.number().min(0),
+  maxCadenceMs: z.number().min(0),
+});
+export type ObserveMetricsSnapshot = z.infer<typeof ObserveMetricsSnapshotSchema>;
+
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -492,6 +513,10 @@ export const JobSchema = z.object({
   // Stage-2 goal/near-miss confirmation-pass metric snapshot (ADAAAA-6797);
   // absent when no VOD confirm dive ran and on older records.
   confirmMetrics: ConfirmMetricsSnapshotSchema.optional(),
+  // Live decide-observer cadence + decide gemma E2E latency snapshot
+  // (ADAAAA-7011); absent when the live observer was not enabled / on VOD and
+  // on older records.
+  observeMetrics: ObserveMetricsSnapshotSchema.optional(),
   // Detail-first VOD knobs + build-phase cost/volume record (ADAAAA-4954, spec
   // §4.5). All optional on Job — additive, no contract version bump. Persisted
   // by runVodJob so the per-video cost + FP gate are measurable exactly as on

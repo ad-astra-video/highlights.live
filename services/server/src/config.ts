@@ -158,6 +158,19 @@ export interface ServerConfig {
    * so the deployed live baseline sends no new payload until an operator enables
    * it. `LIVE_AUDIO_CONTEXT`. */
   audioContext: boolean;
+  /** ADAAAA-7011: enable the LIVE decide-observer architecture. When on, decide
+   * is driven on the ~3 s cadence regardless of whether perceive emitted a
+   * candidate, using the rolling-PAST LiveObserver (~10 s window, <=30-frame
+   * cap). Default off so the deployed candidate-gated live baseline is unchanged
+   * until the observer pass is validated. `LIVE_OBSERVE_LOOP`. */
+  liveObserveLoop: boolean;
+  /** ADAAAA-7007/7011: enable the VOD decide-observer architecture on the
+   * detail-first pass (observeLoop + decideWindowN both set in analyzeJob).
+   * When on, decide is driven on the ~3 s cadence with a ~10 s overlapping
+   * window (<=30 frames) regardless of perceive candidates. Default off so the
+   * deployed candidate-gated VOD baseline is unchanged until the observer pass
+   * is validated. `OBSERVE_LOOP`. */
+  observeLoop: boolean;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -354,6 +367,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // I4 / ADAAAA-6361: live-path decide() carries the surrounding audio clip so
     // Gemma gets auditory context, matching VOD. Opt out with LIVE_AUDIO_CONTEXT=0.
     audioContext: env.LIVE_AUDIO_CONTEXT !== "0",
+    // ADAAAA-7011: wire the LIVE decide-observer into the live job path. Opt in
+    // with LIVE_OBSERVE_LOOP=1 (default off; the candidate-gated live baseline
+    // stays the behavior until the observer pass is validated).
+    liveObserveLoop: env.LIVE_OBSERVE_LOOP === "1",
+    // ADAAAA-7007/7011: wire the VOD decide-observer into the detail-first VOD
+    // job path. Opt in with OBSERVE_LOOP=1 (default off; the candidate-gated VOD
+    // baseline stays the behavior until the observer pass is validated).
+    observeLoop: env.OBSERVE_LOOP === "1",
     // ADAAAA-5342: live sampling driven from the runner's measured capability
     // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
     // headroom so capable GPUs accelerate toward the chartered cadence while
