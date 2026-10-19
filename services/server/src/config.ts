@@ -355,8 +355,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodWorkerConcurrency: Number(env.VOD_WORKER_CONCURRENCY ?? 1),
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
     // ADAAAA-6999 PO decision: VOD detail-first decide requests carry Gemma
-    // reasoning (`reasoning_effort`). Default "medium"; live stays "none".
-    vodDecideReasoningEffort: env.VOD_DECIDE_REASONING_EFFORT ?? "medium",
+    // reasoning (`reasoning_effort`). Default "low" (PO 2026-10-19: medium's
+    // p95 ~27s/decide exceeded the ~5-6s acceptable band); live stays "none".
+    vodDecideReasoningEffort: env.VOD_DECIDE_REASONING_EFFORT ?? "low",
     // I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
     // Frames within +/- vodResampleWindowS of a candidate are re-extracted at
     // vodResampleFps so the ball-goal-crossing instant is in the decide window.

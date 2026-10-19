@@ -529,9 +529,9 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
     expect(seen.frames).toBeDefined();
     expect(seen.frames!.length).toBeGreaterThanOrEqual(1);
     expect(seen.frames![0]).toMatchObject({ role: "full" });
-    // ADAAAA-6999: VOD detail-first decide requests carry Gemma reasoning
-    // ("medium" by default); live stays "none" so the detect budget is untouched.
-    expect(seen.reasoningEffort).toBe("medium");
+    // ADAAAA-6999 PO decision: VOD detail-first decide requests carry Gemma
+    // reasoning (default "low"; live stays "none"). See config.ts / analyzer.ts.
+    expect(seen.reasoningEffort).toBe("low");
     // The observer request carries the window frames — NOT a bare anchored image
     // nor the audio clip (the decide review window is the primary evidence).
     expect(seen.audioB64).toBeUndefined();
