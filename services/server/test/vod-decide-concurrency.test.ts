@@ -48,6 +48,7 @@ function concurrencyClient(opts: {
     controlForward: async () => {},
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     stopPerceive: async () => {},
+    confirm: async () => ({ enabled: false, confidence: 0, reason: "", evidence: {}, stage1Disagreed: false, decision: { isHighlight: false, score: 0, outcome: "not_highlight" } }),
   };
   return client;
 }
@@ -175,6 +176,105 @@ describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)"
     expect(maxInflight).toBe(1); // serial: only one decide in flight at a time
     expect(events.filter((e) => e.type === "highlight")).toHaveLength(2);
     expect(cuts).toHaveLength(2);
+  });
+
+  it("does NOT abort the whole job when a candidate's decide is rejected with TicketParams-expired; the candidate is degraded to rejected and the job reaches done (ADAAAA-7003)", async () => {
+    // A single candidate whose every decide is rejected as `TicketParams expired`
+    // (the ADAAAA-6993 recovery re-mints once; this simulates the runner still
+    // cycling params). Prior to the fix a single expired rejection called
+    // abort() and the whole VOD pass ended `failed`/stuck instead of `done` —
+    // exactly the reported stuck-analyzing loop. The fix retries a bounded
+    // number of times, then records the candidate as rejected and finishes.
+    let decideCalls = 0;
+    const client: PipelineClient = {
+      reservePerceive: async () => ({ sessionId: "sess-x", appUrl: "", controlUrl: "" }),
+      analyze: async (_sid, frame: any) => {
+        const cand = frame.seq === 0 ? { eventType: "GOAL", timestamp: 0 } : undefined;
+        const observation: any = { tracks: [], seq: frame.seq, timestamp: frame.timestamp };
+        return cand ? { observation, candidate: cand } : { observation };
+      },
+      decide: async () => {
+        decideCalls++;
+        const e: any = new Error("decide failed: HTTP 400");
+        e.ticketParamsExpired = true;
+        throw e;
+      },
+      plan: async () => ({
+        planVersion: 1,
+        category: "soccer",
+        intent: "",
+        source: "planner-fallback",
+        maxTracks: 3,
+        targets: [{ label: "player", role: "player" }],
+        reason: "test",
+      }),
+      postAudio: async () => null,
+      controlForward: async () => {},
+      train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
+      stopPerceive: async () => {},
+    confirm: async () => ({ enabled: false, confidence: 0, reason: "", evidence: {}, stage1Disagreed: false, decision: { isHighlight: false, score: 0, outcome: "not_highlight" } }),
+    };
+    const { events, onEvent } = recordEvents();
+    const outcome = await analyzeJob(
+      client,
+      frameSeq(2) as any,
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { ...DECIDE_CFG, jobId: "job-expired" },
+      onEvent
+    );
+    // The job did NOT abort: it resolved to done with no accepted highlight.
+    expect(outcome.highlights).toHaveLength(0);
+    expect(events.filter((e) => e.type === "highlight")).toHaveLength(0);
+    // The candidate was retried (bounded) then degraded, not left in flight.
+    expect(decideCalls).toBeGreaterThan(0);
+  });
+
+  it("retries a TicketParams-expired decide and accepts the candidate when a later retry succeeds (ADAAAA-7003)", async () => {
+    // First decide is expired, the retry succeeds. The candidate is accepted and
+    // the job reaches done with one highlight, no abort.
+    let decideCalls = 0;
+    const client: PipelineClient = {
+      reservePerceive: async () => ({ sessionId: "sess-x", appUrl: "", controlUrl: "" }),
+      analyze: async (_sid, frame: any) => {
+        const cand = frame.seq === 0 ? { eventType: "GOAL", timestamp: 0 } : undefined;
+        const observation: any = { tracks: [], seq: frame.seq, timestamp: frame.timestamp };
+        return cand ? { observation, candidate: cand } : { observation };
+      },
+      decide: async () => {
+        decideCalls++;
+        if (decideCalls === 1) {
+          const e: any = new Error("decide failed: HTTP 400");
+          e.ticketParamsExpired = true;
+          throw e;
+        }
+        return { isHighlight: true, score: 90, eventType: "GOAL" };
+      },
+      plan: async () => ({
+        planVersion: 1,
+        category: "soccer",
+        intent: "",
+        source: "planner-fallback",
+        maxTracks: 3,
+        targets: [{ label: "player", role: "player" }],
+        reason: "test",
+      }),
+      postAudio: async () => null,
+      controlForward: async () => {},
+      train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
+      stopPerceive: async () => {},
+    confirm: async () => ({ enabled: false, confidence: 0, reason: "", evidence: {}, stage1Disagreed: false, decision: { isHighlight: false, score: 0, outcome: "not_highlight" } }),
+    };
+    const { events, onEvent } = recordEvents();
+    const outcome = await analyzeJob(
+      client,
+      frameSeq(2) as any,
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { ...DECIDE_CFG, jobId: "job-expired-retry" },
+      onEvent
+    );
+    expect(outcome.highlights).toHaveLength(1);
+    expect(events.filter((e) => e.type === "highlight")).toHaveLength(1);
+    expect(decideCalls).toBeGreaterThanOrEqual(2);
   });
 
   it("aborts (rejects, never hangs) when an EARLY candidate's decide fails under concurrency while a later one succeeds (AC3 exactly-once / AC5 stability on failure)", async () => {
