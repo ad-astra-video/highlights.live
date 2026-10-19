@@ -286,6 +286,10 @@ services:
       # (base64 media + full request/response record). Unset => no JSONL is
       # written; the server decide_audit rows still hold the sha256 media hashes.
       - DECIDE_AUDIT_DIR=${DECIDE_AUDIT_DIR:-/srv/decide/audit}
+      # ADAAAA-6973/7051: the live goal-confirm gate on the decide side
+      # (`_confirm_pass_enabled`). Default 0 (off); docker/.env sets 1 to arm
+      # it, so a clean `reset --hard origin/master` does NOT drop it.
+      - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-0}
     depends_on:
       gemma:
         condition: service_healthy
@@ -352,6 +356,12 @@ services:
       # come from the compose project .env (docker/.env).
       - LIVE_OBSERVE_LOOP=${LIVE_OBSERVE_LOOP:-0}
       - OBSERVE_LOOP=${OBSERVE_LOOP:-0}
+      # ADAAAA-6973/7051: the live goal-confirm gate. DECIDE_CONFIRM_ENABLED=1
+      # arms the Stage-2 confirm goal-leg pass (server `shouldRunConfirm`,
+      # decide `_confirm_pass_enabled`) so a candidate is only published when
+      # the goal corroborates. Default 0 (off) everywhere; docker/.env sets 1
+      # to arm it, so a clean `reset --hard origin/master` does NOT drop it.
+      - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-0}
       # Live-payment durability (ADAAAA-3932): the SERVER is the VOD payer — it
       # reserves perceive/decide sessions and, on the orchestrator's 402
       # challenge, forwards the payment_params to the remote signer for tickets
