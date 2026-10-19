@@ -396,6 +396,8 @@ export interface Db {
   listDecideAudits(): Promise<DecideAuditRecord[]>;
   /** Retention: keep only the `max` newest records (oldest-first trim). */
   trimDecideAudits(max: number): Promise<void>;
+  /** Retention (byte cap): hard-delete the given decide_audit row ids. */
+  deleteDecideAudits(ids: string[]): Promise<void>;
   /** Persist a fine-tune train run record (full JSON upsert by id). */
   saveTrainRun(r: TrainRun): Promise<void>;
   getTrainRun(id: string): Promise<TrainRun | undefined>;
@@ -812,6 +814,12 @@ export class SqliteDb implements Db {
            SELECT id FROM decide_audit ORDER BY created_at DESC LIMIT ?)`
       )
       .run(max);
+  }
+
+  async deleteDecideAudits(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    const stmt = this.db.prepare(`DELETE FROM decide_audit WHERE id = ?`);
+    for (const id of ids) stmt.run(id);
   }
 
   async saveTrainRun(r: TrainRun): Promise<void> {
@@ -1490,6 +1498,11 @@ export class PgDb implements Db {
          SELECT id FROM decide_audit ORDER BY created_at DESC LIMIT $1)`,
       [max]
     );
+  }
+
+  async deleteDecideAudits(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    await this.pool.query(`DELETE FROM decide_audit WHERE id = ANY($1)`, [ids]);
   }
 
   async saveTrainRun(r: TrainRun): Promise<void> {

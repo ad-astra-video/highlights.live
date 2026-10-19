@@ -186,6 +186,14 @@ export interface ServerConfig {
    * newest decide_audit rows on the write path. 0 disables the trim (unbounded
    * — should only be used in a controlled/dev context). */
   decideAuditRetention: number;
+  /** Decide-audit byte-cap quota (ADAAAA-7029 Inc 3): when > 0, the oldest
+   * decide_audit rows are dropped until the total serialized size rests under
+   * this budget. 0 disables the byte cap (count-based retention only). */
+  decideAuditMaxBytes: number;
+  /** How often the decide-audit retention cleanup job runs (ms). It enforces
+   * both the count and byte caps even when no new decide call writes a row
+   * (ADAAAA-7029 Inc 3). Default hourly; 0 disables the scheduled sweep. */
+  decideAuditSweepIntervalMs: number;
   /** Where `npm run db:backup` writes DB snapshots (default `data/backups`). */
   databaseBackupDir: string;
   /** Email-sender container base URL (e.g. http://email:3001). When unset,
@@ -370,6 +378,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     databasePath: env.DATABASE_PATH ?? "data/highlights.db",
     databaseUrl: env.DATABASE_URL,
     decideAuditRetention: Number(env.DECIDE_AUDIT_RETENTION ?? 2000),
+    decideAuditMaxBytes: Number(env.DECIDE_AUDIT_MAX_BYTES ?? 0),
+    decideAuditSweepIntervalMs: Number(env.DECIDE_AUDIT_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
     databaseBackupDir: env.DATABASE_BACKUP_DIR ?? "data/backups",
     emailSenderUrl: env.EMAIL_SENDER_URL,
     mailerToken: env.MAILER_TOKEN || env.EMAIL_QUEUE_TOKEN,

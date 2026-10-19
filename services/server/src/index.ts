@@ -11,6 +11,7 @@ import { makeAdapter } from "./livepeer-adapter";
 import { makeMailer } from "./mailer";
 import { runRejectSweep } from "./lifecycle";
 import { runDatasetPurgeSweep, scheduleDatasetsPurgeForOwner } from "./dataset-lifecycle";
+import { enforceDecideAuditRetention } from "./decide-audit";
 import { filePerceiveSessionLedger, releaseOrphanedPerceiveSessions } from "./perceive-ledger";
 import Stripe from "stripe";
 
@@ -63,6 +64,27 @@ function scheduleDatasetPurgeSweep(
   };
   void run(true);
   const t = setInterval(() => void run(false), cfg.datasetPurgeSweepIntervalMs);
+  t.unref();
+  return t;
+}
+
+/** Schedule the decide-audit retention cleanup job (ADAAAA-7029 Inc 3). Enforces
+ * the count and byte caps even when no new decide call writes a row, so storage
+ * stays bounded without depending on the write path. Runs on the run-log /
+ * instance-DB path only — it never touches a telemetry endpoint. Unref'd timer. */
+function scheduleDecideAuditSweep(cfg: ReturnType<typeof loadConfig>, db: Awaited<ReturnType<typeof openDb>>): NodeJS.Timeout | null {
+  if (cfg.decideAuditSweepIntervalMs <= 0) return null;
+  const run = async () => {
+    try {
+      await enforceDecideAuditRetention(db, cfg.decideAuditRetention, cfg.decideAuditMaxBytes);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("decide-audit sweep error:", e);
+    }
+  };
+  // One boot-time pass so a lowered cap is applied promptly after restart.
+  void run();
+  const t = setInterval(() => void run(), cfg.decideAuditSweepIntervalMs);
   t.unref();
   return t;
 }
@@ -126,6 +148,7 @@ async function main() {
   const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements, mailer: mailer ?? undefined });
   scheduleRejectSweep(cfg, store);
   scheduleDatasetPurgeSweep(cfg, db);
+  scheduleDecideAuditSweep(cfg, db);
   // A container recreate mid-VOD drops the in-memory payment refreshers, so a
   // perceive session the orchestrator still holds stops being funded and would
   // be force-released with `insufficient balance`. Release any the previous
