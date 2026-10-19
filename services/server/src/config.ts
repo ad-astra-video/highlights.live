@@ -416,7 +416,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     stripePriceUsage: env.STRIPE_PRICE_USAGE,
     publicBaseUrl: env.PUBLIC_BASE_URL ?? "http://127.0.0.1:3000",
     freeHighlights: Number(env.FREE_HIGHLIGHTS ?? 10),
-    decideFee: Number(env.DECIDE_FEE ?? 0.01),
+    decideFee: Number(env.DECIDE_FEE ?? 0.0033),
     // Stage-2 goal/near-miss confirmation pass config flag (ADAAAA-6797).
     // Default OFF (VOD-first rollout); the VOD pass reads it. Only when "1" do
     // the VOD candidates go through the decide /confirm deep frame dive.
