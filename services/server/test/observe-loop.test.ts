@@ -9,9 +9,14 @@ import {
   runObserveLoop,
   applyOnDemandRecall,
   ObserveDecider,
+  assembleLiveWindow,
+  LiveObserver,
   OBSERVE_MAX_FRAMES,
   OBSERVE_CADENCE_S,
   OBSERVE_WINDOW_S,
+  LIVE_OBSERVE_WINDOW_S,
+  LIVE_OBSERVE_MAX_FRAMES,
+  type LiveObserveLatencySample,
   type ObserveDecidePayload,
   type PerFrameSeed,
 } from "../src/observe-loop";
@@ -322,5 +327,111 @@ describe("ObserveDecider (in-loop integration seam)", () => {
     d.record(3.0, "f2", { ts: 3.0 });
     await d.maybeFire(3.0);
     expect(calls).toBe(2); // cadence elapsed -> fires
+  });
+});
+
+describe("assembleLiveWindow (ADAAAA-7008: rolling PAST window, no decode ahead)", () => {
+  it("only keeps frames in [now - windowS, now], ordered oldest->newest", () => {
+    const frames = timeline(2, 30, false); // ts 0..30 at 2 fps
+    const w = assembleLiveWindow(frames, 20, { windowS: 10, maxFrames: 30, fps: 2 });
+    // Rolling past window: [10, 20]. Nothing after `now` may be included.
+    const lo = 10;
+    for (const f of w.frames) {
+      expect(f.ts).toBeGreaterThanOrEqual(lo - 1e-9);
+      expect(f.ts).toBeLessThanOrEqual(20 + 1e-9);
+    }
+    for (let i = 1; i < w.frames.length; i++) {
+      expect(w.frames[i].ts).toBeGreaterThanOrEqual(w.frames[i - 1].ts);
+    }
+    // The window is PAST-only: a frame AFTER nowTs must never appear.
+    expect(w.frames.some((f) => f.ts > 20 + 1e-9)).toBe(false);
+  });
+
+  it("caps to <= maxFrames and flags capped on a dense stream", () => {
+    const frames = timeline(8, 40, false); // 8 fps / 10s window = 80, cap 30
+    const w = assembleLiveWindow(frames, 35, { windowS: 10, maxFrames: 30, fps: 8 });
+    expect(w.frames.length).toBeLessThanOrEqual(LIVE_OBSERVE_MAX_FRAMES);
+    expect(w.capped).toBe(true);
+    expect(w.droppedCount).toBeGreaterThan(0);
+  });
+
+  it("returns empty window when nothing is in the past window", () => {
+    const frames = timeline(2, 5, false); // ts 0..5
+    const w = assembleLiveWindow(frames, 100, { windowS: 10, maxFrames: 30, fps: 2 });
+    expect(w.frames.length).toBe(0);
+    expect(w.centerTs).toBe(100);
+  });
+});
+
+describe("LiveObserver (ADAAAA-7008: rolling-past cadence observer)", () => {
+  function makeObserver(onDecide: (p: ObserveDecidePayload) => Promise<boolean>) {
+    return new LiveObserver({ cadenceS: 3, windowS: 10, maxFrames: 30, fps: 2, onDecide });
+  }
+
+  it("fires at cadence, caps every payload, seeds every payload, measures e2e+cadence latency", async () => {
+    const fired: ObserveDecidePayload[] = [];
+    const obs = makeObserver(async (p) => {
+      fired.push(p);
+      expect(p.frames.length).toBeLessThanOrEqual(LIVE_OBSERVE_MAX_FRAMES);
+      expect(p.seeds.length).toBe(p.frames.length); // perceive seeding in every payload
+      return true;
+    });
+    const fps = 5;
+    for (let i = 0; i < fps * 20; i++) {
+      const ts = i / fps;
+      obs.record(ts, `f${i}`, { ts, tracks: [{ trackId: "t1" }] });
+      await obs.maybeFire(ts);
+    }
+    await obs.flush();
+    expect(fired.length).toBeGreaterThan(3); // ~3s cadence over 20s
+    expect(fired.every((p) => p.frames.length <= LIVE_OBSERVE_MAX_FRAMES)).toBe(true);
+    // Latency report surface is populated for the Livepeer runner report.
+    const samples: LiveObserveLatencySample[] = obs.latencySamples();
+    expect(samples.length).toBe(fired.length);
+    expect(obs.decideCalls()).toBe(fired.length);
+    expect(obs.maxFrameCount()).toBeLessThanOrEqual(LIVE_OBSERVE_MAX_FRAMES);
+    expect(obs.acceptedCount()).toBe(fired.length);
+    // e2eMs is wall-clock (>=0) since onDecide was awaited.
+    expect(samples.every((s) => s.e2eMs >= 0)).toBe(true);
+    // Regular cadence ticks are ~cadenceS (3s) apart in content time; the
+    // forced end-of-stream flush tick may be shorter, so assert the maximum
+    // content cadence is ~3s (proves the cadence holds) rather than every tick.
+    const cadences = samples.map((s) => s.cadenceMs).filter((c) => c > 0);
+    expect(Math.max(...cadences)).toBeGreaterThanOrEqual(2.9 * 1000);
+    expect(Math.max(...cadences)).toBeLessThanOrEqual(3.1 * 1000);
+  });
+
+  it("never decodes ahead: each window's frames are all <= the tick's content time", async () => {
+    const fired: ObserveDecidePayload[] = [];
+    const obs = makeObserver(async (p) => {
+      fired.push(p);
+      return false;
+    });
+    const fps = 5;
+    for (let i = 0; i < fps * 20; i++) {
+      const ts = i / fps;
+      obs.record(ts, `f${i}`, { ts });
+      await obs.maybeFire(ts);
+    }
+    for (const p of fired) {
+      for (const f of p.frames) expect(f.ts).toBeLessThanOrEqual(p.centerTs + 1e-9);
+    }
+  });
+
+  it("respects the cadence interval (no early fire) and forces at flush", async () => {
+    let calls = 0;
+    const obs = makeObserver(async () => {
+      calls++;
+      return false;
+    });
+    obs.record(0, "f0", { ts: 0 });
+    await obs.maybeFire(0);
+    expect(calls).toBe(1);
+    obs.record(2.9, "f1", { ts: 2.9 });
+    await obs.maybeFire(2.9);
+    expect(calls).toBe(1);
+    obs.record(3.0, "f2", { ts: 3.0 });
+    await obs.maybeFire(3.0);
+    expect(calls).toBe(2);
   });
 });
