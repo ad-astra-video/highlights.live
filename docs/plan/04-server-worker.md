@@ -23,8 +23,16 @@ Acceptance: VOD → json+clips, one perceive session id, on-chain ≥1 successfu
 2. Discover+pay+reserve one perceive session when live
 3. Sample 1fps, publish to trickle video-in
 4. Subscribe events-out + SSE; persist
-5. Candidate → paid single-shot decide; if highlight wait for T+15 then confirm + CPU clip
+5. **Decide-observer (ADAAAA-7008)**: a `LiveObserver` fires a single-shot
+   decide on the ~3 s cadence over the rolling-PAST ~10 s window
+   (`OBSERVE_CADENCE_S` / `LIVE_OBSERVE_WINDOW_S` / `LIVE_OBSERVE_MAX_FRAMES`).
+   perceive supplies `seeds` + `biasHints` (it is the data seeder, NOT the
+   on/off gate); `scoring_play` accept → wait for T+15 then confirm + CPU clip
 6. Stream end: stop perceive + halt payment refresh
+7. The observer records cadence + gemma end-to-end latency per invocation
+   (`LiveObserver` latency surface — see
+   [`09-live-observer-latency-report.md`](09-live-observer-latency-report.md))
+   to prove the ~30 s flag budget.
 Redis: stream:{id}:session, stream:{id}:tracks.
 
 ## Tests (§4.5)

@@ -39,6 +39,16 @@ The worker's `TrackingPlanController` enforces this by construction: it calls
 event). The per-frame `/analyze` loop never calls the planner — it only
 *reads* the already-produced plan and forwards it to perceive.
 
+**Live-path deviation (ADAAAA-7008):** the last row ("decide only on a
+*candidate* event") is **not** true for the live path. On live, decide is a
+cadence-driven observer — a `LiveObserver` fires a single-shot decide every
+`OBSERVE_CADENCE_S` (~3 s) over a rolling-PAST window, regardless of whether
+perceive emitted a candidate. Perceive's trigger signals are folded in as
+`biasHints`, not the on/off gate. So the live decide cost is bounded by the
+observer cadence, not the candidate rate; the ~30 s flag budget and how cadence +
+gemma end-to-end latency are measured/reported are documented in
+[`09-live-observer-latency-report.md`](09-live-observer-latency-report.md).
+
 ## 3. OD vs caption cadence (the cost lens)
 
 Florence-2 task cost / latency, from cheapest to most expensive:

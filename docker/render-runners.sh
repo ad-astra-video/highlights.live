@@ -12,6 +12,12 @@
 #   DECIDE_RUNNER_CAPACITY=2 PERCEIVE_RUNNER_CAPACITY=2 ./render-runners.sh
 #
 # The committed docker/runners.json already ships the defaults (both 2).
+#
+# Live-path note (ADAAAA-7008): the live path runs a cadence-driven
+# decide-observer; perceive remains the persistent session runner and decide the
+# single-shot fixed-price runner. Each decide invocation is still a single-shot
+# paid call, so the runner registration/capacity model is unchanged by that
+# architecture (only the cadence at which the SERVER fires decide changes).
 set -e
 cd "$(dirname "$0")"
 

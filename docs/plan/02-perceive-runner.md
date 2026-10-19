@@ -39,3 +39,23 @@ mode `persistent`, capacity 1, health 200 when Florence loaded (NOT when Gemma i
 - SAM3 real multiplex: DONE — app/sam3_backend.py (Sam3Backend, per-frame obj_id-keyed advance) behind HybridTracker (app/sam_tracker.py), box-seeded from Florence; degrades to Florence->IoU when triton/weights absent. Tests: test_sam3_backend.py, test_sam_tracker.py.
 - WebSocket /app/ws + control message handlers (seed/evict/lock/confirm/configure/ping/analyze-still): DONE — handle_control() in app/__init__.py shared by WS and trickle control; rejects WS that creates a new session.
 - Trickle video-in/events-out/control: DONE — app/trickle.py (TrickleRail/TrickleSession) opens the session's channels on first proxied request and feeds video-in frames through the SAME process_frame() as /analyze; publishes observations on events-out; round-trips control acks. app/hub.py is an in-process broker implementing the same channel contract (offline dev stand-in, §3.10). Verified by tests/test_trickle.py over httpx ASGITransport. Real go-livepeer broker wiring is a deploy/transport detail (swap the AsyncClient target).
+
+## Data seeder + on-demand provider (ADAAAA-7007 / ADAAAA-7008)
+perceive is no longer the candidate on/off gate for either pass. It is the
+**data seeder** (per-frame derived context — detections / tracking / scoreboard /
+motion-geometry — folded into every decide payload as `seeds`) and an
+**on-demand provider** (recalled by decide when a moment needs more evidence,
+`applyOnDemandRecall`). Perceive trigger signals become per-window **bias hints /
+provenance metadata** (`biasHints`), never the decide trigger.
+
+This applies to the **live path** too (ADAAAA-7008). On live, decide is driven
+on the cadence (rolling-PAST window) regardless of whether perceive emitted a
+candidate, so perceive's **audio noise-change** and **motion** signals are folded
+in as **bias hints** only — not the decide on/off gate.
+
+Tracking remains capped: `MAX_TRACKS = 8` (VOD) / `LIVE_MAX_TRACKS = 3` (live)
+(`packages/events`), enforced in `tracking_plan.py` (`clamp_max_tracks`, mode
+cap) and `analyzer.ts` `TrackingPlanController` (a plan's `maxTracks` is clamped
+to 8 for VOD / 3 for live) and on the adapters' planner fallback. The `<=3`
+live cap is the authoritative knob; the perceive runner registration
+`metadata.maxTracks` is informational only and does not override the plan clamp.

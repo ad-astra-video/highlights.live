@@ -14,7 +14,6 @@ import {
   analyzeJob,
   EvidenceTracker,
   LiveRunShared,
-  decideOnCandidate,
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
@@ -536,7 +535,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // on every re-reserve via the slotRef.onReserve hook.
       const slot = { current: initial, stopped: false };
       livePerceiveSlots.set(job.id, slot);
-      // Bind `ingest.cut` (it reads `this.cfg`): analyzeJob/decideOnCandidate
+      // Bind `ingest.cut` (it reads `this.cfg`): analyzeJob and the observer
       // receive it as a plain function reference, so an unbound method loses
       // `this` and throws (job->failed) the moment a highlight needs a clip.
       const cut = (ts: number) => ingest.cut(ts);
@@ -558,6 +557,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         warmupSeconds: cfg.warmupSeconds,
         recheckIntervalSeconds: cfg.recheckIntervalSeconds,
         planMode: "live",
+        // ADAAAA-7011: wire the LIVE decide-observer into the live job path
+        // (config-gated). When on, decide runs on the ~3 s cadence regardless
+        // of whether perceive emitted a candidate.
+        liveObserveLoop: cfg.liveObserveLoop,
         // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
         onDecision: persistDecision,
         // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
@@ -602,18 +605,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             // for Gemma (ADAAAA-4785: video + audio frame analysis per trigger).
             shared.addAudioChunk(chunk.timestamp, chunk.samples);
             try {
-              const cand = await adapter.postAudio(initial.sessionId, {
+              // Perceive audio gate is a DATA SEEDER (audio level curve context)
+              // and never a decide trigger (ADAAAA-7008). The decide-observer
+              // drives decide on the ~3 s cadence regardless, so the audio
+              // candidate (if any) is provenance-only now — no candidate-gated
+              // decide.
+              await adapter.postAudio(initial.sessionId, {
                 seq: chunk.seq,
                 timestamp: chunk.timestamp,
                 samples: chunk.samples,
                 streamId: job.id,
               });
-              if (cand) {
-                await decideOnCandidate(adapter, shared, cut, anaCfg, cand, onEvent, {
-                  seq: chunk.seq,
-                  timestamp: chunk.timestamp,
-                });
-              }
             } catch {
               /* gate is best-effort — keep going */
             }
@@ -643,6 +645,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         status: "done",
         perceiveSessionId: outcome.sessionId,
         stageAMetrics: stageA,
+        // ADAAAA-7011: cadence + decide gemma E2E latency snapshot from the live
+        // decide-observer, so the Livepeer runner shows the ~30 s budget
+        // utilization. Absent when the observer was not enabled.
+        ...(outcome.observeMetrics ? { observeMetrics: outcome.observeMetrics } : {}),
       });
       // ADAAAA-6798 Inc 1: generate the LLM job title once the job reaches
       // `done` (fire-and-forget; fallback title on any failure; never blocks).
@@ -755,6 +761,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sampleFps: cfg.vodDetailFps,
       frameScale: cfg.vodFrameScale,
       decideWindowN: cfg.vodDecideWindowN,
+      // ADAAAA-7007/7011: drive the VOD decide-observer on the detail-first pass
+      // (config-gated). When on, decide runs on the ~3 s cadence regardless of
+      // whether perceive emitted a candidate.
+      observeLoop: cfg.observeLoop,
       // Increment D (ADAAAA-6467): the what-to-track planner's warm-up window
       // + out-of-band re-check cadence on the VOD pass (cap 8).
       warmupSeconds: cfg.warmupSeconds,
@@ -985,19 +995,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         for await (const chunk of extractVodAudioChunks(cfg.ffmpegPath, videoPath)) {
           shared.addAudioChunk(chunk.timestamp, chunk.samples);
           try {
-            const cand = await adapter.postAudio(initial.sessionId, {
+            // Perceive audio gate is a DATA SEEDER (audio level curve context)
+            // and never a decide trigger (ADAAAA-7008). The decide-observer
+            // drives decide on the ~3 s cadence regardless, so the audio
+            // candidate (if any) is provenance-only now — no candidate-gated
+            // decide.
+            await adapter.postAudio(initial.sessionId, {
               seq: chunk.seq,
               timestamp: chunk.timestamp,
               samples: chunk.samples,
               streamId: jobId,
             });
-            if (cand) {
-              candidatesTriggered++;
-              await decideOnCandidate(adapter, shared, cut, anaCfg, cand, onEvent, {
-                seq: chunk.seq,
-                timestamp: chunk.timestamp,
-              });
-            }
           } catch {
             /* gate best-effort — keep going */
           }
