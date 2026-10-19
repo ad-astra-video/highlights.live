@@ -342,6 +342,12 @@ services:
       # default so the deployed live baseline sends no new payload until an
       # operator enables it. `LIVE_AUDIO_CONTEXT` (1 => on).
       - LIVE_AUDIO_CONTEXT=${LIVE_AUDIO_CONTEXT:-0}
+      # ADAAAA-7008/7019: opt-in to the decide observe loops. LIVE_OBSERVE_LOOP=1
+      # enables the live rolling-window decide observer; OBSERVE_LOOP=1 enables the
+      # VOD detail-first decide observer. Both default off until validated. Values
+      # come from the compose project .env (docker/.env).
+      - LIVE_OBSERVE_LOOP=${LIVE_OBSERVE_LOOP:-0}
+      - OBSERVE_LOOP=${OBSERVE_LOOP:-0}
       # Live-payment durability (ADAAAA-3932): the SERVER is the VOD payer — it
       # reserves perceive/decide sessions and, on the orchestrator's 402
       # challenge, forwards the payment_params to the remote signer for tickets
