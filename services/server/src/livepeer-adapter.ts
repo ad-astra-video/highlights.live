@@ -31,6 +31,7 @@ import type {
   TrainResult,
   TrainRunRequest,
 } from "./analyzer";
+import type { PerFrameSeed } from "./observe-loop";
 import { SessionLostError } from "./analyzer";
 
 export function buildAnalyzeFrames(frameDir: string, sampleFps = 1) {
@@ -432,6 +433,29 @@ export class OrchestratorAdapter implements PipelineClient {
     });
     if (status >= 500) throw new Error(`controlForward failed: HTTP ${status}`);
   }
+  async recallPerceive(
+    sessionId: string,
+    req: { centerTs?: number; windowS?: number; startTs?: number; endTs?: number }
+  ): Promise<{ centerTs?: number; seeds: PerFrameSeed[] }> {
+    // ADAAAA-7008 / ADAAAA-7012: on-demand perceive recall. Proxy through the
+    // same orchestrator session as /analyze so the perceive runner serves the
+    // per-frame derived context ALREADY computed (no detector re-run). Best-effort:
+    // a 404 (fresh session after re-reserve) / 5xx / transport error returns
+    // empty seeds (a no-op) rather than aborting the decide/finalize path.
+    try {
+      const { status, data } = await this.client.appCall<any>(sessionId, "evidence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req),
+      });
+      if (status >= 200 && status < 300) {
+        return { centerTs: req.centerTs, seeds: (data?.seeds ?? []) as PerFrameSeed[] };
+      }
+      return { centerTs: req.centerTs, seeds: [] };
+    } catch {
+      return { centerTs: req.centerTs, seeds: [] };
+    }
+  }
   async decide(
     evidence: {
       eventType: string;
@@ -782,6 +806,29 @@ export class DirectAdapter implements PipelineClient {
       body: JSON.stringify(control),
     });
     if (r.status >= 500) throw new Error(`controlForward failed: HTTP ${r.status}`);
+  }
+  async recallPerceive(
+    sessionId: string,
+    req: { centerTs?: number; windowS?: number; startTs?: number; endTs?: number }
+  ): Promise<{ centerTs?: number; seeds: PerFrameSeed[] }> {
+    // ADAAAA-7008 / ADAAAA-7012: on-demand perceive recall (decide asks perceive
+    // for extra evidence for a moment before finalizing). POST straight to
+    // perceive /app/evidence; it serves the per-frame derived context ALREADY
+    // computed, WITHOUT re-running the detector. Best-effort: any transport /
+    // 5xx failure returns empty seeds (a no-op) rather than aborting the
+    // decide/finalize path — a recall must never regress a decision.
+    try {
+      const r = await fetch(`${this.cfg.perceiveUrl}/app/evidence`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Session-Id": this.fakeSession },
+        body: JSON.stringify(req),
+      });
+      if (r.status < 200 || r.status >= 300) return { centerTs: req.centerTs, seeds: [] };
+      const body = (await r.json().catch(() => null)) as { seeds?: PerFrameSeed[] } | null;
+      return { centerTs: req.centerTs, seeds: body?.seeds ?? [] };
+    } catch {
+      return { centerTs: req.centerTs, seeds: [] };
+    }
   }
   async decide(
     evidence: {
