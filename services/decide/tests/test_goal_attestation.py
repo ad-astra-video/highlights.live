@@ -32,9 +32,13 @@ def test_attested_criterion_requires_measured_signal():
     assert attested_goal_criterion({"ballOutcome": "goal"}) is True
     assert attested_goal_criterion({"goalCrossed": True}) is True
     assert attested_goal_criterion({"scoreBoardChanged": True}) is True
+    # ADAAAA-7044: the geometry-agnostic ball-in-net attestation also counts.
+    assert attested_goal_criterion({"ballInNet": True}) is True
     # A near-miss / off-target ballOutcome is NOT a goal attestation.
     assert attested_goal_criterion({"ballOutcome": "off_target"}) is False
     assert attested_goal_criterion({"ballOutcome": "blocked"}) is False
+    # A measured ballInNet=False is NEVER an attestation.
+    assert attested_goal_criterion({"ballInNet": False}) is False
     # Model self-report is never an attestation (that is the confabulation).
     assert attested_goal_criterion(
         {"verdict": {"criteria": {"ballInNet": True}}}
@@ -115,6 +119,7 @@ def test_attested_templated_goal_is_kept():
         {"ballOutcome": "goal"},
         {"goalCrossed": True},
         {"scoreBoardChanged": True},
+        {"ballInNet": True},  # ADAAAA-7044 geometry-agnostic attestation
     ):
         decision = {"isHighlight": True, "outcome": "scoring_play", "eventType": "GOAL", "reason": TEMPLATED}
         ok, _ = apply_goal_attestation_gate(decision, evidence, "GOAL")

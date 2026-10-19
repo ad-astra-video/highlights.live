@@ -36,6 +36,7 @@ from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
 from .zone_trigger import DetectionZoneTrigger, resolve_zones
 from .goal_plane import GoalLineDetector, GoalLineSpec
+from .goal_attestation import GoalAttestationDetector
 from .scoreboard import parse_ocr_score, ScoreboardTracker
 from .tracking_plan import (
     PLAN_VERSION,
@@ -303,6 +304,16 @@ def _ensure_goal_line_detector(state) -> GoalLineDetector | None:
     if state.goal_line_detector is None:
         state.goal_line_detector = GoalLineDetector(state.goal_line_spec)
     return state.goal_line_detector
+
+
+def _ensure_goal_attestation(state) -> GoalAttestationDetector | None:
+    """Lazily build this session's geometry-agnostic goal-attestation detector
+    (ADAAAA-7044). Returns None when not configured (env) — then the candidate
+    carries no ballInNet field (never fabricated). Never raises.
+    """
+    if getattr(state, "goal_attestation", None) is None:
+        state.goal_attestation = GoalAttestationDetector.from_config()
+    return state.goal_attestation
 
 
 def _plan_category(state) -> "str | None":
@@ -635,6 +646,18 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         state.scoreboard_tracker.record(cand_ts, score)
         if state.scoreboard_tracker.changed(cand_ts):
             cand_dict["scoreBoardChanged"] = True
+    # Geometry-agnostic "ball-in-net" goal attestation (ADAAAA-7044). Optional:
+    # when a fine-tuned detector is configured (env) and positively finds the
+    # ball in the net on the candidate anchor frame, attach a measured
+    # `ballInNet` attestation the decide gate accepts. Unconfigured or any
+    # failure -> no field (never fabricated). Bounded to candidate frames.
+    goal_att = _ensure_goal_attestation(state)
+    if cand_dict is not None and goal_att is not None and state.last_rgb is not None:
+        try:
+            if goal_att.detect_ball_in_net(state.last_rgb):
+                cand_dict["ballInNet"] = True
+        except Exception as e:  # noqa: BLE001  (attestation never drops a frame)
+            log.warning("goal attestation skipped for frame %s: %s", seq, e)
     # ADAAAA-7008 / ADAAAA-7012: cache this frame's derived context (the "data
     # seeder" contract) so the on-demand `/app/evidence` recall endpoint can serve
     # it WITHOUT re-running the detector. Compact seed (tracks / objects / ocr) —
