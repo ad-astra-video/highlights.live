@@ -238,6 +238,10 @@ def test_decide_enables_thinking_for_reasoning_effort(monkeypatch):
     req = mock.requests[0]
     assert req["reasoning_effort"] == "medium"
     assert req.get("chat_template_kwargs", {}).get("enable_thinking") is True
+    # ADAAAA-6999: reasoning on -> the token budget is raised so the think chain
+    # AND the JSON both fit (the old 1200 budget returned empty content -> rule
+    # fallback when thinking is on).
+    assert req["max_tokens"] > 1200
     assert req["temperature"] == 0.0
 
 
