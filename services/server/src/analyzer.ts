@@ -129,6 +129,13 @@ export function buildRichEvidence(shared: LiveRunShared, timestamp: number): Ric
     audioLevels: shared.audioLevelSeries(),
   };
 }
+/** ADAAAA-7028 Inc 2: the frame-group partition key for a candidate timestamp.
+ * Mirrors the plan's 3 s frame-group window (FRAME_GROUP_WINDOW_S=3) so each
+ * decide call resolves to a stable (sessionId, groupKey) and, once the
+ * grouped-decide path lands, one decide_audit row per frame group. */
+export function decideGroupKey(timestamp: number): string {
+  return `g${Math.floor(timestamp / 3)}`;
+}
 export interface DecisionResult {
   isHighlight: boolean;
   score: number;
@@ -282,6 +289,10 @@ export interface PipelineClient {
        * re-analysis. The decide-runner contract add (ADAAAA-6030) wires this
        * into the prompt; empty when the window has nothing to add. */
       priorContextText?: string;
+      /** ADAAAA-7028 Inc 2 audit identity forwarded so the decide audit
+       * descriptor keys the durable index by (sessionId, groupKey). */
+      jobId?: string;
+      groupKey?: string;
     }
   ): Promise<DecisionResult>;
   /**
@@ -448,6 +459,11 @@ export interface AnalyzerConfig {
    * logged by the caller, never allowed to fail the frame loop.
    */
   onDecision?: (cand: JobCandidate) => void;
+  /** ADAAAA-7028 Inc 2: persist the decide audit descriptor returned on the
+   * decision (`_audit`) so the durable decide_audit index + decision-trail has
+   * one row per frame group. Best-effort: a throwing onDecideAudit is caught
+   * + logged, never a pipeline failure. */
+  onDecideAudit?: (desc: unknown) => void;
 }
 
 /**
@@ -1337,12 +1353,21 @@ export async function decideOnCandidate(
       // the detail-first (VOD) pass so the prompt can cite concrete evidence.
       ...(cfg.decideWindowN !== undefined ? buildRichEvidence(shared, candidate.timestamp) : {}),
     },
-    detailDecideOpts(cfg, shared, anchoredImage, { timestamp: candidate.timestamp, peakAudioTs: candidate.audio?.ts }, burstFrames)
+    { ...detailDecideOpts(cfg, shared, anchoredImage, { timestamp: candidate.timestamp, peakAudioTs: candidate.audio?.ts }, burstFrames), jobId: cfg.jobId, groupKey: decideGroupKey(candidate.timestamp) }
   );
   // Track the Stage-A FP-rate metric (INC-2 / ADAAAA-4325 slice 5): whether
   // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
   // reported onset latency. Feeds job.stageAMetrics fpRate = rejected / total.
   shared.stageA.recordOutcome(decision.isHighlight, candidate.audio?.onsetLatencyS);
+  // ADAAAA-7028 Inc 2: ingest the decide audit descriptor into the durable
+  // index (best-effort; never a pipeline failure).
+  if (cfg.onDecideAudit) {
+    try {
+      cfg.onDecideAudit((decision as any).audit);
+    } catch (e: any) {
+      console.error(`[decide-audit:${cfg.jobId}] onDecideAudit failed:`, String(e?.message || e));
+    }
+  }
   // ADAAAA-6851 Inc 2: persist EVERY decide evaluation — accepted highlight,
   // burst-suppressed, near-miss, not-highlight — before the accept gate so no
   // non-accepted decision is lost.
@@ -1566,8 +1591,16 @@ export async function analyzeJob(
             // curve on the detail-first (VOD) pass.
             ...(cfg.decideWindowN !== undefined ? buildRichEvidence(run, res.candidate.timestamp) : {}),
           },
-          detailDecideOpts(cfg, run, anchoredImage, { timestamp: res.candidate.timestamp, peakAudioTs: res.candidate.audio?.ts }, burstFrames)
+          { ...detailDecideOpts(cfg, run, anchoredImage, { timestamp: res.candidate.timestamp, peakAudioTs: res.candidate.audio?.ts }, burstFrames), jobId: cfg.jobId, groupKey: decideGroupKey(res.candidate.timestamp) }
         );
+        // ADAAAA-7028 Inc 2: ingest the decide audit descriptor (best-effort).
+        if (cfg.onDecideAudit) {
+          try {
+            cfg.onDecideAudit((decision as any).audit);
+          } catch (e: any) {
+            console.error(`[decide-audit:${cfg.jobId}] onDecideAudit failed:`, String(e?.message || e));
+          }
+        }
         // ADAAAA-6851 Inc 2: persist EVERY decide evaluation — accepted
         // highlight, burst-suppressed, near-miss, not-highlight.
         const acceptedDecision = isAcceptedHighlight(decision);

@@ -182,6 +182,10 @@ export interface ServerConfig {
   /** Postgres connection string (prod). When set, the server uses Postgres
    * instead of SQLite; SQLite stays the local/dev default. */
   databaseUrl?: string;
+  /** Decide-audit retention cap (ADAAAA-7028 Inc 2): keep at most this many
+   * newest decide_audit rows on the write path. 0 disables the trim (unbounded
+   * — should only be used in a controlled/dev context). */
+  decideAuditRetention: number;
   /** Where `npm run db:backup` writes DB snapshots (default `data/backups`). */
   databaseBackupDir: string;
   /** Email-sender container base URL (e.g. http://email:3001). When unset,
@@ -365,6 +369,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     curatedManifestDir: env.CURATED_MANIFEST_DIR || path.join(env.DATA_DIR ?? "data", "..", "evals"),
     databasePath: env.DATABASE_PATH ?? "data/highlights.db",
     databaseUrl: env.DATABASE_URL,
+    decideAuditRetention: Number(env.DECIDE_AUDIT_RETENTION ?? 2000),
     databaseBackupDir: env.DATABASE_BACKUP_DIR ?? "data/backups",
     emailSenderUrl: env.EMAIL_SENDER_URL,
     mailerToken: env.MAILER_TOKEN || env.EMAIL_QUEUE_TOKEN,

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, ConfigDict, Field
@@ -178,6 +178,10 @@ class HighlightRequest(BaseModel):
     # Frontend-selectable; defaults to "none" (thinking off = fast single-shot
     # JSON). Other values (low/medium/high) are passed to llama.cpp verbatim.
     reasoningEffort: str = Field(default="none")
+    # ADAAAA-7028 Inc 2 audit identity (optional; the server forwards these so
+    # the audit descriptor keys the durable index by (sessionId, groupKey)).
+    jobId: Optional[str] = None
+    groupKey: Optional[str] = None
 
 
 # --- Response contract ------------------------------------------------------
@@ -250,6 +254,11 @@ class HighlightDecision(BaseModel):
     verdict: Optional[Verdict] = None
     evidenceAttested: list[str] = Field(default_factory=list)
     audioContext: Optional[AudioContext] = None
+    # ADAAAA-7028 Inc 2: compact decide audit descriptor returned so the server
+    # can index the exact request/response (one row per frame group). Contains
+    # group identity, prompt text, media content hashes, model params, raw
+    # reply, parsed verdicts, timings, fallback flag — never the media bytes.
+    audit: Optional[Dict[str, Any]] = None
 
 
 def _is_gemma_mode() -> bool:
@@ -362,6 +371,13 @@ def create_app() -> FastAPI:
                 reasoning_effort=req.reasoningEffort,
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
                 score_board_changed=req.evidence.scoreBoardChanged,
+                audit_ctx={
+                    "sessionId": req.sessionId,
+                    "jobId": req.jobId,
+                    "groupKey": req.groupKey,
+                    "frameCount": len(req.frames),
+                    "candidateCount": 1,
+                },
             )
             # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
             # goal-line ground-truth signal. A non-"goal" ballOutcome forces

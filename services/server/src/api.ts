@@ -15,6 +15,7 @@ import {
   EvidenceTracker,
   LiveRunShared,
   decideOnCandidate,
+  decideGroupKey,
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
@@ -39,6 +40,7 @@ import {
   type JobDecision,
 } from "@highlights/events";
 import { buildSections, buildTraces, maxTracesForSource } from "./job-detail";
+import { recordDecideAudit } from "./decide-audit";
 import {
   datasetAccessActive,
   scheduleDatasetsPurgeForOwner,
@@ -508,6 +510,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       console.error(`[decide-note:${cand.jobId}] persist failed:`, e?.message || e)
     );
   };
+  // ADAAAA-7028 Inc 2: durable write-through of the decide audit descriptor
+  // (group identity, prompt text, media hashes, raw reply, verdicts, timings)
+  // into the decide_audit index, with the retention cap enforced on the write
+  // path. Best-effort: never a pipeline failure.
+  const persistDecideAudit = (desc: unknown): void => {
+    recordDecideAudit(db, desc, cfg.decideAuditRetention);
+  };
   async function runLiveJob(
     ingest: LiveIngest,
     job: { id: string; gameHint?: string; preferLabels?: string[] },
@@ -551,6 +560,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         planMode: "live",
         // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
         onDecision: persistDecision,
+        // ADAAAA-7028 Inc 2: ingest the decide audit descriptor durably.
+        onDecideAudit: persistDecideAudit,
         // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
         // evidence). Live uses the default analysis_fps / windows.
         analysisFps: cfg.analysisFps,
@@ -743,6 +754,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       planMode: "vod",
       // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
       onDecision: persistDecision,
+      onDecideAudit: persistDecideAudit,
       // Increment F / ADAAAA-6465: VOD gets the HIGHER-cap / longer-window
       // detail-first frame-sequence assembly (speed secondary; detail-first).
       analysisFps: cfg.vodAnalysisFps,
@@ -1863,6 +1875,28 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     });
   });
 
+  // ADAAAA-7028 Inc 2: queryable decide-audit surface. Returns the durable
+  // decide_audit rows for a job (one per frame group), optionally narrowed to a
+  // single frame group via ?groupKey=. Owner-or-admin scoped. Each row carries
+  // the prompt text, media content hashes (re-attach by hash), raw reply,
+  // parsed verdicts, timings, fallback flag, and a replayable marker so an
+  // operator can reconstruct + re-submit the exact request.
+  app.get<{ Params: { id: string }; Querystring: { groupKey?: string } }>(
+    "/jobs/:id/decide-audit",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const user = req.user;
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "not found" });
+      if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+      const all = await db.listDecideAudits();
+      const forJob = all.filter((a) => a.jobId === job.id);
+      const groupKey = (req.query as any).groupKey as string | undefined;
+      const rows = groupKey ? forJob.filter((a) => a.groupKey === groupKey) : forJob;
+      return { jobId: job.id, groupKey: groupKey ?? null, audits: rows };
+    }
+  );
+
   // Delete a job (ADAAAA-6838, increment 2). Owner-or-admin; 404 if missing,
   // 403 if another user. For a VOD `file` job we release any held Livepeer
   // perceive slot synchronously (mirroring the stop path) so deleting never
@@ -2057,9 +2091,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               imageB64: image,
               // Frontend-selectable; defaults to "none" (thinking off / fast JSON)
               reasoningEffort: (req.body as any)?.reasoningEffort || "none",
+              // ADAAAA-7028 Inc 2: audit identity so the descriptor keys the
+              // durable decide_audit index by (sessionId, groupKey).
+              jobId: job.id,
+              groupKey: decideGroupKey(timestamp),
             }
           );
           await billing.onDecideCompleted(duser, dsub, { streaming: true });
+          // ADAAAA-7028 Inc 2: ingest the decide audit descriptor (best-effort;
+          // never a pipeline failure).
+          await recordDecideAudit(db, (d as any).audit, cfg.decideAuditRetention);
           if (d.isHighlight) {
             highlight = {
               id: randomUUID(),
