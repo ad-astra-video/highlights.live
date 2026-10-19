@@ -1697,12 +1697,58 @@ export class OrderedDecidePipeline {
     }
   }
 
+  /** ADAAAA-7003: a single paid decide that the orchestrator rejects with HTTP
+   * 400 `TicketParams expired` must NOT fail the entire VOD pass. The
+   * ADAAAA-6993 adapter recovery already re-mints fresh params and re-signs
+   * once; a second expired rejection means the runner is still cycling its
+   * ticket params (the params are time-windowed, so a longer-lived pass that
+   * drains slowly crosses the expiry boundary). Retrying the decide a bounded
+   * number of times with backoff lets the runner finish cycling params; if it
+   * still cannot be paid, degrade THIS candidate to a rejected note (it is not
+   * a confirmed highlight) instead of aborting the pipeline and leaving the
+   * whole job stuck/failed at `analyzing`. */
+  private readonly decideExpiredRetryAttempts = 3;
+
+  private isTicketParamsExpired(err: unknown): boolean {
+    return !!err && typeof err === "object" && (err as { ticketParamsExpired?: boolean }).ticketParamsExpired === true;
+  }
+
+  private async decideWithRejectFallback(job: { index: number; evidence: any; opts: any; candidate: any; emit: { seq: number; timestamp: number } }): Promise<DecisionResult> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < this.decideExpiredRetryAttempts; attempt++) {
+      try {
+        return await this.client.decide(job.evidence, job.opts);
+      } catch (e) {
+        if (!this.isTicketParamsExpired(e)) throw e;
+        lastErr = e;
+        // Backoff so the runner has time to cycle its payment params before
+        // re-signing (distinct from the benign 480/481/482 cases).
+        await new Promise((r) => setTimeout(r, 1500 * 2 ** attempt));
+      }
+    }
+    throw lastErr;
+  }
+
   private async runJob(job: { index: number; evidence: any; opts: any; candidate: any; emit: { seq: number; timestamp: number } }): Promise<void> {
     try {
-      const decision = await this.client.decide(job.evidence, job.opts);
+      const decision = await this.decideWithRejectFallback(job);
       this.results.set(job.index, { decision, candidate: job.candidate, emit: job.emit });
     } catch (e) {
-      this.abort(e);
+      if (this.isTicketParamsExpired(e)) {
+        // Recoverable-expired but still not payable after the bounded retries:
+        // record this candidate as rejected (never a confirmed highlight) and
+        // let the ordered accept drain it, so the job finishes `done` instead of
+        // aborting the whole pass. The candidate is dropped — exactly as a
+        // non-highlight verdict would be.
+        this.results.set(job.index, {
+          decision: { isHighlight: false, score: 0, outcome: "not_highlight", reason: "decide skipped: TicketParams expired after retry" },
+          candidate: job.candidate,
+          emit: job.emit,
+        });
+        console.error(`[decide] candidate ${job.candidate?.eventType ?? ""} @${job.candidate?.timestamp ?? "?"} not decided (TicketParams expired after ${this.decideExpiredRetryAttempts} retries); recording as rejected`);
+      } else {
+        this.abort(e);
+      }
     } finally {
       this.active--;
       this.pump();
@@ -1746,11 +1792,13 @@ export class OrderedDecidePipeline {
   }
 
   private maybeSettle(): void {
-    if (this.settled) return;
     const allDecidesDone = this.queue.length === 0 && this.active === 0;
     const allAccepted = this.aborting || this.nextAccept >= this.total;
     if (allDecidesDone && allAccepted && !this.accepting) {
       this.settled = true;
+      // Resolve any drain() waiter. A pipeline can become fully idle (and this
+      // settle) BEFORE drain() is called; a later accept completing must still
+      // release the drain waiter, so do not gate the resolve on `settled`.
       this.settleResolve?.();
     }
   }
