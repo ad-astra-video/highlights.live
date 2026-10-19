@@ -256,3 +256,24 @@ export function adminReadonlyRequired(auth: AuthService) {
     return reply.code(401).send({ error: "unauthorized" });
   };
 }
+
+/** Read-guard for the decide-audit / frame-debugger surface (ADAAAA-7029 Inc 3):
+ * accepts either a DB-backed user (any role, for owner reads) or a standalone
+ * read-only admin service token (role admin_readonly), so board reads succeed
+ * under the existing admin_readonly granularity while writes stay gated. */
+export function authRequiredOrReadonly(auth: AuthService) {
+  return async (req: FastifyRequest, reply: FastifyReply) => {
+    const token = (req.headers.authorization as string) || "";
+    const user = await auth.verify(token);
+    if (user) {
+      (req as any).user = user;
+      return;
+    }
+    const ro = auth.verifyReadonly(token);
+    if (ro) {
+      (req as any).user = ro;
+      return;
+    }
+    return reply.code(401).send({ error: "unauthorized" });
+  };
+}

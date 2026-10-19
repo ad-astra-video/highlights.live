@@ -74,6 +74,78 @@ def _audit_sha256(b64: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+# --- Secret redaction (ADAAAA-7029 Inc 3, privacy) --------------------------
+# Credential-shaped patterns are scrubbed from every free-text field before an
+# audit record or descriptor is emitted, so no API key / token / Bearer
+# credential ever enters a record (acceptance metric: secret-pattern matches =
+# 0). Media bytes / base64 data URLs are data, not secrets, and are left
+# untouched. For prompt text that carries no credential this is a no-op, so the
+# byte-for-byte replay control assertion still holds.
+_SECRET_PATTERNS = [
+    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=\-]{8,}", re.I),
+    re.compile(r"\b(?:api[_-]?key|access[_-]?token|secret[_-]?key|auth[_-]?token|client[_-]?secret|refresh[_-]?token|password|passwd|token)\b\s*[:=]\s*['\"]?[A-Za-z0-9._~+/=\-]{8,}", re.I),
+    re.compile(r"\bsk-[A-Za-z0-9]{8,}\b"),
+    re.compile(r"\b(?:pk|rk)_[A-Za-z0-9]{8,}\b"),
+    re.compile(r"\bghp_[A-Za-z0-9]{16,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{8,}\b"),
+]
+
+_REDACTED = "[REDACTED]"
+
+
+def _redact_secrets(text):
+    """Replace credential-shaped substrings in a string with [REDACTED]."""
+    if not text:
+        return text
+    out = text
+    for pat in _SECRET_PATTERNS:
+        out = pat.sub(_REDACTED, out)
+    return out
+
+
+def _redact_deep(value):
+    """Recursively redact every string value in a JSON-ish object."""
+    if isinstance(value, str):
+        return _redact_secrets(value)
+    if isinstance(value, list):
+        return [_redact_deep(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _redact_deep(v) for k, v in value.items()}
+    return value
+
+
+def _redact_record_texts(record: dict) -> dict:
+    """Deep-scrub textual fields in an audit record while leaving media refs
+    (sha256 + base64 data URLs) intact. Returns a new record dict."""
+    out = dict(record)
+    # Raw reply text.
+    out["rawReply"] = _redact_secrets(record.get("rawReply"))
+    # Parsed verdict structure (may embed the reply text).
+    out["parsed"] = _redact_deep(record.get("parsed"))
+    # Message text content (system prompt + user prompt text parts). Media
+    # parts inside image_url / input_audio are data and left untouched.
+    msgs = []
+    for m in (record.get("messages") or []):
+        m2 = dict(m)
+        if isinstance(m2.get("content"), str):
+            m2["content"] = _redact_secrets(m2["content"])
+        elif isinstance(m2.get("content"), list):
+            parts = []
+            for p in m2["content"]:
+                if isinstance(p, dict) and p.get("type") == "text" and isinstance(p.get("text"), str):
+                    p2 = dict(p)
+                    p2["text"] = _redact_secrets(p2["text"])
+                    parts.append(p2)
+                else:
+                    parts.append(p)
+            m2["content"] = parts
+        msgs.append(m2)
+    out["messages"] = msgs
+    return out
+
+
 def _content_ref(part: dict) -> dict | None:
     """For an image-content part, return a compact ref {sha256, mime, dataUrl}
     without duplicating the base64 bytes in the record (they live in the audit
@@ -126,7 +198,7 @@ def _audit_record(
         elif part.get("type") == "text":
             refs.append({"type": "text", "text": part["text"]})
     params = {k: v for k, v in payload.items() if k != "messages"}
-    return {
+    return _redact_record_texts({
         "version": 1,
         "systemPromptVersion": SYSTEM_PROMPT_VERSION,
         "mode": mode,
@@ -148,7 +220,7 @@ def _audit_record(
             "asrLatencyS": asr_latency_s,
         },
         "createdAt": round(time.time(), 3),
-    }
+    })
 
 
 def _emit_audit(record: dict) -> None:

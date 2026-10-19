@@ -50,7 +50,7 @@ import { extractVodAudioChunks } from "./vod-audio";
 import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./db";
 import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribeFunnel, recordSignupFunnel } from "./funnel";
 import { reportMonitoring, RELIABILITY_FLOOR } from "./monitoring";
-import { AuthService, BetaGateError, adminRequired, adminReadonlyRequired, authRequired, type AuthService as AuthSvc } from "./auth";
+import { AuthService, BetaGateError, adminRequired, adminReadonlyRequired, authRequired, authRequiredOrReadonly, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError, canRetrieveDataset } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
 import { FixedWindowLimiter, rateLimit } from "./rate-limit";
@@ -312,6 +312,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const authReq = authRequired(auth);
   const adminReq = adminRequired(auth);
   const adminReadOnlyReq = adminReadonlyRequired(auth);
+  const authReqOrReadonly = authRequiredOrReadonly(auth);
   const train = createTrainService(db, adapter, cfg);
 
   // Public auth endpoints share one anti-abuse budget per IP (login, register,
@@ -515,7 +516,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // into the decide_audit index, with the retention cap enforced on the write
   // path. Best-effort: never a pipeline failure.
   const persistDecideAudit = (desc: unknown): void => {
-    recordDecideAudit(db, desc, cfg.decideAuditRetention);
+    recordDecideAudit(db, desc, cfg.decideAuditRetention, cfg.decideAuditMaxBytes);
   };
   async function runLiveJob(
     ingest: LiveIngest,
@@ -1877,18 +1878,23 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   // ADAAAA-7028 Inc 2: queryable decide-audit surface. Returns the durable
   // decide_audit rows for a job (one per frame group), optionally narrowed to a
-  // single frame group via ?groupKey=. Owner-or-admin scoped. Each row carries
-  // the prompt text, media content hashes (re-attach by hash), raw reply,
-  // parsed verdicts, timings, fallback flag, and a replayable marker so an
-  // operator can reconstruct + re-submit the exact request.
+  // single frame group via ?groupKey=. Owner-or-admin-or-admin_readonly scoped
+  // (ADAAAA-7029 Inc 3: board reads succeed under the existing admin_readonly
+  // granularity — the read-only service token and a full admin may read any
+  // job; a regular user reads own jobs). Each row carries the prompt text,
+  // media content hashes (re-attach by hash), raw reply, parsed verdicts,
+  // timings, fallback flag, and a replayable marker so an operator can
+  // reconstruct + re-submit the exact request.
   app.get<{ Params: { id: string }; Querystring: { groupKey?: string } }>(
     "/jobs/:id/decide-audit",
-    { preHandler: authReq },
+    { preHandler: authReqOrReadonly },
     async (req: any, reply) => {
       const user = req.user;
       const job = store.getJob(req.params.id);
       if (!job) return reply.code(404).send({ error: "not found" });
-      if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+      const readonly = user.role === "admin_readonly";
+      if (!readonly && job.ownerId !== user.id && user.role !== "admin")
+        return reply.code(403).send({ error: "forbidden" });
       const all = await db.listDecideAudits();
       const forJob = all.filter((a) => a.jobId === job.id);
       const groupKey = (req.query as any).groupKey as string | undefined;
@@ -2100,7 +2106,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           await billing.onDecideCompleted(duser, dsub, { streaming: true });
           // ADAAAA-7028 Inc 2: ingest the decide audit descriptor (best-effort;
           // never a pipeline failure).
-          await recordDecideAudit(db, (d as any).audit, cfg.decideAuditRetention);
+          await recordDecideAudit(db, (d as any).audit, cfg.decideAuditRetention, cfg.decideAuditMaxBytes);
           if (d.isHighlight) {
             highlight = {
               id: randomUUID(),

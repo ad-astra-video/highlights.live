@@ -148,6 +148,52 @@ def test_ask_emits_one_record_and_replay_byte_matches():
         _clean()
 
 
+def test_secret_redaction_keeps_records_credential_free():
+    """ADAAAA-7029 Inc 3 (privacy): an audit record carrying a credential-shaped
+    string in the prompt / reply / params has that string scrubbed, so no API
+    key / Bearer / token ever enters a record. The acceptance guard is a sample
+    scan for credential patterns returning 0 matches."""
+    from app.gemma import _SECRET_PATTERNS, _redact_secrets
+
+    dirty_text = (
+        "api_key=sk-live-abcdef123456 and Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcDEF123 "
+        "and a ghp_abcdefghijklmnop token and AKIAIOSFODNN7EXAMPLE"
+    )
+    out = _redact_secrets(dirty_text)
+    assert "[REDACTED]" in out
+    # No credential pattern survives.
+    for pat in _SECRET_PATTERNS:
+        assert pat.search(out) is None, f"pattern {pat.pattern} still matched after redaction"
+
+
+def test_audit_record_redacts_secrets_but_keeps_media():
+    """ADAAAA-7029 Inc 3: _audit_record scrubs credentials from message text and
+    the raw reply, while the base64 media data URL / content refs stay intact."""
+    rec = _audit_record(
+        audit_ctx={"sessionId": "job", "groupKey": "g1", "frameCount": 1, "candidateCount": 1},
+        mode="single",
+        content=[{"type": "text", "text": "user prompt"}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,aGk="}}],
+        payload={
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT + " token=abcdefghijklmnop"},
+                {"role": "user", "content": [{"type": "text", "text": "Bearer abcdefghijklmnop"}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,aGk="}}]},
+            ],
+            "temperature": 0.0,
+        },
+        raw_reply='{"isHighlight":true,"auth":"Bearer abcdefghijklmnop"}',
+        parsed={"isHighlight": True, "note": "api_key=sk-live-1234567890"},
+        fallback=False,
+        started_at=time.time() - 0.5,
+    )
+    # Credential text is scrubbed.
+    assert "abcdefghijklmnop" not in json.dumps(rec)
+    assert "sk-live" not in json.dumps(rec)
+    assert "[REDACTED]" in rec["rawReply"]
+    # Media content ref is preserved (data url + sha256) — it is data, not a secret.
+    img = [r for r in rec["contentRefs"] if r["type"] == "image"]
+    assert img and img[0]["sha256"] and img[0]["dataUrl"].startswith("data:image/jpeg;base64,")
+
+
 def test_audit_descriptor_emitted_compact_on_decision():
     """ADAAAA-7028 Inc 2: the decision returned by ask() carries a compact
     `audit` descriptor the server can index (group identity + prompt + media
