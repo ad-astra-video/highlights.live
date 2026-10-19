@@ -282,6 +282,10 @@ services:
       # ADAAAA-5778 notable-only knob. Data-landed default 60; override in prod
       # only after re-measuring on the real-feed eval set (evals/decide_discernment.py).
       - DECIDE_NOTABILITY_MIN=${DECIDE_NOTABILITY_MIN:-60}
+      # ADAAAA-7045 (Inc 2 follow-up): durable JSONL audit dir on the decide side
+      # (base64 media + full request/response record). Unset => no JSONL is
+      # written; the server decide_audit rows still hold the sha256 media hashes.
+      - DECIDE_AUDIT_DIR=${DECIDE_AUDIT_DIR:-/srv/decide/audit}
     depends_on:
       gemma:
         condition: service_healthy
