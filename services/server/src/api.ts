@@ -256,8 +256,17 @@ export async function persistLiveHighlight(
     // instant a highlight lands (never gated on job completion). Guarded on the
     // job being present in this store instance so an edge case (job already
     // deleted / not hydrated here) never fails highlight persistence itself.
+    // ADAAAA-7118: set the live highlight counter to the ABSOLUTE persisted
+    // count from the store (the source of truth), never an increment of the
+    // current value. bumping `job.highlightsFound + 1` overcounted when the
+    // count had already been advanced by the job's own progress writer (the
+    // local tally going 0->1), so highlightsFound transiently read 2 while only
+    // 1 highlight was persisted. Deriving from `store.highlightsForJob` is
+    // correct for VOD and live alike and can never drift from the persisted
+    // count. (Same guard ADAAAA-6874 keeps billing/quota exactly-once: the
+    // store addHighlight dedup + `created` gate is untouched.)
     const job = deps.store.getJob(record.jobId);
-    if (job) await deps.store.patchJob(record.jobId, { highlightsFound: (job.highlightsFound ?? 0) + 1 });
+    if (job) await deps.store.patchJob(record.jobId, { highlightsFound: deps.store.highlightsForJob(record.jobId).length });
   }
   return record;
 }
@@ -874,7 +883,6 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // count during processing. Legacy rows without an idempotencyKey fall back to
     // the start|eventType form so resume protection still holds for them.
     const existingHl = new Set(store.highlightsForJob(jobId).map(highlightDedupKey));
-    let highlightsFound = store.highlightsForJob(jobId).length;
 
     // Throttled, monotonic progress persistence (ADAAAA-6873). We persist at most
     // once per second (or force on a highlight/terminal write) and never let
@@ -896,7 +904,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         framesAnalyzed,
         framesTotal,
         framesPct: pct,
-        highlightsFound,
+        // ADAAAA-7118: surface the live highlight count as the ABSOLUTE
+        // persisted count from the store (source of truth), never a local
+        // tally, so highlightsFound always equals what addHighlight persisted
+        // during processing (a same-idempotency-key double-emit counts once).
+        highlightsFound: store.highlightsForJob(jobId).length,
         progress: Math.min(100, Math.max(1, pct)),
         progressLabel: `analyzing (frame ${framesAnalyzed}/${framesTotal})`,
       });
@@ -935,7 +947,6 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           return; // already persisted on an earlier attempt — no re-debit
         }
         existingHl.add(key);
-        highlightsFound++;
         persistLiveHighlight({ store, cfg, billing, entitlements, db }, user, sub, ev.highlight)
           .then(() => persistProgress(store.getJob(jobId)?.framesAnalyzed ?? 0, true))
           .catch((e) => console.error(`[vod:${jobId}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e));
@@ -1110,7 +1121,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       framesAnalyzed: outcome.framesAnalyzed,
       framesTotal,
       framesPct: doneFramesPct,
-      highlightsFound,
+      // ADAAAA-7118: completed record surfaces the ABSOLUTE persisted highlight
+      // count from the store (source of truth), matching what addHighlight wrote.
+      highlightsFound: store.highlightsForJob(jobId).length,
       candidatesTriggered,
       decideCalls,
       perceiveSessionS: Number(perceiveSessionS.toFixed(1)),

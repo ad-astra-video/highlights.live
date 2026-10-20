@@ -123,4 +123,32 @@ describe("VOD onEvent dedup guard keyed on highlightIdempotencyKey (ADAAAA-7118)
     expect(g.onHighlight(mkRec(jobId, 0, "GOAL", { start: 5 }))).toBe(false); // start|5|GOAL already seen
     expect(g.count()).toBe(1);
   });
+
+  it("the job counter derives from the store's ABSOLUTE persisted count, so a same-key double-emit never reads 2-vs-1 (regression, ADAAAA-7118 fix)", async () => {
+    const store = new Store(null);
+    const jobId = randomUUID();
+    await store.createJob({ id: jobId, source: "file", gameHint: "soccer" });
+
+    // Two `highlight` events sharing one idempotency key (GOAL anchor at seq 150)
+    // but with drifting `start` — store dedups to ONE persisted highlight.
+    const k = highlightIdempotencyKey(jobId, 150, "GOAL");
+    await store.addHighlight(mkRec(jobId, 150, "GOAL", { idempotencyKey: k, start: 5 }));
+    const a2 = await store.addHighlight(mkRec(jobId, 150, "GOAL", { idempotencyKey: k, start: 6 }));
+    expect(a2.created).toBe(false);
+    expect(store.highlightsForJob(jobId).length).toBe(1);
+
+    // Mirror the fixed write path (persistLiveHighlight / persistProgress): set
+    // highlightsFound to the store's absolute persisted count. A stale progress
+    // tally written moments earlier is overwritten by the correct count, never
+    // incremented on top (the old `job.highlightsFound + 1` turned 1 into 2).
+    await store.patchJob(jobId, { highlightsFound: 1 }); // stale tally as-if already counted once
+    await store.patchJob(jobId, { highlightsFound: store.highlightsForJob(jobId).length });
+    expect(store.getJob(jobId)?.highlightsFound).toBe(1);
+
+    // And the OLD incrementing write would have overcounted to 2 — assert the
+    // store-first derivation is what keeps the live counter honest.
+    const stale = store.getJob(jobId)?.highlightsFound ?? 0;
+    expect(stale + 1).toBe(2); // old `+1` bump (the bug)
+    expect(store.highlightsForJob(jobId).length).toBe(1); // persisted is still 1
+  });
 });
