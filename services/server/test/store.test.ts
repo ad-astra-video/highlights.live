@@ -77,4 +77,53 @@ describe("Store (in-memory)", () => {
     expect(got.progress).toBe(42);
     expect(got.progressLabel).toBe("analyzing (frame 1/10)");
   });
+
+  it("addHighlight is idempotent on idempotencyKey: first insert wins, no duplicate row / no double-count (ADAAAA-6874)", async () => {
+    const s = new Store();
+    const j = await s.createJob({ ownerId: "u", source: "file" });
+    const mk = (id: string) => ({
+      id,
+      jobId: j.id,
+      idempotencyKey: `hl:${j.id}:12:goal`,
+      clipUri: `/clips/${id}.mp4`,
+      start: 10,
+      end: 14,
+      eventType: "goal",
+      score: 90,
+      reason: "a goal",
+      status: "accepted" as const,
+      createdAt: new Date().toISOString(),
+    });
+    const first = await s.addHighlight(mk("h-a"));
+    expect(first.created).toBe(true);
+    expect(first.record.id).toBe("h-a");
+
+    // A resumed job re-decides the SAME candidate: new random id, SAME key.
+    const second = await s.addHighlight(mk("h-b"));
+    expect(second.created).toBe(false);
+    // The original record wins (no duplicate row, no double-count).
+    expect(second.record.id).toBe("h-a");
+    expect(s.highlightsForJob(j.id)).toHaveLength(1);
+    expect(s.allHighlights()).toHaveLength(1);
+    expect(s.getHighlight("h-b")).toBeUndefined();
+  });
+
+  it("highlightsFound bumps on the job via patchJob and is surfaced on GET (ADAAAA-6874)", async () => {
+    const s = new Store();
+    const j = await s.createJob({ ownerId: "u", source: "file" });
+    expect(s.getJob(j.id)!.highlightsFound).toBe(0);
+    await s.patchJob(j.id, { highlightsFound: (s.getJob(j.id)!.highlightsFound ?? 0) + 1 });
+    expect(s.getJob(j.id)!.highlightsFound).toBe(1);
+  });
+
+  it("highlightIdempotencyKey is deterministic per (jobId, seq, eventType) (ADAAAA-6874)", async () => {
+    const { highlightIdempotencyKey } = await import("../src/analyzer");
+    const a = highlightIdempotencyKey("job1", 12, "goal");
+    const b = highlightIdempotencyKey("job1", 12, "goal");
+    const c = highlightIdempotencyKey("job1", 13, "goal");
+    const d = highlightIdempotencyKey("job1", 12, "save");
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+    expect(a).not.toBe(d);
+  });
 });

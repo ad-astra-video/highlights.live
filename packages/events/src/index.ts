@@ -554,7 +554,7 @@ export const JobSchema = z.object({
   stage: z.string().optional(),
   framesTotal: z.number().int().min(0).optional(),
   framesPct: z.number().min(0).max(100).optional(),
-  highlightsFound: z.number().int().min(0).optional(),
+  highlightsFound: z.number().int().min(0).default(0),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   attempts: z.number().int().min(0).optional(),
@@ -620,6 +620,12 @@ export const HighlightRecordSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
   jobId: z.string(),
+  // ADAAAA-6874 (Phase 2): deterministic per-highlight idempotency key derived
+  // from (jobId, candidate seq, eventType). A re-claimed/resumed job that
+  // re-decides the same candidate must not double-persist or double-bill. The
+  // store's addHighlight dedups on this key (first insert wins; billing/debit
+  // only on first insert). Additive optional — older rows carry none.
+  idempotencyKey: z.string().optional(),
   clipUri: z.string(),
   start: z.number(),
   end: z.number(),
