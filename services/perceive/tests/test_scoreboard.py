@@ -319,3 +319,46 @@ def test_scoreboard_roi_gates_and_yields_no_ocrhits():
     assert state.scoreboard_visible is False
     # Gate: OCR would not be invoked, so ocrHits stays 0 / no score.
     assert parse_ocr_score([], roi=None) is None
+
+
+def test_scoreboard_roi_backoff_bounds_region_pass_and_preserves_recall():
+    # ADAAAA-7086 (QA non-blocking finding): an always-no-scoreboard source must
+    # not pay a billable region-discovery pass on every candidate frame. We
+    # re-attempt only every `_SCOREBOARD_DETECT_BACKOFF` candidates, but a
+    # scoreboard that appears mid-stream is still picked up after the backoff.
+    from types import SimpleNamespace
+
+    from app import _SCOREBOARD_DETECT_BACKOFF, _scoreboard_roi
+
+    calls = {"n": 0}
+
+    class FakeDetector:
+        def discover(self, image, task="<DETAILED_CAPTION>"):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # No scoreboard yet: only a generic in-frame region.
+                return {"method": "region", "task": task,
+                        "regions": [{"bbox": [0.1, 0.1, 0.4, 0.3], "caption": "banner ad copy"}]}
+            # Scoreboard appears mid-stream -> must be found on the next attempt.
+            return {"method": "region", "task": task,
+                    "regions": [{"bbox": [0.55, 0.72, 0.93, 0.90], "caption": "broadcast scoreboard"}]}
+
+        def ocr(self, image, roi=None):  # pragma: no cover - gated off
+            raise AssertionError("OCR ran when no scoreboard is visible")
+
+    det = FakeDetector()
+    state = SimpleNamespace(last_rgb=object(), scoreboard_visible=None)
+    # Drive enough candidates to cross one full backoff boundary.
+    found = None
+    for _ in range(_SCOREBOARD_DETECT_BACKOFF + 1):
+        found = _scoreboard_roi(state, det)
+    # The region pass ran on candidate 1 and again after the backoff (found now).
+    assert calls["n"] == 2, f"region pass not bounded: {calls['n']}"
+    assert found is not None, "mid-stream scoreboard not picked up after backoff"
+    assert state.scoreboard_visible is True
+    assert found.contains([0.58, 0.75, 0.90, 0.88])
+    # Once found the region is cached: subsequent candidates pay no region pass.
+    before = calls["n"]
+    for _ in range(3):
+        assert _scoreboard_roi(state, det) == found
+    assert calls["n"] == before

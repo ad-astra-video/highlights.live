@@ -62,6 +62,13 @@ from .tracking_plan import (
 )
 from .discovery import discovery_block, run_discovery_pass  # noqa: E402  (increment C)
 
+# ADAAAA-7086: candidates (not every frame, bounded by the Stage-A cooldown)
+# between region-discovery attempts when a scoreboard has not yet been found.
+# Without this an always-no-scoreboard source would pay a billable region pass
+# on every candidate frame; a scoreboard that appears mid-stream is still
+# picked up on the next attempt after the backoff (recall preserved).
+_SCOREBOARD_DETECT_BACKOFF = 5
+
 # One live trickle session per perceive session (plan §0.1 session rule).
 _trickle: dict[str, TrickleSession] = {}
 # Serialize detector/SAM passes: the event-loop's HTTP /analyze and the trickle
@@ -347,31 +354,37 @@ def _scoreboard_roi(state, detector=None):
 
     # 2. Auto-detect the scoreboard region from the frame content.
     locator = _scoreboard_locator(state, detector)
-    if locator is not None and getattr(state, "last_rgb", None) is not None:
-        try:
-            located = locator.locate(state.last_rgb)
-        except Exception:  # noqa: BLE001 - never crash the candidate path
-            located = None
-        if located is not None:
-            state.scoreboard_roi = located
-            state.scoreboard_visible = True
-            return located
+    if locator is not None:
+        # Re-attempt region discovery only every `_SCOREBOARD_DETECT_BACKOFF`
+        # candidates. An always-no-scoreboard source must not pay a billable
+        # region pass on every candidate frame (acceptance: no GPU pass beyond
+        # the ROI-scoped OCR), yet a scoreboard that appears mid-stream is
+        # still picked up after the backoff (recall preserved).
+        misses = int(getattr(state, "scoreboard_miss_count", 0))
+        if getattr(state, "last_rgb", None) is not None and misses % _SCOREBOARD_DETECT_BACKOFF == 0:
+            try:
+                located = locator.locate(state.last_rgb)
+            except Exception:  # noqa: BLE001 - never crash the candidate path
+                located = None
+            if located is not None:
+                state.scoreboard_roi = located
+                state.scoreboard_visible = True
+                return located
+        # A region-capable detector ran but found no visible scoreboard -> gate.
+        # Count the miss so the next region pass waits out the backoff; a
+        # scoreboard that appears mid-stream is still picked up on the next
+        # attempt (state.scoreboard_roi stays None until found).
+        state.scoreboard_miss_count = misses + 1
+        state.scoreboard_roi = None
+        state.scoreboard_visible = False
+        return None
 
-    # No explicit ROI and no detected scoreboard.
-    if locator is None:
-        # No region-capable detector (stub path): fall back to the documented
-        # default top-band prior rather than dropping all score evidence.
-        default = ScoreboardRoi.from_env()
-        state.scoreboard_roi = default
-        state.scoreboard_visible = True
-        return default
-
-    # A region-capable detector ran but found no visible scoreboard -> gate.
-    # Re-attempt on later candidates so a scoreboard that appears mid-stream is
-    # still picked up (state.scoreboard_roi stays None until found).
-    state.scoreboard_roi = None
-    state.scoreboard_visible = False
-    return None
+    # No region-capable detector (stub path): fall back to the documented
+    # default top-band prior rather than dropping all score evidence.
+    default = ScoreboardRoi.from_env()
+    state.scoreboard_roi = default
+    state.scoreboard_visible = True
+    return default
 
 
 def _plan_category(state) -> "str | None":
