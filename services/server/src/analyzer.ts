@@ -1674,6 +1674,14 @@ function buildCandidateNote(
  * `highlight` event (which drives decision-time persist/bill/quota exactly
  * once). Shared by the serial (live / w=1) inline path and the ordered VOD
  * pipeline so both are byte-for-byte identical. */
+/** ADAAAA-6874 (Phase 2): deterministic per-highlight idempotency key anchored
+ * on the job + candidate frame seq + event type. A re-claimed/resumed job that
+ * re-decides the same candidate produces the SAME key, so the server's
+ * addHighlight dedup prevents double-persist and double-billing. */
+export function highlightIdempotencyKey(jobId: string, seq: number, eventType?: string): string {
+  return `hl:${jobId}:${seq}:${eventType ?? "highlight"}`;
+}
+
 async function acceptVideoDecision(
   client: PipelineClient,
   run: LiveRunShared,
@@ -1723,6 +1731,9 @@ async function acceptVideoDecision(
   const rec: HighlightRecord = {
     id: randomUUID(),
     jobId: cfg.jobId,
+    // ADAAAA-6874 (Phase 2): deterministic idempotency key so a resumed job that
+    // re-decides the same candidate cannot double-persist/double-bill.
+    idempotencyKey: highlightIdempotencyKey(cfg.jobId, emit.seq, decision.eventType ?? candidate.eventType),
     clipUri,
     start: Math.max(0, candidate.timestamp - cfg.clipBeforeS),
     end: candidate.timestamp + cfg.clipAfterS,

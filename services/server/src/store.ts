@@ -39,6 +39,10 @@ export const MAX_OBSERVATIONS_PER_JOB = 2000;
 export class Store {
   private jobs = new Map<string, Job>();
   private highlights = new Map<string, HighlightRecord>();
+  // ADAAAA-6874 (Phase 2): idempotency-key index over accepted highlights so a
+  // re-claimed/resumed job can't double-persist or double-bill a highlight.
+  // Populated on load() and maintained by addHighlight (first insert wins).
+  private highlightsByK = new Map<string, HighlightRecord>();
   private byJob = new Map<string, string[]>();
   private observations = new Map<string, StoredObservation[]>();
   private candidates = new Map<string, JobCandidate[]>();
@@ -62,6 +66,7 @@ export class Store {
     ]);
     this.jobs.clear();
     this.highlights.clear();
+    this.highlightsByK.clear();
     this.byJob.clear();
     this.observations.clear();
     this.candidates.clear();
@@ -69,6 +74,7 @@ export class Store {
     for (const j of jobs) this.jobs.set(j.id, j);
     for (const h of highlights) {
       this.highlights.set(h.id, h);
+      if (h.idempotencyKey) this.highlightsByK.set(h.idempotencyKey, h);
       const list = this.byJob.get(h.jobId) ?? [];
       list.push(h.id);
       this.byJob.set(h.jobId, list);
@@ -147,14 +153,25 @@ export class Store {
     return next;
   }
 
-  async addHighlight(rec: HighlightRecord): Promise<HighlightRecord> {
+  async addHighlight(rec: HighlightRecord): Promise<{ record: HighlightRecord; created: boolean }> {
     const parsed = HighlightRecordSchema.parse(rec);
+    // ADAAAA-6874 (Phase 2): idempotency guard. If a highlight carrying this
+    // idempotencyKey was already persisted (a re-claimed/resumed job re-deciding
+    // the same candidate), return the EXISTING record with `created: false` so
+    // the caller does NOT write a duplicate row, re-bill, or re-debit quota.
+    if (parsed.idempotencyKey) {
+      const existing = this.highlightsByK.get(parsed.idempotencyKey);
+      if (existing) return { record: existing, created: false };
+    }
     this.highlights.set(parsed.id, parsed);
+    if (parsed.idempotencyKey) this.highlightsByK.set(parsed.idempotencyKey, parsed);
     const list = this.byJob.get(parsed.jobId) ?? [];
-    list.push(parsed.id);
+    // Guard against double-appending the same record id (e.g. an idempotent retry
+    // that re-persists the exact same id) so byJob never grows duplicate entries.
+    if (!list.includes(parsed.id)) list.push(parsed.id);
     this.byJob.set(parsed.jobId, list);
     if (this.db) await this.db.saveHighlight(parsed);
-    return parsed;
+    return { record: parsed, created: true };
   }
 
   getHighlight(id: string): HighlightRecord | undefined {
