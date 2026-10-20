@@ -717,9 +717,19 @@ class FlorenceDetector:
             log.warning("roi pass skipped for frame: %s", e)
         return objs
 
-    def ocr(self, image: "np.ndarray") -> list[str]:
+    def ocr(self, image: "np.ndarray", roi=None) -> list[str]:
         """Run the Florence-2 ``<OCR>`` task on a frame (scoreboard text, caption
         readings). Returns recognized text as a trimmed list of lines.
+
+        ``roi`` (ADAAAA-7081): an optional object exposing ``pixel_box(width,
+        height)`` (e.g. ``ScoreboardRoi``). When given, the frame is first
+        cropped to the scoreboard region of interest so ``<OCR>`` reads ONLY
+        the scoreboard graphic — text from the crowd, banner/ad-board copy,
+        jersey numbers, shot clocks or any other on-screen graphic is cropped
+        out and can never be misread as a score. The crop is a single ``<OCR>``
+        inference on the same model, so there is no incremental billable GPU
+        cost beyond the ROI-scoped read itself. A ``None``/invalid ROI leaves
+        the whole frame (legacy behaviour).
 
         Best-effort, bounded to candidate anchor frames by the caller
         (ADAAAA-6360, decide-leg I3): any GPU/transport failure degrades to
@@ -731,7 +741,22 @@ class FlorenceDetector:
 
         if image.ndim == 2:
             image = np.stack([image] * 3, axis=-1)
-        pil = Image.fromarray(image.astype(np.uint8)).convert("RGB")
+        H, W = image.shape[:2]
+        px_box = None
+        if roi is not None and hasattr(roi, "pixel_box"):
+            try:
+                px_box = roi.pixel_box(W, H)
+            except Exception:  # noqa: BLE001 - an invalid ROI never kills the frame
+                px_box = None
+        if px_box is not None:
+            px0, py0, px1, py1 = px_box
+            crop = image[py0:py1, px0:px1]
+            if crop.shape[0] >= 8 and crop.shape[1] >= 8:
+                pil = Image.fromarray(crop.astype(np.uint8)).convert("RGB")
+            else:
+                pil = Image.fromarray(image.astype(np.uint8)).convert("RGB")
+        else:
+            pil = Image.fromarray(image.astype(np.uint8)).convert("RGB")
         prompt = "<OCR>"
         inputs = self._processor(images=pil, text=prompt, return_tensors="pt")
 
