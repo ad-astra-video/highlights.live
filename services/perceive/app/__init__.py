@@ -36,7 +36,7 @@ from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
 from .zone_trigger import DetectionZoneTrigger, resolve_zones
 from .goal_plane import GoalLineDetector, GoalLineSpec
-from .scoreboard import parse_ocr_score, ScoreboardTracker
+from .scoreboard import parse_ocr_score, ScoreboardTracker, ScoreboardRoi
 from .tracking_plan import (
     PLAN_VERSION,
     SAFE_DEFAULT_ROLE,
@@ -285,6 +285,23 @@ def _ensure_goal_line_detector(state) -> GoalLineDetector | None:
     if state.goal_line_detector is None:
         state.goal_line_detector = GoalLineDetector(state.goal_line_spec)
     return state.goal_line_detector
+
+
+def _scoreboard_roi(state):
+    """The session's scoreboard region-of-interest (ADAAAA-7081).
+
+    Resolved once per session from ``PERCEIVE_SCOREBOARD_ROI`` (a normalized
+    ``x0,y0,x1,y1`` box) else a documented default region. The scoreboard OCR
+    pass crops each candidate anchor frame to this ROI before ``<OCR>`` so only
+    the scoreboard graphic can produce a score / ``ocrHits`` — crowd, banner,
+    jersey, shot-clock and other on-screen text is cropped out. Never raises; an
+    unset/malformed ROI safely falls back to the default.
+    """
+    roi = getattr(state, "scoreboard_roi", None)
+    if roi is None:
+        roi = ScoreboardRoi.from_env()
+        state.scoreboard_roi = roi
+    return roi
 
 
 def _plan_category(state) -> "str | None":
@@ -605,15 +622,25 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     # across the candidate window is a hard, independent goal confirmation; its
     # presence/absence is forwarded to decide. OCR failure degrades to [] (weak
     # / absent evidence); it never drops the frame or the candidate.
+    #
+    # ADAAAA-7081: the OCR read is SCOPED to the scoreboard region of interest.
+    # We crop each candidate anchor frame to the scoreboard ROI before `<OCR>`
+    # so only the scoreboard graphic can produce a score / `ocrHits`. Crowd,
+    # banner/ad-board copy, jersey numbers and shot-clock text are cropped out
+    # and can never be misread as a score — a whole-frame `<OCR>` read of that
+    # text used to forge a false score delta (`scoreBoardChanged`), a hard
+    # goal-confirmation signal. Still exactly one `<OCR>` inference (on the
+    # crop), so no incremental billable GPU per frame.
     if cand_dict is not None and detector is not None and state.last_rgb is not None:
+        roi = _scoreboard_roi(state)
         try:
-            ocr_lines = detector.ocr(state.last_rgb) or []
+            ocr_lines = detector.ocr(state.last_rgb, roi=roi) or []
         except Exception as e:  # noqa: BLE001
             log.warning("scoreboard OCR skipped for frame %s: %s", seq, e)
             ocr_lines = []
         obs["ocr"] = ocr_lines
         cand_ts = float(cand_dict["timestamp"])
-        score = parse_ocr_score(ocr_lines)
+        score = parse_ocr_score(ocr_lines, roi=roi)
         state.scoreboard_tracker.record(cand_ts, score)
         if state.scoreboard_tracker.changed(cand_ts):
             cand_dict["scoreBoardChanged"] = True
