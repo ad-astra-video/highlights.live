@@ -217,3 +217,73 @@ def test_model_plainly_saw_goalnet_threat_helpers():
         {"reason": "The ball hits the post and goes over."}
     ) is True
     assert _model_plainly_saw_goalnet_threat({"reason": "Nothing notable happens."}) is False
+
+
+# ---- ADAAAA-7072 regression: do NOT suppress genuine near-miss reads ---------
+
+
+def test_near_miss_goalpost_deflects_away_is_corroborated():
+    # The empirical eval (ADAAAA-7072) surfaced that a genuine goal-bound
+    # non-conversion read ("hits the goalpost and deflects away") was suppressed
+    # because `\bpost(s)?\b` does not match inside the compound word "goalpost".
+    # The compound-goal objective regex must corroborate a real near-miss.
+    ok, _ = apply_near_miss_frame_grounding_gate(
+        _near_miss_decision(
+            reason="A player takes a shot that hits the goalpost and deflects away."
+        )
+    )
+    assert ok is True
+    assert _model_plainly_saw_goalnet_threat(
+        {"reason": "A player takes a shot that hits the goalpost and deflects away."}
+    ) is True
+
+
+def test_near_miss_cleared_off_goal_line_is_corroborated():
+    ok, _ = apply_near_miss_frame_grounding_gate(
+        _near_miss_decision(reason="The ball is cleared off the goal line by a defender.")
+    )
+    assert ok is True
+
+
+def test_near_miss_rebound_off_upright_is_corroborated():
+    assert _model_plainly_saw_goalnet_threat(
+        {"reason": "The striker's shot rebounds off the upright back into play."}
+    ) is True
+
+
+def test_near_miss_crowd_cue_still_rejected():
+    # The widened regexes must NOT turn a crowd/thematic cue into a near-miss.
+    ok, _ = apply_near_miss_frame_grounding_gate(
+        _near_miss_decision(reason="A crowd swell and thematic cue, no shot on goal.")
+    )
+    assert ok is False
+
+
+# ---- ADAAAA-7072 regression: do NOT miss a described goal (recall fallback) ---
+
+
+def test_specific_goal_read_recognizes_entered_net():
+    # A real goal the model described as "entering/entered the net" (criteria
+    # null at the sampled rate) must count as a frame-grounded goal read, so the
+    # gate does not collapse real-goal recall (ADAAAA-7072).
+    for obs in (
+        "The ball is seen entering the net after beating the keeper.",
+        "The striker struck the ball into the net.",
+        "The ball crossed the goal line between the posts.",
+    ):
+        assert _model_plainly_saw_goal(
+            {"verdict": {"independentlyObserved": obs, "criteria": {"ballInNet": None}}}
+        ) is True, obs
+
+
+def test_accept_with_entered_net_read_surfaces_goal():
+    decision = _goal_decision(
+        verdict={
+            "independentlyObserved": "The ball is seen entering the net, keeper beaten.",
+            "criteria": {"ballInNet": None, "ballCrossedLineBetweenPosts": None},
+        }
+    )
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL")
+    assert ok is True
+    assert decision["isHighlight"] is True
+    assert decision["outcome"] == "scoring_play"
