@@ -8,8 +8,8 @@
 #   * this module is the CONTRACT + the validator ("must implement validator
 #     rules" — increment A acceptance). It is pure data + coercion; it never
 #     raises on bad LLM output and never touches the GPU.
-#   * the PER-FRAME path consumes a normalized plan (increment B will wire
-#     resolve_vocabulary / resolve_zones / anchor slot to it). The guarantee
+#   * the PER-FRAME path consumes a normalized plan (increment B wires the
+#     resolve_vocabulary / anchor-slot application to it). The guarantee
 #     this module buys is that an unparseable/unknown/absent plan can never
 #     crash the per-frame path: normalize() coerces, validate() reports, and
 #     the caller degrades to the canned/safe-default roster.

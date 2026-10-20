@@ -2,9 +2,22 @@
 import time
 
 import numpy as np
+import pytest
 
 from app import florence
 from app.florence import FlorenceDetector
+
+
+def test_goal_reclass_removed_by_default():
+    """ADAAAA-7108 increment B: perceive never re-labels a candidate as GOAL.
+
+    Perceive does not have the knowledge to produce GOAL candidates; the
+    decide/gemma observer is the primary timeline reviewer on a fixed cadence
+    and sees goals via its own abilities. So sport_specific_event_type always
+    returns the raw generic type, never GOAL.
+    """
+    assert florence.sport_specific_event_type("soccer", "KILL") == "KILL"
+    assert florence.sport_specific_event_type("soccer", "MOVE", category="soccer") == "MOVE"
 
 
 def test_parse_single_object_with_special_tokens():
@@ -223,29 +236,30 @@ def test_resolve_vocabulary_game_hint_alias_substring():
 
 # --- ADAAAA-4193: sport-specific candidate event classification ---------------
 
-def test_sport_specific_event_soccer_kill_to_goal():
-    # The tracker anchors a fast strike as a generic KILL (explosive single-step).
-    # On the soccer paid path that must reach decide as a GOAL, or the model
-    # hard-rejects it ("this is soccer, not a KILL event") and no clip is cut.
-    assert florence.sport_specific_event_type("soccer", "KILL") == "GOAL"
-    assert florence.sport_specific_event_type("soccer", "MOVE") == "GOAL"
+def test_sport_specific_event_soccer_kill_not_goal():
+    # ADAAAA-7108 (increment B): perceive no longer re-classifies a soccer
+    # KILL/MOVE candidate as GOAL. Perceive does not have the knowledge to
+    # produce GOAL candidates; the decide/gemma observer sees goals via its own
+    # abilities. So the raw generic type passes through unchanged.
+    assert florence.sport_specific_event_type("soccer", "KILL") == "KILL"
+    assert florence.sport_specific_event_type("soccer", "MOVE") == "MOVE"
 
 
-def test_sport_specific_event_soccer_alias():
-    assert florence.sport_specific_event_type("Premier League", "KILL") == "GOAL"
-    assert florence.sport_specific_event_type("FA Cup", "MOVE") == "GOAL"
+def test_sport_specific_event_soccer_alias_keeps_generic():
+    assert florence.sport_specific_event_type("Premier League", "KILL") == "KILL"
+    assert florence.sport_specific_event_type("FA Cup", "MOVE") == "MOVE"
 
 
 def test_sport_specific_event_extended_soccer_aliases_inc8():
-    """INC-8 (ADAAAA-4484): a real operator/driver may hand a human league name
-    (Serie A, Ligue 1, Eredivisie, MLS, "soccer match", Uefa Champions League)
-    rather than the bare token 'soccer'. All must canonicalize to soccer so the
-    GOAL classification fires and the drive doesn't silently fall back to KILL."""
+    """INC-8 (ADAAAA-4484): league-name hints canonicalize to soccer. Under the
+    ADAAAA-7108 rework the generic type is kept (no GOAL reclass) but the
+    canonical_sport resolution must still hold so downstream sport handling
+    stays correct."""
     soc = ["Serie A", "Ligue 1", "Eredivisie", "Primeira Liga", "Liga MX",
            "Major League Soccer", "MLS", "soccer match", "football match",
            "UEFA Champions League", "Uefa Nations League"]
     for hint in soc:
-        assert florence.sport_specific_event_type(hint, "KILL") == "GOAL", hint
+        assert florence.sport_specific_event_type(hint, "KILL") == "KILL", hint
         assert florence.canonical_sport(hint) == "soccer", hint
     # non-soccer stays intact
     assert florence.sport_specific_event_type("NBA", "KILL") == "KILL"
@@ -314,8 +328,9 @@ def test_sport_specific_event_american_football_is_not_goal() -> None:
     # ADAAAA-6463: American football must never classify a strike as a soccer GOAL.
     assert florence.sport_specific_event_type("football", "KILL") == "KILL"
     assert florence.sport_specific_event_type("football", "MOVE", category="football") == "MOVE"
-    # Soccer still GOAL.
-    assert florence.sport_specific_event_type("football", "KILL", category="soccer") == "GOAL"
+    # ADAAAA-7108: no candidate type is re-classified as GOAL anymore (perceive
+    # lacks the knowledge to produce GOAL candidates).
+    assert florence.sport_specific_event_type("football", "KILL", category="soccer") == "KILL"
 
 
 def test_gate_stub_mode(monkeypatch):
