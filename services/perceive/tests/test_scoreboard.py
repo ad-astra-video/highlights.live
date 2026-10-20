@@ -7,7 +7,13 @@ shot-clock text is cropped out and can never set ``scoreBoardChanged``.
 """
 from __future__ import annotations
 
-from app.scoreboard import ScoreboardRoi, ScoreboardTracker, parse_ocr_score, score_changed
+from app.scoreboard import (
+    ScoreboardRoi,
+    ScoreboardTracker,
+    fallback_score_eligible,
+    parse_ocr_score,
+    score_changed,
+)
 
 
 def test_parse_ocr_score_standard_dash():
@@ -167,3 +173,76 @@ def test_scoreboard_roi_from_env_and_fallback():
             os.environ.pop(env_key, None)
         else:
             os.environ[env_key] = previous
+
+
+# --- ADAAAA-7094: vision-LLM score-text fallback eligibility -----------------
+# The empty-crop fallback accepts the LLM `score` only when the LLM-box overlaps
+# the configured scoreboard ROI, so a hallucinated box/score off the graphic
+# can never become a score and forge a scoreBoardChanged delta.
+
+
+def test_fallback_eligible_on_roi_overlap():
+    # A localized scoreboard inside the configured ROI qualifies (recall case).
+    roi = ScoreboardRoi(0.0, 0.0, 0.5, 0.25)
+    assert fallback_score_eligible([0.02, 0.03, 0.30, 0.20], roi) is True
+    # Overlapping the region edge / spanning it also qualifies.
+    assert fallback_score_eligible([0.39, 0.24, 0.40, 0.25], roi) is True
+    assert fallback_score_eligible([0.0, 0.0, 1.0, 1.0], roi) is True
+
+
+def test_fallback_ineligible_for_hallucinated_off_roi_box():
+    # The QA finding: a hallucinated box over a no-text region (crowd/banner)
+    # is ineligible, so the LLM's "3 - 1" never becomes a score.
+    roi = ScoreboardRoi(0.0, 0.0, 0.4, 0.25)  # top-left scorebug band
+    crowd_box = [0.5, 0.6, 0.9, 0.75]  # crowd/banner band, off the ROI
+    assert fallback_score_eligible(crowd_box, roi) is False
+
+
+def test_fallback_ineligible_without_localization():
+    # An LLM score without a bounding box (could not localize) must not be
+    # trusted on the empty-crop path.
+    roi = ScoreboardRoi(0.0, 0.0, 0.5, 0.25)
+    assert fallback_score_eligible(None, roi) is False
+
+
+def test_fallback_ineligible_malformed_or_missing_roi():
+    roi = ScoreboardRoi(0.0, 0.0, 0.5, 0.25)
+    # Wrong arity / non-numeric box -> not eligible, never raises.
+    assert fallback_score_eligible([0.1, 0.1, 0.2], roi) is False
+    assert fallback_score_eligible([0.1, 0.1, "x", 0.2], roi) is False  # type: ignore[arg-type]
+    # No ROI configured at all -> not eligible (no score, never a delta).
+    assert fallback_score_eligible([0.1, 0.1, 0.3, 0.2], None) is False
+
+
+def test_fallback_score_cannot_forge_delta_when_box_off_roi():
+    # End-to-end at the pure level mirroring the ADAAAA-7091 finding: two
+    # candidate frames with the crop OCR forced EMPTY and a hallucinated LLM
+    # score "3 - 1" then "3 - 2" over an OFF-ROI box. With the eligibility gate
+    # the LLM score never becomes a score, so the tracker can never report a
+    # delta — the false-positive window is structurally closed.
+    roi = ScoreboardRoi(0.0, 0.0, 0.4, 0.25)  # configured scoreboard ROI
+    tr = ScoreboardTracker(window_seconds=60.0)
+    for ts, llm_score in [(10.0, "3 - 1"), (30.0, "3 - 2")]:
+        hallucinated_box = [0.5, 0.6, 0.9, 0.75]  # off-ROI crowd region
+        ocr_lines = (
+            [llm_score]
+            if fallback_score_eligible(hallucinated_box, roi)
+            else []
+        )
+        score = parse_ocr_score(ocr_lines, roi=roi)
+        tr.record(ts, score)
+    # No score ever recorded (both reads rejected) -> no delta.
+    assert tr.changed(40.0) is False
+
+
+def test_fallback_score_still_forges_delta_when_box_on_roi():
+    # Control: a REAL in-ROI scoreboard (box overlapping the ROI) reading a
+    # change across the window still fires a delta — recall is preserved.
+    roi = ScoreboardRoi(0.0, 0.0, 0.4, 0.25)
+    tr = ScoreboardTracker(window_seconds=60.0)
+    for ts, llm_score in [(10.0, "3 - 1"), (30.0, "3 - 2")]:
+        real_box = [0.02, 0.03, 0.30, 0.20]  # inside the ROI
+        ocr_lines = [llm_score] if fallback_score_eligible(real_box, roi) else []
+        score = parse_ocr_score(ocr_lines, roi=roi)
+        tr.record(ts, score)
+    assert tr.changed(40.0) is True

@@ -36,7 +36,7 @@ from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
 from .zone_trigger import DetectionZoneTrigger, resolve_zones
 from .goal_plane import GoalLineDetector, GoalLineSpec
-from .scoreboard import parse_ocr_score, ScoreboardTracker, ScoreboardRoi
+from .scoreboard import fallback_score_eligible, parse_ocr_score, ScoreboardTracker, ScoreboardRoi
 from .scoreboard_vision import (
     ScoreboardVerdict,
     enabled as scoreboard_vision_enabled,
@@ -671,7 +671,11 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     # parse_ocr_score (score-line regex + colon/clock exclusion + absurd-value
     # cap) and a delta still only from the two-concrete-readings tracker, so a
     # hallucinated LLM box/score degrades to "no clean score line" and never
-    # forges a delta. ANY LLM failure (unreachable / timeout / non-JSON) yields
+    # forges a delta. ADAAAA-7094 makes that guarantee hold on the empty-crop
+    # score-text fallback too: the LLM `score` text is only trusted when its
+    # box overlaps the configured scoreboard ROI (see fallback_score_eligible),
+    # so a hallucinated box/score off the graphic can never become a delta.
+    # ANY LLM failure (unreachable / timeout / non-JSON) yields
     # None and degrades to the ADAAAA-7081 fixed-ROI path — a vision-LLM outage
     # never costs the signal the ROI would have caught and never drops a frame.
     if cand_dict is not None and detector is not None and state.last_rgb is not None:
@@ -697,9 +701,21 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 ocr_lines = []
             # Fallback: the cropped Florence <OCR> came back empty (e.g. a
             # faint scorebug Florence can't parse) but the vision LLM read the
-            # score — use the LLM's score text. It still passes parse_ocr_score
-            # below, so a non-score string can never become a score.
-            if not ocr_lines and verdict is not None and verdict.visible and verdict.score_text:
+            # score — use the LLM's score text ONLY when the LLM-localized box
+            # actually overlaps the configured scoreboard ROI (ADAAAA-7094).
+            # That gate makes a hallucinated box over a no-text region (crowd,
+            # banners) or an unlocalized score ineligible, so a hallucinated
+            # "N - M" can never forge a scoreBoardChanged delta on this path.
+            # The score still passes parse_ocr_score below (score-line regex +
+            # colon/clock exclusion + absurd-value cap), so a non-score string
+            # can never become a score either.
+            if (
+                not ocr_lines
+                and verdict is not None
+                and verdict.visible
+                and verdict.score_text
+                and fallback_score_eligible(verdict.box, _scoreboard_roi(state))
+            ):
                 ocr_lines = [verdict.score_text]
         else:
             ocr_lines = []
