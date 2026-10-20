@@ -12,7 +12,13 @@ Covers the decide service's running-summary contract:
 from fastapi.testclient import TestClient
 
 from app import app as decide_app
-from app.gemma import _compile_summary, _rule_summary, build_prompt, MAX_RUNNING_SUMMARY_CHARS
+from app.gemma import (
+    _compile_summary,
+    _next_running_summary,
+    _rule_summary,
+    build_prompt,
+    MAX_RUNNING_SUMMARY_CHARS,
+)
 
 client = TestClient(decide_app)
 
@@ -41,6 +47,70 @@ def test_rule_summary_grows_monotonically_then_compacts():
     # tick N contains/extends tick N-1 (monotonic growth).
     assert s2.startswith(s1)
     assert "GOAL" in s2 and "SHOT" in s2
+
+
+# --- ADAAAA-7113: gemma-path monotonic containment -------------------------
+# The rule path appends deterministically, so tick N is code-guaranteed to
+# contain tick N-1. On the gemma path the model can REWRITE the summary and
+# drop prior detail; _next_running_summary re-asserts containment so the
+# persisted runningSummary never loses earlier events.
+
+
+def test_next_running_summary_keeps_extension_verbatim():
+    # Model produced a true forward-only extension of the prior -> keep it whole.
+    prior = "min 1: a-team scored"
+    model = "min 1: a-team scored\nmin 2: a-team nearly scored"
+    out = _next_running_summary(prior, model)
+    assert out == _compile_summary(model)
+    assert out.startswith(prior)
+
+
+def test_next_running_summary_repairs_dropped_detail():
+    # Model rewrote and DROPPED prior detail -> prior is retained (monotonic).
+    prior = "team-a: goal (GOAL)\nteam-a: near miss (SHOT)"
+    model = "team-b advanced the ball"  # dropped the prior events entirely
+    out = _next_running_summary(prior, model)
+    # tick N still contains/extends tick N-1's covered events.
+    assert out.startswith(prior)
+    assert "GOAL" in out and "SHOT" in out
+    assert "team-b advanced the ball" in out
+
+
+def test_next_running_summary_partial_rewrite_keeps_prior():
+    # Model kept some prior detail but dropped others: prior is prepended so
+    # N-1's full covered set survives (no event loss, forward-only).
+    prior = "early: kickoff\nevent: corner"
+    model = "corner only"  # dropped 'kickoff'
+    out = _next_running_summary(prior, model)
+    assert "kickoff" in out and "corner" in out
+
+
+def test_next_running_summary_empty_prior_uses_model():
+    out = _next_running_summary("", "first tick detail")
+    assert out == _compile_summary("first tick detail")
+
+
+def test_next_running_summary_empty_model_keeps_prior():
+    # Model omitted the summary: never lose the prior.
+    prior = "prev events"
+    assert _next_running_summary(prior, "") == _compile_summary(prior)
+
+
+def test_next_running_summary_stays_bounded():
+    prior = "p " * (MAX_RUNNING_SUMMARY_CHARS // 2)
+    model = "m " * (MAX_RUNNING_SUMMARY_CHARS // 2)
+    out = _next_running_summary(prior, model)
+    assert len(out) <= MAX_RUNNING_SUMMARY_CHARS
+
+
+def test_next_running_summary_consecutive_observes_monotonic():
+    # Simulate consecutive cadence observes where the model keeps rewrites:
+    # tick N summary must always begin with (contain) tick N-1's.
+    s0 = "min 1: goal"
+    s1 = _next_running_summary(s0, "min 1: goal\nmin 2: save")
+    s2 = _next_running_summary(s1, "min 2: save")  # model dropped 'min 1: goal'
+    assert s2.startswith(s0)
+    assert s2.startswith(s1)
 
 
 def test_prompt_forwards_story_so_far_and_asks_running_summary():
