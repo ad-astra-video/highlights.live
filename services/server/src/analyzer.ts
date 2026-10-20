@@ -1682,6 +1682,18 @@ export function highlightIdempotencyKey(jobId: string, seq: number, eventType?: 
   return `hl:${jobId}:${seq}:${eventType ?? "highlight"}`;
 }
 
+/** ADAAAA-7118: the dedup key the VOD onEvent guard (and any caller mirroring
+ * store.addHighlight) must use. It is the SAME key store.addHighlight dedups on
+ * (a persisted record's `idempotencyKey`), so a candidate that emits two
+ * `highlight` events with an identical key (e.g. the GOAL anchor at the same seq)
+ * increments `highlightsFound` exactly once and the live counter matches the
+ * persisted count during processing. Legacy persisted rows without an
+ * idempotencyKey fall back to the legacy `start|eventType` form so resume
+ * protection still holds for them. */
+export function highlightDedupKey(h: { idempotencyKey?: string; start: number; eventType?: string }): string {
+  return h.idempotencyKey ?? `${Math.round(h.start)}|${h.eventType ?? "highlight"}`;
+}
+
 async function acceptVideoDecision(
   client: PipelineClient,
   run: LiveRunShared,
