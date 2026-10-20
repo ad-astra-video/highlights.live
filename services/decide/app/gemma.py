@@ -868,6 +868,44 @@ def transcribe_audio(
     return text, round(time.monotonic() - t0, 4)
 
 
+# Prompt-variant switch (ADAAAA-7085 / ADAAAA-7098): the pass-1 vision prompt
+# can be swapped via the DECIDE_PROMPT_VARIANT env. Arm A is now the DEFAULT
+# (it is a strict improvement over v0 on the real VOD path: A4 out-depth
+# D_vod 64.1 = +33% rel v0, A5 Stage-A FP 15.6% vs v0 19.8%, A2 recall-VOD
+# stays 100%, strict-JSON 100% — see evals/VOD-PROMPT-AB-RESULTS.md). v0 stays
+# available as the fallback/control arm (DECIDE_PROMPT_VARIANT=v0). B/C/D
+# regress A2 recall-VOD and are NOT adopted. Every variant keeps the strict-JSON
+# output contract (isHighlight, score 0..100, eventType, reason, outcome,
+# reasoning, verdict, evidenceAttested) and the image-before-text /
+# audio-after-text modality order; each variant changes ONLY the prompt text.
+PROMPT_VARIANT_DEFAULT = "A"
+
+
+def _variant_instructions(variant: str | None) -> str:
+    """Return the variant-specific instruction block appended to the shared
+    body, or '' for v0 (the control arm). Variants are prompt-text edits only."""
+    v = (variant or "").strip().upper()
+    if v.startswith("V"):
+        v = "V0"
+    if v not in ("V0", "A", "B", "C", "D"):
+        v = PROMPT_VARIANT_DEFAULT
+    blocks: list[str] = []
+    if v == "A":
+        blocks.append(
+            "DETAIL-FIRST NARRATION:\n"
+            "Your \"reason\" must be a concrete event narrative of roughly 40-60 "
+            "words, not a short label. When observable on the frames, name: the "
+            "players or sides involved, the ball path and its final location, the "
+            "possession or the scoring/contact action, the score context, and the "
+            "crowd/bench/player reaction. Whenever people are visible you MUST cite "
+            "their reaction (players with arms raised, a group pile/team huddle, "
+            "bench/dugout leaping up, or the crowd/commentary erupting) as part of "
+            "the narrative. A terse template reason such as \"high-value event GOAL\" "
+            "is NOT acceptable.\n"
+        )
+    return "".join(blocks)
+
+
 def build_prompt(
     event_type: str,
     evidence: dict,
@@ -875,8 +913,18 @@ def build_prompt(
     n_frames: int = 1,
     has_audio: bool = False,
     transcript: str = "",
+    variant: str | None = None,
 ) -> str:
     ev = event_type.upper()
+    # Variant = the prompt-variant arm (default A). Resolved from the explicit
+    # arg > DECIDE_PROMPT_VARIANT env > PROMPT_VARIANT_DEFAULT. v0 keeps today's
+    # prompt text as the control arm; A adds the detail-first narration block.
+    v = (
+        variant
+        or os.environ.get("DECIDE_PROMPT_VARIANT")
+        or PROMPT_VARIANT_DEFAULT
+    )
+    instr = _variant_instructions(v)
     meta = [
         f"candidate event type: {ev}",
         f"game hint: {game_hint or 'unspecified'}",
@@ -1031,7 +1079,8 @@ def build_prompt(
         "A near miss scores below a scoring play but above not_highlight: keep "
         "`score` in a lower band (e.g. <60) for near_miss, and set `nearMiss`/the "
         "flag so downstream assembly can label it distinctly.\n"
-        "Context:\n- " + "\n- ".join(meta) + "\n\n"
+        + instr
+        + "Context:\n- " + "\n- ".join(meta) + "\n\n"
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "
         "leading/trailing prose, exactly of this shape:\n"
         "{\"isHighlight\": true|false, \"score\": 0..100, \"eventType\": \"<type>\", "
