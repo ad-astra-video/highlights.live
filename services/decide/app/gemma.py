@@ -671,6 +671,212 @@ def apply_goal_attestation_gate(
     )
 
 
+# --- goal/net frame-grounding gate (ADAAAA-7070) ----------------------------
+#
+# The accept-biased prompt + the perceive goal signals (ballOutcome=goal /
+# ballInNet / goalCrossed / a scoreboard change) can together produce a "goal"
+# the frames do not show: the perceive detector fires on a near-goal (ball
+# tracked near the net / scoreboard OCR flicker) and the model, handed the
+# hypothesis, narrates a goal it was handed. The ADAAAA-6610 attestation gate
+# only requires *some* independent measured criterion; it does NOT require the
+# model's PASS 1 frame read to corroborate. This gate closes that gap.
+#
+# The frame-grounding gate is the PRIMARY gate for both GOAL and NEAR_MISS: a
+# verdict may only be surfaced as a goal when the model's independent PASS 1
+# observation plainly states it SAW the ball enter the net / cross between the
+# posts / the keeper beaten with the ball ending in the goal. Attestation alone
+# is never sufficient (req 3: if the PASS 1 observation cannot plainly state a
+# goal/net, do not surface GOAL). Real-goal recall (ADAAAA-6533 / ADAAAA-6543)
+# is preserved because a real goal yields a genuine frame read; this gate never
+# rejects a frame-grounded goal, and it never gates a non-goal outcome.
+
+# The model's structured PASS-1 tri-state read of the frames. `True` here is the
+# model plainly stating it SAW the ball in the net / between the posts. These
+# (not the free-text reason) are the trust surface for frame-grounding, because
+# the free text is exactly where the accept-biased model confabulates.
+_GOAL_READ_CRITERIA = ("ballInNet", "ballCrossedLineBetweenPosts")
+
+# A *specific, non-templated* goal read for the recall fallback: a real goal
+# whose structured criterion came back null (the 1 FPS sample missed the exact
+# net-entry instant) but whose observation still names, concretely, the ball in
+# the net / the net rippling / the keeper beaten with the ball crossing the
+# line. Requires the supporting read in the text, so a bare templated reason
+# (see is_bare_templated_reason) never counts as frame-grounded.
+_SPECIFIC_GOAL_READ_RE = re.compile(
+    r"\b(?:ball|strike|shot|header|tap)\b[^.;]{0,45}"
+    r"\b(?:into|inside|in|ripples?|bulges?|settles?\s+in)\s+"
+    r"(?:the\s+)?(?:net|goal|back\s+of\s+the\s+net)\b"
+    r"|\b(?:cross|crosses|crossing|crossed)\s+the\s+(?:goal\s+)?line\b"
+    r"[^.;]{0,45}\b(?:between\s+the\s+posts|into\s+the\s+net|and\s+in|inside)\b"
+    r"|\b(?:keeper|goalkeeper|gk)\b[^.;]{0,45}\b(?:beaten|wrong\s+foot|dived\s+the\s+wrong)\b"
+    r"[^.;]{0,40}\b(?:ball\s+)?(?:in\s+the\s+net|into\s+the\s+net|crosses?\s+the\s+(?:goal\s+)?line)\b",
+    re.IGNORECASE,
+)
+
+
+def _specific_goal_read_present(text: str) -> bool:
+    """True when ``text`` names a concrete, frame-grounded goal read (the ball
+    in the net / net rippling / keeper beaten with the ball crossing the line)
+    and is NOT the bare templated boilerplate. Empty text is never specific, and
+    a bare templated reason is never a supporting read (anti-confabulation)."""
+    if not text:
+        return False
+    if is_bare_templated_reason(text):
+        return False
+    return bool(_SPECIFIC_GOAL_READ_RE.search(text))
+
+
+def _model_plainly_saw_goal(decision: dict) -> bool:
+    """True when the model's PASS 1 independent observation plainly states it
+    SAW the ball enter the net / cross between the posts / the keeper beaten
+    with the ball ending in the goal.
+
+    Primary signal: ``verdict.criteria.ballInNet`` or
+    ``verdict.criteria.ballCrossedLineBetweenPosts`` == True (the model's
+    explicit binary frame read). Recall fallback: a specific, non-templated goal
+    read named in ``independentlyObserved`` (and, if absent there, ``reason``).
+
+    A bare templated reason, or a self-reported ``scoring_play`` verdict with no
+    supporting frame read, is NOT frame-grounded (anti-confabulation,
+    ADAAAA-7070)."""
+    verdict = decision.get("verdict")
+    if isinstance(verdict, dict):
+        crit = verdict.get("criteria")
+        if isinstance(crit, dict):
+            for key in _GOAL_READ_CRITERIA:
+                if crit.get(key) is True:
+                    return True
+        observed = _as_text(verdict.get("independentlyObserved"))
+        if _specific_goal_read_present(observed):
+            return True
+    if _specific_goal_read_present(decision.get("reason") or ""):
+        return True
+    return False
+
+
+# Frame-grounded near-miss read: the model SAW a goal objective (net / goal
+# mouth / posts) AND a shot genuinely threatening it that did NOT convert — on
+# target but saved/blocked, hitting the post/bar, or an on-goal shot dragged
+# wide/over. Checked independently (order-independent) on the observation text,
+# since the near-miss taxonomy is not one of the tri-state goal criteria.
+_GOAL_OBJECTIVE_RE = re.compile(
+    r"\b(?:goal(?:mouth)?|net|post(?:s)?|crossbar|bar|upright)\b", re.IGNORECASE
+)
+_GOAL_ATTEMPT_RE = re.compile(
+    r"\b(?:shot|strike|header|effort|kick|ball|hit|hits|cross(?:es)?)\b", re.IGNORECASE
+)
+_GOAL_THREAT_RE = re.compile(
+    r"\b(?:blocked|block|save|saved|cleared\s+off\s+the\s+line|off\s+the\s+line|"
+    r"deflected|over|wide|off[-\s]target|on[-\s]target|crosses?\s+the\s+(?:goal\s+)?line|"
+    r"beaten|tipped|parried|denied|post|bar|crossbar|goes\s+over|into\s+the\s+goal\s+mouth)\b",
+    re.IGNORECASE,
+)
+
+
+def _model_plainly_saw_goalnet_threat(decision: dict) -> bool:
+    """True when the model's independent observation plainly states it SAW a
+    goal objective (the goal mouth / net / posts) AND a shot genuinely
+    threatening it that did not convert — the frame-grounded read that must
+    corroborate a near-miss. Requires all three independent signals (a goal
+    objective + a shot/attempt + a threat-that-did-not-convert). A near-miss
+    must NOT be surfaced on a crowd-noise / thematic cue or the perceive signal
+    alone (ADAAAA-7070 req 2)."""
+    verdict = decision.get("verdict")
+    text = ""
+    if isinstance(verdict, dict):
+        text = _as_text(verdict.get("independentlyObserved"))
+    text = text or (decision.get("reason") or "")
+    if not text:
+        return False
+    return bool(
+        _GOAL_OBJECTIVE_RE.search(text)
+        and _GOAL_ATTEMPT_RE.search(text)
+        and _GOAL_THREAT_RE.search(text)
+    )
+
+
+def apply_frame_grounding_gate(
+    decision: dict, event_type: Optional[str] = None
+) -> tuple[bool, str | None]:
+    """ADAAAA-7070: the goal/net frame-grounding gate over the model's accept.
+
+    Returns (ok, reason). For a GOAL (`scoring_play` or a goal event) accept, the
+    model's PASS 1 observation must plainly state it SAW the goal in the frames
+    (see ``_model_plainly_saw_goal``); otherwise the verdict is NOT surfaced as a
+    GOAL — it is downgraded to ``big_play`` / ``not_highlight`` so no goal
+    highlight is created from frames that do not show one. The independent
+    attestation (perceive ballOutcome=goal / ballInNet / scoreboard change)
+    alone is never sufficient (req 3). A frame-grounded goal always passes, so
+    real-goal recall is preserved.
+
+    Runs AFTER the attestation gate so a goal the model did not actually SEE is
+    caught even when a (misleading) perceive signal attested it — the exact
+    false-positive class the last VOD job surfaced. Never acts on a non-goal
+    outcome (scoring_play stays the only true goal)."""
+    if not is_goal_accept(decision, event_type):
+        return True, None
+    if _model_plainly_saw_goal(decision):
+        return True, None
+    # Not frame-grounded: do not surface a GOAL.
+    decision["isHighlight"] = False
+    decision["outcome"] = "not_highlight"
+    decision.setdefault(
+        "reason",
+        "",
+    )
+    decision["reason"] = (
+        (decision.get("reason") or "")
+        + "; PASS 1 observation did not plainly show a goal/net (frame-grounding gate)"
+    ).strip("; ")
+    try:
+        cur = decision.get("eventType") or event_type or ""
+        decision["eventType"] = event_type_for_outcome("not_highlight", str(cur)) or cur
+    except Exception:  # noqa: BLE001
+        pass
+    return False, (
+        "no frame-grounded goal/net read in the model's PASS 1 independent "
+        "observation; not surfaced as a goal"
+    )
+
+
+def apply_near_miss_frame_grounding_gate(decision: dict) -> tuple[bool, str | None]:
+    """ADAAAA-7070: gate a NEAR_MISS on the model's frame ground of a goal/net.
+
+    Returns (ok, reason). A near-miss is surfaced only when BOTH the
+    deterministic goal-line signal (blocked / off_target) fired AND the model's
+    independent observation corroborates a goal objective (mouth / net / posts)
+    with a genuinely threatening shot (req 2). A near-miss on a crowd-noise /
+    thematic cue or the perceive signal alone — with no frame-grounded goal/net
+    read — is downgraded to ``not_highlight`` so no near-miss highlight is
+    created from frames that do not show a goal being genuinely threatened.
+
+    ``near_miss_vs_scoring_confusion`` stays 0 either way: this gate only ever
+    downgrades a near-miss; it never promotes a near-miss to a scoring_play."""
+    if (decision.get("outcome") or "") != "near_miss":
+        return True, None
+    if _model_plainly_saw_goalnet_threat(decision):
+        return True, None
+    decision["isHighlight"] = False
+    decision["outcome"] = "not_highlight"
+    decision["nearMiss"] = False
+    decision.setdefault(
+        "reason",
+        "",
+    )
+    decision["reason"] = (
+        (decision.get("reason") or "")
+        + "; no frame-grounded goal/net read corroborating the near-miss (ADAAAA-7070)"
+    ).strip("; ")
+    try:
+        cur = decision.get("eventType") or ""
+        decision["eventType"] = event_type_for_outcome("not_highlight", str(cur)) or cur
+    except Exception:  # noqa: BLE001
+        pass
+    return False, (
+        "no frame-grounded goal/net read corroborating the near-miss; not surfaced"
+    )
+
+
 # --- near-miss reconciliation (ADAAAA-6481 / §8 near_miss_recall) ----------
 #
 # A goal-bound shot that does NOT convert is a NEAR-MISS, not a non-event:
@@ -954,12 +1160,15 @@ def build_prompt(
         "full read of the frames, audio, and context; never let reaction alone "
         "override a clear read of the play.\n"
         "For soccer (game hint contains 'soccer'), the candidate is a GOAL and "
-        "the clip is a highlight when the frames + audio show the team actually "
-        "SCORED. Judge the goal from the full visual + audio read (frames + "
-        "audio-noise trigger), NOT from the geometric goal-line corroboration "
-        "alone. Explicit goal signals - assess each against the frames/audio, "
-        "mark it true when you plainly see it, false when the frames plainly "
-        "show it did NOT happen, and null (unverifiable) when you cannot tell:\n"
+        "the clip is a GOAL highlight ONLY when the frames plainly show the team "
+        "actually SCORED — the ball entering the net / crossing the goal line "
+        "between the posts / the keeper beaten with the ball ending in the goal. "
+        "Judge the goal from the FRAMES FIRST (the temporal sequence you are "
+        "shown); the geometric goal-line corroboration and the audio are "
+        "secondary, never a substitute for a goal actually visible in the "
+        "frames. Assess each explicit goal signal against the frames, mark it "
+        "true ONLY when you plainly see it, false when the frames plainly show it "
+        "did NOT happen, and null (unverifiable) when you cannot tell:\n"
         "- ballCrossedLineBetweenPosts: you plainly see the ball cross the goal "
         "line between the uprights;\n"
         "- ballInNet: the ball is in the net / the net ripples / the keeper is "
@@ -967,16 +1176,22 @@ def build_prompt(
         "- scoreboardChanged: the scoreboard / score readout changes to reflect "
         "a goal;\n"
         "- crowdErupted: the crowd/commentary erupts consistent with a goal.\n"
-        "A GOAL is confirmed (isHighlight=true) when the aggregate evidence "
-        "supports it: the ball ends in the net / the net ripples / the keeper is "
-        "beaten AND the crowd/commentary erupts consistent with a goal. The "
-        "goal-line / homography corroboration (ballOutcome, "
-        "ballCrossedLineBetweenPosts) is OPTIONAL corroboration, NOT a required "
-        "gate: when it is absent (no field homography configured, or the "
-        "line-crossing instant is not captured at the sampled frame) judge the "
-        "goal DIRECTLY from the frames + audio-noise trigger, and do NOT reject "
-        "just because you could not confirm the exact line crossing. Do NOT flag "
-        "a soccer clip as a highlight when it shows:\n"
+        "A GOAL is confirmed (isHighlight=true) ONLY when you PLAINLY SEE the "
+        "ball enter the net / cross between the posts / the keeper beaten with "
+        "the ball ending in the goal. If the frames do NOT plainly show that — "
+        "if you cannot confirm the ball entered the net because the net-entry "
+        "instant is not captured, the ball is not visibly in the net, or the "
+        "keeper is not beaten with the ball ending in the goal — then the "
+        "candidate is NOT a goal: return isHighlight=false, set "
+        "ballInNet/ballCrossedLineBetweenPosts to false or null, and classify "
+        "the outcome by what you DID see (a goal-bound shot that did not "
+        "convert = near_miss; a save / post / last-line denial = big_play; "
+        "otherwise not_highlight). Absence of a clear goal read must NEVER "
+        "resolve to an accept — do NOT infer a goal from the candidate event "
+        "type, from the crowd/commentary reaction, from a perceived "
+        "ballOutcome/ballInNet/scoreboard signal, or from players celebrating, "
+        "unless the frames themselves plainly show the ball in the net. Do NOT "
+        "flag a soccer clip as a GOAL highlight when it shows:\n"
         "- a yellow card, red card, booking, foul, tackle, or any disciplinary "
         "incident (referee showing a card, players confronting, a player sent "
         "off);\n"
@@ -984,17 +1199,6 @@ def build_prompt(
         "blocked shot, or any chance in which the ball does NOT enter the net;\n"
         "- only open play, build-up, players running, warm-ups, or a celebration "
         "with no ball in the net.\n"
-        "Goal-line corroboration that is UNVERIFIABLE (you cannot confirm the "
-        "ball crossed the line / is in the net because the instant was not "
-        "captured or no homography is configured) is NOT a rejection by itself - "
-        "decide on your full read of the frames + audio. You MUST return "
-        "isHighlight=false ONLY when the frames EXPLICITLY CONTRADICT a goal - "
-        "you plainly see the ball did NOT enter the net (it hit the post or bar, "
-        "was saved, went over or wide, or the ball stays in midfield / the clip "
-        "is warm-up or lull with no strike) - and name the contradicting evidence "
-        "in `reason` and in verdict.contradictedBy. NEVER infer a goal from the "
-        "candidate event type, or from players celebrating / crowd erupting ALONE "
-        "when the frames show the ball did NOT enter the net.\n"
         "HARD GATE — perceived goal-line ground truth: when the context reports a "
         "`ballOutcome` (goal-line ground-truth from perceive's homography), it is "
         "a decisive measurement of whether the ball entered the goal. If "
@@ -1002,15 +1206,18 @@ def build_prompt(
         "`off_target`, `blocked`, `no_shot`, or `cross`), the ball did NOT enter "
         "the net and you MUST return isHighlight=false and state that the "
         "measured ballOutcome contradicts the goal. Treat `ballOutcome=goal` as "
-        "strong confirmation but still verify visually. A missing/absent "
-        "`ballOutcome` is NOT a rejection signal — decide on the frames/audio as "
-        "normal.\n"
-        "Scoreboard evidence: when the context reports a scoreboard score change "
-        "observed during the candidate window, that is independent confirmation of "
-        "a goal — treat it as strong evidence for isHighlight=true (combined with "
-        "the ball crossing the line). When no scoreboard change is reported, treat "
-        "that as weak/absent evidence and NEVER let its absence alone force or block "
-        "a goal verdict.\n"
+        "corroborating evidence only — you must STILL plainly see the ball in the "
+        "net in the frames (a perceived signal never substitutes for a goal you "
+        "cannot see). A missing/absent `ballOutcome` is NOT a rejection signal — "
+        "decide on the frames as normal, and still require a goal plainly visible "
+        "in the frames.\n"
+        "Scoreboard evidence: a scoreboard score change observed during the "
+        "window is corroborating evidence of a goal, but it is NEVER sufficient "
+        "on its own — you must still plainly see the ball enter the net in the "
+        "frames to confirm isHighlight=true (a fitted/flickering scoreboard read "
+        "is a known false-trigger, so never confirm a goal on the scoreboard "
+        "alone). When no scoreboard change is reported, treat that as weak/absent "
+        "evidence and NEVER let its absence alone force or block a goal verdict.\n"
         "OUTCOME TAXONOMY — you must ALSO classify the outcome into EXACTLY one of "
         "the four members below and return it in the `outcome` field (increment F):\n"
         "- scoring_play: the frames show the ball/object actually crossing / "

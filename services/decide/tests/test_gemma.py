@@ -513,41 +513,44 @@ def test_build_prompt_names_explicit_goal_criteria():
         "crowdErupted",
     ):
         assert k in p
-    # the criteria are corroboration; unverifiable goal-line corroboration is
-    # NOT a rejection, only EXPLICIT contradiction is. (ADAAAA-6543 pivot)
-    assert "UNVERIFIABLE" in p
-    assert "EXPLICITLY CONTRADICT" in p
+    # ADAAAA-7070 de-bias: a goal must be PLAINLY SEEN in the frames; a missing
+    # read must never resolve to an accept, and never infer a goal from the
+    # candidate type / reaction / perceived signal.
+    assert "PLAINLY SEE the ball enter the net" in p
     assert "isHighlight=false" in p
+    assert "do NOT infer a goal" in p
+    assert "crowd/commentary reaction" in p
 
 
 def test_build_prompt_goal_line_corroboration_not_a_gate():
     # ADAAAA-6543 (ADAAAA-6538 pivot_vlm_judgment): the goal-line / homography
     # corroboration must NOT be a required accept gate. A real goal is judged
-    # from the frames + audio-noise trigger directly, and an ABSENT ballOutcome
-    # / line-crossing (no homography configured) must not cause a rejection.
+    # from the frames directly, and an ABSENT ballOutcome / line-crossing (no
+    # homography configured) must not cause a rejection.
     p = build_prompt("GOAL", {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0}, "soccer")
-    assert "OPTIONAL corroboration" in p
-    assert "NOT a required gate" in p
-    assert "goal DIRECTLY from the frames + audio-noise trigger" in p
+    # the perceived signal is corroborating, never a substitute for a goal the
+    # model cannot see in the frames
+    assert "corroborating evidence only" in p
+    assert "A missing/absent `ballOutcome` is NOT a rejection signal" in p
+    assert "still require a goal plainly visible in the frames" in p
     # the old conservative formulation (both ball criteria MUST be true) is gone
     assert "only when the required ball criteria" not in p
     assert "ballCrossedLineBetweenPosts AND ballInNet) are true" not in p
-    # absent corroboration is NOT a rejection by itself
-    assert "is NOT a rejection by itself" in p
 
 
 def test_build_prompt_keeps_false_positive_guard():
     # Criterion 2 (false-positive guard): the pivot must not become accept-all.
-    # A non-goal (ball mid-field / saved / hit post / no ball in net) must
-    # still be rejected. The contradiction instructions remain.
+    # A non-goal (saved / hit post / no ball in net / open play) must still be
+    # rejected; a goal is only accepted when the frames plainly show the ball in
+    # the net.
     p = build_prompt("GOAL", {"trackCount": 1, "maxVelocity": 0.2, "ocrHits": 0}, "soccer")
     assert "any chance in which the ball does NOT enter the net" in p
-    assert "the ball stays in midfield" in p
-    assert "NEVER infer a goal from the candidate event type" in p
+    assert "only open play, build-up, players running, warm-ups, or a celebration" in p
+    assert "do NOT infer a goal" in p
     # celebrating / crowd erupting ALONE must not imply a goal when frames show
     # the ball did not enter the net.
-    assert "crowd erupting ALONE" in p
-    assert "EXPLICITLY CONTRADICT" in p
+    assert "crowd/commentary reaction" in p
+    assert "unless the frames themselves plainly show the ball in the net" in p
 
 
 def test_build_prompt_response_shape_carries_rationale():
