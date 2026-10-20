@@ -37,6 +37,12 @@ from .ball_signal import BallSignalPipeline, is_ball_label
 from .zone_trigger import DetectionZoneTrigger, resolve_zones
 from .goal_plane import GoalLineDetector, GoalLineSpec
 from .scoreboard import parse_ocr_score, ScoreboardTracker, ScoreboardRoi
+from .scoreboard_vision import (
+    ScoreboardVerdict,
+    enabled as scoreboard_vision_enabled,
+    parse_scoreboard_verdict,
+    vision_scoreboard,
+)
 from .tracking_plan import (
     PLAN_VERSION,
     SAFE_DEFAULT_ROLE,
@@ -301,6 +307,28 @@ def _scoreboard_roi(state):
     if roi is None:
         roi = ScoreboardRoi.from_env()
         state.scoreboard_roi = roi
+    return roi
+
+
+def _vision_box_roi(state) -> "ScoreboardRoi | None":
+    """The vision-LLM scoreboard box for the current candidate (ADAAAA-7084).
+
+    When the vision-LLM path ran this frame and localized the scoreboard, the
+    LLM's box is what the ``<OCR>`` pass should crop to (it tracks the graphic
+    to wherever it actually sits, unlike the fixed prior ROI). Returns the
+    box as a :class:`ScoreboardRoi`, or ``None`` when the gate is off, the LLM
+    returned no usable box, or the box is too degenerate to crop (the caller
+    then falls back to the configured ROI). Never raises.
+    """
+    verdict = getattr(state, "scoreboard_vision", None)
+    if not isinstance(verdict, ScoreboardVerdict) or not verdict.box:
+        return None
+    try:
+        roi = ScoreboardRoi(*verdict.box)
+    except (TypeError, ValueError):
+        return None
+    if roi.pixel_box(1920, 1080) is None:  # sanity: a reachable, non-degenerate region
+        return None
     return roi
 
 
@@ -631,12 +659,49 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     # text used to forge a false score delta (`scoreBoardChanged`), a hard
     # goal-confirmation signal. Still exactly one `<OCR>` inference (on the
     # crop), so no incremental billable GPU per frame.
+    #
+    # ADAAAA-7084 (design follow-up, opt-in via PERCEIVE_SCOREBOARD_LLM): the
+    # vision LLM (the same OpenAI-compatible endpoint the decide planner/gemma
+    # use) first assesses whether a scoreboard is actually VISIBLE in this
+    # frame and, when so, localizes it. That removes the ADAAAA-7082
+    # calibration-dependent recall — a source whose scorebug sits outside the
+    # fixed prior ROI is still found and cropped by the LLM's box, so a real
+    # score change fires `scoreBoardChanged`. The existing false-positive
+    # protections stay the FINAL gate: the score still only comes from
+    # parse_ocr_score (score-line regex + colon/clock exclusion + absurd-value
+    # cap) and a delta still only from the two-concrete-readings tracker, so a
+    # hallucinated LLM box/score degrades to "no clean score line" and never
+    # forges a delta. ANY LLM failure (unreachable / timeout / non-JSON) yields
+    # None and degrades to the ADAAAA-7081 fixed-ROI path — a vision-LLM outage
+    # never costs the signal the ROI would have caught and never drops a frame.
     if cand_dict is not None and detector is not None and state.last_rgb is not None:
-        roi = _scoreboard_roi(state)
-        try:
-            ocr_lines = detector.ocr(state.last_rgb, roi=roi) or []
-        except Exception as e:  # noqa: BLE001
-            log.warning("scoreboard OCR skipped for frame %s: %s", seq, e)
+        # The vision-LLM "scoreboard visible?" gate + locator (opt-in).
+        verdict = vision_scoreboard(image_b64) if scoreboard_vision_enabled() else None
+        state.scoreboard_vision = verdict
+        # Crop region: the LLM's localized box when it ran and returned a usable
+        # one (tracks the graphic wherever it actually sits), else the
+        # configured ROI (the ADAAAA-7081 prior).
+        roi = _vision_box_roi(state) if verdict is not None else None
+        if roi is None:
+            roi = _scoreboard_roi(state)
+        # When the vision LLM says there is NO scoreboard, skip the <OCR> pass
+        # entirely so out-of-ROI text is never even read (the gate the CEO
+        # asked for). A None verdict (gate off / LLM failure) keeps visible=True
+        # and runs the ADAAAA-7081 fixed-ROI path unchanged.
+        visible = verdict.visible if verdict is not None else True
+        if visible:
+            try:
+                ocr_lines = detector.ocr(state.last_rgb, roi=roi) or []
+            except Exception as e:  # noqa: BLE001
+                log.warning("scoreboard OCR skipped for frame %s: %s", seq, e)
+                ocr_lines = []
+            # Fallback: the cropped Florence <OCR> came back empty (e.g. a
+            # faint scorebug Florence can't parse) but the vision LLM read the
+            # score — use the LLM's score text. It still passes parse_ocr_score
+            # below, so a non-score string can never become a score.
+            if not ocr_lines and verdict is not None and verdict.visible and verdict.score_text:
+                ocr_lines = [verdict.score_text]
+        else:
             ocr_lines = []
         obs["ocr"] = ocr_lines
         cand_ts = float(cand_dict["timestamp"])
@@ -644,6 +709,11 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         state.scoreboard_tracker.record(cand_ts, score)
         if state.scoreboard_tracker.changed(cand_ts):
             cand_dict["scoreBoardChanged"] = True
+        if verdict is not None:
+            log.info(
+                "scoreboard vision session=%s seq=%s visible=%s box=%s score=%r",
+                state.session_id, seq, verdict.visible, verdict.box, verdict.score_text,
+            )
     for q in state.subscribers:
         for e in events:
             try:
