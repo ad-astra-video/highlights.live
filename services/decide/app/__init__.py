@@ -451,7 +451,7 @@ def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, 
     # caught, and so no goal/near-miss highlight is created from frames that do
     # not show one. near_miss_vs_scoring_confusion stays 0: these gates only
     # downgrade a near-miss, never promote it to a scoring_play.
-    apply_frame_grounding_gate(decision, event_type)
+    apply_frame_grounding_gate(decision, event_type, evidence)
     apply_near_miss_frame_grounding_gate(decision)
     return decision
 
@@ -606,7 +606,7 @@ def create_app() -> FastAPI:
             # frame-grounded goal/net read. Runs after finalize so a goal the
             # model did not actually SEE is caught, and so no goal/near-miss
             # highlight is created from frames that do not show one.
-            apply_frame_grounding_gate(decision, req.eventType)
+            apply_frame_grounding_gate(decision, req.eventType, req.evidence.model_dump())
             apply_near_miss_frame_grounding_gate(decision)
             _log_highlight("gemma", req, decision)
             return decision

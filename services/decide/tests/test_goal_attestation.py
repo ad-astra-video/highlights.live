@@ -59,11 +59,12 @@ def test_frame_grounding_rejects_templated_unseen_goal():
 
 
 def test_frame_grounding_accepts_frame_grounded_goal():
-    # A frame-grounded PASS 1 read (model plainly saw the ball in the net) is
-    # accepted, even without a perceive attestation.
+    # A frame-grounded PASS 1 read (model plainly saw the ball in the net)
+    # corroborated by an independent data signal is accepted (ADAAAA-7070 data
+    # backstop: the model read is no longer the sole authority).
     decision = _goal_decision(
         reason="Striker slots it low into the far corner past the keeper; the ball is clearly in the net.",
         verdict={"criteria": {"ballInNet": True, "ballCrossedLineBetweenPosts": True}, "independentlyObserved": "The striker shoots low; the ball crosses the line into the net."},
     )
-    ok, _ = apply_frame_grounding_gate(decision, "GOAL")
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", {"scoreBoardChanged": True})
     assert ok is True

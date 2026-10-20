@@ -811,37 +811,58 @@ def _model_plainly_saw_goalnet_threat(decision: dict) -> bool:
 
 
 def apply_frame_grounding_gate(
-    decision: dict, event_type: Optional[str] = None
+    decision: dict, event_type: Optional[str] = None, evidence: Optional[dict] = None
 ) -> tuple[bool, str | None]:
     """ADAAAA-7070: the goal/net frame-grounding gate over the model's accept.
 
     Returns (ok, reason). For a GOAL (`scoring_play` or a goal event) accept, the
-    model's PASS 1 observation must plainly state it SAW the goal in the frames
-    (see ``_model_plainly_saw_goal``); otherwise the verdict is NOT surfaced as a
-    GOAL — it is downgraded to ``big_play`` / ``not_highlight`` so no goal
-    highlight is created from frames that do not show one. The independent
-    attestation (perceive ballOutcome=goal / ballInNet / scoreboard change)
-    alone is never sufficient (req 3). A frame-grounded goal always passes, so
-    real-goal recall is preserved.
+    verdict is only surfaced when BOTH hold:
+      1. the model's PASS 1 observation plainly states it SAW the goal in the
+         frames (see ``_model_plainly_saw_goal``), AND
+      2. at least one INDEPENDENT, measured data signal corroborates the goal
+         (see ``attested_goal_criterion``: perceive ``ballOutcome=goal`` /
+         ``goalCrossed`` / ``ballInNet``, or a scoreboard score change).
+
+    The independent-data backstop (board decision 2026-10-20) is what closes the
+    residual GOAL FPR: with perceive data-only, the gate previously trusted the
+    model's self-reported `verdict.criteria.ballInNet` / `ballCrossed` — the
+    very confabulation source — so a prompt alone could never keep FPR < 5%.
+    Corroborating the model's read with an independent measured signal makes the
+    model NO LONGER the sole evidence source. Neither signal is sufficient alone:
+    attestation alone is never a goal (req 3), and a confabulated read with no
+    independent corroboration is never a goal (the 66.7% FPR class). A frame read
+    that is NOT corroborated is downgraded to ``not_highlight`` so no goal
+    highlight is created from frames that do not show one. Real-goal recall is
+    preserved because a real goal yields both a genuine frame read AND a score
+    change / goal attestation (ADAAAA-6533 / 6543); only a goal with NEITHER is
+    suppressed (the ADAAAA-7021 tradeoff the board accepted, to be quantified by
+    QA).
 
     Runs AFTER the attestation gate so a goal the model did not actually SEE is
-    caught even when a (misleading) perceive signal attested it — the exact
-    false-positive class the last VOD job surfaced. Never acts on a non-goal
-    outcome (scoring_play stays the only true goal)."""
+    caught even when a (misleading) perceive signal attested it. Never acts on a
+    non-goal outcome (scoring_play stays the only true goal)."""
     if not is_goal_accept(decision, event_type):
         return True, None
-    if _model_plainly_saw_goal(decision):
+    if _model_plainly_saw_goal(decision) and attested_goal_criterion(evidence):
         return True, None
-    # Not frame-grounded: do not surface a GOAL.
+    # Not both frame-grounded AND independently corroborated: do not surface a
+    # GOAL. Include which leg failed so the published reason is diagnostic.
+    read_ok = _model_plainly_saw_goal(decision)
+    corrob_ok = attested_goal_criterion(evidence)
     decision["isHighlight"] = False
     decision["outcome"] = "not_highlight"
     decision.setdefault(
         "reason",
         "",
     )
+    leg = (
+        "no independent goal signal (perceive goalCrossed / ballOutcome=goal / "
+        "ballInNet / scoreboard change)" if read_ok else
+        "PASS 1 observation did not plainly show a goal/net"
+    )
     decision["reason"] = (
         (decision.get("reason") or "")
-        + "; PASS 1 observation did not plainly show a goal/net (frame-grounding gate)"
+        + "; frame-grounding gate failed: " + leg
     ).strip("; ")
     try:
         cur = decision.get("eventType") or event_type or ""
@@ -849,8 +870,8 @@ def apply_frame_grounding_gate(
     except Exception:  # noqa: BLE001
         pass
     return False, (
-        "no frame-grounded goal/net read in the model's PASS 1 independent "
-        "observation; not surfaced as a goal"
+        "no frame-grounded goal/net read corroborated by an independent goal "
+        "signal; not surfaced as a goal"
     )
 
 
