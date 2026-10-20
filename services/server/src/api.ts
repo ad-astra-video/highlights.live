@@ -930,6 +930,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // matching the persisted count. Legacy highlights without an
         // idempotencyKey fall back to the start|eventType form.
         const key = highlightDedupKey(ev.highlight);
+        console.error(`[vod:${jobId}] HL ev dedup=${existingHl.has(key)} key=${key} ik=${ev.highlight.idempotencyKey} start=${ev.highlight.start} et=${ev.highlight.eventType} id=${ev.highlight.id}`);
         if (existingHl.has(key)) {
           baseHook(ev);
           return; // already persisted on an earlier attempt — no re-debit
