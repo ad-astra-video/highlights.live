@@ -40,6 +40,14 @@ def _goal_decision(**kw) -> dict:
     return d
 
 
+def _attested_evidence(**kw) -> dict:
+    """An independent measured goal signal (score change) that corroborates a
+    frame-grounded read — the data-backstop half of the ADAAAA-7070 gate."""
+    ev = {"scoreBoardChanged": True}
+    ev.update(kw)
+    return ev
+
+
 # ---- GOAL frame-grounding ---------------------------------------------------
 
 
@@ -48,7 +56,7 @@ def test_goal_accept_requires_model_frame_read():
     # plainly states a goal -> must NOT surface a GOAL (the exact false-positive
     # class the last VOD job surfaced). Attestation alone is never sufficient.
     decision = _goal_decision()  # no verdict block -> no frame read
-    ok, reason = apply_frame_grounding_gate(decision, "GOAL")
+    ok, reason = apply_frame_grounding_gate(decision, "GOAL", _attested_evidence())
     assert ok is False
     assert reason is not None
     assert "frame-grounded" in reason
@@ -60,21 +68,24 @@ def test_goal_accept_with_attestation_but_no_read_is_downgraded():
     # Even with an independent attestation, a goal the model did not SEE in the
     # frames must not be surfaced. This is the core ADAAAA-7070 requirement.
     decision = _goal_decision()
-    ok, _ = apply_frame_grounding_gate(decision, "GOAL")
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", _attested_evidence())
     assert ok is False
     # The hear-of-it attestation (evidence) is NOT passed to the frame gate; the
     # model read is what decides. A perceive attestation can never substitute.
-    ok2, _ = apply_frame_grounding_gate(_goal_decision(verdict={"criteria": {"ballInNet": None}}), "GOAL")
+    ok2, _ = apply_frame_grounding_gate(
+        _goal_decision(verdict={"criteria": {"ballInNet": None}}), "GOAL", _attested_evidence()
+    )
     assert ok2 is False
 
 
 def test_goal_accept_with_criteria_ball_in_net_passes():
     # The model's structured PASS-1 read plainly states it saw the ball in the
-    # net -> frame-grounded -> goal surfaces (recall preserved).
+    # net -> frame-grounded -> goal surfaces (recall preserved), corroborated by
+    # the independent score change (data backstop).
     decision = _goal_decision(
         verdict={"criteria": {"ballInNet": True, "ballCrossedLineBetweenPosts": None}}
     )
-    ok, _ = apply_frame_grounding_gate(decision, "GOAL")
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", _attested_evidence())
     assert ok is True
     assert decision["isHighlight"] is True
     assert decision["outcome"] == "scoring_play"
@@ -84,7 +95,7 @@ def test_goal_accept_with_crossed_between_posts_passes():
     decision = _goal_decision(
         verdict={"criteria": {"ballCrossedLineBetweenPosts": True, "ballInNet": None}}
     )
-    ok, _ = apply_frame_grounding_gate(decision, "GOAL")
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", _attested_evidence())
     assert ok is True
 
 
@@ -97,7 +108,7 @@ def test_goal_accept_with_specific_observed_read_passes():
             "criteria": {"ballInNet": None, "ballCrossedLineBetweenPosts": None},
         }
     )
-    ok, _ = apply_frame_grounding_gate(decision, "GOAL")
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", _attested_evidence())
     assert ok is True
 
 
@@ -107,7 +118,74 @@ def test_goal_templated_reason_with_no_read_is_rejected():
     decision = _goal_decision(
         reason="The ball enters the net, and the crowd and players celebrate wildly."
     )
-    ok, _ = apply_frame_grounding_gate(decision, "GOAL")
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", _attested_evidence())
+    assert ok is False
+
+
+# ---- ADAAAA-7070 independent data backstop (board decision 2026-10-20) ------
+
+
+def test_goal_frame_read_without_independent_signal_is_downgraded():
+    # THE residual-FPR class QA measured at 66.7% (ADAAAA-7097): the model's
+    # self-reported PASS 1 read says ballInNet=True, but NO independent measured
+    # signal (goalCrossed / ballOutcome=goal / ballInNet / scoreboard change)
+    # corroborates it. With perceive data-only the gate trusted the model's
+    # self-report — the very confabulation source. The data backstop requires a
+    # corroborating independent signal, so this must NOT surface a GOAL.
+    decision = _goal_decision(
+        verdict={"criteria": {"ballInNet": True, "ballCrossedLineBetweenPosts": None}}
+    )
+    ok, reason = apply_frame_grounding_gate(decision, "GOAL", {})
+    assert ok is False
+    assert reason is not None
+    assert "independent" in reason
+    assert decision["isHighlight"] is False
+    assert decision["outcome"] == "not_highlight"
+
+
+def test_goal_frame_read_with_no_evidence_at_all_is_downgraded():
+    # No independent data forwarded at all (evidence absent) -> a frame-grounded
+    # read alone is NOT surfaced (the model is no longer the sole authority).
+    decision = _goal_decision(
+        verdict={"criteria": {"ballInNet": True, "ballCrossedLineBetweenPosts": None}}
+    )
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", None)
+    assert ok is False
+
+
+def test_goal_frame_read_with_goal_crossed_corroboration_passes():
+    decision = _goal_decision(
+        verdict={"criteria": {"ballCrossedLineBetweenPosts": True}}
+    )
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", {"goalCrossed": True})
+    assert ok is True
+
+
+def test_goal_frame_read_with_ball_outcome_goal_corroboration_passes():
+    decision = _goal_decision(
+        verdict={"criteria": {"ballInNet": True}}
+    )
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", {"ballOutcome": "goal"})
+    assert ok is True
+
+
+def test_goal_frame_read_with_ball_in_net_corroboration_passes():
+    decision = _goal_decision(
+        verdict={"criteria": {"ballInNet": True}}
+    )
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", {"ballInNet": True})
+    assert ok is True
+
+
+def test_confabulated_reason_without_independent_signal_is_rejected():
+    # The realistic residual-FPR class: a confabulated, specific-sounding reason
+    # (no structured PASS-1 read) with NO independent goal signal
+    # (scoreBoardChanged=false) must NOT surface — the model's self-reported
+    # narrative alone is never enough (req 6 anti-confabulation).
+    decision = _goal_decision(
+        reason="The ball clearly enters the net after a shot from a player in a white and blue kit."
+    )
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", {"scoreBoardChanged": False})
     assert ok is False
 
 
@@ -285,7 +363,7 @@ def test_accept_with_entered_net_read_surfaces_goal():
             "criteria": {"ballInNet": None, "ballCrossedLineBetweenPosts": None},
         }
     )
-    ok, _ = apply_frame_grounding_gate(decision, "GOAL")
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL", _attested_evidence())
     assert ok is True
     assert decision["isHighlight"] is True
     assert decision["outcome"] == "scoring_play"
@@ -315,6 +393,7 @@ def test_contested_goal_ending_in_net_is_not_downgraded():
                 }
             ),
             "GOAL",
+            _attested_evidence(),
         )
         assert ok is True, obs
         assert _model_plainly_saw_goal(
@@ -333,6 +412,7 @@ def test_contested_goal_criteria_true_is_not_downgraded():
             }
         ),
         "GOAL",
+        _attested_evidence(),
     )
     assert ok is True
 
