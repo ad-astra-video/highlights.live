@@ -287,3 +287,66 @@ def test_accept_with_entered_net_read_surfaces_goal():
     assert ok is True
     assert decision["isHighlight"] is True
     assert decision["outcome"] == "scoring_play"
+
+
+# ---- ADAAAA-7073 regression: do NOT over-correct a contested real goal -------
+
+
+def test_contested_goal_ending_in_net_is_not_downgraded():
+    # The empirical re-eval (ADAAAA-7073) surfaced that a REAL goal on a
+    # scrambled / contested free-kick (defenders and keeper near the ball) was
+    # misread as "blocked by defenders ... does not enter the net" and then
+    # suppressed, collapsing real-goal recall. A read that plainly states the
+    # ball ENDS IN THE NET / crosses between the posts is a GOAL even when the
+    # model also mentions defenders/keeper contesting the shot. The frame gate
+    # must surface it (recall preserved), never downgrade it to a block.
+    for obs in (
+        "After a scramble in the box the ball ends in the net despite the defenders' attempts.",
+        "The striker's shot is deflected by a defender but still crosses the line between the posts.",
+        "The keeper dives but is beaten and the ball settles in the net after a goalmouth scramble.",
+    ):
+        ok, _ = apply_frame_grounding_gate(
+            _goal_decision(
+                verdict={
+                    "independentlyObserved": obs,
+                    "criteria": {"ballInNet": None, "ballCrossedLineBetweenPosts": None},
+                }
+            ),
+            "GOAL",
+        )
+        assert ok is True, obs
+        assert _model_plainly_saw_goal(
+            {"verdict": {"independentlyObserved": obs, "criteria": {"ballInNet": None}}}
+        ) is True, obs
+
+
+def test_contested_goal_criteria_true_is_not_downgraded():
+    # Even when the model mentions defenders, if it sets the binary criteria to
+    # true the gate must accept (criteria are the primary frame signal).
+    ok, _ = apply_frame_grounding_gate(
+        _goal_decision(
+            verdict={
+                "independentlyObserved": "The ball is blocked or diverted by defenders in the box.",
+                "criteria": {"ballInNet": True, "ballCrossedLineBetweenPosts": None},
+            }
+        ),
+        "GOAL",
+    )
+    assert ok is True
+
+
+def test_blocked_read_that_stays_out_is_still_not_a_goal():
+    # Guard the FPR side: a read that plainly says the ball is KEPT OUT (does
+    # NOT cross the line / enter the net) is a genuine block, NOT a goal. This
+    # preserves the frame-grounding / no-hallucination requirement (req 6).
+    decision = _goal_decision(
+        verdict={
+            "independentlyObserved": "The shot is blocked by defenders in the box and does not enter the net.",
+            "criteria": {"ballInNet": False, "ballCrossedLineBetweenPosts": False},
+        }
+    )
+    ok, _ = apply_frame_grounding_gate(decision, "GOAL")
+    assert ok is False
+    assert decision["isHighlight"] is False
+    assert decision["outcome"] == "not_highlight"
+
