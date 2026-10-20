@@ -7,7 +7,13 @@ shot-clock text is cropped out and can never set ``scoreBoardChanged``.
 """
 from __future__ import annotations
 
-from app.scoreboard import ScoreboardRoi, ScoreboardTracker, parse_ocr_score, score_changed
+from app.scoreboard import (
+    ScoreboardLocator,
+    ScoreboardRoi,
+    ScoreboardTracker,
+    parse_ocr_score,
+    score_changed,
+)
 
 
 def test_parse_ocr_score_standard_dash():
@@ -167,3 +173,149 @@ def test_scoreboard_roi_from_env_and_fallback():
             os.environ.pop(env_key, None)
         else:
             os.environ[env_key] = previous
+
+
+# --- ADAAAA-7086: scoreboard visibility locator + recall / gate ---------------
+# Instead of a fixed per-source PERCEIVE_SCOREBOARD_ROI, the perceive vision step
+# predicts the scoreboard region per frame. A scorebug in ANY position (e.g. the
+# bottom-right, far outside the old top-band default) must still be found (recall),
+# and a frame with no scoreboard must gate the OCR pass off (no ocrHits).
+
+
+def test_locator_finds_scoreboard_outside_default_top_band():
+    # A genuine broadcast scoreboard overlay at the BOTTOM-RIGHT. The old default
+    # top-band ROI (0,0,1,0.25) does NOT overlap it, so a fixed-ROI approach would
+    # crop it out and never read a score. The locator predicts the region instead
+    # of assuming a position -> recall is no longer calibration-dependent.
+    def discover(image, task="<DETAILED_CAPTION>"):
+        return {
+            "method": "region",
+            "task": task,
+            "regions": [
+                {"bbox": [0.55, 0.72, 0.93, 0.90], "caption": "broadcast scoreboard, home 2, away 1"}
+            ],
+        }
+
+    loc = ScoreboardLocator(discover)
+    roi = loc.locate(object())
+    assert roi is not None
+    # The detected region must cover the actual scorebug box (padded).
+    assert roi.contains([0.58, 0.75, 0.90, 0.88])
+    # Crucially it does NOT overlap the old default top-band region.
+    assert not ScoreboardRoi(0.0, 0.0, 1.0, 0.25).contains([0.58, 0.75, 0.90, 0.88])
+    # And a score read from that ROI is a valid reading (recall).
+    assert parse_ocr_score(["home 2 away 1", "2 - 1"], roi=roi) == (2, 1)
+
+
+def test_locator_gates_when_no_scoreboard_visible():
+    # A frame with only crowd/banner/ad text (no scoreboard). The locator must
+    # return None so the caller gates the OCR pass off -> no score, no ocrHits.
+    def discover(image, task="<DETAILED_CAPTION>"):
+        return {
+            "method": "region",
+            "task": task,
+            "regions": [
+                {"bbox": [0.05, 0.40, 0.95, 0.95], "caption": "crowd of spectators in the stands"}
+            ],
+        }
+
+    assert ScoreboardLocator(discover).locate(object()) is None
+
+
+def test_locator_prefers_real_scoreboard_over_generic_region():
+    # Two candidate regions: a generic number graphic and a real scoreboard. The
+    # locator must select the scoreboard, not the first/noisiest region.
+    def discover(image, task="<DETAILED_CAPTION>"):
+        return {
+            "method": "region",
+            "task": task,
+            "regions": [
+                {"bbox": [0.10, 0.10, 0.40, 0.30], "caption": "advertisement board"},
+                {"bbox": [0.55, 0.72, 0.93, 0.90], "caption": "scoreboard showing home 1 away 2"},
+            ],
+        }
+
+    roi = ScoreboardLocator(discover).locate(object())
+    assert roi is not None
+    assert roi.contains([0.58, 0.75, 0.90, 0.88])
+    assert not roi.contains([0.12, 0.12, 0.38, 0.28])
+
+
+def test_locator_never_raises_on_missing_or_poor_discovery():
+    def failing(image, task="<DETAILED_CAPTION>"):
+        raise RuntimeError("gpu down")
+
+    assert ScoreboardLocator(failing).locate(object()) is None
+    assert ScoreboardLocator(lambda i, t: {}).locate(object()) is None
+    # Missing image -> None (gate), never a crash.
+    assert ScoreboardLocator(lambda i, t: {"regions": []}).locate(None) is None
+
+
+def test_explicit_scoreboard_roi_distinguishes_calibration_from_unset():
+    from app import scoreboard as sb
+
+    assert sb.explicit_scoreboard_roi(None) is None
+    assert sb.explicit_scoreboard_roi("") is None
+    assert sb.explicit_scoreboard_roi("not,a,box") is None
+    roi = sb.explicit_scoreboard_roi("0.5,0.6,0.9,0.95")
+    assert roi is not None and (roi.x0, roi.y0, roi.x1, roi.y1) == (0.5, 0.6, 0.9, 0.95)
+
+
+def test_scoreboard_roi_autodetects_bottom_right_and_recall_delta():
+    # End-to-end at the pure level: the perceive `_scoreboard_roi` resolves the
+    # ROI from a bottom-right scoreboard (no per-source calibration), and a score
+    # read from that ROI drives a real `scoreBoardChanged` delta across two
+    # different readings.
+    from types import SimpleNamespace
+
+    from app import _scoreboard_roi
+
+    class FakeDetector:
+        def __init__(self, regions, ocr_lines):
+            self._regions = regions
+            self._ocr_lines = ocr_lines
+
+        def discover(self, image, task="<DETAILED_CAPTION>"):
+            return {"method": "region", "task": task, "regions": self._regions}
+
+        def ocr(self, image, roi=None):
+            return self._ocr_lines
+
+    regions = [{"bbox": [0.55, 0.72, 0.93, 0.90], "caption": "broadcast scoreboard"}]
+    det = FakeDetector(regions, ["2 - 1"])
+    state = SimpleNamespace(last_rgb=object(), scoreboard_visible=None)
+    roi = _scoreboard_roi(state, det)
+    assert roi is not None
+    assert state.scoreboard_visible is True
+
+    tr = ScoreboardTracker(window_seconds=60.0)
+    tr.record(10.0, parse_ocr_score(["2 - 1"], roi=roi))
+    tr.record(30.0, parse_ocr_score(["3 - 1"], roi=roi))
+    assert tr.changed(40.0) is True  # genuine delta on a genuine scoreboard
+
+
+def test_scoreboard_roi_gates_and_yields_no_ocrhits():
+    # A frame with NO visible scoreboard -> gate. The OCR pass is skipped, so
+    # `obs["ocr"]` is empty (<!-- ocrHits=0 -->) and no score/delta can be forged
+    # from non-scoreboard text.
+    from types import SimpleNamespace
+
+    from app import _scoreboard_roi
+
+    class FakeDetector:
+        def discover(self, image, task="<DETAILED_CAPTION>"):
+            return {
+                "method": "region",
+                "task": task,
+                "regions": [{"bbox": [0.05, 0.4, 0.95, 0.95], "caption": "banner ad copy"}],
+            }
+
+        def ocr(self, image, roi=None):  # pragma: no cover - must NOT be called
+            raise AssertionError("OCR ran when no scoreboard is visible")
+
+    state = SimpleNamespace(last_rgb=object(), scoreboard_visible=None)
+    roi = _scoreboard_roi(state, FakeDetector())
+    assert roi is None
+    assert state.scoreboard_visible is False
+    # Gate: OCR would not be invoked, so ocrHits stays 0 / no score.
+    assert parse_ocr_score([], roi=None) is None
