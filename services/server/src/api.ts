@@ -16,6 +16,7 @@ import {
   LiveRunShared,
   decideGroupKey,
   highlightIdempotencyKey,
+  highlightDedupKey,
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
@@ -864,12 +865,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
     // Durable idempotent resume (ADAAAA-6873): highlights already persisted for
     // this job are NOT re-added and their quota is NOT re-debited, so a stale
-    // re-claim (restart) never duplicates a clip or double-charges. Key =
-    // start|eventType. `highlightsFound` counts the job's total highlights and
-    // starts from the on-disk count so a resume keeps the running tally.
-    const existingHl = new Set(
-      store.highlightsForJob(jobId).map((h) => `${Math.round(h.start)}|${h.eventType}`)
-    );
+    // re-claim (restart) never duplicates a clip or double-charges. ADAAAA-7118:
+    // the onEvent dedup guard is keyed on the SAME highlightIdempotencyKey that
+    // store.addHighlight uses (hl:<jobId>:<seq>:<eventType>) via
+    // highlightDedupKey, so a candidate that emits two `highlight` events with an
+    // identical idempotency key (e.g. the GOAL anchor at the same seq) increments
+    // highlightsFound exactly once and the live counter matches the persisted
+    // count during processing. Legacy rows without an idempotencyKey fall back to
+    // the start|eventType form so resume protection still holds for them.
+    const existingHl = new Set(store.highlightsForJob(jobId).map(highlightDedupKey));
     let highlightsFound = store.highlightsForJob(jobId).length;
 
     // Throttled, monotonic progress persistence (ADAAAA-6873). We persist at most
@@ -916,11 +920,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-6352: persist + bill + quota-debit each accepted highlight at
       // DECISION time (mirror the live publish-at-decision ADAAAA-5777) via the
       // same write-through helper. jobEventHook already fanned the `highlight`
-      // event to SSE subscribers. ADAAAA-6873: guard against double-persist on a
-      // re-claim — a highlight keyed by start|eventType that is already on disk
-      // is skipped so its quota is never re-debited.
+      // event to SSE subscribers. ADAAAA-6873/7118: guard against double-persist
+      // on a re-claim — a highlight whose highlightIdempotencyKey is already on
+      // disk is skipped so its quota is never re-debited.
       if (ev.type === "highlight" && ev.highlight) {
-        const key = `${Math.round(ev.highlight.start)}|${ev.highlight.eventType}`;
+        // ADAAAA-7118: dedup on the same highlightIdempotencyKey used by
+        // store.addHighlight, so two `highlight` events carrying an identical
+        // key (the GOAL anchor at the same seq) increment highlightsFound once,
+        // matching the persisted count. Legacy highlights without an
+        // idempotencyKey fall back to the start|eventType form.
+        const key = highlightDedupKey(ev.highlight);
         if (existingHl.has(key)) {
           baseHook(ev);
           return; // already persisted on an earlier attempt — no re-debit
