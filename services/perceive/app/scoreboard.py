@@ -129,6 +129,33 @@ def _line_in_roi(roi: ScoreboardRoi | None, box: Optional[Sequence[float]]) -> b
     return roi.contains(box)
 
 
+def fallback_score_eligible(
+    box: Optional[Sequence[float]], roi: Optional[ScoreboardRoi]
+) -> bool:
+    """Whether the vision-LLM ``score`` text may stand in for an empty OCR crop
+    (ADAAAA-7094).
+
+    The vision-LLM score-text fallback — used when the LLM-localized crop
+    ``<OCR>`` comes back empty (e.g. a faint scorebug Florence-2 cannot parse)
+    — is only trusted as a score when the LLM *localized* the scoreboard AND
+    that box actually overlaps the configured scoreboard ROI (``roi``). A
+    hallucinated / unsupported box over a no-text region (crowd, banners, ad
+    boards), or a score the LLM could not localize, never qualifies. So a
+    hallucinated ``"N - M"`` can never reach :func:`parse_ocr_score` and forge a
+    ``scoreBoardChanged`` delta. A missing box or ROI degrades to ``False``
+    ("no clean score line"), never a forged delta, while real in-ROI faint
+    scorebugs (the recall case the fallback exists to catch) still pass.
+    """
+    if roi is None or box is None:
+        return False
+    if len(box) != 4:
+        return False
+    try:
+        return roi.contains([float(v) for v in box])
+    except (TypeError, ValueError):
+        return False
+
+
 def parse_ocr_score(
     frame_ocr,
     roi: Optional[ScoreboardRoi] = None,
