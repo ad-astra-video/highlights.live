@@ -587,6 +587,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         onDecision: persistDecision,
         // ADAAAA-7028 Inc 2: ingest the decide audit descriptor durably.
         onDecideAudit: persistDecideAudit,
+        // ADAAAA-7111 (Increment D): maintain the job's running video summary
+        // (story-so-far) across cadence observe ticks — read it to carry into
+        // the decide request, persist the updated one for the job-detail UI.
+        getRunningSummary: () => store.getJob(job.id)?.runningSummary ?? "",
+        onRunningSummary: (summary) =>
+          store
+            .patchJob(job.id, { runningSummary: summary })
+            .catch((e: any) => console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))),
         // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
         // evidence). Live uses the default analysis_fps / windows.
         analysisFps: cfg.analysisFps,
@@ -797,6 +805,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
       onDecision: persistDecision,
       onDecideAudit: persistDecideAudit,
+      // ADAAAA-7111 (Increment D): maintain the job's running video summary
+      // (story-so-far) across cadence observe ticks — read it to carry into the
+      // decide request, persist the updated one for the job-detail UI.
+      getRunningSummary: () => store.getJob(jobId)?.runningSummary ?? "",
+      onRunningSummary: (summary) =>
+        store
+          .patchJob(jobId, { runningSummary: summary })
+          .catch((e: any) => console.error(`[running-summary:${jobId}] persist failed:`, String(e?.message || e))),
       // Increment F / ADAAAA-6465: VOD gets the HIGHER-cap / longer-window
       // detail-first frame-sequence assembly (speed secondary; detail-first).
       analysisFps: cfg.vodAnalysisFps,

@@ -695,6 +695,17 @@ export function JobDetail() {
                 </div>
               </div>
             </div>
+            {/* ADAAAA-7111 (Increment D): the decide/gemma running video summary
+                (story-so-far) — grows as the video progresses. Rendered only when
+                the job produced one. */}
+            {detail.job.runningSummary && (
+              <div className="mt-4 rounded-lg bg-card px-3 py-2" data-detail-running-summary>
+                <div className="text-xs uppercase tracking-wide text-mut">Running summary</div>
+                <pre className="mt-1 whitespace-pre-wrap font-mono text-sm leading-relaxed text-ink">
+                  {detail.job.runningSummary}
+                </pre>
+              </div>
+            )}
             {detail.job.error && (
               <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red" data-detail-error>
                 {detail.job.error}
