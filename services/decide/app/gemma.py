@@ -403,7 +403,9 @@ def _as_str_list(value) -> list[str]:
 # forwarded into each request (`storySoFar`) and the model returns the updated
 # one (`runningSummary`), which the server persists + surfaces in the job
 # detail. The summary must GROW monotonically but stay BOUNDED, hence the
-# two helpers below.
+# helpers below. Each tick we RE-ASSERT containment of the prior story-so-far
+# even when the model rewrites the summary (_next_running_summary), so the
+# persisted summary never loses earlier events (ADAAAA-7113).
 MAX_RUNNING_SUMMARY_CHARS = 600
 
 
@@ -441,6 +443,41 @@ def _rule_summary(story_so_far: str, outcome: str, event_type: str, reason: str 
     if reason:
         line += f" — {reason[:120]}"
     return _compile_summary((prior + "\n" + line) if prior else line)
+
+
+def _next_running_summary(prior: str, model: str) -> str:
+    """Merge the prior story-so-far with the model's updated summary so tick N's
+    running summary CONTAINS/extends tick N-1's covered events (monotonic,
+    forward-only) regardless of model behavior.
+
+    ADAAAA-7113: the Gemma path previously trusted the model's ``runningSummary``
+    verbatim (bounded only), so a rewrite that dropped earlier detail could make
+    the web-UI summary regress across cadence observes. This helper guarantees
+    prior detail survives:
+
+      - model empty          -> keep prior (never lose it);
+      - prior empty          -> bounded model;
+      - model EXTENDS prior  -> bounded model as-is (already forward-only);
+      - model rewrites/drops prior detail -> prior + new detail, so the earlier
+        events are retained and the summary only grows.
+
+    Always bounded via {@link _compile_summary} (grow-then-compact), so the
+    600-char cap and the rule path's monotonic-extension semantics are
+    preserved. Non-empty model text is never discarded outright: if it extends
+    prior it is kept whole; otherwise prior is prepended so nothing is lost up
+    to the cap (oldest pruned only once the cap is hit, as documented)."""
+    prior = (prior or "").strip()
+    model = (model or "").strip()
+    if not model:
+        return _compile_summary(prior)
+    if not prior:
+        return _compile_summary(model)
+    if prior in model:
+        # The model already carried the prior events forward (true extension).
+        return _compile_summary(model)
+    # The model rewrote / dropped prior detail: keep prior first and append the
+    # model's (newest) summary so earlier events are never lost.
+    return _compile_summary(prior + "\n" + model)
 
 
 
@@ -1346,9 +1383,12 @@ def decide_with_gemma(
     # Gemma's updated summary is returned bounded; on the rule-fallback path (or
     # when the model omitted it) synthesise a deterministic extension of the
     # prior summary so the summary still GROWS monotonically across ticks.
+    # ADAAAA-7113: when the model DID return a summary, route it through
+    # _next_running_summary so tick N still contains/extends tick N-1's covered
+    # events even if the model rewrote/dropped prior detail (forward-only).
     rs = (result.get("runningSummary") or "").strip()
     if rs:
-        rs = _compile_summary(rs)
+        rs = _next_running_summary(story_so_far, rs)
     else:
         rs = _rule_summary(story_so_far, result.get("outcome") or "not_highlight", event_type, result.get("reason"))
     result["runningSummary"] = rs
