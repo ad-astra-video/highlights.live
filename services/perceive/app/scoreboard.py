@@ -19,6 +19,16 @@ every line is already in-region; ``parse_ocr_score`` additionally accepts
 optional per-line bounding boxes so that, when a caller has whole-frame OCR with
 positions, out-of-ROI lines are filtered out before they can become a score.
 
+ADAAAA-7086 — the ROI is no longer a hard-coded / per-source calibrated box.
+``ScoreboardLocator`` uses the vision model's region-discovery pass to (a)
+assess whether a scoreboard is actually visible in the frame and (b) predict the
+normalized scoreboard box per source, so a scorebug sitting anywhere in the
+frame (e.g. bottom-right) is still found without a hand-tuned
+``PERCEIVE_SCOREBOARD_ROI``. When no scoreboard is visible the caller gates the
+OCR pass off entirely (no score, no ``ocrHits``), so non-scoreboard text can
+never drive ``scoreBoardChanged`` or ``ocrHits``. ``PERCEIVE_SCOREBOARD_ROI``
+remains as an explicit per-source calibration override.
+
 Pure and side-effect free where possible so the parsing + delta logic can be
 unit-tested without a GPU.
 """
@@ -127,6 +137,162 @@ def _line_in_roi(roi: ScoreboardRoi | None, box: Optional[Sequence[float]]) -> b
     if box is None:
         return True
     return roi.contains(box)
+
+
+def _parse_env_roi(raw: Optional[str]) -> Optional[ScoreboardRoi]:
+    """Parse a normalized ROI string (``"x0,y0,x1,y1"``) into a ``ScoreboardRoi``.
+
+    Returns ``None`` for an unset, malformed, or out-of-range value. Unlike
+    ``from_env`` (whose whole point is a safe default fallback and never raises),
+    this returns ``None`` so a caller can tell "no calibration configured" apart
+    from "calibrated to the default region".
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        vals = [float(v) for v in text.split(",")]
+    except (TypeError, ValueError):
+        return None
+    if len(vals) != 4:
+        return None
+    roi = ScoreboardRoi(*vals)
+    if roi.pixel_box(1920, 1080) is not None:  # sanity: reachable region
+        return roi
+    return None
+
+
+def explicit_scoreboard_roi(raw: Optional[str] = None) -> Optional[ScoreboardRoi]:
+    """The explicitly-configured ``PERCEIVE_SCOREBOARD_ROI``, or ``None``.
+
+    Use this when you need to distinguish an operator-supplied calibration ROI
+    (an explicit override that says "this source's scoreboard lives here") from
+    the built-in default that ``ScoreboardRoi.from_env`` would fall back to. A
+    ``None`` result means "no explicit calibration" and lets the caller fall
+    through to auto-detection instead of silently cropping to a top-band guess.
+    """
+    return _parse_env_roi(raw if raw is not None else os.environ.get(_SCOREBOARD_ROI_ENV, ""))
+
+
+# --- Scoreboard visibility / locator (ADAAAA-7086) ----------------------------
+# Instead of assuming a fixed geometric ROI, the perceive vision step assesses
+# whether a scoreboard is actually visible in the frame and, when it is, predicts
+# the scoreboard box. This removes the per-source PERCEIVE_SCOREBOARD_ROI
+# calibration dependency for recall (a scorebug in a non-default corner is still
+# found) and gates the OCR pass off when no scoreboard is present (so non-score
+# text can never drive scoreBoardChanged / ocrHits).
+#
+# A single "N - M" style caption keyword is a strong signal the region is a
+# scoreboard; generic arena words are weaker. The score is deliberately coarse
+# and the threshold conservative: an unreliable region is better ignored (gate)
+# than misread as a scoreboard.
+_SCOREBOARD_CAPTION_KEYWORDS = (
+    "scoreboard",
+    "score board",
+    "score bug",
+    "scorebug",
+    "score card",
+    "score line",
+    "scoreline",
+    "home score",
+    "away score",
+    "score",
+)
+# A caption that itself contains a "N - M" score is a strong scoreboard signal.
+_SCOREBOARD_CAPTION_PATTERN = _SCORE_LINE_RE
+# Minimum region score for a region to be treated as a scoreboard (recall vs
+# precision: too low picks up an unrelated number graphic; too high drops a real
+# scoreboard). Requiring at least one keyword/signal keeps the gate honest.
+_SCOREBOARD_MIN_REGION_SCORE = 2
+
+
+def _bbox_normalized(box: Optional[Sequence[float]]) -> bool:
+    """True when ``box`` is a well-formed normalized (0..1) ``(x0,y0,x1,y1)`` box."""
+    if box is None or len(box) != 4:
+        return False
+    try:
+        xs = [float(v) for v in box]
+    except (TypeError, ValueError):
+        return False
+    return 0.0 <= xs[0] < xs[2] <= 1.0 and 0.0 <= xs[1] < xs[3] <= 1.0
+
+
+def _region_score(region: dict) -> int:
+    """Score a discovery region (caption + optional bbox) for scoreboard-ness."""
+    cap = str((region.get("caption") or "")).lower()
+    if not cap:
+        return 0
+    score = 0
+    for kw in _SCOREBOARD_CAPTION_KEYWORDS:
+        if kw in cap:
+            score += 2
+    if _SCOREBOARD_CAPTION_PATTERN.search(cap):
+        score += 4  # a literal home-away score read is a strong scoreboard signal
+    if _bbox_normalized(region.get("bbox")):
+        score += 1
+    return int(score)
+
+
+def _region_to_roi(box: Optional[Sequence[float]], pad: float = 0.04) -> Optional[ScoreboardRoi]:
+    """Expand a normalized discovery ``bbox`` into a padded, valid ``ScoreboardRoi``."""
+    if not _bbox_normalized(box):
+        return None
+    assert box is not None  # _bbox_normalized rejected None above
+    x0, y0, x1, y1 = (float(v) for v in box)
+    roi = ScoreboardRoi(
+        max(0.0, x0 - pad),
+        max(0.0, y0 - pad),
+        min(1.0, x1 + pad),
+        min(1.0, y1 + pad),
+    )
+    if roi.pixel_box(1920, 1080) is None:
+        return None
+    return roi
+
+
+class ScoreboardLocator:
+    """Predict the scoreboard region of a broadcast frame (ADAAAA-7086).
+
+    Wraps the vision model's region-discovery pass (``<DENSE_REGION_CAPTION>`` /
+    ``<REGION_PROPOSAL>``), which returns candidate regions with captions and
+    normalized boxes. ``locate`` picks the region that looks most like a
+    scoreboard and returns a padded ``ScoreboardRoi`` for it; it returns ``None``
+    when no scoreboard is visible so the caller can gate the OCR pass off.
+
+    The ``discover`` callable is injected (production passes
+    ``florence.FlorenceDetector.discover``) so this class stays GPU-free and can
+    be unit-tested with a stub. Detection failure never raises — it degrades to
+    ``None`` (no scoreboard) rather than crashing the candidate path.
+    """
+
+    def __init__(self, discover, pad: float = 0.04):
+        self._discover = discover
+        self._pad = pad
+
+    def locate(self, image) -> Optional[ScoreboardRoi]:
+        """Return a ``ScoreboardRoi`` for the frame's scoreboard, or ``None``.
+
+        ``None`` means "no scoreboard visible" — the caller gates the OCR pass
+        off. Also ``None`` on a missing image, a failing/poor discovery result,
+        or when no region scores above the threshold, so it can never misfire.
+        """
+        if image is None:
+            return None
+        try:
+            res = self._discover(image, task="<DENSE_REGION_CAPTION>")
+        except Exception:  # noqa: BLE001 - never crash the candidate path
+            return None
+        regions = (res or {}).get("regions") or []
+        best = None
+        best_score = 0
+        for region in regions:
+            score = _region_score(region)
+            if score > best_score:
+                best = region
+                best_score = int(score)
+        if best is None or best_score < _SCOREBOARD_MIN_REGION_SCORE:
+            return None
+        return _region_to_roi(best.get("bbox"), pad=self._pad)
 
 
 def parse_ocr_score(
