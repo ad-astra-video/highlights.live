@@ -417,33 +417,15 @@ def _rule_title(req: TitleRequest) -> str:
 def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, prefer_labels: list[str]) -> dict:
     """Apply the DRY post-processing gates to ONE per-candidate gemma verdict
     (group mode), mirroring the single-candidate gemma path exactly:
-    ball_outcome gate -> scoreboard force -> goal attestation -> notable-only ->
-    finalize_goal_acceptance. Mutates and returns ``decision``."""
-    ball_outcome = evidence.get("ballOutcome")
-    if is_near_miss_ball_outcome(ball_outcome):
-        decision = reconcile_outcome_with_ball_signal(decision, ball_outcome)
-        gate_ok, gate_reason = True, None
-    else:
-        gate_ok, gate_reason = apply_ball_outcome_gate(evidence)
-    if not gate_ok and decision.get("isHighlight"):
-        decision["isHighlight"] = False
-        decision["reason"] = (
-            (decision.get("reason") or "") + "; " + (gate_reason or "")
-        ).strip("; ")
-    elif scoreboard_forces_goal(
-        bool(evidence.get("scoreBoardChanged", False)), decision.get("eventType") or event_type
-    ):
-        decision["isHighlight"] = True
-        decision["outcome"] = "scoring_play"
-        decision["reason"] = (
-            (decision.get("reason") or "") + "; scoreboard score change confirmed"
-        ).strip("; ")
-    att_ok, att_reason = apply_goal_attestation_gate(decision, evidence, event_type)
-    if not att_ok and decision.get("isHighlight"):
-        decision["isHighlight"] = False
-        decision["reason"] = (
-            (decision.get("reason") or "") + "; " + (att_reason or "")
-        ).strip("; ")
+    notable-only -> finalize_goal_acceptance -> goal/net frame-grounding.
+
+    Perceive detections (`ballOutcome`, `goalCrossed`, `ballInNet`,
+    `scoreBoardChanged`) are DATA, not decision signals (CEO directive for
+    ADAAAA-7070): they are handed to the vision model to weigh against its own
+    frame observation but never veto / force / attest a verdict. The model's
+    frame-grounded PASS 1 read is the sole GOAL/NEAR_MISS authority (see
+    ``apply_frame_grounding_gate`` / ``apply_near_miss_frame_grounding_gate``).
+    Mutates and returns ``decision``."""
     if decision.get("isHighlight"):
         ok, rejects = apply_gate(
             score=float(decision.get("score") or 0.0),
@@ -466,23 +448,18 @@ def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, 
     # in the model's PASS 1 frame read (it must plainly state it SAW the ball in
     # the net); a near-miss must be corroborated by a frame-grounded goal/net
     # read. Runs after finalize so a goal the model did not actually SEE is
-    # caught even when a (misleading) perceive signal attested it, and so no
-    # goal/near-miss highlight is created from frames that do not show one.
-    # near_miss_vs_scoring_confusion stays 0: these gates only downgrade a
-    # near-miss, never promote it to a scoring_play.
-    att_ok, _ = apply_frame_grounding_gate(decision, event_type)
-    if not att_ok:
-        decision["reason"] = (decision.get("reason") or "").strip("; ")
-    nm_ok, _ = apply_near_miss_frame_grounding_gate(decision)
-    if not nm_ok:
-        decision["reason"] = (decision.get("reason") or "").strip("; ")
+    # caught, and so no goal/near-miss highlight is created from frames that do
+    # not show one. near_miss_vs_scoring_confusion stays 0: these gates only
+    # downgrade a near-miss, never promote it to a scoring_play.
+    apply_frame_grounding_gate(decision, event_type)
+    apply_near_miss_frame_grounding_gate(decision)
     return decision
 
 
 def _rule_verdict(cand: "GroupCandidate", prefer_labels: list[str]) -> dict:
     """DRY per-candidate rule-path verdict (group mode), mirroring the
-    single-candidate rule path: decide() -> ball_outcome gate -> near-miss
-    reconcile -> finalize_goal_acceptance -> goal attestation guard."""
+    single-candidate rule path: decide() -> finalize_goal_acceptance. Perceive
+    detections are DATA, not decision signals (CEO directive for ADAAAA-7070)."""
     evidence = cand.evidence.model_dump()
     d = decide(
         event_type=cand.eventType,
@@ -492,13 +469,6 @@ def _rule_verdict(cand: "GroupCandidate", prefer_labels: list[str]) -> dict:
         reaction=cand.evidence.reaction.model_dump() if cand.evidence.reaction else None,
         score_board_changed=cand.evidence.scoreBoardChanged,
     )
-    ball_outcome = evidence.get("ballOutcome")
-    gate_ok, gate_reason = apply_ball_outcome_gate(evidence)
-    if is_near_miss_ball_outcome(ball_outcome):
-        d.is_highlight = True
-    elif not gate_ok:
-        d.is_highlight = False
-        d.reason = ((d.reason or "") + "; " + (gate_reason or "")).strip("; ")
     dec = {
         "isHighlight": d.is_highlight,
         "score": d.score,
@@ -510,14 +480,7 @@ def _rule_verdict(cand: "GroupCandidate", prefer_labels: list[str]) -> dict:
         "outcome": _rule_outcome(d),
         "nearMiss": False,
     }
-    if is_near_miss_ball_outcome(ball_outcome):
-        dec = reconcile_outcome_with_ball_signal(dec, ball_outcome)
-    dec = finalize_goal_acceptance(dec, prefer_labels)
-    att_ok, att_reason = apply_goal_attestation_gate(dec, evidence, cand.eventType)
-    if not att_ok and dec.get("isHighlight"):
-        dec["isHighlight"] = False
-        dec["reason"] = ((dec.get("reason") or "") + "; " + (att_reason or "")).strip("; ")
-    return dec
+    return finalize_goal_acceptance(dec, prefer_labels)
 
 
 async def _handle_group(req: "HighlightRequest") -> dict:
@@ -600,58 +563,12 @@ def create_app() -> FastAPI:
                     "candidateCount": 1,
                 },
             )
-            # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
-            # goal-line ground-truth signal. A non-"goal" ballOutcome forces
-            # rejection regardless of Gemma's verdict (deterministic, before the
-            # notable-only gate). ADAAAA-6481 near-miss reconciliation: a
-            # goal-bound shot that did NOT convert (blocked / off_target) is a
-            # NEAR-MISS, not a rejection — surface it (never as scoring_play).
-            ball_outcome = req.evidence.model_dump().get("ballOutcome")
-            if is_near_miss_ball_outcome(ball_outcome):
-                decision = reconcile_outcome_with_ball_signal(decision, ball_outcome)
-                gate_ok, gate_reason = True, None
-            else:
-                gate_ok, gate_reason = apply_ball_outcome_gate(req.evidence.model_dump())
-            if not gate_ok and decision.get("isHighlight"):
-                decision["isHighlight"] = False
-                decision["reason"] = (
-                    (decision.get("reason") or "")
-                    + "; " + (gate_reason or "")
-                ).strip("; ")
-            # I3 (ADAAAA-6360): a detected scoreboard score change for a GOAL
-            # event is a hard, independent confirmation — force isHighlight=true
-            # regardless of the model's read (skipped when the I2 ball-outcome
-            # gate already rejected). Absence is weak/absent evidence and never
-            # forces a goal (scoreboard_forces_goal is false). ADAAAA-6598: a
-            # scoreboard-confirmed goal is a REAL goal, so it is upgraded to
-            # scoring_play so the single accept gate (finalize_goal_acceptance)
-            # keeps it accepted even when the model leaned near_miss.
-            elif scoreboard_forces_goal(
-                req.evidence.scoreBoardChanged, decision.get("eventType") or req.eventType
-            ):
-                decision["isHighlight"] = True
-                decision["outcome"] = "scoring_play"
-                decision["reason"] = (
-                    (decision.get("reason") or "")
-                    + "; scoreboard score change confirmed"
-                ).strip("; ")
-            # Goal-verification attestation gate (ADAAAA-6610 / ADAAAA-6588
-            # crit 2/3 residual): the model CONFABULATES templated
-            # `scoring_play` on non-goal frames. Reject an ACCEPTED goal whose
-            # reason is bare templated AND which carries no attested
-            # independent goal criterion (ballOutcome=goal / goalCrossed /
-            # scoreboard change). Deliberately narrow: an attested goal or a
-            # specific frame-grounded reason always passes (ADAAAA-6543 recall
-            # behavior preserved).
-            att_ok, att_reason = apply_goal_attestation_gate(
-                decision, req.evidence.model_dump(), req.eventType
-            )
-            if not att_ok and decision.get("isHighlight"):
-                decision["isHighlight"] = False
-                decision["reason"] = (
-                    (decision.get("reason") or "")
-                    + "; " + (att_reason or "")
-                ).strip("; ")
+            # Perceive detections (`ballOutcome`, `scoreBoardChanged`, ...) are
+            # DATA, not decision signals (CEO directive for ADAAAA-7070): they
+            # were given to the model and are weighed against its frame read,
+            # but they no longer veto / force / attest a verdict. The model's
+            # frame-grounded PASS 1 read is the sole GOAL/NEAR_MISS authority
+            # (see apply_frame_grounding_gate below).
             # Notable-only gate on the Gemma verdict (ADAAAA-5778). Pure
             # post-process over signals we already have — isHighlight, score,
             # classified eventType, evidence — so it adds NO inference (same
@@ -687,9 +604,8 @@ def create_app() -> FastAPI:
             # (single-candidate path). A GOAL must be grounded in the model's
             # PASS 1 frame read; a near-miss must be corroborated by a
             # frame-grounded goal/net read. Runs after finalize so a goal the
-            # model did not actually SEE is caught even when a (misleading)
-            # perceive signal attested it, and so no goal/near-miss highlight is
-            # created from frames that do not show one.
+            # model did not actually SEE is caught, and so no goal/near-miss
+            # highlight is created from frames that do not show one.
             apply_frame_grounding_gate(decision, req.eventType)
             apply_near_miss_frame_grounding_gate(decision)
             _log_highlight("gemma", req, decision)
@@ -703,17 +619,9 @@ def create_app() -> FastAPI:
             reaction=ev,
             score_board_changed=req.evidence.scoreBoardChanged,
         )
-        # Decide-leg I2 (ADAAAA-6359): HARD GATE — a non-"goal" perceived
-        # ballOutcome forces rejection even on the deterministic rule path.
-        # ADAAAA-6481: a goal-bound-but-not-converted ballOutcome (blocked /
-        # off_target) is a near-miss, surfaced not rejected.
-        ball_outcome = req.evidence.model_dump().get("ballOutcome")
-        gate_ok, gate_reason = apply_ball_outcome_gate(req.evidence.model_dump())
-        if is_near_miss_ball_outcome(ball_outcome):
-            d.is_highlight = True
-        elif not gate_ok:
-            d.is_highlight = False
-            d.reason = ((d.reason or "") + "; " + (gate_reason or "")).strip("; ")
+        # Perceive detections (`ballOutcome`, `scoreBoardChanged`, ...) are DATA,
+        # not decision signals (CEO directive for ADAAAA-7070): they no longer
+        # veto / force a near-miss or a goal on the rule path.
         dec = {
             "isHighlight": d.is_highlight,
             "score": d.score,
@@ -726,25 +634,12 @@ def create_app() -> FastAPI:
             "outcome": _rule_outcome(d),
             "nearMiss": False,
         }
-        if is_near_miss_ball_outcome(ball_outcome):
-            dec = reconcile_outcome_with_ball_signal(dec, ball_outcome)
         # ADAAAA-6598: single accept gate — ONLY a scoring_play is a
         # board-accepted GOAL highlight (a rule-path highlight maps to
         # scoring_play; a near-miss read is rejected). ADAAAA-6855: a non-goal
         # class explicitly requested in preferLabels is accepted as a DISTINCT
         # highlight (never a goal).
         dec = finalize_goal_acceptance(dec, req.preferLabels)
-        # Goal-verification attestation gate (ADAAAA-6610) on the rule path too
-        # (mirror of the gemma path): an accepted goal with a bare templated
-        # reason and no attested goal criterion is rejected. On the rule path
-        # the reason is deterministic (never templated), so this is a no-op
-        # consistency guard.
-        att_ok, att_reason = apply_goal_attestation_gate(
-            dec, req.evidence.model_dump(), req.eventType
-        )
-        if not att_ok and dec.get("isHighlight"):
-            dec["isHighlight"] = False
-            dec["reason"] = ((dec.get("reason") or "") + "; " + (att_reason or "")).strip("; ")
         _log_highlight("rule", req, dec)
         return dec
 

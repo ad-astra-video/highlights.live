@@ -54,16 +54,21 @@ def event_class(event_type: str) -> str:
     return "high" if normalize_event(event_type) in HIGH_VALUE_EVENTS else "ordinary"
 
 
-# I3 (ADAAAA-6360): a detected scoreboard score change is a hard, independent
-# confirmation of a goal. It forces isHighlight=true ONLY for a goal event; on
-# every other event it is weak/absent evidence and never on its own confirms one.
+# I3 (ADAAAA-6360) scoreboard: a detected scoreboard score change is REPORTED
+# DATA, not a decision signal (CEO directive for ADAAAA-7070). Perceive OCR
+# flicker is a known false-trigger, so a score change must never force a goal
+# on its own; the model's frame-grounded PASS 1 read (ball in the net / across
+# the line) is the sole GOAL authority.
 GOAL_EVENTS = {"GOAL", "GOL"}
 
 
 def scoreboard_forces_goal(score_board_changed: bool, event_type: str) -> bool:
-    """True only when a score change was actually detected AND the event is a
-    goal. Absence or a non-goal event never forces a highlight."""
-    return bool(score_board_changed) and normalize_event(event_type) in GOAL_EVENTS
+    """Perceive scoreboard OCR is DATA, not a signal: it never forces a goal.
+    A score change no longer overrides the model's frame read (ADAAAA-7070), so
+    this always returns False. The scoreboard data is still handed to the
+    vision model to weigh against the frames, and the scoreboard criterion
+    remains in the model's verdict. Retained for call-site compatibility."""
+    return False
 
 
 def has_corroboration(

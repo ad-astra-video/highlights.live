@@ -206,78 +206,25 @@ def test_gemma_path_rejects_bare_trigger_on_yes_verdict(monkeypatch):
     assert "notable-only bar" in body["reason"]
 
 
-def test_scoreboard_change_forces_goal_on_bare_candidate():
-    # I3 (ADAAAA-6360): a detected scoreboard score change for a GOAL event is a
-    # hard, independent confirmation — it forces isHighlight=true even when the
-    # candidate is otherwise unremarkable (no track, no motion).
-    from app.decider import decide
-
-    d = decide("GOAL", track_count=0, max_velocity=0.0, score_board_changed=True)
-    assert d.is_highlight is True
-    assert "scoreboard score change confirmed" in d.reason
-
-
-def test_scoreboard_absent_never_forces_goal():
-    # Absent scoreboard change is weak/absent evidence — it never on its own
-    # forces a goal; a bare GOAL trigger with no corroboration stays rejected.
-    from app.decider import decide
-
-    d = decide("GOAL", track_count=0, max_velocity=0.0)
-    assert d.is_highlight is False
-
-
-def test_scoreboard_change_does_not_force_non_goal():
-    # A score change on a non-goal event never forces a highlight.
+def test_scoreboard_change_does_not_force_goal():
+    # Perceive scoreboard OCR is DATA, not a signal (CEO directive ADAAAA-7070):
+    # a score change no longer *forces* a goal on its own inside the rule
+    # classifier, but it still counts as corroborating evidence for the
+    # notable-only bar. The frame read is the authority for the goal verdict.
     from app.decider import decide, scoreboard_forces_goal
 
     assert scoreboard_forces_goal(True, "SHOT") is False
     assert scoreboard_forces_goal(False, "GOAL") is False
-    assert scoreboard_forces_goal(True, "GOAL") is True
+    assert scoreboard_forces_goal(True, "GOAL") is False
+    # A GOAL with NO corroboration at all stays rejected.
+    d = decide("GOAL", track_count=0, max_velocity=0.0)
+    assert d.is_highlight is False
+    # A score change corroborates, so a high-value GOAL with one is accepted
+    # (notability), but it is NOT forced by scoreboard_forces_goal.
+    d = decide("GOAL", track_count=0, max_velocity=0.0, score_board_changed=True)
+    assert d.is_highlight is True
     d = decide("SHOT", track_count=0, max_velocity=0.0, score_board_changed=True)
     assert d.is_highlight is False
-
-
-def test_scoreboard_change_forces_goal_via_endpoint():
-    r = client.post(
-        "/app/highlight",
-        json={
-            "sessionId": "sess-sb",
-            "eventType": "GOAL",
-            "timestamp": 1.0,
-            "evidence": {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0, "scoreBoardChanged": True},
-        },
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["isHighlight"] is True
-    assert body["reason"]
-
-
-def test_gemma_path_scoreboard_force_when_gemma_says_no(monkeypatch):
-    # Gemma reads the Goal candidate and says 'no', but a scoreboard score
-    # change was detected -> the I3 force flips isHighlight=true. Absence would
-    # NOT force (separate test above).
-    from app import gemma as gemma_mod
-
-    monkeypatch.setenv("DECIDE_MODE", "gemma")
-    monkeypatch.setattr(
-        gemma_mod,
-        "ask",
-        lambda *a, **k: {"isHighlight": False, "score": 30.0, "eventType": "GOAL", "reason": "no ball in net", "source": "gemma"},
-    )
-    r = client.post(
-        "/app/highlight",
-        json={
-            "sessionId": "sess-sb-gemma",
-            "eventType": "GOAL",
-            "timestamp": 1.0,
-            "evidence": {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0, "scoreBoardChanged": True},
-        },
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["isHighlight"] is True
-    assert "scoreboard score change confirmed" in body["reason"]
 
 
 def test_gemma_path_scoreboard_absent_no_force(monkeypatch):
@@ -345,14 +292,14 @@ def test_highlight_accepts_rich_detection_evidence():
 # (false-positive guard) — the pivot must not become accept-all.
 
 
-def test_real_goal_no_attestation_is_rejected():
-    # ADAAAA-6610 PRECEDENCE over ADAAAA-6543: the old recall contract accepted
-    # a "real" goal judged from frames + audio reaction with NO homography /
-    # NO scoreboard attestation. The fresh full-VOD E2E proved that judgment is
-    # exactly what gets confabulated — an open-play / keeper-has-the-ball frame
-    # was accepted as scoring_play on a "ball in net" reason. So a GOAL accept
-    # now REQUIRES an independent attested criterion; a crowded-reaction but
-    # unattested candidate is REJECTED (not accepted on the model's word).
+def test_real_goal_no_attestation_is_accepted():
+    # Perceive is DATA, not a decision signal (CEO directive ADAAAA-7070): the
+    # old attestation gate (ADAAAA-6610) required a perceive ballOutcome/goal/
+    # scoreboard attestation to accept a goal. That gate is superseded — a
+    # corroborated goal (the model/rule read + notability) is accepted without a
+    # perceive attestation. Anti-confabulation now comes from the goal/net
+    # frame-grounding gate on the gemma path (the model plainly seeing the ball
+    # in the net). Labelled-eval FPR must confirm this stays < 5%.
     r = client.post(
         "/app/highlight",
         json={
@@ -377,7 +324,7 @@ def test_real_goal_no_attestation_is_rejected():
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["isHighlight"] is False
+    assert body["isHighlight"] is True
 
 
 def test_real_goal_with_scoreboard_attestation_is_accepted():

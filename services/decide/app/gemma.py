@@ -523,23 +523,19 @@ def _reaction_summary(evidence: dict) -> list[str]:
 
 
 def apply_ball_outcome_gate(evidence: Optional[dict]) -> tuple[bool, str | None]:
-    """Decide-leg I2 (ADAAAA-6359) HARD GATE over the perceived goal-line
-    ground-truth signal.
+    """Perceive is a DATA source, not a decision signal (CEO directive for
+    ADAAAA-7070).
 
-    Returns (ok, reason). ok is True when no `ballOutcome` is present (no
-    calibration / no signal — never gates) or when it is `goal`. When
-    `ballOutcome` is present and is anything other than `goal` (off_target /
-    blocked / no_shot / cross), the measured ball did not enter the goal, so
-    the clip must be rejected regardless of any other verdict. This is a hard
-    gate applied deterministically in the /highlight route, not just a prompt
-    instruction.
+    ``ballOutcome`` is a reported measurement from perceive's homography pass.
+    It is handed to the vision model so it can weigh it against its own frame
+    observation, but it is NOT a deterministic verdict: perceive detection
+    reliability is not yet trusted, so a measured ``ballOutcome`` of anything
+    other than ``goal`` must never veto a goal the model plainly saw in the
+    frames. The model's frame-grounded PASS 1 read is the sole authority for
+    GOAL/NEAR_MISS (see ``apply_frame_grounding_gate``). This gate therefore
+    never rejects; retained for call-site compatibility.
     """
-    outcome = (evidence or {}).get("ballOutcome")
-    if not outcome:
-        return True, None
-    if outcome == "goal":
-        return True, None
-    return False, f"perceived ballOutcome={outcome} (not a goal); hard-gate rejection"
+    return True, None
 
 
 # --- goal-verification attestation gate (ADAAAA-6610 / ADAAAA-6588 crit 2/3) ---
@@ -634,41 +630,16 @@ def _confirm_pass_enabled() -> bool:
 def apply_goal_attestation_gate(
     decision: dict, evidence: Optional[dict], event_type: Optional[str] = None
 ) -> tuple[bool, str | None]:
-    """Deterministic post-gate over the *model's* accept (ADAAAA-6610).
+    """Legacy gate (ADAAAA-6610) now SUPERSEDED by the goal/net frame-grounding
+    gate (ADAAAA-7070).
 
-    Returns (ok, reason). An ACCEPTED goal is allowed ONLY when an independent,
-    *measured* goal criterion is present (perceive ballOutcome=goal /
-    goalCrossed / scoreboard score change). The model's self-reported reason —
-    whether templated OR a "specific" description — is NEVER sufficient on its
-    own, because the E2E proved the model confabulates both (a specific
-    "ball clearly seen inside the net, goalkeeper beaten" reason was produced on
-    an open-play / keeper-has-the-ball frame with no goal). Template enumeration
-    cannot be exhaustive, so the only trustworthy gate over the model's accept is
-    the independent attestation.
-
-    ADAAAA-6973 (Option 1): when the Stage-2 confirmation pass is ENABLED
-    (``DECIDE_CONFIRM_ENABLED=1``), defer the attestation to the confirm
-    deep-frame dive instead of hard-rejecting here. An accepted goal-type
-    candidate that carries no independent attestation PASSES so the server's
-    ``shouldRunConfirm`` fires and ``/confirm`` becomes the attestation
-    (``goalConfirmed=confirmed_goal`` → accept; ``near_miss``/``not_goal`` →
-    reject). The anti-confabulation property moves to the verifier stage rather
-    than being dropped. When the confirmation pass is OFF (live / flag-off
-    path), keep the strict reject so the model alone is never trusted — the
-    pre-existing behavior is byte-for-byte preserved.
-    """
-    if not is_goal_accept(decision, event_type):
-        return True, None
-    if attested_goal_criterion(evidence):
-        return True, None
-    if _confirm_pass_enabled():
-        # Defer to the Stage-2 confirm deep-frame dive (goal attestation at the
-        # verifier stage); the candidate is a Stage-1 scoring_play accept.
-        return True, None
-    return False, (
-        "no attested goal criterion (ballOutcome=goal / goalCrossed / "
-        "scoreboard change); model reason alone is not sufficient to accept a goal"
-    )
+    Perceive is a DATA source, not a decision signal (CEO directive): a
+    perceived ``ballOutcome``/``goalCrossed``/``ballInNet``/scoreboard change no
+    longer attests a goal. A GOAL is surfaced only when the model's PASS 1 frame
+    read plainly shows the goal (see ``apply_frame_grounding_gate``), which runs
+    after finalize and is the sole GOAL authority. This gate therefore never
+    rejects; retained for call-site compatibility."""
+    return True, None
 
 
 # --- goal/net frame-grounding gate (ADAAAA-7070) ----------------------------
@@ -714,14 +685,37 @@ _SPECIFIC_GOAL_READ_RE = re.compile(
 )
 
 
+# A read that explicitly says the model could NOT confirm / did NOT see the
+# goal must NOT count as a frame-grounded goal read (anti-confabulation,
+# ADAAAA-7070 req 6): "cannot confirm the ball entered the net" / "unclear
+# whether..." is the model stating plainly it CANNOT see the goal, not a goal
+# read. Guard before the positive regex so a negated / inconclusive read never
+# surfaces a goal it did not observe.
+_GOAL_READ_NEGATION_RE = re.compile(
+    r"\b(?:cannot|can't|couldn't|unable|not)\s+(?:confirm|tell|verify|say|see)\b"
+    r"|\b(?:unclear|uncertain|(?:not|no)\s+clear(?:\s+whether)?|can't\s+tell)\b"
+    r"|\b(?:did\s+not|does\s+not|never|no)\s+(?:enter|entered|cross|crossed|score)\b"
+    r"|\b(?:went\s+over|went\s+wide|kept\s+out|stayed\s+out|off\s+target)\b",
+    re.IGNORECASE,
+)
+
+
 def _specific_goal_read_present(text: str) -> bool:
     """True when ``text`` names a concrete, frame-grounded goal read (the ball
     in the net / net rippling / keeper beaten with the ball crossing the line)
-    and is NOT the bare templated boilerplate. Empty text is never specific, and
-    a bare templated reason is never a supporting read (anti-confabulation)."""
+    and is NOT the bare templated boilerplate, and does NOT negate the goal.
+
+    Anti-confabulation (ADAAAA-7070 req 6): a read that explicitly says the
+    model could NOT confirm / did NOT see the goal ("cannot confirm the ball
+    entered the net", "unclear whether...") is NOT a frame-grounded goal — it
+    must state plainly it cannot see the goal/net, and that must not be treated
+    as a positive read. Empty text is never specific, and a bare templated
+    reason is never a supporting read."""
     if not text:
         return False
     if is_bare_templated_reason(text):
+        return False
+    if _GOAL_READ_NEGATION_RE.search(text):
         return False
     return bool(_SPECIFIC_GOAL_READ_RE.search(text))
 
@@ -747,6 +741,13 @@ def _model_plainly_saw_goal(decision: dict) -> bool:
                 if crit.get(key) is True:
                     return True
         observed = _as_text(verdict.get("independentlyObserved"))
+        if observed and _GOAL_READ_NEGATION_RE.search(observed):
+            # The PASS 1 independent observation explicitly states the model
+            # could NOT see / confirm the goal ("cannot confirm the ball entered
+            # the net", "unclear whether..."). PASS 1 is the trust surface; a
+            # self-reported `reason` that later narrates a goal must NOT override
+            # it (anti-confabulation, ADAAAA-7070 req 6). Do not surface.
+            return False
         if _specific_goal_read_present(observed):
             return True
     if _specific_goal_read_present(decision.get("reason") or ""):
@@ -895,56 +896,42 @@ def apply_near_miss_frame_grounding_gate(decision: dict) -> tuple[bool, str | No
 #
 # A goal-bound shot that does NOT convert is a NEAR-MISS, not a non-event:
 # the deployed plan should be able to act on it. The perceived goal-line /
-# ball-outcome signal is the deterministic ground truth for this: `blocked`
-# (shot stopped at the line within the mouth) and `off_target` (a shot on
-# goal that missed) both mean the ball was genuinely threatening the goal but
-# did not score. Those must surface as `near_miss` — never as `scoring_play`
-# (keeps near_miss_vs_scoring_confusion == 0) and never dismissed as
-# `not_highlight` (that is the recall gap the §8 near_miss_recall metric
-# measures).
+# --- near-miss classification (ADAAAA-6481 / §8 near_miss_recall) ----------
+#
+# Perceive is a DATA source, not a decision signal (CEO directive for
+# ADAAAA-7070). A perceived ``ballOutcome`` of ``blocked`` / ``off_target`` is
+# a reported measurement handed to the vision model so it can weigh it against
+# its own frame observation; it is NOT a deterministic verdict, because perceive
+# detection reliability is not yet trusted. The model's frame-grounded PASS 1
+# read (a goal objective visibly threatened by a goal-bound shot that did not
+# convert) is the sole authority for a NEAR_MISS (see
+# ``apply_near_miss_frame_grounding_gate``). A near-miss is NEVER `scoring_play`
+# (keeps near_miss_vs_scoring_confusion == 0) and is recorded distinctly but is
+# not a board-accepted GOAL highlight (ADAAAA-6598: isHighlight forced False).
 NEAR_MISS_BALL_OUTCOMES: tuple[str, ...] = ("blocked", "off_target")
 
 
 def is_near_miss_ball_outcome(ball_outcome: Optional[str]) -> bool:
-    """True when the perceived goal-line signal records a goal-bound shot that
-    did NOT convert — a genuine near-miss (blocked/saved at the line, or an
-    on-goal shot that missed). Never True for `goal`, `no_shot`, `cross`, or
-    when the signal is absent."""
+    """Whether the perceive data reports a goal-bound shot that did NOT convert
+    (blocked/saved at the line, or an on-goal shot that missed). This is
+    informational DATA about what perceive measured — it does NOT itself
+    classify the clip: the model's frame-grounded read is the near-miss
+    authority. Kept for reference/call-site compatibility.
+    """
     return (ball_outcome or "") in NEAR_MISS_BALL_OUTCOMES
 
 
 def reconcile_outcome_with_ball_signal(decision: dict, ball_outcome: Optional[str]) -> dict:
-    """Deterministically set the near-miss verdict from the goal-line signal
-    (ADAAAA-6481). When `ball_outcome` is a near-miss class the verdict is
-    `near_miss` regardless of the model's read (Gemma often dismisses a
-    near-goal as `not_highlight`); it is NEVER `scoring_play` (the ball did
-    not go in). ADAAAA-6598: a near-miss is recorded DISTINCTLY (outcome /
-    nearMiss preserved) but is NOT a board-accepted GOAL highlight, so
-    `isHighlight` is forced to False — it must never surface as a score on
-    the board. Mutates and returns `decision`.
+    """Perceive is DATA, not a decision signal (CEO directive for ADAAAA-7070).
 
-    Only acts when the signal is a near-miss class; otherwise `decision` is
-    returned unchanged (no regression for goals / no-signal / non-events)."""
-    if not is_near_miss_ball_outcome(ball_outcome):
-        return decision
-    decision["outcome"] = "near_miss"
-    decision["nearMiss"] = True
-    # A near-miss is notable and recorded distinctly, but is NEVER accepted as
-    # a scoring/GOAL highlight on the board (ADAAAA-6598).
-    decision["isHighlight"] = False
-    try:
-        sc = float(decision.get("score") or 0.0)
-    except (TypeError, ValueError):
-        sc = 0.0
-    if sc >= 60.0:
-        decision["score"] = 55.0
-    decision["reason"] = (
-        (decision.get("reason") or "")
-        + "; goal-line signal: goal-bound shot did not convert (near-miss)"
-    ).strip("; ")
-    # ADAAAA-6969: the outcome was forced to near_miss, so the public label
-    # MUST reflect that class — never leave a stale candidate/model "GOAL".
-    decision["eventType"] = event_type_for_outcome("near_miss", decision.get("eventType") or "")
+    Formerly (ADAAAA-6481) this forced ``near_miss`` from a perceived
+    ``ballOutcome`` of ``blocked``/``off_target``. Perceive detection
+    reliability is not yet trusted, so a reported ``ballOutcome`` no longer
+    overrides the model's frame-grounded read; a NEAR_MISS is only surfaced
+    when the model's PASS 1 observation plainly saw a goal objective being
+    threatened (``apply_near_miss_frame_grounding_gate``). ``decision`` is
+    therefore returned unchanged. Mutates nothing and is retained for call-site
+    compatibility."""
     return decision
 
 
@@ -1113,20 +1100,20 @@ def build_prompt(
         f"frames shown (1 FPS temporal window): {n_frames}",
         f"audio provided (commentary/crowd): {'yes' if has_audio else 'no'}",
     ]
-    # Decide-leg I2 (ADAAAA-6359): the perceived goal-line / ball-outcome
-    # ground-truth signal. When present it is decisive: a non-"goal" outcome
-    # (off_target / blocked / no_shot / cross) means the ball did NOT enter the
-    # goal, so the clip must be rejected. Absent == no ground-truth signal, no
-    # gate (no regression).
+    # Perceive is a DATA source, not a decision signal (CEO directive for
+    # ADAAAA-7070). `ballOutcome` / `goalCrossed` are REPORTED MEASUREMENTS
+    # from perceive's homography pass — detection reliability is not yet
+    # trusted, so they are evidence you weigh against the frames, never ground
+    # truth and never a hard gate. Absent == no report (decide from frames).
     outcome = evidence.get("ballOutcome")
     crossed = evidence.get("goalCrossed")
     if outcome:
         meta.append(
-            f"goal-line ground-truth (perceive homography): ballOutcome={outcome}"
+            f"perceive report (data, not ground truth): ballOutcome={outcome}"
             + (f", goalCrossed={crossed}" if crossed is not None else "")
         )
     else:
-        meta.append("goal-line ground-truth (perceive homography): not available")
+        meta.append("perceive report (data, not ground truth): not available for ballOutcome")
     reaction_lines = _reaction_summary(evidence)
     transcript = (transcript or "").strip()
     if reaction_lines or transcript:
@@ -1233,18 +1220,16 @@ def build_prompt(
         "signal you actually saw; if no frame or signal you were given supports "
         "a claim, do not assert it. State plainly whenever you cannot see the "
         "goal/net.\n"
-        "HARD GATE — perceived goal-line ground truth: when the context reports a "
-        "`ballOutcome` (goal-line ground-truth from perceive's homography), it is "
-        "a decisive measurement of whether the ball entered the goal. If "
-        "`ballOutcome` is present and is anything other than `goal` (i.e. "
-        "`off_target`, `blocked`, `no_shot`, or `cross`), the ball did NOT enter "
-        "the net and you MUST return isHighlight=false and state that the "
-        "measured ballOutcome contradicts the goal. Treat `ballOutcome=goal` as "
-        "corroborating evidence only — you must STILL plainly see the ball in the "
-        "net in the frames (a perceived signal never substitutes for a goal you "
-        "cannot see). A missing/absent `ballOutcome` is NOT a rejection signal — "
-        "decide on the frames as normal, and still require a goal plainly visible "
-        "in the frames.\n"
+        "PERCEIVE REPORT IS DATA, NOT A DETERMINATION: the context may include a "
+        "reported `ballOutcome` from perceive's goal-line detection. That "
+        "detection's reliability is NOT yet trusted and the report can be wrong, "
+        "so treat it as one piece of evidence to weigh against the frames — never "
+        "as ground truth and never as an instruction to accept or reject. Decide "
+        "the goal from the frames you actually see: only a goal plainly visible in "
+        "the frames (ball across the line between the posts / into the net) makes "
+        "isHighlight=true. A perceive report of anything other than `goal`, or of "
+        "`goal`, neither forces nor blocks your verdict; a missing report is "
+        "simply no information and you decide from the frames as normal.\n"
         "Scoreboard evidence: a scoreboard score change observed during the "
         "window is corroborating evidence of a goal, but it is NEVER sufficient "
         "on its own — you must still plainly see the ball enter the net in the "

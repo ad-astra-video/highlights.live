@@ -515,10 +515,11 @@ def test_build_prompt_names_explicit_goal_criteria():
         assert k in p
     # ADAAAA-7070 de-bias: a goal must be PLAINLY SEEN in the frames; a missing
     # read must never resolve to an accept, and never infer a goal from the
-    # candidate type / reaction / perceived signal.
+    # candidate type / reaction / perceived signal. The model must also state
+    # plainly when it cannot see the goal/net (no hallucination, req 6).
     assert "PLAINLY SEE the ball enter the net" in p
-    assert "isHighlight=false" in p
     assert "do NOT infer a goal" in p
+    assert "State plainly whenever you cannot see the" in p
     assert "crowd/commentary reaction" in p
 
 
@@ -528,11 +529,12 @@ def test_build_prompt_goal_line_corroboration_not_a_gate():
     # from the frames directly, and an ABSENT ballOutcome / line-crossing (no
     # homography configured) must not cause a rejection.
     p = build_prompt("GOAL", {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0}, "soccer")
-    # the perceived signal is corroborating, never a substitute for a goal the
-    # model cannot see in the frames
-    assert "corroborating evidence only" in p
-    assert "A missing/absent `ballOutcome` is NOT a rejection signal" in p
-    assert "still require a goal plainly visible in the frames" in p
+    # perceive is DATA, not a decision signal (CEO directive ADAAAA-7070): it is
+    # never ground truth and never an instruction to accept or reject.
+    assert "PERCEIVE REPORT IS DATA" in p
+    assert "not ground truth" in p
+    assert "never as ground truth" in p or "never as an instruction to accept or reject" in p
+    assert "decide from the frames as normal" in p
     # the old conservative formulation (both ball criteria MUST be true) is gone
     assert "only when the required ball criteria" not in p
     assert "ballCrossedLineBetweenPosts AND ballInNet) are true" not in p
@@ -753,33 +755,30 @@ def test_highlight_rule_path_preserves_classifiers_through_response_model(monkey
 # --- Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome HARD GATE ---------
 
 
-def test_apply_ball_outcome_gate_non_goal_rejects():
+def test_apply_ball_outcome_gate_never_rejects():
     from app.gemma import apply_ball_outcome_gate
 
-    for outcome in ["off_target", "blocked", "no_shot", "cross"]:
+    # Perceive is DATA (CEO directive ADAAAA-7070): a ballOutcome no longer
+    # hard-vetoes a verdict, so the gate never rejects.
+    for outcome in ["off_target", "blocked", "no_shot", "cross", "goal", None]:
         ok, reason = apply_ball_outcome_gate({"ballOutcome": outcome})
-        assert ok is False, f"{outcome} must gate"
-        assert reason is not None and outcome in reason
-    ok, reason = apply_ball_outcome_gate({"ballOutcome": "goal"})
-    assert ok is True and reason is None
-    ok, reason = apply_ball_outcome_gate({})
-    assert ok is True and reason is None
-    ok, reason = apply_ball_outcome_gate(None)
-    assert ok is True and reason is None
+        assert ok is True
 
 
-def test_build_prompt_renders_ball_outcome_gate():
+def test_build_prompt_renders_perceive_report_as_data():
     p = build_prompt("GOAL", {"ballOutcome": "off_target", "goalCrossed": True}, "soccer")
-    assert "goal-line ground-truth" in p
+    # The perceive measurement is reported as DATA, not ground truth / a gate.
+    assert "perceive report" in p
+    assert "not ground truth" in p
     assert "ballOutcome=off_target" in p
-    assert "HARD GATE" in p
-    # Absent signal never gates / never claims a measurement.
+    assert "HARD GATE" not in p
+    # Absent report is simply no information; the model still decides from frames.
     p2 = build_prompt("GOAL", {"trackCount": 1}, "soccer")
     assert "not available" in p2
-    assert "HARD GATE" in p2  # the gate instruction is always present
+    assert "decide from the frames as normal" in p2
 
 
-def test_highlight_rule_mode_hard_gate_rejects_non_goal():
+def test_highlight_rule_mode_rejects_non_goal_with_no_corroboration():
     from app import create_app as decide_create_app
 
     decide_app = decide_create_app()
@@ -787,8 +786,9 @@ def test_highlight_rule_mode_hard_gate_rejects_non_goal():
 
     os.environ["DECIDE_MODE"] = "rule"
     c = TestClient(decide_app)
-    # ADAAAA-6481: ballOutcome=off_target is a goal-bound shot that did NOT
-    # convert -> a near-miss, surfaced but NEVER scored as a goal.
+    # Perceive is DATA, so `ballOutcome` no longer forces a near-miss / goal on
+    # the rule path. The rule decides on notability: a bare GOAL trigger with NO
+    # corroboration stays rejected.
     r = c.post(
         "/app/highlight",
         json={
@@ -796,23 +796,17 @@ def test_highlight_rule_mode_hard_gate_rejects_non_goal():
             "eventType": "GOAL",
             "timestamp": 3.0,
             "gameHint": "soccer",
-            "evidence": {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0,
-                         "ballOutcome": "off_target", "goalCrossed": True,
-                         "reaction": {"crowdEnergy": 0.9}},
+            "evidence": {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0,
+                         "ballOutcome": "off_target", "goalCrossed": True},
         },
     )
     assert r.status_code == 200
     body = r.json()
-    # off_target now surfaces as a near-miss (not a rejection, not a goal).
-    # ADAAAA-6598: a near-miss is recorded distinctly but is NOT accepted as a
-    # GOAL highlight on the board (isHighlight stays false).
-    assert body["outcome"] == "near_miss"
-    assert body["nearMiss"] is True
+    # No corroboration + low notability -> not a highlight.
     assert body["isHighlight"] is False
-    assert body["outcome"] != "scoring_play"
 
 
-def test_highlight_rule_mode_hard_gate_still_rejects_no_shot():
+def test_highlight_rule_mode_rejects_no_shot_with_no_corroboration():
     from app import create_app as decide_create_app
 
     decide_app = decide_create_app()
@@ -827,16 +821,14 @@ def test_highlight_rule_mode_hard_gate_still_rejects_no_shot():
             "eventType": "GOAL",
             "timestamp": 3.0,
             "gameHint": "soccer",
-            "evidence": {"trackCount": 2, "maxVelocity": 0.1, "ocrHits": 0,
-                         "ballOutcome": "no_shot", "goalCrossed": False,
-                         "reaction": {"crowdEnergy": 0.1}},
+            "evidence": {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0,
+                         "ballOutcome": "no_shot", "goalCrossed": False},
         },
     )
     assert r.status_code == 200
     body = r.json()
-    # no_shot is a genuine non-event: hard-gate rejection, not a near-miss.
+    # No corroboration -> not a highlight (rule decides on evidence, not perceive).
     assert body["isHighlight"] is False
-    assert "no_shot" in body["reason"]
 
 
 def test_highlight_rule_mode_goal_passes_gate():
