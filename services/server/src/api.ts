@@ -257,7 +257,11 @@ export async function persistLiveHighlight(
     // job being present in this store instance so an edge case (job already
     // deleted / not hydrated here) never fails highlight persistence itself.
     const job = deps.store.getJob(record.jobId);
-    if (job) await deps.store.patchJob(record.jobId, { highlightsFound: (job.highlightsFound ?? 0) + 1 });
+    if (job) {
+      const target = (job.highlightsFound ?? 0) + 1;
+      console.error(`[vod:${record.jobId}] PLH created=${created} cur=${job.highlightsFound ?? 0} -> ${target}`);
+      await deps.store.patchJob(record.jobId, { highlightsFound: target });
+    }
   }
   return record;
 }
@@ -888,8 +892,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       if (!force && now - lastProgressAt < 1000) return;
       lastProgressAt = now;
       const cur = store.getJob(jobId);
-      if ((cur?.framesAnalyzed ?? 0) >= framesAnalyzed) return; // never regress
+      if ((cur?.framesAnalyzed ?? 0) >= framesAnalyzed) { console.error(`[vod:${jobId}] PROGRESS skip frames cur=${cur?.framesAnalyzed} req=${framesAnalyzed} hlLocal=${highlightsFound}`); return; } // never regress
       const pct = framesTotal > 0 ? Math.min(100, Math.round((framesAnalyzed / framesTotal) * 100)) : 0;
+      console.error(`[vod:${jobId}] PROGRESS write frames=${framesAnalyzed} hlLocal=${highlightsFound} force=${force}`);
       await store.patchJobProgress(jobId, {
         status: "analyzing",
         stage: "analyzing",
