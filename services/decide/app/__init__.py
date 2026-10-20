@@ -27,7 +27,9 @@ from .confirm import (  # noqa: F401
 )
 from .gemma import (  # noqa: F401
     apply_ball_outcome_gate,
+    apply_frame_grounding_gate,
     apply_goal_attestation_gate,
+    apply_near_miss_frame_grounding_gate,
     decide_group_with_gemma,
     decide_with_gemma,
     finalize_goal_acceptance,
@@ -460,6 +462,20 @@ def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, 
                 + "; ".join(rejects)
             ).strip("; ")
     decision = finalize_goal_acceptance(decision, prefer_labels)
+    # ADAAAA-7070: goal/net frame-grounding gate. A GOAL accept must be grounded
+    # in the model's PASS 1 frame read (it must plainly state it SAW the ball in
+    # the net); a near-miss must be corroborated by a frame-grounded goal/net
+    # read. Runs after finalize so a goal the model did not actually SEE is
+    # caught even when a (misleading) perceive signal attested it, and so no
+    # goal/near-miss highlight is created from frames that do not show one.
+    # near_miss_vs_scoring_confusion stays 0: these gates only downgrade a
+    # near-miss, never promote it to a scoring_play.
+    att_ok, _ = apply_frame_grounding_gate(decision, event_type)
+    if not att_ok:
+        decision["reason"] = (decision.get("reason") or "").strip("; ")
+    nm_ok, _ = apply_near_miss_frame_grounding_gate(decision)
+    if not nm_ok:
+        decision["reason"] = (decision.get("reason") or "").strip("; ")
     return decision
 
 
@@ -667,6 +683,15 @@ def create_app() -> FastAPI:
             # ADAAAA-6855: a non-goal class explicitly requested in
             # preferLabels is accepted as a DISTINCT highlight (never a goal).
             decision = finalize_goal_acceptance(decision, req.preferLabels)
+            # ADAAAA-7070: goal/net frame-grounding gate over the model's accept
+            # (single-candidate path). A GOAL must be grounded in the model's
+            # PASS 1 frame read; a near-miss must be corroborated by a
+            # frame-grounded goal/net read. Runs after finalize so a goal the
+            # model did not actually SEE is caught even when a (misleading)
+            # perceive signal attested it, and so no goal/near-miss highlight is
+            # created from frames that do not show one.
+            apply_frame_grounding_gate(decision, req.eventType)
+            apply_near_miss_frame_grounding_gate(decision)
             _log_highlight("gemma", req, decision)
             return decision
         ev = req.evidence.reaction.model_dump() if req.evidence.reaction else None
