@@ -83,10 +83,6 @@ class SessionState:
     # SessionRegistry.get_or_create. Both optional: absent -> graceful fallback.
     homography: Optional[np.ndarray] = None
     ball_signal: Optional[object] = None
-    # INC-3 / ADAAAA-4327: per-session detection-in-zone Stage-A candidate
-    # trigger (goal-mouth zones per sport, folding ball velocity/possession).
-    # Built lazily in __init__._ensure_zone_trigger, rebuilt on gameHint change.
-    zone_trigger: Optional[object] = None
     # Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome ground-truth signal.
     # `goal_line_spec` is the goal-line plane in the calibration's field coords
     # (control `configure` goalLine / env); `goal_line_detector` is the
