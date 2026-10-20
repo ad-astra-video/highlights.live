@@ -704,7 +704,7 @@ _GOAL_READ_CRITERIA = ("ballInNet", "ballCrossedLineBetweenPosts")
 # (see is_bare_templated_reason) never counts as frame-grounded.
 _SPECIFIC_GOAL_READ_RE = re.compile(
     r"\b(?:ball|strike|shot|header|tap)\b[^.;]{0,45}"
-    r"\b(?:into|inside|in|ripples?|bulges?|settles?\s+in)\s+"
+    r"\b(?:into|inside|in|enter(?:s|ed|ing)?|ripples?|bulges?|settles?\s+in|ends?\s+up\s+in|tucked\s+away)\s+"
     r"(?:the\s+)?(?:net|goal|back\s+of\s+the\s+net)\b"
     r"|\b(?:cross|crosses|crossing|crossed)\s+the\s+(?:goal\s+)?line\b"
     r"[^.;]{0,45}\b(?:between\s+the\s+posts|into\s+the\s+net|and\s+in|inside)\b"
@@ -760,15 +760,29 @@ def _model_plainly_saw_goal(decision: dict) -> bool:
 # wide/over. Checked independently (order-independent) on the observation text,
 # since the near-miss taxonomy is not one of the tri-state goal criteria.
 _GOAL_OBJECTIVE_RE = re.compile(
-    r"\b(?:goal(?:mouth)?|net|post(?:s)?|crossbar|bar|upright)\b", re.IGNORECASE
+    # compound goal-objective terms first (goalpost / goalmouth / goal frame /
+    # goal line), then the standalone goal-objective words. The eval (ADAAAA-7072)
+    # showed a genuine near-miss read "hits the goalpost and deflects away" was
+    # suppressed because `\bpost(s)?\b` does not match inside the compound word
+    # "goalpost"; recognize the goal compounds (and the goal line) so a
+    # frame-grounded goal objective is corroborated.
+    r"\bgoal[\s-]*(?:posts?|mouths?|frames?|lines?|bars?)\b"
+    r"|\b(?:nets?|posts?|bars?|uprights?|cross[\s-]?bars?|goal)\b",
+    re.IGNORECASE,
 )
 _GOAL_ATTEMPT_RE = re.compile(
-    r"\b(?:shot|strike|header|effort|kick|ball|hit|hits|cross(?:es)?)\b", re.IGNORECASE
+    r"\b(?:shot|strike|header|effort|kick|ball|hit|hits|cross(?:es)?|"
+    r"clear(?:s|ed|ing)|deflect(?:s|ed|ing)|rebound(?:s|ed|ing))\b",
+    re.IGNORECASE,
 )
 _GOAL_THREAT_RE = re.compile(
-    r"\b(?:blocked|block|save|saved|cleared\s+off\s+the\s+line|off\s+the\s+line|"
-    r"deflected|over|wide|off[-\s]target|on[-\s]target|crosses?\s+the\s+(?:goal\s+)?line|"
-    r"beaten|tipped|parried|denied|post|bar|crossbar|goes\s+over|into\s+the\s+goal\s+mouth)\b",
+    r"\b(?:blocked|block|save|saved|cleared\s+off\s+(?:the\s+)?(?:goal\s+)?line|"
+    r"off\s+(?:the\s+)?(?:goal\s+)?line|"
+    r"deflect(?:s|ed|ing)?|over|wide|off[-\\s]target|on[-\\s]target|"
+    r"crosses?\s+the\s+(?:goal\s+)?line|beaten|tipped|parried|denied|post|bar|"
+    r"crossbar|goes?\s+over|goes?\s+wide|drag(?:s|ged|ging)?\s+wide|"
+    r"comes?\s+(?:back\s+)?off|rebound(?:s|ed|ing)?|"
+    r"clipped\s+(?:the\s+)?(?:post|bar|upright)|into\s+the\s+goal\s+mouth)\b",
     re.IGNORECASE,
 )
 
@@ -1176,29 +1190,40 @@ def build_prompt(
         "- scoreboardChanged: the scoreboard / score readout changes to reflect "
         "a goal;\n"
         "- crowdErupted: the crowd/commentary erupts consistent with a goal.\n"
-        "A GOAL is confirmed (isHighlight=true) ONLY when you PLAINLY SEE the "
-        "ball enter the net / cross between the posts / the keeper beaten with "
-        "the ball ending in the goal. If the frames do NOT plainly show that — "
-        "if you cannot confirm the ball entered the net because the net-entry "
-        "instant is not captured, the ball is not visibly in the net, or the "
-        "keeper is not beaten with the ball ending in the goal — then the "
-        "candidate is NOT a goal: return isHighlight=false, set "
-        "ballInNet/ballCrossedLineBetweenPosts to false or null, and classify "
-        "the outcome by what you DID see (a goal-bound shot that did not "
-        "convert = near_miss; a save / post / last-line denial = big_play; "
-        "otherwise not_highlight). Absence of a clear goal read must NEVER "
-        "resolve to an accept — do NOT infer a goal from the candidate event "
-        "type, from the crowd/commentary reaction, from a perceived "
-        "ballOutcome/ballInNet/scoreboard signal, or from players celebrating, "
-        "unless the frames themselves plainly show the ball in the net. Do NOT "
-        "flag a soccer clip as a GOAL highlight when it shows:\n"
-        "- a yellow card, red card, booking, foul, tackle, or any disciplinary "
-        "incident (referee showing a card, players confronting, a player sent "
-        "off);\n"
-        "- a free kick, corner, shot on target, save, miss, near-miss, off-target, "
-        "blocked shot, or any chance in which the ball does NOT enter the net;\n"
-        "- only open play, build-up, players running, warm-ups, or a celebration "
-        "with no ball in the net.\n"
+        "A GOAL is confirmed (isHighlight=true) when you PLAINLY SEE the ball "
+        "enter the net / cross between the posts / the keeper beaten with the "
+        "ball ending in the goal. Judge BOTH directions accurately: confirm a "
+        "goal when the frames show it — never downgrade a goal you clearly saw "
+        "to a save or a block just to 'play it safe' (a ball that ends in the "
+        "net or crosses between the posts IS a goal, whatever the crowd or a "
+        "nearby keeper does); and confirm a NON-goal (saved / blocked / off "
+        "target / wide / over / no goal) ONLY when the frames plainly show "
+        "that. When you clearly saw a goal, set ballInNet / "
+        "ballCrossedLineBetweenPosts to true and isHighlight=true.\n"
+        "When you cannot tell either way — the net-entry instant is not "
+        "captured, the ball's relation to the line is unclear, or no frame "
+        "clearly shows the ball in the net — set the goal criteria to null, "
+        "state plainly in `independentlyObserved` that you could not confirm "
+        "whether it was a goal, and do NOT invent a goal OR a save/block that "
+        "the frames do not support. Then classify the outcome from the clearest "
+        "thing you DID see (a goal-bound shot that did not convert = near_miss; "
+        "a save / post / last-line denial = big_play; otherwise not_highlight).\n"
+        "Absence of a clear goal read must NEVER resolve to an accept — do NOT "
+        "infer a goal from the candidate event type, from the crowd/commentary "
+        "reaction, from a perceived ballOutcome/ballInNet/scoreboard signal, or "
+        "from players celebrating, unless the frames themselves plainly show the "
+        "ball in the net. Only the frames (ball crossing the line / into the net "
+        "/ objective taken) can make a scoring_play; the candidate type, audio, "
+        "and perceived signals are never a substitute. And do NOT mark a real "
+        "score as non-highlight just because the crowd stayed quiet or a "
+        "perceived signal was absent. A clip with no goal AND no genuine "
+        "goal-bound threat or notable play (open play, build-up, players "
+        "running, warm-ups, a booking / card / foul, or a celebration with no "
+        "ball in the net) is NOT a highlight.\n"
+        "Attribute every goal/net detail you assert to a specific frame or "
+        "signal you actually saw; if no frame or signal you were given supports "
+        "a claim, do not assert it. State plainly whenever you cannot see the "
+        "goal/net.\n"
         "HARD GATE — perceived goal-line ground truth: when the context reports a "
         "`ballOutcome` (goal-line ground-truth from perceive's homography), it is "
         "a decisive measurement of whether the ball entered the goal. If "

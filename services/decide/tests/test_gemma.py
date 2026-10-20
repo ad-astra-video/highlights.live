@@ -540,12 +540,12 @@ def test_build_prompt_goal_line_corroboration_not_a_gate():
 
 def test_build_prompt_keeps_false_positive_guard():
     # Criterion 2 (false-positive guard): the pivot must not become accept-all.
-    # A non-goal (saved / hit post / no ball in net / open play) must still be
-    # rejected; a goal is only accepted when the frames plainly show the ball in
-    # the net.
+    # A non-goal (saved / hit post / no ball in net / open play / a booking) must
+    # still be rejected; a goal is only accepted when the frames plainly show the
+    # ball in the net.
     p = build_prompt("GOAL", {"trackCount": 1, "maxVelocity": 0.2, "ocrHits": 0}, "soccer")
-    assert "any chance in which the ball does NOT enter the net" in p
-    assert "only open play, build-up, players running, warm-ups, or a celebration" in p
+    assert "is NOT a highlight" in p
+    assert "A clip with no goal AND no genuine goal-bound threat" in p
     assert "do NOT infer a goal" in p
     # celebrating / crowd erupting ALONE must not imply a goal when frames show
     # the ball did not enter the net.
