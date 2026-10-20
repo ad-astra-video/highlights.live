@@ -19,9 +19,11 @@ because a real goal yields a genuine frame read (ADAAAA-6533 / 6543); and
 near_miss_vs_scoring_confusion stays 0 because these gates only downgrade, never
 promote a near-miss to a scoring_play.
 """
+from app import _postprocess_gemma_verdict
 from app.gemma import (
     apply_frame_grounding_gate,
     apply_near_miss_frame_grounding_gate,
+    apply_goal_attestation_gate,
     _model_plainly_saw_goal,
     _model_plainly_saw_goalnet_threat,
 )
@@ -349,4 +351,34 @@ def test_blocked_read_that_stays_out_is_still_not_a_goal():
     assert ok is False
     assert decision["isHighlight"] is False
     assert decision["outcome"] == "not_highlight"
+
+
+def test_unattested_confabulated_goal_rejected_by_production_compose():
+    # ADAAAA-7078 measured a residual goal FPR (12.5%, neg-03) but applied only
+    # the two ADAAAA-7070 gates in isolation, BYPASSING the production
+    # apply_goal_attestation_gate that runs FIRST in _postprocess_gemma_verdict /
+    # the single-candidate gemma path. That isolated verdict is a harness artifact:
+    # a confabulated goal read with NO independent attestation (no ballOutcome=goal
+    # / goalCrossed / scoreBoardChanged / ballInNet) is only a false goal if a gate
+    # trusts the model's self-reported read. In the production compose the
+    # attestation gate rejects it before the frame gate ever sees it. Lock that in
+    # so the artifact cannot silently recur on a future re-measure.
+    decision = {
+        "isHighlight": True,
+        "outcome": "scoring_play",
+        "eventType": "GOAL",
+        "eventClass": "goal",
+        "source": "gemma",
+        "score": 0.9,
+        "reason": "The ball clearly enters the net after a shot from a player in a white and blue kit.",
+        "verdict": {
+            "criteria": {"ballInNet": True, "ballCrossedLineBetweenPosts": True},
+            "independentlyObserved": "A shot from a player in white and blue; the ball enters the net.",
+        },
+    }
+    evidence = {"trackCount": 1, "maxVelocity": 0, "ocrHits": 0, "reaction": {}}
+    out = dict(_postprocess_gemma_verdict(decision, evidence, "GOAL", []))
+    assert out["isHighlight"] is False
+    assert "no attested goal criterion" in (out.get("reason") or "")
+
 
