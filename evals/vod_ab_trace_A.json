@@ -1,0 +1,2789 @@
+{
+  "events": [
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 2.25,
+      "framesJudged": 16,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit successfully strikes the ball into the net, resulting in a goal. The opposing team in blue is seen reacting in disappointment, while the scoring team prepares to celebrate. The crowd in the background is visible, and the play concludes with the ball in the net.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.003,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 16
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 4.25,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit successfully strikes the ball into the net during a crowded penalty area sequence. The goal is immediately followed by a celebration where players with arms raised and a group pile-up occur, while the crowd in the background erupts in a visible celebration.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.039,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 4.75,
+      "framesJudged": 11,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit successfully strikes the ball into the net during a crowded set-piece situation. The goal is immediately followed by a celebration where the scoring player and teammates show high-motion reactions, while the opposing team in blue remains in the box.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.106,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 11
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 6.25,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white and red kit successfully maneuvers through a dense cluster of blue-shirted defenders to strike the ball into the net. The goal is met with immediate celebration from the attacking team, while the opposing players react with disappointment as the ball settles in the net.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.635,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 4.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 6.75,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white and blue kit successfully strikes the ball into the net during a crowded set-piece situation. The goal is scored against a team in blue jerseys. Several players are seen reacting with high-motion celebration cues as the ball crosses the goal line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.189,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 8.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a blue and white kit successfully maneuvers through a crowded penalty area to strike the ball into the net. The opposing team in white jerseys reacts with visible disappointment, while the crowd energy begins to build as the goal is secured in a high-pressure situation.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.019,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.153,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 8.75,
+      "framesJudged": 3,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit successfully maneuvers through a dense cluster of blue-shirted defenders in the penalty area to score a goal. The crowd in the background shows signs of excitement, and the visual cues indicate a high-intensity scoring moment in a professional soccer match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.056,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.039,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 0.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 2.75,
+      "framesJudged": 23,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal against the blue-clad team. The goal-scorer celebrates by running toward the camera with arms raised, while the opposing goalkeeper remains in the net. The crowd and surrounding players react to the successful scoring play in the final moments.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.055,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.158,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 23
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 4.75,
+      "framesJudged": 19,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal against the blue-clad team. The scoring player celebrates by running toward the camera with arms raised, while the opposing goalkeeper falls to the ground in disappointment. The crowd and surrounding players react to the successful strike in the penalty area.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.319,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 19
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 3.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 5.25,
+      "framesJudged": 15,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal against the blue-clad team. The scoring player celebrates by running toward the camera with arms raised, while the opposing goalkeeper remains on the ground. The crowd and surrounding players react to the successful strike in the penalty area.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.174,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 15
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 8.75,
+      "framesJudged": 11,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal against a blue-clad defense. The goal is followed by a clear celebration where the scoring player and his teammates react with high-motion movements and raised arms, while the opposing team shows signs of disappointment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.166,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.138,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 11
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 8.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 10.75,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal against a team in blue. The scoring player celebrates by running forward with arms raised, while the opposing goalkeeper remains on the ground. The sequence captures the immediate aftermath of the goal and the scorer's jubilant reaction.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.003,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.011,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 10.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 12.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "The player, wearing a white jersey with the number 32, celebrates a goal by running with his arms raised and a joyful expression. The sequence shows him moving across the pitch in a celebratory manner, indicating a successful scoring play for his team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.208,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 10.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 12.75,
+      "framesJudged": 3,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "The player, wearing a white jersey with the number 32, celebrates a goal by running with his arms raised in a jubilant gesture. The sequence captures his emotional reaction immediately following a successful scoring play, showing him moving across the pitch in a clear celebration.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.091,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 2.25,
+      "framesJudged": 24,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow kit successfully strikes the ball into the net, resulting in a goal. The opposing team in dark kits reacts with disappointment, while the yellow team's players begin to celebrate. The crowd in the background is visible, and the goal is clearly captured in the final frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 24
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 4.25,
+      "framesJudged": 20,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a dark kit takes a shot from the edge of the penalty area, and the ball beats the goalkeeper to enter the net. The opposing team in yellow reacts with visible disappointment, while the crowd in the background remains tense as the goal is scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.015,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.167,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 20
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 4.75,
+      "framesJudged": 19,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a dark kit takes a shot from the center of the pitch, and the ball travels toward the goal. A player in a yellow kit (number 10) is positioned nearby as the play develops. The crowd is watching intently as the ball moves toward the net.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.041,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.079,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 19
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 6.25,
+      "framesJudged": 16,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow kit takes a shot from the center of the pitch, and the ball travels toward the goal. The opposing goalkeeper is positioned to defend, but the play concludes with a goal. The crowd and players show high-motion celebration cues, indicating a significant scoring moment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.034,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.055,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 16
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 3.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 5.75,
+      "framesJudged": 15,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow kit successfully maneuvers through the defense to strike the ball into the net. The goal is met with a visible celebration from the attacking team, while the opposing players in dark kits react with disappointment as the ball crosses the goal line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.051,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.099,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 15
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 8.25,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow jersey takes a shot from the edge of the penalty area, beating the goalkeeper to score a goal. The crowd in the background is visible, and the scoring player begins a celebration as the ball crosses the goal line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.056,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.057,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 5.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 7.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow kit maneuvers through the defense to strike the ball into the net. The goal is scored as the ball crosses the line, followed by a celebration from the scoring team's players and a visible reaction from the crowd in the background.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.029,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.14,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 8.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 10.25,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow jersey takes a shot from the edge of the penalty area, and the ball beats the goalkeeper to enter the net. The goal is celebrated by the attacking team, with players showing high-motion celebration cues as the crowd erupts in the background.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.207,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 8.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 10.75,
+      "framesJudged": 6,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow kit takes a shot from the penalty area, and the ball enters the net. The opposing goalkeeper is beaten, and the yellow team players begin to celebrate with high-motion movements, while the crowd in the background reacts to the goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.072,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 6
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 10.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 12.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow kit takes a shot from the edge of the penalty area, and the ball finds the back of the net. The opposing team's goalkeeper is beaten, and the yellow team's players are seen beginning to celebrate as the crowd erupts in the background.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.044,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 2.25,
+      "framesJudged": 20,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence captures a high-intensity goal sequence where a player in a purple jersey, identified as Handwalla, is seen in close proximity to the goal. The surrounding players and the crowd's atmosphere suggest a significant scoring moment, with the player's focused expression and the proximity to the net confirming a goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 20
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 4.25,
+      "framesJudged": 16,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a close-up of players, including one in a purple jersey and another in a white and black kit, standing near the goal net. There is no clear ball movement, scoring action, or significant celebration visible in these frames to justify a highlight clip.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.163,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 16
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 6.25,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "The sequence captures a high-intensity moment where a player in a purple jersey, identified as Handwalla, reacts with a focused and intense expression. The surrounding players and the crowd's energy suggest a significant play or goal just occurred, with the atmosphere in the stadium being palpable.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.09,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.236,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 4.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 6.75,
+      "framesJudged": 11,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "The sequence captures a high-intensity moment where a player in a purple jersey, identified as Handwalla, appears to be involved in a goal-scoring sequence or a significant offensive play. The surrounding players show intense focus and physical proximity, with a goalkeeper in a yellow kit positioned nearby, indicating a goal or a near-miss.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.061,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.459,
+        "ballPossessionId": "t1792477073983-1"
+      },
+      "frameWindow": 11
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 5.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 7.75,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a close-up of players from Fiorentina and Juventus in a tense, stationary moment. There is no ball movement, scoring action, or clear goal celebration visible; the players appear to be in a heated exchange or a break in play rather than a highlight-worthy goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.451,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 8.75,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a close-up of a player in a purple jersey, likely from Fiorentina, looking intensely at an opponent in a black and white jersey. There is no clear ball movement, scoring action, or significant celebration visible in these frames to justify a highlight clip.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.485,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 8.75,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a close-up of a player in a purple jersey looking intensely at an opponent in a black and white kit. There is no ball movement, scoring action, or clear goal celebration visible in these frames, making it a non-highlight moment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.0,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 9.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 11.25,
+      "framesJudged": 2,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a close-up of players from Fiorentina and Torino in a tense, stationary moment during a match. There is no ball movement, scoring action, or clear goal celebration visible; the players appear to be in a standoff or waiting for a play to develop.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.028,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 2
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 1.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 3.25,
+      "framesJudged": 18,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "In a high-pressure set piece, a player from the team in light blue scores a goal against the team in black. The goal is secured as the ball enters the net, followed by a visible celebration from the scoring team's players, who are seen in high motion with arms raised.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 18
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 3.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 5.25,
+      "framesJudged": 14,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a light blue kit successfully maneuvers through a crowded penalty area to strike the ball into the net. The goal is met with immediate celebration from the attacking team, while the opposing players in black remain in the box. The crowd in the background shows high engagement.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.017,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.003,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 14
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 5.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 7.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a light blue kit successfully maneuvers through a crowded penalty area to strike the ball into the net. The goal is met with an immediate celebration by the attacking team, while the opposing players in black remain in the box. The crowd in the background is highly engaged.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.418,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 8.25,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a light blue kit takes a shot from the edge of the penalty area, successfully beating the goalkeeper to score a goal. The opposing team in black kits looks on in disappointment while the light blue team prepares to celebrate the successful strike.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.023,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.084,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 7.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 9.25,
+      "framesJudged": 6,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a light blue kit successfully maneuvers through the defense to strike the ball into the net. The goal is secured as the opposing team in black fails to block the shot. The crowd and players show visible excitement as the ball crosses the goal line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.077,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.098,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 6
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 9.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 11.25,
+      "framesJudged": 2,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a blue and white kit successfully strikes the ball into the net, resulting in a goal. The opposing team in black is positioned defensively near the goal line. Several players in blue and white are seen celebrating with high-motion reactions, while the crowd in the background is active.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.117,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 2
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 0.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 2.75,
+      "framesJudged": 17,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a purple and black kit takes a shot from the edge of the penalty area. The ball travels past the goalkeeper and into the net, resulting in a goal. The opposing team's players react with disappointment while the scoring team's players begin to celebrate.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.057,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.247,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 17
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 4.75,
+      "framesJudged": 13,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit takes a shot from the edge of the penalty area, and the ball finds the back of the net. The opposing team in purple and red jerseys reacts with disappointment as the scoring team prepares to celebrate. The crowd remains relatively calm.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.048,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.383,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 13
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 1.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 3.75,
+      "framesJudged": 11,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit takes a shot from the edge of the penalty area, successfully beating the goalkeeper to score a goal. The opposing team in purple and red jerseys reacts with disappointment, while the crowd energy begins to rise as the ball hits the back of the net.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.127,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.046,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 11
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 4.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 6.75,
+      "framesJudged": 9,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit successfully maneuvers through the defense to strike the ball into the net. The goal is met with an immediate celebration from the scoring team, with players running toward each other and the crowd erupting in excitement as the ball crosses the line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.081,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 9
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 5.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 7.25,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit takes a shot from the edge of the penalty area, and the ball finds the back of the net. The opposing team in purple and red jerseys reacts with disappointment, while the crowd in the background is visible in a high-energy atmosphere.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.145,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 8.75,
+      "framesJudged": 5,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit takes a shot from the edge of the penalty area, successfully beating the goalkeeper to score a goal. The opposing team in purple and red jerseys reacts with disappointment, while the crowd in the background remains engaged in the high-intensity match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.061,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 8.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 10.75,
+      "framesJudged": 1,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit successfully maneuvers the ball into the net during a high-pressure sequence. The opposing team in dark kits is positioned defensively, while the crowd and nearby players show signs of celebration, indicating a significant scoring moment in the match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.003,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.237,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 1
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 2.25,
+      "framesJudged": 24,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal against a team in dark jerseys. The sequence shows the ball entering the net, followed by a chaotic celebration where a player in a black tank top and a referee are involved in a scuffle with fans. The crowd is erupting in a high-energy reaction.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.046,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 24
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 4.25,
+      "framesJudged": 24,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a dark kit scores a goal, leading to an immediate and intense celebration. The player runs toward the fans, and several teammates and officials are seen in high-motion celebration. The crowd is erupting in a chaotic, high-energy reaction as the goal is secured.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.146,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.187,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 24
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 4.25,
+      "framesJudged": 23,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a black and red kit scores a goal, leading to an immediate and intense celebration. The player runs toward the fans, while teammates and the crowd erupt in excitement. The visual evidence of players with arms raised and the high-motion celebration confirms a high-value goal event.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.146,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.34,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 23
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 6.25,
+      "framesJudged": 20,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a dark kit scores a goal, leading to an immediate and intense celebration. The scoring player is seen running toward the fans, while teammates and the crowd erupt in celebration. The atmosphere is electric as the team celebrates the successful goal in front of the cheering supporters.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.319,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 20
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 5.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 7.25,
+      "framesJudged": 18,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a black top and shorts celebrates a goal by running toward the crowd, while a teammate in a yellow jersey also celebrates nearby. The crowd is erupting in excitement, and the atmosphere is highly charged as the team celebrates their success on the pitch.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.4,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 18
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 8.25,
+      "framesJudged": 16,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a black sports bra and shorts celebrates a goal by running toward the fans. The crowd erupts in a massive celebration, with fans jumping and cheering. The player's high-motion celebration and the intense reaction of the surrounding spectators confirm a significant scoring moment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.307,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 16
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 5.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 7.75,
+      "framesJudged": 14,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a black sports bra and shorts celebrates a goal by running toward the crowd. The crowd erupts in celebration, with fans jumping and cheering. The player is seen in high motion, and the surrounding atmosphere is one of intense excitement and victory.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.564,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 14
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 8.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 10.25,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow jersey scores a goal, leading to an immediate and intense celebration. The player is swarmed by teammates and security personnel near the sidelines, while the crowd in the background erupts in a chaotic, high-energy reaction. The atmosphere is electric as the team celebrates the successful play.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.564,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 9.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 11.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow jersey scores a goal, leading to a chaotic scene where fans breach the security barrier. The crowd erupts in intense celebration and aggression, with several people jumping over the fence and clashing with security personnel and other players on the pitch.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.0,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 10.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 12.25,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow jersey scores a goal, leading to an immediate and intense confrontation with the opposing fans. The crowd erupts in anger as the player is swarmed by fans, while teammates and security personnel rush in to intervene and protect the player from the hostile atmosphere.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 10.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 12.25,
+      "framesJudged": 6,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored by the team in yellow and blue, leading to an immediate and intense celebration. Players from the scoring team, including the goalkeeper, are seen in a group pile/team huddle and embracing near the sidelines. The opposing team in red and black appears dejected as the crowd erupts in the background.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.329,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 6
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 12.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 14.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow and blue kit scores a goal, leading to an immediate and intense celebration. Several teammates, including one in a yellow jersey with the number 15, rush toward the sidelines to form a group pile/team huddle. The crowd in the background is erupting in a massive, high-energy reaction.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.394,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 13.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 15.25,
+      "framesJudged": 2,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored as a player in a yellow and green kit celebrates with teammates in a group huddle near the sidelines. The crowd in the background is erupting in celebration, and the scoreboard shows the time at 39:44, confirming a high-value scoring moment in the match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.219,
+        "ballPossessionId": "t1792477233248-1"
+      },
+      "frameWindow": 2
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 2.25,
+      "framesJudged": 18,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow and blue kit successfully strikes the ball into the net, scoring a goal. The opposing team in blue and yellow is seen reacting to the play, and the crowd in the background is visible. The ball ends up in the net, confirming a successful scoring event.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.009,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 18
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 4.25,
+      "framesJudged": 14,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow and blue kit successfully maneuvers through the defense to strike the ball into the net. The goal is confirmed as the opposing team's goalkeeper is beaten, and the scoring player begins a celebration while the crowd and teammates react with high-motion excitement.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.523,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 14
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 6.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow and blue kit successfully maneuvers the ball into the net, resulting in a goal. The opposing team in blue and yellow reacts with high-motion celebration, while the crowd and surrounding players show visible excitement as the ball crosses the goal line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.004,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.049,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 8.25,
+      "framesJudged": 6,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow and blue kit successfully maneuvers the ball into the net, resulting in a goal. The opposing team in red and blue watches as the scoring team prepares to celebrate. The crowd energy is low, but the visual of the ball crossing the line confirms the score.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.049,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.054,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 6
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 7.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 9.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow and blue kit successfully maneuvers through the defense to strike the ball into the net. The goal is secured as the opposing team reacts in disappointment while the scoring team prepares to celebrate. The crowd energy is low, but the visual cues indicate a successful scoring play.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.027,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.126,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 8.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 10.25,
+      "framesJudged": 2,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow and blue kit successfully maneuvers through the defense to score a goal. The opposing team in blue is positioned defensively, while the yellow team's players are moving toward the goal area. The visual cues of high motion among the players suggest a significant scoring moment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.589,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 2
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 0.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 2.75,
+      "framesJudged": 15,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow kit scores a goal, leading to an immediate celebration. The referee is seen holding up a yellow card, while the scoring player and a teammate react with high-motion celebration. The crowd and surrounding players are in a state of high intensity following the goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.024,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 15
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 4.75,
+      "framesJudged": 11,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow kit scores a goal, leading to a significant reaction from the referee who shows a yellow card to a player in a red shirt. The yellow team's player celebrates while the referee's intervention highlights a high-intensity moment in the match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.064,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.362,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 11
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 4.75,
+      "framesJudged": 9,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a soccer match where a player in a yellow jersey is being cautioned by the referee with a yellow card. There is no goal scored in this sequence; the ball is stationary near the center of the pitch, and the players' reactions are focused on the referee's decision rather than a score.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.064,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.199,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 9
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 4.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 6.75,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee holding up a yellow card to a player in a yellow jersey, while other players stand nearby. There is no goal scored in these frames; the action is a disciplinary foul rather than a scoring event, despite the high motion of the referee's arm.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.036,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.152,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 5.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 7.75,
+      "framesJudged": 5,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee holding up a yellow card to a player in a yellow jersey. There is no goal scored; instead, the referee is issuing a disciplinary action. The player's expression of disbelief and the referee's gesture indicate a foul or misconduct rather than a scoring event.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.034,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.356,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 8.75,
+      "framesJudged": 3,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee in a red shirt holding up a yellow card to a player in a yellow jersey. There is no goal scored; instead, the referee is issuing a disciplinary sanction. The player's open-handed gesture and the referee's raised arm indicate a foul or warning, not a scoring play.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.015,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.149,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 5.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 7.75,
+      "framesJudged": 1,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a referee holding up his hand to signal a foul or a stoppage in play, rather than a goal being scored. A player in a yellow kit stands nearby with his hands out, and while there is some motion, there is no goal celebration or ball movement towards a net.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.034,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.062,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 1
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 2.25,
+      "framesJudged": 17,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored by the team in white, as evidenced by the referee signaling a foul or play stoppage and the players' reactions. The player in the white jersey with number 5 is seen in a celebratory stance, while the opposing team in red and blue looks on in disappointment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 2,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 17
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 1.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 3.25,
+      "framesJudged": 14,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white jersey scores a goal, leading to a celebration where several players, including one with arms raised, react with joy. The referee is seen monitoring the play as the ball enters the net, and the opposing team in red jerseys looks on in disappointment.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.337,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 14
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 4.25,
+      "framesJudged": 13,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white jersey (number 5) is seen in a celebratory stance near the center of the pitch, while a referee in yellow stands nearby. Other players in red and blue jerseys are reacting to the play, with some showing expressions of disappointment or frustration as the goal is scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.446,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 13
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 4.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal, leading to a celebration where he is greeted by a teammate. The referee is seen signaling the goal, and the opposing players in red and blue kits look on with disappointed expressions as the crowd reacts in the background.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.339,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 6.25,
+      "framesJudged": 9,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee making a signal while players from both teams stand nearby. There is no goal scored, no ball movement toward a net, and no celebratory reaction from the players or the crowd. The players are simply waiting for a decision or a restart of play.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.003,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.229,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 9
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 8.25,
+      "framesJudged": 5,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee making a signal while players from AC Milan and Real Madrid stand nearby. There is no goal scored, ball movement into the net, or any significant celebration or reaction from the players or crowd that would indicate a highlight-worthy scoring event.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.732,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 8.25,
+      "framesJudged": 3,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The referee is shown holding up a yellow card to a player, indicating a disciplinary action rather than a goal. While some players are in motion, there is no ball movement toward a goal or any celebration of a score; the scene captures a foul or warning during the match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.497,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 8.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 10.25,
+      "framesJudged": 1,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "The image captures a goal celebration in a soccer match between AC Milan and Real Madrid. Players like Cutrone and Miretti are seen in high-motion celebration, with some players having arms raised. The referee is also present, and the crowd's energy is low, but the visual celebration confirms a goal was scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.009,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.525,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 1
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 2.25,
+      "framesJudged": 22,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal after a close-range shot, leading to an immediate celebration. The scoring player is seen with arms raised in joy, while the opposing team in blue looks on in disappointment. The crowd and surrounding players react to the successful goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 22
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 1.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 3.75,
+      "framesJudged": 19,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal after a sequence of play in the center of the pitch. The goal is immediately followed by a celebration where the scoring player and teammates are seen in high motion with arms raised, while the opposing team in blue looks dejected.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.298,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 19
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 4.25,
+      "framesJudged": 18,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal after a sequence of play in the center of the pitch. The goal is immediately followed by a celebration where the scoring player and teammates are seen with arms raised in joy, while the opposing team in blue looks dejected.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.395,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 18
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 6.25,
+      "framesJudged": 14,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white and purple kit scores a goal after a close-range shot, leading to an immediate celebration. The scoring player is seen with arms raised in joy, while teammates and the crowd react to the successful goal in a high-intensity match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.062,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.057,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 14
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 1.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 3.75,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal, leading to an immediate celebration. The scoring player is seen with arms raised in joy, while teammates and the crowd erupt in celebration. The ball is successfully placed in the net, marking a significant scoring moment for the team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.21,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 8.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white and purple kit scores a goal, leading to an immediate celebration. The scoring player is seen with arms raised in joy, while teammates and the crowd react to the successful play. The ball is positioned near the goal line as the celebration begins.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.128,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.216,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 8.75,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white and purple kit scores a goal, leading to an immediate celebration. The player falls to the ground in a gesture of triumph while teammates nearby react with high-motion celebrations. The goal occurs in a high-stakes match, evidenced by the intense atmosphere and stadium branding.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.057,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.203,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 8.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 10.25,
+      "framesJudged": 6,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white and purple kit scores a goal, leading to an immediate celebration. The scoring player is seen in a high-motion celebration with arms raised, while teammates and the crowd react to the successful play. The ball is positioned near the goal line as the team celebrates.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.087,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 6
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 9.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 11.75,
+      "framesJudged": 3,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a light purple kit celebrates a goal by sliding on the grass, while a teammate in a yellow jersey and another in a blue kit react nearby. The goal is confirmed by the intense celebration of the scoring team and the presence of the goal net in the background.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 2,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.0,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 10.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 12.25,
+      "framesJudged": 2,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white and purple kit celebrates a goal by raising his arms in the air. Other players, including one in a yellow jersey and another in blue, are visible in the background near the goal net. The high-motion celebration indicates a successful scoring play.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.0,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 2
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 2.25,
+      "framesJudged": 16,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit successfully maneuvers through the defense to strike the ball into the net. The goal is met with a visible celebration from the scoring player, while the opposing team in blue remains in the defensive area. The crowd and surrounding players react to the successful score.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.002,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 16
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 4.25,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit successfully maneuvers through a cluster of blue-shirted defenders to strike the ball into the net. The goal is followed by a visible celebration from the scoring team, with players showing high-motion reactions as the crowd energy begins to rise.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.017,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.026,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 3.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 5.75,
+      "framesJudged": 9,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit successfully strikes the ball into the net, resulting in a goal. The opposing team in blue jerseys reacts with visible disappointment, while the scoring team's players begin to celebrate. The crowd in the background is also reacting to the successful scoring play.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.112,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 9
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 6.25,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit successfully maneuvers through the defense to score a goal. The opposing team in blue jerseys reacts with visible disappointment, while the scoring team's players begin to celebrate. The ball ends up in the net, marking a significant scoring moment in the match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.035,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 5.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 7.75,
+      "framesJudged": 5,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit takes a free kick from the orignal position, successfully striking the ball past the blue-clad defense into the net. The goal is met with a visible celebration from the white team players, while the crowd energy remains relatively low.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.007,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.111,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 8.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a soccer match in a set-piece situation, likely a free kick or corner, with players from both teams positioned around the penalty area. The ball is stationary or moving slowly, and no goal is scored within these frames, making it a standard play rather than a highlight.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.047,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.12,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 7.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 9.25,
+      "framesJudged": 1,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a soccer match in progress with players from both teams positioned in the midfield and attacking third. No goal has been scored in this frame; the ball is in play near the center, and there is no clear scoring action or significant celebration visible.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.056,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.059,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 1
+    }
+  ],
+  "stageA": {
+    "totalCandidates": 96,
+    "rejected": 15
+  },
+  "tracking": {},
+  "_meta": {
+    "issue": "ADAAAA-7089",
+    "variant": "A",
+    "gameHint": "soccer",
+    "fps": 2.0,
+    "decideWindowN": 24,
+    "gemmaCalls": 96,
+    "gemmaSeconds": 121.1
+  }
+}

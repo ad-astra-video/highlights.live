@@ -1,0 +1,2789 @@
+{
+  "events": [
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 2.25,
+      "framesJudged": 16,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a soccer match where a player successfully strikes the ball into the net, resulting in a goal. The visual evidence of the ball crossing the line and the subsequent positioning of the players confirms a scoring event.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.003,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 16
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 4.25,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored in a high-pressure situation, with players reacting and the ball entering the net.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.039,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 4.75,
+      "framesJudged": 11,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored in a crowded penalty area, with players reacting and the ball entering the net.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.106,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 11
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 6.25,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored as the ball enters the net, followed by a clear celebration by the attacking team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.635,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 4.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 6.75,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored in a soccer match, with players in the box reacting to the ball entering the net.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.189,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 8.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a chaotic scramble in the penalty area with no clear shot on goal or scoring action occurring within the frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.019,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.153,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-01",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-01",
+      "timestamp": 8.75,
+      "framesJudged": 3,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard play in the penalty area with no clear scoring action, goal, or significant celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.056,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.039,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 0.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 2.75,
+      "framesJudged": 23,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal, followed by a clear celebration where he runs toward the camera with arms raised and a teammate celebrates nearby.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.055,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.158,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 23
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 4.75,
+      "framesJudged": 19,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a white kit scoring a goal, followed by a clear celebration where he runs toward the camera with his arms raised, while the opposing team's goalkeeper remains on the ground.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.319,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 19
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 3.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 5.25,
+      "framesJudged": 15,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal, followed by a clear celebration where he runs toward the camera with arms raised and a joyful expression.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.174,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 15
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 8.75,
+      "framesJudged": 11,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored, followed by a clear celebration by the scoring player and a reaction from the opposing team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.166,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.138,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 11
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 8.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 10.75,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a white kit celebrating a goal, with a clear visual of the ball in the net and the opposing goalkeeper on the ground.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.003,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.011,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 10.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 12.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a white kit celebrating a goal with arms raised and a joyful expression, followed by a view of his jersey showing the name 'PETERSEN' and number '32'.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.208,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-02",
+      "eventType": "GOAL",
+      "timestamp": 10.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-02",
+      "timestamp": 12.75,
+      "framesJudged": 3,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a white kit celebrating with arms raised, followed by a view of the player's back showing the name 'PETERSEN' and number '32', indicating a goal celebration.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.091,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 2.25,
+      "framesJudged": 24,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored by a player in a yellow kit, followed by a clear celebration by the scoring player and a reaction from the opposing team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 24
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 4.25,
+      "framesJudged": 20,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a dark kit successfully strikes the ball into the net, resulting in a goal. The sequence shows the ball crossing the goal line and the subsequent reaction of the players.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.015,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.167,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 20
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 4.75,
+      "framesJudged": 19,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a soccer player (number 10 in yellow) successfully striking the ball into the net, followed by a clear goal celebration by the attacking team and a reaction from the crowd.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.041,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.079,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 19
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 6.25,
+      "framesJudged": 16,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a soccer player successfully striking the ball into the net, resulting in a goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.034,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.055,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 16
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 3.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 5.75,
+      "framesJudged": 15,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored by a player in a yellow jersey, followed by a clear celebration by the team and a reaction from the crowd.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.051,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.099,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 15
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 8.25,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored by the team in yellow, with the ball entering the net and the opposing goalkeeper in red reacting to the goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.056,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.057,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 5.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 7.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a play in the penalty area, but no goal is scored. The ball remains in play and the players do not exhibit any celebration or reaction to a goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.029,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.14,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 8.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 10.25,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a soccer player in a yellow jersey taking a shot that results in a goal, followed by a clear celebration by the attacking team and a reaction from the crowd.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.207,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 8.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 10.75,
+      "framesJudged": 6,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a play developing in the penalty area, but no goal is scored within the provided frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.072,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 6
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-03",
+      "eventType": "GOAL",
+      "timestamp": 10.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-03",
+      "timestamp": 12.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored by the team in yellow, with the ball entering the net and the opposing goalkeeper falling. The crowd and players are reacting to the goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.044,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 2.25,
+      "framesJudged": 20,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player standing near a corner flag and a goalkeeper in the net, but no actual goal is scored or celebrated in the provided frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 20
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 4.25,
+      "framesJudged": 16,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows players standing near a goal net with no actual scoring action, ball movement, or celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.163,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 16
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 6.25,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows players in close proximity but lacks any clear scoring action, ball movement, or significant celebration/crowd reaction to indicate a goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.09,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.236,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 4.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 6.75,
+      "framesJudged": 11,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows players in close proximity with neutral or slightly frustrated expressions, but there is no clear scoring action, goal celebration, or significant crowd reaction to indicate a goal was scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.061,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.459,
+        "ballPossessionId": "t1792477073983-1"
+      },
+      "frameWindow": 11
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 5.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 7.75,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows players in close proximity with no ball action, scoring event, or clear celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.451,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 8.75,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a close-up of players in a tense interaction, but there is no goal scored or significant scoring action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.485,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 8.75,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a close-up of players' faces with no actual goal-scoring action or celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.0,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-goal-04",
+      "eventType": "GOAL",
+      "timestamp": 9.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-goal-04",
+      "timestamp": 11.25,
+      "framesJudged": 2,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show players in close proximity with neutral expressions; there is no goal, scoring action, or celebration visible.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.028,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true
+      },
+      "frameWindow": 2
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 1.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 3.25,
+      "framesJudged": 18,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored during a set piece, with players celebrating and the crowd reacting.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 18
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 3.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 5.25,
+      "framesJudged": 14,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored during a set piece, with players in the box reacting to the successful play.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.017,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.003,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 14
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 5.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 7.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored in a crowded penalty area, with players in blue and black kits reacting to the play and the ball entering the net.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.418,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 8.25,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a chaotic scramble in the box with no clear shot on goal or scoring action occurring within the frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.023,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.084,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 7.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 9.25,
+      "framesJudged": 6,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a chaotic scramble in the box with no clear shot on goal or scoring action occurring within the frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.077,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.098,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 6
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-01",
+      "eventType": "GOAL",
+      "timestamp": 9.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-01",
+      "timestamp": 11.25,
+      "framesJudged": 2,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a soccer match in a goal-scoring situation with players in the penalty area and a clear goal-scoring action occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.117,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 2
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 0.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 2.75,
+      "framesJudged": 17,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player preparing to take a free kick, but no goal is scored within the provided frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.057,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.247,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 17
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 4.75,
+      "framesJudged": 13,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard play in the middle of the field with no scoring action, goal celebration, or significant crowd reaction.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.048,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.383,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 13
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 1.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 3.75,
+      "framesJudged": 11,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard play in the middle of the field with no scoring action, goal, or significant celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.127,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.046,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 11
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 4.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 6.75,
+      "framesJudged": 9,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard play in the middle of the field with no scoring action, goal, or significant celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.081,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 9
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 5.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 7.25,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard play in the middle of the field with no scoring action, goal, or significant celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.145,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 8.75,
+      "framesJudged": 5,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a buildup play in the final third of the field, but no shot is taken and no goal is scored within the provided frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.061,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-near-02",
+      "eventType": "GOAL",
+      "timestamp": 8.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-near-02",
+      "timestamp": 10.75,
+      "framesJudged": 1,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a standard play in progress with no clear scoring action, goal celebration, or significant crowd reaction visible.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.003,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.237,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 1
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 2.25,
+      "framesJudged": 24,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored, followed by a chaotic and intense celebration where players and security personnel are involved in a scuffle near the sidelines.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.046,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 24
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 4.25,
+      "framesJudged": 24,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored, followed by a chaotic celebration where players and fans are involved in a scuffle near the sidelines.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.146,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.187,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 24
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 4.25,
+      "framesJudged": 23,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored, followed by a chaotic celebration where players and fans are involved in a scuffle near the goal line.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.146,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.34,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 23
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 6.25,
+      "framesJudged": 20,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player celebrating a goal with a group of teammates and fans, with high-motion celebration cues and a clear goal-scoring context.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.319,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 20
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 5.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 7.25,
+      "framesJudged": 18,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a black top and shorts celebrating a goal, followed by a massive celebration involving multiple players and fans in the stands, including a group huddle and high-motion celebration.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.4,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 18
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 8.25,
+      "framesJudged": 16,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a sports bra and shorts celebrating a goal, followed by a massive crowd and team celebration in the stands and on the pitch.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.307,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 16
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 5.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 7.75,
+      "framesJudged": 14,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a sports bra and shorts celebrating a goal, followed by a massive crowd eruption and players from both teams converging on the pitch to celebrate/confront each other.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.564,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 14
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 8.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 10.25,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal celebration where a player in a yellow jersey is being swarmed and embraced by teammates and staff, with the crowd in the background reacting intensely.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.564,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 9.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 11.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a black sports bra and shorts (likely a fan or performer) being confronted by security and fans, followed by a chaotic scene where a player in a yellow jersey is being swarmed and held by security and fans near the pitch side. This is a high-intensity, notable incident during a match.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.0,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 10.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 12.25,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a yellow jersey celebrating a goal by running towards the fans, while a player in a black tank top is being confronted by fans at the barrier. The crowd is in a state of high-intensity reaction, confirming a significant scoring event.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 10.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 12.25,
+      "framesJudged": 6,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a group of players in yellow and blue kits celebrating intensely near the sidelines, with some players jumping and others embracing, indicating a goal was just scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.329,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 6
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 12.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 14.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a group of players in yellow and blue kits celebrating a goal, with some players embracing and others running towards the camera, while the crowd in the background is highly active and cheering.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.394,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-01",
+      "eventType": "GOAL",
+      "timestamp": 13.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-01",
+      "timestamp": 15.25,
+      "framesJudged": 2,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "goal",
+        "reason": "Players are seen celebrating a goal in a group huddle near the sidelines, with a visible crowd reaction in the background.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.219,
+        "ballPossessionId": "t1792477233248-1"
+      },
+      "frameWindow": 2
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 2.25,
+      "framesJudged": 18,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a soccer player in a yellow and blue kit successfully striking the ball into the net, followed by a clear goal celebration from the scoring player and a reaction from the opposing team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.009,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 18
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 4.25,
+      "framesJudged": 14,
+      "decision": {
+        "isHighlight": true,
+        "score": 85.0,
+        "eventType": "GOAL",
+        "reason": "A player in a yellow and blue kit successfully scores a goal, followed by a clear celebration by the scoring player and teammates.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.523,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 14
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 6.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard play in the middle of the field with no scoring action, goal, or celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.004,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.049,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 8.25,
+      "framesJudged": 6,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard play in the middle of the field with no scoring action, goal celebration, or significant crowd reaction.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.049,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.054,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 6
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 7.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 9.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a chaotic scramble in the penalty area with a player on the ground, but no clear goal is scored or celebrated within the frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.027,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.126,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-off-02",
+      "eventType": "GOAL",
+      "timestamp": 8.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-off-02",
+      "timestamp": 10.25,
+      "framesJudged": 2,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a standard play in the middle of the field with no clear scoring action, goal, or celebration occurring.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.589,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 2
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 0.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 2.75,
+      "framesJudged": 15,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee showing a yellow card to a player, not a goal being scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.024,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 15
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 4.75,
+      "framesJudged": 11,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee showing a yellow card to a player, not a goal being scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.064,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.362,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 11
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 2.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 4.75,
+      "framesJudged": 9,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee showing a yellow card to a player, but no goal is scored or celebrated in the provided frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.064,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.199,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 9
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 4.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 6.75,
+      "framesJudged": 7,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee showing a yellow card to a player, not a goal being scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.036,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.152,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 7
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 5.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 7.75,
+      "framesJudged": 5,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee showing a yellow card to a player, not a goal being scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.034,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.356,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 8.75,
+      "framesJudged": 3,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a referee communicating with a player, not a goal being scored or a celebration of a goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.015,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.149,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-01",
+      "eventType": "GOAL",
+      "timestamp": 5.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-01",
+      "timestamp": 7.75,
+      "framesJudged": 1,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a referee communicating with a player, but there is no goal being scored or celebration occurring in the frame.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.034,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.062,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 1
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 2.25,
+      "framesJudged": 17,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored, with the referee signaling the goal and players from both teams reacting to the play.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 2,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 17
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 1.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 3.25,
+      "framesJudged": 14,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee making a signal and players reacting, but no actual goal is scored or celebrated in the provided frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.337,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 14
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 4.25,
+      "framesJudged": 13,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee making a signal and players reacting, but there is no actual goal scored or significant scoring action occurring in the frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.446,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 13
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 4.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee making a signal and players standing around, but no goal is scored or celebrated in the provided frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.339,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 6.25,
+      "framesJudged": 9,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee making a signal and players standing around, but no goal is scored or celebrated in the frames provided.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.003,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.229,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 9
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 8.25,
+      "framesJudged": 5,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a referee making a signal and players standing around, but no goal is scored or celebrated in the provided frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.732,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 8.25,
+      "framesJudged": 3,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a referee holding up a yellow card, indicating a foul or disciplinary action rather than a goal being scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.497,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-warm-02",
+      "eventType": "GOAL",
+      "timestamp": 8.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-warm-02",
+      "timestamp": 10.25,
+      "framesJudged": 1,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a goal celebration in progress with players from opposing teams (AC Milan and Real Madrid) reacting to a goal, including a referee signaling and players in celebratory poses.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.009,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.525,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 1
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 2.25,
+      "framesJudged": 22,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored, followed by a player falling to the ground in celebration and a teammate running towards the camera with arms raised in a clear goal celebration.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 22
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 1.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 3.75,
+      "framesJudged": 19,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A player in a white kit scores a goal, followed by a clear celebration where a teammate is seen falling to the ground in joy and others are celebrating near the goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.298,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 19
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 4.25,
+      "framesJudged": 18,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored, followed by a player falling to the ground in a celebratory/exhausted pose and a teammate celebrating with arms raised.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.395,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 18
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 6.25,
+      "framesJudged": 14,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "A goal is scored, followed by a clear celebration by the scoring team and a reaction from the opposing team.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.062,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.057,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 14
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 1.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 3.75,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored, followed by a player falling to the ground in celebration and another player running towards the camera with arms raised in a clear goal celebration.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.21,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 8.25,
+      "framesJudged": 10,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a goal being scored, followed by a player celebrating with arms raised and another player falling to the ground in a reaction to the play.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.128,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.216,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 10
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 6.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 8.75,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a white/purple kit celebrating a goal by falling to the ground, while a player in a blue kit stands nearby. The visual reaction of the celebrating player confirms a scoring event.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.057,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.203,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 8.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 10.25,
+      "framesJudged": 6,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a white/purple kit celebrating a goal by falling to the ground, while teammates and opponents react in the background. The high-motion celebration and the context of the play indicate a successful goal.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.087,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 6
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 9.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 11.75,
+      "framesJudged": 3,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a player in a light purple kit celebrating a goal by sliding on the ground, while other players and the crowd react to the scoring event.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 2,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.0,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 3
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-lull-01",
+      "eventType": "GOAL",
+      "timestamp": 10.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-lull-01",
+      "timestamp": 12.25,
+      "framesJudged": 2,
+      "decision": {
+        "isHighlight": true,
+        "score": 95.0,
+        "eventType": "GOAL",
+        "reason": "The frames show a player in a white/purple kit celebrating with arms raised, while other players are in close proximity, indicating a goal was just scored.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 1,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.0,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 2
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 0.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 2.25,
+      "framesJudged": 16,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard play in the middle of the field with no scoring action, goal celebration, or significant crowd reaction.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.002,
+        "audioKind": "",
+        "humansInMotion": 2,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 16
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 2.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 4.25,
+      "framesJudged": 12,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a standard play in the middle of the field with no scoring action, goal celebration, or significant crowd reaction.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.017,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.026,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 12
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 3.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 5.75,
+      "framesJudged": 9,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a set piece situation (free kick) where the ball is being contested or moved, but no goal is scored within the provided frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.112,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 9
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 4.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 6.25,
+      "framesJudged": 8,
+      "decision": {
+        "isHighlight": false,
+        "score": 0.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a set piece situation (free kick) where the ball is being contested, but no goal is scored within the provided frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.0,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.035,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 8
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 5.75
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 7.75,
+      "framesJudged": 5,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a set-piece situation (free kick) with no actual goal scored or significant scoring action occurring within the frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.007,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": false,
+        "ballSpeedMps": 0.111,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 5
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 6.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 8.25,
+      "framesJudged": 4,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The sequence shows a set piece situation (free kick) with no actual goal scored or significant scoring action occurring within the frames.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.047,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.12,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 4
+    },
+    {
+      "type": "candidate",
+      "clipId": "soc-replay-01",
+      "eventType": "GOAL",
+      "timestamp": 7.25
+    },
+    {
+      "type": "decision",
+      "clipId": "soc-replay-01",
+      "timestamp": 9.25,
+      "framesJudged": 1,
+      "decision": {
+        "isHighlight": false,
+        "score": 10.0,
+        "eventType": "GOAL",
+        "reason": "The image shows a standard play in the middle of the field with no clear scoring action, goal celebration, or significant crowd reaction.",
+        "source": "gemma"
+      },
+      "reaction": {
+        "crowdEnergy": 0.056,
+        "audioKind": "",
+        "humansInMotion": 3,
+        "celebrationCluster": 0,
+        "ballInGoalMouth": true,
+        "ballSpeedMps": 0.059,
+        "ballPossessionId": "none"
+      },
+      "frameWindow": 1
+    }
+  ],
+  "stageA": {
+    "totalCandidates": 96,
+    "rejected": 45
+  },
+  "tracking": {},
+  "_meta": {
+    "issue": "ADAAAA-7089",
+    "variant": "B",
+    "gameHint": "soccer",
+    "fps": 2.0,
+    "decideWindowN": 24,
+    "gemmaCalls": 96,
+    "gemmaSeconds": 85.6
+  }
+}
