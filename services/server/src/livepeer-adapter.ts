@@ -885,6 +885,9 @@ export class DirectAdapter implements PipelineClient {
       audioB64?: string;
       jobId?: string;
       groupKey?: string;
+      /** ADAAAA-7111 (Increment D): the running video summary (story-so-far)
+       * carried into this cadence decide so the model EXTENDS it. */
+      storySoFar?: string;
     }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
@@ -898,6 +901,9 @@ export class DirectAdapter implements PipelineClient {
         reasoningEffort: opts?.reasoningEffort || "none",
         jobId: opts?.jobId,
         groupKey: opts?.groupKey,
+        // ADAAAA-7111 (Increment D): forward the running video summary so the
+        // decide brain extends it (monotonic growth). Empty on the first tick.
+        storySoFar: opts?.storySoFar ?? "",
         evidence,
         images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
         frames: opts?.frames ?? [],
