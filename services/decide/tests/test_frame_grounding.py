@@ -353,16 +353,13 @@ def test_blocked_read_that_stays_out_is_still_not_a_goal():
     assert decision["outcome"] == "not_highlight"
 
 
-def test_unattested_confabulated_goal_rejected_by_production_compose():
-    # ADAAAA-7078 measured a residual goal FPR (12.5%, neg-03) but applied only
-    # the two ADAAAA-7070 gates in isolation, BYPASSING the production
-    # apply_goal_attestation_gate that runs FIRST in _postprocess_gemma_verdict /
-    # the single-candidate gemma path. That isolated verdict is a harness artifact:
-    # a confabulated goal read with NO independent attestation (no ballOutcome=goal
-    # / goalCrossed / scoreBoardChanged / ballInNet) is only a false goal if a gate
-    # trusts the model's self-reported read. In the production compose the
-    # attestation gate rejects it before the frame gate ever sees it. Lock that in
-    # so the artifact cannot silently recur on a future re-measure.
+def test_unattested_confabulated_goal_rejected_by_frame_grounding():
+    # ADAAAA-7078 measured a residual goal FPR (12.5%, neg-03). The old
+    # apply_goal_attestation_gate (perceive-driven) was the anti-confabulation
+    # backstop; per the CEO directive (ADAAAA-7070) perceive is DATA-only and no
+    # longer attests, so the goal/net frame-grounding gate is now the SOLE
+    # anti-confabulation authority. A confabulated goal whose PASS 1 read does
+    # NOT plainly show the goal in the frames must be rejected by that gate.
     decision = {
         "isHighlight": True,
         "outcome": "scoring_play",
@@ -372,13 +369,14 @@ def test_unattested_confabulated_goal_rejected_by_production_compose():
         "score": 0.9,
         "reason": "The ball clearly enters the net after a shot from a player in a white and blue kit.",
         "verdict": {
-            "criteria": {"ballInNet": True, "ballCrossedLineBetweenPosts": True},
-            "independentlyObserved": "A shot from a player in white and blue; the ball enters the net.",
+            "criteria": {"ballInNet": None, "ballCrossedLineBetweenPosts": None},
+            "independentlyObserved": "A shot from a player in white and blue; the ball's position relative to the goal is unclear and I cannot confirm the ball entered the net.",
         },
     }
     evidence = {"trackCount": 1, "maxVelocity": 0, "ocrHits": 0, "reaction": {}}
     out = dict(_postprocess_gemma_verdict(decision, evidence, "GOAL", []))
+    # Not frame-grounded -> not surfaced as a goal.
     assert out["isHighlight"] is False
-    assert "no attested goal criterion" in (out.get("reason") or "")
+    assert out["outcome"] == "not_highlight"
 
 
