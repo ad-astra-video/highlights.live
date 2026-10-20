@@ -988,3 +988,44 @@ def test_outcome_is_highlight_only_scoring_play_surfaces():
     assert outcome_is_highlight("near_miss") is False
     assert outcome_is_highlight("big_play") is False
     assert outcome_is_highlight("not_highlight") is False
+
+
+# --- ADAAAA-7098: variant switch, arm A is the default -----------------------
+
+def test_build_prompt_default_is_arm_a_detail_first():
+    # Arm A (detail-first narration) is the default; the DETAIL-FIRST NARRATION
+    # block is in the prompt with no env/arg needed, and the strict-JSON
+    # contract + modality order are preserved.
+    p = build_prompt("GOAL", {"trackCount": 1, "maxVelocity": 0.2, "ocrHits": 0}, "soccer")
+    assert "DETAIL-FIRST NARRATION" in p
+    assert "concrete event narrative of roughly 40-60 words" in p
+    assert '"isHighlight"' in p
+    assert '"score": 0..100' in p
+    assert 'Context:' in p
+
+
+def test_build_prompt_variant_arg_v0_is_control():
+    # v0 (control arm) does NOT carry the detail-first narration block; the
+    # strict-JSON contract is unchanged.
+    p = build_prompt("GOAL", {"trackCount": 1, "maxVelocity": 0.2, "ocrHits": 0}, "soccer", variant="v0")
+    assert "DETAIL-FIRST NARRATION" not in p
+    assert '"isHighlight"' in p
+    assert '"score": 0..100' in p
+
+
+def test_build_prompt_env_selects_variant(monkeypatch):
+    # DECIDE_PROMPT_VARIANT=v0 drives the control arm; A re-adds the block.
+    monkeypatch.setenv("DECIDE_PROMPT_VARIANT", "v0")
+    p0 = build_prompt("GOAL", {"trackCount": 1, "maxVelocity": 0.2}, "soccer")
+    assert "DETAIL-FIRST NARRATION" not in p0
+    monkeypatch.setenv("DECIDE_PROMPT_VARIANT", "A")
+    pa = build_prompt("GOAL", {"trackCount": 1, "maxVelocity": 0.2}, "soccer")
+    assert "DETAIL-FIRST NARRATION" in pa
+
+
+def test_build_prompt_unknown_variant_falls_back_to_default_a():
+    # Any unknown/missing variant resolves to the default (A), so A is always
+    # in force unless v0 is explicitly requested.
+    for bad in ("X", "", "  ", None):
+        p = build_prompt("GOAL", {"trackCount": 1, "maxVelocity": 0.2}, "soccer", variant=bad)
+        assert "DETAIL-FIRST NARRATION" in p
