@@ -11,6 +11,7 @@ import {
   applyOnDemandRecall,
   type ObserveDecidePayload,
   type PerFrameSeed,
+  type PerFrameSignal,
   type ObserveBiasHint,
   OBSERVE_MAX_FRAMES,
   LIVE_OBSERVE_MAX_FRAMES,
@@ -31,6 +32,11 @@ export interface ObservationResult {
     // anchor frames; the server folds the count into decide `ocrHits`.
     ocr?: string[];
     objects?: { label: string; confidence?: number; bbox: number[] }[];
+    // ADAAAA-7145: perceive's additive per-frame `evidence` (goal/ball signal
+    // fields: goalCrossed / ballOutcome / ballVelocity / ballPossession).
+    // Consumed by the Tier-2 signal gate; absent when no goal-line/ball channel
+    // judged the frame (recall-safe: the gate escalates).
+    evidence?: PerFrameSignal;
   };
   candidate?: {
     eventType: string;
@@ -100,6 +106,21 @@ export function clamp01(v: number | undefined): number {
 export function clampTrackCount(v: number | undefined): number {
   if (v === undefined || Number.isNaN(v)) return 0;
   return Math.min(2, Math.max(0, Math.round(v)));
+}
+/**
+ * ADAAAA-7145: map perceive's per-frame signal `evidence` (goal/ball fields)
+ * into the Tier-2 gate's {@link PerFrameSignal}. An absent evidence => undefined
+ * (no signal reported; the gate escalates — recall-safe). A goal-line judgment
+ * (goalCrossed / ballOutcome / ballInNet present) is marked `goalInfra: true` so
+ * an explicit non-goal frame can be suppressed by the gate.
+ */
+export function seedSignalFromEvidence(evidence: PerFrameSignal | undefined): PerFrameSignal | undefined {
+  if (!evidence) return undefined;
+  const out: PerFrameSignal = { ...evidence };
+  if (evidence.goalCrossed !== undefined || evidence.ballOutcome !== undefined || evidence.ballInNet !== undefined) {
+    out.goalInfra = true;
+  }
+  return out;
 }
 export function buildReactionEvidence(
   candidate: {
@@ -732,6 +753,17 @@ export interface AnalyzerConfig {
    * (`OBSERVE_MAX_FRAMES`). A denser window is subsampled to this cap.
    */
   observeMaxFrames?: number;
+  /**
+   * ADAAAA-7145: enable the Tier-2 signal gate on the decide-observer so a
+   * billable decide call only fires on a window with a real highlight signal
+   * (ball-in-net / goal-crossed / scoreboard change / confident motion+audio),
+   * cutting per-job decide volume + latency. Recall-safe: an uncalibrated /
+   * unsignaled window always escalates, so a genuine goal is never starved.
+   * Default off (existing high-recall cadence unchanged) until box QA confirms
+   * goal recall after the perceive goal-line/homography channels are enabled.
+   * Wired from `OBSERVE_SIGNAL_GATE` (server config).
+   */
+  observeSignalGate?: boolean;
   /**
    * ADAAAA-7011: enable the LIVE decide-observer architecture. When set (with
    * `decideWindowN` UNSET, i.e. the live/default pass), decide is driven on the
@@ -2314,6 +2346,7 @@ export async function analyzeJob(
           windowS: cfg.observeWindowS,
           maxFrames: cfg.observeMaxFrames ?? OBSERVE_MAX_FRAMES,
           fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
+          signalGate: cfg.observeSignalGate,
           onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
         })
       : null;
@@ -2331,6 +2364,7 @@ export async function analyzeJob(
           windowS: cfg.observeWindowS,
           maxFrames: cfg.observeMaxFrames ?? LIVE_OBSERVE_MAX_FRAMES,
           fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
+          signalGate: cfg.observeSignalGate,
           onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
         })
       : null;
@@ -2442,6 +2476,12 @@ export async function analyzeJob(
           tracks: res.observation.tracks.map((t) => ({ trackId: t.trackId, label: t.label ?? t.kind, bbox: t.bbox as number[] })),
           objects: res.observation.objects,
           ocr: res.observation.ocr,
+          // ADAAAA-7145: fold perceive's per-frame goal/ball signal evidence into
+          // the seed so the Tier-2 signal gate can judge the window. Mark a
+          // goal-line judgment (goalCrossed / ballOutcome / ballInNet present) as
+          // goalInfra so an explicit non-goal frame can be suppressed; an absent
+          // evidence is recall-safe (the gate escalates, never starving a goal).
+          signal: seedSignalFromEvidence(res.observation.evidence),
         };
         observeDecider?.record(frame.timestamp, frame.imageB64, seed);
         liveObserver?.record(frame.timestamp, frame.imageB64, seed);
