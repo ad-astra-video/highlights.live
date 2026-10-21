@@ -410,6 +410,19 @@ export interface PlanRequest {
   imageB64?: string;
 }
 
+/** ADAAAA-6489 / ADAAAA-7159 Gap 2: a REAL per-camera/per-clip goal-line
+ * calibration delivered to perceive on every /analyze so the goal-line signal
+ * (goalCrossed/ballOutcome) is genuine — never a fabricated uncalibrated flip.
+ * `homography` is the row-major 3x3 image->field pitch homography (9 numbers)
+ * for THIS session's camera/clip; `goalLine` is the goal-line plane spec in the
+ * calibration's field coords `{axis, position, mouthMin, mouthMax}`. Absent ->
+ * perceive falls back to image space / no goal-line signal (reported as
+ * not_captured, never fabricated). */
+export interface GoalLineCalibration {
+  homography?: number[];
+  goalLine?: { axis?: string; position?: number; mouthMin?: number; mouthMax?: number };
+}
+
 /** ADAAAA-6935: one Stage-A candidate trigger accumulated within a 3 s frame
  * group, carrying its own decide-evidence snapshot so a single merged group
  * review can return a per-trigger verdict (per-trigger accept / exactly-once
@@ -443,7 +456,7 @@ export interface PipelineClient {
   analyze(
     sessionId: string,
     frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
-    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string; trackingPlan?: Record<string, unknown> }
+    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string; trackingPlan?: Record<string, unknown> } & GoalLineCalibration
   ): Promise<ObservationResult>;
   /** Single-shot what-to-track planner call (plan §4.4 / §7 D). The worker
    * fires this at stream-start warm-up + out-of-band re-check cadence — NEVER
@@ -614,6 +627,15 @@ export interface AnalyzerConfig {
    * session serves the base model (no regression on base-stream detection).
    * Flowed to perceive on every /analyze exactly like gameHint/preferLabels. */
   loraRef?: string;
+  /** Per-camera/per-clip goal-line calibration (ADAAAA-6489 / ADAAAA-7159 Gap 2):
+   * a REAL image->field pitch homography + goal-line plane spec for THIS
+   * session's clip/camera, delivered to the perceive session on every /analyze
+   * (with gameHint/preferLabels/trackingPlan) so the goal-line crossing signal
+   * (goalCrossed/ballOutcome) is genuine, not a single static env value. When a
+   * clip has no calibrated homography/spec the fields are simply absent, so
+   * perceive emits no ballOutcome/goalCrossed and the metric reports
+   * not_captured (never a fabricated signal). */
+  calibration?: GoalLineCalibration;
   /** Detail-first VOD knobs (ADAAAA-4954, spec §1). When absent the pass runs at
     * the live/default depth (1 fps frames, 16-frame window, single decide image).
     * When `decideWindowN` is set the pass is "detail-first": the shared frame
@@ -2417,6 +2439,13 @@ export async function analyzeJob(
         preferLabels: cfg.preferLabels,
         loraRef: cfg.loraRef,
         trackingPlan: planController.delivery() ?? undefined,
+        // ADAAAA-6489 / ADAAAA-7159 Gap 2: deliver this session's per-camera/
+        // per-clip goal-line calibration (homography + goal-line spec) on every
+        // /analyze so a fresh or re-reserved session inherits it and the
+        // goal-line signal (goalCrossed/ballOutcome) flows into decide. Absent
+        // -> perceive emits no signal (not_captured, never fabricated).
+        ...(cfg.calibration?.homography ? { homography: cfg.calibration.homography } : {}),
+        ...(cfg.calibration?.goalLine ? { goalLine: cfg.calibration.goalLine } : {}),
       };
       let stoppedRun = false;
       for (;;) {
