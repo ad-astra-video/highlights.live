@@ -35,7 +35,14 @@ from .sam_tracker import HybridTracker
 from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
 from .goal_plane import GoalLineDetector, GoalLineSpec
-from .scoreboard import parse_ocr_score, ScoreboardTracker, ScoreboardRoi
+from .scoreboard import (
+    ScoreboardLocator,
+    ScoreboardRoi,
+    ScoreboardTracker,
+    explicit_scoreboard_roi,
+    fallback_score_eligible,
+    parse_ocr_score,
+)
 from .scoreboard_vision import (
     ScoreboardVerdict,
     enabled as scoreboard_vision_enabled,
@@ -71,6 +78,10 @@ _gpu_lock = threading.Lock()
 # (plus the first) logs a single salient heartbeat line at INFO; per-frame
 # detail is emitted only at DEBUG.
 HEARTBEAT_EVERY = 30
+
+# ADAAAA-7086: re-attempt scoreboard region discovery only every Nth candidate
+# while no scoreboard has been found (bounded region pass; recall preserved).
+_SCOREBOARD_DETECT_BACKOFF = 5
 
 
 
@@ -351,21 +362,91 @@ def _apply_calibration(state, homography, goal_line) -> None:
             state.goal_line_detector = GoalLineDetector(spec)
 
 
-def _scoreboard_roi(state) -> ScoreboardRoi:
-    """The session's scoreboard region-of-interest (ADAAAA-7081).
+def _scoreboard_locator(state, detector):
+    """The session's ``ScoreboardLocator`` (built lazily, ADAAAA-7086).
 
-    Resolved once per session from ``PERCEIVE_SCOREBOARD_ROI`` (a normalized
-    ``x0,y0,x1,y1`` box) else a documented default region. The scoreboard OCR
-    pass crops each observed frame to this ROI before ``<OCR>`` so only the
-    scoreboard graphic can produce a score / ``ocrHits`` — crowd, banner,
-    jersey, shot-clock and other on-screen text is cropped out. Never raises; an
-    unset/malformed ROI safely falls back to the default.
+    Wraps the vision detector's region-discovery pass so the scoreboard region
+    can be predicted per source (not calibrated per source). ``None`` when there
+    is no region-capable detector (e.g. the stub/background path), which falls
+    back to the static ROI / gate behaviour below.
     """
+    locator = getattr(state, "scoreboard_locator", None)
+    if locator is None and "scoreboard_locator" not in vars(state):
+        if detector is not None and hasattr(detector, "discover"):
+            locator = ScoreboardLocator(lambda img, task: detector.discover(img, task=task))
+        state.scoreboard_locator = locator
+    return locator
+
+
+def _scoreboard_roi(state, detector=None) -> "ScoreboardRoi | None":
+    """The session's active scoreboard region-of-interest (ADAAAA-7081/7086).
+
+    Resolution order (first match wins, in priority order):
+
+    1. **Explicit calibration** — ``PERCEIVE_SCOREBOARD_ROI`` set to a valid box
+       (the operator has told us exactly where this source's scoreboard is). We
+       trust it and treat a scoreboard as visible.
+    2. **Auto-detected region** — predicted by ``ScoreboardLocator`` from the
+       frame's content, so a scorebug in any corner is found without per-source
+       calibration (ADAAAA-7086 recall). Cached on the session once found.
+    3. **Visibility gate** — no scoreboard predicted/visible -> ``None``, and the
+       caller runs no OCR at all (no score, no ``ocrHits``), so non-scoreboard
+       text can never drive ``scoreBoardChanged`` / ``ocrHits``.
+
+    Detection itself runs only while no region has been found (bounded — once a
+    scoreboard is located it is cached and reused for the source), so it is not a
+    per-frame billable pass beyond the ROI-scoped OCR. If detection is
+    unavailable (stub detector, no ``discover``) and no explicit ROI is set, we
+    fall back to the documented default top-band region (legacy behaviour) rather
+    than silently dropping all score evidence. Never raises.
+    """
+    # 1. Already-located region (explicit or auto-detected) is cached on state.
     roi = getattr(state, "scoreboard_roi", None)
-    if roi is None:
-        roi = ScoreboardRoi.from_env()
-        state.scoreboard_roi = roi
-    return roi
+    if roi is not None:
+        state.scoreboard_visible = True
+        return roi
+
+    # Explicit per-source calibration wins over auto-detection (operator has
+    # pinned the scoreboard region). Invalid/unset -> None below.
+    explicit = explicit_scoreboard_roi()
+    if explicit is not None:
+        state.scoreboard_roi = explicit
+        state.scoreboard_visible = True
+        return explicit
+
+    # 2. Auto-detect the scoreboard region from the frame content.
+    locator = _scoreboard_locator(state, detector)
+    if locator is not None:
+        # Re-attempt region discovery only every `_SCOREBOARD_DETECT_BACKOFF`
+        # candidates. An always-no-scoreboard source must not pay a billable
+        # region pass on every candidate frame (acceptance: no GPU pass beyond
+        # the ROI-scoped OCR), yet a scoreboard that appears mid-stream is
+        # still picked up after the backoff (recall preserved).
+        misses = int(getattr(state, "scoreboard_miss_count", 0))
+        if getattr(state, "last_rgb", None) is not None and misses % _SCOREBOARD_DETECT_BACKOFF == 0:
+            try:
+                located = locator.locate(state.last_rgb)
+            except Exception:  # noqa: BLE001 - never crash the candidate path
+                located = None
+            if located is not None:
+                state.scoreboard_roi = located
+                state.scoreboard_visible = True
+                return located
+        # A region-capable detector ran but found no visible scoreboard -> gate.
+        # Count the miss so the next region pass waits out the backoff; a
+        # scoreboard that appears mid-stream is still picked up on the next
+        # attempt (state.scoreboard_roi stays None until found).
+        state.scoreboard_miss_count = misses + 1
+        state.scoreboard_roi = None
+        state.scoreboard_visible = False
+        return None
+
+    # No region-capable detector (stub path): fall back to the documented
+    # default top-band prior rather than dropping all score evidence.
+    default = ScoreboardRoi.from_env()
+    state.scoreboard_roi = default
+    state.scoreboard_visible = True
+    return default
 
 
 def _vision_box_roi(state) -> "ScoreboardRoi | None":
@@ -626,21 +707,60 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     # still reach decide as the additive `evidence` field on the observation
     # (kept above) so the goal-attestation gate can attest a real scoring_play.
     cand_dict = None
-    # ADAAAA-7081/7084: ROI-scoped scoreboard OCR on the observe cadence. The
-    # scoreboard graphic is cropped to a stable region-of-interest before the
-    # <OCR> pass so crowd / banner / jersey / shot-clock text can never be read
-    # as a score. A concrete in-ROI score delta across the window is an
-    # independent scoreboard-change corroboration for decide's confirm gate
-    # (decision confirm.py goal_corroborated(scoreboard_changed, transcript)).
-    # A None/degenerate ROI degrades to whole-frame OCR (legacy behaviour); any
-    # OCR/GPU failure degrades to [] (absent evidence, never on its own a goal).
+    # ADAAAA-7081/7084/7086/7094: scoreboard OCR scoped to a scoreboard region
+    # of interest, on the observe cadence. The scoreboard graphic is cropped to
+    # a stable region before the `<OCR>` pass so crowd / banner / jersey /
+    # shot-clock text can never be read as a score. A concrete in-ROI score delta
+    # across the window is an independent scoreboard-change corroboration for
+    # decide's confirm gate. OCR/GPU failure degrades to [] (absent evidence,
+    # never on its own a goal).
+    #
+    # ADAAAA-7086: the ROI is not a fixed per-source calibration. The vision
+    # detector's region-discovery pass predicts the scoreboard region per source
+    # (and assesses whether a scoreboard is even visible); when none is visible
+    # the pass is gated off entirely (no OCR, no ocrHits), so non-scoreboard text
+    # can never drive scoreBoardChanged / ocrHits, while a scorebug in any corner
+    # is still found (recall no longer depends on a hand-tuned ROI).
+    #
+    # ADAAAA-7084 (opt-in PERCEIVE_SCOREBOARD_LLM): a vision LLM first assesses
+    # whether a scoreboard is ACTUALLY visible and, when so, localizes it and may
+    # read the score. When visible, the crop uses the LLM's box (tracks the
+    # graphic wherever it actually sits); when not visible, the `<OCR>` pass is
+    # skipped entirely. Any LLM failure degrades to None and runs the ROI path.
+    #
+    # ADAAAA-7094: the LLM score-text fallback (used when the cropped Florence
+    # `<OCR>` is empty) is only trusted when the LLM-localized box actually
+    # overlaps the configured scoreboard ROI — a hallucinated box/score off the
+    # graphic can never forge a scoreBoardChanged delta.
     if detector is not None and state.last_rgb is not None:
-        roi = _scoreboard_roi(state)
+        # ADAAAA-7084 (opt-in): vision-LLM scoreboard visibility verdict.
+        verdict = vision_scoreboard(image_b64) if scoreboard_vision_enabled() else None
+        state.scoreboard_vision = verdict
+        # Crop region: prefer the vision-LLM box (when it ran and localized a
+        # usable scoreboard), else the ADAAAA-7086-aware `_scoreboard_roi`.
+        roi = _vision_box_roi(state) if verdict is not None else None
+        if roi is None:
+            roi = _scoreboard_roi(state, detector)
+        # Visibility gate: the LLM says no scoreboard (7084) or the region
+        # discovery found none (7086) -> skip the `<OCR>` pass entirely so
+        # out-of-ROI / non-scoreboard text is never even read.
+        visible = verdict.visible if verdict is not None else getattr(state, "scoreboard_visible", True)
         ocr_lines: list[str] = []
-        try:
-            ocr_lines = detector.ocr(state.last_rgb, roi=roi) or []
-        except Exception as e:  # noqa: BLE001
-            log.warning("scoreboard OCR skipped for frame %s: %s", seq, e)
+        if visible:
+            try:
+                ocr_lines = detector.ocr(state.last_rgb, roi=roi) or []
+            except Exception as e:  # noqa: BLE001
+                log.warning("scoreboard OCR skipped for frame %s: %s", seq, e)
+            # ADAAAA-7094: the LLM score text only stands in for an empty crop
+            # when its localizing box overlaps the configured scoreboard ROI.
+            if (
+                not ocr_lines
+                and verdict is not None
+                and verdict.visible
+                and verdict.score_text
+                and fallback_score_eligible(verdict.box, _scoreboard_roi(state, detector))
+            ):
+                ocr_lines = [verdict.score_text]
         obs["ocr"] = ocr_lines
         score = parse_ocr_score(ocr_lines, roi=roi)
         state.scoreboard_tracker.record(timestamp, score)
