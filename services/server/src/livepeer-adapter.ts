@@ -36,6 +36,7 @@ import type {
   ConfirmDecision,
   ConfirmRequest,
   DecisionResult,
+  GoalLineCalibration,
   GroupDecodeRequest,
   ObservationResult,
   PipelineClient,
@@ -335,7 +336,7 @@ export class OrchestratorAdapter implements PipelineClient {
   async analyze(
     sessionId: string,
     frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
-    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string; trackingPlan?: Record<string, unknown> }
+    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string; trackingPlan?: Record<string, unknown> } & GoalLineCalibration
   ): Promise<ObservationResult> {
     const { status, data } = await this.client.appCall<any>(sessionId, "analyze", {
       method: "POST",
@@ -358,6 +359,12 @@ export class OrchestratorAdapter implements PipelineClient {
         // on every /analyze so detect/seeding stays scoped to the plan roster
         // (and a re-reserved session inherits it on its first frame).
         ...(opts?.trackingPlan ? { trackingPlan: opts.trackingPlan } : {}),
+        // ADAAAA-6489 / ADAAAA-7159 Gap 2: deliver this session's per-camera/
+        // per-clip goal-line calibration (homography + goal-line spec) so the
+        // goal-line signal (goalCrossed/ballOutcome) flows into decide. Absent
+        // -> perceive emits no signal (not_captured, never fabricated).
+        ...(opts?.homography ? { homography: opts.homography } : {}),
+        ...(opts?.goalLine ? { goalLine: opts.goalLine } : {}),
       }),
     });
     if (status >= 400) {
@@ -756,7 +763,7 @@ export class DirectAdapter implements PipelineClient {
   async analyze(
     sessionId: string,
     frame: { seq: number; timestamp: number; imageB64: string; clipPath?: string },
-    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string; trackingPlan?: Record<string, unknown> }
+    opts?: { gameHint?: string; preferLabels?: string[]; loraRef?: string; trackingPlan?: Record<string, unknown> } & GoalLineCalibration
   ): Promise<ObservationResult> {
     const r = await fetch(`${this.cfg.perceiveUrl}/app/analyze`, {
       method: "POST",
@@ -774,6 +781,10 @@ export class DirectAdapter implements PipelineClient {
         loraRef: opts?.loraRef || "",
         // Increment D (ADAAAA-6467): the active what-to-track plan.
         ...(opts?.trackingPlan ? { trackingPlan: opts.trackingPlan } : {}),
+        // ADAAAA-6489 / ADAAAA-7159 Gap 2: deliver this session's per-camera/
+        // per-clip goal-line calibration (homography + goal-line spec).
+        ...(opts?.homography ? { homography: opts.homography } : {}),
+        ...(opts?.goalLine ? { goalLine: opts.goalLine } : {}),
       }),
     });
     if (!r.ok) {
