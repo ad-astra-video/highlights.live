@@ -190,6 +190,19 @@ export interface ServerConfig {
    * actually cuts decide volume on the current box). Default off (recall-safe
    * escalate) until goal recall is verified. `OBSERVE_SIGNAL_GATE_SUPPRESS_QUIET`. */
   observeSignalGateSuppressQuiet: boolean;
+  /** ADAAAA-7152 Gap 1: adaptive perceive cadence for the VOD detail-first pass.
+   * When on, the per-frame perceive pass runs at a REDUCED cadence in cool
+   * (no-signal) regions and FULL cadence around any window the Tier-2 signal gate
+   * escalates (the escalated goal window is never starved), cutting VOD E2E cost.
+   * Tri-state: `PERCEIVE_CADENCE=1` forces on, `=0` forces off, unset auto-enables
+   * when `OBSERVE_LOOP` + `OBSERVE_SIGNAL_GATE` are both on (the gap-1 target). */
+  perceiveCadence?: boolean;
+  /** ADAAAA-7152 Gap 1: cool-region perceive stride (perceive every N-th frame
+   * where no signal escalated; 1 = full pass). `PERCEIVE_QUIET_STRIDE` (2). */
+  perceiveQuietStride?: number;
+  /** ADAAAA-7152 Gap 1: seconds of FULL-perceive treatment after a frame
+   * escalates the Tier-2 gate. `PERCEIVE_HOT_AFTER_S` (default observe window). */
+  perceiveHotAfterS?: number;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -409,6 +422,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // escalate stays the default until box QA confirms goal recall under it).
     observeSignalGateBallMinSpeedMps: env.OBSERVE_SIGNAL_GATE_BALL_MIN_SPEED !== undefined ? Number(env.OBSERVE_SIGNAL_GATE_BALL_MIN_SPEED) : undefined,
     observeSignalGateSuppressQuiet: env.OBSERVE_SIGNAL_GATE_SUPPRESS_QUIET === "1",
+    // ADAAAA-7152 Gap 1: adaptive perceive cadence for the VOD detail-first pass.
+    // Tri-state: PERCEIVE_CADENCE=1 forces on (=0 forces off); unset auto-enables
+    // exactly when OBSERVE_LOOP + OBSERVE_SIGNAL_GATE are both on (the gated VOD
+    // detail-first pass the gap targets). The cool-region stride and the
+    // full-perceive hot window after an escalation are separately tunable.
+    perceiveCadence: env.PERCEIVE_CADENCE === "1" ? true : env.PERCEIVE_CADENCE === "0" ? false : undefined,
+    perceiveQuietStride: env.PERCEIVE_QUIET_STRIDE !== undefined ? Number(env.PERCEIVE_QUIET_STRIDE) : undefined,
+    perceiveHotAfterS: env.PERCEIVE_HOT_AFTER_S !== undefined ? Number(env.PERCEIVE_HOT_AFTER_S) : undefined,
     // ADAAAA-5342: live sampling driven from the runner's measured capability
     // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
     // headroom so capable GPUs accelerate toward the chartered cadence while
