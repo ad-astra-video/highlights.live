@@ -156,6 +156,25 @@ function SectionBlock({ section, token, selectMode, selectedSeqs, onFrameClick }
   );
 }
 
+/**
+ * ADAAAA-7135 (Tier-1): the observe-loop running action narrative ("watch +
+ * notes") for a job — the runningSummary the continuous decide observer
+ * accumulates as the video progresses. Distinct from `job.candidates`, which
+ * now holds only confirmed highlights; this surface is the live-note stream,
+ * never a re-introduction of raw candidate triggers into the trail. Rendered
+ * only when the job produced one (matches ADAAAA-7111's server-side surface;
+ * this component makes the panel independently testable, like HighlightCard).
+ */
+export function RunningActionNotes({ summary }: { summary?: string }) {
+  if (!summary) return null;
+  return (
+    <div className="mt-4 rounded-lg bg-card px-3 py-2" data-detail-running-summary>
+      <div className="text-xs uppercase tracking-wide text-mut">Running action notes</div>
+      <pre className="mt-1 whitespace-pre-wrap font-mono text-sm leading-relaxed text-ink">{summary}</pre>
+    </div>
+  );
+}
+
 function statusChip(status: string): string {
   switch (status) {
     case "queued":
@@ -695,17 +714,12 @@ export function JobDetail() {
                 </div>
               </div>
             </div>
-            {/* ADAAAA-7111 (Increment D): the decide/gemma running video summary
-                (story-so-far) — grows as the video progresses. Rendered only when
-                the job produced one. */}
-            {detail.job.runningSummary && (
-              <div className="mt-4 rounded-lg bg-card px-3 py-2" data-detail-running-summary>
-                <div className="text-xs uppercase tracking-wide text-mut">Running summary</div>
-                <pre className="mt-1 whitespace-pre-wrap font-mono text-sm leading-relaxed text-ink">
-                  {detail.job.runningSummary}
-                </pre>
-              </div>
-            )}
+            {/* ADAAAA-7135 (Tier-1): the observe-loop running action notes
+                ("watch + notes") — the live runningSummary narrative the
+                continuous decide observer accumulates. Distinct from
+                `job.candidates` (confirmed highlights only). Rendered only
+                when the job produced one. */}
+            <RunningActionNotes summary={detail.job.runningSummary} />
             {detail.job.error && (
               <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red" data-detail-error>
                 {detail.job.error}
