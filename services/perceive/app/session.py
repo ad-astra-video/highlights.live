@@ -22,6 +22,7 @@ from .audio_gate import AudioEnergyGate
 from .tracker import IoUTracker, LIVE_MAX_TRACKS, VOD_MAX_TRACKS
 from .sam_tracker import HybridTracker, make_tracker
 from .scoreboard import ScoreboardTracker
+from .scoreboard_vision import ScoreboardVerdict
 from .tracking_plan import TrackingPlan
 
 RECENT_FRAMES = 30  # ~30 sampled frames kept for clip/confirm
@@ -95,6 +96,13 @@ class SessionState:
     # candidate can report whether the displayed score changed across the
     # candidate window. Bounded per-session state, never grows on long streams.
     scoreboard_tracker: ScoreboardTracker = field(default_factory=ScoreboardTracker)
+    # ADAAAA-7084 (design follow-up to 7081): the vision LLM's per-candidate
+    # "scoreboard visible?" verdict + localization for the most recent candidate
+    # anchor frame. Ephemeral per-frame state (overwritten every candidate); a
+    # dataclass field so the per-session cache is explicit rather than a dynamic
+    # attribute, and so `None` (gate off / LLM failure) degrades to the
+    # ADAAAA-7081 fixed-ROI path. Optional: absent -> fixed-ROI behaviour.
+    scoreboard_vision: Optional[ScoreboardVerdict] = None
     # LLM TrackingPlan (ADAAAA-6463, child of ADAAAA-6441): the closed detection
     # roster + zones + anchor + maxTracks the decide brain emitted for this
     # session. Plan-first: when present, detect/seeding vocabulary, zone set and
