@@ -102,11 +102,14 @@ describe("shouldRunConfirm", () => {
     expect(shouldRunConfirm({} as any, { eventType: "GOAL" }, acceptedGoal)).toBe(false);
     expect(shouldRunConfirm({ confirmEnabled: false } as any, { eventType: "GOAL" }, acceptedGoal)).toBe(false);
   });
-  it("fires only for un-attested goal-type scoring_play accepts", () => {
+  it("fires only for un-attested scoring_play accepts (goal-ness from the DECISION, ADAAAA-7185)", () => {
     const cfg = { confirmEnabled: true } as any;
     expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, acceptedGoal)).toBe(true);
-    // non-goal type
-    expect(shouldRunConfirm(cfg, { eventType: "ASSIST" }, acceptedGoal)).toBe(false);
+    // Observe-path regression (ADAAAA-7185): the candidate carries the perceive
+    // bias-hint label (SPORTING_EVENT) while the GOAL class lives on the
+    // verdict. The gate must fire anyway.
+    expect(shouldRunConfirm(cfg, { eventType: "SPORTING_EVENT" }, acceptedGoal)).toBe(true);
+    expect(shouldRunConfirm(cfg, { eventType: "ASSIST" }, acceptedGoal)).toBe(true);
     // independently attested → excluded
     expect(shouldRunConfirm(cfg, { eventType: "GOAL", ballOutcome: "goal" }, acceptedGoal)).toBe(false);
     expect(shouldRunConfirm(cfg, { eventType: "GOAL", goalCrossed: true }, acceptedGoal)).toBe(false);
@@ -115,6 +118,17 @@ describe("shouldRunConfirm", () => {
   it("does not fire on a Stage-1 non-accept (near miss / not a highlight)", () => {
     const cfg = { confirmEnabled: true } as any;
     expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, nonAccept)).toBe(false);
+  });
+  it("does not fire on a requested near-miss / big-play highlight (never a goal, ADAAAA-7185)", () => {
+    const cfg = { confirmEnabled: true, preferLabels: ["near-misses"] } as any;
+    const nearMissHighlight: DecisionResult = {
+      isHighlight: true,
+      score: 55,
+      eventType: "GOAL",
+      outcome: "near_miss",
+      nearMiss: true,
+    };
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, nearMissHighlight)).toBe(false);
   });
 });
 
@@ -272,6 +286,37 @@ describe("confirmReconcile", () => {
     expect(res.decision).toEqual(acceptedGoal);
     expect(shared.confirmMetrics.totalRuns).toBe(1);
     expect(shared.confirmMetrics.disagreed).toBe(0);
+  });
+
+  it("fires for an observe-path candidate (SPORTING_EVENT) and emits a run_confirmation_pass audit descriptor (ADAAAA-7185)", async () => {
+    const recon: ConfirmDecision = {
+      enabled: true,
+      goalConfirmed: "confirmed_goal",
+      confidence: 0.9,
+      reason: "ball in net",
+      evidence: { ballInNet: true },
+      stage1Disagreed: false,
+      // ADAAAA-7185: the decide side now reports WHICH independent signal.
+      corroborated: true,
+      corroborationSource: "scoreboard",
+      decision: { isHighlight: true, score: 85, eventType: "GOAL", outcome: "scoring_play" },
+    };
+    const audits: any[] = [];
+    const { client } = makeClient({ confirm: async () => recon });
+    const shared = new LiveRunShared();
+    const cfg = { confirmEnabled: true, gameHint: "soccer", jobId: "job-x", onDecideAudit: (d: any) => audits.push(d) } as any;
+    // Observe-path candidate carries the perceive bias label (SPORTING_EVENT);
+    // the gate must still fire because the DECISION is a scoring_play goal.
+    const res = await confirmReconcile(client, shared, cfg, acceptedGoal, { eventType: "SPORTING_EVENT", timestamp: 1 });
+    expect(res.confirmRan).toBe(true);
+    expect(res.decision.outcome).toBe("scoring_play");
+    // A run_confirmation_pass descriptor is persisted for queryability.
+    expect(audits).toHaveLength(1);
+    expect(audits[0].verdicts.runConfirmationPass).toBe(true);
+    expect(audits[0].verdicts.goalConfirmed).toBe("confirmed_goal");
+    expect(audits[0].verdicts.corroborated).toBe(true);
+    expect(audits[0].verdicts.corroborationSource).toBe("scoreboard");
+    expect(audits[0].jobId).toBe("job-x");
   });
 });
 

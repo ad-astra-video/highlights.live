@@ -324,6 +324,11 @@ export interface ConfirmDecision {
   evidence: Record<string, boolean | null>;
   /** Whether this pass corrected the Stage-1 read (the core value metric). */
   stage1Disagreed: boolean;
+  /** ADAAAA-7162/7185: whether an independent corroboration signal (scoreboard
+   * change OR goal-calling audio text) was present, and which one. Persisted so
+   * accepted == corroborated is queryable post hoc. */
+  corroborated?: boolean;
+  corroborationSource?: "audio_text" | "scoreboard" | null;
   /** The reconciled HighlightDecision-shaped dict to adopt in place of the
    * Stage-1 verdict. On passthrough it is the (unchanged) Stage-1 verdict. */
   decision: DecisionResult;
@@ -1831,7 +1836,17 @@ async function acceptVideoDecision(
   // /confirm deep frame dive and adopt the reconciled verdict in its place.
   // Strict no-op when the trigger doesn't fire or the flag (confirmEnabled) is
   // off; the Stage-1 verdict is kept on passthrough / transport failure.
-  const { decision, confirm } = await confirmReconcile(client, run, cfg, stage1, candidate);
+  const { decision: confirmReconciled, confirmRan, confirm } = await confirmReconcile(client, run, cfg, stage1, candidate);
+  // ADAAAA-7185: accepted == corroborated. When the Stage-2 gate is live and it
+  // RAN for this un-attested goal but could not corroborate it (passthrough or
+  // transport failure left goalConfirmed null), the Stage-1 visual read is NOT
+  // sufficient — downgrade to a near-miss so no un-corroborated GOAL is accepted
+  // as final. (A structured confirmed_goal without corroboration is already
+  // downgraded to near_miss by the decide-side gate.)
+  let decision = confirmReconciled;
+  if (cfg.confirmEnabled && confirmRan && !(confirm && confirm.goalConfirmed)) {
+    decision = downgradeUncorroborated(stage1);
+  }
   // ADAAAA-6798 Inc 2: derive the trigger provenance ONCE from the candidate
   // (pure function, no inference) and share one candidateId across the
   // persisted JobCandidate and the HighlightRecord so the trigger kind +
@@ -1881,6 +1896,11 @@ async function acceptVideoDecision(
     // Stage-2 confirmation verdict (ADAAAA-6797), set when the trigger fired.
     goalConfirmed: confirm?.goalConfirmed ?? undefined,
     stage1Disagreed: confirm?.stage1Disagreed ?? undefined,
+    // ADAAAA-7185: independent corroboration evidence (scoreboard change or
+    // goal-calling audio/commentary text), persisted so accepted == corroborated
+    // is queryable on the accepted highlight record.
+    corroborated: confirm?.corroborated ?? undefined,
+    corroborationSource: confirm?.corroborationSource ?? undefined,
     status: "pending",
     // ADAAAA-6798 Inc 2: link the highlight to the candidate that started it
     // and carry that candidate's trigger provenance (no read-time join).
@@ -2181,6 +2201,21 @@ export function isGoalTypeEvent(eventType: string | undefined): boolean {
   return GOAL_TYPE_EVENTS.has((eventType || "").toUpperCase().trim());
 }
 
+/** ADAAAA-7185: whether a Stage-1 decide verdict is GOAL-shaped — the
+ * goal-type classification that gates the confirmation pass. The decide
+ * OUTCOME taxonomy is authoritative: only `scoring_play` is ever published as
+ * a GOAL (highlightEventType maps scoring_play→GOAL, near_miss→NEAR_MISS,
+ * big_play→BIG_PLAY), so a requested near-miss / big-play highlight is never a
+ * goal even if its eventType says GOAL. Legacy verdicts with no `outcome` fall
+ * back to the historic eventType check. The candidate's raw event label is NOT
+ * used here because in the observe architecture it carries the perceive
+ * bias-hint label (commonly SPORTING_EVENT) while the actual GOAL class lives
+ * on the verdict. */
+export function isGoalDecision(d: DecisionResult): boolean {
+  if (d.outcome === undefined) return isGoalTypeEvent(d.eventType);
+  return d.outcome === "scoring_play";
+}
+
 /** Whether a candidate carries INDEPENDENT attestation of the goal: perceive
  * `ballOutcome=goal`, `goalCrossed`, or a scoreboard score change. When any is
  * present the candidate is already independently confirmed and the Stage-2
@@ -2208,9 +2243,15 @@ export function shouldRunConfirm(
   stage1Decision: DecisionResult
 ): boolean {
   if (!cfg.confirmEnabled) return false;
-  if (!isGoalTypeEvent(candidate.eventType)) return false;
+  // ADAAAA-7185: gate goal-ness on the DECISION, not the candidate's raw
+  // eventType. In the observe architecture the candidate carries the perceive
+  // bias-hint label (commonly SPORTING_EVENT) while the actual GOAL class lives
+  // on the verdict (outcome=scoring_play / eventType=GOAL). Gating on
+  // candidate.eventType made the gate inert for every observe-accepted goal.
+  if (!isAcceptedHighlight(stage1Decision)) return false;
+  if (!isGoalDecision(stage1Decision)) return false;
   if (hasIndependentAttestation(candidate)) return false;
-  return isAcceptedHighlight(stage1Decision);
+  return true;
 }
 
 /** Select the precise pre-event / event-instant / post-event keyframes from a
@@ -2322,6 +2363,18 @@ export async function confirmReconcile(
       scoreBoardChanged: candidate.scoreBoardChanged,
     } as ConfirmRequest);
     shared.recordConfirm({ stage1Disagreed: confirm.stage1Disagreed === true });
+    // ADAAAA-7185: emit a decide-audit descriptor from the /confirm pass
+    // (run_confirmation_pass) so the corroboration result for an accepted GOAL
+    // is queryable after the fact (currently nothing is written to
+    // decide_audit for the confirm pass). Keyed by (jobId, group:confirm) so it
+    // never collides with the primary /highlight decide-audit row.
+    if (cfg.onDecideAudit) {
+      try {
+        cfg.onDecideAudit(confirmAuditDescriptor(cfg, candidate, confirm));
+      } catch (e: any) {
+        console.error(`[confirm-audit:${cfg.jobId}] ingest failed:`, String(e?.message || e));
+      }
+    }
     // Adopt the reconciled verdict only when the pass actually produced one; on
     // passthrough (goalConfirmed null) keep the Stage-1 verdict unchanged.
     if (confirm.goalConfirmed && confirm.decision && typeof confirm.decision === "object") {
@@ -2333,6 +2386,52 @@ export async function confirmReconcile(
     shared.recordConfirm({ stage1Disagreed: false });
     return { decision: stage1, confirmRan: true };
   }
+}
+
+/** ADAAAA-7185: build a decide-audit descriptor for a Stage-2 /confirm pass
+ * (run_confirmation_pass). Small + stable enough for the decide_audit index:
+ * jobId/sessionId identity + the confirm verdict + the corroboration evidence. */
+function confirmAuditDescriptor(
+  cfg: AnalyzerConfig,
+  candidate: { timestamp: number },
+  confirm: ConfirmDecision
+): Record<string, unknown> {
+  return {
+    jobId: cfg.jobId,
+    sessionId: cfg.jobId,
+    groupKey: `${decideGroupKey(candidate.timestamp)}:confirm`,
+    verdicts: {
+      runConfirmationPass: true,
+      goalConfirmed: confirm?.goalConfirmed ?? null,
+      corroborated: confirm?.corroborated ?? false,
+      corroborationSource: confirm?.corroborationSource ?? null,
+      stage1Disagreed: confirm?.stage1Disagreed ?? false,
+    },
+    params: { stage1Disagreed: confirm?.stage1Disagreed ?? false },
+    rawReply: confirm?.reason ?? "",
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/** ADAAAA-7185: when the Stage-2 gate RAN for this un-attested goal but could
+ * not corroborate it (passthrough / transport failure left the Stage-1 visual
+ * accept standing), the server must NOT accept a GOAL on the Stage-1 read alone
+ * (accepted == corroborated). Downgrade to a near-miss so it never surfaces as
+ * a board-accepted goal. */
+function downgradeUncorroborated(stage1: DecisionResult): DecisionResult {
+  const d: DecisionResult = {
+    ...stage1,
+    outcome: "near_miss",
+    nearMiss: true,
+    isHighlight: false,
+    eventType: "NEAR_MISS",
+    // ADAAAA-7185: surface the reason so a reviewer can see the confirm pass
+    // could not corroborate the goal (the accept was not trusted).
+    reason: `${stage1.reason ?? ""}; confirm pass couldn't corroborate the goal (no independent signal) — accepted as near_miss`.trim(),
+  } as DecisionResult;
+  const sc = Number((stage1 as any).score ?? 0) || 0;
+  if (sc >= 60) d.score = 55;
+  return d;
 }
 
 

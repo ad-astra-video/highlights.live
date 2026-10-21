@@ -203,6 +203,10 @@ class ConfirmDecision(BaseModel):
     # OR goal-calling audio text) was present, and whether it is required. A
     # confirmed_goal on an un-corroborated candidate is downgraded to near-miss.
     corroborated: bool = False
+    # ADAAAA-7185: WHICH independent corroboration signal fired ("scoreboard"
+    # or "audio_text"), persisted so the evidence is queryable post hoc. null
+    # when no independent corroboration signal was present.
+    corroborationSource: Optional[str] = None
     corroborationRequired: bool = False
     decision: dict = Field(default_factory=dict)
 
@@ -600,6 +604,14 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         corroborated=corroborated,
         require_corroboration=confirm_requires_corroboration(),
     )
+    # ADAAAA-7185: WHICH independent corroboration signal fired, persisted so the
+    # evidence for an accepted GOAL is queryable after the fact. Scoreboard
+    # change takes precedence over goal-calling audio text; null when none.
+    corroboration_source = None
+    if bool(req.get("scoreBoardChanged")):
+        corroboration_source = "scoreboard"
+    elif audio_calls_goal(transcript):
+        corroboration_source = "audio_text"
 
     resp = {
         "enabled": True,
@@ -610,12 +622,14 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         "stage1Disagreed": stage1_disagrees(stage1, goal),
         # ADAAAA-7162: whether an independent corroboration signal was present.
         "corroborated": corroborated,
+        "corroborationSource": corroboration_source,
         "corroborationRequired": confirm_requires_corroboration(),
         "decision": decision,
     }
     log.info(
-        "confirm pass session=%s event=%s goal_confirmed=%s confidence=%.2f disagree=%s",
+        "confirm pass session=%s event=%s goal_confirmed=%s confidence=%.2f disagree=%s corroborated=%s source=%s",
         req.get("sessionId"), req.get("eventType"), goal, resp["confidence"], resp["stage1Disagreed"],
+        corroborated, corroboration_source,
     )
     return resp
 
