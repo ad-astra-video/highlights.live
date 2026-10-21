@@ -269,24 +269,29 @@ export class LiveObserver {
   private readonly windowS: number;
   private readonly maxFrames: number;
   private readonly fps: number;
+  private readonly signalGate: boolean;
   private readonly onDecide: ((payload: ObserveDecidePayload) => Promise<boolean>) | null;
   private readonly latency: LiveObserveLatencySample[] = [];
   /** Perceive candidate triggers folded into each window as bias hints
    * (provenance metadata) — never the on/off switch. */
   private readonly biasHints: ObserveBiasHint[] = [];
   private accepts = 0;
+  /** Cadence ticks suppressed by the Tier-2 signal gate (ADAAAA-7145). */
+  private gatedSkips = 0;
 
   constructor(opts: {
     cadenceS?: number;
     windowS?: number;
     maxFrames?: number;
     fps?: number;
+    signalGate?: boolean;
     onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
     this.maxFrames = opts.maxFrames ?? LIVE_OBSERVE_MAX_FRAMES;
     this.fps = opts.fps ?? OBSERVE_CONTENT_FPS;
+    this.signalGate = opts.signalGate ?? false;
     this.onDecide = opts.onDecide ?? null;
   }
 
@@ -330,6 +335,12 @@ export class LiveObserver {
     const lo = nowTs - this.windowS;
     const inWindow = this.biasHints.filter((h) => h.ts >= lo && h.ts <= nowTs + 1e-9);
     const payload = buildObservePayload(win, this.findings, inWindow);
+    // ADAAAA-7145: Tier-2 signal gate (recall-safe, same rule as ObserveDecider).
+    if (this.signalGate && !force && !windowHasSignal(payload.seeds, inWindow)) {
+      this.gatedSkips++;
+      this.lastFireTs = nowTs;
+      return;
+    }
     const cadenceMs = prevFire === null ? 0 : (nowTs - prevFire) * 1000;
     let e2eMs = 0;
     if (this.onDecide) {
@@ -376,6 +387,10 @@ export class LiveObserver {
   acceptedCount(): number {
     return this.accepts;
   }
+  /** Cadence ticks suppressed by the Tier-2 signal gate (ADAAAA-7145). */
+  gatedSkipCount(): number {
+    return this.gatedSkips;
+  }
 }
 
 /** Per-frame perceive-derived seed context carried into a decide payload
@@ -389,6 +404,80 @@ export interface PerFrameSeed {
   ocr?: string[];
   /** Convenience summary derived from the findings (never triggers a decide). */
   summary?: string;
+  /** ADAAAA-7145: per-frame perceive-derived goal/ball/scoreboard signal
+   * evidence (the additive `evidence` field perceive attaches to every
+   * observation — ballVelocity / goalCrossed / ballOutcome / scoreboard). Used
+   * by the Tier-2 signal gate to decide whether a window is worth a billable
+   * decide call. Absent/undefined = no signal reported for the frame. */
+  signal?: PerFrameSignal;
+}
+
+/** ADAAAA-7145: one frame's real-goal signal evidence, as reported by perceive.
+ * Mirrors the perceive `signal_gate` vocabulary (ADAAAA-7135 tier2). All fields
+ * optional — an absent field is "no signal reported", never fabricated. */
+export interface PerFrameSignal {
+  /** Geometry-agnostic ball-in-net attestation (ADAAAA-7044). */
+  ballInNet?: boolean;
+  /** Goal-line plane classifier: ball crossed the line (decide-leg I2). */
+  goalCrossed?: boolean;
+  /** Goal-line outcome string ("goal" | "cross" | "off_target" | ...). */
+  ballOutcome?: string;
+  /** Scoreboard score-delta across the candidate window (decide-leg I3). */
+  scoreBoardChanged?: boolean;
+  /** A confident motion burst detected on the frame. */
+  motionBurst?: boolean;
+  /** An audio noise-change gate firing on/near the frame. */
+  audioBurst?: boolean;
+  /** True when a goal-signal channel (goal-line / homography / scoreboard) was
+   * configured AND produced a judgment. When false/absent, recall-safety
+   * escalates (a genuine goal in an uncalibrated session is never starved). */
+  goalInfra?: boolean;
+}
+
+/** `ballOutcome` values meaning a scoring play crossed the line. Anything else
+ * (off_target / blocked / no_shot / absent) is NOT a goal signal by itself. */
+export const GOAL_OUTCOMES: ReadonlySet<string> = new Set(["goal", "cross", "goal_crossed", "crossed"]);
+
+/**
+ * ADAAAA-7145 (Tier-2 signal gate): whether ONE frame escalates to the Tier-2
+ * confirm pass (a billable decide call). Escalates on ANY real goal signal
+ * (ball-in-net / goal-crossed / goal-valued outcome / scoreboard change), OR a
+ * confident motion+audio burst (recall path for a no-geometry goal), OR
+ * recall-safety when no goal-signal channel judged the frame. Only SUPPRESSES
+ * when a goal-signal channel actively reported NOT a goal (goalInfra true) and
+ * there is no confident motion+audio burst — that is the flood scenario the gate
+ * is built to cut. Pure + deterministic (unit-testable).
+ */
+export function escalatesToTier2(sig: PerFrameSignal | undefined): boolean {
+  if (!sig) return false;
+  if (sig.ballInNet === true) return true;
+  if (sig.goalCrossed === true) return true;
+  if (sig.ballOutcome !== undefined && GOAL_OUTCOMES.has(sig.ballOutcome)) return true;
+  if (sig.scoreBoardChanged === true) return true;
+  if (sig.motionBurst === true && sig.audioBurst === true) return true;
+  // Recall safety: no goal-signal channel could judge -> escalate (never starve
+  // a genuine goal in an uncalibrated/disabled session).
+  if (sig.goalInfra !== true) return true;
+  return false;
+}
+
+/**
+ * ADAAAA-7145: whether a decide WINDOW contains a real highlight signal, so the
+ * Tier-2 confirm (decide observer) should fire. A window escalates when ANY
+ * in-window frame seed carries a real goal signal, or any in-window bias hint
+ * carries a goal attestation (scoreboard change / goal-crossed / goal-valued
+ * outcome). Pure + deterministic.
+ */
+export function windowHasSignal(
+  seeds: { signal?: PerFrameSignal }[],
+  biasHints: ObserveBiasHint[] = []
+): boolean {
+  for (const s of seeds) if (escalatesToTier2(s.signal)) return true;
+  for (const h of biasHints) {
+    if (h.scoreBoardChanged === true || h.goalCrossed === true) return true;
+    if (h.ballOutcome !== undefined && GOAL_OUTCOMES.has(h.ballOutcome)) return true;
+  }
+  return false;
 }
 
 export interface ObserveDecidePayload {
@@ -600,24 +689,29 @@ export class ObserveDecider {
   private readonly windowS: number;
   private readonly maxFrames: number;
   private readonly fps: number;
+  private readonly signalGate: boolean;
   private readonly onDecide: ((payload: ObserveDecidePayload) => Promise<boolean>) | null;
   /** Accumulated per-call decide input-size + accept report. */
   private readonly reportTicks: number[] = [];
   private accepts = 0;
   /** Calls where the max-frames cap forced a subsample (ADAAAA-7007 AC). */
   private subsampledCalls = 0;
+  /** Cadence ticks suppressed by the Tier-2 signal gate (ADAAAA-7145). */
+  private gatedSkips = 0;
 
   constructor(opts: {
     cadenceS?: number;
     windowS?: number;
     maxFrames?: number;
     fps?: number;
+    signalGate?: boolean;
     onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? OBSERVE_WINDOW_S;
     this.maxFrames = opts.maxFrames ?? OBSERVE_MAX_FRAMES;
     this.fps = opts.fps ?? OBSERVE_CONTENT_FPS;
+    this.signalGate = opts.signalGate ?? false;
     this.onDecide = opts.onDecide ?? null;
   }
 
@@ -663,6 +757,15 @@ export class ObserveDecider {
     const hi = currentTs + this.windowS / 2;
     const inWindow = this.biasHints.filter((h) => h.ts >= lo && h.ts <= hi);
     const payload = buildObservePayload(win, this.findings, inWindow);
+    // ADAAAA-7145: Tier-2 signal gate. When enabled, do NOT spend a billable
+    // decide call on a window with no real highlight signal (recall-safe: an
+    // unsignaled / uncalibrated window always escalates, so a genuine goal is
+    // never starved). Suppressed ticks are counted so the report can show the
+    // gate actually cut decide volume.
+    if (this.signalGate && !force && !windowHasSignal(payload.seeds, inWindow)) {
+      this.gatedSkips++;
+      return;
+    }
     this.reportTicks.push(payload.frames.length);
     if (payload.capped) this.subsampledCalls++;
     if (this.onDecide && (await this.onDecide(payload))) this.accepts++;
@@ -686,6 +789,10 @@ export class ObserveDecider {
   }
   acceptedCount(): number {
     return this.accepts;
+  }
+  /** Cadence ticks suppressed by the Tier-2 signal gate (ADAAAA-7145). */
+  gatedSkipCount(): number {
+    return this.gatedSkips;
   }
 }
 

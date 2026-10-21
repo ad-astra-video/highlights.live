@@ -594,6 +594,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // (config-gated). When on, decide runs on the ~3 s cadence regardless
         // of whether perceive emitted a candidate.
         liveObserveLoop: cfg.liveObserveLoop,
+        // ADAAAA-7145: gate the live decide-observer's billable decide calls on
+        // a real highlight signal (recall-safe). Default off.
+        observeSignalGate: cfg.observeSignalGate,
         // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
         onDecision: persistDecision,
         // ADAAAA-7028 Inc 2: ingest the decide audit descriptor durably.
@@ -808,6 +811,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // (config-gated). When on, decide runs on the ~3 s cadence regardless of
       // whether perceive emitted a candidate.
       observeLoop: cfg.observeLoop,
+      // ADAAAA-7145: gate the VOD decide-observer's billable decide calls on a
+      // real highlight signal (recall-safe). Wired so box QA can enable it once
+      // the perceive goal-line/homography channels are configured.
+      observeSignalGate: cfg.observeSignalGate,
       // Increment D (ADAAAA-6467): the what-to-track planner's warm-up window
       // + out-of-band re-check cadence on the VOD pass (cap 8).
       warmupSeconds: cfg.warmupSeconds,

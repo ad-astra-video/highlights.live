@@ -171,6 +171,15 @@ export interface ServerConfig {
    * deployed candidate-gated VOD baseline is unchanged until the observer pass
    * is validated. `OBSERVE_LOOP`. */
   observeLoop: boolean;
+  /** ADAAAA-7145: enable the Tier-2 signal gate on the decide-observer so a
+   * billable decide call only fires on a window with a real highlight signal
+   * (ball-in-net / goal-crossed / scoreboard change / confident motion+audio),
+   * cutting per-job decide volume + latency. Recall-safe: an uncalibrated /
+   * unsignaled window always escalates, so a genuine goal is never starved.
+   * Default off (existing high-recall cadence unchanged) until box QA confirms
+   * goal recall after the perceive goal-line/homography channels are enabled.
+   * `OBSERVE_SIGNAL_GATE`. */
+  observeSignalGate: boolean;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -379,6 +388,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // job path. Opt in with OBSERVE_LOOP=1 (default off; the candidate-gated VOD
     // baseline stays the behavior until the observer pass is validated).
     observeLoop: env.OBSERVE_LOOP === "1",
+    observeSignalGate: env.OBSERVE_SIGNAL_GATE === "1",
     // ADAAAA-5342: live sampling driven from the runner's measured capability
     // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
     // headroom so capable GPUs accelerate toward the chartered cadence while
