@@ -20,6 +20,7 @@ import {
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
+  type GoalLineCalibration,
   type PipelineClient,
 } from "./analyzer";
 import type { SignalGateOptions } from "./observe-loop";
@@ -619,8 +620,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         postWindowS: cfg.analysisPostWindowS,
         // ADAAAA-6489 / ADAAAA-7159 Gap 2: per-camera/per-clip goal-line
         // calibration for this live stream/job (absent -> no goal-line signal,
-        // reported not_captured, never fabricated).
-        calibration: cfg.goalLineCalibrations?.[job.id],
+        // reported not_captured, never fabricated). Keyed by job id (a live
+        // stream has no stable clip id configured on the job), then `default`
+        // (ADAAAA-7163 Blocker 1).
+        calibration: resolveGoalLineCalibration(cfg, [job.id]),
       };
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
@@ -855,8 +858,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // per-clip goal-line calibration to the perceive session so the goal-line
       // signal (goalCrossed/ballOutcome) is real. Absent -> perceive emits no
       // ballOutcome and the metric reports not_captured (never a fabricated
-      // signal).
-      calibration: cfg.goalLineCalibrations?.[jobId],
+      // signal). Keyed by job id, then the clip filename/source, then `default`
+      // (ADAAAA-7163 Blocker 1).
+      calibration: resolveGoalLineCalibration(cfg, [jobId, stableClipCalibrationKey(videoPath)]),
       // ADAAAA-6797: Stage-2 goal/near-miss confirmation pass. VOD-first: only
       // the VOD pass ever sets `confirmEnabled` (from the server config flag
       // DECIDE_CONFIRM_ENABLED, default off), so the live pass is untouched and
@@ -2968,6 +2972,39 @@ function buildObserveSignalGateOpts(cfg: ServerConfig): SignalGateOptions | unde
     ...(cfg.observeSignalGateBallMinSpeedMps !== undefined ? { ballMinSpeedMps: cfg.observeSignalGateBallMinSpeedMps } : {}),
     suppressQuietUncalibrated: cfg.observeSignalGateSuppressQuiet,
   };
+}
+
+/** Stable clip/camera key an operator would configure a calibration under.
+ * Derives a basename from the job's source URL/path so a calibration can be
+ * keyed per clip (e.g. `real_goal_3080.mp4`) rather than the server-side random
+ * job id. Falls back to the raw source string when a basename is unavailable. */
+export function stableClipCalibrationKey(sourceUrl?: string): string | undefined {
+  if (!sourceUrl) return undefined;
+  try {
+    const u = new URL(sourceUrl);
+    const base = path.basename(u.pathname);
+    return base || sourceUrl;
+  } catch {
+    return path.basename(sourceUrl) || sourceUrl;
+  }
+}
+
+/** ADAAAA-7152 cont / ADAAAA-7163 Blocker 1: resolve a job's per-camera/per-clip
+ * goal-line calibration by trying a prioritized list of keys in order — the
+ * exact job id first, then any stable clip/camera identifier, then a reserved
+ * `default`. A job id is a server-side random UUID, so keying by it alone made
+ * the calibration UNREACHABLE for an operator. Absent any match -> undefined
+ * (perceive reports not_captured, never fabricated). */
+export function resolveGoalLineCalibration(
+  cfg: ServerConfig,
+  keys: Array<string | undefined>,
+): GoalLineCalibration | undefined {
+  for (const key of keys) {
+    if (!key) continue;
+    const v = cfg.goalLineCalibrations?.[key];
+    if (v) return v;
+  }
+  return cfg.goalLineCalibrations?.default;
 }
 
 function spaHandler(cfg: ServerConfig) {
