@@ -12,6 +12,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import app.confirm as cf
+from app.confirm import run_confirmation_pass
 from app.gemma import (
     build_group_prompt,
     build_prompt,
@@ -241,5 +242,3 @@ def test_confirm_analysis_prompt_and_context(monkeypatch):
     cd = ConfirmDecision(**resp)
     assert cd.analysis["request"]["prompt"] == an["request"]["prompt"]
 
-
-from app.confirm import run_confirmation_pass  # noqa: E402
