@@ -818,6 +818,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // the perceive goal-line/homography channels are configured.
       observeSignalGate: cfg.observeSignalGate,
       observeSignalGateOpts: buildObserveSignalGateOpts(cfg),
+      // ADAAAA-7152 Gap 1: adaptive perceive cadence for the VOD detail-first
+      // pass — cut the per-frame perceive cost in cool regions while keeping the
+      // escalated goal window fully perceived. Auto-on with the gated observe
+      // loop; tunable via PERCEIVE_* (see config.ts).
+      perceiveCadence: cfg.perceiveCadence,
+      perceiveQuietStride: cfg.perceiveQuietStride,
+      perceiveHotAfterS: cfg.perceiveHotAfterS,
       // Increment D (ADAAAA-6467): the what-to-track planner's warm-up window
       // + out-of-band re-check cadence on the VOD pass (cap 8).
       warmupSeconds: cfg.warmupSeconds,

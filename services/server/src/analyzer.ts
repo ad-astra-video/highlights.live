@@ -17,7 +17,9 @@ import {
   OBSERVE_MAX_FRAMES,
   LIVE_OBSERVE_MAX_FRAMES,
   OBSERVE_CONTENT_FPS,
+  OBSERVE_WINDOW_S,
 } from "./observe-loop";
+import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
 
 export interface ReserveResult {
   sessionId: string;
@@ -777,6 +779,26 @@ export interface AnalyzerConfig {
    */
   observeSignalGateOpts?: SignalGateOptions;
   /**
+   * ADAAAA-7152 Gap 1: adaptive perceive cadence for the VOD detail-first pass.
+   * When active, the per-frame `client.analyze` (the expensive perceive pass that
+   * dominates VOD E2E) runs at a REDUCED cadence in "cool" (no-signal) regions
+   * and at FULL cadence around any window the Tier-2 signal gate escalates, so
+   * the escalated goal window is never starved and non-goal clips do not flood.
+   * Tri-state: `true` forces on, `false` forces off, `undefined` auto-enables
+   * exactly when the gap-1 target configuration is present (`observeLoop` AND
+   * `observeSignalGate` both set with `decideWindowN`, i.e. the gated VOD
+   * detail-first pass). Default undefined (auto). `PERCEIVE_CADENCE`.
+   */
+  perceiveCadence?: boolean;
+  /** ADAAAA-7152 Gap 1: cool-region perceive stride (perceive every
+   * `quietStride`-th frame where no signal escalated). 1 = full pass.
+   * `PERCEIVE_QUIET_STRIDE` (default 2). */
+  perceiveQuietStride?: number;
+  /** ADAAAA-7152 Gap 1: seconds of FULL-perceive treatment after a frame
+   * escalates the Tier-2 gate (covers the decide observer's reference window).
+   * Default the observe window (`observeWindowS`). `PERCEIVE_HOT_AFTER_S`. */
+  perceiveHotAfterS?: number;
+  /**
    * ADAAAA-7011: enable the LIVE decide-observer architecture. When set (with
    * `decideWindowN` UNSET, i.e. the live/default pass), decide is driven on the
    * ~3 s cadence REGARDLESS of whether perceive emitted a candidate, using the
@@ -862,6 +884,10 @@ export interface AnalyzeOutcome {
   sessionId: string;
   highlights: HighlightRecord[];
   framesAnalyzed: number;
+  /** ADAAAA-7152 Gap 1: number of frames actually sent to perceive (<=
+   * `framesAnalyzed` when the adaptive perceive cadence is active; equal to it
+   * on the full pass). Metric for confirming the VOD perceive cost was cut. */
+  perceiveCalls?: number;
   /** ADAAAA-7011: live decide-observer cadence + decide gemma E2E latency
    * snapshot (absent when the live observer was not enabled). Populated from
    * LiveObserver.latencySamples() so the Livepeer runner shows the ~30 s budget
@@ -2384,6 +2410,27 @@ export async function analyzeJob(
       : null;
   let framesAnalyzed = 0;
   let planApplied = false;
+  // ADAAAA-7152 Gap 1: adaptive perceive cadence for the VOD detail-first pass.
+  // The per-frame `client.analyze` (perceive `process_frame` -> Florence detect)
+  // is the dominant VOD E2E cost. When active, cool (no-signal) regions run at a
+  // reduced `quietStride` cadence and the escalated goal window is forced to FULL
+  // perceive. Auto-enable (unless explicitly forced by `cfg.perceiveCadence`)
+  // exactly when the gated VOD detail-first pass is present — the configuration
+  // the gap targets (ObserveDecider + Tier-2 signal gate + decideWindowN).
+  // see perceive-cadence.ts for the recall-safety argument.
+  const perceiveCadenceEnabled =
+    cfg.perceiveCadence === true ||
+    (cfg.perceiveCadence === undefined &&
+      cfg.observeLoop === true &&
+      cfg.observeSignalGate === true &&
+      cfg.decideWindowN !== undefined);
+  const perceiveCadence: PerceiveCadence | null = perceiveCadenceEnabled
+    ? new PerceiveCadence({
+        quietStride: cfg.perceiveQuietStride,
+        hotAfterS: cfg.perceiveHotAfterS ?? cfg.observeWindowS ?? OBSERVE_WINDOW_S,
+      })
+    : null;
+  let perceiveCalls = 0;
   try {
     for await (const frame of iterFrames) {
       framesAnalyzed++;
@@ -2418,65 +2465,77 @@ export async function analyzeJob(
         loraRef: cfg.loraRef,
         trackingPlan: planController.delivery() ?? undefined,
       };
+      // ADAAAA-7152 Gap 1: decide whether this frame gets the expensive perceive
+      // pass. In a cool (no-signal) region only every `quietStride`-th frame is
+      // sent to perceive; once the Tier-2 gate escalates, the armed hot window
+      // forces FULL perceive on every frame (the escalated goal window is never
+      // starved). When the cadence is active and this frame is skipped, we still
+      // feed it to the decide observer below with NO fabricated signal — the gate
+      // treats an absent signal as recall-safe — so the decide window keeps full
+      // frame coverage and the decide cadence keeps ticking.
+      const shouldPerceive = perceiveCadence ? perceiveCadence.shouldPerceive(frame.timestamp) : true;
       let stoppedRun = false;
-      for (;;) {
-        try {
-          res = await client.analyze(sessionId, frame, vocab);
-          break;
-        } catch (err) {
-          // ADAAAA-6561: the stop path released the perceive slot synchronously,
-          // so the in-flight /analyze may now fail. On a stopped job do NOT
-          // re-reserve a fresh session (that would re-bind a capacity-1 slot to
-          // a job that is already stopping) — just exit the frame loop.
-          if (slotRef?.isStopped?.()) {
-            stoppedRun = true;
+      if (shouldPerceive) {
+        perceiveCalls++;
+        for (;;) {
+          try {
+            res = await client.analyze(sessionId, frame, vocab);
             break;
+          } catch (err) {
+            // ADAAAA-6561: the stop path released the perceive slot synchronously,
+            // so the in-flight /analyze may now fail. On a stopped job do NOT
+            // re-reserve a fresh session (that would re-bind a capacity-1 slot to
+            // a job that is already stopping) — just exit the frame loop.
+            if (slotRef?.isStopped?.()) {
+              stoppedRun = true;
+              break;
+            }
+            if (!(err instanceof SessionLostError)) throw err;
+            if (reReserved >= maxReReserves) throw err;
+            // ADAAAA-6577: bounded exponential backoff before re-reserving so a
+            // flapping perceive runner (every /analyze 404s) doesn't get a
+            // request storm — ride through a brief recovery, then still abort
+            // cleanly once maxReReserves is exhausted.
+            await sleep(backoffDelayMs(reReserved, sessionRetryBackoffMs, sessionRetryBackoffMaxMs));
+            reReserved++;
+            const fresh = await client.reservePerceive();
+            sessionId = fresh.sessionId;
+            reserved.add(fresh.sessionId);
+            slotRef?.onReserve?.(fresh);
           }
-          if (!(err instanceof SessionLostError)) throw err;
-          if (reReserved >= maxReReserves) throw err;
-          // ADAAAA-6577: bounded exponential backoff before re-reserving so a
-          // flapping perceive runner (every /analyze 404s) doesn't get a
-          // request storm — ride through a brief recovery, then still abort
-          // cleanly once maxReReserves is exhausted.
-          await sleep(backoffDelayMs(reReserved, sessionRetryBackoffMs, sessionRetryBackoffMaxMs));
-          reReserved++;
-          const fresh = await client.reservePerceive();
-          sessionId = fresh.sessionId;
-          reserved.add(fresh.sessionId);
-          slotRef?.onReserve?.(fresh);
         }
-      }
-      if (stoppedRun) break;
-      evidence.step(res.observation);
-      onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "observation", observation: res.observation });
-      // A1: cache this frame's already-computed findings (tracks/OCR/objects)
-      // into the 60 s window. Reused by windowFactsText — never re-analyzed.
-      run.setFindings(frame.seq, res.observation);
-      if (res.candidate) {
-        // Immediate re-plan on a candidate event (out of band from the per-frame
-        // detection; never blocks the observer cadence).
-        void planController.onCandidate(client, run.anchor(res.candidate.timestamp) ?? frame.imageB64);
-        // Fold the candidate into the window's factual context (plan §A).
-        run.addCandidate({ timestamp: res.candidate.timestamp, eventType: res.candidate.eventType });
-        onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "candidate", candidate: res.candidate });
-        // ADAAAA-7007/7008: a perceive candidate is ONLY a bias hint (per-window
-        // provenance) — it NEVER gates decide. The decide-observer (ObserveDecider
-        // for VOD, LiveObserver for live) drives every decide on the ~3 s cadence
-        // below regardless of whether perceive emitted a candidate, so trigger-FP
-        // gating no longer limits recall. Perceive is a data seeder here.
-        // ADAAAA-7021 fix: the candidate's goal-attestation signals (goalCrossed /
-        // ballOutcome / scoreBoardChanged) are folded into the hint so the decide
-        // goal-attestation gate can attest a `scoring_play` rather than reject it.
-        observeDecider?.addHint(res.candidate.eventType, res.candidate.timestamp, {
-          goalCrossed: res.candidate.goalCrossed,
-          ballOutcome: res.candidate.ballOutcome,
-          scoreBoardChanged: res.candidate.scoreBoardChanged,
-        });
-        liveObserver?.addHint(res.candidate.eventType, res.candidate.timestamp, {
-          goalCrossed: res.candidate.goalCrossed,
-          ballOutcome: res.candidate.ballOutcome,
-          scoreBoardChanged: res.candidate.scoreBoardChanged,
-        });
+        if (stoppedRun) break;
+        evidence.step(res.observation);
+        onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "observation", observation: res.observation });
+        // A1: cache this frame's already-computed findings (tracks/OCR/objects)
+        // into the 60 s window. Reused by windowFactsText — never re-analyzed.
+        run.setFindings(frame.seq, res.observation);
+        if (res.candidate) {
+          // Immediate re-plan on a candidate event (out of band from the per-frame
+          // detection; never blocks the observer cadence).
+          void planController.onCandidate(client, run.anchor(res.candidate.timestamp) ?? frame.imageB64);
+          // Fold the candidate into the window's factual context (plan §A).
+          run.addCandidate({ timestamp: res.candidate.timestamp, eventType: res.candidate.eventType });
+          onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "candidate", candidate: res.candidate });
+          // ADAAAA-7007/7008: a perceive candidate is ONLY a bias hint (per-window
+          // provenance) — it NEVER gates decide. The decide-observer (ObserveDecider
+          // for VOD, LiveObserver for live) drives every decide on the ~3 s cadence
+          // below regardless of whether perceive emitted a candidate, so trigger-FP
+          // gating no longer limits recall. Perceive is a data seeder here.
+          // ADAAAA-7021 fix: the candidate's goal-attestation signals (goalCrossed /
+          // ballOutcome / scoreBoardChanged) are folded into the hint so the decide
+          // goal-attestation gate can attest a `scoring_play` rather than reject it.
+          observeDecider?.addHint(res.candidate.eventType, res.candidate.timestamp, {
+            goalCrossed: res.candidate.goalCrossed,
+            ballOutcome: res.candidate.ballOutcome,
+            scoreBoardChanged: res.candidate.scoreBoardChanged,
+          });
+          liveObserver?.addHint(res.candidate.eventType, res.candidate.timestamp, {
+            goalCrossed: res.candidate.goalCrossed,
+            ballOutcome: res.candidate.ballOutcome,
+            scoreBoardChanged: res.candidate.scoreBoardChanged,
+          });
+        }
       }
       // ADAAAA-7007/7008: drive the decide-observer on cadence, feeding EVERY
       // frame's perceive-derived context (tracks / objects / ocr) as the payload
@@ -2485,22 +2544,34 @@ export async function analyzeJob(
       // elapses (so the analyze hot path is not blocked between ticks) and the
       // live observer never decodes ahead (rolling PAST window).
       if (observeDecider || liveObserver) {
-        const seed: PerFrameSeed = {
-          ts: frame.timestamp,
-          tracks: res.observation.tracks.map((t) => ({ trackId: t.trackId, label: t.label ?? t.kind, bbox: t.bbox as number[] })),
-          objects: res.observation.objects,
-          ocr: res.observation.ocr,
-          // ADAAAA-7145: fold perceive's per-frame goal/ball signal evidence into
-          // the seed so the Tier-2 signal gate can judge the window. Mark a
-          // goal-line judgment (goalCrossed / ballOutcome / ballInNet present) as
-          // goalInfra so an explicit non-goal frame can be suppressed; an absent
-          // evidence is recall-safe (the gate escalates, never starving a goal).
-          signal: seedSignalFromEvidence(res.observation.evidence),
-        };
+        // A skipped (cool-region) frame carries NO perceive-derived context and NO
+        // signal. Empty tracks/objects/ocr + `signal: undefined` is recall-safe at
+        // the gate (absent signal escalates, never starves) and never fabricates a
+        // goal/ball signal the frame did not report.
+        const seed: PerFrameSeed = shouldPerceive
+          ? {
+              ts: frame.timestamp,
+              tracks: res.observation.tracks.map((t) => ({ trackId: t.trackId, label: t.label ?? t.kind, bbox: t.bbox as number[] })),
+              objects: res.observation.objects,
+              ocr: res.observation.ocr,
+              // ADAAAA-7145: fold perceive's per-frame goal/ball signal evidence into
+              // the seed so the Tier-2 signal gate can judge the window. Mark a
+              // goal-line judgment (goalCrossed / ballOutcome / ballInNet present) as
+              // goalInfra so an explicit non-goal frame can be suppressed; an absent
+              // evidence is recall-safe (the gate escalates, never starving a goal).
+              signal: seedSignalFromEvidence(res.observation.evidence),
+            }
+          : { ts: frame.timestamp, tracks: [], objects: [], ocr: [], signal: undefined };
         observeDecider?.record(frame.timestamp, frame.imageB64, seed);
         liveObserver?.record(frame.timestamp, frame.imageB64, seed);
         if (observeDecider) await observeDecider.maybeFire(frame.timestamp);
         if (liveObserver) await liveObserver.maybeFire(frame.timestamp);
+        // ADAAAA-7152 Gap 1: arm the full-perceive hot window when this frame
+        // escalates the Tier-2 gate (the SAME predicate the decide observer uses),
+        // so the goal window around it keeps FULL perceive treatment going forward.
+        if (perceiveCadence) {
+          perceiveCadence.noteFrameSignal(frame.timestamp, seed.signal, cfg.observeSignalGateOpts ?? {});
+        }
       }
     }
     // Force one final observer tick at end-of-stream so the tail of the feed is
@@ -2524,6 +2595,7 @@ export async function analyzeJob(
     sessionId,
     highlights,
     framesAnalyzed,
+    ...(perceiveCadenceEnabled ? { perceiveCalls } : {}),
     ...(liveObserver ? { observeMetrics: buildLiveObserveMetrics(liveObserver) } : {}),
     ...(observeDecider ? { vodObserveMetrics: buildVodObserveMetrics(observeDecider) } : {}),
   };
