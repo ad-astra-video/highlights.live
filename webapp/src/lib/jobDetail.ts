@@ -25,6 +25,80 @@ export interface TrackObservation {
   accuracy?: number;
 }
 
+// ADAAAA-7156 Increment B / ADAAAA-7157 Increment C: the per-window LLM analysis
+// payload (exactly what the decide LLM was fed + what it returned) + the
+// Stage-2 confirm (deep-dive) record, mirrored locally from
+// @highlights/events (WindowAnalysis / ConfirmRecord). Additive + optional —
+// absent on legacy decide notes that predate the capture.
+export interface AnalysisDataItem {
+  type: string;
+  label: string;
+  value?: string | number | boolean | null;
+}
+export interface AnalysisMediaRef {
+  seq: number;
+  uri: string;
+}
+export interface AnalysisAudio {
+  uri?: string;
+  sampleRate?: number;
+  path?: "input_audio" | "asr_text" | "none";
+}
+export interface AnalysisAsr {
+  transcript?: string;
+  url?: string;
+  latencyS?: number;
+}
+export interface AnalysisResponse {
+  isHighlight?: boolean;
+  score?: number;
+  eventType?: string;
+  reason?: string;
+  outcome?: "scoring_play" | "near_miss" | "big_play" | "not_highlight";
+  nearMiss?: boolean;
+  reasoning?: string;
+  verdict?: unknown;
+  evidenceAttested: string[];
+  audioContext?: unknown;
+  runningSummary?: string;
+  source?: string;
+}
+/** Per-window capture of exactly what was fed to the decide LLM + what it returned. */
+export interface WindowAnalysis {
+  prompt: string;
+  dataItems: AnalysisDataItem[];
+  frames: AnalysisMediaRef[];
+  images: AnalysisMediaRef[];
+  audio?: AnalysisAudio;
+  asr?: AnalysisAsr;
+  response?: AnalysisResponse;
+}
+export interface ConfirmRequest {
+  prompt: string;
+  dataItems: AnalysisDataItem[];
+  frames: AnalysisMediaRef[];
+  keyframes: AnalysisMediaRef[];
+  trajectories: string[];
+  opticalFlowMagnitude?: number;
+  audioLevels: number[];
+  transcript?: string;
+  stage1?: unknown;
+}
+export interface ConfirmDecisionBlock {
+  enabled?: boolean;
+  goalConfirmed?: "confirmed_goal" | "near_miss" | "not_goal" | null;
+  confidence?: number;
+  reason?: string;
+  evidence?: unknown;
+  stage1Disagreed?: boolean;
+  outcome?: "scoring_play" | "near_miss" | "big_play" | "not_highlight";
+}
+/** Stage-2 confirmation-pass record (request context + ConfirmDecision). */
+export interface ConfirmRecord {
+  request: ConfirmRequest;
+  decision: ConfirmDecisionBlock;
+}
+
 /** A decide-LLM note anchored to its trigger timestamp (ADAAAA-6851 Inc 2). */
 export interface DecideNote {
   seq: number;
@@ -36,6 +110,12 @@ export interface DecideNote {
   isHighlight: boolean;
   status: "accepted" | "suppressed" | "rejected";
   reason?: string;
+  // ADAAAA-7156 Increment B: the per-window LLM analysis (prompt / dataItems /
+  // media refs / full response) + the Stage-2 confirm (deep-dive) record for
+  // this section's decide note. Additive optional — absent on legacy notes
+  // without a capture (the UI renders an explicit "not captured" state).
+  analysis?: WindowAnalysis;
+  confirm?: ConfirmRecord;
 }
 
 /** Metadata for one frame in a section (image bytes stay lazy via `uri`). */
@@ -223,6 +303,49 @@ export function triggerLabel(trigger: HighlightTrigger | undefined): string {
   const where = ` @ T+${trigger.timestamp.toFixed(1)}s`;
   const what = trigger.eventType ? ` · ${trigger.eventType}` : "";
   return `${kind}${where}${what}`;
+}
+
+/**
+ * Resolve a lazy analysis media ref to a fetchable frame URI. The decide layer
+ * may leave `uri` empty (bytes not resolved at the decide layer); fall back to
+ * the canonical job-detail frame delivery route so thumbnails still render
+ * (ADAAAA-7157 Increment C).
+ */
+export function frameUriFor(ref: { seq: number; uri?: string }, jobId: string): string {
+  if (ref.uri && ref.uri.length > 0) return ref.uri;
+  return `/jobs/${jobId}/frames/${ref.seq}`;
+}
+
+/**
+ * Human text for an analysis data item's value (null/undefined → "—", boolean →
+ * yes/no, numbers as-is, strings verbatim). The UI renders each item's value as
+ * a plain string so a malformed / absent value degrades to "—", never a crash.
+ */
+export function dataItemValueText(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  return String(value);
+}
+
+/**
+ * Stable label for a verdict tri-state (confirmed_goal / near_miss / not_goal)
+ * used by the Stage-2 confirm pass. Null/absent → "not decided".
+ */
+export function goalConfirmedLabel(
+  v: "confirmed_goal" | "near_miss" | "not_goal" | null | undefined
+): string {
+  switch (v) {
+    case "confirmed_goal":
+      return "confirmed goal";
+    case "near_miss":
+      return "near miss";
+    case "not_goal":
+      return "not a goal";
+    case null:
+      return "not decided (null)";
+    default:
+      return "not decided";
+  }
 }
 
 /**
