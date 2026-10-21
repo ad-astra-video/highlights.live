@@ -752,6 +752,14 @@ export interface AnalyzerConfig {
    * dive and the reconciled verdict is adopted in its place. */
   confirmEnabled?: boolean;
   /**
+   * ADAAAA-7162 (CEO feedback on ADAAAA-7134): extra seconds (each side) the
+   * Stage-2 confirmation frame window is expanded beyond the Stage-1 pre/post
+   * window, so the confirm pass sees the ball actually cross the line / enter
+   * the net rather than a single boundary frame. Default 4 s (a 3-5 s window
+   * per the requirement); `DECIDE_CONFIRM_EXTRA_WINDOW_S`.
+   */
+  confirmWindowExtraS?: number;
+  /**
    * ADAAAA-7007: enable the VOD decide-observer architecture. When set (with
    * `decideWindowN` also set, i.e. the VOD detail-first pass), the vision LLM
    * becomes the primary observer: decide is invoked on a ~3 s cadence with a
@@ -1555,6 +1563,11 @@ export const AUDIO_CLIP_KEEP_S = 10;
  * event instant) the server samples cached track findings from (ADAAAA-6797).
  * Roughly the dense-dive window; no new GPU (reuses cached findings). */
 export const CONFIRM_MOTION_WINDOW_S = 5;
+/** ADAAAA-7162: extra seconds (each side) the Stage-2 confirmation frame window
+ * is expanded beyond the Stage-1 pre/post window, so the confirm pass sees the
+ * ball actually cross the line / enter the net. 4 s is within the required
+ * 3-5 s window. Tune via `DECIDE_CONFIRM_EXTRA_WINDOW_S`. */
+export const DEFAULT_CONFIRM_WINDOW_EXTRA_S = 4;
 
 /** Wrap a run of base64 mono 16 kHz int16 PCM samples into a RIFF/WAVE file and
  * return it as base64. Pure + deterministic so it is unit-testable. The decide
@@ -2239,6 +2252,10 @@ export async function buildConfirmContext(
 ): Promise<Omit<ConfirmRequest, "eventType" | "timestamp" | "gameHint" | "stage1">> {
   // Denser frame window: prefer the detail-first higher-FPS burst re-sample
   // (I7 / ADAAAA-6361) around the trigger; else the cached window; else [].
+  // ADAAAA-7162: expand the confirm window by `confirmWindowExtraS` on each side
+  // so the model sees the ball actually cross the line / enter the net, not a
+  // single boundary frame.
+  const extra = Math.max(0, cfg.confirmWindowExtraS ?? DEFAULT_CONFIRM_WINDOW_EXTRA_S);
   let dense: { timestamp: number; imageB64: string }[] = [];
   if (cfg.resampleFrames) {
     try {
@@ -2247,13 +2264,13 @@ export async function buildConfirmContext(
       dense = [];
     }
   }
-  if (!dense.length) dense = shared.framesNear(candidate.timestamp, CONFIRM_MOTION_WINDOW_S);
+  if (!dense.length) dense = shared.framesNear(candidate.timestamp, CONFIRM_MOTION_WINDOW_S + extra);
   const frames = dense.map((f) => ({ role: "full", base64: f.imageB64 }));
   const keyframes = selectConfirmKeyframes(
     dense,
     candidate.timestamp,
-    cfg.preWindowS ?? DEFAULT_PRE_WINDOW_S,
-    cfg.postWindowS ?? DEFAULT_POST_WINDOW_S
+    (cfg.preWindowS ?? DEFAULT_PRE_WINDOW_S) + extra,
+    (cfg.postWindowS ?? DEFAULT_POST_WINDOW_S) + extra
   );
   const motion = shared.motionContext(candidate.timestamp);
   const audioLevels = shared.audioLevelSeries();

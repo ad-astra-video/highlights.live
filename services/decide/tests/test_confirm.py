@@ -152,14 +152,67 @@ def test_run_pass_confirms_goal_and_disagrees(monkeypatch):
         '"evidence": {"ballTrajectoryCrossedLine": true, "ballInNet": true, "audioErupted": true}}'
     )
     monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
-    resp = run_confirmation_pass({"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]})
+    # ADAAAA-7162: an independent corroboration signal (scoreboard change) is
+    # required to accept a confirmed_goal. Provide it so the goal is kept.
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": True}
+    )
     assert resp["enabled"] is True
     assert resp["goalConfirmed"] == "confirmed_goal"
     assert resp["confidence"] == 0.95
+    assert resp["corroborated"] is True
     assert resp["decision"]["outcome"] == "scoring_play"
     assert resp["decision"]["isHighlight"] is True
     # Stage-1 already said goal, so confirm-agree means NO disagreement.
     assert resp["stage1Disagreed"] is False
+
+
+def test_run_pass_downgrades_unconfirmed_goal_to_near_miss(monkeypatch):
+    """ADAAAA-7162: a confirmed_goal with NO scoreboard change and NO goal-calling
+    audio text is downgraded to near_miss (never a board-accepted GOAL), even when
+    the model self-reports high confidence. This is the fabricated-read case."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 99, "eventType": "GOAL", "reason": "stage1 templated"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.99, '
+        '"reason": "ball clearly enters the net / goalkeeper beaten", '
+        '"evidence": {"ballInNet": true, "audioErupted": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    # No scoreboard change and no audio transcript -> NOT corroborated.
+    resp = run_confirmation_pass({"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]})
+    assert resp["enabled"] is True
+    assert resp["goalConfirmed"] == "confirmed_goal"  # raw model verdict
+    assert resp["corroborated"] is False
+    # Deterministic reconcile downgrades to near_miss (never a GOPAL).
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
+    assert resp["decision"]["nearMiss"] is True
+
+
+def test_run_pass_confirms_goal_on_goal_calling_audio(monkeypatch):
+    """ADAAAA-7162: goal-calling audio/commentary text is a valid independent
+    corroboration, so a confirmed_goal with such text is kept as a goal."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("AUDIO_CONTEXT", "1")
+    monkeypatch.setattr(cf, "_asr_url", lambda: "http://asr:9999")
+    monkeypatch.setattr(
+        cf, "transcribe_audio", lambda *a, **k: ("GOOOAL what a strike from the right wing", None)
+    )
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 88, "eventType": "GOAL", "reason": "s1"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "frames show ball in the net", '
+        '"evidence": {"ballInNet": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "audioB64": "AAA"}
+    )
+    assert resp["corroborated"] is True
+    assert resp["goalConfirmed"] == "confirmed_goal"
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
 
 
 def test_run_pass_refutes_goal_and_disagrees(monkeypatch):
@@ -230,3 +283,73 @@ def test_prompt_tests_contradictory_hypothesis():
     assert "INPUT ONLY, never a gate" in p
     # The structured goalConfirmed is required.
     assert "goalConfirmed" in p
+
+
+# --- ADAAAA-7162 goal corroboration gate -----------------------------------
+
+
+def test_audio_calls_goal_detects_goal_call():
+    from app import confirm as cf
+    assert cf.audio_calls_goal("GOOOAL!!! And it's in the net") is True
+    assert cf.audio_calls_goal("it's in!") is True
+    assert cf.audio_calls_goal("what a goal from the striker") is True
+    # conservative: bare "goal" / replay narration is not a goal call.
+    assert cf.audio_calls_goal("the goal is the objective of the game") is False
+    assert cf.audio_calls_goal("") is False
+    assert cf.audio_calls_goal(None) is False
+
+
+def test_goal_corroborated_requires_independent_signal():
+    from app import confirm as cf
+    # scoreboard change OR goal-calling audio is sufficient.
+    assert cf.goal_corroborated(scoreboard_changed=True, transcript="") is True
+    assert cf.goal_corroborated(scoreboard_changed=False, transcript="GOOOAL") is True
+    # neither is present -> NOT corroborated (the fabrication case).
+    assert cf.goal_corroborated(scoreboard_changed=False, transcript="crowd roars") is False
+    assert cf.goal_corroborated(scoreboard_changed=False, transcript="") is False
+
+
+def test_confirm_requires_corroboration_default_on(monkeypatch):
+    from app import confirm as cf
+    monkeypatch.delenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", raising=False)
+    assert cf.confirm_requires_corroboration() is True
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "0")
+    assert cf.confirm_requires_corroboration() is False
+
+
+def test_reconcile_downgrades_unconfirmed_goal_on_required_corroboration():
+    """A confirmed_goal with NO independent corroboration must be downgraded to
+    near_miss (never a board-accepted GOAL) regardless of model confidence."""
+    from app import confirm as cf
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 99, "reason": "r", "eventType": "GOAL"}
+    d = cf.reconcile_confirmed_goal(
+        "confirmed_goal", stage1,
+        corroborated=False, require_corroboration=True,
+    )
+    assert d["outcome"] == "near_miss"
+    assert d["isHighlight"] is False
+    assert d["nearMiss"] is True
+    assert d["score"] < 60
+
+
+def test_reconcile_keeps_corroborated_goal():
+    from app import confirm as cf
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 99, "reason": "r", "eventType": "GOAL"}
+    d = cf.reconcile_confirmed_goal(
+        "confirmed_goal", stage1,
+        corroborated=True, require_corroboration=True,
+    )
+    assert d["outcome"] == "scoring_play"
+    assert d["isHighlight"] is True
+
+
+def test_reconcile_legacy_no_requirement_keeps_goal():
+    """With corroboration not required (legacy path), a confirmed_goal is kept."""
+    from app import confirm as cf
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 99, "reason": "r", "eventType": "GOAL"}
+    d = cf.reconcile_confirmed_goal(
+        "confirmed_goal", stage1,
+        corroborated=False, require_corroboration=False,
+    )
+    assert d["outcome"] == "scoring_play"
+    assert d["isHighlight"] is True
