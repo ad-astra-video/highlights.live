@@ -51,6 +51,62 @@ from .gemma import DEFAULT_GEMMA_URL, _as_text, _strip_json_fence, _asr_url, tra
 # near_miss | not_goal).
 CONFIRM_VALUES: tuple[str, ...] = ("confirmed_goal", "near_miss", "not_goal")
 
+# ---------------------------------------------------------------------------
+# Goal corroboration gate (ADAAAA-7162, CEO feedback on ADAAAA-7134).
+#
+# The model's decide/confirm read frequently fabricates a goal ("ball clearly
+# enters the net / goalkeeper beaten") even for a near-miss, a saved/blocked
+# shot, or a pure dribble, with no independent corroboration. The confirm pass
+# previously treated corroboration as "INPUT ONLY, never a gate", so a
+# self-reported `confirmed_goal` with no corroborating signal was accepted as a
+# real GOAL. Per the CEO, a GOAL is accepted on the confirm pass ONLY when the
+# deep frame dive confirms the ball is actually in the net AND there is at
+# least one INDEPENDENT corroboration signal:
+#   - a scoreboard change to the correct value, or
+#   - audio/commentary text that calls the goal ("GOOOAL", "it's in",
+#     team-scored phrasing).
+# A `confirmed_goal` verdict with no independent corroboration is downgraded to
+# `near_miss` regardless of the model's self-reported confidence. The gate is
+# deterministic and live on the confirm path (DECIDE_CONFIRM_ENABLED=1).
+# ---------------------------------------------------------------------------
+
+# Goal-calling audio/commentary phrasing (lower-cased). Conservative: only
+# unambiguous goal calls. "goal" alone is excluded (a replay / general
+# narration can say "the goal" without a goal having just been scored).
+_GOAL_CALL_PATTERNS: tuple[str, ...] = (
+    "goooal", "gooal", "goall ", "it's in", "its in", "it is in",
+    "its in the net", "in the net", "goal!", "goal for", "that's a goal",
+    "thats a goal", "what a goal", "scores!", "scored", "find the net",
+    "back of the net", "top corner", "net bulging", "a goal at",
+)
+
+
+def audio_calls_goal(transcript: str | None) -> bool:
+    """Whether the (fallible) ASR commentary text calls a goal.
+
+    Conservative substring/heuristic match over the lower-cased transcript.
+    Used as ONE independent corroboration signal on the confirm pass. Never
+    raises; empty/None input is False (no text is never corroboration)."""
+    t = (transcript or "").strip().lower()
+    if not t:
+        return False
+    return any(p in t for p in _GOAL_CALL_PATTERNS)
+
+
+def confirm_requires_corroboration() -> bool:
+    """Whether the confirm pass gates a confirmed_goal on an independent
+    corroboration signal. Default ON (the CEO requirement); set
+    ``DECIDE_CONFIRM_REQUIRE_CORROBORATION=0`` to restore the legacy
+    frame-only behavior in an emergency (e.g. clips with no commentary)."""
+    return os.environ.get("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1") == "1"
+
+
+def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None) -> bool:
+    """True when at least one INDEPENDENT corroboration signal is present: a
+    scoreboard change OR goal-calling audio/commentary text. Either signal is
+    the independent anchor that keeps a self-reported visual read honest."""
+    return bool(scoreboard_changed) or audio_calls_goal(transcript)
+
 
 def confirm_enabled() -> bool:
     """Whether the Stage-2 confirmation pass is on for this deployment.
@@ -143,6 +199,11 @@ class ConfirmDecision(BaseModel):
     reason: str = ""
     evidence: ConfirmEvidence = Field(default_factory=ConfirmEvidence)
     stage1Disagreed: bool = False
+    # ADAAAA-7162: whether an independent corroboration signal (scoreboard change
+    # OR goal-calling audio text) was present, and whether it is required. A
+    # confirmed_goal on an un-corroborated candidate is downgraded to near-miss.
+    corroborated: bool = False
+    corroborationRequired: bool = False
     decision: dict = Field(default_factory=dict)
 
 
@@ -265,12 +326,17 @@ def build_confirm_prompt(
         "motion) or was stopped/denied at the instant (a deny/stop is a near "
         "miss, never a score). The audio energy + ASR transcript are FALLIBLE — "
         "a crowd/commentary eruption, a replay, or a wrong call must NEVER make "
-        "you confirm a goal; only the frames/trajectory can.\\n"
-        "STEP 3 — RECONCILE with the frames. The frames and trajectory are the "
-        "primary evidence; audio is cheap and can be wrong. If the frames show "
-        "the ball/object actually scoring, confirm the goal. If they show a "
-        "close call that did NOT convert, call it a near miss. If they show "
-        "nothing scoring, call it not a goal.\\n"
+        "you confirm a goal on their own; the frames/trajectory are the primary "
+        "visual evidence.\\n"
+        "STEP 3 — RECONCILE with the frames AND an INDEPENDENT corroboration "
+        "signal. A GOAL is only CONFIRMED when the frames show the ball actually "
+        "entering the net AND at least one INDEPENDENT corroboration signal is "
+        "present: a scoreboard score change, or audio/commentary text that CALLS "
+        "the goal (e.g. 'GOOOAL', 'it's in', team-scored phrasing). A goal-calling "
+        "commentary line is a valid independent corroboration alongside the "
+        "frames; without ANY independent corroboration, do NOT confirm a goal — "
+        "call it a near miss (close call that did not convert) or not a goal. "
+        "If they show nothing scoring, call it not a goal.\\n"
         "Context:\\n- " + "\n- ".join(meta) + "\\n\\n"
         "Now answer with ONLY one JSON object, no markdown, no preamble, exactly "
         "of this shape:\\n"
@@ -354,7 +420,9 @@ def stage1_disagrees(stage1: dict, goal_confirmed: str) -> bool:
     return s1_is_goal
 
 
-def reconcile_confirmed_goal(goal_confirmed: str, stage1: dict, comment: str = "") -> dict:
+def reconcile_confirmed_goal(goal_confirmed: str, stage1: dict, comment: str = "",
+                             *, corroborated: bool = True,
+                             require_corroboration: bool = False) -> dict:
     """Deterministically map the confirmation verdict onto the final highlight
     decision (a HighlightDecision-shaped dict the server can adopt directly).
 
@@ -363,12 +431,34 @@ def reconcile_confirmed_goal(goal_confirmed: str, stage1: dict, comment: str = "
       NEVER a board-accepted goal — ADAAAA-6598: isHighlight=false);
     - ``not_goal``       -> ``not_highlight`` (not a highlight).
 
+    ADAAAA-7162 (CEO feedback on ADAAAA-7134): when corroboration is REQUIRED
+    (``require_corroboration=True``, the confirm-pass default) a
+    ``confirmed_goal`` with NO independent corroboration signal (no scoreboard
+    change and no goal-calling audio text) is DOWNGRADED to ``near_miss``
+    regardless of the model's self-reported confidence — because the model
+    routinely fabricates a goal read ("ball clearly enters the net") for a
+    near-miss / saved shot / dribble with no corroboration. ``corroborated`` is
+    the deterministic independent-signal check from ``goal_corroborated``.
+
     Never raises; returns a valid decision dict."""
     decision: dict = dict(stage1 or {})
     try:
         sc = float(decision.get("score") or 0.0)
     except (TypeError, ValueError):  # noqa: BLE001
         sc = 0.0
+
+    # ADAAAA-7162: a confirmed_goal that lacks independent corroboration is not
+    # a real goal — downgrade to near_miss so it surfaces distinctly, never as a
+    # board-accepted GOAL, regardless of the model's confidence.
+    if goal_confirmed == "confirmed_goal" and require_corroboration and not corroborated:
+        comment = (comment or "").strip()
+        goal_confirmed = "near_miss"
+        comment = (
+            comment
+            + ("; " if comment else "")
+            + "goal read not corroborated (no scoreboard change / goal-calling audio); "
+              "downgraded to near-miss"
+        ).strip()
 
     comment = (comment or "").strip()
     if goal_confirmed == "confirmed_goal":
@@ -497,7 +587,19 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
 
     goal = parsed.get("goalConfirmed", "")
     comment = _as_text(parsed.get("reason"))
-    decision = reconcile_confirmed_goal(goal, stage1, comment=comment)
+    # ADAAAA-7162: require an INDEPENDENT corroboration signal (scoreboard
+    # change OR goal-calling audio/commentary text) to accept a confirmed_goal.
+    # Otherwise a fabricated visual read ("ball clearly enters the net") for a
+    # near-miss / saved shot / dribble is downgraded to near_miss, never a GOAL.
+    corroborated = goal_corroborated(
+        scoreboard_changed=bool(req.get("scoreBoardChanged")),
+        transcript=transcript,
+    )
+    decision = reconcile_confirmed_goal(
+        goal, stage1, comment=comment,
+        corroborated=corroborated,
+        require_corroboration=confirm_requires_corroboration(),
+    )
 
     resp = {
         "enabled": True,
@@ -506,6 +608,9 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         "reason": comment,
         "evidence": _norm_evidence(parsed.get("evidence")),
         "stage1Disagreed": stage1_disagrees(stage1, goal),
+        # ADAAAA-7162: whether an independent corroboration signal was present.
+        "corroborated": corroborated,
+        "corroborationRequired": confirm_requires_corroboration(),
         "decision": decision,
     }
     log.info(

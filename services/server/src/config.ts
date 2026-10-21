@@ -268,6 +268,10 @@ export interface ServerConfig {
    * `DECIDE_CONFIRM_ENABLED` (default "0"). VOD-first: only the VOD pass reads
    * this flag (the live pass never sets `confirmEnabled`), so rollout is safe. */
   decideConfirmEnabled: boolean;
+  /** ADAAAA-7162: extra seconds (each side) the Stage-2 confirmation frame
+   * window is expanded beyond the Stage-1 pre/post window. `DECIDE_CONFIRM_EXTRA_WINDOW_S`
+   * (default 4). */
+  decideConfirmExtraWindowS: number;
   /** Free plan included decide calls before gating (dev-friendly). */
   freeDecides: number;
   /** Dev-only: wireframe billing (no real Stripe). Enables /dev/billing/*. */
@@ -493,6 +497,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // Default OFF (VOD-first rollout); the VOD pass reads it. Only when "1" do
     // the VOD candidates go through the decide /confirm deep frame dive.
     decideConfirmEnabled: env.DECIDE_CONFIRM_ENABLED === "1",
+    decideConfirmExtraWindowS: Number(env.DECIDE_CONFIRM_EXTRA_WINDOW_S ?? 4),
     freeDecides: Number(env.FREE_DECIDES ?? 5),
     billingWireframe: env.BILLING_WIREFRAME === "1" || env.BILLING_WIREFRAME === "true",
     betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),

@@ -866,6 +866,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // DECIDE_CONFIRM_ENABLED, default off), so the live pass is untouched and
       // the flag-off path is a strict no-op.
       confirmEnabled: cfg.decideConfirmEnabled,
+      confirmWindowExtraS: cfg.decideConfirmExtraWindowS,
     };
     // Count candidates (video + audio) for the recorded decide/cost fields.
     let candidatesTriggered = 0;
