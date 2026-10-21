@@ -450,6 +450,71 @@ def reconcile_outcome_with_ball_signal(decision: dict, ball_outcome: Optional[st
     return decision
 
 
+# ADAAAA-7135 (criteria 6): celebration-only GOAL false-positive guard.
+# When the model accepts a GOAL at a near-max confidence but reports the
+# ball-in-net instant as NOT observed (ballInNet AND ballCrossedLineBetweenPosts
+# both non-true) while the crowd/celebration IS observed (crowdErupted true),
+# the accept is celebration-driven — the ball never demonstrably entered the
+# net — so it must not surface as a scoring highlight. Narrow and deliberate: a
+# real goal whose ball-in-net instant IS observed (either criterion true) is
+# never caught, and a lower-confidence / non-celebration read is untouched
+# (this deliberately does NOT re-enter the removed "both ball criteria must be
+# true" gate — see test_gemma.py test_build_prompt_does_not_require_ball_criteria).
+CELEBRATION_ONLY_SCORE_FLOOR = 90.0
+CELEBRATION_ONLY_SCORE_CAP = 55.0
+
+
+def apply_celebration_only_guard(decision: dict) -> dict:
+    """ADAAAA-7135 criteria 6: reject a near-max-score GOAL accepted on
+    crowd/celebration alone when the ball-in-net instant is not observed.
+
+    Fires ONLY when ALL hold:
+      - the decision is a board-accepted goal read (isHighlight true, and the
+        event is a GOAL/GOL or the outcome is scoring_play),
+      - the score is a near-max confidence (>= CELEBRATION_ONLY_SCORE_FLOOR),
+      - neither explicit ball-goal criterion is observed (ballInNet is not True
+        AND ballCrossedLineBetweenPosts is not True), and
+      - the crowd/celebration IS observed (crowdErupted is True).
+
+    In that case the score is capped and isHighlight forced to false so a
+    celebration-only moment never surfaces as a score. Mutates and returns
+    `decision` (no-op otherwise)."""
+    if not decision.get("isHighlight"):
+        return decision
+    evt = str(decision.get("eventType") or "").upper().strip()
+    is_goal_read = evt in ("GOAL", "GOL") or str(decision.get("outcome") or "").lower() == "scoring_play"
+    if not is_goal_read:
+        return decision
+    try:
+        score = float(decision.get("score") or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    if score < CELEBRATION_ONLY_SCORE_FLOOR:
+        return decision
+    crit = (decision.get("verdict") or {}).get("criteria") or {}
+    ball_in_net = crit.get("ballInNet")
+    ball_crossed = crit.get("ballCrossedLineBetweenPosts")
+    scoreboard_changed = crit.get("scoreboardChanged")
+    crowd = crit.get("crowdErupted")
+    # The goal must be observed by at least one INDEPENDENT criterion (ball in
+    # net / ball crossed the line / scoreboard change) for a near-max score;
+    # a scoreboard change is an independent confirmation (I3 / ADAAAA-6360) and
+    # must never be caught here.
+    if ball_in_net is True or ball_crossed is True or scoreboard_changed is True:
+        return decision
+    # Celebration observed but ball-in-net not observed -> celebration-only.
+    if crowd is not True:
+        return decision
+    decision["isHighlight"] = False
+    decision["score"] = CELEBRATION_ONLY_SCORE_CAP
+    decision["reason"] = (
+        (decision.get("reason") or "")
+        + "; celebration-only goal read: ball-in-net instant not observed, "
+        "crowd/celebration alone cannot confirm a GOAL"
+    ).strip("; ")
+    return decision
+
+
 def finalize_goal_acceptance(decision: dict) -> dict:
     """ADAAAA-6598: the SINGLE accept gate at the top of the decide route.
 
@@ -460,7 +525,10 @@ def finalize_goal_acceptance(decision: dict) -> dict:
     This closes the loop on the two verified false positives (a near_miss at
     t=1821s and a big_play at t=1954.9s whose own reason said the ball did NOT
     enter the net) and on the high-value (GOAL) waiver that accepted a
-    corroborated-but-not-a-goal candidate. Mutates and returns `decision`."""
+    corroborated-but-not-a-goal candidate. ADAAAA-7135 (criteria 6): also
+    rejects a near-max-score GOAL accepted on celebration alone when the
+    ball-in-net instant is not observed. Mutates and returns `decision`."""
+    decision = apply_celebration_only_guard(decision)
     if decision.get("outcome") != "scoring_play":
         decision["isHighlight"] = False
         decision.setdefault(
