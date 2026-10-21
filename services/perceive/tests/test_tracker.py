@@ -4,6 +4,31 @@ import pytest
 from app.tracker import IoUTracker, MAX_TRACKS, _iou, foreground_blobs
 
 
+def test_motion_burst_trigger_removed():
+    """ADAAAA-7108 (increment C): no candidate-driven decide off fast motion.
+
+    The tracker fast-movement / motion-burst trigger is REMOVED (camera angles
+    move, so velocity-jump is unreliable as a decide signal). `candidate()`
+    always returns None, so perceive never emits a motion-burst candidate.
+    """
+    tr = IoUTracker(jump_velocity=0.2, cooldown_s=0.0)
+    tr.step([(0.1, 0.1, 0.2, 0.2)], ts=1.0)
+    for i in range(5):
+        dx = 0.05 * (i + 1)
+        tr.step([(0.1 + dx, 0.1 + dx, 0.2 + dx, 0.2 + dx)], ts=2.0 + i)
+    assert tr.candidate(ts=7.0) is None
+
+
+def test_candidate_removed_regardless_of_accumulated_movement():
+    """Even a strong accumulated velocity-jump never emits a candidate anymore."""
+    tr = IoUTracker(jump_velocity=0.2, cooldown_s=0.0)
+    tr.step([(0.1, 0.1, 0.2, 0.2)], ts=1.0)
+    for i in range(6):
+        dx = 0.06 * (i + 1)
+        tr.step([(0.1 + dx, 0.1 + dx, 0.2 + dx, 0.2 + dx)], ts=2.0 + i)
+    assert tr.candidate(ts=8.0) is None
+
+
 def test_iou():
     assert abs(_iou((0, 0, 1, 1), (0, 0, 1, 1)) - 1.0) < 1e-6
     assert abs(_iou((0, 0, 0.5, 0.5), (0.5, 0.5, 1, 1)) - 0.0) < 1e-6
@@ -116,56 +141,44 @@ def test_unselected_track_reports_no_accuracy():
     assert t.accuracy is None
 
 
-def test_candidate_on_accumulated_movement_and_cooldown():
+def test_candidate_never_emits_though_motion_accumulates():
+    """ADAAAA-7108 (increment C): no motion-burst candidate, so an accumulating
+    velocity jump never yields a candidate (candidate() is inert)."""
     tr = IoUTracker(jump_velocity=0.2, cooldown_s=3.0)
     tr.step([(0.1, 0.1, 0.2, 0.2)], ts=1.0)
     assert tr.candidate(ts=1.0) is None  # first frame, no movement
-    # move 0.05/frame x5; overlaps keep the same track, movement accumulates
     for i in range(5):
         dx = 0.05 * (i + 1)
         tr.step([(0.1 + dx, 0.1 + dx, 0.2 + dx, 0.2 + dx)], ts=2.0 + i)
-    c = tr.candidate(ts=7.0)
-    assert c is not None and c.event_type == "MOVE"
-    # cooldown throttles an immediate second candidate
+    assert tr.candidate(ts=7.0) is None  # trigger removed -> no candidate
+    # cooldown field also stays inert
     tr.step([(0.39, 0.39, 0.49, 0.49)], ts=7.1)
     assert tr.candidate(ts=7.2) is None
 
 
-def test_candidate_anchors_to_peak_motion_strike_frame():
-    """A candidate whose accumulated displacement crosses the threshold AFTER the
-    explosive step must still be anchored at the peak-motion (strike) frame, so
-    the decide/cut moment lands on the strike, not the post-strike follow-through."""
+def test_candidate_anchoring_no_longer_emits_strike():
+    """The previous peak-motion anchoring is gone with the trigger: no candidate
+    is emitted on a strike burst (the decide observer reviews all cadence frames)."""
     tr = IoUTracker(jump_velocity=0.2, cooldown_s=0.0)
-    # seed the track (no displacement recorded for the seeding frame)
     tr.step([(0.1, 0.1, 0.2, 0.2)], ts=1.0)
     assert tr.candidate(ts=1.0) is None
-    # settle frame establishes prev_center with negligible motion
     tr.step([(0.11, 0.11, 0.21, 0.21)], ts=2.0)
     assert tr.candidate(ts=2.0) is None
-    # strike burst: PEAK step 0.16 at ts=3.0 (still < the 0.2 jump_velocity alone)
     tr.step([(0.19, 0.19, 0.29, 0.29)], ts=3.0)
-    assert tr.candidate(ts=3.0) is None  # not crossed yet (moved=0.18)
-    # follow-through: small step at ts=4.0 pushes accumulated over 0.2
+    assert tr.candidate(ts=3.0) is None
     tr.step([(0.21, 0.21, 0.31, 0.31)], ts=4.0)
-    c = tr.candidate(ts=4.0)
-    assert c is not None
-    assert c.timestamp == 3.0  # anchored at the peak-motion frame, not the late crossing frame
-    assert c.event_type == "KILL"  # classified from the anchored step (0.16 >= FAST_STEP)
+    assert tr.candidate(ts=4.0) is None  # no candidate emitted
 
 
-def test_candidate_accumulated_motion_stays_move_anchored_in_burst():
-    """Steady drift spikes the accumulated threshold with no single big step: the
-    candidate stays a MOVE and anchors to the burst, not the evaluation frame."""
+def test_candidate_inert_on_steady_drift():
+    """Steady drift accumulates the threshold but candidate() stays inert."""
     tr = IoUTracker(jump_velocity=0.2, cooldown_s=0.0)
     tr.step([(0.1, 0.1, 0.2, 0.2)], ts=1.0)
     assert tr.candidate(ts=1.0) is None
-    for i in range(5):  # 0.05/frame drift -> 0.10 displacement per step
+    for i in range(5):
         dx = 0.05 * (i + 1)
         tr.step([(0.1 + dx, 0.1 + dx, 0.2 + dx, 0.2 + dx)], ts=2.0 + i)
-    c = tr.candidate(ts=7.0)
-    assert c is not None and c.event_type == "MOVE"
-    # anchored to a drift-burst step (2.0..6.0), not the later evaluation frame (7.0)
-    assert 2.0 <= c.timestamp <= 6.0
+    assert tr.candidate(ts=7.0) is None
 
 
 def test_foreground_blobs_real_frame():

@@ -7,6 +7,7 @@ not_highlight frame read must NEVER be accepted as a board GOAL highlight
 (true-goal recall is not regressed).
 """
 from app.gemma import (
+    apply_celebration_only_guard,
     event_type_for_outcome,
     finalize_goal_acceptance,
     normalize_outcome,
@@ -58,6 +59,96 @@ def test_parse_decision_real_goal_still_accepted():
     assert d is not None
     assert d["outcome"] == "scoring_play"
     assert d["isHighlight"] is True
+
+
+# --- ADAAAA-7135 criteria 6: celebration-only GOAL false-positive guard ----
+def test_celebration_only_goal_is_rejected_at_max_score():
+    # g28/g29 verified FP: ballCrossedLineBetweenPosts / ballInNet are null but
+    # score=100 and only crowd/celebration observed -> must NOT be accepted.
+    d = parse_decision(
+        '{"isHighlight":true,"score":100,"eventType":"GOAL","outcome":"scoring_play",'
+        '"verdict":{"criteria":{"ballCrossedLineBetweenPosts":null,"ballInNet":null,'
+        '"scoreboardChanged":null,"crowdErupted":true}}}'
+    )
+    assert d is not None
+    assert d["isHighlight"] is True  # scoring_play parses as a highlight
+    d = finalize_goal_acceptance(d)
+    assert d["isHighlight"] is False
+    assert d["score"] < 90
+    assert "celebrat" in d["reason"]
+
+
+def test_celebration_only_goal_rejected_when_ball_criteria_false():
+    # Explicitly false ball criteria (not just null) is also celebration-only.
+    d = parse_decision(
+        '{"isHighlight":true,"score":100,"eventType":"GOAL","outcome":"scoring_play",'
+        '"verdict":{"criteria":{"ballCrossedLineBetweenPosts":false,"ballInNet":false,'
+        '"scoreboardChanged":false,"crowdErupted":true}}}'
+    )
+    assert d is not None
+    d = finalize_goal_acceptance(d)
+    assert d["isHighlight"] is False
+
+
+def test_real_goal_with_ball_in_net_true_is_not_caught():
+    # A genuine goal whose ball-in-net instant IS observed is never rejected.
+    d = parse_decision(
+        '{"isHighlight":true,"score":100,"eventType":"GOAL","outcome":"scoring_play",'
+        '"verdict":{"criteria":{"ballCrossedLineBetweenPosts":true,"ballInNet":true,'
+        '"scoreboardChanged":null,"crowdErupted":true}}}'
+    )
+    assert d is not None
+    d = finalize_goal_acceptance(d)
+    assert d["isHighlight"] is True
+    assert d["score"] == 100
+
+
+def test_scoreboard_confirmed_goal_is_not_caught_by_celebration_guard():
+    # A scoreboard change is an independent confirmation (I3) — not celebration-only.
+    d = parse_decision(
+        '{"isHighlight":true,"score":100,"eventType":"GOAL","outcome":"scoring_play",'
+        '"verdict":{"criteria":{"ballCrossedLineBetweenPosts":null,"ballInNet":null,'
+        '"scoreboardChanged":true,"crowdErupted":true}}}'
+    )
+    assert d is not None
+    d = finalize_goal_acceptance(d)
+    assert d["isHighlight"] is True
+
+
+def test_low_score_celebration_is_untouched():
+    # The guard is scoped to near-max confidence; a mid-confidence read is left alone.
+    d = parse_decision(
+        '{"isHighlight":true,"score":80,"eventType":"GOAL","outcome":"scoring_play",'
+        '"verdict":{"criteria":{"ballCrossedLineBetweenPosts":null,"ballInNet":null,'
+        '"scoreboardChanged":null,"crowdErupted":true}}}'
+    )
+    assert d is not None
+    d = finalize_goal_acceptance(d)
+    assert d["isHighlight"] is True
+
+
+def test_goal_without_celebration_is_untouched():
+    # No observed celebration -> not a celebration-only read, never caught.
+    d = parse_decision(
+        '{"isHighlight":true,"score":100,"eventType":"GOAL","outcome":"scoring_play",'
+        '"verdict":{"criteria":{"ballCrossedLineBetweenPosts":null,"ballInNet":null,'
+        '"scoreboardChanged":null,"crowdErupted":false}}}'
+    )
+    assert d is not None
+    d = finalize_goal_acceptance(d)
+    assert d["isHighlight"] is True
+
+
+def test_missing_verdict_criteria_is_legacy_untouched():
+    # A decision with no verdict/criteria block (legacy) never trips the guard.
+    d = parse_decision(
+        '{"isHighlight":true,"score":100,"eventType":"GOAL","outcome":"scoring_play",'
+        '"reason":"ball in the net"}'
+    )
+    assert d is not None
+    d = finalize_goal_acceptance(d)
+    assert d["isHighlight"] is True
+
 
 
 def test_parse_decision_scoring_play_with_false_is_highlight_still_accepted():

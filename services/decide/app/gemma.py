@@ -395,6 +395,55 @@ def _as_str_list(value) -> list[str]:
     return [s] if s else []
 
 
+# ---------------------------------------------------------------------------
+# Running video summary (ADAAAA-7111, Increment D)
+# ---------------------------------------------------------------------------
+# The decide/gemma brain maintains an incrementally updated RUNNING summary of
+# the video so far (story-so-far), carried across cadence observe ticks. It is
+# forwarded into each request (`storySoFar`) and the model returns the updated
+# one (`runningSummary`), which the server persists + surfaces in the job
+# detail. The summary must GROW monotonically but stay BOUNDED, hence the
+# two helpers below.
+MAX_RUNNING_SUMMARY_CHARS = 600
+
+
+def _compile_summary(summary: str) -> str:
+    """Bound a running summary to MAX_RUNNING_SUMMARY_CHARS, dropping the OLDEST
+    lines first so the newest detail survives (grow-then-compact: monotonic up
+    to the cap, then the oldest events are pruned). Never raises; an empty/None
+    input yields ''. This is the single place the bounded-size acceptance
+    criterion is enforced."""
+    summary = (summary or "").strip()
+    if not summary:
+        return ""
+    if len(summary) <= MAX_RUNNING_SUMMARY_CHARS:
+        return summary
+    lines = summary.split("\n")
+    while lines and len("\n".join(lines)) > MAX_RUNNING_SUMMARY_CHARS:
+        lines.pop(0)
+    if not lines:
+        # A single over-cap line (no newlines to prune): truncate the tail.
+        return summary[:MAX_RUNNING_SUMMARY_CHARS]
+    out = "\n".join(lines)
+    if len(out) > MAX_RUNNING_SUMMARY_CHARS:
+        out = out[:MAX_RUNNING_SUMMARY_CHARS]
+    return out
+
+
+def _rule_summary(story_so_far: str, outcome: str, event_type: str, reason: str | None) -> str:
+    """Deterministic running summary for the rule/no-gemma path. Extends the
+    prior story-so-far with a compact chronological line for this window and
+    bounds the total size via {@link _compile_summary}, so the summary grows
+    monotonically up to the cap then compacts. Mirrors the contiguous
+    story-so-far semantics the Gemma path produces."""
+    prior = (story_so_far or "").strip()
+    line = f"[{outcome or 'not_highlight'}] {event_type}"
+    if reason:
+        line += f" — {reason[:120]}"
+    return _compile_summary((prior + "\n" + line) if prior else line)
+
+
+
 def _normalize_verdict(verdict) -> dict | None:
     """Normalize the model's structured ``verdict`` block to a stable shape.
     Returns None when absent/malformed. Criteria values are coerced to a
@@ -481,6 +530,9 @@ def parse_decision(text: str) -> dict | None:
         "reasoning": _as_text(obj.get("reasoning")),
         "verdict": _normalize_verdict(obj.get("verdict")),
         "evidenceAttested": _as_str_list(obj.get("evidenceAttested")),
+        # ADAAAA-7111 (Increment D): the running video summary the model updated
+        # for this window. Bound on write (see _compile_summary in the caller).
+        "runningSummary": _as_text(obj.get("runningSummary")),
         "source": "gemma",
     }
 
@@ -722,6 +774,71 @@ def reconcile_outcome_with_ball_signal(decision: dict, ball_outcome: Optional[st
     return decision
 
 
+# ADAAAA-7135 (criteria 6): celebration-only GOAL false-positive guard.
+# When the model accepts a GOAL at a near-max confidence but reports the
+# ball-in-net instant as NOT observed (ballInNet AND ballCrossedLineBetweenPosts
+# both non-true) while the crowd/celebration IS observed (crowdErupted true),
+# the accept is celebration-driven — the ball never demonstrably entered the
+# net — so it must not surface as a scoring highlight. Narrow and deliberate: a
+# real goal whose ball-in-net instant IS observed (either criterion true) is
+# never caught, and a lower-confidence / non-celebration read is untouched
+# (this deliberately does NOT re-enter the removed "both ball criteria must be
+# true" gate — see test_gemma.py test_build_prompt_does_not_require_ball_criteria).
+CELEBRATION_ONLY_SCORE_FLOOR = 90.0
+CELEBRATION_ONLY_SCORE_CAP = 55.0
+
+
+def apply_celebration_only_guard(decision: dict) -> dict:
+    """ADAAAA-7135 criteria 6: reject a near-max-score GOAL accepted on
+    crowd/celebration alone when the ball-in-net instant is not observed.
+
+    Fires ONLY when ALL hold:
+      - the decision is a board-accepted goal read (isHighlight true, and the
+        event is a GOAL/GOL or the outcome is scoring_play),
+      - the score is a near-max confidence (>= CELEBRATION_ONLY_SCORE_FLOOR),
+      - neither explicit ball-goal criterion is observed (ballInNet is not True
+        AND ballCrossedLineBetweenPosts is not True), and
+      - the crowd/celebration IS observed (crowdErupted is True).
+
+    In that case the score is capped and isHighlight forced to false so a
+    celebration-only moment never surfaces as a score. Mutates and returns
+    `decision` (no-op otherwise)."""
+    if not decision.get("isHighlight"):
+        return decision
+    evt = str(decision.get("eventType") or "").upper().strip()
+    is_goal_read = evt in ("GOAL", "GOL") or str(decision.get("outcome") or "").lower() == "scoring_play"
+    if not is_goal_read:
+        return decision
+    try:
+        score = float(decision.get("score") or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    if score < CELEBRATION_ONLY_SCORE_FLOOR:
+        return decision
+    crit = (decision.get("verdict") or {}).get("criteria") or {}
+    ball_in_net = crit.get("ballInNet")
+    ball_crossed = crit.get("ballCrossedLineBetweenPosts")
+    scoreboard_changed = crit.get("scoreboardChanged")
+    crowd = crit.get("crowdErupted")
+    # The goal must be observed by at least one INDEPENDENT criterion (ball in
+    # net / ball crossed the line / scoreboard change) for a near-max score;
+    # a scoreboard change is an independent confirmation (I3 / ADAAAA-6360) and
+    # must never be caught here.
+    if ball_in_net is True or ball_crossed is True or scoreboard_changed is True:
+        return decision
+    # Celebration observed but ball-in-net not observed -> celebration-only.
+    if crowd is not True:
+        return decision
+    decision["isHighlight"] = False
+    decision["score"] = CELEBRATION_ONLY_SCORE_CAP
+    decision["reason"] = (
+        (decision.get("reason") or "")
+        + "; celebration-only goal read: ball-in-net instant not observed, "
+        "crowd/celebration alone cannot confirm a GOAL"
+    ).strip("; ")
+    return decision
+
+
 def finalize_goal_acceptance(decision: dict, prefer_labels: list[str] | None = None) -> dict:
     """ADAAAA-6598: the SINGLE accept gate at the top of the decide route.
 
@@ -732,7 +849,9 @@ def finalize_goal_acceptance(decision: dict, prefer_labels: list[str] | None = N
     This closes the loop on the two verified false positives (a near_miss at
     t=1821s and a big_play at t=1954.9s whose own reason said the ball did NOT
     enter the net) and on the high-value (GOAL) waiver that accepted a
-    corroborated-but-not-a-goal candidate. Mutates and returns `decision`.
+    corroborated-but-not-a-goal candidate. ADAAAA-7135 (criteria 6): also
+    rejects a near-max-score GOAL accepted on celebration alone when the
+    ball-in-net instant is not observed. Mutates and returns `decision`.
 
     ADAAAA-6855: when the job explicitly requested a non-goal class in
     `prefer_labels` (near-misses/saves/red-cards/counter-attacks), a
@@ -741,6 +860,7 @@ def finalize_goal_acceptance(decision: dict, prefer_labels: list[str] | None = N
     goal, so goal precision is unaffected). When no non-goal label is requested
     the default scoring-only gate is unchanged.
     """
+    decision = apply_celebration_only_guard(decision)
     outcome = decision.get("outcome")
     if outcome == "scoring_play":
         return decision
@@ -875,6 +995,7 @@ def build_prompt(
     n_frames: int = 1,
     has_audio: bool = False,
     transcript: str = "",
+    story_so_far: str = "",
 ) -> str:
     ev = event_type.upper()
     meta = [
@@ -922,6 +1043,14 @@ def build_prompt(
     audio_level_line = _audio_level_line(evidence)
     if audio_level_line:
         meta.append(audio_level_line)
+    # ADAAAA-7111 (Increment D): the running video summary (story-so-far) carried
+    # from the previous cadence observe tick. Forwarded so the model can EXTEND
+    # it (not rewrite from scratch) — the summary at tick N must contain/extend
+    # the summary at tick N-1. Absent on the first tick (no prior summary).
+    ssf = (story_so_far or "").strip()
+    if ssf:
+        meta.append("STORY SO FAR (your running summary of the video so far — you MUST extend/compress it, keep it chronological and forward-only, never delete events already captured, only tighten wording):")
+        meta.append("  " + ssf[:MAX_RUNNING_SUMMARY_CHARS])
     return (
         "You are a sports/esports highlight judge. You are shown a temporal "
         "SEQUENCE of frames (extracted at 1 FPS from the moment of a detected "
@@ -1045,7 +1174,11 @@ def build_prompt(
         "\"ballInNet\": true|false|null, \"scoreboardChanged\": true|false|null, "
         "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<the evidence that "
         "contradicts the hypothesis, or the null when it does not>\"}, "
-        "\"evidenceAttested\": [\"<each concrete piece of grounded evidence you relied on>\"]}"
+        "\"evidenceAttested\": [\"<each concrete piece of grounded evidence you relied on>\"], "
+        "\"runningSummary\": \"<your updated RUNNING video summary so far, ~500 chars max, "
+        "chronological + forward-only: if a STORY SO FAR was given you must EXTEND it, never rewrite "
+        "from scratch or delete captured events, only tighten wording; if none was given start it "
+        "fresh. Cover the whole video so far, not just this window>.\"}"
     )
 
 
@@ -1062,6 +1195,7 @@ def ask(
     timeout_s: float = 180.0,
     transcript: str = "",
     audit_ctx: dict | None = None,
+    story_so_far: str = "",
 ) -> dict | None:
     """Call the gemma multimodal completion (vLLM OpenAI-compat server). Returns
     a parsed/validated HighlightDecision dict, or None on any transport/parse
@@ -1117,6 +1251,7 @@ def ask(
                 n_frames=len(frames),
                 has_audio=bool(send_audio or transcript),
                 transcript=transcript,
+                story_so_far=story_so_far,
             ),
         }
     )
@@ -1210,6 +1345,7 @@ def decide_with_gemma(
     url: str | None = None,
     score_board_changed: bool = False,
     audit_ctx: dict | None = None,
+    story_so_far: str = "",
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision.
@@ -1248,6 +1384,7 @@ def decide_with_gemma(
         reasoning_effort=reasoning_effort,
         transcript=transcript,
         audit_ctx=audit_ctx,
+        story_so_far=story_so_far,
     )
     if g is not None:
         result = g
@@ -1273,6 +1410,16 @@ def decide_with_gemma(
             "nearMiss": _rule_outcome(d) == "near_miss",
             "source": "rule-fallback",
         }
+    # ADAAAA-7111 (Increment D): carry the running video summary (story-so-far).
+    # Gemma's updated summary is returned bounded; on the rule-fallback path (or
+    # when the model omitted it) synthesise a deterministic extension of the
+    # prior summary so the summary still GROWS monotonically across ticks.
+    rs = (result.get("runningSummary") or "").strip()
+    if rs:
+        rs = _compile_summary(rs)
+    else:
+        rs = _rule_summary(story_so_far, result.get("outcome") or "not_highlight", event_type, result.get("reason"))
+    result["runningSummary"] = rs
     # Per-highlight audio-context cost/latency readout. `path` reports which
     # audio channel the model actually received: native `input_audio` when raw
     # send is on (GEMMA_SEND_AUDIO=1, ADAAAA-6350), else the ASR->text

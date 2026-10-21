@@ -30,13 +30,11 @@ from . import preload  # noqa: E402  (startup model preload)
 from .audio_gate import AudioEnergyGate
 from .session import RECENT_FRAMES, SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
-from .florence import capability, get_detector, record_analyze, resolve_vocabulary, sport_specific_event_type
+from .florence import capability, get_detector, record_analyze, resolve_vocabulary
 from .sam_tracker import HybridTracker
 from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
-from .zone_trigger import DetectionZoneTrigger, resolve_zones
 from .goal_plane import GoalLineDetector, GoalLineSpec
-from .scoreboard import parse_ocr_score, ScoreboardTracker
 from .tracking_plan import (
     PLAN_VERSION,
     SAFE_DEFAULT_ROLE,
@@ -305,17 +303,6 @@ def _ensure_goal_line_detector(state) -> GoalLineDetector | None:
     return state.goal_line_detector
 
 
-def _plan_category(state) -> "str | None":
-    """The session TrackingPlan's `category` (str), else None. Passed through to
-    sport resolution so the plan's sport drives GOAL classification / zones on
-    the plan-first path (ADAAAA-6463)."""
-    plan = getattr(state, "tracking_plan", None)
-    if plan is None:
-        return None
-    cat = getattr(plan, "category", None) if not isinstance(plan, dict) else plan.get("category")
-    return str(cat).strip().lower() if cat else None
-
-
 def _apply_tracking_plan(state, raw_plan) -> "TrackingPlan":
     """Apply an LLM TrackingPlan to a session (ADAAAA-6463, plan-first).
 
@@ -331,29 +318,7 @@ def _apply_tracking_plan(state, raw_plan) -> "TrackingPlan":
     _tracker = getattr(state, "tracker", None)
     if _tracker is not None and hasattr(_tracker, "set_anchor"):
         _tracker.set_anchor(anchor)
-    # The plan changes the active zones (or the sport for the canned fallback)
-    # -> rebuild the detection-in-zone trigger.
-    state.zone_trigger = None
-    _ensure_zone_trigger(state)
     return plan
-
-
-def _ensure_zone_trigger(state) -> "DetectionZoneTrigger | None":
-    """Lazily build this session's detection-in-zone Stage-A trigger.
-
-    Zones are resolved from the session's current gameHint (soccer -> goal
-    mouths). Rebuilt on a gameHint change so the goal regions track the sport;
-    an unknown/empty sport yields an inert trigger (no zones) — motion-burst
-    + audio gates still generate candidates. Never raises.
-    """
-    if state.zone_trigger is not None:
-        return state.zone_trigger
-    # Plan-first (ADAAAA-6463): the session's TrackingPlan zones win when
-    # present; otherwise the gameHint's canned per-sport zones apply. Rebuilt on
-    # a gameHint/plan change so the goal regions track the sport.
-    tr = DetectionZoneTrigger(zones=resolve_zones(state.game_hint, plan=state.tracking_plan))
-    state.zone_trigger = tr
-    return tr
 
 
 def _player_tracks(tracks) -> dict:
@@ -548,6 +513,12 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         ],
         "objects": objects,
         "ocr": [],
+        # ADAAAA-7108: the GOAL / motion-burst candidate triggers are removed,
+        # but the independently-computed goal-line + ball signals must still
+        # reach decide as evidence so the goal-attestation gate can attest a
+        # real scoring_play from what decide sees. Additive field — downstream
+        # consumers that do not read `evidence` ignore it unchanged.
+        **({"evidence": {**ball_signal_fields, **goal_signal_fields}} if (ball_signal_fields or goal_signal_fields) else {}),
         # ADAAAA-3726: closed-vocab <OD> gating metrics (Unknown rate) so QA can
         # verify bboxes stay labelable on a real clip (target Unknown < ~10%).
         **(
@@ -559,82 +530,15 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     state.recent_frames.append({"seq": seq, "timestamp": timestamp, "tracks": obs["tracks"]})
 
     events: list[dict] = [obs]
-    # INC-3 / ADAAAA-4327: a detection-in-zone (or ball-velocity-spike) Stage-A
-    # trigger can fire its own candidate independent of the motion-burst gate.
-    # Both are cheap (no GPU), both mark a *candidate only* — the decide()
-    # stage (Gemma) runs later on candidates. The zone trigger folds the INC-2b
-    # ball velocity/possession signals in; each candidate carries them too.
-    zone_trigger = _ensure_zone_trigger(state)
-    zone_cand = None
-    if zone_trigger is not None:
-        try:
-            zone_cand = zone_trigger.update(tracks, ball_signal_fields or None, timestamp, ball_objects=objects)
-        except Exception as e:  # noqa: BLE001  (a zone hiccup never drops a frame)
-            log.warning("zone trigger skipped for frame %s: %s", seq, e)
-
-    cand = state.tracker.candidate(ts=timestamp)
+    # ADAAAA-7108 (increments B & C): the detection-in-zone GOAL trigger and the
+    # tracker fast-movement / motion-burst (KILL/MOVE) trigger are REMOVED from
+    # perceive. Perceive does not have the knowledge to produce these kinds of
+    # candidates; the decide/gemma observer is the PRIMARY timeline observer and
+    # fires on a fixed ~3 s cadence (observe-loop.ts) regardless of any candidate,
+    # so no candidate-gated decide path remains. The goal-line + ball signals
+    # still reach decide as the additive `evidence` field on the observation
+    # (kept above) so the goal-attestation gate can attest a real scoring_play.
     cand_dict = None
-    if cand is not None:
-        # ADAAAA-4222/4193: the tracker anchors the strike but emits a generic
-        # KILL/MOVE motion type. On a goal-scoring sport (soccer) that label
-        # conflicts with the scene and the decide model hard-rejects it
-        # ("this is soccer, not a KILL event"), so no GOAL clip is ever cut.
-        # Classify the anchored candidate with the sport-specific event type
-        # (GOAL) now that the session knows gameHint / the plan's category.
-        event_type = sport_specific_event_type(
-            state.game_hint, cand.event_type, category=_plan_category(state)
-        )
-        # Return a plain dict (JSON-serializable) so callers can embed it in a
-        # response/ack without reaching into the dataclass.
-        cand_dict = {
-            "eventType": event_type,
-            "timestamp": cand.timestamp,
-            "trackId": cand.track_id,
-            **ball_signal_fields,
-            **goal_signal_fields,
-        }
-        log.info(
-            "candidate emitted session=%s seq=%s event=%s ts=%.2f track=%s",
-            state.session_id, seq, event_type, cand.timestamp, cand.track_id,
-        )
-        events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
-    elif zone_cand is not None:
-        # No motion burst this frame, but the detection-in-zone trigger fired.
-        # Classify to the sport (GOAL on a goal-scoring sport) so decide() sees
-        # a plausible event type; carry ball velocity/possession corroboration.
-        event_type = sport_specific_event_type(
-            state.game_hint, zone_cand["eventType"], category=_plan_category(state)
-        )
-        cand_dict = {
-            "eventType": event_type,
-            "timestamp": zone_cand["timestamp"],
-            "trigger": zone_cand["trigger"],
-            **ball_signal_fields,
-            **goal_signal_fields,
-        }
-        log.info(
-            "zone trigger fired session=%s seq=%s event=%s ts=%.2f trigger=%s",
-            state.session_id, seq, event_type, zone_cand["timestamp"], zone_cand.get("trigger"),
-        )
-        events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
-    # Scoreboard OCR / score-delta confirmation (ADAAAA-6360, decide-leg I3).
-    # Bounded to candidate anchor frames (Stage-A cooldown) — never every frame
-    # — so it adds per-candidate GPU only. A change in the displayed score
-    # across the candidate window is a hard, independent goal confirmation; its
-    # presence/absence is forwarded to decide. OCR failure degrades to [] (weak
-    # / absent evidence); it never drops the frame or the candidate.
-    if cand_dict is not None and detector is not None and state.last_rgb is not None:
-        try:
-            ocr_lines = detector.ocr(state.last_rgb) or []
-        except Exception as e:  # noqa: BLE001
-            log.warning("scoreboard OCR skipped for frame %s: %s", seq, e)
-            ocr_lines = []
-        obs["ocr"] = ocr_lines
-        cand_ts = float(cand_dict["timestamp"])
-        score = parse_ocr_score(ocr_lines)
-        state.scoreboard_tracker.record(cand_ts, score)
-        if state.scoreboard_tracker.changed(cand_ts):
-            cand_dict["scoreBoardChanged"] = True
     # ADAAAA-7008 / ADAAAA-7012: cache this frame's derived context (the "data
     # seeder" contract) so the on-demand `/app/evidence` recall endpoint can serve
     # it WITHOUT re-running the detector. Compact seed (tracks / objects / ocr) —
@@ -655,18 +559,16 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             except Exception:
                 pass
     # DEBUG per-frame summary (ADAAAA-6525): detection labels/scores, track
-    # state, zone-trigger + ball/goal outcome, candidate id. Only at DEBUG.
+    # state, ball/goal outcome. Only at DEBUG.
     log.debug(
-        "frame done session=%s seq=%s ts=%.2f detections=%s tracks=%s zone=%s ball=%s goal=%s candidate=%s",
+        "frame done session=%s seq=%s ts=%.2f detections=%s tracks=%s ball=%s goal=%s",
         state.session_id,
         seq,
         timestamp,
         [(o.get("label"), round(float(o.get("confidence", 0.0)), 2)) for o in objects[:12]],
         [(t.track_id, getattr(t, "kind", ""), getattr(t, "label", "")) for t in tracks[:MAX_TRACKS]],
-        (zone_cand or {}).get("trigger"),
         ball_signal_fields,
         goal_signal_fields,
-        (cand_dict or {}).get("eventType"),
     )
     return obs, cand_dict
 
@@ -744,13 +646,7 @@ def handle_control(state, msg: dict) -> dict:
         if "sampleFps" in msg and msg.get("sampleFps", 0) > 0:
             state.sample_fps = float(msg["sampleFps"])
         if msg.get("gameHint") is not None:
-            changed = str(msg["gameHint"]) != state.game_hint
             state.game_hint = str(msg["gameHint"])
-            # INC-3: a sport change rebuilds the detection-in-zone trigger so
-            # the goal-mouth zones track the new sport.
-            if changed:
-                state.zone_trigger = None
-                _ensure_zone_trigger(state)
         # Per-stream LoRA injection (ADAAAA-5324): reconfigure this session's
         # adapter (or clear to base with empty string).
         if "loraRef" in msg:
@@ -770,7 +666,6 @@ def handle_control(state, msg: dict) -> dict:
         # Decide-leg I2 (ADAAAA-6359): optional goal-line plane spec (field
         # coords) so perceive can emit goalCrossed / ballOutcome. A bad value is
         # ignored (KEEP the existing spec) and reported, never fatal.
-        if msg.get("goalLine") is not None:
             spec = GoalLineSpec.from_dict(msg["goalLine"])
             if spec is None:
                 return {"type": "ack", "ok": False, "cmd": "configure", "error": "bad goalLine: need {axis, position, mouthMin, mouthMax}"}
@@ -892,13 +787,7 @@ def create_app() -> FastAPI:
         # session is configured BEFORE the frame is run. Same effect as a WS
         # `configure` — applies to resolve_vocabulary() inside process_frame.
         if req.gameHint:
-            changed = str(req.gameHint) != state.game_hint
             state.game_hint = req.gameHint
-            # INC-3: a sport change rebuilds the detection-in-zone trigger so
-            # the goal-mouth zones track the new sport.
-            if changed:
-                state.zone_trigger = None
-                _ensure_zone_trigger(state)
         if req.preferLabels:
             state.prefer_labels = list(req.preferLabels)
         # Per-stream LoRA injection (ADAAAA-5324): an attached adapter selects
