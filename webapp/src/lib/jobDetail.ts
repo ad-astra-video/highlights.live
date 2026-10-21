@@ -117,9 +117,10 @@ export interface JobDetail {
     // Short human-readable job title (ADAAAA-6798 Inc 1); absent on legacy jobs
     // where the UI falls back to `<gameHint/source> · <n> highlights · <date>`.
     title?: string;
-    // ADAAAA-7111 (Increment D): the decide/gemma running video summary
-    // (story-so-far), growing as the video progresses. Absent on jobs that never
-    // ran the observe cadence / older records.
+    // ADAAAA-7135 (Tier-1): the observe-loop running action narrative
+    // ("watch + notes") that the continuous decide observer accumulates as the
+    // video progresses — distinct from `candidates` (now confirmed highlights
+    // only). Absent on jobs that never ran the observe cadence / older records.
     runningSummary?: string;
     sampleFps?: number;
     framesAnalyzed?: number;
