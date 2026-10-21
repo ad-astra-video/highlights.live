@@ -238,7 +238,7 @@ function AudioAsrBlock({ a }: { a: WindowAnalysis }) {
 /** The Stage-2 confirm (deep frame dive) sub-panel: the confirm request context
  *  + its ConfirmDecision. Rendered only when the candidate went to deeper
  *  processing (a `confirm` record exists). */
-export function ConfirmSubPanel({ confirm, defaultOpen = false }: { confirm: ConfirmRecord; defaultOpen?: boolean }) {
+export function ConfirmSubPanel({ confirm, jobId, defaultOpen = false }: { confirm: ConfirmRecord; jobId: string; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   const req = confirm.request;
   const d = confirm.decision;
@@ -270,8 +270,8 @@ export function ConfirmSubPanel({ confirm, defaultOpen = false }: { confirm: Con
           <div className="mt-2">
             <DataItemList items={req.dataItems} />
           </div>
-          <MediaRefRow label="Frames" refs={req.frames} jobId="" />
-          <MediaRefRow label="Keyframes" refs={req.keyframes} jobId="" />
+          <MediaRefRow label="Frames" refs={req.frames} jobId={jobId} />
+          <MediaRefRow label="Keyframes" refs={req.keyframes} jobId={jobId} />
           <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
             <Field label="Trajectories" mono>{req.trajectories.length}</Field>
             <Field label="Optical flow mag.">{req.opticalFlowMagnitude ?? "—"}</Field>
@@ -383,7 +383,7 @@ export function WindowAnalysisPanel({ analysis, confirm, jobId }: WindowAnalysis
       </div>
 
       {/* Stage-2 confirm (deep dive) sub-panel */}
-      {confirm && <ConfirmSubPanel confirm={confirm} />}
+      {confirm && <ConfirmSubPanel confirm={confirm} jobId={jobId} />}
     </div>
   );
 }

@@ -125,12 +125,16 @@ describe("WindowAnalysisPanel (ADAAAA-7157)", () => {
 
   it("renders the confirm request context + ConfirmDecision in the deep-dive body", () => {
     const html = renderToString(
-      React.createElement(ConfirmSubPanel, { confirm, defaultOpen: true })
+      React.createElement(ConfirmSubPanel, { confirm, jobId: "abc", defaultOpen: true })
     );
     // Request context
     expect(html).toContain("data-confirm-prompt");
     expect(html).toContain("Confirm the scoring play with the frame-level deep dive.");
     expect(html).toContain("data-refs=\"Keyframes\"");
+    // Finding 1 regression: deep-dive frame/keyframe refs use the real job id
+    expect(html).toContain("/jobs/abc/frames/0");
+    expect(html).toContain("/jobs/abc/frames/2");
+    expect(html).not.toContain("/jobs//frames/");
     expect(html).toContain("Trajectories");
     expect(html).toContain("Optical flow mag.");
     expect(html).toContain("0.42");
