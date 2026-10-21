@@ -114,6 +114,45 @@ def test_ws_ping_and_configure_ack():
         assert ack["sampleFps"] == 2.0
 
 
+# --- ADAAAA-6359: configure accepts a per-session goal-line spec -------------
+def test_configure_goal_line_spec_applies_without_homography():
+    """ADAAAA-7152 (Gap 2): `configure` with a `goalLine` spec applies the
+    goal-line detector INDEPENDENTLY of `homography` (previously nested inside
+    the homography branch). The server may ship a goalLine spec without a
+    homography (or vice versa) and perceive must honor it so it can emit a REAL
+    goalCrossed / ballOutcome attestation."""
+    from app import handle_control
+    from app.session import SessionState
+    from app.goal_plane import GoalLineSpec
+
+    state = SessionState(session_id="s-goal-line")
+    ack = handle_control(state, {
+        "type": "configure",
+        "goalLine": {"axis": "y", "position": 0.0, "mouthMin": 20.0, "mouthMax": 48.0},
+    })
+    assert ack["ok"] is True and ack["cmd"] == "configure"
+    assert state.goal_line_spec is not None
+    assert isinstance(state.goal_line_spec, GoalLineSpec)
+    assert state.goal_line_spec.axis == "y"
+    assert state.goal_line_detector is not None
+
+
+def test_configure_bad_goal_line_is_reported_not_fatal():
+    """An unparseable goalLine (invalid axis) is rejected with a bad ack and
+    NEVER crashes the configure path; the session keeps no goal-line spec."""
+    from app import handle_control
+    from app.session import SessionState
+
+    state = SessionState(session_id="s-goal-bad")
+    ack = handle_control(state, {
+        "type": "configure",
+        "goalLine": {"axis": "z", "position": 0.0, "mouthMin": 20.0, "mouthMax": 48.0},
+    })
+    assert ack["ok"] is False
+    assert "bad goalLine" in ack.get("error", "")
+    assert state.goal_line_spec is None
+
+
 # --- ADAAAA-6463: configure accepts a TrackingPlan ----------------------------
 def test_configure_accepts_tracking_plan():
     """`configure` with a `trackingPlan` key stores the normalized plan on the
