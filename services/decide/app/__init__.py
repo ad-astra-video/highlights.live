@@ -34,6 +34,7 @@ from .gemma import (  # noqa: F401
     plan_tracking_with_gemma,
     title_with_gemma,
     _rule_outcome,
+    _rule_summary,
     is_near_miss_ball_outcome,
     reconcile_outcome_with_ball_signal,
 )
@@ -218,6 +219,10 @@ class HighlightRequest(BaseModel):
     # the audit descriptor keys the durable index by (sessionId, groupKey)).
     jobId: Optional[str] = None
     groupKey: Optional[str] = None
+    # ADAAAA-7111 (Increment D): the running video summary (story-so-far)
+    # carried from the previous cadence observe tick so the model EXTENDS it
+    # (not rewrite from scratch). Empty/absent on the first tick. Additive.
+    storySoFar: Optional[str] = None
 
 
 # --- Response contract ------------------------------------------------------
@@ -299,6 +304,10 @@ class HighlightDecision(BaseModel):
     # group identity, prompt text, media content hashes, model params, raw
     # reply, parsed verdicts, timings, fallback flag — never the media bytes.
     audit: Optional[Dict[str, Any]] = None
+    # ADAAAA-7111 (Increment D): the updated running video summary (story-so-far)
+    # after this window, so the server persists it and carries it into the next
+    # cadence tick. Bounded (compacted). Empty when the path does not produce one.
+    runningSummary: str = ""
 
 
 def _is_gemma_mode() -> bool:
@@ -583,6 +592,7 @@ def create_app() -> FastAPI:
                     "frameCount": len(req.frames),
                     "candidateCount": 1,
                 },
+                story_so_far=req.storySoFar or "",
             )
             # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
             # goal-line ground-truth signal. A non-"goal" ballOutcome forces
@@ -720,6 +730,10 @@ def create_app() -> FastAPI:
         if not att_ok and dec.get("isHighlight"):
             dec["isHighlight"] = False
             dec["reason"] = ((dec.get("reason") or "") + "; " + (att_reason or "")).strip("; ")
+        # ADAAAA-7111 (Increment D): running video summary on the rule path too.
+        dec["runningSummary"] = _rule_summary(
+            req.storySoFar or "", dec.get("outcome") or _rule_outcome(d), req.eventType, dec.get("reason")
+        )
         _log_highlight("rule", req, dec)
         return dec
 

@@ -192,6 +192,10 @@ export interface DecisionResult {
   // on-demand (`recallPerceive`) and folds the fresh context into the payload.
   // Absent / false => no recall (default). Optional + backward compatible.
   recall?: boolean;
+  // ADAAAA-7111 (Increment D): the running video summary (story-so-far) the
+  // decide brain updated for this window. The server persists it onto the job
+  // and forwards it into the next cadence tick. Optional + additive.
+  runningSummary?: string;
 }
 // ADAAAA-6855: map job-requested highlight labels (preferLabels) to the
 // outcome taxonomy members they authorize for export. A requested non-goal
@@ -501,6 +505,10 @@ export interface PipelineClient {
        * descriptor keys the durable index by (sessionId, groupKey). */
       jobId?: string;
       groupKey?: string;
+      /** ADAAAA-7111 (Increment D): the running video summary (story-so-far)
+       * carried into this cadence decide so the model EXTENDS it. Empty on the
+       * first tick. Absent = no prior summary (unchanged behaviour). */
+      storySoFar?: string;
     }
   ): Promise<DecisionResult>;
   /**
@@ -742,6 +750,15 @@ export interface AnalyzerConfig {
    * one row per frame group. Best-effort: a throwing onDecideAudit is caught
    * + logged, never a pipeline failure. */
   onDecideAudit?: (desc: unknown) => void;
+  /** ADAAAA-7111 (Increment D): read the job's current running video summary
+   * (story-so-far) so the next cadence decide request can carry it forward.
+   * Absent => no prior summary (the decide runs without one). */
+  getRunningSummary?: () => string;
+  /** ADAAAA-7111 (Increment D): persist the updated running video summary after
+   * a cadence decide, so the job-detail endpoint + web UI surface it growing.
+   * Best-effort: a throwing callback is caught + logged, never a pipeline
+   * failure. */
+  onRunningSummary?: (summary: string) => void;
 }
 
 /**
@@ -1907,6 +1924,9 @@ export function buildObserveDecideRequest(
     // group regardless of how many decide invocations the group spans.
     jobId: cfg.jobId,
     groupKey: decideGroupKey(center),
+    // ADAAAA-7111 (Increment D): carry the job's running video summary
+    // (story-so-far) so the decide brain EXTENDS it (monotonic growth).
+    storySoFar: cfg.getRunningSummary?.() ?? "",
   };
   return { evidence, opts };
 }
@@ -1934,6 +1954,18 @@ export async function applyObserveRecall(
   // can never regress a decision.
   if (!result || result.seeds.length === 0) return payload;
   return applyOnDemandRecall(payload, { centerTs: result.centerTs ?? payload.centerTs, seeds: result.seeds });
+}
+
+/**
+ * ADAAAA-7111 (Increment D): derive the updated running video summary to
+ * persist after a cadence decide. Returns the bounded summary string when it
+ * actually changed vs the prior one (carried in), else null (no write needed —
+ * avoids redundant DB writes on a stable/compact summary). Pure + testable.
+ */
+export function nextRunningSummary(prior: string | undefined, decision: DecisionResult): string | null {
+  const rs = (decision as any).runningSummary;
+  if (typeof rs !== "string" || !rs.trim()) return null;
+  return rs === (prior ?? "") ? null : rs;
 }
 
 /**
@@ -1996,6 +2028,21 @@ export async function observeOnDecide(
       cfg.onDecideAudit((decision as any).audit);
     } catch (e: any) {
       console.error(`[decide-audit:${cfg.jobId}] onDecideAudit failed:`, String(e?.message || e));
+    }
+  }
+  // ADAAAA-7111 (Increment D): persist the running video summary (story-so-far)
+  // the decide brain updated for this window, so the job-detail endpoint + web
+  // UI surface it growing across cadence ticks. Only writes when the summary
+  // actually changed (avoids redundant DB writes on a stable/compact summary).
+  // Best-effort: a throwing callback is caught + logged, never a pipeline failure.
+  if (cfg.onRunningSummary) {
+    const next = nextRunningSummary(cfg.getRunningSummary?.(), decision);
+    if (next !== null) {
+      try {
+        cfg.onRunningSummary(next);
+      } catch (e: any) {
+        console.error(`[running-summary:${cfg.jobId}] persist failed:`, String(e?.message || e));
+      }
     }
   }
   // ADAAAA-7021 fix: the window's goal-attestation signals (folded from the

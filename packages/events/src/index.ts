@@ -504,6 +504,11 @@ export const JobSchema = z.object({
   // decide service is unavailable. Additive optional — absent on older records
   // and on jobs that predate title generation (no contract version bump).
   title: z.string().optional(),
+  // ADAAAA-7111 (Increment D): the decide/gemma running video summary
+  // (story-so-far), re-persisted on each cadence observe tick. Monotonic
+  // (extends the prior summary) and bounded (compacted). Additive optional —
+  // absent on jobs that predate it / that never ran the observe cadence.
+  runningSummary: z.string().optional(),
   // `file-sim` = loop a local file at real-time rate as a synthetic live source
   // (LiveIngest kind `file-sim`); used by QA/dev to run the live pipeline
   // deterministically without an RTMP encoder or a display (ADAAAA-5777).
