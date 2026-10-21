@@ -290,6 +290,10 @@ services:
       # (`_confirm_pass_enabled`). Default 0 (off); docker/.env sets 1 to arm
       # it, so a clean `reset --hard origin/master` does NOT drop it.
       - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-0}
+      # ADAAAA-7162: expand the Stage-2 confirm window by this many seconds on
+      # each side of the Stage-1 pre/post window (default 4 s, within the 3-5 s
+      # requirement). Wired here so a clean `reset --hard` does NOT drop it.
+      - DECIDE_CONFIRM_EXTRA_WINDOW_S=${DECIDE_CONFIRM_EXTRA_WINDOW_S:-4}
     depends_on:
       gemma:
         condition: service_healthy
@@ -362,6 +366,12 @@ services:
       # the goal corroborates. Default 0 (off) everywhere; docker/.env sets 1
       # to arm it, so a clean `reset --hard origin/master` does NOT drop it.
       - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-0}
+      # ADAAAA-7162 (CEO feedback): a confirmed_goal is only accepted when an
+      # INDEPENDENT corroboration signal is present (scoreboard change OR
+      # goal-calling audio). Default 1 (ON, the CEO requirement); set 0 only in
+      # an emergency for clips with no commentary/scoreboard. Wired here so a
+      # clean `reset --hard` does NOT drop it.
+      - DECIDE_CONFIRM_REQUIRE_CORROBORATION=${DECIDE_CONFIRM_REQUIRE_CORROBORATION:-1}
       # Live-payment durability (ADAAAA-3932): the SERVER is the VOD payer — it
       # reserves perceive/decide sessions and, on the orchestrator's 402
       # challenge, forwards the payment_params to the remote signer for tickets
