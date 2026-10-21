@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,13 +19,22 @@ from .logging_setup import configure_logging  # noqa: E402  (defines log above)
 configure_logging()
 
 from .decider import apply_gate, decide, scoreboard_forces_goal
+from .confirm import (  # noqa: F401
+    ConfirmRequest,
+    ConfirmDecision,
+    confirm_enabled,
+    run_confirmation_pass,
+)
 from .gemma import (  # noqa: F401
     apply_ball_outcome_gate,
     apply_goal_attestation_gate,
+    decide_group_with_gemma,
     decide_with_gemma,
     finalize_goal_acceptance,
     plan_tracking_with_gemma,
+    title_with_gemma,
     _rule_outcome,
+    _rule_summary,
     is_near_miss_ball_outcome,
     reconcile_outcome_with_ball_signal,
 )
@@ -108,6 +117,23 @@ class ImageRef(BaseModel):
     base64: str = ""
 
 
+class GroupCandidate(BaseModel):
+    """One Stage-A candidate trigger inside a 3 s frame group (group mode).
+
+    The server's live analyzer groups all Stage-A candidate triggers that fall
+    inside one 3 s frame window and sends a single `/highlight` request carrying
+    a ``candidates`` array plus the group's ``frames``. Each candidate has its
+    own eventType / timestamp / evidence; the ONE merged gemma review returns a
+    verdict PER candidate. ``extra=ignore`` so a newer upstream field never 422s
+    the group call.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    eventType: str
+    timestamp: float = 0.0
+    evidence: Evidence = Field(default_factory=Evidence)
+
+
 class PlanRequest(BaseModel):
     """Single-shot what-to-track planner request (plan §4.4 / §7 D).
 
@@ -178,6 +204,25 @@ class HighlightRequest(BaseModel):
     # Frontend-selectable; defaults to "none" (thinking off = fast single-shot
     # JSON). Other values (low/medium/high) are passed to llama.cpp verbatim.
     reasoningEffort: str = Field(default="none")
+    # ADAAAA-6855: the job's requested highlight labels (e.g.
+    # ["goals","saves","near-misses","red cards","counter-attacks"]). When a
+    # non-goal class is requested, a correctly-detected instance of that class
+    # is accepted and exported as a distinct highlight rather than being
+    # swallowed by the scoring-only accept gate. Empty == default gate.
+    preferLabels: list[str] = Field(default_factory=list)
+    # Group mode: when the server's live analyzer groups all Stage-A candidate
+    # triggers inside one 3 s frame window, it sends them here (one per
+    # candidate, in order). Empty == the existing single-candidate call, whose
+    # behavior is unchanged (byte-for-byte).
+    candidates: list[GroupCandidate] = Field(default_factory=list)
+    # ADAAAA-7028 Inc 2 audit identity (optional; the server forwards these so
+    # the audit descriptor keys the durable index by (sessionId, groupKey)).
+    jobId: Optional[str] = None
+    groupKey: Optional[str] = None
+    # ADAAAA-7111 (Increment D): the running video summary (story-so-far)
+    # carried from the previous cadence observe tick so the model EXTENDS it
+    # (not rewrite from scratch). Empty/absent on the first tick. Additive.
+    storySoFar: Optional[str] = None
 
 
 # --- Response contract ------------------------------------------------------
@@ -250,6 +295,19 @@ class HighlightDecision(BaseModel):
     verdict: Optional[Verdict] = None
     evidenceAttested: list[str] = Field(default_factory=list)
     audioContext: Optional[AudioContext] = None
+    # Group mode: one verdict dict per candidate, in the same order as the
+    # request's `candidates` array. Empty for single-candidate calls, whose
+    # behavior is unchanged.
+    verdicts: list[dict] = Field(default_factory=list)
+    # ADAAAA-7028 Inc 2: compact decide audit descriptor returned so the server
+    # can index the exact request/response (one row per frame group). Contains
+    # group identity, prompt text, media content hashes, model params, raw
+    # reply, parsed verdicts, timings, fallback flag — never the media bytes.
+    audit: Optional[Dict[str, Any]] = None
+    # ADAAAA-7111 (Increment D): the updated running video summary (story-so-far)
+    # after this window, so the server persists it and carries it into the next
+    # cadence tick. Bounded (compacted). Empty when the path does not produce one.
+    runningSummary: str = ""
 
 
 def _is_gemma_mode() -> bool:
@@ -327,6 +385,164 @@ def _log_plan(mode: str, req: "PlanRequest", resp: "TrackingPlanResponse") -> No
     )
 
 
+class TitleRequest(BaseModel):
+    """Compact summary for the text-only job-title call (ADAAAA-6798 Inc 1).
+
+    Lightweight (no images/audio) — the one small Gemma inference per completed
+    job. The server/worker sends gameHint + the job's eventTypes + the accepted
+    highlight reasons + the accepted count; the decide brain returns a short
+    human-readable title string."""
+
+    model_config = ConfigDict(extra="ignore")
+    gameHint: str = ""
+    eventTypes: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    highlightCount: int = 0
+
+
+class TitleResponse(BaseModel):
+    title: str
+
+
+def _rule_title(req: TitleRequest) -> str:
+    """Deterministic fallback title when Gemma is unavailable / in rule mode.
+    Mirrors the server's own fallback shape so a completed job still has a
+    sensible title even when the model is down (never blocks or fails the job)."""
+    parts = []
+    if req.gameHint:
+        parts.append(req.gameHint)
+    kinds = list(dict.fromkeys(req.eventTypes or []))
+    if kinds:
+        parts.append(", ".join(kinds[:3]))
+    if req.highlightCount:
+        parts.append(f"{req.highlightCount} highlight{'s' if req.highlightCount != 1 else ''}")
+    if not parts:
+        parts.append("Highlight reel")
+    return " · ".join(parts)
+
+
+def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, prefer_labels: list[str]) -> dict:
+    """Apply the DRY post-processing gates to ONE per-candidate gemma verdict
+    (group mode), mirroring the single-candidate gemma path exactly:
+    ball_outcome gate -> scoreboard force -> goal attestation -> notable-only ->
+    finalize_goal_acceptance. Mutates and returns ``decision``."""
+    ball_outcome = evidence.get("ballOutcome")
+    if is_near_miss_ball_outcome(ball_outcome):
+        decision = reconcile_outcome_with_ball_signal(decision, ball_outcome)
+        gate_ok, gate_reason = True, None
+    else:
+        gate_ok, gate_reason = apply_ball_outcome_gate(evidence)
+    if not gate_ok and decision.get("isHighlight"):
+        decision["isHighlight"] = False
+        decision["reason"] = (
+            (decision.get("reason") or "") + "; " + (gate_reason or "")
+        ).strip("; ")
+    elif scoreboard_forces_goal(
+        bool(evidence.get("scoreBoardChanged", False)), decision.get("eventType") or event_type
+    ):
+        decision["isHighlight"] = True
+        decision["outcome"] = "scoring_play"
+        decision["reason"] = (
+            (decision.get("reason") or "") + "; scoreboard score change confirmed"
+        ).strip("; ")
+    att_ok, att_reason = apply_goal_attestation_gate(decision, evidence, event_type)
+    if not att_ok and decision.get("isHighlight"):
+        decision["isHighlight"] = False
+        decision["reason"] = (
+            (decision.get("reason") or "") + "; " + (att_reason or "")
+        ).strip("; ")
+    if decision.get("isHighlight"):
+        ok, rejects = apply_gate(
+            score=float(decision.get("score") or 0.0),
+            event_type=decision.get("eventType") or event_type,
+            track_count=evidence.get("trackCount", 0),
+            max_velocity=evidence.get("maxVelocity", 0),
+            ocr_hits=evidence.get("ocrHits", 0),
+            reaction=evidence.get("reaction") or {},
+            score_board_changed=evidence.get("scoreBoardChanged", False),
+        )
+        if not ok:
+            decision["isHighlight"] = False
+            decision["reason"] = (
+                (decision.get("reason") or "")
+                + "; rejected by notable-only bar: "
+                + "; ".join(rejects)
+            ).strip("; ")
+    decision = finalize_goal_acceptance(decision, prefer_labels)
+    return decision
+
+
+def _rule_verdict(cand: "GroupCandidate", prefer_labels: list[str]) -> dict:
+    """DRY per-candidate rule-path verdict (group mode), mirroring the
+    single-candidate rule path: decide() -> ball_outcome gate -> near-miss
+    reconcile -> finalize_goal_acceptance -> goal attestation guard."""
+    evidence = cand.evidence.model_dump()
+    d = decide(
+        event_type=cand.eventType,
+        track_count=cand.evidence.trackCount,
+        max_velocity=cand.evidence.maxVelocity,
+        ocr_hits=cand.evidence.ocrHits,
+        reaction=cand.evidence.reaction.model_dump() if cand.evidence.reaction else None,
+        score_board_changed=cand.evidence.scoreBoardChanged,
+    )
+    ball_outcome = evidence.get("ballOutcome")
+    gate_ok, gate_reason = apply_ball_outcome_gate(evidence)
+    if is_near_miss_ball_outcome(ball_outcome):
+        d.is_highlight = True
+    elif not gate_ok:
+        d.is_highlight = False
+        d.reason = ((d.reason or "") + "; " + (gate_reason or "")).strip("; ")
+    dec = {
+        "isHighlight": d.is_highlight,
+        "score": d.score,
+        "eventType": cand.eventType,
+        "reason": d.reason,
+        "source": "rule",
+        "eventClass": d.event_class,
+        "corroborated": d.corroborated,
+        "outcome": _rule_outcome(d),
+        "nearMiss": False,
+    }
+    if is_near_miss_ball_outcome(ball_outcome):
+        dec = reconcile_outcome_with_ball_signal(dec, ball_outcome)
+    dec = finalize_goal_acceptance(dec, prefer_labels)
+    att_ok, att_reason = apply_goal_attestation_gate(dec, evidence, cand.eventType)
+    if not att_ok and dec.get("isHighlight"):
+        dec["isHighlight"] = False
+        dec["reason"] = ((dec.get("reason") or "") + "; " + (att_reason or "")).strip("; ")
+    return dec
+
+
+async def _handle_group(req: "HighlightRequest") -> dict:
+    """Group mode: ONE merged review for the whole 3 s frame group returns a
+    verdict per candidate (same order as ``req.candidates``). The top-level
+    response ``decision`` fields are taken from the FIRST verdict for backward
+    compatibility; ``verdicts`` carries the full per-candidate list."""
+    if _is_gemma_mode():
+        raw = await asyncio.to_thread(
+            decide_group_with_gemma,
+            candidates=[c.model_dump() for c in req.candidates],
+            game_hint=req.gameHint,
+            images=[img.model_dump() for img in req.images],
+            frames=[fr.model_dump() for fr in req.frames],
+            audio_b64=req.audioB64,
+            audio_sample_rate=req.audioSampleRate,
+            reasoning_effort=req.reasoningEffort,
+            url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
+        )
+        verdicts = [
+            _postprocess_gemma_verdict(v, c.evidence.model_dump(), c.eventType, req.preferLabels)
+            for v, c in zip(raw, req.candidates)
+        ]
+    else:
+        verdicts = [_rule_verdict(c, req.preferLabels) for c in req.candidates]
+    top = dict(verdicts[0])
+    top["verdicts"] = verdicts
+    _log_highlight("gemma" if _is_gemma_mode() else "rule", req, top)
+    return top
+
+
+
 def create_app() -> FastAPI:
     router = APIRouter()
 
@@ -342,6 +558,13 @@ def create_app() -> FastAPI:
 
     @router.post("/highlight", response_model=HighlightDecision)
     async def highlight(req: HighlightRequest):
+        # Group mode (ADAAAA-6935): when the server's live analyzer grouped the
+        # Stage-A candidates inside a 3 s frame window into a single merged call
+        # (`candidates` non-empty), run ONE review for the whole group and return
+        # a verdict per candidate. The existing single-candidate path (candidates
+        # empty) is unchanged byte-for-byte below.
+        if req.candidates:
+            return await _handle_group(req)
         if _is_gemma_mode():
             # ADAAAA-6373: the gemma inference is a blocking sync call (httpx).
             # Called directly it stalls uvicorn's single event loop for the
@@ -362,6 +585,14 @@ def create_app() -> FastAPI:
                 reasoning_effort=req.reasoningEffort,
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
                 score_board_changed=req.evidence.scoreBoardChanged,
+                audit_ctx={
+                    "sessionId": req.sessionId,
+                    "jobId": req.jobId,
+                    "groupKey": req.groupKey,
+                    "frameCount": len(req.frames),
+                    "candidateCount": 1,
+                },
+                story_so_far=req.storySoFar or "",
             )
             # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
             # goal-line ground-truth signal. A non-"goal" ballOutcome forces
@@ -443,7 +674,9 @@ def create_app() -> FastAPI:
             # board-accepted GOAL highlight. This overrides any earlier gate
             # (high-value waiver, model isHighlight) for a near_miss/big_play/
             # not_highlight read so no false positive reaches the board.
-            decision = finalize_goal_acceptance(decision)
+            # ADAAAA-6855: a non-goal class explicitly requested in
+            # preferLabels is accepted as a DISTINCT highlight (never a goal).
+            decision = finalize_goal_acceptance(decision, req.preferLabels)
             _log_highlight("gemma", req, decision)
             return decision
         ev = req.evidence.reaction.model_dump() if req.evidence.reaction else None
@@ -482,8 +715,10 @@ def create_app() -> FastAPI:
             dec = reconcile_outcome_with_ball_signal(dec, ball_outcome)
         # ADAAAA-6598: single accept gate — ONLY a scoring_play is a
         # board-accepted GOAL highlight (a rule-path highlight maps to
-        # scoring_play; a near-miss read is rejected).
-        dec = finalize_goal_acceptance(dec)
+        # scoring_play; a near-miss read is rejected). ADAAAA-6855: a non-goal
+        # class explicitly requested in preferLabels is accepted as a DISTINCT
+        # highlight (never a goal).
+        dec = finalize_goal_acceptance(dec, req.preferLabels)
         # Goal-verification attestation gate (ADAAAA-6610) on the rule path too
         # (mirror of the gemma path): an accepted goal with a bare templated
         # reason and no attested goal criterion is rejected. On the rule path
@@ -495,6 +730,10 @@ def create_app() -> FastAPI:
         if not att_ok and dec.get("isHighlight"):
             dec["isHighlight"] = False
             dec["reason"] = ((dec.get("reason") or "") + "; " + (att_reason or "")).strip("; ")
+        # ADAAAA-7111 (Increment D): running video summary on the rule path too.
+        dec["runningSummary"] = _rule_summary(
+            req.storySoFar or "", dec.get("outcome") or _rule_outcome(d), req.eventType, dec.get("reason")
+        )
         _log_highlight("rule", req, dec)
         return dec
 
@@ -549,6 +788,50 @@ def create_app() -> FastAPI:
         )
         _log_plan("rule", req, resp)
         return resp
+
+    @router.post("/title", response_model=TitleResponse)
+    async def title(req: TitleRequest):
+        """Text-only job-title generation (ADAAAA-6798 Inc 1). One lightweight
+        Gemma call per completed job: takes a compact summary (gameHint +
+        eventTypes + accepted-highlight reasons + count) and returns a short
+        human-readable title. Runs the inference in a worker thread (like the
+        /highlight gemma branch, ADAAAA-6373) so /health stays responsive. On
+        any failure (Gemma down / unparseable) returns a deterministic rule
+        title so the caller never has to block the job on it."""
+        if _is_gemma_mode():
+            t = await asyncio.to_thread(
+                title_with_gemma,
+                game_hint=req.gameHint,
+                event_types=req.eventTypes,
+                reasons=req.reasons,
+                highlight_count=req.highlightCount,
+                url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
+                timeout_s=float(os.environ.get("TITLE_TIMEOUT_S", "5")),
+            )
+            if t:
+                return TitleResponse(title=t)
+        # Rule / fallback path: Gemma unavailable, rule mode, or a null reply —
+        # return a deterministic title; the caller still has its own fallback.
+        return TitleResponse(title=_rule_title(req))
+    @router.post("/confirm", response_model=ConfirmDecision)
+    async def confirm(req: ConfirmRequest):
+        """Stage-2 goal/near-miss confirmation pass (ADAAAA-6797).
+
+        A deep frame dive that runs ONLY for goal-type candidates carrying no
+        independent attestation. It presents the Stage-1 verdict + reason back,
+        tests the contradictory hypothesis over denser frames / trajectory /
+        optical-flow / audio context, and emits a structured ``goalConfirmed``
+        verdict that is deterministically reconciled. The whole pass is gated by
+        ``DECIDE_CONFIRM_ENABLED`` (default off, VOD-first); when disabled or on
+        any model/parse failure it returns a passthrough that leaves the Stage-1
+        verdict unchanged, so the server can call it safely. The gemma inference
+        is a blocking sync call (httpx) — run it in a worker thread so /health
+        stays responsive during inference (same pattern as /highlight)."""
+        result = await asyncio.to_thread(
+            run_confirmation_pass,
+            req.model_dump(),
+        )
+        return ConfirmDecision(**result)
 
     app = FastAPI(title="highlights-decide", version="0.1.0")
     # Canonical at root (go-livepeer strips `/app`); `/app/*` alias for direct calls.

@@ -50,6 +50,13 @@ class SessionState:
     frames_processed: int = 0
     health_ts: float = field(default_factory=time.time)
     recent_frames: Deque[dict] = field(default_factory=lambda: deque(maxlen=RECENT_FRAMES))
+    # ADAAAA-7008 / ADAAAA-7012: per-frame derived-context cache (the "data
+    # seeder" contract). Keys are frame timestamps (content seconds); values are
+    # the compact seed already computed by process_frame (tracks / objects / ocr)
+    # so the on-demand `/app/evidence` recall endpoint can serve it WITHOUT
+    # re-running the detector. Bounded to RECENT_FRAMES so it never grows on a
+    # long stream. Absent timestamp -> no evidence (explicit no-signal).
+    frame_seeds: dict[float, dict] = field(default_factory=dict)
     subscribers: List[asyncio.Queue] = field(default_factory=list)
     # Raw RGB of the most recent sampled frame + its image b64, so a control
     # `analyze-still` can force a fresh Florence+SAM3 pass on the current frame.
@@ -76,10 +83,6 @@ class SessionState:
     # SessionRegistry.get_or_create. Both optional: absent -> graceful fallback.
     homography: Optional[np.ndarray] = None
     ball_signal: Optional[object] = None
-    # INC-3 / ADAAAA-4327: per-session detection-in-zone Stage-A candidate
-    # trigger (goal-mouth zones per sport, folding ball velocity/possession).
-    # Built lazily in __init__._ensure_zone_trigger, rebuilt on gameHint change.
-    zone_trigger: Optional[object] = None
     # Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome ground-truth signal.
     # `goal_line_spec` is the goal-line plane in the calibration's field coords
     # (control `configure` goalLine / env); `goal_line_detector` is the
@@ -92,14 +95,6 @@ class SessionState:
     # candidate can report whether the displayed score changed across the
     # candidate window. Bounded per-session state, never grows on long streams.
     scoreboard_tracker: ScoreboardTracker = field(default_factory=ScoreboardTracker)
-    # Tier-2 escalation (ADAAAA-7135): timestamp (s) of the most recent Stage-A
-    # audio burst. Kept on the session so a video-frame candidate can be
-    # corroborated by a recent audio noise-change on a DIFFERENT channel (the
-    # audio tap runs its own cadence, independent of the video /analyze). The
-    # signal gate uses this to allow a motion burst to escalate when it is
-    # confirmed by a confident audio burst — the recall path for a real goal
-    # with no geometric attestation. 0.0 = no audio burst yet this session.
-    last_audio_burst_ts: float = 0.0
     # LLM TrackingPlan (ADAAAA-6463, child of ADAAAA-6441): the closed detection
     # roster + zones + anchor + maxTracks the decide brain emitted for this
     # session. Plan-first: when present, detect/seeding vocabulary, zone set and

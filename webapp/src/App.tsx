@@ -5,6 +5,7 @@ import { Landing } from "./pages/Landing";
 import { AuthPage } from "./pages/AuthPage";
 import { ResetPage } from "./pages/ResetPage";
 import { Highlights } from "./pages/Highlights";
+import { JobDetail } from "./pages/JobDetail";
 import { Dataset } from "./pages/Dataset";
 import { Billing } from "./pages/Billing";
 import { Settings } from "./pages/Settings";
@@ -40,6 +41,7 @@ export default function App() {
         }
       >
         <Route index element={<Highlights />} />
+        <Route path="jobs/:id" element={<JobDetail />} />
         <Route path="train" element={<Train />}>
           <Route index element={<FineTune />} />
           <Route path="dataset" element={<Dataset />} />

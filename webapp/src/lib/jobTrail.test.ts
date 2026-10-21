@@ -4,6 +4,7 @@ import {
   trailFromEvent,
   decisionToTrail,
   mergeTrail,
+  reconcileTrail,
   hasCandidateTrigger,
   type TrailEntry,
 } from "./jobTrail";
@@ -126,6 +127,50 @@ describe("hasCandidateTrigger (empty in-flight trail messaging)", () => {
     expect(hasCandidateTrigger([{ seq: 1, ts: 1, eventType: "GOAL", decision: "candidate", kind: "candidate" }])).toBe(true);
     expect(hasCandidateTrigger([{ seq: 1, ts: 1, eventType: "GOAL", decision: "accepted", kind: "highlight" }])).toBe(false);
     expect(hasCandidateTrigger([])).toBe(false);
+  });
+});
+
+// --- ADAAAA-6893 (I3-B live-path decision-trail wipe on the 15s poll) ---
+// The Job detail panel's 15s poll re-seeds the trail from `job.candidates`. A
+// live in-flight job carries an EMPTY `job.candidates` (persistDecision writes
+// to the job_candidates table but does not populate job.candidates), so the old
+// `setTrail(trailFromJob(r.job))` wiped the SSE-appended trail back to
+// "No decisions yet". `reconcileTrail` must keep live SSE frames across the poll.
+describe("reconcileTrail (ADAAAA-6893 live decision-trail stability)", () => {
+  const liveSSE: TrailEntry[] = [
+    { seq: 1, ts: 1000, eventType: "GOAL", decision: "candidate", kind: "candidate" },
+    { seq: 2, ts: 2000, eventType: "GOAL", decision: "accepted", kind: "highlight", highlightId: "hl-1" },
+  ];
+
+  it("keeps the SSE-appended live trail when the poll snapshot is empty (live job)", () => {
+    const reconciled = reconcileTrail(liveSSE, []);
+    expect(reconciled).toEqual(liveSSE);
+  });
+
+  it("keeps the live trail even when it is the only source and the job is in flight", () => {
+    // The regression: trailFromJob on an in-flight live job returns [], which the
+    // poll applied via setTrail and dropped the SSE frames. After the fix the
+    // empty snapshot is a no-op.
+    const persisted = trailFromJob({ id: "j", status: "active", source: "webrtc", preferLabels: [], createdAt: "2026-10-16T10:00:00Z" });
+    expect(reconcileTrail(liveSSE, persisted)).toEqual(liveSSE);
+  });
+
+  it("merges a non-empty persisted snapshot over the SSE trail (VOD file path) without dropping either", () => {
+    const persisted: TrailEntry[] = [
+      { seq: 1, ts: 1000, eventType: "GOAL", decision: "candidate", kind: "candidate" },
+      { seq: 3, ts: 3000, eventType: "DUNK", decision: "accepted", kind: "highlight", highlightId: "hl-2" },
+    ];
+    const reconciled = reconcileTrail(liveSSE, persisted);
+    // seq 1 deduped (same kind+seq+eventType), seq 2 (SSE) kept, seq 3 (persisted) added.
+    expect(reconciled.map((e) => e.seq)).toEqual([1, 2, 3]);
+    expect(reconciled.find((e) => e.seq === 2)?.kind).toBe("highlight"); // SSE frame survived
+  });
+
+  it("still seeds the trail from the persisted snapshot when there is no SSE trail yet", () => {
+    const persisted: TrailEntry[] = [
+      { seq: 1, ts: 1000, eventType: "GOAL", decision: "candidate", kind: "candidate" },
+    ];
+    expect(reconcileTrail([], persisted)).toEqual(persisted);
   });
 });
 

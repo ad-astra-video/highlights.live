@@ -83,6 +83,27 @@ docker logs highlights-orchestrator | grep TicketEV                  # | TicketE
 docker inspect highlights-media --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E 'SIGNER_URL|PAYER_ADDRESS'
 ```
 
+## Live decide-observer (ADAAAA-7008)
+
+The live path runs a cadence-driven decide-observer, not a candidate-gated
+decide. The server drives a `LiveObserver` (`services/server/src/observe-loop.ts`)
+that fires a single-shot decide on the ~3 s cadence
+(`OBSERVE_CADENCE_S`) over a rolling-PAST ~10 s window
+(`LIVE_OBSERVE_WINDOW_S` = `[now-10s, now]`, because a live observer cannot
+decode ahead), hard-capped at <=30 frames (`LIVE_OBSERVE_MAX_FRAMES`).
+`perceive` is the **data seeder** (`seeds`) + on-demand provider; its audio
+noise-change and motion signals are **bias hints** (`biasHints`), never the
+on/off gate. Live tracking stays <=3 objects (`LIVE_MAX_TRACKS`).
+
+Runner registration for the live path (perceive = persistent session runner,
+decide = single-shot fixed-price runner, both advertised via
+`docker/runners.json` and rendered by `docker/render-runners.sh`) is unchanged
+by this architecture — each decide invocation is still a single-shot
+`unit: fixed` paid call through `packages/livepeer-session`. The **~30 s flag
+budget** (cadence + gemma end-to-end latency) and how it is measured/reported on
+the Livepeer runner are documented in
+[`docs/plan/09-live-observer-latency-report.md`](plan/09-live-observer-latency-report.md).
+
 ## Post-deploy live re-check (acceptance for this task)
 
 After a deploy, confirm the served behavior matches source:

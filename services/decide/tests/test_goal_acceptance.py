@@ -8,10 +8,12 @@ not_highlight frame read must NEVER be accepted as a board GOAL highlight
 """
 from app.gemma import (
     apply_celebration_only_guard,
+    event_type_for_outcome,
     finalize_goal_acceptance,
     normalize_outcome,
     outcome_is_highlight,
     parse_decision,
+    requested_outcomes,
 )
 from app.decider import apply_gate
 
@@ -198,3 +200,85 @@ def test_normalize_outcome_members_preserved():
     assert normalize_outcome("scoring_play") == "scoring_play"
     assert normalize_outcome("near_miss") == "near_miss"
     assert normalize_outcome("big_play") == "big_play"
+
+
+# --- ADAAAA-6855: preferLabels-aware acceptance gate ------------------------
+def test_requested_outcomes_maps_labels_to_members():
+    assert requested_outcomes(None) == set()
+    assert requested_outcomes(["near-misses"]) == {"near_miss"}
+    assert requested_outcomes(["saves"]) == {"near_miss", "big_play"}
+    assert requested_outcomes(["red cards"]) == {"big_play"}
+    assert requested_outcomes(["counter-attacks"]) == {"big_play"}
+    assert requested_outcomes(["goals"]) == {"scoring_play"}
+    # Unknown / empty labels never widen the gate.
+    assert requested_outcomes(["???"]) == set()
+
+
+def test_finalize_accepts_near_miss_when_requested():
+    # A correctly-detected near-miss is exported as a DISTINCT highlight when
+    # the job explicitly requests near-misses (ADAAAA-6855).
+    d = {"isHighlight": False, "outcome": "near_miss", "score": 55, "reason": "saved at the line", "nearMiss": True}
+    out = finalize_goal_acceptance(d, prefer_labels=["near-misses"])
+    assert out["isHighlight"] is True
+    assert out["outcome"] == "near_miss"  # never relabeled as a goal
+    assert "not a scoring highlight" not in out["reason"]
+
+
+def test_finalize_accepts_big_play_when_saves_requested():
+    d = {"isHighlight": False, "outcome": "big_play", "score": 45, "reason": "big save"}
+    out = finalize_goal_acceptance(d, prefer_labels=["saves"])
+    assert out["isHighlight"] is True
+    assert out["outcome"] == "big_play"
+
+
+def test_finalize_still_rejects_near_miss_when_not_requested():
+    # Backward compatible: no request / different labels -> default gate.
+    d = {"isHighlight": True, "outcome": "near_miss", "score": 0, "reason": "saved"}
+    for labels in (None, ["goals"], ["red cards"]):
+        out = finalize_goal_acceptance(dict(d), prefer_labels=labels)
+        assert out["isHighlight"] is False
+        assert "not a scoring highlight" in out["reason"]
+
+
+def test_finalize_keeps_real_goal_even_without_labels():
+    d = {"isHighlight": True, "outcome": "scoring_play", "score": 80}
+    out = finalize_goal_acceptance(d, prefer_labels=None)
+    assert out["isHighlight"] is True
+
+
+# --- ADAAAA-6969: non-goal highlight label never defaults to GOAL -----------
+def test_finalize_accepts_near_miss_with_non_goal_label():
+    # A requested near-miss/save accepted as a distinct highlight must carry a
+    # non-GOAL eventType (NEAR_MISS), even when the model/candidate verdict said
+    # GOAL. outcome + nearMiss preserved; only the label changes.
+    d = {"isHighlight": False, "outcome": "near_miss", "eventType": "GOAL",
+         "score": 55, "reason": "keeper save at the line", "nearMiss": True}
+    out = finalize_goal_acceptance(d, prefer_labels=["saves"])
+    assert out["isHighlight"] is True
+    assert out["outcome"] == "near_miss"
+    assert out["nearMiss"] is True
+    assert out["eventType"] == "NEAR_MISS"
+    assert out["eventType"] != "GOAL"
+
+
+def test_finalize_accepts_big_play_with_big_play_label():
+    d = {"isHighlight": False, "outcome": "big_play", "eventType": "GOAL", "score": 45}
+    out = finalize_goal_acceptance(d, prefer_labels=["saves"])
+    assert out["isHighlight"] is True
+    assert out["eventType"] == "BIG_PLAY"
+    assert out["eventType"] != "GOAL"
+
+
+def test_finalize_keeps_goal_label_for_scoring_play():
+    # AC2: a true scoring_play still emits eventType "GOAL" (no regression).
+    d = {"isHighlight": True, "outcome": "scoring_play", "eventType": "GOAL", "score": 80}
+    out = finalize_goal_acceptance(d, prefer_labels=["goals"])
+    assert out["isHighlight"] is True
+    assert out["eventType"] == "GOAL"
+
+
+def test_event_type_for_outcome_never_goal_for_non_scoring():
+    # AC4: near_miss-vs-scoring confusion stays 0 for the label too.
+    assert event_type_for_outcome("near_miss", "GOAL") == "NEAR_MISS"
+    assert event_type_for_outcome("big_play", "GOAL") == "BIG_PLAY"
+    assert event_type_for_outcome("scoring_play", "GOAL") == "GOAL"

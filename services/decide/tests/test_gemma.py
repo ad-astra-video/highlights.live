@@ -141,7 +141,7 @@ def test_decide_with_gemma_forwards_reaction_context():
     finally:
         mock.stop()
     assert len(mock.requests) == 1  # exactly one decide() call
-    text_content = [c for c in mock.requests[0]["messages"][0]["content"] if c.get("type") == "text"]
+    text_content = [c for c in mock.requests[0]["messages"][-1]["content"] if c.get("type") == "text"]
     prompt = text_content[0]["text"]
     assert "audio reaction: burst at crowd energy 0.90/1.0" in prompt
     assert "visual reaction: 4 human(s) in high motion" in prompt
@@ -236,7 +236,7 @@ def test_decide_with_gemma_uses_model():
     assert d["isHighlight"] is True
     assert d["score"] == 90.0
     assert d["source"] == "gemma"
-    content = mock.requests[0]["messages"][0]["content"]
+    content = mock.requests[0]["messages"][-1]["content"]
     assert any(c.get("type") == "image_url" for c in content)
 
 
@@ -263,7 +263,7 @@ def test_decide_with_gemma_orders_frames_text_audio(monkeypatch):
     finally:
         mock.stop()
     assert d["eventType"] == "GOAL"
-    content = mock.requests[0]["messages"][0]["content"]
+    content = mock.requests[0]["messages"][-1]["content"]
     types = [c.get("type") for c in content if c.get("type")]
     # 2 frames + 1 crop (all image_url) -> text -> input_audio
     assert types == ["image_url", "image_url", "image_url", "text", "input_audio"]
@@ -438,7 +438,7 @@ def test_decide_with_gemma_injects_transcript_when_audio_present(monkeypatch):
         asr.stop()
         llama.stop()
     # transcript injected into the prompt
-    content = llama.requests[0]["messages"][0]["content"]
+    content = llama.requests[0]["messages"][-1]["content"]
     prompt = [c["text"] for c in content if c.get("type") == "text"][0]
     assert "audio commentary transcript (ASR):" in prompt
     assert "what a strike from the edge of the box" in prompt
@@ -470,7 +470,7 @@ def test_decide_with_gemma_no_asr_url_skips_transcript(monkeypatch):
         )
     finally:
         llama.stop()
-    prompt = [c["text"] for c in llama.requests[0]["messages"][0]["content"] if c.get("type") == "text"][0]
+    prompt = [c["text"] for c in llama.requests[0]["messages"][-1]["content"] if c.get("type") == "text"][0]
     assert "audio commentary transcript" not in prompt
     assert d["audioContext"]["transcribed"] is False
     assert d["audioContext"]["asrRan"] is False
@@ -680,7 +680,7 @@ def test_decide_with_gemma_returns_i1_rationale(monkeypatch):
     assert d["verdict"]["contradictedBy"] == "ball went over the bar"
     assert d["evidenceAttested"] == ["ball crossed above the crossbar"]
     # the de-anchored prompt actually reached the model request
-    prompt = [c["text"] for c in mock.requests[0]["messages"][0]["content"] if c.get("type") == "text"][0]
+    prompt = [c["text"] for c in mock.requests[0]["messages"][-1]["content"] if c.get("type") == "text"][0]
     assert "HYPOTHESIS to test" in prompt
     assert "ballCrossedLineBetweenPosts" in prompt
 

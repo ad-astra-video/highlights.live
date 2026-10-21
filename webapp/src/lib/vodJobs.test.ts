@@ -28,6 +28,11 @@ describe("isInFlight (queued/active are processing; done/failed are terminal)", 
     expect(isInFlight("queued")).toBe(true);
     expect(isInFlight("active")).toBe(true);
   });
+  it("treats the VOD processing stages as in flight (ADAAAA-6989)", () => {
+    expect(isInFlight("extracting")).toBe(true);
+    expect(isInFlight("analyzing")).toBe(true);
+    expect(isInFlight("finalizing")).toBe(true);
+  });
   it("treats done and failed as terminal (not in flight)", () => {
     expect(isInFlight("done")).toBe(false);
     expect(isInFlight("failed")).toBe(false);
@@ -147,7 +152,7 @@ describe("done/error row routing", () => {
 });
 
 // --- Increment 2 (ADAAAA-6837): three-surface partition, attribution, delete ---
-import { partitionJobs, groupHighlightsByJob, jobSpanLabel, formatDuration, formatJobTime, deleteJob, sourceLabel } from "./vodJobs";
+import { partitionJobs, groupHighlightsByJob, jobSpanLabel, formatDuration, formatJobTime, deleteJob, sourceLabel, jobTitle } from "./vodJobs";
 import { api } from "./api";
 import type { Highlight } from "./api";
 
@@ -256,5 +261,29 @@ describe("sourceLabel + deleteJob wiring (ADAAAA-6837)", () => {
     (api as unknown as ReturnType<typeof vi.fn>).mockClear();
     await deleteJob("job-123");
     expect(api).toHaveBeenCalledWith("/jobs/job-123", { method: "DELETE" });
+  });
+});
+
+// ADAAAA-6798 Inc 4: job display title is LLM-first with a deterministic
+// fallback (mirroring the server's fallbackJobTitle) and a short-id last resort.
+describe("jobTitle (LLM title + fallback)", () => {
+  const base = { id: "job-12345678", source: "file" as const };
+
+  it("returns the LLM title when present (trimmed)", () => {
+    expect(jobTitle({ ...base, title: "  Buzzer beater vs Duke  " }, 3)).toBe("Buzzer beater vs Duke");
+  });
+
+  it("falls back to `<game/source> · n highlights · date` when title is absent", () => {
+    const j = { ...base, gameHint: "Basketball" };
+    expect(jobTitle(j, 3, "2026-10-18")).toBe("Basketball · 3 highlights · 2026-10-18");
+    expect(jobTitle(j, 1, "2026-10-18")).toBe("Basketball · 1 highlight · 2026-10-18");
+  });
+
+  it("uses the source label when no game hint is set", () => {
+    expect(jobTitle({ ...base, title: "", gameHint: "" }, 2, "2026-10-18")).toBe("file · 2 highlights · 2026-10-18");
+  });
+
+  it("falls back to the short id for a legacy job with no metadata", () => {
+    expect(jobTitle({ id: "job-12345678" }, 0)).toBe("job-1234");
   });
 });

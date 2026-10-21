@@ -18,9 +18,20 @@ import { readSSE } from "./sse";
  * as dedicated SSE events. */
 export const VOD_POLL_MS = 15_000;
 
-/** True while a job still has background work outstanding (not yet terminal). */
+/** True while a job still has background work outstanding (not yet terminal).
+ * ADAAAA-6989: the server persists distinct VOD processing stages as the job
+ * status (`extracting` → `analyzing` → `finalizing`) between `active` and
+ * `done`; a job in any of them is still in flight, so the queue keeps polling
+ * + streaming its SSE progress and `partitionJobs` keeps it in the in-flight
+ * bucket. Only `done`/`failed` are terminal. */
 export function isInFlight(status: string | undefined): boolean {
-  return status === "queued" || status === "active";
+  return (
+    status === "queued" ||
+    status === "active" ||
+    status === "extracting" ||
+    status === "analyzing" ||
+    status === "finalizing"
+  );
 }
 
 /** Clamp a job's progress into 0..100 for a progress bar; defaults to 0 when
@@ -71,6 +82,30 @@ const SOURCE_LABELS: Record<string, string> = {
 
 export function sourceLabel(source: string | undefined): string {
   return (source && SOURCE_LABELS[source]) || source || "Unknown";
+}
+
+/**
+ * Job display title (ADAAAA-6798 Inc 4), LLM-first with a deterministic
+ * fallback: `job.title` when present; else `<gameHint/source> · <n> highlights ·
+ * <date>` mirroring the server's fallbackJobTitle; else the 8-char id for a
+ * legacy job with no metadata. `nonRejectedCount` is the accepted-plus-pending
+ * highlight count (rejected clips are excluded from the count, matching the
+ * server's title fallback). `dateIso` is injectable so the fallback string is
+ * deterministic under test; defaults to today.
+ */
+export function jobTitle(
+  job: { id: string; title?: string; gameHint?: string; source?: string },
+  nonRejectedCount: number,
+  dateIso?: string
+): string {
+  const t = job.title?.trim();
+  if (t) return t;
+  const who = job.gameHint || job.source;
+  if (who) {
+    const date = dateIso ?? new Date().toISOString().slice(0, 10);
+    return `${who} · ${nonRejectedCount} highlight${nonRejectedCount === 1 ? "" : "s"} · ${date}`;
+  }
+  return job.id.slice(0, 8);
 }
 
 export interface JobPartition {

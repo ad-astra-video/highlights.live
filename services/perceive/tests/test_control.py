@@ -2,6 +2,7 @@ import base64
 import io
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -140,9 +141,9 @@ def test_configure_accepts_tracking_plan():
     assert state.tracking_plan.vocabulary() == ["soccer ball", "player"]
     # Anchor-slot policy: the anchor label is applied to the tracker.
     assert state.tracker.anchor_label == "soccer ball"
-    # Zone trigger rebuilt on the plan zones.
-    assert state.zone_trigger is not None
-    assert list(state.zone_trigger.zones) == [(0.7, 0.4, 1.0, 0.9)]
+    # ADAAAA-7108: the detection-in-zone GOAL trigger is removed, so no zone
+    # trigger is built on the plan zones (zones are now inert evidence only).
+    assert getattr(state, "zone_trigger", None) is None
     assert ack["trackingPlan"]["anchor"]["label"] == "soccer ball"
     assert ack["trackingPlan"]["roster"] == ["soccer ball", "player"]
 
@@ -232,39 +233,33 @@ def _moving_frames(n=5, dx=12):
         yield g
 
 
-def test_control_worker_contract_with_candidate():
-    """The /analyze response keeps its contract AND stays JSON-serializable when
-    a candidate fires (regression: CandidateEvent dataclass was returned and
-    subscripted as a dict, crashing the analysis rail at frame 2+)."""
+def test_control_worker_contract_no_candidate_fires():
+    """The /analyze response keeps its JSON-serializable contract. ADAAAA-7108:
+    the GOAL / motion-burst candidate triggers are REMOVED, so no candidate is
+    emitted (decide is the cadence-driven observer)."""
     sid = _uuid_sid()
     last = None
-    fired = False
     for i, g in enumerate(_moving_frames(5, dx=12)):
         r = client.post("/app/analyze", json={"seq": i, "timestamp": float(i), "image": _frame_jpeg(g)}, headers={"X-Session-Id": sid})
         assert r.status_code == 200
         body = r.json()
-        if "candidate" in body:
-            fired = True
-            assert body["candidate"]["eventType"] == "KILL"
-            assert isinstance(body["candidate"]["timestamp"], (int, float))
-            assert body["observation"]["sessionId"] == sid
+        assert "candidate" not in body or body.get("candidate") is None
+        # no candidate -> body IS the observation
+        assert body["type"] == "observation"
+        assert body["sessionId"] == sid
         last = body
-    assert fired, "expected a KILL candidate from the moving box"
     # response must be JSON-serializable end-to-end
     import json as _json
 
     _json.dumps(last)  # must not raise
 
 
-def test_live_analyze_with_soccer_game_hint_emits_GOAL():
-    """INC-8 (ADAAAA-4484): the live /analyze front door (the path the INC-7
-    deployed soccer drive used) must activate the closed vocabulary + sport
-    classification when the session is told gameHint='soccer'. Same fast-strike
-    frames that emit a generic KILL with no hint must surface as GOAL, so the
-    decide model judges and auto-cuts a real goal instead of rejecting a
-    shooter/combat label. Without this, §6 live recall can't be met."""
+def test_live_analyze_with_soccer_game_hint_emits_no_candidate():
+    """ADAAAA-7108: the live /analyze front door no longer emits a GOAL candidate
+    from a fast-strike box — perceive lacks the knowledge to produce GOAL
+    candidates. The closed vocabulary + sport handling remain active, but no
+    candidate-gated decide path exists."""
     sid = _uuid_sid()
-    fired = False
     for i, g in enumerate(_moving_frames(5, dx=12)):
         r = client.post(
             "/app/analyze",
@@ -279,25 +274,19 @@ def test_live_analyze_with_soccer_game_hint_emits_GOAL():
         )
         assert r.status_code == 200
         body = r.json()
-        if "candidate" in body:
-            fired = True
-            assert body["candidate"]["eventType"] == "GOAL", body["candidate"]
-            # when a real detector is present the closed vocabulary is active
-            # (the stub test env has no detector, so this is asserted only when
-            # the observation surfaces a detector block).
-            det = body["observation"].get("detector")
-            if det is not None:
-                assert det.get("vocabulary") is True
-    assert fired, "expected a GOAL candidate from the soccer moving box"
+        assert "candidate" not in body or body.get("candidate") is None
+        # no candidate -> body IS the observation
+        assert body["type"] == "observation"
+        det = body.get("detector")
+        if det is not None:
+            assert det.get("vocabulary") is True
 
 
-def test_live_analyze_soccer_alias_alias_or_default_still_emits_GOAL():
-    """INC-8: a human-facing gameHint like 'Premier League Match' (not the bare
-    word 'soccer') must map through _GAME_HINT_ALIASES to soccer and still emit
-    GOAL — the live drive must not fail just because the hint isn't literally
-    'soccer'."""
+def test_live_analyze_soccer_alias_still_emits_no_candidate():
+    """ADAAAA-7108: a human-facing gameHint like 'Premier League Match' maps
+    through the alias table to soccer, but no GOAL candidate is emitted (the
+    trigger is removed)."""
     sid = _uuid_sid()
-    fired = False
     for i, g in enumerate(_moving_frames(5, dx=12)):
         r = client.post(
             "/app/analyze",
@@ -306,10 +295,7 @@ def test_live_analyze_soccer_alias_alias_or_default_still_emits_GOAL():
         )
         assert r.status_code == 200
         body = r.json()
-        if "candidate" in body:
-            fired = True
-            assert body["candidate"]["eventType"] == "GOAL", body["candidate"]
-    assert fired, "expected a GOAL candidate from the aliased soccer hint"
+        assert "candidate" not in body or body.get("candidate") is None
 
 
 # --- INC-6 on-demand find-and-track -----------------------------------------

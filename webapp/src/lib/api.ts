@@ -351,6 +351,29 @@ export interface Plan {
   amount: number; // cents
   includedHighlights: number;
 }
+// Per-highlight trigger provenance (ADAAAA-6798 Inc 2). Mirrors
+// packages/events HighlightTriggerSchema: the trigger signal that STARTED the
+// candidate this highlight came from (audio gate, ball signal, scoreboard
+// change, goal-line crossing, ...). Persisted on the HighlightRecord at decide
+// time — NO re-inference. Absent on legacy rows without a candidate; those
+// degrade to "trigger unknown" in the UI.
+export interface HighlightTrigger {
+  kind: "audio_burst" | "audio_swell" | "motion" | "ball_signal" | "score_change" | "goal_line" | "corroborated";
+  /** Trigger timestamp (s from stream start) the candidate was anchored to. */
+  timestamp: number;
+  /** The event class that fired the trigger (KILL | GOAL | DUNK | ...). */
+  eventType: string;
+  // Reaction evidence derived from the same candidate; all optional when the
+  // signal was not present.
+  crowdEnergy?: number;
+  audioKind?: string;
+  ballSpeedMps?: number;
+  ballPossessionId?: string;
+  goalCrossed?: boolean;
+  ballOutcome?: string;
+  scoreBoardChanged?: boolean;
+}
+
 export interface Highlight {
   id: string;
   // Source VOD/live job that produced this highlight (ADAAAA-6837). Present on
@@ -375,11 +398,25 @@ export interface Highlight {
   // aged >= the server's rejection TTL are ever hard-deleted. Exposed by the
   // backend (ADAAAA-5168) so the UI can show a recovery deadline.
   rejectedAt?: string;
+  // ADAAAA-6798 Inc 2: link this highlight to the JobCandidate that started it
+  // and de-normalize that candidate's trigger metadata so the detail view can
+  // show "what trigger started this highlight". Both additive optional — legacy
+  // rows without a candidate degrade to "trigger unknown".
+  candidateId?: string;
+  trigger?: HighlightTrigger;
 }
 // Async-VOD job record (ADAAAA-6760). Mirrors packages/events JobSchema (the
 // shared contract) so the webapp's processing-jobs surface can render a job's
 // id, source, status, progress, and terminal metrics without another type.
-export type JobStatus = "queued" | "active" | "done" | "failed";
+export type JobStatus =
+  | "queued"
+  | "active"
+  | "extracting"
+  | "analyzing"
+  | "finalizing"
+  | "done"
+  | "failed"
+  | "cancelled";
 export interface Job {
   id: string;
   ownerId?: string;
@@ -388,6 +425,11 @@ export interface Job {
   gameHint?: string;
   preferLabels?: string[];
   status: JobStatus;
+  // Short human-readable job title (ADAAAA-6798 Inc 1). Generated once at job
+  // completion by a single text-only decide call; falls back to a deterministic
+  // `<gameHint/source> · <n> highlights · <date>` on the server. Additive
+  // optional — absent on older/legacy jobs, where the UI shows the fallback.
+  title?: string;
   // Server-side error text for a failed (status === "failed") job; surfaced on
   // the row instead of the generic client string (ADAAAA-6781).
   error?: string;
