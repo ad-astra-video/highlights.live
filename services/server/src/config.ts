@@ -180,6 +180,16 @@ export interface ServerConfig {
    * goal recall after the perceive goal-line/homography channels are enabled.
    * `OBSERVE_SIGNAL_GATE`. */
   observeSignalGate: boolean;
+  /** ADAAAA-7147: image-space `speedMps` at/above which a frame is a
+   * "meaningful ball" escalation signal for the Tier-2 gate on an
+   * uncalibrated box (no goal-line/homography/scoreboard channel).
+   * `OBSERVE_SIGNAL_GATE_BALL_MIN_SPEED` (default 0.08). */
+  observeSignalGateBallMinSpeedMps?: number;
+  /** ADAAAA-7147: enable quiet-uncalibrated suppression so the Tier-2 gate
+   * drops a no-signal window even when no goal channel judged it (this is what
+   * actually cuts decide volume on the current box). Default off (recall-safe
+   * escalate) until goal recall is verified. `OBSERVE_SIGNAL_GATE_SUPPRESS_QUIET`. */
+  observeSignalGateSuppressQuiet: boolean;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -389,6 +399,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // baseline stays the behavior until the observer pass is validated).
     observeLoop: env.OBSERVE_LOOP === "1",
     observeSignalGate: env.OBSERVE_SIGNAL_GATE === "1",
+    // ADAAAA-7147: when the Tier-2 signal gate is on, use the calibration-free
+    // ball-velocity signal as the escalation discriminator on an uncalibrated
+    // box (no goal-line/homography/scoreboard channel) so the gate actually
+    // suppresses quiet non-goal windows and cuts decide volume. A frame is a
+    // "meaningful ball" at/above this image-space `speedMps` threshold
+    // (`OBSERVE_SIGNAL_GATE_BALL_MIN_SPEED`, default 0.08). `suppressQuiet`
+    // enables the quiet-uncalibrated suppression (default off; recall-safe
+    // escalate stays the default until box QA confirms goal recall under it).
+    observeSignalGateBallMinSpeedMps: env.OBSERVE_SIGNAL_GATE_BALL_MIN_SPEED !== undefined ? Number(env.OBSERVE_SIGNAL_GATE_BALL_MIN_SPEED) : undefined,
+    observeSignalGateSuppressQuiet: env.OBSERVE_SIGNAL_GATE_SUPPRESS_QUIET === "1",
     // ADAAAA-5342: live sampling driven from the runner's measured capability
     // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
     // headroom so capable GPUs accelerate toward the chartered cadence while

@@ -13,6 +13,7 @@ import {
   type PerFrameSeed,
   type PerFrameSignal,
   type ObserveBiasHint,
+  type SignalGateOptions,
   OBSERVE_MAX_FRAMES,
   LIVE_OBSERVE_MAX_FRAMES,
   OBSERVE_CONTENT_FPS,
@@ -761,9 +762,20 @@ export interface AnalyzerConfig {
    * unsignaled window always escalates, so a genuine goal is never starved.
    * Default off (existing high-recall cadence unchanged) until box QA confirms
    * goal recall after the perceive goal-line/homography channels are enabled.
-   * Wired from `OBSERVE_SIGNAL_GATE` (server config).
+   * `OBSERVE_SIGNAL_GATE` (server config).
    */
   observeSignalGate?: boolean;
+  /**
+   * ADAAAA-7147: tuning for the Tier-2 signal gate's calibration-free
+   * ball-velocity discriminator. `ballMinSpeedMps` is the image-space
+   * `speedMps` at/above which a frame is a "meaningful ball"; `suppressQuiet`
+   * drops a quiet uncalibrated no-signal window instead of recall-escalating
+   * (the fix that makes the gate actually cut decide volume on a box with no
+   * goal-line/homography/scoreboard channel). Both absent => the gate keeps the
+   * recall-safe baseline. Wired from `OBSERVE_SIGNAL_GATE_BALL_MIN_SPEED` /
+   * `OBSERVE_SIGNAL_GATE_SUPPRESS_QUIET`.
+   */
+  observeSignalGateOpts?: SignalGateOptions;
   /**
    * ADAAAA-7011: enable the LIVE decide-observer architecture. When set (with
    * `decideWindowN` UNSET, i.e. the live/default pass), decide is driven on the
@@ -2347,6 +2359,7 @@ export async function analyzeJob(
           maxFrames: cfg.observeMaxFrames ?? OBSERVE_MAX_FRAMES,
           fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
           signalGate: cfg.observeSignalGate,
+          signalGateOpts: cfg.observeSignalGateOpts,
           onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
         })
       : null;
@@ -2365,6 +2378,7 @@ export async function analyzeJob(
           maxFrames: cfg.observeMaxFrames ?? LIVE_OBSERVE_MAX_FRAMES,
           fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
           signalGate: cfg.observeSignalGate,
+          signalGateOpts: cfg.observeSignalGateOpts,
           onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
         })
       : null;

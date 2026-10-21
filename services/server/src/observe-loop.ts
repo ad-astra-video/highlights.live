@@ -270,6 +270,7 @@ export class LiveObserver {
   private readonly maxFrames: number;
   private readonly fps: number;
   private readonly signalGate: boolean;
+  private readonly signalGateOpts: SignalGateOptions;
   private readonly onDecide: ((payload: ObserveDecidePayload) => Promise<boolean>) | null;
   private readonly latency: LiveObserveLatencySample[] = [];
   /** Perceive candidate triggers folded into each window as bias hints
@@ -285,6 +286,7 @@ export class LiveObserver {
     maxFrames?: number;
     fps?: number;
     signalGate?: boolean;
+    signalGateOpts?: SignalGateOptions;
     onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
@@ -292,6 +294,7 @@ export class LiveObserver {
     this.maxFrames = opts.maxFrames ?? LIVE_OBSERVE_MAX_FRAMES;
     this.fps = opts.fps ?? OBSERVE_CONTENT_FPS;
     this.signalGate = opts.signalGate ?? false;
+    this.signalGateOpts = opts.signalGateOpts ?? {};
     this.onDecide = opts.onDecide ?? null;
   }
 
@@ -336,7 +339,7 @@ export class LiveObserver {
     const inWindow = this.biasHints.filter((h) => h.ts >= lo && h.ts <= nowTs + 1e-9);
     const payload = buildObservePayload(win, this.findings, inWindow);
     // ADAAAA-7145: Tier-2 signal gate (recall-safe, same rule as ObserveDecider).
-    if (this.signalGate && !force && !windowHasSignal(payload.seeds, inWindow)) {
+    if (this.signalGate && !force && !windowHasSignal(payload.seeds, inWindow, this.signalGateOpts)) {
       this.gatedSkips++;
       this.lastFireTs = nowTs;
       return;
@@ -432,6 +435,26 @@ export interface PerFrameSignal {
    * configured AND produced a judgment. When false/absent, recall-safety
    * escalates (a genuine goal in an uncalibrated session is never starved). */
   goalInfra?: boolean;
+  /** ADAAAA-7147: the calibration-free ball-velocity estimate perceive attaches
+   * to the observation `evidence` (image-space when `homography:false`, no
+   * goal-line/homography required — it is the ONE signal perceive reliably
+   * emits on an uncalibrated box). `speedMps` is a per-second displacement in
+   * image/normalized units when `homography:false`; `homography:true` means a
+   * real field-plane m/s estimate from a pitch homography. Used by the Tier-2
+   * signal gate to escalate a fast/meaningful ball even when no goal channel
+   * judged the frame, so the gate stops being inert on the current box. */
+  ballVelocity?: {
+    vxMps?: number;
+    vyMps?: number;
+    speedMps?: number;
+    posXm?: number;
+    posYm?: number;
+    homography?: boolean;
+  };
+  /** Perceive's ball possession assignment (calibration-free, image-space
+   * loose-ball fallback when no homography). Weak/absent only; carried so the
+   * decide prompt can cite possession but never a goal signal on its own. */
+  ballPossession?: { possessingPlayerId?: string; distanceM?: number };
 }
 
 /** `ballOutcome` values meaning a scoring play crossed the line. Anything else
@@ -439,40 +462,81 @@ export interface PerFrameSignal {
 export const GOAL_OUTCOMES: ReadonlySet<string> = new Set(["goal", "cross", "goal_crossed", "crossed"]);
 
 /**
+ * ADAAAA-7147: per-window signal-gate tuning for the Tier-2 gate. All fields
+ * optional; absent fields fall back to the recall-safe baseline (an
+ * uncalibrated window escalates rather than starving a goal).
+ */
+export interface SignalGateOptions {
+  /** Ball speed (see {@link PerFrameSignal.ballVelocity} `speedMps`) at/above
+   * which a frame is a "meaningful ball" escalation signal. When unset, ball
+   * velocity is never used as a discriminator (the gate ignores it, matching
+   * the pre-7147 behaviour). */
+  ballMinSpeedMps?: number;
+  /** When true, an uncalibrated window (no goal channel judged, `goalInfra`
+   * not true) that carries NO meaningful ball / goal signal / motion+audio
+   * burst is SUPPRESSED instead of recall-escalated. This is the
+   * calibration-free discriminator that lets the gate actually cut decide
+   * volume on a box with no goal-line/homography/scoreboard channel. Keep it
+   * off unless the decide observer verifies goal recall under it. */
+  suppressQuietUncalibrated?: boolean;
+}
+
+/** ADAAAA-7147: a faster-than-this ball is "meaningful" when no per-job
+ * threshold is supplied. Image-space (normalized frame) displacement per
+ * second when `homography:false`, so a value that distinguishes a genuine
+ * play (shot / driven pass / cross) from a near-static ball. Conservative so a
+ * real goal's approach is not starved; the box-measurement pass tunes
+ * `OBSERVE_SIGNAL_GATE_BALL_MIN_SPEED`. */
+export const DEFAULT_BALL_MIN_SPEED = 0.08;
+
+/**
  * ADAAAA-7145 (Tier-2 signal gate): whether ONE frame escalates to the Tier-2
  * confirm pass (a billable decide call). Escalates on ANY real goal signal
  * (ball-in-net / goal-crossed / goal-valued outcome / scoreboard change), OR a
- * confident motion+audio burst (recall path for a no-geometry goal), OR
- * recall-safety when no goal-signal channel judged the frame. Only SUPPRESSES
- * when a goal-signal channel actively reported NOT a goal (goalInfra true) and
- * there is no confident motion+audio burst — that is the flood scenario the gate
- * is built to cut. Pure + deterministic (unit-testable).
+ * confident motion+audio burst (recall path for a no-geometry goal), OR a
+ * meaningful calibration-free ball velocity when a threshold is supplied, OR
+ * recall-safety when no goal-signal channel judged the frame (unless
+ * `suppressQuietUncalibrated` says to drop a quiet uncalibrated window — the
+ * ADAAAA-7147 reliability fix, see the interface). Only SUPPRESSES when a
+ * goal-signal channel actively reported NOT a goal (goalInfra true) and there
+ * is no strong signal, or (in suppress-quiet mode) the uncalibrated window is
+ * genuinely quiet. Pure + deterministic (unit-testable).
  */
-export function escalatesToTier2(sig: PerFrameSignal | undefined): boolean {
+export function escalatesToTier2(sig: PerFrameSignal | undefined, opts: SignalGateOptions = {}): boolean {
   if (!sig) return false;
   if (sig.ballInNet === true) return true;
   if (sig.goalCrossed === true) return true;
   if (sig.ballOutcome !== undefined && GOAL_OUTCOMES.has(sig.ballOutcome)) return true;
   if (sig.scoreBoardChanged === true) return true;
   if (sig.motionBurst === true && sig.audioBurst === true) return true;
-  // Recall safety: no goal-signal channel could judge -> escalate (never starve
-  // a genuine goal in an uncalibrated/disabled session).
-  if (sig.goalInfra !== true) return true;
-  return false;
+  // Calibration-free meaningful-ball signal (ADAAAA-7147): a fast ball is a
+  // real highlight signal worth a decide, even with no goal channel.
+  if (opts.ballMinSpeedMps !== undefined && sig.ballVelocity?.speedMps !== undefined && sig.ballVelocity.speedMps >= opts.ballMinSpeedMps) {
+    return true;
+  }
+  // A goal-signal channel actively judged the frame (not-a-goal) and there is
+  // no strong signal -> suppress (the flood scenario the gate is built to cut).
+  if (sig.goalInfra === true) return false;
+  // Uncalibrated (no goal channel): recall-safe escalates by default (never
+  // starve a genuine goal in an uncalibrated/disabled session).
+  if (opts.suppressQuietUncalibrated === true) return false;
+  return true;
 }
 
 /**
  * ADAAAA-7145: whether a decide WINDOW contains a real highlight signal, so the
  * Tier-2 confirm (decide observer) should fire. A window escalates when ANY
- * in-window frame seed carries a real goal signal, or any in-window bias hint
- * carries a goal attestation (scoreboard change / goal-crossed / goal-valued
- * outcome). Pure + deterministic.
+ * in-window frame seed carries a real goal signal, a meaningful calibration-free
+ * ball velocity (per {@link SignalGateOptions.ballMinSpeedMps}), or any
+ * in-window bias hint carries a goal attestation (scoreboard change /
+ * goal-crossed / goal-valued outcome). Pure + deterministic.
  */
 export function windowHasSignal(
   seeds: { signal?: PerFrameSignal }[],
-  biasHints: ObserveBiasHint[] = []
+  biasHints: ObserveBiasHint[] = [],
+  opts: SignalGateOptions = {}
 ): boolean {
-  for (const s of seeds) if (escalatesToTier2(s.signal)) return true;
+  for (const s of seeds) if (escalatesToTier2(s.signal, opts)) return true;
   for (const h of biasHints) {
     if (h.scoreBoardChanged === true || h.goalCrossed === true) return true;
     if (h.ballOutcome !== undefined && GOAL_OUTCOMES.has(h.ballOutcome)) return true;
@@ -690,6 +754,7 @@ export class ObserveDecider {
   private readonly maxFrames: number;
   private readonly fps: number;
   private readonly signalGate: boolean;
+  private readonly signalGateOpts: SignalGateOptions;
   private readonly onDecide: ((payload: ObserveDecidePayload) => Promise<boolean>) | null;
   /** Accumulated per-call decide input-size + accept report. */
   private readonly reportTicks: number[] = [];
@@ -705,6 +770,7 @@ export class ObserveDecider {
     maxFrames?: number;
     fps?: number;
     signalGate?: boolean;
+    signalGateOpts?: SignalGateOptions;
     onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
@@ -712,6 +778,7 @@ export class ObserveDecider {
     this.maxFrames = opts.maxFrames ?? OBSERVE_MAX_FRAMES;
     this.fps = opts.fps ?? OBSERVE_CONTENT_FPS;
     this.signalGate = opts.signalGate ?? false;
+    this.signalGateOpts = opts.signalGateOpts ?? {};
     this.onDecide = opts.onDecide ?? null;
   }
 
@@ -762,7 +829,7 @@ export class ObserveDecider {
     // unsignaled / uncalibrated window always escalates, so a genuine goal is
     // never starved). Suppressed ticks are counted so the report can show the
     // gate actually cut decide volume.
-    if (this.signalGate && !force && !windowHasSignal(payload.seeds, inWindow)) {
+    if (this.signalGate && !force && !windowHasSignal(payload.seeds, inWindow, this.signalGateOpts)) {
       this.gatedSkips++;
       return;
     }
