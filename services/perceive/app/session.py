@@ -92,6 +92,14 @@ class SessionState:
     # candidate can report whether the displayed score changed across the
     # candidate window. Bounded per-session state, never grows on long streams.
     scoreboard_tracker: ScoreboardTracker = field(default_factory=ScoreboardTracker)
+    # Tier-2 escalation (ADAAAA-7135): timestamp (s) of the most recent Stage-A
+    # audio burst. Kept on the session so a video-frame candidate can be
+    # corroborated by a recent audio noise-change on a DIFFERENT channel (the
+    # audio tap runs its own cadence, independent of the video /analyze). The
+    # signal gate uses this to allow a motion burst to escalate when it is
+    # confirmed by a confident audio burst — the recall path for a real goal
+    # with no geometric attestation. 0.0 = no audio burst yet this session.
+    last_audio_burst_ts: float = 0.0
     # LLM TrackingPlan (ADAAAA-6463, child of ADAAAA-6441): the closed detection
     # roster + zones + anchor + maxTracks the decide brain emitted for this
     # session. Plan-first: when present, detect/seeding vocabulary, zone set and

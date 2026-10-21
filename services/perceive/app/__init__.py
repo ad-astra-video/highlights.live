@@ -12,6 +12,23 @@ from typing import Optional
 
 log = logging.getLogger("highlights.perceive.trickle")
 
+# Tier-2 escalation (ADAAAA-7135): how close (s) a video-frame candidate must be
+# to the most recent Stage-A audio burst for the audio burst to corroborate the
+# motion burst as a "confident" escalation. The audio tap runs its own cadence
+# (10 Hz, independent of the 1 fps video /analyze), so a small window bridges
+# the two channels without letting any lazy audio burst escalate unrelated
+# motion. 3 s mirrors the job-detail frame-group partition unit.
+AUDIO_BURST_ESCALATION_WINDOW_S = 3.0
+
+# Tier-2 signal gate master switch (ADAAAA-7135). Default OFF: the perceive
+# layer keeps its existing high-recall Stage-A candidate emission, and the
+# flood fix is carried at the recording layer by the confirmed-only trail rule
+# (jobTrail), which is verified and recall-safe. Flip PERCEIVE_SIGNAL_GATE=1 to
+# escalate only real-signal frames to Tier-2 (the signal gate is staged for box
+# QA: criterion 4 real-goal recall must be confirmed on real_goal_3080.mp4
+# before it is enabled — see ADAAAA-7136).
+SIGNAL_GATE_ENABLED = os.environ.get("PERCEIVE_SIGNAL_GATE", "0").strip().lower() in ("1", "true", "yes", "on")
+
 from .logging_setup import configure_logging  # noqa: E402  (defines log above)
 
 # Wire the perceive log level from PERCEIVE_LOG_LEVEL (default INFO) at app
@@ -28,6 +45,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from . import preload  # noqa: E402  (startup model preload)
 from .audio_gate import AudioEnergyGate
+from .signal_gate import escalates_to_tier2
 from .session import SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
 from .florence import capability, get_detector, record_analyze, resolve_vocabulary, sport_specific_event_type
@@ -579,7 +597,6 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             "candidate emitted session=%s seq=%s event=%s ts=%.2f track=%s",
             state.session_id, seq, event_type, cand.timestamp, cand.track_id,
         )
-        events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
     elif zone_cand is not None:
         # No motion burst this frame, but the detection-in-zone trigger fired.
         # Classify to the sport (GOAL on a goal-scoring sport) so decide() sees
@@ -598,7 +615,6 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             "zone trigger fired session=%s seq=%s event=%s ts=%.2f trigger=%s",
             state.session_id, seq, event_type, zone_cand["timestamp"], zone_cand.get("trigger"),
         )
-        events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
     # Scoreboard OCR / score-delta confirmation (ADAAAA-6360, decide-leg I3).
     # Bounded to candidate anchor frames (Stage-A cooldown) — never every frame
     # — so it adds per-candidate GPU only. A change in the displayed score
@@ -617,6 +633,59 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         state.scoreboard_tracker.record(cand_ts, score)
         if state.scoreboard_tracker.changed(cand_ts):
             cand_dict["scoreBoardChanged"] = True
+    # Tier-2 escalation signal gate (ADAAAA-7135). A Stage-A candidate only
+    # ESCALATES to the Tier-2 confirm pass when a real goal signal is present:
+    # ballInNet / goalCrossed / a goal-valued ballOutcome / scoreBoardChanged,
+    # OR a confident motion+audio burst (a track motion burst corroborated by a
+    # recent audio noise-change). A frame with no such signal stays Tier-1
+    # (watch/notes) and is NOT surfaced as a candidate. Gated behind
+    # PERCEIVE_SIGNAL_GATE (default OFF): with it off the existing high-recall
+    # candidate emission is unchanged (legacy behavior), and with it on the
+    # signal gate filters — staged for box QA (criterion-4 real-goal recall on
+    # real_goal_3080.mp4) before it is enabled.
+    if cand_dict is None:
+        # no candidate this frame — nothing to gate.
+        pass
+    elif not SIGNAL_GATE_ENABLED:
+        # Legacy behavior (flag OFF): surface every Stage-A candidate.
+        events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
+    else:
+        motion_burst = cand is not None  # a tracker motion burst fired this frame
+        cand_ts = float(cand_dict.get("timestamp", timestamp))
+        # A recent audio burst (from the independent audio tap cadence) within a
+        # short window corroborates a motion burst as a "confident" escalation.
+        audio_burst = (
+            state.last_audio_burst_ts > 0.0
+            and abs(cand_ts - state.last_audio_burst_ts) <= AUDIO_BURST_ESCALATION_WINDOW_S
+        )
+        # A goal-signal channel "judged" this candidate when it populated a
+        # goal-attestation field (goalCrossed / ballOutcome / ballInNet). When NO
+        # such channel judged (no goal-line spec, no attestation), we must not
+        # suppress — a genuine goal would be starved (recall safety). The gate
+        # then only suppresses a frame a channel actively reported as NOT a goal.
+        goal_infra = any(
+            cand_dict.get(f) is not None for f in ("goalCrossed", "ballOutcome", "ballInNet")
+        )
+        if escalates_to_tier2(
+            ballInNet=cand_dict.get("ballInNet"),
+            goalCrossed=cand_dict.get("goalCrossed"),
+            ballOutcome=cand_dict.get("ballOutcome"),
+            scoreBoardChanged=cand_dict.get("scoreBoardChanged"),
+            motion_burst=motion_burst,
+            audio_burst=audio_burst,
+            goal_infra=goal_infra,
+        ):
+            events.append({"type": "candidate", "sessionId": state.session_id, **cand_dict, "seq": seq})
+        else:
+            # Suppress BOTH the SSE event and the returned candidate so the
+            # caller runs no Tier-2 decide on this frame — that is the
+            # signal-gated escalation: no real signal -> no GPU decide, no
+            # candidate surfaced, stays Tier-1 watch/notes.
+            log.info(
+                "candidate did NOT escalate to Tier-2 session=%s seq=%s event=%s ts=%.2f (no goal signal / no confident burst)",
+                state.session_id, seq, cand_dict.get("eventType"), cand_ts,
+            )
+            cand_dict = None
     for q in state.subscribers:
         for e in events:
             try:
@@ -669,6 +738,10 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> dict |
     state.audio_seq = seq if seq >= 0 else state.audio_seq + 1
     if sig is None:
         return None
+    # Tier-2 escalation (ADAAAA-7135): remember this audio burst so a nearby
+    # video-frame candidate can be corroborated by it (recall path for a goal
+    # with no geometric attestation). Keep the most recent burst timestamp.
+    state.last_audio_burst_ts = float(sig.ts)
     # AudioSignalSchema (packages/events) camelCase keys.
     audio = {
         "kind": sig.kind,
