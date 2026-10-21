@@ -882,3 +882,82 @@ describe("bounded exponential backoff helpers (ADAAAA-6577)", () => {
     expect(Date.now() - t0).toBeGreaterThanOrEqual(15);
   });
 });
+
+describe("analyzeJob adaptive perceive cadence (ADAAAA-7152 Gap 1)", () => {
+  it("auto-enables with observeLoop + signal gate + decideWindowN and CUTS per-frame perceive calls on a quiet clip (no flood)", async () => {
+    let analyzeCalls = 0;
+    const { client } = fakeClient({
+      analyze: async () => {
+        analyzeCalls++;
+        return { observation: { tracks: [], seq: 0, timestamp: 0 } };
+      },
+    });
+    const outcome = await analyzeJob(
+      client,
+      frames(20),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      // No `perceiveCadence` -> the auto rule enables it (observeLoop + gate + decideWindowN).
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 4, observeLoop: true, observeSignalGate: true, perceiveQuietStride: 2 }
+    );
+    // 20 frames at stride 2 -> ~10 perceive calls, NOT the full 20.
+    expect(analyzeCalls).toBeLessThan(20);
+    expect(outcome.perceiveCalls).toBe(analyzeCalls);
+  });
+
+  it("explicit perceiveCadence:false keeps the full per-frame pass (unchanged behavior)", async () => {
+    let analyzeCalls = 0;
+    const { client } = fakeClient({
+      analyze: async () => {
+        analyzeCalls++;
+        return { observation: { tracks: [], seq: 0, timestamp: 0 } };
+      },
+    });
+    await analyzeJob(
+      client,
+      frames(8),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 4, observeLoop: true, observeSignalGate: true, perceiveCadence: false }
+    );
+    expect(analyzeCalls).toBe(8);
+  });
+
+  it("the escalated goal window keeps FULL perceive treatment (never starved)", async () => {
+    const perceivedAt: number[] = [];
+    const { client } = fakeClient({
+      analyze: async (_sid, frame) => {
+        perceivedAt.push(frame.timestamp);
+        const ts = frame.timestamp;
+        return {
+          observation: {
+            tracks: [],
+            seq: ts,
+            timestamp: ts,
+            evidence: ts === 10 ? { ballVelocity: { speedMps: 0.5, homography: false } } : { ballVelocity: { speedMps: 0.01, homography: false } },
+          },
+        };
+      },
+    });
+    const outcome = await analyzeJob(
+      client,
+      frames(20),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      {
+        jobId: "j",
+        clipBeforeS: 4,
+        clipAfterS: 4,
+        gameHint: "soccer",
+        decideWindowN: 4,
+        observeLoop: true,
+        observeSignalGate: true,
+        perceiveQuietStride: 2,
+        perceiveHotAfterS: 5,
+        observeSignalGateOpts: { ballMinSpeedMps: 0.08, suppressQuietUncalibrated: true },
+      }
+    );
+    // The escalate frame + every frame inside [10, 15] is FULL-perceived.
+    expect(perceivedAt).toContain(10);
+    for (let ts = 11; ts <= 15; ts++) expect(perceivedAt).toContain(ts);
+    // Yet the pass still reduced perceive calls overall vs the naive full pass.
+    expect(outcome.perceiveCalls!).toBeLessThan(20);
+  });
+});
