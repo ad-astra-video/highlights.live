@@ -617,6 +617,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         maxFramesPerAnalysis: cfg.maxFramesPerAnalysis,
         preWindowS: cfg.analysisPreWindowS,
         postWindowS: cfg.analysisPostWindowS,
+        // ADAAAA-6489 / ADAAAA-7159 Gap 2: per-camera/per-clip goal-line
+        // calibration for this live stream/job (absent -> no goal-line signal,
+        // reported not_captured, never fabricated).
+        calibration: cfg.goalLineCalibrations?.[job.id],
       };
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
@@ -847,6 +851,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       maxFramesPerAnalysis: cfg.vodMaxFramesPerAnalysis,
       preWindowS: cfg.vodAnalysisPreWindowS,
       postWindowS: cfg.vodAnalysisPostWindowS,
+      // ADAAAA-6489 / ADAAAA-7159 Gap 2: deliver this VOD clip's per-camera/
+      // per-clip goal-line calibration to the perceive session so the goal-line
+      // signal (goalCrossed/ballOutcome) is real. Absent -> perceive emits no
+      // ballOutcome and the metric reports not_captured (never a fabricated
+      // signal).
+      calibration: cfg.goalLineCalibrations?.[jobId],
       // ADAAAA-6797: Stage-2 goal/near-miss confirmation pass. VOD-first: only
       // the VOD pass ever sets `confirmEnabled` (from the server config flag
       // DECIDE_CONFIRM_ENABLED, default off), so the live pass is untouched and
