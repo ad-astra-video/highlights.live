@@ -431,6 +431,39 @@ describe("WindowAnalysis + ConfirmRecord (ADAAAA-7137 / ADAAAA-7155 Incr A)", ()
     expect(note.confirm?.decision?.goalConfirmed).toBe("confirmed_goal");
   });
 
+  it("persists a confirm record on a JobCandidate (ADAAAA-7156 Increment B)", () => {
+    const c = JobCandidateSchema.parse({
+      id: "cc",
+      jobId: "job",
+      seq: 10,
+      timestamp: 12,
+      eventType: "GOAL",
+      score: 92,
+      isHighlight: true,
+      status: "accepted",
+      createdAt: "2026-10-21T00:00:00Z",
+      analysis,
+      confirm: {
+        request: {
+          prompt: "You are a sports highlight CONFIRMATION judge...",
+          dataItems: [{ type: "confirm", label: "Stage-1 verdict", value: "scoring_play" }],
+          stage1: { outcome: "scoring_play", isHighlight: true },
+        },
+        decision: {
+          enabled: true,
+          goalConfirmed: "confirmed_goal",
+          confidence: 0.95,
+          stage1Disagreed: false,
+          outcome: "scoring_play",
+        },
+      },
+    });
+    expect(c.analysis?.prompt).toContain("highlight judge");
+    expect(c.confirm?.request?.prompt).toContain("CONFIRMATION");
+    expect(c.confirm?.decision?.goalConfirmed).toBe("confirmed_goal");
+    expect(c.confirm?.decision?.stage1Disagreed).toBe(false);
+  });
+
   it("round-trips a standalone ConfirmRecord + rejects a bad goalConfirmed", () => {
     const rec = ConfirmRecordSchema.parse({
       request: { prompt: "p" },
