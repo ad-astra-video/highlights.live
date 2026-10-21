@@ -10,7 +10,7 @@
       "version": "0.1.0",
       "metadata": "{\"maxTracks\": 2, \"models\": \"florence-sam\"}",
       "mode": "persistent",
-      "capacity": 1,
+      "capacity": 2,
       "proxy": true,
       "gpu": {
         "id": "0",
@@ -33,7 +33,7 @@
       "version": "0.1.0",
       "metadata": "{\"model\": \"cyankiwi/gemma-4-12B-it-qat-AWQ-INT4\", \"engine\": \"vllm\", \"quantization\": \"compressed-tensors INT4\", \"maxConcurrency\": 4}",
       "mode": "single-shot",
-      "capacity": 1,
+      "capacity": 2,
       "proxy": true,
       "gpu": {
         "id": "1",

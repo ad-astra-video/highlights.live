@@ -13,7 +13,14 @@ Target: `brad@soccer99` on 192.168.1.6:1222 (livepeer-ai-x99).
 4. Verify: orchestrator 8935, perceive /health, decide /health, server :3000 /health.
 5. Run the webapp (vite dev) + use the server API from this host against the box, or run server locally pointed at box runners.
 6. End-to-end VOD job: upload test_vod.mp4 → perceive analyze → decide → clip → review. Confirm clips + json.
-7. Live/confirmed-by-user path: start live console e2e if resources allow.
+7. Live/confirmed-by-user path: start live console e2e if resources allow. The
+   live path runs the decide-observer: a `LiveObserver` fires single-shot decide
+   on the ~3 s cadence (`OBSERVE_CADENCE_S`) over the rolling-PAST ~10 s window
+   (`LIVE_OBSERVE_WINDOW_S`, `LIVE_OBSERVE_MAX_FRAMES`); perceive seeds `seeds` +
+   `biasHints` (data seeder, not the on/off gate) and tracking is capped <=3
+   (`LIVE_MAX_TRACKS`). Confirm cadence + gemma end-to-end latency against the
+   ~30 s flag budget via the report in
+   [`09-live-observer-latency-report.md`](09-live-observer-latency-report.md).
 
 ## Blockers to watch
 - GPU 1 OOM (Gemma on 16 GB card that's ~93% used) → free GPU 1 or CPU fallback.

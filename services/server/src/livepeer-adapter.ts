@@ -7,6 +7,7 @@ import {
   PaymentRequiredError,
   ROUTES,
   isSessionRefreshError,
+  isTicketParamsExpiredText,
   type LivePayment,
   type RemotePaymentStateSig,
   type SignerClient,
@@ -14,10 +15,28 @@ import {
 import type { ServerConfig } from "./config";
 import { createPaymentRefresher, type PaymentRefresher } from "./payment";
 import type { PerceiveSessionLedger } from "./perceive-ledger";
+
+/**
+ * ADAAAA-7003: an orchestrator HTTP 400 on a fixed-price single-shot
+ * decide/plan/train request whose body names a payment rejection other than
+ * `TicketParams expired` — either the ticket price no longer matches the
+ * runner's advertised price (`price does not match live runner price`) or the
+ * ticket cannot be redeemed (`insufficient funds for transfer`). These come
+ * from a stale/mismatched pricing OrchestratorInfo that survives a long
+ * single-shot drain; they are recoverable by re-minting fresh params and
+ * re-signing, so they are routed into the same recovery as a params expiry
+ * instead of aborting the whole job.
+ */
+function isSingleShotPaymentRejectionText(body: string): boolean {
+  return /price does not match live runner price|insufficient funds for transfer|invalid .* runner payment signer address/.test(body);
+}
 import type {
   AudioCandidate,
   AudioChunk,
+  ConfirmDecision,
+  ConfirmRequest,
   DecisionResult,
+  GroupDecodeRequest,
   ObservationResult,
   PipelineClient,
   PlanRequest,
@@ -27,6 +46,7 @@ import type {
   TrainResult,
   TrainRunRequest,
 } from "./analyzer";
+import type { PerFrameSeed } from "./observe-loop";
 import { SessionLostError } from "./analyzer";
 
 export function buildAnalyzeFrames(frameDir: string, sampleFps = 1) {
@@ -46,6 +66,12 @@ export function buildAnalyzeFrames(frameDir: string, sampleFps = 1) {
   };
 }
 
+/** Short pre-retry backoff so the orchestrator has time to cycle its payment
+ * params after an expired-params rejection (ADAAAA-6993). */
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface PaidOrchestratorOptions {
   /** Remote signer used to generate Livepeer-Payment on 402 (on-chain only). */
   signer?: SignerClient;
@@ -57,6 +83,11 @@ export interface PaidOrchestratorOptions {
    * release any the previous process left funded instead of letting the
    * orchestrator bill-and-force-release them (ADAAAA-6586). */
   ledger?: PerceiveSessionLedger;
+  /** ADAAAA-6993: short backoff (ms) before retrying a single-shot
+   * decide/plan/train after the orchestrator rejects a ticket minted against
+   * expired payment params with HTTP 400 `TicketParams expired` (default 1000).
+   * Gives the orchestrator time to cycle its params before the re-sign/retry. */
+  ticketParamsRetryBackoffMs?: number;
 }
 
 export class OrchestratorAdapter implements PipelineClient {
@@ -69,13 +100,19 @@ export class OrchestratorAdapter implements PipelineClient {
   private payers = new Map<string, PaymentRefresher>();
   /** Durable ledger of funded sessions (survives a server restart). */
   private ledger?: PerceiveSessionLedger;
+  private ticketParamsRetryBackoffMs: number;
 
   constructor(cfg: ServerConfig, opts: PaidOrchestratorOptions = {}) {
-    this.client = new LivepeerClient(cfg.orchestratorUrl);
+    this.client = new LivepeerClient(
+      cfg.orchestratorUrl,
+      undefined,
+      cfg.decideConcurrency !== undefined ? { decideConcurrency: cfg.decideConcurrency } : undefined
+    );
     this.signer = opts.signer;
     this.payerAddress = opts.payerAddress;
     this.paymentIntervalMs = opts.paymentIntervalMs ?? 10_000;
     this.ledger = opts.ledger;
+    this.ticketParamsRetryBackoffMs = opts.ticketParamsRetryBackoffMs ?? 1000;
   }
 
   /**
@@ -170,6 +207,72 @@ export class OrchestratorAdapter implements PipelineClient {
       const fresh = await this.client.refreshPaymentSession(this.payerAddress, manifestID);
       if (!fresh?.paymentParams) throw err;
       return { pmt: await sign(fresh.paymentParams), infoB64: fresh.paymentParams };
+    }
+  }
+
+  /**
+   * ADAAAA-6993: build the HTTP error for a single-shot decide/plan/train
+   * request and mark a `TicketParams expired` rejection (orchestrator HTTP 400
+   * whose body names the signal) so the caller can trigger the recovery below.
+   *
+   * ADAAAA-7003: a fixed-price single-shot decide is ALSO rejected at HTTP 400
+   * for other payment reasons — `payment price does not match live runner
+   * price` / `insufficient funds for transfer` (a stale/mismatched pricing
+   * ticket after a long zero-cadence drain). These are recoverable by the same
+   * re-mint-fresh-params + re-sign path below, so mark them recoverable too
+   * instead of aborting the whole VOD pass. A malformed request on this path
+   * returns 422 (not 400), so a 400 here is always a payment rejection.
+   */
+  private httpError(status: number, data: unknown, label: string): Error & { ticketParamsExpired?: boolean } {
+    const err = new Error(`${label} failed: HTTP ${status}`) as Error & { ticketParamsExpired?: boolean };
+    if (status === 400) {
+      const body = JSON.stringify(data);
+      if (isTicketParamsExpiredText(body) || isSingleShotPaymentRejectionText(body)) err.ticketParamsExpired = true;
+    }
+    return err;
+  }
+
+  /**
+   * ADAAAA-6993: fixed-price single-shot decide/plan/train recovery. Signs a
+   * ticket for the 402 challenge's OrchestratorInfo, runs the paid request, and
+   * on an orchestrator HTTP 400 `TicketParams expired` — a recoverable refresh
+   * signal — re-issues the request WITHOUT payment headers to get a FRESH 402
+   * challenge (new payment_params / manifest_id), re-signs against the fresh
+   * params so the stale OrchestratorInfo is never reused, and retries the paid
+   * request once after a short backoff. A second expired rejection throws
+   * without looping (the caller decides whether to degrade).
+   */
+  private async retryPaidSingleShot(
+    probeUnpaid: () => Promise<unknown>,
+    initial: { b64: string; manifestID?: string },
+    signOpts: { app: string; type: "live" | "lv2v" | "fixed" },
+    runPaid: (headers: Record<string, string>) => Promise<unknown>
+  ): Promise<unknown> {
+    const first = await this.generateLivePaymentRecovering480(initial.b64, initial.manifestID, signOpts);
+    try {
+      return await runPaid({ "Livepeer-Payment": first.pmt.payment, "Livepeer-Segment": first.pmt.segCreds });
+    } catch (err) {
+      if (!(err as { ticketParamsExpired?: boolean })?.ticketParamsExpired) throw err;
+      // Re-issue WITHOUT payment headers to get a fresh 402 challenge (new params):
+      // the orchestrator only re-mints fresh OrchestratorInfo when the request is
+      // unpaid (it 402s), so the stale info is never reused.
+      let fresh: unknown;
+      try {
+        const got = await probeUnpaid();
+        // Unpaid probe unexpectedly succeeded (offchain / no charge) -> use it.
+        return got;
+      } catch (e) {
+        if (!(e instanceof PaymentRequiredError)) throw err;
+        fresh = e;
+      }
+      const freshB64 = (fresh as PaymentRequiredError).challenge?.paymentParams;
+      const freshManifest = (fresh as PaymentRequiredError).challenge?.manifestId;
+      if (freshB64 && freshManifest) {
+        await sleepMs(this.ticketParamsRetryBackoffMs);
+        const again = await this.generateLivePaymentRecovering480(freshB64, freshManifest, signOpts);
+        return await runPaid({ "Livepeer-Payment": again.pmt.payment, "Livepeer-Segment": again.pmt.segCreds });
+      }
+      throw err;
     }
   }
 
@@ -288,7 +391,8 @@ export class OrchestratorAdapter implements PipelineClient {
         payerAddress: payerAddress || undefined,
         paymentHeaders,
       });
-      if (status >= 400) throw new Error(`plan failed: HTTP ${status}`);
+      const err = this.httpError(status, data, "plan");
+      if (status >= 400) throw err;
       return (data ?? {}) as TrackingPlanResult;
     };
     try {
@@ -306,12 +410,20 @@ export class OrchestratorAdapter implements PipelineClient {
       // Reuse the one-shot 480 recovery (ADAAAA-6705) so a reused session that
       // returns signer HTTP 480 on this single-shot fixed-price call is
       // re-minted via /refresh-payment and re-signed once instead of failing
-      // the run hard (ADAAAA-6710).
-      const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
-        app: ROUTES.decide,
-        type: "fixed",
-      });
-      return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
+      // the run hard (ADAAAA-6710). ADAAAA-6993 adds the orchestrator HTTP 400
+      // `TicketParams expired` recovery (fresh 402 challenge + re-sign).
+      try {
+        const res = await this.retryPaidSingleShot(
+          () => this.client.decide("plan", payload, { payerAddress: payerAddress || undefined }),
+          { b64, manifestID: manifestID || undefined },
+          { app: ROUTES.decide, type: "fixed" },
+          (h) => run(h)
+        );
+        return (res ?? {}) as TrackingPlanResult;
+      } catch {
+        // Degrade to a safe-default plan on any failure (never a dead stream).
+        return { planVersion: 1, category: req.category || "", intent: req.intent || "", source: "planner-fallback", maxTracks: req.mode === "vod" ? 8 : 3, reason: "planner unavailable" };
+      }
     }
   }
   async postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioCandidate | null> {
@@ -347,6 +459,29 @@ export class OrchestratorAdapter implements PipelineClient {
     });
     if (status >= 500) throw new Error(`controlForward failed: HTTP ${status}`);
   }
+  async recallPerceive(
+    sessionId: string,
+    req: { centerTs?: number; windowS?: number; startTs?: number; endTs?: number }
+  ): Promise<{ centerTs?: number; seeds: PerFrameSeed[] }> {
+    // ADAAAA-7008 / ADAAAA-7012: on-demand perceive recall. Proxy through the
+    // same orchestrator session as /analyze so the perceive runner serves the
+    // per-frame derived context ALREADY computed (no detector re-run). Best-effort:
+    // a 404 (fresh session after re-reserve) / 5xx / transport error returns
+    // empty seeds (a no-op) rather than aborting the decide/finalize path.
+    try {
+      const { status, data } = await this.client.appCall<any>(sessionId, "evidence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req),
+      });
+      if (status >= 200 && status < 300) {
+        return { centerTs: req.centerTs, seeds: (data?.seeds ?? []) as PerFrameSeed[] };
+      }
+      return { centerTs: req.centerTs, seeds: [] };
+    } catch {
+      return { centerTs: req.centerTs, seeds: [] };
+    }
+  }
   async decide(
     evidence: {
       eventType: string;
@@ -370,6 +505,11 @@ export class OrchestratorAdapter implements PipelineClient {
       reasoningEffort?: string;
       frames?: { role: string; base64: string }[];
       audioB64?: string;
+      // ADAAAA-6855: the job's requested highlight labels, forwarded so the
+      // decide runner exports a requested non-goal class as a distinct highlight.
+      preferLabels?: string[];
+      jobId?: string;
+      groupKey?: string;
     }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -379,8 +519,12 @@ export class OrchestratorAdapter implements PipelineClient {
       timestamp: 0,
       gameHint: opts?.gameHint || "",
       reasoningEffort: opts?.reasoningEffort || "none",
+      jobId: opts?.jobId,
+      groupKey: opts?.groupKey,
       evidence,
       images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
+      // ADAAAA-6855: thread the job's requested highlight labels verbatim.
+      preferLabels: opts?.preferLabels ?? [],
       // Detail-first (ADAAAA-4954): the temporal frame SEQUENCE + surrounding
       // audio clip the Gemma runner reasons across. Absent on the live baseline.
       frames: opts?.frames ?? [],
@@ -400,7 +544,8 @@ export class OrchestratorAdapter implements PipelineClient {
         payerAddress: payerAddress || undefined,
         paymentHeaders,
       });
-      if (status >= 400) throw new Error(`decide failed: HTTP ${status}`);
+      const err = this.httpError(status, data, "decide");
+      if (status >= 400) throw err;
       return data as DecisionResult;
     };
     try {
@@ -417,7 +562,123 @@ export class OrchestratorAdapter implements PipelineClient {
       // Reuse the one-shot 480 recovery (ADAAAA-6705) so a reused session that
       // returns signer HTTP 480 on this single-shot fixed-price call is
       // re-minted via /refresh-payment and re-signed once instead of failing
-      // the run hard (ADAAAA-6710).
+      // the run hard (ADAAAA-6710). ADAAAA-6993 adds the orchestrator HTTP 400
+      // `TicketParams expired` recovery: re-issue WITHOUT payment headers for a
+      // fresh 402 challenge and re-sign once so the stale OrchestratorInfo is
+      // never reused (retryPaidSingleShot).
+      const res = await this.retryPaidSingleShot(
+        () => this.client.decide("highlight", payload, { payerAddress: payerAddress || undefined }),
+        { b64, manifestID: manifestID || undefined },
+        { app: ROUTES.decide, type: "fixed" },
+        (h) => run(h)
+      );
+      return res as DecisionResult;
+    }
+  }
+  /** ADAAAA-6935: ONE merged decide review for all candidates inside a 3 s
+   * frame group. Sends the group's frame sequence + every candidate (with its
+   * own evidence snapshot) as a single fixed-price /highlight call and returns
+   * a verdict per candidate. Mirrors `decide`'s 402 -> signer -> retry payment
+   * flow so the merged group call is priced the same as one decide. */
+  async decideGroup(req: GroupDecodeRequest): Promise<{ verdicts: DecisionResult[] }> {
+    const payerAddress = this.payerAddress;
+    const payload = {
+      sessionId: "job",
+      eventType: req.candidates[0]?.eventType ?? "",
+      timestamp: req.candidates[0]?.timestamp ?? 0,
+      gameHint: req.gameHint || "",
+      reasoningEffort: req.reasoningEffort || "none",
+      // ADAAAA-6935: the merged group-review payload (one gemma call).
+      candidates: req.candidates.map((c) => ({ eventType: c.eventType, timestamp: c.timestamp, evidence: c.evidence })),
+      images: [],
+      preferLabels: req.preferLabels ?? [],
+      frames: req.frames ?? [],
+      audioB64: req.audioB64 ?? "",
+      audioSampleRate: 16_000,
+    };
+    const run = async (paymentHeaders?: Record<string, string>) => {
+      const { status, data } = await this.client.decide("highlight", payload, {
+        payerAddress: payerAddress || undefined,
+        paymentHeaders,
+      });
+      const err = this.httpError(status, data, "decide group");
+      if (status >= 400) throw err;
+      return data as { verdicts?: DecisionResult[] };
+    };
+    try {
+      const data = await run();
+      return { verdicts: (data.verdicts ?? []).map((v) => v as DecisionResult) };
+    } catch (err) {
+      if (!(err instanceof PaymentRequiredError) || !this.signer || !payerAddress) throw err;
+      const b64 = err.challenge?.paymentParams;
+      if (!b64) {
+        throw new Error("on-chain decide 402 challenge carried no payment_params (orchestrator info) to forward to the signer; cannot obtain tickets");
+      }
+      const manifestID = err.challenge?.manifestId;
+      // ADAAAA-6993: recover an orchestrator HTTP 400 `TicketParams expired` on
+      // the paid decide-group retry by re-issuing WITHOUT payment headers (fresh
+      // 402 challenge) and re-signing once, so the stale OrchestratorInfo is
+      // never reused (retryPaidSingleShot).
+      const res = (await this.retryPaidSingleShot(
+        () => this.client.decide("highlight", payload, { payerAddress: payerAddress || undefined }),
+        { b64, manifestID: manifestID || undefined },
+        { app: ROUTES.decide, type: "fixed" },
+        (h) => run(h)
+      )) as { verdicts?: DecisionResult[] };
+      return { verdicts: (res.verdicts ?? []).map((v) => v as DecisionResult) };
+    }
+  }
+  /** Submit a single-shot fine-tune to the highlights-train runner, mirroring
+   * `decide`: one fixed-price live-runner app call, with the 402 -> signer ->
+   * retry payment flow on-chain. The payload maps TrainRunRequest fields to the
+   * train-entrypoint env contract (manifest path + hyper-params). */
+  /** Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). Mirrors `decide`:
+   * one fixed-price decide-runner app call to `/apps/highlights-decide/app/confirm`,
+   * with the same 402 -> signer -> retry payment flow on-chain. Slides the
+   * payload = the ConfirmRequest fields the /confirm endpoint consumes. The
+   * runner returns a passthrough (goalConfirmed null) when disabled or
+   * unparseable; a transport failure rejects so the caller keeps the Stage-1
+   * verdict. */
+  async confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string }): Promise<ConfirmDecision> {
+    const payerAddress = this.payerAddress;
+    const payload = {
+      sessionId: "job",
+      eventType: req.eventType,
+      timestamp: req.timestamp,
+      gameHint: req.gameHint || "",
+      reasoningEffort: opts?.reasoningEffort || "none",
+      stage1: req.stage1,
+      frames: req.frames ?? [],
+      keyframes: req.keyframes ?? [],
+      trajectories: req.trajectories ?? [],
+      opticalFlowMagnitude: req.opticalFlowMagnitude ?? 0,
+      flowMagnitudes: req.flowMagnitudes ?? [],
+      audioLevels: req.audioLevels ?? [],
+      audioB64: req.audioB64 ?? "",
+      audioSampleRate: 16_000,
+      ballOutcome: req.ballOutcome ?? null,
+      goalCrossed: req.goalCrossed ?? null,
+      scoreBoardChanged: req.scoreBoardChanged ?? false,
+    };
+    const run = async (paymentHeaders?: Record<string, string>) => {
+      const { status, data } = await this.client.decide("confirm", payload, {
+        payerAddress: payerAddress || undefined,
+        paymentHeaders,
+      });
+      if (status >= 400) throw new Error(`confirm failed: HTTP ${status}`);
+      return data as ConfirmDecision;
+    };
+    try {
+      return await run();
+    } catch (err) {
+      if (!(err instanceof PaymentRequiredError) || !this.signer || !payerAddress) throw err;
+      const b64 = err.challenge?.paymentParams;
+      if (!b64) {
+        throw new Error(
+          "on-chain confirm 402 challenge carried no payment_params (orchestrator info) to forward to the signer; cannot obtain tickets"
+        );
+      }
+      const manifestID = err.challenge?.manifestId;
       const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
         app: ROUTES.decide,
         type: "fixed",
@@ -425,10 +686,6 @@ export class OrchestratorAdapter implements PipelineClient {
       return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
     }
   }
-  /** Submit a single-shot fine-tune to the highlights-train runner, mirroring
-   * `decide`: one fixed-price live-runner app call, with the 402 -> signer ->
-   * retry payment flow on-chain. The payload maps TrainRunRequest fields to the
-   * train-entrypoint env contract (manifest path + hyper-params). */
   async train(request: TrainRunRequest): Promise<TrainResult> {
     const payerAddress = this.payerAddress;
     const payload = {
@@ -444,7 +701,8 @@ export class OrchestratorAdapter implements PipelineClient {
         payerAddress: payerAddress || undefined,
         paymentHeaders,
       });
-      if (status >= 400) throw new Error(`train failed: HTTP ${status}`);
+      const err = this.httpError(status, data, "train");
+      if (status >= 400) throw err;
       return data as TrainResult;
     };
     try {
@@ -461,12 +719,14 @@ export class OrchestratorAdapter implements PipelineClient {
       // Reuse the one-shot 480 recovery (ADAAAA-6705) so a reused session that
       // returns signer HTTP 480 on this single-shot fixed-price call is
       // re-minted via /refresh-payment and re-signed once instead of failing
-      // the run hard (ADAAAA-6710).
-      const { pmt } = await this.generateLivePaymentRecovering480(b64, manifestID || undefined, {
-        app: ROUTES.train,
-        type: "fixed",
-      });
-      return await run({ "Livepeer-Payment": pmt.payment, "Livepeer-Segment": pmt.segCreds });
+      // the run hard (ADAAAA-6710). ADAAAA-6993 adds the orchestrator HTTP 400
+      // `TicketParams expired` recovery (fresh 402 challenge + re-sign).
+      return (await this.retryPaidSingleShot(
+        () => this.client.train("train", payload, { payerAddress: payerAddress || undefined }),
+        { b64, manifestID: manifestID || undefined },
+        { app: ROUTES.train, type: "fixed" },
+        (h) => run(h)
+      )) as TrainResult;
     }
   }
   async stopPerceive(sessionId: string): Promise<void> {
@@ -577,6 +837,29 @@ export class DirectAdapter implements PipelineClient {
     });
     if (r.status >= 500) throw new Error(`controlForward failed: HTTP ${r.status}`);
   }
+  async recallPerceive(
+    sessionId: string,
+    req: { centerTs?: number; windowS?: number; startTs?: number; endTs?: number }
+  ): Promise<{ centerTs?: number; seeds: PerFrameSeed[] }> {
+    // ADAAAA-7008 / ADAAAA-7012: on-demand perceive recall (decide asks perceive
+    // for extra evidence for a moment before finalizing). POST straight to
+    // perceive /app/evidence; it serves the per-frame derived context ALREADY
+    // computed, WITHOUT re-running the detector. Best-effort: any transport /
+    // 5xx failure returns empty seeds (a no-op) rather than aborting the
+    // decide/finalize path — a recall must never regress a decision.
+    try {
+      const r = await fetch(`${this.cfg.perceiveUrl}/app/evidence`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Session-Id": this.fakeSession },
+        body: JSON.stringify(req),
+      });
+      if (r.status < 200 || r.status >= 300) return { centerTs: req.centerTs, seeds: [] };
+      const body = (await r.json().catch(() => null)) as { seeds?: PerFrameSeed[] } | null;
+      return { centerTs: req.centerTs, seeds: body?.seeds ?? [] };
+    } catch {
+      return { centerTs: req.centerTs, seeds: [] };
+    }
+  }
   async decide(
     evidence: {
       eventType: string;
@@ -600,6 +883,11 @@ export class DirectAdapter implements PipelineClient {
       reasoningEffort?: string;
       frames?: { role: string; base64: string }[];
       audioB64?: string;
+      jobId?: string;
+      groupKey?: string;
+      /** ADAAAA-7111 (Increment D): the running video summary (story-so-far)
+       * carried into this cadence decide so the model EXTENDS it. */
+      storySoFar?: string;
     }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
@@ -611,6 +899,11 @@ export class DirectAdapter implements PipelineClient {
         timestamp: 0,
         gameHint: opts?.gameHint || "",
         reasoningEffort: opts?.reasoningEffort || "none",
+        jobId: opts?.jobId,
+        groupKey: opts?.groupKey,
+        // ADAAAA-7111 (Increment D): forward the running video summary so the
+        // decide brain extends it (monotonic growth). Empty on the first tick.
+        storySoFar: opts?.storySoFar ?? "",
         evidence,
         images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
         frames: opts?.frames ?? [],
@@ -620,6 +913,60 @@ export class DirectAdapter implements PipelineClient {
     });
     if (!r.ok) throw new Error(`decide failed: HTTP ${r.status}`);
     return (await r.json()) as DecisionResult;
+  }
+  async decideGroup(req: GroupDecodeRequest): Promise<{ verdicts: DecisionResult[] }> {
+    const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: this.fakeSession,
+        eventType: req.candidates[0]?.eventType ?? "",
+        timestamp: req.candidates[0]?.timestamp ?? 0,
+        gameHint: req.gameHint || "",
+        reasoningEffort: req.reasoningEffort || "none",
+        // ADAAAA-6935: merged group review (one gemma call) — every candidate
+        // in the 3 s group + the group's frame sequence.
+        candidates: req.candidates.map((c) => ({ eventType: c.eventType, timestamp: c.timestamp, evidence: c.evidence })),
+        images: [],
+        frames: req.frames ?? [],
+        audioB64: req.audioB64 ?? "",
+        audioSampleRate: 16_000,
+      }),
+    });
+    if (!r.ok) throw new Error(`decide group failed: HTTP ${r.status}`);
+    const data = (await r.json()) as { verdicts?: DecisionResult[] };
+    return { verdicts: (data.verdicts ?? []).map((v) => v as DecisionResult) };
+  }
+  /** Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). Direct dev path:
+   * POST straight to decide `/app/confirm`. The runner returns a passthrough
+   * (goalConfirmed null) when disabled/unparseable; a transport failure rejects
+   * so the caller keeps the Stage-1 verdict. */
+  async confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string }): Promise<ConfirmDecision> {
+    const r = await fetch(`${this.cfg.decideUrl}/app/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: this.fakeSession,
+        eventType: req.eventType,
+        timestamp: req.timestamp,
+        gameHint: req.gameHint || "",
+        reasoningEffort: opts?.reasoningEffort || "none",
+        stage1: req.stage1,
+        frames: req.frames ?? [],
+        keyframes: req.keyframes ?? [],
+        trajectories: req.trajectories ?? [],
+        opticalFlowMagnitude: req.opticalFlowMagnitude ?? 0,
+        flowMagnitudes: req.flowMagnitudes ?? [],
+        audioLevels: req.audioLevels ?? [],
+        audioB64: req.audioB64 ?? "",
+        audioSampleRate: 16_000,
+        ballOutcome: req.ballOutcome ?? null,
+        goalCrossed: req.goalCrossed ?? null,
+        scoreBoardChanged: req.scoreBoardChanged ?? false,
+      }),
+    });
+    if (!r.ok) throw new Error(`confirm failed: HTTP ${r.status}`);
+    return (await r.json()) as ConfirmDecision;
   }
   async train(request: TrainRunRequest): Promise<TrainResult> {
     // Direct dev path: requires a reachable TRAIN_URL exposing /app/train (the

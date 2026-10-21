@@ -440,10 +440,75 @@ export const JobDecisionSchema = z.object({
   highlightId: z.string().optional(),
 });
 export type JobDecision = z.infer<typeof JobDecisionSchema>;
+// Stage-2 goal/near-miss confirmation-pass metric snapshot (ADAAAA-6797).
+// Recorded on the job when the VOD pass routes un-attested goal-type candidates
+// through the decide /confirm deep frame dive. Additive + optional on Job (no
+// contract version bump); absent on non-confirm / older records.
+export const ConfirmMetricsSnapshotSchema = z.object({
+  // Confirm passes actually run (dive attempted).
+  totalRuns: z.number().int().min(0),
+  // Runs where the confirmation pass corrected the Stage-1 read.
+  disagreed: z.number().int().min(0),
+  // Stage-1 vs Stage-2 disagreement rate = disagreed / totalRuns (0..1; 0 when
+  // totalRuns is 0). The core value metric for the feature.
+  gapRate: z.number().min(0).max(1),
+});
+export type ConfirmMetricsSnapshot = z.infer<typeof ConfirmMetricsSnapshotSchema>;
+
+// Live decide-observer cadence + decide gemma E2E latency snapshot (ADAAAA-7011).
+// Recorded on a live job when the decide-observer is enabled, so the cadence +
+// gemma end-to-end latency (the ~30 s budget = ~3 s cadence + gemma E2E) is
+// inspectable on the Livepeer runner. Additive + optional on Job (no contract
+// version bump); absent when the observer was not enabled and on older records.
+export const ObserveMetricsSnapshotSchema = z.object({
+  // Decide invocations that fired on the cadence.
+  decideCalls: z.number().int().min(0),
+  // Decisions that became an accepted highlight.
+  accepted: z.number().int().min(0),
+  // Max frames in a single decide payload (<= the 30-frame cap).
+  maxFrames: z.number().int().min(0),
+  // Mean / max decide gemma end-to-end latency (ms).
+  meanE2eMs: z.number().min(0),
+  maxE2eMs: z.number().min(0),
+  // Mean / max content-time cadence between consecutive fired ticks (ms).
+  meanCadenceMs: z.number().min(0),
+  maxCadenceMs: z.number().min(0),
+  // ADAAAA-7007: VOD decide-observer per-call input-size + cap report. Additive
+  // optional (absent on live-only / older records). `subsampledCalls>0` proves
+  // the <=30-frame cap was actually exercised; `framesPerCall` is the per-call
+  // decide input-size distribution (the -67% cost measure input).
+  subsampledCalls: z.number().int().min(0).optional(),
+  framesPerCall: z.array(z.number().int().min(0)).optional(),
+});
+export type ObserveMetricsSnapshot = z.infer<typeof ObserveMetricsSnapshotSchema>;
+
+// ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot. Additive
+// optional on Job. `subsampledCalls>0` proves the <=30-frame cap was actually
+// exercised on the VOD pass; `framesPerCall` is the per-call decide input-size
+// distribution (the -67% per-call cost-measure input).
+export const VodObserveMetricsSnapshotSchema = z.object({
+  decideCalls: z.number().int().min(0),
+  accepted: z.number().int().min(0),
+  maxFrames: z.number().int().min(0),
+  subsampledCalls: z.number().int().min(0),
+  framesPerCall: z.array(z.number().int().min(0)),
+});
+export type VodObserveMetricsSnapshot = z.infer<typeof VodObserveMetricsSnapshotSchema>;
 
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
+  // Short human-readable job title (ADAAAA-6798 Inc 1). Generated once at job
+  // completion by a single text-only `/app/title` decide call; falls back to a
+  // deterministic `<gameHint or source> · <n> highlights · <date>` when the
+  // decide service is unavailable. Additive optional — absent on older records
+  // and on jobs that predate title generation (no contract version bump).
+  title: z.string().optional(),
+  // ADAAAA-7111 (Increment D): the decide/gemma running video summary
+  // (story-so-far), re-persisted on each cadence observe tick. Monotonic
+  // (extends the prior summary) and bounded (compacted). Additive optional —
+  // absent on jobs that predate it / that never ran the observe cadence.
+  runningSummary: z.string().optional(),
   // `file-sim` = loop a local file at real-time rate as a synthetic live source
   // (LiveIngest kind `file-sim`); used by QA/dev to run the live pipeline
   // deterministically without an RTMP encoder or a display (ADAAAA-5777).
@@ -451,7 +516,12 @@ export const JobSchema = z.object({
   sourceUrl: z.string().optional(),
   gameHint: z.string().optional(),
   preferLabels: z.array(z.string()).default([]),
-  status: z.enum(["queued", "active", "done", "failed"]).default("queued"),
+  // Durable lifecycle state machine (ADAAAA-6873): a VOD job moves
+  // queued -> extracting -> analyzing -> finalizing -> done | failed, plus
+  // cancelled. "active" is kept for live/browser-capture jobs and older rows.
+  status: z
+    .enum(["queued", "active", "extracting", "analyzing", "finalizing", "done", "failed", "cancelled"])
+    .default("queued"),
   // Set when the job fails (status === "failed") to the server-side error text
   // so GET /jobs / GET /jobs/:id and the webapp processing-jobs surface render
   // the real reason instead of a generic client string (ADAAAA-6781).
@@ -464,6 +534,17 @@ export const JobSchema = z.object({
   // Stage-A audio-gate metric snapshot (INC-2 / ADAAAA-4325); absent on VOD /
   // non-audio jobs and on older records.
   stageAMetrics: StageAMetricsSnapshotSchema.optional(),
+  // Stage-2 goal/near-miss confirmation-pass metric snapshot (ADAAAA-6797);
+  // absent when no VOD confirm dive ran and on older records.
+  confirmMetrics: ConfirmMetricsSnapshotSchema.optional(),
+  // Live decide-observer cadence + decide gemma E2E latency snapshot
+  // (ADAAAA-7011); absent when the live observer was not enabled / on VOD and
+  // on older records.
+  observeMetrics: ObserveMetricsSnapshotSchema.optional(),
+  // ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot
+  // (decideCalls / maxFrames / subsampledCalls / framesPerCall); absent when the
+  // VOD observer was not enabled and on older records.
+  vodObserveMetrics: VodObserveMetricsSnapshotSchema.optional(),
   // Detail-first VOD knobs + build-phase cost/volume record (ADAAAA-4954, spec
   // §4.5). All optional on Job — additive, no contract version bump. Persisted
   // by runVodJob so the per-video cost + FP gate are measurable exactly as on
@@ -471,6 +552,17 @@ export const JobSchema = z.object({
   frameScale: z.string().optional(),
   decideWindowN: z.number().int().positive().optional(),
   framesAnalyzed: z.number().int().min(0).optional(),
+  // Durable job progress (ADAAAA-6873). Throttled + monotonic (never regresses);
+  // `stage` mirrors the processing statuses; `framesAnalyzed` tracks frames fed
+  // to the pipeline; `highlightsFound` increments the moment a highlight is
+  // decided; `attempts` counts worker re-claims so a restart never double-debits.
+  stage: z.string().optional(),
+  framesTotal: z.number().int().min(0).optional(),
+  framesPct: z.number().min(0).max(100).optional(),
+  highlightsFound: z.number().int().min(0).default(0),
+  startedAt: z.string().optional(),
+  finishedAt: z.string().optional(),
+  attempts: z.number().int().min(0).optional(),
   candidatesTriggered: z.number().int().min(0).optional(),
   decideCalls: z.number().int().min(0).optional(),
   perceiveSessionS: z.number().min(0).optional(),
@@ -494,10 +586,51 @@ export const JobSchema = z.object({
 });
 export type Job = z.infer<typeof JobSchema>;
 
+// --- per-highlight trigger metadata (ADAAAA-6798 Inc 2) ---------------------
+// The decide stage already computes the trigger signal that started a candidate
+// (audio gate, ball signal, scoreboard change, goal-line crossing, ...). This
+// additive type persists that signal onto both the JobCandidate and the
+// HighlightRecord so the UI can show "what trigger started this highlight".
+// Populated from the candidate object at decision time — NO new inference.
+// Absent on legacy rows without a candidate; those degrade to "trigger unknown"
+// (the highlight's own anchored eventType/timestamp) with no re-inference.
+export const HighlightTriggerSchema = z.object({
+  kind: z.enum([
+    "audio_burst",
+    "audio_swell",
+    "motion",
+    "ball_signal",
+    "score_change",
+    "goal_line",
+    "corroborated",
+  ]),
+  /** Trigger timestamp (s from stream start) the candidate was anchored to. */
+  timestamp: z.number().min(0),
+  /** The event class that fired the trigger (KILL | GOAL | DUNK | ...). */
+  eventType: z.string(),
+  // Reaction evidence derived from the same candidate object (all optional/
+  // absent when the signal was not present). These mirror the decide evidence
+  // fields so no re-inference is required to display the trigger provenance.
+  crowdEnergy: z.number().min(0).optional(),
+  audioKind: z.string().optional(),
+  ballSpeedMps: z.number().min(0).optional(),
+  ballPossessionId: z.string().optional(),
+  goalCrossed: z.boolean().optional(),
+  ballOutcome: z.string().optional(),
+  scoreBoardChanged: z.boolean().optional(),
+});
+export type HighlightTrigger = z.infer<typeof HighlightTriggerSchema>;
+
 export const HighlightRecordSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
   jobId: z.string(),
+  // ADAAAA-6874 (Phase 2): deterministic per-highlight idempotency key derived
+  // from (jobId, candidate seq, eventType). A re-claimed/resumed job that
+  // re-decides the same candidate must not double-persist or double-bill. The
+  // store's addHighlight dedups on this key (first insert wins; billing/debit
+  // only on first insert). Additive optional — older rows carry none.
+  idempotencyKey: z.string().optional(),
   clipUri: z.string(),
   start: z.number(),
   end: z.number(),
@@ -515,7 +648,20 @@ export const HighlightRecordSchema = z.object({
   // distinct label downstream); a scoring play is the full highlight score.
   outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
   nearMiss: z.boolean().optional(),
+  // Stage-2 confirmation-pass verdict (ADAAAA-6797): set on a goal-type
+  // highlight that went through the /confirm deep frame dive. null on the
+  // passthrough path. Additive + optional.
+  goalConfirmed: z.enum(["confirmed_goal", "near_miss", "not_goal"]).optional(),
+  // Stage-1 vs Stage-2 disagreement flag for this highlight (ADAAAA-6797).
+  stage1Disagreed: z.boolean().optional(),
   status: z.enum(["pending", "accepted", "rejected"]).default("pending"),
+  // ADAAAA-6798 Inc 2: link the highlight to the JobCandidate that started it,
+  // and de-normalize that candidate's trigger metadata so GET /highlights and
+  // GET /jobs/:id/detail can show "what trigger started this highlight" with
+  // zero drift and no read-time join. Both additive optional — legacy rows
+  // without a candidate degrade to the highlight's own anchored metadata.
+  candidateId: z.string().optional(),
+  trigger: HighlightTriggerSchema.optional(),
   // When the clip entered `rejected` (soft-delete undo grace start). Set on
   // reject, cleared on reject->accept (cancels pending TTL purge). Only
   // `rejected` clips with a `rejectedAt` aged >= rejectTtlMs are ever purge
@@ -552,6 +698,11 @@ export const JobCandidateSchema = z.object({
    *   suppressed -> model accepted but the Goal burst-suppression window dropped it
    *   rejected   -> not an accepted scoring highlight (near-miss / not-highlight) */
   status: z.enum(["accepted", "suppressed", "rejected"]).default("rejected"),
+  // ADAAAA-6798 Inc 2: the trigger signal that started this candidate, derived
+  // from the candidate object at decision time and persisted so the UI can show
+  // its provenance with no re-inference. Additive optional — absent on legacy
+  // rows (which predate trigger persistence).
+  trigger: HighlightTriggerSchema.optional(),
   createdAt: z.string(),
 });
 export type JobCandidate = z.infer<typeof JobCandidateSchema>;

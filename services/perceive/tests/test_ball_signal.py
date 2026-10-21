@@ -18,11 +18,22 @@ locked by each component's own tests in slices 2-4):
   * process_frame wiring actually attaches both fields to the candidate.
 """
 import numpy as np
+import pytest
 
 import app as app_mod
 from app import process_frame
 from app.ball_signal import BallSignalPipeline, is_ball_label
 from app.pitch_homography import homography_from_pitch_rect, project_points
+
+
+@pytest.fixture(autouse=True)
+def _enable_triggers_for_ball_signal_tests(monkeypatch):
+    """ADAAAA-7108: the motion-burst / GOAL candidate triggers are removed by
+    default. These tests lock the ball-signal *orchestration onto a candidate*;
+    run them with the candidate trigger re-enabled so the attach path is
+    exercised."""
+    monkeypatch.setenv("AD_MOTION_TRIGGER", "1")
+    monkeypatch.setenv("AD_GOAL_TRIGGER", "1")
 
 # --- synthetic broadcast camera on NORMALIZED image coords (0..1) -----------
 NORM_IMAGE_CORNERS = [
@@ -205,9 +216,11 @@ class _FakeDetector:
         return []
 
 
-def test_process_frame_attaches_ball_signal_to_candidate(monkeypatch):
-    """End-to-end wiring: with a ball + moving player + calibration, a fired
-    CandidateEvent carries ballVelocity + ballPossession (decide() context)."""
+def test_process_frame_attaches_ball_signal_to_evidence(monkeypatch):
+    """End-to-end wiring: with a ball + moving player + calibration, the
+    observation's additive `evidence` field carries ballVelocity + ballPossession
+    (decide() context). ADAAAA-7108: no candidate is emitted, so the ball signal
+    reaches decide via the observation evidence, not a candidate."""
     from app.session import SessionState
     from app.tracker import IoUTracker
 
@@ -215,8 +228,7 @@ def test_process_frame_attaches_ball_signal_to_candidate(monkeypatch):
     state.tracker = IoUTracker()
     state.homography = H
 
-    # Per-frame Florence objects: a fast-moving PLAYER (silhouette) triggers the
-    # tracker candidate; the ball moves on the pitch throughout.
+    # Per-frame Florence objects: a fast-moving PLAYER (silhouette) and a ball.
     objects_per_frame = []
     player_center = 0.15
     ball_field = np.array([10.0, 20.0])
@@ -235,27 +247,26 @@ def test_process_frame_attaches_ball_signal_to_candidate(monkeypatch):
     fake = _FakeDetector(objects_per_frame)
     monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: fake)
 
-    saw_candidate = False
+    saw_evidence = False
     for k in range(n):
-        _obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
-        if cand is not None:
-            saw_candidate = True
-            assert "ballVelocity" in cand, "candidate must carry ballVelocity"
-            assert cand["ballVelocity"]["homography"] is True
-            assert cand["ballVelocity"]["speedMps"] >= 0
-            assert "ballPossession" in cand, "candidate must carry ballPossession"
-            # Contract field present with a valid assignment ("<track-id>" or
-            # "none" for a loose ball -- possession correctness is unit-tested
-            # in the pipeline tests; here we verify it flows onto the event).
-            assert isinstance(cand["ballPossession"]["possessingPlayerId"], str)
+        obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
+        assert cand is None, "no candidate is emitted (ADAAAA-7108)"
+        ev = obs.get("evidence") or {}
+        if "ballVelocity" in ev:
+            saw_evidence = True
+            assert ev["ballVelocity"]["homography"] is True
+            assert ev["ballVelocity"]["speedMps"] >= 0
+            assert "ballPossession" in ev, "observation evidence must carry ballPossession"
+            assert isinstance(ev["ballPossession"]["possessingPlayerId"], str)
             break
-    assert saw_candidate, "expected at least one candidate from the fast-moving player"
+    assert saw_evidence, "expected observation evidence to carry ballVelocity/ballPossession"
 
 
-def test_process_frame_attaches_goal_outcome_to_candidate(monkeypatch):
+def test_process_frame_attaches_goal_outcome_to_evidence(monkeypatch):
     """Decide-leg I2 (ADAAAA-6359) wiring: with a goal-line spec + calibration,
-    a fired CandidateEvent carries goalCrossed / ballOutcome from the goal-plane
-    classifier (forwarded first-class to decide). No spec -> no fields."""
+    the observation `evidence` field carries goalCrossed / ballOutcome from the
+    goal-plane classifier (forwarded first-class to decide). No spec -> no fields.
+    ADAAAA-7108: no candidate is emitted, so the goal signal flows via evidence."""
     from app.session import SessionState
     from app.tracker import IoUTracker
     from app.goal_plane import GoalLineSpec
@@ -287,17 +298,20 @@ def test_process_frame_attaches_goal_outcome_to_candidate(monkeypatch):
 
     saw_outcome = False
     for k in range(n):
-        _obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
-        if cand is not None and "ballOutcome" in cand:
+        obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
+        assert cand is None, "no candidate is emitted (ADAAAA-7108)"
+        ev = obs.get("evidence") or {}
+        if "ballOutcome" in ev:
             saw_outcome = True
-            assert isinstance(cand["goalCrossed"], bool)
-            assert cand["ballOutcome"] in {"goal", "off_target", "blocked", "no_shot", "cross"}
+            assert isinstance(ev["goalCrossed"], bool)
+            assert ev["ballOutcome"] in {"goal", "off_target", "blocked", "no_shot", "cross"}
             break
-    assert saw_outcome, "expected a fired candidate to carry goalCrossed / ballOutcome"
+    assert saw_outcome, "expected observation evidence to carry goalCrossed / ballOutcome"
 
 
 def test_process_frame_no_goal_line_spec_no_fields(monkeypatch):
-    """Without a goal-line spec the candidate carries no goal fields (no crash)."""
+    """Without a goal-line spec the observation evidence carries no goal fields
+    (no crash)."""
     from app.session import SessionState
     from app.tracker import IoUTracker
 
@@ -323,10 +337,11 @@ def test_process_frame_no_goal_line_spec_no_fields(monkeypatch):
     monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: fake)
 
     for k in range(12):
-        _obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
-        if cand is not None:
-            assert "goalCrossed" not in cand
-            assert "ballOutcome" not in cand
+        obs, cand = process_frame(state, seq=k, timestamp=k * DT, image_b64="")
+        assert cand is None, "no candidate is emitted (ADAAAA-7108)"
+        ev = obs.get("evidence") or {}
+        assert "goalCrossed" not in ev
+        assert "ballOutcome" not in ev
 
 
 # ------------------------------------------------------- ADAAAA-5488 empty-seed fix

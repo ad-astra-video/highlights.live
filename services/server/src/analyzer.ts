@@ -2,9 +2,20 @@
 // feed frames to perceive, compute evidence, call decide on candidates, cut a
 // clip on each highlight, and stop the session in `finally`.
 import { randomUUID } from "node:crypto";
-import type { HighlightRecord, JobCandidate, TrackObservation } from "@highlights/events";
+import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation } from "@highlights/events";
 import { StageAMetrics } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
+import {
+  ObserveDecider,
+  LiveObserver,
+  applyOnDemandRecall,
+  type ObserveDecidePayload,
+  type PerFrameSeed,
+  type ObserveBiasHint,
+  OBSERVE_MAX_FRAMES,
+  LIVE_OBSERVE_MAX_FRAMES,
+  OBSERVE_CONTENT_FPS,
+} from "./observe-loop";
 
 export interface ReserveResult {
   sessionId: string;
@@ -57,16 +68,6 @@ export interface DetectionEvidence {
   confidence: number;
   trackId: string;
 }
-/** The I4 / ADAAAA-6361 evidence extension forwarded to decide(): per-detection
- * geometry + ball position + audio-energy level curve. Optional so the live
- * baseline (which forwards none) renders without it. */
-export interface RichEvidence {
-  detections?: DetectionEvidence[];
-  ballPosition?: [number, number] | null;
-  distanceToGoal?: number;
-  goalLineDelta?: number;
-  audioLevels?: number[];
-}
 /** Normalized RMS energy (0..1) of a mono 16-bit PCM buffer — used to build the
  * audio-energy level curve (I4). Silent buffer -> 0. */
 export function rmsNormalized(pcm: Buffer): number {
@@ -116,18 +117,65 @@ export function buildReactionEvidence(
     ballPossessionId: candidate.ballPossession?.possessingPlayerId ?? "",
   };
 }
-/** I4 / ADAAAA-6361: assemble the per-detection geometry + ball position +
- * audio-energy level curve for a candidate at `timestamp`, from the shared
- * window's cached findings and buffered audio taps (no re-analysis, no extra
- * GPU). All fields optional — detail-first mode forwards them, the live baseline
- * forwards none so its prompt is unchanged. */
-export function buildRichEvidence(shared: LiveRunShared, timestamp: number): RichEvidence {
-  const detections = shared.richDetections(timestamp);
+/**
+ * The candidate signal shape a trigger is derived from (ADAAAA-6798 Inc 2).
+ * Mirrors the candidate object produced by perceive / the video + audio legs so
+ * the trigger provenance is a pure function of the candidate — no re-inference.
+ */
+export interface CandidateSignal {
+  eventType: string;
+  timestamp: number;
+  seq?: number;
+  audio?: AudioCandidate["audio"];
+  ballVelocity?: { speedMps?: number };
+  ballPossession?: { possessingPlayerId?: string };
+  goalCrossed?: boolean;
+  ballOutcome?: string;
+  scoreBoardChanged?: boolean;
+}
+
+/**
+ * Derive the trigger metadata for a candidate from the signal already computed
+ * at decision time (ADAAAA-6798 Inc 2). Deterministic and purely derived from the
+ * candidate object — NO new inference, no re-analysis. The `kind` is the
+ * dominant trigger (or `corroborated` when >= 2 independent signals are present);
+ * the raw reaction evidence is carried alongside so the UI can show provenance.
+ */
+export function deriveHighlightTrigger(c: CandidateSignal): HighlightTrigger {
+  const audioKind = c.audio?.kind ?? "";
+  const goalCrossed = c.goalCrossed === true;
+  const scoreChanged = c.scoreBoardChanged === true;
+  const ballSpeed = c.ballVelocity?.speedMps ?? 0;
+  const ballPos = c.ballPossession?.possessingPlayerId ?? "";
+  const signals: string[] = [];
+  if (audioKind === "burst") signals.push("audio_burst");
+  else if (audioKind === "swell") signals.push("audio_swell");
+  if (goalCrossed) signals.push("goal_line");
+  if (scoreChanged) signals.push("score_change");
+  if (ballSpeed > 0 || ballPos) signals.push("ball_signal");
+  let kind: HighlightTrigger["kind"];
+  if (signals.length >= 2) kind = "corroborated";
+  else if (signals.length === 1) kind = signals[0] as HighlightTrigger["kind"];
+  else kind = "motion";
   return {
-    detections: detections.length ? detections : undefined,
-    ballPosition: shared.ballPosition(timestamp) ?? null,
-    audioLevels: shared.audioLevelSeries(),
+    kind,
+    timestamp: c.timestamp,
+    eventType: c.eventType,
+    crowdEnergy: clamp01(c.audio?.peakEnergy) || undefined,
+    audioKind: audioKind || undefined,
+    ballSpeedMps: ballSpeed > 0 ? ballSpeed : undefined,
+    ballPossessionId: ballPos || undefined,
+    goalCrossed: goalCrossed || undefined,
+    ballOutcome: c.ballOutcome || undefined,
+    scoreBoardChanged: scoreChanged || undefined,
   };
+}
+/** ADAAAA-7028 Inc 2: the frame-group partition key for a candidate timestamp.
+ * Mirrors the plan's 3 s frame-group window (FRAME_GROUP_WINDOW_S=3) so each
+ * decide call resolves to a stable (sessionId, groupKey) and, once the
+ * grouped-decide path lands, one decide_audit row per frame group. */
+export function decideGroupKey(timestamp: number): string {
+  return `g${Math.floor(timestamp / 3)}`;
 }
 export interface DecisionResult {
   isHighlight: boolean;
@@ -139,7 +187,70 @@ export interface DecisionResult {
   // flagged so the highlight-clip is labeled distinctly downstream.
   outcome?: "scoring_play" | "near_miss" | "big_play" | "not_highlight";
   nearMiss?: boolean;
+  // ADAAAA-7008 / ADAAAA-7012: when the verdict is uncertain and asks for MORE
+  // evidence for this moment before finalizing, the server calls perceive
+  // on-demand (`recallPerceive`) and folds the fresh context into the payload.
+  // Absent / false => no recall (default). Optional + backward compatible.
+  recall?: boolean;
+  // ADAAAA-7111 (Increment D): the running video summary (story-so-far) the
+  // decide brain updated for this window. The server persists it onto the job
+  // and forwards it into the next cadence tick. Optional + additive.
+  runningSummary?: string;
 }
+// ADAAAA-6855: map job-requested highlight labels (preferLabels) to the
+// outcome taxonomy members they authorize for export. A requested non-goal
+// class may be recorded as a DISTINCT highlight even though it is not a
+// scoring play. Conservative — never widens goal acceptance. Mirrors the
+// decide service's NON_GOAL_LABEL_OUTCOMES in gemma.py (keep in sync).
+const NON_GOAL_LABEL_OUTCOMES: Record<string, Set<string>> = {
+  goals: new Set(["scoring_play"]),
+  "near-misses": new Set(["near_miss"]),
+  saves: new Set(["near_miss", "big_play"]),
+  "red cards": new Set(["big_play"]),
+  "counter-attacks": new Set(["big_play"]),
+};
+
+function requestedOutcomes(preferLabels?: string[]): Set<string> {
+  const out = new Set<string>();
+  for (const lab of preferLabels ?? []) {
+    const mapped = NON_GOAL_LABEL_OUTCOMES[lab.trim().toLowerCase()];
+    if (mapped) for (const m of mapped) out.add(m);
+  }
+  return out;
+}
+
+/** ADAAAA-6969: derive the TRUE public `eventType` label from the outcome
+ * taxonomy member. A non-scoring highlight (`near_miss` / `big_play`) is never
+ * published as "GOAL" — the label reflects the outcome class (NEAR_MISS /
+ * BIG_PLAY), so a keeper save / near-miss surfaces as a distinct non-goal
+ * highlight. A frame-confirmed `scoring_play` stays "GOAL". Any other / unknown
+ * outcome defers to `fallback` (the candidate/model label).
+ *
+ * Kept in sync with `event_type_for_outcome` in services/decide/app/gemma.py
+ * (ADAAAA-6969) so the public label and the decide-note always agree. */
+export function eventTypeForOutcome(
+  outcome: DecisionResult["outcome"],
+  fallback?: string
+): string | undefined {
+  switch (outcome) {
+    case "scoring_play":
+      return "GOAL";
+    case "near_miss":
+      return "NEAR_MISS";
+    case "big_play":
+      return "BIG_PLAY";
+    default:
+      return fallback;
+  }
+}
+
+/** ADAAAA-6969: the eventType a highlight carries: the outcome-derived label
+ * when the outcome is known (never a stale candidate/model "GOAL" on a
+ * non-scoring class), else the decision's own eventType / candidate type. */
+function highlightEventType(decision: DecisionResult, fallback?: string): string {
+  return eventTypeForOutcome(decision.outcome, decision.eventType ?? fallback) ?? "";
+}
+
 /**
  * ADAAAA-6598: the single server-side accept gate. ONLY a frame-confirmed
  * scoring_play is a board-accepted GOAL highlight. A near_miss / big_play /
@@ -148,11 +259,77 @@ export interface DecisionResult {
  * positive reaches the board. A legacy verdict with no `outcome` is treated
  * per its isHighlight (backward compatible). This is defense-in-depth on top of
  * the decide service's own finalize_goal_acceptance.
+ *
+ * ADAAAA-6855: when the job explicitly requested a non-goal class in
+ * `preferLabels`, that class is accepted as a DISTINCT highlight (outcome /
+ * eventType preserved, never a goal) so a correctly-detected near-miss / save /
+ * red-card / counter-attack is exported rather than swallowed.
  */
-export function isAcceptedHighlight(d: DecisionResult): boolean {
+export function isAcceptedHighlight(d: DecisionResult, preferLabels?: string[]): boolean {
   if (!d.isHighlight) return false;
   if (d.outcome === undefined) return true; // legacy verdict, trust isHighlight
-  return d.outcome === "scoring_play";
+  if (d.outcome === "scoring_play") return true; // goal always a highlight
+  return requestedOutcomes(preferLabels).has(d.outcome);
+}
+
+// ---------------------------------------------------------------------------
+// Stage-2 goal/near-miss CONFIRMATION pass (ADAAAA-6797) — server-side VOD
+// driver. The decide /confirm endpoint (services/decide/app/confirm.py) is the
+// owner of the actual deep-frame-dive verdict; this file only (1) detects the
+// trigger population (goal-type + no independent attestation + Stage-1
+// scoring_play accept), (2) assembles the higher-fidelity confirm context from
+// data the server already holds (cached frame window / trajectories / audio
+// tap), (3) routes the candidate through the adapter `confirm()` call, and
+// (4) adopts the reconciled decision (or keeps Stage-1 on passthrough / any
+// failure). It is gated by `cfg.confirmEnabled` (VOD-first; the live pass
+// never sets it) so the flag-off path is a strict no-op.
+// ---------------------------------------------------------------------------
+
+/** The Stage-2 confirmation-pass response (mirror of ConfirmDecision). */
+export interface ConfirmDecision {
+  /** Was the pass enabled on the decide side. */
+  enabled: boolean;
+  /** Structured verdict: confirmed_goal | near_miss | not_goal, or null on the
+   * passthrough path (disabled / unparseable). */
+  goalConfirmed?: "confirmed_goal" | "near_miss" | "not_goal" | null;
+  /** Model self-confidence 0..1. */
+  confidence: number;
+  /** Short grounded reason naming the deciding evidence. */
+  reason: string;
+  /** Per-evidence tri-state read (true / false / null). */
+  evidence: Record<string, boolean | null>;
+  /** Whether this pass corrected the Stage-1 read (the core value metric). */
+  stage1Disagreed: boolean;
+  /** The reconciled HighlightDecision-shaped dict to adopt in place of the
+   * Stage-1 verdict. On passthrough it is the (unchanged) Stage-1 verdict. */
+  decision: DecisionResult;
+}
+
+/** The confirmation-pass request the adapter forwards to decide `/confirm`. */
+export interface ConfirmRequest {
+  eventType: string;
+  timestamp: number;
+  gameHint: string;
+  /** Stage-1 primary-pass verdict, presented back to the model. */
+  stage1: DecisionResult;
+  /** Denser temporal frame window (~10-15 fps) around the event instant. */
+  frames: { role: string; base64: string }[];
+  /** Precise pre-event / event-instant / post-event keyframes. */
+  keyframes: { role: string; base64: string }[];
+  /** Object/ball trajectory tracks: { label, trackId, path: [[t,x,y],..] }. */
+  trajectories: { label: string; trackId: string; path: number[][] }[];
+  /** Motion / optical-flow magnitude at the event (0 when unavailable). */
+  opticalFlowMagnitude: number;
+  /** Motion magnitude series across the sample ([] when unavailable). */
+  flowMagnitudes: number[];
+  /** Short RMS audio-energy envelope ([] when unavailable). */
+  audioLevels: number[];
+  /** Surrounding audio clip (mono 16 kHz WAV base64) — "" when unavailable. */
+  audioB64: string;
+  /** Optional independent corroboration — INPUT only, never a gate. */
+  ballOutcome?: string;
+  goalCrossed?: boolean;
+  scoreBoardChanged?: boolean;
 }
 /** One audio chunk fed to the Stage-A noise-change gate (INC-2 / ADAAAA-4325).
  * Owned by the server's ffmpeg audio tap: short (default ~100 ms) mono int16
@@ -211,6 +388,34 @@ export interface PlanRequest {
   imageB64?: string;
 }
 
+/** ADAAAA-6935: one Stage-A candidate trigger accumulated within a 3 s frame
+ * group, carrying its own decide-evidence snapshot so a single merged group
+ * review can return a per-trigger verdict (per-trigger accept / exactly-once
+ * billing preserved, AC7). */
+export interface GroupCandidate {
+  /** The frame-group partition key: timestamp of the frame that fired it. */
+  timestamp: number;
+  eventType: string;
+  /** Decide evidence snapshot captured at candidate fire time. */
+  evidence: Parameters<PipelineClient["decide"]>[0];
+}
+
+/** ADAAAA-6935: the payload of ONE merged decide review over a 3 s frame
+ * group. `frames` is the group's frame sequence (temporal order); the decide
+ * service runs a SINGLE gemma review over them + every `candidates` entry and
+ * returns one verdict per candidate (in order), so decide GPU calls drop from
+ * ~#triggers to ~#groups-with-a-trigger. */
+export interface GroupDecodeRequest {
+  gameHint?: string;
+  preferLabels?: string[];
+  reasoningEffort?: string;
+  /** The whole group's frame sequence (full frames, temporal order). */
+  frames?: { role: string; base64: string }[];
+  /** Surrounding audio clip (mono 16 kHz WAV, base64) for the group. */
+  audioB64?: string;
+  candidates: GroupCandidate[];
+}
+
 export interface PipelineClient {
   reservePerceive(): Promise<ReserveResult>;
   analyze(
@@ -239,6 +444,20 @@ export interface PipelineClient {
    * a 404 (fresh session after re-reserve) is dropped, never fatal.
    */
   controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<void>;
+  /**
+   * On-demand perceive recall (ADAAAA-7008 / ADAAAA-7012). When a decide verdict
+   * requests more evidence for a moment, the server asks perceive for the
+   * per-frame derived context (tracks / objects / ocr) ALREADY computed by
+   * process_frame — WITHOUT re-running the detector — and the caller folds it
+   * into the payload via `applyOnDemandRecall` before finalizing. `seeds` is `[]`
+   * on a no-op (nothing cached / best-effort failure), which the caller treats
+   * as "no new evidence" so a recall never regresses a decision. Optional so a
+   * client/FAKE without recall support simply never recalls (no regression).
+   */
+  recallPerceive?(
+    sessionId: string,
+    req: { centerTs?: number; windowS?: number; startTs?: number; endTs?: number }
+  ): Promise<{ centerTs?: number; seeds: PerFrameSeed[] }>;
   /**
    * Decide whether a candidate is a highlight. `imageB64` is the candidate
    * frame so the Gemma 12B QAT decide runner sees the actual moment (vision),
@@ -282,8 +501,39 @@ export interface PipelineClient {
        * re-analysis. The decide-runner contract add (ADAAAA-6030) wires this
        * into the prompt; empty when the window has nothing to add. */
       priorContextText?: string;
+      /** ADAAAA-7028 Inc 2 audit identity forwarded so the decide audit
+       * descriptor keys the durable index by (sessionId, groupKey). */
+      jobId?: string;
+      groupKey?: string;
+      /** ADAAAA-7111 (Increment D): the running video summary (story-so-far)
+       * carried into this cadence decide so the model EXTENDS it. Empty on the
+       * first tick. Absent = no prior summary (unchanged behaviour). */
+      storySoFar?: string;
     }
   ): Promise<DecisionResult>;
+  /**
+   * Decide ALL candidates in one 3 s frame group with a SINGLE gemma review
+   * (ADAAAA-6935). `req.frames` is the group's frame sequence; the decide
+   * service runs ONE inference over them + every `req.candidates` entry and
+   * returns a verdict per candidate, in candidate order. Per-trigger accept
+   * side-effects (cut / highlight record / billing exactly once) are applied
+   * by the caller, so merged grouping never drops a genuine highlight or
+   * double-bills (AC7). Optional: a client (or test fake) that does not
+   * implement the merged review falls back to a per-candidate `decide` loop,
+   * preserving the old per-trigger behavior with no regression.
+   */
+  decideGroup?(req: GroupDecodeRequest): Promise<{ verdicts: DecisionResult[] }>;
+  /**
+   * Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). For a goal-type
+   * candidate that carried no independent attestation and read as a Stage-1
+   * scoring_play, run the decide `/confirm` deep frame dive with the Stage-1
+   * verdict + the higher-fidelity confirm context, and return the reconciled
+   * verdict. Reuses the same fixed-price decide-runner path as `decide`/`
+   * /highlight` (1 billable unit; 402 -> signer -> retry). The runner returns a
+   * passthrough (goalConfirmed null) when disabled/unparseable, and a transport
+   * failure is a rejected promise — either way the caller keeps Stage-1.
+   */
+  confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string }): Promise<ConfirmDecision>;
   /**
    * Submit a single-shot fine-tune job to the highlights-train runner
    * (Florence-2 <OD> LoRA). The runner blocks until the job finishes and the
@@ -358,7 +608,7 @@ export interface AnalyzerConfig {
     * the decide window (a 1 FPS / low-fps sample can skip it). Returns absolute-
     * timestamped frames (always >= 1); a throw/[] degrades to the rolling window. */
    resampleFrames?: (timestamp: number) => Promise<{ timestamp: number; imageB64: string }[]>;
-  /**
+   /**
    * ADAAAA-6314 Path 2: forward the surrounding audio clip on the LIVE baseline
    * too (bounded to trigger candidates — never every frame; no `frames[]`
    * change, so live frame depth is untouched). The go-livepeer decide runner
@@ -448,6 +698,67 @@ export interface AnalyzerConfig {
    * logged by the caller, never allowed to fail the frame loop.
    */
   onDecision?: (cand: JobCandidate) => void;
+  /** ADAAAA-6797: run the Stage-2 goal/near-miss confirmation pass on this
+   * pass. Only the VOD path sets it (from `DECIDE_CONFIRM_ENABLED`); the live
+   * pass leaves it unset so live is untouched during VOD-first rollout. When
+   * set, an un-attested goal-type candidate whose Stage-1 read is a
+   * scoring_play accept is routed through the decide `/confirm` deep frame
+   * dive and the reconciled verdict is adopted in its place. */
+  confirmEnabled?: boolean;
+  /**
+   * ADAAAA-7007: enable the VOD decide-observer architecture. When set (with
+   * `decideWindowN` also set, i.e. the VOD detail-first pass), the vision LLM
+   * becomes the primary observer: decide is invoked on a ~3 s cadence with a
+   * ~10 s overlapping reference window (<=30 frames), and perceive becomes a
+   * data seeder + on-demand provider rather than the candidate on/off gate.
+   * Default off; the candidate-gated path stays the live/default behavior until
+   * the observer pass is validated end-to-end. Wired from
+   * `VOD_OBSERVE_LOOP` (server config). */
+  observeLoop?: boolean;
+  /**
+   * ADAAAA-7007: observe-loop cadence (content seconds) between decide
+   * invocations. Default 3 (`OBSERVE_CADENCE_S`). Optional so the flag-on path
+   * can be tuned without code change.
+   */
+  observeCadenceS?: number;
+  /**
+   * ADAAAA-7007: observe reference window length (content seconds) assembled
+   * around the current moment. Default 10 (`OBSERVE_WINDOW_S`). Decides only
+   * fire after the window cadence elapses so consecutive windows overlap.
+   */
+  observeWindowS?: number;
+  /**
+   * ADAAAA-7007: observe hard frame cap per decide invocation. Default 30
+   * (`OBSERVE_MAX_FRAMES`). A denser window is subsampled to this cap.
+   */
+  observeMaxFrames?: number;
+  /**
+   * ADAAAA-7011: enable the LIVE decide-observer architecture. When set (with
+   * `decideWindowN` UNSET, i.e. the live/default pass), decide is driven on the
+   * ~3 s cadence REGARDLESS of whether perceive emitted a candidate, using the
+   * `LiveObserver` (rolling PAST ~10 s window, <=30-frame cap). Perceive becomes
+   * a data seeder + on-demand provider; candidate triggers are folded into
+   * `biasHints` (provenance) and never gate decide, so trigger-FP gating no
+   * longer limits recall. Accepts share `acceptVideoDecision` (clip cut + record
+   * + SSE highlight + decision-time billing). Default off; the candidate-gated
+   * live baseline stays the behavior until the observer pass is validated.
+   * Wired from `LIVE_OBSERVE_LOOP` (server config).
+   */
+  liveObserveLoop?: boolean;
+  /** ADAAAA-7028 Inc 2: persist the decide audit descriptor returned on the
+   * decision (`_audit`) so the durable decide_audit index + decision-trail has
+   * one row per frame group. Best-effort: a throwing onDecideAudit is caught
+   * + logged, never a pipeline failure. */
+  onDecideAudit?: (desc: unknown) => void;
+  /** ADAAAA-7111 (Increment D): read the job's current running video summary
+   * (story-so-far) so the next cadence decide request can carry it forward.
+   * Absent => no prior summary (the decide runs without one). */
+  getRunningSummary?: () => string;
+  /** ADAAAA-7111 (Increment D): persist the updated running video summary after
+   * a cadence decide, so the job-detail endpoint + web UI surface it growing.
+   * Best-effort: a throwing callback is caught + logged, never a pipeline
+   * failure. */
+  onRunningSummary?: (summary: string) => void;
 }
 
 /**
@@ -507,6 +818,84 @@ export interface AnalyzeOutcome {
   sessionId: string;
   highlights: HighlightRecord[];
   framesAnalyzed: number;
+  /** ADAAAA-7011: live decide-observer cadence + decide gemma E2E latency
+   * snapshot (absent when the live observer was not enabled). Populated from
+   * LiveObserver.latencySamples() so the Livepeer runner shows the ~30 s budget
+   * utilization (cadence + gemma E2E). */
+  observeMetrics?: LiveObserveMetricsSnapshot;
+  /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot
+   * (absent when the VOD observer was not enabled). Populated from
+   * ObserveDecider so the VOD job record carries the <=30-frame cap-exercised
+   * count + per-call decide input size for the -67% cost measure. */
+  vodObserveMetrics?: VodObserveMetricsSnapshot;
+}
+
+/** ADAAAA-7011: live decide-observer cadence + decide gemma E2E latency
+ * snapshot, recorded onto the live job so the cadence + gemma E2E latency are
+ * inspectable on the Livepeer runner (the ~30 s budget = ~3 s cadence + the
+ * gemma end-to-end latency). Mirrors the StageAMetrics snapshot convention. */
+export interface LiveObserveMetricsSnapshot {
+  /** Number of decide invocations that fired on the cadence. */
+  decideCalls: number;
+  /** Decisions that became an accepted highlight. */
+  accepted: number;
+  /** Max frames in a single decide payload (<= LIVE_OBSERVE_MAX_FRAMES). */
+  maxFrames: number;
+  /** Mean decide gemma end-to-end latency (ms). */
+  meanE2eMs: number;
+  /** Max decide gemma end-to-end latency (ms). */
+  maxE2eMs: number;
+  /** Mean content-time cadence between consecutive fired ticks (ms). */
+  meanCadenceMs: number;
+  /** Max content-time cadence between consecutive fired ticks (ms). */
+  maxCadenceMs: number;
+}
+
+/** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
+ * onto the VOD job so the acceptance criteria are inspectable per job: the
+ * <=30-frame cap actually exercised (`subsampledCalls>0`) and the per-call
+ * decide input-size distribution (`framesPerCall`, the -67% cost-measure
+ * input). Mirrors the live {@link LiveObserveMetricsSnapshot} convention. */
+export interface VodObserveMetricsSnapshot {
+  /** Number of decide invocations that fired on the cadence. */
+  decideCalls: number;
+  /** Decisions that became an accepted highlight. */
+  accepted: number;
+  /** Max frames in a single decide payload (<= OBSERVE_MAX_FRAMES = 30). */
+  maxFrames: number;
+  /** Calls where the max-frames cap forced a subsample (proves cap exercised). */
+  subsampledCalls: number;
+  /** Per-call decide input-size distribution (frame count per invocation). */
+  framesPerCall: number[];
+}
+
+/** Build the VOD decide-observer per-call input-size + cap snapshot from the
+ * decider's report ticks (pure aggregation of {@link ObserveDecider}). */
+export function buildVodObserveMetrics(obs: ObserveDecider): VodObserveMetricsSnapshot {
+  return {
+    decideCalls: obs.decideCalls(),
+    accepted: obs.acceptedCount(),
+    maxFrames: obs.maxFrameCount(),
+    subsampledCalls: obs.subsampledCallCount(),
+    framesPerCall: obs.inputSizeSamples(),
+  };
+}
+
+/** Build the live decide-observer latency/cadence snapshot from the observer's
+ * measured samples (pure aggregation of {@link LiveObserver.latencySamples}). */
+export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSnapshot {
+  const samples = obs.latencySamples();
+  const cadences = samples.map((s) => s.cadenceMs).filter((c) => c > 0);
+  const avg = (xs: number[]): number => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+  return {
+    decideCalls: obs.decideCalls(),
+    accepted: obs.acceptedCount(),
+    maxFrames: obs.maxFrameCount(),
+    meanE2eMs: Number(obs.meanE2eMs().toFixed(1)),
+    maxE2eMs: Number(obs.maxE2eMs().toFixed(1)),
+    meanCadenceMs: Number(avg(cadences).toFixed(1)),
+    maxCadenceMs: cadences.length ? Number(Math.max(...cadences).toFixed(1)) : 0,
+  };
 }
 
 /**
@@ -734,9 +1123,14 @@ export class LiveRunShared {
   readonly evidence = new EvidenceTracker();
   readonly highlights: HighlightRecord[] = [];
   /** Stage-A audio-gate FP-rate + latency metric (INC-2 / ADAAAA-4325 slice 5).
-   * Every audio candidate routed through decideOnCandidate() records its
-   * outcome here; the job runner snapshots it onto the job at completion. */
+   * Every audio gate outcome records here; the job runner snapshots it onto the
+   * job at completion. */
   readonly stageA = new StageAMetrics();
+  /** Stage-1 vs Stage-2 confirmation-pass metric (ADAAAA-6797). Every confirm
+   * dive attempted records its outcome here; runVodJob snapshots it onto the
+   * job at completion as `confirmMetrics` (disagreement rate = disagreed /
+   * totalRuns). */
+  readonly confirmMetrics = { totalRuns: 0, disagreed: 0 };
   /** Rolling window of cached frames + their already-computed findings (plan
    * §A). Time-bounded to DECIDE_WINDOW_SECONDS and hard-capped at
    * CACHE_MAX_FRAMES, so it never grows on long streams. Findings are REUSED
@@ -997,12 +1391,78 @@ export class LiveRunShared {
     const [x1, y1, x2, y2] = ball.bbox;
     return [(x1 + x2) / 2, (y1 + y2) / 2];
   }
+  /** Record one confirmation-pass dive into the Stage-1 vs Stage-2 metric
+   * (ADAAAA-6797). `stage1Disagreed` is only counted when a real reconciled
+   * verdict came back (a transport failure / passthrough records a run with no
+   * disagreement). */
+  recordConfirm(result: { stage1Disagreed?: boolean }): void {
+    this.confirmMetrics.totalRuns++;
+    if (result.stage1Disagreed === true) this.confirmMetrics.disagreed++;
+  }
+  /** Sampled frames inside [ts-windowS, ts+windowS] as raw {timestamp, imageB64}
+   * pairs (oldest -> newest), for the Stage-2 denser window / keyframes. Uses
+   * the already-cached frame window — no new GPU. [] when nothing cached. */
+  framesNear(timestamp: number, windowS: number): { timestamp: number; imageB64: string }[] {
+    return [...this.frames.values()]
+      .filter((f) => f.imageB64 && f.timestamp >= timestamp - windowS && f.timestamp <= timestamp + windowS)
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map((f) => ({ timestamp: f.timestamp, imageB64: f.imageB64 }));
+  }
+  /** Build the Stage-2 object/ball trajectory tracks + motion/optical-flow
+   * magnitude (ADAAAA-6797) from the ALREADY-COMPUTED cached findings — no new
+   * GPU inference. For each tracked object it assembles a per-timestep
+   * [t, cx, cy] center path across the in-window frames; `opticalFlowMagnitude`
+   * is the max single-step center displacement (a motion proxy) and
+   * `flowMagnitudes` is the per-frame max displacement series. Empty / 0 when
+   * no track findings are cached in the window. */
+  motionContext(timestamp: number): {
+    trajectories: { label: string; trackId: string; path: number[][] }[];
+    opticalFlowMagnitude: number;
+    flowMagnitudes: number[];
+  } {
+    const frames = [...this.frames.values()]
+      .filter((f) => f.findings && f.timestamp >= timestamp - CONFIRM_MOTION_WINDOW_S && f.timestamp <= timestamp + CONFIRM_MOTION_WINDOW_S)
+      .sort((a, b) => a.timestamp - b.timestamp);
+    const byTrack = new Map<string, { label: string; path: number[][] }>();
+    const prevPos = new Map<string, [number, number]>();
+    let opticalFlowMagnitude = 0;
+    const flowMagnitudes: number[] = [];
+    for (const f of frames) {
+      let frameMax = 0;
+      for (const t of f.findings!.tracks) {
+        const bbox = t.bbox as number[];
+        if (!bbox || bbox.length < 4) continue;
+        const cx = (bbox[0] + bbox[2]) / 2;
+        const cy = (bbox[1] + bbox[3]) / 2;
+        const key = t.trackId || t.label || "obj";
+        const entry = byTrack.get(key) ?? { label: t.label || "object", path: [] };
+        entry.path.push([f.timestamp, cx, cy]);
+        byTrack.set(key, entry);
+        const prev = prevPos.get(key);
+        if (prev) {
+          const d = Math.hypot(cx - prev[0], cy - prev[1]);
+          if (d > frameMax) frameMax = d;
+          if (d > opticalFlowMagnitude) opticalFlowMagnitude = d;
+        }
+        prevPos.set(key, [cx, cy]);
+      }
+      flowMagnitudes.push(frameMax);
+    }
+    const trajectories = [...byTrack.values()]
+      .map((e) => ({ label: e.label, trackId: e.label, path: e.path }))
+      .slice(0, 8);
+    return { trajectories, opticalFlowMagnitude, flowMagnitudes };
+  }
 }
 
 /** Seconds of audio tap kept for the decide() surrounding-audio clip
  * (ADAAAA-4954 detail-first; bounded so a long VOD pass doesn't grow unbounded).
  * Roughly the clip-relevant window around a trigger. */
 export const AUDIO_CLIP_KEEP_S = 10;
+/** Stage-2 confirmation-pass motion-context window (s on each side of the
+ * event instant) the server samples cached track findings from (ADAAAA-6797).
+ * Roughly the dense-dive window; no new GPU (reuses cached findings). */
+export const CONFIRM_MOTION_WINDOW_S = 5;
 
 /** Wrap a run of base64 mono 16 kHz int16 PCM samples into a RIFF/WAVE file and
  * return it as base64. Pure + deterministic so it is unit-testable. The decide
@@ -1028,62 +1488,6 @@ export function pcmInt16ToWavB64(samplesB64: string, sampleRate = 16_000): strin
   return Buffer.concat([header, pcm]).toString("base64");
 }
 
-/** Build the decide() opts for a candidate. Always anchors the candidate to
- * its nearest frame image; in DETAIL-FIRST mode (cfg.decideWindowN set,
- * ADAAAA-4954) additionally forwards the temporal `frames[]` SEQUENCE and the
- * surrounding audio clip so Gemma reasons deeper per trigger than the single
- * still-image live baseline. Live/default passes (no decideWindowN) send only
- * the anchored image, keeping the deployed baseline byte-for-byte unchanged. */
-function detailDecideOpts(
-  cfg: AnalyzerConfig,
-  shared: LiveRunShared,
-  anchoredImage: string | undefined,
-  candidate: { timestamp: number; peakAudioTs?: number },
-  burstFrames?: { role: string; base64: string }[]
-): {
-  gameHint: string;
-  imageB64: string | undefined;
-  frames?: { role: string; base64: string }[];
-  audioB64?: string;
-  priorContextText?: string;
-} {
-  const opts: {
-    gameHint: string;
-    imageB64: string | undefined;
-    frames?: { role: string; base64: string }[];
-    audioB64?: string;
-    priorContextText?: string;
-  } = {
-    gameHint: cfg.gameHint,
-    imageB64: anchoredImage,
-  };
-  // A2: every decide call for an in-window candidate carries the current 60 s
-  // window's facts as bounded text tokens (pure server assembly; cached
-  // findings, no re-analysis). Included unconditionally — live and detail-first
-  // alike. Empty when the window has nothing to add (behavior identical).
-  opts.priorContextText = shared.windowFactsText();
-  // Increment F / ADAAAA-6465: Frames are the PRIMARY evidence on EVERY trigger
-  // (live + VOD). Assemble the capped sequence — sampled at analysis_fps,
-  // keyframe set (trigger-onset, peak-audio, window-end), hard-capped at
-  // max_frames_per_analysis — so the LLM watches the actual play. Audio stays a
-  // cheap, fallible trigger/corroboration (crowds erupt for near misses / wrong
-  // calls / replays). This replaces the detail-first-only `frames[]` gating so
-  // the analysis call always receives the assembled sequence, never a single
-  // still (live baseline no longer sends a bare anchored image).
-  const seq = shared.frameSequenceFor(candidate.timestamp, candidate.peakAudioTs, {
-    analysisFps: cfg.analysisFps,
-    maxFramesPerAnalysis: cfg.maxFramesPerAnalysis,
-    preWindowS: cfg.preWindowS,
-    postWindowS: cfg.postWindowS,
-  });
-  // I7 / ADAAAA-6361: when a higher-FPS burst was re-sampled around the trigger,
-  // prefer it (it already contains the ball-goal-crossing instant); else use the
-  // assembled capped sequence.
-  opts.frames = burstFrames?.length ? burstFrames : seq;
-  const audio = shared.audioClipB64();
-  if (audio) opts.audioB64 = audio;
-  return opts;
-}
 
 /**
  * Increment D (ADAAAA-6467): the what-to-track plan orchestrator on the
@@ -1255,141 +1659,561 @@ export class TrackingPlanController {
  * never fails the frame loop. */
 function buildCandidateNote(
   cfg: AnalyzerConfig,
-  candidate: { eventType: string; timestamp: number; seq?: number },
+  candidate: CandidateSignal,
   decision: DecisionResult,
-  status: "accepted" | "suppressed" | "rejected"
+  status: "accepted" | "suppressed" | "rejected",
+  candidateId: string,
+  trigger: HighlightTrigger
 ): void {
   if (!cfg.onDecision) return;
   try {
     cfg.onDecision({
-      id: randomUUID(),
+      id: candidateId,
       jobId: cfg.jobId,
       seq: candidate.seq ?? 0,
       timestamp: candidate.timestamp,
-      eventType: decision.eventType ?? candidate.eventType,
+      eventType: highlightEventType(decision, candidate.eventType),
       score: decision.score,
       isHighlight: decision.isHighlight,
       outcome: decision.outcome,
       nearMiss: decision.nearMiss,
       reason: decision.reason,
       status,
+      trigger,
       createdAt: new Date().toISOString(),
     });
   } catch (e: any) {
     console.error(`[decide-note:${cfg.jobId}] persist failed:`, String(e?.message || e));
   }
 }
+/** Accept (or suppress) a decided candidate with exactly the serial semantics:
+ * goal-burst suppression applied in timestamp order, then cut + record + SSE
+ * `highlight` event (which drives decision-time persist/bill/quota exactly
+ * once). Shared by the serial (live / w=1) inline path and the ordered VOD
+ * pipeline so both are byte-for-byte identical. */
+/** ADAAAA-6874 (Phase 2): deterministic per-highlight idempotency key anchored
+ * on the job + candidate frame seq + event type. A re-claimed/resumed job that
+ * re-decides the same candidate produces the SAME key, so the server's
+ * addHighlight dedup prevents double-persist and double-billing. */
+export function highlightIdempotencyKey(jobId: string, seq: number, eventType?: string): string {
+  return `hl:${jobId}:${seq}:${eventType ?? "highlight"}`;
+}
 
-/**
- * Route ONE candidate through the decide stage on the anchored frame (INC-2 /
- * ADAAAA-4325 slice 4). Shared by the video /analyze leg and the Stage-A audio
- * tap leg so both: emit a live-console candidate, anchor the decide frame image
- * to the candidate's timestamp, run the Gemma decide runner with the shared
- * video evidence, and — when it is a highlight — cut a clip and record it.
- *
- * The candidate marks a possible highlight only; only ``decide()`` decides.
- * ``emit`` carries the caller's seq/timestamp for live-console events.
- */
-export async function decideOnCandidate(
+async function acceptVideoDecision(
   client: PipelineClient,
-  shared: LiveRunShared,
+  run: LiveRunShared,
   cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
   cfg: AnalyzerConfig,
-  candidate: { eventType: string; timestamp: number; seq?: number; audio?: AudioCandidate["audio"]; goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean },
-  onEvent?: (ev: AnalyzeEvent) => void,
-  emit?: { seq: number; timestamp: number }
+  onEvent: ((ev: AnalyzeEvent) => void) | undefined,
+  emit: { seq: number; timestamp: number },
+  candidate: CandidateSignal,
+  stage1: DecisionResult
 ): Promise<void> {
-  const evSeq = emit?.seq ?? candidate.seq ?? 0;
-  const evTs = emit?.timestamp ?? candidate.timestamp;
-  onEvent?.({ seq: evSeq, timestamp: evTs, type: "candidate", candidate });
-  const anchoredImage = shared.anchor(candidate.timestamp);
-  // I7 / ADAAAA-6361: on the detail-first VOD pass, re-sample a higher-FPS burst
-  // of frames around the trigger so the ball-goal-crossing instant is present in
-  // the decide window (a low-FPS sample can skip it). Any failure degrades to the
-  // rolling window — never a dead decide call.
-  let burstFrames: { role: string; base64: string }[] | undefined;
-  if (cfg.decideWindowN !== undefined && cfg.resampleFrames) {
-    try {
-      const burst = await cfg.resampleFrames(candidate.timestamp);
-      if (burst?.length) burstFrames = burst.map((f) => ({ role: "full", base64: f.imageB64 }));
-    } catch {
-      /* degrade to rolling window */
-    }
-  }
-  // Cache the candidate (type + timestamp + reaction) into the 60 s window so
-  // it participates in the window's factual context (plan §A / A2).
-  shared.addCandidate({
-    timestamp: candidate.timestamp,
-    eventType: candidate.eventType,
-    reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
-  });
-  const decision = await client.decide(
-    {
-      eventType: candidate.eventType,
-      trackCount: shared.evidence.trackCount,
-      maxVelocity: shared.evidence.maxVelocity,
-      ocrHits: shared.ocrHitsAt(candidate.timestamp),
-      reaction: buildReactionEvidence(candidate, shared.evidence.trackCount),
-      goalCrossed: candidate.goalCrossed,
-      ballOutcome: candidate.ballOutcome,
-      scoreBoardChanged: candidate.scoreBoardChanged,
-      // I4 / ADAAAA-6361: forward per-detection geometry + audio level curve on
-      // the detail-first (VOD) pass so the prompt can cite concrete evidence.
-      ...(cfg.decideWindowN !== undefined ? buildRichEvidence(shared, candidate.timestamp) : {}),
-    },
-    detailDecideOpts(cfg, shared, anchoredImage, { timestamp: candidate.timestamp, peakAudioTs: candidate.audio?.ts }, burstFrames)
-  );
-  // Track the Stage-A FP-rate metric (INC-2 / ADAAAA-4325 slice 5): whether
-  // Gemma accepted this audio-gate candidate as a highlight, plus the gate's
-  // reported onset latency. Feeds job.stageAMetrics fpRate = rejected / total.
-  shared.stageA.recordOutcome(decision.isHighlight, candidate.audio?.onsetLatencyS);
+  // ADAAAA-6797: Stage-2 confirmation dive — for an un-attested goal-type
+  // candidate whose Stage-1 read is a scoring_play accept, run the decide
+  // /confirm deep frame dive and adopt the reconciled verdict in its place.
+  // Strict no-op when the trigger doesn't fire or the flag (confirmEnabled) is
+  // off; the Stage-1 verdict is kept on passthrough / transport failure.
+  const { decision, confirm } = await confirmReconcile(client, run, cfg, stage1, candidate);
+  // ADAAAA-6798 Inc 2: derive the trigger provenance ONCE from the candidate
+  // (pure function, no inference) and share one candidateId across the
+  // persisted JobCandidate and the HighlightRecord so the trigger kind +
+  // timestamp match the candidate with zero drift.
+  const trigger = deriveHighlightTrigger(candidate);
+  const candidateId = randomUUID();
   // ADAAAA-6851 Inc 2: persist EVERY decide evaluation — accepted highlight,
-  // burst-suppressed, near-miss, not-highlight — before the accept gate so no
-  // non-accepted decision is lost.
-  const acceptedDecision = isAcceptedHighlight(decision);
-  // ADAAAA-6598: accept gate — only a frame-confirmed scoring_play is a board
-  // highlight. A near_miss / big_play read is recorded distinctly (outcome
-  // preserved) but never cut as a GOAL highlight/clip.
-  if (!acceptedDecision) {
-    buildCandidateNote(cfg, candidate, decision, "rejected");
+  // burst-suppressed, near-miss, not-highlight. This runs on both the serial
+  // (live / w=1) path and the ordered pipeline accept path (ADAAAA-6854), so
+  // the decision-time note trail stays identical either way.
+  if (!isAcceptedHighlight(decision, cfg.preferLabels)) {
+    buildCandidateNote(cfg, candidate, decision, "rejected", candidateId, trigger);
     return;
   }
-  // ADAAAA-6610 temporal burst suppression: at most one GOAL highlight per
-  // window. A GOAL accepted within `goalBurstWindowS` of a previous one is a
-  // burst duplicate (start-of-clip confabulated-goal flood) and is dropped,
-  // not recorded.
-  if (shared.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType)) {
-    buildCandidateNote(cfg, candidate, decision, "suppressed");
+  // ADAAAA-6610 temporal burst suppression: a GOAL
+  // accepted within `goalBurstWindowS` of a previous one is a start-of-clip
+  // burst duplicate and is dropped, not recorded.
+  if (run.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType)) {
+    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger);
     onEvent?.({
-      seq: evSeq,
-      timestamp: evTs,
+      seq: emit.seq,
+      timestamp: emit.timestamp,
       type: "candidateBlocked",
-      candidate: { eventType: decision.eventType ?? candidate.eventType, timestamp: candidate.timestamp },
+      candidate: { eventType: highlightEventType(decision, candidate.eventType), timestamp: candidate.timestamp },
       reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
     });
     return;
   }
-  buildCandidateNote(cfg, candidate, decision, "accepted");
+  buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger);
   const { clipId, clipUri } = await cut(candidate.timestamp);
   const rec: HighlightRecord = {
     id: randomUUID(),
     jobId: cfg.jobId,
+    // ADAAAA-6874 (Phase 2): deterministic idempotency key so a resumed job that
+    // re-decides the same candidate cannot double-persist/double-bill.
+    idempotencyKey: highlightIdempotencyKey(cfg.jobId, emit.seq, decision.eventType ?? candidate.eventType),
     clipUri,
     start: Math.max(0, candidate.timestamp - cfg.clipBeforeS),
     end: candidate.timestamp + cfg.clipAfterS,
-    eventType: decision.eventType,
+    eventType: highlightEventType(decision),
     score: decision.score,
     reason: decision.reason,
     // Increment F / ADAAAA-6465: near-miss surface at a lower score, labeled
-    // distinctly via the outcome/nearMiss flag on the highlight record.
+    // distinctly via the outcome/nearMiss flag.
     outcome: decision.outcome,
     nearMiss: decision.nearMiss,
+    // Stage-2 confirmation verdict (ADAAAA-6797), set when the trigger fired.
+    goalConfirmed: confirm?.goalConfirmed ?? undefined,
+    stage1Disagreed: confirm?.stage1Disagreed ?? undefined,
     status: "pending",
+    // ADAAAA-6798 Inc 2: link the highlight to the candidate that started it
+    // and carry that candidate's trigger provenance (no read-time join).
+    candidateId,
+    trigger,
     createdAt: new Date().toISOString(),
   };
-  shared.highlights.push(rec);
-  onEvent?.({ seq: evSeq, timestamp: evTs, type: "highlight", highlight: rec });
+  run.highlights.push(rec);
+  onEvent?.({ seq: emit.seq, timestamp: emit.timestamp, type: "highlight", highlight: rec });
 }
+
+// ---------------------------------------------------------------------------
+// ADAAAA-7007: decide-observer request builders + helpers. The vision LLM is
+// the primary observer; perceive-derived per-frame context (seeds) + per-window
+// bias hints (provenance) ride the payload, and candidate triggers never gate.
+// ---------------------------------------------------------------------------
+
+/** A generic observe-window event label used when the window carries no bias
+ * hint (a moment with no perceived trigger). The outcome enum still governs
+ * whether it can be a GOAL — never published as GOAL unless scoring_play. */
+export function observeDefaultEventType(_payload: ObserveDecidePayload): string {
+  return "SPORTING_EVENT";
+}
+
+/** Derive a monotonic, schema-valid frame sequence for an observe-window decide
+ * emit (ADAAAA-7007). The observe payload frames carry only `ts`/`imageB64`
+ * (no per-frame seq), so we derive the anchor's frame index from `centerTs` at
+ * the content fps used to assemble the window. Clamped to 0 so a zero-anchored
+ * timeline never yields a negative seq — the candidate / JobDecision trail
+ * schema requires `seq >= 0` (packages/events). Replaces the previous hardcoded
+ * `seq: -1`, which made every observe-loop highlight hit a ZodError
+ * (`candidates[N].seq` must be >= 0) and fail the VOD job before it completed. */
+export function observeEmitSeq(centerTs: number, fps: number): number {
+  const f = Number.isFinite(fps) && fps > 0 ? fps : OBSERVE_CONTENT_FPS;
+  return Math.max(0, Math.round(centerTs * f));
+}
+
+/** True when an unknown error is the recoverable-but-unpayable TicketParams
+ * expiry (ADAAAA-7003). Mirrors the OrderedDecidePipeline guard. */
+export function isTicketParamsExpired(err: unknown): boolean {
+  return !!err && typeof err === "object" && (err as { ticketParamsExpired?: boolean }).ticketParamsExpired === true;
+}
+
+// ADAAAA-7022: clamp observer-built evidence to the decide service's schema
+// caps before sending. A real multi-object broadcast window exceeds both
+// bounds, and because decide is now the SOLE driver of the live loop a 422
+// aborts the whole live job (`decide failed: HTTP 422`). These mirror the
+// decide contract (services/decide/app/__init__.py: Evidence.trackCount le=8,
+// Evidence.detections max_length=16, Detection.bbox max_length=4,
+// Detection.confidence ge=0 le=1) so the observer never produces a payload the
+// decide schema rejects.
+export const DECIDE_MAX_TRACK_COUNT = 8;
+export const DECIDE_MAX_DETECTIONS = 16;
+export const DECIDE_MAX_DETECTION_BBOX = 4;
+
+/** Fold the goal-attestation signals (goalCrossed / ballOutcome /
+ * scoreBoardChanged) carried by a set of in-window bias hints into a single
+ * window-level attestation. Any hint carrying a true attestation attests the
+ * window; the strongest signal wins (a goal attestation stands over a
+ * near-miss / absent). Returns `{}` when nothing attests — the correct
+ * "no attestation, provenance-only" case. Pure + deterministic (ADAAAA-7021). */
+export function foldWindowAttestation(
+  hints: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean }[] | ReadonlyArray<ObserveBiasHint>
+): { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean } {
+  const out: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean } = {};
+  for (const h of hints) {
+    if (h.goalCrossed === true) out.goalCrossed = true;
+    if (typeof h.ballOutcome === "string" && /^goal$/i.test(h.ballOutcome.trim())) out.ballOutcome = h.ballOutcome;
+    if (h.scoreBoardChanged === true) out.scoreBoardChanged = true;
+  }
+  return out;
+}
+
+/** Build the decide() evidence + opts for an observe window. The temporal
+ * window frames + the perceive-seeded per-frame context are the primary
+ * evidence; candidate triggers inside the window are folded as bias hints
+ * (provenance), and the frozen candidate/event vocabulary is preserved.
+ * Deterministic per payload so the decision is reproducible. */
+export function buildObserveDecideRequest(
+  cfg: AnalyzerConfig,
+  run: LiveRunShared,
+  payload: ObserveDecidePayload
+): { evidence: Parameters<PipelineClient["decide"]>[0]; opts: Parameters<PipelineClient["decide"]>[1] } {
+  const bias = payload.biasHints[0] as ObserveBiasHint | undefined;
+  const eventType = bias?.eventType ?? observeDefaultEventType(payload);
+  const center = payload.centerTs;
+  // Fold the window's perceive-derived context into the scalar evidence the
+  // decide contract expects (track count / OCR / reaction) from the seeds.
+  const seeds = payload.seeds;
+  let maxTrackCount = 0;
+  let ocrHits = 0;
+  for (const s of seeds) {
+    maxTrackCount = Math.max(maxTrackCount, s.tracks?.length ?? 0);
+    ocrHits += s.ocr?.length ?? 0;
+  }
+  // ADAAAA-7022: clamp to the decide Evidence schema caps so a multi-object
+  // window never builds a payload decide rejects (trackCount le=8).
+  const trackCount = Math.min(maxTrackCount, DECIDE_MAX_TRACK_COUNT);
+  const detections: DetectionEvidence[] = [];
+  for (const s of seeds) {
+    for (const o of s.objects ?? []) {
+      detections.push({
+        label: o.label,
+        confidence: o.confidence ?? 0,
+        // ADAAAA-7022: Detection.bbox is max_length=4 and confidence ge=0 le=1.
+        bbox: (o.bbox ?? []).slice(0, DECIDE_MAX_DETECTION_BBOX),
+        trackId: "",
+      });
+    }
+  }
+  // ADAAAA-7021 fix: fold the perceive candidate's goal-attestation signals that
+  // rode the in-window bias hints (goalCrossed / ballOutcome / scoreBoardChanged).
+  // Any hint in the window carrying a true attestation attests the whole window;
+  // the strongest signal (goal attests over near-miss) wins. Absent everywhere =
+  // no attestation (provenance only). This keeps the goal-attestation gate able
+  // to independently confirm a scoring_play instead of rejecting every goal.
+  const windowAttestation = foldWindowAttestation(payload.biasHints);
+  const evidence: Parameters<PipelineClient["decide"]>[0] = {
+    eventType,
+    trackCount,
+    maxVelocity: run.evidence.maxVelocity,
+    ocrHits,
+    reaction: buildReactionEvidence({}, trackCount),
+    // Perceive-derived per-detection geometry + audio level curve (I4).
+    // ADAAAA-7022: keep the FIRST DECIDE_MAX_DETECTIONS (oldest frames) so the
+    // payload never breaches Evidence.detections max_length=16.
+    detections: detections.slice(0, DECIDE_MAX_DETECTIONS),
+    // ADAAAA-7021 fix: forward the perceive candidate's goal-attestation signals
+    // (folded into the in-window bias hints) FIRST-CLASS so the decide
+    // goal-attestation gate can independently attest a `scoring_play`. Previously
+    // scoreBoardChanged was hardcoded false and goalCrossed/ballOutcome were never
+    // forwarded, so the decide runner rejected every goal ("model reason alone is
+    // not sufficient") — collapsing goal recall to 0% (ADAAAA-7021). Absent/undefined
+    // = no attestation (provenance only), never a fabricated false attestation.
+    goalCrossed: windowAttestation.goalCrossed || undefined,
+    ballOutcome: windowAttestation.ballOutcome || undefined,
+    scoreBoardChanged: windowAttestation.scoreBoardChanged || undefined,
+  };
+  const opts: Parameters<PipelineClient["decide"]>[1] = {
+    gameHint: cfg.gameHint,
+    reasoningEffort: "none",
+    frames: payload.frames.map((f) => ({ role: "full", base64: f.imageB64 })),
+    // ADAAAA-7028 Inc 2: audit identity — forward the job + frame-group
+    // partition key so the decide service's `_audit` descriptor keys the
+    // durable decide_audit index by (sessionId, groupKey). One row per frame
+    // group regardless of how many decide invocations the group spans.
+    jobId: cfg.jobId,
+    groupKey: decideGroupKey(center),
+    // ADAAAA-7111 (Increment D): carry the job's running video summary
+    // (story-so-far) so the decide brain EXTENDS it (monotonic growth).
+    storySoFar: cfg.getRunningSummary?.() ?? "",
+  };
+  return { evidence, opts };
+}
+
+/**
+ * Run the on-demand perceive recall for an observe payload (ADAAAA-7008 /
+ * ADAAAA-7012). When a decide verdict requests more evidence for a moment, the
+ * server calls perceive on demand (`recall` callback -> adapter -> perceive
+ * `/app/evidence`) and folds the freshly derived per-frame context into the
+ * payload via {@link applyOnDemandRecall} BEFORE finalizing.
+ *
+ * `recall` is the injectable transport (the adapter's `recallPerceive`); it
+ * returns the recall's seeds (empty `[]` / undefined on a no-op). A no-op
+ * recall returns the SAME payload object unmodified, so a recall can never
+ * regress a decision — the caller checks `!== payload` to decide whether to
+ * re-decide with the richer payload.
+ */
+export async function applyObserveRecall(
+  payload: ObserveDecidePayload,
+  recall: (centerTs: number, windowS?: number) => Promise<{ centerTs?: number; seeds: PerFrameSeed[] } | undefined>
+): Promise<ObserveDecidePayload> {
+  if (!payload) return payload;
+  const result = await recall(payload.centerTs, undefined);
+  // A no-op recall (nothing new) returns the SAME payload object, so a recall
+  // can never regress a decision.
+  if (!result || result.seeds.length === 0) return payload;
+  return applyOnDemandRecall(payload, { centerTs: result.centerTs ?? payload.centerTs, seeds: result.seeds });
+}
+
+/**
+ * ADAAAA-7111 (Increment D): derive the updated running video summary to
+ * persist after a cadence decide. Returns the bounded summary string when it
+ * actually changed vs the prior one (carried in), else null (no write needed —
+ * avoids redundant DB writes on a stable/compact summary). Pure + testable.
+ */
+export function nextRunningSummary(prior: string | undefined, decision: DecisionResult): string | null {
+  const rs = (decision as any).runningSummary;
+  if (typeof rs !== "string" || !rs.trim()) return null;
+  return rs === (prior ?? "") ? null : rs;
+}
+
+/**
+ * ADAAAA-7011: shared decide+accept callback for BOTH decide-observer paths
+ * (the VOD ObserveDecider and the live LiveObserver). Builds the decide request
+ * from an observe window payload, runs the gemma decide (with on-demand
+ * perceive recall when the verdict asks for more evidence), then routes the
+ * verdict through the same `acceptVideoDecision` path used by the
+ * candidate-gated live/VOD paths (clip cut + highlight record + SSE highlight +
+ * decision-time billing). Returns whether the moment was accepted (for the
+ * observer's cost/accept report). Keeping it identical across both paths means
+ * the observer verdict contract never diverges from the candidate-gated one.
+ */
+export async function observeOnDecide(
+  client: PipelineClient,
+  run: LiveRunShared,
+  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cfg: AnalyzerConfig,
+  onEvent: ((ev: AnalyzeEvent) => void) | undefined,
+  sessionId: string,
+  payload: ObserveDecidePayload
+): Promise<boolean> {
+  let { evidence, opts } = buildObserveDecideRequest(cfg, run, payload);
+  let decision: DecisionResult;
+  try {
+    decision = await client.decide(evidence, opts);
+  } catch (e) {
+    if (isTicketParamsExpired(e)) {
+      console.error(`[observe] decide @${payload.centerTs} skipped (TicketParams expired)`);
+      return false;
+    }
+    throw e;
+  }
+  // ADAAAA-7008 / ADAAAA-7012: on-demand perceive recall. When the verdict asks
+  // for MORE evidence for this moment, call perceive on demand (per-frame
+  // derived context already computed — no detector re-run), fold it into the
+  // payload via applyOnDemandRecall, and re-decide before finalizing. A no-op
+  // recall returns the SAME payload (refreshed === payload), so we keep the
+  // original decision — a recall can never regress it.
+  if (decision.recall && client.recallPerceive) {
+    const refreshed = await applyObserveRecall(payload, (centerTs, windowS) =>
+      client.recallPerceive!(sessionId, { centerTs, windowS })
+    );
+    if (refreshed !== payload) {
+      const rebuilt = buildObserveDecideRequest(cfg, run, refreshed);
+      evidence = rebuilt.evidence;
+      opts = rebuilt.opts;
+      decision = await client.decide(evidence, opts);
+    }
+  }
+  // ADAAAA-7028 Inc 2: ingest the decide audit descriptor into the durable
+  // decide_audit index (best-effort; never a pipeline failure). Gated by
+  // `cfg.onDecideAudit` (wired to recordDecideAudit in the server). Captured
+  // ONCE here, after any on-demand recall re-decide settles, using the final
+  // `decision` — so exactly one row is persisted per frame group (the
+  // (sessionId, groupKey) upsert in recordDecideAudit also makes it idempotent
+  // across repeated decide invocations for the same group).
+  if (cfg.onDecideAudit) {
+    try {
+      cfg.onDecideAudit((decision as any).audit);
+    } catch (e: any) {
+      console.error(`[decide-audit:${cfg.jobId}] onDecideAudit failed:`, String(e?.message || e));
+    }
+  }
+  // ADAAAA-7111 (Increment D): persist the running video summary (story-so-far)
+  // the decide brain updated for this window, so the job-detail endpoint + web
+  // UI surface it growing across cadence ticks. Only writes when the summary
+  // actually changed (avoids redundant DB writes on a stable/compact summary).
+  // Best-effort: a throwing callback is caught + logged, never a pipeline failure.
+  if (cfg.onRunningSummary) {
+    const next = nextRunningSummary(cfg.getRunningSummary?.(), decision);
+    if (next !== null) {
+      try {
+        cfg.onRunningSummary(next);
+      } catch (e: any) {
+        console.error(`[running-summary:${cfg.jobId}] persist failed:`, String(e?.message || e));
+      }
+    }
+  }
+  // ADAAAA-7021 fix: the window's goal-attestation signals (folded from the
+  // in-window bias hints) ride the candidate too, so acceptVideoDecision's
+  // Stage-2 confirm reconcile + deriveHighlightTrigger see the attestation
+  // (hasIndependentAttestation excludes an attested goal from the un-attested
+  // confirm dive) rather than treating the goal as un-attested.
+  const windowAttestation = { ...foldWindowAttestation(payload.biasHints) };
+  const candidate: CandidateSignal = {
+    eventType: payload.biasHints[0]?.eventType ?? observeDefaultEventType(payload),
+    timestamp: payload.centerTs,
+    goalCrossed: windowAttestation.goalCrossed,
+    ballOutcome: windowAttestation.ballOutcome,
+    scoreBoardChanged: windowAttestation.scoreBoardChanged,
+  };
+  await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, decision);
+  return isAcceptedHighlight(decision, cfg.preferLabels);
+}
+
+// ---------------------------------------------------------------------------
+// Stage-2 confirmation-pass driver (ADAAAA-6797): trigger detection + confirm
+// context assembly + reconcile adoption. Pure/helpers are unit-testable.
+// ---------------------------------------------------------------------------
+
+/** Goal-type event categories eligible for the confirmation pass. A near-miss
+ * as a GOAL is the user-facing false positive the pass guards against. */
+const GOAL_TYPE_EVENTS = new Set(["GOAL", "GOL", "TOUCHDOWN", "BASKET", "KILL"]);
+
+/** Is `eventType` a goal-type event (goal / touchdown / basket / kill)? */
+export function isGoalTypeEvent(eventType: string | undefined): boolean {
+  return GOAL_TYPE_EVENTS.has((eventType || "").toUpperCase().trim());
+}
+
+/** Whether a candidate carries INDEPENDENT attestation of the goal: perceive
+ * `ballOutcome=goal`, `goalCrossed`, or a scoreboard score change. When any is
+ * present the candidate is already independently confirmed and the Stage-2
+ * dive is NOT needed — this is exactly the exclusion that keeps the confirm
+ * pass scoped to the un-attested population. */
+export function hasIndependentAttestation(c: {
+  ballOutcome?: string;
+  goalCrossed?: boolean;
+  scoreBoardChanged?: boolean;
+}): boolean {
+  if (typeof c.ballOutcome === "string" && /^goal$/i.test(c.ballOutcome.trim())) return true;
+  if (c.goalCrossed === true) return true;
+  if (c.scoreBoardChanged === true) return true;
+  return false;
+}
+
+/** The Stage-2 trigger: only an un-attested goal-type candidate whose Stage-1
+ * read is a scoring_play accept (goal-shaped) enters the confirmation dive.
+ * Everything else (non-goal type, attested, or a Stage-1 non-accept) keeps the
+ * existing 1-5 s path unchanged. `cfg.confirmEnabled` is the VOD-first config
+ * gate — when off this is a strict no-op. */
+export function shouldRunConfirm(
+  cfg: AnalyzerConfig,
+  candidate: { eventType: string; ballOutcome?: string; goalCrossed?: boolean; scoreBoardChanged?: boolean },
+  stage1Decision: DecisionResult
+): boolean {
+  if (!cfg.confirmEnabled) return false;
+  if (!isGoalTypeEvent(candidate.eventType)) return false;
+  if (hasIndependentAttestation(candidate)) return false;
+  return isAcceptedHighlight(stage1Decision);
+}
+
+/** Select the precise pre-event / event-instant / post-event keyframes from a
+ * dense frame list (nearest frame to each target timestamp). Returns [] when no
+ * frame matches. Deterministic + pure so it is unit-testable. */
+export function selectConfirmKeyframes(
+  frames: { timestamp: number; imageB64: string }[],
+  eventTs: number,
+  preS: number,
+  postS: number
+): { role: string; base64: string }[] {
+  const targets = [eventTs - preS, eventTs, eventTs + postS];
+  const out: { role: string; base64: string }[] = [];
+  for (const t of targets) {
+    let best: { timestamp: number; imageB64: string } | undefined;
+    let bestDiff = Infinity;
+    for (const f of frames) {
+      const d = Math.abs(f.timestamp - t);
+      if (d < bestDiff) {
+        bestDiff = d;
+        best = f;
+      }
+    }
+    if (best && best.imageB64) out.push({ role: "full", base64: best.imageB64 });
+  }
+  return out;
+}
+
+/** Assemble the higher-fidelity Stage-2 confirm context (ADAAAA-6797): a denser
+ * temporal frame window + precise pre/event/post keyframes + object/ball
+ * trajectory tracks + motion/optical-flow magnitude + audio-energy envelope.
+ * Wherever a tool is unavailable, send the empty default — the decide /confirm
+ * endpoint handles absent context (no crash, no regression). */
+export async function buildConfirmContext(
+  shared: LiveRunShared,
+  cfg: AnalyzerConfig,
+  candidate: { timestamp: number },
+  stage1: DecisionResult
+): Promise<Omit<ConfirmRequest, "eventType" | "timestamp" | "gameHint" | "stage1">> {
+  // Denser frame window: prefer the detail-first higher-FPS burst re-sample
+  // (I7 / ADAAAA-6361) around the trigger; else the cached window; else [].
+  let dense: { timestamp: number; imageB64: string }[] = [];
+  if (cfg.resampleFrames) {
+    try {
+      dense = (await cfg.resampleFrames(candidate.timestamp)) ?? [];
+    } catch {
+      dense = [];
+    }
+  }
+  if (!dense.length) dense = shared.framesNear(candidate.timestamp, CONFIRM_MOTION_WINDOW_S);
+  const frames = dense.map((f) => ({ role: "full", base64: f.imageB64 }));
+  const keyframes = selectConfirmKeyframes(
+    dense,
+    candidate.timestamp,
+    cfg.preWindowS ?? DEFAULT_PRE_WINDOW_S,
+    cfg.postWindowS ?? DEFAULT_POST_WINDOW_S
+  );
+  const motion = shared.motionContext(candidate.timestamp);
+  const audioLevels = shared.audioLevelSeries();
+  const audioB64 = shared.audioClipB64();
+  return {
+    frames,
+    keyframes,
+    trajectories: motion.trajectories,
+    opticalFlowMagnitude: motion.opticalFlowMagnitude,
+    flowMagnitudes: motion.flowMagnitudes,
+    audioLevels,
+    audioB64,
+  };
+}
+
+/** Run the Stage-2 confirmation dive (if the trigger fires) and return the
+ * effective decision to use downstream. On the no-trigger / flag-off path the
+ * Stage-1 verdict is returned unchanged (strict no-op). On a real dive it
+ * adopts the reconciled `decision` when the pass produced one (goalConfirmed
+ * non-null); on passthrough (disabled/unparseable) or any transport failure it
+ * keeps the Stage-1 verdict (no behavior change). Also records the disagreement
+ * metric on `shared`. */
+export async function confirmReconcile(
+  client: PipelineClient,
+  shared: LiveRunShared,
+  cfg: AnalyzerConfig,
+  stage1: DecisionResult,
+  candidate: {
+    eventType: string;
+    timestamp: number;
+    ballOutcome?: string;
+    goalCrossed?: boolean;
+    scoreBoardChanged?: boolean;
+  }
+): Promise<{ decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision }> {
+  if (!shouldRunConfirm(cfg, candidate, stage1)) {
+    return { decision: stage1, confirmRan: false };
+  }
+  const ctx = await buildConfirmContext(shared, cfg, candidate, stage1);
+  try {
+    const confirm = await client.confirm({
+      eventType: candidate.eventType,
+      timestamp: candidate.timestamp,
+      gameHint: cfg.gameHint,
+      stage1,
+      ...ctx,
+      ballOutcome: candidate.ballOutcome,
+      goalCrossed: candidate.goalCrossed,
+      scoreBoardChanged: candidate.scoreBoardChanged,
+    } as ConfirmRequest);
+    shared.recordConfirm({ stage1Disagreed: confirm.stage1Disagreed === true });
+    // Adopt the reconciled verdict only when the pass actually produced one; on
+    // passthrough (goalConfirmed null) keep the Stage-1 verdict unchanged.
+    if (confirm.goalConfirmed && confirm.decision && typeof confirm.decision === "object") {
+      return { decision: confirm.decision, confirmRan: true, confirm };
+    }
+    return { decision: stage1, confirmRan: true, confirm };
+  } catch {
+    // Transport failure — keep the Stage-1 verdict (no behavior change).
+    shared.recordConfirm({ stage1Disagreed: false });
+    return { decision: stage1, confirmRan: true };
+  }
+}
+
 
 /** Live-console event: pushed to SSE subscribers for a job as analysis runs. */
 export interface AnalyzeEvent {
@@ -1426,7 +2250,13 @@ export async function analyzeJob(
    * a fresh session once the job has been stopped (otherwise the stop-path
    * slot release would make the in-flight analyze 404 and re-bind a new slot
    * on a job that is already stopping). */
-  slotRef?: { onReserve?: (res: ReserveResult) => void; isStopped?: () => boolean }
+  slotRef?: { onReserve?: (res: ReserveResult) => void; isStopped?: () => boolean },
+  /** Progress hook (ADAAAA-6873): fires with the running frames-processed count
+   * after each frame is fed to the pipeline, so the durable worker can persist
+   * a throttled, monotonic progress snapshot without waiting for job
+   * completion. Optional and trailing so existing positional callers are
+   * unaffected. */
+  onProgress?: (framesAnalyzed: number) => void
 ): Promise<AnalyzeOutcome> {
   const maxReReserves = cfg.maxReReserves ?? 3;
   // ADAAAA-6577: bounded exponential backoff between a perceive session-lost
@@ -1458,11 +2288,46 @@ export async function analyzeJob(
     recheckIntervalSeconds: cfg.recheckIntervalSeconds,
     planMode: cfg.planMode ?? "live",
   });
+  // ADAAAA-7007: decide-observer architecture for the VOD detail-first pass.
+  // The vision LLM is the PRIMARY observer: decide is invoked on a ~3 s cadence
+  // with a ~10 s overlapping window (<=30 frames) and perceive is a data seeder
+  // + on-demand provider, NOT the candidate on/off gate. Candidate trigger
+  // signals inside the window are folded in as per-window bias hints
+  // (provenance metadata). The decision path is shared via
+  // observeOnDecide -> acceptVideoDecision.
+  const observeDecider =
+    cfg.observeLoop && cfg.decideWindowN !== undefined
+      ? new ObserveDecider({
+          cadenceS: cfg.observeCadenceS,
+          windowS: cfg.observeWindowS,
+          maxFrames: cfg.observeMaxFrames ?? OBSERVE_MAX_FRAMES,
+          fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
+          onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
+        })
+      : null;
+  // ADAAAA-7011: LIVE decide-observer. When enabled on the live/default pass
+  // (decideWindowN UNSET), decide is driven on the ~3 s cadence REGARDLESS of
+  // whether perceive emitted a candidate, using the rolling-PAST LiveObserver.
+  // Perceive becomes a data seeder (per-frame tracks/objects/ocr ride every
+  // payload) and candidate triggers are folded into biasHints (provenance) —
+  // they never gate decide, so trigger-FP gating no longer limits recall. The
+  // accept path is shared via observeOnDecide -> acceptVideoDecision.
+  const liveObserver =
+    cfg.liveObserveLoop && cfg.decideWindowN === undefined
+      ? new LiveObserver({
+          cadenceS: cfg.observeCadenceS,
+          windowS: cfg.observeWindowS,
+          maxFrames: cfg.observeMaxFrames ?? LIVE_OBSERVE_MAX_FRAMES,
+          fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
+          onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
+        })
+      : null;
   let framesAnalyzed = 0;
   let planApplied = false;
   try {
     for await (const frame of iterFrames) {
       framesAnalyzed++;
+      onProgress?.(framesAnalyzed);
       run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
       let res!: ObservationResult;
       let reReserved = 0;
@@ -1529,86 +2394,53 @@ export async function analyzeJob(
       run.setFindings(frame.seq, res.observation);
       if (res.candidate) {
         // Immediate re-plan on a candidate event (out of band from the per-frame
-        // detection; never blocks the current candidate's decide()).
+        // detection; never blocks the observer cadence).
         void planController.onCandidate(client, run.anchor(res.candidate.timestamp) ?? frame.imageB64);
         // Fold the candidate into the window's factual context (plan §A).
         run.addCandidate({ timestamp: res.candidate.timestamp, eventType: res.candidate.eventType });
         onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "candidate", candidate: res.candidate });
-
-        // Send the ACTUAL candidate frame so the Gemma vision decide runner can
-        // see the moment, plus the game hint. Evidence remains as context. The
-        // candidate is ANCHORED at the peak-motion (strike) frame's timestamp,
-        // so resolve that frame's image from the rolling window — a candidate
-        // fired on the late post-strike frame must still be judged on the strike.
-        const anchoredImage = run.anchor(res.candidate.timestamp) ?? frame.imageB64;
-        // I7 / ADAAAA-6361: re-sample a higher-FPS burst around the trigger on the
-        // detail-first VOD pass so the crossing instant is in the decide window.
-        let burstFrames: { role: string; base64: string }[] | undefined;
-        if (cfg.decideWindowN !== undefined && cfg.resampleFrames) {
-          try {
-            const burst = await cfg.resampleFrames(res.candidate.timestamp);
-            if (burst?.length) burstFrames = burst.map((f) => ({ role: "full", base64: f.imageB64 }));
-          } catch {
-            /* degrade to rolling window */
-          }
-        }
-        const decision = await client.decide(
-          {
-            eventType: res.candidate.eventType,
-            trackCount: evidence.trackCount,
-            maxVelocity: evidence.maxVelocity,
-            ocrHits: res.observation?.ocr?.length ?? 0,
-            reaction: buildReactionEvidence(res.candidate, evidence.trackCount),
-            goalCrossed: res.candidate.goalCrossed,
-            ballOutcome: res.candidate.ballOutcome,
-            scoreBoardChanged: res.candidate?.scoreBoardChanged,
-            // I4 / ADAAAA-6361: forward per-detection geometry + audio level
-            // curve on the detail-first (VOD) pass.
-            ...(cfg.decideWindowN !== undefined ? buildRichEvidence(run, res.candidate.timestamp) : {}),
-          },
-          detailDecideOpts(cfg, run, anchoredImage, { timestamp: res.candidate.timestamp, peakAudioTs: res.candidate.audio?.ts }, burstFrames)
-        );
-        // ADAAAA-6851 Inc 2: persist EVERY decide evaluation — accepted
-        // highlight, burst-suppressed, near-miss, not-highlight.
-        const acceptedDecision = isAcceptedHighlight(decision);
-        if (!acceptedDecision) {
-          buildCandidateNote(cfg, res.candidate, decision, "rejected");
-        } else if (run.suppressIfGoalBurst(res.candidate.timestamp, decision.eventType ?? res.candidate.eventType)) {
-          // ADAAAA-6610 temporal burst suppression (see decideOnCandidate): a
-          // GOAL accepted within `goalBurstWindowS` of a previous one is a
-          // start-of-clip burst duplicate and is dropped, not recorded.
-          buildCandidateNote(cfg, res.candidate, decision, "suppressed");
-          onEvent?.({
-            seq: frame.seq,
-            timestamp: frame.timestamp,
-            type: "candidateBlocked",
-            candidate: { eventType: decision.eventType ?? res.candidate.eventType, timestamp: res.candidate.timestamp },
-            reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
-          });
-        } else {
-          buildCandidateNote(cfg, res.candidate, decision, "accepted");
-          const { clipId, clipUri } = await cut(res.candidate.timestamp);
-            const rec: HighlightRecord = {
-              id: randomUUID(),
-              jobId: cfg.jobId,
-              clipUri,
-              start: Math.max(0, res.candidate.timestamp - cfg.clipBeforeS),
-              end: res.candidate.timestamp + cfg.clipAfterS,
-              eventType: decision.eventType,
-              score: decision.score,
-              reason: decision.reason,
-              // Increment F / ADAAAA-6465: near-miss surface at a lower score,
-              // labeled distinctly via the outcome/nearMiss flag.
-              outcome: decision.outcome,
-              nearMiss: decision.nearMiss,
-              status: "pending",
-              createdAt: new Date().toISOString(),
-            };
-            highlights.push(rec);
-            onEvent?.({ seq: frame.seq, timestamp: frame.timestamp, type: "highlight", highlight: rec });
-          }
+        // ADAAAA-7007/7008: a perceive candidate is ONLY a bias hint (per-window
+        // provenance) — it NEVER gates decide. The decide-observer (ObserveDecider
+        // for VOD, LiveObserver for live) drives every decide on the ~3 s cadence
+        // below regardless of whether perceive emitted a candidate, so trigger-FP
+        // gating no longer limits recall. Perceive is a data seeder here.
+        // ADAAAA-7021 fix: the candidate's goal-attestation signals (goalCrossed /
+        // ballOutcome / scoreBoardChanged) are folded into the hint so the decide
+        // goal-attestation gate can attest a `scoring_play` rather than reject it.
+        observeDecider?.addHint(res.candidate.eventType, res.candidate.timestamp, {
+          goalCrossed: res.candidate.goalCrossed,
+          ballOutcome: res.candidate.ballOutcome,
+          scoreBoardChanged: res.candidate.scoreBoardChanged,
+        });
+        liveObserver?.addHint(res.candidate.eventType, res.candidate.timestamp, {
+          goalCrossed: res.candidate.goalCrossed,
+          ballOutcome: res.candidate.ballOutcome,
+          scoreBoardChanged: res.candidate.scoreBoardChanged,
+        });
+      }
+      // ADAAAA-7007/7008: drive the decide-observer on cadence, feeding EVERY
+      // frame's perceive-derived context (tracks / objects / ocr) as the payload
+      // seed. The vision LLM is the PRIMARY observer; decide runs on the ~3 s
+      // cadence REGARDLESS of candidates. maybeFire no-ops until the cadence
+      // elapses (so the analyze hot path is not blocked between ticks) and the
+      // live observer never decodes ahead (rolling PAST window).
+      if (observeDecider || liveObserver) {
+        const seed: PerFrameSeed = {
+          ts: frame.timestamp,
+          tracks: res.observation.tracks.map((t) => ({ trackId: t.trackId, label: t.label ?? t.kind, bbox: t.bbox as number[] })),
+          objects: res.observation.objects,
+          ocr: res.observation.ocr,
+        };
+        observeDecider?.record(frame.timestamp, frame.imageB64, seed);
+        liveObserver?.record(frame.timestamp, frame.imageB64, seed);
+        if (observeDecider) await observeDecider.maybeFire(frame.timestamp);
+        if (liveObserver) await liveObserver.maybeFire(frame.timestamp);
       }
     }
+    // Force one final observer tick at end-of-stream so the tail of the feed is
+    // still observed (no-op if nothing was recorded).
+    await observeDecider?.flush();
+    await liveObserver?.flush();
   } finally {
     // Stop / un-pay every session we reserved this pass. Sessions the server
     // already released are a no-op on the orchestrator but still drop their
@@ -1619,5 +2451,14 @@ export async function analyzeJob(
       await client.stopPerceive(s).catch(() => {});
     }
   }
-  return { sessionId, highlights, framesAnalyzed };
+  // ADAAAA-7007/7008: the observer already awaited every cadence decide above
+  // (observeOnDecide runs each decide + accept inline on the cadence), so
+  // nothing further to drain before returning.
+  return {
+    sessionId,
+    highlights,
+    framesAnalyzed,
+    ...(liveObserver ? { observeMetrics: buildLiveObserveMetrics(liveObserver) } : {}),
+    ...(observeDecider ? { vodObserveMetrics: buildVodObserveMetrics(observeDecider) } : {}),
+  };
 }

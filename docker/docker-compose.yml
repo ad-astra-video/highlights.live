@@ -282,6 +282,14 @@ services:
       # ADAAAA-5778 notable-only knob. Data-landed default 60; override in prod
       # only after re-measuring on the real-feed eval set (evals/decide_discernment.py).
       - DECIDE_NOTABILITY_MIN=${DECIDE_NOTABILITY_MIN:-60}
+      # ADAAAA-7045 (Inc 2 follow-up): durable JSONL audit dir on the decide side
+      # (base64 media + full request/response record). Unset => no JSONL is
+      # written; the server decide_audit rows still hold the sha256 media hashes.
+      - DECIDE_AUDIT_DIR=${DECIDE_AUDIT_DIR:-/srv/decide/audit}
+      # ADAAAA-6973/7051: the live goal-confirm gate on the decide side
+      # (`_confirm_pass_enabled`). Default 0 (off); docker/.env sets 1 to arm
+      # it, so a clean `reset --hard origin/master` does NOT drop it.
+      - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-0}
     depends_on:
       gemma:
         condition: service_healthy
@@ -342,6 +350,18 @@ services:
       # default so the deployed live baseline sends no new payload until an
       # operator enables it. `LIVE_AUDIO_CONTEXT` (1 => on).
       - LIVE_AUDIO_CONTEXT=${LIVE_AUDIO_CONTEXT:-0}
+      # ADAAAA-7008/7019: opt-in to the decide observe loops. LIVE_OBSERVE_LOOP=1
+      # enables the live rolling-window decide observer; OBSERVE_LOOP=1 enables the
+      # VOD detail-first decide observer. Both default off until validated. Values
+      # come from the compose project .env (docker/.env).
+      - LIVE_OBSERVE_LOOP=${LIVE_OBSERVE_LOOP:-0}
+      - OBSERVE_LOOP=${OBSERVE_LOOP:-0}
+      # ADAAAA-6973/7051: the live goal-confirm gate. DECIDE_CONFIRM_ENABLED=1
+      # arms the Stage-2 confirm goal-leg pass (server `shouldRunConfirm`,
+      # decide `_confirm_pass_enabled`) so a candidate is only published when
+      # the goal corroborates. Default 0 (off) everywhere; docker/.env sets 1
+      # to arm it, so a clean `reset --hard origin/master` does NOT drop it.
+      - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-0}
       # Live-payment durability (ADAAAA-3932): the SERVER is the VOD payer — it
       # reserves perceive/decide sessions and, on the orchestrator's 402
       # challenge, forwards the payment_params to the remote signer for tickets

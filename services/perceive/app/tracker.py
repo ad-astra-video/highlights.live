@@ -399,36 +399,26 @@ class IoUTracker:
 
     @staticmethod
     def _anchor_step(tr: "Track") -> Tuple[float, float]:
-        """Anchor a candidate at the peak single-step of the just-crossed burst.
+        """Return the (timestamp, displacement) of the single biggest step.
 
-        `tr.moved` is ACCUMULATED displacement, so it can cross `jump_velocity`
-        one or more frames AFTER the explosive moment (a fast strike spreads
-        over 2+ sampled frames; the threshold lands on the follow-through). Return
-        the (timestamp, displacement) of the single biggest step in the burst so
-        the emitted candidate points at the strike, not the late-crossing frame.
+        ADAAAA-7108 (increment C): the tracker no longer emits a fast-movement /
+        motion-burst (KILL/MOVE) candidate — camera angles move, so tracker
+        velocity-jump is unreliable as a decide signal. The decide-observer is
+        the primary timeline observer on a fixed ~3 s cadence; motion is at most
+        benign evidence, never a trigger. `_anchor_step` is retained as the pure
+        peak-step helper (used for motion evidence), but no candidate is emitted
+        from it anymore.
         """
         if not tr.step_hist:
             return (tr.last_seen, tr.last_step_disp)
         return max(tr.step_hist, key=lambda p: p[1])
 
     def candidate(self, ts: float) -> Optional[CandidateEvent]:
-        """Emit a candidate on a sharp track move, rate-limited by cooldown.
+        """ADAAAA-7108 (increment C): no motion-burst candidate.
 
-        The candidate's `timestamp` is anchored at the peak single-step in the
-        burst (the strike moment), and its event type is classified from that
-        anchored step — so a GOAL strike is reported at/around the moment it
-        happens instead of a post-strike frame. Fall back to the current frame
-        when the burst is a single step (peak == here).
+        The tracker fast-movement / motion-burst trigger is REMOVED. A tracker
+        velocity-jump (KILL/MOVE) is at most a benign evidence hint, never a
+        trigger; decide already reviews every content window on the ~3 s cadence,
+        so no candidate-driven decide off fast motion remains.
         """
-        if ts - self.last_candidate < self.cooldown_s:
-            return None
-        for tr in self.tracks:
-            if tr.moved >= self.jump_velocity:
-                anchor_ts, anchor_disp = self._anchor_step(tr)
-                event_type = "KILL" if anchor_disp >= self.FAST_STEP else "MOVE"
-                tr.moved = 0.0
-                tr.last_step_disp = 0.0
-                tr.step_hist.clear()
-                self.last_candidate = ts
-                return CandidateEvent(event_type=event_type, timestamp=anchor_ts, track_id=tr.track_id)
         return None

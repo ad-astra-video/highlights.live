@@ -99,6 +99,85 @@ describe("LivepeerClient", () => {
     expect(t.calls[0].method).toBe("POST");
   });
 
+  it("decide overlaps up to decideConcurrency calls instead of serializing to 1 (ADAAAA-6911)", async () => {
+    // The ADAAAA-6848/6903 increment wanted VOD decide dispatch to overlap
+    // inference; the LivepeerClient previously serialized EVERY decide to
+    // capacity 1 via a promise chain (`serializedDecide`), so the decide
+    // runner's capacity-2 admission was never used and no concurrent-decide
+    // throughput existed on the box. Assert the bounded gate admits
+    // `decideConcurrency` in-flight calls at once (default 2), and that a
+    // third call waits for a permit rather than running concurrently.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const releasers: Array<() => void> = [];
+    const t = new MockTransport([]);
+    const resp = () => ({
+      status: 200,
+      headers: new Headers(),
+      async json() {
+        return { isHighlight: true };
+      },
+      async text() {
+        return JSON.stringify({ isHighlight: true });
+      },
+    });
+    t.request = async (_m: string, _u: string, _i: any) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise<void>((r) => releasers.push(r));
+      inFlight--;
+      return resp();
+    };
+    const releasePending = () => releasers.splice(0).forEach((r) => r());
+    const c = new LivepeerClient("http://orch", t, { decideConcurrency: 2 });
+    const p1 = c.decide("highlight", { eventType: "GOAL" });
+    const p2 = c.decide("highlight", { eventType: "GOAL" });
+    const p3 = c.decide("highlight", { eventType: "GOAL" }); // must wait for a permit
+    // Let the two permitted calls enter the transport; the third stays queued.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(maxInFlight).toBe(2); // two concurrent decide runs, not one
+    expect(releasers.length).toBe(2); // third call is still parked on a permit
+    releasePending(); // release p1+p2 -> their finally frees the third's permit
+    await new Promise((r) => setTimeout(r, 20)); // let p3 run and hit the transport
+    releasePending(); // release p3's (now queued) transport request
+    await Promise.all([p1, p2, p3]);
+    expect(maxInFlight).toBe(2); // never exceeded the bound (admission backpressure)
+  });
+
+  it("decideConcurrency:1 restores fully-serial behavior (live-path safety, ADAAAA-6911)", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const releasers: Array<() => void> = [];
+    const t = new MockTransport([]);
+    const resp = () => ({
+      status: 200,
+      headers: new Headers(),
+      async json() {
+        return { isHighlight: false };
+      },
+      async text() {
+        return JSON.stringify({ isHighlight: false });
+      },
+    });
+    t.request = async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise<void>((r) => releasers.push(r));
+      inFlight--;
+      return resp();
+    };
+    const releasePending = () => releasers.splice(0).forEach((r) => r());
+    const c = new LivepeerClient("http://orch", t, { decideConcurrency: 1 });
+    const p1 = c.decide("highlight", { eventType: "GOAL" });
+    const p2 = c.decide("highlight", { eventType: "GOAL" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(maxInFlight).toBe(1); // strictly serial when capped at 1
+    releasePending();
+    await new Promise((r) => setTimeout(r, 20));
+    releasePending();
+    await Promise.all([p1, p2]);
+  });
+
   it("decide retries a transient 404 runner-not-found (orchestrator health flap) and returns the success", async () => {
     const t = new MockTransport([
       { status: 404, data: "runner not found" },
@@ -286,6 +365,75 @@ describe("LivepeerClient", () => {
     });
   });
 
+  it("refreshPerceivePayment recovers from orchestrator HTTP 400 TicketParams expired by re-minting fresh params, re-signing, and retrying once (ADAAAA-6993)", async () => {
+    // Transport calls: 1) POST <controlUrl>/payment -> 400 `TicketParams expired`
+    //                    2) POST /refresh-payment       -> fresh payment_params
+    //                    3) POST <controlUrl>/payment   -> 200 (retry success)
+    const t = new MockTransport([
+      { status: 400, data: { error: "TicketParams expired" } },
+      { status: 200, data: { payment_params: "ZnJlc2g=", manifest_id: "sess-1", orchestrator: "http://orch" } },
+      { status: 200, data: { ok: true } },
+    ]);
+    const c = new LivepeerClient("http://orch", t, { ticketParamsRetryBackoffMs: 0 });
+    const signedB64: string[] = [];
+    const signer: SignerClient = {
+      async discover() {
+        return [];
+      },
+      async signOrchInfo() {
+        return { a: 1 };
+      },
+      async generateLivePayment(b64: string) {
+        signedB64.push(b64);
+        return { payment: "P", segCreds: "S", signerState: { State: "c3RhdGU=", Sig: "c2ln" } };
+      },
+    };
+    const out = await c.refreshPerceivePayment("s1", "http://c", signer, "b3JjaA==", null, "sess-1", "0xabc");
+    // The first /payment POST on the STALE OrchestratorInfo was rejected with 400
+    // `TicketParams expired`; we re-minted fresh info via /refresh-payment and
+    // signed against it, then the retry /payment succeeded. The stale info is
+    // never reused after an expired-params rejection.
+    expect(signedB64).toEqual(["b3JjaA==", "ZnJlc2g="]);
+    expect(t.calls[0].url).toBe("http://c/payment");
+    expect(t.calls[1].url).toBe("/refresh-payment");
+    expect(JSON.parse(t.calls[1].body as string)).toEqual({ sender: "0xabc", manifest_id: "sess-1" });
+    expect(t.calls[2].url).toBe("http://c/payment");
+    // The freshest OrchestratorInfo is returned so the caller persists it for the
+    // next tick instead of re-using the expired one.
+    expect(out).toMatchObject({ signerState: { State: "c3RhdGU=", Sig: "c2ln" }, orchInfoB64: "ZnJlc2g=" });
+  });
+
+  it("refreshPerceivePayment does NOT loop forever when the retry is also rejected 400 TicketParams expired (ADAAAA-6993)", async () => {
+    // Both /payment POSTs return 400 `TicketParams expired` (the orchestrator kept
+    // cycling, or the fresh params are themselves rejected). The recovery must not
+    // spin: it re-mints + re-signs ONCE, then the second expired rejection throws.
+    const t = new MockTransport([
+      { status: 400, data: { error: "TicketParams expired" } },
+      { status: 200, data: { payment_params: "ZnJlc2g=", manifest_id: "sess-1", orchestrator: "http://orch" } },
+      { status: 400, data: { error: "TicketParams expired" } },
+    ]);
+    const c = new LivepeerClient("http://orch", t, { ticketParamsRetryBackoffMs: 0 });
+    let signCount = 0;
+    const signer: SignerClient = {
+      async discover() {
+        return [];
+      },
+      async signOrchInfo() {
+        return { a: 1 };
+      },
+      async generateLivePayment() {
+        signCount++;
+        return { payment: "P", segCreds: "S", signerState: { State: "c3RhdGU=", Sig: "c2ln" } };
+      },
+    };
+    await expect(
+      c.refreshPerceivePayment("s1", "http://c", signer, "b3JjaA==", null, "sess-1", "0xabc")
+    ).rejects.toThrow(/TicketParams expired/);
+    // Exactly one recovery attempt (one re-sign with the fresh params), then it
+    // gave up rather than looping.
+    expect(signCount).toBe(2);
+  });
+
   it("refreshPerceivePayment treats signer HTTP 482 (no new tickets needed) as a benign no-op, not a failure (ADAAAA-6588)", async () => {
     // 482 = the signer's committed reserve already covers the orchestrator's
     // minimum credit for the billable window; nothing new to POST to the
@@ -305,9 +453,14 @@ describe("LivepeerClient", () => {
       },
     };
     const out = await c.refreshPerceivePayment("s1", "http://c", signer, "b3JjaA==", null, "sess-1", "0xabc");
-    // Benign no-op: no payment POST, fresh state not advanced (caller keeps the
-    // last known-good state so the next tick still carries the funded reserves).
-    expect(out).toBeNull();
+    // Benign no-op: no payment POST, fresh state not advanced. NOTE (ADAAAA-6609)
+    // the signer's 482 body may carry the re-signed, fee-accounted (DRAINED) state;
+    // `refreshPerceivePayment` persists it and returns it (as an object) so the
+    // next tick sees the drained balance and mints a refill before the fee trough.
+    // Here the mock 482 carries no drained state, so it returns the caller's
+    // (null) state verbatim — still an object so the caller keeps the freshest
+    // OrchestratorInfo for the next tick.
+    expect(out).toMatchObject({ signerState: null, orchInfoB64: "b3JjaA==" });
     expect(t.calls.length).toBe(0);
   });
 

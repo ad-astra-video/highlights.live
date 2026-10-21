@@ -325,6 +325,67 @@ describe("OrchestratorAdapter (VOD) on-chain payment", () => {
     expect(decideCalls[1].headers["Livepeer-Payment"]).toBe("livepeer-payment-ticket");
     expect(decideCalls[1].headers["Livepeer-Segment"]).toBe("segment-creds");
   });
+
+  it("recovers a paid single-shot decide that returns orchestrator HTTP 400 TicketParams expired by re-issuing a fresh 402 challenge and re-signing once, instead of failing the job (ADAAAA-6993)", async () => {
+    const log: Array<{ url: string; headers: Record<string, string> }> = [];
+    let decideCalls = 0;
+    const fn = vi.fn(async (input: any, init?: any) => {
+      const url = String(input);
+      const headers = { ...((init?.headers as any) || {}) };
+      log.push({ url, headers });
+      if (url.endsWith("/apps/highlights-decide/app/highlight")) {
+        decideCalls++;
+        if (decideCalls === 1) return jsonResponse(402, CHALLENGE); // unpaid probe
+        if (decideCalls === 2) return jsonResponse(400, { error: "TicketParams expired" }); // paid retry on stale info
+        if (decideCalls === 3) return jsonResponse(402, { ...CHALLENGE, payment_params: "ZnJlc2g=" }); // fresh unpaid probe
+        return jsonResponse(200, { decision: "make_clip" }); // paid retry on fresh info
+      }
+      if (url.includes("/refresh-payment"))
+        return jsonResponse(200, { payment_params: "ZnJlc2g=", manifest_id: "sess-abc", orchestrator: "http://orch" });
+      if (url.includes("/payment")) return jsonResponse(200, { ok: true });
+      if (url.endsWith("/stop")) return new Response(null, { status: 204 });
+      return jsonResponse(404, { error: "nf" });
+    });
+    vi.stubGlobal("fetch", fn);
+
+    const sigCalls: Array<string> = [];
+    const signer: SignerClient = {
+      async discover() {
+        return [];
+      },
+      async signOrchInfo() {
+        return {};
+      },
+      async generateLivePayment(orchInfoB64: string): Promise<LivePayment> {
+        sigCalls.push(orchInfoB64);
+        return { payment: "livepeer-payment-ticket", segCreds: "segment-creds", signerState: { State: "c3RhdGU=", Sig: "c2ln" } };
+      },
+    };
+
+    const adapter = new OrchestratorAdapter(cfg(), {
+      signer,
+      payerAddress: PAYER,
+      ticketParamsRetryBackoffMs: 0,
+    });
+
+    // The single-shot decide completes despite the expired-params rejection.
+    const res = await adapter.decide(
+      { eventType: "KILL", trackCount: 1, maxVelocity: 0, ocrHits: 0 },
+      { gameHint: "final" }
+    );
+    expect(res).toEqual({ decision: "make_clip" });
+
+    const decideCallsLog = log.filter((c) => c.url.endsWith("/apps/highlights-decide/app/highlight"));
+    expect(decideCallsLog).toHaveLength(4);
+    // The stale OrchestratorInfo is NEVER reused: the first sign used the 402
+    // challenge's info; the recovery re-issued an unpaid probe to get a FRESH 402
+    // challenge, then re-signed against the fresh info.
+    expect(sigCalls).toEqual(["b3JjaC1pbmZv", "ZnJlc2g="]);
+    // Both paid retries carried the signer's ticket; the re-probe was unpaid.
+    expect(decideCallsLog[1].headers["Livepeer-Payment"]).toBe("livepeer-payment-ticket");
+    expect(decideCallsLog[3].headers["Livepeer-Payment"]).toBe("livepeer-payment-ticket");
+    expect(decideCallsLog[2].headers["Livepeer-Payment"]).toBeUndefined();
+  });
 });
 
 // ADAAAA-3250: a live perceive session's payment refresher must never strand on

@@ -12,6 +12,11 @@ export interface ServerConfig {
   /** When set, bypass the orchestrator and call runners directly (dev). */
   perceiveUrl?: string;
   decideUrl?: string;
+  /** ADAAAA-6911: server-side knob for the livepeer-session decide-runner gate
+   * (`DECIDE_CONCURRENCY`). Left unset -> the client keeps its default (decide
+   * runner capacity 2); set to 1 to reproduce the capacity-1 serial baseline
+   * for the AC1 on-box measurement. */
+  decideConcurrency?: number;
   /** When set, bypass the orchestrator and call the train runner directly (dev).
    * No train container ships with the local stack today, so this stays unset
    * and direct train calls fail with a clear error until a TRAIN_URL is wired. */
@@ -115,6 +120,9 @@ export interface ServerConfig {
    * `frameScale`, default 640:360 — higher-res than live 320:180).
    * `VOD_FRAME_SCALE`. */
   vodFrameScale: string;
+  /** Max VOD jobs a worker drains concurrently (ADAAAA-6873). Each running job
+   * holds one perceive session, so this gates GPU concurrency. `VOD_WORKER_CONCURRENCY`. */
+  vodWorkerConcurrency: number;
   /** Detail-first VOD decide temporal window length (spec knob
    * `decideWindowN`, default 24 > live 16). Frames forwarded to decide()'s
    * `frames[]` so Gemma reasons across a longer SEQUENCE per trigger.
@@ -150,6 +158,19 @@ export interface ServerConfig {
    * so the deployed live baseline sends no new payload until an operator enables
    * it. `LIVE_AUDIO_CONTEXT`. */
   audioContext: boolean;
+  /** ADAAAA-7011: enable the LIVE decide-observer architecture. When on, decide
+   * is driven on the ~3 s cadence regardless of whether perceive emitted a
+   * candidate, using the rolling-PAST LiveObserver (~10 s window, <=30-frame
+   * cap). Default off so the deployed candidate-gated live baseline is unchanged
+   * until the observer pass is validated. `LIVE_OBSERVE_LOOP`. */
+  liveObserveLoop: boolean;
+  /** ADAAAA-7007/7011: enable the VOD decide-observer architecture on the
+   * detail-first pass (observeLoop + decideWindowN both set in analyzeJob).
+   * When on, decide is driven on the ~3 s cadence with a ~10 s overlapping
+   * window (<=30 frames) regardless of perceive candidates. Default off so the
+   * deployed candidate-gated VOD baseline is unchanged until the observer pass
+   * is validated. `OBSERVE_LOOP`. */
+  observeLoop: boolean;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -182,6 +203,10 @@ export interface ServerConfig {
   /** Postgres connection string (prod). When set, the server uses Postgres
    * instead of SQLite; SQLite stays the local/dev default. */
   databaseUrl?: string;
+  /** Decide-audit retention cap (ADAAAA-7028 Inc 2): keep at most this many
+   * newest decide_audit rows on the write path. 0 disables the trim (unbounded
+   * — should only be used in a controlled/dev context). */
+  decideAuditRetention: number;
   /** Where `npm run db:backup` writes DB snapshots (default `data/backups`). */
   databaseBackupDir: string;
   /** Email-sender container base URL (e.g. http://email:3001). When unset,
@@ -204,6 +229,12 @@ export interface ServerConfig {
   freeHighlights: number;
   /** Fixed fee per decide call (single shot, USD). Default $0.01. */
   decideFee: number;
+  /** Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). When true, the
+   * VOD pass runs the decide `/confirm` deep-frame-dive for un-attested
+   * goal-type candidates and adopts the reconciled verdict. Wired from
+   * `DECIDE_CONFIRM_ENABLED` (default "0"). VOD-first: only the VOD pass reads
+   * this flag (the live pass never sets `confirmEnabled`), so rollout is safe. */
+  decideConfirmEnabled: boolean;
   /** Free plan included decide calls before gating (dev-friendly). */
   freeDecides: number;
   /** Dev-only: wireframe billing (no real Stripe). Enables /dev/billing/*. */
@@ -289,6 +320,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     orchestratorUrl: env.ORCHESTRATOR_URL ?? "http://127.0.0.1:8935",
     perceiveUrl: env.PERCEIVE_URL,
     decideUrl: env.DECIDE_URL,
+    decideConcurrency: env.DECIDE_CONCURRENCY ? Number(env.DECIDE_CONCURRENCY) : undefined,
     trainUrl: env.TRAIN_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
     signerUrl: env.SIGNER_URL,
@@ -318,6 +350,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodSampleMaxFps: Number(env.VOD_SAMPLE_MAX_FPS ?? 8),
     vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 2),
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
+    vodWorkerConcurrency: Number(env.VOD_WORKER_CONCURRENCY ?? 1),
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
     // I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
     // Frames within +/- vodResampleWindowS of a candidate are re-extracted at
@@ -338,6 +371,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // I4 / ADAAAA-6361: live-path decide() carries the surrounding audio clip so
     // Gemma gets auditory context, matching VOD. Opt out with LIVE_AUDIO_CONTEXT=0.
     audioContext: env.LIVE_AUDIO_CONTEXT !== "0",
+    // ADAAAA-7011: wire the LIVE decide-observer into the live job path. Opt in
+    // with LIVE_OBSERVE_LOOP=1 (default off; the candidate-gated live baseline
+    // stays the behavior until the observer pass is validated).
+    liveObserveLoop: env.LIVE_OBSERVE_LOOP === "1",
+    // ADAAAA-7007/7011: wire the VOD decide-observer into the detail-first VOD
+    // job path. Opt in with OBSERVE_LOOP=1 (default off; the candidate-gated VOD
+    // baseline stays the behavior until the observer pass is validated).
+    observeLoop: env.OBSERVE_LOOP === "1",
     // ADAAAA-5342: live sampling driven from the runner's measured capability
     // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
     // headroom so capable GPUs accelerate toward the chartered cadence while
@@ -365,6 +406,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     curatedManifestDir: env.CURATED_MANIFEST_DIR || path.join(env.DATA_DIR ?? "data", "..", "evals"),
     databasePath: env.DATABASE_PATH ?? "data/highlights.db",
     databaseUrl: env.DATABASE_URL,
+    decideAuditRetention: Number(env.DECIDE_AUDIT_RETENTION ?? 2000),
     databaseBackupDir: env.DATABASE_BACKUP_DIR ?? "data/backups",
     emailSenderUrl: env.EMAIL_SENDER_URL,
     mailerToken: env.MAILER_TOKEN || env.EMAIL_QUEUE_TOKEN,
@@ -375,6 +417,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     publicBaseUrl: env.PUBLIC_BASE_URL ?? "http://127.0.0.1:3000",
     freeHighlights: Number(env.FREE_HIGHLIGHTS ?? 10),
     decideFee: Number(env.DECIDE_FEE ?? 0.01),
+    // Stage-2 goal/near-miss confirmation pass config flag (ADAAAA-6797).
+    // Default OFF (VOD-first rollout); the VOD pass reads it. Only when "1" do
+    // the VOD candidates go through the decide /confirm deep frame dive.
+    decideConfirmEnabled: env.DECIDE_CONFIRM_ENABLED === "1",
     freeDecides: Number(env.FREE_DECIDES ?? 5),
     billingWireframe: env.BILLING_WIREFRAME === "1" || env.BILLING_WIREFRAME === "true",
     betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),

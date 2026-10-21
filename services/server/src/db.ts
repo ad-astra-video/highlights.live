@@ -271,6 +271,67 @@ export interface MediaSession {
   updatedAt: string;
 }
 
+/** A durable decide request/response audit row (ADAAAA-7028). One row per frame
+ * group, keyed by (session_id, group_key). Media bytes are content-addressed by
+ * sha256 and live in the decide audit dir/blobs, not duplicated in the row. */
+export interface DecideAuditRecord {
+  id: string;
+  jobId?: string | null;
+  sessionId: string;
+  groupKey: string;
+  frameCount?: number | null;
+  candidateCount?: number | null;
+  systemPromptVersion?: string | null;
+  promptText?: string | null;
+  mediaHashes: { sha256: string; mime?: string; type?: string }[];
+  params?: Record<string, unknown> | null;
+  rawReply?: string | null;
+  verdicts?: unknown | null;
+  timings?: Record<string, unknown> | null;
+  fallback: boolean;
+  replayable: boolean;
+  createdAt: string;
+}
+
+/** Map a raw decide_audit row (snake_case) to a DecideAuditRecord. */
+export function hydrateDecideAudit(r: {
+  id: string;
+  job_id?: string | null;
+  session_id: string;
+  group_key: string;
+  frame_count?: number | null;
+  candidate_count?: number | null;
+  system_prompt_version?: string | null;
+  prompt_text?: string | null;
+  media_hashes?: string | null;
+  params?: string | null;
+  raw_reply?: string | null;
+  verdicts?: string | null;
+  timings?: string | null;
+  fallback?: number | null;
+  replayable?: number | null;
+  created_at: string;
+}): DecideAuditRecord {
+  return {
+    id: r.id,
+    jobId: r.job_id ?? null,
+    sessionId: r.session_id,
+    groupKey: r.group_key,
+    frameCount: r.frame_count ?? null,
+    candidateCount: r.candidate_count ?? null,
+    systemPromptVersion: r.system_prompt_version ?? null,
+    promptText: r.prompt_text ?? null,
+    mediaHashes: r.media_hashes ? JSON.parse(r.media_hashes) : [],
+    params: r.params ? JSON.parse(r.params) : null,
+    rawReply: r.raw_reply ?? null,
+    verdicts: r.verdicts ? JSON.parse(r.verdicts) : null,
+    timings: r.timings ? JSON.parse(r.timings) : null,
+    fallback: !!r.fallback,
+    replayable: !!r.replayable,
+    createdAt: r.created_at,
+  };
+}
+
 /** Async persistence contract shared by the SQLite (dev) and Postgres (prod) backends. */
 export interface Db {
   close(): Promise<void>;
@@ -327,6 +388,14 @@ export interface Db {
   jobCandidatesForJob(jobId: string): Promise<JobCandidate[]>;
   /** Every decide note across all jobs (hydrates the Store on boot). */
   listJobCandidates(): Promise<JobCandidate[]>;
+  /** Upsert one decide audit record (keyed by session_id + group_key). */
+  saveDecideAudit(a: DecideAuditRecord): Promise<void>;
+  /** The audit record for one frame group (queryable by group key). */
+  decideAuditForGroup(sessionId: string, groupKey: string): Promise<DecideAuditRecord | undefined>;
+  /** Every decide audit record (hydrates the decision-trail / frame debugger). */
+  listDecideAudits(): Promise<DecideAuditRecord[]>;
+  /** Retention: keep only the `max` newest records (oldest-first trim). */
+  trimDecideAudits(max: number): Promise<void>;
   /** Persist a fine-tune train run record (full JSON upsert by id). */
   saveTrainRun(r: TrainRun): Promise<void>;
   getTrainRun(id: string): Promise<TrainRun | undefined>;
@@ -699,6 +768,50 @@ export class SqliteDb implements Db {
   async listJobCandidates(): Promise<JobCandidate[]> {
     const rows = this.db.prepare("SELECT record FROM job_candidates").all() as { record: string }[];
     return rows.map((r) => JSON.parse(r.record) as JobCandidate);
+  }
+
+  async saveDecideAudit(a: DecideAuditRecord): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO decide_audit (id, job_id, session_id, group_key, frame_count, candidate_count,
+           system_prompt_version, prompt_text, media_hashes, params, raw_reply, verdicts, timings,
+           fallback, replayable, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(session_id, group_key) DO UPDATE SET
+           job_id=excluded.job_id, frame_count=excluded.frame_count, candidate_count=excluded.candidate_count,
+           system_prompt_version=excluded.system_prompt_version, prompt_text=excluded.prompt_text,
+           media_hashes=excluded.media_hashes, params=excluded.params, raw_reply=excluded.raw_reply,
+           verdicts=excluded.verdicts, timings=excluded.timings, fallback=excluded.fallback,
+           replayable=excluded.replayable, created_at=excluded.created_at`
+      )
+      .run(
+        a.id, a.jobId ?? null, a.sessionId, a.groupKey, a.frameCount ?? null, a.candidateCount ?? null,
+        a.systemPromptVersion ?? null, a.promptText ?? null, JSON.stringify(a.mediaHashes),
+        a.params ? JSON.stringify(a.params) : null, a.rawReply ?? null,
+        a.verdicts ? JSON.stringify(a.verdicts) : null, a.timings ? JSON.stringify(a.timings) : null,
+        a.fallback ? 1 : 0, a.replayable ? 1 : 0, a.createdAt
+      );
+  }
+
+  async decideAuditForGroup(sessionId: string, groupKey: string): Promise<DecideAuditRecord | undefined> {
+    const r = this.db
+      .prepare("SELECT * FROM decide_audit WHERE session_id = ? AND group_key = ?")
+      .get(sessionId, groupKey) as any;
+    return r ? hydrateDecideAudit(r) : undefined;
+  }
+
+  async listDecideAudits(): Promise<DecideAuditRecord[]> {
+    const rows = this.db.prepare("SELECT * FROM decide_audit ORDER BY created_at DESC").all() as any[];
+    return rows.map(hydrateDecideAudit);
+  }
+
+  async trimDecideAudits(max: number): Promise<void> {
+    this.db
+      .prepare(
+        `DELETE FROM decide_audit WHERE id NOT IN (
+           SELECT id FROM decide_audit ORDER BY created_at DESC LIMIT ?)`
+      )
+      .run(max);
   }
 
   async saveTrainRun(r: TrainRun): Promise<void> {
@@ -1336,6 +1449,49 @@ export class PgDb implements Db {
     return r.rows.map((row) => JSON.parse(row.record) as JobCandidate);
   }
 
+  async saveDecideAudit(a: DecideAuditRecord): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO decide_audit (id, job_id, session_id, group_key, frame_count, candidate_count,
+         system_prompt_version, prompt_text, media_hashes, params, raw_reply, verdicts, timings,
+         fallback, replayable, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       ON CONFLICT (session_id, group_key) DO UPDATE SET
+         job_id=EXCLUDED.job_id, frame_count=EXCLUDED.frame_count, candidate_count=EXCLUDED.candidate_count,
+         system_prompt_version=EXCLUDED.system_prompt_version, prompt_text=EXCLUDED.prompt_text,
+         media_hashes=EXCLUDED.media_hashes, params=EXCLUDED.params, raw_reply=EXCLUDED.raw_reply,
+         verdicts=EXCLUDED.verdicts, timings=EXCLUDED.timings, fallback=EXCLUDED.fallback,
+         replayable=EXCLUDED.replayable, created_at=EXCLUDED.created_at`,
+      [
+        a.id, a.jobId ?? null, a.sessionId, a.groupKey, a.frameCount ?? null, a.candidateCount ?? null,
+        a.systemPromptVersion ?? null, a.promptText ?? null, JSON.stringify(a.mediaHashes),
+        a.params ? JSON.stringify(a.params) : null, a.rawReply ?? null,
+        a.verdicts ? JSON.stringify(a.verdicts) : null, a.timings ? JSON.stringify(a.timings) : null,
+        a.fallback ? 1 : 0, a.replayable ? 1 : 0, a.createdAt,
+      ]
+    );
+  }
+
+  async decideAuditForGroup(sessionId: string, groupKey: string): Promise<DecideAuditRecord | undefined> {
+    const r = await this.pool.query(
+      "SELECT * FROM decide_audit WHERE session_id = $1 AND group_key = $2",
+      [sessionId, groupKey]
+    );
+    return r.rows.length ? hydrateDecideAudit(r.rows[0]) : undefined;
+  }
+
+  async listDecideAudits(): Promise<DecideAuditRecord[]> {
+    const r = await this.pool.query("SELECT * FROM decide_audit ORDER BY created_at DESC");
+    return r.rows.map(hydrateDecideAudit);
+  }
+
+  async trimDecideAudits(max: number): Promise<void> {
+    await this.pool.query(
+      `DELETE FROM decide_audit WHERE id NOT IN (
+         SELECT id FROM decide_audit ORDER BY created_at DESC LIMIT $1)`,
+      [max]
+    );
+  }
+
   async saveTrainRun(r: TrainRun): Promise<void> {
     await this.pool.query(
       `INSERT INTO train_runs (id, record, owner_id, status, created_at)
@@ -1796,6 +1952,25 @@ const SCHEMA_SQLITE = `
     owner_id TEXT,
     created_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS decide_audit (
+    id TEXT PRIMARY KEY,
+    job_id TEXT,
+    session_id TEXT NOT NULL,
+    group_key TEXT NOT NULL,
+    frame_count INTEGER,
+    candidate_count INTEGER,
+    system_prompt_version TEXT,
+    prompt_text TEXT,
+    media_hashes TEXT NOT NULL DEFAULT '[]',
+    params TEXT,
+    raw_reply TEXT,
+    verdicts TEXT,
+    timings TEXT,
+    fallback INTEGER NOT NULL DEFAULT 0,
+    replayable INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE (session_id, group_key)
+  );
   CREATE TABLE IF NOT EXISTS train_runs (
     id TEXT PRIMARY KEY,
     record TEXT NOT NULL,
@@ -1957,6 +2132,25 @@ const SCHEMA_PG = `
     record TEXT NOT NULL,
     owner_id TEXT,
     created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS decide_audit (
+    id TEXT PRIMARY KEY,
+    job_id TEXT,
+    session_id TEXT NOT NULL,
+    group_key TEXT NOT NULL,
+    frame_count INTEGER,
+    candidate_count INTEGER,
+    system_prompt_version TEXT,
+    prompt_text TEXT,
+    media_hashes TEXT NOT NULL DEFAULT '[]',
+    params TEXT,
+    raw_reply TEXT,
+    verdicts TEXT,
+    timings TEXT,
+    fallback INTEGER NOT NULL DEFAULT 0,
+    replayable INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE (session_id, group_key)
   );
   CREATE TABLE IF NOT EXISTS train_runs (
     id TEXT PRIMARY KEY,

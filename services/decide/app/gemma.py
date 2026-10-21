@@ -33,10 +33,14 @@ homography and the prompt conservatively rejected).
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import os
+import pathlib
 import re
+import time
 from typing import Optional
 
 from .decider import decide
@@ -44,6 +48,200 @@ from .decider import decide
 log = logging.getLogger("highlights.decide.gemma")
 
 DEFAULT_GEMMA_URL = "http://127.0.0.1:8088"
+
+# --- decide audit (ADAAAA-7027 / ADAAAA-7028) ---------------------------------
+# Versioned system prompt so an audit record can re-create the EXACT request the
+# model saw. Additive relative to the pre-audit user-only request: the current
+# user prompt text (build_prompt / build_group_prompt) is preserved unchanged.
+SYSTEM_PROMPT_VERSION = "1"
+SYSTEM_PROMPT = (
+    "You are a video highlight review agent in a sports broadcast pipeline. "
+    "You will be given a candidate event and a sequence of frames (and possibly "
+    "audio context). Follow the user's instructions exactly and respond ONLY with "
+    "the requested strict JSON. Do not add commentary, markdown fences, or any "
+    "text outside the JSON object."
+)
+
+
+def _audit_sha256(b64: str) -> str:
+    """Content-addressed SHA-256 for a base64 media part (used as the media ref)."""
+    if not b64:
+        return ""
+    try:
+        raw = base64.b64decode(b64, validate=False)
+    except Exception:  # noqa: BLE001
+        return hashlib.sha256(b64.encode("utf-8")).hexdigest()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _content_ref(part: dict) -> dict | None:
+    """For an image-content part, return a compact ref {sha256, mime, dataUrl}
+    without duplicating the base64 bytes in the record (they live in the audit
+    dir / blobs, addressable by sha256)."""
+    b64 = part.get("base64") or part.get("image") or ""
+    if not b64:
+        return None
+    return {
+        "sha256": _audit_sha256(b64),
+        "mime": "image/jpeg",
+        "dataUrl": f"data:image/jpeg;base64,{b64}",
+    }
+
+
+def _messages(mode: str, content: list, *, with_system: bool = True) -> list:
+    """The ordered message array actually sent to gemma: optional system slot
+    (role=system) then the single user message carrying the multimodal content."""
+    msgs: list = []
+    if with_system:
+        msgs.append({"role": "system", "content": SYSTEM_PROMPT})
+    msgs.append({"role": "user", "content": content})
+    return msgs
+
+
+def _audit_record(
+    *,
+    audit_ctx: dict | None,
+    mode: str,
+    content: list,
+    payload: dict,
+    raw_reply: str,
+    parsed: object,
+    fallback: bool,
+    started_at: float,
+    asr_latency_s: float = 0.0,
+) -> dict:
+    """Assemble the audit record for one gemma decide call. Content images are
+    represented by content refs (sha256 + data url) so the record stays compact
+    while still being able to re-attach the exact bytes. Include group identity
+    (sessionId/jobId/groupKey) verbatim from audit_ctx when the caller passes it."""
+    ctx = audit_ctx or {}
+    # ordered multimodal refs for the user content
+    refs: list = []
+    for part in content:
+        if part.get("type") == "image_url":
+            ref = _content_ref({"base64": part["image_url"]["url"].split(",", 1)[1] if "," in part["image_url"]["url"] else ""})
+            refs.append({"type": "image", **ref} if ref else {"type": "image"})
+        elif part.get("type") == "input_audio":
+            refs.append({"type": "audio", "format": part.get("input_audio", {}).get("format", "wav")})
+        elif part.get("type") == "text":
+            refs.append({"type": "text", "text": part["text"]})
+    params = {k: v for k, v in payload.items() if k != "messages"}
+    return {
+        "version": 1,
+        "systemPromptVersion": SYSTEM_PROMPT_VERSION,
+        "mode": mode,
+        "groupId": ctx.get("groupKey") or ctx.get("groupId") or None,
+        "groupKey": ctx.get("groupKey") or None,
+        "sessionId": ctx.get("sessionId") or None,
+        "jobId": ctx.get("jobId") or None,
+        "frameCount": ctx.get("frameCount"),
+        "candidateCount": ctx.get("candidateCount"),
+        "candidates": ctx.get("candidates"),
+        "messages": payload.get("messages", []),
+        "contentRefs": refs,
+        "params": params,
+        "rawReply": raw_reply,
+        "parsed": parsed,
+        "fallback": bool(fallback),
+        "timings": {
+            "elapsedMs": round((time.time() - started_at) * 1000.0, 3),
+            "asrLatencyS": asr_latency_s,
+        },
+        "createdAt": round(time.time(), 3),
+    }
+
+
+def _emit_audit(record: dict) -> None:
+    """Append one audit record as a JSONL line to DECIDE_AUDIT_DIR (if set).
+    Side-effect-free: never raises, never fails a decide call. When the env is
+    unset this is a no-op (existing behaviour unchanged)."""
+    d = os.environ.get("DECIDE_AUDIT_DIR")
+    if not d:
+        return
+    try:
+        path = pathlib.Path(d) / "decide-audit.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except Exception as e:  # noqa: BLE001
+        log.warning("decide audit write failed (ignored): %s", e)
+
+
+def load_audit_records(path: str | None = None) -> list:
+    """Read back every audit record from DECIDE_AUDIT_DIR/decide-audit.jsonl."""
+    d = path or os.environ.get("DECIDE_AUDIT_DIR")
+    if not d:
+        return []
+    f = pathlib.Path(d) / "decide-audit.jsonl"
+    if not f.exists():
+        return []
+    recs: list = []
+    for line in f.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            recs.append(json.loads(line))
+        except Exception:  # noqa: BLE001
+            continue
+    return recs
+
+
+def _audit_descriptor(record: dict) -> dict | None:
+    """Compact audit descriptor emitted on the decide response so the server can
+    index it (ADAAAA-7028 Increment 2). Unlike the full record written to
+    DECIDE_AUDIT_DIR, this strips the base64 image bytes (which stay in the
+    audit dir / blobs, addressable by sha256) and keeps only what the server
+    index + decision-trail needs: group identity, prompt text, media content
+    hashes, model params, raw reply, parsed verdicts, timings, fallback flag.
+    Returns None when the record carries no messages/params (not replayable)."""
+    msgs = record.get("messages", [])
+    texts: list[str] = []
+    for m in msgs:
+        if isinstance(m.get("content"), str):
+            texts.append(m["content"])
+        elif isinstance(m.get("content"), list):
+            for part in m["content"]:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    texts.append(part.get("text", ""))
+    media: list[dict] = []
+    for r in record.get("contentRefs", []):
+        if r.get("type") == "image":
+            media.append({"type": "image", "sha256": r.get("sha256"), "mime": r.get("mime", "image/jpeg")})
+        elif r.get("type") == "audio":
+            media.append({"type": "audio", "format": r.get("format", "wav")})
+    if not msgs:
+        return None
+    parsed = record.get("parsed")
+    verdicts = dict(parsed) if isinstance(parsed, dict) else parsed
+    return {
+        "version": record.get("version", 1),
+        "systemPromptVersion": record.get("systemPromptVersion"),
+        "mode": record.get("mode"),
+        "sessionId": record.get("sessionId"),
+        "jobId": record.get("jobId"),
+        "groupKey": record.get("groupKey") or record.get("groupId"),
+        "frameCount": record.get("frameCount"),
+        "candidateCount": record.get("candidateCount"),
+        "promptText": "\n".join(t for t in texts if t) or None,
+        "mediaHashes": media,
+        "params": record.get("params"),
+        "rawReply": record.get("rawReply"),
+        "verdicts": verdicts,
+        "timings": record.get("timings"),
+        "fallback": bool(record.get("fallback")),
+        "replayable": True,
+        "createdAt": record.get("createdAt"),
+    }
+
+
+def rebuild_payload(record: dict) -> dict:
+    """Rebuild the exact chat/completions payload from an audit record (for
+    replay). The record stores the verbatim messages + params, so this is a
+    faithful reconstruction that byte-matches the original request (which is
+    what the acceptance control assertion checks)."""
+    return dict(record.get("params", {}) | {"messages": record.get("messages", [])})
+
 
 
 def _strip_json_fence(text: str) -> str:
@@ -110,6 +308,60 @@ def outcome_is_highlight(outcome: str) -> bool:
     return outcome == "scoring_play"
 
 
+# ADAAAA-6855: map job-requested highlight labels (preferLabels) to the outcome
+# taxonomy members they authorize for export. A requested non-goal class may be
+# exported as a DISTINCT highlight (outcome/eventType preserved, never relabeled
+# as a goal) even though it is not a scoring play. The map is conservative — it
+# never widens goal acceptance — and it mirrors the server-side map in
+# services/server/src/analyzer.ts (keep the two in sync).
+NON_GOAL_LABEL_OUTCOMES: dict[str, frozenset[str]] = {
+    "goals": frozenset({"scoring_play"}),
+    "near-misses": frozenset({"near_miss"}),
+    "saves": frozenset({"near_miss", "big_play"}),
+    "red cards": frozenset({"big_play"}),
+    "counter-attacks": frozenset({"big_play"}),
+}
+
+
+def normalize_prefer_label(label) -> str:
+    return (label or "").strip().lower()
+
+
+def event_type_for_outcome(outcome: str | None, fallback: str = "") -> str:
+    """ADAAAA-6969: derive the TRUE public ``eventType`` label from the outcome
+    taxonomy member.
+
+    A non-scoring highlight (``near_miss`` / ``big_play``) must never be
+    published as ``GOAL`` — the label reflects the outcome class (``NEAR_MISS`` /
+    ``BIG_PLAY``), so a keeper save / near-miss surfaces as a distinct non-goal
+    highlight. A frame-confirmed ``scoring_play`` stays ``GOAL``. Any other /
+    unknown outcome defers to ``fallback`` (the candidate/model label).
+
+    Kept in sync with the server-side ``eventTypeForOutcome`` in
+    ``services/server/src/analyzer.ts`` (ADAAAA-6969) so the public label and
+    the decide-note always agree.
+    """
+    if outcome == "scoring_play":
+        return "GOAL"
+    if outcome == "near_miss":
+        return "NEAR_MISS"
+    if outcome == "big_play":
+        return "BIG_PLAY"
+    return fallback
+
+
+def requested_outcomes(prefer_labels) -> set[str]:
+    """The outcome taxonomy members the job's preferLabels authorize for export.
+    Empty set when no labels are requested, which preserves the default
+    scoring-only gate (backward compatible)."""
+    out: set[str] = set()
+    for lab in prefer_labels or []:
+        norm = normalize_prefer_label(lab)
+        if norm in NON_GOAL_LABEL_OUTCOMES:
+            out |= NON_GOAL_LABEL_OUTCOMES[norm]
+    return out
+
+
 def _rule_outcome(d) -> str:
     """Map a deterministic rule decision to the outcome taxonomy member so the
     fallback path returns the same shape as the Gemma path (increment F). The
@@ -141,6 +393,55 @@ def _as_str_list(value) -> list[str]:
         return out
     s = value.strip() if isinstance(value, str) else ""
     return [s] if s else []
+
+
+# ---------------------------------------------------------------------------
+# Running video summary (ADAAAA-7111, Increment D)
+# ---------------------------------------------------------------------------
+# The decide/gemma brain maintains an incrementally updated RUNNING summary of
+# the video so far (story-so-far), carried across cadence observe ticks. It is
+# forwarded into each request (`storySoFar`) and the model returns the updated
+# one (`runningSummary`), which the server persists + surfaces in the job
+# detail. The summary must GROW monotonically but stay BOUNDED, hence the
+# two helpers below.
+MAX_RUNNING_SUMMARY_CHARS = 600
+
+
+def _compile_summary(summary: str) -> str:
+    """Bound a running summary to MAX_RUNNING_SUMMARY_CHARS, dropping the OLDEST
+    lines first so the newest detail survives (grow-then-compact: monotonic up
+    to the cap, then the oldest events are pruned). Never raises; an empty/None
+    input yields ''. This is the single place the bounded-size acceptance
+    criterion is enforced."""
+    summary = (summary or "").strip()
+    if not summary:
+        return ""
+    if len(summary) <= MAX_RUNNING_SUMMARY_CHARS:
+        return summary
+    lines = summary.split("\n")
+    while lines and len("\n".join(lines)) > MAX_RUNNING_SUMMARY_CHARS:
+        lines.pop(0)
+    if not lines:
+        # A single over-cap line (no newlines to prune): truncate the tail.
+        return summary[:MAX_RUNNING_SUMMARY_CHARS]
+    out = "\n".join(lines)
+    if len(out) > MAX_RUNNING_SUMMARY_CHARS:
+        out = out[:MAX_RUNNING_SUMMARY_CHARS]
+    return out
+
+
+def _rule_summary(story_so_far: str, outcome: str, event_type: str, reason: str | None) -> str:
+    """Deterministic running summary for the rule/no-gemma path. Extends the
+    prior story-so-far with a compact chronological line for this window and
+    bounds the total size via {@link _compile_summary}, so the summary grows
+    monotonically up to the cap then compacts. Mirrors the contiguous
+    story-so-far semantics the Gemma path produces."""
+    prior = (story_so_far or "").strip()
+    line = f"[{outcome or 'not_highlight'}] {event_type}"
+    if reason:
+        line += f" — {reason[:120]}"
+    return _compile_summary((prior + "\n" + line) if prior else line)
+
 
 
 def _normalize_verdict(verdict) -> dict | None:
@@ -229,6 +530,9 @@ def parse_decision(text: str) -> dict | None:
         "reasoning": _as_text(obj.get("reasoning")),
         "verdict": _normalize_verdict(obj.get("verdict")),
         "evidenceAttested": _as_str_list(obj.get("evidenceAttested")),
+        # ADAAAA-7111 (Increment D): the running video summary the model updated
+        # for this window. Bound on write (see _compile_summary in the caller).
+        "runningSummary": _as_text(obj.get("runningSummary")),
         "source": "gemma",
     }
 
@@ -366,6 +670,13 @@ def is_goal_accept(decision: dict, event_type: Optional[str] = None) -> bool:
     return False
 
 
+def _confirm_pass_enabled() -> bool:
+    """Whether the Stage-2 confirmation pass (ADAAAA-6797) is on for this
+    deployment. Mirrors ``confirm.confirm_enabled`` without a circular import
+    (confirm.py imports from gemma.py)."""
+    return os.environ.get("DECIDE_CONFIRM_ENABLED", "0") == "1"
+
+
 def apply_goal_attestation_gate(
     decision: dict, evidence: Optional[dict], event_type: Optional[str] = None
 ) -> tuple[bool, str | None]:
@@ -381,13 +692,24 @@ def apply_goal_attestation_gate(
     cannot be exhaustive, so the only trustworthy gate over the model's accept is
     the independent attestation.
 
-    True goals whose oracle didn't fire are also rejected (recall is validated
-    by the fresh full-VOD E2E against real goal timestamps); this is the
-    deliberate cost of not letting a confabulated reason be the sole evidence.
+    ADAAAA-6973 (Option 1): when the Stage-2 confirmation pass is ENABLED
+    (``DECIDE_CONFIRM_ENABLED=1``), defer the attestation to the confirm
+    deep-frame dive instead of hard-rejecting here. An accepted goal-type
+    candidate that carries no independent attestation PASSES so the server's
+    ``shouldRunConfirm`` fires and ``/confirm`` becomes the attestation
+    (``goalConfirmed=confirmed_goal`` → accept; ``near_miss``/``not_goal`` →
+    reject). The anti-confabulation property moves to the verifier stage rather
+    than being dropped. When the confirmation pass is OFF (live / flag-off
+    path), keep the strict reject so the model alone is never trusted — the
+    pre-existing behavior is byte-for-byte preserved.
     """
     if not is_goal_accept(decision, event_type):
         return True, None
     if attested_goal_criterion(evidence):
+        return True, None
+    if _confirm_pass_enabled():
+        # Defer to the Stage-2 confirm deep-frame dive (goal attestation at the
+        # verifier stage); the candidate is a Stage-1 scoring_play accept.
         return True, None
     return False, (
         "no attested goal criterion (ballOutcome=goal / goalCrossed / "
@@ -446,7 +768,9 @@ def reconcile_outcome_with_ball_signal(decision: dict, ball_outcome: Optional[st
         (decision.get("reason") or "")
         + "; goal-line signal: goal-bound shot did not convert (near-miss)"
     ).strip("; ")
-    decision["eventType"] = decision.get("eventType") or "NEAR_MISS"
+    # ADAAAA-6969: the outcome was forced to near_miss, so the public label
+    # MUST reflect that class — never leave a stale candidate/model "GOAL".
+    decision["eventType"] = event_type_for_outcome("near_miss", decision.get("eventType") or "")
     return decision
 
 
@@ -515,7 +839,7 @@ def apply_celebration_only_guard(decision: dict) -> dict:
     return decision
 
 
-def finalize_goal_acceptance(decision: dict) -> dict:
+def finalize_goal_acceptance(decision: dict, prefer_labels: list[str] | None = None) -> dict:
     """ADAAAA-6598: the SINGLE accept gate at the top of the decide route.
 
     ONLY a frame-confirmed `scoring_play` is a board-accepted GOAL highlight.
@@ -527,18 +851,36 @@ def finalize_goal_acceptance(decision: dict) -> dict:
     enter the net) and on the high-value (GOAL) waiver that accepted a
     corroborated-but-not-a-goal candidate. ADAAAA-7135 (criteria 6): also
     rejects a near-max-score GOAL accepted on celebration alone when the
-    ball-in-net instant is not observed. Mutates and returns `decision`."""
+    ball-in-net instant is not observed. Mutates and returns `decision`.
+
+    ADAAAA-6855: when the job explicitly requested a non-goal class in
+    `prefer_labels` (near-misses/saves/red-cards/counter-attacks), a
+    correctly-detected instance of that class is ACCEPTED and exported as a
+    DISTINCT highlight (outcome / eventType preserved — never relabeled as a
+    goal, so goal precision is unaffected). When no non-goal label is requested
+    the default scoring-only gate is unchanged.
+    """
     decision = apply_celebration_only_guard(decision)
-    if decision.get("outcome") != "scoring_play":
-        decision["isHighlight"] = False
-        decision.setdefault(
-            "reason",
-            "",
-        )
-        decision["reason"] = (
-            (decision.get("reason") or "")
-            + f"; outcome={decision.get('outcome')} is not a scoring highlight"
-        ).strip("; ")
+    outcome = decision.get("outcome")
+    if outcome == "scoring_play":
+        return decision
+    # Explicitly-requested non-goal class -> accept as a distinct highlight.
+    if outcome in requested_outcomes(prefer_labels):
+        decision["isHighlight"] = True
+        # ADAAAA-6969: a non-scoring highlight's label reflects the outcome
+        # class (NEAR_MISS / BIG_PLAY) — never the candidate/model's "GOAL".
+        # outcome & nearMiss are preserved; only the label changes.
+        decision["eventType"] = event_type_for_outcome(outcome, decision.get("eventType") or "")
+        return decision
+    decision["isHighlight"] = False
+    decision.setdefault(
+        "reason",
+        "",
+    )
+    decision["reason"] = (
+        (decision.get("reason") or "")
+        + f"; outcome={decision.get('outcome')} is not a scoring highlight"
+    ).strip("; ")
     return decision
 
 
@@ -653,6 +995,7 @@ def build_prompt(
     n_frames: int = 1,
     has_audio: bool = False,
     transcript: str = "",
+    story_so_far: str = "",
 ) -> str:
     ev = event_type.upper()
     meta = [
@@ -700,6 +1043,14 @@ def build_prompt(
     audio_level_line = _audio_level_line(evidence)
     if audio_level_line:
         meta.append(audio_level_line)
+    # ADAAAA-7111 (Increment D): the running video summary (story-so-far) carried
+    # from the previous cadence observe tick. Forwarded so the model can EXTEND
+    # it (not rewrite from scratch) — the summary at tick N must contain/extend
+    # the summary at tick N-1. Absent on the first tick (no prior summary).
+    ssf = (story_so_far or "").strip()
+    if ssf:
+        meta.append("STORY SO FAR (your running summary of the video so far — you MUST extend/compress it, keep it chronological and forward-only, never delete events already captured, only tighten wording):")
+        meta.append("  " + ssf[:MAX_RUNNING_SUMMARY_CHARS])
     return (
         "You are a sports/esports highlight judge. You are shown a temporal "
         "SEQUENCE of frames (extracted at 1 FPS from the moment of a detected "
@@ -823,7 +1174,11 @@ def build_prompt(
         "\"ballInNet\": true|false|null, \"scoreboardChanged\": true|false|null, "
         "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<the evidence that "
         "contradicts the hypothesis, or the null when it does not>\"}, "
-        "\"evidenceAttested\": [\"<each concrete piece of grounded evidence you relied on>\"]}"
+        "\"evidenceAttested\": [\"<each concrete piece of grounded evidence you relied on>\"], "
+        "\"runningSummary\": \"<your updated RUNNING video summary so far, ~500 chars max, "
+        "chronological + forward-only: if a STORY SO FAR was given you must EXTEND it, never rewrite "
+        "from scratch or delete captured events, only tighten wording; if none was given start it "
+        "fresh. Cover the whole video so far, not just this window>.\"}"
     )
 
 
@@ -839,6 +1194,8 @@ def ask(
     reasoning_effort: str = "none",
     timeout_s: float = 180.0,
     transcript: str = "",
+    audit_ctx: dict | None = None,
+    story_so_far: str = "",
 ) -> dict | None:
     """Call the gemma multimodal completion (vLLM OpenAI-compat server). Returns
     a parsed/validated HighlightDecision dict, or None on any transport/parse
@@ -848,9 +1205,15 @@ def ask(
     content (temporal frame sequence + crops) comes BEFORE the text prompt,
     and any audio comes AFTER the text. Audio is mono 16 kHz float32 (wav).
     The `model` field is sent when GEMMA_MODEL is set (vLLM requires it to
-    match the served model name)."""
+    match the served model name).
+
+    When ``audit_ctx`` is given (sessionId/jobId/groupKey/candidates), the
+    exact request and raw reply are also captured into an audit record
+    written to DECIDE_AUDIT_DIR (see _audit_record / _emit_audit) so the
+    model's input+output can be re-created and replayed later."""
     import httpx
 
+    started_at = time.time()
     frames = frames or []
     images = images or []
 
@@ -888,6 +1251,7 @@ def ask(
                 n_frames=len(frames),
                 has_audio=bool(send_audio or transcript),
                 transcript=transcript,
+                story_so_far=story_so_far,
             ),
         }
     )
@@ -916,7 +1280,7 @@ def ask(
     # vLLM channel) so strict JSON returns immediately regardless of the vLLM
     # version's default / auto-injection behaviour; it can never ENABLE thinking.
     payload = {
-        "messages": [{"role": "user", "content": content}],
+        "messages": _messages("single", content),
         "temperature": 0.0,
         # Frontend-selectable; "none" (the default) turns OFF gemma-4 QAT thinking
         # so content comes back as the JSON immediately instead of empty until a
@@ -950,6 +1314,22 @@ def ask(
     log.debug("gemma result event=%s parsed=%s", event_type, result)
     if result is None:
         log.error("gemma reply unparseable event=%s reply=%r", event_type, text[:500])
+    _record = _audit_record(
+        audit_ctx=audit_ctx,
+        mode="single",
+        content=content,
+        payload=payload,
+        raw_reply=text,
+        parsed=result,
+        fallback=False,
+        started_at=started_at,
+    )
+    _emit_audit(_record)
+    # Emit the compact audit descriptor on the decision (ADAAAA-7028 Inc 2) so
+    # the server can index it. The descriptor is attached to the returned dict;
+    # it never carries the base64 media bytes (those stay in the audit dir).
+    if result is not None:
+        result["audit"] = _audit_descriptor(_record)
     return result
 
 
@@ -964,6 +1344,8 @@ def decide_with_gemma(
     reasoning_effort: str = "none",
     url: str | None = None,
     score_board_changed: bool = False,
+    audit_ctx: dict | None = None,
+    story_so_far: str = "",
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision.
@@ -1001,6 +1383,8 @@ def decide_with_gemma(
         audio_sample_rate,
         reasoning_effort=reasoning_effort,
         transcript=transcript,
+        audit_ctx=audit_ctx,
+        story_so_far=story_so_far,
     )
     if g is not None:
         result = g
@@ -1026,6 +1410,16 @@ def decide_with_gemma(
             "nearMiss": _rule_outcome(d) == "near_miss",
             "source": "rule-fallback",
         }
+    # ADAAAA-7111 (Increment D): carry the running video summary (story-so-far).
+    # Gemma's updated summary is returned bounded; on the rule-fallback path (or
+    # when the model omitted it) synthesise a deterministic extension of the
+    # prior summary so the summary still GROWS monotonically across ticks.
+    rs = (result.get("runningSummary") or "").strip()
+    if rs:
+        rs = _compile_summary(rs)
+    else:
+        rs = _rule_summary(story_so_far, result.get("outcome") or "not_highlight", event_type, result.get("reason"))
+    result["runningSummary"] = rs
     # Per-highlight audio-context cost/latency readout. `path` reports which
     # audio channel the model actually received: native `input_audio` when raw
     # send is on (GEMMA_SEND_AUDIO=1, ADAAAA-6350), else the ASR->text
@@ -1083,3 +1477,316 @@ def plan_tracking_with_gemma(
         fallback=fallback,
         discovery_runner=discovery_runner,
     )
+
+
+def title_with_gemma(
+    game_hint: str = "",
+    event_types: list[str] | None = None,
+    reasons: list[str] | None = None,
+    highlight_count: int = 0,
+    url: str | None = None,
+    timeout_s: float = 5.0,
+) -> str | None:
+    """Generate a short, human-readable job title with a TEXT-ONLY Gemma call
+    (ADAAAA-6798 Inc 1). Takes a compact summary (gameHint + the job's
+    eventTypes + accepted-highlight reasons, plus the accepted count) and
+    returns a short title string (e.g. \"Soccer — 3 goals, 1 near miss\"), or
+    None on any transport/parse failure so the caller can apply its own
+    fallback title. No images and no audio — this is the one lightweight
+    text-only inference per completed job; it must never gate or fail the job.
+
+    The FastAPI layer runs this in a worker thread (like the /highlight gemma
+    branch, ADAAAA-6373) so /health stays responsive during the inference.
+    """
+    import httpx
+
+    event_types = [str(x) for x in (event_types or [])]
+    reasons = [str(x) for x in (reasons or [])]
+    prompt = (
+        "You write a short title for a sports/gaming highlight reel. "
+        "Return ONLY one short human-readable title (<= 12 words, no quotes, "
+        "no leading/trailing punctuation).\n"
+        f"Sport/game: {game_hint or 'unknown'}\n"
+        f"Highlight event types: {', '.join(event_types) or 'none'}\n"
+        f"Accepted highlight count: {highlight_count}\n"
+        f"Highlight reasons: {'; '.join(r for r in reasons[:6]) or 'none'}\n"
+        "Title:"
+    )
+    payload = {
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "reasoning_effort": "none",
+        "chat_template_kwargs": {"enable_thinking": False},
+        "max_tokens": 64,
+        "stream": False,
+    }
+    model = os.environ.get("GEMMA_MODEL")
+    if model:
+        payload["model"] = model
+    u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
+    try:
+        resp = httpx.post(u.rstrip("/") + "/v1/chat/completions", json=payload, timeout=timeout_s)
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:  # noqa: BLE001
+        log.error("gemma title call failed url=%s: %s", u, e)
+        return None
+    title = (text or "").strip().strip('"').strip()
+    if not title:
+        return None
+    return title[:120]
+def _strip_json_fence_array(text: str) -> str:
+    """Extract the first JSON array (```json ... ```-fenced or bare) from a
+    group gemma reply, stripping surrounding prose. Returns '' when none."""
+
+    def _first_array(s: str) -> str:
+        lo = s.find("[")
+        hi = s.rfind("]")
+        if lo == -1 or hi == -1 or hi <= lo:
+            return ""
+        return s[lo : hi + 1]
+
+    m = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
+    if m:
+        return _first_array(m.group(1))
+    return _first_array(text)
+
+
+def parse_verdicts(text: str) -> list | None:
+    """Parse a GROUP gemma reply into a list of per-candidate verdict dicts.
+
+    Robust to code fences and prose. Accepts either a top-level JSON array of
+    verdict objects, or a JSON object carrying a ``verdicts``/``verdict`` list.
+    Returns None on any parse/shape failure so the caller can fall back to one
+    single-candidate decide per candidate (a genuine highlight is never silently
+    dropped)."""
+    raw: list | None = None
+    seg = _strip_json_fence_array(text)
+    if seg:
+        try:
+            raw = json.loads(seg)
+        except Exception:
+            raw = None
+    if raw is None:
+        # Try a JSON object (e.g. {"verdicts": [...]}).
+        obj = None
+        try:
+            obj = json.loads(_strip_json_fence(text))
+        except Exception:
+            obj = None
+        if isinstance(obj, dict):
+            for key in ("verdicts", "verdict", "candidates", "results"):
+                vs = obj.get(key)
+                if isinstance(vs, list):
+                    raw = vs
+                    break
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for v in raw:
+        if not isinstance(v, dict):
+            return None  # malformed element -> fall back
+        out.append(v)
+    return out
+
+
+def build_group_prompt(
+    candidates: list,
+    game_hint: str = "",
+    n_frames: int = 1,
+    has_audio: bool = False,
+    transcript: str = "",
+) -> str:
+    """The group-mode decide prompt. Lists every candidate (index, eventType,
+    timestamp, evidence summary) and asks for a JSON ARRAY of verdicts, one per
+    candidate, in order. Candidates are dicts shaped ``{eventType, timestamp,
+    evidence}`` (the GroupCandidate model_dump)."""
+    lines: list[str] = []
+    for i, c in enumerate(candidates):
+        ev = c.get("evidence") or {}
+        if not isinstance(ev, dict):
+            ev = {}
+        reaction = ev.get("reaction") or {}
+        if not isinstance(reaction, dict):
+            reaction = {}
+        lines.append(
+            f"Candidate {i}: eventType={c.get('eventType')} timestamp={c.get('timestamp')} "
+            f"trackCount={ev.get('trackCount', 0)} maxVelocity={ev.get('maxVelocity', 0)} "
+            f"ocrHits={ev.get('ocrHits', 0)} scoreBoardChanged={ev.get('scoreBoardChanged')} "
+            f"ballOutcome={ev.get('ballOutcome')} goalCrossed={ev.get('goalCrossed')} "
+            f"audioReaction={reaction.get('crowdEnergy') or 0} humansInMotion={reaction.get('humansInMotion') or 0}"
+        )
+    candidates_block = "\n".join(lines)
+    transcript = (transcript or "").strip()
+    extra = ""
+    if transcript:
+        extra += "\naudio commentary transcript (ASR):\n  " + transcript[:500]
+    return (
+        "You are a sports/esports highlight judge. You are shown a temporal "
+        "SEQUENCE of frames (extracted at 1 FPS) spanning a single 3-second "
+        f"frame group ({n_frames} frames), plus, when available, the accompanying "
+        "audio.\n"
+        "This group may contain MULTIPLE candidate trigger events (Stage-A "
+        "upstream detections). Each candidate is a HYPOTHESIS to test, NOT a "
+        "fact. You must review the same frames + audio once for the WHOLE group "
+        "and return an independent verdict PER candidate.\n"
+        "Candidates (in order):\n" + candidates_block + "\n"
+        "For each candidate, judge independently from the frames + audio whether "
+        "it is a genuine highlight (scoring_play) or not. Use the same "
+        "outcome taxonomy as a single review: scoring_play | near_miss | "
+        "big_play | not_highlight. A GOAL is isHighlight=true only when the "
+        "frames show the ball actually entered the net; absent/contradicting "
+        "evidence means false.\n"
+        "VERDICT COUNT IS CRITICAL: reply with EXACTLY one verdict object per "
+        "candidate, in the same order as the candidate list above.\n" + extra +
+        "\nNow answer with ONLY a JSON array, no markdown, no preamble, no "
+        "trailing prose, exactly of this shape (one object per candidate, in "
+        "order):\n"
+        '[{"isHighlight": true|false, "score": 0..100, "eventType": "<type>", '
+        '"reason": "<short grounded reason>", "outcome": "scoring_play|near_miss|big_play|not_highlight", '
+        '"nearMiss": true|false}]'
+    )
+
+
+def ask_group(
+    url: str,
+    candidates: list,
+    game_hint: str = "",
+    images: list | None = None,
+    frames: list | None = None,
+    audio_b64: str = "",
+    audio_sample_rate: int = 16000,
+    reasoning_effort: str = "none",
+    timeout_s: float = 180.0,
+    transcript: str = "",
+) -> list | None:
+    """Call the gemma multimodal completion ONCE for the whole frame group and
+    return the parsed per-candidate verdict list (or None on any failure). Same
+    modality order as ``ask`` (all images BEFORE the text prompt, audio AFTER)."""
+    import httpx
+
+    frames = frames or []
+    images = images or []
+    send_audio = bool(audio_b64) and os.environ.get("GEMMA_SEND_AUDIO", "0") == "1"
+
+    def _img(part: dict) -> dict | None:
+        b64 = part.get("base64") or part.get("image") or ""
+        if not b64:
+            return None
+        return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+
+    content: list = [i for i in (_img(p) for p in frames + images) if i is not None]
+    content.append(
+        {
+            "type": "text",
+            "text": build_group_prompt(
+                candidates,
+                game_hint,
+                n_frames=len(frames),
+                has_audio=bool(send_audio or transcript),
+                transcript=transcript,
+            ),
+        }
+    )
+    if send_audio:
+        content.append(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": audio_b64, "format": "wav"},
+            }
+        )
+    payload = {
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0.0,
+        "reasoning_effort": reasoning_effort,
+        "chat_template_kwargs": {"enable_thinking": False},
+        "max_tokens": 2400,
+        "stream": False,
+    }
+    model = os.environ.get("GEMMA_MODEL")
+    if model:
+        payload["model"] = model
+    log.debug("gemma group call candidates=%d frames=%d audio=%s", len(candidates), len(frames), bool(audio_b64))
+    try:
+        resp = httpx.post(url.rstrip("/") + "/v1/chat/completions", json=payload, timeout=timeout_s)
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:  # noqa: BLE001
+        log.error("gemma group call failed candidates=%d url=%s: %s", len(candidates), url, e)
+        return None
+    result = parse_verdicts(text)
+    if result is None:
+        log.error("gemma group reply unparseable candidates=%d reply=%r", len(candidates), text[:500])
+    return result
+
+
+def decide_group_with_gemma(
+    candidates: list,
+    game_hint: str = "",
+    images: list | None = None,
+    frames: list | None = None,
+    audio_b64: str = "",
+    audio_sample_rate: int = 16000,
+    reasoning_effort: str = "none",
+    url: str | None = None,
+    score_board_changed: bool = False,
+) -> list[dict]:
+    """Group mode: ONE gemma review of the whole 3 s frame group returns a
+    verdict per candidate (same order as ``candidates``). Candidates are dicts
+    shaped ``{eventType, timestamp, evidence}``.
+
+    SAFETY (AC7): when the group reply cannot be parsed, or the returned array
+    length does not equal the candidate count, FALL BACK to calling the existing
+    single-candidate ``decide_with_gemma`` once per candidate — so a genuine
+    highlight is never silently dropped. This is a rare path, documented."""
+
+    u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
+    n = len(candidates)
+    transcript = ""
+    asr_latency_s = 0.0
+    asr_ran = False
+    if (
+        audio_b64
+        and not (os.environ.get("GEMMA_SEND_AUDIO", "0") == "1")
+        and os.environ.get("AUDIO_CONTEXT", "1") == "1"
+    ):
+        asr_url = _asr_url()
+        if asr_url:
+            transcript, asr_latency_s = transcribe_audio(asr_url, audio_b64, audio_sample_rate)
+            asr_ran = True
+    g = ask_group(
+        u,
+        candidates,
+        game_hint,
+        images,
+        frames,
+        audio_b64,
+        audio_sample_rate,
+        reasoning_effort=reasoning_effort,
+        transcript=transcript,
+    )
+    if g is not None and len(g) == n:
+        results = g
+    else:
+        # Rare safety fallback (AC7): one single-candidate gemma decide per
+        # candidate so a genuine highlight is never silently dropped.
+        log.warning("gemma group verdict malformed (n=%d got=%s); falling back to per-candidate decide", n, None if g is None else len(g))
+        results = []
+        for c in candidates:
+            ev = c.get("evidence") or {}
+            if not isinstance(ev, dict):
+                ev = {}
+            v = decide_with_gemma(
+                event_type=c.get("eventType", ""),
+                evidence=ev,
+                game_hint=game_hint,
+                images=images,
+                frames=frames,
+                audio_b64=audio_b64,
+                audio_sample_rate=audio_sample_rate,
+                reasoning_effort=reasoning_effort,
+                url=u,
+                score_board_changed=bool(ev.get("scoreBoardChanged", False)),
+            )
+            results.append(v)
+    return results

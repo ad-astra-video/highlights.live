@@ -89,6 +89,25 @@ export function mergeTrail(current: TrailEntry[], incoming: TrailEntry[]): Trail
   return [...byKey.values()].sort((a, b) => (a.seq !== b.seq ? a.seq - b.seq : a.ts - b.ts));
 }
 
+/** Reconcile the open panel's trail against the 15s poll's persisted snapshot
+ * (`job.candidates`) without wiping live SSE-appended frames (ADAAAA-6893).
+ *
+ * A live in-flight job carries an EMPTY `job.candidates` — `persistDecision`
+ * writes to the `job_candidates` table but does not populate `job.candidates` on
+ * the job object — so re-seeding from an empty snapshot erased the SSE-streamed
+ * "candidate"/"highlight" entries and dropped the trail back to "No decisions
+ * yet". Two rules keep the live trail stable:
+ *   - empty persisted snapshot -> keep the current (SSE-appended) trail as-is;
+ *   - non-empty snapshot (the VOD `file` path) -> merge it over the current
+ *     trail, deduping by (kind, seq, eventType), so persisted decisions and any
+ *     not-yet-flushed SSE frames both survive.
+ * The panel calls this from `refresh()` so the 15s poll reconciles instead of
+ * replacing the trail. */
+export function reconcileTrail(current: TrailEntry[], persisted: TrailEntry[]): TrailEntry[] {
+  if (persisted.length === 0) return current;
+  return mergeTrail(current, persisted);
+}
+
 /** True when a job's trail contains at least one candidate trigger (so the panel
  * can say "still analyzing — no candidates yet" for an empty in-flight trail). */
 export function hasCandidateTrigger(trail: TrailEntry[]): boolean {
