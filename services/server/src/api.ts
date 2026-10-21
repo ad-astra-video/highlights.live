@@ -22,6 +22,7 @@ import {
   type AnalyzeOutcome,
   type PipelineClient,
 } from "./analyzer";
+import type { SignalGateOptions } from "./observe-loop";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractBurstFrames, extractFrames } from "./ffmpeg";
@@ -597,6 +598,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // ADAAAA-7145: gate the live decide-observer's billable decide calls on
         // a real highlight signal (recall-safe). Default off.
         observeSignalGate: cfg.observeSignalGate,
+        observeSignalGateOpts: buildObserveSignalGateOpts(cfg),
         // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
         onDecision: persistDecision,
         // ADAAAA-7028 Inc 2: ingest the decide audit descriptor durably.
@@ -815,6 +817,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // real highlight signal (recall-safe). Wired so box QA can enable it once
       // the perceive goal-line/homography channels are configured.
       observeSignalGate: cfg.observeSignalGate,
+      observeSignalGateOpts: buildObserveSignalGateOpts(cfg),
       // Increment D (ADAAAA-6467): the what-to-track planner's warm-up window
       // + out-of-band re-check cadence on the VOD pass (cap 8).
       warmupSeconds: cfg.warmupSeconds,
@@ -2935,6 +2938,19 @@ function resolveWebappDist(cfg: ServerConfig): string | null {
     }
   }
   return null;
+}
+
+/** ADAAAA-7147: derive the Tier-2 signal-gate tuning for an AnalyzeConfig from
+ * server config. Returns undefined when neither knob is set (the gate keeps the
+ * recall-safe baseline — ball velocity ignored, uncalibrated windows escalate).
+ * `ballMinSpeedMps` is the calibration-free image-space `speedMps` threshold;
+ * `suppressQuiet` enables quiet-uncalibrated suppression. */
+function buildObserveSignalGateOpts(cfg: ServerConfig): SignalGateOptions | undefined {
+  if (cfg.observeSignalGateBallMinSpeedMps === undefined && !cfg.observeSignalGateSuppressQuiet) return undefined;
+  return {
+    ...(cfg.observeSignalGateBallMinSpeedMps !== undefined ? { ballMinSpeedMps: cfg.observeSignalGateBallMinSpeedMps } : {}),
+    suppressQuietUncalibrated: cfg.observeSignalGateSuppressQuiet,
+  };
 }
 
 function spaHandler(cfg: ServerConfig) {
