@@ -20,6 +20,7 @@ import {
   type AnalyzeOutcome,
   type PipelineClient,
 } from "./analyzer";
+import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractBurstFrames, extractFrames } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
@@ -787,18 +788,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         }, TRAIL_FLUSH_MS - (now - lastTrailFlush));
       }
     };
+    // ADAAAA-7135 (two-tier): record ONLY confirmed highlights into the durable
+    // `job.candidates` trail. A raw `candidate` trigger is a Tier-1 watch
+    // hypothesis — the tracker labels the fast-strike MOVE/KILL primitive as
+    // GOAL via `sport_specific_event_type` on essentially every soccer frame —
+    // so persisting it as `{decision:"candidate"}` is what produced the
+    // 168-candidate / all-GOAL trail flood. Candidate triggers still fan out
+    // live over the SSE `baseHook` (the in-flight note stream) but are never
+    // written as a decision. `candidatesTriggered` below keeps counting raw
+    // candidate triggers solely for the decide/cost accounting. `decision`
+    // equals `highlight.outcome ?? status` (accepted / near_miss / ...).
     const recordTrailDecision = (ev: AnalyzeEvent) => {
-      if (ev.type === "candidate" && ev.candidate) {
-        jobTrail.push({ seq: ev.seq, ts: ev.timestamp, eventType: ev.candidate.eventType, decision: "candidate" });
-      } else if (ev.type === "highlight" && ev.highlight) {
-        jobTrail.push({
-          seq: ev.seq,
-          ts: ev.timestamp,
-          eventType: ev.highlight.eventType ?? "highlight",
-          decision: ev.highlight.outcome ?? ev.highlight.status,
-          highlightId: ev.highlight.id,
-        });
-      }
+      const entry = trailDecisionFromEvent(ev);
+      if (!entry) return;
+      jobTrail.push(entry);
       scheduleTrailFlush();
     };
     const baseHook = jobEventHook(jobId);
