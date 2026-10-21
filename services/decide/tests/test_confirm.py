@@ -161,6 +161,8 @@ def test_run_pass_confirms_goal_and_disagrees(monkeypatch):
     assert resp["goalConfirmed"] == "confirmed_goal"
     assert resp["confidence"] == 0.95
     assert resp["corroborated"] is True
+    # ADAAAA-7185: the corroboration source is persisted (scoreboard change).
+    assert resp["corroborationSource"] == "scoreboard"
     assert resp["decision"]["outcome"] == "scoring_play"
     assert resp["decision"]["isHighlight"] is True
     # Stage-1 already said goal, so confirm-agree means NO disagreement.
@@ -184,6 +186,8 @@ def test_run_pass_downgrades_unconfirmed_goal_to_near_miss(monkeypatch):
     assert resp["enabled"] is True
     assert resp["goalConfirmed"] == "confirmed_goal"  # raw model verdict
     assert resp["corroborated"] is False
+    # ADAAAA-7185: no corroboration source persisted when none present.
+    assert resp["corroborationSource"] is None
     # Deterministic reconcile downgrades to near_miss (never a GOPAL).
     assert resp["decision"]["outcome"] == "near_miss"
     assert resp["decision"]["isHighlight"] is False
@@ -210,6 +214,8 @@ def test_run_pass_confirms_goal_on_goal_calling_audio(monkeypatch):
         {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "audioB64": "AAA"}
     )
     assert resp["corroborated"] is True
+    # ADAAAA-7185: the corroboration source is persisted (goal-calling audio).
+    assert resp["corroborationSource"] == "audio_text"
     assert resp["goalConfirmed"] == "confirmed_goal"
     assert resp["decision"]["outcome"] == "scoring_play"
     assert resp["decision"]["isHighlight"] is True
