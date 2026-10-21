@@ -813,6 +813,11 @@ export const JobCandidateSchema = z.object({
   // ordered dataItems / media refs / full response) for this candidate's decide
   // read. Additive optional — absent on legacy rows. Observability only.
   analysis: WindowAnalysisSchema.optional(),
+  // ADAAAA-7156 Increment B: the Stage-2 confirmation-pass record (request
+  // context summary + ConfirmDecision) for this candidate, set when the
+  // goal-type candidate ran the decide /confirm deep frame dive. Additive
+  // optional — absent on non-confirm / legacy rows. Observability only.
+  confirm: ConfirmRecordSchema.optional(),
   createdAt: z.string(),
 });
 export type JobCandidate = z.infer<typeof JobCandidateSchema>;

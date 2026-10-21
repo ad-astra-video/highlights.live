@@ -2,7 +2,7 @@
 // payload (GET /jobs/:id/detail). Kept out of api.ts so the section partition
 // (no duplicate frame seq across sections) and decide-note attachment can be
 // asserted directly in unit tests.
-import type { JobCandidate, JobTrace, TrackObservation } from "@highlights/events";
+import type { JobCandidate, JobTrace, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
 import type { StoredObservation } from "./store";
 
 /** Fixed section length (s). Section index = floor(timestamp / SECTION_WINDOW). */
@@ -30,6 +30,11 @@ export interface Section {
     isHighlight: boolean;
     status: "accepted" | "suppressed" | "rejected";
     reason?: string;
+    // ADAAAA-7156 Increment B: the per-window LLM analysis (prompt / dataItems /
+    // media refs / full response) + the Stage-2 confirm record for this section's
+    // decide note. Additive optional — absent on legacy notes without a capture.
+    analysis?: WindowAnalysis;
+    confirm?: ConfirmRecord;
   }[];
 }
 
@@ -66,6 +71,11 @@ export function buildSections(
       isHighlight: c.isHighlight,
       status: c.status,
       reason: c.reason,
+      // ADAAAA-7156 Increment B: attach the per-window analysis + Stage-2 confirm
+      // record so the job-detail payload exposes exactly what the decide LLM was
+      // fed + returned for this window. Absent on legacy candidates.
+      analysis: c.analysis,
+      confirm: c.confirm,
     });
   }
   return [...sections.values()].sort((a, b) => a.index - b.index);

@@ -2,7 +2,8 @@
 // feed frames to perceive, compute evidence, call decide on candidates, cut a
 // clip on each highlight, and stop the session in `finally`.
 import { randomUUID } from "node:crypto";
-import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation } from "@highlights/events";
+import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
+import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
 import { StageAMetrics } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
 import type { PerceiveCalibration } from "./perceive-calibration";
@@ -221,6 +222,13 @@ export interface DecisionResult {
   // decide brain updated for this window. The server persists it onto the job
   // and forwards it into the next cadence tick. Optional + additive.
   runningSummary?: string;
+  // ADAAAA-7155 Increment A / ADAAAA-7156 Increment B: the per-window analysis
+  // payload (exact prompt / ordered dataItems / media refs / full response)
+  // returned by the decide service for this window. Carried across the adapter
+  // boundary and persisted onto the JobCandidate so the job-detail API can
+  // expose it. Observability only; no inference change. Absent on legacy
+  // verdicts that predate the capture.
+  analysis?: WindowAnalysis;
 }
 // ADAAAA-6855: map job-requested highlight labels (preferLabels) to the
 // outcome taxonomy members they authorize for export. A requested non-goal
@@ -328,6 +336,13 @@ export interface ConfirmDecision {
   /** The reconciled HighlightDecision-shaped dict to adopt in place of the
    * Stage-1 verdict. On passthrough it is the (unchanged) Stage-1 verdict. */
   decision: DecisionResult;
+  // ADAAAA-7155 Increment A / ADAAAA-7156 Increment B: the confirmation-pass
+  // analysis record (exact confirm prompt + request context summary +
+  // ConfirmDecision) returned by the decide /confirm endpoint. Carried across
+  // the adapter boundary and persisted onto the JobCandidate's `confirm` block
+  // so the job-detail API can expose the deep-frame dive. Observability only;
+  // no inference change. Absent on passthroughs that never built a prompt.
+  analysis?: ConfirmRecord;
 }
 
 /** The confirmation-pass request the adapter forwards to decide `/confirm`. */
@@ -1739,15 +1754,34 @@ export class TrackingPlanController {
  * builds the HighlightRecord, so every decide() result is recorded, not just
  * accepted ones. Best-effort: a throwing onDecision is caught + logged and
  * never fails the frame loop. */
-function buildCandidateNote(
+export function buildCandidateNote(
   cfg: AnalyzerConfig,
   candidate: CandidateSignal,
   decision: DecisionResult,
   status: "accepted" | "suppressed" | "rejected",
   candidateId: string,
-  trigger: HighlightTrigger
+  trigger: HighlightTrigger,
+  // ADAAAA-7156 Increment B: the per-window analysis + Stage-2 confirm record
+  // captured at the decide boundary, persisted onto the JobCandidate so the
+  // job-detail API can expose them. Observability only; absent on legacy rows.
+  analysis?: WindowAnalysis,
+  confirm?: ConfirmRecord
 ): void {
   if (!cfg.onDecision) return;
+  // ADAAAA-7156 Increment B: only attach analysis/confirm blocks that conform to
+  // the contract, so a malformed decide response (or a future schema drift) can
+  // never make the WHOLE candidate note fail recordJobCandidate's parse and get
+  // dropped from persistence. Observability is best-effort: a bad block is
+  // skipped (window still shows as decided, without analysis) rather than
+  // silently losing the note.
+  let okAnalysis = analysis;
+  let okConfirm = confirm;
+  if (analysis !== undefined) {
+    try { okAnalysis = WindowAnalysisSchema.parse(analysis); } catch { okAnalysis = undefined; }
+  }
+  if (confirm !== undefined) {
+    try { okConfirm = ConfirmRecordSchema.parse(confirm); } catch { okConfirm = undefined; }
+  }
   try {
     cfg.onDecision({
       id: candidateId,
@@ -1762,6 +1796,8 @@ function buildCandidateNote(
       reason: decision.reason,
       status,
       trigger,
+      analysis: okAnalysis,
+      confirm: okConfirm,
       createdAt: new Date().toISOString(),
     });
   } catch (e: any) {
@@ -1820,14 +1856,14 @@ async function acceptVideoDecision(
   // (live / w=1) path and the ordered pipeline accept path (ADAAAA-6854), so
   // the decision-time note trail stays identical either way.
   if (!isAcceptedHighlight(decision, cfg.preferLabels)) {
-    buildCandidateNote(cfg, candidate, decision, "rejected", candidateId, trigger);
+    buildCandidateNote(cfg, candidate, decision, "rejected", candidateId, trigger, stage1.analysis, confirm?.analysis);
     return;
   }
   // ADAAAA-6610 temporal burst suppression: a GOAL
   // accepted within `goalBurstWindowS` of a previous one is a start-of-clip
   // burst duplicate and is dropped, not recorded.
   if (run.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType)) {
-    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger);
+    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stage1.analysis, confirm?.analysis);
     onEvent?.({
       seq: emit.seq,
       timestamp: emit.timestamp,
@@ -1837,7 +1873,7 @@ async function acceptVideoDecision(
     });
     return;
   }
-  buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger);
+  buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger, stage1.analysis, confirm?.analysis);
   const { clipId, clipUri } = await cut(candidate.timestamp);
   const rec: HighlightRecord = {
     id: randomUUID(),
