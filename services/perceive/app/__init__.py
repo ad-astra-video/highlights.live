@@ -35,6 +35,12 @@ from .sam_tracker import HybridTracker
 from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
 from .goal_plane import GoalLineDetector, GoalLineSpec
+from .scoreboard import parse_ocr_score, ScoreboardTracker, ScoreboardRoi
+from .scoreboard_vision import (
+    ScoreboardVerdict,
+    enabled as scoreboard_vision_enabled,
+    vision_scoreboard,
+)
 from .tracking_plan import (
     PLAN_VERSION,
     SAFE_DEFAULT_ROLE,
@@ -345,6 +351,45 @@ def _apply_calibration(state, homography, goal_line) -> None:
             state.goal_line_detector = GoalLineDetector(spec)
 
 
+def _scoreboard_roi(state) -> ScoreboardRoi:
+    """The session's scoreboard region-of-interest (ADAAAA-7081).
+
+    Resolved once per session from ``PERCEIVE_SCOREBOARD_ROI`` (a normalized
+    ``x0,y0,x1,y1`` box) else a documented default region. The scoreboard OCR
+    pass crops each observed frame to this ROI before ``<OCR>`` so only the
+    scoreboard graphic can produce a score / ``ocrHits`` — crowd, banner,
+    jersey, shot-clock and other on-screen text is cropped out. Never raises; an
+    unset/malformed ROI safely falls back to the default.
+    """
+    roi = getattr(state, "scoreboard_roi", None)
+    if roi is None:
+        roi = ScoreboardRoi.from_env()
+        state.scoreboard_roi = roi
+    return roi
+
+
+def _vision_box_roi(state) -> "ScoreboardRoi | None":
+    """The vision-LLM scoreboard box for the current observed frame (ADAAAA-7084).
+
+    When the opt-in vision-LLM path ran this frame and localized the scoreboard,
+    the LLM's box is what the ``<OCR>`` pass should crop to (it tracks the
+    graphic to wherever it actually sits, unlike the fixed prior ROI). Returns
+    the box as a :class:`ScoreboardRoi`, or ``None`` when the gate is off, the
+    LLM returned no usable box, or the box is too degenerate to crop (the caller
+    then falls back to the configured ROI). Never raises.
+    """
+    verdict = getattr(state, "scoreboard_vision", None)
+    if not isinstance(verdict, ScoreboardVerdict) or not verdict.box:
+        return None
+    try:
+        roi = ScoreboardRoi(*verdict.box)
+    except (TypeError, ValueError):
+        return None
+    if roi.pixel_box(1920, 1080) is None:  # sanity: a reachable, non-degenerate region
+        return None
+    return roi
+
+
 def _apply_tracking_plan(state, raw_plan) -> "TrackingPlan":
     """Apply an LLM TrackingPlan to a session (ADAAAA-6463, plan-first).
 
@@ -581,6 +626,26 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     # still reach decide as the additive `evidence` field on the observation
     # (kept above) so the goal-attestation gate can attest a real scoring_play.
     cand_dict = None
+    # ADAAAA-7081/7084: ROI-scoped scoreboard OCR on the observe cadence. The
+    # scoreboard graphic is cropped to a stable region-of-interest before the
+    # <OCR> pass so crowd / banner / jersey / shot-clock text can never be read
+    # as a score. A concrete in-ROI score delta across the window is an
+    # independent scoreboard-change corroboration for decide's confirm gate
+    # (decision confirm.py goal_corroborated(scoreboard_changed, transcript)).
+    # A None/degenerate ROI degrades to whole-frame OCR (legacy behaviour); any
+    # OCR/GPU failure degrades to [] (absent evidence, never on its own a goal).
+    if detector is not None and state.last_rgb is not None:
+        roi = _scoreboard_roi(state)
+        ocr_lines: list[str] = []
+        try:
+            ocr_lines = detector.ocr(state.last_rgb, roi=roi) or []
+        except Exception as e:  # noqa: BLE001
+            log.warning("scoreboard OCR skipped for frame %s: %s", seq, e)
+        obs["ocr"] = ocr_lines
+        score = parse_ocr_score(ocr_lines, roi=roi)
+        state.scoreboard_tracker.record(timestamp, score)
+        if state.scoreboard_tracker.changed(timestamp):
+            obs["scoreBoardChanged"] = True
     # ADAAAA-7008 / ADAAAA-7012: cache this frame's derived context (the "data
     # seeder" contract) so the on-demand `/app/evidence` recall endpoint can serve
     # it WITHOUT re-running the detector. Compact seed (tracks / objects / ocr) —
