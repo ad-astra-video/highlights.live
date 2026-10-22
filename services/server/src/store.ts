@@ -119,11 +119,18 @@ export class Store {
     return [...this.jobs.values()];
   }
 
-  /** Jobs currently mid-analysis (status `active`, no `completedAt`) — the
-   * in-flight set a staged deploy MUST inspect before recreating the
-   * capacity-1 perceive runner (ADAAAA-7203 deploy gate). */
+  /** Jobs currently mid-analysis — the in-flight set a staged deploy MUST
+   * inspect before recreating the capacity-1 perceive runner (ADAAAA-7203
+   * deploy gate). A job is "in-flight" whenever it is in a non-terminal state;
+   * the JobSchema status enum is `queued | active | extracting | analyzing |
+   * finalizing | done | failed | cancelled`, where a VOD verify holds a live
+   * perceive session while `analyzing` and a live/browser capture job while
+   * `active` — filtering on a single status would miss the other. Reuse the
+   * terminal-status predicate so every state the pipeline can be in is
+   * reported and the gate never silently reports a clear runway while a job is
+   * mid-pass. */
   listActiveJobs(): Job[] {
-    return [...this.jobs.values()].filter((j) => j.status === "active" && !j.completedAt);
+    return [...this.jobs.values()].filter((j) => !Store.isTerminalStatus(j.status) && !j.completedAt);
   }
 
   /** Jobs belonging to `ownerId` (or every job when `ownerId` is omitted/undefined

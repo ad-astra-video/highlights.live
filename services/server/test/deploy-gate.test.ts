@@ -64,7 +64,10 @@ describe("deploy-gate in-flight detection (ADAAAA-7203)", () => {
     expect(empty.statusCode).toBe(200);
     expect(empty.json().inflight).toHaveLength(0);
 
-    // An active (mid-analysis) job is reported as in-flight.
+    // Both an `active` (live/browser capture) AND an `analyzing` (VOD verify)
+    // job are reported as in-flight. Filtering on a single status misses the
+    // VOD case — a VOD verify holds a perceive session while `analyzing`, so
+    // the gate must report it or it would recreate perceive mid-VOD (ADAAAA-7203).
     const active = await store.createJob({
       id: "job-inflight",
       ownerId: "u1",
@@ -72,6 +75,13 @@ describe("deploy-gate in-flight detection (ADAAAA-7203)", () => {
       gameHint: "soccer goal",
     });
     await store.patchJob(active.id, { status: "active" });
+    const vodVerify = await store.createJob({
+      id: "job-vod-verify",
+      ownerId: "u1",
+      source: "file",
+      gameHint: "soccer goal",
+    });
+    await store.patchJob(vodVerify.id, { status: "analyzing" });
 
     const res = await app.inject({
       method: "GET",
@@ -80,12 +90,13 @@ describe("deploy-gate in-flight detection (ADAAAA-7203)", () => {
     });
     expect(res.statusCode).toBe(200);
     const inflight = res.json().inflight;
-    expect(inflight).toHaveLength(1);
-    expect(inflight[0].id).toBe("job-inflight");
+    expect(inflight).toHaveLength(2);
+    expect(inflight.map((j: any) => j.id).sort()).toEqual(["job-inflight", "job-vod-verify"].sort());
     expect((res.headers["content-type"] || "").includes("application/json")).toBeTruthy();
 
     // A completed job is no longer in-flight.
     await store.patchJob(active.id, { status: "done", completedAt: new Date().toISOString() });
+    await store.patchJob(vodVerify.id, { status: "done", completedAt: new Date().toISOString() });
     const after = await app.inject({
       method: "GET",
       url: "/admin/inflight-jobs",
