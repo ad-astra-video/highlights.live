@@ -241,7 +241,11 @@ def test_confirm_analysis_prompt_and_context(monkeypatch):
     assert an["request"]["frames"] == [{"seq": 0, "uri": ""}, {"seq": 1, "uri": ""}]
     assert an["decision"]["goalConfirmed"] == "confirmed_goal"
     assert an["decision"]["confidence"] == 0.95
-    assert an["decision"]["outcome"] == "scoring_play"
+    # ADAAAA-7162/7185 corroboration gate: an un-corroborated confirmed_goal is
+    # downgraded to near_miss (corroborated=False here), so the decision outcome
+    # is near_miss, not scoring_play. The assertion originally expected
+    # scoring_play under the pre-gate behaviour; update it to the correct value.
+    assert an["decision"]["outcome"] == "near_miss"
     # the ConfirmDecision itself carries the analysis alongside
     from app.confirm import ConfirmDecision
     cd = ConfirmDecision(**resp)
