@@ -74,9 +74,11 @@ The server-side in-flight resilience (ADAAAA-7203) additionally maps a
 `502/503/504` from the perceive analyze proxy to a re-reservable
 `SessionLostError` (`analyze interrupted (deploy-recreate)`), so even a recreate
 that slips past the gate lets `analyzeJob` re-reserve a fresh perceive session
-and resume from the last persisted observation (bounded by `maxReReserves`), and
-only ends the job with a typed retriable verdict if the bounded re-reserve cap is
-exhausted.
+and resume from the last persisted observation — the re-reserve itself retries
+with the bounded exponential backoff (default 5 attempts / `VOD_SESSION_RETRY_*`
+backoff) so a runner still re-registering after the recreate is re-acquired. It
+only ends the job with a typed `analyze interrupted (deploy-recreate)` verdict
+(cheaply retriable) if that bounded re-reserve is exhausted.
 
 The **Developer** owns both legs of the deploy: getting the code onto
 `origin/master` AND the box leg (reconcile the box branch to `origin/master`,
