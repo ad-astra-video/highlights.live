@@ -11,7 +11,10 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from fastapi.testclient import TestClient
+
 import app.confirm as cf
+from app import app as decide_app
 from app.confirm import run_confirmation_pass
 from app.gemma import (
     build_group_prompt,
@@ -19,6 +22,8 @@ from app.gemma import (
     decide_group_with_gemma,
     decide_with_gemma,
 )
+
+client = TestClient(decide_app)
 
 
 class _MockLlama:
@@ -241,4 +246,84 @@ def test_confirm_analysis_prompt_and_context(monkeypatch):
     from app.confirm import ConfirmDecision
     cd = ConfirmDecision(**resp)
     assert cd.analysis["request"]["prompt"] == an["request"]["prompt"]
+
+
+# --- HTTP response boundary (ADAAAA-7221) ------------------------------------
+# Regression guard for the drop-field bug: the gemma / confirm code paths attach
+# `analysis` to the decision dict, but FastAPI's `response_model=HighlightDecision`
+# (with `model_config=ConfigDict(extra="ignore")`) SILENTLY STRIPPED it because
+# the model had no declared `analysis` field. These assert the field now crosses
+# the actual HTTP boundary, matching what the deployed webapp consumes.
+
+
+def test_highlight_http_response_includes_analysis(monkeypatch):
+    """/highlight gemma path must NOT swallow `analysis` at the response boundary."""
+    mock = _MockLlama(_RICH_REPLY)
+    try:
+        monkeypatch.setenv("DECIDE_MODE", "gemma")
+        monkeypatch.setenv("GEMMA_URL", f"http://127.0.0.1:{mock.port}")
+        r = client.post(
+            "/app/highlight",
+            json={
+                "sessionId": "bnd-1",
+                "eventType": "GOAL",
+                "timestamp": 1.0,
+                "evidence": _evidence(),
+                "frames": [{"seq": 10, "base64": "AAA"}, {"seq": 11, "base64": "BBB"}],
+                "images": [{"seq": 3, "base64": "CCC"}],
+                "gameHint": "soccer",
+            },
+        )
+    finally:
+        mock.stop()
+    assert r.status_code == 200
+    body = r.json()
+    an = body.get("analysis")
+    # The drop-field regression: with no declared field, FastAPI returned a body
+    # with NO `analysis` key. It MUST now be present and fully populated.
+    assert an is not None, "analysis was dropped at the /highlight response boundary"
+    assert an["prompt"] == build_prompt(
+        "GOAL", _evidence(), "soccer", n_frames=2, has_audio=False,
+        transcript="", story_so_far="",
+    )
+    assert len(an["dataItems"]) >= 8
+    assert isinstance(an["response"], dict)
+    assert an["response"]["reasoning"].startswith("I first observed")
+    # and the per-candidate verdict fields still cross the boundary unchanged
+    assert body["isHighlight"] is True
+    assert body["reasoning"].startswith("I first observed")
+
+
+def test_confirm_http_response_includes_analysis(monkeypatch):
+    """/confirm must also return `analysis` (confirm record) at the boundary."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.93, '
+        '"reason": "dense frames show the ball crossing the line", '
+        '"evidence": {"ballTrajectoryCrossedLine": true, "ballInNet": true, "audioErupted": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "stage1"}
+    r = client.post(
+        "/app/confirm",
+        json={
+            "stage1": stage1,
+            "sessionId": "bnd-confirm",
+            "eventType": "GOAL",
+            "gameHint": "soccer",
+            "frames": [{"base64": "x"}, {"base64": "y"}],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    an = body.get("analysis")
+    assert an is not None, "analysis was dropped at the /confirm response boundary"
+    assert an["request"]["prompt"].startswith(cf.build_confirm_prompt(
+        event_type="GOAL", game_hint="soccer", stage1=stage1,
+        n_frames=2, n_keyframes=0, trajectories=[], optical_flow=0.0,
+        flow_magnitudes=[], audio_levels=[], transcript="",
+        ball_outcome=None, goal_crossed=None, scoreboard_changed=False,
+    ))
+    assert an["decision"]["goalConfirmed"] == "confirmed_goal"
+    assert body["goalConfirmed"] == "confirmed_goal"
 
