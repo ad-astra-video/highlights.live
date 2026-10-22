@@ -308,6 +308,14 @@ class HighlightDecision(BaseModel):
     # after this window, so the server persists it and carries it into the next
     # cadence tick. Bounded (compacted). Empty when the path does not produce one.
     runningSummary: str = ""
+    # ADAAAA-7155 Increment A / ADAAAA-7221: the per-window LLM inspection block —
+    # the exact prompt, the ordered dataItems, the frame/image refs, the audio/asr
+    # context and the full model response (reasoning / verdict / evidenceAttested /
+    # audioContext) for the decided window. Without a declared field here,
+    # `extra="ignore"` above made FastAPI silently DROP it at the `/highlight`
+    # response boundary, so the webapp never received it. Additive optional;
+    # absent on rule-path verdicts that never built a prompt.
+    analysis: Optional[dict] = None
 
 
 def _is_gemma_mode() -> bool:
