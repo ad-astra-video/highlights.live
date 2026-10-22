@@ -9,6 +9,7 @@ import {
   ObserveDecider,
   LiveObserver,
   applyOnDemandRecall,
+  GOAL_OUTCOMES,
   type ObserveDecidePayload,
   type PerFrameSeed,
   type PerFrameSignal,
@@ -2655,6 +2656,33 @@ export async function analyzeJob(
         // A1: cache this frame's already-computed findings (tracks/OCR/objects)
         // into the 60 s window. Reused by windowFactsText — never re-analyzed.
         run.setFindings(frame.seq, res.observation);
+        // ADAAAA-7190: perceive no longer emits a `candidate` (ADAAAA-7108 set
+        // cand_dict=None), so the attestation fold below (gated on res.candidate)
+        // never runs and the deterministic scoreboard / goal attestation carried
+        // on the per-frame OBSERVATION is dropped before the confirm gate — every
+        // real goal the model saw in the frames was downgraded to near_miss for
+        // lack of an independent corroboration record. Fold the observation-level
+        // attestation into the window bias hints too, so scoreBoardChanged (and
+        // ballOutcome / goalCrossed) reach the confirm request's corroboration
+        // check. Absent attestation stays provenance-only, never a false signal.
+        {
+          const _o = res.observation as any;
+          const _ev: PerFrameSignal | undefined = _o.evidence;
+          const _att = {
+            goalCrossed: _o.goalCrossed ?? _ev?.goalCrossed,
+            ballOutcome: _o.ballOutcome ?? _ev?.ballOutcome,
+            scoreBoardChanged: _o.scoreBoardChanged ?? _ev?.scoreBoardChanged,
+          };
+          const _attested =
+            _att.scoreBoardChanged === true ||
+            _att.goalCrossed === true ||
+            (typeof _att.ballOutcome === "string" && GOAL_OUTCOMES.has(_att.ballOutcome));
+          if (_attested) {
+            const _evType: string = _o.eventType || res.candidate?.eventType || "SPORTING_EVENT";
+            observeDecider?.addHint(_evType, frame.timestamp, _att);
+            liveObserver?.addHint(_evType, frame.timestamp, _att);
+          }
+        }
         if (res.candidate) {
           // Immediate re-plan on a candidate event (out of band from the per-frame
           // detection; never blocks the observer cadence).
