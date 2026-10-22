@@ -1488,6 +1488,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     };
   });
 
+  // In-flight perceive analyze jobs (ADAAAA-7203 deploy gate). Read-only so the
+  // staged-deploy gate can query it with the bounded `admin_readonly`
+  // credential (which every write route rejects). Returns jobs currently
+  // `active` (mid-analysis) so the deployer can wait/drain before recreating the
+  // capacity-1 perceive runner instead of dropping its session mid-pass.
+  app.get("/admin/inflight-jobs", { preHandler: adminReadOnlyReq }, async () => {
+    const inflight = store.listActiveJobs();
+    return {
+      generatedAt: new Date().toISOString(),
+      inflight: inflight.map((j) => ({
+        id: j.id,
+        source: j.source,
+        gameHint: j.gameHint ?? "",
+        createdAt: j.createdAt,
+      })),
+    };
+  });
+
   // Conversion-funnel + per-channel CAC readout (ADAAAA-6368, plan §3b.2).
   // Admin-only; on demand. Reports N users per funnel stage (signup ->
   // activate -> generate -> subscribe -> retain), the same dimensioned by

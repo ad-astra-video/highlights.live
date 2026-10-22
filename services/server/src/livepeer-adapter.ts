@@ -370,9 +370,18 @@ export class OrchestratorAdapter implements PipelineClient {
     if (status >= 400) {
       // 404 "runner not found" / "runner session not found" means go-livepeer
       // released the session (static runner health flapped) — a recoverable
-      // "session lost" that analyzeJob re-reserves against. Any other status
-      // is a real analyze error that aborts the pass.
+      // "session lost" that analyzeJob re-reserves against. 502/503/504 are the
+      // SAME recoverable class: the perceive runner is briefly unreachable
+      // (most commonly a staged-deploy `docker compose up -d --build` recreate
+      // of highlights-perceive mid-pass, ADAAAA-7203). They are typed as
+      // session-lost so the pass re-reserves a fresh session and resumes from
+      // the last persisted observation instead of dying to a generic 502; if the
+      // bounded re-reserve cap is exhausted the typed `analyze interrupted
+      // (deploy-recreate)` message surfaces so the job is retriable, not a bare
+      // 502. Any OTHER status is a real analyze error that aborts the pass.
       if (status === 404) throw new SessionLostError(`analyze failed: HTTP ${status}`);
+      if (status === 502 || status === 503 || status === 504)
+        throw new SessionLostError(`analyze interrupted (deploy-recreate): HTTP ${status} — perceive runner down mid-pass`);
       throw new Error(`analyze failed: HTTP ${status}`);
     }
     return normalizeObservation(data);
@@ -789,6 +798,8 @@ export class DirectAdapter implements PipelineClient {
     });
     if (!r.ok) {
       if (r.status === 404) throw new SessionLostError(`analyze failed: HTTP ${r.status}`);
+      if (r.status === 502 || r.status === 503 || r.status === 504)
+        throw new SessionLostError(`analyze interrupted (deploy-recreate): HTTP ${r.status} — perceive runner down mid-pass`);
       throw new Error(`analyze failed: HTTP ${r.status}`);
     }
     return normalizeObservation(await r.json());

@@ -44,6 +44,40 @@ git pull origin master          # or fresh: git clone
 docker compose -f docker/docker-compose.yml up -d --build
 ```
 
+### Perceive in-flight deploy gate (ADAAAA-7203)
+
+The `highlights-perceive` runner is **capacity-1**: a staged deploy that recreates
+it while a VOD/live analyze job is mid-pass drops the session and the job fails
+`analyze failed: HTTP 502` and burns a full re-run. Before recreating the stack
+(or `highlights-perceive` specifically), run the opt-in deploy gate:
+
+```sh
+DEPLOY_GATE_ENABLED=1 \
+  HIGHLIGHTS_COMPOSE=1 \
+  docker/deploy-gate.sh   # queries the RUNNING server's /admin/inflight-jobs
+```
+
+- **Opt-in** — `DEPLOY_GATE_ENABLED!=1` disables the gate and the deploy proceeds.
+- **Bounded** — waits up to `DEPLOY_GATE_MAX_WAIT_S` (default 300) for in-flight
+  jobs to drain; never blocks a deploy indefinitely (logs and proceeds on timeout).
+- **Logged** — each poll logs the in-flight job ids and the time waited.
+- **Fail-open** — if the endpoint is unavailable (pre-gate server, missing
+  `HIGHLIGHTS_ADMIN_TOKEN`, server down) it logs the reason and proceeds; the
+  in-flight resilience in the server re-reserves a fresh perceive session on a
+  dropped session instead of losing the job to a generic 502.
+- Auth: `HIGHLIGHTS_ADMIN_TOKEN` (or `HIGHLIGHTS_ADMIN_TOKEN_FILE`, default
+  `~/.highlights_admin_readonly_token`) — a long-lived `admin_readonly` bearer
+  token (minted with the server `JWT_SECRET`), which is rejected by every write
+  route. The read-only principal is accepted on `GET /admin/inflight-jobs`.
+
+The server-side in-flight resilience (ADAAAA-7203) additionally maps a
+`502/503/504` from the perceive analyze proxy to a re-reservable
+`SessionLostError` (`analyze interrupted (deploy-recreate)`), so even a recreate
+that slips past the gate lets `analyzeJob` re-reserve a fresh perceive session
+and resume from the last persisted observation (bounded by `maxReReserves`), and
+only ends the job with a typed retriable verdict if the bounded re-reserve cap is
+exhausted.
+
 The **Developer** owns both legs of the deploy: getting the code onto
 `origin/master` AND the box leg (reconcile the box branch to `origin/master`,
 rebuild the stack, verify the tunnel serves current master). Routing change

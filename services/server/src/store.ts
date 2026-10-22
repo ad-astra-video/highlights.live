@@ -119,6 +119,13 @@ export class Store {
     return [...this.jobs.values()];
   }
 
+  /** Jobs currently mid-analysis (status `active`, no `completedAt`) — the
+   * in-flight set a staged deploy MUST inspect before recreating the
+   * capacity-1 perceive runner (ADAAAA-7203 deploy gate). */
+  listActiveJobs(): Job[] {
+    return [...this.jobs.values()].filter((j) => j.status === "active" && !j.completedAt);
+  }
+
   /** Jobs belonging to `ownerId` (or every job when `ownerId` is omitted/undefined
    * — the admin case), newest first, capped at `limit`. This is the data path for
    * the new GET /jobs surface so the webapp can render processing/done/failed
