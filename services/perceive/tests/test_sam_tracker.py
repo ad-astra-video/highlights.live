@@ -148,3 +148,70 @@ def test_user_seed_reprompts_sam():
     assert tr._prompts[0] == (0.2, 0.2, 0.4, 0.4)
     tr.seed((0.5, 0.5, 0.7, 0.7), slot=0, ts=1.0)  # user changed target -> re-prompted
     assert tr._prompts[0] == (0.5, 0.5, 0.7, 0.7)
+
+
+# --- ADAAAA-7217 (Increment A): dedicated locked ball SAM slot ----------------
+def _ball_prop_plan(ball_slot):
+    """SAM plan: the ball slot propagates forward 3 frames; a player slot holds."""
+    return [
+        {ball_slot: (0.20, 0.20, 0.40, 0.40)},
+        {ball_slot: (0.24, 0.22, 0.44, 0.42)},
+        {ball_slot: (0.28, 0.24, 0.48, 0.44)},
+    ]
+
+
+def test_ball_slot_seeded_and_tracked_by_sam():
+    # Florence identifies the ball -> a dedicated locked SAM slot tracks it.
+    tr = HybridTracker(detect=None, backend=CountingBackend(), ball_label="soccer ball")
+    assert tr.ball_live is False
+    tr.seed_ball((0.2, 0.2, 0.4, 0.4), ts=0.0)
+    assert tr.ball_live is True
+    assert tr.ball_box() == (0.2, 0.2, 0.4, 0.4)
+    # advances SAM -> the ball is held + feeds a ball track
+    tr.step_frame(_white(), 1.0)
+    assert tr.ball_live is True
+    assert tr.ball_box() == (0.2, 0.2, 0.4, 0.4)
+    assert any(t.kind == "ball" for t in tr.tracks)
+    # the ball slot is locked so it is never auto-evicted
+    assert tr._ball_slot in tr._iou.locked
+
+
+def test_ball_slot_propagates_forward():
+    tr = HybridTracker(detect=None, backend=StubBackend(_ball_prop_plan(0)), ball_label="soccer ball")
+    tr.seed_ball((0.2, 0.2, 0.4, 0.4), ts=0.0)
+    for i, ts in enumerate([1.0, 2.0, 3.0]):
+        tr.step_frame(_white(), ts)
+        assert round(tr.ball_box()[0], 2) == _ball_prop_plan(0)[i][0][0]
+
+
+def test_ball_slot_holds_last_box_on_miss():
+    # Eviction guard: a short SAM miss holds the last known box (not lost).
+    tr = HybridTracker(detect=None, backend=StubBackend([{0: (0.2, 0.2, 0.4, 0.4)}, {0: None}]), ball_label="soccer ball", ball_hold_frames=5)
+    tr.seed_ball((0.2, 0.2, 0.4, 0.4), ts=0.0)
+    tr.step_frame(_white(), 1.0)   # SAM present
+    tr.step_frame(_white(), 2.0)   # SAM miss -> held
+    assert tr.ball_live is True
+    assert tr.ball_miss_frames == 1
+    assert tr.ball_box() == (0.2, 0.2, 0.4, 0.4)   # held box still emitted
+    assert not tr.ball_needs_redetect()
+
+
+def test_ball_slot_reports_redetect_after_sustained_loss():
+    # Beyond the hold window the ball is absent and needs Florence re-identify.
+    tr = HybridTracker(detect=None, backend=StubBackend([{0: (0.2, 0.2, 0.4, 0.4)}] + [{0: None}] * 6), ball_label="soccer ball", ball_hold_frames=2)
+    tr.seed_ball((0.2, 0.2, 0.4, 0.4), ts=0.0)
+    for ts in range(1, 7):
+        tr.step_frame(_white(), float(ts))
+    assert tr.ball_miss_frames >= 2
+    assert tr.ball_needs_redetect() is True
+    assert tr.ball_box() is None
+
+
+def test_ball_not_evicted_after_long_loss():
+    # The dedicated slot is locked: even after many lost frames it survives.
+    tr = HybridTracker(detect=None, backend=StubBackend([{0: (0.2, 0.2, 0.4, 0.4)}] + [{0: None}] * 20), ball_label="soccer ball", lost_before_evict=4, ball_hold_frames=2)
+    tr.seed_ball((0.2, 0.2, 0.4, 0.4), ts=0.0)
+    for ts in range(1, 20):
+        tr.step_frame(_white(), float(ts))
+    assert tr.ball_live is True
+    assert any(t.kind == "ball" for t in tr.tracks)

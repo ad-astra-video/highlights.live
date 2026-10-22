@@ -136,17 +136,27 @@ class BallSignalPipeline:
         objects: Sequence[dict],
         player_tracks: Optional[PlayerTracks],
         ts: float,
+        sam_ball_box: Optional[BBox] = None,
     ) -> BallSignalFrame:
         """Advance one frame and return the ball signal.
 
-        ``objects`` are this frame's Florence detections (ball boxes are
-        extracted internally). ``player_tracks`` maps player track id -> bbox
-        (the caller decides the on-screen player set; see the wiring in
-        ``app/__init__._player_tracks``). ``velocity`` is None until the
-        estimator has at least 2 on-pitch samples; ``possession`` is None when
-        there is no ball this frame. Never raises on absent/empty input.
+        ``objects`` are this frame's Florence detections used to extract ball
+        boxes UNLESS ``sam_ball_box`` is provided (ADAAAA-7217 Increment A), in
+        which case the SAM-tracked ball box is authoritative — the ball is no
+        longer included in the per-frame Florence pass once SAM owns it, so the
+        signal is driven by the SAM box instead of re-derived per-frame.
+        ``player_tracks`` maps player track id -> bbox (the caller decides the
+        on-screen player set; see the wiring in ``app/__init__._player_tracks``).
+        ``velocity`` is None until the estimator has at least 2 on-pitch samples;
+        ``possession`` is None when there is no ball this frame. Never raises on
+        absent/empty input.
         """
-        ball_boxes = self.extract_ball_boxes(objects)
+        if sam_ball_box is not None:
+            ball_boxes = [
+                (float(sam_ball_box[0]), float(sam_ball_box[1]), float(sam_ball_box[2]), float(sam_ball_box[3]))
+            ]
+        else:
+            ball_boxes = self.extract_ball_boxes(objects)
         bs = self.ball_tracker.step(ball_boxes, ts)
 
         velocity: Optional[dict] = None

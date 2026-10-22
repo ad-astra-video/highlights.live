@@ -527,6 +527,43 @@ def _player_tracks(tracks) -> dict:
     return out
 
 
+def _ball_label_for(vocabulary, tracker=None) -> str:
+    """The ball label for the session's closed vocabulary (else the tracker's)."""
+    for v in vocabulary or []:
+        if is_ball_label(v):
+            return str(v)
+    return getattr(tracker, "ball_label", "") or "soccer ball"
+
+
+def _recover_sam_ball(detector, state, tracker, vocabulary) -> bool:
+    """Re-identify the ball on SAM loss via the bounded ROI recovery pass.
+
+    ADAAAA-7217 (Increment A): once the ball SAM slot is live the ball is dropped
+    from the per-frame full-frame `<OD>` pass; if SAM then reports sustained
+    absence (`tracker.ball_needs_redetect()`), Florence re-identifies the ball
+    WITH the ROI second pass (`_run_roi_pass`) so small/far balls are recovered,
+    and re-seeds the locked ball SAM slot. Returns True when a ball was recovered
+    and re-seeded. Never raises / never runs on GPU-less stub detector.
+    """
+    ball_vocab = [v for v in (vocabulary or []) if is_ball_label(v)]
+    if not ball_vocab and getattr(tracker, "ball_label", None):
+        ball_vocab = [tracker.ball_label]
+    if not ball_vocab or detector is None or getattr(state, "last_rgb", None) is None:
+        return False
+    try:
+        _s = monotonic()
+        det = detector.detect(state.last_rgb, vocabulary=ball_vocab, roi_pass=True) or []
+        record_analyze(monotonic() - _s)
+    except Exception as e:  # noqa: BLE001
+        log.warning("ball ROI re-detect failed session=%s: %s", state.session_id, e)
+        return False
+    ball = next((o for o in det if is_ball_label(o.get("label")) and o.get("bbox")), None)
+    if ball is not None:
+        tracker.seed_ball(_norm_bbox(ball["bbox"]))
+        return True
+    return False
+
+
 def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[dict, dict | None]:
     """Run one sampled frame through the shared perceive pipeline: Florence or
     background-diff detection -> tracker.step -> observation (+ candidate).
@@ -556,9 +593,24 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # 1.0-confidence boxes). Plan-first (ADAAAA-6463): when a TrackingPlan is
         # present its roster is the active vocabulary.
         vocabulary = resolve_vocabulary(state.game_hint, state.prefer_labels, plan=state.tracking_plan)
+        # ADAAAA-7217 (Increment A): once the dedicated ball SAM slot is live,
+        # SAM owns the ball — DROP the ball from the per-frame full-frame
+        # Florence <OD> pass (no per-frame ball re-detection). Florence
+        # re-identifies the ball ONLY when the SAM ball slot reports absence
+        # (SAM loss), via the ROI recovery pass (see _recover_sam_ball below).
+        # Increment B already makes the default soccer roster ball-first.
+        is_hybrid = isinstance(state.tracker, HybridTracker)
+        ball_live = is_hybrid and bool(getattr(state.tracker, "ball_live", False))
+        # Enable the dedicated locked ball SAM slot for sessions whose closed
+        # vocabulary includes a ball (e.g. soccer default ball-first roster).
+        if is_hybrid and vocabulary and any(is_ball_label(v) for v in vocabulary):
+            state.tracker.ball_label = _ball_label_for(vocabulary, state.tracker)
+        perframe_vocab = vocabulary
+        if ball_live and vocabulary and any(is_ball_label(v) for v in vocabulary):
+            perframe_vocab = [v for v in vocabulary if not is_ball_label(v)]
         try:
             _s = monotonic()
-            objects = detector.detect(state.last_rgb, vocabulary=vocabulary)
+            objects = detector.detect(state.last_rgb, vocabulary=perframe_vocab)
             record_analyze(monotonic() - _s)
         except Exception as e:  # keep the pipeline alive if the GPU hiccups
             objects = [{"label": "error", "confidence": 0.0, "bbox": [0, 0, 0.001, 0.001]}]
@@ -615,6 +667,23 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             len(tracks), len(state.subscribers),
         )
 
+    # ADAAAA-7217 (Increment A): ball handoff. Once the ball SAM slot is live,
+    # SAM owns the ball — feed its box to the ball-signal pipeline instead of
+    # re-deriving it from the per-frame Florence pass (the ball is excluded from
+    # that pass above). On SAM loss, re-identify the ball via the ROI recovery
+    # pass and re-seed the locked SAM slot. Reflect the SAM ball box back into
+    # `objects` so the detection-contract field still reports the ball.
+    sam_ball_box = None
+    if isinstance(state.tracker, HybridTracker):
+        if getattr(state.tracker, "ball_live", False):
+            if getattr(state.tracker, "ball_needs_redetect", lambda: False)():
+                _recover_sam_ball(detector, state, state.tracker, vocabulary)
+            sam_ball_box = state.tracker.ball_box() if hasattr(state.tracker, "ball_box") else None
+            if sam_ball_box is not None and not any(is_ball_label(o.get("label")) for o in objects):
+                objects.append(
+                    {"label": _ball_label_for(vocabulary, state.tracker), "confidence": 1.0, "bbox": list(sam_ball_box)}
+                )
+
     # Ball-centric candidate signal (INC-2b): per-frame ball track ->
     # homography velocity + nearest-player possession, attached to the
     # CandidateEvent as corroborating decide() context (NOT the highlight
@@ -624,7 +693,7 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     pipe = _ensure_ball_signal(state)
     if pipe is not None:
         try:
-            _bf = pipe.step(objects, _player_tracks(tracks), timestamp)
+            _bf = pipe.step(objects, _player_tracks(tracks), timestamp, sam_ball_box=sam_ball_box)
             if _bf.velocity is not None:
                 ball_signal_fields["ballVelocity"] = _bf.velocity
             if _bf.possession is not None:

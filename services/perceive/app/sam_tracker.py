@@ -71,6 +71,8 @@ class HybridTracker:
         cooldown_s: float = 2.0,
         capacity: int = MAX_TRACKS,
         anchor_label: str | None = None,
+        ball_label: str | None = None,     # ADAAAA-7217 Inc A: dedicated locked ball SAM slot
+        ball_hold_frames: int = 5,         # ball-miss frames held before re-detect (eviction guard)
     ):
         self._detect = detect
         self._backend = backend
@@ -82,6 +84,22 @@ class HybridTracker:
         self._prompts: Dict[int, BBox] = {}
         self._miss: Dict[int, int] = {}
         self._since_detect = 0
+        # ADAAAA-7217 (Increment A): a dedicated, LOCKED ball SAM slot. The ball
+        # is small/fast and a generic slot would be auto-evicted after a few
+        # lost frames, so this slot is pinned (never evicted) and holds the last
+        # known box forward during a detection gap (reusing the BallTracker
+        # eviction-guard semantics at the SAM level). Florence re-identifies the
+        # ball only when the slot reports sustained absence (SAM loss).
+        self.ball_label = ball_label
+        self.ball_hold_frames = max(1, int(ball_hold_frames))
+        self._ball_slot: Optional[int] = None
+        self._ball_prompt: Optional[BBox] = None   # current SAM box
+        self._ball_held: Optional[BBox] = None     # last known box (eviction guard)
+        self._ball_miss = 0
+        self._ball_on_screen = False
+        self._ball_on_screen_frames = 0
+        self._ball_present_frames = 0
+        self._ball_tail_frames = 0
 
     @property
     def tracks(self) -> List[Track]:
@@ -107,6 +125,63 @@ class HybridTracker:
     def set_anchor(self, label: str | None) -> None:
         """Set the plan anchor label (ADAAAA-6463) — delegate to the IoU layer."""
         self._iou.set_anchor(label)
+
+    # --- dedicated locked ball SAM slot (ADAAAA-7217 Increment A) ------------
+    @property
+    def ball_live(self) -> bool:
+        """True once the ball has been identified and SAM is tracking it."""
+        return self._ball_slot is not None
+
+    @property
+    def ball_miss_frames(self) -> int:
+        return self._ball_miss
+
+    def ball_box(self) -> Optional[BBox]:
+        """The ball's current SAM box, or the held last-known box while within
+        the eviction-guard hold window, else None (ball absent / off screen)."""
+        if self._ball_slot is None:
+            return None
+        box = self._ball_prompt
+        if box is None and self._ball_held is not None and self._ball_miss <= self.ball_hold_frames:
+            box = self._ball_held
+        return box
+
+    def ball_needs_redetect(self) -> bool:
+        """True when the SAM ball slot has reported sustained absence (>= the
+        hold window) and Florence must re-identify the ball to re-seed it."""
+        return self._ball_slot is not None and self._ball_miss > self.ball_hold_frames and self._ball_prompt is None
+
+    def ball_persistence(self) -> float:
+        """Fraction of on-screen frames for which a ball track was emitted
+        (matches the BallTracker >=95% persistence target)."""
+        if self._ball_on_screen_frames == 0:
+            return 1.0
+        return self._ball_present_frames / self._ball_on_screen_frames
+
+    def seed_ball(self, bbox: BBox, ts: float = 0.0) -> None:
+        """Reserve/lock the dedicated ball SAM slot and seed it from `bbox`.
+
+        Bypasses the generic (player) slot pool, so the ball never competes for a
+        player slot and is never auto-evicted. Sets the SAM prompt and marks the
+        ball on-screen. `bbox` is a normalized [x1,y1,x2,y2] box.
+        """
+        if self._ball_slot is None:
+            used = set(self._prompts.keys())
+            free = [s for s in range(self.capacity) if s not in used]
+            slot = free[0] if free else 0
+            self._ball_slot = slot
+            # Pin the slot so the IO layer never auto-evicts the ball track.
+            self._iou.lock(slot)
+        b: BBox = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        self._ball_prompt = b
+        self._ball_held = b
+        self._ball_miss = 0
+        self._ball_on_screen = True
+        self._prompts[self._ball_slot] = b
+        self._miss[self._ball_slot] = 0
+        # Reflect the ball as a confirmed, selected (find-and-track) track so it
+        # surfaces in `tracks` with the ball label/kind, matching prior output.
+        self._iou.seed(b, kind="ball", label=self.ball_label or "", slot=self._ball_slot, ts=ts, selected=True)
 
     def candidate(self, ts: float) -> Optional[CandidateEvent]:
         return self._iou.candidate(ts)
@@ -158,18 +233,37 @@ class HybridTracker:
         sam_boxes: List[BBox] = []
         sam_labels: List[str] = []
         for slot in list(self._prompts.keys()):
+            is_ball = slot == self._ball_slot
             b = self._backend.get(slot)
             if b is None:
                 self._miss[slot] = self._miss.get(slot, 0) + 1
-                if self._miss[slot] >= self.lost_before_redetect:
+                if is_ball:
+                    self._ball_miss = self._ball_miss + 1
+                    # ADAAAA-7217 (Inc A): eviction guard for the ball — hold the
+                    # last known box forward during the hold window (also fed to
+                    # the IO layer so the ball track never flickers), and only
+                    # after sustained absence mark the slot as needing Florence
+                    # re-identification (via ROI recovery in process_frame).
+                    if self._ball_miss <= self.ball_hold_frames and self._ball_held is not None:
+                        sam_boxes.append(self._ball_held)
+                        sam_labels.append(self.ball_label or "")
+                    else:
+                        self._ball_prompt = None
+                        if self._ball_miss > self.ball_hold_frames:
+                            need_redetect = True
+                elif self._miss[slot] >= self.lost_before_redetect:
                     need_redetect = True  # SAM lost this target -> Florence must refind it
             else:
                 self._miss[slot] = 0
                 self._prompts[slot] = b  # carry the prompt forward
+                if is_ball:
+                    self._ball_miss = 0
                 sam_boxes.append(b)
                 # Keep the slot's known label on the SAM-propated box.
                 tr = next((t for t in self._iou.tracks if t.slot == slot), None)
                 sam_labels.append(tr.label if tr is not None else "")
+            if is_ball:
+                self._update_ball_state(b)  # b may be None (held handled above)
 
         if need_redetect:
             if florence_boxes is None and self._detect is not None:
@@ -185,8 +279,35 @@ class HybridTracker:
         """Re-prompt SAM slots from a fresh Florence detection set."""
         boxes = list(boxes)
         u_labels = list(labels) if labels is not None else [None] * len(boxes)
+        # ADAAAA-7217 (Increment A): route a ball detection to the dedicated
+        # locked ball SAM slot — never the generic (player) slot pool, so the
+        # ball can't be evicted or displaced by a player box.
+        if self.ball_label and boxes:
+            for i, b in enumerate(boxes):
+                lab = (u_labels[i] or "").lower()
+                if "ball" in lab or lab == self.ball_label.lower():
+                    bb = boxes.pop(i)
+                    u_labels.pop(i)
+                    if self._ball_slot is None:
+                        self.seed_ball(bb)  # first identification bootstraps the slot
+                    else:
+                        # Re-identify (SAM loss): refresh the ball prompt/held box
+                        # and re-arm the survive-without-eviction guard.
+                        self._ball_prompt = bb
+                        self._ball_held = bb
+                        self._ball_miss = 0
+                        self._ball_on_screen = True
+                        self._prompts[self._ball_slot] = bb
+                        self._miss[self._ball_slot] = 0
+                        btr = next((t for t in self._iou.tracks if t.slot == self._ball_slot), None)
+                        if btr is not None:
+                            btr.bbox = bb
+                            btr.lost_frames = 0
+                    break
         # refresh existing tracked slots with the nearest detected box when possible
         for slot in list(self._prompts.keys()):
+            if slot == self._ball_slot:
+                continue  # ball is refreshed above / by its own guard
             tr = next((t for t in self._iou.tracks if t.slot == slot), None)
             if tr is not None:
                 best = _nearest_box(tr.bbox, boxes)
@@ -214,6 +335,33 @@ class HybridTracker:
             self._iou.seed_reuse_identity(b, ts=0.0, kind=kind_from_label(lab or ""), label=lab or "")
             self._prompts[slot] = b
             self._miss[slot] = 0
+
+
+    def _update_ball_state(self, sam_box: Optional[BBox]) -> None:
+        """Update the ball's on-screen/persistence metric for the current frame.
+
+        A 'present' frame emits a ball box (the real SAM box, or the eviction-
+        guard held box while within the hold window — matching BallTracker,
+        where a held box still counts as on-screen). Frames beyond the hold
+        window are absent; the on-screen interval closes (and the dead tail is
+        rolled back) once the ball is gone long enough, so a mid-shot gap does
+        not count against the >=95% persistence target.
+        """
+        if sam_box is not None:
+            self._ball_prompt = sam_box
+            self._ball_held = sam_box
+        present = self.ball_box() is not None
+        if present:
+            self._ball_on_screen = True
+            self._ball_on_screen_frames += 1
+            self._ball_present_frames += 1
+            self._ball_tail_frames = 0
+        else:
+            self._ball_tail_frames += 1
+            if self._ball_on_screen and self._ball_tail_frames >= max(self.ball_hold_frames, 1) + 1:
+                self._ball_on_screen = False
+                self._ball_on_screen_frames -= self._ball_tail_frames
+                self._ball_tail_frames = 0
 
 
 def _real_sam3_backend(clip_path: str | None = None) -> Optional[SamBackend]:
