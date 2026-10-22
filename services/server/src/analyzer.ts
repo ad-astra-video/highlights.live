@@ -2,9 +2,11 @@
 // feed frames to perceive, compute evidence, call decide on candidates, cut a
 // clip on each highlight, and stop the session in `finally`.
 import { randomUUID } from "node:crypto";
-import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation } from "@highlights/events";
+import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
+import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
 import { StageAMetrics } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
+import type { PerceiveCalibration } from "./perceive-calibration";
 import {
   ObserveDecider,
   LiveObserver,
@@ -221,6 +223,13 @@ export interface DecisionResult {
   // decide brain updated for this window. The server persists it onto the job
   // and forwards it into the next cadence tick. Optional + additive.
   runningSummary?: string;
+  // ADAAAA-7155 Increment A / ADAAAA-7156 Increment B: the per-window analysis
+  // payload (exact prompt / ordered dataItems / media refs / full response)
+  // returned by the decide service for this window. Carried across the adapter
+  // boundary and persisted onto the JobCandidate so the job-detail API can
+  // expose it. Observability only; no inference change. Absent on legacy
+  // verdicts that predate the capture.
+  analysis?: WindowAnalysis;
 }
 // ADAAAA-6855: map job-requested highlight labels (preferLabels) to the
 // outcome taxonomy members they authorize for export. A requested non-goal
@@ -333,6 +342,13 @@ export interface ConfirmDecision {
   /** The reconciled HighlightDecision-shaped dict to adopt in place of the
    * Stage-1 verdict. On passthrough it is the (unchanged) Stage-1 verdict. */
   decision: DecisionResult;
+  // ADAAAA-7155 Increment A / ADAAAA-7156 Increment B: the confirmation-pass
+  // analysis record (exact confirm prompt + request context summary +
+  // ConfirmDecision) returned by the decide /confirm endpoint. Carried across
+  // the adapter boundary and persisted onto the JobCandidate's `confirm` block
+  // so the job-detail API can expose the deep-frame dive. Observability only;
+  // no inference change. Absent on passthroughs that never built a prompt.
+  analysis?: ConfirmRecord;
 }
 
 /** The confirmation-pass request the adapter forwards to decide `/confirm`. */
@@ -842,6 +858,17 @@ export interface AnalyzerConfig {
    * escalates the Tier-2 gate (covers the decide observer's reference window).
    * Default the observe window (`observeWindowS`). `PERCEIVE_HOT_AFTER_S`. */
   perceiveHotAfterS?: number;
+  /**
+   * ADAAAA-7152 (Gap 2): the per-camera pitch calibration (homography 3x3 +
+   * goalLine spec) shipped to the perceive session for THIS job so perceive
+   * emits a REAL `goalCrossed`/`ballOutcome` attestation that the decide
+   * goal-attestation gate can fold into a `scoring_play` accept. Resolved per
+   * camera from the server's `perceiveCalibration` map via
+   * `resolvePerceiveCalibration`. Absent => the server sends no `configure`
+   * calibration, the session stays uncalibrated (no goal channel) and the gate
+   * keeps the recall-safe baseline. The server never fabricates a calibration.
+   */
+  perceiveCalibration?: PerceiveCalibration;
   /**
    * ADAAAA-7011: enable the LIVE decide-observer architecture. When set (with
    * `decideWindowN` UNSET, i.e. the live/default pass), decide is driven on the
@@ -1830,15 +1857,34 @@ export class TrackingPlanController {
  * builds the HighlightRecord, so every decide() result is recorded, not just
  * accepted ones. Best-effort: a throwing onDecision is caught + logged and
  * never fails the frame loop. */
-function buildCandidateNote(
+export function buildCandidateNote(
   cfg: AnalyzerConfig,
   candidate: CandidateSignal,
   decision: DecisionResult,
   status: "accepted" | "suppressed" | "rejected",
   candidateId: string,
-  trigger: HighlightTrigger
+  trigger: HighlightTrigger,
+  // ADAAAA-7156 Increment B: the per-window analysis + Stage-2 confirm record
+  // captured at the decide boundary, persisted onto the JobCandidate so the
+  // job-detail API can expose them. Observability only; absent on legacy rows.
+  analysis?: WindowAnalysis,
+  confirm?: ConfirmRecord
 ): void {
   if (!cfg.onDecision) return;
+  // ADAAAA-7156 Increment B: only attach analysis/confirm blocks that conform to
+  // the contract, so a malformed decide response (or a future schema drift) can
+  // never make the WHOLE candidate note fail recordJobCandidate's parse and get
+  // dropped from persistence. Observability is best-effort: a bad block is
+  // skipped (window still shows as decided, without analysis) rather than
+  // silently losing the note.
+  let okAnalysis = analysis;
+  let okConfirm = confirm;
+  if (analysis !== undefined) {
+    try { okAnalysis = WindowAnalysisSchema.parse(analysis); } catch { okAnalysis = undefined; }
+  }
+  if (confirm !== undefined) {
+    try { okConfirm = ConfirmRecordSchema.parse(confirm); } catch { okConfirm = undefined; }
+  }
   try {
     cfg.onDecision({
       id: candidateId,
@@ -1853,6 +1899,8 @@ function buildCandidateNote(
       reason: decision.reason,
       status,
       trigger,
+      analysis: okAnalysis,
+      confirm: okConfirm,
       createdAt: new Date().toISOString(),
     });
   } catch (e: any) {
@@ -1921,14 +1969,14 @@ async function acceptVideoDecision(
   // (live / w=1) path and the ordered pipeline accept path (ADAAAA-6854), so
   // the decision-time note trail stays identical either way.
   if (!isAcceptedHighlight(decision, cfg.preferLabels)) {
-    buildCandidateNote(cfg, candidate, decision, "rejected", candidateId, trigger);
+    buildCandidateNote(cfg, candidate, decision, "rejected", candidateId, trigger, stage1.analysis, confirm?.analysis);
     return;
   }
   // ADAAAA-6610 temporal burst suppression: a GOAL
   // accepted within `goalBurstWindowS` of a previous one is a start-of-clip
   // burst duplicate and is dropped, not recorded.
   if (run.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType)) {
-    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger);
+    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stage1.analysis, confirm?.analysis);
     onEvent?.({
       seq: emit.seq,
       timestamp: emit.timestamp,
@@ -1938,7 +1986,7 @@ async function acceptVideoDecision(
     });
     return;
   }
-  buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger);
+  buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger, stage1.analysis, confirm?.analysis);
   const { clipId, clipUri } = await cut(candidate.timestamp);
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -2509,6 +2557,35 @@ export interface AnalyzeEvent {
   reason?: string;
 }
 
+/**
+ * ADAAAA-7152 (Gap 2): forward this job's per-camera pitch calibration
+ * (homography 3x3 + goalLine spec) to a perceive session via the `configure`
+ * control. This is what makes perceive emit a REAL `goalCrossed`/`ballOutcome`
+ * attestation on the server path. Called once when a session is reserved (and
+ * again after each re-reserve so a fresh session inherits the calibration).
+ *
+ * Best-effort: a calibration-forward failure (e.g. a transient 404 on a just-
+ * re-reserved session, or an adapter without controlForward support) is dropped
+ * and logged, never fatal to the frame loop. When `cal` is absent (no
+ * calibration configured for the camera) this is a strict no-op — the session
+ * stays uncalibrated (no goal channel), the recall-safe gate unchanged. The
+ * server never fabricates a calibration: only explicit per-camera config is
+ * carried here.
+ */
+export async function configurePerceiveCalibration(
+  client: PipelineClient,
+  sessionId: string,
+  cal: PerceiveCalibration | undefined
+): Promise<void> {
+  if (!cal) return;
+  const control: { type: string; [k: string]: unknown } = { type: "configure" };
+  if (cal.homography) control.homography = cal.homography;
+  if (cal.goalLine) control.goalLine = cal.goalLine;
+  await client.controlForward(sessionId, control).catch((err: any) => {
+    console.warn(`[calibration:${sessionId}] configure forward failed (best-effort):`, String(err?.message || err));
+  });
+}
+
 export async function analyzeJob(
   client: PipelineClient,
   iterFrames: AsyncIterable<{ seq: number; timestamp: number; imageB64: string }>,
@@ -2555,6 +2632,12 @@ export async function analyzeJob(
   const first = initialSession ?? (await client.reservePerceive());
   let sessionId = first.sessionId;
   slotRef?.onReserve?.(first);
+  // ADAAAA-7152 (Gap 2): ship this job's per-camera pitch calibration (homography
+  // + goalLine) to the freshly-reserved session so perceive emits a REAL
+  // goalCrossed / ballOutcome attestation (a `scoring_play` accept) instead of
+  // an uncalibrated no-goal channel. Best-effort; a no-op when no calibration is
+  // configured for the camera (recall-safe baseline unchanged).
+  await configurePerceiveCalibration(client, sessionId, cfg.perceiveCalibration);
   // Every session we reserved (initial + any re-reserves) must be stopped /
   // un-paid in `finally`, even the ones go-livepeer already released (the
   // server-side released ones still hold a payment refiller in the adapter).
@@ -2723,6 +2806,10 @@ export async function analyzeJob(
             sessionId = fresh.sessionId;
             reserved.add(fresh.sessionId);
             slotRef?.onReserve?.(fresh);
+            // ADAAAA-7152 (Gap 2): a re-reserved session is a fresh perceive
+            // session, so re-ship the job's calibration (best-effort) — otherwise
+            // it would fall back to the uncalibrated no-goal channel.
+            await configurePerceiveCalibration(client, sessionId, cfg.perceiveCalibration);
           }
         }
         if (stoppedRun) break;

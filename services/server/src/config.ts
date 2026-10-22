@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { GoalLineCalibration } from "./analyzer";
+import { parsePerceiveCalibration, type PerceiveCalibrationMap } from "./perceive-calibration";
 
 export interface ServerConfig {
   port: number;
@@ -205,6 +206,16 @@ export interface ServerConfig {
   /** ADAAAA-7152 Gap 1: seconds of FULL-perceive treatment after a frame
    * escalates the Tier-2 gate. `PERCEIVE_HOT_AFTER_S` (default observe window). */
   perceiveHotAfterS?: number;
+  /** ADAAAA-7152 (Gap 2): per-camera pitch calibration the server forwards to a
+   * perceive session via the `configure` control so perceive emits a REAL
+   * `goalCrossed`/`ballOutcome` attestation (a `scoring_play` accept) instead of
+   * an uncalibrated box judging no goal channel. Wired from
+   * `PERCEIVE_CALIBRATION_JSON` (a JSON map keyed by camera id with a reserved
+   * `default` entry). Absent => the server sends NO `configure` calibration, the
+   * perceive session stays uncalibrated (no goal channel) and the gate keeps the
+   * recall-safe baseline. Never fabricated: only explicit config reaches the
+   * session. See `perceive-calibration.ts`. */
+  perceiveCalibration?: PerceiveCalibrationMap;
   /** Auth + billing */
   jwtSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
@@ -456,6 +467,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     perceiveCadence: env.PERCEIVE_CADENCE === "1" ? true : env.PERCEIVE_CADENCE === "0" ? false : undefined,
     perceiveQuietStride: env.PERCEIVE_QUIET_STRIDE !== undefined ? Number(env.PERCEIVE_QUIET_STRIDE) : undefined,
     perceiveHotAfterS: env.PERCEIVE_HOT_AFTER_S !== undefined ? Number(env.PERCEIVE_HOT_AFTER_S) : undefined,
+    // ADAAAA-7152 (Gap 2): per-camera pitch calibration (homography + goalLine)
+    // the server forwards to a perceive session via the `configure` control.
+    // Sourced ONLY from explicit config (`PERCEIVE_CALIBRATION_JSON`, a JSON map
+    // keyed by camera id with a reserved `default` entry). Unset / malformed =>
+    // `undefined` => the server sends no calibration => perceive stays
+    // uncalibrated (recall-safe, unchanged). Never fabricated.
+    perceiveCalibration: parsePerceiveCalibration(env.PERCEIVE_CALIBRATION_JSON),
     // ADAAAA-5342: live sampling driven from the runner's measured capability
     // (mirroring the VOD mechanism): a live-specific ceiling (10) plus a 10%
     // headroom so capable GPUs accelerate toward the chartered cadence while

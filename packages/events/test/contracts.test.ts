@@ -12,6 +12,10 @@ import {
   TrackObservationSchema,
   RunnerSessionSchema,
   JobSchema,
+  JobCandidateSchema,
+  DecideNoteSchema,
+  WindowAnalysisSchema,
+  ConfirmRecordSchema,
   StageAMetricsSnapshotSchema,
   MAX_TRACKS,
   LIVE_MAX_TRACKS,
@@ -343,5 +347,136 @@ describe("Job + StageAMetricsSnapshot (INC-2 / ADAAAA-4325 slice 5: FP-rate metr
         JobSchema.parse({ id: "j", source: "file", createdAt: "2026-10-16T00:00:00Z", progress: -1 })
       ).toThrow();
     });
+  });
+});
+
+describe("WindowAnalysis + ConfirmRecord (ADAAAA-7137 / ADAAAA-7155 Incr A)", () => {
+  const analysis = {
+    prompt: "You are a sports/esports highlight judge...",
+    dataItems: [
+      { type: "candidate", label: "Candidate event type", value: "GOAL" },
+      { type: "tracking", label: "Track count", value: 3 },
+      { type: "asr", label: "Audio commentary transcript (ASR)", value: "goal!" },
+    ],
+    frames: [{ seq: 10, uri: "" }],
+    images: [{ seq: 3, uri: "" }],
+    audio: { uri: "", sampleRate: 16000, path: "none" },
+    asr: { transcript: "goal!", url: "", latencyS: 1.2 },
+    response: {
+      isHighlight: true,
+      score: 92,
+      outcome: "scoring_play",
+      reasoning: "observed ball cross the line",
+      evidenceAttested: ["ball in net"],
+      audioContext: { path: "none" },
+    },
+  };
+
+  it("parses a per-window analysis on a JobCandidate (additive optional)", () => {
+    const c = JobCandidateSchema.parse({
+      id: "cit",
+      jobId: "job",
+      seq: 10,
+      timestamp: 12,
+      eventType: "GOAL",
+      score: 92,
+      isHighlight: true,
+      status: "accepted",
+      createdAt: "2026-10-21T00:00:00Z",
+      analysis,
+    });
+    expect(c.analysis?.prompt).toContain("highlight judge");
+    expect(c.analysis?.dataItems).toHaveLength(3);
+    expect(c.analysis?.response?.reasoning).toContain("ball cross");
+    // legacy candidate without analysis still parses (no contract bump)
+    const legacy = JobCandidateSchema.parse({
+      id: "l", jobId: "job", seq: 1, timestamp: 1, eventType: "KILL", score: 0,
+      isHighlight: false, status: "rejected", createdAt: "2026-10-21T00:00:00Z",
+    });
+    expect(legacy.analysis).toBeUndefined();
+  });
+
+  it("carries analysis + confirm block on a section decide-note", () => {
+    const note = DecideNoteSchema.parse({
+      seq: 10,
+      timestamp: 12,
+      eventType: "GOAL",
+      score: 92,
+      isHighlight: true,
+      status: "accepted",
+      analysis,
+      confirm: {
+        request: {
+          prompt: "You are a sports highlight CONFIRMATION judge...",
+          dataItems: [{ type: "confirm", label: "Stage-1 verdict", value: "scoring_play" }],
+          frames: [{ seq: 0, uri: "" }],
+          keyframes: [{ seq: 1, uri: "" }],
+          trajectories: ["- ball (track t1) path: t=0.0s (0.50,0.50)"],
+          opticalFlowMagnitude: 1.5,
+          audioLevels: [0.2, 0.8],
+          transcript: "goal!",
+          stage1: { outcome: "scoring_play", isHighlight: true },
+        },
+        decision: {
+          enabled: true,
+          goalConfirmed: "confirmed_goal",
+          confidence: 0.95,
+          evidence: { ballInNet: true },
+          stage1Disagreed: false,
+          outcome: "scoring_play",
+        },
+      },
+    });
+    expect(note.analysis?.dataItems).toHaveLength(3);
+    expect(note.confirm?.decision?.goalConfirmed).toBe("confirmed_goal");
+  });
+
+  it("persists a confirm record on a JobCandidate (ADAAAA-7156 Increment B)", () => {
+    const c = JobCandidateSchema.parse({
+      id: "cc",
+      jobId: "job",
+      seq: 10,
+      timestamp: 12,
+      eventType: "GOAL",
+      score: 92,
+      isHighlight: true,
+      status: "accepted",
+      createdAt: "2026-10-21T00:00:00Z",
+      analysis,
+      confirm: {
+        request: {
+          prompt: "You are a sports highlight CONFIRMATION judge...",
+          dataItems: [{ type: "confirm", label: "Stage-1 verdict", value: "scoring_play" }],
+          stage1: { outcome: "scoring_play", isHighlight: true },
+        },
+        decision: {
+          enabled: true,
+          goalConfirmed: "confirmed_goal",
+          confidence: 0.95,
+          stage1Disagreed: false,
+          outcome: "scoring_play",
+        },
+      },
+    });
+    expect(c.analysis?.prompt).toContain("highlight judge");
+    expect(c.confirm?.request?.prompt).toContain("CONFIRMATION");
+    expect(c.confirm?.decision?.goalConfirmed).toBe("confirmed_goal");
+    expect(c.confirm?.decision?.stage1Disagreed).toBe(false);
+  });
+
+  it("round-trips a standalone ConfirmRecord + rejects a bad goalConfirmed", () => {
+    const rec = ConfirmRecordSchema.parse({
+      request: { prompt: "p" },
+      decision: { goalConfirmed: "near_miss", confidence: 0.8 },
+    });
+    expect(rec.decision.goalConfirmed).toBe("near_miss");
+    expect(() =>
+      ConfirmRecordSchema.parse({ request: { prompt: "p" }, decision: { goalConfirmed: "maybe" } })
+    ).toThrow();
+  });
+
+  it("WindowAnalysis requires a non-empty prompt", () => {
+    expect(() => WindowAnalysisSchema.parse({ prompt: "" })).not.toThrow();
+    expect(WindowAnalysisSchema.parse({ prompt: "p" }).dataItems).toEqual([]);
   });
 });
