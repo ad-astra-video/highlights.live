@@ -208,8 +208,12 @@ def test_resolve_vocabulary_game_hint_wins_over_event_prefer_labels():
         prefer_labels=["goals", "saves", "red cards", "near-misses", "counter-attacks"],
     )
     assert vocab is not None
-    assert "player" in vocab
+    # ADAAAA-7217 (Increment B): the default soccer roster is ball-first —
+    # players/keeper/referee are NOT in the default per-frame detection
+    # vocabulary; ball (and goal) are.
+    assert "player" not in vocab
     assert "soccer ball" in vocab
+    assert "goal" in vocab
     assert "goals" not in vocab
 
 
@@ -223,8 +227,9 @@ def test_resolve_vocabulary_object_prefer_labels_fallback_unknown_hint():
 def test_resolve_vocabulary_game_hint_soccer():
     vocab = florence.resolve_vocabulary(game_hint="soccer")
     assert vocab is not None
+    # ADAAAA-7217 (Increment B): ball-first default roster.
     assert "soccer ball" in vocab
-    assert "goalkeeper" in vocab
+    assert "goalkeeper" not in vocab
 
 
 def test_resolve_vocabulary_game_hint_alias_substring():
@@ -506,7 +511,11 @@ def test_process_frame_track_carries_gated_label_not_unknown(monkeypatch):
 
     reg = SessionRegistry(max_sessions=1)
     state = reg.get_or_create("sess-5056", "", "")
-    state.game_hint = "soccer"
+    # ADAAAA-7217 (Increment B): the default soccer roster is ball-first, so to
+    # exercise the in-roster player label we make the session's roster the
+    # closed vocabulary via preferLabels (gameHint blank so it isn't overridden
+    # by the canned ball-first soccer map).
+    state.game_hint = ""
     state.prefer_labels = list(vocab)
     state.last_rgb = np.zeros((60, 80, 3), dtype=np.uint8)
     state.tracker = IoUTracker(capacity=3)
