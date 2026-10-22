@@ -15,6 +15,7 @@ from app.scoreboard import (
     parse_ocr_score,
     score_changed,
 )
+from app import _scoreboard_roi
 
 
 def test_parse_ocr_score_standard_dash():
@@ -295,10 +296,19 @@ def test_scoreboard_roi_autodetects_bottom_right_and_recall_delta():
     assert tr.changed(40.0) is True  # genuine delta on a genuine scoreboard
 
 
-def test_scoreboard_roi_gates_and_yields_no_ocrhits():
-    # A frame with NO visible scoreboard -> gate. The OCR pass is skipped, so
-    # `obs["ocr"]` is empty (<!-- ocrHits=0 -->) and no score/delta can be forged
-    # from non-scoreboard text.
+def test_scoreboard_roi_discovery_miss_falls_back_to_top_band():
+    # ADAAAA-7190: the `<DENSE_REGION_CAPTION>` discovery pass is flaky and
+    # frequently reports NO scoreboard region even when a numeric scorebug IS
+    # present and changing (observed live on job 5c886c12: a discovery miss used
+    # to gate the OCR pass off entirely, so every candidate carried eventType
+    # SPORTING_EVENT but never scoreBoardChanged, dropping the independent
+    # corroboration for a real goal). On a miss the ROI now falls back to the
+    # documented default top-band prior (the same prior used when no
+    # region-capable detector exists) so the scoreboard OCR can still read a
+    # scorebug discovery missed. The anti-forgery property is preserved:
+    # `parse_ocr_score` still requires a clean two-integer "N - M" line and the
+    # delta still needs two differing concrete readings, so a non-scoreboard
+    # top-band read cannot forge a scoreBoardChanged on its own.
     from types import SimpleNamespace
 
     from app import _scoreboard_roi
@@ -311,15 +321,18 @@ def test_scoreboard_roi_gates_and_yields_no_ocrhits():
                 "regions": [{"bbox": [0.05, 0.4, 0.95, 0.95], "caption": "banner ad copy"}],
             }
 
-        def ocr(self, image, roi=None):  # pragma: no cover - must NOT be called
-            raise AssertionError("OCR ran when no scoreboard is visible")
+        def ocr(self, image, roi=None):  # pragma: no cover - not driven here
+            return ["banner ad copy", "no score here"]
 
     state = SimpleNamespace(last_rgb=object(), scoreboard_visible=None)
     roi = _scoreboard_roi(state, FakeDetector())
-    assert roi is None
-    assert state.scoreboard_visible is False
-    # Gate: OCR would not be invoked, so ocrHits stays 0 / no score.
-    assert parse_ocr_score([], roi=None) is None
+    assert roi is not None
+    # Falls back to the default top-band prior (full width, top 25%).
+    assert (roi.x0, roi.y0, roi.x1, roi.y1) == (0.0, 0.0, 1.0, 0.25)
+    assert state.scoreboard_visible is True
+    # Even with the fallback a non-scoreboard top-band read never parses as a
+    # score (no clean two-integer line), so no delta can be forged.
+    assert parse_ocr_score(["banner ad copy", "no score here"], roi=roi) is None
 
 
 def test_scoreboard_roi_backoff_bounds_region_pass_and_preserves_recall():

@@ -432,14 +432,26 @@ def _scoreboard_roi(state, detector=None) -> "ScoreboardRoi | None":
                 state.scoreboard_roi = located
                 state.scoreboard_visible = True
                 return located
-        # A region-capable detector ran but found no visible scoreboard -> gate.
-        # Count the miss so the next region pass waits out the backoff; a
-        # scoreboard that appears mid-stream is still picked up on the next
-        # attempt (state.scoreboard_roi stays None until found).
+        # A region-capable detector ran but found no visible scoreboard. Count
+        # the miss so the next region pass waits out the backoff; a scoreboard
+        # that appears mid-stream is still picked up on the next attempt
+        # (state.scoreboard_roi stays None until found).
         state.scoreboard_miss_count = misses + 1
-        state.scoreboard_roi = None
-        state.scoreboard_visible = False
-        return None
+        # ADAAAA-7190: the `<DENSE_REGION_CAPTION>` discovery pass is flaky and
+        # frequently reports NO scoreboard region even when a numeric scorebug is
+        # present and changing (observed live on job 5c886c12: every candidate
+        # carried eventType SPORTING_EVENT but never a scoreBoardChanged /
+        # ballOutcome, because a discovery miss gated the OCR pass off entirely
+        # and dropped the independent scoreboard corroboration for a real goal).
+        # Rather than gating the OCR off on a miss, fall back to the documented
+        # default top-band prior for THIS frame so the scoreboard OCR can still
+        # read a scorebug that discovery missed. This is the same prior already
+        # used when no region-capable detector exists, it stays scoped to the
+        # scoreboard band (not the whole frame), and it is deliberately NOT
+        # cached as `state.scoreboard_roi` so a later discovery attempt can still
+        # upgrade to a better box when one is found.
+        state.scoreboard_visible = True
+        return ScoreboardRoi.from_env()
 
     # No region-capable detector (stub path): fall back to the documented
     # default top-band prior rather than dropping all score evidence.
