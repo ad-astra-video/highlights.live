@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OrchestratorAdapter } from "../src/livepeer-adapter";
 import { loadConfig } from "../src/config";
-import { SessionLostError } from "../src/analyzer";
+import { SessionLostError, reservePerceiveWithRetry, DeployRecreateInterruptedError } from "../src/analyzer";
 import { buildTestApp, testCfg } from "./helpers";
 
 function cfg(env: Record<string, string> = {}) {
@@ -105,3 +105,48 @@ describe("deploy-gate in-flight detection (ADAAAA-7203)", () => {
     expect(c.adminEmail).toBeTruthy();
   });
 });
+
+describe("re-reserve retry across a deploy-recreate (ADAAAA-7203)", () => {
+  it("retries a transient runner-unavailable reserve and recovers", async () => {
+    let attempts = 0;
+    const client = {
+      reservePerceive: async () => {
+        attempts++;
+        if (attempts < 3) throw new Error("reserve perceive failed: HTTP 404 runner not found");
+        return { sessionId: "sess-recovered", appUrl: "", controlUrl: "" };
+      },
+    } as any;
+    const r = await reservePerceiveWithRetry(client, { attempts: 5, baseMs: 1, maxMs: 8 });
+    expect(r.sessionId).toBe("sess-recovered");
+    expect(attempts).toBe(3);
+  });
+
+  it("throws a typed DeployRecreateInterruptedError after the bounded reserve attempts", async () => {
+    const client = {
+      reservePerceive: async () => {
+        throw new Error("reserve perceive failed: HTTP 404 runner not found");
+      },
+    } as any;
+    await expect(reservePerceiveWithRetry(client, { attempts: 3, baseMs: 1, maxMs: 4 })).rejects.toBeInstanceOf(
+      DeployRecreateInterruptedError
+    );
+    await expect(reservePerceiveWithRetry(client, { attempts: 3, baseMs: 1, maxMs: 4 })).rejects.toThrow(
+      /analyze interrupted \(deploy-recreate\)/
+    );
+  });
+
+  it("propagates a non-transient reserve error immediately (no retry)", async () => {
+    let attempts = 0;
+    const client = {
+      reservePerceive: async () => {
+        attempts++;
+        throw new Error("invalid live runner payment signer address");
+      },
+    } as any;
+    await expect(reservePerceiveWithRetry(client, { attempts: 5, baseMs: 1, maxMs: 8 })).rejects.toThrow(
+      /invalid live runner payment signer address/
+    );
+    expect(attempts).toBe(1);
+  });
+});
+

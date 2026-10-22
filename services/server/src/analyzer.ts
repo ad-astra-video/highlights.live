@@ -710,6 +710,14 @@ export interface AnalyzerConfig {
    * `maxReReserves` times per frame at the capped cadence and then aborts.
    * Wired from `VOD_SESSION_RETRY_BACKOFF_MAX_MS` (default 8000). */
   sessionRetryBackoffMaxMs?: number;
+  /** ADAAAA-7203: max attempts to reserve a fresh perceive session within ONE
+   * re-reserve after a session-lost, retried with the bounded backoff when the
+   * runner is momentarily unavailable (deploy-recreate / re-registration: the
+   * orchestrator 404s "runner not found" or 503s "no capacity" while the runner
+   * is down). A single immediate reserve 404s and would abort the whole pass;
+   * retrying lets the pass ride through the recovery and resume. Bounded
+   * (default 5) so it never spins. */
+  reReserveAttempts?: number;
   /**
    * Increment D (ADAAAA-6467): the stream-start warm-up window (seconds)
    * within which exactly ONE planner call must deliver a valid TrackingPlan
@@ -890,6 +898,60 @@ export function sleep(ms: number): Promise<void> {
  * 500ms -> 1s -> 2s -> 4s, cap 8s). Pure function — trivially unit-testable. */
 export function backoffDelayMs(attempt: number, baseMs: number, maxMs: number): number {
   return Math.min(baseMs * 2 ** Math.max(0, attempt), maxMs);
+}
+
+/** ADAAAA-7203: the perceive runner is momentarily unavailable — the
+ * orchestrator proxies to it through the runner session and returns HTTP
+ * 502/503/504 while the runner is down (deploy-recreate / re-registration),
+ * and reserve returns 404 "runner not found" or 503 "no capacity" during the
+ * recovery window. These are transient and retriable; a payment/auth/other
+ * error is not. */
+function isTransientRunnerError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /HTTP (404|502|503|504)/.test(msg) || /runner not found/.test(msg) || /no capacity/.test(msg);
+}
+
+/** ADAAAA-7203: reserve a perceive session after a session-lost, retrying when
+ * the runner is momentarily unavailable (deploy-recreate) with the bounded
+ * exponential backoff. A single immediate reserve during the recreate window
+ * 404s ("runner not found") and would abort the whole pass; retrying lets the
+ * pass ride through the recovery and resume from the last observation. Bounded
+ * by `attempts`; on exhaustion a typed `analyze interrupted (deploy-recreate)`
+ * verdict is thrown so the job is cheaply retriable rather than a bare 502. A
+ * non-transient (payment/auth) reserve error propagates immediately. */
+export async function reservePerceiveWithRetry(
+  client: PipelineClient,
+  opts: { attempts?: number; baseMs?: number; maxMs?: number } = {}
+): Promise<ReserveResult> {
+  const attempts = opts.attempts ?? 5;
+  const baseMs = opts.baseMs ?? 500;
+  const maxMs = opts.maxMs ?? 8000;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await client.reservePerceive();
+    } catch (err) {
+      if (!isTransientRunnerError(err)) throw err;
+      // Last attempt done: surface the typed retriable verdict, not a bare 502.
+      if (attempt + 1 >= attempts) {
+        throw new DeployRecreateInterruptedError(
+          `analyze interrupted (deploy-recreate): perceive runner unavailable after ${attempts} reserve attempts; job is retriable`
+        );
+      }
+      await sleep(backoffDelayMs(attempt, baseMs, maxMs));
+    }
+  }
+}
+
+/** ADAAAA-7203: typed, retriable outcome when a perceive runner recreate
+ * (staged deploy) drops the session and the bounded re-reserve could not
+ * re-acquire a runner in the recovery window. Distinct from the generic
+ * `SessionLostError` (which the pass re-reserves against) and from a bare
+ * `analyze failed: HTTP 502` (which is not signal about WHY it dropped). */
+export class DeployRecreateInterruptedError extends Error {
+  constructor(msg = "analyze interrupted (deploy-recreate)") {
+    super(msg);
+    this.name = "DeployRecreateInterruptedError";
+  }
 }
 
 /** Compute per-job evidence from the observation stream. */
@@ -2487,6 +2549,9 @@ export async function analyzeJob(
   // instead of hammering the orchestrator (see backoffDelayMs).
   const sessionRetryBackoffMs = cfg.sessionRetryBackoffMs ?? 500;
   const sessionRetryBackoffMaxMs = cfg.sessionRetryBackoffMaxMs ?? 8000;
+  // ADAAAA-7203: how many times to re-attempt the reserve within ONE re-reserve
+  // when the runner is momentarily unavailable (deploy-recreate). Bounded.
+  const reReserveAttempts = cfg.reReserveAttempts ?? 5;
   const first = initialSession ?? (await client.reservePerceive());
   let sessionId = first.sessionId;
   slotRef?.onReserve?.(first);
@@ -2644,7 +2709,17 @@ export async function analyzeJob(
             // cleanly once maxReReserves is exhausted.
             await sleep(backoffDelayMs(reReserved, sessionRetryBackoffMs, sessionRetryBackoffMaxMs));
             reReserved++;
-            const fresh = await client.reservePerceive();
+            // ADAAAA-7203: retry the reserve within ONE re-reserve with the
+            // bounded backoff, so a runner that was recreated by a staged deploy
+            // (momentarily 404ing "runner not found" while it re-registers) can
+            // be re-acquired and the pass resumes from the last observation. On
+            // exhaustion a typed `analyze interrupted (deploy-recreate)` verdict
+            // is thrown so the job is retriable, not a bare 502.
+            const fresh = await reservePerceiveWithRetry(client, {
+              attempts: reReserveAttempts,
+              baseMs: sessionRetryBackoffMs,
+              maxMs: sessionRetryBackoffMaxMs,
+            });
             sessionId = fresh.sessionId;
             reserved.add(fresh.sessionId);
             slotRef?.onReserve?.(fresh);
