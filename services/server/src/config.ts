@@ -91,7 +91,8 @@ export interface ServerConfig {
    * "3 live / 8 VOD" cadence. Default `VOD_SAMPLE_MAX_FPS` = 8. */
   vodSampleMaxFps: number;
   /** Detail-first VOD sampling fps (ADAAAA-4954, spec §1 knob `sampleFps`).
-   * Deeper than the live 1 fps share; default 2. `VOD_DETAIL_FPS`. */
+   * Deeper than the live 1 fps share; default 3 (raised from 2 by ADAAAA-7179 so
+   * the decide read samples the goal-crossing window densely). `VOD_DETAIL_FPS`. */
   vodDetailFps: number;
   /** Hard ceiling on LIVE source sampling (frames/second) when the perceive
    * runner reports it can sustain more than `sampleIntervalSec`. ADAAAA-5342:
@@ -405,7 +406,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // overridable per job. Keep the live path's sampleIntervalSec untouched.
     vodSampleFpsDefault: Number(env.VOD_SAMPLE_FPS_DEFAULT ?? 5),
     vodSampleMaxFps: Number(env.VOD_SAMPLE_MAX_FPS ?? 8),
-    vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 2),
+    vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 3),
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
     vodWorkerConcurrency: Number(env.VOD_WORKER_CONCURRENCY ?? 1),
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
