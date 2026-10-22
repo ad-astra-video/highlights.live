@@ -109,6 +109,10 @@ class SessionState:
     # anchor-slot preference all come from it (with canned fallback when the
     # plan is absent/empty). Set via control `configure` trackingPlan.
     tracking_plan: Optional[TrackingPlan] = None
+    # ADAAAA-7218 (Increment C): the jersey number of the player the operator
+    # asked to track (control `track-player`). None until such a request. Used
+    # to label the surfaced track + record the request for the observer.
+    requested_player_number: Optional[int] = None
 
     @property
     def is_idle(self) -> bool:

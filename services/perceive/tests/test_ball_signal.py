@@ -216,6 +216,26 @@ class _FakeDetector:
         return []
 
 
+def test_step_uses_sam_ball_box_authoritative():
+    """ADAAAA-7217 (Inc A): the SAM ball box is authoritative for the signal —
+    the pipeline uses it even when the per-frame Florence objects carry no ball
+    (the ball is dropped from the per-frame pass once SAM owns it)."""
+    pipe = BallSignalPipeline(H=None)
+    frame = pipe.step([], {}, 1.0, sam_ball_box=(0.4, 0.4, 0.45, 0.45))
+    assert frame.ball_state.present is True
+    assert frame.ball_state.bbox == (0.4, 0.4, 0.45, 0.45)
+    assert frame.ball_state.real is True
+
+
+def test_step_without_sam_ball_box_falls_back_to_objects():
+    """Without a SAM box the pipeline keeps extracting the ball from Florence
+    objects (pre-increment path)."""
+    pipe = BallSignalPipeline(H=None)
+    frame = pipe.step([{"label": "soccer ball", "confidence": 0.9, "bbox": [0.2, 0.2, 0.3, 0.3]}], {}, 1.0)
+    assert frame.ball_state.present is True
+    assert frame.ball_state.bbox == (0.2, 0.2, 0.3, 0.3)
+
+
 def test_process_frame_attaches_ball_signal_to_evidence(monkeypatch):
     """End-to-end wiring: with a ball + moving player + calibration, the
     observation's additive `evidence` field carries ballVelocity + ballPossession

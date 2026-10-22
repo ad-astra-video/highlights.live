@@ -97,15 +97,21 @@ def discovery_method_for_task(task: str | None) -> str | None:
 # the <OD> prompt to a tight label set. `preferLabels` from the session always wins
 # over this map when it is non-empty (it is the operator's explicit closed set).
 _GAME_VOCABULARIES: dict[str, list[str]] = {
-    "soccer": ["soccer ball", "player", "goalkeeper", "goal", "referee"],
+    # ADAAAA-7217 (Increment B): the default soccer per-frame roster is now
+    # ball-first. Player/goalkeeper/referee are DROPPED from the default
+    # detection vocabulary; ball detection is kept. Player detection runs only
+    # on demand when the user requests a specific player (plan target with
+    # `track` / control seed), which is handled separately from this roster.
+    # "goal" stays because it is a non-player object, not a player.
+    "soccer": ["soccer ball", "goal"],
     # American-football synonym fix (ADAAAA-6463, plan §7 B): a US "football"
     # game must NOT resolve to the soccer vocabulary. "football" (and its
     # league aliases) now maps to an American-football roster; soccer keeps the
     # explicit "soccer" key + competition aliases ("football match", leagues).
     "football": ["football", "player", "referee"],
     "american football": ["football", "player", "referee"],
-    "fa cup": ["soccer ball", "player", "goalkeeper", "goal", "referee"],
-    "soccer ball": ["soccer ball", "player", "goalkeeper", "goal", "referee"],
+    "fa cup": ["soccer ball", "goal"],
+    "soccer ball": ["soccer ball", "goal"],
     "basketball": ["basketball", "player", "hoop", "referee"],
     "tennis": ["tennis ball", "player", "racket", "net"],
     "valorant": ["player", "agent", "weapon", "head"],
