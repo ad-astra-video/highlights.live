@@ -1182,6 +1182,183 @@ def build_prompt(
     )
 
 
+# --- ADAAAA-7155 Increment A: per-window LLM analysis capture ----------------
+# Observability/inspectability only. These helpers build the `analysis` block
+# (exact prompt + ordered dataItems + media refs + asr + full response) that is
+# threaded onto the returned decision. They never change parse/accept semantics
+# and never add an inference call.
+
+
+def _media_refs(media: list | None) -> list:
+    """Lazy media refs (seq + uri) for the frames/images fed to the model.
+    `uri` is carried from the frame dict when present (the server fills the
+    canonical /frames/:seq delivery); an empty uri means "bytes not resolved at
+    the decide layer" — Incr B maps seq->uri on the server path."""
+    out: list = []
+    for i, f in enumerate(media or []):
+        seq = f.get("seq", i) if isinstance(f, dict) else i
+        uri = f.get("uri") if isinstance(f, dict) and f.get("uri") else ""
+        try:
+            seq = int(seq)
+        except (TypeError, ValueError):  # noqa: BLE001
+            seq = i
+        out.append({"seq": seq, "uri": uri})
+    return out
+
+
+def _build_data_items(
+    event_type: str,
+    evidence: dict,
+    game_hint: str = "",
+    n_frames: int = 1,
+    n_images: int = 0,
+    has_audio: bool = False,
+    transcript: str = "",
+    story_so_far: str = "",
+) -> list:
+    """Ordered, structured view of the context items fed to the model for a
+    single-candidate window. Mirrors `build_prompt`'s rendered lines so the UI
+    can render each item independently (type/label/value)."""
+    items: list = []
+
+    def add(typ: str, label: str, value) -> None:
+        items.append({"type": typ, "label": label, "value": value})
+
+    ev = (event_type or "").upper()
+    add("candidate", "Candidate event type", ev)
+    add("game", "Game hint", game_hint or "unspecified")
+    add("tracking", "Track count", evidence.get("trackCount", 0))
+    add("tracking", "Max tracked velocity", evidence.get("maxVelocity", 0))
+    add("ocr", "OCR hits", evidence.get("ocrHits", 0))
+    add("scoreboard", "Scoreboard score change", "yes" if evidence.get("scoreBoardChanged") else "no")
+    add("frames", "Frames shown (1 FPS temporal window)", n_frames)
+    add("images", "Context images", n_images)
+    add("audio", "Audio provided (commentary/crowd)", "yes" if has_audio else "no")
+    outcome = evidence.get("ballOutcome")
+    crossed = evidence.get("goalCrossed")
+    if outcome:
+        glv = f"ballOutcome={outcome}" + (f", goalCrossed={crossed}" if crossed is not None else "")
+    else:
+        glv = "not available"
+    add("goal_line", "Goal-line ground-truth (perceive homography)", glv)
+    reaction_lines = _reaction_summary(evidence)
+    for ln in reaction_lines:
+        add("reaction", "People-reaction evidence", ln)
+    tt = (transcript or "").strip()
+    if tt:
+        add("asr", "Audio commentary transcript (ASR)", tt[:500])
+    det_lines = _detection_lines(evidence)
+    for ln in det_lines:
+        add("detections", "Detection geometry", ln)
+    al = _audio_level_line(evidence)
+    if al:
+        add("audio_level", "Audio-energy level curve", al)
+    ssf = (story_so_far or "").strip()
+    if ssf:
+        add("summary", "STORY SO FAR", ssf[:MAX_RUNNING_SUMMARY_CHARS])
+    return items
+
+
+def _build_group_data_items(
+    candidates: list,
+    game_hint: str = "",
+    n_frames: int = 1,
+    n_images: int = 0,
+    has_audio: bool = False,
+    transcript: str = "",
+) -> list:
+    """Ordered structured view of the context items fed for the group-mode
+    window (one review over the whole frame group)."""
+    items: list = []
+
+    def add(typ: str, label: str, value) -> None:
+        items.append({"type": typ, "label": label, "value": value})
+
+    add("game", "Game hint", game_hint or "unspecified")
+    add("frames", "Frames shown (1 FPS temporal window)", n_frames)
+    add("images", "Context images", n_images)
+    add("audio", "Audio provided (commentary/crowd)", "yes" if has_audio else "no")
+    for i, c in enumerate(candidates or []):
+        ev = c.get("evidence") or {}
+        if not isinstance(ev, dict):
+            ev = {}
+        reaction = ev.get("reaction") or {}
+        if not isinstance(reaction, dict):
+            reaction = {}
+        add("candidate", f"Candidate {i} eventType", c.get("eventType"))
+        add("candidate", f"Candidate {i} timestamp", c.get("timestamp"))
+        add("candidate", f"Candidate {i} trackCount", ev.get("trackCount", 0))
+        add("candidate", f"Candidate {i} maxVelocity", ev.get("maxVelocity", 0))
+        add("candidate", f"Candidate {i} ocrHits", ev.get("ocrHits", 0))
+        add("candidate", f"Candidate {i} scoreBoardChanged", ev.get("scoreBoardChanged"))
+        add("candidate", f"Candidate {i} ballOutcome", ev.get("ballOutcome"))
+        add("candidate", f"Candidate {i} goalCrossed", ev.get("goalCrossed"))
+        add("candidate", f"Candidate {i} audioReaction", reaction.get("crowdEnergy") or 0)
+        add("candidate", f"Candidate {i} humansInMotion", reaction.get("humansInMotion") or 0)
+    tt = (transcript or "").strip()
+    if tt:
+        add("asr", "Audio commentary transcript (ASR)", tt[:500])
+    return items
+
+
+def _response_block(decision: dict) -> dict:
+    """The full response fields retained from a decide decision, as a FLAT copy
+    (never the decision dict itself, to avoid a self-referential analysis)."""
+    return {
+        "isHighlight": decision.get("isHighlight"),
+        "score": decision.get("score"),
+        "eventType": decision.get("eventType"),
+        "reason": decision.get("reason"),
+        "outcome": decision.get("outcome"),
+        "nearMiss": decision.get("nearMiss"),
+        "reasoning": decision.get("reasoning"),
+        "verdict": decision.get("verdict"),
+        "evidenceAttested": decision.get("evidenceAttested") or [],
+        "audioContext": decision.get("audioContext"),
+        "runningSummary": decision.get("runningSummary"),
+        "source": decision.get("source"),
+    }
+
+
+def _window_analysis(
+    *,
+    prompt: str,
+    event_type: str = "",
+    evidence: dict | None = None,
+    game_hint: str = "",
+    data_items: list | None = None,
+    n_frames: int = 1,
+    n_images: int = 0,
+    send_audio: bool = False,
+    transcript: str = "",
+    story_so_far: str = "",
+    audio_sample_rate: int = 16000,
+    frames: list | None = None,
+    images: list | None = None,
+    response: dict | None = None,
+) -> dict:
+    """Assemble the opaque `analysis` block for a decided window."""
+    evidence = evidence or {}
+    if data_items is None:
+        data_items = _build_data_items(
+            event_type, evidence, game_hint, n_frames, n_images,
+            send_audio or bool(transcript), transcript, story_so_far,
+        )
+    return {
+        "prompt": prompt,
+        "dataItems": data_items,
+        "frames": _media_refs(frames),
+        "images": _media_refs(images),
+        "audio": {
+            "uri": "",
+            "sampleRate": audio_sample_rate,
+            "path": "input_audio" if send_audio else ("asr_text" if transcript else "none"),
+        },
+        "asr": {"transcript": transcript or "", "url": _asr_url()},
+        "response": response if response is not None else {},
+    }
+
+
 def ask(
     url: str,
     event_type: str,
@@ -1241,20 +1418,18 @@ def ask(
     # 2) the text prompt, in the middle. has_audio reflects whether audio bytes
     # actually reach the model (send_audio), never whether the caller supplied
     # them — we must not tell the model "audio provided: yes" when it is not.
-    content.append(
-        {
-            "type": "text",
-            "text": build_prompt(
-                event_type,
-                evidence,
-                game_hint,
-                n_frames=len(frames),
-                has_audio=bool(send_audio or transcript),
-                transcript=transcript,
-                story_so_far=story_so_far,
-            ),
-        }
+    # ADAAAA-7155 Incr A: the exact built prompt is captured once here and reused
+    # for the request AND recorded on the returned decision as `analysis.prompt`.
+    prompt = build_prompt(
+        event_type,
+        evidence,
+        game_hint,
+        n_frames=len(frames),
+        has_audio=bool(send_audio or transcript),
+        transcript=transcript,
+        story_so_far=story_so_far,
     )
+    content.append({"type": "text", "text": prompt})
     # 3) audio AFTER the text (modality-order rule) — only when the raw-send gate
     # is on. By default (Path 2) the audio context is delivered as TEXT
     # (transcript) instead, because the deployed QAT model is not audio-capable.
@@ -1330,6 +1505,24 @@ def ask(
     # it never carries the base64 media bytes (those stay in the audit dir).
     if result is not None:
         result["audit"] = _audit_descriptor(_record)
+        # ADAAAA-7155 Incr A: capture the per-window analysis block — the exact
+        # prompt, the ordered dataItems, the frame/image refs, the audio/asr
+        # context and the full response. Observability only; never a parse gate.
+        result["analysis"] = _window_analysis(
+            prompt=prompt,
+            event_type=event_type,
+            evidence=evidence,
+            game_hint=game_hint,
+            n_frames=len(frames),
+            n_images=len(images),
+            send_audio=send_audio,
+            transcript=transcript,
+            story_so_far=story_so_far,
+            audio_sample_rate=audio_sample_rate,
+            frames=frames,
+            images=images,
+            response=_response_block(result),
+        )
     return result
 
 
@@ -1431,6 +1624,39 @@ def decide_with_gemma(
         "asrRan": asr_ran,
         "asrLatencyS": asr_latency_s,
     }
+    # ADAAAA-7155 Incr A: finalize the per-window analysis block. On the gemma
+    # path the prompt/dataItems were captured inside `ask`; here we sync the full
+    # response (incl. the just-computed audioContext + runningSummary) and the
+    # ASR latency. On the rule-fallback path `ask` returned None, so we build the
+    # analysis from the deterministic rule inputs directly (records what the
+    # fallback was fed; prompt is empty — no model call happened).
+    _an = result.get("analysis")
+    if isinstance(_an, dict):
+        _an["response"] = _response_block(result)
+        ac = result["audioContext"]
+        if isinstance(_an.get("audio"), dict):
+            _an["audio"]["path"] = ac.get("path", "none")
+        if isinstance(_an.get("asr"), dict):
+            _an["asr"]["latencyS"] = asr_latency_s
+    else:
+        result["analysis"] = _window_analysis(
+            prompt="",
+            event_type=event_type,
+            evidence=evidence,
+            game_hint=game_hint,
+            n_frames=len(frames or []),
+            n_images=len(images or []),
+            send_audio=False,
+            transcript=transcript,
+            story_so_far=story_so_far,
+            audio_sample_rate=audio_sample_rate,
+            frames=frames,
+            images=images,
+            response=_response_block(result),
+        )
+        # rule fallback: no model call, so no audio channel reached the model
+        if isinstance(result["analysis"].get("audio"), dict):
+            result["analysis"]["audio"]["path"] = "none"
     log.debug(
         "gemma decide event=%s source=%s is_highlight=%s score=%s outcome=%s audio_path=%s",
         event_type, result.get("source"), result.get("isHighlight"),
@@ -1676,18 +1902,16 @@ def ask_group(
         return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
 
     content: list = [i for i in (_img(p) for p in frames + images) if i is not None]
-    content.append(
-        {
-            "type": "text",
-            "text": build_group_prompt(
-                candidates,
-                game_hint,
-                n_frames=len(frames),
-                has_audio=bool(send_audio or transcript),
-                transcript=transcript,
-            ),
-        }
+    # ADAAAA-7155 Incr A: capture the group prompt once for the request AND the
+    # analysis block recorded on each returned verdict.
+    group_prompt = build_group_prompt(
+        candidates,
+        game_hint,
+        n_frames=len(frames),
+        has_audio=bool(send_audio or transcript),
+        transcript=transcript,
     )
+    content.append({"type": "text", "text": group_prompt})
     if send_audio:
         content.append(
             {
@@ -1717,6 +1941,29 @@ def ask_group(
     result = parse_verdicts(text)
     if result is None:
         log.error("gemma group reply unparseable candidates=%d reply=%r", len(candidates), text[:500])
+        return result
+    # ADAAAA-7155 Incr A: capture the per-window analysis on each returned
+    # verdict (one shared group prompt + group dataItems; per-verdict response).
+    for item in result:
+        if isinstance(item, dict):
+            item["analysis"] = _window_analysis(
+                prompt=group_prompt,
+                event_type="GROUP",
+                evidence={},
+                game_hint=game_hint,
+                data_items=_build_group_data_items(
+                    candidates, game_hint, len(frames), len(images),
+                    bool(send_audio or transcript), transcript,
+                ),
+                n_frames=len(frames),
+                n_images=len(images),
+                send_audio=send_audio,
+                transcript=transcript,
+                audio_sample_rate=audio_sample_rate,
+                frames=frames,
+                images=images,
+                response=_response_block(item),
+            )
     return result
 
 

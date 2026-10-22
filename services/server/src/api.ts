@@ -24,6 +24,7 @@ import {
   type PipelineClient,
 } from "./analyzer";
 import type { SignalGateOptions } from "./observe-loop";
+import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractBurstFrames, extractFrames } from "./ffmpeg";
@@ -600,6 +601,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // a real highlight signal (recall-safe). Default off.
         observeSignalGate: cfg.observeSignalGate,
         observeSignalGateOpts: buildObserveSignalGateOpts(cfg),
+        // ADAAAA-7152 (Gap 2): per-camera pitch calibration forwarded to the
+        // perceive session via the `configure` control so perceive emits a REAL
+        // goalCrossed/ballOutcome attestation. Resolved per camera; absent =>
+        // no `configure` sent (uncalibrated, recall-safe, unchanged).
+        perceiveCalibration: resolvePerceiveCalibration(cfg.perceiveCalibration, (job as any).cameraId),
         // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
         onDecision: persistDecision,
         // ADAAAA-7028 Inc 2: ingest the decide audit descriptor durably.
@@ -832,6 +838,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       perceiveCadence: cfg.perceiveCadence,
       perceiveQuietStride: cfg.perceiveQuietStride,
       perceiveHotAfterS: cfg.perceiveHotAfterS,
+      // ADAAAA-7152 (Gap 2): per-camera pitch calibration (homography 3x3 +
+      // goalLine) the server forwards to the perceive session via the
+      // `configure` control so perceive emits a REAL goalCrossed/ballOutcome
+      // attestation (a `scoring_play` accept). Resolved from the server's
+      // `perceiveCalibration` map by camera id; absent => no `configure` sent,
+      // the session stays uncalibrated (recall-safe, unchanged). Never
+      // fabricated — only explicit per-camera config is carried here.
+      perceiveCalibration: resolvePerceiveCalibration(cfg.perceiveCalibration, (job as any).cameraId),
       // Increment D (ADAAAA-6467): the what-to-track planner's warm-up window
       // + out-of-band re-check cadence on the VOD pass (cap 8).
       warmupSeconds: cfg.warmupSeconds,

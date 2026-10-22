@@ -66,6 +66,46 @@ describe("buildSections (ADAAAA-6851 Inc 3)", () => {
     expect(sections[2].decideNotes[0].status).toBe("rejected");
   });
 
+  it("attaches the per-window analysis + confirm record to the decide note (ADAAAA-7156 Incr B)", () => {
+    const observations = [obs(0, 0.2), obs(1, 2.9)];
+    const candidates = [
+      cand({
+        timestamp: 2.1,
+        eventType: "GOAL",
+        reason: "ball in net",
+        analysis: {
+          prompt: "You are a highlight judge...",
+          dataItems: [{ type: "candidate", label: "Candidate event type", value: "GOAL" }],
+          frames: [{ seq: 0, uri: "/jobs/job-1/frames/0" }],
+          images: [],
+          response: { isHighlight: true, score: 92, outcome: "scoring_play", reasoning: "ball crossed", evidenceAttested: ["ball in net"] },
+        },
+        confirm: {
+          request: {
+            prompt: "You are a highlight CONFIRMATION judge...",
+            dataItems: [{ type: "confirm", label: "Stage-1 verdict", value: "scoring_play" }],
+            frames: [{ seq: 0, uri: "" }],
+            keyframes: [{ seq: 1, uri: "" }],
+            trajectories: [],
+            audioLevels: [0.2, 0.8],
+          },
+          decision: { goalConfirmed: "confirmed_goal", confidence: 0.95, stage1Disagreed: false, outcome: "scoring_play" },
+        },
+      }),
+      cand({ timestamp: 8.6, eventType: "KILL", isHighlight: false, status: "rejected", outcome: "not_highlight" }),
+    ];
+    const sections = buildSections(observations, candidates, "job-1");
+    const note = sections[0].decideNotes[0];
+    expect(note.analysis?.prompt).toContain("highlight judge");
+    expect(note.analysis?.dataItems[0].value).toBe("GOAL");
+    expect(note.analysis?.response?.reasoning).toContain("ball crossed");
+    expect(note.confirm?.decision?.goalConfirmed).toBe("confirmed_goal");
+    // A candidate with no capture (legacy) leaves analysis/confirm undefined.
+    // Sections are sparse (no content at t=3..8 -> index 1 is the t=8.6 bucket).
+    expect(sections[1].decideNotes[0].analysis).toBeUndefined();
+    expect(sections[1].decideNotes[0].confirm).toBeUndefined();
+  });
+
   it("leaves frames metadata-only and preserves track boxes per frame", () => {
     const observations = [obs(0, 0.5, [track("t1", 0), track("t2", 1, { label: "ball", kind: "ball" })])];
     const sections = buildSections(observations, [], "job-1");

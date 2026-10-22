@@ -926,6 +926,7 @@ def handle_control(state, msg: dict) -> dict:
         # Decide-leg I2 (ADAAAA-6359): optional goal-line plane spec (field
         # coords) so perceive can emit goalCrossed / ballOutcome. A bad value is
         # ignored (KEEP the existing spec) and reported, never fatal.
+        if isinstance(msg.get("goalLine"), dict):
             spec = GoalLineSpec.from_dict(msg["goalLine"])
             if spec is None:
                 return {"type": "ack", "ok": False, "cmd": "configure", "error": "bad goalLine: need {axis, position, mouthMin, mouthMax}"}

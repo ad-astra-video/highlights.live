@@ -682,6 +682,112 @@ export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
 // near-miss, not-highlight) so the full-screen Job detail can show the decide
 // LLM's note on EVERY trigger, not just accepted clips. All types below are
 // additive: no existing required field changed, no contract version bump.
+
+// --- per-window LLM analysis payload (ADAAAA-7137 / ADAAAA-7155 Increment A) -
+// Observability/inspectability ONLY: exactly what was fed to the decide LLM for
+// a window and what it returned. Additive + optional everywhere; no contract
+// version bump, no inference change. Frames/images stay lazy (refs only, image
+// bytes delivered via the existing /frames/:seq / frames delivery). The `prompt`
+// is the exact text handed to the model; `dataItems` is an ordered structured
+// view of the same context so the UI can render each item independently.
+export const AnalysisDataItemSchema = z.object({
+  /** Category of the item: candidate | game | tracking | ocr | scoreboard |
+   * goal_line | reaction | audio_level | detections | asr | frames | images |
+   * audio | summary. */
+  type: z.string(),
+  /** Human label for the UI (e.g. "Track count", "Goal-line ground-truth"). */
+  label: z.string(),
+  /** The value fed for this item (string / number / boolean; null when absent). */
+  value: z.union([z.string(), z.number(), z.boolean()]).nullable().optional(),
+});
+export type AnalysisDataItem = z.infer<typeof AnalysisDataItemSchema>;
+
+/** A lazy media ref (image bytes stay out-of-band via the existing frame delivery). */
+export const AnalysisMediaRefSchema = z.object({
+  seq: z.number().int().min(0),
+  uri: z.string(),
+});
+export type AnalysisMediaRef = z.infer<typeof AnalysisMediaRefSchema>;
+
+/** Which audio channel actually reached the model for this window. */
+export const AnalysisAudioSchema = z.object({
+  uri: z.string().optional(),
+  sampleRate: z.number().int().positive().optional(),
+  /** native input_audio bytes, the ASR->text transcript, or none. */
+  path: z.enum(["input_audio", "asr_text", "none"]).optional(),
+});
+export type AnalysisAudio = z.infer<typeof AnalysisAudioSchema>;
+
+/** ASR (audio->text) context block fed as the transcript. */
+export const AnalysisAsrSchema = z.object({
+  transcript: z.string().optional(),
+  url: z.string().optional(),
+  latencyS: z.number().min(0).optional(),
+});
+export type AnalysisAsr = z.infer<typeof AnalysisAsrSchema>;
+
+/** The full decide LLM response, retained at the decide boundary (not just the
+ * note fields JobCandidate already stores). */
+export const AnalysisResponseSchema = z.object({
+  isHighlight: z.boolean().optional(),
+  score: z.number().min(0).max(100).optional(),
+  eventType: z.string().optional(),
+  reason: z.string().optional(),
+  outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
+  nearMiss: z.boolean().optional(),
+  reasoning: z.string().optional(),
+  verdict: z.unknown().optional(),
+  evidenceAttested: z.array(z.string()).default([]),
+  audioContext: z.unknown().optional(),
+  runningSummary: z.string().optional(),
+  source: z.string().optional(),
+});
+export type AnalysisResponse = z.infer<typeof AnalysisResponseSchema>;
+
+/** Per-window capture of exactly what was fed to the decide LLM + what it returned. */
+export const WindowAnalysisSchema = z.object({
+  /** The exact prompt text sent to the model for this window. */
+  prompt: z.string(),
+  /** Ordered structured list of the context items fed to the model. */
+  dataItems: z.array(AnalysisDataItemSchema).default([]),
+  /** Lazy refs to the temporal frame sequence shown (1 FPS). */
+  frames: z.array(AnalysisMediaRefSchema).default([]),
+  /** Lazy refs to the context crop images. */
+  images: z.array(AnalysisMediaRefSchema).default([]),
+  audio: AnalysisAudioSchema.optional(),
+  asr: AnalysisAsrSchema.optional(),
+  response: AnalysisResponseSchema.optional(),
+});
+export type WindowAnalysis = z.infer<typeof WindowAnalysisSchema>;
+
+/** Stage-2 confirmation-pass record (request summary + decision), attached to a
+ * candidate or a section's decide-note. Additive optional. */
+export const ConfirmRecordSchema = z.object({
+  /** The confirm request: exact prompt + the context items it was fed. */
+  request: z.object({
+    prompt: z.string(),
+    dataItems: z.array(AnalysisDataItemSchema).default([]),
+    frames: z.array(AnalysisMediaRefSchema).default([]),
+    keyframes: z.array(AnalysisMediaRefSchema).default([]),
+    trajectories: z.array(z.string()).default([]),
+    opticalFlowMagnitude: z.number().min(0).optional(),
+    audioLevels: z.array(z.number()).default([]),
+    transcript: z.string().optional(),
+    stage1: z.unknown().optional(),
+  }),
+  /** The ConfirmDecision: goalConfirmed / confidence / evidence / stage1Disagreed / reason. */
+  decision: z.object({
+    enabled: z.boolean().optional(),
+    goalConfirmed: z.enum(["confirmed_goal", "near_miss", "not_goal"]).nullable().optional(),
+    confidence: z.number().min(0).max(1).optional(),
+    reason: z.string().optional(),
+    evidence: z.unknown().optional(),
+    stage1Disagreed: z.boolean().optional(),
+    outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
+  }).default({}),
+});
+export type ConfirmRecord = z.infer<typeof ConfirmRecordSchema>;
+
 export const JobCandidateSchema = z.object({
   id: z.string(),
   jobId: z.string(),
@@ -709,6 +815,15 @@ export const JobCandidateSchema = z.object({
   // its provenance with no re-inference. Additive optional — absent on legacy
   // rows (which predate trigger persistence).
   trigger: HighlightTriggerSchema.optional(),
+  // ADAAAA-7155 Increment A: the per-window LLM analysis payload (exact prompt /
+  // ordered dataItems / media refs / full response) for this candidate's decide
+  // read. Additive optional — absent on legacy rows. Observability only.
+  analysis: WindowAnalysisSchema.optional(),
+  // ADAAAA-7156 Increment B: the Stage-2 confirmation-pass record (request
+  // context summary + ConfirmDecision) for this candidate, set when the
+  // goal-type candidate ran the decide /confirm deep frame dive. Additive
+  // optional — absent on non-confirm / legacy rows. Observability only.
+  confirm: ConfirmRecordSchema.optional(),
   createdAt: z.string(),
 });
 export type JobCandidate = z.infer<typeof JobCandidateSchema>;
@@ -739,6 +854,11 @@ export const DecideNoteSchema = z.object({
   isHighlight: z.boolean(),
   status: z.enum(["accepted", "suppressed", "rejected"]),
   reason: z.string().optional(),
+  // ADAAAA-7155 Increment A: the per-window analysis (prompt / dataItems /
+  // media refs / full response) + the Stage-2 confirm record for this
+  // section's decide note. Additive optional — absent on legacy notes.
+  analysis: WindowAnalysisSchema.optional(),
+  confirm: ConfirmRecordSchema.optional(),
 });
 export type DecideNote = z.infer<typeof DecideNoteSchema>;
 

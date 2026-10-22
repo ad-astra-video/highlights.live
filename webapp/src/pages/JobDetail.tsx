@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Play, Check, X, Loader2 } from "lucide-react";
+import { ArrowLeft, Play, Check, X, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { api, getToken } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { VideoClip } from "../components/VideoClip";
+import { WindowAnalysisPanel } from "../components/WindowAnalysis";
 import {
   fetchJobDetail,
   isJobInFlight,
@@ -15,6 +16,7 @@ import {
   type JobDetailHighlight,
   type FrameSection,
   type JobDetailFrame,
+  type DecideNote,
 } from "../lib/jobDetail";
 import {
   drawFrameWithBoxes,
@@ -102,13 +104,50 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
 interface SectionBlockProps {
   section: FrameSection;
   token: string | null;
+  jobId: string;
   selectMode: boolean;
   selectedSeqs: Set<number>;
   onFrameClick: (seq: number) => void;
 }
 
+/** One expandable decide-note banner: the one-line summary plus an "Inspect
+ *  window" toggle that opens the per-window LLM inspection panel (ADAAAA-7157
+ *  Increment C). Read-only over the job-detail API data. */
+function DecideNoteBanner({ note, jobId }: { note: DecideNote; jobId: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      className={`rounded-lg border px-3 py-2 text-xs ${
+        note.status === "accepted"
+          ? "border-green/40 bg-green/10 text-green"
+          : note.status === "suppressed"
+          ? "border-yellow/40 bg-yellow/10 text-yellow"
+          : "border-mut/30 bg-mut/10 text-slate-ink"
+      }`}
+      data-decide-note
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1 text-left"
+        data-decide-note-toggle
+        aria-expanded={open}
+      >
+        <span className="shrink-0">{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</span>
+        <span className="font-bold">Decide @ T+{note.timestamp.toFixed(1)}s</span>
+        <span className="ml-1">— {note.eventType} · {Math.round(note.score)}{note.outcome ? ` · ${note.outcome}` : ""} · {note.status}</span>
+        <span className="ml-auto rounded border border-mut/30 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-mut" data-inspect-label>
+          Inspect window
+        </span>
+      </button>
+      {note.reason && <div className="mt-0.5 text-mut">{note.reason}</div>}
+      {open && <WindowAnalysisPanel analysis={note.analysis} confirm={note.confirm} jobId={jobId} />}
+    </div>
+  );
+}
+
 /** A 3 s section: frames filmstrip (with perceive boxes + labels) + decide-note banners. */
-function SectionBlock({ section, token, selectMode, selectedSeqs, onFrameClick }: SectionBlockProps) {
+function SectionBlock({ section, token, jobId, selectMode, selectedSeqs, onFrameClick }: SectionBlockProps) {
   return (
     <section className="rounded-xl border border-purple/30 bg-black/30 p-3" data-frame-section data-section-index={section.index}>
       <div className="mb-2 flex items-center justify-between">
@@ -118,21 +157,7 @@ function SectionBlock({ section, token, selectMode, selectedSeqs, onFrameClick }
       {section.decideNotes.length > 0 && (
         <div className="mb-2 flex flex-col gap-1">
           {section.decideNotes.map((n, i) => (
-            <div
-              key={i}
-              className={`rounded-lg border px-3 py-2 text-xs ${
-                n.status === "accepted"
-                  ? "border-green/40 bg-green/10 text-green"
-                  : n.status === "suppressed"
-                  ? "border-yellow/40 bg-yellow/10 text-yellow"
-                  : "border-mut/30 bg-mut/10 text-slate-ink"
-              }`}
-              data-decide-note
-            >
-              <span className="font-bold">Decide @ T+{n.timestamp.toFixed(1)}s</span>
-              <span className="ml-1">— {n.eventType} · {Math.round(n.score)}{n.outcome ? ` · ${n.outcome}` : ""} · {n.status}</span>
-              {n.reason && <div className="mt-0.5 text-mut">{n.reason}</div>}
-            </div>
+            <DecideNoteBanner key={i} note={n} jobId={jobId} />
           ))}
         </div>
       )}
@@ -844,6 +869,7 @@ export function JobDetail() {
                   key={s.index}
                   section={s}
                   token={token}
+                  jobId={id}
                   selectMode={selectMode}
                   selectedSeqs={new Set(multiSeqs)}
                   onFrameClick={onFrameClick}

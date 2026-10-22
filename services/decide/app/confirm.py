@@ -45,7 +45,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger("highlights.decide")
 
-from .gemma import DEFAULT_GEMMA_URL, _as_text, _strip_json_fence, _asr_url, transcribe_audio  # noqa: E402
+from .gemma import (  # noqa: E402
+    DEFAULT_GEMMA_URL,
+    _as_text,
+    _strip_json_fence,
+    _asr_url,
+    _media_refs,
+    transcribe_audio,
+)
 
 # The closed confirmation taxonomy (mirror of the plan: confirmed_goal |
 # near_miss | not_goal).
@@ -209,6 +216,12 @@ class ConfirmDecision(BaseModel):
     corroborationSource: Optional[str] = None
     corroborationRequired: bool = False
     decision: dict = Field(default_factory=dict)
+    # ADAAAA-7155 Increment A: the confirm request/response analysis — the exact
+    # confirm prompt, the request context summary (frames / keyframes /
+    # trajectories / optical-flow / audio envelope / transcript / stage-1) and
+    # the ConfirmDecision — so the server can record the confirm task verbatim.
+    # Additive optional; absent on passthroughs that never built a prompt.
+    analysis: Optional[dict] = Field(default=None)
 
 
 # --- prompt -----------------------------------------------------------------
@@ -230,6 +243,109 @@ def _trajectory_lines(trajectories: list) -> list[str]:
         line = f"- {label}" + (f" (track {tid})" if tid else "") + " path: " + ", ".join(pts)
         out.append(line)
     return out
+
+
+def _confirm_data_items(
+    event_type: str,
+    stage1: dict,
+    n_frames: int,
+    n_keyframes: int,
+    trajectories: list,
+    optical_flow: float,
+    flow_magnitudes: list,
+    audio_levels: list,
+    transcript: str,
+    ball_outcome: Optional[str],
+    goal_crossed: Optional[bool],
+    scoreboard_changed: bool,
+) -> list:
+    """Ordered, structured view of the confirm-pass request context (ADAAAA-7155
+    Incr A): what the deep-frame-dive was fed, so it can be rendered item by
+    item. Mirrors build_confirm_prompt's rendered lines."""
+    items: list = []
+
+    def add(typ: str, label: str, value) -> None:
+        items.append({"type": typ, "label": label, "value": value})
+
+    s1 = stage1 or {}
+    add("candidate", "Candidate event type", (event_type or "").upper() or "GOAL")
+    add("confirm", "Stage-1 verdict outcome", _as_text(s1.get("outcome")) or "unknown")
+    add("confirm", "Stage-1 isHighlight", bool(s1.get("isHighlight")))
+    add("confirm", "Stage-1 reason", _as_text(s1.get("reason")) or "none given")
+    add("frames", "Dense frame window (~10-15 fps)", n_frames)
+    add("frames", "Precise keyframes (pre / event / post)", n_keyframes)
+    if ball_outcome:
+        cv = f"ballOutcome={ball_outcome}"
+        if goal_crossed is not None:
+            cv += f", goalCrossed={goal_crossed}"
+    else:
+        cv = "not available"
+    add("corroboration", "Independent corroboration (INPUT ONLY, never a gate)", cv)
+    add("corroboration", "Scoreboard change", "observed" if scoreboard_changed else "none observed")
+    if optical_flow:
+        add("motion", "Motion / optical-flow magnitude", round(float(optical_flow), 2))
+    if flow_magnitudes:
+        add("motion", "Optical-flow magnitude curve",
+            [round(float(v), 2) for v in (flow_magnitudes or [])[:32] if isinstance(v, (int, float))])
+    if audio_levels:
+        add("audio_level", "Audio-energy envelope",
+            [round(float(v), 2) for v in (audio_levels or [])[:32] if isinstance(v, (int, float))])
+    tt = (transcript or "").strip()
+    if tt:
+        add("asr", "Audio commentary transcript (ASR, fallible)", tt[:600])
+    for ln in _trajectory_lines(trajectories):
+        add("trajectory", "Object / ball trajectory track", ln)
+    return items
+
+
+def _confirm_analysis(
+    prompt: str,
+    event_type: str,
+    stage1: dict,
+    n_frames: int,
+    n_keyframes: int,
+    trajectories: list,
+    optical_flow: float,
+    flow_magnitudes: list,
+    audio_levels: list,
+    transcript: str,
+    ball_outcome: Optional[str],
+    goal_crossed: Optional[bool],
+    scoreboard_changed: bool,
+    frames: list,
+    keyframes: list,
+    decision: dict,
+) -> dict:
+    """Assemble the ConfirmRecord-shaped analysis block (request summary +
+    decision) for a deep-frame-dive confirm task (ADAAAA-7155 Incr A)."""
+    flow_nums = [round(float(v), 2) for v in (flow_magnitudes or [])[:32] if isinstance(v, (int, float))]
+    level_nums = [round(float(v), 2) for v in (audio_levels or [])[:32] if isinstance(v, (int, float))]
+    return {
+        "request": {
+            "prompt": prompt,
+            "dataItems": _confirm_data_items(
+                event_type, stage1, n_frames, n_keyframes, trajectories,
+                optical_flow, flow_magnitudes, audio_levels, transcript,
+                ball_outcome, goal_crossed, scoreboard_changed,
+            ),
+            "frames": _media_refs(frames),
+            "keyframes": _media_refs(keyframes),
+            "trajectories": [ln for ln in _trajectory_lines(trajectories)],
+            "opticalFlowMagnitude": round(float(optical_flow), 2) if optical_flow else 0.0,
+            "audioLevels": level_nums,
+            "transcript": (transcript or "").strip(),
+            "stage1": stage1,
+        },
+        "decision": {
+            "enabled": bool(decision.get("enabled")),
+            "goalConfirmed": decision.get("goalConfirmed"),
+            "confidence": decision.get("confidence", 0.0),
+            "reason": decision.get("reason", ""),
+            "evidence": decision.get("evidence"),
+            "stage1Disagreed": bool(decision.get("stage1Disagreed")),
+            "outcome": (decision.get("decision") or {}).get("outcome"),
+        },
+    }
 
 
 def build_confirm_prompt(
@@ -587,7 +703,7 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
     parsed = parse_confirm(raw) if raw else None
     if parsed is None:
         log.error("confirm reply unparseable event=%s reply=%r", req.get("eventType"), (raw or "")[:500])
-        return _passthrough(req, enabled=True, reason="confirmation pass unparseable (kept Stage-1)")
+        return _passthrough(req, enabled=True, reason="confirmation pass unparseable (kept Stage-1)", prompt=prompt)
 
     goal = parsed.get("goalConfirmed", "")
     comment = _as_text(parsed.get("reason"))
@@ -626,6 +742,27 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         "corroborationRequired": confirm_requires_corroboration(),
         "decision": decision,
     }
+    # ADAAAA-7155 Incr A: record the confirm request/response analysis (exact
+    # prompt + request context summary + decision) so the server can record the
+    # confirm task verbatim. Observability only.
+    resp["analysis"] = _confirm_analysis(
+        prompt=prompt,
+        event_type=req.get("eventType", ""),
+        stage1=stage1,
+        n_frames=len(frames),
+        n_keyframes=len(keyframes),
+        trajectories=req.get("trajectories") or [],
+        optical_flow=float(req.get("opticalFlowMagnitude") or 0.0),
+        flow_magnitudes=req.get("flowMagnitudes") or [],
+        audio_levels=req.get("audioLevels") or [],
+        transcript=transcript,
+        ball_outcome=req.get("ballOutcome"),
+        goal_crossed=req.get("goalCrossed"),
+        scoreboard_changed=bool(req.get("scoreBoardChanged")),
+        frames=frames,
+        keyframes=keyframes,
+        decision=resp,
+    )
     log.info(
         "confirm pass session=%s event=%s goal_confirmed=%s confidence=%.2f disagree=%s corroborated=%s source=%s",
         req.get("sessionId"), req.get("eventType"), goal, resp["confidence"], resp["stage1Disagreed"],
@@ -634,10 +771,11 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
     return resp
 
 
-def _passthrough(req: dict, *, enabled: bool, reason: str) -> dict:
+def _passthrough(req: dict, *, enabled: bool, reason: str, prompt: str = "") -> dict:
     """No-op result: the Stage-1 verdict passes through unchanged."""
-    stage1 = dict((req or {}).get("stage1") or {})
-    return {
+    req = req or {}
+    stage1 = dict(req.get("stage1") or {})
+    resp = {
         "enabled": enabled,
         "goalConfirmed": None,
         "confidence": 0.0,
@@ -646,3 +784,24 @@ def _passthrough(req: dict, *, enabled: bool, reason: str) -> dict:
         "stage1Disagreed": False,
         "decision": stage1,
     }
+    # ADAAAA-7155 Incr A: record what the confirm task was fed (or that it never
+    # built a prompt on the disabled path) so the fallback is also inspectable.
+    resp["analysis"] = _confirm_analysis(
+        prompt=prompt,
+        event_type=req.get("eventType", ""),
+        stage1=stage1,
+        n_frames=len(req.get("frames") or []),
+        n_keyframes=len(req.get("keyframes") or []),
+        trajectories=req.get("trajectories") or [],
+        optical_flow=float(req.get("opticalFlowMagnitude") or 0.0),
+        flow_magnitudes=req.get("flowMagnitudes") or [],
+        audio_levels=req.get("audioLevels") or [],
+        transcript="",
+        ball_outcome=req.get("ballOutcome"),
+        goal_crossed=req.get("goalCrossed"),
+        scoreboard_changed=bool(req.get("scoreBoardChanged")),
+        frames=req.get("frames") or [],
+        keyframes=req.get("keyframes") or [],
+        decision=resp,
+    )
+    return resp
