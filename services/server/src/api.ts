@@ -811,7 +811,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // loop; default 500ms base / 8000ms cap).
       sessionRetryBackoffMs: cfg.vodSessionRetryBackoffMs,
       sessionRetryBackoffMaxMs: cfg.vodSessionRetryBackoffMaxMs,
-      // Detail-first knobs (ADAAAA-4954): deeper than live (2 fps / 640p / 24
+      // Detail-first knobs (ADAAAA-4954): deeper than live (3 fps / 640p / 24
       // frame window). Opt into the temporal frames[] + audio decide payload.
       sampleFps: cfg.vodDetailFps,
       frameScale: cfg.vodFrameScale,
