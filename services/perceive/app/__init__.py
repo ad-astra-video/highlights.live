@@ -32,6 +32,7 @@ from .session import RECENT_FRAMES, SessionRegistry
 from .tracker import MAX_TRACKS, foreground_blobs
 from .florence import capability, get_detector, record_analyze, resolve_vocabulary
 from .sam_tracker import HybridTracker
+from .player_id import identify_player_by_number
 from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
 from .goal_plane import GoalLineDetector, GoalLineSpec
@@ -1044,6 +1045,43 @@ def handle_control(state, msg: dict) -> dict:
         label = msg.get("label") or ""
         tr = state.tracker.seed(tuple(bbox), kind=kind, label=label, slot=slot, selected=True)
         return {"type": "ack", "ok": True, "cmd": ctype, "slot": tr.slot, "trackId": tr.track_id, "selected": True}
+    if ctype in ("track-player", "track-player-by-number"):
+        # ADAAAA-7218 (Increment C): player-by-number identification + SAM3
+        # handoff. Gated behind an explicit user request ("track player #9");
+        # it NEVER runs in the default per-frame path (one-shot vision cost).
+        # Run one-shot player-by-number identification on the anchor frame and
+        # seed THAT player's SAM slot (selected -> surfaced + accuracy tracked);
+        # SAM propagates from there, player detection is not re-run per frame.
+        number = msg.get("number", msg.get("playerNumber"))
+        if number is None:
+            return {"type": "ack", "ok": False, "cmd": ctype, "error": "number required (jersey number)"}
+        if state.last_rgb is None:
+            return {"type": "ack", "ok": False, "cmd": ctype, "error": "no frame sampled yet (anchor frame required)"}
+        try:
+            requested = int(number)
+        except (TypeError, ValueError):
+            return {"type": "ack", "ok": False, "cmd": ctype, "error": f"bad jersey number: {number!r}"}
+        detector = get_detector(state.lora_ref or None)
+        matched = identify_player_by_number(state.last_rgb, requested, detector)
+        if matched is None:
+            return {"type": "ack", "ok": False, "cmd": ctype, "error": f"no player with number {requested} identified on the anchor frame"}
+        bbox = tuple(matched["bbox"])
+        kind = "player"
+        # Surface the matched player's identity on the box the operator sees:
+        # request "track player #9" -> the track carries label "player #9".
+        label = f"player #{requested}"
+        tr = state.tracker.seed(bbox, kind=kind, label=label, selected=True)
+        state.requested_player_number = requested
+        return {
+            "type": "ack",
+            "ok": True,
+            "cmd": ctype,
+            "number": requested,
+            "slot": tr.slot,
+            "trackId": tr.track_id,
+            "selected": True,
+            "bbox": list(bbox),
+        }
     if ctype == "evict":
         slot = msg.get("slot")
         capacity = getattr(state.tracker, "capacity", MAX_TRACKS)
