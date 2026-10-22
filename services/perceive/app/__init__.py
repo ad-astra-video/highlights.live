@@ -763,6 +763,27 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 ocr_lines = [verdict.score_text]
         obs["ocr"] = ocr_lines
         score = parse_ocr_score(ocr_lines, roi=roi)
+        # ADAAAA-7190: the auto-discovered region-of-interest crop can miss a
+        # numeric scorebug that sits just outside the tight region (observed live
+        # on an El-Clasico-style score overlay where the ROI crop OCR read only
+        # the "EL CLASICO" branding column while whole-frame OCR read
+        # "REAL MADRID 3 - 4 FC BARCELONA"). When a scoreboard is known visible
+        # but the ROI-scoped crop produced no parseable score, fall back to a
+        # whole-frame OCR and parse the score from it, so a real score delta is
+        # still detected instead of silently dropping the corroboration. Bounded
+        # relaxation: only on frames where the visibility gate already deemed a
+        # scoreboard visible, and `parse_ocr_score` still requires a clean
+        # two-integer "N - M" line (a branding / non-score read never qualifies).
+        if score is None and visible:
+            try:
+                full_ocr = detector.ocr(state.last_rgb) or []
+                alt = parse_ocr_score(full_ocr)  # whole-frame, no ROI filter
+            except Exception as e:  # noqa: BLE001
+                log.warning("scoreboard whole-frame OCR fallback skipped frame %s: %s", seq, e)
+            else:
+                if alt is not None:
+                    score = alt
+                    obs["ocr"] = full_ocr
         state.scoreboard_tracker.record(timestamp, score)
         if state.scoreboard_tracker.changed(timestamp):
             obs["scoreBoardChanged"] = True
