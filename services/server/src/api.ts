@@ -689,13 +689,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               // and never a decide trigger (ADAAAA-7008). The decide-observer
               // drives decide on the ~3 s cadence regardless, so the audio
               // candidate (if any) is provenance-only now — no candidate-gated
-              // decide.
-              await adapter.postAudio(initial.sessionId, {
+              // decide. The bounded (t, energy, baseline) inspection series also
+              // rides the response (ADAAAA-7255) for the graph.
+              const res = await adapter.postAudio(initial.sessionId, {
                 seq: chunk.seq,
                 timestamp: chunk.timestamp,
                 samples: chunk.samples,
                 streamId: job.id,
               });
+              if (res?.series?.length) shared.setAudioSeries(res.series);
             } catch {
               /* gate is best-effort — keep going */
             }
@@ -1134,13 +1136,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             // and never a decide trigger (ADAAAA-7008). The decide-observer
             // drives decide on the ~3 s cadence regardless, so the audio
             // candidate (if any) is provenance-only now — no candidate-gated
-            // decide.
-            await adapter.postAudio(initial.sessionId, {
+            // decide. The bounded (t, energy, baseline) inspection series also
+            // rides the response (ADAAAA-7255) for the graph.
+            const res = await adapter.postAudio(initial.sessionId, {
               seq: chunk.seq,
               timestamp: chunk.timestamp,
               samples: chunk.samples,
               streamId: jobId,
             });
+            if (res?.series?.length) shared.setAudioSeries(res.series);
           } catch {
             /* gate best-effort — keep going */
           }

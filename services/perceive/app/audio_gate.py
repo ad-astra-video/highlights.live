@@ -112,6 +112,11 @@ class AudioEnergyGate:
     def __post_init__(self) -> None:
         self.baseline: float | None = None  # rolling percentile ambient floor
         self._history: deque[tuple[float, float]] = deque()  # (ts, energy) in window
+        # ADAAAA-7255: bounded per-chunk (ts, energy, baseline) inspection series
+        # for the web request-inspection energy-vs-baseline graph. Bounded to the
+        # same rolling lookback window as ``_history`` so it never grows on a long
+        # stream. Purely passive capture — the trigger logic below is unchanged.
+        self._series: deque[tuple[float, float, float]] = deque()  # (ts, energy, baseline)
         self._elevated: int = 0             # consecutive elevated-frame count
         self._swell_energy_sum: float = 0.0
         self._peak: float = 0.0
@@ -153,6 +158,30 @@ class AudioEnergyGate:
         else:
             self.baseline = max(p, cfg.baseline_floor)
 
+    def _capture_series(self, ts: float, energy: float) -> None:
+        """Record one (ts, energy, baseline) inspection point (ADAAAA-7255).
+
+        Bounded to the same rolling lookback window as ``_history`` so it never
+        grows on a long stream. The baseline recorded is the gate's ambient
+        percentile at this chunk (floored), so the web graph shows exactly the
+        signal the gate compares against. Passive — never affects triggering.
+        """
+        base = self.baseline if self.baseline is not None else energy
+        self._series.append((ts, energy, float(max(base, self.cfg.baseline_floor))))
+        cutoff = ts - self.cfg.lookback_s
+        while self._series and self._series[0][0] < cutoff:
+            self._series.popleft()
+
+    def series_snapshot(self) -> list[dict]:
+        """The bounded per-chunk (t, energy, baseline) inspection series.
+
+        Ordered oldest -> newest, covering at most the last ``lookback_s``
+        seconds of the stream. Each point is ``{"t": ts, "energy": e,
+        "baseline": b}`` (seconds over the stream, both energies 0..1). Pure
+        read of captured state — no recomputation, no inference.
+        """
+        return [{"t": round(ts, 3), "energy": round(e, 6), "baseline": round(b, 6)} for (ts, e, b) in self._series]
+
     def _in_cooldown(self, ts: float) -> bool:
         return (
             self._last_fired_ts is not None
@@ -176,6 +205,7 @@ class AudioEnergyGate:
         e = frame_energy(samples)
         self._history.append((ts, e))
         self._recompute_baseline(ts)
+        self._capture_series(ts, e)
 
         # Disarmed during the calibration window: let the ambient baseline
         # form before we start treating deviations as anomalies.
@@ -246,5 +276,6 @@ class AudioEnergyGate:
         """Clear all state (new session / new stream)."""
         self.baseline = None
         self._history.clear()
+        self._series.clear()
         self._last_fired_ts = None
         self._reset_window()

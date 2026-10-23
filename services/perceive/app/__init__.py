@@ -918,7 +918,7 @@ def _decode_audio(b64: str) -> np.ndarray:
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32)
 
 
-def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> dict | None:
+def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[dict | None, list]:
     """Run one audio chunk through the Stage-A noise-change gate (INC-2).
 
     Pure DSP — NEVER touches the detector / SAM / Gemma (no billed GPU on the
@@ -926,12 +926,18 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> dict |
     AudioSignal evidence (kind, onset ts, firedAt, onsetLatencyS, peakEnergy,
     baselineEnergy) and enqueues it onto any SSE subscribers. It does NOT
     decide a highlight — the decide stage (Gemma) runs later, on candidates.
+
+    ADAAAA-7255: returns the bounded per-chunk ``(t, energy, baseline)``
+    inspection series (oldest -> newest, whole lookback window) alongside the
+    candidate so the inspector can render the energy-vs-baseline graph. The
+    series is captured passively and never affects triggering.
     """
     samples = _decode_audio(samples_b64)
     sig = state.audio_gate.update(samples, ts=timestamp)
     state.audio_seq = seq if seq >= 0 else state.audio_seq + 1
+    series = state.audio_gate.series_snapshot()
     if sig is None:
-        return None
+        return None, series
     # AudioSignalSchema (packages/events) camelCase keys.
     audio = {
         "kind": sig.kind,
@@ -961,7 +967,7 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> dict |
             q.put_nowait(cand)
         except Exception:
             pass
-    return cand
+    return cand, series
 
 
 def handle_control(state, msg: dict) -> dict:
@@ -1221,8 +1227,8 @@ def create_app() -> FastAPI:
         state = registry.get_or_create(sid, req.stream_id)
         if req.stream_id:
             state.stream_id = req.stream_id
-        cand = process_audio(state, req.seq, req.timestamp, req.samples)
-        return {"candidate": cand}
+        cand, series = process_audio(state, req.seq, req.timestamp, req.samples)
+        return {"candidate": cand, "series": series}
 
     @router.get("/events")
     async def events(
