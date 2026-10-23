@@ -5,7 +5,8 @@ import path from "node:path";
 import { JobCandidateSchema, type JobCandidate } from "@highlights/events";
 import { SqliteDb } from "../src/db";
 import { Store, type StoredObservation } from "../src/store";
-import { buildSections, buildTraces, maxTracesForSource, SECTION_WINDOW } from "../src/job-detail";
+import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource, SECTION_WINDOW } from "../src/job-detail";
+import type { WindowAnalysis } from "@highlights/events";
 
 // ADAAAA-6851 Inc 1-3: durable per-frame observations + per-candidate decide
 // notes + composite job-detail builders (section partition / trace aggregation).
@@ -144,6 +145,70 @@ describe("maxTracesForSource", () => {
     expect(maxTracesForSource("browser")).toBe(3);
     expect(maxTracesForSource("file-sim")).toBe(3);
     expect(maxTracesForSource("file")).toBe(8);
+  });
+});
+
+describe("attachWindowAudioUris (ADAAAA-7285)", () => {
+  const analysisFor = (path: "input_audio" | "asr_text" | "none", uri = ""): WindowAnalysis => ({
+    prompt: "You are a highlight judge...",
+    dataItems: [],
+    frames: [],
+    images: [],
+    audio: { path, uri, sampleRate: 16000 },
+    asr: { transcript: path === "none" ? "" : "goal" },
+    response: { evidenceAttested: [] },
+  });
+
+  function buildSectionWith(noteTs: number, analysis: WindowAnalysis | undefined) {
+    const candidate = cand({
+      timestamp: noteTs,
+      eventType: "GOAL",
+      reason: "ball in net",
+      analysis,
+    });
+    return buildSections([obs(0, noteTs)], [candidate], "job-1");
+  }
+
+  it("points a captured-audio window's audio.uri at the on-demand endpoint", () => {
+    const sections = buildSectionWith(12.4, analysisFor("input_audio"));
+    attachWindowAudioUris(sections, "job-1");
+    const a = sections[0].decideNotes[0].analysis!;
+    // [-2s, +3s] around the trigger -> [10.400, 15.400]
+    expect(a.audio?.uri).toBe("/jobs/job-1/windows/audio?start=10.400&end=15.400");
+  });
+
+  it("leaves a silent (path none) window without a bogus URI", () => {
+    const sections = buildSectionWith(12.4, analysisFor("none"));
+    attachWindowAudioUris(sections, "job-1");
+    const a = sections[0].decideNotes[0].analysis!;
+    expect(a.audio?.uri).toBe("");
+  });
+
+  it("clamps the window start at 0 for a trigger near the beginning", () => {
+    const sections = buildSectionWith(0.5, analysisFor("asr_text"));
+    attachWindowAudioUris(sections, "job-1");
+    const a = sections[0].decideNotes[0].analysis!;
+    expect(a.audio?.uri).toBe("/jobs/job-1/windows/audio?start=0.000&end=3.500");
+  });
+
+  it("does not mutate the stored candidate's analysis object (fresh clone)", () => {
+    const analysis = analysisFor("input_audio");
+    const candidate = cand({
+      timestamp: 12.4,
+      eventType: "GOAL",
+      reason: "ball in net",
+      analysis,
+    });
+    const sections = buildSections([obs(0, 12.4)], [candidate], "job-1");
+    attachWindowAudioUris(sections, "job-1");
+    expect(candidate.analysis?.audio?.uri).toBe(""); // stored candidate untouched
+    expect(sections[0].decideNotes[0].analysis?.audio?.uri).toContain("windows/audio");
+  });
+
+  it("leaves legacy windows with no analysis block untouched", () => {
+    const sections = buildSectionWith(12.4, undefined);
+    attachWindowAudioUris(sections, "job-1");
+    expect(sections[0].decideNotes[0].analysis).toBeUndefined();
   });
 });
 

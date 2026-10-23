@@ -26,6 +26,27 @@ export async function probeDuration(ffmpegPath: string, source: string): Promise
   }
 }
 
+/** Whether a media file carries an audio stream. Used at clip-cut time so the
+ * webapp can show the true audio state of the DELIVERED clip (an audible
+ * "has audio" clip vs an explicitly-labeled "no audio captured" clip) rather
+ * than silently implying sound (ADAAAA-7248). Best-effort: any probe failure
+ * returns false (no audio detected) so a cut never hard-fails on the probe. */
+export async function probeHasAudio(ffmpegPath: string, file: string): Promise<boolean> {
+  const ffprobe = ffmpegPath.replace(/ffmpeg([^/]*)$/, "ffprobe$1") || "ffprobe";
+  try {
+    const { stdout } = await exec(ffprobe, [
+      "-v", "error",
+      "-select_streams", "a",
+      "-show_entries", "stream=codec_type",
+      "-of", "csv=p=0",
+      file,
+    ]);
+    return stdout.trim().split("\n").some((l) => l.trim().toLowerCase() === "audio");
+  } catch {
+    return false;
+  }
+}
+
 /** Time window (seconds) to restrict a frame extraction to a sub-range of the
  * source. Omitted bounds mean "from the start" / "to the end". */
 export interface FrameWindow {
@@ -132,6 +153,36 @@ export async function cutClip(
     "-avoid_negative_ts", "make_zero",
     outPath,
   ]);
+}
+
+/** ADAAAA-7285: extract the audio for `[startS, startS + durationS]` of a job
+ * source recording as a mono 16 kHz 16-bit PCM WAV Buffer. Used to serve a
+ * per-window audio URI so the analysis-window player actually plays.
+ * `-ss` before `-i` fast-seeks at the demuxer; `-t` after `-i` bounds the
+ * decoded duration from the seek point (mirrors `cutClip`). `-map 0:a:0?`
+ * tolerates a source with no audio stream (yields no audio, not a hard fail).
+ * Throws on a decode/read failure — the caller maps that to 404 so a
+ * missing/silent source never yields a bogus playable URI. */
+export async function extractAudioWindow(
+  ffmpegPath: string,
+  source: string,
+  startS: number,
+  durationS: number
+): Promise<Buffer> {
+  const { stdout } = await exec(ffmpegPath, [
+    "-hide_banner",
+    "-loglevel", "error",
+    "-ss", String(Math.max(0, startS)),
+    "-t", String(Math.max(0.1, durationS)),
+    "-i", source,
+    "-map", "0:a:0?",
+    "-ac", "1",
+    "-ar", "16000",
+    "-c:a", "pcm_s16le",
+    "-f", "wav",
+    "-",
+  ], { encoding: "buffer" });
+  return stdout as Buffer;
 }
 
 /**
