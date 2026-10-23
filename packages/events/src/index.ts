@@ -495,6 +495,22 @@ export const VodObserveMetricsSnapshotSchema = z.object({
 });
 export type VodObserveMetricsSnapshot = z.infer<typeof VodObserveMetricsSnapshotSchema>;
 
+// ADAAAA-7237: one entry in the append-only per-pass summary time log. Each
+// cadence decide pass appends a new entry; past entries are NEVER overwritten,
+// dropped, or reordered. `seq` is a job-monotonic sequence (strictly
+// increasing per job); `ts` is the wall-clock time the entry was appended;
+// `windowTs` (when known) is the timestamp of the summarize window / observe
+// tick it maps to; `text` is the summary content the model concluded for that
+// window (the incremental detail, distinct from the bounded rolling in-model
+// story-so-far). Additive optional on Job — absent on jobs that predate it.
+export const SummaryLogEntrySchema = z.object({
+  seq: z.number().int().min(1),
+  ts: z.string(),
+  windowTs: z.number().int().optional(),
+  text: z.string(),
+});
+export type SummaryLogEntry = z.infer<typeof SummaryLogEntrySchema>;
+
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -509,6 +525,15 @@ export const JobSchema = z.object({
   // (extends the prior summary) and bounded (compacted). Additive optional —
   // absent on jobs that predate it / that never ran the observe cadence.
   runningSummary: z.string().optional(),
+  // ADAAAA-7237: append-only per-pass summary time log. Each cadence pass
+  // appends a { seq, ts, text } entry; past entries are never overwritten,
+  // dropped, or reordered. Distinct from `runningSummary` (the bounded rolling
+  // in-model story-so-far). Additive optional — absent on jobs that predate it.
+  summaryLog: z.array(SummaryLogEntrySchema).optional(),
+  // ADAAAA-7237: end-of-video compiled overall summary generated once at job
+  // completion from the full summaryLog + confirmed highlights. Distinct from
+  // `runningSummary`. Additive optional — absent until the job finalizes.
+  overallSummary: z.string().optional(),
   // `file-sim` = loop a local file at real-time rate as a synthetic live source
   // (LiveIngest kind `file-sim`); used by QA/dev to run the live pipeline
   // deterministically without an RTMP encoder or a display (ADAAAA-5777).
