@@ -310,6 +310,103 @@ export function sectionLabel(s: FrameSection): string {
 }
 
 /**
+ * The three Analysis filter/window types the board asked for
+ * (ADAAAA-7274): a decide-note window classifies as a `highlight`, a
+ * `suppressed` (candidate gated off but logged), or `not_highlight`. These
+ * drive the Analysis section filter chips and the color-coded collapsed
+ * summary.
+ */
+export type NoteKind = "highlight" | "suppressed" | "not_highlight";
+
+/** Human label for a window type (used by the filter chips + collapsed lines). */
+export function noteKindLabel(kind: NoteKind): string {
+  switch (kind) {
+    case "highlight":
+      return "highlight";
+    case "suppressed":
+      return "suppressed";
+    case "not_highlight":
+      return "not highlight";
+  }
+}
+
+/**
+ * Classify one decide note into an Analysis window type. A note whose outcome is
+ * `not_highlight` (or whose `isHighlight` is false) is `not_highlight`; a note
+ * that was gated off (`status === "suppressed"`) is `suppressed`; anything else
+ * (accepted / rejected highlight) counts as a `highlight`. This is the single
+ * source of truth for the collapsible summary + filter so both stay in lockstep.
+ */
+export function noteKind(note: DecideNote): NoteKind {
+  if (note.outcome === "not_highlight" || note.isHighlight === false) return "not_highlight";
+  if (note.status === "suppressed") return "suppressed";
+  return "highlight";
+}
+
+/**
+ * Short single-line summary of one decide note — the text shown in the
+ * collapsed time-window summary (type · score · status, plus the reason) so an
+ * operator can scan windows without expanding them.
+ */
+export function noteSummaryText(note: DecideNote): string {
+  const bits = [note.eventType || "event", `${Math.round(note.score)}`, note.status];
+  if (note.outcome && note.outcome !== "not_highlight") bits.push(note.outcome);
+  return bits.join(" · ") + (note.reason ? ` — ${note.reason}` : "");
+}
+
+/**
+ * The collapsed summary text for one time window (frame section): the window's
+ * time range + each decide note's summary line. A window with no decide notes
+ * reads as having no analysis.
+ */
+export function sectionSummaryText(s: FrameSection): string {
+  if (s.decideNotes.length === 0) return `${sectionLabel(s)} — no analysis`;
+  return `${sectionLabel(s)} · ${s.decideNotes.map(noteSummaryText).join(" | ")}`;
+}
+
+/**
+ * Whether a window has at least one decide note matching any active filter
+ * type. An empty `active` set (no filter applied) matches every window; a
+ * window with no decide notes matches nothing once a filter is applied.
+ */
+export function sectionMatchesFilter(s: FrameSection, active: NoteKind[]): boolean {
+  if (active.length === 0) return true;
+  return s.decideNotes.some((n) => active.includes(noteKind(n)));
+}
+
+/**
+ * Whether a window's summary text matches a search query (case-insensitive,
+ * trimmed). An empty query matches every window. Used by the Analysis search
+ * bar to filter windows by their text content.
+ */
+export function sectionMatchesSearch(s: FrameSection, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return sectionSummaryText(s).toLowerCase().includes(q);
+}
+
+/** The Analysis window types in canonical display order (filter chip order). */
+export const NOTE_KINDS: NoteKind[] = ["highlight", "suppressed", "not_highlight"];
+
+/**
+ * The distinct window types present in one time window (frame section), in
+ * canonical order. A window holding multiple decide notes of different kinds
+ * shows all of their type marks, so the collapsed summary still communicates
+ * every type in the window at a glance.
+ */
+export function sectionKinds(s: FrameSection): NoteKind[] {
+  const set = new Set<NoteKind>();
+  for (const n of s.decideNotes) set.add(noteKind(n));
+  return NOTE_KINDS.filter((k) => set.has(k));
+}
+
+/** Combine the type filter + text search for one window (single source for the
+ *  Analysis list so both controls stay in lockstep). */
+export function sectionMatches(s: FrameSection, active: NoteKind[], query: string): boolean {
+  return sectionMatchesFilter(s, active) && sectionMatchesSearch(s, query);
+}
+
+/**
  * Human label for the trigger that started an analysis (ADAAAA-6798 Inc 2),
  * e.g. `audio burst @ T+12.4s · KILL`. Absent/null on legacy rows without a
  * persisted candidate → `trigger unknown`.
