@@ -393,6 +393,16 @@ export interface Highlight {
   // (missing/incomplete recording or a cut failure). The UI renders a failure
   // card instead of an empty player when clipUri is "" but clipError is set.
   clipError?: string;
+  // ADAAAA-7248: whether the source this highlight's clip was cut from carried
+  // an audio stream. `false` => the delivered clip is silent because the source
+  // had no audio track (e.g. a screen/window share, or an audio-less upload);
+  // the card surfaces an explicit "no audio captured" state instead of implying
+  // sound. Absent when the server did not probe (unknown).
+  hasAudio?: boolean;
+  // ADAAAA-7248: ASR transcript for this highlight's audio context, surfaced on
+  // the card so textual corroboration is available when the clip has no audible
+  // audio. Populated by the decide->persist follow-up; absent otherwise.
+  asrTranscript?: string;
   // When the clip entered `rejected` (soft-delete undo-grace start). Set on
   // reject, cleared on reject->accept; only rejected clips with a rejectedAt
   // aged >= the server's rejection TTL are ever hard-deleted. Exposed by the

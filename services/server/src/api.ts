@@ -28,7 +28,7 @@ import type { SignalGateOptions } from "./observe-loop";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
-import { cutClip, extractBurstFrames, extractFrames } from "./ffmpeg";
+import { cutClip, extractBurstFrames, extractFrames, probeHasAudio } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
 import {
@@ -2457,7 +2457,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           const win = clipWindow(h.start, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
           const dur = Math.max(h.end - h.start, win.end - win.start);
           await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), dur);
-          await store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4` });
+          // ADAAAA-7248: record whether the source recording carried audio so
+          // the card can show an explicit "no audio captured" state (e.g. a
+          // screen/window share yields no audio track) instead of implying
+          // sound. `-c copy` preserves the source's audio, so a `false` here
+          // means the source itself had no audio stream. A probe failure leaves
+          // it unset (unknown) rather than mislabeling.
+          const hasAudio = await probeHasAudio(cfg.ffmpegPath, recPath);
+          await store.patchHighlight(h.id, {
+            clipUri: `/clips/${name}.mp4`,
+            ...(hasAudio != null ? { hasAudio } : {}),
+          });
         } catch (e: any) {
           missed++;
           await store.patchHighlight(h.id, { clipError: `Clip cut failed: ${String(e?.message || e)}` });

@@ -215,6 +215,11 @@ class ConfirmDecision(BaseModel):
     # when no independent corroboration signal was present.
     corroborationSource: Optional[str] = None
     corroborationRequired: bool = False
+    # ADAAAA-7251 (ACC-3): the ASR transcript computed for this highlight's
+    # audio context (Path 2, fallible) and fed to the confirm prompt. Returned
+    # to the server top-level so it can be persisted on the highlight record
+    # for human corroboration. "" when no audio context / ASR was not computed.
+    transcript: str = ""
     decision: dict = Field(default_factory=dict)
     # ADAAAA-7155 Increment A: the confirm request/response analysis — the exact
     # confirm prompt, the request context summary (frames / keyframes /
@@ -740,6 +745,9 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         "corroborated": corroborated,
         "corroborationSource": corroboration_source,
         "corroborationRequired": confirm_requires_corroboration(),
+        # ADAAAA-7251 (ACC-3): surface the ASR transcript to the server so it can
+        # be persisted on the highlight record for human corroboration.
+        "transcript": transcript,
         "decision": decision,
     }
     # ADAAAA-7155 Incr A: record the confirm request/response analysis (exact
