@@ -16,6 +16,7 @@ import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
+import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
 import { WebRtcIngestSession } from "./rtc";
@@ -109,6 +110,13 @@ export class MediaServer {
 
   async build() {
     const app = Fastify({ logger: false });
+    // Browser cross-origin RTC signaling (ADAAAA-7294): the webapp origin
+    // (https://highlights-server.dpn.gg) POSTs /sessions/:sid/rtc/offer and
+    // /rtc/ice/:pcId to the PUBLIC media origin. Without CORS the browser
+    // blocks the preflight (OPTIONS -> 404, no access-control headers) and
+    // the offer never round-trips, so a real screen share silently falls back
+    // to WS. Mirror the control plane's registration (api.ts: origin: true).
+    app.register(cors, { origin: true });
     await app.register(websocket, { options: { maxPayload: 4 * 1024 * 1024 } });
 
     // Provision a perceive session for a stream. Returns the WS path the
