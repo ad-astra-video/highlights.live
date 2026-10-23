@@ -34,6 +34,37 @@ PLAYER_DETECTION_VOCABULARY: tuple[str, ...] = ("player", "goalkeeper")
 
 _DIGIT_RUN = re.compile(r"\d+")
 
+# A seeded player box must be a tight, SAM3-trackable SINGLE-player box. On a
+# wide broadcast shot the one-shot full-frame <OD> can also emit a near-full-frame
+# "player" detection whose <OCR> happens to read the requested jersey number off
+# a scorebug / banner (ADAAAA-7262, observed on p18_seg: area ~0.50 box reading
+# "R.MARIN18PEACE..."). Seeding that box makes SAM3 try to propagate a region
+# spanning most of the frame -> lost every frame -> accuracy null. Gate the match
+# to plausible single-player boxes so an over-large box is never the seed target.
+MAX_PLAYER_SEED_AREA = 0.30   # normalized area cap for a single-player seed box
+MAX_PLAYER_SEED_SIDE = 0.70   # a single normalized side beyond which the box is implausible
+
+
+def _bbox_area(bbox) -> float:
+    """Normalized [x1,y1,x2,y2] area, guarded for malformed boxes."""
+    if not bbox or len(bbox) != 4:
+        return 0.0
+    x1, y1, x2, y2 = (float(v) for v in bbox)
+    return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+
+def is_plausible_player_seed_box(bbox) -> bool:
+    """True when a player detection bbox is a tight, SAM3-trackable single-player
+    box (not a near-full-frame box whose jersey number is read from a scorebug)."""
+    if not bbox or len(bbox) != 4:
+        return False
+    x1, y1, x2, y2 = (float(v) for v in bbox)
+    w = max(0.0, x2 - x1)
+    h = max(0.0, y2 - y1)
+    if w > MAX_PLAYER_SEED_SIDE or h > MAX_PLAYER_SEED_SIDE:
+        return False
+    return _bbox_area(bbox) <= MAX_PLAYER_SEED_AREA
+
 
 class _BBoxRoi:
     """Minimal ``pixel_box``-shaped ROI adapter for a normalized [x1,y1,x2,y2]
@@ -100,10 +131,19 @@ def match_player_by_number(
     that crop. Iterates candidates in confidence order and returns the first
     detection whose read numbers contain the requested one, augmented with the
     matched ``number`` and the raw ``ocr`` lines. No match -> None.
+
+    Only PLAUSIBLE single-player boxes are considered (ADAAAA-7262): an
+    implausibly-large ``<OD>`` detection (whose ``<OCR>`` often reads the jersey
+    number off a scorebug) is never a valid seed target because SAM3 cannot
+    propagate it.
     """
     requested = int(requested_number)
     ranked = sorted(
-        (o for o in objects if is_player_detection(o)),
+        (
+            o
+            for o in objects
+            if is_player_detection(o) and is_plausible_player_seed_box(o.get("bbox"))
+        ),
         key=lambda o: float(o.get("confidence", 0.0) or 0.0),
         reverse=True,
     )
