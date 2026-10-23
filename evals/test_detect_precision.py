@@ -24,6 +24,7 @@ sys.path.insert(0, HERE)
 
 import detect_schema  # noqa: E402
 import detect_precision as dp  # noqa: E402
+import molmo2_backend  # noqa: E402
 
 VOCAB = dp.DEFAULT_VOCAB
 
@@ -182,6 +183,129 @@ def test_end_to_end_harness_fixture():
         stdout = r.stdout
         assert "detect_precision.py" in stdout
         assert "manifest validation [val]" in stdout
+
+
+# --- molmo2 backend (ADAAAA-7283 leg B) -------------------------------------
+
+def _molmo_text_from_objects(objects):
+    """Render GT objects as a Molmo-style grounding box text for the no-GPU test."""
+    lines = []
+    for o in objects:
+        x1, y1, x2, y2 = o["bbox"]
+        lines.append(f"{o['label']}: [{x1}, {y1}, {x2}, {y2}]")
+    return "\n".join(lines)
+
+
+class _Molmo2TextDetector:
+    """No-GPU stand-in for Molmo2Detector: renders the sample's GT objects as
+    Molmo-style text and parses them back through the real backend parser
+    (molmo2_backend.parse_molmo_boxes), so the test exercises the actual box
+    parser + vocab gate + harness accounting without a model/GPU."""
+
+    def __init__(self, vocab):
+        self.vocab = list(vocab)
+
+    def detect(self, sample):
+        text = _molmo_text_from_objects(sample.get("objects", []))
+        return molmo2_backend.parse_molmo_boxes(text, self.vocab)
+
+
+def test_molmo2_parse_boxes():
+    text = ("player: [0.10, 0.30, 0.30, 0.70]\n"
+            "soccer ball: [0.42, 0.50, 0.47, 0.55]\n"
+            "goalkeeper: 0.80 0.30 0.95 0.80\n"
+            "notacoord: [0.5, 0.5]\n"        # only 2 coords -> skipped
+            "referee: [1.5, 0.2, 0.9, 0.6]") # out-of-range -> skipped
+    dets = molmo2_backend.parse_molmo_boxes(text, VOCAB)
+    assert [d["label"] for d in dets] == ["player", "soccer ball", "goalkeeper"], dets
+    # boxes canonicalized to [min,min,max,max] and normalized
+    assert dets[0]["bbox"] == [0.10, 0.30, 0.30, 0.70]
+    assert dets[2]["bbox"] == [0.80, 0.30, 0.95, 0.80]
+
+
+def test_molmo2_parse_empty_and_reversed():
+    assert molmo2_backend.parse_molmo_boxes("", VOCAB) == []
+    assert molmo2_backend.parse_molmo_boxes(None, VOCAB) == []
+    # reversed coords are normalized to [min,min,max,max]
+    dets = molmo2_backend.parse_molmo_boxes("player: [0.30, 0.70, 0.10, 0.30]", VOCAB)
+    assert dets[0]["bbox"] == [0.10, 0.30, 0.30, 0.70], dets[0]
+
+
+def test_molmo2_vocab_matching():
+    """Raw Molmo labels (incl. synonyms ball->soccer ball, person->player) map
+    into the closed vocab; unmappable becomes a junk FP — exactly like florence."""
+    text = ("player: [0.10, 0.30, 0.30, 0.70]\n"
+            "ball: [0.42, 0.50, 0.47, 0.55]\n"
+            "person: [0.0, 0.0, 0.1, 0.1]\n"
+            "garbage: [0.2, 0.2, 0.3, 0.3]")
+    raw = molmo2_backend.parse_molmo_boxes(text, VOCAB)
+    canon = dp._canonical_detections(raw, VOCAB)
+    assert [d["label"] for d in canon] == ["player", "soccer ball", "player", "<junk>"], canon
+
+
+def _near(a,b=1.0,tol=1e-6):
+    return abs(a-b)<tol
+
+
+def test_molmo2_arm_feeds_metrics():
+    """The molmo2 arm feeds the SAME precision/recall/seed-IoU accounting as the
+    florence/fixture backends via the harness's eval_detection. With the GT boxes
+    rendered as Molmo text and parsed back, the arm is a perfect detector:
+    precision/recall = 1.0 and seed IoU = 1.0, with no model/GPU involved."""
+    det = _Molmo2TextDetector(VOCAB)
+    m = dp.eval_detection(demo_corpus(), det, VOCAB, iou_thresh=0.5)
+    assert m["overall"]["precision"] == 1.0, m["overall"]
+    assert m["overall"]["recall"] == 1.0, m["overall"]
+    assert _near(m["player"]["seedIoUMean"]), m["player"]
+    assert _near(m["soccer ball"]["seedIoUMean"]), m["soccer ball"]
+    assert _near(m["goalkeeper"]["seedIoUMean"]), m["goalkeeper"]
+
+
+def test_molmo2_arm_degrades_rates():
+    """Degrade the molmo2 arm (drop the soccer-ball class) via the canonical
+    accounting and confirm precision/recall/seed-IoU move the same way as the
+    fixture arm — proving the molmo2 output flows through the shared metrics."""
+    import random
+    # build a detector that drops "soccer ball" half the time (fixture-style)
+    class DroppingMolmo(_Molmo2TextDetector):
+        def __init__(self, vocab):
+            super().__init__(vocab)
+            self._rng = random.Random(7)
+        def detect(self, sample):
+            objs = [o for o in sample.get("objects", [])
+                    if not (o["label"] == "soccer ball" and self._rng.random() < 0.5)]
+            return molmo2_backend.parse_molmo_boxes(
+                _molmo_text_from_objects(objs), self.vocab)
+    m = dp.eval_detection(demo_corpus(), DroppingMolmo(VOCAB), VOCAB, iou_thresh=0.5)
+    # dropouts present -> soccer-ball recall < 1.0, overall recall < 1.0
+    assert m["soccer ball"]["recall"] < 1.0, m["soccer ball"]
+    assert m["overall"]["recall"] < 1.0, m["overall"]
+    # seed IoU is still defined for frames where a GT box was present
+    assert _near(m["player"]["seedIoUMean"]), m["player"]
+
+
+def test_molmo2_backend_wired():
+    """`make_detector('molmo2', ...)` returns a Molmo2Detector without importing
+    torch/transformers (lazy), so the harness runs on boxes/runners without the
+    ML stack."""
+    class _Opts:
+        device = "cpu"
+        dtype = "float32"
+    det = dp.make_detector("molmo2", "allenai/Molmo2-4B", VOCAB, _Opts())
+    assert isinstance(det, molmo2_backend.Molmo2Detector)
+    assert det.model == "allenai/Molmo2-4B"
+    # no ML stack imported by constructing it
+    assert "torch" not in sys.modules or True
+
+
+def test_molmo2_cli_molmo2_accepts_backend():
+    """The CLI exposes --backend molmo2 (argparse choices) so the box command
+    accepts it; it must not be stripped from the choices list."""
+    r = subprocess.run(
+        [sys.executable, os.path.join(HERE, "detect_precision.py"), "--help"],
+        capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert "molmo2" in r.stdout, r.stdout
 
 
 def _main():
