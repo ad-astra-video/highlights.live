@@ -7,6 +7,7 @@ import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation,
 import { StageAMetrics } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
 import type { PerceiveCalibration } from "./perceive-calibration";
+import { clipWindow } from "./config";
 import {
   ObserveDecider,
   LiveObserver,
@@ -203,6 +204,29 @@ export function deriveHighlightTrigger(c: CandidateSignal): HighlightTrigger {
  * grouped-decide path lands, one decide_audit row per frame group. */
 export function decideGroupKey(timestamp: number): string {
   return `g${Math.floor(timestamp / 3)}`;
+}
+/** ADAAAA-7232: deterministic highlight-instant localization from the defined
+ * per-frame/per-tap signal. Prefers the highest-RMS audio tap strictly AFTER
+ * the trigger within `maxLookaheadS` (peak-audio post-trigger, Acc-2/Acc-3);
+ * falls back to the trigger timestamp when no post-trigger tap is buffered yet
+ * (e.g. the live latency-first path, where observation hasn't advanced past the
+ * trigger). Pure — no inference, no new GPU calls (Acc-3 / Acc-6). */
+export function localizeHighlightInstant(
+  triggerTs: number,
+  taps: { ts: number; rms: number }[] | undefined,
+  maxLookaheadS: number
+): { ts: number; signal: "peak_audio" | "trigger" } {
+  if (taps?.length) {
+    const upper = triggerTs + maxLookaheadS;
+    let best: { ts: number; rms: number } | undefined;
+    for (const t of taps) {
+      if (t.ts > triggerTs && t.ts <= upper) {
+        if (!best || t.rms > best.rms) best = t;
+      }
+    }
+    if (best) return { ts: best.ts, signal: "peak_audio" };
+  }
+  return { ts: triggerTs, signal: "trigger" };
 }
 export interface DecisionResult {
   isHighlight: boolean;
@@ -638,6 +662,9 @@ export interface TrainResult {
 export interface AnalyzerConfig {
   clipBeforeS: number;
   clipAfterS: number;
+  /** Hard floor (seconds) on the delivered highlight clip length (ADAAAA-7232).
+   * Guarantees Acc-1 (>=15 s) even when clipBeforeS/clipAfterS are tuned low. */
+  clipWindowMinSec?: number;
   jobId: string;
   gameHint: string;
   /**
@@ -1551,6 +1578,12 @@ export class LiveRunShared {
     const out = this.audio.map((a) => rmsNormalized(Buffer.from(a.samples, "base64")));
     return out.slice(-Math.max(1, maxPoints));
   }
+  /** ADAAAA-7232: timestamped RMS energy per buffered audio tap (oldest-first)
+   * for deterministic highlight-instant localization (peak-audio post-trigger).
+   * [] when nothing buffered. No new inference / no GPU call. */
+  audioEnergyTaps(): { ts: number; rms: number }[] {
+    return this.audio.map((a) => ({ ts: a.ts, rms: rmsNormalized(Buffer.from(a.samples, "base64")) }));
+  }
   /** I4 / ADAAAA-6361: per-detection boxes (tracks + open-set objects) for the
    * frame FINDINGS nearest `timestamp`, so the decide prompt gets real geometry
    * (bboxes) instead of asking Gemma to guess positions from vision alone. []
@@ -1987,16 +2020,25 @@ async function acceptVideoDecision(
     return;
   }
   buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger, stage1.analysis, confirm?.analysis);
-  const { clipId, clipUri } = await cut(candidate.timestamp);
+  // ADAAAA-7232: center the delivered clip on the localized highlight instant
+  // (deterministic peak-audio post-trigger), not the coarse trigger, so the
+  // moment lands in the middle third and the window always meets >=15 s.
+  const loc = localizeHighlightInstant(candidate.timestamp, run.audioEnergyTaps(), cfg.clipAfterS);
+  const win = clipWindow(loc.ts, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15);
+  const { clipId, clipUri } = await cut(loc.ts);
   const rec: HighlightRecord = {
     id: randomUUID(),
     jobId: cfg.jobId,
+    // ADAAAA-7232: record the localized instant + signal so the delivered clip
+    // center is queryable (Acc-3). Additive optional — legacy rows carry none.
+    localizedTs: loc.ts,
+    localizeSignal: loc.signal,
     // ADAAAA-6874 (Phase 2): deterministic idempotency key so a resumed job that
     // re-decides the same candidate cannot double-persist/double-bill.
     idempotencyKey: highlightIdempotencyKey(cfg.jobId, emit.seq, decision.eventType ?? candidate.eventType),
     clipUri,
-    start: Math.max(0, candidate.timestamp - cfg.clipBeforeS),
-    end: candidate.timestamp + cfg.clipAfterS,
+    start: win.start,
+    end: win.end,
     eventType: highlightEventType(decision),
     score: decision.score,
     reason: decision.reason,

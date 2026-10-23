@@ -8,6 +8,7 @@ import { rm } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { clipWindow } from "./config";
 import type { ServerConfig } from "./config";
 import type { Store } from "./store";
 import {
@@ -579,6 +580,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         jobId: job.id,
         clipBeforeS: cfg.clipBeforeS,
         clipAfterS: cfg.clipAfterS,
+        clipWindowMinSec: cfg.clipWindowMinSec,
         gameHint: job.gameHint || cfg.gameHintDefault,
         preferLabels: job.preferLabels,
         // ADAAAA-6577: bounded exponential backoff between a perceive
@@ -810,6 +812,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       jobId,
       clipBeforeS: cfg.clipBeforeS,
       clipAfterS: cfg.clipAfterS,
+      clipWindowMinSec: cfg.clipWindowMinSec,
       gameHint: job.gameHint || cfg.gameHintDefault,
       preferLabels: job.preferLabels,
       // ADAAAA-6577: bounded exponential backoff between a perceive session-
@@ -1049,7 +1052,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       emitJobProgress(jobId, 90, "cutting clips");
       const clipId = randomUUID();
       const out = path.join(clipDir, `${clipId}.mp4`);
-      await cutClip(cfg.ffmpegPath, videoPath, out, Math.max(0, ts - cfg.clipBeforeS), cfg.clipBeforeS + cfg.clipAfterS);
+      const win = clipWindow(ts, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15);
+      await cutClip(cfg.ffmpegPath, videoPath, out, win.start, win.end - win.start);
       return { clipId, clipUri: `/clips/${clipId}.mp4` };
     };
     // Async-VOD progress: wrap the frame iterator so analyzeJob's frame pull
@@ -2371,7 +2375,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         try {
           const name = `${job.id}-${Math.round(h.start * 10)}`;
           const out = path.join(outDir, `${name}.mp4`);
-          await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), cfg.clipBeforeS + cfg.clipAfterS);
+          const win = clipWindow(h.start, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15);
+          const dur = Math.max(h.end - h.start, win.end - win.start);
+          await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), dur);
           await store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4` });
         } catch (e: any) {
           missed++;
@@ -2471,8 +2477,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               // same candidate highlight.
               idempotencyKey: highlightIdempotencyKey(job.id, Math.round(timestamp), d.eventType),
               clipUri: "",
-              start: Math.max(0, timestamp - cfg.clipBeforeS),
-              end: timestamp + cfg.clipAfterS,
+              start: clipWindow(timestamp, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15).start,
+              end: clipWindow(timestamp, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15).end,
               eventType: d.eventType,
               score: d.score,
               reason: d.reason,
