@@ -215,3 +215,28 @@ def test_ball_not_evicted_after_long_loss():
         tr.step_frame(_white(), float(ts))
     assert tr.ball_live is True
     assert any(t.kind == "ball" for t in tr.tracks)
+
+
+# --- ADAAAA-7243: player-by-number track keeps its label/accuracy on redetect --
+def test_player_number_track_keeps_label_across_redetect():
+    # A seeded player-by-number slot (selected, label "player #9") must survive
+    # the redetect cadence. The per-frame soccer roster only reports ball/goal
+    # (players are detected on demand); _reseed_from's nearest-box refresh used
+    # to ADOPT the nearest detection REGARDLESS of class, so a "goal" box near
+    # the player clobbered the "player #9" label -> the track stopped surfacing
+    # as a selected "player #" track and the measure harness read accuracy=None.
+    plan = [{1: (0.40, 0.40, 0.55, 0.70)}] * 8   # player SAM slot 1 persists
+    tr = HybridTracker(detect=None, backend=StubBackend(plan), ball_label="soccer ball",
+                       redetect_every=3, lost_before_redetect=99, capacity=8)
+    tr.seed((0.40, 0.40, 0.55, 0.70), slot=1, ts=0.0, kind="player",
+            label="player #9", selected=True)
+    tr.seed_ball((0.40, 0.40, 0.50, 0.50), ts=0.0)   # ball slot 0 (ball-first)
+    goal = (0.38, 0.42, 0.52, 0.66)                  # different-class box near player
+    # Drive past the redetect cadence; per-frame roster only ever yields ball/goal,
+    # and the goal is the nearest detection to the player slot.
+    for ts in range(1, 7):
+        tr.step_frame(_white(), float(ts), florence_boxes=[goal], labels=["goal"])
+    player_track = next(t for t in tr.tracks if t.kind == "player")
+    assert player_track.selected is True
+    assert player_track.label == "player #9"     # identity preserved, not clobbered to "goal"
+    assert player_track.accuracy is not None      # continuity accuracy still computable

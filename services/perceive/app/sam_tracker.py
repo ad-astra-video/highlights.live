@@ -304,7 +304,7 @@ class HybridTracker:
                             btr.bbox = bb
                             btr.lost_frames = 0
                     break
-        # refresh existing tracked slots with the nearest detected box when possible
+        # refresh existing tracked slots with a SAME-CLASS detection when possible
         for slot in list(self._prompts.keys()):
             if slot == self._ball_slot:
                 continue  # ball is refreshed above / by its own guard
@@ -314,12 +314,22 @@ class HybridTracker:
                 if best is not None:
                     bi = boxes.index(best)
                     lab = u_labels[bi] or ""
+                    # ADAAAA-7243: only adopt a detection that belongs to the
+                    # SLOT's own trackable class. The per-frame roster (e.g.
+                    # soccer: ball+goal) holds non-player classes; taking the
+                    # nearest such box would re-prompt the player slot onto a
+                    # different object AND clobber an operator-named selected
+                    # track's identity (seeded "player #9" -> "goal"), so the
+                    # player-by-number track stops surfacing its label/accuracy.
+                    if lab and kind_from_label(lab) != tr.kind:
+                        continue
                     self._prompts[slot] = best
                     self._miss[slot] = 0
-                    # Preserve track identity; just refresh its gated label/kind
-                    # so the surfaced box never falls back to "unknown".
                     tr.bbox = best
-                    if lab:
+                    # ADAAAA-5056/7243: an operator-selected track keeps its
+                    # identity label (e.g. "player #9"); untagged auto tracks
+                    # adopt the detection's gated in-roster label.
+                    if lab and not tr.selected:
                         tr.label = lab
                         tr.kind = kind_from_label(lab)
                     boxes.pop(bi)
