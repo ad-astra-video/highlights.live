@@ -98,6 +98,7 @@ describe("media server handshake (b)", () => {
     expect(body.wsPath).toBe("/stream/sess-fake");
     expect(body.jobId).toBe("job-1");
     expect(body.wsUrl).toBeUndefined(); // no publicBaseUrl -> clients fall back to wsPath
+    expect(body.rtcOrigin).toBeUndefined(); // no public origin for RTC signaling either
   });
 
   it("returns the FULL LB-routable ws ingest URL when publicBaseUrl is set", async () => {
@@ -111,6 +112,8 @@ describe("media server handshake (b)", () => {
     const body = res.json();
     expect(body.wsUrl).toBe("wss://media.example.com/stream/sess-fake");
     expect(body.wsPath).toBe("/stream/sess-fake");
+    // ADAAAA-7286: the public RTC signaling origin is derived from publicBaseUrl.
+    expect(body.rtcOrigin).toBe("https://media.example.com");
     await srv.close();
   });
 

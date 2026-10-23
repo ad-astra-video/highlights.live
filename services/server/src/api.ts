@@ -435,12 +435,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   //     browser to a fresh wsUrl (no user action needed).
   async function provisionMedia(jobId: string): Promise<{ wsUrl: string; mediaSessionId: string; mediaOrigin: string }> {
     if (!cfg.mediaServerUrl) throw new Error("media server not configured (MEDIA_SERVER_URL)");
-    const mediaOrigin = cfg.mediaServerUrl.replace(/\/+$/, "");
+    // The control plane reaches the media node on its docker-internal URL
+    // (media:4070) for provisioning + health checks; a browser cannot resolve
+    // that service name, so the value handed BACK to the webapp for the WebRTC
+    // signaling POSTs is the PUBLIC media origin when configured (ADAAAA-7286).
+    const internalOrigin = cfg.mediaServerUrl.replace(/\/+$/, "");
+    const browserOrigin = (cfg.mediaPublicBaseUrl ?? cfg.mediaServerUrl).replace(/\/+$/, "");
     const existing = await db.getMediaSession(jobId);
     if (existing && existing.status === "active" && (await isMediaHealthy(existing.mediaOrigin))) {
-      return { wsUrl: existing.wsUrl, mediaSessionId: existing.sessionId, mediaOrigin: existing.mediaOrigin };
+      return { wsUrl: existing.wsUrl, mediaSessionId: existing.sessionId, mediaOrigin: browserOrigin };
     }
-    const r = await fetch(`${mediaOrigin}/sessions`, {
+    const r = await fetch(`${internalOrigin}/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jobId }),
@@ -448,8 +453,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (r.status !== 200) throw new Error(`media provision failed: HTTP ${r.status} ${await r.text()}`);
     const body: any = await r.json();
     // Prefer the media server's own full URL (LB-routable); fall back to
-    // deriving ws:// from MEDIA_SERVER_URL + the returned path.
-    const base = mediaOrigin.replace(/^http/, "ws");
+    // deriving ws:// from the browser-facing media origin + the returned path.
+    const base = browserOrigin.replace(/^http/, "ws");
     const wsUrl = body.wsUrl ?? `${base}${body.wsPath}`;
     const now = new Date().toISOString();
     await db.setMediaSession({
@@ -457,7 +462,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sessionId: body.sessionId,
       streamId: body.streamId ?? "",
       wsUrl,
-      mediaOrigin,
+      // Persist the internal origin so isMediaHealthy() health-checks the media
+      // node directly; the PUBLIC origin is what the browser is told.
+      mediaOrigin: internalOrigin,
       status: "active",
       createdAt: now,
       updatedAt: now,
@@ -468,7 +475,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       bj.mediaSessionId = body.sessionId;
       bj.mediaWsUrl = wsUrl;
     }
-    return { wsUrl, mediaSessionId: body.sessionId, mediaOrigin };
+    return { wsUrl, mediaSessionId: body.sessionId, mediaOrigin: browserOrigin };
   }
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));

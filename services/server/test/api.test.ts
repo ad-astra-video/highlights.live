@@ -575,6 +575,57 @@ describe("media session reroute (DB-tracked)", () => {
     await app.close();
     await new Promise<void>((r) => srv.close(() => r()));
   });
+
+  it("returns the PUBLIC mediaOrigin to the browser while provisioning/health-checking the INTERNAL origin (ADAAAA-7286)", async () => {
+    let provisions = 0;
+    const srv = createServer((req, res) => {
+      const url = (req.url || "").split("?")[0];
+      if (url === "/health") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"status":"ok"}');
+        return;
+      }
+      if (url === "/sessions" && req.method === "POST") {
+        provisions += 1;
+        const n = provisions;
+        req.on("data", () => undefined);
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              sessionId: `sess-${n}`,
+              wsPath: `/stream/sess-${n}`,
+              wsUrl: `ws://127.0.0.1:${(srv.address() as any).port}/stream/sess-${n}`,
+              streamId: `st-${n}`,
+            })
+          );
+        });
+        return;
+      }
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end('{"error":"nf"}');
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as any).port;
+
+    const PUBLIC = "https://highlights-media.dpn.gg";
+    const { app, db } = await buildTestApp({ MEDIA_SERVER_URL: `http://127.0.0.1:${port}`, MEDIA_PUBLIC_BASE_URL: PUBLIC });
+    const token = await register(app, "m@test.dev", "password123");
+    const jr = await app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token}` }, payload: { source: "browser", gameHint: "x" } });
+    const jobId = jr.json().job.id;
+
+    const m1 = await app.inject({ method: "POST", url: `/jobs/${jobId}/media`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(m1.statusCode).toBe(200);
+    // The browser-facing mediaOrigin is the PUBLIC origin, never media:4070.
+    expect(m1.json().mediaOrigin).toBe(PUBLIC);
+    // The DB persists the INTERNAL origin so isMediaHealthy() health-checks the node directly.
+    const rec = await db.getMediaSession(jobId);
+    expect(rec?.mediaOrigin).toBe(`http://127.0.0.1:${port}`);
+    expect(provisions).toBe(1);
+
+    await app.close();
+    await new Promise<void>((r) => srv.close(() => r()));
+  });
 });
 
 describe("VOD browser upload (multipart POST /jobs/upload)", () => {

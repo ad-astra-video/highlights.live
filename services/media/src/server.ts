@@ -139,11 +139,18 @@ export class MediaServer {
       }
       // Full ingest WS URL (LB/public front), when the operator tells us the
       // public origin. Clients that can't route by LB fall back to wsPath.
-      const wsBase = (this.opts.publicBaseUrl || "").replace(/\/$/, "").replace(/^http/, "ws");
+      const publicBase = (this.opts.publicBaseUrl || "").replace(/\/+$/, "");
+      const wsBase = publicBase.replace(/^http/, "ws");
       return {
         sessionId: p.sessionId,
         wsPath: `/stream/${p.sessionId}`,
         wsUrl: wsBase ? `${wsBase}/stream/${p.sessionId}` : undefined,
+        // Public origin the browser uses for the RTC signaling (offer/ICE)
+        // POSTs — the browser cannot reach the docker-internal service name,
+        // so it must signal to the LB/public front (ADAAAA-7286). When unset,
+        // clients fall back to the control plane's own MEDIA_PUBLIC_BASE_URL /
+        // MEDIA_SERVER_URL.
+        rtcOrigin: publicBase || undefined,
         // WebRTC ingest is enabled: the browser signals via
         // POST /sessions/:sid/rtc/offer + /rtc/ice/:pcId instead of WS frame
         // posting. Older WS clients may still connect to /stream/:sid.
