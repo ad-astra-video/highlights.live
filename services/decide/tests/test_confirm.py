@@ -216,9 +216,42 @@ def test_run_pass_confirms_goal_on_goal_calling_audio(monkeypatch):
     assert resp["corroborated"] is True
     # ADAAAA-7185: the corroboration source is persisted (goal-calling audio).
     assert resp["corroborationSource"] == "audio_text"
+    # ADAAAA-7251 (ACC-3): the ASR transcript computed for the audio context is
+    # surfaced on the confirm response so the server can persist it.
+    assert resp["transcript"] == "GOOOAL what a strike from the right wing"
     assert resp["goalConfirmed"] == "confirmed_goal"
     assert resp["decision"]["outcome"] == "scoring_play"
     assert resp["decision"]["isHighlight"] is True
+
+
+def test_endpoint_confirm_returns_asr_transcript(monkeypatch):
+    """ADAAAA-7251 (ACC-3): the /confirm HTTP response carries the ASR transcript
+    so the server can persist it on the highlight record."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("AUDIO_CONTEXT", "1")
+    monkeypatch.setattr(cf, "_asr_url", lambda: "http://asr:9999")
+    monkeypatch.setattr(cf, "transcribe_audio", lambda *a, **k: ("GOOOAL driven into the top corner", None))
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 90, "eventType": "GOAL", "reason": "s1"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "frames show ball in the net", "evidence": {"ballInNet": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    data = client.post(
+        "/confirm",
+        json={"eventType": "GOAL", "stage1": stage1, "frames": [{"base64": "x"}], "audioB64": "AAA"},
+    )
+    assert data.status_code == 200
+    body = data.json()
+    assert body["goalConfirmed"] == "confirmed_goal"
+    assert body["transcript"] == "GOOOAL driven into the top corner"
+    # Absent ASR (no audio context) -> empty string, never a fabricated value.
+    data2 = client.post(
+        "/confirm",
+        json={"eventType": "GOAL", "stage1": stage1, "frames": [{"base64": "x"}]},
+    )
+    assert data2.status_code == 200
+    assert data2.json()["transcript"] == ""
 
 
 def test_run_pass_refutes_goal_and_disagrees(monkeypatch):
