@@ -1077,6 +1077,11 @@ def handle_control(state, msg: dict) -> dict:
         # request "track player #9" -> the track carries label "player #9".
         label = f"player #{requested}"
         tr = state.tracker.seed(bbox, kind=kind, label=label, selected=True)
+        # ADAAAA-7305: an operator-selected `player #N` is a deliberate tracked
+        # target — pin its slot so a transient SAM miss cannot auto-evict it and
+        # drop the selected track (and its accuracy/on-screen metric) to null.
+        # Mirrors the dedicated ball slot's eviction guard (ADAAAA-7217).
+        state.tracker.lock(tr.slot)
         state.requested_player_number = requested
         return {
             "type": "ack",

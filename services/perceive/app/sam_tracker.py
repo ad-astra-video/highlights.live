@@ -272,7 +272,18 @@ class HybridTracker:
                 labels = [str(d.get("label", "") or "") for d in det if d.get("bbox")]
             self._reseed_from(florence_boxes or [], labels)
             self._since_detect = 0
-            return (florence_boxes or sam_boxes), (labels or sam_labels)
+            # ADAAAA-7305: feed the IoU layer the SAM-PROPAGATED tracked boxes on
+            # a redetect frame, not the raw Florence detections. `_reseed_from`
+            # already re-seeded the SAM prompts (and, on SAM loss, re-identified
+            # the target) and minted new IoU tracks for newly detected objects,
+            # so an already-tracked slot (the dedicated ball slot OR an
+            # operator-selected `player #N` slot) must NOT appear lost just
+            # because this frame's Florence detections are being made available —
+            # returning the raw detections dropped the SAM box and drove the
+            # selected track's onto_frames to 0 / accuracy to None. Fall back to
+            # the fresh detections only when no tracked box was produced this
+            # frame (all slots lost -> the fresh detections seed the IoU layer).
+            return (sam_boxes or florence_boxes or []), (sam_labels or labels)
         return sam_boxes, sam_labels
 
     def _reseed_from(self, boxes: List[BBox], labels: Optional[List[str]] = None) -> None:

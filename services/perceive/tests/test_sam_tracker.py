@@ -240,3 +240,47 @@ def test_player_number_track_keeps_label_across_redetect():
     assert player_track.selected is True
     assert player_track.label == "player #9"     # identity preserved, not clobbered to "goal"
     assert player_track.accuracy is not None      # continuity accuracy still computable
+
+
+# --- ADAAAA-7305: selected player stays ON-SCREEN across the redetect cadence --
+def test_selected_player_track_stays_on_screen_across_redetect():
+    # A selected `player #N` track (SAM-propagated, label "player #1") must NOT
+    # register as "lost" on the Florence redetect frames. `_sam_step` used to
+    # return the raw Florence detections on a redetect frame, which DROPPED the
+    # SAM-propagated player box -> the selected track's onto_frames stayed 0 and
+    # accuracy None / onScreen False on the measure harness. The redetect frame
+    # must feed the IoU layer the SAM-propagated tracked boxes, keeping the
+    # selected track matched (lost_frames == 0) and its accuracy computable.
+    plan = [{0: (0.20, 0.20, 0.40, 0.40), 2: (0.45, 0.30, 0.55, 0.45)}] * 12
+    tr = HybridTracker(detect=None, backend=StubBackend(plan), ball_label="soccer ball",
+                       redetect_every=3, lost_before_evict=8, lost_before_redetect=99,
+                       capacity=8)
+    tr.seed((0.45, 0.30, 0.55, 0.45), slot=2, ts=0.0, kind="player",
+            label="player #1", selected=True)
+    tr.seed_ball((0.20, 0.20, 0.40, 0.40), ts=0.0)          # ball slot 0
+    goal = (0.60, 0.60, 0.80, 0.80)                          # default-roster structure box
+    # Drive past several redetect cadences; per-frame roster only ever yields goal.
+    for ts in range(1, 13):
+        tr.step_frame(_white(), float(ts), florence_boxes=[goal], labels=["goal"])
+    pl = next(t for t in tr.tracks if t.kind == "player")
+    assert pl.selected is True
+    assert pl.label == "player #1"
+    assert pl.lost_frames == 0                 # never spuriously lost on redetect
+    assert pl.accuracy is not None
+    assert pl.accuracy >= 0.90                 # >=90% continuity target
+
+
+def test_operator_selected_player_slot_is_not_auto_evicted():
+    # An operator-selected `player #N` slot is pinned (like the ball slot) so a
+    # SAM-propagation gap cannot auto-evict the chosen track and drop the metric
+    # to None (the track must stay surfaceable to report accuracy).
+    # Plan: the player slot's SAM box is ABSENT from frame 2 onward (a long gap).
+    plan = [{2: (0.45, 0.30, 0.55, 0.45)}, {2: None}] + [{2: None}] * 20
+    tr = HybridTracker(detect=None, backend=StubBackend(plan), ball_label="soccer ball",
+                       lost_before_evict=4, lost_before_redetect=99, capacity=8)
+    tr.seed((0.45, 0.30, 0.55, 0.45), slot=2, ts=0.0, kind="player",
+            label="player #1", selected=True)
+    tr.lock(2)                                 # track-player pins the selected slot
+    for ts in range(1, 22):
+        tr.step_frame(_white(), float(ts), florence_boxes=[])
+    assert any(t.slot == 2 and t.kind == "player" for t in tr.tracks)  # not evicted
