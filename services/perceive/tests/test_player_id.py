@@ -244,6 +244,79 @@ class _CountingDetector:
         return []
 
 
+# --- ADAAAA-7262: over-large (scorebug) player box must never be the seed target ---
+
+
+def test_is_plausible_player_seed_box():
+    from app.player_id import is_plausible_player_seed_box
+
+    # tight single-player box -> plausible
+    assert is_plausible_player_seed_box([0.2, 0.2, 0.4, 0.5]) is True
+    # near-full-frame box (observed on p18_seg: [0.286,0.123,0.856,0.997]) -> not
+    assert is_plausible_player_seed_box([0.286, 0.123, 0.856, 0.997]) is False
+    # malformed / missing bbox -> not
+    assert is_plausible_player_seed_box(None) is False
+    assert is_plausible_player_seed_box([0.1, 0.1]) is False
+
+
+def test_match_player_by_number_rejects_implausibly_large_scorebug_box():
+    """ADAAAA-7262: a near-full-frame 'player' box whose OCR reads the requested
+    number off a scorebug must NOT be selected as the seed target, even when it is
+    the only candidate whose OCR matches (no fallback to an untrackable box)."""
+    objects = [
+        # tight player (real) — number not read
+        {"label": "player", "confidence": 0.9, "bbox": [0.37, 0.15, 0.41, 0.25]},
+        # near-full-frame scorebug box — reads '18' off the banner
+        {"label": "player", "confidence": 1.0, "bbox": [0.286, 0.123, 0.856, 0.997]},
+    ]
+
+    def read(bbox):
+        if _norm_key(bbox) == _norm_key([0.286, 0.123, 0.856, 0.997]):
+            return ["R.MARIN18PEACE"]
+        return ["C"]  # tight player number not readable
+
+    match = match_player_by_number(objects, 18, read)
+    assert match is None, "an over-large scorebug box must not be seeded"
+
+
+def test_match_player_by_number_prefers_tight_box_over_large_scorebug_box():
+    """When both a tight player box and an over-large scorebug box read the
+    requested number, the tight box wins."""
+    objects = [
+        {"label": "player", "confidence": 0.9, "bbox": [0.5, 0.2, 0.62, 0.5]},   # tight #9
+        {"label": "player", "confidence": 1.0, "bbox": [0.1, 0.1, 0.95, 0.95]},  # large scorebug #9
+    ]
+
+    def read(bbox):
+        if _norm_key(bbox) == _norm_key([0.5, 0.2, 0.62, 0.5]):
+            return ["9"]
+        return ["9"]  # large box also reads 9 (scorebug)
+
+    match = match_player_by_number(objects, 9, read)
+    assert match is not None
+    assert list(match["bbox"]) == [0.5, 0.2, 0.62, 0.5]
+    assert match["number"] == 9
+
+
+def test_identify_player_by_number_returns_none_when_only_overlarge_matches(monkeypatch):
+    """End-to-end through identify: an anchor frame where the ONLY candidate whose
+    OCR matches is a near-full-frame box yields no seed (null accuracy rather than
+    seeding an untrackable box). Mirrors the p18_seg observation."""
+    det = _FakeDetector(
+        [
+            {"label": "player", "confidence": 1.0, "bbox": [0.286, 0.123, 0.856, 0.997]},
+            {"label": "player", "confidence": 0.9, "bbox": [0.37, 0.15, 0.41, 0.25]},
+        ],
+        numbers={
+            _px_key([0.286, 0.123, 0.856, 0.997]): ["R.MARIN18PEACE"],
+            _px_key([0.37, 0.15, 0.41, 0.25]): ["C"],
+        },
+    )
+    frame = np.zeros((64, 64, 3), np.uint8)
+    match = identify_player_by_number(frame, 18, det)
+    assert match is None
+
+
 def test_track_player_handoff_sam_propagates_without_per_frame_player_detect(monkeypatch):
     """ADAAAA-7218 acceptance: once the matched player's SAM slot is seeded,
     SAM propagates the tracking and player detections are NOT re-run per frame.
