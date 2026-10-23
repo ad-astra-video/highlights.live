@@ -1,0 +1,4 @@
+{"id":"soc-0","frame":0,"image":"","objects":[{"label":"player","bbox":[0.270313,0.308333,0.354687,0.693056]},{"label":"soccer ball","bbox":[0.060937,0.830556,0.095312,0.891667]}]}
+{"id":"soc-1","frame":1,"image":"","objects":[{"label":"player","bbox":[0.274219,0.31,0.358594,0.694722]},{"label":"soccer ball","bbox":[0.067969,0.827778,0.102344,0.888889]}]}
+{"id":"soc-2","frame":2,"image":"","objects":[{"label":"player","bbox":[0.28,0.315,0.36,0.69]},{"label":"goalkeeper","bbox":[0.8,0.3,0.95,0.8]},{"label":"soccer ball","bbox":[0.07,0.83,0.10,0.89]}]}
+{"id":"soc-3","frame":3,"image":"","objects":[{"label":"player","bbox":[0.27,0.31,0.35,0.69]},{"label":"soccer ball","bbox":[0.06,0.83,0.095,0.89]}]}
