@@ -238,6 +238,36 @@ class AudioChunkRequest(BaseModel):
     seq: int = Field(default=-1)  # optional; <0 -> per-session auto counter
 
 
+class AudioBatchChunk(BaseModel):
+    """One sub-chunk inside a windowed ``/audio/batch`` request (ADAAAA-7313).
+
+    Identical wire shape to a single ``AudioChunkRequest`` body minus
+    ``stream_id`` (the batch inherits the session/stream from the request so a
+    caller does not repeat it per sub-chunk). ``seq`` is optional; <0 lets the
+    session's auto counter assign it in array order, exactly like the
+    single-chunk path.
+    """
+
+    timestamp: float = 0.0  # seconds from stream start (this chunk's end)
+    samples: str = ""       # base64 int16 mono LE PCM
+    seq: int = Field(default=-1)
+
+
+class AudioBatchRequest(BaseModel):
+    """An ordered window of audio sub-chunks for the Stage-A gate (ADAAAA-7313).
+
+    The gate is pure DSP (never the detector/SAM/Gemma). Chunks are decoded and
+    fed through ``state.audio_gate.update()`` in array order; the gate state
+    (rolling baseline / burst / swell / cooldown) carries across the whole
+    window AND across separate requests, so a caller may split a file into
+    several batch windows as long as chunks arrive in order with monotonic
+    ``timestamp``. The response carries every candidate that fired in the
+    window (0..n), in fire order.
+    """
+
+    chunks: list[AudioBatchChunk] = Field(default_factory=list)
+
+
 class SessionCloseResponse(BaseModel):
     closed: str | None = None
 
@@ -946,6 +976,7 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[
         "onsetLatencyS": round(sig.onset_latency_s, 3),
         "peakEnergy": round(sig.peak_energy, 6),
         "baselineEnergy": round(sig.baseline_energy, 6),
+        "frames": sig.frames,
     }
     cand = {
         "type": "candidate",
@@ -968,6 +999,33 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[
         except Exception:
             pass
     return cand, series
+
+
+def process_audio_batch(state, chunks: list[AudioBatchChunk]) -> tuple[list[dict], list]:
+    """Run an ordered window of audio sub-chunks through the Stage-A gate.
+
+    Additive path (ADAAAA-7313): decodes each sub-chunk (``_decode_audio``) and
+    feeds it through ``state.audio_gate.update()`` in array order, collecting
+    every candidate that fires across the window. Pure DSP like the single-chunk
+    path — NEVER touches the detector / SAM / Gemma, so it bills no GPU. Gate
+    state (rolling baseline / burst / swell / cooldown) carries across the whole
+    window AND across separate requests, so a caller may split a file into
+    several batches (each a separate HTTP POST) as long as chunks arrive in
+    order with monotonic ``timestamp``.
+
+    Each fired candidate is broadcast to this session's SSE subscribers exactly
+    like the single-chunk path (the candidate set is the window's fired events;
+    subscribers see them too). Returns ``(candidates, series)`` where
+    ``candidates`` is the ordered list of fired CandidateEvents (0..n) and
+    ``series`` is the bounded (t, energy, baseline) inspection snapshot.
+    """
+    candidates: list[dict] = []
+    for chunk in chunks:
+        cand, _series = process_audio(state, chunk.seq, chunk.timestamp, chunk.samples)
+        if cand is not None:
+            candidates.append(cand)
+    series = state.audio_gate.series_snapshot()
+    return candidates, series
 
 
 def handle_control(state, msg: dict) -> dict:
@@ -1234,6 +1292,32 @@ def create_app() -> FastAPI:
             state.stream_id = req.stream_id
         cand, series = process_audio(state, req.seq, req.timestamp, req.samples)
         return {"candidate": cand, "series": series}
+
+    @router.post("/audio/batch")
+    async def audio_batch(
+        req: AudioBatchRequest,
+        livepeer_session_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ):
+        """Feed an ordered audio window to the Stage-A noise-change gate.
+
+        Additive path (ADAAAA-7313): the same pure-DSP gate as ``/audio``, but
+        the caller sends a WHOLE window of sub-chunks in one request and gets
+        back every candidate that fired across it. The gate is stateful across
+        the window AND across separate requests (session baseline / cooldown /
+        history persist), so a file may be split into several batches as long
+        as chunks arrive in order with monotonic ``timestamp``. It NEVER runs
+        the detector / SAM / Gemma — this path bills no GPU.
+        """
+        sid = _read_session_id(livepeer_session_id, x_session_id)
+        if not sid:
+            raise HTTPException(status_code=400, detail="missing session id (Livepeer-Session-Id or X-Session-Id)")
+        state = registry.get_or_create(sid, "")
+        candidates, series = process_audio_batch(state, req.chunks)
+        # Same response body shape as the single-chunk path (candidate + series)
+        # for parity; ``candidate`` is kept as the last-fired candidate (or null)
+        # so an existing consumer that reads only ``candidate`` still works.
+        return {"candidate": candidates[-1] if candidates else None, "candidates": candidates, "series": series}
 
     @router.get("/events")
     async def events(

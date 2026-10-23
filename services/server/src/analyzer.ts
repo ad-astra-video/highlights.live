@@ -519,6 +519,13 @@ export interface AudioPostResult {
   candidate: AudioCandidate | null;
   series: { t: number; energy: number; baseline: number }[];
 }
+/** ADAAAA-7313: the perceive `/audio/batch` response — every candidate that
+ * fired across a windowed request (0..n, in fire order) plus the bounded
+ * per-chunk inspection series. */
+export interface AudioBatchResult {
+  candidates: AudioCandidate[];
+  series: { t: number; energy: number; baseline: number }[];
+}
 /** The decide brain's single-shot what-to-track plan (plan §4.4 / §7 D).
  * Returned by PipelineClient.plan(). `maxTracks` arrives already clamped to
  * the mode cap (3 live / 8 VOD) by the decide runner. */
@@ -608,6 +615,18 @@ export interface PipelineClient {
    * the server can route it to ``decide()``); ``null`` when the gate didn't
    * trip. The gate never decides a highlight itself. */
   postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioPostResult>;
+  /** Feed an ordered audio WINDOW to the perceive session's Stage-A gate.
+   * Additive (ADAAAA-7313): sends many sub-chunks in one request and returns
+   * every candidate that fired across the window, in fire order. The gate is
+   * pure DSP on the perceive side (never the detector/SAM/Gemma) and stays
+   * stateful across requests. Best-effort like postAudio: a 4xx/404 (session
+   * re-reserved) returns an empty candidate set rather than throwing.
+   *
+   * Optional for interface back-compat: an adapter that does not implement
+   * windowed batching keeps streaming single-chunk ``postAudio`` (the VOD audio
+   * leg falls back to that). The shipped OrchestratorAdapter and DirectAdapter
+   * both implement it. */
+  postAudioBatch?(sessionId: string, chunks: AudioChunk[]): Promise<AudioBatchResult>;
   /**
    * Deliver an operator/find-and-track control intent (INC-6 / ADAAAA-4330) to
    * the perceive session over HTTP: `track`/`seed`/`lock`/`evict`, plus the
