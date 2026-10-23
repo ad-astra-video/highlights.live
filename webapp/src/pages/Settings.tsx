@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { User, SlidersHorizontal, CreditCard, Sparkles, Mail } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useSettings } from "../lib/settings";
+import { api, type ApiError } from "../lib/api";
 
 const REASONING_OPTIONS = [
   {
@@ -70,6 +71,109 @@ function AccountTab() {
   );
 }
 
+function ClipWindowCard() {
+  const [before, setBefore] = useState("7");
+  const [after, setAfter] = useState("8");
+  const [minSec, setMinSec] = useState(15);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      try {
+        const c = await api<{ clipBeforeS: number; clipAfterS: number; clipWindowMinSec: number }>("/config/clip-window", { auth: false });
+        if (on) {
+          setBefore(String(c.clipBeforeS));
+          setAfter(String(c.clipAfterS));
+          setMinSec(c.clipWindowMinSec ?? 15);
+        }
+      } catch {
+        if (on) setError("Could not load the clip window setting.");
+      } finally {
+        if (on) setLoading(false);
+      }
+    })();
+    return () => {
+      on = false;
+    };
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    setSaved(null);
+    setNote(null);
+    try {
+      const r = await api<{ clipBeforeS: number; clipAfterS: number; clipWindowMinSec: number; note?: string; deliveredWindowSec: number }>(
+        "/config/clip-window",
+        { method: "PUT", body: { clipBeforeS: Number(before), clipAfterS: Number(after) } }
+      );
+      setBefore(String(r.clipBeforeS));
+      setAfter(String(r.clipAfterS));
+      setMinSec(r.clipWindowMinSec ?? 15);
+      setSaved("Saved. The next highlight sits on this window.");
+      if (r.note) setNote(r.note);
+    } catch (e) {
+      // The server's clear validation message (non-numeric / negative /
+      // out-of-range / too-short) surfaces verbatim here so the user sees why
+      // it was rejected (ADAAAA-7247 / ACC-7).
+      setError((e as ApiError)?.message || "Failed to save the clip window setting.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputCls = "rounded-lg border border-neon/40 bg-black/60 px-3 py-2 text-sm text-white w-24";
+
+  return (
+    <div className="card card-accent mt-4 p-6">
+      <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-mut">
+        <SlidersHorizontal className="h-4 w-4" /> Highlight clip window
+      </div>
+      <p className="mt-2 text-sm text-slate-ink">
+        How many seconds of footage sit before and after the flagged moment in a delivered highlight clip.
+        Defaults are {minSec - 8}s before / 8s after (a {minSec}s window). The server keeps every clip at
+        least {minSec}s regardless of the setting, so a clip is never delivered shorter than {minSec}s.
+      </p>
+      <div className="mt-4 flex flex-wrap items-end gap-4">
+        <label className="text-sm text-mut">
+          <span className="block mb-1">Before (s)</span>
+          <input
+            type="number"
+            min={0}
+            className={inputCls}
+            value={before}
+            onChange={(e) => setBefore(e.target.value)}
+            disabled={saving}
+          />
+        </label>
+        <label className="text-sm text-mut">
+          <span className="block mb-1">After (s)</span>
+          <input
+            type="number"
+            min={0}
+            className={inputCls}
+            value={after}
+            onChange={(e) => setAfter(e.target.value)}
+            disabled={saving}
+          />
+        </label>
+        <button className="btn-neon inline-flex items-center gap-2" onClick={save} disabled={saving}>
+          <SlidersHorizontal className="h-4 w-4" /> {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+      {note && <div className="mt-3 rounded-lg border border-yellow/40 bg-yellow/10 px-4 py-3 text-sm text-yellow">{note}</div>}
+      {saved && !note && <div className="mt-3 rounded-lg border border-green/40 bg-green/10 px-4 py-3 text-sm text-green">{saved}</div>}
+      {error && <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-4 py-3 text-sm text-red">{error}</div>}
+      {loading && <div className="mt-3 text-sm text-mut">Loading…</div>}
+    </div>
+  );
+}
+
 function SettingsTab() {
   const { reasoningEffort, setReasoningEffort } = useSettings();
   const current = REASONING_OPTIONS.find((o) => o.value === reasoningEffort) ?? REASONING_OPTIONS[0];
@@ -100,6 +204,7 @@ function SettingsTab() {
         </div>
         <div className="mt-3 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-ink">{current.blurb}</div>
       </div>
+      <ClipWindowCard />
     </div>
   );
 }
