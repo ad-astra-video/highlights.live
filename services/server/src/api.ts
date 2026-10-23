@@ -27,7 +27,7 @@ import type { SignalGateOptions } from "./observe-loop";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
-import { cutClip, extractBurstFrames, extractFrames, probeHasAudio } from "./ffmpeg";
+import { cutClip, extractAudioWindow, extractBurstFrames, extractFrames, probeHasAudio } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
 import {
@@ -44,7 +44,7 @@ import {
   type JobCandidate,
   type JobDecision,
 } from "@highlights/events";
-import { buildSections, buildTraces, maxTracesForSource } from "./job-detail";
+import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
 import { applyJobTitle } from "./job-title";
 import { recordDecideAudit } from "./decide-audit";
 import {
@@ -420,12 +420,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   //     browser to a fresh wsUrl (no user action needed).
   async function provisionMedia(jobId: string): Promise<{ wsUrl: string; mediaSessionId: string; mediaOrigin: string }> {
     if (!cfg.mediaServerUrl) throw new Error("media server not configured (MEDIA_SERVER_URL)");
-    const mediaOrigin = cfg.mediaServerUrl.replace(/\/+$/, "");
+    // The control plane reaches the media node on its docker-internal URL
+    // (media:4070) for provisioning + health checks; a browser cannot resolve
+    // that service name, so the value handed BACK to the webapp for the WebRTC
+    // signaling POSTs is the PUBLIC media origin when configured (ADAAAA-7286).
+    const internalOrigin = cfg.mediaServerUrl.replace(/\/+$/, "");
+    const browserOrigin = (cfg.mediaPublicBaseUrl ?? cfg.mediaServerUrl).replace(/\/+$/, "");
     const existing = await db.getMediaSession(jobId);
     if (existing && existing.status === "active" && (await isMediaHealthy(existing.mediaOrigin))) {
-      return { wsUrl: existing.wsUrl, mediaSessionId: existing.sessionId, mediaOrigin: existing.mediaOrigin };
+      return { wsUrl: existing.wsUrl, mediaSessionId: existing.sessionId, mediaOrigin: browserOrigin };
     }
-    const r = await fetch(`${mediaOrigin}/sessions`, {
+    const r = await fetch(`${internalOrigin}/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jobId }),
@@ -433,8 +438,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (r.status !== 200) throw new Error(`media provision failed: HTTP ${r.status} ${await r.text()}`);
     const body: any = await r.json();
     // Prefer the media server's own full URL (LB-routable); fall back to
-    // deriving ws:// from MEDIA_SERVER_URL + the returned path.
-    const base = mediaOrigin.replace(/^http/, "ws");
+    // deriving ws:// from the browser-facing media origin + the returned path.
+    const base = browserOrigin.replace(/^http/, "ws");
     const wsUrl = body.wsUrl ?? `${base}${body.wsPath}`;
     const now = new Date().toISOString();
     await db.setMediaSession({
@@ -442,7 +447,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sessionId: body.sessionId,
       streamId: body.streamId ?? "",
       wsUrl,
-      mediaOrigin,
+      // Persist the internal origin so isMediaHealthy() health-checks the media
+      // node directly; the PUBLIC origin is what the browser is told.
+      mediaOrigin: internalOrigin,
       status: "active",
       createdAt: now,
       updatedAt: now,
@@ -453,7 +460,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       bj.mediaSessionId = body.sessionId;
       bj.mediaWsUrl = wsUrl;
     }
-    return { wsUrl, mediaSessionId: body.sessionId, mediaOrigin };
+    return { wsUrl, mediaSessionId: body.sessionId, mediaOrigin: browserOrigin };
   }
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));
@@ -2231,6 +2238,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const candidates = store.candidatesForJob(job.id);
 
     const sectionList = buildSections(obs, candidates, job.id);
+    // ADAAAA-7285: point each analysis window that captured audio at a real
+    // per-window audio resource (re-extracted on demand from the source), so
+    // the analysis-window player has something to play. Silent windows (audio
+    // path === "none") are left with no URI — the UI shows "No audio captured".
+    attachWindowAudioUris(sectionList, job.id);
     const traces = buildTraces(obs);
 
     return JobDetailSchema.parse({
@@ -2625,6 +2637,60 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!existsSync(abs)) return reply.code(404).send({ error: "not found" });
     return reply.type("image/jpeg").send(createReadStream(abs));
   });
+
+  // ADAAAA-7285: serve a per-window audio clip (mono 16 kHz WAV) re-extracted on
+  // demand from the job source recording, so the analysis-window player can
+  // actually play. The job-detail read path points each analysis window's
+  // `audio.uri` at this route. Public like `/clips/*` so the `<audio>` element
+  // can fetch it directly without an Authorization header (per the ADAAAA-7277
+  // player design); the media is per-job and the job/timestamp range is only
+  // reachable from the (auth-protected) job-detail payload.
+  //   GET /jobs/:id/windows/audio?start=<s>&end=<s>
+  // 400 for a missing/invalid window, 404 when the source recording is gone or
+  // carries no audio stream (a silent source must not yield a bogus URI).
+  const jobSourceRecordingPath = (job: { source: string; sourceUrl?: string; id: string }): string | null => {
+    const candidates: string[] = [];
+    if (job.sourceUrl) candidates.push(job.sourceUrl); // VOD `file` job local path
+    if (job.source !== "file") {
+      // Live-injest MPEG-TS session, or the browser capture once assembled.
+      candidates.push(path.join(cfg.dataDir, "live", job.id, "session.ts"));
+      candidates.push(path.join(cfg.dataDir, "live", job.id, "capture.webm"));
+      candidates.push(path.join(cfg.dataDir, "live", job.id, "capture.mp4"));
+    }
+    for (const c of candidates) {
+      if (c && existsSync(c) && statSync(c).size > 0) return c;
+    }
+    return null;
+  };
+  app.get<{ Params: { id: string }; Querystring: { start?: string; end?: string } }>(
+    "/jobs/:id/windows/audio",
+    async (req: any, reply) => {
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "not found" });
+      const start = parseFloat(req.query.start as string);
+      const end = parseFloat(req.query.end as string);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
+        return reply.code(400).send({ error: "start/end query args required (seconds), end must be > start" });
+      }
+      const source = jobSourceRecordingPath(job);
+      if (!source) {
+        return reply.code(404).send({ error: "source recording not available for this job (live source no longer on disk)" });
+      }
+      // A silent source must not yield a "valid-looking" URI: pre-check so the
+      // ADAAAA-7248 "no audio captured" semantics stay honest.
+      if (!(await probeHasAudio(cfg.ffmpegPath, source))) {
+        return reply.code(404).send({ error: "no audio track in job source (silent window)" });
+      }
+      let wav: Buffer;
+      try {
+        wav = await extractAudioWindow(cfg.ffmpegPath, source, start, end - start);
+      } catch (e: any) {
+        return reply.code(404).send({ error: `could not extract window audio: ${String(e?.message || e).slice(0, 200)}` });
+      }
+      if (!wav || wav.length === 0) return reply.code(404).send({ error: "no audio in window" });
+      return reply.type("audio/wav").header("Content-Length", String(wav.length)).send(wav);
+    }
+  );
 
   // Live-console overlay: Server-Sent Events stream of observations / candidates
   // / highlights for a live (or file-sim) job, as analysis runs. Client re-subscribes
