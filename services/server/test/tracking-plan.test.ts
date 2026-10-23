@@ -11,7 +11,7 @@ function mkClient(over: Partial<PipelineClient> = {}): { client: PipelineClient;
       calls.push(`plan:${req.mode}`);
       return { planVersion: 1, category: "soccer", intent: "", source: "planner", maxTracks: req.mode === "vod" ? 8 : 3, targets: [{ label: "player", role: "player" }] } as any;
     },
-    postAudio: async () => null,
+    postAudio: async () => ({ candidate: null, series: [] }),
     controlForward: async () => {},
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     stopPerceive: async () => {},

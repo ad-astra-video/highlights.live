@@ -42,7 +42,7 @@ function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
     // on the PipelineClient interface. null = the gate did not fire.
     postAudio: async () => {
       log.push("audio");
-      return null;
+      return { candidate: null, series: [] };
     },
     // INC-6 find-and-track control forward: not exercised in these unit tests,
     // but required on the PipelineClient interface.
@@ -73,7 +73,7 @@ describe("analyzeJob", () => {
       frames(3),
       async (ts) => {
         cuts.push(ts);
-        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
+        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true };
       },
       { jobId: "job-1", clipBeforeS: 4, clipAfterS: 4, gameHint: "" }
     );
@@ -92,7 +92,7 @@ describe("analyzeJob", () => {
     const cuts: number[] = [];
     const cut = async (ts: number) => {
       cuts.push(ts);
-      return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
+      return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true };
     };
     const outcome = await analyzeJob(client, frames(3), cut, {
       jobId: "j",
@@ -132,7 +132,7 @@ describe("analyzeJob", () => {
         return { isHighlight: true, score: 80, eventType: "GOAL" };
       },
     });
-    await analyzeJob(client, frames(1), async () => ({ clipId: "c", clipUri: "/c.mp4" }), {
+    await analyzeJob(client, frames(1), async () => ({ clipId: "c", clipUri: "/c.mp4", hasAudio: true }), {
       jobId: "j",
       clipBeforeS: 4,
       clipAfterS: 4,
@@ -175,7 +175,7 @@ describe("analyzeJob", () => {
     await analyzeJob(
       client,
       frames(3),
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", liveObserveLoop: true },
       (ev) => events.push(ev)
     );
@@ -201,7 +201,7 @@ describe("analyzeJob", () => {
     const outcome = await analyzeJob(
       client,
       frames(6),
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", liveObserveLoop: true },
       (ev) => events.push(ev)
     );
@@ -226,7 +226,7 @@ describe("analyzeJob", () => {
       frames(2),
       async (ts) => {
         cuts.push(ts);
-        return { clipId: "c", clipUri: "u" };
+        return { clipId: "c", clipUri: "u", hasAudio: true };
       },
       // Live observe loop runs the decide + accept path; a rejected verdict
       // must not cut a clip or record a highlight.
@@ -261,7 +261,7 @@ describe("analyzeJob", () => {
     const outcome = await analyzeJob(
       client.client,
       frames(3),
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", sessionRetryBackoffMs: 0, sessionRetryBackoffMaxMs: 0 }
     );
     // 2 reserves (initial + one re-reserve), 4 analyze invocations (3 frames,
@@ -289,7 +289,7 @@ describe("analyzeJob", () => {
       analyzeJob(
         client.client,
         frames(2),
-        async (ts) => ({ clipId: "c", clipUri: "u" }),
+        async (ts) => ({ clipId: "c", clipUri: "u", hasAudio: true }),
         { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", maxReReserves: 2, sessionRetryBackoffMs: 0, sessionRetryBackoffMaxMs: 0 }
       )
     ).rejects.toBeInstanceOf(SessionLostError);
@@ -310,7 +310,7 @@ describe("analyzeJob", () => {
       },
     });
     await expect(
-      analyzeJob(client.client, frames(2), async (ts) => ({ clipId: "c", clipUri: "u" }), {
+      analyzeJob(client.client, frames(2), async (ts) => ({ clipId: "c", clipUri: "u", hasAudio: true }), {
         jobId: "j",
         clipBeforeS: 4,
         clipAfterS: 4,
@@ -340,7 +340,7 @@ describe("analyzeJob", () => {
       reservePerceive: async () => ({ sessionId: "sess-r", appUrl: "", controlUrl: "" }),
     });
     await expect(
-      analyzeJob(client.client, frames(1), async (ts) => ({ clipId: "c", clipUri: "u" }), {
+      analyzeJob(client.client, frames(1), async (ts) => ({ clipId: "c", clipUri: "u", hasAudio: true }), {
         jobId: "j",
         clipBeforeS: 4,
         clipAfterS: 4,
@@ -377,7 +377,7 @@ describe("analyzeJob", () => {
     await analyzeJob(
       client.client,
       frames(3),
-      async (ts) => ({ clipId: "c", clipUri: "u" }),
+      async (ts) => ({ clipId: "c", clipUri: "u", hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", preferLabels: ["player", "soccer ball"] }
     );
     expect(optsSeen.length).toBe(4); // 3 frames; frame 2's session-lost retried on the fresh session
@@ -401,7 +401,7 @@ describe("analyzeJob", () => {
     await analyzeJob(
       client.client,
       frames(2),
-      async (ts) => ({ clipId: "c", clipUri: "u" }),
+      async (ts) => ({ clipId: "c", clipUri: "u", hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", loraRef: "/models/lora-stream-7" }
     );
     expect(optsSeen.length).toBe(2);
@@ -445,7 +445,7 @@ describe("analyzeJob", () => {
       },
       stopPerceive: async () => {},
     });
-    await analyzeJob(client, frames(2), async (ts) => ({ clipId: `c${ts}`, clipUri: "/c.mp4" }), {
+    await analyzeJob(client, frames(2), async (ts) => ({ clipId: `c${ts}`, clipUri: "/c.mp4", hasAudio: true }), {
       jobId: "j",
       clipBeforeS: 4,
       clipAfterS: 4,
@@ -474,7 +474,7 @@ describe("analyzeJob", () => {
     await analyzeJob(
       client.client,
       frames(2),
-      async () => ({ clipId: "c", clipUri: "u" }),
+      async () => ({ clipId: "c", clipUri: "u", hasAudio: true }),
       {
         jobId: "j",
         clipBeforeS: 4,
@@ -503,7 +503,7 @@ describe("analyzeJob", () => {
     await analyzeJob(
       client.client,
       frames(2),
-      async () => ({ clipId: "c", clipUri: "u" }),
+      async () => ({ clipId: "c", clipUri: "u", hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer" }
     );
     for (const o of optsSeen) {
@@ -570,7 +570,7 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
     await analyzeJob(
       client,
       frames(4),
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 4, observeLoop: true },
       undefined,
       undefined,
@@ -605,7 +605,7 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
     await analyzeJob(
       client,
       frames(2),
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", liveObserveLoop: true }
     );
     expect(seen.frames).toBeDefined(); // assembled window sequence forwarded
@@ -635,7 +635,7 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
     await analyzeJob(
       client,
       frames(2),
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", audioContext: true, liveObserveLoop: true },
       undefined,
       undefined,
@@ -744,7 +744,7 @@ describe("A — 60s rolling window + processed-frame/finding cache (ADAAAA-6029)
     await analyzeJob(
       client,
       frames(2),
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 4, observeLoop: true },
       undefined,
       undefined,
@@ -769,7 +769,7 @@ describe("A — 60s rolling window + processed-frame/finding cache (ADAAAA-6029)
     await analyzeJob(
       client,
       frames(1),
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", liveObserveLoop: true }
     );
     // The live observer request carries the rolling-PAST window frames[].
@@ -947,7 +947,7 @@ describe("analyzeJob adaptive perceive cadence (ADAAAA-7152 Gap 1)", () => {
     const outcome = await analyzeJob(
       client,
       frames(20),
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true }),
       // No `perceiveCadence` -> the auto rule enables it (observeLoop + gate + decideWindowN).
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 4, observeLoop: true, observeSignalGate: true, perceiveQuietStride: 2 }
     );
@@ -967,7 +967,7 @@ describe("analyzeJob adaptive perceive cadence (ADAAAA-7152 Gap 1)", () => {
     await analyzeJob(
       client,
       frames(8),
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true }),
       { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", decideWindowN: 4, observeLoop: true, observeSignalGate: true, perceiveCadence: false }
     );
     expect(analyzeCalls).toBe(8);
@@ -992,7 +992,7 @@ describe("analyzeJob adaptive perceive cadence (ADAAAA-7152 Gap 1)", () => {
     const outcome = await analyzeJob(
       client,
       frames(20),
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4`, hasAudio: true }),
       {
         jobId: "j",
         clipBeforeS: 4,
@@ -1011,5 +1011,31 @@ describe("analyzeJob adaptive perceive cadence (ADAAAA-7152 Gap 1)", () => {
     for (let ts = 11; ts <= 15; ts++) expect(perceivedAt).toContain(ts);
     // Yet the pass still reduced perceive calls overall vs the naive full pass.
     expect(outcome.perceiveCalls!).toBeLessThan(20);
+  });
+});
+
+describe("LiveRunShared audio-gate inspection series (ADAAAA-7255)", () => {
+  it("stores the forwarded series and slices it to a time window around the trigger", () => {
+    const shared = new LiveRunShared();
+    shared.setAudioSeries([
+      { t: 7.0, energy: 0.1, baseline: 0.10 },
+      { t: 8.0, energy: 0.6, baseline: 0.11 },
+      { t: 9.0, energy: 0.9, baseline: 0.12 },
+      { t: 12.0, energy: 0.2, baseline: 0.13 },
+      { t: 15.0, energy: 0.1, baseline: 0.13 },
+    ]);
+    // Window [trigger - pre, trigger + post] = [7, 11] around t=9 with pre=2/post=2
+    const win = shared.seriesWindow(9, 2, 2);
+    expect(win.map((p) => p.t)).toEqual([7, 8, 9]);
+    // Absent series -> empty.
+    expect(new LiveRunShared().seriesWindow(9, 2, 2)).toEqual([]);
+  });
+
+  it("setAudioSeries updates in place (snapshot replacement, bounded by perceive)", () => {
+    const shared = new LiveRunShared();
+    shared.setAudioSeries([{ t: 1, energy: 0.2, baseline: 0.2 }]);
+    expect(shared.seriesWindow(1, 0.5, 0.5)).toHaveLength(1);
+    shared.setAudioSeries([]);
+    expect(shared.seriesWindow(1, 0.5, 0.5)).toEqual([]);
   });
 });

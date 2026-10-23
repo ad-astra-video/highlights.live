@@ -59,7 +59,7 @@ function capacityAdapter(analyzeDelayMs = 2000) {
       return { run: "x", checkpoint: "/x" };
     },
     async postAudio() {
-      return null;
+      return { candidate: null, series: [] };
     },
     async controlForward() {},
     async stopPerceive(sessionId: string) {

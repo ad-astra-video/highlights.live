@@ -144,7 +144,7 @@ function buildFakePipeline(record: any[]): PipelineClient {
       return { isHighlight: true, score: 80, eventType: "GOAL", reason: "test" };
     },
     async postAudio() {
-      return null;
+      return { candidate: null, series: [] };
     },
     async plan(): Promise<any> {
       return { planVersion: 1, category: "soccer", intent: "", source: "planner-fallback", maxTracks: 3, targets: [], reason: "test" };
@@ -172,7 +172,7 @@ describe("analyzeJob ships calibration to the reserved perceive session", () => 
   it("forwards a `configure` control on reserve when calibration is configured", async () => {
     const record: any[] = [];
     const client = buildFakePipeline(record);
-    await analyzeJob(client, singleFrame(), async () => ({ clipId: "c", clipUri: "u" }), {
+    await analyzeJob(client, singleFrame(), async () => ({ clipId: "c", clipUri: "u" , hasAudio: true }), {
       jobId: "job-1",
       gameHint: "soccer",
       clipBeforeS: 2,
@@ -188,7 +188,7 @@ describe("analyzeJob ships calibration to the reserved perceive session", () => 
   it("sends NO configure control when no calibration is configured (uncalibrated baseline)", async () => {
     const record: any[] = [];
     const client = buildFakePipeline(record);
-    await analyzeJob(client, singleFrame(), async () => ({ clipId: "c", clipUri: "u" }), {
+    await analyzeJob(client, singleFrame(), async () => ({ clipId: "c", clipUri: "u" , hasAudio: true }), {
       jobId: "job-2",
       gameHint: "soccer",
       clipBeforeS: 2,

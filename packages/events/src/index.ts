@@ -643,6 +643,17 @@ export const HighlightRecordSchema = z.object({
   // clipError is present (ADAAAA-6522). An empty clipUri with no clipError means
   // the clip is simply deferred until stop-time finalize.
   clipError: z.string().optional(),
+  // ADAAAA-7248: whether the DELIVERED clip mp4 actually contains an audio
+  // stream, probed at clip-cut time. True -> the clip is audible; false ->
+  // the capture source had no audio (e.g. a screen/window share has no tab
+  // audio), so the UI shows an explicit "no audio captured" state instead of
+  // silently implying sound. Additive optional — absent on legacy rows.
+  hasAudio: z.boolean().optional(),
+  // ADAAAA-7248: the ASR (audio->text) transcript for this highlight's audio
+  // window, when one was computed, so the webapp card can render it for human
+  // corroboration. Carried from the decide confirm/stage-1 analysis block.
+  // Additive optional — absent when no ASR ran.
+  asrTranscript: z.string().optional(),
   // Increment F / ADAAAA-6465: outcome taxonomy member + near-miss flag, so a
   // near miss surfaces at a lower score labeled distinctly (shorter clip / a
   // distinct label downstream); a scoring play is the full highlight score.
@@ -744,6 +755,19 @@ export const AnalysisResponseSchema = z.object({
 });
 export type AnalysisResponse = z.infer<typeof AnalysisResponseSchema>;
 
+/** One per-chunk audio energy-vs-baseline inspection point (ADAAAA-7255):
+ * ``t`` seconds over the stream, ``energy`` and ``baseline`` both normalized
+ * 0..1 (the Stage-A gate's per-chunk RMS energy and its rolling ambient
+ * baseline). Carried by the per-window analysis so the request-inspection view
+ * can render the energy-vs-baseline graph. Additive optional — absent on legacy
+ * analyses / windows without an audio tap. */
+export const AudioSeriesPointSchema = z.object({
+  t: z.number().min(0),
+  energy: z.number().min(0).max(1),
+  baseline: z.number().min(0).max(1),
+});
+export type AudioSeriesPoint = z.infer<typeof AudioSeriesPointSchema>;
+
 /** Per-window capture of exactly what was fed to the decide LLM + what it returned. */
 export const WindowAnalysisSchema = z.object({
   /** The exact prompt text sent to the model for this window. */
@@ -757,6 +781,10 @@ export const WindowAnalysisSchema = z.object({
   audio: AnalysisAudioSchema.optional(),
   asr: AnalysisAsrSchema.optional(),
   response: AnalysisResponseSchema.optional(),
+  // ADAAAA-7255: the bounded per-chunk (t, energy, baseline) audio gate series
+  // for this window, for the energy-vs-baseline graph. Additive optional —
+  // absent when the audio tap produced nothing for the window.
+  audioSeries: z.array(AudioSeriesPointSchema).optional(),
 });
 export type WindowAnalysis = z.infer<typeof WindowAnalysisSchema>;
 

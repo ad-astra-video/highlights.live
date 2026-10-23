@@ -123,6 +123,40 @@ describe("WindowAnalysisPanel (ADAAAA-7157)", () => {
     expect(html).toContain("confirmed goal"); // goalConfirmed chip on the toggle
   });
 
+  it("renders the audio energy-vs-baseline graph with the trigger onset marked (ADAAAA-7255)", () => {
+    const withSeries: WindowAnalysis = {
+      ...analysis,
+      audioSeries: [
+        { t: 8.0, energy: 0.10, baseline: 0.10 },
+        { t: 9.0, energy: 0.55, baseline: 0.11 },
+        { t: 10.0, energy: 0.90, baseline: 0.12 },
+        { t: 11.0, energy: 0.30, baseline: 0.13 },
+      ],
+    };
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis: withSeries, jobId: "abc", triggerTs: 10.0 })
+    );
+    expect(html).toContain("data-audio-series-graph");
+    expect(html).toContain("Audio energy vs baseline");
+    expect(html).toContain("data-audio-series-energy");
+    expect(html).toContain("data-audio-series-baseline");
+    expect(html).toContain("data-audio-trigger");
+    expect(html).toContain("data-audio-trigger-label");
+    // React SSR inserts `<!-- -->` between static and interpolated text nodes,
+    // so assert on the two halves rather than the joined string.
+    expect(html).toContain("trigger @ T+");
+    expect(html).toContain("10.0");
+    expect(html).toContain("energy");
+    expect(html).toContain("baseline");
+  });
+
+  it("does not render the graph when no audio series was captured", () => {
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis, jobId: "abc", triggerTs: 10.0 })
+    );
+    expect(html).not.toContain("data-audio-series-graph");
+  });
+
   it("renders the confirm request context + ConfirmDecision in the deep-dive body", () => {
     const html = renderToString(
       React.createElement(ConfirmSubPanel, { confirm, jobId: "abc", defaultOpen: true })

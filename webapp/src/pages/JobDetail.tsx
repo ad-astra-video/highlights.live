@@ -141,7 +141,7 @@ function DecideNoteBanner({ note, jobId }: { note: DecideNote; jobId: string }) 
         </span>
       </button>
       {note.reason && <div className="mt-0.5 text-mut">{note.reason}</div>}
-      {open && <WindowAnalysisPanel analysis={note.analysis} confirm={note.confirm} jobId={jobId} />}
+      {open && <WindowAnalysisPanel analysis={note.analysis} confirm={note.confirm} jobId={jobId} triggerTs={note.timestamp} />}
     </div>
   );
 }
@@ -264,6 +264,23 @@ export function HighlightCard({ highlight: h, onDecision, pendingStatus = null }
           </span>
         </div>
         <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
+        {/* ADAAAA-7248: honest audio state + ASR corroboration on the card. A
+            clip cut from an audio-less source (screen/window share) shows an
+            explicit label instead of silently implying sound; an ASR
+            transcript (when computed) is rendered for textual corroboration. */}
+        {h.hasAudio === false && (
+          <div
+            className="mt-2 inline-flex items-center gap-1 rounded-full border border-mut/40 bg-mut/10 px-2 py-0.5 text-xs font-bold text-mut"
+            data-detail-no-audio
+          >
+            No audio captured
+          </div>
+        )}
+        {h.asrTranscript && (
+          <div className="mt-2 rounded-lg border border-neon/30 bg-mut/10 px-2 py-1 text-xs text-ink" data-detail-asr>
+            <span className="text-neon">ASR:</span> {h.asrTranscript}
+          </div>
+        )}
         <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
         <div className="text-xs text-mut">
           T+{Math.round(h.start)}s → T+{Math.round(h.end)}s

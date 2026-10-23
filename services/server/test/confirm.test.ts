@@ -50,7 +50,7 @@ function makeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
     stopPerceive: async () => {
       log.push("stop");
     },
-    postAudio: async () => null,
+    postAudio: async () => ({ candidate: null, series: [] }),
     controlForward: async () => {},
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     confirm: async () => {
@@ -329,7 +329,7 @@ describe("analyzeJob integration (VOD confirm driver)", () => {
     });
     const shared = new LiveRunShared();
     const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" } as any; // confirmEnabled undefined
-    const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }), cfg, undefined, undefined, shared);
+    const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }), cfg, undefined, undefined, shared);
     expect(confirmed).toBe(0);
     expect(outcome.highlights).toHaveLength(1); // Stage-1 accepted goal cut as normal
     expect(shared.confirmMetrics.totalRuns).toBe(0);
@@ -342,7 +342,7 @@ describe("analyzeJob integration (VOD confirm driver)", () => {
     });
     const shared = new LiveRunShared();
     const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", confirmEnabled: true } as any;
-    const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }), cfg, undefined, undefined, shared);
+    const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }), cfg, undefined, undefined, shared);
     // The refuted goal is NOT cut as a board goal highlight.
     expect(outcome.highlights).toHaveLength(0);
     expect(shared.confirmMetrics.totalRuns).toBe(1);
@@ -356,7 +356,7 @@ describe("analyzeJob integration (VOD confirm driver)", () => {
     });
     const shared = new LiveRunShared();
     const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", confirmEnabled: true } as any;
-    const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }), cfg, undefined, undefined, shared);
+    const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }), cfg, undefined, undefined, shared);
     expect(outcome.highlights).toHaveLength(1);
     expect(outcome.highlights[0]).toMatchObject({ goalConfirmed: "confirmed_goal", stage1Disagreed: false, outcome: "scoring_play" });
     expect(shared.confirmMetrics.totalRuns).toBe(1);

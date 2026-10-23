@@ -32,6 +32,7 @@ function isSingleShotPaymentRejectionText(body: string): boolean {
 }
 import type {
   AudioCandidate,
+  AudioPostResult,
   AudioChunk,
   ConfirmDecision,
   ConfirmRequest,
@@ -442,12 +443,14 @@ export class OrchestratorAdapter implements PipelineClient {
       }
     }
   }
-  async postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioCandidate | null> {
+  async postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioPostResult> {
     // Pure-DSP audio gate on the perceive runner — no GPU on this path. Proxy
     // through the same orchestrator session as /analyze so the gate marks
     // candidates on the live session the worker is already paying for. The
     // gate's CandidateEvent (or null) rides the response back so the server can
-    // route an audio-triggered candidate to decide() on the anchored frame.
+    // route an audio-triggered candidate to decide() on the anchored frame, and
+    // the bounded (t, energy, baseline) inspection series rides it too
+    // (ADAAAA-7255) for the request-inspection energy-vs-baseline graph.
     const { status, data } = await this.client.appCall<any>(sessionId, "audio", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -461,7 +464,11 @@ export class OrchestratorAdapter implements PipelineClient {
     // A dropped audio chunk is cheap (gate is best-effort); a 404 just means
     // the video leg already re-reserved a fresh session. Never abort the pass.
     if (status >= 500) throw new Error(`postAudio failed: HTTP ${status}`);
-    return (status >= 200 && status < 300 ? data?.candidate : null) ?? null;
+    if (status < 200 || status >= 300) return { candidate: null, series: [] };
+    return {
+      candidate: (data?.candidate ?? null) as AudioCandidate | null,
+      series: Array.isArray(data?.series) ? (data.series as AudioPostResult["series"]) : [],
+    };
   }
   async controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<void> {
     // INC-6 / ADAAAA-4330: proxy a find-and-track / operator control intent
@@ -829,7 +836,7 @@ export class DirectAdapter implements PipelineClient {
       return { planVersion: 1, category: req.category || "", intent: req.intent || "", source: "planner-fallback", maxTracks: req.mode === "vod" ? 8 : 3, reason: "planner unavailable" };
     }
   }
-  async postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioCandidate | null> {
+  async postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioPostResult> {
     // Direct dev path: POST straight to perceive /app/audio (pure DSP, no GPU).
     const r = await fetch(`${this.cfg.perceiveUrl}/app/audio`, {
       method: "POST",
@@ -843,11 +850,16 @@ export class DirectAdapter implements PipelineClient {
     });
     // Best-effort gate: a dropped chunk must never abort the video pass. The
     // gate's CandidateEvent (or null) rides the response back so the server can
-    // route an audio-triggered candidate to decide() on the anchored frame.
+    // route an audio-triggered candidate to decide() on the anchored frame, and
+    // the bounded (t, energy, baseline) inspection series rides it too
+    // (ADAAAA-7255) for the request-inspection energy-vs-baseline graph.
     if (r.status >= 500) throw new Error(`postAudio failed: HTTP ${r.status}`);
-    if (r.status < 200 || r.status >= 300) return null;
-    const body = (await r.json().catch(() => null)) as { candidate?: AudioCandidate } | null;
-    return body?.candidate ?? null;
+    if (r.status < 200 || r.status >= 300) return { candidate: null, series: [] };
+    const body = (await r.json().catch(() => null)) as { candidate?: AudioCandidate; series?: AudioPostResult["series"] } | null;
+    return {
+      candidate: body?.candidate ?? null,
+      series: Array.isArray(body?.series) ? body.series! : [],
+    };
   }
   async controlForward(_sessionId: string, control: { type: string; [k: string]: any }): Promise<void> {
     // INC-6 / ADAAAA-4330: direct dev path posts the find-and-track control
