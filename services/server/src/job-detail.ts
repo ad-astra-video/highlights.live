@@ -107,3 +107,52 @@ export function buildTraces(observations: StoredObservation[]): JobTrace[] {
 export function maxTracesForSource(source: string): number {
   return ["rtmp", "webrtc", "screenshare", "browser", "file-sim"].includes(source) ? 3 : 8;
 }
+
+/** ADAAAA-7285: point every analysis window that actually captured audio at a
+ * real, servable per-window audio resource so the analysis-window player
+ * (WindowAnalysis.tsx `audio.uri`) has something to play.
+ *
+ * The window is `[timestamp - preS, timestamp + postS]` around the decide-note
+ * trigger (the decide default is `[-2s, +3s]` — DEFAULT_PRE_WINDOW_S /
+ * DEFAULT_POST_WINDOW_S). The URI targets the on-demand extraction endpoint
+ * (`/jobs/:jobId/windows/audio?start=..&end=..`), which re-extracts the window
+ * from the job source recording via ffmpeg, so it works retroactively for
+ * existing jobs whose source is still on disk.
+ *
+ * Windows whose audio channel reached the model as `none` (genuinely silent
+ * source) keep `audio.uri` as persisted ("" / absent) — a silent window must
+ * NOT get a bogus playable URI, and the UI shows the "No audio captured" badge
+ * (ADAAAA-7248/7277 semantics preserved).
+ *
+ * Pure + additive: only analyze notes that carry a captured `analysis.audio`
+ * are touched, and each rewritten analysis is a fresh object so the stored
+ * JobCandidate is never mutated. */
+export function attachWindowAudioUris(
+  sections: Section[],
+  jobId: string,
+  windowPreS = DEFAULT_WINDOW_PRE_S,
+  windowPostS = DEFAULT_WINDOW_POST_S
+): Section[] {
+  for (const s of sections) {
+    for (const n of s.decideNotes) {
+      const a = n.analysis;
+      if (!a?.audio) continue;
+      if (a.audio.path === "none") continue; // silent window — keep uri ""
+      const start = Math.max(0, n.timestamp - windowPreS);
+      const end = n.timestamp + windowPostS;
+      n.analysis = {
+        ...a,
+        audio: {
+          ...a.audio,
+          uri: `/jobs/${jobId}/windows/audio?start=${start.toFixed(3)}&end=${end.toFixed(3)}`,
+        },
+      };
+    }
+  }
+  return sections;
+}
+
+/** Decide window defaults, mirrored here (the read path has no live AnalyzerConfig
+ * at hand). Keep in sync with analyzer.ts DEFAULT_PRE_WINDOW_S / POST_WINDOW_S. */
+export const DEFAULT_WINDOW_PRE_S = 2;
+export const DEFAULT_WINDOW_POST_S = 3;

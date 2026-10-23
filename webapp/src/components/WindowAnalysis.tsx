@@ -196,39 +196,77 @@ function ResponseBlock({ a }: { a: WindowAnalysis }) {
 }
 
 /** The audio / ASR context block (which channel reached the model + the ASR
- *  transcript). Rendered only when audio/asr context was captured. */
+ *  transcript). Rendered only when audio/asr context was captured.
+ *
+ *  ADAAAA-7277: two behaviours:
+ *  • when the window carries a servable audio URI (`audio.uri`), render a real
+ *    playable `<audio controls>` element so the operator can hear the window.
+ *  • when the window's audio channel is `none` (a genuinely silent source),
+ *    render the explicit "No audio captured" badge (matching the highlight-card
+ *    wording from ADAAAA-7248) instead of a blank box.
+ *  The ASR transcript text is always rendered when present. */
 function AudioAsrBlock({ a }: { a: WindowAnalysis }) {
-  const hasAudio = !!a.audio;
-  const hasAsr = !!a.asr;
+  const audio = a.audio;
+  const asr = a.asr;
+  const hasAudio = !!audio;
+  const hasAsr = !!asr;
   if (!hasAudio && !hasAsr) return null;
+  // A window whose audio channel reached the model as `none` had no audio
+  // captured (silent source) → explicit badge, never a silent empty box.
+  const isSilent = audio?.path === "none";
+  const hasPlayable = !!(audio && audio.uri);
   return (
     <div className="mt-2 rounded-md border border-purple/30 bg-purple/5 p-3" data-audio-asr>
       <div className="mb-1 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-purple">
         {hasAudio ? <AudioLines className="h-3.5 w-3.5" /> : <Captions className="h-3.5 w-3.5" />}
         Audio / ASR context
       </div>
-      {hasAudio && a.audio && (
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-ink">
-          {a.audio.path && <span>channel: <span className="font-mono text-neon">{a.audio.path}</span></span>}
-          {a.audio.sampleRate && <span>rate: <span className="font-mono text-neon">{a.audio.sampleRate} Hz</span></span>}
-          {a.audio.uri && (
-            <span className="truncate font-mono text-mut" title={a.audio.uri}>
-              {a.audio.uri}
-            </span>
+      {hasAudio && audio && (
+        <>
+          {isSilent ? (
+            <div
+              className="inline-flex items-center gap-1 rounded-full border border-mut/40 bg-mut/10 px-2 py-0.5 text-xs font-bold text-mut"
+              data-window-no-audio
+            >
+              No audio captured
+            </div>
+          ) : (
+            <>
+              {hasPlayable && (
+                <audio
+                  controls
+                  preload="metadata"
+                  src={audio.uri}
+                  className="mt-1 h-9 w-full"
+                  data-window-audio-player
+                >
+                  Your browser does not support audio playback.
+                </audio>
+              )}
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-ink">
+                {audio.path && <span>channel: <span className="font-mono text-neon">{audio.path}</span></span>}
+                {audio.sampleRate && <span>rate: <span className="font-mono text-neon">{audio.sampleRate} Hz</span></span>}
+                {audio.uri && (
+                  <span className="truncate font-mono text-mut" title={audio.uri}>
+                    {audio.uri}
+                  </span>
+                )}
+              </div>
+            </>
           )}
-        </div>
+        </>
       )}
-      {hasAsr && a.asr && (
+      {hasAsr && asr && (
         <div className="mt-1">
-          {a.asr.transcript ? (
+          {asr.transcript ? (
             <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink" data-asr-transcript>
-              {a.asr.transcript}
+              {asr.transcript}
             </pre>
           ) : (
             <span className="text-xs text-mut">No transcript.</span>
           )}
-          {a.asr.latencyS !== undefined && (
-            <span className="ml-1 font-mono text-[10px] text-mut">({a.asr.latencyS.toFixed(2)}s ASR)</span>
+          {asr.latencyS !== undefined && (
+            <span className="ml-1 font-mono text-[10px] text-mut">({asr.latencyS.toFixed(2)}s ASR)</span>
           )}
         </div>
       )}
