@@ -35,6 +35,15 @@ export interface MediaConfig {
   publicBaseUrl?: string;
   /** Release a provisioned-but-never-used perceive slot after this many ms. */
   provisionNoClientMs?: number;
+  /** ICE servers (STUN/TURN) for WebRTC ingest — a JSON array of
+   *  `{ urls, username?, credential? }`. When set, the media server gathers a
+   *  relay (TURN) candidate and hands the same servers to the browser, so the
+   *  media path can be held instead of the browser reconnect-looping on
+   *  unreachable host candidates (ADAAAA-7304 finding 4). */
+  rtcIceServers?: { urls: string | string[]; username?: string; credential?: string }[];
+  /** Max ms to wait for the answerer's ICE gathering to complete before the RTC
+   *  answer is returned (so it carries a reachable candidate). */
+  rtcIceGatherTimeoutMs?: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
@@ -49,5 +58,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     paymentIntervalMs: env.PAYMENT_INTERVAL_MS ? Number(env.PAYMENT_INTERVAL_MS) : 10_000,
     publicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,
     provisionNoClientMs: env.MEDIA_PROVISION_NO_CLIENT_MS ? Number(env.MEDIA_PROVISION_NO_CLIENT_MS) : 60_000,
+    rtcIceServers: env.MEDIA_RTC_ICE_SERVERS ? JSON.parse(env.MEDIA_RTC_ICE_SERVERS) : undefined,
+    rtcIceGatherTimeoutMs: env.MEDIA_RTC_ICE_GATHER_TIMEOUT_MS ? Number(env.MEDIA_RTC_ICE_GATHER_TIMEOUT_MS) : undefined,
   };
 }

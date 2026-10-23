@@ -11,8 +11,11 @@ import {
   RtpHeader,
   RtpPacket,
   useH264,
+  useVP8,
+  useVP9,
 } from "werift";
 import { MediaServer } from "../src/server";
+import { isVp8Keyframe, isVp9Keyframe } from "../src/rtc";
 import type { ProvisionedSession } from "../src/orch";
 
 const wsConnect = (url: string) =>
@@ -367,5 +370,183 @@ describe("media server WebRTC ingest (C1)", () => {
   it("falls through to 404 for unknown sessions on the RTC offer route", async () => {
     const res = await app.inject({ method: "POST", url: "/sessions/nope/rtc/offer", payload: { offer: {} } });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("media server VP8/VP9 keyframe detection (C2)", () => {
+  it("detects a real VP8 keyframe via the frame-tag P bit (regression: byte0=0x50 was never 0/1)", () => {
+    // Real libvpx-VP8 frame tags: keyframe byte0=0x50 (P=0); interframes
+    // 0xb1/0xd1/0x51 (P=1). The old `data[0]===0||1` never matched these.
+    expect(isVp8Keyframe(Buffer.from([0x50, 0x00, 0x00, 0x00]))).toBe(true);
+    expect(isVp8Keyframe(Buffer.from([0xb1, 0x00, 0x00]))).toBe(false);
+    expect(isVp8Keyframe(Buffer.from([0xd1, 0x00, 0x00]))).toBe(false);
+    expect(isVp8Keyframe(Buffer.from([0x51, 0x00, 0x00]))).toBe(false);
+    // but literals 0x00/0x01 would have been misclassified as keyframes before
+    expect(isVp8Keyframe(Buffer.from([0x01, 0x00, 0x00]))).toBe(false);
+    expect(isVp8Keyframe(Buffer.alloc(0))).toBe(false);
+  });
+
+  it("detects a real VP9 keyframe via frame_marker + frame_type", () => {
+    // Real libvpx-VP9 frames: keyframe byte0=0x82, interframe byte0=0x86.
+    expect(isVp9Keyframe(Buffer.from([0x82, 0x49, 0x00]))).toBe(true);
+    expect(isVp9Keyframe(Buffer.from([0x86, 0x00, 0x00]))).toBe(false);
+    expect(isVp9Keyframe(Buffer.alloc(0))).toBe(false);
+  });
+});
+
+// --- generic RTC loopback used by the VP8/VP9 decode tests ---------------
+/** Parse an IVF file into its raw frame payloads (depacketized access units). */
+function ivfFrames(path: string): Buffer[] {
+  const raw = readFileSync(path);
+  if (raw.toString("ascii", 0, 4) !== "DKIF") throw new Error(`not an IVF: ${path}`);
+  const hdrLen = raw.readUInt16LE(6);
+  const frames: Buffer[] = [];
+  let off = hdrLen;
+  while (off + 12 <= raw.length) {
+    const size = raw.readUInt32LE(off);
+    frames.push(raw.subarray(off + 12, off + 12 + size));
+    off += 12 + size;
+  }
+  return frames;
+}
+
+/** Establish a browser (offerer) WebRTC session against the media server, wait
+ *  for ICE to connect, then stream `frames` as RTP using `codec` and poll for a
+ *  real decoded JPEG landing in the fake orchestrator. `payload` wraps each
+ *  frame with the codec's RTP payload descriptor (VP8 0x10, VP9 0x0C) so
+ *  werift's depacketizer returns the raw frame. */
+async function rtcPublishCodec(
+  srv: FastifyInstance,
+  sBase: string,
+  sid: string,
+  orch: FakeOrch,
+  codec: any,
+  frames: Buffer[],
+  payload: (frame: Buffer) => Buffer,
+): Promise<{ pc: any; elapsedMs: number }> {
+  const browserPc = new RTCPeerConnection({ codecs: { video: [codec] } } as any);
+  const sendTrack = new MediaStreamTrack({ kind: "video" });
+  browserPc.addTransceiver(sendTrack, { direction: "sendonly" } as any);
+  const offer = await browserPc.createOffer();
+  await browserPc.setLocalDescription(offer);
+
+  const ans = await srv.inject({
+    method: "POST",
+    url: `/sessions/${sid}/rtc/offer`,
+    payload: { offer },
+  });
+  expect(ans.statusCode).toBe(200);
+  const { answer } = ans.json();
+  await browserPc.setRemoteDescription(answer);
+
+  for (let i = 0; i < 40 && browserPc.connectionState !== "connected"; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  expect(browserPc.connectionState).toBe("connected");
+
+  const sender = browserPc.getTransceivers().find((t) => t.sender)?.sender;
+  if (sender) {
+    const s = sender as any;
+    s.sequenceNumber = 0;
+    s.timestamp = 0;
+    s.seqOffset = 0;
+    s.timestampOffset = 0;
+  }
+
+  const before = orch.publishes.length;
+  const added = () => orch.publishes.slice(before);
+  const pay = sender?.codec?.payloadType ?? 96;
+  const t0 = Date.now();
+  let clock = 0, ts = 0;
+  for (const frame of frames) {
+    const header = new RtpHeader({
+      payloadType: pay,
+      sequenceNumber: (clock++) % 65536,
+      timestamp: (ts += 90000 / 15),
+      ssrc: sender?.ssrc ?? 1,
+      marker: 1,
+    } as any);
+    sendTrack.writeRtp(new RtpPacket(header, payload(frame)));
+  }
+  let published = false;
+  for (let i = 0; i < 40 && !published; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    published = added().some((p) => p.jpeg.length > 100 && p.jpeg[0] === 0xff && p.jpeg[1] === 0xd8);
+  }
+  const elapsedMs = Date.now() - t0;
+  expect(published).toBe(true);
+  return { pc: browserPc, elapsedMs };
+}
+
+describe("media server WebRTC VP8/VP9 decode (C3)", () => {
+  let vp8Frames: Buffer[];
+  let vp9Frames: Buffer[];
+  beforeAll(() => {
+    const vp8Path = path.join(tmpdir(), `hl-rtc-${process.pid}.vp8.ivf`);
+    execFileSync("ffmpeg", [
+      "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=15",
+      "-t", "0.6", "-c:v", "libvpx", "-b:v", "200k", "-f", "ivf", vp8Path,
+    ]);
+    vp8Frames = ivfFrames(vp8Path);
+    const vp9Path = path.join(tmpdir(), `hl-rtc-${process.pid}.vp9.ivf`);
+    execFileSync("ffmpeg", [
+      "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=15",
+      "-t", "0.6", "-c:v", "libvpx-vp9", "-b:v", "250k", "-f", "ivf", vp9Path,
+    ]);
+    vp9Frames = ivfFrames(vp9Path);
+  });
+
+  it("decodes a browser-negotiated VP8 stream to a real JPEG on the video-in rail", async () => {
+    const g = new FakeOrch("sess-vp8");
+    const ms = new MediaServer(
+      { orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", reconnectGraceMs: 3000 },
+      g as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    try {
+      const prov = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-vp8" } });
+      const sid = prov.json().sessionId;
+      const { pc, elapsedMs } = await rtcPublishCodec(
+        srv, sBase, sid, g, useVP8(), vp8Frames,
+        (f) => Buffer.concat([Buffer.from([0x10]), f]), // VP8 descriptor: S=1,PID=0
+      );
+      expect(elapsedMs).toBeLessThan(3000);
+      const pub = [...g.publishes].reverse().find((p) => p.jpeg.length > 100)!;
+      expect(pub.jpeg[0]).toBe(0xff);
+      expect(pub.jpeg[1]).toBe(0xd8);
+      await pc.close();
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("decodes a browser-negotiated VP9 stream to a real JPEG on the video-in rail", async () => {
+    const g = new FakeOrch("sess-vp9");
+    const ms = new MediaServer(
+      { orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", reconnectGraceMs: 3000 },
+      g as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    try {
+      const prov = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-vp9" } });
+      const sid = prov.json().sessionId;
+      const { pc, elapsedMs } = await rtcPublishCodec(
+        srv, sBase, sid, g, useVP9(), vp9Frames,
+        (f) => Buffer.concat([Buffer.from([0x0c]), f]), // VP9 descriptor: B=1,E=1
+      );
+      expect(elapsedMs).toBeLessThan(3000);
+      const pub = [...g.publishes].reverse().find((p) => p.jpeg.length > 100)!;
+      expect(pub.jpeg[0]).toBe(0xff);
+      expect(pub.jpeg[1]).toBe(0xd8);
+      await pc.close();
+    } finally {
+      await srv.close();
+    }
   });
 });
