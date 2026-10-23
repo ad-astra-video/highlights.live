@@ -634,6 +634,13 @@ export const HighlightRecordSchema = z.object({
   clipUri: z.string(),
   start: z.number(),
   end: z.number(),
+  // ADAAAA-7232: the deterministic localized highlight instant (seconds from
+  // stream start) the delivered clip is centered on, plus the signal that
+  // produced it ("peak_audio" | "trigger"). Additive optional — legacy rows
+  // carry none; when absent the clip is centered on the coarse candidate
+  // trigger. Records Acc-3 so the clip center is queryable.
+  localizedTs: z.number().min(0).optional(),
+  localizeSignal: z.enum(["peak_audio", "trigger"]).optional(),
   eventType: z.string().optional(),
   score: z.number().min(0).max(100),
   reason: z.string().optional(),
