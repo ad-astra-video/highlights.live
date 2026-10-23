@@ -62,6 +62,28 @@ async function runFfmpeg(ffmpegPath: string, args: string[]): Promise<void> {
   }
 }
 
+/** Probe whether `source` carries an audio stream. Used at clip-cut time so the
+ * highlight can record `hasAudio` and the UI can surface an explicit
+ * "no audio captured" state for a silent clip (ADAAAA-7248) instead of implying
+ * sound. A source with no audio stream (e.g. a screen/window share, or an
+ * audio-less VOD upload) yields `false`; an inevitable ffprobe failure returns
+ * `null` so the caller can degrade to "unknown" rather than mislabeling audio. */
+export async function probeHasAudio(ffmpegPath: string, source: string): Promise<boolean | null> {
+  const ffprobe = ffmpegPath.replace(/ffmpeg([^/]*)$/, "ffprobe$1") || "ffprobe";
+  try {
+    const { stdout } = await exec(ffprobe, [
+      "-v", "error",
+      "-select_streams", "a",
+      "-show_entries", "stream=codec_type",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      source,
+    ]);
+    return stdout.trim().length > 0;
+  } catch {
+    return null;
+  }
+}
+
 /** Build ffmpeg args for a frame extraction. Pure + exported so the sliding
  * window positioning can be unit-tested without invoking ffmpeg. `-ss` before
  * `-i` fast-seeks at the demuxer; `-to` after `-i` stops decoding at outSec,

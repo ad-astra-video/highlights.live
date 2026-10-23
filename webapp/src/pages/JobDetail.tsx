@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Play, Check, X, Loader2, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, Play, Check, X, Loader2, ChevronDown, ChevronRight, VolumeX } from "lucide-react";
 import { api, getToken } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { VideoClip } from "../components/VideoClip";
@@ -271,6 +271,27 @@ export function HighlightCard({ highlight: h, onDecision, pendingStatus = null }
         <div className="mt-1 rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut" data-detail-trigger>
           Trigger: <span className="font-bold text-ink">{triggerLabel(h.trigger)}</span>
         </div>
+        {/* ADAAAA-7248: surface audio state explicitly — a silent clip (e.g. a
+            screen/window share, or an audio-less upload) reads as "no audio
+            captured" rather than silently implying sound; when an ASR transcript
+            is available for corroboration it is shown too. */}
+        {h.hasAudio === false && (
+          <div
+            className="mt-1 rounded-lg border border-yellow/40 bg-yellow/10 px-2 py-1 text-xs text-yellow"
+            data-detail-no-audio
+          >
+            <VolumeX className="mr-1 inline h-3 w-3" aria-hidden /> No audio captured — the source had
+            no audio track (e.g. a screen/window share). Sound is unavailable for this clip.
+          </div>
+        )}
+        {h.asrTranscript && (
+          <div
+            className="mt-1 rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut"
+            data-detail-asr
+          >
+            ASR transcript: <span className="text-slate-ink">{h.asrTranscript}</span>
+          </div>
+        )}
         <div className="mt-3 flex gap-2">
           <button
             className="btn-neon flex-1"
