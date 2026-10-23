@@ -663,6 +663,18 @@ export const HighlightRecordSchema = z.object({
   // clipError is present (ADAAAA-6522). An empty clipUri with no clipError means
   // the clip is simply deferred until stop-time finalize.
   clipError: z.string().optional(),
+  // ADAAAA-7248: whether the source this highlight's clip was cut from carried
+  // an audio stream. Set at clip-cut time (ffprobe). false => the delivered
+  // clip is silent because the source had no audio track (e.g. a screen/window
+  // share, or an audio-less upload), which the UI surfaces as an explicit
+  // "no audio captured" state instead of silently implying sound. Additive
+  // optional — absent on pre-existing rows / when the probe was skipped.
+  hasAudio: z.boolean().optional(),
+  // ADAAAA-7248: the ASR transcript computed in the decide runner for this
+  // highlight's audio context, surfaced on the card so textual corroboration is
+  // available when the clip has no audible audio. Additive optional; populated
+  // by the decide->persist follow-up (ACC-3) so absent today on new rows.
+  asrTranscript: z.string().optional(),
   // Increment F / ADAAAA-6465: outcome taxonomy member + near-miss flag, so a
   // near miss surfaces at a lower score labeled distinctly (shorter clip / a
   // distinct label downstream); a scoring play is the full highlight score.
