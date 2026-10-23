@@ -776,6 +776,19 @@ export const AnalysisResponseSchema = z.object({
 });
 export type AnalysisResponse = z.infer<typeof AnalysisResponseSchema>;
 
+/** One per-chunk audio energy-vs-baseline inspection point (ADAAAA-7255):
+ * ``t`` seconds over the stream, ``energy`` and ``baseline`` both normalized
+ * 0..1 (the Stage-A gate's per-chunk RMS energy and its rolling ambient
+ * baseline). Carried by the per-window analysis so the request-inspection view
+ * can render the energy-vs-baseline graph. Additive optional — absent on legacy
+ * analyses / windows without an audio tap. */
+export const AudioSeriesPointSchema = z.object({
+  t: z.number().min(0),
+  energy: z.number().min(0).max(1),
+  baseline: z.number().min(0).max(1),
+});
+export type AudioSeriesPoint = z.infer<typeof AudioSeriesPointSchema>;
+
 /** Per-window capture of exactly what was fed to the decide LLM + what it returned. */
 export const WindowAnalysisSchema = z.object({
   /** The exact prompt text sent to the model for this window. */
@@ -789,6 +802,10 @@ export const WindowAnalysisSchema = z.object({
   audio: AnalysisAudioSchema.optional(),
   asr: AnalysisAsrSchema.optional(),
   response: AnalysisResponseSchema.optional(),
+  // ADAAAA-7255: the bounded per-chunk (t, energy, baseline) audio gate series
+  // for this window, for the energy-vs-baseline graph. Additive optional —
+  // absent when the audio tap produced nothing for the window.
+  audioSeries: z.array(AudioSeriesPointSchema).optional(),
 });
 export type WindowAnalysis = z.infer<typeof WindowAnalysisSchema>;
 

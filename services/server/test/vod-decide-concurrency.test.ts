@@ -44,7 +44,7 @@ function concurrencyClient(opts: {
       targets: [{ label: "player", role: "player" }],
       reason: "test",
     }),
-    postAudio: async () => null,
+    postAudio: async () => ({ candidate: null, series: [] }),
     controlForward: async () => {},
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     stopPerceive: async () => {},
@@ -96,7 +96,7 @@ describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)"
       frameSeq(4) as any,
       async (ts) => {
         cuts.push(ts);
-        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
+        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true };
       },
       { ...DECIDE_CFG, jobId: "job-vod" },
       onEvent
@@ -132,7 +132,7 @@ describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)"
       frameSeq(11) as any,
       async (ts) => {
         cuts.push(ts);
-        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
+        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true };
       },
       { ...DECIDE_CFG, jobId: "job-vod2" },
       onEvent
@@ -167,7 +167,7 @@ describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)"
       frameSeq(3) as any,
       async (ts) => {
         cuts.push(ts);
-        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` };
+        return { clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true };
       },
       { ...LIVE_CFG, jobId: "job-live-serial" },
       onEvent
@@ -208,7 +208,7 @@ describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)"
         targets: [{ label: "player", role: "player" }],
         reason: "test",
       }),
-      postAudio: async () => null,
+      postAudio: async () => ({ candidate: null, series: [] }),
       controlForward: async () => {},
       train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
       stopPerceive: async () => {},
@@ -218,7 +218,7 @@ describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)"
     const outcome = await analyzeJob(
       client,
       frameSeq(2) as any,
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }),
       { ...DECIDE_CFG, jobId: "job-expired" },
       onEvent
     );
@@ -258,7 +258,7 @@ describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)"
         targets: [{ label: "player", role: "player" }],
         reason: "test",
       }),
-      postAudio: async () => null,
+      postAudio: async () => ({ candidate: null, series: [] }),
       controlForward: async () => {},
       train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
       stopPerceive: async () => {},
@@ -268,7 +268,7 @@ describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)"
     const outcome = await analyzeJob(
       client,
       frameSeq(2) as any,
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }),
       { ...DECIDE_CFG, jobId: "job-expired-retry" },
       onEvent
     );
@@ -298,7 +298,7 @@ describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)"
       analyzeJob(
         client,
         frameSeq(2) as any,
-        async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+        async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }),
         { ...DECIDE_CFG, jobId: "job-fail" },
         onEvent
       )
@@ -318,7 +318,7 @@ describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)"
       analyzeJob(
         client,
         frameSeq(1) as any,
-        async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+        async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }),
         { ...LIVE_CFG, jobId: "job-live-serial-fail" },
         () => {}
       )
@@ -344,7 +344,7 @@ describe("VOD decide concurrency (ADAAAA-6854 / ADAAAA-6903 no app-side toggle)"
       await analyzeJob(
         client,
         frameSeq(4) as any,
-        async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+        async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }),
         vod ? { ...DECIDE_CFG, jobId: "job-ac1-vod" } : { ...LIVE_CFG, jobId: "job-ac1-live" },
         onEvent
       );

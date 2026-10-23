@@ -49,6 +49,13 @@ export interface AnalysisAsr {
   url?: string;
   latencyS?: number;
 }
+/** One per-chunk audio energy-vs-baseline inspection point (ADAAAA-7255):
+ * ``t`` seconds over the stream, ``energy`` and ``baseline`` both 0..1. */
+export interface AudioSeriesPoint {
+  t: number;
+  energy: number;
+  baseline: number;
+}
 export interface AnalysisResponse {
   isHighlight?: boolean;
   score?: number;
@@ -72,6 +79,10 @@ export interface WindowAnalysis {
   audio?: AnalysisAudio;
   asr?: AnalysisAsr;
   response?: AnalysisResponse;
+  // ADAAAA-7255: the bounded per-chunk (t, energy, baseline) audio-gate series
+  // for this window, for the energy-vs-baseline graph. Absent when the audio tap
+  // produced nothing for the window.
+  audioSeries?: AudioSeriesPoint[];
 }
 export interface ConfirmRequest {
   prompt: string;
