@@ -45,6 +45,16 @@ export interface RtcIngestOptions {
   jpegQuality?: number;
   /** Max longest-side resolution for the decode sample. Default 480. */
   maxWidth?: number;
+  /** ICE servers (STUN/TURN) the answerer gathers candidates with. The media
+   *  server sits behind the public LB, so its host candidates are private
+   *  container IPs unreachable from the browser; a relay (TURN) candidate gives
+   *  the browser a reachable path so the DTLS/media path can be held instead of
+   *  falling into a ~17s reconnect loop (ADAAAA-7304 finding 4). */
+  iceServers?: { urls: string | string[]; username?: string; credential?: string }[];
+  /** Max ms to wait for the answerer's ICE gathering to complete before
+   *  returning the answer, so the answer carries a reachable candidate.
+   *  Default 2000. */
+  iceGatherTimeoutMs?: number;
 }
 
 export interface DecodedFrame {
@@ -58,12 +68,62 @@ export interface DecodedFrame {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Map a negotiated codec mimeType to ffmpeg's raw-video demuxer. */
+/** Map a negotiated codec mimeType to ffmpeg's raw-video demuxer. VP8/VP9 have
+ *  no native raw-video demuxer in ffmpeg (verified: `-f vp8` / `-f vp9` both
+ *  fail with "Unknown input format"), so they are carried in an IVF container
+ *  and decoded with `-f ivf`. H264 stays Annex-B (`-f h264`). */
 function demuxerFor(mime: string | undefined): string {
   const m = (mime || "").toLowerCase();
-  if (m.includes("vp8")) return "vp8";
-  if (m.includes("vp9") || m.includes("vp09")) return "vp9";
+  if (m.includes("vp8") || m.includes("vp9") || m.includes("vp09")) return "ivf";
   return "h264"; // default: H264 (the common WebRTC video codec)
+}
+
+/** IVF fourCC for a negotiated VP8/VP9 codec. */
+function ivfFourcc(mime: string | undefined): string {
+  const m = (mime || "").toLowerCase();
+  return m.includes("vp9") || m.includes("vp09") ? "VP90" : "VP80";
+}
+
+/** 32-byte IVF container header ("DKIF"). Width/height are unknown until
+ *  decode, so 0 — ffmpeg's ivf demuxer reads true dimensions from the keyframe
+ *  bitstream (verified: an all-zero-dim IVF still decodes and scales via
+ *  `scale=min(w,iw):-2`). The numerator/denominator frame-rate pair MUST be
+ *  nonzero or ffmpeg rejects the container with "Invalid frame rate". */
+function ivfHeader(fourcc: string, frameCount: number): Buffer {
+  const h = Buffer.alloc(32);
+  h.write("DKIF", 0, "ascii");
+  h.writeUInt16LE(0, 4); // version
+  h.writeUInt16LE(32, 6); // header length
+  h.write(fourcc, 8, "ascii");
+  h.writeUInt16LE(0, 12); // width (unknown)
+  h.writeUInt16LE(0, 14); // height (unknown)
+  h.writeUInt32LE(30, 16); // nominal frame rate (numerator)
+  h.writeUInt32LE(1, 20); // ... (denominator)
+  h.writeUInt32LE(frameCount, 24);
+  return h;
+}
+
+/** 12-byte IVF frame record (uint32 size + uint64 PTS) followed by the frame. */
+function ivfFrame(data: Buffer, pts: number): Buffer {
+  const rec = Buffer.alloc(12);
+  rec.writeUInt32LE(data.length, 0);
+  rec.writeBigUInt64LE(BigInt(Math.max(0, Math.round(pts))), 4);
+  return Buffer.concat([rec, data]);
+}
+
+/** True when `data` starts a VP8 keyframe — the frame-tag P bit (bit 0) is 0
+ *  (RFC 6386). The old `data[0]===0||1` never matched a real frame tag (a
+ *  keyframe tags byte0=0x50), so the decode segment never reset on a keyframe
+ *  and grew unboundedly. */
+export function isVp8Keyframe(data: Buffer): boolean {
+  return data.length > 0 && (data[0] & 0x01) === 0;
+}
+
+/** True when `data` starts a VP9 keyframe — frame_marker (low 2 bits) == 0b10
+ *  and the keyframe bit (frame_type, bit 2) == 0. Verified on real libvpx-vp9
+ *  frames: keyframe byte0=0x82, interframe byte0=0x86. */
+export function isVp9Keyframe(data: Buffer): boolean {
+  return data.length > 0 && (data[0] & 0x07) === 0x02;
 }
 
 /** Split Annex-B into its NAL units (payloads, no start codes). */
@@ -107,8 +167,9 @@ export class WebRtcIngestSession extends EventEmitter {
   // ---- decode segment state (bounded from the last IDR) ----
   /** SPS/PPS retained across IDR resets so a keyframe segment always decodes. */
   private paramSets?: Buffer[];
-  /** Access units (as Annex-B) since the last IDR. */
-  private seg: Buffer[] = [];
+  /** Access units (as Annex-B for H264 / raw frame for VP8-VP9) since the last
+   *  IDR, each with the RTP timestamp used as the IVF PTS. */
+  private seg: { data: Buffer; pts: number }[] = [];
   /** Number of VCL (picture) access units in `seg` — used as `-frames:v`. */
   private vclCount = 0;
   /** NAL header byte of the last access unit (to detect VCL / IDR). */
@@ -133,6 +194,11 @@ export class WebRtcIngestSession extends EventEmitter {
       codecs: {
         video: [useH264(), useVP8(), useVP9({ profile: 0 } as any)],
       },
+      // A relay (TURN) ICE server gives the answerer a candidate the browser
+      // can actually reach when the media server's host candidates are private
+      // container IPs behind the public LB (ADAAAA-7304 finding 4). Without it
+      // the DTLS/media path cannot be held and the browser reconnect-loops.
+      ...(this.opts.iceServers?.length ? { iceServers: this.opts.iceServers } : {}),
     } as any);
     this.pc = pc;
     // The server is the answerer and expects to RECEIVE video: declare a
@@ -161,8 +227,29 @@ export class WebRtcIngestSession extends EventEmitter {
     await pc.setRemoteDescription(offer as any);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer as any);
-    await sleep(150); // allow ICE candidates to gather into the local description
+    // Wait for ICE gathering to finish (bounded) so the returned answer
+    // actually carries a reachable candidate. Returning before gathering puts
+    // no candidate in the answer, so the browser never connects and falls into
+    // the ~17s reconnect loop (ADAAAA-7304 finding 4).
+    await this.waitForIceGathering(pc);
     return pc.localDescription as any;
+  }
+
+  /** Wait (bounded) for the answerer's ICE gathering to complete so the answer
+   *  carries a candidate. No-op when already complete. */
+  private async waitForIceGathering(pc: RTCPeerConnection): Promise<void> {
+    if (pc.iceGatheringState === "complete") return;
+    const timeout = this.opts.iceGatherTimeoutMs ?? 2000;
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        const check = () => {
+          if (pc.iceGatheringState === "complete") resolve();
+        };
+        check();
+        pc.iceGatheringStateChange.subscribe(check);
+      }),
+      sleep(timeout),
+    ]);
   }
 
   /** Add a remote ICE candidate (trickle). */
@@ -253,7 +340,7 @@ export class WebRtcIngestSession extends EventEmitter {
     } else {
       // VP8/VP9: every access unit is a whole frame.
       isVCL = true;
-      isIDR = data[0] === 0 || data[0] === 1; // VP8 keyframe S bit; VP9 frame is full.
+      isIDR = this.packetCodec() === "VP8" ? isVp8Keyframe(data) : isVp9Keyframe(data);
     }
 
     if (isIDR) {
@@ -264,7 +351,7 @@ export class WebRtcIngestSession extends EventEmitter {
     const stored = isH264 ? withStartCode(data) : Buffer.from(data);
     // Feed the segment: skip pure parameter/supplemental NALs (they're retained
     // via this.paramSets at the head, so we need not duplicate them per frame).
-    this.seg.push(stored);
+    this.seg.push({ data: stored, pts: rtpTs });
     if (isVCL) this.vclCount++;
     this.lastNalType = nalType;
 
@@ -278,15 +365,19 @@ export class WebRtcIngestSession extends EventEmitter {
     }
   }
 
-  /** Build the bounded decode segment (SPS/PPS + AUs since last IDR) as Annex-B. */
+  /** Build the bounded decode segment as a single ffmpeg-addressable byte
+   *  stream. H264 is Annex-B (SPS/PPS at the head); VP8/VP9 are wrapped in an
+   *  IVF container so ffmpeg's `-f ivf` demuxer can decode them. */
   private buildSegment(): Buffer {
+    if (this.demuxer() === "ivf") {
+      // VP8/VP9: wrap each whole-frame access unit in an IVF frame record.
+      const parts: Buffer[] = [ivfHeader(ivfFourcc(this.codecMime), this.seg.length)];
+      for (const f of this.seg) parts.push(ivfFrame(f.data, f.pts));
+      return Buffer.concat(parts);
+    }
     const parts: Buffer[] = [];
     if (this.paramSets) for (const p of this.paramSets) parts.push(withStartCode(p));
-    if (this.demuxer() !== "h264") {
-      // VP8/VP9 raw frame data — feed the raw concatenation directly.
-      return Buffer.concat(this.seg);
-    }
-    for (const au of this.seg) parts.push(au);
+    for (const f of this.seg) parts.push(f.data);
     return Buffer.concat(parts);
   }
 
