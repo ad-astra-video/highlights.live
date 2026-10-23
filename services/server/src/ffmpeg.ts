@@ -26,27 +26,6 @@ export async function probeDuration(ffmpegPath: string, source: string): Promise
   }
 }
 
-/** Whether a media file carries an audio stream. Used at clip-cut time so the
- * webapp can show the true audio state of the DELIVERED clip (an audible
- * "has audio" clip vs an explicitly-labeled "no audio captured" clip) rather
- * than silently implying sound (ADAAAA-7248). Best-effort: any probe failure
- * returns false (no audio detected) so a cut never hard-fails on the probe. */
-export async function probeHasAudio(ffmpegPath: string, file: string): Promise<boolean> {
-  const ffprobe = ffmpegPath.replace(/ffmpeg([^/]*)$/, "ffprobe$1") || "ffprobe";
-  try {
-    const { stdout } = await exec(ffprobe, [
-      "-v", "error",
-      "-select_streams", "a",
-      "-show_entries", "stream=codec_type",
-      "-of", "csv=p=0",
-      file,
-    ]);
-    return stdout.trim().split("\n").some((l) => l.trim().toLowerCase() === "audio");
-  } catch {
-    return false;
-  }
-}
-
 /** Time window (seconds) to restrict a frame extraction to a sub-range of the
  * source. Omitted bounds mean "from the start" / "to the end". */
 export interface FrameWindow {
