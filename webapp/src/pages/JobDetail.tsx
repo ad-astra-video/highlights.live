@@ -444,9 +444,11 @@ function EnlargeGallery({
 
 /**
  * Full-screen Job detail (ADAAAA-6852 Inc 4). Route /app/jobs/:id. Covers the
- * start-new-job surface: header (job metadata), Highlights, Traces (with
- * capacity budget), and the 3 s-sectioned frame timeline with perceive overlays
- * + decide notes. Live-updates via /jobs/:id/events SSE (Inc 5) and tears the
+ * start-new-job surface: header (job metadata), Highlights, and the 3
+ * s-sectioned frame timeline with perceive overlays + decide notes. (The former
+ * standalone Traces table was removed per ADAAAA-7236; the tracking decision
+ * signal survives through track overlays in the frame debugger + highlight
+ * notes.) Live-updates via /jobs/:id/events SSE (Inc 5) and tears the
  * subscription down on a terminal state so no SSE leaks after done/failed.
  */
 export function JobDetail() {
@@ -541,7 +543,7 @@ export function JobDetail() {
 
   // Realtime reconciling poll (ADAAAA-6984, AC-1/AC-2/AC-3/AC-5/AC-7). While the
   // job is still in flight, re-fetch its detail every VOD_DETAIL_POLL_MS (5 s)
-  // to update status/progress/highlights/traces in place — no full reload. The
+  // to update status/progress/highlights in place — no full reload. The
   // SSE channel above remains the fast path; this interval guarantees a server
   // status transition shows within one poll cycle even if an SSE event is
   // missed or the socket drops. One timer per open detail view: it is torn down
@@ -793,46 +795,6 @@ export function JobDetail() {
               </div>
             </>
           )}
-
-          {/* Traces */}
-          <h3 className="mt-8 text-2xl font-black">Traces</h3>
-          <div className="mt-3 overflow-x-auto rounded-xl border border-purple/30 bg-black/30 p-4">
-            <div className="mb-2 text-xs text-mut">
-              Tracked objects — capacity budget {detail.traces.length} / {detail.maxTraces}
-            </div>
-            {detail.traces.length === 0 ? (
-              <div className="text-sm text-mut" data-detail-no-traces>No tracked objects for this job.</div>
-            ) : (
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="text-xs uppercase tracking-wide text-mut">
-                    <th className="py-1 pr-4">Track</th>
-                    <th className="py-1 pr-4">Label</th>
-                    <th className="py-1 pr-4">On screen</th>
-                    <th className="py-1 pr-4">Into</th>
-                    <th className="py-1 pr-4">Lost</th>
-                    <th className="py-1 pr-4">Accuracy</th>
-                    <th className="py-1">Sel.</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.traces.map((tr) => (
-                    <tr key={tr.trackId} className="border-t border-white/10" data-detail-trace>
-                      <td className="py-1.5 pr-4 font-mono text-xs">{tr.trackId}</td>
-                      <td className="py-1.5 pr-4">{tr.label || tr.kind || "—"}</td>
-                      <td className="py-1.5 pr-4">{tr.onScreen}</td>
-                      <td className="py-1.5 pr-4">{tr.ontoFrames ?? 0}</td>
-                      <td className="py-1.5 pr-4">{tr.lostFrames ?? 0}</td>
-                      <td className="py-1.5 pr-4">
-                        {tr.accuracy !== undefined ? `${Math.round(tr.accuracy * 100)}%` : "—"}
-                      </td>
-                      <td className="py-1.5">{tr.selected ? <span className="text-yellow">●</span> : ""}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
 
           {/* Frames timeline */}
           <div className="mt-8 flex items-center gap-3">
