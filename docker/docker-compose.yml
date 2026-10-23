@@ -344,6 +344,12 @@ services:
       # Media-path (b): the browser streams frames to the media server instead
       # of the server's HTTP /ingest when this is set.
       - MEDIA_SERVER_URL=${MEDIA_SERVER_URL:-http://media:4070}
+      # ADAAAA-7286: the SERVER hands the webapp the media origin for the WebRTC
+      # screen-share signaling POSTs. It must be the PUBLIC LB origin (a browser
+      # cannot resolve the docker-internal `media:4070` service name). config.ts
+      # reads this as `mediaPublicBaseUrl`, falling back to MEDIA_SERVER_URL when
+      # unset (local/dev, no LB). mediaPublicBaseUrl feeds api.ts provisionMedia().
+      - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-https://highlights-media.dpn.gg}
       # ADAAAA-6372/6373: the server is the VOD payer and calls `${decideUrl}/app/highlight`
       # (livepeer-adapter.ts). config.ts reads `decideUrl: env.DECIDE_URL` with NO default and
       # falls back to the server's own relative path -> 404 `decide failed`. Default to the
