@@ -1,6 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { clipWindow, validateClipWindow, CLIP_WINDOW_MAX_SIDE_S } from "../src/config";
-import { localizeHighlightInstant } from "../src/analyzer";
+import {
+  localizeHighlightInstant,
+  localizeHighlightInstantFrame,
+  localizeHighlightInstantVod,
+  frameLocalizationScore,
+  acceptVideoDecision,
+  LiveRunShared,
+  type LocalizeFrameInput,
+  type AnalyzerConfig,
+} from "../src/analyzer";
+import type { PerFrameSignal } from "../src/observe-loop";
 
 describe("clipWindow (ADAAAA-7232)", () => {
   it("defaults to a 15s window centered on the event (7s before, 8s after)", () => {
@@ -107,5 +117,180 @@ describe("validateClipWindow (ADAAAA-7247 / ACC-7)", () => {
     // Even a 1/1 setting still yields a >=15s delivered window via clipWindow.
     const w = clipWindow(100, 1, 1, 15);
     expect(w.end - w.start).toBe(15);
+  });
+});
+
+describe("frameLocalizationScore (ADAAAA-7253 / ACC-3)", () => {
+  const sig = (over: PerFrameSignal): PerFrameSignal => over;
+  it("ranks ball-in-net above goal-crossed above scoreboard-change", () => {
+    expect(frameLocalizationScore({ ts: 1, signal: sig({ ballInNet: true }) })).toBeGreaterThan(
+      frameLocalizationScore({ ts: 1, signal: sig({ goalCrossed: true }) })
+    );
+    expect(frameLocalizationScore({ ts: 1, signal: sig({ goalCrossed: true }) })).toBeGreaterThan(
+      frameLocalizationScore({ ts: 1, signal: sig({ scoreBoardChanged: true }) })
+    );
+  });
+
+  it("scores a goal-valued ballOutcome above a plain scoreboard change", () => {
+    const goal = frameLocalizationScore({ ts: 1, signal: sig({ ballOutcome: "goal" }) });
+    const sb = frameLocalizationScore({ ts: 1, signal: sig({ scoreBoardChanged: true }) });
+    expect(goal).toBeGreaterThan(sb);
+  });
+
+  it("falls through to tracking-detection confidence when no goal signal is present", () => {
+    const none = frameLocalizationScore({ ts: 1, signal: undefined, detectionConfidence: 0 });
+    const conf = frameLocalizationScore({ ts: 1, signal: undefined, detectionConfidence: 0.9 });
+    expect(conf).toBeGreaterThan(none);
+    expect(conf).toBeGreaterThan(0);
+  });
+});
+
+describe("localizeHighlightInstantFrame (ADAAAA-7253 / ACC-3)", () => {
+  const frame = (ts: number, signal?: PerFrameSignal, detectionConfidence?: number): LocalizeFrameInput => ({
+    ts,
+    signal,
+    detectionConfidence,
+  });
+  const ballInNet = (ts: number): LocalizeFrameInput => frame(ts, { ballInNet: true });
+
+  it("picks the peak ball-in-net frame deterministically after the trigger", () => {
+    const frames = [
+      frame(9.6, { scoreBoardChanged: true }), // scoreboard change
+      frame(10.5, { ballInNet: true }), // peak (ball-in-net)
+      frame(11.0, { goalCrossed: true }),
+    ];
+    const loc = localizeHighlightInstantFrame(frames, 9.5, 8);
+    expect(loc).toEqual({ ts: 10.5, signal: "peak_frame" });
+  });
+
+  it("tie-breaks to the earliest qualifying frame (deterministic)", () => {
+    const frames = [ballInNet(10.5), ballInNet(11.0)];
+    const loc = localizeHighlightInstantFrame(frames, 9.5, 8);
+    expect(loc).toEqual({ ts: 10.5, signal: "peak_frame" });
+  });
+
+  it("ignores frames at/before the trigger and beyond the lookahead", () => {
+    const frames = [
+      ballInNet(9.4), // <= trigger -> ignored
+      ballInNet(9.6),
+      ballInNet(20.0), // beyond lookahead -> ignored
+    ];
+    const loc = localizeHighlightInstantFrame(frames, 9.5, 8);
+    expect(loc).toEqual({ ts: 9.6, signal: "peak_frame" });
+  });
+
+  it("falls back to detection-confidence peak when no goal signal is present", () => {
+    const frames = [
+      frame(10.0, undefined, 0.5),
+      frame(11.0, undefined, 0.9),
+      frame(12.0, undefined, 0.7),
+    ];
+    const loc = localizeHighlightInstantFrame(frames, 9.5, 8);
+    expect(loc).toEqual({ ts: 11.0, signal: "peak_frame" });
+  });
+
+  it("falls back to the trigger when no qualifying signal-bearing frame exists", () => {
+    const loc = localizeHighlightInstantFrame([frame(10.0)], 9.5, 8);
+    expect(loc).toEqual({ ts: 9.5, signal: "trigger" });
+    expect(localizeHighlightInstantFrame([], 9.5, 8)).toEqual({ ts: 9.5, signal: "trigger" });
+    expect(localizeHighlightInstantFrame([frame(3, { ballInNet: true })], 9.5, 8)).toEqual({ ts: 9.5, signal: "trigger" });
+  });
+});
+
+describe("localizeHighlightInstantVod (ADAAAA-7253 / ACC-3)", () => {
+  const taps = [{ ts: 10.5, rms: 0.9 }];
+  const frames: LocalizeFrameInput[] = [{ ts: 10.5, signal: { ballInNet: true } }];
+
+  it("prefers the frame-based peak over peak-audio when a frame signal is present", () => {
+    const loc = localizeHighlightInstantVod(9.5, frames, taps, 8);
+    expect(loc).toEqual({ ts: 10.5, signal: "peak_frame" });
+  });
+
+  it("falls back to peak-audio when no frame signal qualifies", () => {
+    const loc = localizeHighlightInstantVod(9.5, [], taps, 8);
+    expect(loc).toEqual({ ts: 10.5, signal: "peak_audio" });
+  });
+
+  it("falls back to the trigger when neither frame nor audio signal is present", () => {
+    const loc = localizeHighlightInstantVod(9.5, undefined, undefined, 8);
+    expect(loc).toEqual({ ts: 9.5, signal: "trigger" });
+  });
+});
+
+describe("acceptVideoDecision frame-localized record (ADAAAA-7253 / ACC-3)", () => {
+  const seedCfg = {
+    jobId: "job-1",
+    confirmEnabled: false,
+    clipBeforeS: 7,
+    clipAfterS: 8,
+    clipWindowMinSec: 15,
+  } as unknown as AnalyzerConfig;
+
+  it("records localizeSignal=peak_frame and localizedTs on the highlight, with no new decide/confirm call", async () => {
+    const run = new LiveRunShared({ goalBurstWindowS: 30 });
+    let cutTs: number | undefined;
+    const cut = async (ts: number) => {
+      cutTs = ts;
+      return { clipId: "clip-1", clipUri: "uri-1" };
+    };
+    // Any decide/confirm invocation would throw — proves the frame-based accept
+    // path makes NO new decide/inference call (Acc-6).
+    const client = {
+      decide: () => {
+        throw new Error("decide should NOT be called during frame-based accept");
+      },
+      confirm: () => {
+        throw new Error("confirm should NOT be called when confirmEnabled=false");
+      },
+    } as any;
+
+    const frameSignals: LocalizeFrameInput[] = [
+      { ts: 10.6, signal: { scoreBoardChanged: true } },
+      { ts: 11.4, signal: { ballInNet: true } }, // peak
+      { ts: 12.0, signal: { goalCrossed: true } },
+    ];
+
+    await acceptVideoDecision(
+      client,
+      run,
+      cut,
+      seedCfg,
+      undefined,
+      { seq: 1, timestamp: 10.0 },
+      { eventType: "GOAL", timestamp: 10.0 },
+      { isHighlight: true, outcome: "scoring_play", score: 88 },
+      frameSignals
+    );
+
+    expect(cutTs).toBe(11.4);
+    expect(run.highlights).toHaveLength(1);
+    const rec = run.highlights[0];
+    expect(rec.localizedTs).toBe(11.4);
+    expect(rec.localizeSignal).toBe("peak_frame");
+    // The delivered clip is centered on the localized instant (ACC-2 centering).
+    expect(rec.start).toBe(11.4 - 7);
+    expect(rec.end).toBe(11.4 + 8);
+  });
+
+  it("falls back to the trigger signal on the record when no frame signal is present", async () => {
+    const run = new LiveRunShared({ goalBurstWindowS: 30 });
+    const cut = async () => ({ clipId: "clip-1", clipUri: "uri-1" });
+    const client = {} as any;
+
+    await acceptVideoDecision(
+      client,
+      run,
+      cut,
+      seedCfg,
+      undefined,
+      { seq: 1, timestamp: 42.0 },
+      { eventType: "GOAL", timestamp: 42.0 },
+      { isHighlight: true, outcome: "scoring_play", score: 90 }
+    );
+
+    expect(run.highlights).toHaveLength(1);
+    const rec = run.highlights[0];
+    expect(rec.localizeSignal).toBe("trigger");
+    expect(rec.localizedTs).toBe(42.0);
   });
 });

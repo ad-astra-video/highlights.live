@@ -228,6 +228,82 @@ export function localizeHighlightInstant(
   }
   return { ts: triggerTs, signal: "trigger" };
 }
+/** ADAAAA-7253 (ACC-3): one frame's input to frame-based VOD highlight
+ * localization. `signal` is the perceive-derived per-frame goal/ball evidence
+ * (ball-in-net / goal-crossed / scoreboard-change); `detectionConfidence` is the
+ * frame's max tracked/object detection confidence (0 when none). Both values are
+ * already-computed cached findings — frame localization reuses them with NO new
+ * inference / GPU decide pass (Acc-6). */
+export interface LocalizeFrameInput {
+  ts: number;
+  signal?: PerFrameSignal;
+  detectionConfidence?: number;
+}
+/** ADAAAA-7253 (ACC-3): deterministic per-frame localization score. Ranks a
+ * frame by the goal signal it carries — ball-in-net (peak) > goal-crossed >
+ * goal-valued outcome > scoreboard-change — and adds a small tracking-detection
+ * confidence term so a no-goal-channel window still localizes on the
+ * confident-detection peak. Absent signal scores ~0 (never a localization peak).
+ * Pure + deterministic (unit-testable). */
+export function frameLocalizationScore(f: LocalizeFrameInput): number {
+  const sig = f.signal;
+  let channel = 0;
+  if (sig) {
+    if (sig.ballInNet === true) channel = 100;
+    else if (sig.goalCrossed === true) channel = 80;
+    else if (sig.ballOutcome !== undefined && GOAL_OUTCOMES.has(sig.ballOutcome)) channel = 70;
+    else if (sig.scoreBoardChanged === true) channel = 60;
+  }
+  const conf = clamp01(f.detectionConfidence);
+  return channel + conf * 0.1;
+}
+/** ADAAAA-7253 (ACC-3): frame-based deterministic VOD highlight-instant
+ * localization. Within the dense window strictly AFTER the trigger within
+ * `maxLookaheadS`, pick the frame maximizing {@link frameLocalizationScore};
+ * ties break to the earliest qualifying frame (deterministic, and nearest the
+ * trigger). Returns `{ts, signal: "peak_frame"}` when a signal-bearing
+ * post-trigger frame exists, else `{ts: triggerTs, signal: "trigger"}`. Reuses
+ * already-cached per-frame signals — no new decide/inference call (Acc-6). */
+export function localizeHighlightInstantFrame(
+  frames: LocalizeFrameInput[],
+  triggerTs: number,
+  maxLookaheadS: number
+): { ts: number; signal: "peak_frame" | "trigger" } {
+  if (frames?.length) {
+    const upper = triggerTs + maxLookaheadS;
+    // Ascending ts => earliest frame wins ties (deterministic).
+    const candidates = frames
+      .filter((f) => f.ts > triggerTs && f.ts <= upper)
+      .sort((a, b) => a.ts - b.ts);
+    let best: LocalizeFrameInput | undefined;
+    let bestScore = 0;
+    for (const f of candidates) {
+      const s = frameLocalizationScore(f);
+      if (best === undefined || s > bestScore) {
+        best = f;
+        bestScore = s;
+      }
+    }
+    if (best && bestScore > 0) return { ts: best.ts, signal: "peak_frame" };
+  }
+  return { ts: triggerTs, signal: "trigger" };
+}
+/** ADAAAA-7253 (ACC-3): VOD highlight-instant localization with a frame-based
+ * path. Prefers frame-based localization when the pass carries a post-trigger
+ * per-frame signal (records `peak_frame`); otherwise falls back to the
+ * deterministic peak-audio tap (records `peak_audio`), then the trigger
+ * (records `trigger`). Pure — no inference, no new GPU/decide calls (Acc-3 /
+ * Acc-6). */
+export function localizeHighlightInstantVod(
+  triggerTs: number,
+  frames: LocalizeFrameInput[] | undefined,
+  taps: { ts: number; rms: number }[] | undefined,
+  maxLookaheadS: number
+): { ts: number; signal: "peak_frame" | "peak_audio" | "trigger" } {
+  const frame = localizeHighlightInstantFrame(frames ?? [], triggerTs, maxLookaheadS);
+  if (frame.signal === "peak_frame") return frame;
+  return localizeHighlightInstant(triggerTs, taps, maxLookaheadS);
+}
 export interface DecisionResult {
   isHighlight: boolean;
   score: number;
@@ -1965,7 +2041,7 @@ export function highlightDedupKey(h: { idempotencyKey?: string; start: number; e
   return h.idempotencyKey ?? `${Math.round(h.start)}|${h.eventType ?? "highlight"}`;
 }
 
-async function acceptVideoDecision(
+export async function acceptVideoDecision(
   client: PipelineClient,
   run: LiveRunShared,
   cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
@@ -1973,7 +2049,13 @@ async function acceptVideoDecision(
   onEvent: ((ev: AnalyzeEvent) => void) | undefined,
   emit: { seq: number; timestamp: number },
   candidate: CandidateSignal,
-  stage1: DecisionResult
+  stage1: DecisionResult,
+  // ADAAAA-7253 (ACC-3): the window's per-frame localization inputs (ts +
+  // perceive-derived goal/ball signal + detection confidence) so the delivered
+  // clip is centered on the per-frame signal peak, not the coarse trigger.
+  // Optional — when absent the frame-based path is skipped and the existing
+  // audio-tap / trigger fallback runs unchanged.
+  frameSignals?: LocalizeFrameInput[]
 ): Promise<void> {
   // ADAAAA-6797: Stage-2 confirmation dive — for an un-attested goal-type
   // candidate whose Stage-1 read is a scoring_play accept, run the decide
@@ -2020,10 +2102,12 @@ async function acceptVideoDecision(
     return;
   }
   buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger, stage1.analysis, confirm?.analysis);
-  // ADAAAA-7232: center the delivered clip on the localized highlight instant
-  // (deterministic peak-audio post-trigger), not the coarse trigger, so the
-  // moment lands in the middle third and the window always meets >=15 s.
-  const loc = localizeHighlightInstant(candidate.timestamp, run.audioEnergyTaps(), cfg.clipAfterS);
+  // ADAAAA-7232: center the delivered clip on the localized highlight instant,
+  // so the moment lands in the middle third and the window always meets >=15 s.
+  // ADAAAA-7253 (ACC-3): prefer the frame-based localization (per-frame signal
+  // peak) when the pass carries post-trigger per-frame signals, falling back to
+  // the deterministic peak-audio post-trigger tap, then the trigger.
+  const loc = localizeHighlightInstantVod(candidate.timestamp, frameSignals, run.audioEnergyTaps(), cfg.clipAfterS);
   const win = clipWindow(loc.ts, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15);
   const { clipId, clipUri } = await cut(loc.ts);
   const rec: HighlightRecord = {
@@ -2344,7 +2428,17 @@ export async function observeOnDecide(
     ballOutcome: windowAttestation.ballOutcome,
     scoreBoardChanged: windowAttestation.scoreBoardChanged,
   };
-  await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, decision);
+  // ADAAAA-7253 (ACC-3): carry the window's per-frame localization inputs
+  // (ts + perceive-derived goal/ball signal + max detection confidence) into
+  // the accept path so frame-based localization can center the clip on the
+  // per-frame signal peak. These are ALREADY-COMPUTED cached findings from the
+  // observe seeds — no new inference / decide / GPU call (Acc-6).
+  const frameSignals: LocalizeFrameInput[] = payload.seeds.map((s) => ({
+    ts: s.ts,
+    signal: s.signal,
+    detectionConfidence: (s.objects ?? []).reduce((m, o) => Math.max(m, clamp01(o.confidence)), 0),
+  }));
+  await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, decision, frameSignals);
   return isAcceptedHighlight(decision, cfg.preferLabels);
 }
 
