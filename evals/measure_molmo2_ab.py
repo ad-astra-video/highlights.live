@@ -50,6 +50,8 @@ import time
 from collections import defaultdict
 from statistics import median
 
+import molmo2_backend  # real Molmo2 grounding decode (ADAAAA-7283 leg B)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "services", "perceive"))
@@ -182,18 +184,25 @@ class FlorenceDetector:
 
 
 class MolmoDetector:
-    """Stub-free Molmo2-4B detector via HF transformers (measurement arm).
+    """Molmo2-4B detector via HF transformers (measurement arm).
 
     Requires transformers >= 4.52 (Molmo-2 architecture). Implements the same
-    detect(image, vocabulary) -> [{label, confidence, bbox}] contract, using the
-    open-vocab 'find all <vocab>' prompt with box output (MolmoPoint grounding
-    noted separately; primary arm here is the box output)."""
+    detect(image, vocabulary) -> [{label, confidence, bbox}] contract. Molmo2-4B
+    is a *point*-grounding model: for each closed-vocab class it emits one
+    `<points>` reference point per object instance. The output is decoded with
+    the REAL grounding decode helpers in molmo2_backend (extract_image_points /
+    points_to_boxes / parse_molmo_detection) — the same path the eval harness
+    uses — and each point is expanded to a non-degenerate per-point box
+    (DEFAULT_BOX_SIZE), replacing the old text-grep `_parse_boxes` placeholder
+    which Molmo2-4B never emits.
+    """
 
-    def __init__(self, model, vocab, device="cuda", dtype="bfloat16"):
+    def __init__(self, model, vocab, device="cuda", dtype="bfloat16", box_size=None):
         self.model = model
         self.device = device
         self.vocab = list(vocab)
         self.dtype = dtype
+        self.box_size = box_size if box_size is not None else molmo2_backend.DEFAULT_BOX_SIZE
         self._model = self._proc = None
         self.calls = 0
         self.peak_vram_mb = 0
@@ -202,53 +211,29 @@ class MolmoDetector:
         if self._model is not None:
             return
         import torch
-        from transformers import AutoModelForCausalLM, AutoProcessor
         dtype = getattr(torch, self.dtype, torch.bfloat16)
-        model = AutoModelForCausalLM.from_pretrained(
-            self.model, torch_dtype=dtype, trust_remote_code=True, device_map=self.device
-        )
-        model.eval()
-        proc = AutoProcessor.from_pretrained(self.model, trust_remote_code=True)
+        model, proc = molmo2_backend._load_model_and_processor(self.model, dtype, self.device)
         self._model, self._proc = model, proc
         if self.device.startswith("cuda"):
             self.peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
 
-    def _parse_boxes(self, output_text, vocabulary, width, height):
-        """Parse '<vocab>: [x1,y1,x2,y2]' style dot-box lines from the Molmo
-        output into normalized [{label, confidence, bbox}], keeping only boxes
-        whose label is in the closed vocabulary (junk otherwise). This is a
-        placeholder that mirrors the common MolmoPoint text format; the box-side
-        measurement may substitute the repo decode helper if present."""
-        vocab_lower = [str(v).strip().lower() for v in vocabulary]
-        found = []
-        if not output_text:
-            return found
-        for line in output_text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(":")
-            if len(parts) < 2:
-                continue
-            label = parts[0].strip().lower()
-            body = ":".join(parts[1:])
-            nums = []
-            for tok in body.replace("[", " ").replace("]", " ").split(","):
-                tok = tok.strip()
-                try:
-                    nums.append(float(tok))
-                except ValueError:
-                    pass
-            if len(nums) < 4:
-                continue
-            if label not in vocab_lower:
-                continue
-            x1, y1, x2, y2 = nums[0], nums[1], nums[2], nums[3]
-            if any(v <= 0 or v > 1.0 for v in (x1, y1, x2, y2)):
-                continue
-            found.append({"label": label, "confidence": 1.0,
-                          "bbox": [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]})
-        return found
+    def _generate(self, pil, prompt):
+        """Generate on one (image, prompt) pair via the Molmo2 chat-template path."""
+        import torch
+
+        messages = [{"role": "user", "content": [
+            {"type": "image", "image": pil},
+            {"type": "text", "text": prompt}]}]
+        inputs = self._proc.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True,
+            return_tensors="pt", return_dict=True,
+        )
+        inputs = {k: (v.to(self.device) if hasattr(v, "to") else v)
+                  for k, v in inputs.items()}
+        with torch.no_grad():
+            out = self._model.generate(**inputs, max_new_tokens=256)
+        gen = out[0][inputs["input_ids"].size(1):]
+        return self._proc.decode(gen, skip_special_tokens=True)
 
     def detect(self, image, vocabulary=None):
         import numpy as np
@@ -257,16 +242,13 @@ class MolmoDetector:
             image = np.stack([image] * 3, axis=-1)
         pil = Image.fromarray(image.astype(np.uint8)).convert("RGB")
         vocab = list(vocabulary) if vocabulary is not None else self.vocab
-        prompt = "find all " + ", ".join(vocab) + "."
         self.calls += 1
         self._load()
-        import torch
-        inputs = self._proc(images=pil, text=prompt, return_tensors="pt")
-        with torch.no_grad():
-            out = self._model.generate(**inputs, max_new_tokens=256)
-        text = self._proc.decode(out[0], skip_special_tokens=True)
-        w, h = pil.size
-        return self._parse_boxes(text, vocab, w, h)
+        dets = []
+        for cls in vocab:
+            text = self._generate(pil, molmo2_backend.build_prompt(cls))
+            dets.extend(molmo2_backend.parse_molmo_detection(text, cls, box_size=self.box_size))
+        return dets
 
 
 # --- eval loop ---------------------------------------------------------------
