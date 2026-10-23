@@ -52,7 +52,7 @@ function capacityAdapter(analyzeDelayMs = 1500) {
       return { run: "x", checkpoint: "/x" };
     },
     async postAudio() {
-      return null;
+      return { candidate: null, series: [] };
     },
     async controlForward() {},
     async stopPerceive(sessionId: string) {
@@ -169,7 +169,7 @@ describe("perceive slot released promptly on job-stop (ADAAAA-6561)", () => {
       decide: async () => ({ isHighlight: false, score: 0, eventType: "" }),
       plan: async () => ({ planVersion: 1, category: "soccer", intent: "", source: "x", maxTracks: 3, targets: [], reason: "t" }),
       train: async () => ({ run: "x", checkpoint: "/x" }),
-      postAudio: async () => null,
+      postAudio: async () => ({ candidate: null, series: [] }),
       controlForward: async () => {},
       stopPerceive: async () => {
         log.push("stop");
@@ -181,7 +181,7 @@ describe("perceive slot released promptly on job-stop (ADAAAA-6561)", () => {
     await analyzeJob(
       client,
       frames(3),
-      async () => ({ clipId: "c", clipUri: "/c.mp4" }),
+      async () => ({ clipId: "c", clipUri: "/c.mp4" , hasAudio: true }),
       { jobId: "job-x", clipBeforeS: 1, clipAfterS: 1, gameHint: "", maxReReserves: 3 },
       undefined,
       undefined,

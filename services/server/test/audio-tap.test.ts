@@ -89,12 +89,15 @@ describe("DirectAdapter.postAudio (server -> perceive /audio client)", () => {
   it("throws on 5xx (sick runner) but tolerates 404/4xx (session re-reserved — best effort)", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("{}", { status: 404 }))
+      vi.fn(async () => new Response("{ }", { status: 404 }))
     );
     const adapter = new DirectAdapter(cfg);
     // 404 must NOT throw — analysisJob may have re-reserved a fresh session.
-    // It also means the gate didn't return a candidate (null).
-    await expect(adapter.postAudio("sess-1", { seq: 0, timestamp: 0, samples: "AA" })).resolves.toBeNull();
+    // It also means the gate didn't return a candidate (empty result).
+    await expect(adapter.postAudio("sess-1", { seq: 0, timestamp: 0, samples: "AA" })).resolves.toEqual({
+      candidate: null,
+      series: [],
+    });
     // 500 must throw.
     vi.stubGlobal(
       "fetch",
@@ -118,13 +121,31 @@ describe("DirectAdapter.postAudio (server -> perceive /audio client)", () => {
     );
     const adapter = new DirectAdapter(cfg);
     const out = await adapter.postAudio("sess-1", { seq: 41, timestamp: 12.3, samples: "AAAA" });
-    expect(out).toEqual(cand);
+    expect(out.candidate).toEqual(cand);
   });
 
-  it("returns null when the gate does NOT fire (candidate: null)", async () => {
+  it("returns null candidate + empty series when the gate does NOT fire (candidate: null)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ candidate: null }), { status: 200 })));
     const adapter = new DirectAdapter(cfg);
-    await expect(adapter.postAudio("sess-1", { seq: 0, timestamp: 0, samples: "AA" })).resolves.toBeNull();
+    await expect(adapter.postAudio("sess-1", { seq: 0, timestamp: 0, samples: "AA" })).resolves.toEqual({
+      candidate: null,
+      series: [],
+    });
+  });
+
+  it("forwards the bounded (t, energy, baseline) inspection series from /audio (ADAAAA-7255)", async () => {
+    const series = [
+      { t: 8.0, energy: 0.1, baseline: 0.1 },
+      { t: 9.0, energy: 0.55, baseline: 0.11 },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ candidate: null, series }), { status: 200 }))
+    );
+    const adapter = new DirectAdapter(cfg);
+    const out = await adapter.postAudio("sess-1", { seq: 9, timestamp: 9.0, samples: "AAAA" });
+    expect(out.candidate).toBeNull();
+    expect(out.series).toEqual(series);
   });
 });
 

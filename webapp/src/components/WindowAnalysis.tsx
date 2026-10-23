@@ -31,6 +31,7 @@ import {
   goalConfirmedLabel,
   type AnalysisDataItem,
   type AnalysisMediaRef,
+  type AudioSeriesPoint,
   type ConfirmRecord,
   type WindowAnalysis,
 } from "../lib/jobDetail";
@@ -322,6 +323,99 @@ export function ConfirmSubPanel({ confirm, jobId, defaultOpen = false }: { confi
   );
 }
 
+/** ADAAAA-7255: the energy-vs-baseline graph for a per-window analysis.
+ * Time-aligned over the window's ``t`` (seconds), with the gate's per-chunk
+ * ``energy`` (0..1) and rolling ambient ``baseline`` (0..1) overlaid as two
+ * lines, and the candidate trigger onset marked with a vertical line where one
+ * fired. Read-only; uses only theme tokens. Renders nothing when no points. */
+function AudioEnergyGraph({ points, triggerTs }: { points: AudioSeriesPoint[]; triggerTs?: number }) {
+  if (points.length === 0) return null;
+  const W = 320;
+  const H = 90;
+  let xMin = Infinity;
+  let xMax = -Infinity;
+  for (const p of points) {
+    xMin = Math.min(xMin, p.t);
+    xMax = Math.max(xMax, p.t);
+  }
+  const xSpan = Math.max(1e-6, xMax - xMin);
+  const X = (t: number) => ((t - xMin) / xSpan) * W;
+  const Y = (v: number) => H - Math.max(0, Math.min(1, v)) * H;
+  const energyPts = points.map((p) => `${X(p.t).toFixed(1)},${Y(p.energy).toFixed(1)}`).join(" ");
+  const baselinePts = points.map((p) => `${X(p.t).toFixed(1)},${Y(p.baseline).toFixed(1)}`).join(" ");
+  const inWindow = triggerTs !== undefined && triggerTs >= xMin && triggerTs <= xMax;
+  const triggerX = inWindow ? X(triggerTs as number) : null;
+  return (
+    <div className="mt-2 rounded-md border border-mut/20 bg-black/30 p-3" data-audio-series-graph>
+      <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-wide text-mut">
+        <span className="font-bold">Audio energy vs baseline</span>
+        <span className="flex items-center gap-1 normal-case">
+          <svg width="14" height="6" className="stroke-neon" viewBox="0 0 14 6" aria-hidden>
+            <line x1="0" y1="3" x2="14" y2="3" strokeWidth="2" />
+          </svg>
+          energy
+        </span>
+        <span className="flex items-center gap-1 normal-case">
+          <svg width="14" height="6" className="stroke-purple" viewBox="0 0 14 6" aria-hidden>
+            <line x1="0" y1="3" x2="14" y2="3" strokeWidth="2" />
+          </svg>
+          baseline
+        </span>
+      </div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="h-24 w-full"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Audio energy vs baseline over the window"
+      >
+        {/* 0 / 1 reference lines */}
+        <line x1="0" y1={H} x2={W} y2={H} className="stroke-mut/40" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        <line x1="0" y1="0" x2={W} y2="0" className="stroke-mut/40" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        <polyline
+          points={baselinePts}
+          fill="none"
+          className="stroke-purple"
+          strokeWidth="1.5"
+          vectorEffect="non-scaling-stroke"
+          data-audio-series-baseline
+        />
+        <polyline
+          points={energyPts}
+          fill="none"
+          className="stroke-neon"
+          strokeWidth="2"
+          vectorEffect="non-scaling-stroke"
+          data-audio-series-energy
+        />
+        {triggerX !== null && (
+          <line
+            x1={triggerX}
+            y1="0"
+            x2={triggerX}
+            y2={H}
+            className="stroke-yellow"
+            strokeWidth="2"
+            strokeDasharray="3 2"
+            vectorEffect="non-scaling-stroke"
+            data-audio-trigger
+            data-trigger-ts={triggerTs}
+          />
+        )}
+      </svg>
+      <div className="mt-1 flex justify-between font-mono text-[10px] text-mut">
+        <span data-audio-x-start>{xMin.toFixed(1)}s</span>
+        {inWindow && triggerX !== null && (
+          <span className="text-yellow" data-audio-trigger-label>
+            trigger @ T+{triggerTs?.toFixed(1)}s
+          </span>
+        )}
+        <span data-audio-x-end>{xMax.toFixed(1)}s</span>
+      </div>
+    </div>
+  );
+}
+
 export interface WindowAnalysisPanelProps {
   /** The per-window analysis payload (absent on legacy decide notes). */
   analysis?: WindowAnalysis;
@@ -329,6 +423,9 @@ export interface WindowAnalysisPanelProps {
   confirm?: ConfirmRecord;
   /** Job id, used to resolve lazy frame/image refs to their delivery URI. */
   jobId: string;
+  /** ADAAAA-7255: the candidate trigger onset timestamp (seconds) to mark on
+   * the audio energy-vs-baseline graph, when one fired. */
+  triggerTs?: number;
 }
 
 /**
@@ -336,7 +433,7 @@ export interface WindowAnalysisPanelProps {
  * Renders an explicit "not captured" state when `analysis` is absent (legacy)
  * rather than a blank.
  */
-export function WindowAnalysisPanel({ analysis, confirm, jobId }: WindowAnalysisPanelProps) {
+export function WindowAnalysisPanel({ analysis, confirm, jobId, triggerTs }: WindowAnalysisPanelProps) {
   if (!analysis) {
     return (
       <div
@@ -372,6 +469,12 @@ export function WindowAnalysisPanel({ analysis, confirm, jobId }: WindowAnalysis
 
       {/* Audio / ASR block */}
       <AudioAsrBlock a={analysis} />
+
+      {/* ADAAAA-7255: audio energy-vs-baseline graph (time-aligned to the window,
+          trigger onset marked when one fired) */}
+      {analysis.audioSeries && analysis.audioSeries.length > 0 && (
+        <AudioEnergyGraph points={analysis.audioSeries} triggerTs={triggerTs} />
+      )}
 
       {/* Full LLM response */}
       <div>

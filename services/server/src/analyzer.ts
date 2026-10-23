@@ -406,6 +406,14 @@ export interface AudioCandidate {
     baselineEnergy: number;
   };
 }
+/** ADAAAA-7255: the perceive /audio response — the candidate the gate fired
+ * (or null) plus the bounded per-chunk (t, energy, baseline) inspection series
+ * used for the request-inspection energy-vs-baseline graph. Each point is
+ * ``{t, energy, baseline}`` (seconds over the stream, energies 0..1). */
+export interface AudioPostResult {
+  candidate: AudioCandidate | null;
+  series: { t: number; energy: number; baseline: number }[];
+}
 /** The decide brain's single-shot what-to-track plan (plan §4.4 / §7 D).
  * Returned by PipelineClient.plan(). `maxTracks` arrives already clamped to
  * the mode cap (3 live / 8 VOD) by the decide runner. */
@@ -494,7 +502,7 @@ export interface PipelineClient {
    * this path bills no GPU. Fires a *candidate* only (returned to the caller so
    * the server can route it to ``decide()``); ``null`` when the gate didn't
    * trip. The gate never decides a highlight itself. */
-  postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioCandidate | null>;
+  postAudio(sessionId: string, chunk: AudioChunk): Promise<AudioPostResult>;
   /**
    * Deliver an operator/find-and-track control intent (INC-6 / ADAAAA-4330) to
    * the perceive session over HTTP: `track`/`seed`/`lock`/`evict`, plus the
@@ -1344,6 +1352,12 @@ export class LiveRunShared {
    * kept as a short rolling clip so the surrounding audio can be handed to
    * decide() (ADAAAA-4954 detail-first). */
   private audio: { ts: number; samples: string }[] = [];
+  /** ADAAAA-7255: the bounded per-chunk (t, energy, baseline) audio-gate
+   * inspection series, as forwarded by perceive on the /audio event path. Kept
+   * as the latest bounded snapshot (perceive already bounds it to its lookback
+   * window), so it never grows on a long stream. Used to render the
+   * energy-vs-baseline graph on the request-inspection view. */
+  private audioSeries: { t: number; energy: number; baseline: number }[] = [];
   /** Timestamp of the last ACCEPTED GOAL highlight in this run (ADAAAA-6610
    * burst suppression). Used to drop a GOAL accepted within `goalBurstWindowS`
    * of a prior one. */
@@ -1540,6 +1554,22 @@ export class LiveRunShared {
   audioClipB64(): string {
     if (!this.audio.length) return "";
     return pcmInt16ToWavB64(this.audio.map((a) => a.samples).join(""));
+  }
+  /** ADAAAA-7255: replace the bounded per-chunk (t, energy, baseline) audio-gate
+   * inspection series with the latest snapshot perceive forwarded on the /audio
+   * event path. Perceive bounds the snapshot to its lookback window, so this
+   * never grows unbounded on a long stream. */
+  setAudioSeries(points: { t: number; energy: number; baseline: number }[]): void {
+    if (Array.isArray(points)) this.audioSeries = points;
+  }
+  /** ADAAAA-7255: the audio-gate inspection series points whose ``t`` falls in
+   * ``[centerTs - preS, centerTs + postS]`` (oldest -> newest), for the
+   * per-window energy-vs-baseline graph. Empty when no audio tap data reached
+   * the run. */
+  seriesWindow(centerTs: number, preS: number, postS: number): { t: number; energy: number; baseline: number }[] {
+    const lo = centerTs - preS;
+    const hi = centerTs + postS;
+    return this.audioSeries.filter((p) => p.t >= lo && p.t <= hi).sort((a, b) => a.t - b.t);
   }
   /**
    * I4 / ADAAAA-6361: the audio-energy level CURVE (not just one scalar peak).
@@ -1932,16 +1962,40 @@ export function highlightDedupKey(h: { idempotencyKey?: string; start: number; e
   return h.idempotencyKey ?? `${Math.round(h.start)}|${h.eventType ?? "highlight"}`;
 }
 
+/** ADAAAA-7255: attach the bounded (t, energy, baseline) audio-gate inspection
+ * series (sliced to the decide window around the trigger) to a per-window
+ * analysis payload, so the inspection view renders the energy-vs-baseline
+ * graph. Best-effort: absent analysis / no series returns the payload
+ * unchanged. */
+function withAudioSeries(
+  analysis: WindowAnalysis | undefined,
+  run: LiveRunShared,
+  triggerTs: number,
+  cfg: AnalyzerConfig
+): WindowAnalysis | undefined {
+  if (!analysis) return analysis;
+  const pre = cfg.preWindowS ?? DEFAULT_PRE_WINDOW_S;
+  const post = cfg.postWindowS ?? DEFAULT_POST_WINDOW_S;
+  const series = run.seriesWindow(triggerTs, pre, post);
+  if (!series.length) return analysis;
+  return { ...analysis, audioSeries: series };
+}
+
 async function acceptVideoDecision(
   client: PipelineClient,
   run: LiveRunShared,
-  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cut: (ts: number) => Promise<{ clipId: string; clipUri: string; hasAudio: boolean }>,
   cfg: AnalyzerConfig,
   onEvent: ((ev: AnalyzeEvent) => void) | undefined,
   emit: { seq: number; timestamp: number },
   candidate: CandidateSignal,
   stage1: DecisionResult
 ): Promise<void> {
+  // ADAAAA-7255: attach the bounded (t, energy, baseline) audio-gate inspection
+  // series (sliced to the decide window around the trigger) to the per-window
+  // analysis so the request-inspection view renders the energy-vs-baseline
+  // graph. Best-effort: absent analysis / no series leaves it unchanged.
+  const stageAnalysis = withAudioSeries(stage1.analysis, run, candidate.timestamp, cfg);
   // ADAAAA-6797: Stage-2 confirmation dive — for an un-attested goal-type
   // candidate whose Stage-1 read is a scoring_play accept, run the decide
   // /confirm deep frame dive and adopt the reconciled verdict in its place.
@@ -1969,14 +2023,14 @@ async function acceptVideoDecision(
   // (live / w=1) path and the ordered pipeline accept path (ADAAAA-6854), so
   // the decision-time note trail stays identical either way.
   if (!isAcceptedHighlight(decision, cfg.preferLabels)) {
-    buildCandidateNote(cfg, candidate, decision, "rejected", candidateId, trigger, stage1.analysis, confirm?.analysis);
+    buildCandidateNote(cfg, candidate, decision, "rejected", candidateId, trigger, stageAnalysis, confirm?.analysis);
     return;
   }
   // ADAAAA-6610 temporal burst suppression: a GOAL
   // accepted within `goalBurstWindowS` of a previous one is a start-of-clip
   // burst duplicate and is dropped, not recorded.
   if (run.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType)) {
-    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stage1.analysis, confirm?.analysis);
+    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis);
     onEvent?.({
       seq: emit.seq,
       timestamp: emit.timestamp,
@@ -1986,8 +2040,15 @@ async function acceptVideoDecision(
     });
     return;
   }
-  buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger, stage1.analysis, confirm?.analysis);
-  const { clipId, clipUri } = await cut(candidate.timestamp);
+  buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger, stageAnalysis, confirm?.analysis);
+  const { clipId, clipUri, hasAudio } = await cut(candidate.timestamp);
+  // ADAAAA-7248: the ASR transcript of this highlight's audio window (when one
+  // was computed) so the webapp card can render it for human corroboration, and
+  // whether the delivered clip actually carries audio. Both additive optional.
+  const asrTranscript =
+    confirm?.analysis?.request?.transcript ||
+    stage1?.analysis?.asr?.transcript ||
+    undefined;
   const rec: HighlightRecord = {
     id: randomUUID(),
     jobId: cfg.jobId,
@@ -1995,6 +2056,8 @@ async function acceptVideoDecision(
     // re-decides the same candidate cannot double-persist/double-bill.
     idempotencyKey: highlightIdempotencyKey(cfg.jobId, emit.seq, decision.eventType ?? candidate.eventType),
     clipUri,
+    hasAudio,
+    asrTranscript,
     start: Math.max(0, candidate.timestamp - cfg.clipBeforeS),
     end: candidate.timestamp + cfg.clipAfterS,
     eventType: highlightEventType(decision),
@@ -2218,7 +2281,7 @@ export function nextRunningSummary(prior: string | undefined, decision: Decision
 export async function observeOnDecide(
   client: PipelineClient,
   run: LiveRunShared,
-  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cut: (ts: number) => Promise<{ clipId: string; clipUri: string; hasAudio: boolean }>,
   cfg: AnalyzerConfig,
   onEvent: ((ev: AnalyzeEvent) => void) | undefined,
   sessionId: string,
@@ -2589,7 +2652,7 @@ export async function configurePerceiveCalibration(
 export async function analyzeJob(
   client: PipelineClient,
   iterFrames: AsyncIterable<{ seq: number; timestamp: number; imageB64: string }>,
-  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cut: (ts: number) => Promise<{ clipId: string; clipUri: string; hasAudio: boolean }>,
   cfg: AnalyzerConfig,
   onEvent?: (ev: AnalyzeEvent) => void,
   /** Optional pre-reserved session (shared with a concurrent audio tap so both

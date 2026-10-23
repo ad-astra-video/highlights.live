@@ -27,7 +27,7 @@ import type { SignalGateOptions } from "./observe-loop";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
-import { cutClip, extractBurstFrames, extractFrames } from "./ffmpeg";
+import { cutClip, extractBurstFrames, extractFrames, probeHasAudio } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
 import {
@@ -670,13 +670,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               // and never a decide trigger (ADAAAA-7008). The decide-observer
               // drives decide on the ~3 s cadence regardless, so the audio
               // candidate (if any) is provenance-only now — no candidate-gated
-              // decide.
-              await adapter.postAudio(initial.sessionId, {
+              // decide. The bounded (t, energy, baseline) inspection series also
+              // rides the response (ADAAAA-7255) for the graph.
+              const res = await adapter.postAudio(initial.sessionId, {
                 seq: chunk.seq,
                 timestamp: chunk.timestamp,
                 samples: chunk.samples,
                 streamId: job.id,
               });
+              if (res?.series?.length) shared.setAudioSeries(res.series);
             } catch {
               /* gate is best-effort — keep going */
             }
@@ -1050,7 +1052,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const clipId = randomUUID();
       const out = path.join(clipDir, `${clipId}.mp4`);
       await cutClip(cfg.ffmpegPath, videoPath, out, Math.max(0, ts - cfg.clipBeforeS), cfg.clipBeforeS + cfg.clipAfterS);
-      return { clipId, clipUri: `/clips/${clipId}.mp4` };
+      // ADAAAA-7248: record whether the DELIVERED clip actually carries audio so
+      // the webapp card can show an honest audible vs "no audio captured" state.
+      const hasAudio = await probeHasAudio(cfg.ffmpegPath, out);
+      return { clipId, clipUri: `/clips/${clipId}.mp4`, hasAudio };
     };
     // Async-VOD progress: wrap the frame iterator so analyzeJob's frame pull
     // drives a throttled `analyzing (frame i/N)` progress (ADAAAA-6760). We
@@ -1109,13 +1114,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             // and never a decide trigger (ADAAAA-7008). The decide-observer
             // drives decide on the ~3 s cadence regardless, so the audio
             // candidate (if any) is provenance-only now — no candidate-gated
-            // decide.
-            await adapter.postAudio(initial.sessionId, {
+            // decide. The bounded (t, energy, baseline) inspection series also
+            // rides the response (ADAAAA-7255) for the graph.
+            const res = await adapter.postAudio(initial.sessionId, {
               seq: chunk.seq,
               timestamp: chunk.timestamp,
               samples: chunk.samples,
               streamId: jobId,
             });
+            if (res?.series?.length) shared.setAudioSeries(res.series);
           } catch {
             /* gate best-effort — keep going */
           }
@@ -2372,7 +2379,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           const name = `${job.id}-${Math.round(h.start * 10)}`;
           const out = path.join(outDir, `${name}.mp4`);
           await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), cfg.clipBeforeS + cfg.clipAfterS);
-          await store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4` });
+          // ADAAAA-7248: record whether the delivered clip actually carries
+          // audio (a screen/window share has no tab audio, so the clip is
+          // genuinely silent) so the webapp card shows an honest "no audio
+          // captured" state instead of silently implying sound.
+          const hasAudio = await probeHasAudio(cfg.ffmpegPath, out);
+          await store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4`, hasAudio });
         } catch (e: any) {
           missed++;
           await store.patchHighlight(h.id, { clipError: `Clip cut failed: ${String(e?.message || e)}` });

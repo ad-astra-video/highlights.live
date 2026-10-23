@@ -47,7 +47,7 @@ function makeClient(opts: {
       targets: [{ label: "player", role: "player" }],
       reason: "test",
     }),
-    postAudio: async () => null,
+    postAudio: async () => ({ candidate: null, series: [] }),
     controlForward: async () => {},
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     stopPerceive: async () => {},
@@ -90,7 +90,7 @@ describe("LIVE decide-observer wiring (ADAAAA-7011)", () => {
     const outcome = await analyzeJob(
       client,
       frames(5, 20) as any, // 5 fps over 20 s (dense enough to exceed the 30-frame cap)
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }),
       { ...LIVE_OBSERVE_CFG } as any,
       undefined
     );
@@ -139,7 +139,7 @@ describe("LIVE decide-observer wiring (ADAAAA-7011)", () => {
     const outcome = await analyzeJob(
       client,
       frames(5, 12) as any,
-      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }),
       { ...LIVE_OBSERVE_CFG } as any,
       undefined
     );
