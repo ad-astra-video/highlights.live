@@ -74,6 +74,14 @@ export interface MediaServerOptions {
   tmpDir?: string;
   /** WebRTC ingest JPEG sample cadence (fps). Default 1.0. */
   rtcSampleFps?: number;
+  /** ICE servers (STUN/TURN) for WebRTC ingest. A relay (TURN) candidate gives
+   *  the browser a reachable media path when the media server's host candidates
+   *  are private container IPs behind the public LB (ADAAAA-7304 finding 4).
+   *  Also returned to the browser so both peers use the same relay. */
+  rtcIceServers?: { urls: string | string[]; username?: string; credential?: string }[];
+  /** Max ms to wait for the answerer's ICE gathering to complete before the
+   *  RTC answer is returned (so it carries a reachable candidate). Default 2000. */
+  rtcIceGatherTimeoutMs?: number;
 }
 
 const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
@@ -162,6 +170,11 @@ export class MediaServer {
         // WebRTC ingest is enabled: the browser signals via
         // POST /sessions/:sid/rtc/offer + /rtc/ice/:pcId instead of WS frame
         // posting. Older WS clients may still connect to /stream/:sid.
+        // ICE/STUN/TURN servers the browser should configure its peer with
+        // (same relay the media server gathers with), so the media path can be
+        // held instead of the browser reconnect-looping on unreachable host
+        // candidates (ADAAAA-7304 finding 4).
+        iceServers: this.opts.rtcIceServers,
         rtc: true,
         streamId: stream.streamId,
         jobId: stream.jobId,
@@ -180,7 +193,11 @@ export class MediaServer {
         if (!stream || stream.closed) return reply.code(404).send({ error: "no such session" });
         if (!req.body?.offer) return reply.code(400).send({ error: "offer required" });
         if (!stream.rtc) {
-          const session = new WebRtcIngestSession({ sampleFps: this.rtcSampleFps });
+          const session = new WebRtcIngestSession({
+            sampleFps: this.rtcSampleFps,
+            iceServers: this.opts.rtcIceServers,
+            iceGatherTimeoutMs: this.opts.rtcIceGatherTimeoutMs,
+          });
           // Decoded frames -> orchestrator video-in rail -> observation relay.
           session.on("frame", (f) => {
             void this.publishAndObserve(stream, f.seq, f.jpeg, f.ts).catch((e) =>
@@ -199,7 +216,7 @@ export class MediaServer {
         const { session } = stream.rtc;
         try {
           const answer = await session.handleOffer(req.body.offer);
-          return { pcId: stream.rtc.pcId, answer };
+          return { pcId: stream.rtc.pcId, answer, iceServers: this.opts.rtcIceServers };
         } catch (e: any) {
           return reply.code(400).send({ error: String(e?.message || e) });
         }
