@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Play, Check, X, Loader2, ChevronDown, ChevronRight, VolumeX } from "lucide-react";
+import { ArrowLeft, Play, Check, X, Loader2, ChevronDown, ChevronRight, VolumeX, Search } from "lucide-react";
 import { api, getToken } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { VideoClip } from "../components/VideoClip";
@@ -9,14 +9,19 @@ import {
   fetchJobDetail,
   isJobInFlight,
   assertFramePartition,
-  sectionLabel,
   triggerLabel,
   authFetchFrame,
+  sectionKinds,
+  sectionSummaryText,
+  sectionMatches,
+  noteKindLabel,
+  NOTE_KINDS,
   type JobDetail,
   type JobDetailHighlight,
   type FrameSection,
   type JobDetailFrame,
   type DecideNote,
+  type NoteKind,
 } from "../lib/jobDetail";
 import {
   drawFrameWithBoxes,
@@ -101,15 +106,6 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
   );
 }
 
-interface SectionBlockProps {
-  section: FrameSection;
-  token: string | null;
-  jobId: string;
-  selectMode: boolean;
-  selectedSeqs: Set<number>;
-  onFrameClick: (seq: number) => void;
-}
-
 /** One expandable decide-note banner: the one-line summary plus an "Inspect
  *  window" toggle that opens the per-window LLM inspection panel (ADAAAA-7157
  *  Increment C). Read-only over the job-detail API data. */
@@ -146,37 +142,89 @@ function DecideNoteBanner({ note, jobId }: { note: DecideNote; jobId: string }) 
   );
 }
 
-/** A 3 s section: frames filmstrip (with perceive boxes + labels) + decide-note banners. */
-function SectionBlock({ section, token, jobId, selectMode, selectedSeqs, onFrameClick }: SectionBlockProps) {
+/**
+ * ADAAAA-7274: the three Analysis window types' accent classes (token-only).
+ * `highlight` → green, `suppressed` → yellow (gated off but logged),
+ * `not_highlight` → muted grey. Used by both the collapsed summary chips and
+ * the filter chips so the type is spot-able at a glance in either place.
+ */
+const KIND_TONE: Record<NoteKind, string> = {
+  highlight: "border-green/40 bg-green/10 text-green",
+  suppressed: "border-yellow/40 bg-yellow/10 text-yellow",
+  not_highlight: "border-mut/40 bg-mut/10 text-mut",
+};
+
+interface AnalysisWindowProps {
+  section: FrameSection;
+  token: string | null;
+  jobId: string;
+  selectMode: boolean;
+  selectedSeqs: Set<number>;
+  onFrameClick: (seq: number) => void;
+  /** Initial collapse state (default expanded). SSR/test hook; the toggle
+   *  switches it client-side. */
+  defaultOpen?: boolean;
+}
+
+/**
+ * A collapsible Analysis time window (frame section). Collapsed it shows ONLY
+ * the summary text plus the color-coded window-type chips (highlight /
+ * suppressed / not highlight) so the type stays spot-able at a glance without
+ * expanding. Expanded it shows the decide-note banners + frame filmstrip.
+ */
+export function AnalysisWindow({ section, token, jobId, selectMode, selectedSeqs, onFrameClick, defaultOpen = true }: AnalysisWindowProps) {
+  const [open, setOpen] = useState(defaultOpen);
+  const kinds = sectionKinds(section);
   return (
-    <section className="rounded-xl border border-purple/30 bg-black/30 p-3" data-frame-section data-section-index={section.index}>
-      <div className="mb-2 flex items-center justify-between">
-        <h4 className="text-sm font-black uppercase tracking-wide text-neon">{sectionLabel(section)}</h4>
-        <span className="text-xs text-mut">{section.frames.length} frame(s)</span>
-      </div>
-      {section.decideNotes.length > 0 && (
-        <div className="mb-2 flex flex-col gap-1">
-          {section.decideNotes.map((n, i) => (
-            <DecideNoteBanner key={i} note={n} jobId={jobId} />
-          ))}
+    <section className="rounded-xl border border-purple/30 bg-black/30" data-analysis-window data-section-index={section.index}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        data-analysis-window-toggle
+      >
+        <span className="shrink-0 text-mut">{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</span>
+        {kinds.map((k) => (
+          <span
+            key={k}
+            className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${KIND_TONE[k]}`}
+            data-analysis-kind={k}
+          >
+            {noteKindLabel(k)}
+          </span>
+        ))}
+        <span className="min-w-0 flex-1 truncate text-xs text-slate-ink" data-analysis-summary>
+          {sectionSummaryText(section)}
+        </span>
+      </button>
+      {open && (
+        <div className="border-t border-purple/20 p-3" data-analysis-window-body>
+          {section.decideNotes.length > 0 && (
+            <div className="mb-2 flex flex-col gap-1">
+              {section.decideNotes.map((n, i) => (
+                <DecideNoteBanner key={i} note={n} jobId={jobId} />
+              ))}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            {section.frames.length === 0 ? (
+              <div className="text-xs text-mut">No frames in this section.</div>
+            ) : (
+              section.frames.map((f) => (
+                <FrameTile
+                  key={f.seq}
+                  frame={f}
+                  token={token}
+                  selectMode={selectMode}
+                  selected={selectedSeqs.has(f.seq)}
+                  onFrameClick={onFrameClick}
+                />
+              ))
+            )}
+          </div>
         </div>
       )}
-      <div className="flex flex-wrap gap-1.5">
-        {section.frames.length === 0 ? (
-          <div className="text-xs text-mut">No frames in this section.</div>
-        ) : (
-          section.frames.map((f) => (
-            <FrameTile
-              key={f.seq}
-              frame={f}
-              token={token}
-              selectMode={selectMode}
-              selected={selectedSeqs.has(f.seq)}
-              onFrameClick={onFrameClick}
-            />
-          ))
-        )}
-      </div>
     </section>
   );
 }
@@ -625,6 +673,20 @@ export function JobDetail() {
   const [gallery, setGallery] = useState<number[] | null>(null);
   const [galIndex, setGalIndex] = useState(0);
 
+  // ADAAAA-7274: Analysis section filter (by window type) + text search. An
+  // empty `analysisFilter` means "all types"; the two controls combine so the
+  // visible window list is the intersection of both.
+  const [analysisFilter, setAnalysisFilter] = useState<NoteKind[]>([]);
+  const [analysisQuery, setAnalysisQuery] = useState("");
+  const visibleSections = useMemo(
+    () => (detail ? detail.sections.filter((s) => sectionMatches(s, analysisFilter, analysisQuery)) : []),
+    [detail, analysisFilter, analysisQuery]
+  );
+
+  function toggleKind(kind: NoteKind) {
+    setAnalysisFilter((cur) => (cur.includes(kind) ? cur.filter((k) => k !== kind) : [...cur, kind]));
+  }
+
   function openSingle(seq: number) {
     setGallery([seq]);
     setGalIndex(0);
@@ -834,49 +896,90 @@ export function JobDetail() {
             </>
           )}
 
-          {/* Frames timeline */}
-          <div className="mt-8 flex items-center gap-3">
-            <h3 className="text-2xl font-black">Frames</h3>
-            <span className="text-xs text-mut">click any frame to enlarge · {frameCount} frame(s)</span>
-            <div className="ml-auto flex items-center gap-2">
-              <button
-                type="button"
-                data-select-mode={selectMode ? "true" : undefined}
-                onClick={toggleSelectMode}
-                className="rounded border border-mut/40 px-2 py-1 text-[11px] text-mut hover:border-neon hover:text-neon"
-              >
-                {selectMode ? "Cancel select" : "Select"}
-              </button>
-              {selectMode && (
-                <button
-                  type="button"
-                  data-enlarge-multi={multiSeqs.length >= 2 ? "true" : undefined}
-                  disabled={multiSeqs.length < 2}
-                  onClick={openMulti}
-                  className="rounded border border-neon/60 px-2 py-1 text-[11px] text-neon disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Enlarge ({multiSeqs.length})
-                </button>
-              )}
+          {/* Analysis timeline (ADAAAA-7274): the Frames detail section is
+              renamed to Analysis — collapsible time windows (collapsed shows
+              only the color-coded type summary), a sticky top bar (filter +
+              search + select/enlarge), a type filter, and a text search. */}
+          <div className="mt-8" data-analysis-section>
+            <div className="sticky top-0 z-20 -mx-4 border-b border-purple/30 bg-dusk/95 px-4 py-3 backdrop-blur" data-analysis-toolbar>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <h3 className="text-2xl font-black">Analysis</h3>
+                <span className="text-xs text-mut">
+                  {frameCount} frame(s) · {visibleSections.length} window(s) shown
+                </span>
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  {/* Filter by window type */}
+                  <div className="flex items-center gap-1" data-analysis-filter>
+                    {NOTE_KINDS.map((k) => {
+                      const active = analysisFilter.includes(k);
+                      return (
+                        <button
+                          key={k}
+                          type="button"
+                          onClick={() => toggleKind(k)}
+                          data-analysis-filter-chip={k}
+                          data-active={active ? "true" : undefined}
+                          className={`rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${
+                            active ? KIND_TONE[k] : "border-mut/30 text-mut hover:border-neon hover:text-neon"
+                          }`}
+                        >
+                          {noteKindLabel(k)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {/* Search by summary/transcript text */}
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-mut" />
+                    <input
+                      value={analysisQuery}
+                      onChange={(e) => setAnalysisQuery(e.target.value)}
+                      placeholder="Search analysis…"
+                      data-analysis-search
+                      className="w-40 rounded border border-mut/30 bg-black/40 py-1 pl-7 pr-2 text-xs text-ink outline-none placeholder:text-mut/60 focus:border-neon"
+                    />
+                  </div>
+                  {/* Existing select / enlarge controls (unchanged behavior) */}
+                  <button
+                    type="button"
+                    data-select-mode={selectMode ? "true" : undefined}
+                    onClick={toggleSelectMode}
+                    className="rounded border border-mut/40 px-2 py-1 text-[11px] text-mut hover:border-neon hover:text-neon"
+                  >
+                    {selectMode ? "Cancel select" : "Select"}
+                  </button>
+                  {selectMode && (
+                    <button
+                      type="button"
+                      data-enlarge-multi={multiSeqs.length >= 2 ? "true" : undefined}
+                      disabled={multiSeqs.length < 2}
+                      onClick={openMulti}
+                      className="rounded border border-neon/60 px-2 py-1 text-[11px] text-neon disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Enlarge ({multiSeqs.length})
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
+            {visibleSections.length === 0 ? (
+              <div className="mt-3 text-mut" data-analysis-empty>No Analysis windows match.</div>
+            ) : (
+              <div className="mt-3 flex flex-col gap-3" data-analysis-windows>
+                {visibleSections.map((s) => (
+                  <AnalysisWindow
+                    key={s.index}
+                    section={s}
+                    token={token}
+                    jobId={id}
+                    selectMode={selectMode}
+                    selectedSeqs={new Set(multiSeqs)}
+                    onFrameClick={onFrameClick}
+                  />
+                ))}
+              </div>
+            )}
           </div>
-          {frameCount === 0 ? (
-            <div className="mt-3 text-mut" data-detail-no-frames>No frames for this job.</div>
-          ) : (
-            <div className="mt-3 flex flex-col gap-3" data-detail-frames>
-              {detail.sections.map((s) => (
-                <SectionBlock
-                  key={s.index}
-                  section={s}
-                  token={token}
-                  jobId={id}
-                  selectMode={selectMode}
-                  selectedSeqs={new Set(multiSeqs)}
-                  onFrameClick={onFrameClick}
-                />
-              ))}
-            </div>
-          )}
 
           {/* Decide LLM audit — ADAAAA-7045 (Inc 2, follow-up to ADAAAA-7039):
               durable decide_audit rows for this job (one per frame group). The
