@@ -819,6 +819,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
   }
 
+  // ADAAAA-7325: the capacity-1 perceive runner's SessionRegistry fills
+  // transiently (orphaned server-side session ids), and reservePerceive /
+  // provisionMedia surface it as "no capacity available for runner" (HTTP 503).
+  // That is RETRYABLE — the client/server should back off, not treat it as a
+  // server bug. Map it to 503 in the /jobs/:id/ingest and /jobs/:id/media
+  // routes so the client can back off; every other error stays 500.
+  function isCapacityExhaustion(e: any): boolean {
+    const msg = String(e?.message ?? e ?? "");
+    return /no capacity available for runner/i.test(msg)
+      || e?.statusCode === 503
+      || e?.status === 503;
+  }
+  function mediaErrorStatus(e: any): number {
+    return isCapacityExhaustion(e) ? 503 : 500;
+  }
+
   async function runVodJob(job: { id: string; gameHint?: string; preferLabels?: string[] }, videoPath: string, user: any, sub: any) {
     const jobId = job.id;
     const scheduledAt = new Date().toISOString();
@@ -2611,7 +2627,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         }
         return { ok: true, highlight, trackCount: bj.evidence.trackCount };
       } catch (e: any) {
-        return reply.code(500).send({ error: String(e?.message || e) });
+        // ADAAAA-7325: perceive capacity exhaustion is transient/retryable —
+        // return 503 (not the catch-all 500) so the client can back off.
+        return reply.code(mediaErrorStatus(e)).send({ error: String(e?.message || e) });
       }
     }
   );
@@ -2637,7 +2655,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // posting sampled frames over the WS. wsUrl is kept for the WS fallback.
       return { wsUrl, mediaSessionId, mediaOrigin, rtc: true };
     } catch (e: any) {
-      return reply.code(500).send({ error: String(e?.message || e) });
+      // ADAAAA-7325: perceive capacity exhaustion surfaces through provisionMedia
+      // as "no capacity available for runner" — return 503 (not the catch-all
+      // 500) so the client can back off.
+      return reply.code(mediaErrorStatus(e)).send({ error: String(e?.message || e) });
     }
   });
 
