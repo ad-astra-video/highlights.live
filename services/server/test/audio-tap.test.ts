@@ -149,6 +149,62 @@ describe("DirectAdapter.postAudio (server -> perceive /audio client)", () => {
   });
 });
 
+describe("DirectAdapter.postAudioBatch (server -> perceive /audio/batch client)", () => {
+  const cfg = loadConfig({ PERCEIVE_URL: "http://p", DECIDE_URL: "http://d" });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("POSTs the whole window to /app/audio/batch with ordered chunks and session header", async () => {
+    const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      async () => new Response('{"candidates": [], "series": []}', { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = new DirectAdapter(cfg);
+    await adapter.postAudioBatch("sess-1", [
+      { seq: 0, timestamp: 0.1, samples: "AA", streamId: "job-x" },
+      { seq: 1, timestamp: 0.2, samples: "BB", streamId: "job-x" },
+    ]);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [{}, Record<string, any>];
+    expect(url).toBe("http://p/app/audio/batch");
+    expect(init.method).toBe("POST");
+    expect(init.headers["X-Session-Id"]).toBe("local-dev");
+    const body = JSON.parse(init.body);
+    // the window is forwarded in array order; stream_id is per-chunk (dropped)
+    // so the batch shape matches perceive's AudioBatchRequest.
+    expect(body.chunks).toEqual([
+      { timestamp: 0.1, samples: "AA", seq: 0 },
+      { timestamp: 0.2, samples: "BB", seq: 1 },
+    ]);
+  });
+
+  it("returns every candidate the gate fired across the window", async () => {
+    const cands = [
+      { type: "candidate", sessionId: "local-dev", eventType: "AUDIO", timestamp: 0.3, seq: 0, audio: { kind: "burst", ts: 0.1, firedAt: 0.3, onsetLatencyS: 0.2, peakEnergy: 0.9, baselineEnergy: 0.02 } },
+      { type: "candidate", sessionId: "local-dev", eventType: "AUDIO", timestamp: 4.3, seq: 1, audio: { kind: "burst", ts: 4.1, firedAt: 4.3, onsetLatencyS: 0.2, peakEnergy: 0.8, baselineEnergy: 0.02 } },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ candidates: cands, series: [] }), { status: 200 }))
+    );
+    const adapter = new DirectAdapter(cfg);
+    const out = await adapter.postAudioBatch("sess-1", [
+      { seq: 0, timestamp: 0.3, samples: "AA" },
+      { seq: 1, timestamp: 4.3, samples: "BB" },
+    ]);
+    expect(out.candidates).toEqual(cands);
+  });
+
+  it("returns an empty set on 404 (session re-reserved) but throws on 5xx", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    const adapter = new DirectAdapter(cfg);
+    await expect(adapter.postAudioBatch("sess-1", [{ seq: 0, timestamp: 0, samples: "AA" }])).resolves.toEqual({
+      candidates: [],
+      series: [],
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+    await expect(adapter.postAudioBatch("sess-1", [{ seq: 0, timestamp: 0, samples: "AA" }])).rejects.toThrow(/5\d\d/);
+  });
+});
+
 describe("DirectAdapter.decide detail-first forwarding (ADAAAA-4954)", () => {
   const cfg = loadConfig({ PERCEIVE_URL: "http://p", DECIDE_URL: "http://d" });
   afterEach(() => vi.restoreAllMocks());

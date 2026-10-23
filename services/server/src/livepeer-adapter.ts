@@ -33,6 +33,7 @@ function isSingleShotPaymentRejectionText(body: string): boolean {
 import type {
   AudioCandidate,
   AudioPostResult,
+  AudioBatchResult,
   AudioChunk,
   ConfirmDecision,
   ConfirmRequest,
@@ -470,6 +471,29 @@ export class OrchestratorAdapter implements PipelineClient {
       series: Array.isArray(data?.series) ? (data.series as AudioPostResult["series"]) : [],
     };
   }
+  async postAudioBatch(sessionId: string, chunks: AudioChunk[]): Promise<AudioBatchResult> {
+    // ADAAAA-7313: windowed /audio/batch — same pure-DSP gate as postAudio, but
+    // one request carries a whole window and returns every candidate that fired.
+    // Best-effort like postAudio: a 404 (session re-reserved) is dropped, never
+    // fatal; a 5xx (sick runner) throws so the caller can react.
+    const { status, data } = await this.client.appCall<any>(sessionId, "audio/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chunks: chunks.map((c) => ({
+          timestamp: c.timestamp,
+          samples: c.samples,
+          seq: c.seq,
+        })),
+      }),
+    });
+    if (status >= 500) throw new Error(`postAudioBatch failed: HTTP ${status}`);
+    if (status < 200 || status >= 300) return { candidates: [], series: [] };
+    return {
+      candidates: Array.isArray(data?.candidates) ? (data.candidates as AudioCandidate[]) : [],
+      series: Array.isArray(data?.series) ? (data.series as AudioBatchResult["series"]) : [],
+    };
+  }
   async controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<void> {
     // INC-6 / ADAAAA-4330: proxy a find-and-track / operator control intent
     // through the same orchestrator session as /analyze so the perceive runner
@@ -858,6 +882,29 @@ export class DirectAdapter implements PipelineClient {
     const body = (await r.json().catch(() => null)) as { candidate?: AudioCandidate; series?: AudioPostResult["series"] } | null;
     return {
       candidate: body?.candidate ?? null,
+      series: Array.isArray(body?.series) ? body.series! : [],
+    };
+  }
+  async postAudioBatch(sessionId: string, chunks: AudioChunk[]): Promise<AudioBatchResult> {
+    // ADAAAA-7313: windowed /audio/batch — direct dev path POSTs straight to
+    // perceive /app/audio/batch (pure DSP, no GPU) with the fake session id.
+    // Best-effort like postAudio: a 4xx is dropped (empty set), a 5xx throws.
+    const r = await fetch(`${this.cfg.perceiveUrl}/app/audio/batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Id": this.fakeSession },
+      body: JSON.stringify({
+        chunks: chunks.map((c) => ({
+          timestamp: c.timestamp,
+          samples: c.samples,
+          seq: c.seq,
+        })),
+      }),
+    });
+    if (r.status >= 500) throw new Error(`postAudioBatch failed: HTTP ${r.status}`);
+    if (r.status < 200 || r.status >= 300) return { candidates: [], series: [] };
+    const body = (await r.json().catch(() => null)) as { candidates?: AudioCandidate[]; series?: AudioBatchResult["series"] } | null;
+    return {
+      candidates: Array.isArray(body?.candidates) ? body.candidates! : [],
       series: Array.isArray(body?.series) ? body.series! : [],
     };
   }

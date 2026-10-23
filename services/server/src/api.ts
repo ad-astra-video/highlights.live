@@ -21,6 +21,7 @@ import {
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
+  type AudioChunk,
   type GoalLineCalibration,
   type PipelineClient,
 } from "./analyzer";
@@ -152,6 +153,17 @@ export async function resolveSampleFps(
  * VOD jobs (ADAAAA-4954 spec §4.1). Flat hour unit, so session billing is
  * proportional to perceiveSessionS. */
 const PERCEIVE_PER_HOUR_USD = 0.01;
+
+// VOD audio gate batching window (ADAAAA-7313): how many ~100 ms sub-chunks to
+// accumulate before flushing one perceive /audio/batch request. Default 300
+// chunks = 30 s per request, so a 90-min file drops from ~54k requests to
+// ~180. Overridable via env for a larger window (fewer requests) or a smaller
+// one (lower per-request latency) without recompiling.
+function vodAudioBatchWindowChunks(): number {
+  const raw = process.env.VOD_AUDIO_BATCH_WINDOW_CHUNKS;
+  const n = raw ? Number.parseInt(raw, 10) : 300;
+  return Number.isFinite(n) && n > 0 ? n : 300;
+}
 
 // Extension-based fallback for sources that ship a generic MIME (mpegts is
 // frequently served as application/octet-stream; some MP4s as audio/mp4).
@@ -1136,8 +1148,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // itself never decides and bills no GPU.
     const audioLoop = (async () => {
       try {
-        for await (const chunk of extractVodAudioChunks(cfg.ffmpegPath, videoPath)) {
-          shared.addAudioChunk(chunk.timestamp, chunk.samples);
+        // ADAAAA-7313: VOD is offline/detail-first, so drive the audio gate
+        // with a small number of WINDOWED batch requests (perceive
+        // /audio/batch) instead of one POST per 100 ms chunk. The gate is
+        // stateful across requests, so splitting the file into windows is safe
+        // (each window is sent in array order with monotonic timestamp). The
+        // live path (runLiveJob) deliberately keeps streaming single-chunk so a
+        // fired candidate reaches decide() inside the 1-5 s latency budget.
+        let window: AudioChunk[] = [];
+        const flushWindow = async () => {
+          if (!window.length) return;
+          const chunks = window;
+          window = [];
           try {
             // Perceive audio gate is a DATA SEEDER (audio level curve context)
             // and never a decide trigger (ADAAAA-7008). The decide-observer
@@ -1145,17 +1167,30 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             // candidate (if any) is provenance-only now — no candidate-gated
             // decide. The bounded (t, energy, baseline) inspection series also
             // rides the response (ADAAAA-7255) for the graph.
-            const res = await adapter.postAudio(initial.sessionId, {
-              seq: chunk.seq,
-              timestamp: chunk.timestamp,
-              samples: chunk.samples,
-              streamId: jobId,
-            });
-            if (res?.series?.length) shared.setAudioSeries(res.series);
+            // ADAAAA-7313: windowed batch request when the adapter supports it;
+            // otherwise fall back to streaming one chunk per postAudio.
+            if (adapter.postAudioBatch) {
+              const res = await adapter.postAudioBatch(initial.sessionId, chunks);
+              if (res?.series?.length) shared.setAudioSeries(res.series);
+            } else {
+              for (const c of chunks) {
+                const res = await adapter.postAudio(initial.sessionId, c);
+                if (res?.series?.length) shared.setAudioSeries(res.series);
+              }
+            }
           } catch {
             /* gate best-effort — keep going */
           }
+        };
+        for await (const chunk of extractVodAudioChunks(cfg.ffmpegPath, videoPath)) {
+          // Keep buffering the raw PCM into the shared live-run context per chunk
+          // so an audio-triggered candidate can assemble the AROUND audio clip
+          // for Gemma (ADAAAA-4785), exactly like the single-chunk path.
+          shared.addAudioChunk(chunk.timestamp, chunk.samples);
+          window.push({ seq: chunk.seq, timestamp: chunk.timestamp, samples: chunk.samples, streamId: jobId });
+          if (window.length >= vodAudioBatchWindowChunks()) await flushWindow();
         }
+        await flushWindow(); // flush any partial trailing window
       } catch {
         /* tap ended early — video leg unaffected */
       }
