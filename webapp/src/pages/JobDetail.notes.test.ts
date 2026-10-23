@@ -8,7 +8,7 @@
 import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import React from "react";
-import { RunningActionNotes } from "./JobDetail";
+import { RunningActionNotes, OverallSummary } from "./JobDetail";
 
 describe("Tier-1 running action notes surface (ADAAAA-7135)", () => {
   it("renders the running action narrative when the job produced one", () => {
@@ -27,6 +27,25 @@ describe("Tier-1 running action notes surface (ADAAAA-7135)", () => {
     // The marker is absent so no empty surface shows for a job with no produced
     // narrative (legacy / no observe cadence) — never a blank panel.
     expect(html).not.toContain("data-detail-running-summary");
+    expect(html.trim()).toBe("");
+  });
+});
+
+describe("Overall summary surface (ADAAAA-7237)", () => {
+  it("renders a clearly-labeled overall summary, distinct from the running notes", () => {
+    const html = renderToString(
+      React.createElement(OverallSummary, {
+        summary: "Overview of the whole video: a GOAL at 2:00 and a near miss at 5:00.",
+      })
+    );
+    expect(html).toContain("data-detail-overall-summary");
+    expect(html).toContain("Overall summary");
+    expect(html).toContain("GOAL at 2:00");
+  });
+
+  it("renders nothing (not a blank panel) when the job has no compiled overall summary", () => {
+    const html = renderToString(React.createElement(OverallSummary, {}));
+    expect(html).not.toContain("data-detail-overall-summary");
     expect(html.trim()).toBe("");
   });
 });
