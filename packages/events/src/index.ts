@@ -636,11 +636,15 @@ export const HighlightRecordSchema = z.object({
   end: z.number(),
   // ADAAAA-7232: the deterministic localized highlight instant (seconds from
   // stream start) the delivered clip is centered on, plus the signal that
-  // produced it ("peak_audio" | "trigger"). Additive optional — legacy rows
-  // carry none; when absent the clip is centered on the coarse candidate
-  // trigger. Records Acc-3 so the clip center is queryable.
+  // produced it ("peak_frame" | "peak_audio" | "trigger"). Additive optional —
+  // legacy rows carry none; when absent the clip is centered on the coarse
+  // candidate trigger. Records Acc-3 so the clip center is queryable.
+  // ADAAAA-7253 (ACC-3): "peak_frame" records a frame-based localization — the
+  // delivered clip is centered on the per-frame signal peak (ball-in-net /
+  // goal-crossed / scoreboard-change / tracking-detection confidence), not the
+  // coarse trigger.
   localizedTs: z.number().min(0).optional(),
-  localizeSignal: z.enum(["peak_audio", "trigger"]).optional(),
+  localizeSignal: z.enum(["peak_frame", "peak_audio", "trigger"]).optional(),
   // ADAAAA-7247 (ACC-7): the per-company clip-window setting that produced this
   // clip — configured pre-roll (clipWindowBeforeS) and post-roll
   // (clipWindowAfterS) seconds, plus the delivered window length
