@@ -2033,6 +2033,14 @@ async function acceptVideoDecision(
     // center is queryable (Acc-3). Additive optional — legacy rows carry none.
     localizedTs: loc.ts,
     localizeSignal: loc.signal,
+    // ADAAAA-7247 (ACC-7): record the per-company clip-window setting that
+    // produced this clip plus the delivered window length so the delivered clip
+    // window is auditable (Acc-3). Values come from the resolved (webui > env)
+    // per-company setting already applied to `cfg`; `win` may pad the after side
+    // to the >=15 s floor, so clipWindowSec reflects the ACTUAL delivered length.
+    clipWindowBeforeS: cfg.clipBeforeS,
+    clipWindowAfterS: cfg.clipAfterS,
+    clipWindowSec: win.end - win.start,
     // ADAAAA-6874 (Phase 2): deterministic idempotency key so a resumed job that
     // re-decides the same candidate cannot double-persist/double-bill.
     idempotencyKey: highlightIdempotencyKey(cfg.jobId, emit.seq, decision.eventType ?? candidate.eventType),

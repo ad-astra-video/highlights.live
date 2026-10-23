@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clipWindow } from "../src/config";
+import { clipWindow, validateClipWindow, CLIP_WINDOW_MAX_SIDE_S } from "../src/config";
 import { localizeHighlightInstant } from "../src/analyzer";
 
 describe("clipWindow (ADAAAA-7232)", () => {
@@ -58,5 +58,54 @@ describe("localizeHighlightInstant (ADAAAA-7232)", () => {
     expect(loc).toEqual({ ts: 12, signal: "trigger" });
     expect(localizeHighlightInstant(12, undefined, 8)).toEqual({ ts: 12, signal: "trigger" });
     expect(localizeHighlightInstant(12, [], 8)).toEqual({ ts: 12, signal: "trigger" });
+  });
+});
+
+describe("validateClipWindow (ADAAAA-7247 / ACC-7)", () => {
+  it("accepts whole-second values and returns the nominal window", () => {
+    const v = validateClipWindow(7, 8, 15);
+    expect(v.ok).toBe(true);
+    expect(v.clipBeforeS).toBe(7);
+    expect(v.clipAfterS).toBe(8);
+    expect(v.windowSec).toBe(15);
+  });
+
+  it("accepts any non-negative whole-second pair (even < minSec; clipWindow pads at assembly)", () => {
+    const v = validateClipWindow(1, 2, 15);
+    expect(v.ok).toBe(true);
+    expect(v.windowSec).toBe(3);
+  });
+
+  it("rejects a missing / non-numeric value with a clear message", () => {
+    const v = validateClipWindow(undefined, 8, 15);
+    expect(v.ok).toBe(false);
+    expect(v.error).toContain("clipBeforeS must be a number");
+    const v2 = validateClipWindow("7", 8, 15);
+    expect(v2.ok).toBe(false);
+    expect(v2.error).toContain("clipBeforeS must be a number");
+  });
+
+  it("rejects fractional seconds", () => {
+    const v = validateClipWindow(7.5, 8, 15);
+    expect(v.ok).toBe(false);
+    expect(v.error).toContain("whole number of seconds");
+  });
+
+  it("rejects negative values with a clear message", () => {
+    const v = validateClipWindow(-1, 8, 15);
+    expect(v.ok).toBe(false);
+    expect(v.error).toContain("0 or more seconds");
+  });
+
+  it("rejects out-of-range (per-side > cap) values with a clear message", () => {
+    const v = validateClipWindow(7, CLIP_WINDOW_MAX_SIDE_S + 1, 15);
+    expect(v.ok).toBe(false);
+    expect(v.error).toContain("capped at");
+  });
+
+  it("never lets an invalid pair break the >=15s floor (clipWindow pads)", () => {
+    // Even a 1/1 setting still yields a >=15s delivered window via clipWindow.
+    const w = clipWindow(100, 1, 1, 15);
+    expect(w.end - w.start).toBe(15);
   });
 });

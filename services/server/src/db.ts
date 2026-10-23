@@ -253,6 +253,16 @@ export interface FunnelReport {
   cac: { channel: string; spendUsd: number; subscribers: number; cacUsd: number | null }[];
 }
 
+/** Per-company clip-window setting (ADAAAA-7247 / ACC-7). Whole-second pre-roll
+ * (`clipBeforeS`) and post-roll (`clipAfterS`) around the localized highlight
+ * instant. Persisted in the `server_settings` table so it survives restarts
+ * and the webui-configured value wins over env at assembly (the server still
+ * enforces the `>=clipWindowMinSec` floor so ACC-1 is guaranteed regardless). */
+export interface ClipWindowSettings {
+  clipBeforeS: number;
+  clipAfterS: number;
+}
+
 /** A live media-server session tracked by the control plane. Persisted so that
  * if a media node dies the server can detect the gap and re-route the browser
  * to a freshly-provisioned session on a healthy node (seamless reconnect).
@@ -510,6 +520,12 @@ export interface Db {
   recordChannelSpend(channel: string, spendUsd: number, note?: string | null): Promise<ChannelSpend>;
   /** All per-channel spend entries (for admin inspection). */
   listChannelSpend(): Promise<ChannelSpend[]>;
+  // --- per-company clip-window setting (ADAAAA-7247 / ACC-7) ---
+  /** Read the persisted clip-window setting, or undefined when it has never
+   * been set (the caller then falls back to the env/deployment default). */
+  getClipWindowSettings(): Promise<ClipWindowSettings | undefined>;
+  /** Persist the clip-window setting (upsert). Returns the stored values. */
+  setClipWindowSettings(s: ClipWindowSettings): Promise<ClipWindowSettings>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1182,6 +1198,25 @@ export class SqliteDb implements Db {
     const rows = this.db.prepare("SELECT * FROM channel_spend ORDER BY channel").all() as any[];
     return rows.map((r) => ({ channel: String(r.channel), spendUsd: Number(r.spend_usd), note: r.note ?? null, updatedAt: String(r.updated_at) }));
   }
+
+  // --- per-company clip-window setting (ADAAAA-7247 / ACC-7) ---
+  async getClipWindowSettings(): Promise<ClipWindowSettings | undefined> {
+    const r = this.db.prepare("SELECT clip_before_s, clip_after_s FROM server_settings WHERE id = 'clip-window'").get() as { clip_before_s: number; clip_after_s: number } | undefined;
+    if (!r) return undefined;
+    return { clipBeforeS: Number(r.clip_before_s), clipAfterS: Number(r.clip_after_s) };
+  }
+
+  async setClipWindowSettings(s: ClipWindowSettings): Promise<ClipWindowSettings> {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO server_settings (id, clip_before_s, clip_after_s, updated_at) VALUES ('clip-window',?,?,?)
+         ON CONFLICT(id) DO UPDATE SET clip_before_s=excluded.clip_before_s,
+           clip_after_s=excluded.clip_after_s, updated_at=excluded.updated_at`
+      )
+      .run(s.clipBeforeS, s.clipAfterS, now);
+    return { clipBeforeS: s.clipBeforeS, clipAfterS: s.clipAfterS };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1845,6 +1880,23 @@ export class PgDb implements Db {
     const r = await this.pool.query("SELECT * FROM channel_spend ORDER BY channel");
     return r.rows.map((row: any) => ({ channel: String(row.channel), spendUsd: Number(row.spend_usd), note: row.note ?? null, updatedAt: String(row.updated_at) }));
   }
+
+  // --- per-company clip-window setting (ADAAAA-7247 / ACC-7) ---
+  async getClipWindowSettings(): Promise<ClipWindowSettings | undefined> {
+    const r = await this.pool.query("SELECT clip_before_s, clip_after_s FROM server_settings WHERE id = $1", ["clip-window"]);
+    if (!r.rows[0]) return undefined;
+    return { clipBeforeS: Number(r.rows[0].clip_before_s), clipAfterS: Number(r.rows[0].clip_after_s) };
+  }
+
+  async setClipWindowSettings(s: ClipWindowSettings): Promise<ClipWindowSettings> {
+    await this.pool.query(
+      `INSERT INTO server_settings (id, clip_before_s, clip_after_s, updated_at) VALUES ('clip-window',$1,$2,$3)
+       ON CONFLICT (id) DO UPDATE SET clip_before_s=EXCLUDED.clip_before_s,
+         clip_after_s=EXCLUDED.clip_after_s, updated_at=EXCLUDED.updated_at`,
+      [s.clipBeforeS, s.clipAfterS, new Date().toISOString()]
+    );
+    return { clipBeforeS: s.clipBeforeS, clipAfterS: s.clipAfterS };
+  }
 }
 
 const SCHEMA_SQLITE = `
@@ -2019,6 +2071,12 @@ const SCHEMA_SQLITE = `
     id TEXT PRIMARY KEY CHECK (id = 'gate'),
     allocation_open INTEGER NOT NULL DEFAULT 1,
     set_by TEXT,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS server_settings (
+    id TEXT PRIMARY KEY CHECK (id = 'clip-window'),
+    clip_before_s REAL NOT NULL DEFAULT 7,
+    clip_after_s REAL NOT NULL DEFAULT 8,
     updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS _schema_migrations (
@@ -2202,6 +2260,12 @@ const SCHEMA_PG = `
     set_by TEXT,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS server_settings (
+    id TEXT PRIMARY KEY CHECK (id = 'clip-window'),
+    clip_before_s REAL NOT NULL DEFAULT 7,
+    clip_after_s REAL NOT NULL DEFAULT 8,
+    updated_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS _schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -2348,6 +2412,24 @@ const MIGRATIONS: Migration[] = [
       // placements are distinguishable in the CAC drilldown.
       if (!(await hasColumn("users", "utm_medium"))) await exec("ALTER TABLE users ADD COLUMN utm_medium TEXT");
       if (!(await hasColumn("users", "utm_content"))) await exec("ALTER TABLE users ADD COLUMN utm_content TEXT");
+    },
+  },
+  {
+    version: 7,
+    name: "server-settings-clip-window",
+    up: async (exec) => {
+      // ADAAAA-7247 (ACC-7): per-company clip-window setting. The baseline
+      // CREATE already covers fresh DBs (both backends); this brings
+      // pre-existing on-disk DBs up to shape. One TEXT/REAL statement serves
+      // both SQLite and Postgres.
+      await exec(
+        `CREATE TABLE IF NOT EXISTS server_settings (
+          id TEXT PRIMARY KEY CHECK (id = 'clip-window'),
+          clip_before_s REAL NOT NULL DEFAULT 7,
+          clip_after_s REAL NOT NULL DEFAULT 8,
+          updated_at TEXT NOT NULL
+        )`
+      );
     },
   },
 ];
