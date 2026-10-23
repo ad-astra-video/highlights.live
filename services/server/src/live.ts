@@ -7,6 +7,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readdir, readFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { cutClip } from "./ffmpeg";
+import { clipWindow } from "./config";
 import type { ServerConfig } from "./config";
 
 export type LiveKind = "screen" | "rtmp" | "file-sim";
@@ -251,19 +252,21 @@ export class LiveIngest {
     }
   }
 
-  /** Cut a highlight clip from the session recording. */
+  /** Cut a highlight clip from the session recording. ADAAAA-7232: the window
+   * is centered on `ts` and guaranteed >= `clipWindowMinSec` (floor 15 s). */
   async cut(ts: number): Promise<{ clipId: string; clipUri: string }> {
     const { mkdir } = await import("node:fs/promises");
     const outDir = path.join(this.cfg.dataDir, "clips");
     await mkdir(outDir, { recursive: true });
     const name = `${this.jobId}-${Math.round(ts * 10)}`;
     const out = path.join(outDir, `${name}.mp4`);
+    const win = clipWindow(ts, this.cfg.clipBeforeS, this.cfg.clipAfterS, this.cfg.clipWindowMinSec ?? 15);
     await cutClip(
       this.cfg.ffmpegPath,
       this.sessionTs,
       out,
-      Math.max(0, ts - this.cfg.clipBeforeS),
-      this.cfg.clipBeforeS + this.cfg.clipAfterS
+      win.start,
+      win.end - win.start
     );
     return { clipId: name, clipUri: `/clips/${name}.mp4` };
   }

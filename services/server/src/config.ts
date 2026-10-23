@@ -69,10 +69,16 @@ export interface ServerConfig {
    * event. ADAAAA-5059: defaults were 4/4 (an 8s window that read as the whole
    * segment); reduced to 2/2 (4s, "the moment") — short enough to read as the
    * flagged moment while keeping pre-roll context and post-roll reaction.
-   * Tunable per-deployment via CLIP_BEFORE_S / CLIP_AFTER_S; recommended window
-   * is ~1.5-2s each side of the event. */
+   * Tunable per-deployment via CLIP_BEFORE_S / CLIP_AFTER_S. ADAAAA-7232:
+   * defaults raised to 7/8 (a 15 s window) so the delivered clip is >=15 s and
+   * the localized highlight lands mid-clip. */
   clipBeforeS: number;
   clipAfterS: number;
+  /** Hard floor (seconds) on the delivered highlight clip length (ADAAAA-7232).
+   * Guarantees Acc-1 (>=15 s) even if CLIP_BEFORE_S/CLIP_AFTER_S are tuned
+   * shorter via env: `clipWindow` pads the AFTER side so the window is always
+   * at least `clipWindowMinSec` long. */
+  clipWindowMinSec: number;
   /** Seconds between frames when the perceive runner's capability can't be
    * queried (orchestrator mode); with PERCEIVE_URL set the runner's measured
    * sample_interval_s is used instead. */
@@ -406,11 +412,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodChunkBytes: Number(env.VOD_CHUNK_BYTES ?? 64 * 1024 * 1024),
     ffmpegPath: env.FFMPEG_PATH ?? "ffmpeg",
     gameHintDefault: env.GAME_HINT ?? "unspecified",
-    // ADAAAA-5059: trim the delivered highlight to a defined window around the
-    // flagged event (~2s pre-roll + ~2s post-roll = 4s total) instead of the
-    // previous 8s window that read as the whole segment. Tunable via env.
-    clipBeforeS: Number(env.CLIP_BEFORE_S ?? 2),
-    clipAfterS: Number(env.CLIP_AFTER_S ?? 2),
+    // ADAAAA-7232: delivered highlight clip is a >=15 s window so the localized
+    // highlight lands mid-clip. 7s pre-roll + 8s post-roll = 15s. Tunable via
+    // env, but `clipWindow` enforces `clipWindowMinSec` (15) as a hard floor.
+    clipBeforeS: Number(env.CLIP_BEFORE_S ?? 7),
+    clipAfterS: Number(env.CLIP_AFTER_S ?? 8),
+    clipWindowMinSec: Number(env.CLIP_WINDOW_MIN_SEC ?? 15),
     sampleIntervalSec: Number(env.SAMPLE_INTERVAL_SEC ?? 1.0),
     // ADAAAA-5059: VOD default sampling moved up to 5 fps (from the previous
     // 1 fps fallback); still bounded above by VOD_SAMPLE_MAX_FPS (8) and
@@ -542,4 +549,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodSessionRetryBackoffMaxMs: Number(env.VOD_SESSION_RETRY_BACKOFF_MAX_MS ?? 8000),
     vodReserveRetryTotalMs: Number(env.VOD_RESERVE_RETRY_TOTAL_MS ?? 120000),
   };
+}
+
+/**
+ * ADAAAA-7232: deliverable highlight clip window around `eventTs`, guaranteed
+ * to be at least `minSec` long.
+ *
+ * The nominal window is `[eventTs - beforeS, eventTs + afterS]`. When the
+ * nominal before+after sum falls short of the hard floor `minSec` (Acc-1:
+ * >=15 s), the AFTER side is padded so the window always meets the minimum —
+ * extra context/reaction after the flagged moment rather than trimming pre-roll
+ * (which would risk dropping the raised-action lead-in). A negative/clamped
+ * `beforeS` is floored at 0.
+ */
+export function clipWindow(
+  eventTs: number,
+  beforeS: number,
+  afterS: number,
+  minSec = 15
+): { start: number; end: number } {
+  const b = Math.max(0, beforeS);
+  let a = Math.max(0, afterS);
+  const min = Math.max(0, minSec);
+  if (b + a < min) a += min - (b + a);
+  let start = Math.max(0, eventTs - b);
+  let end = eventTs + a;
+  // Clamping `start` to 0 (very early event near stream start) shortens the
+  // window; extend the END so the delivered clip still meets the floor.
+  if (end - start < min) end = start + min;
+  return { start, end };
 }
