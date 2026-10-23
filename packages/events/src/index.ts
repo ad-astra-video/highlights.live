@@ -641,6 +641,15 @@ export const HighlightRecordSchema = z.object({
   // trigger. Records Acc-3 so the clip center is queryable.
   localizedTs: z.number().min(0).optional(),
   localizeSignal: z.enum(["peak_audio", "trigger"]).optional(),
+  // ADAAAA-7247 (ACC-7): the per-company clip-window setting that produced this
+  // clip — configured pre-roll (clipWindowBeforeS) and post-roll
+  // (clipWindowAfterS) seconds, plus the delivered window length
+  // (clipWindowSec = end - start once the >=15 s floor is applied). Persisted
+  // on the record so the delivered clip window is auditable (Acc-3). Additive
+  // optional — legacy rows carry none.
+  clipWindowBeforeS: z.number().min(0).optional(),
+  clipWindowAfterS: z.number().min(0).optional(),
+  clipWindowSec: z.number().min(0).optional(),
   eventType: z.string().optional(),
   score: z.number().min(0).max(100),
   reason: z.string().optional(),

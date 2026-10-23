@@ -579,3 +579,75 @@ export function clipWindow(
   if (end - start < min) end = start + min;
   return { start, end };
 }
+
+// ---------------------------------------------------------------------------
+// ADAAAA-7247 (ACC-7): per-company clip-window setting validation.
+//
+// The webui can set whole-second `clipBeforeS` / `clipAfterS` (defaults 7/8).
+// The server validates them here (single source of truth, shared by the PUT
+// endpoint and any caller that persists a value). The >=15 s delivery floor is
+// NOT enforced here — it is guaranteed at assembly by `clipWindow` (which pads
+// the after side to `minSec`), so NO persisted setting can ever produce a
+// delivered clip <15 s (ACC-1). What this rejects is the invalid territory the
+// webui must surface with a clear message: non-numeric, non-integer, negative,
+// or out-of-range (per-side) values.
+// ---------------------------------------------------------------------------
+/** Hard per-side ceiling for a clip-window value (10 min) — bounds a bad UI. */
+export const CLIP_WINDOW_MAX_SIDE_S = 600;
+
+export interface ClipWindowValidation {
+  ok: boolean;
+  minSec: number;
+  /** Validated whole-second values (present only when ok). */
+  clipBeforeS?: number;
+  clipAfterS?: number;
+  /** Nominal pre+post window in seconds (before+after; clipWindow may pad it). */
+  windowSec?: number;
+  /** Clear, human-readable rejection reason (present only when !ok). */
+  error?: string;
+}
+
+/**
+ * Validate a webui-submitted clip-window pair. Returns `{ ok, ... }` on
+ * success (the whole-second values to persist + the nominal window) or
+ * `{ ok:false, error }` with a message the webui can surface verbatim. The
+ * >=15 s floor is enforced downstream by `clipWindow`, not here.
+ */
+export function validateClipWindow(
+  beforeS: unknown,
+  afterS: unknown,
+  minSec: number = 15
+): ClipWindowValidation {
+  const problems: string[] = [];
+  const isWholeSec = (v: unknown, name: string): v is number => {
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      problems.push(`${name} must be a number of whole seconds`);
+      return false;
+    }
+    if (!Number.isInteger(v)) {
+      problems.push(`${name} must be a whole number of seconds`);
+      return false;
+    }
+    return true;
+  };
+  const beforeOk = isWholeSec(beforeS, "clipBeforeS");
+  const afterOk = isWholeSec(afterS, "clipAfterS");
+  if (!beforeOk || !afterOk) return { ok: false, minSec, error: problems.join("; ") };
+  const before = beforeS as number;
+  const after = afterS as number;
+  if (before < 0 || after < 0) {
+    return {
+      ok: false,
+      minSec,
+      error: `clipBeforeS and clipAfterS must each be 0 or more seconds (got ${before} / ${after})`,
+    };
+  }
+  if (before > CLIP_WINDOW_MAX_SIDE_S || after > CLIP_WINDOW_MAX_SIDE_S) {
+    return {
+      ok: false,
+      minSec,
+      error: `clipBeforeS / clipAfterS are capped at ${CLIP_WINDOW_MAX_SIDE_S}s each (10 min)`,
+    };
+  }
+  return { ok: true, minSec, clipBeforeS: before, clipAfterS: after, windowSec: before + after };
+}
