@@ -398,8 +398,57 @@ def test_audio_endpoint_does_not_run_detector():
         assert r.status_code == 200
         body = r.json()
         assert "tracks" not in body
-        assert set(body.keys()) == {"candidate"}
+        assert set(body.keys()) == {"candidate", "series"}
     assert client.get("/health").status_code == 200
+
+
+# --- ADAAAA-7255: (t, energy, baseline) inspection series -------------
+
+
+def test_series_captured_per_chunk_with_baseline():
+    """Every chunk records an ordered (t, energy, baseline) point, where the
+    baseline is the gate's established ambient percentile (not a fixed 0)."""
+    g = _quiet_gate()  # warmed to a ~0.01 baseline over 10 s
+    sn = g.series_snapshot()
+    assert len(sn) > 0
+    prev_t = -1.0
+    for p in sn:
+        assert {"t", "energy", "baseline"} <= set(p.keys())
+        assert p["t"] >= prev_t
+        prev_t = p["t"]
+        assert 0.0 <= p["energy"] <= 1.0
+        assert 0.0 <= p["baseline"] <= 1.0
+        assert p["baseline"] > 0.0
+    # The newest point reflects the fed energy.
+    assert abs(sn[-1]["energy"] - 0.01) < 1e-6
+    assert abs(sn[-1]["baseline"] - 0.01) < 1e-6
+
+
+def test_series_bounded_to_lookback_window():
+    """The series never grows beyond the rolling lookback window on a long feed."""
+    g = AudioEnergyGate()  # lookback_s=8.0, frame_s=0.1
+    for i in range(400):  # 40 s of continuous feed
+        g.update(_frame(0.01), ts=0.0 + i * 0.1)
+    snap = g.series_snapshot()
+    # 8 s lookback / 0.1 s frame => at most ~81 points (+1 for the newest).
+    assert len(snap) <= 82, f"series not bounded: {len(snap)} points"
+    # Oldest retained point is within the lookback window of the newest ts.
+    assert snap[0]["t"] >= 39.9 - 8.0 - 0.11
+
+
+def test_audio_route_returns_series():
+    """The /audio handler returns the bounded series alongside the candidate."""
+    sid = "audio-sess-series"
+    _warm_audio_gate(sid)
+    r = _post_audio(10.0 + 0.1, _pcm(0.01), sid=sid)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["candidate"] is None
+    series = body["series"]
+    assert isinstance(series, list) and len(series) > 0
+    last = series[-1]
+    assert set(last.keys()) == {"t", "energy", "baseline"}
+    assert abs(last["energy"] - 0.01) < 0.002  # _pcm quantizes to int16 (±1 LSB)
 
 
 def test_audio_accepts_root_route_alias():
