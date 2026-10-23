@@ -363,6 +363,11 @@ export interface ConfirmDecision {
    * accepted == corroborated is queryable post hoc. */
   corroborated?: boolean;
   corroborationSource?: "audio_text" | "scoreboard" | null;
+  /** ADAAAA-7251 (ACC-3): the ASR transcript computed for the highlight's audio
+   * context (Path 2, fallible), returned so the server can persist it on the
+   * highlight record for human corroboration. "" / absent where no audio
+   * context / ASR was not computed. */
+  transcript?: string;
   /** The reconciled HighlightDecision-shaped dict to adopt in place of the
    * Stage-1 verdict. On passthrough it is the (unchanged) Stage-1 verdict. */
   decision: DecisionResult;
@@ -2054,6 +2059,11 @@ async function acceptVideoDecision(
     // is queryable on the accepted highlight record.
     corroborated: confirm?.corroborated ?? undefined,
     corroborationSource: confirm?.corroborationSource ?? undefined,
+    // ADAAAA-7251 (ACC-3): persist the ASR transcript the decide /confirm pass
+    // computed for this highlight's audio context, so it surfaces on the
+    // highlight card for human corroboration. Absent where ASR was not computed
+    // (no audio context), so no-audio clips show the "No audio captured" badge.
+    asrTranscript: confirm?.transcript || undefined,
     status: "pending",
     // ADAAAA-6798 Inc 2: link the highlight to the candidate that started it
     // and carry that candidate's trigger provenance (no read-time join).
