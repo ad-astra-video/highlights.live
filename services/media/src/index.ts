@@ -26,6 +26,8 @@ async function main() {
     discoverOrchestrators,
     publicBaseUrl: cfg.publicBaseUrl,
     provisionNoClientMs: cfg.provisionNoClientMs,
+    rtcIceServers: cfg.rtcIceServers,
+    rtcIceGatherTimeoutMs: cfg.rtcIceGatherTimeoutMs,
   });
   const app = await media.build();
   await app.listen({ port: cfg.port, host: "0.0.0.0" });

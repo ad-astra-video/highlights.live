@@ -512,6 +512,17 @@ services:
       - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-https://highlights-media.dpn.gg}
       # Release a provisioned-but-never-used perceive slot after this long.
       - MEDIA_PROVISION_NO_CLIENT_MS=${MEDIA_PROVISION_NO_CLIENT_MS:-60000}
+      # ADAAAA-7306: ICE/STUN/TURN servers for WebRTC screen-share ingest. The
+      # media server sits behind the public LB, so its host candidates are
+      # private container IPs the browser cannot reach — a TURN relay gives the
+      # browser a reachable media path so the DTLS/media path holds instead of
+      # reconnect-looping. JSON array, e.g.
+      #   [{"urls":"turn:turn.example.com:3478","username":"user","credential":"pass"},
+      #    {"urls":"stun:stun.example.com:3478"}]
+      - MEDIA_RTC_ICE_SERVERS=${MEDIA_RTC_ICE_SERVERS:-}
+      # Max ms to wait for the answerer's ICE gathering to complete before the
+      # RTC answer is returned (so it carries a reachable candidate).
+      - MEDIA_RTC_ICE_GATHER_TIMEOUT_MS=${MEDIA_RTC_ICE_GATHER_TIMEOUT_MS:-2000}
     ports:
       - "4070:4070"
     depends_on:
