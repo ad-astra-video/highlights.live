@@ -28,6 +28,10 @@ Backends:
                   and optionally degrade them (drop small-object class, inject junk FPs)
                   to exercise precision/recall/ID-persistence math. NOT evidence of model
                   quality — only of the harness accounting.
+  - `molmo2`    : loads allenai/Molmo2-4B via HF transformers (evals/molmo2_backend.py,
+                  needs transformers >= 4.52). Open-vocab 'find all <vocab>' prompt with
+                  box output; boxes feed the same precision/recall/seed-IoU accounting.
+                  Runs on the GPU box next to florence (ADAAAA-7283 leg B).
 
 Run (local accounting self-check, no model):
     python3 evals/detect_precision.py --val evals/val_manifest.jsonl --backend fixture
@@ -37,6 +41,8 @@ Run (GPU box, real models):
     python3 evals/detect_precision.py --val evals/val_manifest.jsonl --backend florence \\
         --model-base microsoft/Florence-2-base \\
         --model-finetuned /runs/Florence-2-base-finetuned-<run>
+    python3 evals/detect_precision.py --val evals/val_manifest.jsonl --backend molmo2 \\
+        --model-molmo2 allenai/Molmo2-4B --device cuda --dtype bfloat16
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ import os
 import random
 import sys
 from collections import defaultdict
+from statistics import median
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # for detect_schema
@@ -193,6 +200,11 @@ def _resolve_image(image_ref):
 def make_detector(backend, model_id, vocab, opts, run_label=None):
     if backend == "florence":
         return _FlorenceDetector(model_id, vocab)
+    if backend == "molmo2":
+        import molmo2_backend  # lazy: only pulls transformers/torch on the box
+        return molmo2_backend.Molmo2Detector(model_id, vocab,
+                                             device=getattr(opts, "device", "cuda"),
+                                             dtype=getattr(opts, "dtype", "bfloat16"))
     # fixture: the "base" run takes the degradation opts, "fine-tuned" is the
     # perfect fixture, so the reported delta demonstrates the precision/recall
     # accounting when no model/GPU is available.
@@ -217,6 +229,10 @@ def build_detector_plan(args, vocab):
         runs = [("base", args.model_base), ("fine-tuned", args.model_finetuned)]
         # if only one model supplied, still emit both slots (fine-tuned may be a file)
         return runs
+    if args.backend == "molmo2":
+        # single-arm run for the Molmo2-4B detector (leg B of the A/B). It feeds
+        # the same precision/recall/seed-IoU accounting as florence/fixture.
+        return [("molmo2", args.model_molmo2)]
     # fixture
     return [("fine-tuned", None), ("base", None)]
 
@@ -236,6 +252,7 @@ def eval_detection(samples, detector, vocab, iou_thresh=ACCEPT_IOU, max_frames=N
     frame_recall = defaultdict(list)   # class -> list of (frame_id, recall)
     frame_present = defaultdict(int)   # class -> frames where at least one GT box
     frame_dropout = defaultdict(int)   # class -> frames where GT present but recall==0
+    seed_iou = defaultdict(list)       # class -> best predicted box IoU vs a GT box (seed quality)
     junk_fp = 0
     n_frames = 0
     for i, sample in enumerate(samples):
@@ -272,6 +289,12 @@ def eval_detection(samples, detector, vocab, iou_thresh=ACCEPT_IOU, max_frames=N
                 if recall == 0.0:
                     frame_dropout[cls] += 1
                 frame_recall[cls].append((sample.get("id", i), recall))
+                # seed-box quality: best predicted box IoU vs any GT box for this class
+                best = 0.0
+                for p_box in [b for _, b in preds.get(cls, [])]:
+                    for g_box in [b for _, b in gts.get(cls, [])]:
+                        best = max(best, _iou(p_box, g_box))
+                seed_iou[cls].append(best)
             frame_tp += len(tp_p)
             frame_g += n_g
         junk_fp += len(junk_preds)
@@ -291,10 +314,13 @@ def eval_detection(samples, detector, vocab, iou_thresh=ACCEPT_IOU, max_frames=N
     }}
     for cls in classes:
         t, f, n = tp[cls], fp[cls], fn[cls]
+        si = seed_iou[cls]
         metrics[cls] = {
             "tp": t, "fp": f, "fn": n,
             "precision": t / (t + f) if (t + f) else None,
             "recall": t / (t + n) if (t + n) else None,
+            "seedIoUMean": sum(si) / len(si) if si else None,
+            "seedIoUMed": median(si) if si else None,
         }
     # per-frame recall (dropout) summary per class
     ov_vals = [r for _, r in frame_recall["__overall__"]]
@@ -526,16 +552,20 @@ def main():
     ap.add_argument("--val", default=os.path.join(HERE, "val_manifest.jsonl"))
     ap.add_argument("--train", default=os.path.join(HERE, "train_manifest.jsonl"))
     ap.add_argument("--track", default=os.path.join(HERE, "track_label_manifest.json"))
-    ap.add_argument("--backend", choices=["florence", "fixture"], default="fixture")
+    ap.add_argument("--backend", choices=["florence", "fixture", "molmo2"], default="fixture")
     ap.add_argument("--model-base", default="microsoft/Florence-2-base")
     ap.add_argument("--model-finetuned", default=None)
+    ap.add_argument("--model-molmo2", default="allenai/Molmo2-4B",
+                    help="Molmo2 model id/dir for --backend molmo2 (leg B arm)")
+    ap.add_argument("--device", default="cuda", help="device for --backend molmo2 (or florence)")
+    ap.add_argument("--dtype", default="bfloat16", help="torch dtype for --backend molmo2")
     ap.add_argument("--vocab", nargs="*", default=DEFAULT_VOCAB)
     ap.add_argument("--iou", type=float, default=ACCEPT_IOU)
     ap.add_argument("--max-frames", type=int, default=None)
     ap.add_argument("--drop-class", default=None, help="class to drop (fixture only)")
     ap.add_argument("--drop-rate", type=float, default=0.0, help="fraction of drop-class boxes dropped (fixture)")
     ap.add_argument("--junk-fp", type=int, default=0, help="spurious in-vocab FPs per frame (fixture)")
-    ap.add_argument("--drop", type=int, default=0, help="whole-frame detector dropout % for tracker (0-99)")
+    ap.add_argument("--drop", type=int, default=0, help="whole-frame detector dropout pct for tracker (0-99)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--report-out", default=None, help="write JSON report to PATH")
     args = ap.parse_args()
