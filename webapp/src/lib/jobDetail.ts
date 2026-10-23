@@ -161,6 +161,12 @@ export interface JobDetailHighlight {
   nearMiss?: boolean;
   status: string;
   clipError?: string;
+  // ADAAAA-7248: whether the source this highlight's clip was cut from carried
+  // an audio stream. `false` => silent clip (source had no audio track); the
+  // card shows an explicit "no audio captured" state. Absent when unknown.
+  hasAudio?: boolean;
+  // ADAAAA-7248: ASR transcript surfaced on the card for corroboration.
+  asrTranscript?: string;
   createdAt: string;
   // ADAAAA-6798 Inc 2: link to the JobCandidate that started this highlight and
   // the de-normalized trigger metadata (kind + timestamp + eventType) so the
