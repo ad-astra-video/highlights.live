@@ -8,7 +8,7 @@ import { rm } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { clipWindow } from "./config";
+import { clipWindow, validateClipWindow } from "./config";
 import type { ServerConfig } from "./config";
 import type { Store } from "./store";
 import {
@@ -342,6 +342,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const adminReadOnlyReq = adminReadonlyRequired(auth);
   const train = createTrainService(db, adapter, cfg);
 
+  // ADAAAA-7247 (ACC-7): resolve the per-company clip window that WINS at
+  // assembly. Reads the webui-configured, DB-persisted value first; falls back
+  // to the deployment env default (ServerConfig.clipBeforeS / clipAfterS). The
+  // `>=clipWindowMinSec` floor is enforced downstream by `clipWindow`, so no
+  // persisted setting can ever produce a delivered clip <15 s (ACC-1).
+  async function resolveClipWindow(): Promise<{ clipBeforeS: number; clipAfterS: number; clipWindowMinSec: number }> {
+    const s = await db.getClipWindowSettings();
+    return {
+      clipBeforeS: s?.clipBeforeS ?? cfg.clipBeforeS,
+      clipAfterS: s?.clipAfterS ?? cfg.clipAfterS,
+      clipWindowMinSec: cfg.clipWindowMinSec ?? 15,
+    };
+  }
+
   // Public auth endpoints share one anti-abuse budget per IP (login, register,
   // forgot, reset). In-process fixed-window: fine for a single beta instance;
   // move to a shared store if the server is ever scaled horizontally.
@@ -572,15 +586,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // on every re-reserve via the slotRef.onReserve hook.
       const slot = { current: initial, stopped: false };
       livePerceiveSlots.set(job.id, slot);
+      // ADAAAA-7247 (ACC-7): resolve the webui-configured (DB-persisted) per-company
+      // clip window — it wins over the bare env default at assembly.
+      const cw = await resolveClipWindow();
       // Bind `ingest.cut` (it reads `this.cfg`): analyzeJob and the observer
       // receive it as a plain function reference, so an unbound method loses
       // `this` and throws (job->failed) the moment a highlight needs a clip.
       const cut = (ts: number) => ingest.cut(ts);
       const anaCfg: AnalyzerConfig = {
         jobId: job.id,
-        clipBeforeS: cfg.clipBeforeS,
-        clipAfterS: cfg.clipAfterS,
-        clipWindowMinSec: cfg.clipWindowMinSec,
+        clipBeforeS: cw.clipBeforeS,
+        clipAfterS: cw.clipAfterS,
+        clipWindowMinSec: cw.clipWindowMinSec,
         gameHint: job.gameHint || cfg.gameHintDefault,
         preferLabels: job.preferLabels,
         // ADAAAA-6577: bounded exponential backoff between a perceive
@@ -796,6 +813,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   async function runVodJob(job: { id: string; gameHint?: string; preferLabels?: string[] }, videoPath: string, user: any, sub: any) {
     const jobId = job.id;
     const scheduledAt = new Date().toISOString();
+    // ADAAAA-7247 (ACC-7): resolve the webui-configured (DB-persisted) per-company
+    // clip window once for this job — it wins over the bare env default at
+    // assembly (shared by anaCfg and the VOD cut closure below).
+    const cw = await resolveClipWindow();
     // Durable lifecycle (ADAAAA-6873): claim the job off the request path and
     // persist the extracting transition so status + progress survive a
     // refresh/restart. `attempts` increments on every re-claim so a restart
@@ -810,9 +831,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     emitJobProgress(jobId, 0, "extracting frames");
     const anaCfg: AnalyzerConfig = {
       jobId,
-      clipBeforeS: cfg.clipBeforeS,
-      clipAfterS: cfg.clipAfterS,
-      clipWindowMinSec: cfg.clipWindowMinSec,
+      clipBeforeS: cw.clipBeforeS,
+      clipAfterS: cw.clipAfterS,
+      clipWindowMinSec: cw.clipWindowMinSec,
       gameHint: job.gameHint || cfg.gameHintDefault,
       preferLabels: job.preferLabels,
       // ADAAAA-6577: bounded exponential backoff between a perceive session-
@@ -1052,7 +1073,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       emitJobProgress(jobId, 90, "cutting clips");
       const clipId = randomUUID();
       const out = path.join(clipDir, `${clipId}.mp4`);
-      const win = clipWindow(ts, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15);
+      const win = clipWindow(ts, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
       await cutClip(cfg.ffmpegPath, videoPath, out, win.start, win.end - win.start);
       return { clipId, clipUri: `/clips/${clipId}.mp4` };
     };
@@ -1334,6 +1355,56 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     vodChunkBytes: cfg.vodChunkBytes,
     rejectedClipTtlMs: cfg.rejectTtlMs,
   }));
+
+  // ADAAAA-7247 (ACC-7): webui-configured clip-window setting, persisted per
+  // company. GET returns the currently-effective window (persisted value if set,
+  // else the deployment env default) plus the nominal `windowSec` and the
+  // `deliveredWindowSec` after the >=15 s floor, so the settings UI shows what a
+  // clip will actually run. PUT accepts whole-second clipBeforeS/clipAfterS
+  // (defaults 7/8), validates on the server, persists per company, and returns
+  // the same shape. The >=15 s floor is enforced at assembly by `clipWindow` —
+  // an invalid/too-short setting can never produce a delivered clip <15 s.
+  app.get("/config/clip-window", async () => {
+    const s = await db.getClipWindowSettings();
+    const before = s?.clipBeforeS ?? cfg.clipBeforeS;
+    const after = s?.clipAfterS ?? cfg.clipAfterS;
+    const minSec = cfg.clipWindowMinSec ?? 15;
+    return {
+      clipBeforeS: before,
+      clipAfterS: after,
+      clipWindowMinSec: minSec,
+      windowSec: before + after,
+      deliveredWindowSec: Math.max(before + after, minSec),
+      persisted: Boolean(s),
+    };
+  });
+
+  app.put<{ Body: { clipBeforeS?: unknown; clipAfterS?: unknown } }>(
+    "/config/clip-window",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const minSec = cfg.clipWindowMinSec ?? 15;
+      const v = validateClipWindow(req.body?.clipBeforeS, req.body?.clipAfterS, minSec);
+      if (!v.ok) {
+        return reply.code(400).send({ error: v.error, code: "invalid_clip_window" });
+      }
+      const before = v.clipBeforeS as number;
+      const after = v.clipAfterS as number;
+      await db.setClipWindowSettings({ clipBeforeS: before, clipAfterS: after });
+      const floored = before + after < minSec;
+      return {
+        clipBeforeS: before,
+        clipAfterS: after,
+        clipWindowMinSec: minSec,
+        windowSec: before + after,
+        deliveredWindowSec: Math.max(before + after, minSec),
+        persisted: true,
+        ...(floored
+          ? { note: `Configured window is ${before + after}s (< ${minSec}s). Delivered clips will be padded to the ${minSec}s minimum so the highlight stays >=${minSec}s (ACC-1).` }
+          : {}),
+      };
+    }
+  );
 
   // --- auth (public endpoints are rate limited per IP) ---
   app.post<{ Body: { email?: string; password?: string; inviteCode?: string } }>("/auth/register", { preHandler: limitAuth }, async (req, reply) => {
@@ -1868,7 +1939,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         await store.patchJob(job.id, { sampleFps });
         const kind: LiveKind =
           req.body.source === "screen" ? "screen" : (req.body.source as LiveKind) === "file-sim" ? "file-sim" : "rtmp";
-        const ingest = new LiveIngest(cfg, job.id, {
+        // ADAAAA-7247 (ACC-7): the live session's `cut` reads `this.cfg`, so hand
+        // it a shallow copy of the server config with the webui-configured
+        // (DB-persisted) clip window replacing the bare env default.
+        const cw = await resolveClipWindow();
+        const ingestCfg = { ...cfg, clipBeforeS: cw.clipBeforeS, clipAfterS: cw.clipAfterS, clipWindowMinSec: cw.clipWindowMinSec };
+        const ingest = new LiveIngest(ingestCfg, job.id, {
           kind,
           url: videoPath,
           sampleInterval: 1 / sampleFps,
@@ -2359,6 +2435,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const { mkdir } = await import("node:fs/promises");
       const outDir = path.join(cfg.dataDir, "clips");
       await mkdir(outDir, { recursive: true });
+      // ADAAAA-7247 (ACC-7): use the webui-configured (DB-persisted) per-company
+      // clip window for the final browser clip cuts.
+      const cw = await resolveClipWindow();
       // Cut a clip for every highlight that doesn't already have one. If the
       // recording is missing or a cut fails, surface the miss on the highlight
       // (clipError) instead of silently leaving an empty clipUri -> blank card.
@@ -2375,7 +2454,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         try {
           const name = `${job.id}-${Math.round(h.start * 10)}`;
           const out = path.join(outDir, `${name}.mp4`);
-          const win = clipWindow(h.start, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15);
+          const win = clipWindow(h.start, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
           const dur = Math.max(h.end - h.start, win.end - win.start);
           await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), dur);
           await store.patchHighlight(h.id, { clipUri: `/clips/${name}.mp4` });
@@ -2468,6 +2547,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           // never a pipeline failure).
           await recordDecideAudit(db, (d as any).audit, cfg.decideAuditRetention);
           if (d.isHighlight) {
+            // ADAAAA-7247 (ACC-7): use the webui-configured (DB-persisted)
+            // per-company clip window (it wins over the bare env default).
+            const cw = await resolveClipWindow();
+            const win = clipWindow(timestamp, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
             highlight = {
               id: randomUUID(),
               jobId: job.id,
@@ -2477,8 +2560,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               // same candidate highlight.
               idempotencyKey: highlightIdempotencyKey(job.id, Math.round(timestamp), d.eventType),
               clipUri: "",
-              start: clipWindow(timestamp, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15).start,
-              end: clipWindow(timestamp, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15).end,
+              start: win.start,
+              end: win.end,
               eventType: d.eventType,
               score: d.score,
               reason: d.reason,
