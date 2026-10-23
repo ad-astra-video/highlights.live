@@ -2348,10 +2348,21 @@ export function buildObserveDecideRequest(
     ballOutcome: windowAttestation.ballOutcome || undefined,
     scoreBoardChanged: windowAttestation.scoreBoardChanged || undefined,
   };
+  // ADAAAA-7299: per-window audio context for the observe decide. The observe
+  // loop builds the per-window analysis, so it must forward the window's
+  // captured audio (Path 2 -> ASR -> transcript). Without it every live/file-sim
+  // window persists `analysis.audio.path:"none"`, a blank `asr.transcript`, and
+  // no playable audio. `run.audioClipB64()` returns the rolling tap clip
+  // (AUDIO_CLIP_KEEP_S≈window), aligned with the rolling-past observer window.
+  // Gated on `cfg.audioContext` (LIVE_AUDIO_CONTEXT) and only when audio was
+  // actually buffered, so a silent / no-tap window (or the config-off /
+  // VOD-without-audio-tap case) stays text-only (no regression).
+  const windowAudioB64 = cfg.audioContext ? run.audioClipB64() : "";
   const opts: Parameters<PipelineClient["decide"]>[1] = {
     gameHint: cfg.gameHint,
     reasoningEffort: "none",
     frames: payload.frames.map((f) => ({ role: "full", base64: f.imageB64 })),
+    ...(windowAudioB64 ? { audioB64: windowAudioB64 } : {}),
     // ADAAAA-7028 Inc 2: audit identity — forward the job + frame-group
     // partition key so the decide service's `_audit` descriptor keys the
     // durable decide_audit index by (sessionId, groupKey). One row per frame

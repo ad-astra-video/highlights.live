@@ -616,10 +616,12 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
     expect(seen.imageB64).toBeUndefined();
   });
 
-  it("live observer: the window frames[] are the primary evidence; audioContext does not funnel an audio clip to decide", async () => {
+  it("live observer: the window frames[] are the primary evidence AND the buffered audio clip funnels to decide (ADAAAA-7299)", async () => {
     // ADAAAA-7008: the decide-observer review window (frames[]) is the PRIMARY
-    // evidence. The candidate-path audio-context clip forwarding from the old
-    // candidate path does not apply to the observer request.
+    // evidence. ADAAAA-7299: the observer's decide also forwards the buffered
+    // per-window audio (Path 2 -> ASR -> transcript) so the analysis window is
+    // NOT stuck at audio.path:"none"; only when audioContext is on AND audio
+    // was actually captured.
     let seen: any;
     const { client } = fakeClient({
       analyze: async () => ({
@@ -643,7 +645,11 @@ describe("detail-first VOD (ADAAAA-4954)", () => {
     );
     expect(seen.frames).toBeDefined(); // window frame sequence still forwarded
     expect(seen.reasoningEffort).toBe("none");
-    expect(seen.audioB64).toBeUndefined(); // observer request is the window frames
+    // ADAAAA-7299: the captured audio reaches the decide service as audioB64 so
+    // ASR transcribes it into the per-window analysis (the runtime live/file-sim
+    // gap fix). Empty/no audio stays text-only (asserted in the sibling test).
+    expect(typeof seen.audioB64).toBe("string");
+    expect((seen.audioB64 as string).length).toBeGreaterThan(0);
     expect(seen.imageB64).toBeUndefined();
   });
 
