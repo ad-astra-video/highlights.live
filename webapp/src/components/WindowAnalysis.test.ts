@@ -164,7 +164,7 @@ describe("WindowAnalysisPanel (ADAAAA-7157)", () => {
     // Request context
     expect(html).toContain("data-confirm-prompt");
     expect(html).toContain("Confirm the scoring play with the frame-level deep dive.");
-    expect(html).toContain("data-refs=\"Keyframes\"");
+    expect(html).toContain('data-refs="Keyframes"');
     // Finding 1 regression: deep-dive frame/keyframe refs use the real job id
     expect(html).toContain("/jobs/abc/frames/0");
     expect(html).toContain("/jobs/abc/frames/2");
@@ -184,5 +184,44 @@ describe("WindowAnalysisPanel (ADAAAA-7157)", () => {
     expect(html).toContain("scoring_play");
     expect(html).toContain("data-confirm-reason");
     expect(html).toContain("Frame-level evidence confirms the scoring play.");
+  });
+
+  it("renders a playable <audio> element bound to audio.uri (ADAAAA-7277)", () => {
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis, jobId: "abc" })
+    );
+    expect(html).toContain("data-window-audio-player");
+    expect(html).toContain('controls');
+    expect(html).toContain('src="/audio.wav"');
+    // ASR transcript still rendered alongside the player
+    expect(html).toContain("GOAL scored by number 9");
+  });
+
+  it("renders the explicit 'No audio captured' badge for a silent window, not a blank box (ADAAAA-7277)", () => {
+    const silent: WindowAnalysis = {
+      ...analysis,
+      audio: { path: "none", sampleRate: 16000 },
+      asr: { transcript: "", latencyS: 0.4 },
+    };
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis: silent, jobId: "abc" })
+    );
+    expect(html).toContain("data-window-no-audio");
+    expect(html).toContain("No audio captured");
+    expect(html).not.toContain("data-window-audio-player");
+  });
+
+  it("renders the audio channel metadata (but no player) when audio exists without a servable uri", () => {
+    const metaOnly: WindowAnalysis = {
+      ...analysis,
+      audio: { path: "asr_text", sampleRate: 16000 },
+    };
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis: metaOnly, jobId: "abc" })
+    );
+    expect(html).toContain("data-audio-asr");
+    expect(html).toContain("asr_text");
+    expect(html).not.toContain("data-window-audio-player");
+    expect(html).not.toContain("data-window-no-audio");
   });
 });
