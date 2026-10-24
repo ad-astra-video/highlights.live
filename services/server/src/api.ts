@@ -370,7 +370,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // CLIENT streams sampled frames in via POST /jobs/:id/ingest and a recording
   // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
   // session.
-  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string }>();
+  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string; mediaIceServers?: any[] }>();
   // ADAAAA-6561: per live-ingest job, the CURRENT perceive session held by that
   // job plus whether the job has been stopped. The stop path uses this to
   // release the perceive slot SYNCHRONOUSLY (independent of the in-flight GPU
@@ -433,7 +433,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   //   - if the media node that served the session goes DOWN, isMediaHealthy()
   //     fails and we re-provision on a healthy node, seamlessly re-routing the
   //     browser to a fresh wsUrl (no user action needed).
-  async function provisionMedia(jobId: string): Promise<{ wsUrl: string; mediaSessionId: string; mediaOrigin: string }> {
+  async function provisionMedia(jobId: string): Promise<{ wsUrl: string; mediaSessionId: string; mediaOrigin: string; iceServers?: any[] }> {
     if (!cfg.mediaServerUrl) throw new Error("media server not configured (MEDIA_SERVER_URL)");
     // The control plane reaches the media node on its docker-internal URL
     // (media:4070) for provisioning + health checks; a browser cannot resolve
@@ -443,7 +443,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const browserOrigin = (cfg.mediaPublicBaseUrl ?? cfg.mediaServerUrl).replace(/\/+$/, "");
     const existing = await db.getMediaSession(jobId);
     if (existing && existing.status === "active" && (await isMediaHealthy(existing.mediaOrigin))) {
-      return { wsUrl: existing.wsUrl, mediaSessionId: existing.sessionId, mediaOrigin: browserOrigin };
+      // Reconnect to the SAME live session: reuse its cached ICE servers so the
+      // browser reconfigures its peer with the relay on every offer.
+      return { wsUrl: existing.wsUrl, mediaSessionId: existing.sessionId, mediaOrigin: browserOrigin, iceServers: browserJobs.get(jobId)?.mediaIceServers };
     }
     const r = await fetch(`${internalOrigin}/sessions`, {
       method: "POST",
@@ -469,13 +471,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       createdAt: now,
       updatedAt: now,
     });
-    // Keep the in-memory browser job pointer current for teardown.
+    // Keep the in-memory browser job pointer current for teardown + hand the
+    // browser the media server's ICE/TURN servers so its peer allocates a relay
+    // candidate (reachable across the LB) instead of a private host candidate.
     const bj = browserJobs.get(jobId);
     if (bj) {
       bj.mediaSessionId = body.sessionId;
       bj.mediaWsUrl = wsUrl;
+      bj.mediaIceServers = body.iceServers;
     }
-    return { wsUrl, mediaSessionId: body.sessionId, mediaOrigin: browserOrigin };
+    return { wsUrl, mediaSessionId: body.sessionId, mediaOrigin: browserOrigin, iceServers: body.iceServers };
   }
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));
@@ -2629,13 +2634,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // or — if the media node serving it went down — transparently re-provisions
     // on a healthy node so the browser's reconnect is seamlessly re-routed.
     try {
-      const { wsUrl, mediaSessionId, mediaOrigin } = await provisionMedia(req.params.id);
+      const { wsUrl, mediaSessionId, mediaOrigin, iceServers } = await provisionMedia(req.params.id);
       bj.mediaWsUrl = wsUrl;
       bj.mediaSessionId = mediaSessionId;
       // WebRTC ingest (C1): the browser signals to the media server via
       // POST {mediaOrigin}/sessions/{mediaSessionId}/rtc/offer instead of
       // posting sampled frames over the WS. wsUrl is kept for the WS fallback.
-      return { wsUrl, mediaSessionId, mediaOrigin, rtc: true };
+      // iceServers lets the browser configure TURN so its peer allocates a
+      // relay candidate the media server can reach (ADAAAA-7353).
+      return { wsUrl, mediaSessionId, mediaOrigin, rtc: true, iceServers };
     } catch (e: any) {
       return reply.code(500).send({ error: String(e?.message || e) });
     }
