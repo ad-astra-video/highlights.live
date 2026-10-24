@@ -64,6 +64,9 @@ export interface DecodedFrame {
   ts: number;
   /** JPEG bytes ready for the video-in rail. */
   jpeg: Buffer;
+  /** Ingest latency (ms) from the last RTP packet received to this decoded
+   *  JPEG being emitted — the RTC video-in decode leg of the live budget. */
+  latencyMs?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -163,6 +166,12 @@ export class WebRtcIngestSession extends EventEmitter {
   private closed = false;
   private codecMime = "";
   private activeTrack?: MediaStreamTrack;
+  /** Number of RTP packets received through onReceiveRtp (diagnostics). */
+  packetsReceived = 0;
+  /** Number of decoded JPEG frames emitted on the orchestrator rail. */
+  framesEmitted = 0;
+  /** Wall-clock ms of the last RTP packet received (decode-latency baseline). */
+  private lastPacketAt = 0;
 
   // ---- decode segment state (bounded from the last IDR) ----
   /** SPS/PPS retained across IDR resets so a keyframe segment always decodes. */
@@ -284,9 +293,14 @@ export class WebRtcIngestSession extends EventEmitter {
     this.vclCount = 0;
     this.lastNalType = -1;
     this.lastSampleWall = 0;
+    this.packetsReceived = 0;
+    this.framesEmitted = 0;
+    this.lastPacketAt = 0;
   }
 
   private onRtp(rtp: RtpPacket) {
+    this.packetsReceived++;
+    this.lastPacketAt = Date.now();
     this.au.push(rtp);
     if (!rtp.header.marker) return; // more packets in this access unit
     // Access unit complete -> reassemble Annex-B/IVF and schedule a decode.
@@ -436,18 +450,37 @@ export class WebRtcIngestSession extends EventEmitter {
       ff.stdin.end(); // EOF -> ffmpeg flushes + emits, then closes
     });
 
-    if (jpeg && jpeg.length > 2) this.emitFrame(jpeg, ts);
+    if (jpeg && jpeg.length > 2) {
+      const latencyMs = this.lastPacketAt ? Date.now() - this.lastPacketAt : 0;
+      this.emitFrame(jpeg, ts, latencyMs);
+    }
   }
 
-  private emitFrame(jpeg: Buffer, ts: number) {
+  private emitFrame(jpeg: Buffer, ts: number, latencyMs?: number) {
     if (!jpeg.length || this.closed) return;
-    this.emit("frame", { seq: this.seq++, ts, jpeg } satisfies DecodedFrame);
+    this.framesEmitted++;
+    this.emit("frame", { seq: this.seq++, ts, jpeg, latencyMs } satisfies DecodedFrame);
+  }
+
+  /** Live diagnostics for this ingest session (packets in / frames out). */
+  stats() {
+    return {
+      packetsReceived: this.packetsReceived,
+      framesEmitted: this.framesEmitted,
+      codecMime: this.codecMime,
+      started: this.started,
+      closed: this.closed,
+    };
   }
 
   /** Close the peer. Idempotent. */
   async close() {
     if (this.closed) return;
     this.closed = true;
+    // Diagnostic summary so a connected-but-silent session is distinguishable
+    // from "no frames at all" (AC: packet/frame counters on the RTC path).
+    // eslint-disable-next-line no-console
+    console.log(`[rtc] close codec=${this.codecMime || "?"} packets=${this.packetsReceived} frames=${this.framesEmitted}`);
     if (this.pc) {
       try {
         await this.pc.close();

@@ -200,7 +200,16 @@ export class MediaServer {
           });
           // Decoded frames -> orchestrator video-in rail -> observation relay.
           session.on("frame", (f) => {
-            void this.publishAndObserve(stream, f.seq, f.jpeg, f.ts).catch((e) =>
+            // Periodic cadence health log distinguishes "connected but silent"
+            // (packets in, no frames) from "no packets at all" (AC: counters).
+            const s = session.stats();
+            if (f.seq % 30 === 0 || s.framesEmitted === 1) {
+              // eslint-disable-next-line no-console
+              console.log(
+                `[rtc] frame seq=${f.seq} packets=${s.packetsReceived} frames=${s.framesEmitted} latency=${f.latencyMs ?? 0}ms`
+              );
+            }
+            void this.publishAndObserve(stream, f.seq, f.jpeg, f.ts, undefined, f.latencyMs).catch((e) =>
               console.error("[media] rtc frame err", e)
             );
           });
@@ -216,6 +225,15 @@ export class MediaServer {
         const { session } = stream.rtc;
         try {
           const answer = await session.handleOffer(req.body.offer);
+          // AC1: log whether the returned answer carries a candidate the
+          // browser can actually reach (relay/srflx vs a private host). A
+          // host-only answer means the media path can't be held.
+          const cands = String(answer?.sdp || "")
+            .split("\r\n")
+            .filter((l) => l.startsWith("a=candidate:"));
+          const types = [...new Set(cands.map((c) => (c.includes(" typ relay") ? "relay" : c.includes(" typ srflx") ? "srflx" : c.includes(" typ host") ? "host" : "?")))];
+          // eslint-disable-next-line no-console
+          console.log(`[rtc] offer answered candidates=${cands.length} types=${types.join(",")}`);
           return { pcId: stream.rtc.pcId, answer, iceServers: this.opts.rtcIceServers };
         } catch (e: any) {
           return reply.code(400).send({ error: String(e?.message || e) });
@@ -309,7 +327,8 @@ export class MediaServer {
     seq: number,
     jpeg: Uint8Array,
     ts: number,
-    socket?: any
+    socket?: any,
+    decodeLatencyMs?: number
   ) {
     const p = stream.provisioned;
     await this.orch.publishFrame(p, seq, jpeg, ts);
@@ -319,6 +338,10 @@ export class MediaServer {
     for (let i = 0; i < 10; i++) {
       const obs = await this.orch.readObservation(p, seq).catch(() => null);
       if (obs) {
+        // Live-detection latency budget (PO): wall time from frame receipt to
+        // the observation being published. target 1-5s.
+        // eslint-disable-next-line no-console
+        console.log(`[rtc] obs seq=${seq} liveMs=${Math.round((Date.now() / 1000 - ts) * 1000)} decodeMs=${decodeLatencyMs ?? 0}`);
         this.relay(stream, socket, obs);
         void this.callback(stream, obs);
         return;
