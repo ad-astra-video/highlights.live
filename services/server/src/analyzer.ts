@@ -2562,11 +2562,32 @@ export function hasIndependentAttestation(c: {
   return false;
 }
 
-/** The Stage-2 trigger: only an un-attested goal-type candidate whose Stage-1
- * read is a scoring_play accept (goal-shaped) enters the confirmation dive.
- * Everything else (non-goal type, attested, or a Stage-1 non-accept) keeps the
- * existing 1-5 s path unchanged. `cfg.confirmEnabled` is the VOD-first config
- * gate — when off this is a strict no-op. */
+/** ADAAAA-7357: whether a Stage-1 verdict is a GOAL-shaped read that the
+ * deterministic notable-only bar stripped to a NON-accept purely because the
+ * candidate carried no IN-WINDOW corroboration (a "bare trigger"). This is the
+ * delayed-corroboration population: the vision read was a goal, but the
+ * scoreboard / goal-call audio landed in a LATER window, so apply_gate rejected
+ * it. We detect this from the rejected reason signature (the decide side appends
+ * "rejected by notable-only bar: ... no corroborating evidence (bare trigger)")
+ * so ONLY the notable-only rejection is rescued — a goal rejected by the
+ * ball-outcome gate, the attestation gate, or a true near_miss/not_goal read
+ * (outcome != scoring_play) is NOT broadened. This keeps the confirm population
+ * bounded to goal-shaped reads (one confirm decide per such candidate). */
+export function isGateRejectedBareGoal(d: DecisionResult): boolean {
+  if (d.isHighlight) return false;
+  if (!isGoalDecision(d)) return false;
+  const r = (d.reason || "").toLowerCase();
+  return r.includes("notable-only bar") && r.includes("no corroborating evidence");
+}
+
+/** The Stage-2 trigger: an un-attested goal-type candidate whose Stage-1 read
+ * is a scoring_play accept (goal-shaped), OR a goal-shaped read that the
+ * notable-only bar stripped to a non-accept for lack of in-window corroboration
+ * (the delayed-corroboration rescue, ADAAAA-7357), enters the confirmation dive.
+ * Everything else (non-goal type, attested, a goal rejected by a NON-notable
+ * gate, or a true near_miss/not_goal read) keeps the existing 1-5 s path
+ * unchanged. `cfg.confirmEnabled` is the VOD-first config gate — when off this
+ * is a strict no-op. */
 export function shouldRunConfirm(
   cfg: AnalyzerConfig,
   candidate: { eventType: string; ballOutcome?: string; goalCrossed?: boolean; scoreBoardChanged?: boolean },
@@ -2578,9 +2599,15 @@ export function shouldRunConfirm(
   // bias-hint label (commonly SPORTING_EVENT) while the actual GOAL class lives
   // on the verdict (outcome=scoring_play / eventType=GOAL). Gating on
   // candidate.eventType made the gate inert for every observe-accepted goal.
-  if (!isAcceptedHighlight(stage1Decision)) return false;
   if (!isGoalDecision(stage1Decision)) return false;
   if (hasIndependentAttestation(candidate)) return false;
+  // ADAAAA-7357: the confirm population now includes an accepted un-attested
+  // goal (as before) PLUS a goal-shaped read the notable-only bar stripped for
+  // lack of in-window corroboration (so the confirm can credit a DELAYED
+  // scoreboard / goal-call audio across its expanded window). Everything else
+  // (incl. a goal rejected by the ball-outcome / attestation gate) is bounded
+  // out so we don't spend a confirm call on every rejected candidate.
+  if (!isAcceptedHighlight(stage1Decision) && !isGateRejectedBareGoal(stage1Decision)) return false;
   return true;
 }
 
