@@ -287,9 +287,11 @@ services:
       # written; the server decide_audit rows still hold the sha256 media hashes.
       - DECIDE_AUDIT_DIR=${DECIDE_AUDIT_DIR:-/srv/decide/audit}
       # ADAAAA-6973/7051: the live goal-confirm gate on the decide side
-      # (`_confirm_pass_enabled`). Default 0 (off); docker/.env sets 1 to arm
-      # it, so a clean `reset --hard origin/master` does NOT drop it.
-      - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-0}
+      # (`_confirm_pass_enabled`). ADAAAA-7359: enabled on the VOD path after
+      # CEO cost approval (AC4). Keep the default 1 so a clean
+      # `reset --hard origin/master` does NOT disarm it (docker/.env can still
+      # force 0 for an emergency off-switch).
+      - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-1}
       # ADAAAA-7162: expand the Stage-2 confirm window by this many seconds on
       # each side of the Stage-1 pre/post window (default 4 s, within the 3-5 s
       # requirement). Wired here so a clean `reset --hard` does NOT drop it.
@@ -369,9 +371,10 @@ services:
       # ADAAAA-6973/7051: the live goal-confirm gate. DECIDE_CONFIRM_ENABLED=1
       # arms the Stage-2 confirm goal-leg pass (server `shouldRunConfirm`,
       # decide `_confirm_pass_enabled`) so a candidate is only published when
-      # the goal corroborates. Default 0 (off) everywhere; docker/.env sets 1
-      # to arm it, so a clean `reset --hard origin/master` does NOT drop it.
-      - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-0}
+      # the goal corroborates. ADAAAA-7359: enabled on the VOD path after CEO
+      # cost approval (AC4); default 1 so a clean `reset --hard origin/master`
+      # does NOT disarm it (docker/.env can still force 0 as an off-switch).
+      - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-1}
       # ADAAAA-7162: expand the Stage-2 confirm window by this many seconds on
       # each side of the Stage-1 pre/post window (default 4 s, within the 3-5 s
       # requirement). The server-side `analyzer.ts`/`config.ts` reads it; wired
