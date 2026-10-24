@@ -30,6 +30,7 @@ class FakePredictor:
         self.frames = frames
         self.row = 0
         self.prompts = {}
+        self.boxes = {}
         self.resets = 0
         self.session = None
 
@@ -45,6 +46,11 @@ class FakePredictor:
             self.prompts[int(req["obj_id"])] = (
                 req["frame_index"],
                 tuple(np.asarray(req["points"])[0].tolist()),
+            )
+            self.boxes[int(req["obj_id"])] = (
+                req["frame_index"],
+                tuple(np.asarray(req.get("bounding_boxes")).reshape(-1).tolist()),
+                tuple(np.asarray(req.get("bounding_box_labels")).reshape(-1).tolist()),
             )
             return {}
         return {}
@@ -138,6 +144,26 @@ def test_target_change_resets_and_readds():
     assert fake.resets == 1
     assert fake.prompts[0][1][0] == pytest.approx(0.8)
     assert backend.get(0) is not None  # next frame still returns its mask
+
+
+def test_add_prompt_sends_bounding_box_for_large_object():
+    # ADAAAA-7305: a large operator-selected `player #N` must be prompted with a
+    # bounding BOX (not just a single center point, which can land on a gap and
+    # yield no mask). The add_prompt request must carry `bounding_boxes` in
+    # normalized XYWH *and* keep the center-point fallback.
+    fake, backend = _make([{0: (0.455, 0.264, 0.551, 0.437)}] * 3)
+    assert backend.ready()
+    box = (0.455, 0.264, 0.551, 0.437)  # the real tight #1 player box
+    backend.advance({0: box})
+    fi, xywh, labels = fake.boxes[0]
+    assert fi == 0
+    assert xywh[0] == pytest.approx(0.455)            # x1
+    assert xywh[1] == pytest.approx(0.264)            # y1
+    assert xywh[2] == pytest.approx(0.551 - 0.455)    # width
+    assert xywh[3] == pytest.approx(0.437 - 0.264)    # height
+    assert labels == (1,)
+    # center point still sent as the fallback
+    assert backend.get(0) is not None
 
 
 # --- HybridTracker integration ----------------------------------------------
