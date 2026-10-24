@@ -329,6 +329,10 @@ services:
       # Perceive mounts the server's dataDir at /data; server hands it the
       # per-job recorded stream as an in-container path (GPU perceive stack).
       - PERCEIVE_CLIP_ROOT=${PERCEIVE_CLIP_ROOT:-/data}
+      # ADAAAA-7383: raise the number of concurrent VOD jobs (each running job
+      # holds one perceive session) so the box serves up to 4 concurrent
+      # perceive streams/sessions. `VOD_WORKER_CONCURRENCY`.
+      - VOD_WORKER_CONCURRENCY=${VOD_WORKER_CONCURRENCY:-4}
       - FFMPEG_PATH=ffmpeg
       - NODE_TLS_REJECT_UNAUTHORIZED=0
       - JWT_SECRET=dev-secret

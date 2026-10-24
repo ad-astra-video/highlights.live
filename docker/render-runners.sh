@@ -11,7 +11,8 @@
 #
 #   DECIDE_RUNNER_CAPACITY=2 PERCEIVE_RUNNER_CAPACITY=2 ./render-runners.sh
 #
-# The committed docker/runners.json already ships the defaults (both 2).
+# The committed docker/runners.json already ships the defaults (decide 2,
+# perceive 4 after ADAAAA-7383).
 #
 # Live-path note (ADAAAA-7008): the live path runs a cadence-driven
 # decide-observer; perceive remains the persistent session runner and decide the
@@ -22,7 +23,7 @@ set -e
 cd "$(dirname "$0")"
 
 # (label):(template sentinel):(env var):(default)
-SPECS="highlights-decide:21127:DECIDE_RUNNER_CAPACITY:2 highlights-perceive:21128:PERCEIVE_RUNNER_CAPACITY:2"
+SPECS="highlights-decide:21127:DECIDE_RUNNER_CAPACITY:2 highlights-perceive:21128:PERCEIVE_RUNNER_CAPACITY:4"
 
 if [ ! -f runners.template.json ]; then
   echo "runners.template.json not found next to render-runners.sh" >&2
