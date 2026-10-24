@@ -72,7 +72,7 @@ export function Highlights() {
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   // VOD "Upload / file" source: the picked local file, whether the user chose
   // the "paste a URL" fallback instead, upload progress (0..1), and the server
-  // upload cap (refreshed from /config; defaults to 2 GB).
+  // upload cap (refreshed from /config; defaults to 4 GiB).
   const [file, setFile] = useState<File | null>(null);
   const [useUrl, setUseUrl] = useState(false);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
