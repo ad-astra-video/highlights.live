@@ -227,7 +227,7 @@ class IoUTracker:
         """
         self.anchor_label = (label or "").strip().lower()
 
-    def step(self, boxes: List[BBox], ts: float, labels: Optional[List[str]] = None) -> List[Track]:
+    def step(self, boxes: List[BBox], ts: float, labels: Optional[List[str]] = None, box_slots: Optional[List[Optional[int]]] = None) -> List[Track]:
         """Match new boxes to existing tracks: IoU if they overlap, else nearest
         centroid within a distance gate (so a fast-moving blob stays ONE track).
         Create/evict as needed; accumulate per-frame displacement.
@@ -259,40 +259,71 @@ class IoUTracker:
             u_labels = list(labels)
         else:
             u_labels = [None] * len(boxes)
+        # ADAAAA-7305: SAM propagates per-SLOT (obj_id == slot), so a box from the
+        # backend carries authoritative slot provenance. Keep it parallel and match
+        # a box to the SAME-slot track directly below, instead of gating on IoU.
+        if box_slots is not None and len(box_slots) == len(boxes):
+            u_slots = list(box_slots)
+        else:
+            u_slots = [None] * len(boxes)
         matched_tracks: set[int] = set()
+
+        def _consume(tr, i):
+            """Match track `tr` to the i-th unmatched box and pop the parallel arrays
+            in lockstep; return the consumed bbox."""
+            new_bbox = unmatched.pop(i)
+            u_labels.pop(i)   # keep labels parallel to unmatched boxes
+            u_slots.pop(i)    # keep slots parallel to unmatched boxes
+            new_center = ((new_bbox[0] + new_bbox[2]) / 2, (new_bbox[1] + new_bbox[3]) / 2)
+            if tr.prev_center is not None:
+                disp = abs(new_center[0] - tr.prev_center[0]) + abs(new_center[1] - tr.prev_center[1])
+                tr.moved += disp
+                tr.last_step_disp = disp
+                tr.step_hist.append((ts, disp))
+            tr.prev_center = new_center
+            tr.bbox = new_bbox
+            tr.lost_frames = 0
+            # INC-6: a selected find-and-track target counts each matched
+            # (on-screen) frame, feeding the continuity/accuracy metric.
+            if tr.selected:
+                tr.onto_frames += 1
+            tr.last_seen = ts
+            # Confirmation: consecutive stable matches promote to identity.
+            if not tr.confirmed:
+                tr.stable_frames += 1
+                if tr.stable_frames >= self.confirm_frames:
+                    tr.confirmed = True
+            matched_tracks.add(id(tr))
+            return new_bbox
+
+        # ADAAAA-7305 Pass A (same-slot reservation): a SAM-propagated box is
+        # authoritative for its slot (SAM backend obj_id == slot), so every track
+        # must be handed ITS OWN box FIRST — before any cross-object IoU matching.
+        # Otherwise a nearby track (e.g. a goal/structure that IoU-overlaps a
+        # tight/moving `player #N` box) consumes it and the selected player track
+        # registers lost (onto_frames stays 0 / accuracy None). Match each slot to
+        # its own box unconditionally; the box often does NOT IoU-overlap the
+        # (tight, moving) seed box, so the pure-IoU/centroid gate alone drops it.
         for tr in list(self.tracks):
-            best_i, best_score, best_type = None, 0.0, None
+            for i, sl in enumerate(u_slots):
+                if sl is not None and sl == tr.slot:
+                    _consume(tr, i)
+                    break
+        # Pass B (IoU / centroid gate) for any track that had no own-slot box.
+        for tr in list(self.tracks):
+            if id(tr) in matched_tracks:
+                continue
+            best_i, best_score = None, 0.0
             for i, b in enumerate(unmatched):
                 iou = _iou(tr.bbox, b)
                 if iou >= 0.05 and iou > best_score:
-                    best_i, best_score, best_type = i, iou, "iou"
+                    best_i, best_score = i, iou
                 else:
                     cd = self._centroid_gate(tr.bbox, b)
                     if cd is not None and cd > best_score:
-                        best_i, best_score, best_type = i, cd, "gate"
+                        best_i, best_score = i, cd
             if best_i is not None:
-                new_bbox = unmatched.pop(best_i)
-                u_labels.pop(best_i)  # keep labels parallel to unmatched boxes
-                new_center = ((new_bbox[0] + new_bbox[2]) / 2, (new_bbox[1] + new_bbox[3]) / 2)
-                if tr.prev_center is not None:
-                    disp = abs(new_center[0] - tr.prev_center[0]) + abs(new_center[1] - tr.prev_center[1])
-                    tr.moved += disp
-                    tr.last_step_disp = disp
-                    tr.step_hist.append((ts, disp))
-                tr.prev_center = new_center
-                tr.bbox = new_bbox
-                tr.lost_frames = 0
-                # INC-6: a selected find-and-track target counts each matched
-                # (on-screen) frame, feeding the continuity/accuracy metric.
-                if tr.selected:
-                    tr.onto_frames += 1
-                tr.last_seen = ts
-                # Confirmation: consecutive stable matches promote to identity.
-                if not tr.confirmed:
-                    tr.stable_frames += 1
-                    if tr.stable_frames >= self.confirm_frames:
-                        tr.confirmed = True
-                matched_tracks.add(id(tr))
+                _consume(tr, best_i)
             else:
                 tr.lost_frames += 1
                 # Locked slots survive repeated lost frames (operator pinned them).
