@@ -4,6 +4,28 @@ import { api } from "../lib/api";
 import { useSettings } from "../lib/settings";
 
 const MAX_RECONNECT = 6; // consecutive media reconnect attempts before falling back to /ingest
+// Transient /jobs/:id/media failures (e.g. HTTP 503 `no capacity available for
+// runner` when the perceive runner's SessionRegistry is at capacity, ADAAAA-7335)
+// are retried with backoff this many times BEFORE we surface. We deliberately do
+// NOT silently degrade the screen share onto the HTTP /ingest rail on a transient
+// media error — that was the bug (ADAAAA-7335).
+const MAX_MEDIA_RETRIES = 3;
+
+// Is this a transient (retryable) media-provision failure? A `/jobs/:id/media`
+// HTTP 503 (incl. `no capacity available for runner` when the perceive runner's
+// SessionRegistry is at capacity) means the media server is momentarily busy —
+// back off and retry rather than silently degrading the screen share to /ingest.
+// Any other non-2xx is a real error we surface instead. (ADAAAA-7335)
+export function isTransientMediaError(e: any): boolean {
+  const status = e?.status ?? e?.statusCode;
+  const msg = String(e?.message ?? e ?? "");
+  return (
+    status === 503 ||
+    status === 502 ||
+    status === 504 ||
+    /no capacity available for runner/i.test(msg)
+  );
+}
 
 // Client-side capture: getDisplayMedia (screen / tab / window). The REAL pixels
 // never leave the browser as a big stream:
@@ -110,15 +132,22 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   }
 
   // Open the media-server ingest path: prefer WebRTC (C1), else the media WS,
-  // else the HTTP /ingest rail. On any unexpected failure we re-ask the server
-  // for the current / freshly-rerouted details (it reuses the session from the
-  // DB, or re-provisions on a healthy node) and reconnect — seamless.
-  function openMedia(jobId: string, stream: MediaStream): Promise<void> {
-    return api<{ wsUrl?: string; mediaOrigin?: string; mediaSessionId?: string; rtc?: boolean }>(
-      `/jobs/${jobId}/media`,
-      { method: "POST", body: {} }
-    )
-      .then(async (media) => {
+  // else the HTTP /ingest rail. A HTTP 200 with neither an RTC nor a WS rail is
+  // the ONLY case we degrade to /ingest (genuine "no media-server rail"). A
+  // TRANSIENT /media failure (HTTP 503 `no capacity available for runner`, when
+  // the perceive runner's SessionRegistry is at capacity) is retried with
+  // backoff and then SURFACED — we never silently drop the screen share onto
+  // the degrading /ingest rail (ADAAAA-7335). On any unexpected network-level
+  // failure we re-ask the server for the current / freshly-rerouted details (it
+  // reuses the session from the DB, or re-provisions on a healthy node) and
+  // reconnect — seamless.
+  async function openMedia(jobId: string, stream: MediaStream): Promise<void> {
+    for (let attempt = 0; attempt <= MAX_MEDIA_RETRIES; attempt++) {
+      try {
+        const media = await api<{ wsUrl?: string; mediaOrigin?: string; mediaSessionId?: string; rtc?: boolean }>(
+          `/jobs/${jobId}/media`,
+          { method: "POST", body: {} }
+        );
         if (media?.rtc && media.mediaOrigin && media.mediaSessionId) {
           modeRef.current = "rtc";
           try {
@@ -156,11 +185,21 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
             ws.addEventListener("error", () => resolve(), { once: true });
           });
         }
+        // HTTP 200 but no RTC and no WS rail — the media server genuinely has no
+        // media rail for this job. ONLY here do we degrade to /ingest.
         modeRef.current = "ingest";
-      })
-      .catch(() => {
-        modeRef.current = "ingest";
-      });
+        return;
+      } catch (e: any) {
+        // A non-transient /media error (404/403/409/…) is not a capacity blip and
+        // is never the "no rail" case — surface it rather than silently degrade.
+        if (!isTransientMediaError(e)) throw e;
+        if (attempt < MAX_MEDIA_RETRIES) await sleep(Math.min(600 * 2 ** attempt, 4000));
+      }
+    }
+    // Every retry exhausted on a transient capacity/busy error: do NOT silently
+    // fall back to /ingest. Surface an actionable message so the operator knows
+    // the media server is busy and can retry.
+    throw new Error("Media pipeline busy — retry. The media server has no free analyze slot right now.");
   }
 
   function scheduleReconnect(jobId: string) {
@@ -298,6 +337,26 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       if (e?.name === "NotAllowedError") setError("Screen share was denied. Click Start to share again.");
       else if (String(e?.status || e?.message || "").includes("402")) setError(`${e.message}`);
       else setError(String(e?.message || e));
+      // We acquired a capture stream and/or created a browser job but the media
+      // handshake failed (e.g. a transient /media 503 capacity error surfaced by
+      // openMedia). Stop the local tracks and finalize the now-unused job so the
+      // screen-share affordance/mic don't stay live and we don't leak the job
+      // (ADAAAA-7335).
+      if (ivRef.current) clearInterval(ivRef.current);
+      ivRef.current = null;
+      teardownRtc();
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      const id = jobIdRef.current;
+      jobIdRef.current = null;
+      if (id) {
+        try {
+          await api(`/jobs/${id}/stop`, { body: {} });
+        } catch {
+          /* job finalization is best-effort here */
+        }
+      }
+      setSharing(false);
     } finally {
       setBusy(false);
     }
