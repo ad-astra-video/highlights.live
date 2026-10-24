@@ -834,7 +834,7 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
     const { app } = await buildTestApp();
     const res = await app.inject({ method: "GET", url: "/config" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().vodMaxUploadBytes).toBe(2147483648);
+    expect(res.json().vodMaxUploadBytes).toBe(4294967296);
     await app.close();
   });
 
@@ -891,10 +891,13 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
 });
 
 describe("VOD resumable/chunked upload rail (init/chunk/complete, ADAAAA-5714)", () => {
-  async function chunkPart(file: Buffer, filename = "part.mp4") {
+  async function chunkPart(file: Buffer, filename = "part.mp4", start = 0) {
     const boundary = "----hlChunk" + Math.random().toString(36).slice(2);
+    // `start` (the chunk's byte offset) MUST precede the file part so
+    // @fastify/multipart parses it before req.file() resolves (ADAAAA-7358).
     const head = Buffer.from(
-      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: video/mp4\r\n\r\n`,
+      `--${boundary}\r\nContent-Disposition: form-data; name="start"\r\n\r\n${start}\r\n` +
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: video/mp4\r\n\r\n`,
       "utf8"
     );
     const tail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
@@ -937,7 +940,7 @@ describe("VOD resumable/chunked upload rail (init/chunk/complete, ADAAAA-5714)",
 
     let received = 0;
     for (let s = 0; s < sent.length; s += 4096) {
-      const { payload, contentType } = await chunkPart(sent.subarray(s, Math.min(s + 4096, sent.length)));
+      const { payload, contentType } = await chunkPart(sent.subarray(s, Math.min(s + 4096, sent.length)), "chunked clip.mp4", s);
       const r = await app.inject({
         method: "POST",
         url: `/jobs/upload/${uploadId}/chunk`,
