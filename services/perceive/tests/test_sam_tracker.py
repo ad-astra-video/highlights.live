@@ -284,3 +284,29 @@ def test_operator_selected_player_slot_is_not_auto_evicted():
     for ts in range(1, 22):
         tr.step_frame(_white(), float(ts), florence_boxes=[])
     assert any(t.slot == 2 and t.kind == "player" for t in tr.tracks)  # not evicted
+
+
+def test_sam_player_box_matches_by_slot_not_iou():
+    # ADAAAA-7305 real-clip regression: the SAM3 backend propagates a per-slot
+    # box, but a tight / fast-moving player's propagated box often does NOT
+    # IoU-overlap the (tight) seed box, so the pure-IoU/centroid gate dropped it
+    # and the selected `player #N` track registered lost on almost every frame
+    # (accuracy ~0.2 / onScreen 3.9% on clip 01e9e5ca). A SAM box carrying the
+    # track's OWN slot is the same object by construction, so it must match that
+    # track directly rather than be gated on IoU.
+    seed = (0.455, 0.264, 0.551, 0.437)   # the real tight #1 box
+    drift = (0.70, 0.70, 0.85, 0.90)      # far-away SAM box (IoU 0 with seed)
+    goal = (0.60, 0.60, 0.80, 0.80)       # default-roster structure box
+    plan = [{2: drift, 0: (0.20, 0.20, 0.40, 0.40)}] * 15
+    tr = HybridTracker(detect=None, backend=StubBackend(plan), ball_label="soccer ball",
+                       redetect_every=10, lost_before_evict=3, lost_before_redetect=99, capacity=8)
+    tr.seed(seed, slot=2, ts=0.0, kind="player", label="player #1", selected=True)
+    tr.seed_ball((0.20, 0.20, 0.40, 0.40), ts=0.0)
+    for ts in range(1, 16):
+        tr.step_frame(_white(), float(ts), florence_boxes=[goal], labels=["goal"])
+    pl = next(t for t in tr.tracks if t.kind == "player")
+    assert pl.selected is True
+    assert pl.label == "player #1"
+    assert pl.onto_frames > 0                     # matched by slot, not just IoU
+    assert pl.lost_frames == 0
+    assert pl.accuracy is not None and pl.accuracy >= 0.90
