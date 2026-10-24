@@ -4,6 +4,7 @@ import {
   buildConfirmContext,
   confirmReconcile,
   hasIndependentAttestation,
+  isGateRejectedBareGoal,
   isGoalTypeEvent,
   LiveRunShared,
   selectConfirmKeyframes,
@@ -129,6 +130,73 @@ describe("shouldRunConfirm", () => {
       nearMiss: true,
     };
     expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, nearMissHighlight)).toBe(false);
+  });
+});
+
+describe("isGateRejectedBareGoal", () => {
+  const gateRejectedGoal: DecisionResult = {
+    isHighlight: false,
+    score: 80,
+    eventType: "GOAL",
+    outcome: "scoring_play",
+    reason: "high-value event GOAL; rejected by notable-only bar: no corroborating evidence (bare trigger)",
+  };
+  it("true only for a goal-shaped read stripped by the notable-only bare-trigger bar", () => {
+    expect(isGateRejectedBareGoal(gateRejectedGoal)).toBe(true);
+  });
+  it("false for an accepted goal", () => {
+    expect(isGateRejectedBareGoal({ isHighlight: true, outcome: "scoring_play", eventType: "GOAL", score: 80, reason: "x" })).toBe(false);
+  });
+  it("false for a non-goal non-accept (outcome != scoring_play)", () => {
+    expect(isGateRejectedBareGoal({ isHighlight: false, outcome: "near_miss", eventType: "GOAL", score: 55, reason: "x" })).toBe(false);
+  });
+  it("false when the reason is not the notable-only signature (ball-outcome / attestation gate)", () => {
+    expect(isGateRejectedBareGoal({ isHighlight: false, outcome: "scoring_play", eventType: "GOAL", score: 80, reason: "ball outcome gate: off_target" })).toBe(false);
+    expect(isGateRejectedBareGoal({ isHighlight: false, outcome: "scoring_play", eventType: "GOAL", score: 80, reason: "goal attestation: bare templated reason" })).toBe(false);
+  });
+});
+
+describe("shouldRunConfirm — ADAAAA-7357 delayed-corroboration population", () => {
+  // A goal-shaped read the deterministic notable-only bar stripped because the
+  // scoreboard / goal-call audio landed in a LATER window (no in-window signal).
+  const gateRejectedGoal: DecisionResult = {
+    isHighlight: false,
+    score: 80,
+    eventType: "GOAL",
+    outcome: "scoring_play",
+    reason: "high-value event GOAL; rejected by notable-only bar: no corroborating evidence (bare trigger)",
+  };
+  // A goal-shaped read rejected by the ball-outcome gate (NOT notable-only) —
+  // must stay out of the confirm population (bounded, no false-positive cost).
+  const ballGateRejectedGoal: DecisionResult = {
+    isHighlight: false,
+    score: 80,
+    eventType: "GOAL",
+    outcome: "scoring_play",
+    reason: "high-value event GOAL; ballOutcome=off_target",
+  };
+  it("fires the confirm dive for a gate-rejected goal-shaped candidate (delayed corroboration rescue)", () => {
+    const cfg = { confirmEnabled: true } as any;
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, gateRejectedGoal)).toBe(true);
+    // The observe bias-hint label must not matter — goalness lives on the verdict.
+    expect(shouldRunConfirm(cfg, { eventType: "SPORTING_EVENT" }, gateRejectedGoal)).toBe(true);
+  });
+  it("still excludes an attested gate-rejected goal", () => {
+    const cfg = { confirmEnabled: true } as any;
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL", scoreBoardChanged: true }, gateRejectedGoal)).toBe(false);
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL", ballOutcome: "goal" }, gateRejectedGoal)).toBe(false);
+  });
+  it("stays a strict no-op when the config flag is off (even for a gate-rejected goal)", () => {
+    expect(shouldRunConfirm({ confirmEnabled: false } as any, { eventType: "GOAL" }, gateRejectedGoal)).toBe(false);
+    expect(shouldRunConfirm({} as any, { eventType: "GOAL" }, gateRejectedGoal)).toBe(false);
+  });
+  it("does NOT broaden to a goal rejected by a NON-notable gate (cost-bounded population)", () => {
+    const cfg = { confirmEnabled: true } as any;
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, ballGateRejectedGoal)).toBe(false);
+  });
+  it("does NOT broaden to a true near-miss / not_goal read", () => {
+    const cfg = { confirmEnabled: true } as any;
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, nonAccept)).toBe(false);
   });
 });
 
@@ -286,6 +354,39 @@ describe("confirmReconcile", () => {
     expect(res.decision).toEqual(acceptedGoal);
     expect(shared.confirmMetrics.totalRuns).toBe(1);
     expect(shared.confirmMetrics.disagreed).toBe(0);
+  });
+
+  it("fires the dive for a notable-only-bar-gate-rejected goal and adopts a confirmed_goal (ADAAAA-7357)", async () => {
+    // A real goal the notable-only bar stripped because its scoreboard change was
+    // DELAYED to a later window (goal-shaped read, no in-window corroboration).
+    const gateRejectedGoal: DecisionResult = {
+      isHighlight: false,
+      score: 80,
+      eventType: "GOAL",
+      outcome: "scoring_play",
+      reason: "high-value event GOAL; rejected by notable-only bar: no corroborating evidence (bare trigger)",
+    };
+    const recon: ConfirmDecision = {
+      enabled: true,
+      goalConfirmed: "confirmed_goal",
+      confidence: 0.92,
+      reason: "goal confirmed; delayed scoreboard change corroborates",
+      evidence: { scoreboardChanged: true },
+      stage1Disagreed: true,
+      corroborated: true,
+      corroborationSource: "scoreboard",
+      decision: { isHighlight: true, score: 85, eventType: "GOAL", outcome: "scoring_play" },
+    };
+    const { client } = makeClient({ confirm: async () => recon });
+    const shared = new LiveRunShared();
+    const cfg = { confirmEnabled: true, gameHint: "soccer" } as any;
+    const res = await confirmReconcile(client, shared, cfg, gateRejectedGoal, { eventType: "GOAL", timestamp: 1 });
+    // The gate-rejected goal gets the Stage-2 dive (confirmRan) and the confirmed
+    // verdict is adopted, so it can surface as a board GOAL.
+    expect(res.confirmRan).toBe(true);
+    expect(res.decision.isHighlight).toBe(true);
+    expect(res.decision.outcome).toBe("scoring_play");
+    expect(shared.confirmMetrics.totalRuns).toBe(1);
   });
 
   it("fires for an observe-path candidate (SPORTING_EVENT) and emits a run_confirmation_pass audit descriptor (ADAAAA-7185)", async () => {
