@@ -9,10 +9,14 @@ import {
   LiveRunShared,
   selectConfirmKeyframes,
   shouldRunConfirm,
+  observeOnDecide,
+  observeGoalEventTs,
+  confirmCandidateIdentity,
   type ConfirmDecision,
   type DecisionResult,
   type PipelineClient,
 } from "../src/analyzer";
+import type { ObserveDecidePayload } from "../src/observe-loop";
 
 // A Stage-1 primary read of an accepted (scoring_play) goal — the population the
 // Stage-2 confirmation pass is scoped to.
@@ -469,5 +473,104 @@ describe("analyzeJob integration (VOD confirm driver)", () => {
     // same candidate on the flush tick; the exactly-once key collapses both).
     expect(shared.confirmMetrics.totalRuns).toBe(1);
     expect(shared.confirmMetrics.disagreed).toBe(0);
+  });
+});
+
+describe("observeOnDecide exactly-once across overlapping windows (ADAAAA-7365 AC1)", () => {
+  // Build an observe window that carries the perceive goal trigger as a bias
+  // hint at the goal's own content time (`goalTs`), with NO independent
+  // attestation (goalCrossed/ballOutcome/scoreboard all absent) — the exact
+  // population that enters the Stage-2 confirm dive. The hint's `ts` is the
+  // goal's stable content timestamp, invariant across the overlapping windows.
+  function payload(centerTs: number, goalTs: number): ObserveDecidePayload {
+    return {
+      centerTs,
+      frames: [{ ts: centerTs, imageB64: "f" }],
+      seeds: [],
+      biasHints: [{ eventType: "GOAL", ts: goalTs }],
+      capped: false,
+      droppedCount: 0,
+    };
+  }
+
+  it("observeGoalEventTs resolves to the goal's content ts (stable across windows)", () => {
+    // The goal is at content time 100 s. Every overlapping window (center 98/101/104)
+    // carries the same in-window goal hint at ts=100, so the identity is stable.
+    const a = observeGoalEventTs(payload(98, 100), { eventType: "GOAL", timestamp: 98 } as any, 4);
+    const b = observeGoalEventTs(payload(101, 100), { eventType: "GOAL", timestamp: 101 } as any, 4);
+    const c = observeGoalEventTs(payload(104, 100), { eventType: "GOAL", timestamp: 104 } as any, 4);
+    expect(a).toBe(100);
+    expect(b).toBe(100);
+    expect(c).toBe(100);
+    // And the three windows map to a single confirm identity key.
+    const cfg = { jobId: "j" } as any;
+    expect(confirmCandidateIdentity(cfg, a)).toBe(confirmCandidateIdentity(cfg, b));
+    expect(confirmCandidateIdentity(cfg, b)).toBe(confirmCandidateIdentity(cfg, c));
+  });
+
+  it("fires the confirm dive EXACTLY ONCE for a goal re-produced across overlapping windows", async () => {
+    let confirmed = 0;
+    const recon: ConfirmDecision = {
+      enabled: true,
+      goalConfirmed: "confirmed_goal",
+      confidence: 0.9,
+      reason: "ball in net",
+      evidence: { ballInNet: true },
+      stage1Disagreed: false,
+      decision: { isHighlight: true, score: 85, eventType: "GOAL", outcome: "scoring_play" },
+    };
+    const { client } = makeClient({
+      decide: async () => acceptedGoal, // every window re-produces the goal-shaped read
+      confirm: async () => { confirmed++; return recon; },
+    });
+    const shared = new LiveRunShared({ goalBurstWindowS: 30 });
+    const cfg = {
+      jobId: "job-exactly-once",
+      confirmEnabled: true,
+      clipBeforeS: 4,
+      clipAfterS: 4,
+      gameHint: "soccer",
+      observeLoop: true,
+      decideWindowN: 24,
+    } as any;
+    const cut = async (ts: number) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` });
+    // The 10 s window @ 3 s cadence re-produces the same goal (content ts 100)
+    // across these overlapping centers. Each window would, without the exactly-once
+    // key, re-bill the confirm dive.
+    const centers = [98, 101, 104];
+    for (const c of centers) {
+      await observeOnDecide(client, shared, cut, cfg, undefined, "sess-x", payload(c, 100));
+    }
+    // AC1: exactly ONE confirm dive for this single distinct goal candidate.
+    expect(confirmed).toBe(1);
+    expect(shared.confirmMetrics.totalRuns).toBe(1);
+    // The single accepted goal is cut exactly once (burst suppression drops the
+    // two re-produced duplicates at the same content time).
+    expect(shared.highlights).toHaveLength(1);
+    expect(shared.highlights[0].goalConfirmed).toBe("confirmed_goal");
+  });
+
+  it("fires TWICE for two distinct goals at different content times", async () => {
+    let confirmed = 0;
+    const { client } = makeClient({
+      decide: async () => acceptedGoal,
+      confirm: async () => {
+        confirmed++;
+        return { enabled: true, goalConfirmed: "confirmed_goal", confidence: 0.9, reason: "", evidence: {}, stage1Disagreed: false, decision: { isHighlight: true, score: 85, eventType: "GOAL", outcome: "scoring_play" } };
+      },
+    });
+    const shared = new LiveRunShared({ goalBurstWindowS: 30 });
+    const cfg = { jobId: "job-two-goals", confirmEnabled: true, clipBeforeS: 4, clipAfterS: 4, gameHint: "soccer", observeLoop: true, decideWindowN: 24 } as any;
+    const cut = async (ts: number) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` });
+    // Goal A at content 100, re-produced by two overlapping windows.
+    await observeOnDecide(client, shared, cut, cfg, undefined, "sess-x", payload(98, 100));
+    await observeOnDecide(client, shared, cut, cfg, undefined, "sess-x", payload(101, 100));
+    // Goal B at a genuinely different content time (200) — a different key.
+    await observeOnDecide(client, shared, cut, cfg, undefined, "sess-x", payload(200, 200));
+    expect(confirmed).toBe(2); // one per distinct goal
+    expect(shared.confirmMetrics.totalRuns).toBe(2);
+    // Both distinct goals cut as board highlights (content times 40s+ apart, past
+    // the 30 s burst window).
+    expect(shared.highlights).toHaveLength(2);
   });
 });
