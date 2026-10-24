@@ -195,15 +195,16 @@ class HybridTracker:
         label so tracks are seeded with it instead of "unknown" (ADAAAA-5056).
         With no SAM backend this degrades to pure Florence -> IoU."""
         if self._backend is not None and self._backend.ready():
-            boxes, box_labels = self._sam_step(frame_rgb, florence_boxes, labels)
+            boxes, box_labels, box_slots = self._sam_step(frame_rgb, florence_boxes, labels)
         else:
             # No SAM: pure Florence -> IoU (unchanged behaviour).
             boxes = florence_boxes or []
             box_labels = labels
+            box_slots = None
             self._since_detect += 1
-        return self._iou.step(boxes, ts, labels=box_labels)
+        return self._iou.step(boxes, ts, labels=box_labels, box_slots=box_slots)
 
-    def _sam_step(self, frame_rgb: np.ndarray, florence_boxes: Optional[List[BBox]] = None, labels: Optional[List[str]] = None) -> tuple[List[BBox], Optional[List[str]]]:
+    def _sam_step(self, frame_rgb: np.ndarray, florence_boxes: Optional[List[BBox]] = None, labels: Optional[List[str]] = None) -> tuple[List[BBox], Optional[List[str]], Optional[List[Optional[int]]]]:
         """Run SAM one frame ahead for every tracked slot.
 
         Gating (rule: Florence IDENTIFIES, SAM TRACKS — SAM never runs with
@@ -227,11 +228,12 @@ class HybridTracker:
                 self._reseed_from(list(florence_boxes), labels)  # Florence identified -> seed SAM
                 self._since_detect = 0
             else:
-                return (florence_boxes or []), labels  # nothing identified -> skip SAM
+                return (florence_boxes or []), labels, None  # nothing identified -> skip SAM
         need_redetect = self._since_detect >= self.redetect_every
         self._backend.advance(dict(self._prompts))  # one frame's compute for all slots
         sam_boxes: List[BBox] = []
         sam_labels: List[str] = []
+        sam_slots: List[Optional[int]] = []   # ADAAAA-7305: slot provenance for IoU same-slot matching
         for slot in list(self._prompts.keys()):
             is_ball = slot == self._ball_slot
             b = self._backend.get(slot)
@@ -247,6 +249,7 @@ class HybridTracker:
                     if self._ball_miss <= self.ball_hold_frames and self._ball_held is not None:
                         sam_boxes.append(self._ball_held)
                         sam_labels.append(self.ball_label or "")
+                        sam_slots.append(self._ball_slot)
                     else:
                         self._ball_prompt = None
                         if self._ball_miss > self.ball_hold_frames:
@@ -259,6 +262,7 @@ class HybridTracker:
                 if is_ball:
                     self._ball_miss = 0
                 sam_boxes.append(b)
+                sam_slots.append(slot)
                 # Keep the slot's known label on the SAM-propated box.
                 tr = next((t for t in self._iou.tracks if t.slot == slot), None)
                 sam_labels.append(tr.label if tr is not None else "")
@@ -283,8 +287,11 @@ class HybridTracker:
             # selected track's onto_frames to 0 / accuracy to None. Fall back to
             # the fresh detections only when no tracked box was produced this
             # frame (all slots lost -> the fresh detections seed the IoU layer).
-            return (sam_boxes or florence_boxes or []), (sam_labels or labels)
-        return sam_boxes, sam_labels
+            ret_boxes = sam_boxes or florence_boxes or []
+            ret_labels = sam_labels or labels
+            ret_slots = sam_slots if sam_boxes else None
+            return ret_boxes, ret_labels, ret_slots
+        return sam_boxes, sam_labels, sam_slots
 
     def _reseed_from(self, boxes: List[BBox], labels: Optional[List[str]] = None) -> None:
         """Re-prompt SAM slots from a fresh Florence detection set."""
