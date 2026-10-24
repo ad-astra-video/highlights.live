@@ -16,7 +16,13 @@ RUN pip install --no-cache-dir --upgrade pip "setuptools<81" "einops"
 COPY services/requirements.txt /srv/requirements.txt
 RUN pip install --no-cache-dir -r /srv/requirements.txt \
  && pip install --no-cache-dir "transformers==4.49.0" timm openvino \
-    "peft" "accelerate" safetensors
+    "peft" "accelerate" safetensors \
+    # ADAAAA-7305: SAM3's start_session decodes the video with cv2 (OpenCV).
+    # The runtime image ships no OpenCV, so build_sam3_video_predictor succeeds
+    # but start_session(resource_path=<clip>) raises ModuleNotFoundError: cv2,
+    # which Sam3Backend._start() swallows -> the tracker silently degrades to
+    # Florence->IoU and the one-shot player-by-number track never propagates.
+    && pip install --no-cache-dir "opencv-python-headless"
 
 # SAM 3 SDK, vendored at the build context root (sam3/). -e install pulls its
 # core deps (timm/ftfy/regex/iopath/huggingface_hub); einops + pycocotools are
