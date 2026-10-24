@@ -1442,6 +1442,14 @@ export class LiveRunShared {
    * job at completion as `confirmMetrics` (disagreement rate = disagreed /
    * totalRuns). */
   readonly confirmMetrics = { totalRuns: 0, disagreed: 0 };
+  /** ADAAAA-7365: already-processed goal candidates keyed on a STABLE goal-event
+   * identity (the goal's content timestamp, NOT the observe-window center). The
+   * VOD observe path re-produces the same goal-shaped decision across every
+   * overlapping 10 s window that contains the goal, so without this the Stage-2
+   * confirm dive re-fires ~5x per distinct candidate (60 confirms / 12 goals).
+   * Caching the outcome lets a re-produced window reuse the FIRST dive's verdict
+   * instead of re-billing / re-confirming / re-cutting it. Bounded. */
+  private readonly confirmedGoals = new Map<string, { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision }>();
   /** Rolling window of cached frames + their already-computed findings (plan
    * §A). Time-bounded to DECIDE_WINDOW_SECONDS and hard-capped at
    * CACHE_MAX_FRAMES, so it never grows on long streams. Findings are REUSED
@@ -1737,6 +1745,28 @@ export class LiveRunShared {
   recordConfirm(result: { stage1Disagreed?: boolean }): void {
     this.confirmMetrics.totalRuns++;
     if (result.stage1Disagreed === true) this.confirmMetrics.disagreed++;
+  }
+  /** ADAAAA-7365: whether this goal candidate (~stable goal-event identity) has
+   * already had its Stage-2 confirm dive processed, and the cached outcome.
+   * Returns undefined when not yet processed (first observation of the goal). */
+  confirmedGoalOutcome(
+    key: string
+  ): { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision } | undefined {
+    return this.confirmedGoals.get(key);
+  }
+  /** ADAAAA-7365: remember the outcome of the (first) confirm dive for a goal
+   * candidate so re-produced overlapping observe windows reuse it instead of
+   * re-billing / re-confirming / re-cutting. Bounded to avoid growth on long
+   * streams. */
+  rememberConfirmedGoal(
+    key: string,
+    outcome: { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision }
+  ): void {
+    this.confirmedGoals.set(key, outcome);
+    if (this.confirmedGoals.size > 256) {
+      const first = this.confirmedGoals.keys().next().value;
+      if (first !== undefined) this.confirmedGoals.delete(first);
+    }
   }
   /** Sampled frames inside [ts-windowS, ts+windowS] as raw {timestamp, imageB64}
    * pairs (oldest -> newest), for the Stage-2 denser window / keyframes. Uses
@@ -2109,7 +2139,11 @@ export async function acceptVideoDecision(
   // clip is centered on the per-frame signal peak, not the coarse trigger.
   // Optional — when absent the frame-based path is skipped and the existing
   // audio-tap / trigger fallback runs unchanged.
-  frameSignals?: LocalizeFrameInput[]
+  frameSignals?: LocalizeFrameInput[],
+  /** ADAAAA-7365: the goal EVENT's stable content timestamp for the confirm
+   * exactly-once key. Observe-path callers pass the goal's own content time so a
+   * goal re-produced across overlapping windows maps to one confirm dive. */
+  goalEventTs?: number
 ): Promise<void> {
   // ADAAAA-7255: attach the bounded (t, energy, baseline) audio-gate inspection
   // series (sliced to the decide window around the trigger) to the per-window
@@ -2121,7 +2155,7 @@ export async function acceptVideoDecision(
   // /confirm deep frame dive and adopt the reconciled verdict in its place.
   // Strict no-op when the trigger doesn't fire or the flag (confirmEnabled) is
   // off; the Stage-1 verdict is kept on passthrough / transport failure.
-  const { decision: confirmReconciled, confirmRan, confirm } = await confirmReconcile(client, run, cfg, stage1, candidate);
+  const { decision: confirmReconciled, confirmRan, confirm } = await confirmReconcile(client, run, cfg, stage1, candidate, goalEventTs);
   // ADAAAA-7185: accepted == corroborated. When the Stage-2 gate is live and it
   // RAN for this un-attested goal but could not corroborate it (passthrough or
   // transport failure left goalConfirmed null), the Stage-1 visual read is NOT
@@ -2513,7 +2547,12 @@ export async function observeOnDecide(
     signal: s.signal,
     detectionConfidence: (s.objects ?? []).reduce((m, o) => Math.max(m, clamp01(o.confidence)), 0),
   }));
-  await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, decision, frameSignals);
+  // ADAAAA-7365: the goal EVENT's stable content timestamp (goal trigger /
+  // localized instant) so the confirm dive fires EXACTLY ONCE per distinct goal
+  // candidate across the overlapping windows that re-produce it — NOT the window
+  // center (which slides by the cadence).
+  const goalEventTs = observeGoalEventTs(payload, candidate, cfg.clipAfterS);
+  await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, decision, frameSignals, goalEventTs);
   return isAcceptedHighlight(decision, cfg.preferLabels);
 }
 
@@ -2684,6 +2723,59 @@ export async function buildConfirmContext(
   };
 }
 
+/** ADAAAA-7365: whether a bias hint independently attests a goal (the same
+ * signals the confirm gate treats as already-confirmed evidence). */
+function hintAttestsGoal(h: ObserveBiasHint): boolean {
+  if (h.goalCrossed === true) return true;
+  if (h.scoreBoardChanged === true) return true;
+  return typeof h.ballOutcome === "string" && /^goal$/i.test(h.ballOutcome.trim());
+}
+
+/** ADAAAA-7365: stable key for a goal candidate's Stage-2 confirm dive. Keyed on
+ * the goal EVENT's content timestamp (the goal trigger / localized instant), NOT
+ * the observe-window center, so the SAME goal re-produced across overlapping
+ * windows maps to ONE key (one confirm dive) while a genuinely distinct goal at a
+ * different content time is a different key. Rounded to 0.01 s so the same
+ * content time always yields one key regardless of float representation. */
+export function confirmCandidateIdentity(cfg: AnalyzerConfig, goalEventTs: number): string {
+  const bucket = Math.round(goalEventTs * 100) / 100;
+  return `${cfg.jobId ?? "job"}:${bucket}`;
+}
+
+/** ADAAAA-7365: the goal EVENT's content timestamp for an observe window. The
+ * stable identity of a goal is its CONTENT time, so the same goal carries the
+ * same identity across every overlapping window that contains it (unlike the
+ * window center, which slides by the cadence and is explicitly NOT used).
+ * Prefers the in-window goal-typed / goal-attested perceive trigger (the goal's
+ * own trigger ts); else the frame-localized goal instant; else the candidate
+ * timestamp (the last-resort fallback for a hint-less bare goal). */
+export function observeGoalEventTs(
+  payload: ObserveDecidePayload,
+  candidate: CandidateSignal,
+  maxLookaheadS: number
+): number {
+  const hints = payload.biasHints ?? [];
+  const goalHint = hints.find((h) => hintAttestsGoal(h) || (typeof h.eventType === "string" && isGoalTypeEvent(h.eventType)));
+  if (goalHint && Number.isFinite(goalHint.ts)) return goalHint.ts;
+  const loc = localizeHighlightInstantFrame(
+    candidateFrameSignalsFromPayload(payload),
+    candidate.timestamp,
+    maxLookaheadS
+  );
+  if (loc.signal === "peak_frame") return loc.ts;
+  return candidate.timestamp;
+}
+
+/** ADAAAA-7365: the per-frame localization inputs for an observe window (the
+ * same mapping acceptVideoDecision derives from the payload seeds). */
+function candidateFrameSignalsFromPayload(payload: ObserveDecidePayload): LocalizeFrameInput[] {
+  return (payload.seeds ?? []).map((s) => ({
+    ts: s.ts,
+    signal: s.signal,
+    detectionConfidence: (s.objects ?? []).reduce((m, o) => Math.max(m, clamp01(o.confidence)), 0),
+  }));
+}
+
 /** Run the Stage-2 confirmation dive (if the trigger fires) and return the
  * effective decision to use downstream. On the no-trigger / flag-off path the
  * Stage-1 verdict is returned unchanged (strict no-op). On a real dive it
@@ -2702,11 +2794,25 @@ export async function confirmReconcile(
     ballOutcome?: string;
     goalCrossed?: boolean;
     scoreBoardChanged?: boolean;
-  }
+  },
+  /** ADAAAA-7365: the goal EVENT's stable content timestamp (goal trigger /
+   * localized instant). For the VOD observe path this is the goal's own content
+   * time — invariant across the overlapping windows that re-produce the same
+   * goal — NOT the window center. When absent (non-observe paths), falls back to
+   * the candidate timestamp (which is already the goal trigger there). */
+  goalEventTs?: number
 ): Promise<{ decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision }> {
   if (!shouldRunConfirm(cfg, candidate, stage1)) {
     return { decision: stage1, confirmRan: false };
   }
+  // ADAAAA-7365: exactly-once. A genuine goal is re-produced by every overlapping
+  // observe window that contains it (10 s window, 3 s cadence => ~5x re-fire on
+  // the untouched base). Once a goal candidate has had its confirm dive, reuse the
+  // FIRST outcome so a re-produced window neither re-bills the confirm dive nor
+  // re-cuts the highlight. Keyed on goal-event identity, not the window center.
+  const key = confirmCandidateIdentity(cfg, goalEventTs ?? candidate.timestamp);
+  const cached = shared.confirmedGoalOutcome(key);
+  if (cached) return cached;
   const ctx = await buildConfirmContext(shared, cfg, candidate, stage1);
   try {
     const confirm = await client.confirm({
@@ -2735,13 +2841,19 @@ export async function confirmReconcile(
     // Adopt the reconciled verdict only when the pass actually produced one; on
     // passthrough (goalConfirmed null) keep the Stage-1 verdict unchanged.
     if (confirm.goalConfirmed && confirm.decision && typeof confirm.decision === "object") {
-      return { decision: confirm.decision, confirmRan: true, confirm };
+      const outcome = { decision: confirm.decision, confirmRan: true, confirm };
+      shared.rememberConfirmedGoal(key, outcome);
+      return outcome;
     }
-    return { decision: stage1, confirmRan: true, confirm };
+    const outcome = { decision: stage1, confirmRan: true, confirm };
+    shared.rememberConfirmedGoal(key, outcome);
+    return outcome;
   } catch {
     // Transport failure — keep the Stage-1 verdict (no behavior change).
     shared.recordConfirm({ stage1Disagreed: false });
-    return { decision: stage1, confirmRan: true };
+    const outcome = { decision: stage1, confirmRan: true };
+    shared.rememberConfirmedGoal(key, outcome);
+    return outcome;
   }
 }
 

@@ -429,7 +429,10 @@ describe("analyzeJob integration (VOD confirm driver)", () => {
       confirm: async () => { confirmed++; return { enabled: true, goalConfirmed: "near_miss", confidence: 0.8, reason: "", evidence: {}, stage1Disagreed: true, decision: { isHighlight: false, score: 55, eventType: "GOAL", outcome: "near_miss", nearMiss: true } }; },
     });
     const shared = new LiveRunShared();
-    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" } as any; // confirmEnabled undefined
+    // ADAAAA-7365: the observe driver is the VOD confirm path (the accept /
+    // confirm dive only runs through observeOnDecide -> acceptVideoDecision), so
+    // the integration tests exercise it with the observe config on.
+    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", observeLoop: true, decideWindowN: 24 } as any; // confirmEnabled undefined
     const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }), cfg, undefined, undefined, shared);
     expect(confirmed).toBe(0);
     expect(outcome.highlights).toHaveLength(1); // Stage-1 accepted goal cut as normal
@@ -442,10 +445,12 @@ describe("analyzeJob integration (VOD confirm driver)", () => {
       confirm: async () => ({ enabled: true, goalConfirmed: "near_miss", confidence: 0.8, reason: "denied at line", evidence: { ballTrajectoryCrossedLine: false }, stage1Disagreed: true, decision: { isHighlight: false, score: 55, eventType: "GOAL", outcome: "near_miss", nearMiss: true } }),
     });
     const shared = new LiveRunShared();
-    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", confirmEnabled: true } as any;
+    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", confirmEnabled: true, observeLoop: true, decideWindowN: 24 } as any;
     const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }), cfg, undefined, undefined, shared);
     // The refuted goal is NOT cut as a board goal highlight.
     expect(outcome.highlights).toHaveLength(0);
+    // ADAAAA-7365: the confirm dive fires EXACTLY ONCE even though the observe
+    // driver re-produces the same candidate on the end-of-stream flush tick.
     expect(shared.confirmMetrics.totalRuns).toBe(1);
     expect(shared.confirmMetrics.disagreed).toBe(1);
   });
@@ -456,10 +461,12 @@ describe("analyzeJob integration (VOD confirm driver)", () => {
       confirm: async () => ({ enabled: true, goalConfirmed: "confirmed_goal", confidence: 0.9, reason: "ball in net", evidence: { ballInNet: true }, stage1Disagreed: false, decision: { isHighlight: true, score: 85, eventType: "GOAL", outcome: "scoring_play" } }),
     });
     const shared = new LiveRunShared();
-    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", confirmEnabled: true } as any;
+    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", confirmEnabled: true, observeLoop: true, decideWindowN: 24 } as any;
     const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }), cfg, undefined, undefined, shared);
     expect(outcome.highlights).toHaveLength(1);
     expect(outcome.highlights[0]).toMatchObject({ goalConfirmed: "confirmed_goal", stage1Disagreed: false, outcome: "scoring_play" });
+    // ADAAAA-7365: the confirm dive fires EXACTLY ONCE (observe re-produces the
+    // same candidate on the flush tick; the exactly-once key collapses both).
     expect(shared.confirmMetrics.totalRuns).toBe(1);
     expect(shared.confirmMetrics.disagreed).toBe(0);
   });
