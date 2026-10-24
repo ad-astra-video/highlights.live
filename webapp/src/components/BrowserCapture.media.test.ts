@@ -50,8 +50,18 @@ describe("isTransientMediaError (ADAAAA-7335)", () => {
     expect(isTransientMediaError(err)).toBe(false);
   });
 
+  it("treats a status-less transport failure (fetch TypeError) as transient", () => {
+    // The api() client uses fetch; a dropped/refused connection rejects with a
+    // TypeError ("Failed to fetch") that carries NO status. It must be retried
+    // as a transient blip, not abort the share. (ADAAAA-7335 follow-up)
+    expect(isTransientMediaError(new TypeError("Failed to fetch"))).toBe(true);
+    const net: any = new Error("network error");
+    expect(isTransientMediaError(net)).toBe(true);
+  });
+
   it("classifies a raw non-ApiError value without a status (no throw)", () => {
     expect(isTransientMediaError("no capacity available for runner")).toBe(true);
+    // A plain Error with no transport/fetch signal is NOT assumed transient.
     expect(isTransientMediaError(new Error("boom"))).toBe(false);
   });
 });

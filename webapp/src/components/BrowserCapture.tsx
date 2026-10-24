@@ -19,6 +19,12 @@ const MAX_MEDIA_RETRIES = 3;
 export function isTransientMediaError(e: any): boolean {
   const status = e?.status ?? e?.statusCode;
   const msg = String(e?.message ?? e ?? "");
+  // A transport/network-level failure carries no HTTP status: `fetch` rejects
+  // with a TypeError (e.g. "Failed to fetch") on a dropped/refused connection.
+  // Treat that as a transient blip too, so openMedia retries instead of
+  // aborting the share. A status-less plain Error with no transport/fetch
+  // signal (e.g. a programming bug) stays non-transient. (ADAAAA-7335 follow-up)
+  if (status == null && (e instanceof TypeError || /fetch|network|load failed/i.test(msg))) return true;
   return (
     status === 503 ||
     status === 502 ||
@@ -205,7 +211,13 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   function scheduleReconnect(jobId: string) {
     if (stoppingRef.current || !streamRef.current) return;
     if (rcRef.current >= MAX_RECONNECT) {
+      // The established media connection dropped and reconnect attempts are
+      // exhausted. We keep the (already-established) share alive, but on the
+      // degraded HTTP /ingest rail and now VISIBLY — surface it rather than
+      // silently switching, the same silent-/ingest class the provisioning fix
+      // removed (ADAAAA-7335 follow-up).
       modeRef.current = "ingest";
+      setError("Media connection dropped — sharing continued on the degraded fallback rail. Stop and reshare to restore live RTC.");
       return;
     }
     const delay = Math.min(800 * 2 ** rcRef.current, 5000);
