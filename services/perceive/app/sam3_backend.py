@@ -167,8 +167,18 @@ class Sam3Backend(SamBackend):
                 {
                     "type": "propagate_in_video",
                     "session_id": self._session_id,
-                    "start_frame_idx": frame_idx,
+                    # ADAAAA-7305: the SAM3 client reads `start_frame_index` (with
+                    # "index"), NOT `start_frame_idx`. We were sending the wrong
+                    # key, so the start frame dropped to None every call and SAM3
+                    # re-tracked from the EARLIEST annotation frame (frame 0) on
+                    # every propagate -> the per-frame `advance()` never actually
+                    # advanced, the operator-selected `player #N` slot produced no
+                    # mask after its seed, and its track reported accuracy ~0.2 /
+                    # on-screen ~4%. Send the correct key and step exactly one
+                    # frame FORWARD (HybridTracker advances one frame per call).
+                    "start_frame_index": frame_idx,
                     "max_frame_num_to_track": 1,
+                    "propagation_direction": "forward",
                 }
             )
             result = next(gen, None)
