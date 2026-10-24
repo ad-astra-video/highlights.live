@@ -248,6 +248,23 @@ export function RunningActionNotes({ summary }: { summary?: string }) {
   );
 }
 
+/**
+ * ADAAAA-7237: the end-of-video compiled OVERALL summary, generated once the
+ * job finalizes (status -> done) from the full summary time log + confirmed
+ * highlights. Clearly-labeled and DISTINCT from the live `RunningActionNotes`
+ * (bounded running summary): this is the whole-video overview. Rendered only
+ * when the job produced one.
+ */
+export function OverallSummary({ summary }: { summary?: string }) {
+  if (!summary) return null;
+  return (
+    <div className="mt-4 rounded-lg border border-neon/30 bg-card px-3 py-2" data-detail-overall-summary>
+      <div className="text-xs uppercase tracking-wide text-neon">Overall summary</div>
+      <pre className="mt-1 whitespace-pre-wrap font-mono text-sm leading-relaxed text-ink">{summary}</pre>
+    </div>
+  );
+}
+
 function statusChip(status: string): string {
   switch (status) {
     case "queued":
@@ -847,6 +864,10 @@ export function JobDetail() {
                 `job.candidates` (confirmed highlights only). Rendered only
                 when the job produced one. */}
             <RunningActionNotes summary={detail.job.runningSummary} />
+            {/* ADAAAA-7237: the end-of-video compiled OVERALL summary, distinct
+                from the live running action notes. Generated once the job
+                finalizes from the full time log + confirmed highlights. */}
+            <OverallSummary summary={detail.job.overallSummary} />
             {detail.job.error && (
               <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red" data-detail-error>
                 {detail.job.error}
