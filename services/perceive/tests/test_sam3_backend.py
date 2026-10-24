@@ -33,6 +33,7 @@ class FakePredictor:
         self.boxes = {}
         self.resets = 0
         self.session = None
+        self.starts = []
 
     def handle_request(self, req):
         t = req["type"]
@@ -56,7 +57,16 @@ class FakePredictor:
         return {}
 
     def handle_stream_request(self, req):
-        start = req["start_frame_idx"]
+        # ADAAAA-7305: the real SAM3 client reads `start_frame_index` (with
+        # "index"); mirror that key so a wrong key in Sam3Backend fails here
+        # instead of silently re-tracking from frame 0 on the GPU box.
+        if "start_frame_index" not in req:
+            raise KeyError(
+                "propagate request must use `start_frame_index` (SAM3 reads this key; "
+                "`start_frame_idx` is silently dropped -> never advances)"
+            )
+        start = req["start_frame_index"]
+        self.starts.append(start)
         row = self.frames[min(start, len(self.frames) - 1)]
         masks = {oid: _mask(b) for oid, b in row.items() if b is not None}
         yield {
@@ -144,6 +154,29 @@ def test_target_change_resets_and_readds():
     assert fake.resets == 1
     assert fake.prompts[0][1][0] == pytest.approx(0.8)
     assert backend.get(0) is not None  # next frame still returns its mask
+
+
+def test_propagate_advances_via_start_frame_index():
+    # ADAAAA-7305: the SAM3 client reads `start_frame_index` (not
+    # `start_frame_idx`). A wrong key silently drops the start to None and SAM3
+    # re-tracks from the earliest annotation frame on EVERY call, so the player
+    # slot never advances and reports no per-frame mask (accuracy ~0.2). Assert
+    # the backend sends the correct key and steps one frame forward per advance.
+    fake, backend = _make([
+        {0: (0.2, 0.2, 0.4, 0.4)},
+        {0: (0.3, 0.2, 0.5, 0.4)},
+        {0: (0.4, 0.2, 0.6, 0.4)},
+        {0: (0.5, 0.2, 0.7, 0.4)},
+    ])
+    assert backend.ready()
+    box = (0.2, 0.2, 0.4, 0.4)
+    for _ in range(3):
+        backend.advance({0: box})
+    # the fake would have raised KeyError if the key were `start_frame_idx`
+    assert fake.starts == [0, 1, 2]           # advances frame-by-frame
+    # and the returned box tracks the object as it drifts right
+    b0 = backend.get(0)
+    assert b0 is not None and b0[0] > 0.2
 
 
 def test_add_prompt_sends_bounding_box_for_large_object():
