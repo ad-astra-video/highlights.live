@@ -219,6 +219,12 @@ export interface JobDetail {
     // video progresses — distinct from `candidates` (now confirmed highlights
     // only). Absent on jobs that never ran the observe cadence / older records.
     runningSummary?: string;
+    // ADAAAA-7237: the end-of-video compiled OVERALL summary, generated once at
+    // job completion from the full summary time log + confirmed highlights.
+    // Distinct from `runningSummary` (the bounded live view). Absent until the
+    // job finalizes / on older records.
+    overallSummary?: string;
+    summaryLog?: { seq: number; ts: string; windowTs?: number; text: string }[];
     sampleFps?: number;
     framesAnalyzed?: number;
     candidatesTriggered?: number;

@@ -47,6 +47,7 @@ import {
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
 import { applyJobTitle } from "./job-title";
+import { appendSummaryEntry, applyOverallSummary } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
 import {
   datasetAccessActive,
@@ -640,10 +641,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // (story-so-far) across cadence observe ticks — read it to carry into
         // the decide request, persist the updated one for the job-detail UI.
         getRunningSummary: () => store.getJob(job.id)?.runningSummary ?? "",
-        onRunningSummary: (summary) =>
-          store
-            .patchJob(job.id, { runningSummary: summary })
-            .catch((e: any) => console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))),
+        onRunningSummary: (summary, meta) =>
+          appendSummaryEntry(store, job.id, summary, meta).catch((e: any) =>
+            console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))
+          ),
         // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
         // evidence). Live uses the default analysis_fps / windows.
         analysisFps: cfg.analysisFps,
@@ -742,6 +743,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-6798 Inc 1: generate the LLM job title once the job reaches
       // `done` (fire-and-forget; fallback title on any failure; never blocks).
       void applyJobTitle(store, cfg, job.id);
+      // ADAAAA-7237: compile the end-of-video overall summary from the full
+      // summary time log + confirmed highlights. Fire-and-forget (like the
+      // title), exactly once per completed job, off the live critical path.
+      void applyOverallSummary(store, cfg, job.id);
       if (stageA.totalCandidates > 0) {
         console.log(
           `[live:${job.id}] stageA fpRate=${stageA.fpRate} (${stageA.rejected}/${stageA.totalCandidates} rejected), ` +
@@ -907,10 +912,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // (story-so-far) across cadence observe ticks — read it to carry into the
       // decide request, persist the updated one for the job-detail UI.
       getRunningSummary: () => store.getJob(jobId)?.runningSummary ?? "",
-      onRunningSummary: (summary) =>
-        store
-          .patchJob(jobId, { runningSummary: summary })
-          .catch((e: any) => console.error(`[running-summary:${jobId}] persist failed:`, String(e?.message || e))),
+      onRunningSummary: (summary, meta) =>
+        appendSummaryEntry(store, jobId, summary, meta).catch((e: any) =>
+          console.error(`[running-summary:${jobId}] persist failed:`, String(e?.message || e))
+        ),
       // Increment F / ADAAAA-6465: VOD gets the HIGHER-cap / longer-window
       // detail-first frame-sequence assembly (speed secondary; detail-first).
       analysisFps: cfg.vodAnalysisFps,
@@ -1262,6 +1267,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // ADAAAA-6798 Inc 1: generate the LLM job title once the job reaches `done`
     // (fire-and-forget; fallback title on any failure; never blocks the job).
     void applyJobTitle(store, cfg, jobId);
+    // ADAAAA-7237: compile the end-of-video overall summary from the full
+    // summary time log + confirmed highlights. Fire-and-forget (like the
+    // title), exactly once per completed job, off the critical path.
+    void applyOverallSummary(store, cfg, jobId);
     emitJobProgress(jobId, 100, "done");
     if (stageA.totalCandidates > 0) {
       console.log(

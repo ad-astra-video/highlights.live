@@ -1011,7 +1011,7 @@ export interface AnalyzerConfig {
    * a cadence decide, so the job-detail endpoint + web UI surface it growing.
    * Best-effort: a throwing callback is caught + logged, never a pipeline
    * failure. */
-  onRunningSummary?: (summary: string) => void;
+  onRunningSummary?: (summary: string, meta?: { windowTs?: number }) => void;
 }
 
 /**
@@ -2484,7 +2484,7 @@ export async function observeOnDecide(
     const next = nextRunningSummary(cfg.getRunningSummary?.(), decision);
     if (next !== null) {
       try {
-        cfg.onRunningSummary(next);
+        cfg.onRunningSummary(next, { windowTs: payload.centerTs });
       } catch (e: any) {
         console.error(`[running-summary:${cfg.jobId}] persist failed:`, String(e?.message || e));
       }
