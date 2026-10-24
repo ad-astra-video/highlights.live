@@ -71,8 +71,12 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   /** Build the WebRTC offer -> answer + ICE signaling to the media server.
    *  The media server assigns the pcId on the offer round-trip, so candidates
    *  that gather before then are buffered and flushed once pcId is known. */
-  function establishRtc(origin: string, sid: string, stream: MediaStream) {
-    const pc = new RTCPeerConnection();
+  function establishRtc(origin: string, sid: string, stream: MediaStream, iceServers?: RTCIceServer[]) {
+    // Configure the peer with the SAME ICE/STUN/TURN servers the media server
+    // gathers with (ADAAAA-7353). Without a relay the browser only gathers a
+    // private host candidate, which the media server (behind the public LB)
+    // cannot reach, so ICE fails and the client reconnect-loops on the offer.
+    const pc = new RTCPeerConnection(iceServers && iceServers.length ? { iceServers } : undefined);
     pcRef.current = pc;
     const pendingCandidates: any[] = [];
     let pcId = "";
@@ -150,14 +154,14 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   async function openMedia(jobId: string, stream: MediaStream): Promise<void> {
     for (let attempt = 0; attempt <= MAX_MEDIA_RETRIES; attempt++) {
       try {
-        const media = await api<{ wsUrl?: string; mediaOrigin?: string; mediaSessionId?: string; rtc?: boolean }>(
+        const media = await api<{ wsUrl?: string; mediaOrigin?: string; mediaSessionId?: string; rtc?: boolean; iceServers?: RTCIceServer[] }>(
           `/jobs/${jobId}/media`,
           { method: "POST", body: {} }
         );
         if (media?.rtc && media.mediaOrigin && media.mediaSessionId) {
           modeRef.current = "rtc";
           try {
-            await establishRtc(media.mediaOrigin, media.mediaSessionId, stream);
+            await establishRtc(media.mediaOrigin, media.mediaSessionId, stream, media.iceServers);
             rcRef.current = 0;
             return;
           } catch (e) {
