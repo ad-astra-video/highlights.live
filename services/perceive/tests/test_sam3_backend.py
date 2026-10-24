@@ -44,14 +44,22 @@ class FakePredictor:
             self.resets += 1
             return {}
         if t == "add_prompt":
+            # ADAAAA-7305: mirror the real SAM3 client's add_prompt contract —
+            # the model asserts points XOR boxes (sending both raises), and the
+            # obj_id TRACKER path requires `points`. Record what was sent so
+            # tests can assert the tracker prompt form.
+            pts = req.get("points")
+            boxes = req.get("bounding_boxes")
+            if pts is not None and boxes is not None:
+                raise AssertionError(
+                    "points and bounding_boxes are mutually exclusive in add_prompt"
+                )
             self.prompts[int(req["obj_id"])] = (
                 req["frame_index"],
-                tuple(np.asarray(req["points"])[0].tolist()),
+                tuple(np.asarray(req["points"])[0].tolist()) if pts is not None else None,
             )
             self.boxes[int(req["obj_id"])] = (
-                req["frame_index"],
-                tuple(np.asarray(req.get("bounding_boxes")).reshape(-1).tolist()),
-                tuple(np.asarray(req.get("bounding_box_labels")).reshape(-1).tolist()),
+                tuple(np.asarray(boxes).reshape(-1).tolist()) if boxes is not None else None,
             )
             return {}
         return {}
@@ -179,23 +187,24 @@ def test_propagate_advances_via_start_frame_index():
     assert b0 is not None and b0[0] > 0.2
 
 
-def test_add_prompt_sends_bounding_box_for_large_object():
-    # ADAAAA-7305: a large operator-selected `player #N` must be prompted with a
-    # bounding BOX (not just a single center point, which can land on a gap and
-    # yield no mask). The add_prompt request must carry `bounding_boxes` in
-    # normalized XYWH *and* keep the center-point fallback.
+def test_add_prompt_uses_points_tracker_path_not_boxes():
+    # ADAAAA-7305: obj_id-based video tracking uses SAM3's TRACKER prompt path,
+    # which requires `points`+`obj_id` and FORBIDS `bounding_boxes` at the same
+    # time (the model asserts points XOR boxes). A prior fix tried to also send
+    # `bounding_boxes` for the large `player #N`, which crashes the real client.
+    # Assert the backend sends ONLY the center-point tracker prompt for the
+    # operator-selected player, so a future change cannot re-introduce the crash.
     fake, backend = _make([{0: (0.455, 0.264, 0.551, 0.437)}] * 3)
     assert backend.ready()
     box = (0.455, 0.264, 0.551, 0.437)  # the real tight #1 player box
     backend.advance({0: box})
-    fi, xywh, labels = fake.boxes[0]
+    # center point sent (tracker path)
+    fi, ppt = fake.prompts[0]
     assert fi == 0
-    assert xywh[0] == pytest.approx(0.455)            # x1
-    assert xywh[1] == pytest.approx(0.264)            # y1
-    assert xywh[2] == pytest.approx(0.551 - 0.455)    # width
-    assert xywh[3] == pytest.approx(0.437 - 0.264)    # height
-    assert labels == (1,)
-    # center point still sent as the fallback
+    assert ppt is not None and ppt[0] == pytest.approx((0.455 + 0.551) / 2, abs=1e-6)
+    assert ppt[1] == pytest.approx((0.264 + 0.437) / 2, abs=1e-6)
+    # no box sent (the fake raises if both points+boxes are present)
+    assert fake.boxes[0] == (None,)
     assert backend.get(0) is not None
 
 
