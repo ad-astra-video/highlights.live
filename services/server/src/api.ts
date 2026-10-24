@@ -186,6 +186,32 @@ function formatUploadLimit(bytes: number): string {
   return `${Math.round(mb)} MB`;
 }
 
+/** Count of DISTINCT bytes covered by a set of [start, end) ranges (overlaps /
+ * duplicately-sent chunks count once). Used for concurrency-safe resumable-upload
+ * accounting: the count is order-independent and never races (ADAAAA-7358). */
+function distinctBytes(ranges: Array<{ start: number; end: number }>): number {
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  let total = 0;
+  let curStart = -1;
+  let curEnd = -1;
+  for (const r of sorted) {
+    if (curStart === -1) {
+      curStart = r.start;
+      curEnd = r.end;
+      continue;
+    }
+    if (r.start <= curEnd) {
+      if (r.end > curEnd) curEnd = r.end;
+    } else {
+      total += curEnd - curStart;
+      curStart = r.start;
+      curEnd = r.end;
+    }
+  }
+  if (curStart !== -1) total += curEnd - curStart;
+  return total;
+}
+
 /** Lightweight projection of a persisted dataset for list/summary responses:
  * the manifest arrays stay server-side for the detail route; the list carries
  * counts + imageRefs the curation UI needs to re-materialize a saved set. */
@@ -393,6 +419,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     mimetype: string;
     size: number;
     received: number;
+    /** Byte ranges [start, end) of bytes already written to `stagePath`, kept
+     * sorted by `start`. Concurrency-safe accounting: each chunk carries its own
+     * byte offset, so arrival order never matters and the count is the number of
+     * DISTINCT bytes written (not a cumulative append counter that races). */
+    receivedRanges: Array<{ start: number; end: number }>;
     stagePath: string;
     dir: string;
     finalPath: string;
@@ -2180,12 +2211,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     } catch {
       labels = [];
     }
+    // Pre-create the staging file so the chunk handler can do random-access
+    // (positioned) writes at each chunk's byte offset — required for concurrent,
+    // out-of-order chunk uploads (ADAAAA-7358).
+    const { open } = await import("node:fs/promises");
+    const stageHandle = await open(stagePath, "w");
+    await stageHandle.close();
     uploadSessions.set(jobId, {
       ownerId: user.id,
       filename: safeName,
       mimetype: mime ?? "",
       size: total,
       received: 0,
+      receivedRanges: [],
       stagePath,
       dir,
       finalPath,
@@ -2203,28 +2241,52 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!session || session.ownerId !== user.id) return reply.code(404).send({ error: "upload session not found" });
     const data = await req.file();
     if (!data) return reply.code(400).send({ error: "multipart file part required" });
-    const { file } = data;
+    const { file, fields } = data;
     // Whether this is a video was already validated once at init against the
-    // declared mime+filename; a chunk is opaque bytes appended to the staged
-    // file, so its cosmetic part-name is irrelevant here.
-    const counter = new Transform({
-      transform(chunk: Buffer, _enc, cb) {
-        session.received += chunk.length;
-        if (session.received > session.size) {
-          cb(Object.assign(new Error("too_large"), { statusCode: 413 }) as any);
-          return;
-        }
-        cb(null, chunk);
-      },
-    });
+    // declared mime+filename; a chunk is opaque bytes placed at its byte offset,
+    // so its cosmetic part-name is irrelevant here.
+    // ADAAAA-7358: the client sends each chunk with its byte offset (`start`) so
+    // the server writes it at the exact position regardless of arrival order.
+    // This is what makes up-to-4 concurrent chunk POSTs safe (append-in-order
+    // would interleave bytes and corrupt the reassembled file).
+    const fv = (v: any) => (Array.isArray(v) ? v[0] : v)?.value;
+    const start = Number(fv(fields?.start));
+    if (!Number.isInteger(start) || start < 0) {
+      file.resume();
+      return reply.code(400).send({ error: "chunk byte offset (start) is required and must be a non-negative integer" });
+    }
+    // Buffer the chunk so we know its exact byte length before placing it at
+    // `start` (a chunk is at most vodChunkBytes ≈ 64 MiB).
+    const bufs: Buffer[] = [];
+    let len = 0;
+    for await (const c of file) {
+      bufs.push(c);
+      len += c.length;
+    }
+    const buf = Buffer.concat(bufs, len);
+    const end = start + len;
+    if (end > session.size) {
+      // The chunk extends past the declared upload size (mirrors the old
+      // cumulative-counter 413; an oversized chunk must not be written).
+      return reply.code(413).send({ error: uploadTooLargeMsg() });
+    }
     try {
-      await pipeline(file, counter, createWriteStream(session.stagePath, { flags: "a" }));
-    } catch (e: any) {
-      if (e?.statusCode === 413 || e?.code === "FST_REQ_FILE_TOO_LARGE") {
-        return reply.code(413).send({ error: uploadTooLargeMsg() });
+      const { open } = await import("node:fs/promises");
+      const fh = await open(session.stagePath, "r+");
+      try {
+        // Positioned write: place this chunk at its exact byte offset.
+        await fh.write(buf, 0, len, start);
+      } finally {
+        await fh.close();
       }
+    } catch (e: any) {
       return reply.code(500).send({ error: String(e?.message || e) });
     }
+    // Record the received range and recompute the distinct-bytes count. This is
+    // atomic per session (single-threaded event loop) and never depends on
+    // arrival order, so concurrent/out-of-order chunks can't race the counter.
+    session.receivedRanges.push({ start, end });
+    session.received = distinctBytes(session.receivedRanges);
     session.lastChunkAt = Date.now();
     return { received: session.received };
   });
@@ -2234,7 +2296,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const { uploadId } = req.body ?? {};
     const session = uploadSessions.get(uploadId);
     if (!session || session.ownerId !== user.id) return reply.code(404).send({ error: "upload session not found" });
-    if (session.received !== session.size) {
+    // ADAAAA-7358: verify the received byte ranges tile [0, size) EXACTLY —
+    // every expected byte range present, and no gap or overlap. A corrupted or
+    // incomplete upload must never land in compute. (distinctBytes() alone would
+    // let the sum hit size even with overlapping chunks; the tiling check rejects
+    // both gaps and overlaps.)
+    const sortedRanges = [...session.receivedRanges].sort((a, b) => a.start - b.start);
+    const complete =
+      sortedRanges.length > 0 &&
+      sortedRanges[0].start === 0 &&
+      sortedRanges[sortedRanges.length - 1].end === session.size &&
+      sortedRanges.every((r, i) => i === 0 || r.start === sortedRanges[i - 1].end);
+    if (!complete) {
       return reply.code(400).send({ error: `incomplete upload: received ${session.received} of ${session.size} bytes` });
     }
     const { mkdir, rename } = await import("node:fs/promises");

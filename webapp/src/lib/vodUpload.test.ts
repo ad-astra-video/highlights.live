@@ -36,23 +36,23 @@ describe("chunkRanges (Cloudflare ~100MB edge-cap workaround, ADAAAA-5714)", () 
   });
 });
 
-const TWO_GB = 2147483648;
-const UNDER = TWO_GB - 1;
-const OVER = TWO_GB + 1;
+const FOUR_GB = 4294967296;
+const UNDER = FOUR_GB - 1;
+const OVER = FOUR_GB + 1;
 
-describe("VOD upload client-side size pre-check (2 GB default)", () => {
+describe("VOD upload client-side size pre-check (4 GiB default)", () => {
   it("accepts a file at or under the cap and rejects one over it", () => {
-    expect(isOverLimit(TWO_GB, TWO_GB)).toBe(false); // exactly at the cap is fine
-    expect(isOverLimit(UNDER, TWO_GB)).toBe(false);
-    expect(isOverLimit(OVER, TWO_GB)).toBe(true); // > cap -> reject BEFORE upload
+    expect(isOverLimit(FOUR_GB, FOUR_GB)).toBe(false); // exactly at the cap is fine
+    expect(isOverLimit(UNDER, FOUR_GB)).toBe(false);
+    expect(isOverLimit(OVER, FOUR_GB)).toBe(true); // > cap -> reject BEFORE upload
   });
 });
 
 describe("oversized-file help text (URL-fallback conversion point)", () => {
   it("points the user to paste a download URL when the file exceeds the cap", () => {
-    const msg = oversizedHelp(TWO_GB);
+    const msg = oversizedHelp(FOUR_GB);
     expect(msg).toContain("File too large");
-    expect(msg).toContain("max 2 GB");
+    expect(msg).toContain("max 4 GB");
     expect(msg).toContain("Paste a download URL instead to process it.");
   });
 
@@ -65,14 +65,14 @@ describe("oversized-file help text (URL-fallback conversion point)", () => {
 
 describe("formatBytes", () => {
   it("formats common sizes", () => {
-    expect(formatBytes(TWO_GB)).toBe("2 GB");
+    expect(formatBytes(FOUR_GB)).toBe("4 GB");
     expect(formatBytes(5 * 1024 * 1024)).toContain("MB");
     expect(formatBytes(0)).toBe("0 B");
   });
 });
 
 describe("default cap constant", () => {
-  it("mirrors the server default of 2 GB", () => {
-    expect(VOD_MAX_UPLOAD_BYTES).toBe(TWO_GB);
+  it("mirrors the server default of 4 GiB", () => {
+    expect(VOD_MAX_UPLOAD_BYTES).toBe(FOUR_GB);
   });
 });

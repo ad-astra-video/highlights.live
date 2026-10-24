@@ -3,10 +3,10 @@ import { chunkRanges, VOD_SINGLE_SHOT_MAX } from "./vodUpload";
 
 const TOKEN_KEY = "hl_token";
 
-// Client-side mirror of the server's VOD_MAX_UPLOAD_BYTES (default 2 GB). The
+// Client-side mirror of the server's VOD_MAX_UPLOAD_BYTES (default 4 GiB). The
 // dashboard refreshes this from GET /config so a server-side override stays in
 // sync; this constant is the pre-flight fallback used before that resolves.
-export const VOD_MAX_UPLOAD_BYTES = 2147483648; // 2 GB
+export const VOD_MAX_UPLOAD_BYTES = 4294967296; // 4 GiB
 
 export function getToken(): string | null {
   return typeof localStorage !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null;
@@ -162,7 +162,13 @@ function uploadVideoSingle<T = any>({ file, gameHint, preferLabels, onProgress }
 
 /** Upload a file in <chunkBytes parts (each well under the Cloudflare ~100 MB
  * edge cap) via the resumable /jobs/upload rail. Returns the same { job, … }
- * shape as the single-shot upload once the server has reassembled + run it. */
+ * shape as the single-shot upload once the server has reassembled + run it.
+ *
+ * ADAAAA-7358: up to 4 chunks are in flight at once; each POST carries its byte
+ * offset so the server writes it at the exact position (chunks may arrive out
+ * of order and still reassemble byte-identically). Progress reflects the
+ * server's cumulative distinct-bytes count. If any chunk fails the batch aborts
+ * (no silent completion with a corrupt file). */
 async function uploadVideoChunked<T = any>({ file, gameHint, preferLabels, onProgress }: UploadVideoOptions): Promise<T> {
   const token = getToken();
   const jsonHeaders: Record<string, string> = { "content-type": "application/json" };
@@ -178,10 +184,21 @@ async function uploadVideoChunked<T = any>({ file, gameHint, preferLabels, onPro
 
   const chunkBytes = init.chunkBytes && init.chunkBytes > 0 ? init.chunkBytes : file.size;
   const ranges = chunkRanges(file.size, chunkBytes);
-  for (const { start, end } of ranges) {
-    const sent = await postChunk(init.uploadId, file.slice(start, end), file.name, token);
-    if (onProgress) onProgress(Math.min(1, (sent ?? end) / file.size));
-  }
+
+  // Up-to-4 concurrent chunk POSTs over a small worker pool. Each chunk carries
+  // its byte offset so the server places it exactly, regardless of arrival order.
+  const MAX_CONCURRENT = 4;
+  let next = 0;
+  let received = 0;
+  const worker = async () => {
+    while (next < ranges.length) {
+      const { start, end } = ranges[next++];
+      const sent = await postChunk(init.uploadId, file.slice(start, end), file.name, token, start);
+      if (typeof sent === "number") received = Math.max(received, sent);
+      if (onProgress) onProgress(Math.min(1, received / file.size));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT, ranges.length) }, () => worker()));
 
   const compRes = await fetch("/jobs/upload/complete", {
     method: "POST",
@@ -197,10 +214,12 @@ async function uploadVideoChunked<T = any>({ file, gameHint, preferLabels, onPro
   return (await compRes.json()) as T;
 }
 
-/** POST one blob as a multipart `file` part to the session append endpoint; the
- * server replies with the cumulative bytes received. XHR (not fetch) so each
- * part's upload progress is observable and the request is streamed. */
-function postChunk(uploadId: string, blob: Blob, name: string, token: string | null): Promise<number | undefined> {
+/** POST one blob as a multipart `file` part to the session endpoint, carrying
+ * its `start` byte offset so the server writes it at the exact position (safe
+ * for out-of-order, concurrent chunks). The server replies with the cumulative
+ * distinct bytes received. XHR (not fetch) so each part's upload progress is
+ * observable and the request is streamed. */
+function postChunk(uploadId: string, blob: Blob, name: string, token: string | null, start: number): Promise<number | undefined> {
   return new Promise<number | undefined>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/jobs/upload/${uploadId}/chunk`);
@@ -238,6 +257,10 @@ function postChunk(uploadId: string, blob: Blob, name: string, token: string | n
       reject(err);
     };
     const fd = new FormData();
+    // Order matters: the `start` field must precede the file part so
+    // @fastify/multipart has parsed it by the time `req.file()` resolves and the
+    // server can read `fields.start` (ADAAAA-7358).
+    fd.append("start", String(start));
     fd.append("file", blob, name);
     xhr.send(fd);
   });
