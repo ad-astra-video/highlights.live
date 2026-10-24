@@ -213,9 +213,15 @@ class Sam3Backend(SamBackend):
         if changed:
             if self._seeded:  # already tracking prompts -> reset then re-add all
                 self._request({"type": "reset_session", "session_id": self._session_id})
-                for s, p in list(self._seeded.items()):
+                for s, _ in list(self._seeded.items()):
                     if s not in changed and s in prompts:
-                        self._add_prompt(s, p)
+                        # ADAAAA-7305: re-add from the CURRENT prompt, not the
+                        # stale seed. A long-tracked slot (e.g. the ball seeded
+                        # at frame 0) whose prompt drifted would otherwise be
+                        # reset back to its frame-0 box when a NEW slot (the
+                        # mid-stream `track-player #N` target) joins, throwing
+                        # the established track off and losing its box.
+                        self._add_prompt(s, prompts[s])
             for s, p in changed.items():
                 self._add_prompt(s, p)
                 self._seeded[s] = p
@@ -229,6 +235,18 @@ class Sam3Backend(SamBackend):
         self._last_returned = {s: self._current.get(s) for s in prompts}
 
     def _add_prompt(self, obj_id: int, box: BBox) -> None:
+        x1, y1, x2, y2 = box
+        # ADAAAA-7305: a single box-center POINT prompt is fragile for a large
+        # object like a player — the point can land on a boundary/gap between
+        # players and SAM3 yields no usable mask, so the operator-selected
+        # `player #N` slot never produces a box and its track reports accuracy
+        # ~0.2 / on-screen 3.9% on the real clip (the small ball tracks fine off
+        # a center point). Send a proper bounding-BOX prompt too (SAM3 supports
+        # `bounding_boxes` in normalized XYWH) so the whole object extent is
+        # handed to SAM; keep the center point as a fallback for predictor
+        # variants that accept points only (the base predictor filters kwargs by
+        # the model's add_prompt signature).
+        xywh = [x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)]
         self._request(
             {
                 "type": "add_prompt",
@@ -236,6 +254,8 @@ class Sam3Backend(SamBackend):
                 "frame_index": self._frame_idx,
                 "points": box_to_point(box),
                 "point_labels": np.array([1], dtype=np.int32),
+                "bounding_boxes": np.array([xywh], dtype=np.float32),
+                "bounding_box_labels": np.array([1], dtype=np.int32),
                 "obj_id": obj_id,
             }
         )
