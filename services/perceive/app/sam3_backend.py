@@ -245,18 +245,16 @@ class Sam3Backend(SamBackend):
         self._last_returned = {s: self._current.get(s) for s in prompts}
 
     def _add_prompt(self, obj_id: int, box: BBox) -> None:
-        x1, y1, x2, y2 = box
-        # ADAAAA-7305: a single box-center POINT prompt is fragile for a large
-        # object like a player — the point can land on a boundary/gap between
-        # players and SAM3 yields no usable mask, so the operator-selected
-        # `player #N` slot never produces a box and its track reports accuracy
-        # ~0.2 / on-screen 3.9% on the real clip (the small ball tracks fine off
-        # a center point). Send a proper bounding-BOX prompt too (SAM3 supports
-        # `bounding_boxes` in normalized XYWH) so the whole object extent is
-        # handed to SAM; keep the center point as a fallback for predictor
-        # variants that accept points only (the base predictor filters kwargs by
-        # the model's add_prompt signature).
-        xywh = [x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)]
+        # ADAAAA-7305: obj_id-based video tracking uses SAM3's TRACKER prompt
+        # path (`add_tracker_new_points`), which requires `points` (+`points` +
+        # `obj_id`) and FORBIDS a box at the same time. The client's
+        # `sam3_video_inference.add_prompt` asserts points XOR boxes, and the
+        # box path (`super().add_prompt`) is a semantic single-object prompt
+        # that `reset_state`s and does NOT register per-obj_id tracking — so
+        # sending `bounding_boxes` either crashes the call or drops obj_id.
+        # We therefore keep the single center-point + obj_id prompt, which is
+        # the only form that yields the per-slot `obj_id_to_mask` this backend
+        # consumes. (Verified against the real client in the perceive image.)
         self._request(
             {
                 "type": "add_prompt",
@@ -264,8 +262,6 @@ class Sam3Backend(SamBackend):
                 "frame_index": self._frame_idx,
                 "points": box_to_point(box),
                 "point_labels": np.array([1], dtype=np.int32),
-                "bounding_boxes": np.array([xywh], dtype=np.float32),
-                "bounding_box_labels": np.array([1], dtype=np.int32),
                 "obj_id": obj_id,
             }
         )
