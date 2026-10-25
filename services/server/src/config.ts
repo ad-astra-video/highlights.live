@@ -145,6 +145,13 @@ export interface ServerConfig {
    * `frames[]` so Gemma reasons across a longer SEQUENCE per trigger.
    * `VOD_DECIDE_WINDOW_N`. */
   vodDecideWindowN: number;
+  /** ADAAAA-7399: how many seconds of the tapped VOD audio timeline to retain
+   * so the decide can slice window-aligned audio around each video-window
+   * center (the VOD tap decodes the whole file faster than the GPU video pass).
+   * `VOD_AUDIO_RETAIN_S`; default 1800 (30 min — covers typical highlight
+   * sources; a longer VOD only gets window-aligned audio for windows within the
+   * retained span). */
+  vodAudioRetainS: number;
   /** I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
    * Frames within +/- `vodResampleWindowS` of a candidate are re-extracted at
    * `vodResampleFps` so the ball-goal-crossing instant is in the decide window.
@@ -437,6 +444,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
     vodWorkerConcurrency: Number(env.VOD_WORKER_CONCURRENCY ?? 1),
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
+    vodAudioRetainS: Number(env.VOD_AUDIO_RETAIN_S ?? 1800),
     // I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).
     // Frames within +/- vodResampleWindowS of a candidate are re-extracted at
     // vodResampleFps so the ball-goal-crossing instant is in the decide window.

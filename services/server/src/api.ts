@@ -871,6 +871,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       clipWindowMinSec: cw.clipWindowMinSec,
       gameHint: job.gameHint || cfg.gameHintDefault,
       preferLabels: job.preferLabels,
+      // ADAAAA-7399: VOD must wire `audioContext` so the decide-observer's
+      // `buildObserveDecideRequest` slices the tapped window-aligned audio
+      // (and Stage-1 audio levels) instead of gating it off. The VOD tap
+      // (vod-audio.ts extractVodAudioChunks) feeds the shared window; with the
+      // config unset here, `cfg.audioContext` is undefined and every VOD window
+      // persisted `audio.path:"none"` / empty `asr.transcript`. Mirrors the live
+      // path (audioContext: cfg.audioContext).
+      audioContext: cfg.audioContext,
       // ADAAAA-6577: bounded exponential backoff between a perceive session-
       // lost re-reserve and the retry of the same frame (shared analyzeJob
       // loop; default 500ms base / 8000ms cap).
@@ -1154,7 +1162,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // analyzeJob re-reserving a fresh session once the slot has been released.
     const slot = { current: initial, stopped: false };
     livePerceiveSlots.set(job.id, slot);
-    const shared = new LiveRunShared({ decideWindowN: cfg.vodDecideWindowN });
+    const shared = new LiveRunShared({ decideWindowN: cfg.vodDecideWindowN, audioRetainS: cfg.vodAudioRetainS });
     // Drive the Stage-A audio tap from the VOD file's audio track in parallel
     // with the video pass. Best-effort: no audio track or a dropped chunk never
     // aborts the video look. When the gate fires, route the candidate through
