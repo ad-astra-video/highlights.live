@@ -348,6 +348,71 @@ def test_goal_corroborated_requires_independent_signal():
     assert cf.goal_corroborated(scoreboard_changed=False, transcript="") is False
 
 
+def test_goal_corroborated_credits_frame_scoreboard_change():
+    """ADAAAA-7357: the confirmation pass's OWN frame read (evidence.scoreboardChanged)
+    is an independent corroboration signal, credited when the deterministic perceive-OCR
+    flag was delayed / did not fire. A bare ball-in-net frame read is NOT credited."""
+    from app import confirm as cf
+    # Frame read attests the scoreboard change -> corroborated even with OCR flag off
+    # and no audio transcript.
+    assert cf.goal_corroborated(scoreboard_changed=False, transcript="",
+                                frame_scoreboard_changed=True) is True
+    # No frame scoreboard read, no OCR, no audio -> still NOT corroborated.
+    assert cf.goal_corroborated(scoreboard_changed=False, transcript="",
+                                frame_scoreboard_changed=False) is False
+    # Ball-in-net alone is never independent corroboration (ADAAAA-7162 guard).
+    assert cf.goal_corroborated(scoreboard_changed=False, transcript="") is False
+
+
+def test_run_pass_confirms_goal_on_frame_scoreboard_attestation(monkeypatch):
+    """ADAAAA-7357 (AC1): a confirmed_goal whose deep-frame dive attests a scoreboard
+    change (evidence.scoreboardChanged=true) is kept as a GOAL even though the
+    deterministic perceive-OCR `scoreBoardChanged` flag is off and VOD has no audio
+    transcript — the delayed-scoreboard case (kids_soccer.mp4 goal 114-117s,
+    scoreboard 117-120s)."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "s1"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "dense frames show the ball crossing the line and the scoreboard ticking 0-1", '
+        '"evidence": {"ballInNet": true, "scoreboardChanged": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    # scoreBoardChanged (OCR) is FALSE on the request; the corroboration comes ONLY
+    # from the confirm pass's own frame read.
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["goalConfirmed"] == "confirmed_goal"
+    assert resp["corroborated"] is True
+    assert resp["corroborationSource"] == "scoreboard"
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
+
+
+def test_run_pass_still_downgrades_on_ball_in_net_alone(monkeypatch):
+    """ADAAAA-7162 guard (AC3): a confirmed_goal with only a bare ballInNet frame
+    attestation and NO scoreboard / audio signal is still downgraded to near_miss —
+    never a board GOAL. The frame-scoreboard credit does not weaken the guard."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 99, "eventType": "GOAL", "reason": "s1"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.99, '
+        '"reason": "ball clearly enters the net", '
+        '"evidence": {"ballInNet": true, "scoreboardChanged": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["goalConfirmed"] == "confirmed_goal"
+    assert resp["corroborated"] is False
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
+
+
 def test_confirm_requires_corroboration_default_on(monkeypatch):
     from app import confirm as cf
     monkeypatch.delenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", raising=False)
@@ -392,3 +457,161 @@ def test_reconcile_legacy_no_requirement_keeps_goal():
     )
     assert d["outcome"] == "scoring_play"
     assert d["isHighlight"] is True
+
+
+# --- ADAAAA-7402 penalty-shootout + narrated-scoreboard corroboration ---------
+
+
+def test_goal_corroborated_shootout_credits_ball_in_net():
+    """ADAAAA-7402 (AC2): during a shootout the aggregate score is fixed, so a
+    ball-in-net attestation ALONE is sufficient corroboration for a converted
+    penalty even with no main-score change and no goal-calling audio."""
+    from app import confirm as cf
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="", ball_in_net=True, penalty_shootout=True
+    ) is True
+    # A penalty-tally increment is also sufficient on its own.
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="", penalty_tally_changed=True, penalty_shootout=True
+    ) is True
+
+
+def test_goal_corroborated_shootout_saved_penalty_not_corroborated():
+    """ADAAAA-7402 (AC3): a shootout kick that is SAVED / MISSED (no ball in the
+    net, no tally increment) is NOT corroborated — stays rejected."""
+    from app import confirm as cf
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="", penalty_shootout=True
+    ) is False
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="", ball_in_net=False,
+        penalty_tally_changed=False, penalty_shootout=True,
+    ) is False
+
+
+def test_goal_corroborated_non_shootout_preserves_ball_in_net_guard():
+    """ADAAAA-7162 guard preserved: outside a shootout a bare ball-in-net read
+    is still NOT independent corroboration."""
+    from app import confirm as cf
+    assert cf.goal_corroborated(scoreboard_changed=False, transcript="", ball_in_net=True) is False
+
+
+def test_reason_asserts_scoreboard_change():
+    """ADAAAA-7402 (AC1): an explicit score transition narrated in the deep-dive
+    reason is credited; bare narration / near-miss wording is not."""
+    from app import confirm as cf
+    assert cf.reason_asserts_scoreboard_change("scoreboard updates from 2-1 to 2-2") is True
+    assert cf.reason_asserts_scoreboard_change("the scoreboard ticks to 1-0") is True
+    assert cf.reason_asserts_scoreboard_change("2-1 to 2-2") is True
+    assert cf.reason_asserts_scoreboard_change("ball clearly enters the net / goalkeeper beaten") is False
+    assert cf.reason_asserts_scoreboard_change("a near miss, no score") is False
+    assert cf.reason_asserts_scoreboard_change("") is False
+    assert cf.reason_asserts_scoreboard_change(None) is False
+
+
+def test_run_pass_confirms_penalty_conversion_in_shootout(monkeypatch):
+    """ADAAAA-7402 (AC2): a confirmed_goal whose deep dive detects a shootout and
+    attests ball-in-net is kept as a GOAL even with no main-score change and no
+    goal-calling audio transcript (the kids_soccer.mp4 converted-penalty case)."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "s1"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "penalty converted, ball clearly enters the net during the shootout", '
+        '"evidence": {"ballInNet": true, "penaltyShootout": true, "penaltyTallyChanged": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["goalConfirmed"] == "confirmed_goal"
+    assert resp["corroborated"] is True
+    assert resp["corroborationSource"] == "scoreboard"
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
+
+
+def test_run_pass_confirms_penalty_conversion_on_ball_in_net_only(monkeypatch):
+    """ADAAAA-7402 (AC2): in a shootout the ball-in-net attestation alone (even
+    without an explicit tally increment) is sufficient corroboration."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "s1"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.88, '
+        '"reason": "shot on goal in the shootout, ball in the net", '
+        '"evidence": {"ballInNet": true, "penaltyShootout": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["corroborated"] is True
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
+
+
+def test_run_pass_still_downgrades_saved_shootout_penalty(monkeypatch):
+    """ADAAAA-7402 (AC3): a shootout kick the deep dive judges SAVED / MISSED
+    (no ball in the net, no tally increment) is still downgraded to near_miss —
+    never a board goal."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "s1"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.7, '
+        '"reason": "keeper saves the penalty, ball never crosses the line", '
+        '"evidence": {"ballInNet": false, "penaltyShootout": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["corroborated"] is False
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
+
+
+def test_run_pass_confirms_regulation_goal_on_narrated_scoreboard(monkeypatch):
+    """ADAAAA-7402 (AC1): the 2-2 regulation equalizer where the deep dive
+    narrates the scoreboard delta (2-1 -> 2-2) but leaves the structured
+    evidence.scoreboardChanged null is now accepted as a GOAL."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "s1"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "scoreboard updates from 2-1 to 2-2 after the goal", '
+        '"evidence": {"ballInNet": true, "scoreboardChanged": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["goalConfirmed"] == "confirmed_goal"
+    assert resp["corroborated"] is True
+    assert resp["corroborationSource"] == "scoreboard"
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
+
+
+def test_run_pass_confirms_penalty_on_tally_increment_without_shootout_flag(monkeypatch):
+    """ADAAAA-7402 (AC2): a clear penalty-tally increment corroborates a converted
+    penalty even when the model could not separately flag the shootout context
+    (evidence.penaltyShootout is null) — the tally IS the shootout signal."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "s1"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "penalty converted, tally ticks to 4-4", '
+        '"evidence": {"ballInNet": true, "penaltyTallyChanged": true, "penaltyShootout": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["corroborated"] is True
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
