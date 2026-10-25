@@ -148,6 +148,34 @@ def reason_asserts_scoreboard_change(reason: str | None) -> bool:
     return _SCORE_DELTA_RE.search(r) is not None
 
 
+# ADAAAA-7402 (penalty-recall follow-up): the deep-dive sometimes describes a
+# penalty shootout in its free-text reason while leaving the structured
+# ``evidence.penaltyShootout`` flag null (the PENALTIS tally line is not clearly
+# legible in the narrower frame window). Since a shootout conversion is
+# corroborated by the model's ``confirmed_goal`` read, and a save / miss never
+# returns ``confirmed_goal``, recognizing the shootout from narration (in
+# addition to the structured flag) lets an ATTESTED conversion surface without
+# admitting a non-goal (AC3). Conservative: only strong shootout phrasing fires.
+_SHOOTOUT_RE = re.compile(
+    r"(?:penalty shootout|penalt(?:y|ies)[^\n]{0,24}?(?:tally|converted|scored)"
+    r"|shootout)",
+    re.IGNORECASE,
+)
+
+
+def reason_asserts_penalty_shootout(reason: str | None) -> bool:
+    """Whether the deep-dive ``reason`` text describes a penalty shootout.
+
+    Used to broaden shootout detection beyond the structured
+    ``evidence.penaltyShootout`` flag (ADAAAA-7402 penalty-recall follow-up).
+    Only strong shootout phrasing fires; never raises; no shootout phrasing ->
+    False, so an ordinary goal narration adds no shootout context."""
+    r = (reason or "").strip().lower()
+    if not r:
+        return False
+    return _SHOOTOUT_RE.search(r) is not None
+
+
 def confirm_requires_corroboration() -> bool:
     """Whether the confirm pass gates a confirmed_goal on an independent
     corroboration signal. Default ON (the CEO requirement); set
@@ -160,7 +188,9 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
                       frame_scoreboard_changed: bool = False,
                       penalty_shootout: bool = False,
                       penalty_tally_changed: bool = False,
-                      ball_in_net: bool = False) -> bool:
+                      ball_in_net: bool = False,
+                      ball_in_net_refuted: bool = False,
+                      goal_confirmed: str = "") -> bool:
     """True when at least one INDEPENDENT corroboration signal is present.
 
     The independent anchor is a scoreboard change OR goal-calling audio text.
@@ -183,8 +213,29 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
     (``ball_in_net``) is treated as SUFFICIENT independent corroboration.
     Outside a shootout the ADAAAA-7162 guard unwinds: a bare ``ball_in_net``
     read with no scoreboard / goal-call signal still is NOT independent
-    corroboration, so saves / misses stay rejected."""
+    corroboration, so saves / misses stay rejected.
+
+    ADAAAA-7402 (penalty-recall follow-up, CEO "too strict"): the deep-dive
+    sometimes returns ``confirmed_goal`` (its high-fidelity read that the ball
+    entered the net) but leaves ``penaltyTallyChanged`` / ``ballInNet`` NULL
+    (the tally / crossing is not legible in its narrower frame window), which
+    previously downgraded an ATTESTED conversion to near_miss. Since a
+    ``confirmed_goal`` verdict IS the model's ball-in-net attestation, in a
+    detected shootout it is credited as corroboration — BUT ONLY when the deep
+    dive did not EXPLICITLY refute the ball being in the net
+    (``ball_in_net_refuted`` = ``evidence.ballInNet`` is ``false``). That
+    refutation is the save / miss guard: a kick the deep dive judged SAVED /
+    MISSED (ball NOT in the net) is still rejected even if it (incorrectly)
+    carries a ``confirmed_goal`` verdict, so AC3 / ADAAAA-7162 hold. Outside a
+    shootout a ``confirmed_goal`` is NOT auto-corroborated (the fabrication
+    guard stays intact)."""
     if penalty_shootout or penalty_tally_changed:
+        # An attested conversion: the deep dive confirmed the goal and did not
+        # explicitly say the ball was NOT in the net. This is the recall gain
+        # (the model's ball-in-net read survives even when the structured
+        # penaltyTallyChanged / ballInNet tri-state is null).
+        if goal_confirmed == "confirmed_goal" and not ball_in_net_refuted:
+            return True
         return bool(penalty_tally_changed) or bool(ball_in_net)
     return bool(scoreboard_changed) or bool(frame_scoreboard_changed) or audio_calls_goal(transcript)
 
@@ -849,9 +900,19 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
     ev = parsed.get("evidence") or {}
     frame_scoreboard_changed = ev.get("scoreboardChanged") is True
     scoreboard_change_narrated = reason_asserts_scoreboard_change(comment) or stage1_narrates_scoreboard
-    penalty_shootout = ev.get("penaltyShootout") is True
+    # ADAAAA-7402 (penalty-recall follow-up): broaden shootout detection to also
+    # include a narrated shootout (the structured penaltyShootout flag is often
+    # null because the PENALTIS tally is not legible in the narrow window). A
+    # ``confirmed_goal`` in a detected shootout is then sufficient corroboration.
+    penalty_shootout = (ev.get("penaltyShootout") is True) or reason_asserts_penalty_shootout(comment)
     penalty_tally_changed = ev.get("penaltyTallyChanged") is True
     ball_in_net = ev.get("ballInNet") is True
+    # ADAAAA-7402 penalty-recall follow-up: the save / miss guard. When the deep
+    # dive EXPLICITLY refutes the ball being in the net (evidence.ballInNet is
+    # false), a confirmed_goal verdict must NOT be credited as corroboration, so
+    # a SAVED / MISSED penalty is still rejected even if it (incorrectly) carries
+    # a confirmed_goal verdict (AC3 / ADAAAA-7162 preserved).
+    ball_in_net_refuted = ev.get("ballInNet") is False
     confirmed = goal_corroborated(
         scoreboard_changed=bool(req.get("scoreBoardChanged")),
         transcript=transcript,
@@ -859,6 +920,8 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         penalty_shootout=penalty_shootout,
         penalty_tally_changed=penalty_tally_changed,
         ball_in_net=ball_in_net,
+        ball_in_net_refuted=ball_in_net_refuted,
+        goal_confirmed=goal,
     )
     decision = reconcile_confirmed_goal(
         goal, stage1, comment=comment,

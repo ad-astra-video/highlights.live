@@ -571,6 +571,118 @@ def test_reconcile_legacy_no_requirement_keeps_goal():
     assert d["isHighlight"] is True
 
 
+# --- ADAAAA-7402 penalty-recall follow-up (penalty-shootout corroboration) ---
+#
+# Root gap (CEO "too strict"): in a penalty shootout the deep-dive returns
+# ``confirmed_goal`` (the ball-in-net attestation) but leaves
+# ``penaltyTallyChanged`` / ``ballInNet`` null (tally not legible in the narrow
+# window), so the corroboration gate downgraded ATTESTED conversions to
+# near_miss. A confirmed_goal verdict inside a detected shootout is its own
+# sufficient corroboration, and a save/miss (which never returns
+# confirmed_goal) stays rejected (AC3).
+
+
+def test_shootout_detector_recognizes_narration():
+    from app import confirm as cf
+    assert cf.reason_asserts_penalty_shootout("penalty shootout: ball in the net") is True
+    assert cf.reason_asserts_penalty_shootout("penalties tally incrementing from 4 to 5") is True
+    assert cf.reason_asserts_penalty_shootout("this is a shootout kick converted") is True
+    # conservative: an ordinary goal narration / no text never fires.
+    assert cf.reason_asserts_penalty_shootout("ball crosses the goal line, 2-1") is False
+    assert cf.reason_asserts_penalty_shootout("") is False
+    assert cf.reason_asserts_penalty_shootout(None) is False
+
+
+def test_goal_corroborated_shootout_confirmed_goal_sufficient():
+    from app import confirm as cf
+    # No tally change, no ball_in_net stamp, but a confirmed_goal inside a
+    # detected shootout is sufficient corroboration (the recall fix).
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="",
+        penalty_shootout=True, penalty_tally_changed=False,
+        ball_in_net=False, goal_confirmed="confirmed_goal",
+    ) is True
+    # A save/miss returns near_miss / not_goal, never confirmed_goal -> stays
+    # NOT corroborated (AC3 guard preserved).
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="",
+        penalty_shootout=True, penalty_tally_changed=False,
+        ball_in_net=False, goal_confirmed="near_miss",
+    ) is False
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="",
+        penalty_shootout=True, penalty_tally_changed=False,
+        ball_in_net=False, goal_confirmed="not_goal",
+    ) is False
+    # Outside a shootout a confirmed_goal is NOT auto-corroborated (ADAAAA-7162
+    # guard intact): the fabrication case stays rejected.
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="",
+        penalty_shootout=False, penalty_tally_changed=False,
+        ball_in_net=False, goal_confirmed="confirmed_goal",
+    ) is False
+    # The save / miss guard: a confirmed_goal that the deep dive EXPLICITLY
+    # refutes (ballInNet=false) is NOT credited — a SAVED penalty stays rejected
+    # even with the (incorrect) confirmed_goal verdict (AC3 / ADAAAA-7162).
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="",
+        penalty_shootout=True, penalty_tally_changed=False,
+        ball_in_net=False, ball_in_net_refuted=True,
+        goal_confirmed="confirmed_goal",
+    ) is False
+
+
+def test_run_pass_shootout_conversion_surfaces_without_tally_stamp(monkeypatch):
+    """AC2 recall fix end-to-end: a converted penalty that narrates the
+    shootout but does NOT stamp penaltyTallyChanged / ballInNet still surfaces
+    as a confirmed goal (was downgraded to near_miss before the fix)."""
+    from app import confirm as cf
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 80,
+              "eventType": "GOAL", "reason": "penalty kick"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "penalty shootout; the keeper is beaten and the ball enters '
+        'the net, even though the PENALTIS tally is not legible in this window", '
+        '"evidence": {"ballInNet": null, "penaltyTallyChanged": null, '
+        '"penaltyShootout": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = cf.run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]}
+    )
+    assert resp["goalConfirmed"] == "confirmed_goal"
+    assert resp["corroborated"] is True
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
+    assert resp["decision"]["nearMiss"] is False
+
+
+def test_run_pass_shootout_save_stays_rejected(monkeypatch):
+    """AC3 guard: a SAVED penalty (deep dive says near_miss, ball NOT in net)
+    must NOT surface as a goal even when the shootout is narrated and the
+    structured flag is present. A save never returns confirmed_goal."""
+    from app import confirm as cf
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 80,
+              "eventType": "GOAL", "reason": "penalty kick"}
+    canned = (
+        '{"goalConfirmed": "near_miss", "confidence": 0.85, '
+        '"reason": "penalty shootout; the goalkeeper saves it at the line, '
+        'the ball does not enter the net and the tally does not change", '
+        '"evidence": {"ballInNet": false, "penaltyTallyChanged": false, '
+        '"penaltyShootout": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = cf.run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]}
+    )
+    assert resp["goalConfirmed"] == "near_miss"
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
+    assert resp["decision"]["nearMiss"] is True
+
+
 # --- ADAAAA-7402 penalty-shootout + narrated-scoreboard corroboration ---------
 
 
