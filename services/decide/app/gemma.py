@@ -404,7 +404,9 @@ def _as_str_list(value) -> list[str]:
 # one (`runningSummary`), which the server persists + surfaces in the job
 # detail. The summary must GROW monotonically but stay BOUNDED, hence the
 # two helpers below.
-MAX_RUNNING_SUMMARY_CHARS = 600
+# ADAAAA-7418: raised 600 -> 2000 so long-video timelog entries stop getting
+# cut off. Only the cap value changes; grow-then-compact semantics stay.
+MAX_RUNNING_SUMMARY_CHARS = 2000
 
 
 def _compile_summary(summary: str) -> str:
@@ -1175,10 +1177,13 @@ def build_prompt(
         "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<the evidence that "
         "contradicts the hypothesis, or the null when it does not>\"}, "
         "\"evidenceAttested\": [\"<each concrete piece of grounded evidence you relied on>\"], "
-        "\"runningSummary\": \"<your updated RUNNING video summary so far, ~500 chars max, "
+        "\"runningSummary\": \"<your updated RUNNING video summary so far, ~1800 chars max, "
         "chronological + forward-only: if a STORY SO FAR was given you must EXTEND it, never rewrite "
         "from scratch or delete captured events, only tighten wording; if none was given start it "
-        "fresh. Cover the whole video so far, not just this window>.\"}"
+        "fresh. Cover the whole video so far, not just this window. Do NOT start a runningSummary "
+        "line with a boilerplate opener such as 'The video begins', 'The video starts with', "
+        "'The video shows', or 'The sequence ...' - start directly with the concrete action/observation "
+        "(e.g. 'Goal: player scores at 72s'), keeping each line to a single sentence>\"}"
     )
 
 

@@ -2,7 +2,7 @@
 
 The decide/gemma brain holds a single **bounded** rolling `runningSummary`
 (story-so-far) on the job record, compacted by dropping the OLDEST lines first
-(`MAX_RUNNING_SUMMARY_CHARS = 600`). This is the *model-input* story — it stays
+(`MAX_RUNNING_SUMMARY_CHARS = 2000`). This is the *model-input* story — it stays
 bounded so per-token Livepeer cost never regresses.
 
 ADAAAA-7237 adds a separate **append-only per-pass summary time log**
