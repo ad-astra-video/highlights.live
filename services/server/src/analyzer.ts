@@ -2601,53 +2601,71 @@ export function hasIndependentAttestation(c: {
   return false;
 }
 
-/** ADAAAA-7357: whether a Stage-1 verdict is a GOAL-shaped read that the
- * deterministic notable-only bar stripped to a NON-accept purely because the
- * candidate carried no IN-WINDOW corroboration (a "bare trigger"). This is the
+/** ADAAAA-7357: whether a Stage-1 verdict is GOAL-shaped for the confirmation
+ * pass — the decide outcome is a scoring play OR the candidate's event label is
+ * a goal-type event. The outcome alone is NOT sufficient: the kids_soccer 114s
+ * goal came through outcome=not_highlight / eventType=GOAL (the coarse 1fps read
+ * said "ball moving away… no ball enters the net" and the notable-only bar
+ * appended the rejection), so a narrow `isGoalDecision()` gate
+ * (outcome===scoring_play) missed exactly the target goal and the confirm dive
+ * never ran. */
+export function isGoalShaped(d: DecisionResult): boolean {
+  return isGoalDecision(d) || isGoalTypeEvent(d.eventType);
+}
+
+/** ADAAAA-7357: whether a Stage-1 verdict is a GOAL-shaped, UN-ATTESTED
+ * NON-accept — a read the deterministic notable-only bar stripped to a non-accept
+ * because it carried no in-window corroboration (a "bare trigger"). This is the
  * delayed-corroboration population: the vision read was a goal, but the
- * scoreboard / goal-call audio landed in a LATER window, so apply_gate rejected
- * it. We detect this from the rejected reason signature (the decide side appends
- * "rejected by notable-only bar: ... no corroborating evidence (bare trigger)")
- * so ONLY the notable-only rejection is rescued — a goal rejected by the
- * ball-outcome gate, the attestation gate, or a true near_miss/not_goal read
- * (outcome != scoring_play) is NOT broadened. This keeps the confirm population
- * bounded to goal-shaped reads (one confirm decide per such candidate). */
+ * scoreboard / goal-call audio landed in a LATER window (kids_soccer.mp4 goal
+ * 114-117s, scoreboard 117-120s), so apply_gate rejected the candidate.
+ *
+ * We do NOT match the literal "rejected by notable-only bar: no corroborating
+ * evidence (bare trigger)" reason string — it varies by model read (the 114s
+ * goal carried "ball moving away from goal… no ball enters the net"), so a
+ * signature match missed exactly the target goal. Instead we detect a bare
+ * goal-shaped non-accept structurally: not an accepted highlight, goal-shaped
+ * (scoring_play outcome OR goal-type event label), and carrying no independent
+ * attestation. The population stays bounded to goal-shaped reads; the confirm
+ * pass's own deterministic corroboration gate (ADAAAA-7162) still downgrades an
+ * un-corroborated confirmed_goal to near_miss, so a genuine near-miss / saved /
+ * dribble never becomes a board GOAL (AC3) and cost stays at one confirm dive
+ * per goal-shaped candidate (AC6). */
 export function isGateRejectedBareGoal(d: DecisionResult): boolean {
   if (d.isHighlight) return false;
-  if (!isGoalDecision(d)) return false;
-  const r = (d.reason || "").toLowerCase();
-  return r.includes("notable-only bar") && r.includes("no corroborating evidence");
+  return isGoalShaped(d);
 }
 
 /** The Stage-2 trigger: an un-attested goal-type candidate whose Stage-1 read
- * is a scoring_play accept (goal-shaped), OR a goal-shaped read that the
- * notable-only bar stripped to a non-accept for lack of in-window corroboration
- * (the delayed-corroboration rescue, ADAAAA-7357), enters the confirmation dive.
- * Everything else (non-goal type, attested, a goal rejected by a NON-notable
- * gate, or a true near_miss/not_goal read) keeps the existing 1-5 s path
- * unchanged. `cfg.confirmEnabled` is the VOD-first config gate — when off this
- * is a strict no-op. */
+ * is a scoring_play accept (goal-shaped), OR a goal-shaped read left as a bare
+ * non-accept for lack of in-window corroboration (the delayed-corroboration
+ * rescue, ADAAAA-7357), enters the confirmation dive. Everything else (non-goal
+ * type, attested, a requested near-miss / big-play highlight — isHighlight=true
+ * with a non-scoring outcome — or a true non-goal read) keeps the existing
+ * path. `cfg.confirmEnabled` is the VOD-first config gate — when off this is a
+ * strict no-op. */
 export function shouldRunConfirm(
   cfg: AnalyzerConfig,
   candidate: { eventType: string; ballOutcome?: string; goalCrossed?: boolean; scoreBoardChanged?: boolean },
   stage1Decision: DecisionResult
 ): boolean {
   if (!cfg.confirmEnabled) return false;
-  // ADAAAA-7185: gate goal-ness on the DECISION, not the candidate's raw
-  // eventType. In the observe architecture the candidate carries the perceive
-  // bias-hint label (commonly SPORTING_EVENT) while the actual GOAL class lives
-  // on the verdict (outcome=scoring_play / eventType=GOAL). Gating on
-  // candidate.eventType made the gate inert for every observe-accepted goal.
-  if (!isGoalDecision(stage1Decision)) return false;
+  // ADAAAA-7185/7357: gate goal-ness on the DECISION + eventLabel, not the
+  // candidate's raw eventType alone. In the observe architecture the candidate
+  // carries the perceive bias-hint label (commonly SPORTING_EVENT) while the
+  // actual GOAL class lives on the verdict. Gating on outcome===scoring_play
+  // alone made the gate inert for the delayed-corroboration goal whose Stage-1
+  // read was outcome=not_highlight / eventType=GOAL (ADAAAA-7357).
+  if (!isGoalShaped(stage1Decision)) return false;
   if (hasIndependentAttestation(candidate)) return false;
-  // ADAAAA-7357: the confirm population now includes an accepted un-attested
-  // goal (as before) PLUS a goal-shaped read the notable-only bar stripped for
-  // lack of in-window corroboration (so the confirm can credit a DELAYED
-  // scoreboard / goal-call audio across its expanded window). Everything else
-  // (incl. a goal rejected by the ball-outcome / attestation gate) is bounded
-  // out so we don't spend a confirm call on every rejected candidate.
-  if (!isAcceptedHighlight(stage1Decision) && !isGateRejectedBareGoal(stage1Decision)) return false;
-  return true;
+  // Accepted highlights: fire ONLY for a genuine goal read (scoring_play /
+  // legacy goal-type). A requested near-miss / big-play highlight
+  // (isHighlight=true, outcome != scoring_play) is never a goal, so no confirm.
+  if (stage1Decision.isHighlight) return isGoalDecision(stage1Decision);
+  // Non-accept: fire for a goal-shaped bare non-accept (the notable-only /
+  // delayed-corroboration rescue). Bounded to goal-shaped reads; the confirm
+  // corroboration gate keeps a true non-goal from ever becoming a board GOAL.
+  return isGateRejectedBareGoal(stage1Decision);
 }
 
 /** Select the precise pre-event / event-instant / post-event keyframes from a
