@@ -1154,7 +1154,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // analyzeJob re-reserving a fresh session once the slot has been released.
     const slot = { current: initial, stopped: false };
     livePerceiveSlots.set(job.id, slot);
-    const shared = new LiveRunShared({ decideWindowN: cfg.vodDecideWindowN });
+    const shared = new LiveRunShared({ decideWindowN: cfg.vodDecideWindowN, audioRetainS: cfg.vodAudioRetainS });
     // Drive the Stage-A audio tap from the VOD file's audio track in parallel
     // with the video pass. Best-effort: no audio track or a dropped chunk never
     // aborts the video look. When the gate fires, route the candidate through
