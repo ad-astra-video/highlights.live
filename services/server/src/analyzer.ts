@@ -1468,6 +1468,13 @@ export class LiveRunShared {
    * kept as a short rolling clip so the surrounding audio can be handed to
    * decide() (ADAAAA-4954 detail-first). */
   private audio: { ts: number; samples: string }[] = [];
+  /** ADAAAA-7399: how many seconds of the tapped audio timeline to retain for
+   * window-aligned slicing. Defaults to AUDIO_CLIP_KEEP_S (10 s) for the live
+   * tap (audio arrives in real time alongside the frames, so a short rolling
+   * clip IS the window). The VOD tap decodes the whole file FASTER than the
+   * video pass, so it must retain the FULL timeline (capped) so the decide can
+   * slice audio around each video-window center instead of the file end. */
+  private readonly audioRetainS: number;
   /** ADAAAA-7255: the bounded per-chunk (t, energy, baseline) audio-gate
    * inspection series, as forwarded by perceive on the /audio event path. Kept
    * as the latest bounded snapshot (perceive already bounds it to its lookback
@@ -1479,9 +1486,10 @@ export class LiveRunShared {
    * of a prior one. */
   private lastGoalHighlightTs: number | null = null;
 
-  constructor(opts: { decideWindowN?: number; goalBurstWindowS?: number } = {}) {
+  constructor(opts: { decideWindowN?: number; goalBurstWindowS?: number; audioRetainS?: number } = {}) {
     this.windowN = opts.decideWindowN ?? DECIDE_FRAME_WINDOW;
     this.goalBurstWindowS = opts.goalBurstWindowS ?? DEFAULT_GOAL_BURST_SUPPRESS_S;
+    this.audioRetainS = opts.audioRetainS ?? AUDIO_CLIP_KEEP_S;
   }
 
   /** Record a sampled frame into the rolling window. The window is
@@ -1661,7 +1669,7 @@ export class LiveRunShared {
    * the rolling clip, kept ~AUDIO_CLIP_KEEP_S seconds behind `ts`. */
   addAudioChunk(ts: number, samples: string): void {
     this.audio.push({ ts, samples });
-    const cutoff = ts - AUDIO_CLIP_KEEP_S;
+    const cutoff = ts - this.audioRetainS;
     while (this.audio.length > 1 && this.audio[0].ts < cutoff) this.audio.shift();
   }
   /** The buffered audio as a mono 16 kHz 16-bit PCM WAV (base64), covering the
@@ -1670,6 +1678,28 @@ export class LiveRunShared {
   audioClipB64(): string {
     if (!this.audio.length) return "";
     return pcmInt16ToWavB64(this.audio.map((a) => a.samples).join(""));
+  }
+  /** ADAAAA-7399: the buffered audio as a mono 16 kHz WAV (base64) SLICED to
+   * the chunks whose ts falls in `[centerTs - preS, centerTs + postS]` — the
+   * WINDOW-ALIGNED surrounding audio for a decide window. The VOD tap decodes
+   * the whole file faster than the GPU video pass, so the plain rolling
+   * `audioClipB64()` returns FILE-END audio, not the current video-window
+   * center; this slices the retained timeline around the window center (the
+   * live/file-sim tap arrives in real time, so here it behaves identically to
+   * the rolling clip). "" when no buffered chunk falls in range (silent /
+   * no-tap window -> stays text-only, no regression). */
+  audioWindowB64(centerTs: number, preS: number, postS: number): string {
+    const lo = centerTs - preS;
+    const hi = centerTs + postS;
+    const inWin = this.audio.filter((a) => a.ts >= lo && a.ts <= hi);
+    if (!inWin.length) return "";
+    return pcmInt16ToWavB64(inWin.map((a) => a.samples).join(""));
+  }
+  /** ADAAAA-7399 (instrumentation): number of audio tap chunks currently
+   * buffered. Logged at the VOD decide so on-box runs reveal whether the tap
+   * reached the shared window (0 => no audio context reached the LLM). */
+  audioChunkCount(): number {
+    return this.audio.length;
   }
   /** ADAAAA-7255: replace the bounded per-chunk (t, energy, baseline) audio-gate
    * inspection series with the latest snapshot perceive forwarded on the /audio
@@ -1697,11 +1727,22 @@ export class LiveRunShared {
     const out = this.audio.map((a) => rmsNormalized(Buffer.from(a.samples, "base64")));
     return out.slice(-Math.max(1, maxPoints));
   }
-  /** ADAAAA-7232: timestamped RMS energy per buffered audio tap (oldest-first)
+  /** ADAAAA-7399: timestamped RMS energy per buffered audio tap (oldest-first)
    * for deterministic highlight-instant localization (peak-audio post-trigger).
    * [] when nothing buffered. No new inference / no GPU call. */
   audioEnergyTaps(): { ts: number; rms: number }[] {
     return this.audio.map((a) => ({ ts: a.ts, rms: rmsNormalized(Buffer.from(a.samples, "base64")) }));
+  }
+  /** ADAAAA-7399: the window-aligned audio-energy level curve around a decide
+   * center (chunks within [center-preS, center+postS]), newest-first trimmed to
+   * `maxPoints`. [] when no buffered chunk falls in range. Lets the Stage-1
+   * decide evidence carry audio intensity (not just the ASR text). */
+  audioWindowLevels(centerTs: number, preS: number, postS: number, maxPoints = 48): number[] {
+    const lo = centerTs - preS;
+    const hi = centerTs + postS;
+    const inWin = this.audio.filter((a) => a.ts >= lo && a.ts <= hi);
+    const out = inWin.map((a) => rmsNormalized(Buffer.from(a.samples, "base64")));
+    return out.slice(-Math.max(1, maxPoints));
   }
   /** I4 / ADAAAA-6361: per-detection boxes (tracks + open-set objects) for the
    * frame FINDINGS nearest `timestamp`, so the decide prompt gets real geometry
@@ -1828,6 +1869,12 @@ export class LiveRunShared {
  * (ADAAAA-4954 detail-first; bounded so a long VOD pass doesn't grow unbounded).
  * Roughly the clip-relevant window around a trigger. */
 export const AUDIO_CLIP_KEEP_S = 10;
+/** ADAAAA-7399: extra seconds of audio to slice on each side of a decide-window
+ * center (beyond the frame span) so the clip brackets the whole window. */
+export const AUDIO_WINDOW_MARGIN_S = 2;
+/** ADAAAA-7399: fallback half-window (seconds) when a decide payload has no
+ * frame timestamps to derive the window span from. */
+export const AUDIO_DEFAULT_WINDOW_S = 5;
 /** Stage-2 confirmation-pass motion-context window (s on each side of the
  * event instant) the server samples cached track findings from (ADAAAA-6797).
  * Roughly the dense-dive window; no new GPU (reuses cached findings). */
@@ -2361,12 +2408,45 @@ export function buildObserveDecideRequest(
   // no attestation (provenance only). This keeps the goal-attestation gate able
   // to independently confirm a scoring_play instead of rejecting every goal.
   const windowAttestation = foldWindowAttestation(payload.biasHints);
+  // ADAAAA-7399: window-ALIGNED audio around the window center. The VOD tap
+  // decodes the whole file faster than the GPU video pass, so the plain rolling
+  // `audioClipB64()` is FILE-END audio, not the current video-window center —
+  // that is why VOD windows persisted `audio.path:"none"` / no transcript while
+  // the live/file-sim tap (audio captured in real time) worked. Slice the
+  // retained timeline around `center` (a head/tail margin brackets the whole
+  // window; silent / no-tap windows yield "" and stay text-only, no regression).
+  const frameTs = payload.frames.map((f) => f.ts).filter((t) => Number.isFinite(t));
+  const preS = frameTs.length ? Math.max(center - Math.min(...frameTs), 0) + AUDIO_WINDOW_MARGIN_S : AUDIO_DEFAULT_WINDOW_S;
+  const postS = frameTs.length ? Math.max(Math.max(...frameTs) - center, 0) + AUDIO_WINDOW_MARGIN_S : AUDIO_DEFAULT_WINDOW_S;
+  const windowAudioB64 = cfg.audioContext ? run.audioWindowB64(center, preS, postS) : "";
+  const windowAudioLevels = cfg.audioContext ? run.audioWindowLevels(center, preS, postS) : [];
+  const audioPeak = windowAudioLevels.length ? Math.max(...windowAudioLevels) : 0;
   const evidence: Parameters<PipelineClient["decide"]>[0] = {
     eventType,
     trackCount,
     maxVelocity: run.evidence.maxVelocity,
     ocrHits,
-    reaction: buildReactionEvidence({}, trackCount),
+    // ADAAAA-7399: the Stage-1 reaction now carries the window's audio intensity
+    // (crowdEnergy from the aligned audio level curve) so the LLM gets audio
+    // cues on the PRIMARY pass, not just the Stage-2 confirm path. Absent audio
+    // stays a text-only empty reaction (no regression).
+    reaction: buildReactionEvidence(
+      {
+        audio: {
+          kind: windowAudioLevels.length ? "swell" : "",
+          ts: center,
+          firedAt: center,
+          onsetLatencyS: 0,
+          peakEnergy: audioPeak,
+          baselineEnergy: 0,
+        },
+      },
+      trackCount
+    ),
+    // ADAAAA-7399: forward the window-aligned audio-energy level CURVE to the
+    // Stage-1 decide evidence (the confirm path already forwards it via
+    // `audioLevels`; the primary evidence did not).
+    audioLevels: windowAudioLevels,
     // Perceive-derived per-detection geometry + audio level curve (I4).
     // ADAAAA-7022: keep the FIRST DECIDE_MAX_DETECTIONS (oldest frames) so the
     // payload never breaches Evidence.detections max_length=16.
@@ -2382,16 +2462,17 @@ export function buildObserveDecideRequest(
     ballOutcome: windowAttestation.ballOutcome || undefined,
     scoreBoardChanged: windowAttestation.scoreBoardChanged || undefined,
   };
-  // ADAAAA-7299: per-window audio context for the observe decide. The observe
-  // loop builds the per-window analysis, so it must forward the window's
-  // captured audio (Path 2 -> ASR -> transcript). Without it every live/file-sim
-  // window persists `analysis.audio.path:"none"`, a blank `asr.transcript`, and
-  // no playable audio. `run.audioClipB64()` returns the rolling tap clip
-  // (AUDIO_CLIP_KEEP_S≈window), aligned with the rolling-past observer window.
-  // Gated on `cfg.audioContext` (LIVE_AUDIO_CONTEXT) and only when audio was
-  // actually buffered, so a silent / no-tap window (or the config-off /
-  // VOD-without-audio-tap case) stays text-only (no regression).
-  const windowAudioB64 = cfg.audioContext ? run.audioClipB64() : "";
+  // (ADAAAA-7399): the window-aligned audio clip + level curve were computed
+  // above (before the evidence) via `run.audioWindowB64` / `audioWindowLevels`
+  // and are forwarded as `opts.audioB64` + `evidence.audioLevels` below.
+  // ADAAAA-7399 (instrumentation): log the VOD decide's audio reach so an
+  // on-box job reveals whether the tap fed the shared window (tapChunks>0 and
+  // audioB64Len>0 => aligned audio reached the LLM; 0 => it did not).
+  if (cfg.decideWindowN !== undefined && cfg.jobId) {
+    console.error(
+      `[vod-audio:${cfg.jobId}] decide @${center}s tapChunks=${run.audioChunkCount()} audioB64Len=${windowAudioB64.length} levels=${windowAudioLevels.length}`
+    );
+  }
   const opts: Parameters<PipelineClient["decide"]>[1] = {
     gameHint: cfg.gameHint,
     reasoningEffort: "none",
