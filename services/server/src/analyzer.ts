@@ -1234,6 +1234,23 @@ export const WINDOW_FACTS_MAX_CHARS = 2400;
  * highlight is accepted per this window in a run, so a start-of-clip burst of
  * confabulated goals cannot flood the accepted list. */
 export const DEFAULT_GOAL_BURST_SUPPRESS_S = 30;
+/** ADAAAA-7402 (shootout-aware follow-up to the AC2 recall fix): the TIGHT
+ * same-kick dedup window (seconds) applied to a GOAL whose acceptance is
+ * independently corroborated by a scoreboard change (`corroborationSource ===
+ * "scoreboard"`). A penalty shootout is a sequence of DISTINCT converted kicks
+ * ~13–18 s apart, each corroborated by a PENALTIS-tally increment on the
+ * scoreboard — so an accepted goal with a scoreboard change is a DISTINCT event,
+ * not a burst duplicate. But an ADJACENT window re-read of the SAME kick (the
+ * decide pass samples the video at ~1 fps, so a single kick is seen across
+ * neighbouring windows a few seconds apart) is a duplicate that must dedup to
+ * one highlight (AC4). This window separates the two: a same-kick re-read is
+ * < SHOOTOUT_KICK_DEDUP_S from the prior accepted conversion, a distinct
+ * conversion is >= SHOOTOUT_KICK_DEDUP_S away. 8 s sits between the observed
+ * same-kick re-read spacing (~1–5 s) and the distinct-conversion spacing
+ * (>=12 s). Confabulated start-of-clip goals never carry a scoreboard change,
+ * so they keep the full ADAAAA-6610 30 s suppression (this constant only narrows
+ * the window for independently corroborated goals). */
+export const SHOOTOUT_KICK_DEDUP_S = 8;
 
 // ---------------------------------------------------------------------------
 // Increment F / ADAAAA-6465: frame-watching assembler (plan §4.9C).
@@ -1551,11 +1568,31 @@ export class LiveRunShared {
    * burst duplicate within the window and should be DROPPED (it does NOT
    * advance the last-accepted reference, so a burst cannot extend itself). A
    * non-GOAL event is never suppressed.
+   *
+   * ADAAAA-7402 (shootout-aware): when `corroborated` is true — the confirm
+   * pass independently corroborated THIS goal's acceptance (a PENALTIS-tally
+   * increment / ball-in-net attestation in a shootout, a main-score change in
+   * regulation, or goal-calling audio) — the accepted goal is a DISTINCT
+   * scoring event, so the effective window shrinks to the tight same-kick
+   * dedup (`SHOOTOUT_KICK_DEDUP_S`): an adjacent window's re-read of the SAME
+   * kick is still deduped (AC4), but the NEXT distinct conversion (>=
+   * SHOOTOUT_KICK_DEDUP_S away) is no longer suppressed (AC2). A goal with NO
+   * independent corroboration keeps the full 30 s ADAAAA-6610 window, so the
+   * confabulated-burst guard is untouched.
+   *
+   * KEYING NOTE (ADAAAA-7420): key on the AGGREGATE `corroborated` flag, not on
+   * `corroborationSource === "scoreboard"`. In the deployed ADAAAA-7402 flow a
+   * converted penalty is corroborated via the model's ball-in-net /
+   * `confirmed_goal` attestation (NOT a scoreboard change, since the aggregate
+   * score is fixed in a shootout), so `corroborationSource` is typically
+   * `null` for a converted penalty. Keying on the scoreboard source would miss
+   * exactly the conversions we need to stop suppressing and re-break AC2.
    */
-  suppressIfGoalBurst(ts: number, eventType?: string): boolean {
+  suppressIfGoalBurst(ts: number, eventType?: string, opts: { corroborated?: boolean } = {}): boolean {
     const ev = (eventType || "").toUpperCase().trim();
     if (ev !== "GOAL" && ev !== "GOL") return false;
-    if (this.lastGoalHighlightTs != null && ts - this.lastGoalHighlightTs < this.goalBurstWindowS) {
+    const windowS = opts.corroborated ? SHOOTOUT_KICK_DEDUP_S : this.goalBurstWindowS;
+    if (this.lastGoalHighlightTs != null && ts - this.lastGoalHighlightTs < windowS) {
       return true;
     }
     this.lastGoalHighlightTs = ts;
@@ -2230,7 +2267,16 @@ export async function acceptVideoDecision(
   // ADAAAA-6610 temporal burst suppression: a GOAL
   // accepted within `goalBurstWindowS` of a previous one is a start-of-clip
   // burst duplicate and is dropped, not recorded.
-  if (run.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType)) {
+  // ADAAAA-7420 (shootout-aware): key on the AGGREGATE `confirm.corroborated`
+  // flag. A converted penalty in the deployed ADAAAA-7402 flow is corroborated
+  // by the model's ball-in-net / confirmed_goal attestation (NOT a scoreboard
+  // change — the aggregate score is fixed in a shootout), so corroborationSource
+  // is typically null. Keying on the aggregate flag stops burst-suppressing a
+  // distinct conversion while still deduping a same-kick re-read (AC4). Saves /
+  // misses never reach here (the confirm gate downgrades them to near_miss first),
+  // so AC3 is unaffected.
+  const corroborated = confirm?.corroborated === true;
+  if (run.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType, { corroborated })) {
     buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis);
     onEvent?.({
       seq: emit.seq,
