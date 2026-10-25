@@ -25,13 +25,13 @@ def test_compile_summary_bounds_to_cap():
 
 def test_compile_summary_prunes_oldest_lines_first():
     # Multi-line: keep the NEWEST lines, drop the oldest, so recent detail survives.
-    lines = [f"line-{i}" for i in range(200)]
+    lines = [f"line-{i}" for i in range(600)]
     joined = "\n".join(lines)
     assert len(joined) > MAX_RUNNING_SUMMARY_CHARS
     out = _compile_summary(joined)
     assert len(out) <= MAX_RUNNING_SUMMARY_CHARS
     # The newest line survives; the oldest is gone.
-    assert out.endswith("line-199")
+    assert out.endswith(lines[-1])
     assert "line-0" not in out
 
 
