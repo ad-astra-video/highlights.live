@@ -108,11 +108,21 @@ def confirm_requires_corroboration() -> bool:
     return os.environ.get("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1") == "1"
 
 
-def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None) -> bool:
-    """True when at least one INDEPENDENT corroboration signal is present: a
-    scoreboard change OR goal-calling audio/commentary text. Either signal is
-    the independent anchor that keeps a self-reported visual read honest."""
-    return bool(scoreboard_changed) or audio_calls_goal(transcript)
+def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
+                      frame_scoreboard_changed: bool = False) -> bool:
+    """True when at least one INDEPENDENT corroboration signal is present.
+
+    The independent anchor is a scoreboard change OR goal-calling audio text.
+
+    ``scoreboard_changed`` is the deterministic perceive-OCR flag fed from the
+    server. ``frame_scoreboard_changed`` is the confirmation pass's OWN frame
+    read (the deep-dive verdict reports ``evidence.scoreboardChanged``) and is
+    credited when the deterministic OCR flag was delayed / did not fire
+    (ADAAAA-7357: scoreboard change visible in the frames around the goal even
+    though perceive's OCR did not flag it). A self-reported ball-in-net read
+    alone is NOT independent corroboration (ADAAAA-7162 guard): only a
+    scoreboard tick or a goal call anchors the visual read."""
+    return bool(scoreboard_changed) or bool(frame_scoreboard_changed) or audio_calls_goal(transcript)
 
 
 def confirm_enabled() -> bool:
@@ -712,13 +722,19 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
 
     goal = parsed.get("goalConfirmed", "")
     comment = _as_text(parsed.get("reason"))
-    # ADAAAA-7162: require an INDEPENDENT corroboration signal (scoreboard
+    # ADAAAA-7162/7357: require an INDEPENDENT corroboration signal (scoreboard
     # change OR goal-calling audio/commentary text) to accept a confirmed_goal.
     # Otherwise a fabricated visual read ("ball clearly enters the net") for a
     # near-miss / saved shot / dribble is downgraded to near_miss, never a GOAL.
+    # The scoreboard signal is anchored on the deterministic perceive-OCR flag
+    # AND the confirmation pass's own frame read (evidence.scoreboardChanged),
+    # so a delayed/UNCORRELATED OCR flag does not strip a goal whose scoreboard
+    # change is visible in the frames (ADAAAA-7357).
+    frame_scoreboard_changed = (parsed.get("evidence") or {}).get("scoreboardChanged") is True
     corroborated = goal_corroborated(
         scoreboard_changed=bool(req.get("scoreBoardChanged")),
         transcript=transcript,
+        frame_scoreboard_changed=frame_scoreboard_changed,
     )
     decision = reconcile_confirmed_goal(
         goal, stage1, comment=comment,
@@ -729,7 +745,7 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
     # evidence for an accepted GOAL is queryable after the fact. Scoreboard
     # change takes precedence over goal-calling audio text; null when none.
     corroboration_source = None
-    if bool(req.get("scoreBoardChanged")):
+    if bool(req.get("scoreBoardChanged")) or frame_scoreboard_changed:
         corroboration_source = "scoreboard"
     elif audio_calls_goal(transcript):
         corroboration_source = "audio_text"
