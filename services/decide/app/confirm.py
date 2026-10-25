@@ -642,7 +642,8 @@ def stage1_disagrees(stage1: dict, goal_confirmed: str) -> bool:
 
 def reconcile_confirmed_goal(goal_confirmed: str, stage1: dict, comment: str = "",
                              *, corroborated: bool = True,
-                             require_corroboration: bool = False) -> dict:
+                             require_corroboration: bool = False,
+                             stage1_narrates_scoreboard: bool = False) -> dict:
     """Deterministically map the confirmation verdict onto the final highlight
     decision (a HighlightDecision-shaped dict the server can adopt directly).
 
@@ -679,6 +680,24 @@ def reconcile_confirmed_goal(goal_confirmed: str, stage1: dict, comment: str = "
             + "goal read not corroborated (no scoreboard change / goal-calling audio); "
               "downgraded to near-miss"
         ).strip()
+
+    # ADAAAA-7408: the deep-dive model conservatively demotes a REAL regulation
+    # goal to near_miss / not_goal when it cannot independently read the
+    # scoreboard in its (narrower) frame window — even though the Stage-1 read
+    # explicitly narrated the scoreboard change ("scoreboard updates 2-1 to
+    # 2-2"). When that Stage-1 scoreboard-change narration is present (an
+    # independent, explicit score transition) AND Stage-1 established a scoring
+    # goal, the demotion is a corroboration-availability artifact, not an
+    # evidence refutation — keep the goal instead of letting the deep dive
+    # sabotage a corroborated goal. Conservative: requires BOTH an explicit
+    # score-transition narration AND a Stage-1 scoring_play read, so saves /
+    # misses / dribbles (which never narrate a scoreboard change and are not
+    # Stage-1 goals) stay rejected (AC3).
+    if (goal_confirmed in ("near_miss", "not_goal")
+            and stage1_narrates_scoreboard
+            and (decision.get("outcome") == "scoring_play"
+                 or decision.get("isHighlight") is True)):
+        goal_confirmed = "confirmed_goal"
 
     comment = (comment or "").strip()
     if goal_confirmed == "confirmed_goal":
@@ -807,6 +826,16 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
 
     goal = parsed.get("goalConfirmed", "")
     comment = _as_text(parsed.get("reason"))
+    # ADAAAA-7408: the Stage-1 primary read (stage1.reason) is the text that
+    # NARRATES the scoreboard change for a real regulation goal (e.g. "the
+    # scoreboard updates from 2-1 to 2-2"); the deep-dive (comment) usually only
+    # says "no scoreboard change". ADAAAA-7402 credited the narration but read
+    # ONLY the deep-dive comment, so the scoreboard corroboration never fired for
+    # regulation goals and the gate downgraded them. Credit either text.
+    stage1_reason = None
+    if isinstance(stage1, dict):
+        stage1_reason = stage1.get("reason")
+    stage1_narrates_scoreboard = reason_asserts_scoreboard_change(stage1_reason)
     # ADAAAA-7162/7357: require an INDEPENDENT corroboration signal (scoreboard
     # change OR goal-calling audio/commentary text) to accept a confirmed_goal.
     # Otherwise a fabricated visual read ("ball clearly enters the net") for a
@@ -819,13 +848,14 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
     # even when the structured evidence.scoreboardChanged field is null.
     ev = parsed.get("evidence") or {}
     frame_scoreboard_changed = ev.get("scoreboardChanged") is True
+    scoreboard_change_narrated = reason_asserts_scoreboard_change(comment) or stage1_narrates_scoreboard
     penalty_shootout = ev.get("penaltyShootout") is True
     penalty_tally_changed = ev.get("penaltyTallyChanged") is True
     ball_in_net = ev.get("ballInNet") is True
     confirmed = goal_corroborated(
         scoreboard_changed=bool(req.get("scoreBoardChanged")),
         transcript=transcript,
-        frame_scoreboard_changed=frame_scoreboard_changed or reason_asserts_scoreboard_change(comment),
+        frame_scoreboard_changed=frame_scoreboard_changed or scoreboard_change_narrated,
         penalty_shootout=penalty_shootout,
         penalty_tally_changed=penalty_tally_changed,
         ball_in_net=ball_in_net,
@@ -834,6 +864,7 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         goal, stage1, comment=comment,
         corroborated=confirmed,
         require_corroboration=confirm_requires_corroboration(),
+        stage1_narrates_scoreboard=stage1_narrates_scoreboard,
     )
     # ADAAAA-7185: WHICH independent corroboration signal fired, persisted so the
     # evidence for an accepted GOAL is queryable after the fact. Scoreboard
@@ -842,7 +873,7 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
     # when none.
     corroboration_source = None
     if penalty_shootout or penalty_tally_changed or bool(req.get("scoreBoardChanged")) or frame_scoreboard_changed \
-            or reason_asserts_scoreboard_change(comment):
+            or scoreboard_change_narrated:
         corroboration_source = "scoreboard"
     elif audio_calls_goal(transcript):
         corroboration_source = "audio_text"

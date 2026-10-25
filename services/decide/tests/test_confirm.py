@@ -140,6 +140,118 @@ def test_reconcile_never_raises_on_bad_stage1():
     assert d["isHighlight"] is False
 
 
+def test_reconcile_promotes_demoted_goal_on_stage1_scoreboard_narration():
+    """ADAAAA-7408 (AC1): the deep-dive conservatively demotes a REAL regulation
+    goal to near_miss when it cannot read the scoreboard in its narrower frames,
+    even though the Stage-1 reason explicitly narrated the scoreboard change
+    ("scoreboard updates from 2-1 to 2-2"). A corroborated goal whose score
+    change the Stage-1 read asserted must not be sabotaged by that
+    corroboration-availability artifact: it is kept as a scoring_play goal."""
+    d = reconcile_confirmed_goal(
+        "near_miss",
+        {"outcome": "scoring_play", "isHighlight": True, "score": 78, "eventType": "GOAL",
+         "reason": "The ball is clearly seen entering the net, and the scoreboard updates from 2-1 to 2-2."},
+        comment="there is no scoreboard change to confirm a goal",
+        corroborated=True, require_corroboration=True,
+        stage1_narrates_scoreboard=True,
+    )
+    assert d["outcome"] == "scoring_play"
+    assert d["isHighlight"] is True
+    assert d["nearMiss"] is False
+
+
+def test_reconcile_promotes_not_goal_on_stage1_scoreboard_narration():
+    """ADAAAA-7408 (AC1): even when the deep-dive says not_goal (candidate 153
+    for the 0-1 -> 1-1 goal), the Stage-1 scoreboard-change narration keeps the
+    corroborated goal."""
+    d = reconcile_confirmed_goal(
+        "not_goal",
+        {"outcome": "scoring_play", "isHighlight": True, "score": 72, "eventType": "GOAL",
+         "reason": "The ball enters the net and the scoreboard updates from 0-1 to 1-1."},
+        comment="no visible ball in the net",
+        corroborated=True, require_corroboration=True,
+        stage1_narrates_scoreboard=True,
+    )
+    assert d["outcome"] == "scoring_play"
+    assert d["isHighlight"] is True
+
+
+def test_reconcile_no_promotion_without_stage1_scoreboard_narration():
+    """ADAAAA-7408 (AC3): a downgraded goal WITHOUT a Stage-1 scoreboard-change
+    narration (a saved shot / dribble over-called by Stage-1) must NOT be
+    promoted — the demotion stays (never a board goal)."""
+    d = reconcile_confirmed_goal(
+        "near_miss",
+        {"outcome": "scoring_play", "isHighlight": True, "score": 95, "eventType": "GOAL",
+         "reason": "The ball clearly enters the net and the goalkeeper is beaten."},
+        comment="blocked by the goalkeeper, no scoreboard change",
+        corroborated=False, require_corroboration=True,
+        stage1_narrates_scoreboard=False,
+    )
+    assert d["outcome"] == "near_miss"
+    assert d["isHighlight"] is False
+
+
+def test_reconcile_static_score_read_not_credited():
+    """ADAAAA-7408 (AC3): a STATIC scoreboard read ("scoreboard shows a score of
+    0-1", no transition) is not a score change, so it credits no corroboration."""
+    gate = cf.reason_asserts_scoreboard_change(
+        "The sequence shows a goal celebration and the scoreboard shows a score of 0-1 for BAR."
+    )
+    assert gate is False
+
+
+def test_run_pass_surfaces_regulation_goal_on_stage1_scoreboard_narration(monkeypatch):
+    """ADAAAA-7408 (AC1) end-to-end: the box regression demoted the real
+    regulation goals (t~153/342/402) to near_miss even though their Stage-1
+    reason explicitly narrated the scoreboard change ("scoreboard updates from
+    1-1 to 2-1"). Crediting that Stage-1 narration as corroboration must surface
+    the goal as a board-accepted scoring_play, not a near_miss."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 78, "eventType": "GOAL",
+              "reason": "The ball is clearly seen entering the net, and the scoreboard updates from 1-1 to 2-1."}
+    # The deep-dive conservatively demotes to near_miss, blaming missing
+    # corroboration (the exact box comment for these windows).
+    canned = (
+        '{"goalConfirmed": "near_miss", "confidence": 0.6, '
+        '"reason": "The ball is seen moving towards the goal but there is no scoreboard change or '
+        'independent corroboration to confirm a goal.", '
+        '"evidence": {"ballInNet": null, "scoreboardChanged": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass({"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]})
+    # The Stage-1 scoreboard narration is credited as corroboration.
+    assert resp["corroborated"] is True
+    assert resp["corroborationSource"] == "scoreboard"
+    # The demoted regulation goal is promoted to a board-accepted goal (AC1).
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
+    assert resp["decision"]["nearMiss"] is False
+
+
+def test_run_pass_keeps_fabricated_saved_shot_rejected(monkeypatch):
+    """ADAAAA-7408 (AC3) end-to-end: a saved-shot window whose Stage-1 reason
+    does NOT narrate a scoreboard change stays a near_miss (never a board goal),
+    even though Stage-1 over-called it a goal and the deep-dive agreed it did not
+    convert."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 95, "eventType": "GOAL",
+              "reason": "The ball clearly enters the net and the goalkeeper is beaten."}
+    canned = (
+        '{"goalConfirmed": "near_miss", "confidence": 0.7, '
+        '"reason": "The ball is blocked by the goalkeeper, there is no scoreboard change or '
+        'independent corroboration to confirm a goal.", '
+        '"evidence": {"ballInNet": false, "scoreboardChanged": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass({"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]})
+    assert resp["corroborated"] is False
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
+
+
 # --- end-to-end run with a mocked gemma call --------------------------------
 
 
