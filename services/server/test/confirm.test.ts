@@ -4,6 +4,7 @@ import {
   buildConfirmContext,
   confirmReconcile,
   hasIndependentAttestation,
+  isGateRejectedBareGoal,
   isGoalTypeEvent,
   LiveRunShared,
   selectConfirmKeyframes,
@@ -22,14 +23,8 @@ const acceptedGoal: DecisionResult = {
   outcome: "scoring_play",
   reason: "stage-1 goal",
 };
-// A Stage-1 read that is NOT an accepted highlight (near miss) — should never trigger.
-const nonAccept: DecisionResult = {
-  isHighlight: false,
-  score: 55,
-  eventType: "GOAL",
-  outcome: "near_miss",
-  nearMiss: true,
-};
+// A Stage-1 read that is NOT an accepted highlight (near miss) — still used to
+// assert the confirm population is bounded (non-goal-shaped reads stay out).
 
 function makeClient(over: Partial<PipelineClient> = {}): { client: PipelineClient; log: string[] } {
   const log: string[] = [];
@@ -115,9 +110,20 @@ describe("shouldRunConfirm", () => {
     expect(shouldRunConfirm(cfg, { eventType: "GOAL", goalCrossed: true }, acceptedGoal)).toBe(false);
     expect(shouldRunConfirm(cfg, { eventType: "GOAL", scoreBoardChanged: true }, acceptedGoal)).toBe(false);
   });
-  it("does not fire on a Stage-1 non-accept (near miss / not a highlight)", () => {
+  it("does not fire on a NON-goal-shaped Stage-1 non-accept (outcome != scoring, eventType not goal-type)", () => {
     const cfg = { confirmEnabled: true } as any;
-    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, nonAccept)).toBe(false);
+    const nonGoalNonAccept: DecisionResult = {
+      isHighlight: false,
+      score: 60,
+      eventType: "ASSIST",
+      outcome: "not_highlight",
+    };
+    expect(shouldRunConfirm(cfg, { eventType: "ASSIST" }, nonGoalNonAccept)).toBe(false);
+    // A goal-shaped non-accept (eventType=GOAL, outcome=not_highlight) DOES fire
+    // (delayed-corroboration rescue, ADAAAA-7357) — the coarse 1fps read can miss
+    // a real goal, so it enters the confirm dive which the corroboration gate keeps honest.
+    const coarseMiss: DecisionResult = { isHighlight: false, score: 0, eventType: "GOAL", outcome: "not_highlight" };
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, coarseMiss)).toBe(true);
   });
   it("does not fire on a requested near-miss / big-play highlight (never a goal, ADAAAA-7185)", () => {
     const cfg = { confirmEnabled: true, preferLabels: ["near-misses"] } as any;
@@ -129,6 +135,118 @@ describe("shouldRunConfirm", () => {
       nearMiss: true,
     };
     expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, nearMissHighlight)).toBe(false);
+  });
+});
+
+describe("isGateRejectedBareGoal", () => {
+  const gateRejectedGoal: DecisionResult = {
+    isHighlight: false,
+    score: 80,
+    eventType: "GOAL",
+    outcome: "scoring_play",
+    reason: "high-value event GOAL; rejected by notable-only bar: no corroborating evidence (bare trigger)",
+  };
+  it("true only for a goal-shaped read stripped to a non-accept by the notable-only bare-trigger bar", () => {
+    expect(isGateRejectedBareGoal(gateRejectedGoal)).toBe(true);
+  });
+  it("false for an accepted goal", () => {
+    expect(isGateRejectedBareGoal({ isHighlight: true, outcome: "scoring_play", eventType: "GOAL", score: 80, reason: "x" })).toBe(false);
+  });
+  it("true for a goal-shaped non-accept even when outcome != scoring_play (delayed-corroboration rescue, ADAAAA-7357)", () => {
+    // kids_soccer.mp4 114s goal: coarse 1fps read said outcome=not_highlight /
+    // eventType=GOAL; the notable-only bar rejected it for lack of in-window
+    // corroboration. A narrow outcome===scoring_play gate missed it.
+    expect(isGateRejectedBareGoal({ isHighlight: false, outcome: "not_highlight", eventType: "GOAL", score: 0, reason: "ball moving away… no ball enters the net" })).toBe(true);
+    expect(isGateRejectedBareGoal({ isHighlight: false, outcome: "near_miss", eventType: "GOAL", score: 55, reason: "x" })).toBe(true);
+  });
+  it("true regardless of the reason string (any free-form bare non-accept read)", () => {
+    // The old signature-match on "notable-only bar" is intentionally dropped — the
+    // reason varies by model read and missed ts=114.
+    expect(isGateRejectedBareGoal({ isHighlight: false, outcome: "scoring_play", eventType: "GOAL", score: 80, reason: "ball outcome gate: off_target" })).toBe(true);
+    expect(isGateRejectedBareGoal({ isHighlight: false, outcome: "scoring_play", eventType: "GOAL", score: 80, reason: "goal attestation: bare templated reason" })).toBe(true);
+  });
+  it("false for a NON-goal-shaped non-accept (eventType not goal-type, outcome != scoring)", () => {
+    expect(isGateRejectedBareGoal({ isHighlight: false, outcome: "not_highlight", eventType: "ASSIST", score: 60, reason: "x" })).toBe(false);
+    expect(isGateRejectedBareGoal({ isHighlight: false, outcome: "big_play", eventType: "COUNTER", score: 60, reason: "x" })).toBe(false);
+  });
+});
+
+describe("shouldRunConfirm — ADAAAA-7357 delayed-corroboration population", () => {
+  // A goal-shaped read the deterministic notable-only bar stripped because the
+  // scoreboard / goal-call audio landed in a LATER window (no in-window signal).
+  const gateRejectedGoal: DecisionResult = {
+    isHighlight: false,
+    score: 80,
+    eventType: "GOAL",
+    outcome: "scoring_play",
+    reason: "high-value event GOAL; rejected by notable-only bar: no corroborating evidence (bare trigger)",
+  };
+  // A goal-shaped read rejected by the ball-outcome gate (NOT notable-only) —
+  // must stay out of the confirm population (bounded, no false-positive cost).
+  const ballGateRejectedGoal: DecisionResult = {
+    isHighlight: false,
+    score: 80,
+    eventType: "GOAL",
+    outcome: "scoring_play",
+    reason: "high-value event GOAL; ballOutcome=off_target",
+  };
+  it("fires the confirm dive for a gate-rejected goal-shaped candidate (delayed corroboration rescue)", () => {
+    const cfg = { confirmEnabled: true } as any;
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, gateRejectedGoal)).toBe(true);
+    // The observe bias-hint label must not matter — goalness lives on the verdict.
+    expect(shouldRunConfirm(cfg, { eventType: "SPORTING_EVENT" }, gateRejectedGoal)).toBe(true);
+  });
+  it("still excludes an attested gate-rejected goal", () => {
+    const cfg = { confirmEnabled: true } as any;
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL", scoreBoardChanged: true }, gateRejectedGoal)).toBe(false);
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL", ballOutcome: "goal" }, gateRejectedGoal)).toBe(false);
+  });
+  it("stays a strict no-op when the config flag is off (even for a gate-rejected goal)", () => {
+    expect(shouldRunConfirm({ confirmEnabled: false } as any, { eventType: "GOAL" }, gateRejectedGoal)).toBe(false);
+    expect(shouldRunConfirm({} as any, { eventType: "GOAL" }, gateRejectedGoal)).toBe(false);
+  });
+  it("fires for a goal-shaped non-accept regardless of the reject reason signature (ADAAAA-7357 broaden)", () => {
+    const cfg = { confirmEnabled: true } as any;
+    // A scoring_play read stripped by a NON-notable gate still fires — the target
+    // is any goal-shaped bare non-accept, because the reason text varies and no
+    // single signature can bound it reliably (that signature miss is the bug).
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, ballGateRejectedGoal)).toBe(true);
+  });
+  it("does NOT broaden to a NON-goal-shaped near-miss / not_goal read (cost-bounded population)", () => {
+    const cfg = { confirmEnabled: true } as any;
+    const nonGoalTypeRead: DecisionResult = {
+      isHighlight: false,
+      score: 55,
+      eventType: "ASSIST",
+      outcome: "near_miss",
+      nearMiss: true,
+    };
+    expect(shouldRunConfirm(cfg, { eventType: "ASSIST" }, nonGoalTypeRead)).toBe(false);
+    const nonGoalBigPlay: DecisionResult = {
+      isHighlight: false,
+      score: 60,
+      eventType: "COUNTER",
+      outcome: "big_play",
+    };
+    expect(shouldRunConfirm(cfg, { eventType: "COUNTER" }, nonGoalBigPlay)).toBe(false);
+  });
+  it("fires for the kids_soccer.mp4 ts=114 delayed-corroboration goal (outcome=not_highlight / eventType=GOAL)", () => {
+    const cfg = { confirmEnabled: true } as any;
+    // The exact production candidate: stage-1 read outcome=not_highlight with a
+    // free-form reject reason and eventType=GOAL. The old gate (outcome must be
+    // scoring_play AND reason must contain the notable-only signature) missed it
+    // and skipped the confirm dive for the target goal.
+    const kidsTs114: DecisionResult = {
+      isHighlight: false,
+      score: 0,
+      eventType: "GOAL",
+      outcome: "not_highlight",
+      nearMiss: false,
+      reason:
+        "The ball is clearly seen moving away from the goal or being played in the midfield area, and no ball enters the net.; outcome=not_highlight is not a scoring highlight",
+    };
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, kidsTs114)).toBe(true);
+    expect(isGateRejectedBareGoal(kidsTs114)).toBe(true);
   });
 });
 
@@ -288,6 +406,39 @@ describe("confirmReconcile", () => {
     expect(shared.confirmMetrics.disagreed).toBe(0);
   });
 
+  it("fires the dive for a notable-only-bar-gate-rejected goal and adopts a confirmed_goal (ADAAAA-7357)", async () => {
+    // A real goal the notable-only bar stripped because its scoreboard change was
+    // DELAYED to a later window (goal-shaped read, no in-window corroboration).
+    const gateRejectedGoal: DecisionResult = {
+      isHighlight: false,
+      score: 80,
+      eventType: "GOAL",
+      outcome: "scoring_play",
+      reason: "high-value event GOAL; rejected by notable-only bar: no corroborating evidence (bare trigger)",
+    };
+    const recon: ConfirmDecision = {
+      enabled: true,
+      goalConfirmed: "confirmed_goal",
+      confidence: 0.92,
+      reason: "goal confirmed; delayed scoreboard change corroborates",
+      evidence: { scoreboardChanged: true },
+      stage1Disagreed: true,
+      corroborated: true,
+      corroborationSource: "scoreboard",
+      decision: { isHighlight: true, score: 85, eventType: "GOAL", outcome: "scoring_play" },
+    };
+    const { client } = makeClient({ confirm: async () => recon });
+    const shared = new LiveRunShared();
+    const cfg = { confirmEnabled: true, gameHint: "soccer" } as any;
+    const res = await confirmReconcile(client, shared, cfg, gateRejectedGoal, { eventType: "GOAL", timestamp: 1 });
+    // The gate-rejected goal gets the Stage-2 dive (confirmRan) and the confirmed
+    // verdict is adopted, so it can surface as a board GOAL.
+    expect(res.confirmRan).toBe(true);
+    expect(res.decision.isHighlight).toBe(true);
+    expect(res.decision.outcome).toBe("scoring_play");
+    expect(shared.confirmMetrics.totalRuns).toBe(1);
+  });
+
   it("fires for an observe-path candidate (SPORTING_EVENT) and emits a run_confirmation_pass audit descriptor (ADAAAA-7185)", async () => {
     const recon: ConfirmDecision = {
       enabled: true,
@@ -328,7 +479,10 @@ describe("analyzeJob integration (VOD confirm driver)", () => {
       confirm: async () => { confirmed++; return { enabled: true, goalConfirmed: "near_miss", confidence: 0.8, reason: "", evidence: {}, stage1Disagreed: true, decision: { isHighlight: false, score: 55, eventType: "GOAL", outcome: "near_miss", nearMiss: true } }; },
     });
     const shared = new LiveRunShared();
-    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "" } as any; // confirmEnabled undefined
+    // ADAAAA-7365: the observe driver is the VOD confirm path (the accept /
+    // confirm dive only runs through observeOnDecide -> acceptVideoDecision), so
+    // the integration tests exercise it with the observe config on.
+    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", observeLoop: true, decideWindowN: 24 } as any; // confirmEnabled undefined
     const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }), cfg, undefined, undefined, shared);
     expect(confirmed).toBe(0);
     expect(outcome.highlights).toHaveLength(1); // Stage-1 accepted goal cut as normal
@@ -341,10 +495,12 @@ describe("analyzeJob integration (VOD confirm driver)", () => {
       confirm: async () => ({ enabled: true, goalConfirmed: "near_miss", confidence: 0.8, reason: "denied at line", evidence: { ballTrajectoryCrossedLine: false }, stage1Disagreed: true, decision: { isHighlight: false, score: 55, eventType: "GOAL", outcome: "near_miss", nearMiss: true } }),
     });
     const shared = new LiveRunShared();
-    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", confirmEnabled: true } as any;
+    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", confirmEnabled: true, observeLoop: true, decideWindowN: 24 } as any;
     const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }), cfg, undefined, undefined, shared);
     // The refuted goal is NOT cut as a board goal highlight.
     expect(outcome.highlights).toHaveLength(0);
+    // ADAAAA-7365: the confirm dive fires EXACTLY ONCE even though the observe
+    // driver re-produces the same candidate on the end-of-stream flush tick.
     expect(shared.confirmMetrics.totalRuns).toBe(1);
     expect(shared.confirmMetrics.disagreed).toBe(1);
   });
@@ -355,10 +511,12 @@ describe("analyzeJob integration (VOD confirm driver)", () => {
       confirm: async () => ({ enabled: true, goalConfirmed: "confirmed_goal", confidence: 0.9, reason: "ball in net", evidence: { ballInNet: true }, stage1Disagreed: false, decision: { isHighlight: true, score: 85, eventType: "GOAL", outcome: "scoring_play" } }),
     });
     const shared = new LiveRunShared();
-    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", confirmEnabled: true } as any;
+    const cfg = { jobId: "j", clipBeforeS: 4, clipAfterS: 4, gameHint: "", confirmEnabled: true, observeLoop: true, decideWindowN: 24 } as any;
     const outcome = await analyzeJob(client, frames(1), async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` , hasAudio: true }), cfg, undefined, undefined, shared);
     expect(outcome.highlights).toHaveLength(1);
     expect(outcome.highlights[0]).toMatchObject({ goalConfirmed: "confirmed_goal", stage1Disagreed: false, outcome: "scoring_play" });
+    // ADAAAA-7365: the confirm dive fires EXACTLY ONCE (observe re-produces the
+    // same candidate on the flush tick; the exactly-once key collapses both).
     expect(shared.confirmMetrics.totalRuns).toBe(1);
     expect(shared.confirmMetrics.disagreed).toBe(0);
   });
