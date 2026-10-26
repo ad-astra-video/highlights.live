@@ -54,14 +54,46 @@ interface FrameTileProps {
   onFrameClick: (seq: number) => void;
 }
 
-/** One frame with its perceive boxes + legible labels drawn on a canvas (lazy, auth-fetched). */
+/**
+ * One frame with its perceive boxes + legible labels drawn on a canvas. The
+ * image bytes are a ROLLING, in-view window (ADAAAA-7471): the tile only starts
+ * `authFetchFrame` once it is near the viewport (IntersectionObserver), and it
+ * revokes the object URL + clears the canvas bitmap the moment it scrolls back
+ * out. A VOD job with 100+ decide calls mounts thousands of frame tiles; eager
+ * loading all of them at once exhausts the browser's image/fetch budget and
+ * produces ERR_INSUFFICIENT_RESOURCES on the frame URLs. Bounding decode to the
+ * visible window (plus a small scroll buffer) keeps memory stable across the job.
+ */
 function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTileProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLButtonElement>(null);
+  const [inView, setInView] = useState(false);
   const [objUrl, setObjUrl] = useState<string | null>(null);
 
+  // Track viewport membership for the rolling window. A ~200 px buffer means a
+  // tile just off-screen is already decoding when it scrolls in; anything
+  // beyond that buffer is released.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => setInView(entries.some((e) => e.isIntersecting)),
+      { rootMargin: "200px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  // Fetch only while in view; release (revoke object URL + clear bitmap) when
+  // out of view. Collapsing the decide-call window unmounts this tile entirely,
+  // which also releases the bitmap via this cleanup.
   useEffect(() => {
     let alive = true;
     let url: string | null = null;
+    if (!inView) {
+      setObjUrl(null);
+      return;
+    }
     authFetchFrame(frame.uri, token)
       .then((u) => {
         url = u;
@@ -71,12 +103,20 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
     return () => {
       alive = false;
       if (url) URL.revokeObjectURL(url);
+      // Leaving view (or unmount) also clears the drawn bitmap so the decoded
+      // image memory is released, not retained by the canvas backing store.
+      setObjUrl(null);
     };
-  }, [frame.uri, token]);
+  }, [frame.uri, token, inView]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !objUrl) return;
+    if (!canvas) return;
+    // Released (scrolled out) — drop the backing bitmap so it is not held.
+    if (!objUrl) {
+      canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
     const img = new Image();
     img.onload = () => {
       if (canvasRef.current !== canvas) return;
@@ -90,6 +130,7 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
 
   return (
     <button
+      ref={wrapRef}
       type="button"
       data-detail-frame
       data-selected-multi={selectMode && selected ? "true" : undefined}
@@ -156,6 +197,53 @@ const KIND_TONE: Record<NoteKind, string> = {
   not_highlight: "border-mut/40 bg-mut/10 text-mut",
 };
 
+/**
+ * Stable identity for one decide-call listing (ADAAAA-7471). A "decide call" is
+ * anchored by the timestamp/event the LLM inspected — the banner reads
+ * "Decide @ T+Ns — <event>". Dedup by this key so a candidate row persisted more
+ * than once (e.g. a transient double-write on an in-flight job, or a re-decide)
+ * can never render as a duplicate entry. Distinct calls carry distinct
+ * timestamps, so legitimate calls are never collapsed.
+ */
+function decideNoteKey(n: DecideNote): string {
+  return `${n.timestamp.toFixed(3)}|${n.eventType}|${n.status}`;
+}
+
+/**
+ * Return the decide notes for a section with each decide call appearing exactly
+ * once (ADAAAA-7471), preserving order. Dedup keyed by decide-call identity so
+ * a candidate row persisted more than once (in-flight transient double-write /
+ * re-decide) can never surface as a duplicate listing.
+ */
+function dedupeDecideNotes(notes: DecideNote[]): DecideNote[] {
+  const seen = new Set<string>();
+  const out: DecideNote[] = [];
+  for (const n of notes) {
+    const k = decideNoteKey(n);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(n);
+  }
+  return out;
+}
+
+/**
+ * Return the section's frames with each seq rendered exactly once (ADAAAA-7471),
+ * preserving order. A frame belongs to exactly one section (server partition);
+ * this guards the filmstrip against a payload that repeats a seq.
+ */
+function dedupeFrames(frames: JobDetailFrame[]): JobDetailFrame[] {
+  const seen = new Set<number>();
+  const out: JobDetailFrame[] = [];
+  for (const f of frames) {
+    if (seen.has(f.seq)) continue;
+    seen.add(f.seq);
+    out.push(f);
+  }
+  return out;
+}
+
+
 interface AnalysisWindowProps {
   section: FrameSection;
   token: string | null;
@@ -202,10 +290,10 @@ export function AnalysisWindow({ section, token, jobId, selectMode, selectedSeqs
       </button>
       {open && (
         <div className="border-t border-purple/20 p-3" data-analysis-window-body>
-          {section.decideNotes.length > 0 && (
+          {dedupeDecideNotes(section.decideNotes).length > 0 && (
             <div className="mb-2 flex flex-col gap-1">
-              {section.decideNotes.map((n, i) => (
-                <DecideNoteBanner key={i} note={n} jobId={jobId} />
+              {dedupeDecideNotes(section.decideNotes).map((n, i) => (
+                <DecideNoteBanner key={n.timestamp + "-" + i} note={n} jobId={jobId} />
               ))}
             </div>
           )}
@@ -213,7 +301,7 @@ export function AnalysisWindow({ section, token, jobId, selectMode, selectedSeqs
             {section.frames.length === 0 ? (
               <div className="text-xs text-mut">No frames in this section.</div>
             ) : (
-              section.frames.map((f) => (
+              dedupeFrames(section.frames).map((f) => (
                 <FrameTile
                   key={f.seq}
                   frame={f}
