@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolveTrackLabel,
   orderGallerySeqs,
+  navigateGallery,
   placeLabel,
   collectFrameSeqs,
   drawFrameWithBoxes,
@@ -51,6 +52,41 @@ describe("orderGallerySeqs (multi-select enlarge gallery order)", () => {
   it("drops seqs not in the filmstrip and returns empty for none selected", () => {
     expect(orderGallerySeqs(frameSeqs, [99, 20])).toEqual([20]);
     expect(orderGallerySeqs(frameSeqs, [])).toEqual([]);
+  });
+});
+
+// ADAAAA-7440: the enlarged-frame lightbox is a carousel over the whole window.
+// navigateGallery decides which frame becomes enlarged when a bottom thumbnail
+// is clicked: move the index within the current set if it already holds the
+// target (e.g. a multi-select subset), else jump into the all-window carousel.
+describe("navigateGallery (bottom-thumbnail carousel navigation)", () => {
+  const allSeqs = [10, 20, 30, 40, 50];
+  it("enters the all-window carousel at the clicked frame when opening single", () => {
+    const nav = navigateGallery(allSeqs, null, 0, 30);
+    expect(nav.gallery).toEqual(allSeqs);
+    expect(nav.galIndex).toBe(2); // 30 is the 3rd frame
+  });
+  it("moves the index within the current subset when the target is already present", () => {
+    const subset = [20, 40, 50];
+    const nav = navigateGallery(allSeqs, subset, 0, 50);
+    expect(nav.gallery).toBe(subset); // keeps the multi-select set
+    expect(nav.galIndex).toBe(2);
+  });
+  it("jumps to the all-window carousel when clicking a frame outside the subset", () => {
+    const subset = [20, 40];
+    const nav = navigateGallery(allSeqs, subset, 1, 30);
+    expect(nav.gallery).toEqual(allSeqs);
+    expect(nav.galIndex).toBe(2);
+  });
+  it("starts at the first frame when a target seq is unknown (defensive)", () => {
+    const nav = navigateGallery(allSeqs, null, 0, 999);
+    expect(nav.gallery).toEqual(allSeqs);
+    expect(nav.galIndex).toBe(0);
+  });
+  it("never mutates the all-window array passed in", () => {
+    const nav = navigateGallery(allSeqs, null, 0, 30);
+    expect(nav.gallery).not.toBe(allSeqs);
+    expect(allSeqs).toEqual([10, 20, 30, 40, 50]);
   });
 });
 
