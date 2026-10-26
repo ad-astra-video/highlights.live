@@ -129,6 +129,21 @@ export interface DecideNote {
   confirm?: ConfirmRecord;
 }
 
+/**
+ * One entry in the append-only per-pass summary time log (ADAAAA-7466). Each
+ * cadence decide pass appends a new entry; past entries are never overwritten,
+ * dropped, or reordered. `ts` is the wall-clock time the entry was appended;
+ * `windowTs` (when known) is the video timestamp (seconds) of the summarize
+ * window / observe tick it maps to. Mirrors `SummaryLogEntrySchema` in
+ * @highlights/events. Additive optional — absent on jobs that predate it.
+ */
+export interface SummaryLogEntry {
+  seq: number;
+  ts: string;
+  windowTs?: number;
+  text: string;
+}
+
 /** Metadata for one frame in a section (image bytes stay lazy via `uri`). */
 export interface JobDetailFrame {
   seq: number;
@@ -224,7 +239,7 @@ export interface JobDetail {
     // Distinct from `runningSummary` (the bounded live view). Absent until the
     // job finalizes / on older records.
     overallSummary?: string;
-    summaryLog?: { seq: number; ts: string; windowTs?: number; text: string }[];
+    summaryLog?: SummaryLogEntry[];
     sampleFps?: number;
     framesAnalyzed?: number;
     candidatesTriggered?: number;
@@ -243,6 +258,20 @@ export interface JobDetail {
   sections: FrameSection[];
   /** Capacity budget the job ran under (3 live / 8 VOD). */
   maxTraces: number;
+}
+
+/**
+ * Human label for one summary-log entry's timestamp (ADAAAA-7466). Prefers the
+ * video-relative `windowTs` (seconds into the stream, `T+Ns`) when known,
+ * falling back to the wall-clock append time `ts` (HH:MM:SS, or the raw string
+ * when unparseable). Deterministic across SSR + client so the growing-log
+ * assertions are stable.
+ */
+export function summaryEntryTimestamp(e: SummaryLogEntry): string {
+  if (e.windowTs !== undefined) return `T+${e.windowTs}s`;
+  const d = new Date(e.ts);
+  if (!Number.isNaN(d.getTime())) return d.toTimeString().slice(0, 8);
+  return e.ts;
 }
 
 /** Fetch the composite job-detail payload for one job. */
