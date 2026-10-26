@@ -22,6 +22,8 @@ import {
   type JobDetailFrame,
   type DecideNote,
   type NoteKind,
+  type SummaryLogEntry,
+  summaryEntryTimestamp,
 } from "../lib/jobDetail";
 import {
   drawFrameWithBoxes,
@@ -230,20 +232,60 @@ export function AnalysisWindow({ section, token, jobId, selectMode, selectedSeqs
 }
 
 /**
- * ADAAAA-7135 (Tier-1): the observe-loop running action narrative ("watch +
- * notes") for a job — the runningSummary the continuous decide observer
- * accumulates as the video progresses. Distinct from `job.candidates`, which
- * now holds only confirmed highlights; this surface is the live-note stream,
- * never a re-introduction of raw candidate triggers into the trail. Rendered
- * only when the job produced one (matches ADAAAA-7111's server-side surface;
- * this component makes the panel independently testable, like HighlightCard).
+ * ADAAAA-7466: the append-only per-pass summary time log (`job.summaryLog`),
+ * rendered as a collapsible section titled **Video Summary**, **collapsed by
+ * default** (header visible, body hidden until expanded). Each entry shows its
+ * timestamp (`windowTs ?? ts`) and text; the log grows as the video processes
+ * (append-only, never drops the oldest entry). Distinct from the compiled
+ * `OverallSummary` (end-of-video overview). A legacy/predate job with no log
+ * renders a graceful "No summary yet" state rather than an error. `defaultOpen`
+ * is an SSR/test hook (default collapsed). Replaces the removed running action
+ * notes surface.
  */
-export function RunningActionNotes({ summary }: { summary?: string }) {
-  if (!summary) return null;
+export function VideoSummary({
+  entries,
+  defaultOpen = false,
+}: {
+  entries?: SummaryLogEntry[];
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const log = entries ?? [];
   return (
-    <div className="mt-4 rounded-lg bg-card px-3 py-2" data-detail-running-summary>
-      <div className="text-xs uppercase tracking-wide text-mut">Running action notes</div>
-      <pre className="mt-1 whitespace-pre-wrap font-mono text-sm leading-relaxed text-ink">{summary}</pre>
+    <div className="mt-4 rounded-lg border border-neon/30 bg-card" data-detail-video-summary>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        data-detail-video-summary-toggle
+      >
+        <span className="shrink-0 text-mut">{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</span>
+        <span className="text-xs uppercase tracking-wide text-neon">Video Summary</span>
+        {log.length > 0 && (
+          <span className="ml-auto rounded-full border border-neon/30 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-mut" data-detail-video-summary-count>
+            {log.length}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="border-t border-neon/20 px-3 py-2" data-detail-video-summary-body>
+          {log.length === 0 ? (
+            <div className="text-sm text-mut" data-detail-video-summary-empty>
+              No summary yet
+            </div>
+          ) : (
+            <ol className="flex flex-col gap-1.5" data-detail-video-summary-log>
+              {log.map((e, i) => (
+                <li key={e.seq ?? i} className="text-xs" data-detail-video-summary-entry data-seq={e.seq}>
+                  <span className="font-mono text-mut">{summaryEntryTimestamp(e)}</span>
+                  <span className="text-slate-ink"> {e.text}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -251,9 +293,9 @@ export function RunningActionNotes({ summary }: { summary?: string }) {
 /**
  * ADAAAA-7237: the end-of-video compiled OVERALL summary, generated once the
  * job finalizes (status -> done) from the full summary time log + confirmed
- * highlights. Clearly-labeled and DISTINCT from the live `RunningActionNotes`
- * (bounded running summary): this is the whole-video overview. Rendered only
- * when the job produced one.
+ * highlights. Clearly-labeled and DISTINCT from the collapsible `VideoSummary`
+ * (the append-only per-pass time log): this is the whole-video overview.
+ * Rendered only when the job produced one.
  */
 export function OverallSummary({ summary }: { summary?: string }) {
   if (!summary) return null;
@@ -858,12 +900,11 @@ export function JobDetail() {
                 </div>
               </div>
             </div>
-            {/* ADAAAA-7135 (Tier-1): the observe-loop running action notes
-                ("watch + notes") — the live runningSummary narrative the
-                continuous decide observer accumulates. Distinct from
-                `job.candidates` (confirmed highlights only). Rendered only
-                when the job produced one. */}
-            <RunningActionNotes summary={detail.job.runningSummary} />
+            {/* ADAAAA-7466: the append-only per-pass summary time log, shown as
+                a collapsible "Video Summary" section (collapsed by default).
+                Replaces the removed running action notes; distinct from the
+                compiled Overall summary below. */}
+            <VideoSummary entries={detail.job.summaryLog} />
             {/* ADAAAA-7237: the end-of-video compiled OVERALL summary, distinct
                 from the live running action notes. Generated once the job
                 finalizes from the full time log + confirmed highlights. */}
