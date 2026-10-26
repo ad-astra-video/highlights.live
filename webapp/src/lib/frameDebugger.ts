@@ -22,6 +22,25 @@ export function orderGallerySeqs(frameSeqs: number[], selectedSeqs: number[]): n
   return frameSeqs.filter((s) => sel.has(s));
 }
 
+// ADAAAA-7440: navigate the enlarged-frame carousel to `targetSeq`. If the
+// current gallery already contains the target (e.g. a multi-select subset),
+// just move the index there so prev/next keeps stepping through that set.
+// Otherwise jump into the all-window carousel (every frame, in order) at the
+// target's position — this is what makes a bottom-thumbnail click enlarge that
+// frame and set up the full "carousel of all frames for the window".
+export function navigateGallery(
+  allSeqs: number[],
+  gallery: number[] | null,
+  galIndex: number,
+  targetSeq: number
+): { gallery: number[]; galIndex: number } {
+  if (gallery && gallery.includes(targetSeq)) {
+    return { gallery, galIndex: gallery.indexOf(targetSeq) };
+  }
+  const idx = allSeqs.indexOf(targetSeq);
+  return { gallery: allSeqs.slice(), galIndex: Math.max(0, idx) };
+}
+
 export interface LabelPlacement {
   lx: number;
   ly: number;

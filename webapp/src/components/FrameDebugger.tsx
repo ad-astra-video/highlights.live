@@ -3,6 +3,7 @@ import { getToken, api } from "../lib/api";
 import {
   resolveTrackLabel,
   orderGallerySeqs,
+  navigateGallery,
   placeLabel,
   drawFrameFullBleed,
   coverTransform,
@@ -138,6 +139,10 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
   const [multiSeqs, setMultiSeqs] = useState<number[]>([]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const enlRef = useRef<HTMLCanvasElement>(null);
+  // ADAAAA-7440: ref to the bottom thumbnail carousel so the active thumbnail
+  // auto-scrolls into view when the enlarged frame changes (prev/next or a
+  // thumbnail click), keeping the carousel and drawn frame in sync.
+  const carouselRef = useRef<HTMLDivElement>(null);
   // ADAAAA-6974: the cover-crop transform currently applied to the enlarged
   // canvas, so a click on a detection box over the full-bleed image hit-tests in
   // the same (cropped) coordinate space the image was drawn in.
@@ -304,8 +309,24 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
 
   function openSingle(seq: number) {
     setSel(seq);
-    setGallery([seq]);
-    setGalIndex(0);
+    // ADAAAA-7440: opening a frame enlarged now enters a carousel over ALL the
+    // window's frames (board request: "a carousel of all the frames for the
+    // window"), positioned at the clicked frame so prev/next + the bottom
+    // carousel step through the whole set.
+    const nav = navigateGallery(allSeqs, null, 0, seq);
+    setGallery(nav.gallery);
+    setGalIndex(nav.galIndex);
+  }
+
+  // ADAAAA-7440: a bottom-thumbnail click switches the enlarged frame to that
+  // seq and marks its thumbnail active. If the frame is already in the current
+  // gallery (e.g. a multi-select subset) we just move the index; otherwise we
+  // jump into the all-window carousel at that frame.
+  function goToGallerySeq(seq: number) {
+    setSel(seq);
+    const nav = navigateGallery(allSeqs, gallery, galIndex, seq);
+    setGallery(nav.gallery);
+    setGalIndex(nav.galIndex);
   }
 
   function openMulti() {
@@ -336,6 +357,22 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
   const selObs = useMemo(() => (sel === null ? undefined : obsBySeq[sel]), [sel, obsBySeq]);
   const selectedTrack = useMemo(() => (selObs ?? []).find((t) => t.selected) ?? null, [selObs]);
   const galSeq = gallery === null ? null : gallery[galIndex];
+  // ADAAAA-7440: the ordered set of every frame in the analysis window (the
+  // same `frames` array the filmstrip renders). This is the frame set the
+  // enlarged-frame carousel steps through and the bottom thumbnails list.
+  const allSeqs = useMemo(() => frames.map((f) => f.seq), [frames]);
+
+  // ADAAAA-7440: keep the active bottom thumbnail scrolled into view so the
+  // carousel highlights the frame currently enlarged (after prev/next or a
+  // thumbnail click). Scrolls only the carousel container, never the page.
+  useEffect(() => {
+    if (gallery === null) return;
+    const cont = carouselRef.current;
+    const el = cont?.querySelector<HTMLElement>('[data-gallery-thumb][data-active="true"]');
+    if (!cont || !el) return;
+    const target = el.offsetLeft - cont.clientWidth / 2 + el.clientWidth / 2;
+    cont.scrollTo({ left: Math.max(0, target), behavior: "smooth" });
+  }, [galSeq, gallery]);
 
   if (err) return <div className="mt-6 rounded-lg border border-red/40 bg-red/10 p-3 text-sm text-red">Frame debugger: {err}</div>;
   if (frames.length === 0) return <div className="mt-6 text-sm text-mut">No frames saved for this job.</div>;
@@ -440,18 +477,51 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
             <span>
               seq {galSeq} — {(obsBySeq[galSeq] ?? []).length} track(s) {gallery.length > 1 ? `(${galIndex + 1}/${gallery.length})` : ""}
             </span>
-            <div className="ml-auto flex items-center gap-1">
+            <div className="ml-auto flex items-center gap-1.5">
               {gallery.length > 1 && (
                 <>
-                  <button type="button" data-gallery-prev="true" onClick={() => shiftGallery(-1)} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-neon">‹ prev</button>
-                  <button type="button" data-gallery-next="true" onClick={() => shiftGallery(1)} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-neon">next ›</button>
+                  <button type="button" data-gallery-prev="true" onClick={() => shiftGallery(-1)} className="rounded border border-mut/40 px-2.5 py-1.5 text-slate-ink hover:border-neon hover:text-neon">‹ prev</button>
+                  <button type="button" data-gallery-next="true" onClick={() => shiftGallery(1)} className="rounded border border-mut/40 px-2.5 py-1.5 text-slate-ink hover:border-neon hover:text-neon">next ›</button>
                 </>
               )}
-              <button type="button" data-gallery-close="true" onClick={() => setGallery(null)} className="rounded border border-mut/40 px-2 py-1 text-mut hover:text-red">✕ close</button>
+              {/* ADAAAA-7440: high-contrast close — solid light pill (ink text on
+                  void) so it reads on any frame content, with a larger hit area. */}
+              <button
+                type="button"
+                data-gallery-close="true"
+                onClick={() => setGallery(null)}
+                className="rounded-md bg-ink px-3 py-1.5 text-sm font-bold text-void shadow-lg hover:bg-slate-ink"
+              >
+                ✕ close
+              </button>
             </div>
           </div>
-          <div className="pointer-events-none absolute inset-x-0 bottom-2 z-10 text-center text-[11px] text-mut/80">
-            click a box in the enlarged view to follow that object · click empty area to close
+          {/* ADAAAA-7440: bottom thumbnail carousel — every frame in the analysis
+              window, scrollable when there are many. Clicking a thumbnail
+              enlarges that frame and marks it active (data-gallery-thumb). */}
+          <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/95 via-black/70 to-transparent px-4 pb-3 pt-10">
+            <div ref={carouselRef} data-gallery-carousel="true" className="flex gap-1.5 overflow-x-auto pb-1">
+              {frames.map((fr) => (
+                <button
+                  key={fr.seq}
+                  type="button"
+                  data-gallery-thumb="true"
+                  data-active={galSeq === fr.seq ? "true" : undefined}
+                  title={`T+${fr.timestamp ?? "?"}s`}
+                  onClick={() => goToGallerySeq(fr.seq)}
+                  className="shrink-0 overflow-hidden rounded border-2 border-transparent data-[active=true]:border-neon"
+                >
+                  {thumbs[fr.seq] ? (
+                    <img src={thumbs[fr.seq]} width={64} height={36} alt={`frame ${fr.seq}`} className="block object-cover" />
+                  ) : (
+                    <div className="flex h-9 w-16 items-center justify-center bg-mut/20 text-[10px] text-mut">…</div>
+                  )}
+                </button>
+              ))}
+            </div>
+            <div className="pointer-events-none mt-1 text-center text-[11px] text-mut/80">
+              click a box in the enlarged view to follow that object · click empty area to close
+            </div>
           </div>
         </div>
       )}
