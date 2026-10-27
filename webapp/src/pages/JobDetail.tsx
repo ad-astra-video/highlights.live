@@ -35,6 +35,7 @@ import {
 } from "../lib/frameDebugger";
 import { jobTitle } from "../lib/vodJobs";
 import { startDetailPoll } from "../lib/detailPoll";
+import { frameFetchWindow } from "../lib/frameFetchWindow";
 
 // Inline thumbnail stays small (original 160x90) so the filmstrip doesn't
 // crowd the page; box strokes are drawn at 2x backing for crispness. Labels
@@ -63,6 +64,11 @@ interface FrameTileProps {
  * loading all of them at once exhausts the browser's image/fetch budget and
  * produces ERR_INSUFFICIENT_RESOURCES on the frame URLs. Bounding decode to the
  * visible window (plus a small scroll buffer) keeps memory stable across the job.
+ * The fetch itself is additionally serialized through `frameFetchWindow`
+ * (ADAAAA-7506): even when a whole row of tiles enters the viewport together,
+ * only a bounded number of frame-image fetches stay in flight at once, so the
+ * per-tab fetch/decode budget is never exhausted. Scrolling a tile back out
+ * aborts its *queued* fetch and releases the slot.
  */
 function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTileProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -86,15 +92,20 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
 
   // Fetch only while in view; release (revoke object URL + clear bitmap) when
   // out of view. Collapsing the decide-call window unmounts this tile entirely,
-  // which also releases the bitmap via this cleanup.
+  // which also releases the bitmap via this cleanup. The fetch is run through
+  // the shared `frameFetchWindow` so this view never holds more than a bounded
+  // number of frame-image fetches in flight; the AbortController cancels a
+  // still-queued fetch when the tile scrolls out, freeing its slot.
   useEffect(() => {
     let alive = true;
     let url: string | null = null;
+    const ctrl = new AbortController();
     if (!inView) {
       setObjUrl(null);
       return;
     }
-    authFetchFrame(frame.uri, token)
+    frameFetchWindow
+      .run(() => authFetchFrame(frame.uri, token), ctrl.signal)
       .then((u) => {
         url = u;
         if (alive) setObjUrl(u);
@@ -102,6 +113,7 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
       .catch(() => {});
     return () => {
       alive = false;
+      ctrl.abort();
       if (url) URL.revokeObjectURL(url);
       // Leaving view (or unmount) also clears the drawn bitmap so the decoded
       // image memory is released, not retained by the canvas backing store.
@@ -574,8 +586,13 @@ function EnlargeGallery({
   useEffect(() => {
     let alive = true;
     let url: string | null = null;
+    const ctrl = new AbortController();
     if (!frame) return;
-    authFetchFrame(frame.uri, token)
+    // Run through the shared rolling window (ADAAAA-7506) so the enlarged
+    // gallery fetch shares the same bounded in-flight budget as the inline
+    // tiles; closing the lightbox aborts a still-queued fetch.
+    frameFetchWindow
+      .run(() => authFetchFrame(frame.uri, token), ctrl.signal)
       .then((u) => {
         url = u;
         if (alive) setObjUrl(u);
@@ -583,6 +600,7 @@ function EnlargeGallery({
       .catch(() => {});
     return () => {
       alive = false;
+      ctrl.abort();
       if (url) URL.revokeObjectURL(url);
     };
   }, [frame, token]);
