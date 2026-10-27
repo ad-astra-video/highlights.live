@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { JobCandidateSchema } from "@highlights/events";
 import { Store } from "../src/store";
 
 describe("Store (in-memory)", () => {
@@ -125,5 +126,42 @@ describe("Store (in-memory)", () => {
     expect(a).toBe(b);
     expect(a).not.toBe(c);
     expect(a).not.toBe(d);
+  });
+
+  it("recordJobCandidate dedupes a re-persisted decide call by timestamp|eventType|status (ADAAAA-7505)", async () => {
+    const s = new Store();
+    const j = await s.createJob({ ownerId: "u", source: "file" });
+    const mk = (id: string, timestamp: number, eventType = "goal", status = "rejected" as const) =>
+      JobCandidateSchema.parse({
+        id,
+        jobId: j.id,
+        seq: 12,
+        timestamp,
+        eventType,
+        score: 80,
+        isHighlight: false,
+        status,
+        reason: "no goal",
+        createdAt: new Date().toISOString(),
+      });
+
+    // First persist wins.
+    await s.recordJobCandidate(mk("c-a", 42.0));
+    expect(s.candidatesForJob(j.id)).toHaveLength(1);
+
+    // A resumed job re-decides the SAME window: new random id, SAME
+    // timestamp/eventType/status -> deduped, no duplicate listing row.
+    await s.recordJobCandidate(mk("c-b", 42.0));
+    expect(s.candidatesForJob(j.id)).toHaveLength(1);
+    expect(s.candidatesForJob(j.id)[0].id).toBe("c-a");
+    expect(s.candidatesForJob(j.id).find((c) => c.id === "c-b")).toBeUndefined();
+
+    // A distinct decide call (different timestamp) is still persisted.
+    await s.recordJobCandidate(mk("c-c", 45.0));
+    expect(s.candidatesForJob(j.id)).toHaveLength(2);
+
+    // A different status at the same timestamp is a distinct decide call, kept.
+    await s.recordJobCandidate(mk("c-d", 42.0, "goal", "accepted"));
+    expect(s.candidatesForJob(j.id)).toHaveLength(3);
   });
 });
