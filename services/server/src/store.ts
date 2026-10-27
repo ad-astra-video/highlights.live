@@ -330,12 +330,33 @@ export class Store {
     return this.observations.get(jobId) ?? [];
   }
 
+  /** Stable identity for one "decide call" (ADAAAA-7505). A decide call is
+   * anchored by the timestamp + event the LLM inspected (the webapp banner reads
+   * "Decide @ T+Ns — <event>"). Mirrors the webapp decide-note dedup key
+   * (`timestamp|eventType|status`) so a candidate row that the job-detail listing
+   * would render as the SAME decide call is persisted at most once. Distinct
+   * calls carry distinct timestamps, so legitimate calls are never collapsed. */
+  private static decideCallKey(c: { timestamp: number; eventType: string; status: string }): string {
+    return `${c.timestamp.toFixed(3)}|${c.eventType}|${c.status}`;
+  }
+
   /** Persist one decide evaluation (accepted highlight, burst-suppressed,
    * near-miss, not-highlight) with its trigger timestamp + reason/score/outcome
    * (ADAAAA-6851 Inc 2). Write-through like jobs/highlights. */
   async recordJobCandidate(cand: JobCandidate): Promise<JobCandidate> {
     const parsed = JobCandidateSchema.parse(cand);
     const list = this.candidates.get(parsed.jobId) ?? [];
+    // ADAAAA-7505: idempotency guard mirroring the webapp decide-note dedup. If a
+    // candidate for the SAME decide call (timestamp|eventType|status) was already
+    // persisted for this job (a re-claimed/resumed job re-deciding the same
+    // window, or a transient double-write), return the existing row instead of
+    // appending a duplicate — so the store (and the top-level candidates payload
+    // behind GET /jobs/:id/detail) never accumulates duplicate decide-call
+    // listings, matching the frontend's one-entry-per-call guarantee at the
+    // source rather than masking it in the renderer.
+    const key = Store.decideCallKey(parsed);
+    const existing = list.find((c) => Store.decideCallKey(c) === key);
+    if (existing) return existing;
     list.push(parsed);
     this.candidates.set(parsed.jobId, list);
     if (this.db) await this.db.saveJobCandidate(parsed);
