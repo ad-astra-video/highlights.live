@@ -530,10 +530,6 @@ export const JobSchema = z.object({
   // dropped, or reordered. Distinct from `runningSummary` (the bounded rolling
   // in-model story-so-far). Additive optional — absent on jobs that predate it.
   summaryLog: z.array(SummaryLogEntrySchema).optional(),
-  // ADAAAA-7237: end-of-video compiled overall summary generated once at job
-  // completion from the full summaryLog + confirmed highlights. Distinct from
-  // `runningSummary`. Additive optional — absent until the job finalizes.
-  overallSummary: z.string().optional(),
   // `file-sim` = loop a local file at real-time rate as a synthetic live source
   // (LiveIngest kind `file-sim`); used by QA/dev to run the live pipeline
   // deterministically without an RTMP encoder or a display (ADAAAA-5777).
