@@ -140,45 +140,41 @@ def test_reconcile_never_raises_on_bad_stage1():
     assert d["isHighlight"] is False
 
 
-def test_reconcile_promotes_demoted_goal_on_stage1_scoreboard_narration():
-    """ADAAAA-7408 (AC1): the deep-dive conservatively demotes a REAL regulation
-    goal to near_miss when it cannot read the scoreboard in its narrower frames,
-    even though the Stage-1 reason explicitly narrated the scoreboard change
-    ("scoreboard updates from 2-1 to 2-2"). A corroborated goal whose score
-    change the Stage-1 read asserted must not be sabotaged by that
-    corroboration-availability artifact: it is kept as a scoring_play goal."""
+def test_reconcile_no_promotion_from_stage1_narration():
+    """ADAAAA-7510: the ADAAAA-7408 Stage-1 scoreboard-narration promotion is
+    removed. A deep-dive demotion (near_miss) is NOT promoted to confirmed_goal by
+    a model-inferred/narrated scoreboard change — only a MEASURED delta or
+    goal-calling audio corroborates. The demotion stands: never a board GOAL."""
     d = reconcile_confirmed_goal(
         "near_miss",
         {"outcome": "scoring_play", "isHighlight": True, "score": 78, "eventType": "GOAL",
          "reason": "The ball is clearly seen entering the net, and the scoreboard updates from 2-1 to 2-2."},
         comment="there is no scoreboard change to confirm a goal",
-        corroborated=True, require_corroboration=True,
-        stage1_narrates_scoreboard=True,
+        corroborated=False, require_corroboration=True,
     )
-    assert d["outcome"] == "scoring_play"
-    assert d["isHighlight"] is True
-    assert d["nearMiss"] is False
+    assert d["outcome"] == "near_miss"
+    assert d["isHighlight"] is False
+    assert d["nearMiss"] is True
 
 
-def test_reconcile_promotes_not_goal_on_stage1_scoreboard_narration():
-    """ADAAAA-7408 (AC1): even when the deep-dive says not_goal (candidate 153
-    for the 0-1 -> 1-1 goal), the Stage-1 scoreboard-change narration keeps the
-    corroborated goal."""
+def test_reconcile_not_goal_stays_not_highlight_from_narration():
+    """ADAAAA-7510: a deep-dive not_goal verdict is NOT promoted to confirmed_goal
+    by a model scoreboard narration — the not-a-goal read stands (no board goal)."""
     d = reconcile_confirmed_goal(
         "not_goal",
         {"outcome": "scoring_play", "isHighlight": True, "score": 72, "eventType": "GOAL",
          "reason": "The ball enters the net and the scoreboard updates from 0-1 to 1-1."},
         comment="no visible ball in the net",
-        corroborated=True, require_corroboration=True,
-        stage1_narrates_scoreboard=True,
+        corroborated=False, require_corroboration=True,
     )
-    assert d["outcome"] == "scoring_play"
-    assert d["isHighlight"] is True
+    assert d["outcome"] == "not_highlight"
+    assert d["isHighlight"] is False
+    assert d["nearMiss"] is False
 
 
-def test_reconcile_no_promotion_without_stage1_scoreboard_narration():
-    """ADAAAA-7408 (AC3): a downgraded goal WITHOUT a Stage-1 scoreboard-change
-    narration (a saved shot / dribble over-called by Stage-1) must NOT be
+def test_reconcile_no_promotion_without_measured_corroboration():
+    """ADAAAA-7510 (AC3): a downgraded goal WITHOUT a MEASURED scoreboard delta or
+    goal-calling audio (a saved shot / dribble over-called by Stage-1) is NOT
     promoted — the demotion stays (never a board goal)."""
     d = reconcile_confirmed_goal(
         "near_miss",
@@ -186,7 +182,6 @@ def test_reconcile_no_promotion_without_stage1_scoreboard_narration():
          "reason": "The ball clearly enters the net and the goalkeeper is beaten."},
         comment="blocked by the goalkeeper, no scoreboard change",
         corroborated=False, require_corroboration=True,
-        stage1_narrates_scoreboard=False,
     )
     assert d["outcome"] == "near_miss"
     assert d["isHighlight"] is False
@@ -201,12 +196,13 @@ def test_reconcile_static_score_read_not_credited():
     assert gate is False
 
 
-def test_run_pass_surfaces_regulation_goal_on_stage1_scoreboard_narration(monkeypatch):
-    """ADAAAA-7408 (AC1) end-to-end: the box regression demoted the real
-    regulation goals (t~153/342/402) to near_miss even though their Stage-1
-    reason explicitly narrated the scoreboard change ("scoreboard updates from
-    1-1 to 2-1"). Crediting that Stage-1 narration as corroboration must surface
-    the goal as a board-accepted scoring_play, not a near_miss."""
+def test_run_pass_downgrades_goal_on_stage1_scoreboard_narration_only(monkeypatch):
+    """ADAAAA-7510: the ADAAAA-7408 (AC1) run-pass case is reversed. A
+    confirmed_goal whose ONLY scoreboard signal is the Stage-1 free-text
+    narration ("scoreboard updates from 1-1 to 2-1") with no MEASURED pre->post
+    delta (scoreBoardChanged=false) is NOT corroborated and is downgraded to
+    near_miss — a model-inferred/narrated scoreboard change can never fabricate a
+    scoring GOAL."""
     monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
     monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
     stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 78, "eventType": "GOAL",
@@ -221,13 +217,13 @@ def test_run_pass_surfaces_regulation_goal_on_stage1_scoreboard_narration(monkey
     )
     monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
     resp = run_confirmation_pass({"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}]})
-    # The Stage-1 scoreboard narration is credited as corroboration.
-    assert resp["corroborated"] is True
-    assert resp["corroborationSource"] == "scoreboard"
-    # The demoted regulation goal is promoted to a board-accepted goal (AC1).
-    assert resp["decision"]["outcome"] == "scoring_play"
-    assert resp["decision"]["isHighlight"] is True
-    assert resp["decision"]["nearMiss"] is False
+    # The Stage-1 narration is NOT credited as measured corroboration anymore.
+    assert resp["corroborated"] is False
+    assert resp["corroborationSource"] is None
+    # The demoted regulation goal stays a near_miss (never a board GOAL).
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
+    assert resp["decision"]["nearMiss"] is True
 
 
 def test_run_pass_keeps_fabricated_saved_shot_rejected(monkeypatch):
@@ -460,28 +456,32 @@ def test_goal_corroborated_requires_independent_signal():
     assert cf.goal_corroborated(scoreboard_changed=False, transcript="") is False
 
 
-def test_goal_corroborated_credits_frame_scoreboard_change():
-    """ADAAAA-7357: the confirmation pass's OWN frame read (evidence.scoreboardChanged)
-    is an independent corroboration signal, credited when the deterministic perceive-OCR
-    flag was delayed / did not fire. A bare ball-in-net frame read is NOT credited."""
+def test_goal_corroborated_not_credited_for_model_frame_read():
+    """ADAAAA-7510: a model-inferred scoreboard frame read is NOT independent
+    corroboration. Only a MEASURED pre->post numeric score delta (the
+    deterministic perceive-OCR `scoreBoardChanged` flag) or goal-calling audio
+    anchors the visual read — a celebration-derived claim can never fabricate a
+    scoring GOAL."""
     from app import confirm as cf
-    # Frame read attests the scoreboard change -> corroborated even with OCR flag off
-    # and no audio transcript.
+    # A model frame read alone is NOT corroborated (was credited pre-7510).
     assert cf.goal_corroborated(scoreboard_changed=False, transcript="",
-                                frame_scoreboard_changed=True) is True
-    # No frame scoreboard read, no OCR, no audio -> still NOT corroborated.
+                                frame_scoreboard_changed=True) is False
+    # No frame read, no measured OCR delta, no audio -> still NOT corroborated.
     assert cf.goal_corroborated(scoreboard_changed=False, transcript="",
                                 frame_scoreboard_changed=False) is False
     # Ball-in-net alone is never independent corroboration (ADAAAA-7162 guard).
     assert cf.goal_corroborated(scoreboard_changed=False, transcript="") is False
+    # A MEASURED delta still corroborates (no recall regression on true goals).
+    assert cf.goal_corroborated(scoreboard_changed=True, transcript="") is True
 
 
-def test_run_pass_confirms_goal_on_frame_scoreboard_attestation(monkeypatch):
-    """ADAAAA-7357 (AC1): a confirmed_goal whose deep-frame dive attests a scoreboard
-    change (evidence.scoreboardChanged=true) is kept as a GOAL even though the
-    deterministic perceive-OCR `scoreBoardChanged` flag is off and VOD has no audio
-    transcript — the delayed-scoreboard case (kids_soccer.mp4 goal 114-117s,
-    scoreboard 117-120s)."""
+def test_run_pass_downgrades_goal_on_model_frame_read_only(monkeypatch):
+    """ADAAAA-7510: a confirmed_goal whose ONLY scoreboard corroboration is the
+    deep-dive's model frame read (evidence.scoreboardChanged=true, deterministic
+    server flag false) is NOT corroborated and is downgraded to near_miss — a
+    model-inferred scoreboard read is exactly the post-bounce fabrication vector.
+    Only a MEASURED pre->post numeric score delta (server `scoreBoardChanged`)
+    or goal-calling audio corroborates."""
     monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
     monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
     stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "s1"}
@@ -491,16 +491,16 @@ def test_run_pass_confirms_goal_on_frame_scoreboard_attestation(monkeypatch):
         '"evidence": {"ballInNet": true, "scoreboardChanged": true}}'
     )
     monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
-    # scoreBoardChanged (OCR) is FALSE on the request; the corroboration comes ONLY
-    # from the confirm pass's own frame read.
+    # scoreBoardChanged (MEASURED OCR) is FALSE on the request; the only scoreboard
+    # signal is the model's frame read -> NOT corroborated.
     resp = run_confirmation_pass(
         {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
     )
     assert resp["goalConfirmed"] == "confirmed_goal"
-    assert resp["corroborated"] is True
-    assert resp["corroborationSource"] == "scoreboard"
-    assert resp["decision"]["outcome"] == "scoring_play"
-    assert resp["decision"]["isHighlight"] is True
+    assert resp["corroborated"] is False
+    assert resp["corroborationSource"] is None
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
 
 
 def test_run_pass_still_downgrades_on_ball_in_net_alone(monkeypatch):
@@ -797,10 +797,13 @@ def test_run_pass_still_downgrades_saved_shootout_penalty(monkeypatch):
     assert resp["decision"]["isHighlight"] is False
 
 
-def test_run_pass_confirms_regulation_goal_on_narrated_scoreboard(monkeypatch):
-    """ADAAAA-7402 (AC1): the 2-2 regulation equalizer where the deep dive
-    narrates the scoreboard delta (2-1 -> 2-2) but leaves the structured
-    evidence.scoreboardChanged null is now accepted as a GOAL."""
+def test_run_pass_downgrades_regulation_goal_on_narrated_scoreboard(monkeypatch):
+    """ADAAAA-7510 (replaces ADAAAA-7402 AC1): the 2-2 regulation equalizer where
+    the deep dive narrates the scoreboard delta (2-1 -> 2-2) but leaves the
+    structured evidence.scoreboardChanged null is NOT accepted as a GOAL unless a
+    MEASURED pre->post numeric score delta (server `scoreBoardChanged`) or
+    goal-calling audio corroborates it. A model-inferred/narrated scoreboard
+    change can never fabricate a scoring GOAL."""
     monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
     monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
     stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 70, "eventType": "GOAL", "reason": "s1"}
@@ -810,14 +813,15 @@ def test_run_pass_confirms_regulation_goal_on_narrated_scoreboard(monkeypatch):
         '"evidence": {"ballInNet": true, "scoreboardChanged": null}}'
     )
     monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    # No MEASURED scoreBoardChanged flag -> narration alone does NOT corroborate.
     resp = run_confirmation_pass(
         {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
     )
     assert resp["goalConfirmed"] == "confirmed_goal"
-    assert resp["corroborated"] is True
-    assert resp["corroborationSource"] == "scoreboard"
-    assert resp["decision"]["outcome"] == "scoring_play"
-    assert resp["decision"]["isHighlight"] is True
+    assert resp["corroborated"] is False
+    assert resp["corroborationSource"] is None
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
 
 
 def test_run_pass_confirms_penalty_on_tally_increment_without_shootout_flag(monkeypatch):
@@ -837,5 +841,59 @@ def test_run_pass_confirms_penalty_on_tally_increment_without_shootout_flag(monk
         {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
     )
     assert resp["corroborated"] is True
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
+
+
+# --- ADAAAA-7510: post-bounce non-goal not accepted as a scoring GOAL ---------
+
+
+def test_run_pass_rejects_post_bounce_non_goal(monkeypatch):
+    """ADAAAA-7510 (the reported kids_soccer.mp4 bug): a shot that BOUNCED off
+    the post and did NOT enter the net. Stage-1 fabricated a scoring_play from
+    the goalkeeper celebration ("ball clearly enters the net"), the confirm deep
+    dive confirms it and narrates a celebration-implied scoreboard change, but
+    there is NO MEASURED pre->post numeric score delta (server `scoreBoardChanged`
+    false) and no goal-calling audio. It must NOT be corroborated and must be
+    downgraded to near_miss — never a board-accepted GOAL."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 100, "eventType": "GOAL",
+              "reason": "The ball clearly enters the net and the goalkeeper celebrates by raising his arm."}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.95, '
+        '"reason": "the goal celebration implies the scoreboard changes 0-0 to 1-0", '
+        '"evidence": {"ballInNet": true, "scoreboardChanged": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["goalConfirmed"] == "confirmed_goal"
+    assert resp["corroborated"] is False
+    assert resp["corroborationSource"] is None
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
+    assert resp["decision"]["nearMiss"] is True
+
+
+def test_run_pass_accepts_real_goal_on_measured_score_delta(monkeypatch):
+    """ADAAAA-7510 guard: a real net goal still surfaces as a GOAL when the
+    deterministic MEASURED pre->post numeric score delta (server
+    `scoreBoardChanged` true) corroborates it — no recall regression."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 82, "eventType": "GOAL", "reason": "s1"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.95, '
+        '"reason": "dense frames show the ball crossing the line into the net", '
+        '"evidence": {"ballInNet": true, "scoreboardChanged": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": True}
+    )
+    assert resp["corroborated"] is True
+    assert resp["corroborationSource"] == "scoreboard"
     assert resp["decision"]["outcome"] == "scoring_play"
     assert resp["decision"]["isHighlight"] is True

@@ -196,13 +196,16 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
     The independent anchor is a scoreboard change OR goal-calling audio text.
 
     ``scoreboard_changed`` is the deterministic perceive-OCR flag fed from the
-    server. ``frame_scoreboard_changed`` is the confirmation pass's OWN frame
-    read (the deep-dive verdict reports ``evidence.scoreboardChanged``) and is
-    credited when the deterministic OCR flag was delayed / did not fire
-    (ADAAAA-7357: scoreboard change visible in the frames around the goal even
-    though perceive's OCR did not flag it). A self-reported ball-in-net read
-    alone is NOT independent corroboration (ADAAAA-7162 guard): only a
-    scoreboard tick or a goal call anchors the visual read.
+    server — the ONLY scoreboard signal credited. It is a REAL measured
+    pre->post numeric score delta (perceive ``score_changed`` semantics: both
+    sides parsed + differ). A model-inferred scoreboard claim —
+    ``frame_scoreboard_changed`` (the deep-dive's own frame read) or a free-text
+    ``scoreboard change`` narration — is NOT independent corroboration
+    (ADAAAA-7510): a celebration-derived scoreboard claim was exactly the
+    post-bounce fabrication accepted as a scoring GOAL. A self-reported
+    ball-in-net read alone is also NOT independent corroboration (ADAAAA-7162
+    guard); only a measured scoreboard tick or a goal call anchors the visual
+    read.
 
     ADAAAA-7402 (AC2): during a penalty shootout the aggregate score is fixed
     (it stays 2-2) so a converted penalty NEVER produces a main-score change —
@@ -237,7 +240,14 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
         if goal_confirmed == "confirmed_goal" and not ball_in_net_refuted:
             return True
         return bool(penalty_tally_changed) or bool(ball_in_net)
-    return bool(scoreboard_changed) or bool(frame_scoreboard_changed) or audio_calls_goal(transcript)
+    # ADAAAA-7510: scoreboard corroboration requires the deterministic MEASURED
+    # pre->post numeric score delta (the perceive-OCR `scoreBoardChanged` flag,
+    # score_changed semantics: both sides parsed + differ). A model read
+    # (`frame_scoreboard_changed`) or a free-text narration of a scoreboard
+    # change is NOT independent corroboration — a celebration-derived claim is
+    # exactly the post-bounce fabrication that was accepted as a scoring GOAL.
+    # Only a measured delta or a goal-calling audio text anchors the visual read.
+    return bool(scoreboard_changed) or audio_calls_goal(transcript)
 
 
 def confirm_enabled() -> bool:
@@ -693,8 +703,7 @@ def stage1_disagrees(stage1: dict, goal_confirmed: str) -> bool:
 
 def reconcile_confirmed_goal(goal_confirmed: str, stage1: dict, comment: str = "",
                              *, corroborated: bool = True,
-                             require_corroboration: bool = False,
-                             stage1_narrates_scoreboard: bool = False) -> dict:
+                             require_corroboration: bool = False) -> dict:
     """Deterministically map the confirmation verdict onto the final highlight
     decision (a HighlightDecision-shaped dict the server can adopt directly).
 
@@ -731,24 +740,6 @@ def reconcile_confirmed_goal(goal_confirmed: str, stage1: dict, comment: str = "
             + "goal read not corroborated (no scoreboard change / goal-calling audio); "
               "downgraded to near-miss"
         ).strip()
-
-    # ADAAAA-7408: the deep-dive model conservatively demotes a REAL regulation
-    # goal to near_miss / not_goal when it cannot independently read the
-    # scoreboard in its (narrower) frame window — even though the Stage-1 read
-    # explicitly narrated the scoreboard change ("scoreboard updates 2-1 to
-    # 2-2"). When that Stage-1 scoreboard-change narration is present (an
-    # independent, explicit score transition) AND Stage-1 established a scoring
-    # goal, the demotion is a corroboration-availability artifact, not an
-    # evidence refutation — keep the goal instead of letting the deep dive
-    # sabotage a corroborated goal. Conservative: requires BOTH an explicit
-    # score-transition narration AND a Stage-1 scoring_play read, so saves /
-    # misses / dribbles (which never narrate a scoreboard change and are not
-    # Stage-1 goals) stay rejected (AC3).
-    if (goal_confirmed in ("near_miss", "not_goal")
-            and stage1_narrates_scoreboard
-            and (decision.get("outcome") == "scoring_play"
-                 or decision.get("isHighlight") is True)):
-        goal_confirmed = "confirmed_goal"
 
     comment = (comment or "").strip()
     if goal_confirmed == "confirmed_goal":
@@ -877,29 +868,17 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
 
     goal = parsed.get("goalConfirmed", "")
     comment = _as_text(parsed.get("reason"))
-    # ADAAAA-7408: the Stage-1 primary read (stage1.reason) is the text that
-    # NARRATES the scoreboard change for a real regulation goal (e.g. "the
-    # scoreboard updates from 2-1 to 2-2"); the deep-dive (comment) usually only
-    # says "no scoreboard change". ADAAAA-7402 credited the narration but read
-    # ONLY the deep-dive comment, so the scoreboard corroboration never fired for
-    # regulation goals and the gate downgraded them. Credit either text.
-    stage1_reason = None
-    if isinstance(stage1, dict):
-        stage1_reason = stage1.get("reason")
-    stage1_narrates_scoreboard = reason_asserts_scoreboard_change(stage1_reason)
-    # ADAAAA-7162/7357: require an INDEPENDENT corroboration signal (scoreboard
-    # change OR goal-calling audio/commentary text) to accept a confirmed_goal.
-    # Otherwise a fabricated visual read ("ball clearly enters the net") for a
-    # near-miss / saved shot / dribble is downgraded to near_miss, never a GOAL.
-    # The scoreboard signal is anchored on the deterministic perceive-OCR flag
-    # AND the confirmation pass's own frame read (evidence.scoreboardChanged),
-    # so a delayed/UNCORRELATED OCR flag does not strip a goal whose scoreboard
-    # change is visible in the frames (ADAAAA-7357). ADAAAA-7402 (AC1) also
-    # credits an explicit score-transition the deep dive NARRATES in its reason
-    # even when the structured evidence.scoreboardChanged field is null.
+    # ADAAAA-7510: scoreboard corroboration requires a MEASURED pre->post numeric
+    # scoreboard change OR goal-calling audio/commentary text) to accept a
+    # confirmed_goal. Otherwise a fabricated visual read ("ball clearly enters
+    # the net") for a near-miss / saved shot / dribble is downgraded to
+    # near_miss, never a GOAL. The scoreboard signal is anchored ONLY on the
+    # deterministic perceive-OCR flag (a REAL measured pre->post numeric score
+    # delta) — a model-inferred scoreboard read (evidence.scoreboardChanged) or
+    # a free-text narration is NOT independent corroboration, so a
+    # celebration-derived "0-0 -> 1-0" claim can never fabricate a scoring GOAL
+    # (ADAAAA-7510, post-bounce FP).
     ev = parsed.get("evidence") or {}
-    frame_scoreboard_changed = ev.get("scoreboardChanged") is True
-    scoreboard_change_narrated = reason_asserts_scoreboard_change(comment) or stage1_narrates_scoreboard
     # ADAAAA-7402 (penalty-recall follow-up): broaden shootout detection to also
     # include a narrated shootout (the structured penaltyShootout flag is often
     # null because the PENALTIS tally is not legible in the narrow window). A
@@ -916,7 +895,7 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
     confirmed = goal_corroborated(
         scoreboard_changed=bool(req.get("scoreBoardChanged")),
         transcript=transcript,
-        frame_scoreboard_changed=frame_scoreboard_changed or scoreboard_change_narrated,
+        frame_scoreboard_changed=False,
         penalty_shootout=penalty_shootout,
         penalty_tally_changed=penalty_tally_changed,
         ball_in_net=ball_in_net,
@@ -927,16 +906,14 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         goal, stage1, comment=comment,
         corroborated=confirmed,
         require_corroboration=confirm_requires_corroboration(),
-        stage1_narrates_scoreboard=stage1_narrates_scoreboard,
     )
     # ADAAAA-7185: WHICH independent corroboration signal fired, persisted so the
     # evidence for an accepted GOAL is queryable after the fact. Scoreboard
-    # change (incl. the shootout tally, which sits on the scoreboard, and the
-    # narrate/AC1 credit) takes precedence over goal-calling audio text; null
-    # when none.
+    # change (incl. the shootout tally, which sits on the scoreboard) takes
+    # precedence over goal-calling audio text; null when none. ADAAAA-7510: only
+    # a MEASURED scoreboard delta is credited (a model read / narration is not).
     corroboration_source = None
-    if penalty_shootout or penalty_tally_changed or bool(req.get("scoreBoardChanged")) or frame_scoreboard_changed \
-            or scoreboard_change_narrated:
+    if penalty_shootout or penalty_tally_changed or bool(req.get("scoreBoardChanged")):
         corroboration_source = "scoreboard"
     elif audio_calls_goal(transcript):
         corroboration_source = "audio_text"
