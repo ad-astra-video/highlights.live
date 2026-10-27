@@ -324,11 +324,10 @@ export function AnalysisWindow({ section, token, jobId, selectMode, selectedSeqs
  * rendered as a collapsible section titled **Video Summary**, **collapsed by
  * default** (header visible, body hidden until expanded). Each entry shows its
  * timestamp (`windowTs ?? ts`) and text; the log grows as the video processes
- * (append-only, never drops the oldest entry). Distinct from the compiled
- * `OverallSummary` (end-of-video overview). A legacy/predate job with no log
- * renders a graceful "No summary yet" state rather than an error. `defaultOpen`
- * is an SSR/test hook (default collapsed). Replaces the removed running action
- * notes surface.
+ * (append-only, never drops the oldest entry). A legacy/predate job with no
+ * log renders a graceful "No summary yet" state rather than an error.
+ * `defaultOpen` is an SSR/test hook (default collapsed). Replaces the removed
+ * running action notes surface.
  */
 export function VideoSummary({
   entries,
@@ -374,23 +373,6 @@ export function VideoSummary({
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * ADAAAA-7237: the end-of-video compiled OVERALL summary, generated once the
- * job finalizes (status -> done) from the full summary time log + confirmed
- * highlights. Clearly-labeled and DISTINCT from the collapsible `VideoSummary`
- * (the append-only per-pass time log): this is the whole-video overview.
- * Rendered only when the job produced one.
- */
-export function OverallSummary({ summary }: { summary?: string }) {
-  if (!summary) return null;
-  return (
-    <div className="mt-4 rounded-lg border border-neon/30 bg-card px-3 py-2" data-detail-overall-summary>
-      <div className="text-xs uppercase tracking-wide text-neon">Overall summary</div>
-      <pre className="mt-1 whitespace-pre-wrap font-mono text-sm leading-relaxed text-ink">{summary}</pre>
     </div>
   );
 }
@@ -990,13 +972,8 @@ export function JobDetail() {
             </div>
             {/* ADAAAA-7466: the append-only per-pass summary time log, shown as
                 a collapsible "Video Summary" section (collapsed by default).
-                Replaces the removed running action notes; distinct from the
-                compiled Overall summary below. */}
+                Replaces the removed running action notes. */}
             <VideoSummary entries={detail.job.summaryLog} />
-            {/* ADAAAA-7237: the end-of-video compiled OVERALL summary, distinct
-                from the live running action notes. Generated once the job
-                finalizes from the full time log + confirmed highlights. */}
-            <OverallSummary summary={detail.job.overallSummary} />
             {detail.job.error && (
               <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red" data-detail-error>
                 {detail.job.error}

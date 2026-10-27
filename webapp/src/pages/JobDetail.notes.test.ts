@@ -5,12 +5,11 @@
 // hidden until expanded), renders the time-log entries in order with their
 // timestamp (`windowTs ?? ts`) + text when expanded, never drops the oldest
 // entry, and degrades to a graceful "No summary yet" state for a legacy/
-// predate job with no log. The Overall summary surface (ADAAAA-7237) stays
-// unchanged and clearly labeled.
+// predate job with no log.
 import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import React from "react";
-import { VideoSummary, OverallSummary } from "./JobDetail";
+import { VideoSummary } from "./JobDetail";
 import { summaryEntryTimestamp } from "../lib/jobDetail";
 
 describe("Video Summary surface (ADAAAA-7466)", () => {
@@ -100,24 +99,5 @@ describe("summaryEntryTimestamp (ADAAAA-7466)", () => {
   });
   it("falls back to the wall-clock ts when windowTs is absent", () => {
     expect(summaryEntryTimestamp({ seq: 1, ts: "2026-10-26T10:00:00Z", text: "x" })).toMatch(/\d{2}:\d{2}:\d{2}/);
-  });
-});
-
-describe("Overall summary surface (ADAAAA-7237)", () => {
-  it("renders a clearly-labeled overall summary, distinct from the running notes", () => {
-    const html = renderToString(
-      React.createElement(OverallSummary, {
-        summary: "Overview of the whole video: a GOAL at 2:00 and a near miss at 5:00.",
-      })
-    );
-    expect(html).toContain("data-detail-overall-summary");
-    expect(html).toContain("Overall summary");
-    expect(html).toContain("GOAL at 2:00");
-  });
-
-  it("renders nothing (not a blank panel) when the job has no compiled overall summary", () => {
-    const html = renderToString(React.createElement(OverallSummary, {}));
-    expect(html).not.toContain("data-detail-overall-summary");
-    expect(html.trim()).toBe("");
   });
 });
