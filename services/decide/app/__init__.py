@@ -32,7 +32,6 @@ from .gemma import (  # noqa: F401
     decide_with_gemma,
     finalize_goal_acceptance,
     plan_tracking_with_gemma,
-    summary_with_gemma,
     title_with_gemma,
     _rule_outcome,
     _rule_summary,
@@ -411,53 +410,6 @@ class TitleRequest(BaseModel):
 
 class TitleResponse(BaseModel):
     title: str
-
-
-class OverallSummaryRequest(BaseModel):
-    """Compact summary input for the end-of-video overall-summary call
-    (ADAAAA-7237). Text-only (no images/audio): the job's gameHint + the
-    confirmed points of interest (event type + timestamp + reason) + the
-    chronological per-pass summary time log. The decide brain returns one
-    compiled overall summary of the whole video."""
-
-    model_config = ConfigDict(extra="ignore")
-    gameHint: str = ""
-    pointsOfInterest: list[dict] = Field(default_factory=list)
-    timeLog: list[dict] = Field(default_factory=list)
-
-
-class OverallSummaryResponse(BaseModel):
-    overallSummary: str
-
-
-def _rule_overall_summary(req: OverallSummaryRequest) -> str:
-    """Deterministic fallback overall summary (Gemma unavailable / rule mode).
-    Names every point of interest with event type + timestamp and walks the
-    time log, so a completed job always has a whole-video overview even when
-    the model is down (never blocks or fails the job)."""
-    lines: list[str] = []
-    if req.gameHint:
-        lines.append(f"Overview of {req.gameHint} video")
-    else:
-        lines.append("Video overview")
-    poi = [p for p in (req.pointsOfInterest or []) if isinstance(p, dict)]
-    if poi:
-        lines.append(f"Points of interest ({len(poi)}):")
-        for p in poi:
-            label = str(p.get("eventType") or "event")
-            ts = p.get("timestamp")
-            at = f" at {ts}s" if ts is not None else ""
-            reason = str(p.get("reason") or "")
-            lines.append(f"- {label}{at}{' — ' + reason[:140] if reason else ''}")
-    else:
-        lines.append("No confirmed highlights.")
-    log = [e for e in (req.timeLog or []) if isinstance(e, dict)]
-    if log:
-        lines.append("Timeline:")
-        for e in log[-12:]:
-            text = str(e.get("text") or "").strip().split("\n")[0][:160]
-            lines.append(f"- [{e.get('seq')}] {text}")
-    return "\n".join(lines)
 
 
 def _rule_title(req: TitleRequest) -> str:
@@ -869,27 +821,7 @@ def create_app() -> FastAPI:
         # Rule / fallback path: Gemma unavailable, rule mode, or a null reply —
         # return a deterministic title; the caller still has its own fallback.
         return TitleResponse(title=_rule_title(req))
-    @router.post("/summary", response_model=OverallSummaryResponse)
-    async def summary(req: OverallSummaryRequest):
-        """Text-only end-of-video OVERALL summary generation (ADAAAA-7237). One
-        lightweight Gemma call per completed job: takes the compact summary time
-        log + the confirmed points of interest (event type + timestamp) and
-        returns a compiled overview of the whole video. Runs the inference in a
-        worker thread (like /title) so /health stays responsive. On any failure
-        (Gemma down / unparseable) returns a deterministic rule summary so the
-        caller never has to block the job on it."""
-        if _is_gemma_mode():
-            s = await asyncio.to_thread(
-                summary_with_gemma,
-                game_hint=req.gameHint,
-                points_of_interest=req.pointsOfInterest,
-                time_log=req.timeLog,
-                url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
-                timeout_s=float(os.environ.get("SUMMARY_TIMEOUT_S", "5")),
-            )
-            if s:
-                return OverallSummaryResponse(overallSummary=s)
-        return OverallSummaryResponse(overallSummary=_rule_overall_summary(req))
+
     @router.post("/confirm", response_model=ConfirmDecision)
     async def confirm(req: ConfirmRequest):
         """Stage-2 goal/near-miss confirmation pass (ADAAAA-6797).
