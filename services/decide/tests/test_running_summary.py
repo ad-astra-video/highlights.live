@@ -51,6 +51,18 @@ def test_prompt_forwards_story_so_far_and_asks_running_summary():
     assert "runningSummary" in p
 
 
+def test_prompt_asks_announcer_style_running_summary():
+    # ADAAAA-7495: the running summary must read like an announcer calling the
+    # game — narrative continuity, scene-change framing, specificity, flow — not
+    # a dry list of static stills.
+    p = build_prompt("GOAL", {}, game_hint="soccer", story_so_far="team pressed")
+    low = p.lower()
+    assert "announcer" in low
+    assert "narrative continuity" in low
+    assert "scene-change framing" in low
+    assert "not a list of static scene descriptions" in low
+
+
 def test_prompt_omits_story_so_far_when_absent():
     p = build_prompt("GOAL", {}, game_hint="soccer")
     # 'STORY SO FAR' only appears inside the instruction text when a prior
