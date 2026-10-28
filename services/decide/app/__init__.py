@@ -628,8 +628,22 @@ def create_app() -> FastAPI:
             # scoreboard-confirmed goal is a REAL goal, so it is upgraded to
             # scoring_play so the single accept gate (finalize_goal_acceptance)
             # keeps it accepted even when the model leaned near_miss.
-            elif scoreboard_forces_goal(
-                req.evidence.scoreBoardChanged, decision.get("eventType") or req.eventType
+            # ADAAAA-7533: the scoreboard force must NOT override a model read
+            # that EXPLICITLY refuted the goal (outcome=not_highlight). Perceive's
+            # scoreBoardChanged flag is a 60s-rolling + transient-OCR delta
+            # detector (scoreboard.py ScoreboardTracker), so it reports a "delta"
+            # in no-goal windows (pre-match ceremony, free kick, anthem) long
+            # after any real score change and on OCR misreads. Overriding a model
+            # "no goal" read with that flag is exactly how the post-fix kids-soccer
+            # run surfaced false GOALs (e.g. 570s anthem / free-kick windows). The
+            # force is still allowed to rescue a goal-ADJACENT read (near_miss /
+            # scoring_play) so true-goal recall is preserved — it may only be
+            # skipped when the model already explicitly said "not a highlight".
+            elif (
+                scoreboard_forces_goal(
+                    req.evidence.scoreBoardChanged, decision.get("eventType") or req.eventType
+                )
+                and decision.get("outcome") != "not_highlight"
             ):
                 decision["isHighlight"] = True
                 decision["outcome"] = "scoring_play"
