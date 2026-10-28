@@ -67,7 +67,7 @@ services:
       - PERCEIVE_DEVICE=cuda
       - PERCEIVE_MIN_FPS=${PERCEIVE_MIN_FPS:-1.0}
       - PERCEIVE_TRACKER=florence_sam
-      - PERCEIVE_CAPACITY=${PERCEIVE_CAPACITY:-2}
+      - PERCEIVE_CAPACITY=${PERCEIVE_CAPACITY:-4}
       # ADAAAA-6414: adopted the fine-tuned Florence-2-base detector (lever #1,
       # board-approved fine-tune 8ba29e16 / ADAAAA-6404) to lift soccer-ball
       # recall to >=70%. The staged merged model dir is a drop-in Florence-2
