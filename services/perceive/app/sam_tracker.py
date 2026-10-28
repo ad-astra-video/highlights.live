@@ -73,6 +73,9 @@ class HybridTracker:
         anchor_label: str | None = None,
         ball_label: str | None = None,     # ADAAAA-7217 Inc A: dedicated locked ball SAM slot
         ball_hold_frames: int = 5,         # ball-miss frames held before re-detect (eviction guard)
+        ball_continuity_gate: float = 0.25,  # ADAAAA-7540: max normalized center distance a ball
+        # detection may be from the tracked ball to still be adopted as the ball
+        # (else it is a hallucination on non-ball content -> suppressed).
     ):
         self._detect = detect
         self._backend = backend
@@ -92,6 +95,7 @@ class HybridTracker:
         # ball only when the slot reports sustained absence (SAM loss).
         self.ball_label = ball_label
         self.ball_hold_frames = max(1, int(ball_hold_frames))
+        self._ball_continuity_gate = float(ball_continuity_gate)
         self._ball_slot: Optional[int] = None
         self._ball_prompt: Optional[BBox] = None   # current SAM box
         self._ball_held: Optional[BBox] = None     # last known box (eviction guard)
@@ -127,6 +131,18 @@ class HybridTracker:
         self._iou.set_anchor(label)
 
     # --- dedicated locked ball SAM slot (ADAAAA-7217 Increment A) ------------
+    @property
+    def ball_sam_active(self) -> bool:
+        """True when the dedicated ball slot is owned AND the SAM backend is
+        actually propagating it (so the ball can be dropped from the per-frame
+        Florence `<OD>` pass).
+
+        ADAAAA-7540: when the SAM backend is NOT ready the slot is still owned
+        (via the fallback owner, see `_own_fallback_ball`) but SAM is not
+        propagating it, so the per-frame pass must KEEP the ball as the presence
+        signal the fallback gates by."""
+        return self._ball_slot is not None and self._backend is not None and self._backend.ready()
+
     @property
     def ball_live(self) -> bool:
         """True once the ball has been identified and SAM is tracking it."""
@@ -197,9 +213,12 @@ class HybridTracker:
         if self._backend is not None and self._backend.ready():
             boxes, box_labels = self._sam_step(frame_rgb, florence_boxes, labels)
         else:
-            # No SAM: pure Florence -> IoU (unchanged behaviour).
-            boxes = florence_boxes or []
-            box_labels = labels
+            # No SAM (or not ready): ADAAAA-7540 — before degrading to the pure
+            # Florence -> IoU path, OWN the ball-first roster ball in the locked
+            # ball slot (see `_own_fallback_ball`) so the ball is a single
+            # selected/onScreen track even without SAM, instead of a generic
+            # per-frame detection with no ownership.
+            boxes, box_labels = self._own_fallback_ball(florence_boxes, labels)
             self._since_detect += 1
         return self._iou.step(boxes, ts, labels=box_labels)
 
@@ -357,6 +376,84 @@ class HybridTracker:
             self._prompts[slot] = b
             self._miss[slot] = 0
 
+
+    def _own_fallback_ball(self, florence_boxes, labels):
+        """ADAAAA-7540: own the ball-first roster ball in the locked ball slot
+        even when the SAM backend is not ready, instead of a generic per-frame
+        Florence detection.
+
+        The dedicated ball slot is normally seeded from `_reseed_from` inside
+        `_sam_step`, which only runs when `_backend.ready()` is True. On the
+        ball-first soccer path (job 7fbcdb02) the SAM backend was not ready, so
+        `_sam_step` never ran and the slot never engaged — the ball regressed to
+        a per-frame Florence `<OD>` detection carrying no `selected`/`onScreen`,
+        and a single hallucinated "soccer ball" box was surfaced on non-ball
+        content (0 of 3691 ball tracks were selected/onScreen).
+
+        This owns the ball in the SAME locked slot even without SAM: it seeds the
+        slot from the caller's collapsed single-ball detection, refreshes it via
+        a continuity gate (only adopt a detection near the tracked ball, or a
+        fresh appearance after a genuine absence), holds the last box through
+        short absence, and drops a hallucinated detection far from the tracked
+        ball so it is never surfaced as the ball.
+
+        Returns `(boxes, labels)` with a suppressed (far-away hallucinated) ball
+        detection removed so the IoU layer does not refresh the owned ball track
+        with a wrong box; an adopted ball detection is left in so IoU matches and
+        refreshes the owned (selected) ball track."""
+        boxes = list(florence_boxes or [])
+        u_labels = list(labels) if labels is not None else [None] * len(boxes)
+        if not self.ball_label:
+            return boxes, u_labels
+        ball_idx = [
+            i for i, l in enumerate(u_labels)
+            if l is not None and ("ball" in str(l).lower() or str(l).lower() == self.ball_label.lower())
+        ]
+        if not ball_idx:
+            # No ball detection this frame: if the slot is owned, count a miss so
+            # the eviction guard goes to re-detect after the hold window.
+            if self._ball_slot is not None:
+                self._ball_miss += 1
+                if self._ball_miss > self.ball_hold_frames:
+                    self._ball_prompt = None
+            return boxes, u_labels
+        b = boxes[ball_idx[0]]
+        if self._ball_slot is None:
+            # Cold start: the caller already collapsed to one ball-like box; own it.
+            self.seed_ball(b)
+            return boxes, u_labels
+        # Owned: adopt the detection only if it continues the tracked ball (near
+        # the held box) or it is a fresh appearance after a genuine absence. A
+        # detection far from the tracked ball on non-ball content is a
+        # hallucination -> hold the last box and count a miss instead of adopting.
+        held = self._ball_held
+        if held is not None and self._ball_miss <= self.ball_hold_frames:
+            cx = (float(b[0]) + float(b[2])) / 2.0
+            cy = (float(b[1]) + float(b[3])) / 2.0
+            hcx = (float(held[0]) + float(held[2])) / 2.0
+            hcy = (float(held[1]) + float(held[3])) / 2.0
+            dist = ((cx - hcx) ** 2 + (cy - hcy) ** 2) ** 0.5
+            if dist > self._ball_continuity_gate:
+                self._ball_miss += 1
+                if self._ball_miss > self.ball_hold_frames:
+                    self._ball_prompt = None
+                # suppress the hallucination: drop it from the IoU feed
+                drop = set(ball_idx)
+                return (
+                    [boxes[i] for i in range(len(boxes)) if i not in drop],
+                    [u_labels[i] for i in range(len(u_labels)) if i not in drop],
+                )
+        self._ball_prompt = b
+        self._ball_held = b
+        self._ball_miss = 0
+        self._ball_on_screen = True
+        self._prompts[self._ball_slot] = b
+        self._miss[self._ball_slot] = 0
+        btr = next((t for t in self._iou.tracks if t.slot == self._ball_slot), None)
+        if btr is not None:
+            btr.bbox = b
+            btr.lost_frames = 0
+        return boxes, u_labels
 
     def _update_ball_state(self, sam_box: Optional[BBox]) -> None:
         """Update the ball's on-screen/persistence metric for the current frame.
