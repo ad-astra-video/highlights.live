@@ -31,6 +31,7 @@ import {
   useH264,
   useVP8,
   useVP9,
+  useOPUS,
   type MediaStreamTrack,
 } from "werift";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -172,6 +173,16 @@ export class WebRtcIngestSession extends EventEmitter {
   framesEmitted = 0;
   /** Wall-clock ms of the last RTP packet received (decode-latency baseline). */
   private lastPacketAt = 0;
+  /** Number of audio (opus) RTP packets received. */
+  audioPacketsReceived = 0;
+  /** Active audio track (receives raw opus RTP for the audio ingest path). */
+  private activeAudioTrack?: MediaStreamTrack;
+  /** werift fragment buffer for fragmented audio packets. */
+  private audioFragment?: Buffer;
+  /** Monotonic seq for emitted audio payloads. */
+  private audioSeq = 0;
+  /** Wall-clock ms of the last audio RTP packet received. */
+  private lastAudioPacketAt = 0;
 
   // ---- decode segment state (bounded from the last IDR) ----
   /** SPS/PPS retained across IDR resets so a keyframe segment always decodes. */
@@ -202,6 +213,11 @@ export class WebRtcIngestSession extends EventEmitter {
     const pc = new RTCPeerConnection({
       codecs: {
         video: [useH264(), useVP8(), useVP9({ profile: 0 } as any)],
+        // opus so a browser-typical video+audio offer (`m=video` + `m=audio`,
+        // H264 + opus) negotiates instead of failing with "negotiate codecs
+        // failed." (ADAAAA-7524). Without an audio codec the answerer advertises
+        // no audio m-line and the whole offer is rejected (measure 7512).
+        audio: [useOPUS()],
       },
       // A relay (TURN) ICE server gives the answerer a candidate the browser
       // can actually reach when the media server's host candidates are private
@@ -215,7 +231,39 @@ export class WebRtcIngestSession extends EventEmitter {
     // recvonly m-line. The negotiated codec comes from the browser's offer;
     // we detect it on the received track and pick the ffmpeg demuxer to match.
     pc.addTransceiver("video", { direction: "recvonly" });
+    // Recvonly audio transceiver so a video+audio offer negotiates a second
+    // (audio) m-line and opus RTP flows to us; without it the audio track is
+    // never negotiated (ADAAAA-7524).
+    pc.addTransceiver("audio", { direction: "recvonly" });
     pc.onTrack.subscribe((track) => {
+      // Audio (opus) track: receive + count the RTP, and relay the raw opus
+      // payload out as-is ("copy as received"). The perceive orchestrator
+      // trickle contract (services/perceive/app/trickle.py) exposes no audio
+      // rail — only video_in/events_out/control — so audio segment assembly is
+      // the livepeer_gateway trickle's responsibility (board direction on
+      // ADAAAA-7513); the media server just ingests + forwards the packets.
+      if (track.kind === "audio") {
+        this.activeAudioTrack = track;
+        track.onReceiveRtp.subscribe((rtp) => {
+          this.audioPacketsReceived++;
+          this.lastAudioPacketAt = Date.now();
+          try {
+            const { data } = dePacketizeRtpPackets("OPUS", [rtp], this.audioFragment);
+            this.audioFragment = undefined;
+            if (data && data.length) {
+              this.emit("audio", {
+                seq: this.audioSeq++,
+                ts: this.lastAudioPacketAt / 1000,
+                payload: data,
+                packets: this.audioPacketsReceived,
+              });
+            }
+          } catch {
+            /* drop a broken audio packet */
+          }
+        });
+        return;
+      }
       if (this.started) return;
       this.started = true;
       this.codecMime = track.codec?.mimeType || "";
@@ -296,6 +344,11 @@ export class WebRtcIngestSession extends EventEmitter {
     this.packetsReceived = 0;
     this.framesEmitted = 0;
     this.lastPacketAt = 0;
+    this.audioPacketsReceived = 0;
+    this.activeAudioTrack = undefined;
+    this.audioFragment = undefined;
+    this.audioSeq = 0;
+    this.lastAudioPacketAt = 0;
   }
 
   private onRtp(rtp: RtpPacket) {
@@ -467,6 +520,7 @@ export class WebRtcIngestSession extends EventEmitter {
     return {
       packetsReceived: this.packetsReceived,
       framesEmitted: this.framesEmitted,
+      audioPacketsReceived: this.audioPacketsReceived,
       codecMime: this.codecMime,
       started: this.started,
       closed: this.closed,
@@ -480,7 +534,7 @@ export class WebRtcIngestSession extends EventEmitter {
     // Diagnostic summary so a connected-but-silent session is distinguishable
     // from "no frames at all" (AC: packet/frame counters on the RTC path).
     // eslint-disable-next-line no-console
-    console.log(`[rtc] close codec=${this.codecMime || "?"} packets=${this.packetsReceived} frames=${this.framesEmitted}`);
+    console.log(`[rtc] close codec=${this.codecMime || "?"} packets=${this.packetsReceived} frames=${this.framesEmitted} audioPackets=${this.audioPacketsReceived}`);
     if (this.pc) {
       try {
         await this.pc.close();

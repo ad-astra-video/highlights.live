@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
 import { execFileSync } from "node:child_process";
@@ -13,6 +13,7 @@ import {
   useH264,
   useVP8,
   useVP9,
+  useOPUS,
 } from "werift";
 import { MediaServer } from "../src/server";
 import { isVp8Keyframe, isVp9Keyframe } from "../src/rtc";
@@ -370,6 +371,84 @@ describe("media server WebRTC ingest (C1)", () => {
   it("falls through to 404 for unknown sessions on the RTC offer route", async () => {
     const res = await app.inject({ method: "POST", url: "/sessions/nope/rtc/offer", payload: { offer: {} } });
     expect(res.statusCode).toBe(404);
+  });
+
+  it("negotiates a browser-typical video+audio offer and ingests BOTH RTP tracks (ADAAAA-7524)", async () => {
+    const g = new FakeOrch("sess-av");
+    const ms = new MediaServer(
+      { orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", reconnectGraceMs: 3000, rtcSampleFps: 1 },
+      g as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    try {
+      const prov = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-av" } });
+      const sid = prov.json().sessionId;
+      expect(prov.json().rtc).toBe(true);
+
+      // Browser-typical video+audio offer: H264 video + opus audio, both sendonly.
+      const browserPc = new RTCPeerConnection({ codecs: { video: [useH264()], audio: [useOPUS()] } } as any);
+      const vidTrack = new MediaStreamTrack({ kind: "video" });
+      const audTrack = new MediaStreamTrack({ kind: "audio" });
+      browserPc.addTransceiver(vidTrack, { direction: "sendonly" } as any);
+      browserPc.addTransceiver(audTrack, { direction: "sendonly" } as any);
+      const offer = await browserPc.createOffer();
+      await browserPc.setLocalDescription(offer);
+
+      // AC1: the media server must ANSWER (200), not 400 "negotiate codecs failed."
+      const ans = await srv.inject({ method: "POST", url: `/sessions/${sid}/rtc/offer`, payload: { offer } });
+      expect(ans.statusCode).toBe(200);
+      const { answer } = ans.json();
+      // the answer must carry an audio m-line (audio transceiver negotiated).
+      expect(String(answer?.sdp || "")).toMatch(/m=audio/);
+      await browserPc.setRemoteDescription(answer);
+
+      for (let i = 0; i < 40 && browserPc.connectionState !== "connected"; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(browserPc.connectionState).toBe("connected");
+
+      const vSender = browserPc.getTransceivers().find((t) => (t.sender as any)?.track?.kind === "video")?.sender as any;
+      const aSender = browserPc.getTransceivers().find((t) => (t.sender as any)?.track?.kind === "audio")?.sender as any;
+      for (const s of [vSender, aSender]) {
+        if (s) { s.sequenceNumber = 0; s.timestamp = 0; s.seqOffset = 0; s.timestampOffset = 0; }
+      }
+
+      const before = g.publishes.length;
+      // Stream the video H264 fixture as RTP (same as rtcPublish).
+      const vPay = vSender?.codec?.payloadType ?? 96;
+      let vclock = 0, vts = 0;
+      for (const nal of nalUnits(h264)) {
+        vidTrack.writeRtp(new RtpPacket(new RtpHeader({
+          payloadType: vPay, sequenceNumber: (vclock++) % 65536, timestamp: (vts += 90000 / 15), ssrc: vSender?.ssrc ?? 1, marker: 1,
+        } as any), nal));
+      }
+      // Stream audio (opus) RTP. Even placeholder payloads should be counted
+      // as received packets (audioPacketsReceived) at the media server.
+      const logSpy = vi.spyOn(console, "log");
+      const aPay = aSender?.codec?.payloadType ?? 111;
+      let aclock = 0, ats = 0;
+      for (let i = 0; i < 6; i++) {
+        audTrack.writeRtp(new RtpPacket(new RtpHeader({
+          payloadType: aPay, sequenceNumber: (aclock++) % 65536, timestamp: (ats += 48000 / 50), ssrc: aSender?.ssrc ?? 2, marker: i === 0 ? 1 : 0,
+        } as any), Buffer.from([0xf8, 0xff, 0xfe]))); // opus TOC + silence
+      }
+      // Both must land: a video frame published + obs relayed, AND audio packets received.
+      let published = false;
+      for (let i = 0; i < 40 && !published; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        published = g.publishes.slice(before).some((p) => p.jpeg.length > 100 && p.jpeg[0] === 0xff && p.jpeg[1] === 0xd8);
+      }
+      expect(published).toBe(true);
+      // Audio path surfaced via the media server's [rtc] audio log.
+      const audioLogged = logSpy.mock.calls.some((c) => String(c[0]).includes("[rtc] audio") && /audioPackets=[1-9]/.test(String(c[0])));
+      logSpy.mockRestore();
+      expect(audioLogged).toBe(true);
+      await browserPc.close();
+    } finally {
+      await srv.close();
+    }
   });
 });
 
