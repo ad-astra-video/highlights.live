@@ -217,6 +217,25 @@ export class MediaServer {
           session.on("close", () => {
             if (stream.sockets.size === 0) this.armGrace(req.params.sid);
           });
+          // Audio (opus) ingest path: receive + count, and relay the raw opus
+          // payload as-is. The media server does NOT assemble audio segments —
+          // that is the livepeer_gateway trickle's job (board direction on
+          // 7513); the perceive orchestrator trickle contract has no audio rail
+          // (only video_in/events_out/control), so audio is surfaced here and
+          // counted on the session for the RTC packet/frame counters (AC).
+          session.on("audio", (a: { seq: number; packets: number; ts: number; payload: Buffer | undefined }) => {
+            if (a.seq === 0 || a.packets === 1 || a.packets % 50 === 0) {
+              // eslint-disable-next-line no-console
+              console.log(
+                `[rtc] audio aseq=${a.seq} audioPackets=${a.packets} payload=${(a.payload?.length ?? 0)}B ts=${a.ts.toFixed(3)}`
+              );
+            }
+            // Forward the raw opus payload to the muxed session recording (the
+            // livepeer_gateway trickle's segment-assembly input), so audio is
+            // not silently dropped while the video frames go to the video-in
+            // rail. Best-effort — the orchestrator has no audio-in endpoint.
+            if (stream.recording && a.payload) stream.recording.stream.write(a.payload);
+          });
           session.on("error", (e) => console.error("[media] rtc err", e));
           stream.rtc = { pcId: randomUUID(), session };
           // A browser attached via RTC — the no-client timer no longer applies.
