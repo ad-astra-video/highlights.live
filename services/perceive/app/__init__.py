@@ -565,6 +565,71 @@ def _recover_sam_ball(detector, state, tracker, vocabulary) -> bool:
     return False
 
 
+def _single_ball_owner(
+    boxes: list, labels: list[str], last_ball_center: tuple[float, float] | None = None
+) -> tuple[list, list[str]]:
+    """Single-ball invariant for ball-first rosters (ADAAAA-7536).
+
+    A soccer/ball frame has exactly ONE ball. Florence-2 open-<OD> frequently
+    emits multiple spurious "soccer ball" boxes on real frames (advertising
+    boards, player legs, foreground bodies) and, because the default ball-first
+    soccer roster is ["soccer ball", "goal"], every one of those false
+    positives is seeded and surfaced as its own ball box — the "makes no sense"
+    boxes the board reported. Live reproduction (job 7fbcdb02, seq 334): three
+    "soccer ball" boxes pointing at a VITALDENT advertising board, a player's
+    leg, and a foreground person's back; 94% of the job's frames carry at least
+    one ball box and 68% carry two or three simultaneous — all Florence false
+    positives, none a genuine ball.
+
+    Keep at most ONE ball detection: prefer the detection continuing the
+    previously-tracked ball (temporal continuity so a real tracked ball's box
+    stays stable), else the most ball-like box — nearest to square with the
+    smallest area (a real soccer ball is a small, roughly-square object; huge
+    over-frame boxes and degenerate slivers are the egregious false positives).
+    This is detector-side: the boxes are genuine system detections with
+    confidence 1.0, so NO render filter can tell a real ball from a false
+    positive — only collapsing at the detection layer before seeding can bound
+    the spurious boxes.
+
+    Returns (boxes, labels) with at most one ball-class detection; a frame with
+    zero or one ball is returned unchanged (no regression to genuine balls).
+    """
+    if not boxes or not labels:
+        return boxes, labels
+    ball_idx = [i for i, l in enumerate(labels) if is_ball_label(l)]
+    if len(ball_idx) <= 1:
+        return boxes, labels
+
+    def area(i: int) -> float:
+        b = boxes[i]
+        return max(0.0, (float(b[2]) - float(b[0])) * (float(b[3]) - float(b[1])))
+
+    def aspect(i: int) -> float:
+        b = boxes[i]
+        w = abs(float(b[2]) - float(b[0]))
+        h = abs(float(b[3]) - float(b[1]))
+        if w <= 0 or h <= 0:
+            return float("inf")
+        return max(w, h) / min(w, h)
+
+    if last_ball_center is not None:
+        def dist(i: int) -> float:
+            b = boxes[i]
+            cx = (float(b[0]) + float(b[2])) / 2.0
+            cy = (float(b[1]) + float(b[3])) / 2.0
+            return (cx - last_ball_center[0]) ** 2 + (cy - last_ball_center[1]) ** 2
+
+        keep = min(ball_idx, key=dist)
+    else:
+        # Cold start: most ball-like (nearest to square), then smallest.
+        keep = min(ball_idx, key=lambda i: (abs(aspect(i) - 1.0), area(i)))
+    drop = set(ball_idx) - {keep}
+    return (
+        [boxes[i] for i in range(len(boxes)) if i not in drop],
+        [labels[i] for i in range(len(labels)) if i not in drop],
+    )
+
+
 def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[dict, dict | None]:
     """Run one sampled frame through the shared perceive pipeline: Florence or
     background-diff detection -> tracker.step -> observation (+ candidate).
@@ -622,6 +687,18 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # "unknown" the user then sees on the box) — ADAAAA-5056.
         boxes = [_norm_bbox(o["bbox"]) for o in objects if o.get("bbox")]
         labels = [str(o.get("label", "") or "") for o in objects if o.get("bbox")]
+        # ADAAAA-7536: single-ball invariant for ball-first rosters. A soccer
+        # frame has ONE ball; collapse multiple spurious Florence "soccer ball"
+        # detections to a single box (continuity with the tracked ball, else the
+        # smallest) before seeding, so the box renderer never draws several
+        # "soccer ball" boxes at unrelated non-ball locations at once.
+        if boxes and vocabulary and any(is_ball_label(v) for v in vocabulary):
+            last_c = getattr(state, "last_ball_center", None)
+            boxes, labels = _single_ball_owner(boxes, labels, last_c)
+            _bi = next((i for i, l in enumerate(labels) if is_ball_label(l)), None)
+            if _bi is not None:
+                _b = boxes[_bi]
+                state.last_ball_center = ((float(_b[0]) + float(_b[2])) / 2.0, (float(_b[1]) + float(_b[3])) / 2.0)
     else:
         # stub path: background-diff blobs from the grayscale frame
         gray = _decode_gray(image_b64)
