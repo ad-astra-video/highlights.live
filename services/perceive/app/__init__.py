@@ -672,7 +672,13 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         if is_hybrid and vocabulary and any(is_ball_label(v) for v in vocabulary):
             state.tracker.ball_label = _ball_label_for(vocabulary, state.tracker)
         perframe_vocab = vocabulary
-        if ball_live and vocabulary and any(is_ball_label(v) for v in vocabulary):
+        # ADAAAA-7540: drop the ball from the per-frame <OD> only when the SAM
+        # slot actually PROPAGATES it (ball_sam_active). When the slot is owned
+        # by the fallback (SAM backend not ready, the job 7fbcdb02 path) the
+        # per-frame pass must KEEP the ball so the fallback owner has a
+        # per-frame presence signal to gate by (see HybridTracker._own_fallback_ball).
+        _drop_ball = ball_live and bool(getattr(state.tracker, "ball_sam_active", False))
+        if _drop_ball and vocabulary and any(is_ball_label(v) for v in vocabulary):
             perframe_vocab = [v for v in vocabulary if not is_ball_label(v)]
         try:
             _s = monotonic()
@@ -757,7 +763,24 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             if getattr(state.tracker, "ball_needs_redetect", lambda: False)():
                 _recover_sam_ball(detector, state, state.tracker, vocabulary)
             sam_ball_box = state.tracker.ball_box() if hasattr(state.tracker, "ball_box") else None
-            if sam_ball_box is not None and not any(is_ball_label(o.get("label")) for o in objects):
+            if sam_ball_box is not None:
+                # ADAAAA-7540: anchor `last_ball_center` to the OWNED ball box
+                # (the accepted/held ball) so the next frame's _single_ball_owner
+                # continuity is measured against the real/owned ball, not a
+                # suppressed hallucination the detector collapsed to this frame.
+                state.last_ball_center = (
+                    (float(sam_ball_box[0]) + float(sam_ball_box[2])) / 2.0,
+                    (float(sam_ball_box[1]) + float(sam_ball_box[3])) / 2.0,
+                )
+            # ADAAAA-7540: when the dedicated slot owns the ball, the detection
+            # contract must report the OWNED ball box, never a raw Florence ball
+            # detection — a hallucinated "soccer ball" box far from the tracked
+            # ball (confidence 1.0) must not be surfaced as the ball. Replace any
+            # raw ball object with the owned box (in the fallback the per-frame
+            # pass keeps the ball as the presence signal, so a hallucination can
+            # appear in `objects`; strip it here).
+            if sam_ball_box is not None:
+                objects = [o for o in objects if not is_ball_label(o.get("label"))]
                 objects.append(
                     {"label": _ball_label_for(vocabulary, state.tracker), "confidence": 1.0, "bbox": list(sam_ball_box)}
                 )
