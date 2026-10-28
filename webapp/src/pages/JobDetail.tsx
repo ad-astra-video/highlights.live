@@ -56,54 +56,35 @@ interface FrameTileProps {
 }
 
 /**
- * One frame with its perceive boxes + legible labels drawn on a canvas. The
- * image bytes are a ROLLING, in-view window (ADAAAA-7471): the tile only starts
- * `authFetchFrame` once it is near the viewport (IntersectionObserver), and it
- * revokes the object URL + clears the canvas bitmap the moment it scrolls back
- * out. A VOD job with 100+ decide calls mounts thousands of frame tiles; eager
- * loading all of them at once exhausts the browser's image/fetch budget and
- * produces ERR_INSUFFICIENT_RESOURCES on the frame URLs. Bounding decode to the
- * visible window (plus a small scroll buffer) keeps memory stable across the job.
- * The fetch itself is additionally serialized through `frameFetchWindow`
- * (ADAAAA-7506): even when a whole row of tiles enters the viewport together,
- * only a bounded number of frame-image fetches stay in flight at once, so the
- * per-tab fetch/decode budget is never exhausted. Scrolling a tile back out
- * aborts its *queued* fetch and releases the slot.
+ * One frame with its perceive boxes + legible labels drawn on a canvas.
+ *
+ * Every tile fetches + draws its frame image on mount, serialized through the
+ * shared `frameFetchWindow` (ADAAAA-7506) so a job that mounts thousands of
+ * tiles never has more than a bounded number of frame-image fetches in flight
+ * at once — guarding the ERR_INSUFFICIENT_RESOURCES break seen when a VOD job
+ * with 100+ decide calls eager-loaded every frame concurrently.
+ *
+ * The previous ADAAAA-7471/7482 code gated the fetch on the tile being "near
+ * the viewport", driven by IntersectionObserver + scroll callbacks. Those are
+ * NOT dispatched in every browser context (notably automated/CDP verification
+ * browsers), so `inView` never flipped true and no frame was ever fetched or
+ * drawn — frames were served but the filmstrip rendered blank tiles
+ * (ADAAAA-7529). Fetching on mount restores rendering in every environment;
+ * the bounded window keeps memory + network safe, and the object URL is
+ * revoked when the tile unmounts.
  */
 function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTileProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLButtonElement>(null);
-  const [inView, setInView] = useState(false);
   const [objUrl, setObjUrl] = useState<string | null>(null);
 
-  // Track viewport membership for the rolling window. A ~200 px buffer means a
-  // tile just off-screen is already decoding when it scrolls in; anything
-  // beyond that buffer is released.
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      (entries) => setInView(entries.some((e) => e.isIntersecting)),
-      { rootMargin: "200px" }
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
-
-  // Fetch only while in view; release (revoke object URL + clear bitmap) when
-  // out of view. Collapsing the decide-call window unmounts this tile entirely,
-  // which also releases the bitmap via this cleanup. The fetch is run through
-  // the shared `frameFetchWindow` so this view never holds more than a bounded
-  // number of frame-image fetches in flight; the AbortController cancels a
-  // still-queued fetch when the tile scrolls out, freeing its slot.
+  // Fetch the frame image on mount (and if the uri/token changes), holding the
+  // object URL until unmount. The AbortController lets an unmounted tile drop a
+  // still-queued fetch and free its frameFetchWindow slot.
   useEffect(() => {
     let alive = true;
     let url: string | null = null;
     const ctrl = new AbortController();
-    if (!inView) {
-      setObjUrl(null);
-      return;
-    }
     frameFetchWindow
       .run(() => authFetchFrame(frame.uri, token), ctrl.signal)
       .then((u) => {
@@ -115,20 +96,13 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
       alive = false;
       ctrl.abort();
       if (url) URL.revokeObjectURL(url);
-      // Leaving view (or unmount) also clears the drawn bitmap so the decoded
-      // image memory is released, not retained by the canvas backing store.
-      setObjUrl(null);
     };
-  }, [frame.uri, token, inView]);
+  }, [frame.uri, token]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    // Released (scrolled out) — drop the backing bitmap so it is not held.
-    if (!objUrl) {
-      canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
-      return;
-    }
+    if (!objUrl) return;
     const img = new Image();
     img.onload = () => {
       if (canvasRef.current !== canvas) return;
