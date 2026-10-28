@@ -253,22 +253,68 @@ def test_scoreboard_change_forces_goal_via_endpoint():
     assert body["reason"]
 
 
-def test_gemma_path_scoreboard_force_when_gemma_says_no(monkeypatch):
-    # Gemma reads the Goal candidate and says 'no', but a scoreboard score
-    # change was detected -> the I3 force flips isHighlight=true. Absence would
-    # NOT force (separate test above).
+def test_gemma_path_scoreboard_force_when_gemma_refutes_no_goal(monkeypatch):
+    # Gemma reads the Goal candidate and EXPLICITLY refutes it (outcome =
+    # not_highlight) even though a scoreboard score change was detected. The I3
+    # force must NOT override an explicit model refutation (ADAAAA-7533):
+    # perceive's scoreBoardChanged is a 60s-rolling + transient-OCR delta flag,
+    # so it fires in no-goal windows (ceremony / free kick) and overriding a model
+    # "no goal" read with it surfaced false GOALs in the post-fix kids-soccer run.
     from app import gemma as gemma_mod
 
     monkeypatch.setenv("DECIDE_MODE", "gemma")
     monkeypatch.setattr(
         gemma_mod,
         "ask",
-        lambda *a, **k: {"isHighlight": False, "score": 30.0, "eventType": "GOAL", "reason": "no ball in net", "source": "gemma"},
+        lambda *a, **k: {
+            "isHighlight": False,
+            "score": 30.0,
+            "eventType": "GOAL",
+            "outcome": "not_highlight",
+            "reason": "players standing in a line, no ball movement or goal scored",
+            "source": "gemma",
+        },
     )
     r = client.post(
         "/app/highlight",
         json={
             "sessionId": "sess-sb-gemma",
+            "eventType": "GOAL",
+            "timestamp": 1.0,
+            "evidence": {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0, "scoreBoardChanged": True},
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # The model refuted the goal -> the scoreboard flag no longer resurrects it.
+    assert body["isHighlight"] is False
+    assert "scoreboard score change confirmed" not in body["reason"]
+
+
+def test_gemma_path_scoreboard_force_rescues_near_miss(monkeypatch):
+    # A goal-ADJACENT read (near_miss — the model leaned "close but not sure")
+    # is still rescued to scoring_play by a measured scoreboard delta (recall
+    # preservation, ADAAAA-6598). The ADAAAA-7533 gate only skips an EXPLICIT
+    # not_highlight refutation, not a near-miss.
+    from app import gemma as gemma_mod
+
+    monkeypatch.setenv("DECIDE_MODE", "gemma")
+    monkeypatch.setattr(
+        gemma_mod,
+        "ask",
+        lambda *a, **k: {
+            "isHighlight": False,
+            "score": 45.0,
+            "eventType": "GOAL",
+            "outcome": "near_miss",
+            "reason": "clear chance, ball close to line",
+            "source": "gemma",
+        },
+    )
+    r = client.post(
+        "/app/highlight",
+        json={
+            "sessionId": "sess-sb-gemma-nm",
             "eventType": "GOAL",
             "timestamp": 1.0,
             "evidence": {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0, "scoreBoardChanged": True},
