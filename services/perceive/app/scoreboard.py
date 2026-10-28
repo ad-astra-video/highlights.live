@@ -390,15 +390,30 @@ class ScoreboardTracker:
         self._readings.append((timestamp, score))
 
     def changed(self, timestamp: float) -> bool:
-        """True when the newest score in the window differs from the earliest
-        surviving score recorded within ``window_seconds`` ending at
-        ``timestamp``. Requires at least two concrete readings."""
+        """True when the newest score reading differs from the immediately-prior
+        reading — i.e. the score actually *transitioned* at this frame
+        (ADAAAA-7543). Requires at least two concrete readings.
+
+        Historical (ADAAAA-6360) behaviour compared the newest reading against
+        the EARLIEST surviving reading within ``window_seconds``. Because
+        perceive records a reading on every frame the scoreboard is visible,
+        that earliest-vs-newest comparison re-reports ``True`` for up to a full
+        ``window_seconds`` after any real goal — even on frames far from the
+        goal. In a frequent-goal compilation (kids_soccer.mp4) that stale delta
+        lands inside near-every 16-frame window, so the server's
+        ``foldWindowAttestation`` attested a non-goal window (t=570 line-up,
+        t=750 free-kick) from a score change that happened tens of seconds
+        earlier, and the window-level "Scoreboard score change" attestation
+        accepted a non-goal as a scoring goal. Comparing the two most recent
+        readings time-correlates the delta to the frame where the score actually
+        changed and stops the re-fire, so a non-goal window is no longer attested
+        by a stale delta."""
         cutoff = timestamp - self.window_seconds
         while self._readings and self._readings[0][0] < cutoff:
             self._readings.popleft()
         if len(self._readings) < 2:
             return False
-        return score_changed(self._readings[0][1], self._readings[-1][1])
+        return score_changed(self._readings[-2][1], self._readings[-1][1])
 
     def clear(self) -> None:
         self._readings.clear()

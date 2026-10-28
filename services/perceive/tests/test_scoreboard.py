@@ -87,6 +87,37 @@ def test_tracker_ignores_none_readings():
     assert tr.changed(20.0) is False
 
 
+def test_tracker_delta_does_not_refire_after_transition():
+    # ADAAAA-7543: the score-delta must be TIME-CORRELATED to the frame where
+    # the score actually changed. A genuine goal changes the score once (e.g.
+    # 1-0 -> 2-0 at t=45). Perceive records a reading on EVERY frame the
+    # scoreboard is visible, and the historical earliest-vs-newest comparison
+    # over a 60s window kept returning True on every later frame too — so in a
+    # frequent-goal compilation a stale delta landed in near-every window and
+    # attested non-goal moments (kids_soccer.mp4 t=570/750). After the fix the
+    # delta fires only on the transition frame; the trailing frames that keep
+    # reading the SAME score must report no delta.
+    tr = ScoreboardTracker(window_seconds=60.0)
+    tr.record(10.0, (1, 0))
+    tr.record(40.0, (1, 0))
+    # Transition at t=45: 1-0 -> 2-0. This is the only frame that should report
+    # a delta.
+    tr.record(45.0, (2, 0))
+    assert tr.changed(45.0) is True
+    # The score stays 2-0 for the rest of the window (and beyond). No delta.
+    tr.record(50.0, (2, 0))
+    assert tr.changed(50.0) is False
+    tr.record(60.0, (2, 0))
+    assert tr.changed(60.0) is False
+    # Even later (still within the 60s rolling window, earliest reading 1-0 has
+    # not yet been pruned at t=70): still no re-fire.
+    tr.record(68.0, (2, 0))
+    assert tr.changed(68.0) is False
+    # A genuine LATER transition still fires.
+    tr.record(90.0, (3, 0))
+    assert tr.changed(90.0) is True
+
+
 # --- ADAAAA-7081: scoreboard ROI scoping -------------------------------------
 # A copy/banner "N - M" line OUTSIDE the scoreboard ROI must never become a
 # score. The scoreboard ROI occupies, say, the top-left score bug region; the
