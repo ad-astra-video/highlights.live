@@ -205,6 +205,41 @@ def test_gemma_group_mode_parses_multi_verdict_response(monkeypatch):
     assert "Candidate 0:" in prompt and "Candidate 1:" in prompt
 
 
+def test_gemma_group_scoreboard_force_not_override_not_highlight(monkeypatch):
+    # ADAAAA-7533: in GROUP mode the I3 scoreboard_forces_goal override must NOT
+    # resurrect a candidate whose model verdict EXPLICITLY refuted the goal
+    # (outcome=not_highlight) just because perceive reported scoreBoardChanged.
+    # This mirrors the single-candidate guard; the group-mode path
+    # (_postprocess_gemma_verdict) had the same unguarded override.
+    reply = json.dumps([
+        {"isHighlight": True, "score": 90, "eventType": "KILL", "reason": "clutch",
+         "outcome": "scoring_play"},
+        {"isHighlight": False, "score": 12, "eventType": "GOAL", "reason": "players standing in a line, no goal",
+         "outcome": "not_highlight"},
+    ])
+    mock = MockLlama(reply)
+    monkeypatch.setenv("DECIDE_MODE", "gemma")
+    monkeypatch.setenv("GEMMA_URL", f"http://127.0.0.1:{mock.port}")
+    cands = [
+        {"eventType": "KILL", "timestamp": 1.0,
+         "evidence": {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0}},
+        {"eventType": "GOAL", "timestamp": 2.0,
+         "evidence": {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0, "scoreBoardChanged": True}},
+    ]
+    try:
+        r = client.post("/app/highlight", json=_group_payload(cands))
+    finally:
+        mock.stop()
+    assert r.status_code == 200
+    vs = r.json()["verdicts"]
+    assert len(vs) == 2
+    # candidate 0 is still a scoring highlight (recall preserved)
+    assert vs[0]["isHighlight"] is True
+    # candidate 1 is NOT resurrected by the scoreboard flag
+    assert vs[1]["isHighlight"] is False
+    assert "scoreboard score change confirmed" not in (vs[1].get("reason") or "")
+
+
 def test_gemma_group_mode_falls_back_on_bad_response(monkeypatch):
     # A malformed group reply (AC7) must NOT drop candidates: it falls back to
     # one single-candidate gemma decide per candidate (which itself degrades to

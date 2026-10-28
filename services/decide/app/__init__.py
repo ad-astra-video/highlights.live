@@ -445,9 +445,19 @@ def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, 
         decision["reason"] = (
             (decision.get("reason") or "") + "; " + (gate_reason or "")
         ).strip("; ")
-    elif scoreboard_forces_goal(
-        bool(evidence.get("scoreBoardChanged", False)), decision.get("eventType") or event_type
+    elif (
+        scoreboard_forces_goal(
+            bool(evidence.get("scoreBoardChanged", False)), decision.get("eventType") or event_type
+        )
+        and decision.get("outcome") != "not_highlight"
     ):
+        # ADAAAA-7533: the scoreboard force must NOT override a model read that
+        # EXPLICITLY refuted the goal (outcome=not_highlight). Mirror of the
+        # single-candidate guard; the group-mode review path (_postprocess_gemma_verdict)
+        # had the same unguarded I3 scoreboard_forces_goal override, so a group
+        # verdict of "not_highlight" on a score_change-detected window could still
+        # be resurrected to scoring_play. Only a goal-adjacent read (near_miss /
+        # scoring_play) is rescued, preserving true-goal recall.
         decision["isHighlight"] = True
         decision["outcome"] = "scoring_play"
         decision["reason"] = (
