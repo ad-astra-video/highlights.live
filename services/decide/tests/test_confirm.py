@@ -1044,3 +1044,41 @@ def test_run_pass_accepts_real_goal_on_measured_score_delta(monkeypatch):
     assert resp["corroborationSource"] == "scoreboard"
     assert resp["decision"]["outcome"] == "scoring_play"
     assert resp["decision"]["isHighlight"] is True
+
+
+def test_prompt_credits_two_signal_frame_attestation():
+    """ADAAAA-7543 (ratified ADAAAA-7555 Option 1): the confirm prompt must
+    offer the two-signal frame attestation (ballInNet AND crossed-the-line) as a
+    FIRST-CLASS corroboration signal. Before this, the prompt demanded a
+    scoreboard change or goal-calling audio and told the dive to refute
+    otherwise, so the dive refuted every regulation goal that had no legible
+    scoreboard tick and no goal call, and the deterministic gate's
+    ``two_signal_attested`` path could never fire (soc-goal-01 run a8747c62:
+    five windows read BOTH signals true and every one was refuted with "no
+    independent corroboration (scoreboard or audio)")."""
+    p = cf.build_confirm_prompt(
+        event_type="GOAL",
+        game_hint="soccer goal",
+        stage1={"outcome": "scoring_play", "reason": "r", "score": 95},
+        n_frames=12,
+        n_keyframes=3,
+        trajectories=[],
+        optical_flow=1.0,
+        flow_magnitudes=[],
+        audio_levels=[],
+        transcript="",
+        ball_outcome=None,
+        goal_crossed=None,
+        scoreboard_changed=False,
+    )
+    # The two-signal frame read is listed as corroboration (c).
+    assert "evidence.ballTrajectoryCrossedLine=true" in p
+    assert "evidence.ballInNet=true" in p
+    assert "first-class corroboration" in p
+    # A genuine two-signal read must not be refuted for lacking scoreboard/audio.
+    assert "do NOT refute the goal" in p
+    # A single-signal self-read stays non-corroborating (ADAAAA-7162 guard).
+    assert "SINGLE-signal frame read" in p
+    assert "is NOT corroboration" in p
+    # The old instruction that forced refutation without scoreboard/audio is gone.
+    assert "without ANY independent corroboration" not in p
