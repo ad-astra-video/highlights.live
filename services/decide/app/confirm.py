@@ -176,6 +176,21 @@ def reason_asserts_penalty_shootout(reason: str | None) -> bool:
     return _SHOOTOUT_RE.search(r) is not None
 
 
+def two_signal_goal_attested(*, ball_in_net: Optional[bool],
+                             ball_crossed: Optional[bool]) -> bool:
+    """ADAAAA-7543 (ratified policy ADAAAA-7555 Option 1): whether a model frame
+    read attests a REGULATION goal strongly enough to be credited.
+
+    The bar is BOTH ``ballInNet`` AND "ball crossed the line between the posts"
+    plainly observed, from the SAME pass. A single-signal self-read stays
+    uncorroborated, so the ADAAAA-7162 fabrication guard still covers a saved
+    shot / near-miss / dribble (the post-bounce celebration claim carries no
+    "crossed the line between the posts" observation, so it stays rejected).
+    Tri-state in: ``None`` (unverifiable) or ``False`` (refuted) never credits.
+    """
+    return ball_in_net is True and ball_crossed is True
+
+
 def confirm_requires_corroboration() -> bool:
     """Whether the confirm pass gates a confirmed_goal on an independent
     corroboration signal. Default ON (the CEO requirement); set
@@ -190,10 +205,14 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
                       penalty_tally_changed: bool = False,
                       ball_in_net: bool = False,
                       ball_in_net_refuted: bool = False,
-                      goal_confirmed: str = "") -> bool:
+                      goal_confirmed: str = "",
+                      two_signal_attested: bool = False) -> bool:
     """True when at least one INDEPENDENT corroboration signal is present.
 
-    The independent anchor is a scoreboard change OR goal-calling audio text.
+    The independent anchors are: a MEASURED scoreboard change, goal-calling audio
+    text, or (ADAAAA-7543 / ratified ADAAAA-7555 Option 1) a two-signal model
+    frame attestation (both ``ballInNet`` AND ball-crossed-the-line-between-posts
+    observed, neither refuted).
 
     ``scoreboard_changed`` is the deterministic perceive-OCR flag fed from the
     server — the ONLY scoreboard signal credited. It is a REAL measured
@@ -246,8 +265,17 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
     # (`frame_scoreboard_changed`) or a free-text narration of a scoreboard
     # change is NOT independent corroboration — a celebration-derived claim is
     # exactly the post-bounce fabrication that was accepted as a scoring GOAL.
-    # Only a measured delta or a goal-calling audio text anchors the visual read.
-    return bool(scoreboard_changed) or audio_calls_goal(transcript)
+    # Only a measured delta, a goal call, or the two-signal frame attestation
+    # anchors the visual read.
+    # ADAAAA-7543 (ratified ADAAAA-7555 Option 1): a REGULATION goal read that
+    # carries BOTH ball-in-net AND ball-crossed-the-line-between-posts (neither
+    # refuted) is credited — a single-signal read is not, so the ADAAAA-7162
+    # fabrication guard still holds for saves / near-misses / dribbles.
+    return (
+        bool(scoreboard_changed)
+        or audio_calls_goal(transcript)
+        or bool(two_signal_attested)
+    )
 
 
 def confirm_enabled() -> bool:
@@ -892,6 +920,28 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
     # a SAVED / MISSED penalty is still rejected even if it (incorrectly) carries
     # a confirmed_goal verdict (AC3 / ADAAAA-7162 preserved).
     ball_in_net_refuted = ev.get("ballInNet") is False
+    # ADAAAA-7543 (ratified ADAAAA-7555 Option 1): the REGULATION-goal two-signal
+    # frame attestation. A model frame read counts only when it carries BOTH
+    # ball-in-net AND ball-crossed-the-line-between-posts. The deep dive is the
+    # contradictory-hypothesis pass, so when IT plainly refutes either criterion
+    # (evidence ``false``) the attestation is not credited — this is the
+    # "neither refuted" clause, and it keeps a saved shot / near-miss rejected
+    # even if Stage-1 read it as a goal. The signals are read from the SAME pass
+    # (never mixed across Stage-1 and Stage-2).
+    stage1_criteria = ((stage1.get("verdict") or {}).get("criteria") or {})
+    deep_dive_refuted = (
+        ev.get("ballInNet") is False or ev.get("ballTrajectoryCrossedLine") is False
+    )
+    two_signal_attested = (not deep_dive_refuted) and (
+        two_signal_goal_attested(
+            ball_in_net=ev.get("ballInNet"),
+            ball_crossed=ev.get("ballTrajectoryCrossedLine"),
+        )
+        or two_signal_goal_attested(
+            ball_in_net=stage1_criteria.get("ballInNet"),
+            ball_crossed=stage1_criteria.get("ballCrossedLineBetweenPosts"),
+        )
+    )
     confirmed = goal_corroborated(
         scoreboard_changed=bool(req.get("scoreBoardChanged")),
         transcript=transcript,
@@ -901,6 +951,7 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         ball_in_net=ball_in_net,
         ball_in_net_refuted=ball_in_net_refuted,
         goal_confirmed=goal,
+        two_signal_attested=two_signal_attested,
     )
     decision = reconcile_confirmed_goal(
         goal, stage1, comment=comment,
@@ -910,13 +961,17 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
     # ADAAAA-7185: WHICH independent corroboration signal fired, persisted so the
     # evidence for an accepted GOAL is queryable after the fact. Scoreboard
     # change (incl. the shootout tally, which sits on the scoreboard) takes
-    # precedence over goal-calling audio text; null when none. ADAAAA-7510: only
-    # a MEASURED scoreboard delta is credited (a model read / narration is not).
+    # precedence over goal-calling audio text, which takes precedence over the
+    # two-signal frame attestation (the weakest of the three, ADAAAA-7543).
+    # Null when none. ADAAAA-7510: only a MEASURED scoreboard delta is credited
+    # (a model read / narration is not).
     corroboration_source = None
     if penalty_shootout or penalty_tally_changed or bool(req.get("scoreBoardChanged")):
         corroboration_source = "scoreboard"
     elif audio_calls_goal(transcript):
         corroboration_source = "audio_text"
+    elif two_signal_attested:
+        corroboration_source = "frame_attestation"
 
     resp = {
         "enabled": True,

@@ -242,10 +242,12 @@ def test_confirm_analysis_prompt_and_context(monkeypatch):
     assert an["decision"]["goalConfirmed"] == "confirmed_goal"
     assert an["decision"]["confidence"] == 0.95
     # ADAAAA-7162/7185 corroboration gate: an un-corroborated confirmed_goal is
-    # downgraded to near_miss (corroborated=False here), so the decision outcome
-    # is near_miss, not scoring_play. The assertion originally expected
-    # scoring_play under the pre-gate behaviour; update it to the correct value.
-    assert an["decision"]["outcome"] == "near_miss"
+    # downgraded to near_miss. ADAAAA-7543 (ratified ADAAAA-7555 Option 1): this
+    # canned deep-dive read attests BOTH ballInNet and ballTrajectoryCrossedLine,
+    # which is now a credited corroboration signal, so the goal IS accepted
+    # (scoring_play). The assertion previously expected near_miss under the
+    # measured-scoreboard-only gate.
+    assert an["decision"]["outcome"] == "scoring_play"
     # the ConfirmDecision itself carries the analysis alongside
     from app.confirm import ConfirmDecision
     cd = ConfirmDecision(**resp)

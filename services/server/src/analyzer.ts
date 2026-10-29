@@ -330,6 +330,13 @@ export interface DecisionResult {
   // expose it. Observability only; no inference change. Absent on legacy
   // verdicts that predate the capture.
   analysis?: WindowAnalysis;
+  // ADAAAA-7543: the reviewer-facing rationale the decide pass returned
+  // (I1/ADAAAA-6358). The server forwards this whole Stage-1 object on the
+  // confirm request, so ``verdict.criteria`` — ballInNet /
+  // ballCrossedLineBetweenPosts — is what the decide /confirm two-signal
+  // attestation check reads (ratified ADAAAA-7555 Option 1). Corroboration
+  // INPUT only; never a server-side accept gate.
+  verdict?: { criteria?: Record<string, boolean | null>; [key: string]: unknown };
 }
 // ADAAAA-6855: map job-requested highlight labels (preferLabels) to the
 // outcome taxonomy members they authorize for export. A requested non-goal
@@ -434,11 +441,12 @@ export interface ConfirmDecision {
   evidence: Record<string, boolean | null>;
   /** Whether this pass corrected the Stage-1 read (the core value metric). */
   stage1Disagreed: boolean;
-  /** ADAAAA-7162/7185: whether an independent corroboration signal (scoreboard
-   * change OR goal-calling audio text) was present, and which one. Persisted so
-   * accepted == corroborated is queryable post hoc. */
+  /** ADAAAA-7162/7185: whether an independent corroboration signal was present
+   * (measured scoreboard change, goal-calling audio text, or the two-signal
+   * frame attestation) and which one fired. Persisted so accepted ==
+   * corroborated is queryable post hoc. */
   corroborated?: boolean;
-  corroborationSource?: "audio_text" | "scoreboard" | null;
+  corroborationSource?: "audio_text" | "scoreboard" | "frame_attestation" | null;
   /** ADAAAA-7251 (ACC-3): the ASR transcript computed for the highlight's audio
    * context (Path 2, fallible), returned so the server can persist it on the
    * highlight record for human corroboration. "" / absent where no audio
