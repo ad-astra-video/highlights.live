@@ -3,6 +3,8 @@ import {
   analyzeJob,
   buildConfirmContext,
   confirmReconcile,
+  CONFIRM_MAX_FRAMES,
+  downsampleConfirmFrames,
   hasIndependentAttestation,
   isGateRejectedBareGoal,
   isGoalTypeEvent,
@@ -267,6 +269,40 @@ describe("selectConfirmKeyframes", () => {
 });
 
 describe("buildConfirmContext", () => {
+  it("ADAAAA-7543: bounds the deep-dive frame sequence and keeps its full span", () => {
+    const dense = Array.from({ length: 48 }, (_, i) => ({ timestamp: i / 8, imageB64: `b${i}` }));
+    const out = downsampleConfirmFrames(dense);
+    expect(out.length).toBe(CONFIRM_MAX_FRAMES);
+    // first + last survive so the pre-instant and the aftermath stay visible
+    expect(out[0].imageB64).toBe("b0");
+    expect(out[out.length - 1].imageB64).toBe("b47");
+    // monotonically ordered, no duplicates
+    const idx = out.map((f) => dense.indexOf(f));
+    expect(idx.every((v, i) => i === 0 || v > idx[i - 1])).toBe(true);
+    // a sequence that already fits is passed through untouched (identity)
+    const small = dense.slice(0, 5);
+    expect(downsampleConfirmFrames(small)).toBe(small);
+  });
+
+  it("ADAAAA-7543: centers the frame window on the goal instant, not the window center", async () => {
+    const shared = new LiveRunShared({ decideWindowN: 24 });
+    const asked: number[] = [];
+    const cfg = {
+      resampleFrames: async (ts: number) => {
+        asked.push(ts);
+        return [
+          { timestamp: ts - 3, imageB64: "r0" },
+          { timestamp: ts, imageB64: "r1" },
+          { timestamp: ts + 3, imageB64: "r2" },
+        ];
+      },
+    } as any;
+    const ctx = await buildConfirmContext(shared, cfg, { timestamp: 51 }, acceptedGoal, 46);
+    expect(asked).toEqual([46]);
+    expect(ctx.frames).toHaveLength(3);
+    expect(ctx.frames[1].base64).toBe("r1");
+  });
+
   it("assembles dense frames + keyframes + trajectory + motion + audio", async () => {
     const shared = new LiveRunShared({ decideWindowN: 24 });
     shared.addFrame(0, 0, "f0");

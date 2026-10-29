@@ -1930,6 +1930,31 @@ export const CONFIRM_MOTION_WINDOW_S = 5;
  * 3-5 s window. Tune via `DECIDE_CONFIRM_EXTRA_WINDOW_S`. */
 export const DEFAULT_CONFIRM_WINDOW_EXTRA_S = 4;
 
+/** ADAAAA-7543: the maximum number of frames handed to the Stage-2 deep dive.
+ * The VOD detail-first burst re-sample is 8 fps over ±3 s (48 frames); feeding
+ * that dense burst made the verification pass lose the ball-in-net instant and
+ * REFUTE genuine goals (measured on /data/clips soc-goal-01: the same window
+ * attests ball-in-net + line-crossed at ~11 evenly spaced frames but refutes at
+ * 16+ frames / multi-fps bursts). A bounded, evenly spaced sequence keeps the
+ * whole pre-instant -> aftermath span visible while staying readable. */
+export const CONFIRM_MAX_FRAMES = 12;
+
+/** ADAAAA-7543: evenly downsample a dense confirm frame sequence to at most
+ * `max` frames, ALWAYS keeping the first and last frame so the window's full
+ * temporal span survives. Pure + order-preserving, so it is unit-testable and a
+ * no-op when the sequence already fits. */
+export function downsampleConfirmFrames<T>(frames: T[], max = CONFIRM_MAX_FRAMES): T[] {
+  const all = frames ?? [];
+  const cap = Math.max(2, Math.floor(max));
+  const n = all.length;
+  if (n <= cap) return all;
+  const out: T[] = [];
+  for (let i = 0; i < cap; i++) {
+    out.push(all[Math.round((i * (n - 1)) / (cap - 1))]);
+  }
+  return out;
+}
+
 /** Wrap a run of base64 mono 16 kHz int16 PCM samples into a RIFF/WAVE file and
  * return it as base64. Pure + deterministic so it is unit-testable. The decide
  * runner accepts a mono WAV at any of the common PCM bit depths; 16-bit is the
@@ -2838,7 +2863,13 @@ export async function buildConfirmContext(
   shared: LiveRunShared,
   cfg: AnalyzerConfig,
   candidate: { timestamp: number },
-  stage1: DecisionResult
+  stage1: DecisionResult,
+  /** ADAAAA-7543: the goal's OWN content instant the deep dive should look at.
+   * The observe-window CENTER can sit several seconds past the crossing, so
+   * centering the frame window on it fed the dive a post-goal restart and the
+   * pass refuted a genuine goal. Defaults to the candidate timestamp for every
+   * non-observe path (where the candidate timestamp IS the goal trigger). */
+  centerTs?: number
 ): Promise<Omit<ConfirmRequest, "eventType" | "timestamp" | "gameHint" | "stage1">> {
   // Denser frame window: prefer the detail-first higher-FPS burst re-sample
   // (I7 / ADAAAA-6361) around the trigger; else the cached window; else [].
@@ -2846,19 +2877,24 @@ export async function buildConfirmContext(
   // so the model sees the ball actually cross the line / enter the net, not a
   // single boundary frame.
   const extra = Math.max(0, cfg.confirmWindowExtraS ?? DEFAULT_CONFIRM_WINDOW_EXTRA_S);
+  const center = centerTs ?? candidate.timestamp;
   let dense: { timestamp: number; imageB64: string }[] = [];
   if (cfg.resampleFrames) {
     try {
-      dense = (await cfg.resampleFrames(candidate.timestamp)) ?? [];
+      dense = (await cfg.resampleFrames(center)) ?? [];
     } catch {
       dense = [];
     }
   }
-  if (!dense.length) dense = shared.framesNear(candidate.timestamp, CONFIRM_MOTION_WINDOW_S + extra);
-  const frames = dense.map((f) => ({ role: "full", base64: f.imageB64 }));
+  if (!dense.length) dense = shared.framesNear(center, CONFIRM_MOTION_WINDOW_S + extra);
+  // ADAAAA-7543: hand the deep dive a bounded, evenly spaced sequence (never the
+  // raw 8 fps burst) — a dense burst makes the pass lose the crossing instant and
+  // refute a genuine goal.
+  const sampled = downsampleConfirmFrames(dense);
+  const frames = sampled.map((f) => ({ role: "full", base64: f.imageB64 }));
   const keyframes = selectConfirmKeyframes(
-    dense,
-    candidate.timestamp,
+    sampled,
+    center,
     (cfg.preWindowS ?? DEFAULT_PRE_WINDOW_S) + extra,
     (cfg.postWindowS ?? DEFAULT_POST_WINDOW_S) + extra
   );
@@ -2966,11 +3002,15 @@ export async function confirmReconcile(
   const key = confirmCandidateIdentity(cfg, goalEventTs ?? candidate.timestamp);
   const cached = shared.confirmedGoalOutcome(key);
   if (cached) return cached;
-  const ctx = await buildConfirmContext(shared, cfg, candidate, stage1);
+  // ADAAAA-7543: center the deep dive's frame window on the goal EVENT instant —
+  // the observe-window center can sit several seconds past the crossing, and a
+  // post-goal restart window made the pass refute genuine goals.
+  const goalTs = goalEventTs ?? candidate.timestamp;
+  const ctx = await buildConfirmContext(shared, cfg, candidate, stage1, goalTs);
   try {
     const confirm = await client.confirm({
       eventType: candidate.eventType,
-      timestamp: candidate.timestamp,
+      timestamp: goalTs,
       gameHint: cfg.gameHint,
       stage1,
       ...ctx,
