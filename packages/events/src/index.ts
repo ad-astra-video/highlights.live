@@ -709,10 +709,11 @@ export const HighlightRecordSchema = z.object({
   stage1Disagreed: z.boolean().optional(),
   // ADAAAA-7185: independent corroboration evidence for an accepted GOAL.
   // Whether the /confirm pass found an independent corroboration signal
-  // (scoreboard change or goal-calling audio/commentary text) and which one.
-  // Persisted so accepted == corroborated is queryable post hoc.
+  // (measured scoreboard change, goal-calling audio/commentary text, or the
+  // ADAAAA-7543 two-signal frame attestation) and which one. Persisted so
+  // accepted == corroborated is queryable post hoc.
   corroborated: z.boolean().optional(),
-  corroborationSource: z.enum(["audio_text", "scoreboard"]).optional(),
+  corroborationSource: z.enum(["audio_text", "scoreboard", "frame_attestation"]).optional(),
   status: z.enum(["pending", "accepted", "rejected"]).default("pending"),
   // ADAAAA-6798 Inc 2: link the highlight to the JobCandidate that started it,
   // and de-normalize that candidate's trigger metadata so GET /highlights and

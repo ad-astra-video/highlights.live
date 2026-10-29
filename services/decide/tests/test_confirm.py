@@ -525,8 +525,155 @@ def test_run_pass_still_downgrades_on_ball_in_net_alone(monkeypatch):
     assert resp["decision"]["isHighlight"] is False
 
 
-def test_confirm_requires_corroboration_default_on(monkeypatch):
+# --- ADAAAA-7543 two-signal frame attestation (ratified ADAAAA-7555 Option 1)
+
+
+def test_two_signal_goal_attested_requires_both_criteria():
+    """A model frame read attests a REGULATION goal only when BOTH ball-in-net
+    and ball-crossed-the-line-between-posts are plainly observed."""
     from app import confirm as cf
+    assert cf.two_signal_goal_attested(ball_in_net=True, ball_crossed=True) is True
+    # single-signal reads never attest (the ADAAAA-7162 fabrication guard).
+    assert cf.two_signal_goal_attested(ball_in_net=True, ball_crossed=False) is False
+    assert cf.two_signal_goal_attested(ball_in_net=True, ball_crossed=None) is False
+    assert cf.two_signal_goal_attested(ball_in_net=False, ball_crossed=True) is False
+    assert cf.two_signal_goal_attested(ball_in_net=None, ball_crossed=True) is False
+    assert cf.two_signal_goal_attested(ball_in_net=None, ball_crossed=None) is False
+
+
+def test_goal_corroborated_credits_two_signal_attestation():
+    """ADAAAA-7543: the two-signal attestation corroborates a regulation goal
+    that carries no scoreboard delta and no goal-calling audio."""
+    from app import confirm as cf
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="", two_signal_attested=True
+    ) is True
+    # single-signal (only one criterion) stays uncorroborated.
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="", two_signal_attested=False
+    ) is False
+    # the measured scoreboard delta and goal-calling audio still corroborate.
+    assert cf.goal_corroborated(scoreboard_changed=True, transcript="") is True
+    assert cf.goal_corroborated(scoreboard_changed=False, transcript="GOOOAL") is True
+
+
+def test_run_pass_accepts_goal_on_two_signal_stage1_attestation(monkeypatch):
+    """ADAAAA-7543 recall path: soc-goal-01 shape — Stage-1 plainly observed BOTH
+    ball-in-net and ball-crossed-line-between-posts, the deep dive confirmed the
+    goal and refuted neither criterion, and there is no scoreboard tick / goal
+    call. The goal is now ACCEPTED as a scoring play (was downgraded pre-fix)."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {
+        "outcome": "scoring_play", "isHighlight": True, "score": 95,
+        "eventType": "GOAL", "reason": "ball into the net, keeper beaten",
+        "verdict": {"criteria": {"ballInNet": True, "ballCrossedLineBetweenPosts": True,
+                                 "scoreboardChanged": None, "crowdErupted": True}},
+    }
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "dense frames show the ball crossing the line and settling in the net", '
+        '"evidence": {"ballInNet": null, "ballTrajectoryCrossedLine": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["corroborated"] is True
+    assert resp["corroborationSource"] == "frame_attestation"
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
+
+
+def test_run_pass_two_signal_from_deep_dive_evidence(monkeypatch):
+    """The deep dive's OWN evidence can carry the two-signal attestation."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 80, "eventType": "GOAL", "reason": "s1"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.85, '
+        '"reason": "ball crossed the line between the posts and is in the net", '
+        '"evidence": {"ballInNet": true, "ballTrajectoryCrossedLine": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["corroborated"] is True
+    assert resp["corroborationSource"] == "frame_attestation"
+    assert resp["decision"]["outcome"] == "scoring_play"
+
+
+def test_run_pass_two_signal_refuted_by_deep_dive_stays_near_miss(monkeypatch):
+    """The "neither refuted" clause: Stage-1 may read both criteria true, but when
+    the contradictory-hypothesis deep dive plainly refutes the ball being in the
+    net, the attestation is NOT credited (save / near-miss stays rejected)."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {
+        "outcome": "scoring_play", "isHighlight": True, "score": 95, "eventType": "GOAL", "reason": "s1",
+        "verdict": {"criteria": {"ballInNet": True, "ballCrossedLineBetweenPosts": True}},
+    }
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.4, '
+        '"reason": "the ball beat the keeper but struck the post and stayed out", '
+        '"evidence": {"ballInNet": false, "ballTrajectoryCrossedLine": false}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["corroborated"] is False
+    assert resp["corroborationSource"] is None
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
+
+
+def test_run_pass_single_signal_stage1_attestation_still_not_credited(monkeypatch):
+    """ADAAAA-7543 AC2: a Stage-1 read that observed ONLY ball-in-net (crossed
+    line = false) is a single-signal self-read -> still downgraded to near_miss,
+    so the ADAAAA-7162 fabrication guard holds."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {
+        "outcome": "scoring_play", "isHighlight": True, "score": 95, "eventType": "GOAL", "reason": "s1",
+        "verdict": {"criteria": {"ballInNet": True, "ballCrossedLineBetweenPosts": False}},
+    }
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "celebration after a shot that went wide of the far post", '
+        '"evidence": {"ballInNet": null, "ballTrajectoryCrossedLine": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": False}
+    )
+    assert resp["corroborated"] is False
+    assert resp["decision"]["outcome"] == "near_miss"
+
+
+def test_run_pass_measured_scoreboard_takes_precedence_over_two_signal(monkeypatch):
+    """Corroboration SOURCE precedence: a MEASURED scoreboard delta (or goal-call)
+    is reported ahead of the weaker two-signal frame attestation."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {
+        "outcome": "scoring_play", "isHighlight": True, "score": 90, "eventType": "GOAL", "reason": "s1",
+        "verdict": {"criteria": {"ballInNet": True, "ballCrossedLineBetweenPosts": True}},
+    }
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, "reason": "goal", '
+        '"evidence": {"ballInNet": true, "ballTrajectoryCrossedLine": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": True}
+    )
+    assert resp["corroborated"] is True
+    assert resp["corroborationSource"] == "scoreboard"
+
+
+def test_confirm_requires_corroboration_default_on(monkeypatch):
     monkeypatch.delenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", raising=False)
     assert cf.confirm_requires_corroboration() is True
     monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "0")
