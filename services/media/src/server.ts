@@ -28,6 +28,9 @@ interface ActiveStream {
   provisioned: ProvisionedSession;
   sockets: Set<any>;
   closed: boolean;
+  /** When this session was provisioned (ms) — the lease age the health surface
+   *  reports (ADAAAA-6869 Phase 4). */
+  startedAt: number;
   /** Active WebRTC ingest terminus (present once a browser opens an RTC session). */
   rtc?: { pcId: string; session: WebRtcIngestSession };
   /** Muxed (video+audio) MediaRecorder chunks reassembled in arrival order.
@@ -83,6 +86,15 @@ export interface MediaServerOptions {
   /** Max ms to wait for the answerer's ICE gathering to complete before the
    *  RTC answer is returned (so it carries a reachable candidate). Default 2000. */
   rtcIceGatherTimeoutMs?: number;
+  /** Node identity published on `/health` + returned by `POST /sessions`
+   *  (ADAAAA-6869 Phase 4). Default `media-0`. */
+  nodeId?: string;
+  /** Advertised concurrent-session capacity (default 1: the perceive runner is
+   *  capacity-1). The console compares active sessions against it. */
+  maxSessions?: number;
+  /** Bearer token gating `GET /node` (per-session detail). Unset => 404, so a
+   *  public media origin never exposes session/job ids. */
+  healthToken?: string;
 }
 
 const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
@@ -94,14 +106,31 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export class MediaServer {
   private active = new Map<string, ActiveStream>(); // keyed by sessionId
   // Pending teardowns during the reconnect grace window (keyed by sessionId).
-  private graceTimers = new Map<string, NodeJS.Timeout>();
+  // `at` is the deadline so the health surface can report the lease expiry.
+  private graceTimers = new Map<string, { t: NodeJS.Timeout; at: number }>();
   // Pending teardowns for provisioned sessions that never got a browser WS.
-  private noClientTimers = new Map<string, NodeJS.Timeout>();
+  private noClientTimers = new Map<string, { t: NodeJS.Timeout; at: number }>();
   private orch: MediaOrchestrator;
   /** WebRTC ingest JPEG sample cadence (fps) decoded by the media server. */
   private rtcSampleFps: number;
+  /** Node identity + advertised capacity (ADAAAA-6869 Phase 4). */
+  private nodeId: string;
+  private maxSessions: number;
+  private healthToken: string | undefined;
+  private startedAt = Date.now();
+  /** Provision/lease counters for the capacity/health surface. */
+  private counters = {
+    provisionAttempts: 0,
+    provisionFailures: 0,
+    noCapacityFailures: 0,
+    sessionsCompleted: 0,
+    sessionSeconds: 0,
+  };
   constructor(private opts: MediaServerOptions, orch?: MediaOrchestrator) {
     this.rtcSampleFps = opts.rtcSampleFps ?? 1;
+    this.nodeId = opts.nodeId ?? "media-0";
+    this.maxSessions = opts.maxSessions && opts.maxSessions > 0 ? opts.maxSessions : 1;
+    this.healthToken = opts.healthToken;
     this.orch =
       orch ??
       new MediaOrchestrator({
@@ -131,13 +160,27 @@ export class MediaServer {
     // Provision a perceive session for a stream. Returns the WS path the
     // browser connects to.
     app.post<{ Body: { jobId?: string } }>("/sessions", async (_, reply) => {
-      const p = await this.orch.provision();
+      this.counters.provisionAttempts++;
+      let p: ProvisionedSession;
+      try {
+        p = await this.orch.provision();
+      } catch (e: any) {
+        this.counters.provisionFailures++;
+        // Capacity exhaustion is the orchestrator's transient saturation signal
+        // (capacity-1 perceive runner); count it so the console can show the
+        // node as saturated rather than merely "unhealthy" (ADAAAA-6869).
+        if (/no capacity available for runner/i.test(String(e?.message ?? e))) {
+          this.counters.noCapacityFailures++;
+        }
+        throw e;
+      }
       const stream: ActiveStream = {
         streamId: randomUUID(),
         jobId: (_.body?.jobId as string) || "",
         provisioned: p,
         sockets: new Set(),
         closed: false,
+        startedAt: Date.now(),
       };
       this.active.set(p.sessionId, stream);
       // Pay the orchestrator for as long as the stream is open (no-op offchain).
@@ -146,13 +189,14 @@ export class MediaServer {
       // but the client vanished) — otherwise a reserved slot leaks forever.
       const noClientMs = this.opts.provisionNoClientMs ?? 60000;
       if (noClientMs > 0) {
-        this.noClientTimers.set(
-          p.sessionId,
-          setTimeout(() => {
+        const at = Date.now() + noClientMs;
+        this.noClientTimers.set(p.sessionId, {
+          at,
+          t: setTimeout(() => {
             this.noClientTimers.delete(p.sessionId);
             void this.teardown(p.sessionId);
-          }, noClientMs)
-        );
+          }, noClientMs),
+        });
       }
       // Full ingest WS URL (LB/public front), when the operator tells us the
       // public origin. Clients that can't route by LB fall back to wsPath.
@@ -179,6 +223,10 @@ export class MediaServer {
         rtc: true,
         streamId: stream.streamId,
         jobId: stream.jobId,
+        // Node identity so the control plane can attribute this job's Livepeer
+        // GPU spend to the media node that carried it (ADAAAA-6869 Phase 4).
+        nodeId: this.nodeId,
+        maxSessions: this.maxSessions,
       };
     });
 
@@ -322,8 +370,90 @@ export class MediaServer {
       return { ok: true };
     });
 
-    app.get("/health", async () => ({ status: "ok" }));
+    // ---------------------------------------------------------------------
+    // Capacity / health surface (ADAAAA-6869 Phase 4)
+    // ---------------------------------------------------------------------
+    // `/health` is PUBLIC (the media origin sits behind the public LB and is
+    // polled by the control plane + box health checks). It reports liveness,
+    // load and lease COUNTS only — never a session id or job id.
+    app.get("/health", async () => this.healthSnapshot());
+    // `/node` is the DETAIL surface: per-session ids, job ids, lease expiry, and
+    // the per-node cost basis. It carries identifiers, so it is bearer-gated by
+    // MEDIA_HEALTH_TOKEN. Unset => disabled (404), never public-by-default.
+    app.get("/node", async (req, reply) => {
+      if (!this.healthToken) return reply.code(404).send({ error: "node detail disabled (MEDIA_HEALTH_TOKEN unset)" });
+      const auth = String((req.headers as any)?.authorization ?? "");
+      const presented = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+      if (presented !== this.healthToken) return reply.code(401).send({ error: "unauthorized" });
+      return this.healthSnapshot({ detail: true });
+    });
     return app;
+  }
+
+  /**
+   * Capacity/health snapshot. `detail:false` (public `/health`) omits every
+   * identifier; `detail:true` (`GET /node`) adds the per-session lease list.
+   *
+   * Lease states:
+   *   - `active`          a browser/peer is attached and frames are flowing
+   *   - `grace`           last client dropped, slot held for `reconnectGraceMs`
+   *                       so a blip reconnects to the SAME session
+   *   - `awaiting-client` provisioned, no browser ever attached yet
+   *
+   * `cost` is the per-node cost BASIS (completed sessions + paid session
+   * seconds on this node). The authoritative money figure per job is the
+   * control plane's `job.costUsd`; this node only publishes the meter.
+   */
+  healthSnapshot(opts: { detail?: boolean } = {}): any {
+    const now = Date.now();
+    const sessions = [...this.active.values()].map((s) => {
+      const grace = this.graceTimers.get(s.provisioned.sessionId);
+      const noClient = this.noClientTimers.get(s.provisioned.sessionId);
+      const lease = grace
+        ? { state: "grace", expiresInS: Math.max(0, Math.round((grace.at - now) / 1000)) }
+        : noClient
+        ? { state: "awaiting-client", expiresInS: Math.max(0, Math.round((noClient.at - now) / 1000)) }
+        : { state: "active", expiresInS: null };
+      return {
+        sessionId: s.provisioned.sessionId,
+        jobId: s.jobId,
+        transport: s.rtc ? "webrtc" : "ws",
+        ageS: Math.round((now - s.startedAt) / 1000),
+        sockets: s.sockets.size,
+        recording: !!s.recording,
+        paying: this.orch.isPaying(s.provisioned.sessionId),
+        lease,
+      };
+    });
+    const leaseCounts = {
+      active: sessions.filter((s) => s.lease.state === "active").length,
+      grace: sessions.filter((s) => s.lease.state === "grace").length,
+      awaitingClient: sessions.filter((s) => s.lease.state === "awaiting-client").length,
+    };
+    const activeSessions = sessions.length;
+    const availableSessions = Math.max(0, this.maxSessions - activeSessions);
+    return {
+      status: "ok",
+      node: { id: this.nodeId, role: "media", uptimeS: Math.round((now - this.startedAt) / 1000) },
+      capacity: {
+        maxSessions: this.maxSessions,
+        activeSessions,
+        availableSessions,
+        loadPct: this.maxSessions > 0 ? Math.round((activeSessions / this.maxSessions) * 100) : 0,
+        saturated: availableSessions === 0,
+        provisionAttempts: this.counters.provisionAttempts,
+        provisionFailures: this.counters.provisionFailures,
+        noCapacityFailures: this.counters.noCapacityFailures,
+      },
+      leases: { ...leaseCounts, paying: this.orch.payingCount(), total: activeSessions },
+      payment: { onchain: this.orch.paysOnchain(), payingSessions: this.orch.payingCount() },
+      cost: {
+        basis: "media-node session meter (control plane attributes job.costUsd per node)",
+        sessionsCompleted: this.counters.sessionsCompleted,
+        sessionSeconds: Number(this.counters.sessionSeconds.toFixed(1)),
+      },
+      ...(opts.detail ? { sessions } : {}),
+    };
   }
 
   private async handleFrame(stream: ActiveStream, socket: any, raw: any) {
@@ -449,20 +579,20 @@ export class MediaServer {
       void this.teardown(sid);
       return;
     }
-    this.graceTimers.set(
-      sid,
-      setTimeout(() => {
+    this.graceTimers.set(sid, {
+      at: Date.now() + ms,
+      t: setTimeout(() => {
         this.graceTimers.delete(sid);
         void this.teardown(sid);
-      }, ms)
-    );
+      }, ms),
+    });
   }
 
   /** Cancel a pending reconnect-grace teardown (a browser reconnected). */
   private clearGrace(sid: string) {
     const t = this.graceTimers.get(sid);
     if (t) {
-      clearTimeout(t);
+      clearTimeout(t.t);
       this.graceTimers.delete(sid);
     }
   }
@@ -471,7 +601,7 @@ export class MediaServer {
   private clearNoClient(sid: string) {
     const t = this.noClientTimers.get(sid);
     if (t) {
-      clearTimeout(t);
+      clearTimeout(t.t);
       this.noClientTimers.delete(sid);
     }
   }
@@ -483,6 +613,11 @@ export class MediaServer {
     const stream = this.active.get(sid);
     if (!stream || stream.closed) return;
     stream.closed = true;
+    // Per-node cost meter (ADAAAA-6869 Phase 4): accrue the paid session time
+    // this node carried, so the console can attribute Livepeer GPU spend to the
+    // node even when the job record itself has not landed yet.
+    this.counters.sessionsCompleted++;
+    this.counters.sessionSeconds += Math.max(0, (Date.now() - stream.startedAt) / 1000);
     // Close the reassembled muxed recording (flush pending chunk bytes).
     if (stream.recording) {
       // Guarded end(): a destroyed/errored file stream reports its failure

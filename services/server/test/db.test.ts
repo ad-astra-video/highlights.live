@@ -28,7 +28,33 @@ describe("media_sessions persistence (SqliteDb)", () => {
 
     await db.clearMediaSession("job-1");
     expect(await db.getMediaSession("job-1")).toBeUndefined();
+    await db.close();
+  });
 
+  // ADAAAA-6869 Phase 4: the node that carried a session is persisted so
+  // Livepeer GPU spend is attributable per node; legacy rows stay unattributed.
+  it("persists the media node id per session (and lists sessions for attribution)", async () => {
+    const db = new SqliteDb(":memory:");
+    const now = new Date().toISOString();
+    const base = {
+      sessionId: "sess-1",
+      streamId: "stream-1",
+      wsUrl: "wss://media.example.com/stream/sess-1",
+      mediaOrigin: "https://media.example.com",
+      status: "active" as const,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await db.setMediaSession({ ...base, jobId: "job-node", nodeId: "media-0" });
+    await db.setMediaSession({ ...base, jobId: "job-legacy" });
+
+    expect((await db.getMediaSession("job-node"))!.nodeId).toBe("media-0");
+    // A pre-node_id row round-trips without inventing a node.
+    expect((await db.getMediaSession("job-legacy"))!.nodeId).toBeUndefined();
+
+    const all = await db.listMediaSessions();
+    expect(all.map((s) => s.jobId).sort()).toEqual(["job-legacy", "job-node"]);
+    expect(all.find((s) => s.jobId === "job-node")!.nodeId).toBe("media-0");
     await db.close();
   });
 });

@@ -400,4 +400,18 @@ export class MediaOrchestrator {
     ref.stop();
     this.payers.delete(sessionId);
   }
+
+  // --- Health-surface accessors (ADAAAA-6869 Phase 4) ---------------------
+  /** True when a payment refresher is active for this session (on-chain only). */
+  isPaying(sessionId: string): boolean {
+    return this.payers.has(sessionId);
+  }
+  /** Number of sessions currently being paid for. 0 offchain. */
+  payingCount(): number {
+    return this.payers.size;
+  }
+  /** True when a remote signer is configured (i.e. this node is the payer). */
+  paysOnchain(): boolean {
+    return !!this.opts.signer;
+  }
 }
