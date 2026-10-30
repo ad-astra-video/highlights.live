@@ -206,7 +206,8 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
                       ball_in_net: bool = False,
                       ball_in_net_refuted: bool = False,
                       goal_confirmed: str = "",
-                      two_signal_attested: bool = False) -> bool:
+                      two_signal_attested: bool = False,
+                      stage1_contradicts: bool = False) -> bool:
     """True when at least one INDEPENDENT corroboration signal is present.
 
     The independent anchors are: a MEASURED scoreboard change, goal-calling audio
@@ -251,6 +252,22 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
     carries a ``confirmed_goal`` verdict, so AC3 / ADAAAA-7162 hold. Outside a
     shootout a ``confirmed_goal`` is NOT auto-corroborated (the fabrication
     guard stays intact)."""
+
+    # ADAAAA-7543 (follow-up fix): a WINDOW-LEVEL scoreboard delta is not a
+    # time-tied read of the analysed instant. kids_soccer.mp4 is a
+    # frequent-goal compilation, so a genuine delta from an adjacent goal lands
+    # inside nearly every 16-frame window. When the window's OWN primary read
+    # says no goal occurred (``stage1_contradicts``), that window-level delta —
+    # or a shootout merely NARRATED from the same window context — must not be
+    # the only thing that flips the window to a GOAL. Only evidence anchored to
+    # THIS window's instant may override the primary read: goal-calling audio
+    # from the window's own audio track, or the two-signal frame attestation
+    # from the same pass. (Observed FP: kids-soccer t=688.6, Stage-1
+    # ``near_miss`` / "ball ... does not enter the net", accepted as a GOAL on a
+    # measured scoreboard delta plus a narrated penalty tally.)
+    frame_anchored = bool(two_signal_attested) or audio_calls_goal(transcript)
+    if stage1_contradicts and not frame_anchored:
+        return False
     if penalty_shootout or penalty_tally_changed:
         # An attested conversion: the deep dive confirmed the goal and did not
         # explicitly say the ball was NOT in the net. This is the recall gain
@@ -726,6 +743,27 @@ def parse_confirm(text: str) -> dict | None:
 # --- reconcile / disagreement ----------------------------------------------
 
 
+def stage1_says_no_goal(stage1: dict) -> bool:
+    """Whether the Stage-1 primary read says NO goal occurred in this window.
+
+    ADAAAA-7543 (follow-up): this is the window's OWN independent read of the
+    analysed instant — ``isHighlight`` false, or an ``outcome`` of
+    ``not_highlight`` / ``near_miss``. It is the read a window-level scoreboard
+    delta must not silently override: a delta inside the 16-frame window can
+    belong to an adjacent goal in a compilation, so it is not evidence about
+    this moment on its own.
+    """
+    s1 = stage1 or {}
+    outcome = (_as_text(s1.get("outcome")) or "").lower()
+    hi = s1.get("isHighlight")
+    # An explicit isHighlight=false is the strongest signal; when the field is
+    # absent (older callers) fall back to the outcome alone rather than
+    # assuming "no goal" — a missing field must never suppress a real goal.
+    if hi is False:
+        return True
+    return outcome in ("not_highlight", "near_miss")
+
+
 def stage1_disagrees(stage1: dict, goal_confirmed: str) -> bool:
     """Whether the confirmation pass CORRECTED the Stage-1 primary read.
 
@@ -965,6 +1003,11 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         ball_in_net_refuted=ball_in_net_refuted,
         goal_confirmed=goal,
         two_signal_attested=two_signal_attested,
+        # ADAAAA-7543 (follow-up): the window's OWN primary read is the
+        # independent read of the analysed instant. When it says no goal
+        # occurred, a window-level scoreboard delta cannot be the only anchor
+        # that accepts the window (only instant-anchored evidence can).
+        stage1_contradicts=stage1_says_no_goal(stage1),
     )
     decision = reconcile_confirmed_goal(
         goal, stage1, comment=comment,
