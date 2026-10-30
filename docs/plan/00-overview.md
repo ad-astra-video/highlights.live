@@ -11,6 +11,21 @@ Source: plan §0–0.4, §8, §9.
 - Frontend: operator console, review queue, public feed, overlays.
 - Orchestrator(s): runner registry, capacity, reverse proxy, ticket verify, trickle broker.
 
+## Post-split topology (accepted plan rev 3, ADAAAA-6714)
+The Server/media-server workload split is landed (phases 0–3). Boundaries:
+- **Server** = negotiator/DB. Fastify control plane: jobs, DB, entitlements,
+  temporal engine, decide/VOD queue. It carries NO media bytes and no model weights.
+- **Media server** = stream + Orchestrator terminus + payer. It owns the browser
+  ingest terminus (WebRTC/WS), publishes frames to the Orchestrator's video-in rail,
+  reads events-out, and pays the Orchestrator via remote-signer tickets while a
+  stream is open. One `MEDIA_SERVER_URL` node today.
+- **Horizontal scale of the media tier is deferred.** The observability contracts are
+  already per-node (`media_sessions.node_id`, `cost.perNode[]`) so a fleet needs no
+  schema/API change; node selection is the deferred piece.
+- Live console surfaces node capacity/health + per-node Livepeer spend; the per-job
+  money figure is `job.costUsd`. See
+  [`10-media-node-observability.md`](10-media-node-observability.md).
+
 ## Session rule (§0.1)
 One persistent perceive session per stream. Decide is single-shot (each `/highlight` is its own paid call). Never start a second perceive session for a second socket. Stop perceive at stream end; decide dies when the HTTP response ends.
 

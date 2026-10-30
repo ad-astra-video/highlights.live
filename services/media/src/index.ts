@@ -28,6 +28,10 @@ async function main() {
     provisionNoClientMs: cfg.provisionNoClientMs,
     rtcIceServers: cfg.rtcIceServers,
     rtcIceGatherTimeoutMs: cfg.rtcIceGatherTimeoutMs,
+    // ADAAAA-6869 Phase 4 capacity/health + per-node cost attribution surface.
+    nodeId: cfg.nodeId,
+    maxSessions: cfg.maxSessions,
+    healthToken: cfg.healthToken,
   });
   const app = await media.build();
   await app.listen({ port: cfg.port, host: "0.0.0.0" });

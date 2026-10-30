@@ -356,6 +356,10 @@ services:
       # reads this as `mediaPublicBaseUrl`, falling back to MEDIA_SERVER_URL when
       # unset (local/dev, no LB). mediaPublicBaseUrl feeds api.ts provisionMedia().
       - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-https://highlights-media.dpn.gg}
+      # ADAAAA-6869 Phase 4: bearer for the media node's `GET /node` per-session
+      # detail surface (leases). Must equal the media service's MEDIA_HEALTH_TOKEN.
+      # Unset => `GET /media/node` still reports capacity/load + DB-derived cost.
+      - MEDIA_HEALTH_TOKEN=${MEDIA_HEALTH_TOKEN:-}
       # ADAAAA-6372/6373: the server is the VOD payer and calls `${decideUrl}/app/highlight`
       # (livepeer-adapter.ts). config.ts reads `decideUrl: env.DECIDE_URL` with NO default and
       # falls back to the server's own relative path -> 404 `decide failed`. Default to the
@@ -530,6 +534,14 @@ services:
       # Max ms to wait for the answerer's ICE gathering to complete before the
       # RTC answer is returned (so it carries a reachable candidate).
       - MEDIA_RTC_ICE_GATHER_TIMEOUT_MS=${MEDIA_RTC_ICE_GATHER_TIMEOUT_MS:-2000}
+      # ADAAAA-6869 Phase 4 capacity/health + per-node cost attribution. The node
+      # id is stored per media session so Livepeer GPU spend is attributable per
+      # node (one node today; a fleet just sets distinct MEDIA_NODE_IDs). The
+      # health token gates `GET /node` (per-session detail); `/health` stays public
+      # and counts-only. Must match the server's MEDIA_HEALTH_TOKEN.
+      - MEDIA_NODE_ID=${MEDIA_NODE_ID:-media-0}
+      - MEDIA_MAX_SESSIONS=${MEDIA_MAX_SESSIONS:-1}
+      - MEDIA_HEALTH_TOKEN=${MEDIA_HEALTH_TOKEN:-}
     ports:
       - "4070:4070"
     depends_on:
