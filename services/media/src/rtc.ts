@@ -36,6 +36,7 @@ import {
 } from "werift";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { guardStream, safeEnd, safeWrite } from "./guarded-write";
 
 export interface RtcIngestOptions {
   /** ffmpeg binary path (default "ffmpeg"). */
@@ -56,6 +57,9 @@ export interface RtcIngestOptions {
    *  returning the answer, so the answer carries a reachable candidate.
    *  Default 2000. */
   iceGatherTimeoutMs?: number;
+  /** Session id, used ONLY for log correlation (write-failure warnings name the
+   *  session so a dead peer is attributable — ADAAAA-7591). */
+  sessionId?: string;
 }
 
 export interface DecodedFrame {
@@ -472,6 +476,17 @@ export class WebRtcIngestSession extends EventEmitter {
     const jpeg = await new Promise<Buffer | null>((resolve) => {
       let done = false;
       const ff: ChildProcessWithoutNullStreams = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
+      // The decoder is one-shot and short-lived: it can exit on the very first
+      // segment it cannot parse (or be killed), which closes its stdin pipe
+      // while our write is still in flight. libuv then reports EPIPE
+      // asynchronously on the stdin Socket, and with no 'error' listener that
+      // unhandled event kills the node process (ADAAAA-7591). Guard all three
+      // child stdio pipes BEFORE any write, and write through safeWrite so the
+      // failure degrades to "no JPEG for this sample".
+      const label = `rtc.ffmpeg session=${this.opts.sessionId ?? "?"} demuxer=${this.demuxer()}`;
+      guardStream(ff.stdin, `${label}.stdin`);
+      guardStream(ff.stdout, `${label}.stdout`);
+      guardStream(ff.stderr, `${label}.stderr`);
       let out = Buffer.alloc(0);
       let errBuf = "";
       ff.on("error", (e) => {
@@ -499,8 +514,13 @@ export class WebRtcIngestSession extends EventEmitter {
           resolve(null);
         }
       });
-      ff.stdin.write(segment);
-      ff.stdin.end(); // EOF -> ffmpeg flushes + emits, then closes
+      // A failed write means ffmpeg exited before consuming the segment: the
+      // 'close' handler above settles the promise (bounded by the child's own
+      // exit), so nothing here may throw.
+      safeWrite(ff.stdin, segment, `${label}.stdin`, () => {
+        if (!done) { done = true; this.emit("ffmpeg", "stdin write failed (peer closed)"); resolve(null); }
+      });
+      safeEnd(ff.stdin, `${label}.stdin`); // EOF -> ffmpeg flushes + emits, then closes
     });
 
     if (jpeg && jpeg.length > 2) {

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,7 +16,7 @@ import {
   useOPUS,
 } from "werift";
 import { MediaServer } from "../src/server";
-import { isVp8Keyframe, isVp9Keyframe } from "../src/rtc";
+import { isVp8Keyframe, isVp9Keyframe, WebRtcIngestSession } from "../src/rtc";
 import type { ProvisionedSession } from "../src/orch";
 
 const wsConnect = (url: string) =>
@@ -629,3 +629,81 @@ describe("media server WebRTC VP8/VP9 decode (C3)", () => {
     }
   });
 });
+
+describe("media write hardening: a closed peer must not kill the process (ADAAAA-7591)", () => {
+  // Live regression (2026-10-30T04:24:38Z): highlights-media ran the RTC rail
+  // normally, then an unguarded write to a peer that had already closed failed
+  // asynchronously with EPIPE on a Socket that carried no 'error' listener, so
+  // node re-threw it as an unhandled 'error' and the container exited
+  // (`restart: no` -> media ingest stayed down until the box-health monitor).
+  // These tests capture uncaught errors instead of letting them kill the worker
+  // process, and assert the failing write degrades to a logged cleanup.
+  const uncaught: Error[] = [];
+  const onUncaught = (e: Error) => uncaught.push(e);
+  const spyUncaught = () => {
+    uncaught.length = 0;
+    process.on("uncaughtException", onUncaught);
+  };
+  const releaseUncaught = () => {
+    process.off("uncaughtException", onUncaught);
+  };
+
+  it("a decoder that exits mid-write (EPIPE on its stdin pipe) ends the sample instead of crashing", async () => {
+    spyUncaught();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const dir = mkdtempSync(path.join(tmpdir(), "hl-media-epipe-"));
+    const bin = path.join(dir, "ffmpeg-dies");
+    // A one-shot decoder that exits WITHOUT reading stdin — what ffmpeg does
+    // when it rejects a segment (or is killed) while our write is still queued.
+    writeFileSync(bin, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    try {
+      const session = new WebRtcIngestSession({ sampleFps: 1, ffmpegBin: bin, sessionId: "sess-epipe" });
+      // White-box: the segment is larger than the 64 KiB child-stdin pipe buffer,
+      // so node still has a write pending when the decoder exits — the crashing
+      // shape (WriteWrap.onWriteComplete -> EPIPE).
+      (session as any).seg = [{ data: Buffer.alloc(2 * 1024 * 1024, 7), pts: 0 }];
+      (session as any).vclCount = 1;
+      // Sink the session's own 'error' emitter (a decoding failure is a
+      // diagnostic here, not a process-level fault).
+      session.on("error", () => {});
+      session.on("ffmpeg", () => {});
+      // sampleFrame must settle (no JPEG), never throw / never leave an
+      // unhandled 'error' behind.
+      await expect((session as any).sampleFrame(Date.now() / 1000, 0)).resolves.toBeUndefined();
+      await new Promise((r) => setTimeout(r, 250)); // let the EPIPE land
+      expect(uncaught).toEqual([]);
+      expect(session.framesEmitted).toBe(0);
+      // ... and the failure is a logged, attributable close (session id in it).
+      const logged = warn.mock.calls.map((c) => String(c[0]));
+      expect(logged.some((s) => s.includes("write-failed") && s.includes("session=sess-epipe"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      releaseUncaught();
+    }
+  });
+
+  it("relays into a WS peer destroyed mid-write without an unhandled 'error', then releases the slot", async () => {
+    spyUncaught();
+    const g = new FakeOrch("sess-kill");
+    const ms = new MediaServer({ orchBase: "http://orch", reconnectGraceMs: 100 }, g as any);
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    try {
+      await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-kill" } });
+      const ws = await wsConnect(`${sBase.replace("http", "ws")}/stream/sess-kill`);
+      // The browser sends a frame and its socket dies (reload / network drop)
+      // before the observation is relayed back into it.
+      ws.send(JSON.stringify({ seq: 1, image: Buffer.from("jpeg").toString("base64"), timestamp: 1 }));
+      ws.terminate();
+      await new Promise((r) => setTimeout(r, 500)); // relay + reconnect-grace teardown
+      expect(uncaught).toEqual([]);
+      // Session cleaned up: the perceive slot is released after the grace window.
+      expect(g.closed).toContain("sess-kill");
+    } finally {
+      releaseUncaught();
+      await srv.close();
+    }
+  });
+});
+
