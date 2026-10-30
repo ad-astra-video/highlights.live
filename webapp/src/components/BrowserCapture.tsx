@@ -93,6 +93,14 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     };
     const track = stream.getVideoTracks()[0];
     if (track) pc.addTransceiver(track, { direction: "sendonly" });
+    // ADAAAA-7594: also send the captured audio track. getDisplayMedia is asked
+    // for `audio: true`, but Chrome only yields an audio track when a TAB is
+    // shared — and until now the client never attached it, so the media server's
+    // opus `recvonly` transceiver (ADAAAA-7524) never received browser audio and
+    // `[rtc] close ... audioPackets=0` on every real client. Best-effort: a
+    // screen/window share has no audio track, so this no-ops.
+    const audioTrack = stream.getAudioTracks()[0];
+    if (audioTrack) pc.addTransceiver(audioTrack, { direction: "sendonly" });
     // Trickle ICE candidates to the media server as they gather.
     pc.onicecandidate = (e) => {
       if (e.candidate) sendCandidate(e.candidate.toJSON());
