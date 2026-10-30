@@ -20,6 +20,7 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
 import { WebRtcIngestSession } from "./rtc";
+import { guardStream, safeEnd, safeWrite } from "./guarded-write";
 
 interface ActiveStream {
   streamId: string;
@@ -197,6 +198,8 @@ export class MediaServer {
             sampleFps: this.rtcSampleFps,
             iceServers: this.opts.rtcIceServers,
             iceGatherTimeoutMs: this.opts.rtcIceGatherTimeoutMs,
+            // Log correlation for the guarded writes (ADAAAA-7591).
+            sessionId: req.params.sid,
           });
           // Decoded frames -> orchestrator video-in rail -> observation relay.
           session.on("frame", (f) => {
@@ -234,7 +237,12 @@ export class MediaServer {
             // livepeer_gateway trickle's segment-assembly input), so audio is
             // not silently dropped while the video frames go to the video-in
             // rail. Best-effort — the orchestrator has no audio-in endpoint.
-            if (stream.recording && a.payload) stream.recording.stream.write(a.payload);
+            if (stream.recording && a.payload) {
+              // Same guarded-write rule as every other socket/stream write here.
+              safeWrite(stream.recording.stream, a.payload, `recording session=${stream.provisioned.sessionId}`, () => {
+                stream.recording = undefined;
+              });
+            }
           });
           session.on("error", (e) => console.error("[media] rtc err", e));
           stream.rtc = { pcId: randomUUID(), session };
@@ -280,6 +288,14 @@ export class MediaServer {
         return;
       }
       stream.sockets.add(connection);
+      // A browser that reloads / loses its network drops this socket mid-write,
+      // and the write below (relay) then fails asynchronously with EPIPE. The
+      // guard turns that into a warn + session close instead of an unhandled
+      // 'error' that kills the process (ADAAAA-7591).
+      guardStream(connection, `ws session=${stream.provisioned.sessionId}`, () => {
+        stream.sockets.delete(connection);
+        if (stream.sockets.size === 0) this.armGrace(req.params.sid);
+      });
       this.clearGrace(req.params.sid); // a reconnect within the grace window cancels pending teardown
       this.clearNoClient(req.params.sid); // a browser connected, so the no-client timeout is moot
       connection.on("data", (buf: Buffer) => {
@@ -371,12 +387,14 @@ export class MediaServer {
 
   private relay(stream: ActiveStream, socket: any, obs: any) {
     const payload = JSON.stringify({ type: "observation", observation: obs });
+    // Guarded: a socket can be destroyed between the read and the write (the
+    // browser dropped between frames). `safeWrite` skips closed sockets, logs a
+    // warn with the session id, and drops the dead socket from the session.
+    const label = `ws session=${stream.provisioned.sessionId}`;
     for (const s of stream.sockets) {
-      try {
-        s.write(payload);
-      } catch {
-        /* skip */
-      }
+      safeWrite(s, payload, label, () => {
+        stream.sockets.delete(s);
+      });
     }
   }
 
@@ -393,8 +411,21 @@ export class MediaServer {
       const ext = EXT_BY_MIME[mime] ?? "webm";
       const recPath = path.join(dir, `${stream.provisioned.sessionId}.${ext}`);
       stream.recording = { path: recPath, mime, stream: createWriteStream(recPath, { flags: "a" }) };
+      // A file-handle write error (ENOSPC, revoked fd) surfaces the same way as
+      // a dead peer — asynchronously, on 'error'. Guard it so a failed recording
+      // closes the recorder instead of killing the media process (ADAAAA-7591).
+      const rec = stream.recording;
+      guardStream(
+        rec.stream,
+        `recording session=${stream.provisioned.sessionId}`,
+        () => {
+          if (stream.recording === rec) stream.recording = undefined;
+        }
+      );
     }
-    stream.recording.stream.write(buf);
+    safeWrite(stream.recording.stream, buf, `recording session=${stream.provisioned.sessionId}`, () => {
+      stream.recording = undefined;
+    });
   }
 
   private async callback(stream: ActiveStream, obs: any) {
@@ -454,11 +485,9 @@ export class MediaServer {
     stream.closed = true;
     // Close the reassembled muxed recording (flush pending chunk bytes).
     if (stream.recording) {
-      try {
-        stream.recording.stream.end();
-      } catch {
-        /* already closed */
-      }
+      // Guarded end(): a destroyed/errored file stream reports its failure
+      // asynchronously on 'error', never as a throw (ADAAAA-7591).
+      safeEnd(stream.recording.stream, `recording session=${sid}`);
       stream.recording = undefined;
     }
     // 1) stop paying (no more ticket refresh). Idempotent.
