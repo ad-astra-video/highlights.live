@@ -276,6 +276,11 @@ export interface MediaSession {
   streamId: string;
   wsUrl: string;
   mediaOrigin: string;
+  /** Identity of the media NODE that provisioned this session (ADAAAA-6869
+   * Phase 4). Single node today (`media-0`); the field is what lets Livepeer GPU
+   * spend be attributed per node once a fleet exists. Null on rows written
+   * before the field existed. */
+  nodeId?: string | null;
   status: "active" | "closed";
   createdAt: string;
   updatedAt: string;
@@ -368,6 +373,9 @@ export interface Db {
   getMediaSession(jobId: string): Promise<MediaSession | undefined>;
   setMediaSession(ms: MediaSession): Promise<void>;
   clearMediaSession(jobId: string): Promise<void>;
+  /** Every tracked media session (one row per job). Feeds the per-node cost
+   * attribution readout (ADAAAA-6869 Phase 4). */
+  listMediaSessions(): Promise<MediaSession[]>;
   /** Persist a job record (full JSON upsert by id). */
   saveJob(job: Job): Promise<void>;
   getJob(id: string): Promise<Job | undefined>;
@@ -651,17 +659,23 @@ export class SqliteDb implements Db {
   async setMediaSession(ms: MediaSession): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO media_sessions (job_id,session_id,stream_id,ws_url,media_origin,status,created_at,updated_at)
-         VALUES (?,?,?,?,?,?,?,?)
+        `INSERT INTO media_sessions (job_id,session_id,stream_id,ws_url,media_origin,node_id,status,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?)
          ON CONFLICT(job_id) DO UPDATE SET session_id=excluded.session_id, stream_id=excluded.stream_id,
-           ws_url=excluded.ws_url, media_origin=excluded.media_origin, status=excluded.status,
+           ws_url=excluded.ws_url, media_origin=excluded.media_origin, node_id=excluded.node_id,
+           status=excluded.status,
            created_at=excluded.created_at, updated_at=excluded.updated_at`
       )
-      .run(ms.jobId, ms.sessionId, ms.streamId, ms.wsUrl, ms.mediaOrigin, ms.status, ms.createdAt, ms.updatedAt);
+      .run(ms.jobId, ms.sessionId, ms.streamId, ms.wsUrl, ms.mediaOrigin, ms.nodeId ?? null, ms.status, ms.createdAt, ms.updatedAt);
   }
 
   async clearMediaSession(jobId: string): Promise<void> {
     this.db.prepare("DELETE FROM media_sessions WHERE job_id = ?").run(jobId);
+  }
+
+  async listMediaSessions(): Promise<MediaSession[]> {
+    const rows = this.db.prepare("SELECT * FROM media_sessions ORDER BY created_at ASC").all() as any[];
+    return rows.map((r) => rowToMediaSession(r));
   }
 
   async saveJob(job: Job): Promise<void> {
@@ -1351,17 +1365,23 @@ export class PgDb implements Db {
 
   async setMediaSession(ms: MediaSession): Promise<void> {
     await this.pool.query(
-      `INSERT INTO media_sessions (job_id,session_id,stream_id,ws_url,media_origin,status,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `INSERT INTO media_sessions (job_id,session_id,stream_id,ws_url,media_origin,node_id,status,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        ON CONFLICT(job_id) DO UPDATE SET session_id=EXCLUDED.session_id, stream_id=EXCLUDED.stream_id,
-         ws_url=EXCLUDED.ws_url, media_origin=EXCLUDED.media_origin, status=EXCLUDED.status,
+         ws_url=EXCLUDED.ws_url, media_origin=EXCLUDED.media_origin, node_id=EXCLUDED.node_id,
+         status=EXCLUDED.status,
          created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at`,
-      [ms.jobId, ms.sessionId, ms.streamId, ms.wsUrl, ms.mediaOrigin, ms.status, ms.createdAt, ms.updatedAt]
+      [ms.jobId, ms.sessionId, ms.streamId, ms.wsUrl, ms.mediaOrigin, ms.nodeId ?? null, ms.status, ms.createdAt, ms.updatedAt]
     );
   }
 
   async clearMediaSession(jobId: string): Promise<void> {
     await this.pool.query("DELETE FROM media_sessions WHERE job_id = $1", [jobId]);
+  }
+
+  async listMediaSessions(): Promise<MediaSession[]> {
+    const r = await this.pool.query("SELECT * FROM media_sessions ORDER BY created_at ASC");
+    return r.rows.map((row: any) => rowToMediaSession(row));
   }
 
   async saveJob(job: Job): Promise<void> {
@@ -1970,6 +1990,7 @@ const SCHEMA_SQLITE = `
     stream_id TEXT NOT NULL,
     ws_url TEXT NOT NULL,
     media_origin TEXT NOT NULL,
+    node_id TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -2157,6 +2178,7 @@ const SCHEMA_PG = `
     stream_id TEXT NOT NULL,
     ws_url TEXT NOT NULL,
     media_origin TEXT NOT NULL,
+    node_id TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -2432,6 +2454,19 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 8,
+    name: "media-sessions-node-id",
+    up: async (exec, hasColumn) => {
+      // ADAAAA-6869 Phase 4: record WHICH media node provisioned a session so
+      // Livepeer GPU spend can be attributed per node. One node today
+      // (`media-0`); the column is the durable hook for a later fleet. The
+      // baseline CREATE covers fresh DBs; this brings existing on-disk DBs up.
+      if (!(await hasColumn("media_sessions", "node_id"))) {
+        await exec("ALTER TABLE media_sessions ADD COLUMN node_id TEXT");
+      }
+    },
+  },
 ];
 
 async function runMigrations(exec: Exec, hasColumn: HasColumn, applied: Applied, markApplied: MarkApplied): Promise<void> {
@@ -2525,6 +2560,9 @@ function rowToMediaSession(r: any): MediaSession {
     streamId: r.stream_id,
     wsUrl: r.ws_url,
     mediaOrigin: r.media_origin,
+    // Absent (not null) on rows written before the column existed, so callers
+    // treat legacy rows uniformly via `session.nodeId || "unattributed"`.
+    ...(r.node_id ? { nodeId: r.node_id as string } : {}),
     status: r.status === "closed" ? "closed" : "active",
     createdAt: r.created_at,
     updatedAt: r.updated_at,

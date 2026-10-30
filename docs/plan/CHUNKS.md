@@ -16,5 +16,6 @@ them in order; verify (tests) before moving on.
 | 07 | 07-browser-stream-rail.md | 3.5, 5 | browser stream rail (WebSocket trickle re-architecture) |
 | 08 | 08-tracking-plan-latency-cost.md | 7 D, 8, 14.4 | tracking-plan → perceive latency & cost accounting |
 | 09 | 09-live-observer-latency-report.md | 11, live | live decide-observer latency surface & ~30 s flag budget |
+| 10 | 10-media-node-observability.md | 0, 4.5, 7 D | post-split media-node capacity/health + per-node inference cost attribution |
 
 Definition of done + risks live in 00-overview's tail (plan §8/§9).

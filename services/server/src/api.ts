@@ -58,6 +58,7 @@ import { extractVodAudioChunks } from "./vod-audio";
 import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./db";
 import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribeFunnel, recordSignupFunnel } from "./funnel";
 import { reportMonitoring, RELIABILITY_FLOOR } from "./monitoring";
+import { buildMediaNodeReport } from "./media-node";
 import { AuthService, BetaGateError, adminRequired, adminReadonlyRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError, canRetrieveDataset } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
@@ -468,6 +469,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // Persist the internal origin so isMediaHealthy() health-checks the media
       // node directly; the PUBLIC origin is what the browser is told.
       mediaOrigin: internalOrigin,
+      // ADAAAA-6869 Phase 4: which node carried this stream, so Livepeer GPU
+      // spend is attributable per node (single node today, fleet-ready shape).
+      nodeId: typeof body.nodeId === "string" && body.nodeId ? body.nodeId : null,
       status: "active",
       createdAt: now,
       updatedAt: now,
@@ -2676,6 +2680,40 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // 500) so the client can back off.
       return reply.code(mediaErrorStatus(e)).send({ error: String(e?.message || e) });
     }
+  });
+
+  // Media-node capacity/health + per-node Livepeer GPU cost attribution
+  // (ADAAAA-6869 Phase 4). The live console polls this next to a running job.
+  //
+  // Sources: the node's public `/health` (counts-only), its bearer-gated `/node`
+  // detail (session leases — only when MEDIA_HEALTH_TOKEN is configured), and
+  // the durable attribution join `media_sessions.node_id` -> `job.costUsd`.
+  // Authenticated (not admin): the console is a per-user operator page.
+  app.get("/media/node", { preHandler: authReq }, async () => {
+    const origin = (cfg.mediaServerUrl ?? "").replace(/\/+$/, "");
+    if (!origin) {
+      return buildMediaNodeReport({ origin: "", health: null, mediaSessions: [], jobs: [] });
+    }
+    const getJson = async (path: string, token?: string): Promise<any | null> => {
+      try {
+        const r = await fetch(`${origin}${path}`, {
+          signal: AbortSignal.timeout(2000),
+          headers: token ? { authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!r.ok) return null;
+        return (await r.json()) as any;
+      } catch {
+        // Node down / unreachable: the report degrades to `reachable: false` and
+        // still publishes the DB-derived cost attribution.
+        return null;
+      }
+    };
+    const health = await getJson("/health");
+    // Per-session detail is optional: an unconfigured or down node just yields
+    // null, and the console renders capacity/load without lease rows.
+    const detail = cfg.mediaHealthToken ? await getJson("/node", cfg.mediaHealthToken) : null;
+    const [mediaSessions, jobs] = await Promise.all([db.listMediaSessions(), db.listJobs()]);
+    return buildMediaNodeReport({ origin, health, detail, mediaSessions, jobs });
   });
 
   // Internal callback from the media server: relay an observation the perceive
