@@ -1082,3 +1082,108 @@ def test_prompt_credits_two_signal_frame_attestation():
     assert "is NOT corroboration" in p
     # The old instruction that forced refutation without scoreboard/audio is gone.
     assert "without ANY independent corroboration" not in p
+
+
+# --- ADAAAA-7543 follow-up: window-level attestation must not accept a non-goal
+
+
+def test_stage1_says_no_goal_reads_the_windows_own_primary_verdict():
+    from app.confirm import stage1_says_no_goal
+    assert stage1_says_no_goal({"outcome": "near_miss", "isHighlight": False}) is True
+    assert stage1_says_no_goal({"outcome": "not_highlight", "isHighlight": False}) is True
+    assert stage1_says_no_goal({"isHighlight": False}) is True
+    assert stage1_says_no_goal({"outcome": "scoring_play", "isHighlight": True}) is False
+    # a missing isHighlight field must never be read as "no goal" on its own
+    assert stage1_says_no_goal({"outcome": "scoring_play"}) is False
+    assert stage1_says_no_goal({}) is False
+
+
+def test_goal_corroborated_window_scoreboard_cannot_override_no_goal_read():
+    """ADAAAA-7543 follow-up: when the window's OWN primary read says no goal
+    occurred, a window-level measured scoreboard delta (or a shootout narrated
+    from the same window context) is NOT enough on its own — only evidence
+    anchored to the analysed instant (goal-calling audio from the window's own
+    track, or the two-signal frame attestation from the same pass) may override
+    it."""
+    from app import confirm as cf
+    # window-level measured delta alone -> NOT corroborated
+    assert cf.goal_corroborated(
+        scoreboard_changed=True, transcript="", stage1_contradicts=True
+    ) is False
+    # narrated shootout / tally inside a no-goal window -> NOT corroborated
+    assert cf.goal_corroborated(
+        scoreboard_changed=True, transcript="", penalty_shootout=True,
+        goal_confirmed="confirmed_goal", stage1_contradicts=True,
+    ) is False
+    assert cf.goal_corroborated(
+        scoreboard_changed=False, transcript="", penalty_tally_changed=True,
+        goal_confirmed="confirmed_goal", stage1_contradicts=True,
+    ) is False
+    # instant-anchored evidence DOES override the primary read (recall path)
+    assert cf.goal_corroborated(
+        scoreboard_changed=True, transcript="", two_signal_attested=True,
+        stage1_contradicts=True,
+    ) is True
+    assert cf.goal_corroborated(
+        scoreboard_changed=True, transcript="GOOOAL! it's in the net",
+        stage1_contradicts=True,
+    ) is True
+    # and the guard never fires when the window's own read agrees (no recall loss)
+    assert cf.goal_corroborated(scoreboard_changed=True, transcript="") is True
+
+
+def test_run_pass_rejects_scoreboard_only_rescue_of_a_non_goal(monkeypatch):
+    """Regression for the observed kids-soccer FP (t=688.6): Stage-1 read
+    ``near_miss`` ("the ball does not enter the net"), the deep dive returned
+    ``confirmed_goal`` narrating a penalty tally 4->5, a measured scoreboard
+    delta sat in the window, and the window was accepted as a GOAL. It must now
+    be rejected — a window-level attestation cannot flip a window whose own
+    read says the goal did not happen."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {
+        "outcome": "near_miss", "isHighlight": False, "score": 60, "eventType": "GOAL",
+        "reason": "the ball is struck towards goal but does not enter the net; "
+                  "it appears to be a shot that is either saved or misses",
+        "verdict": {"criteria": {"ballInNet": None, "ballCrossedLineBetweenPosts": None}},
+    }
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.8, '
+        '"reason": "the ball enters the net and the scoreboard shows the penalty '
+        'tally changing from 4 to 5", '
+        '"evidence": {"ballInNet": true, "ballTrajectoryCrossedLine": null, '
+        '"penaltyTallyChanged": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}],
+         "scoreBoardChanged": True}
+    )
+    assert resp["goalConfirmed"] == "confirmed_goal"
+    assert resp["stage1Disagreed"] is True
+    assert resp["corroborated"] is False
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
+
+
+def test_run_pass_still_accepts_when_window_read_agrees(monkeypatch):
+    """No recall regression: the identical scoreboard-corroborated confirm is
+    still accepted when the window's own primary read saw a goal."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 95,
+              "eventType": "GOAL", "reason": "ball enters the net"}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "the ball is in the net and the scoreboard ticked", '
+        '"evidence": {"ballInNet": true, "ballTrajectoryCrossedLine": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}],
+         "scoreBoardChanged": True}
+    )
+    assert resp["corroborated"] is True
+    assert resp["corroborationSource"] == "scoreboard"
+    assert resp["decision"]["outcome"] == "scoring_play"
+    assert resp["decision"]["isHighlight"] is True
