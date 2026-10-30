@@ -35,6 +35,11 @@ export interface ServerConfig {
    * webapp as the browser-facing `mediaOrigin`. Unset -> fall back to
    * `mediaServerUrl` (local/dev, no LB). ADAAAA-7286. */
   mediaPublicBaseUrl?: string;
+  /** Bearer token the media node requires on `GET /node` (per-session lease
+   * detail). Must equal the media service's `MEDIA_HEALTH_TOKEN`. Unset => the
+   * control plane only proxies the public counts-only `/health`, and the console
+   * shows capacity/load without per-session rows. ADAAAA-6869 Phase 4. */
+  mediaHealthToken?: string;
   /** go-livepeer remote signer base URL (on-chain). Internal-only on Railway. */
   signerUrl?: string;
   /** Shared bearer token the remote signer requires (sealed SIGNER_AUTH_TOKEN).
@@ -414,6 +419,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     trainUrl: env.TRAIN_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
     mediaPublicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,
+    mediaHealthToken: env.MEDIA_HEALTH_TOKEN,
     signerUrl: env.SIGNER_URL,
     signerAuthToken: env.SIGNER_AUTH_TOKEN,
     payerAddress: env.PAYER_ADDRESS,

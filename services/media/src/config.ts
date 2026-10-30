@@ -41,9 +41,32 @@ export interface MediaConfig {
    *  media path can be held instead of the browser reconnect-looping on
    *  unreachable host candidates (ADAAAA-7304 finding 4). */
   rtcIceServers?: { urls: string | string[]; username?: string; credential?: string }[];
-  /** Max ms to wait for the answerer's ICE gathering to complete before the RTC
-   *  answer is returned (so it carries a reachable candidate). */
+  /** Max ms to wait for the answerer's ICE gathering to complete before the
+   *  RTC answer is returned (so it carries a reachable candidate). Default 2000. */
   rtcIceGatherTimeoutMs?: number;
+  /**
+   * Stable identity of THIS media node (ADAAAA-6869 Phase 4). Published on
+   * `/health`, returned to the control plane by `POST /sessions`, and stored per
+   * job so Livepeer GPU spend can be attributed per node. One node today; the
+   * field is what makes a later multi-node fleet attributable without a schema
+   * change. Defaults to `media-0` (set MEDIA_NODE_ID explicitly in a fleet).
+   */
+  nodeId: string;
+  /**
+   * Concurrent perceive sessions this node advertises as its capacity. The
+   * perceive runner behind it is capacity-1 today (the orchestrator 503s
+   * `no capacity available for runner` past that), so the default is 1. The
+   * console compares active sessions against this to show load.
+   */
+  maxSessions: number;
+  /**
+   * Bearer token gating the per-session DETAIL surface (`GET /node`: session
+   * ids, job ids, lease expiry). `/health` always stays public and reports
+   * counts only. Unset => the detail route is disabled (404), because the media
+   * origin is reachable through the public LB and session/job ids must not leak
+   * to anonymous callers.
+   */
+  healthToken?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
@@ -60,5 +83,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     provisionNoClientMs: env.MEDIA_PROVISION_NO_CLIENT_MS ? Number(env.MEDIA_PROVISION_NO_CLIENT_MS) : 60_000,
     rtcIceServers: env.MEDIA_RTC_ICE_SERVERS ? JSON.parse(env.MEDIA_RTC_ICE_SERVERS) : undefined,
     rtcIceGatherTimeoutMs: env.MEDIA_RTC_ICE_GATHER_TIMEOUT_MS ? Number(env.MEDIA_RTC_ICE_GATHER_TIMEOUT_MS) : undefined,
+    // ADAAAA-6869 Phase 4: node identity + advertised capacity + the optional
+    // bearer that unlocks the per-session detail surface.
+    nodeId: env.MEDIA_NODE_ID ?? "media-0",
+    maxSessions: env.MEDIA_MAX_SESSIONS ? Number(env.MEDIA_MAX_SESSIONS) : 1,
+    healthToken: env.MEDIA_HEALTH_TOKEN,
   };
 }
