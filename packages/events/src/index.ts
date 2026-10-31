@@ -585,6 +585,21 @@ export const JobSchema = z.object({
   finishedAt: z.string().optional(),
   attempts: z.number().int().min(0).optional(),
   candidatesTriggered: z.number().int().min(0).optional(),
+  // ADAAAA-7624: which trigger path actually produced `candidatesTriggered`.
+  // `observe` = the VOD/live cadence decide observer (ADAAAA-7007/7008) — the
+  // only path that runs on the deployed pipeline, so a job of 24 observed
+  // highlights must read `candidatesTriggered: 24` with `candidatePath:
+  // "observe"`, never a raw-event 0. `perceive_gate` = the legacy perceive
+  // candidate trigger; `none` = no candidate path ran. Additive optional — absent
+  // on older records.
+  candidatePath: z.enum(["observe", "perceive_gate", "none"]).optional(),
+  // ADAAAA-7624: whether the Stage-A audio-gate counters on this job are a real
+  // measurement. `measured` only when the gate actually judged >= 1 candidate
+  // (so `stageAMetrics` is present and non-zero); `n/a` when the audio Stage-A
+  // path produced nothing, in which case `stageAMetrics` is ABSENT and readers
+  // must show `n/a` rather than a fabricated `0`. Additive optional — absent on
+  // older records (treat as `n/a`).
+  stageAMetricsStatus: z.enum(["measured", "n/a"]).optional(),
   decideCalls: z.number().int().min(0).optional(),
   perceiveSessionS: z.number().min(0).optional(),
   costUsd: z.number().min(0).optional(),
