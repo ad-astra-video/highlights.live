@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { JobSchema, type JobDecision } from "@highlights/events";
 import { SqliteDb } from "../src/db";
-import { Store, MAX_OBSERVATIONS_PER_JOB, type StoredObservation } from "../src/store";
+import { Store, MAX_OBSERVATIONS_PER_JOB, ABSOLUTE_MAX_OBSERVATIONS_PER_JOB, observationCapForJob, type StoredObservation } from "../src/store";
 
 // ADAAAA-6870 (Increment 3 T1 / server): durable `job_observations` write-through
 // + per-job cap/trim, the additive `candidates[]` decision trail on the job
@@ -83,6 +83,48 @@ describe("per-job observation cap/trim (ADAAAA-6870 I3-F)", () => {
       expect(store.observationsForJob(job.id)).toHaveLength(MAX_OBSERVATIONS_PER_JOB);
       expect(store.observationsForJob(job.id)[0].seq).toBe(10);
       await db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("observation cap scales with the job's frame count (ADAAAA-7624)", () => {
+  it("uses the declared frame count (not a fixed 2000) as the cap", () => {
+    // Jobs that have not declared framesTotal keep the 2000-row floor.
+    expect(observationCapForJob(undefined)).toBe(MAX_OBSERVATIONS_PER_JOB);
+    expect(observationCapForJob({ framesTotal: 0 } as any)).toBe(MAX_OBSERVATIONS_PER_JOB);
+    // d61e52f6: 2334 frames at 3 fps -> 2568 rows (10% burst headroom).
+    expect(observationCapForJob({ framesTotal: 2334 } as any)).toBe(Math.ceil(2334 * 1.1));
+    // A truncated/garbage frame total can never unbound the table.
+    expect(observationCapForJob({ framesTotal: 10_000_000 } as any)).toBe(ABSOLUTE_MAX_OBSERVATIONS_PER_JOB);
+  });
+
+  it("keeps one observation row per analyzed frame for a 2334-frame VOD job", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hl-obs-frames-"));
+    const file = path.join(dir, "highlights.db");
+    try {
+      const db = new SqliteDb(file);
+      await db.migrate();
+      const store = new Store(db);
+      await store.load();
+      const job = await store.createJob({ source: "file", sourceUrl: "/tmp/v.mp4" });
+      // runVodJob persists framesTotal before the analyze pass (ADAAAA-6873).
+      await store.patchJob(job.id, { status: "analyzing", framesTotal: 2334 });
+
+      for (let seq = 0; seq < 2334; seq++) {
+        await store.recordObservation(job.id, obs(seq, seq / 3));
+      }
+
+      // Nothing trimmed: the first windows keep their rows (pre-fix seq 0..333
+      // were dropped and rendered as blank filmstrip windows).
+      const mem = store.observationsForJob(job.id);
+      expect(mem).toHaveLength(2334);
+      expect(mem[0].seq).toBe(0);
+      expect(mem[mem.length - 1].seq).toBe(2333);
+      const dbRows = await db.observationsForJob(job.id);
+      expect(dbRows).toHaveLength(2334);
+      expect(dbRows[0].seq).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
