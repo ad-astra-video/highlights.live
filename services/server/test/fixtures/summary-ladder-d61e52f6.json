@@ -1,0 +1,1886 @@
+{
+ "_comment": "Real stored payload of VOD job d61e52f6 (kids-soccer, 780 s, 260 windows, read 2026-10-31). Trimmed to the fields the summary ladder derives from; use for ADAAAA-7623 regression fixtures.",
+ "job": {
+  "id": "d61e52f6-7569-4757-bffc-f56d03e10b6a",
+  "gameHint": "Soccer",
+  "status": "done",
+  "framesTotal": 2334,
+  "completedAt": "2026-10-31T15:39:02.989Z",
+  "summaryLog": [
+   {
+    "seq": 1,
+    "ts": "2026-10-31T14:16:15.205Z",
+    "windowTs": 0,
+    "text": "The scene opens on a group of young children dressed in full FC Barcelona kits, standing side-by-side in a line. They appear to be posing for a photo or participating in a pre-match ceremony, as they are looking directly toward the camera rather than engaging in any active play. There is no movement, no ball in sight, and no live action occurring on a pitch."
+   },
+   {
+    "seq": 2,
+    "ts": "2026-10-31T14:16:26.233Z",
+    "windowTs": 3,
+    "text": "The atmosphere is building as a group of young fans, dressed in full FC Barcelona kits, take to the pitch for a pre-match presentation. They stand in a disciplined line, clapping for the crowd and holding up small team flags, creating a ceremonial start to the event. The focus is on the youth academy representation rather than active play."
+   },
+   {
+    "seq": 3,
+    "ts": "2026-10-31T14:16:39.189Z",
+    "windowTs": 6,
+    "text": "The young prospects of FC Barcelona are lined up on the pitch, looking ready for the day's proceedings. They stand in a disciplined row, some holding blue cards, as they prepare for the upcoming match. The atmosphere is one of anticipation as the group then moves together into a tight team huddle, showing their unity and focus before the whistle blows."
+   },
+   {
+    "seq": 4,
+    "ts": "2026-10-31T14:16:58.423Z",
+    "windowTs": 9,
+    "text": "The scene opens with a close-up of the FC Barcelona lineup graphic, detailing the starting eleven and substitutes. As the camera cuts, we see the team gathered in a tight huddle, with players in their training gear embracing and preparing for the match. The atmosphere is one of focused preparation before the whistle blows."
+   },
+   {
+    "seq": 5,
+    "ts": "2026-10-31T14:17:21.140Z",
+    "windowTs": 12,
+    "text": "The broadcast displays the starting lineup for FC Barcelona, showing the squad and substitutes as the match preparations conclude. A player in a white kit is seen on the pitch, but the focus remains on the graphic as the game setup is established."
+   },
+   {
+    "seq": 6,
+    "ts": "2026-10-31T14:17:45.232Z",
+    "windowTs": 15,
+    "text": "The match is currently in a lull as the players gather near the sideline. There is no active play occurring in this segment, with the team members standing in a group, likely during a break in play or a substitution. The ball remains stationary in the background, and the atmosphere is calm as the game waits for the next phase of action to resume."
+   },
+   {
+    "seq": 7,
+    "ts": "2026-10-31T14:18:10.933Z",
+    "windowTs": 18,
+    "text": "The young athletes are gathered on the pitch, appearing to be in a moment of transition or a pre-match lull. One player in a blue and red kit stands with his hands on his hips, looking toward his teammate, while another player in a white kit watches from the side. There is no active play or movement toward the goal in this sequence, suggesting a break in the action or a training period."
+   },
+   {
+    "seq": 8,
+    "ts": "2026-10-31T14:18:28.445Z",
+    "windowTs": 21,
+    "text": "The match is at a standstill as the players take a moment to regroup. A Real Madrid player stands with his hands on his hips, looking on as the play pauses. The ball sits motionless on the turf, and there is no immediate action or scoring opportunity developing in this sequence."
+   },
+   {
+    "seq": 9,
+    "ts": "2026-10-31T14:18:46.708Z",
+    "windowTs": 24,
+    "text": "The match between Real Madrid and FC Barcelona is heating up as the ball moves into the attacking third. Players are jockeying for position, looking for an opening in the defense. The ball is moved quickly across the grass, but the defense holds firm, preventing a clear shot on goal. The action remains in open play as the teams continue to battle for control of the midfield."
+   },
+   {
+    "seq": 10,
+    "ts": "2026-10-31T14:19:03.413Z",
+    "windowTs": 27,
+    "text": "The tension is palpable as Barcelona pushes forward into the Real Madrid territory. A player in the blue and yellow kit finds a pocket of space and takes a powerful strike toward the goal. The crowd erupts with a 'Go!' as the ball flies toward the net, but the white-clad defenders manage to hold firm, and the ball narrowly misses the mark. It's a heart-stopping near-miss that keeps the score at 0-0."
+   },
+   {
+    "seq": 11,
+    "ts": "2026-10-31T14:19:19.843Z",
+    "windowTs": 30,
+    "text": "The action unfolds in the midfield as the player in the blue jersey takes control of the ball, looking to initiate an attack. He is closely shadowed by a defender in white, who is pressing hard to disrupt the play. The ball moves across the grass as the blue-jerseyed player maneuvers to find an opening, but the defense remains compact and alert. The play is still in its developmental phase, with no shot on goal taken yet."
+   },
+   {
+    "seq": 12,
+    "ts": "2026-10-31T14:19:37.111Z",
+    "windowTs": 33,
+    "text": "The action unfolds in the middle of the pitch as the player in the blue jersey takes control of the ball. He attempts to navigate through a cluster of white-jerseyed defenders, but the play remains in the midfield area. There is no shot taken on goal during this sequence, and the ball stays well away from the net."
+   },
+   {
+    "seq": 13,
+    "ts": "2026-10-31T14:19:52.609Z",
+    "windowTs": 36,
+    "text": "The action intensifies in the penalty area as the white team pushes forward. A player finds a gap in the defense and takes a powerful shot from close range. The goalkeeper is unable to react in time, and the ball sails into the back of the net! It's a goal!"
+   },
+   {
+    "seq": 14,
+    "ts": "2026-10-31T14:20:14.108Z",
+    "windowTs": 39,
+    "text": "The action intensifies as the blue-jerseyed attacker moves into the final third, looking for an opening. A white-jerseyed defender closes in, creating a scramble in the box. The attacker attempts to find the back of the net, but the goalkeeper makes a crucial intervention, parrying the ball away. The defense holds firm, and the scoring opportunity is neutralized as the ball clears the danger zone."
+   },
+   {
+    "seq": 15,
+    "ts": "2026-10-31T14:20:30.001Z",
+    "windowTs": 42,
+    "text": "The action intensifies in the box as the defense scrambles to clear the danger. Players from both sides are clashing for possession in a crowded area, with the goalkeeper positioned to intercept any shot. The ball is contested heavily, but it remains in the mix without finding the back of the net."
+   },
+   {
+    "seq": 16,
+    "ts": "2026-10-31T14:20:46.875Z",
+    "windowTs": 45,
+    "text": "The action intensifies as the team pushes into the final third of the pitch. A player finds a gap in the defense and takes a powerful shot toward the goal. The goalkeeper reacts quickly, making a crucial save to keep the ball out of the net. The defense holds firm, and the play continues as the pressure remains high."
+   },
+   {
+    "seq": 17,
+    "ts": "2026-10-31T14:21:02.247Z",
+    "windowTs": 48,
+    "text": "The action intensifies as the team pushes into the final third of the pitch. A player finds a pocket of space and takes a strike toward the goal, but the goalkeeper remains alert, reacting quickly to parry the shot away. The defense holds firm, and the ball is cleared, keeping the score at a stalemate."
+   },
+   {
+    "seq": 18,
+    "ts": "2026-10-31T14:21:18.824Z",
+    "windowTs": 51,
+    "text": "The action intensifies in the middle of the pitch as players from both sides converge on the ball. A cluster of players from both teams creates a dense pocket of competition, with the ball being contested in the center. Despite the high intensity of the scramble, the ball remains in the midfield area, and no shot on goal is completed during this sequence."
+   },
+   {
+    "seq": 19,
+    "ts": "2026-10-31T14:21:41.942Z",
+    "windowTs": 54,
+    "text": "The action develops as the team pushes forward into the final third of the pitch. Players are maneuvering for position as the ball is moved toward the goal area. A shot is attempted, but it fails to find the back of the net, leaving the score unchanged at 0-0."
+   },
+   {
+    "seq": 20,
+    "ts": "2026-10-31T14:22:02.724Z",
+    "windowTs": 57,
+    "text": "The action intensifies as the white-clad team pushes forward into the final third. A player in white makes a move toward the goal, looking for an opening, but the defense in blue and red is well-positioned. As the shot is attempted, a defender manages to disrupt the play, keeping the ball out of the net. It's a close call, but the goal is denied as the ball remains in play."
+   },
+   {
+    "seq": 21,
+    "ts": "2026-10-31T14:22:21.140Z",
+    "windowTs": 60,
+    "text": "The action intensifies in the middle of the pitch as players from both sides converge on the ball. A player in white attempts to navigate through the defense, but the pressure from the blue and red jerseys keeps the play contained in the center. The ball is contested and moved around, but the attack fails to penetrate the final line of defense, resulting in a neutral play in the midfield."
+   },
+   {
+    "seq": 22,
+    "ts": "2026-10-31T14:22:38.139Z",
+    "windowTs": 63,
+    "text": "The action develops in the final third as the white-clad team pushes forward. A player in white maneuvers toward the center of the pitch, but the ball is currently held in the midfield area, far from the goal. The play remains in a build-up phase as the defense holds firm, and the ball is moved away from the goal line, resulting in no scoring opportunity in this sequence."
+   },
+   {
+    "seq": 23,
+    "ts": "2026-10-31T14:22:55.327Z",
+    "windowTs": 66,
+    "text": "The action intensifies as the white-clad team pushes forward into the final third. A player breaks loose and takes a powerful strike toward the goal, but the defense manages to hold firm as the ball fails to find the back of the net. It's a close call, but the goal remains uncaptured as the play continues."
+   },
+   {
+    "seq": 24,
+    "ts": "2026-10-31T14:23:14.203Z",
+    "windowTs": 69,
+    "text": "The action intensifies as the ball moves toward the goal. A striker takes a shot, and the ball finds its way past the defense and into the back of the net! The goalkeeper is beaten, and the net ripples as the goal is confirmed. The keeper immediately celebrates, raising his arm in the air to signal the score. It's a decisive moment on the pitch as the team secures the point."
+   },
+   {
+    "seq": 25,
+    "ts": "2026-10-31T14:23:39.694Z",
+    "windowTs": 72,
+    "text": "The match is in a tense standoff as the defense holds firm. The goalkeeper stands tall, raising his arm in a triumphant gesture of a successful save or defensive stop, while the opposing players look on from the field. Despite the high energy of the moment, the ball remains outside the net, and the score remains locked at 0-0."
+   },
+   {
+    "seq": 26,
+    "ts": "2026-10-31T14:23:58.811Z",
+    "windowTs": 75,
+    "text": "The youth match is currently in a lull as the players from both sides gather on the pitch. The Real Madrid and Barcelona youth teams are positioned near the center, with the players standing in a cluster while the ball sits idle in the background. There is no active play or scoring opportunity occurring in this segment."
+   },
+   {
+    "seq": 27,
+    "ts": "2026-10-31T14:24:15.641Z",
+    "windowTs": 78,
+    "text": "The action develops as a player takes a long-range shot toward the goal. The ball travels through the air, but the defense remains organized and the shot fails to find the back of the net. The play continues without a score, as the ball remains in play or is cleared."
+   },
+   {
+    "seq": 28,
+    "ts": "2026-10-31T14:24:35.593Z",
+    "windowTs": 81,
+    "text": "The action develops in the middle of the pitch as players from both sides jockey for position. The ball is moved around the center, but the attack fails to penetrate the defense. No shot is taken on goal during this sequence, and the play remains in the midfield area."
+   },
+   {
+    "seq": 29,
+    "ts": "2026-10-31T14:24:53.314Z",
+    "windowTs": 84,
+    "text": "The match is locked in a 0-0 stalemate as the action intensifies in the final minutes. A player in the blue and red kit finds a pocket of space and unleashes a strike toward the goal. The ball flies toward the net, but the defense holds firm, and the ball fails to find the back of the net, resulting in a tense near-miss that keeps the score tied."
+   },
+   {
+    "seq": 30,
+    "ts": "2026-10-31T14:25:13.329Z",
+    "windowTs": 87,
+    "text": "The pressure builds as the white team moves into the final third. A player finds space on the right side of the box and unleashes a strike. The goalkeeper dives, but he's too late\u2014the ball slips past him and into the back of the net! It's a goal!"
+   },
+   {
+    "seq": 31,
+    "ts": "2026-10-31T14:25:29.765Z",
+    "windowTs": 90,
+    "text": "The action intensifies in the penalty area as the white-clad team pushes forward. A player from the white team takes a strike, but the ball fails to find the back of the net, moving wide of the goal. The defense holds firm, and the play continues as the ball remains in play."
+   },
+   {
+    "seq": 32,
+    "ts": "2026-10-31T14:25:46.288Z",
+    "windowTs": 93,
+    "text": "The action intensifies as the white-clad team pushes forward into the final third. A player in white finds a pocket of space and unleashes a strike toward the goal. The defender in purple closes in, but the shot is already away. The ball sails toward the net, creating a moment of high tension for the fans, but the sequence cuts just as the play reaches its climax, leaving the outcome of the strike hanging in the air."
+   },
+   {
+    "seq": 33,
+    "ts": "2026-10-31T14:26:05.562Z",
+    "windowTs": 96,
+    "text": "The action develops in the midfield as the white-clad team looks to establish control. A player in white takes possession, navigating through the opposing purple jerseys. Instead of a direct strike on goal, the play remains in the middle of the pitch as the ball is moved toward the center. There is no immediate threat to the goal in this sequence, and the play continues to develop in the midfield."
+   },
+   {
+    "seq": 34,
+    "ts": "2026-10-31T14:26:23.869Z",
+    "windowTs": 99,
+    "text": "The action intensifies in the final third as the blue and purple side pushes forward. A player in the blue and purple kit attempts to navigate through the defense, but a white-clad defender closes in quickly. The ball is contested and moves toward the center of the pitch, failing to find the back of the net. It's a tense moment of high pressure, but the opportunity slips away as the ball is cleared or lost in the scramble."
+   },
+   {
+    "seq": 35,
+    "ts": "2026-10-31T14:26:54.881Z",
+    "windowTs": 102,
+    "text": "The match is in a tense stalemate as the teams jockey for position in the attacking third. A player in white moves forward, looking for an opening, while the defense remains compact. The ball is currently held in the middle of the field as the play develops slowly, with no immediate shot on goal occurring in this sequence."
+   },
+   {
+    "seq": 36,
+    "ts": "2026-10-31T14:27:11.548Z",
+    "windowTs": 105,
+    "text": "The tension is palpable as the play develops toward the goal. A Barcelona player finds a gap in the defense and unleashes a strike. The ball sails past the keeper and into the back of the net! The crowd erupts as the goal is confirmed, sending the fans into a frenzy."
+   },
+   {
+    "seq": 37,
+    "ts": "2026-10-31T14:27:32.336Z",
+    "windowTs": 108,
+    "text": "The action intensifies as the white-clad team pushes forward into the final third. A player from the white team finds a gap and takes a powerful shot toward the goal, but the defense in purple manages to stay compact. The ball flies toward the net, but it narrowly misses the mark, staying outside the goal line. The crowd remains tense as the play concludes without a score, leaving the match tied at 0-0."
+   },
+   {
+    "seq": 38,
+    "ts": "2026-10-31T14:27:52.663Z",
+    "windowTs": 111,
+    "text": "The action intensifies as the Barcelona side pushes forward into the final third. A player in the blue and red kit maneuvers near the goal, looking for an opening. However, the shot fails to find its mark, and the ball is seen moving away from the net, resulting in a missed opportunity for the score to change."
+   },
+   {
+    "seq": 39,
+    "ts": "2026-10-31T14:28:09.746Z",
+    "windowTs": 114,
+    "text": "The match is locked in a 0-0 stalemate as the action develops in the final moments. A player breaks into the box and takes a shot on goal, but the defense holds firm, and the ball fails to find the back of the net. The pressure remains high, but the score remains unchanged."
+   },
+   {
+    "seq": 40,
+    "ts": "2026-10-31T14:28:29.118Z",
+    "windowTs": 117,
+    "text": "The match is locked in a stalemate at 0-0 as the action intensifies in the final moments. A quick sequence of play leads to a strike that finds the back of the net, breaking the deadlock! The scoreboard flashes to 0-1, and the players erupt in a jubilant celebration, huddling together to mark the decisive goal."
+   },
+   {
+    "seq": 41,
+    "ts": "2026-10-31T14:28:54.549Z",
+    "windowTs": 120,
+    "text": "Barcelona's youth side finds the back of the net! The scoreboard flickers, moving from a stalemate to a 1-0 lead for the Catalans. The celebration is immediate as the players swarm together in a jubilant huddle, marking a significant moment in the match."
+   },
+   {
+    "seq": 42,
+    "ts": "2026-10-31T14:29:09.663Z",
+    "windowTs": 123,
+    "text": "Lamine Yamal finds the back of the net! The ball sails past the keeper and into the net, sparking an immediate explosion of joy from the Barcelona squad. The young talent is swarmed by his teammates, who pull him into a celebratory huddle as they celebrate the goal. The atmosphere is electric as the team celebrates their success on the pitch."
+   },
+   {
+    "seq": 43,
+    "ts": "2026-10-31T14:29:28.415Z",
+    "windowTs": 126,
+    "text": "The pressure builds as the ball moves into the final third of the pitch. A player in the blue and red kit finds a gap in the defense and unleashes a powerful strike. The ball sails past the keeper and finds the back of the net! The crowd erupts as the goal is confirmed, and the players on the sidelines break into a jubilant celebration."
+   },
+   {
+    "seq": 44,
+    "ts": "2026-10-31T14:29:49.673Z",
+    "windowTs": 129,
+    "text": "The action intensifies in the box as the defense scrambles to clear the danger. A player finds a pocket of space and unleashes a strike toward the goal, but the goalkeeper remains alert, reacting quickly to parry the shot away. The ball narrowly misses the net, and the defense manages to maintain their position, preventing a scoring opportunity."
+   },
+   {
+    "seq": 45,
+    "ts": "2026-10-31T14:30:09.010Z",
+    "windowTs": 132,
+    "text": "The action intensifies as the play moves into the final third of the pitch. A player in the blue and purple kit maneuvers into a scoring position, looking for an opening in the defense. He attempts to create a chance, but the defense holds firm, and the ball is kept out of the net. The goalkeeper remains alert, maintaining his position in front of the goal as the play concludes without a score."
+   },
+   {
+    "seq": 46,
+    "ts": "2026-10-31T14:30:28.597Z",
+    "windowTs": 135,
+    "text": "The action intensifies as the Barcelona side pushes forward into the final third. The player in the blue and red kit maneuvers toward the goal, looking for an opening. The goalkeeper remains alert, positioned centrally in the net to guard against a strike. As the play develops, the ball is moved into the danger zone, but the sequence concludes without a shot finding the back of the net."
+   },
+   {
+    "seq": 47,
+    "ts": "2026-10-31T14:30:49.294Z",
+    "windowTs": 138,
+    "text": "The match is currently at a standstill as the players prepare for a set piece. The ball sits motionless on the turf while the referee oversees the positioning of the players. There is no immediate action as the teams wait for the whistle to begin the next phase of play."
+   },
+   {
+    "seq": 48,
+    "ts": "2026-10-31T14:31:06.509Z",
+    "windowTs": 141,
+    "text": "The action intensifies as the ball is worked into the attacking third. A player in white finds a pocket of space and takes a strike toward the goal. However, the shot lacks the necessary power or accuracy to find the back of the net, as the ball sails wide and into the field of play. The defense remains composed as the play continues, and the opportunity for a goal is lost."
+   },
+   {
+    "seq": 49,
+    "ts": "2026-10-31T14:31:23.896Z",
+    "windowTs": 144,
+    "text": "The action develops in the middle of the pitch as the white team pushes forward. A player in white finds space and takes a strike toward the goal. The ball flies toward the net, but it's a close call as the ball fails to find the back of the net, resulting in a near-miss for the attacking side."
+   },
+   {
+    "seq": 50,
+    "ts": "2026-10-31T14:31:40.492Z",
+    "windowTs": 147,
+    "text": "The action intensifies as the white-clad team pushes forward into the final third. A player finds a pocket of space and unleashes a strike toward the goal. The defender in blue scrambles to close the gap, but the shot narrowly misses the target, leaving the score unchanged as the play continues."
+   },
+   {
+    "seq": 51,
+    "ts": "2026-10-31T14:32:00.555Z",
+    "windowTs": 150,
+    "text": "The match is heating up as the pressure builds in the final minutes. A player in white finds a gap in the defense and takes a powerful shot toward the goal. The ball sails past the keeper and into the back of the net! The scoreboard flickers, updating the score to 1-1. The white-clad team erupts in celebration as they level the score in a thrilling turn of events."
+   },
+   {
+    "seq": 52,
+    "ts": "2026-10-31T14:32:27.296Z",
+    "windowTs": 153,
+    "text": "RMA is pushing forward and manages to find the back of the net! The scoreboard flickers as the score changes from 0-1 to 1-1, signaling a massive shift in momentum. The white-clad players erupt in celebration, swarming each other as they secure the equalizer. It's a huge moment for the team, turning the tide of the match in a high-intensity sequence."
+   },
+   {
+    "seq": 53,
+    "ts": "2026-10-31T14:32:59.576Z",
+    "windowTs": 156,
+    "text": "The atmosphere is electric as the players from Real Madrid converge on the pitch. In a moment of pure jubilation, the team huddles together, embracing and celebrating a significant moment in the match. The crowd's energy is palpable as the players share in the success of the play."
+   },
+   {
+    "seq": 54,
+    "ts": "2026-10-31T14:33:25.400Z",
+    "windowTs": 159,
+    "text": "The atmosphere is electric as the team gathers together. A group of people, including a coach and several children, are huddled in a close embrace, sharing a moment of intense emotion and celebration. While the energy is high, the sequence captures the aftermath of a moment rather than the goal itself, showing the team's shared joy in a tight-knit group hug."
+   },
+   {
+    "seq": 55,
+    "ts": "2026-10-31T14:33:43.510Z",
+    "windowTs": 162,
+    "text": "The match is tied 1-1 as the play moves into the defensive third. The goalkeeper stands ready, eyes locked on the ball. He makes contact, striking the ball firmly to clear the danger. The ball sails away from the goal, and the play continues as the defense resets."
+   },
+   {
+    "seq": 56,
+    "ts": "2026-10-31T14:33:59.564Z",
+    "windowTs": 165,
+    "text": "The defense is under pressure as the goalkeeper prepares to clear the ball from the six-yard box. With a powerful kick, the keeper manages to clear the ball out of the danger zone, sending it deep into the field of play. The play continues as the ball moves toward the center, allowing the defense to reset their positions."
+   },
+   {
+    "seq": 57,
+    "ts": "2026-10-31T14:34:15.363Z",
+    "windowTs": 168,
+    "text": "The action intensifies as the white-clad striker finds space on the edge of the box. With a swift motion, they unleash a strike that beats the keeper and finds the back of the net! The crowd erupts as the goal is confirmed, sending the fans into a frenzy."
+   },
+   {
+    "seq": 58,
+    "ts": "2026-10-31T14:34:31.367Z",
+    "windowTs": 171,
+    "text": "Lamine Yamal takes control of the ball, moving into a scoring position. He fires a shot toward the goal, and the keeper is unable to react in time as the ball sails into the back of the net! It's a goal for Barcelona!"
+   },
+   {
+    "seq": 59,
+    "ts": "2026-10-31T14:34:49.699Z",
+    "windowTs": 174,
+    "text": "Lamine Yamal takes control of the ball in the final moments of the match, looking for a decisive strike. He moves into position and unleashes a shot toward the goal, but the ball fails to find the back of the net, leaving the score tied at 1-1."
+   },
+   {
+    "seq": 60,
+    "ts": "2026-10-31T14:35:07.174Z",
+    "windowTs": 177,
+    "text": "The tension is palpable as the play develops in the final moments of the match. A player in the purple jersey takes control of the ball, maneuvering under heavy pressure from the white-clad defense. With a desperate strike, he sends the ball toward the goal, but the defenders are closing in rapidly. The ball flies toward the net, creating a moment of intense suspense, but the sequence cuts just as the outcome hangs in the balance, leaving the fans on the edge of their seats."
+   },
+   {
+    "seq": 61,
+    "ts": "2026-10-31T14:35:22.536Z",
+    "windowTs": 180,
+    "text": "The action unfolds in the middle of the pitch as the player in the purple jersey attempts to navigate through the defense. He is closely marked by a white-jerseyed opponent, who is fighting for possession in a high-intensity duel. The ball is contested heavily in the center, with neither side able to secure a clear advantage or a shot on goal in this sequence."
+   },
+   {
+    "seq": 62,
+    "ts": "2026-10-31T14:35:40.594Z",
+    "windowTs": 183,
+    "text": "The action intensifies as the white-clad team pushes forward into the final third. A player in white attempts to navigate through the defense, but the Barcelona side is well-positioned. A defender in the blue and purple kit closes the gap quickly, engaging in a physical battle for possession. The ball is contested and ultimately forced away from the goal line, resulting in a successful defensive stop that denies the attacking team a clear scoring opportunity."
+   },
+   {
+    "seq": 63,
+    "ts": "2026-10-31T14:36:01.268Z",
+    "windowTs": 186,
+    "text": "The action intensifies in the penalty area as the white-clad team pushes forward. A player in a white kit with the number 5 on his jersey maneuvers the ball near the goal line, looking for an opening. A defender in a purple kit tracks his movement closely, ready to intercept. The ball remains in play as the players jockey for position, but no shot is taken into the net during this sequence."
+   },
+   {
+    "seq": 64,
+    "ts": "2026-10-31T14:36:18.075Z",
+    "windowTs": 189,
+    "text": "The scene opens on a training pitch where players are warming up in training bibs. A player in a blue and red striped bib moves across the grass, preparing for drills. There is no live match action occurring, as the environment and attire indicate a practice session rather than a competitive game."
+   },
+   {
+    "seq": 65,
+    "ts": "2026-10-31T14:36:33.618Z",
+    "windowTs": 192,
+    "text": "The match is in a tense 1-1 deadlock as the action develops in the final minutes. A player breaks into the box and takes a shot on goal, but the ball fails to find the back of the net, resulting in a near-miss as the defense holds firm."
+   },
+   {
+    "seq": 66,
+    "ts": "2026-10-31T14:36:50.932Z",
+    "windowTs": 195,
+    "text": "The match is locked in a 1-1 stalemate as the teams battle for control in the midfield. Players from both sides are jockeying for position, trying to find a way through the defensive lines. The ball moves back and forth as the teams look for an opening, but for now, the play remains in a neutral zone with no clear shot on goal in sight."
+   },
+   {
+    "seq": 67,
+    "ts": "2026-10-31T14:37:12.407Z",
+    "windowTs": 198,
+    "text": "The match is in a tense stalemate as the score sits at 1-1. The play develops in the middle of the field with players from both sides jockeying for position. A player attempts to move the ball forward, but the defense remains compact, preventing any clear opening. The ball remains in the middle of the pitch as the play continues to develop without a scoring opportunity."
+   },
+   {
+    "seq": 68,
+    "ts": "2026-10-31T14:37:29.283Z",
+    "windowTs": 201,
+    "text": "The action intensifies as the white-clad team pushes into the final third of the pitch. A player maneuvers into a scoring position, looking for a gap in the defense. As the shot is unleashed, the defense reacts quickly, and the ball is deflected away, narrowly missing the net. The crowd remains tense as the play continues, but the goal opportunity is ultimately thwarted."
+   },
+   {
+    "seq": 69,
+    "ts": "2026-10-31T14:37:47.257Z",
+    "windowTs": 204,
+    "text": "The match is tied 1-1 as the pressure intensifies in the final moments. A player breaks into the box and takes a powerful shot toward the goal, but the goalkeeper makes a desperate save to keep the ball out. The crowd remains tense as the defense holds firm, and the score remains unchanged."
+   },
+   {
+    "seq": 70,
+    "ts": "2026-10-31T14:38:03.827Z",
+    "windowTs": 207,
+    "text": "The match is locked in a 1-1 stalemate as the action intensifies in the final minutes. A player in white breaks into the box, looking for an opening to break the deadlock. He takes a shot toward the goal, but the defense holds firm, and the ball fails to find the back of the net. The pressure remains high as both sides fight for a winning goal in this tense encounter."
+   },
+   {
+    "seq": 71,
+    "ts": "2026-10-31T14:38:20.364Z",
+    "windowTs": 210,
+    "text": "The action develops in the middle of the pitch as the player in white looks to make a move. A defender in the blue and purple kit tracks the play from a distance, waiting to see how the attack unfolds. The ball remains in the center of the field as the players jockey for position, but no shot on goal is initiated in this sequence."
+   },
+   {
+    "seq": 72,
+    "ts": "2026-10-31T14:38:37.011Z",
+    "windowTs": 213,
+    "text": "Real Madrid and Barcelona are locked in a tense 1-1 stalemate. In this sequence, the play develops in the middle of the pitch as the players jockey for position. A player in the white kit moves forward, but the ball remains under control in the center of the field, with no immediate shot or scoring opportunity occurring in this window."
+   },
+   {
+    "seq": 73,
+    "ts": "2026-10-31T14:38:53.309Z",
+    "windowTs": 216,
+    "text": "The match is in a tense stalemate as the players navigate the midfield. A player in white moves toward the center, looking for an opening, while the opposing team in blue maintains a tight defensive structure. The ball is shuffled back and forth in the middle of the pitch, with no clear path to the goal established in this sequence. The action remains in the build-up phase as both sides jockey for position."
+   },
+   {
+    "seq": 74,
+    "ts": "2026-10-31T14:39:10.488Z",
+    "windowTs": 219,
+    "text": "The action intensifies as the team in white moves into the attacking third. A player finds space in the center and unleashes a powerful strike toward the goal. The crowd holds its breath as the ball flies toward the net, but it narrowly misses the mark, leaving the score unchanged. The defense holds firm, and the play continues as the teams reset for the next phase of the attack."
+   },
+   {
+    "seq": 75,
+    "ts": "2026-10-31T14:39:28.395Z",
+    "windowTs": 222,
+    "text": "The action intensifies as the team pushes into the final third of the pitch. A player finds a pocket of space and unleashes a strike toward the goal. The ball flies toward the net, but the defense holds firm as the keeper manages to keep the ball out of the net. It's a close call, but the goal remains uncaptured as the play continues."
+   },
+   {
+    "seq": 76,
+    "ts": "2026-10-31T14:39:47.942Z",
+    "windowTs": 225,
+    "text": "The action intensifies as the white team pushes into the final third. A player finds space and takes a powerful strike toward the goal. The keeper and defenders scramble to react, but the ball narrowly misses the target, resulting in a tense near-miss as the play continues."
+   },
+   {
+    "seq": 77,
+    "ts": "2026-10-31T14:40:03.200Z",
+    "windowTs": 228,
+    "text": "The action develops as the Barcelona player maneuvers into the attacking third, looking for an opening. He takes a shot, but the sequence cuts before the ball can find the back of the net, leaving the score at 1-1."
+   },
+   {
+    "seq": 78,
+    "ts": "2026-10-31T14:40:21.094Z",
+    "windowTs": 231,
+    "text": "The action intensifies as the player in the blue and yellow kit takes control of the ball, weaving through the defense. He's looking for an opening as he drives toward the goal, with a defender in white closing in quickly to pressure him. The tension builds as the ball moves into the final third, but the sequence cuts off just as the play develops, leaving the outcome of the strike uncertain."
+   },
+   {
+    "seq": 79,
+    "ts": "2026-10-31T14:40:37.971Z",
+    "windowTs": 234,
+    "text": "The action intensifies in the final third as the blue team pushes forward into the box. A player in the blue jersey finds a pocket of space and takes a snap shot toward the goal. The defenders scramble to block, but the ball narrowly misses the target, resulting in a tense near-miss as the play continues."
+   },
+   {
+    "seq": 80,
+    "ts": "2026-10-31T14:40:55.932Z",
+    "windowTs": 237,
+    "text": "The action intensifies in the final third as the white-clad team pushes forward. A player in white receives the ball under heavy pressure from a defender in dark blue. He attempts a strike, but the ball is directed away from the goal, failing to find the back of the net. The play continues as the defense manages to contain the threat."
+   },
+   {
+    "seq": 81,
+    "ts": "2026-10-31T14:41:12.121Z",
+    "windowTs": 240,
+    "text": "The action intensifies in the penalty area as the purple-clad attacker finds a sliver of space. He takes a quick strike toward the goal, but the keeper is alert, reacting just in time to deny the scoring opportunity. The ball flies past the net, leaving the fans in suspense as the play continues."
+   },
+   {
+    "seq": 82,
+    "ts": "2026-10-31T14:41:29.270Z",
+    "windowTs": 243,
+    "text": "The match is tied 1-1 as the action intensifies in the final moments. The player in the blue and yellow jersey finds space in the box and takes a powerful shot toward the goal. However, the defense holds firm, and the ball fails to find the back of the net, resulting in a narrow miss as the clock ticks down."
+   },
+   {
+    "seq": 83,
+    "ts": "2026-10-31T14:41:50.027Z",
+    "windowTs": 246,
+    "text": "The match is tied 1-1 as the pressure builds in the final minutes. A Barcelona player finds space on the edge of the box and takes a powerful strike. The ball sails past the keeper and into the back of the net! The scoreboard flashes to 2-1, securing the lead for Barcelona in a thrilling finish."
+   },
+   {
+    "seq": 84,
+    "ts": "2026-10-31T14:42:02.771Z",
+    "windowTs": 249,
+    "text": "The match is deadlocked at 1-1 as the action intensifies in the final minutes. A player in white finds a gap in the defense and unleashes a strike that finds the back of the net! The stadium erupts as the scoreboard flips to 2-1, giving the lead to the attacking side. The defender in the blue and red kit is left on the ground as the goal celebration begins."
+   },
+   {
+    "seq": 85,
+    "ts": "2026-10-31T14:42:21.200Z",
+    "windowTs": 252,
+    "text": "The action intensifies as the play moves into the final third of the pitch. A player in white makes a desperate run toward the goal, attempting to find a gap in the defense. He takes a shot, but it lacks the necessary power and direction, sailing wide of the post. The player loses his balance and falls to the turf as the opportunity slips away, leaving the score unchanged."
+   },
+   {
+    "seq": 86,
+    "ts": "2026-10-31T14:42:38.462Z",
+    "windowTs": 255,
+    "text": "The action intensifies as the white-clad attacker moves toward the goal, looking for an opening. A defender from Barcelona lunges in with a desperate sliding block, successfully preventing the ball from crossing the line. The shot is thwarted, and the attacker falls to the turf as the play comes to a halt without a score."
+   },
+   {
+    "seq": 87,
+    "ts": "2026-10-31T14:42:55.926Z",
+    "windowTs": 258,
+    "text": "The action intensifies as the white-clad attacker tries to navigate through the defense. A defender in purple lunges forward, executing a sliding tackle that successfully halts the momentum of the play. The ball is pinned to the turf, preventing a scoring opportunity and resulting in a near-miss as the defense holds firm."
+   },
+   {
+    "seq": 88,
+    "ts": "2026-10-31T14:43:11.758Z",
+    "windowTs": 261,
+    "text": "The action intensifies as the ball is worked into the final third. A player in white finds space on the right side of the box and takes a powerful strike. The goalkeeper is caught out of position as the ball sails past him and into the back of the net! The crowd erupts as the score changes, marking a significant moment in the match."
+   },
+   {
+    "seq": 89,
+    "ts": "2026-10-31T14:43:29.300Z",
+    "windowTs": 264,
+    "text": "The action intensifies in the final moments as the white team pushes forward into the penalty area. A player in white takes a shot from close range, but the blue defense is well-positioned, closing down the space. The ball is contested and fails to find the back of the net, resulting in a narrow miss as the play continues in the box."
+   },
+   {
+    "seq": 90,
+    "ts": "2026-10-31T14:43:49.945Z",
+    "windowTs": 267,
+    "text": "The action intensifies in the penalty area as the white-clad team pushes forward. A player in white moves toward the goal, looking for an opening, but the purple defense remains compact and alert. As the shot is attempted, a defender manages to get a foot on the ball, blocking the path to the net. The ball stays in play, and the momentum shifts as the defense successfully repels the immediate threat."
+   },
+   {
+    "seq": 91,
+    "ts": "2026-10-31T14:44:12.237Z",
+    "windowTs": 270,
+    "text": "The match is underway as the players navigate the midfield. We see a cluster of players from both teams vying for possession in the center of the pitch. The ball is currently being contested in open play, with no immediate shot on goal occurring in this sequence."
+   },
+   {
+    "seq": 92,
+    "ts": "2026-10-31T14:44:29.490Z",
+    "windowTs": 273,
+    "text": "The action intensifies as the white-clad team pushes forward into the final third. A player finds a pocket of space and unleashes a strike toward the goal. The ball flies toward the net, but the defense holds firm, and the shot fails to find the back of the net, resulting in a narrow miss as the play continues."
+   },
+   {
+    "seq": 93,
+    "ts": "2026-10-31T14:44:49.404Z",
+    "windowTs": 276,
+    "text": "The action intensifies as the team in blue and red moves into the final third of the pitch. A player finds a pocket of space and takes a strike toward the goal, but the defense holds firm and the ball fails to find the back of the net. The play continues as the momentum shifts back to the other side."
+   },
+   {
+    "seq": 94,
+    "ts": "2026-10-31T14:45:08.701Z",
+    "windowTs": 279,
+    "text": "The tension is palpable as the play develops toward the goal! The player in the blue and red jersey finds a gap in the defense and takes a powerful strike. The ball sails through the air, past the keeper, and finds the back of the net! It's a goal! The crowd erupts in celebration as the score changes, marking a massive moment in the match."
+   },
+   {
+    "seq": 95,
+    "ts": "2026-10-31T14:45:28.228Z",
+    "windowTs": 282,
+    "text": "The action intensifies as the purple and blue team pushes into the final third. A player maneuvers into a scoring position, looking for a gap in the defense. He takes a shot, but the goalkeeper is alert and manages to keep the ball out of the net, resulting in a tense near-miss. The defense holds firm, and the play continues as the pressure remains high in the box."
+   },
+   {
+    "seq": 96,
+    "ts": "2026-10-31T14:45:43.591Z",
+    "windowTs": 285,
+    "text": "The action intensifies as the team pushes forward into the final third. A player finds a gap and takes a powerful shot toward the goal, but the goalkeeper is alert and makes a spectacular save, parrying the ball away. The crowd reacts to the close call, but the score remains unchanged as the defense successfully holds the line."
+   },
+   {
+    "seq": 97,
+    "ts": "2026-10-31T14:46:00.315Z",
+    "windowTs": 288,
+    "text": "The action intensifies as the ball is played into the danger zone. A player in white takes a shot, but the ball flies wide of the target, narrowly missing the net. The defense remains solid as the opportunity passes by."
+   },
+   {
+    "seq": 98,
+    "ts": "2026-10-31T14:46:17.297Z",
+    "windowTs": 291,
+    "text": "The tension is palpable as the Barcelona attacker finds a pocket of space, maneuvering the ball with precision. A Real Madrid defender closes in quickly, attempting to disrupt the rhythm of the play. The ball is contested in a high-pressure zone, with both sides fighting for possession as the play develops toward the goal. The attacker manages to maintain control for a moment, looking for an opening, but the defense remains compact and ready to react."
+   },
+   {
+    "seq": 99,
+    "ts": "2026-10-31T14:46:33.079Z",
+    "windowTs": 294,
+    "text": "The action intensifies as the white-clad team pushes forward into the final third. A player finds a pocket of space and unleashes a strike toward the goal, but the defense is alert. The defender in the blue and yellow kit manages to stay goal-side, and the shot fails to find the back of the net, resulting in a narrow miss as the play continues."
+   },
+   {
+    "seq": 100,
+    "ts": "2026-10-31T14:46:49.964Z",
+    "windowTs": 297,
+    "text": "The action intensifies as the ball moves into the final third of the pitch. A player in the blue and yellow kit finds space and takes a powerful strike toward the goal. The keeper is ready, and the ball narrowly misses the target, resulting in a tense near-miss as the defense scrambles to clear the danger."
+   },
+   {
+    "seq": 101,
+    "ts": "2026-10-31T14:47:12.856Z",
+    "windowTs": 300,
+    "text": "The action intensifies as the white-clad team pushes forward into the final third. A player finds a pocket of space and unleashes a strike toward the goal, but the defense holds firm and the ball fails to find the back of the net. The play continues as the teams reset for the next phase of the attack."
+   },
+   {
+    "seq": 102,
+    "ts": "2026-10-31T14:47:40.054Z",
+    "windowTs": 303,
+    "text": "The match is currently paused as the referee stands on the pitch alongside several children in team jerseys, likely for a ceremonial moment or a break in the action. The atmosphere is calm, and there is no active play occurring in this segment."
+   },
+   {
+    "seq": 103,
+    "ts": "2026-10-31T14:48:08.871Z",
+    "windowTs": 306,
+    "text": "The match is currently in a lull as the referee and a young player from Real Madrid walk across the pitch. There is no active play or scoring opportunity occurring in this segment."
+   },
+   {
+    "seq": 104,
+    "ts": "2026-10-31T14:48:27.684Z",
+    "windowTs": 309,
+    "text": "The match between Real Madrid and FC Barcelona is in a tense state of play. We see a young Real Madrid player standing on the pitch, appearing to wait for a referee's decision or a restart in play. The atmosphere is heavy as the score remains locked at 1-1."
+   },
+   {
+    "seq": 105,
+    "ts": "2026-10-31T14:48:46.812Z",
+    "windowTs": 312,
+    "text": "The action intensifies as the white-clad team pushes forward into the final third. A player finds a pocket of space and unleashes a strike toward the goal. The ball travels toward the net, but the defense holds firm, and the shot fails to find the back of the net. The play continues as the teams reset for the next phase of the attack."
+   },
+   {
+    "seq": 106,
+    "ts": "2026-10-31T14:49:07.693Z",
+    "windowTs": 315,
+    "text": "The match between Real Madrid and FC Barcelona is currently tied 1-1. In this sequence, the play is somewhat stagnant as players from both sides are positioned across the pitch. The ball remains in the middle of the field, and there is no immediate offensive pressure or shot on goal. The action is a lull in the game's intensity as both teams look to reorganize their positions."
+   },
+   {
+    "seq": 107,
+    "ts": "2026-10-31T14:49:26.148Z",
+    "windowTs": 318,
+    "text": "The match is currently at a standstill as the young players take a moment to regroup. We see a cluster of kids in white kits standing together, while a young player in the iconic Barcelona stripes watches from the side. The ball sits relatively idle in the midfield, and there is no immediate pressure or movement toward the goal. It's a brief lull in the action as the teams prepare for the next phase of play."
+   },
+   {
+    "seq": 108,
+    "ts": "2026-10-31T14:49:46.049Z",
+    "windowTs": 321,
+    "text": "The action intensifies as the play moves into the final third of the pitch. A player in the blue and red kit finds space near the goal and takes a shot, but the ball narrowly misses the target, staying out of the net. The defense holds firm as the ball falls away, and the game continues in a tense stalemate."
+   },
+   {
+    "seq": 109,
+    "ts": "2026-10-31T14:50:03.044Z",
+    "windowTs": 324,
+    "text": "The match is tied 1-1 as the pressure intensifies in the final minutes. A player in the blue and red kit attempts to navigate through the midfield, but he's immediately met by a white-clad defender. They battle for possession in a tight space, with the ball being pushed back and away from the goal. It's a gritty, contested play as both sides fight for control in the center of the pitch."
+   },
+   {
+    "seq": 110,
+    "ts": "2026-10-31T14:50:19.520Z",
+    "windowTs": 327,
+    "text": "The action intensifies in the final third as the white-clad attackers push forward. A player in white manages to find a pocket of space, facing off against a defender in the blue and red kit. With a heavy touch, the attacker attempts to fire a shot toward the net, but the pressure from the defense keeps the play tight. The ball is struck, moving toward the goal, but the sequence cuts off before the final result is determined, leaving the outcome hanging in the balance."
+   },
+   {
+    "seq": 111,
+    "ts": "2026-10-31T14:50:36.800Z",
+    "windowTs": 330,
+    "text": "The action intensifies as the white-clad team pushes forward into the final third. A player in white finds a pocket of space and takes a powerful strike toward the goal, while a defender in purple closes in to block the attempt. The ball flies toward the net, but the sequence cuts just as the play reaches its climax, leaving the outcome of the shot hanging in the balance."
+   },
+   {
+    "seq": 112,
+    "ts": "2026-10-31T14:50:52.198Z",
+    "windowTs": 333,
+    "text": "The action intensifies in the final moments as the white team pushes forward into the box. Number 6 finds a pocket of space and takes a decisive strike from just outside the six-yard box. The ball flies past the keeper and into the back of the net, sending the crowd into a frenzy as the score changes. It's a clinical finish to secure the lead!"
+   },
+   {
+    "seq": 113,
+    "ts": "2026-10-31T14:51:10.553Z",
+    "windowTs": 336,
+    "text": "The tension is palpable in the box as the Real Madrid attacker maneuvers through a dense thicket of Barcelona defenders. He manages to keep the ball under control, weaving between the purple jerseys, but the pressure is immense. The defense closes in, looking to intercept and clear the danger before a shot can be unleashed. It's a high-stakes scramble in the final third, with both sides fighting for every inch of space as the crowd watches with bated breath."
+   },
+   {
+    "seq": 114,
+    "ts": "2026-10-31T14:51:30.061Z",
+    "windowTs": 339,
+    "text": "The match is tied 1-1 as the action develops in the midfield. A player in the blue and yellow kit takes control of the ball, looking to initiate an attack, but the play remains in the center of the pitch with no immediate threat on the goal. The ball is moved toward the middle, and the defense remains organized, resulting in a standard transition of play without any scoring opportunity."
+   },
+   {
+    "seq": 115,
+    "ts": "2026-10-31T14:51:53.647Z",
+    "windowTs": 342,
+    "text": "The tension is palpable as the play develops into the final third. A player in white finds a gap in the defense and takes a powerful strike from the edge of the box. The ball sails past the keeper and finds the back of the net! The scoreboard flickers, updating the score to 2-1, as the stadium erupts in celebration of the breakthrough."
+   },
+   {
+    "seq": 116,
+    "ts": "2026-10-31T14:52:17.442Z",
+    "windowTs": 345,
+    "text": "Real Madrid is pushing forward, looking for the breakthrough. Manuel Ordo\u00f1ez finds the space he needs and fires a shot that beats the keeper! The ball ripples the net, and the scoreboard flashes to 2-1. The stadium erupts as Ordo\u00f1ez leads the celebration, arms wide, as the team takes the lead in this intense clash."
+   },
+   {
+    "seq": 117,
+    "ts": "2026-10-31T14:52:33.343Z",
+    "windowTs": 348,
+    "text": "Real Madrid is pushing forward in a tight match against Barcelona. Manuel Ordo\u00f1ez takes a shot from the edge of the box, but the ball narrowly misses the target, leaving the score unchanged. The teammates react with some excitement, but the goal is not converted."
+   },
+   {
+    "seq": 118,
+    "ts": "2026-10-31T14:52:49.705Z",
+    "windowTs": 351,
+    "text": "Real Madrid is pushing forward as the pressure mounts in the final minutes! The ball is worked into the danger zone, and number 6 finds a gap in the defense. He takes the shot\u2014it's true! The ball flies past the keeper and into the back of the net! Real Madrid takes the lead, and the stadium erupts as the white jerseys celebrate the decisive strike!"
+   },
+   {
+    "seq": 119,
+    "ts": "2026-10-31T14:53:05.688Z",
+    "windowTs": 354,
+    "text": "The pressure builds in the final moments as the white team pushes into the box. A player finds a gap in the defense and takes a powerful strike from just inside the area. The goalkeeper is caught out of position, and the ball sails past him, nestling into the back of the net! The stadium erupts as the white team celebrates the decisive goal."
+   },
+   {
+    "seq": 120,
+    "ts": "2026-10-31T14:53:22.785Z",
+    "windowTs": 357,
+    "text": "The action intensifies as the white-clad attacker moves into the danger zone, looking for a gap in the defense. He attempts a strike, but the blue and yellow defenders are alert, closing down the space and successfully blocking the path to the goal. The ball stays out, and the pressure remains high as the play continues in the final moments of the match."
+   },
+   {
+    "seq": 121,
+    "ts": "2026-10-31T14:53:39.341Z",
+    "windowTs": 360,
+    "text": "The pressure builds in the final moments as the team pushes into the box. A striker finds a pocket of space and unleashes a strike from close range. The ball finds the back of the net, sending the crowd into a frenzy as the team celebrates the crucial goal!"
+   },
+   {
+    "seq": 122,
+    "ts": "2026-10-31T14:53:55.441Z",
+    "windowTs": 363,
+    "text": "The pressure builds as the white team pushes into the final third. A striker finds a pocket of space on the edge of the box and unleashes a strike. The goalkeeper is caught off guard, and the ball sails past him into the back of the net! It's a goal!"
+   },
+   {
+    "seq": 123,
+    "ts": "2026-10-31T14:54:12.127Z",
+    "windowTs": 366,
+    "text": "The action intensifies as the white-clad team pushes into the final third of the pitch. A player finds a pocket of space and takes a snap shot toward the goal. The ball flies toward the net, but the keeper manages to stay alert, and the ball fails to find the back of the net, resulting in a narrow miss as the defense remains organized."
+   },
+   {
+    "seq": 124,
+    "ts": "2026-10-31T14:54:28.787Z",
+    "windowTs": 369,
+    "text": "The action intensifies as the purple jersey player takes a shot from the edge of the box. The ball flies toward the goal, but it narrowly misses the target, leaving the defenders in white relieved as the play continues."
+   },
+   {
+    "seq": 125,
+    "ts": "2026-10-31T14:54:46.976Z",
+    "windowTs": 372,
+    "text": "The action intensifies as the team pushes into the final third of the pitch. A player finds a gap in the defense and takes a powerful shot toward the goal. However, the goalkeeper remains alert, reacting quickly to block the attempt. The ball falls short of the net, resulting in a narrow miss as the defense manages to hold the line."
+   },
+   {
+    "seq": 126,
+    "ts": "2026-10-31T14:55:10.946Z",
+    "windowTs": 375,
+    "text": "The match is in a tense final phase as the score sits at RMA 2-1 BAR. A player from the attacking side moves toward the goal, looking for an opening. He takes a shot, but the goalkeeper remains alert, reacting quickly to the incoming ball. The ball narrowly misses the net, and the play continues as the defense holds firm."
+   },
+   {
+    "seq": 127,
+    "ts": "2026-10-31T14:55:39.125Z",
+    "windowTs": 378,
+    "text": "The action shifts to a training environment where a young player in a Barcelona training kit is seen moving across the turf. The focus then shifts to the goal area, where a goalkeeper in a blue kit stands ready, but the play remains static with no shot or scoring opportunity developing."
+   },
+   {
+    "seq": 128,
+    "ts": "2026-10-31T14:55:54.010Z",
+    "windowTs": 381,
+    "text": "The action intensifies as the ball is driven toward the goal. A striker takes a shot, but the ball strikes the post and deflects away, narrowly missing the net. The keeper remains in position as the ball clears the goal line, leaving the score unchanged."
+   },
+   {
+    "seq": 129,
+    "ts": "2026-10-31T14:56:10.410Z",
+    "windowTs": 384,
+    "text": "The pressure builds as the team moves into the final third, looking for an opening. A striker finds a pocket of space on the edge of the box and unleashes a strike. The goalkeeper is caught off guard as the ball sails past him and into the back of the net! The crowd erupts as the score changes, securing a massive moment for the team."
+   },
+   {
+    "seq": 130,
+    "ts": "2026-10-31T14:56:27.167Z",
+    "windowTs": 387,
+    "text": "The action intensifies as the white team pushes into the final third of the pitch. A player in white finds space in the center and takes a powerful shot toward the goal. The goalkeeper is caught out of position, and the ball sails past them, rippling the back of the net for a clean goal. The crowd reacts as the score updates, marking a significant moment in the match."
+   },
+   {
+    "seq": 131,
+    "ts": "2026-10-31T14:56:42.909Z",
+    "windowTs": 390,
+    "text": "The action intensifies as the play moves into the final third of the pitch. A player in the blue and purple kit finds space near the goal and takes a shot, but the defense holds firm. The ball narrowly misses the target, and the goalkeeper remains alert to keep the score at 2-1. The crowd remains tense as the pressure continues to mount in this high-stakes match."
+   },
+   {
+    "seq": 132,
+    "ts": "2026-10-31T14:56:59.590Z",
+    "windowTs": 393,
+    "text": "The action intensifies as the ball moves into the final third of the pitch. A player in the blue kit finds a pocket of space and takes a powerful strike toward the goal. The defense scrambles to react, but the ball narrowly misses the target, leaving the score unchanged as the play continues."
+   },
+   {
+    "seq": 133,
+    "ts": "2026-10-31T14:57:19.298Z",
+    "windowTs": 396,
+    "text": "The pressure builds as the white-jerseyed team pushes into the final third. A player finds space on the right side of the box and unleashes a strike. The goalkeeper is caught off guard as the ball sails past him and into the back of the net! The crowd erupts as the white team celebrates their successful goal."
+   },
+   {
+    "seq": 134,
+    "ts": "2026-10-31T14:57:40.312Z",
+    "windowTs": 399,
+    "text": "The tension is palpable as the action develops in the final moments of the match. A player in white finds a gap in the defense and fires a shot from the edge of the box. The ball sails past the keeper and into the back of the net! The scoreboard flickers, updating the score to 2-2. The crowd erupts in a frenzy as the equalizer is secured in a thrilling finish."
+   },
+   {
+    "seq": 135,
+    "ts": "2026-10-31T14:57:53.954Z",
+    "windowTs": 402,
+    "text": "Real Madrid is pushing for the equalizer as the play develops in the final moments. A player finds space in the box and fires a shot that beats the Barcelona keeper, sending the ball into the back of the net! The scoreboard flashes, confirming the score is now tied at 2-2. The stadium erupts as the tension breaks, with the Madrid players celebrating their hard-fought equalizer."
+   },
+   {
+    "seq": 136,
+    "ts": "2026-10-31T14:58:07.446Z",
+    "windowTs": 405,
+    "text": "The match is heating up as the young stars of Barcelona and Real Madrid battle for possession in a tight cluster. A player in the iconic blue and red stripes of Barcelona is seen grappling with the ball against several white-clad Madrid defenders. The action is concentrated in the middle of the pitch as they fight for control, with no clear shot being unleashed toward the goal in this sequence."
+   },
+   {
+    "seq": 137,
+    "ts": "2026-10-31T14:58:25.873Z",
+    "windowTs": 408,
+    "text": "The match is in a tense state as the players navigate the field. We see a Barcelona player in the blue and red kit controlling the ball, looking for an opening as the opposition closes in. The action remains in the midfield/build-up phase as the players maneuver for position, with no immediate shot on goal occurring in this sequence."
+   },
+   {
+    "seq": 138,
+    "ts": "2026-10-31T14:58:41.890Z",
+    "windowTs": 411,
+    "text": "The action intensifies as the play moves into the final third of the pitch. A player breaks into the box and takes a shot on goal, but the goalkeeper makes a crucial save, keeping the ball out of the net. The defense holds firm as the ball is cleared, and the game remains tied at 2-2."
+   },
+   {
+    "seq": 139,
+    "ts": "2026-10-31T14:58:57.212Z",
+    "windowTs": 414,
+    "text": "The action intensifies in the final moments as the team pushes into the box. A player finds a gap in the defense and fires a shot toward the goal. The goalkeeper makes a desperate dive, but the ball slips past his reach and into the back of the net! It's a goal!"
+   },
+   {
+    "seq": 140,
+    "ts": "2026-10-31T14:59:11.906Z",
+    "windowTs": 417,
+    "text": "The tension is palpable as the play develops in the box! The player in the purple and yellow jersey finds space and rises up, meeting the ball with a powerful header. The ball sails past the diving goalkeeper and into the back of the net! It's a goal! The crowd erupts as the team celebrates the successful strike."
+   },
+   {
+    "seq": 141,
+    "ts": "2026-10-31T14:59:30.863Z",
+    "windowTs": 420,
+    "text": "Barcelona is pushing deep into the Real Madrid territory, looking for a breakthrough. A Barcelona attacker finds a pocket of space in the box and unleashes a strike. The goalkeeper is caught out of position as the ball flies past him and into the back of the net! It's a goal for Barcelona, shifting the momentum of the match!"
+   },
+   {
+    "seq": 142,
+    "ts": "2026-10-31T14:59:47.817Z",
+    "windowTs": 423,
+    "text": "The tension is palpable as the play develops toward the goal! The striker takes the shot, and the ball flies toward the net. The goalkeeper makes a desperate dive, but it's not enough\u2014the ball beats him and ripples the back of the net! GOAL! The crowd erupts as the score changes, marking a massive moment in the match."
+   },
+   {
+    "seq": 143,
+    "ts": "2026-10-31T15:00:03.534Z",
+    "windowTs": 426,
+    "text": "The match is in a tense standoff as the teams prepare for a set piece. Players from both sides are positioned along the sidelines, watching the play develop. A player in white takes control of the ball in the midfield, looking for an opening to move the play forward. The defense remains compact, and the ball is moved laterally as the attacking team tries to find a gap in the formation. No shot is taken on goal during this sequence, and the play remains in the middle of the pitch."
+   },
+   {
+    "seq": 144,
+    "ts": "2026-10-31T15:00:20.930Z",
+    "windowTs": 429,
+    "text": "The action intensifies as the white-clad team pushes into the final third of the pitch. A player finds a pocket of space and takes a strike toward the goal. The ball flies toward the net, but the defense holds firm, and the ball fails to find the back of the net, resulting in a narrow miss as the play continues."
+   },
+   {
+    "seq": 145,
+    "ts": "2026-10-31T15:00:38.919Z",
+    "windowTs": 432,
+    "text": "The action intensifies as the play moves into the heart of the penalty area! It's a frantic scramble with players from both sides converging on the ball. A white-shirted attacker tries to find a gap and get a shot away, but the defense is well-positioned. The ball is contested, bobbling around as defenders and attackers collide in the box. Ultimately, the strike fails to find the back of the net, and the ball is cleared away, leaving the score unchanged."
+   },
+   {
+    "seq": 146,
+    "ts": "2026-10-31T15:00:55.940Z",
+    "windowTs": 435,
+    "text": "The match is tied 2-2 as the pressure intensifies in the final moments. A player in white breaks into the box and attempts a strike on goal, but the goalkeeper manages to stay on his feet and deflects the shot away. The ball falls harmlessly into the crowd or out of play, leaving the score unchanged as the clock ticks down."
+   },
+   {
+    "seq": 147,
+    "ts": "2026-10-31T15:01:12.137Z",
+    "windowTs": 438,
+    "text": "The action intensifies as the team pushes into the final third, looking for a breakthrough. Players are maneuvering for position, but the ball remains contested in the middle of the attacking zone. Despite the pressure, the ball doesn't find the back of the net, and the score remains locked at 2-2."
+   },
+   {
+    "seq": 148,
+    "ts": "2026-10-31T15:01:28.624Z",
+    "windowTs": 441,
+    "text": "The match is in a tense state as the ball moves into the middle of the pitch. A player in the blue jersey takes control of the ball, looking to initiate an attack, while the white-clad defenders maintain their positions. The play is developing slowly as both sides jockey for position in the center of the field."
+   },
+   {
+    "seq": 149,
+    "ts": "2026-10-31T15:01:47.150Z",
+    "windowTs": 444,
+    "text": "The action intensifies as the blue and yellow side pushes forward into the final third. A player finds space and takes a powerful strike toward the goal. The ball flies toward the net, but the defense holds firm, and the shot fails to find the back of the net, resulting in a narrow miss as the play continues."
+   },
+   {
+    "seq": 150,
+    "ts": "2026-10-31T15:02:05.596Z",
+    "windowTs": 447,
+    "text": "The match is tied 2-2 as the action intensifies in the final minutes. A player in the blue and red kit takes control of the ball, navigating through a cluster of defenders. He's looking for an opening as the pressure mounts in the final third. The defense is compact, but he manages to find a sliver of space to drive toward the goal. The crowd is on edge, waiting for the decisive strike to break the deadlock."
+   },
+   {
+    "seq": 151,
+    "ts": "2026-10-31T15:02:21.946Z",
+    "windowTs": 450,
+    "text": "The match is tied 2-2 as the action develops in the midfield. A player in the blue and red kit takes control of the ball, looking to initiate an attack. Instead of a strike on goal, he drives forward into the center of the pitch, looking for an opening to transition the play. The defense remains organized as the ball moves into open space, and the play continues to develop in the middle third."
+   },
+   {
+    "seq": 152,
+    "ts": "2026-10-31T15:02:46.211Z",
+    "windowTs": 453,
+    "text": "The match is heating up as the action moves into the final third. A player in the white kit is pushing forward, looking for an opening in the defense. The blue-shirted defender is tracking closely, trying to close down the space. The ball is being contested in the middle of the penalty area, but the pressure is high and the defense remains compact. No shot finds the back of the net in this sequence as the play continues to develop."
+   },
+   {
+    "seq": 153,
+    "ts": "2026-10-31T15:03:08.294Z",
+    "windowTs": 456,
+    "text": "[not_highlight] SPORTING_EVENT \u2014 1 track(s); fast move 0.75; ocr 16; notability 40 < bar 60"
+   },
+   {
+    "seq": 154,
+    "ts": "2026-10-31T15:03:21.892Z",
+    "windowTs": 459,
+    "text": "The action intensifies as the team moves into the final third of the pitch. A player in the blue and red kit finds a pocket of space and unleashes a strike toward the goal. The ball sails past the keeper and finds the back of the net, sparking an immediate celebration from the team. The crowd erupts as the scoreline changes, marking a significant moment in the match."
+   },
+   {
+    "seq": 155,
+    "ts": "2026-10-31T15:03:39.439Z",
+    "windowTs": 462,
+    "text": "The action intensifies as the team pushes into the final third, looking for a breakthrough. A player finds space on the right side of the box and unleashes a strike toward the goal. The goalkeeper reacts quickly, managing to keep the ball out of the net, resulting in a narrow miss as the defense scrambles to clear the danger."
+   },
+   {
+    "seq": 156,
+    "ts": "2026-10-31T15:04:03.967Z",
+    "windowTs": 465,
+    "text": "The action intensifies as the play moves into the final third of the pitch. A player breaks through the defense and finds a clear lane toward the goal. With a powerful strike, they aim for the bottom corner, but the ball takes a slight turn and slams into the post! The keeper remains in position as the ball bounces away, leaving the crowd in suspense as the opportunity slips by."
+   },
+   {
+    "seq": 157,
+    "ts": "2026-10-31T15:04:28.762Z",
+    "windowTs": 468,
+    "text": "In this youth match between Barcelona and Real Madrid, the action is developing on the pitch. A young Barcelona player is currently controlling the ball, looking for an opening as he moves into space. The Real Madrid defender is watching closely, waiting for the next move. The game remains in a state of build-up as the players navigate the field."
+   },
+   {
+    "seq": 158,
+    "ts": "2026-10-31T15:04:45.824Z",
+    "windowTs": 471,
+    "text": "The match is tied 2-2 as the pressure intensifies on the pitch. A player in the blue and red kit takes control of the ball, looking for an opening to break the deadlock. As he moves forward, a defender in white closes in rapidly, putting pressure on the play. The attacker attempts to maneuver past, but the defender manages to block the path, causing the ball to be diverted away from the goal. It's a tense moment of high-stakes action, but the scoring opportunity is neutralized, leaving the score unchanged."
+   },
+   {
+    "seq": 159,
+    "ts": "2026-10-31T15:05:02.738Z",
+    "windowTs": 474,
+    "text": "The action unfolds as a player in a white kit maneuvers toward the goal, attempting to find an opening. However, the shot fails to find its mark, and the ball remains in the field of play as the defense remains organized. The play continues without a score, as the ball is seen moving away from the goal area."
+   },
+   {
+    "seq": 160,
+    "ts": "2026-10-31T15:05:18.799Z",
+    "windowTs": 477,
+    "text": "The action develops in the final third as the blue and red team pushes forward. A player in the blue and red kit attempts to navigate the ball through the defense, but the pressure from the white-clad opponents keeps the play contained. The ball is struck but fails to find the back of the net, moving away from the goal line as the defense holds firm. The play continues with the white team maintaining their position, and no goal is scored in this sequence."
+   },
+   {
+    "seq": 161,
+    "ts": "2026-10-31T15:05:35.261Z",
+    "windowTs": 480,
+    "text": "The match is tied at 2-2 as the action intensifies in the final minutes. A player in white finds space and takes a powerful strike toward the goal, but the defense holds firm as the ball fails to find the back of the net. The crowd remains tense as the game hangs in the balance."
+   },
+   {
+    "seq": 162,
+    "ts": "2026-10-31T15:05:51.895Z",
+    "windowTs": 483,
+    "text": "The action intensifies in the center of the pitch as the players converge on the ball. A player in the purple kit tries to shield the ball, but he's immediately swarmed by the white-clad defenders. It's a gritty battle for possession in the middle of the field, with no clear path to the goal opening up just yet. The play remains stagnant in this area as both sides fight for control, keeping the score at a tense 2-2."
+   },
+   {
+    "seq": 163,
+    "ts": "2026-10-31T15:06:11.641Z",
+    "windowTs": 486,
+    "text": "The match is tied 2-2 as the pressure intensifies in the final minutes. A player in a white kit breaks into the box, looking for an opening to break the deadlock. As they move toward the goal, they are closely shadowed by a defender in the blue and yellow kit. The attacker takes a shot, aiming for the bottom corner, but the ball narrowly misses the target, leaving the score unchanged for now."
+   },
+   {
+    "seq": 164,
+    "ts": "2026-10-31T15:06:29.418Z",
+    "windowTs": 489,
+    "text": "The match is tied 2-2 as the pressure mounts in the final minutes. A player in the blue and yellow kit finds space in the center of the box and takes a powerful strike toward the goal. The ball flies toward the net, but it narrowly misses the mark, failing to find the back of the net. The defense holds firm, and the tension in the stadium remains palpable as the game continues."
+   },
+   {
+    "seq": 165,
+    "ts": "2026-10-31T15:06:48.553Z",
+    "windowTs": 492,
+    "text": "The match is tied at 2-2 as the pressure intensifies in the final minutes. A player breaks into the box and takes a shot on goal, but the goalkeeper makes a crucial save, keeping the score level. The defense holds firm as the play continues in a tense standoff."
+   },
+   {
+    "seq": 166,
+    "ts": "2026-10-31T15:07:11.065Z",
+    "windowTs": 495,
+    "text": "The action intensifies in the penalty area as the defense scrambles to clear the zone. A player manages to get a shot off from close range, but the goalkeeper remains alert, reacting quickly to parry the ball away. The crowd holds its breath as the ball narrowly misses the net, resulting in a tense near-miss rather than a goal."
+   },
+   {
+    "seq": 167,
+    "ts": "2026-10-31T15:07:28.192Z",
+    "windowTs": 498,
+    "text": "The action is developing in the middle of the pitch as players from both sides converge on the ball. A young fan in a Barcelona kit watches closely as the play moves around the center circle. The players are jockeying for position, but no clear shot on goal has been initiated yet."
+   },
+   {
+    "seq": 168,
+    "ts": "2026-10-31T15:07:47.598Z",
+    "windowTs": 501,
+    "text": "The match is tied 2-2 as the action intensifies in the middle of the pitch. A player in white tries to maintain possession under heavy pressure from the opposing side. The ball is contested fiercely, but the play remains in the center of the field without a clear shot on goal or a scoring opportunity developing in this sequence."
+   },
+   {
+    "seq": 169,
+    "ts": "2026-10-31T15:08:05.919Z",
+    "windowTs": 504,
+    "text": "The match is tied 2-2 as Real Madrid and Barcelona battle for control in the midfield. The ball is contested by several players in a dense cluster, with both teams looking to find an opening. A player in white attempts to move the ball forward, but it is quickly contested by the opposition. The play remains stagnant in the center of the pitch as both sides jockey for position, failing to produce a clear scoring opportunity in this sequence."
+   },
+   {
+    "seq": 170,
+    "ts": "2026-10-31T15:08:22.667Z",
+    "windowTs": 507,
+    "text": "Real Madrid is locked in a 2-2 stalemate with Barcelona in this intense youth match. The action intensifies as a Real Madrid player finds space in the attacking third, attempting to break the deadlock. He takes a shot, but the defense holds firm, and the ball is diverted away from the goal. The pressure remains high as both sides look for a decisive breakthrough in this high-stakes encounter."
+   },
+   {
+    "seq": 171,
+    "ts": "2026-10-31T15:08:39.814Z",
+    "windowTs": 510,
+    "text": "The action intensifies in the final third as the white-clad team pushes forward. A player in white finds a pocket of space and takes a powerful strike toward the goal, narrowly evading a sliding challenge from the purple and blue defender. The ball flies toward the net, creating a moment of high tension for the spectators, but the sequence cuts just as the play reaches its climax, leaving the outcome of the strike hanging in the balance."
+   },
+   {
+    "seq": 172,
+    "ts": "2026-10-31T15:08:57.936Z",
+    "windowTs": 513,
+    "text": "The action intensifies in the middle of the pitch as the players battle for possession. The player in the white kit attempts to maneuver past his opponent, but the defender stays glued to him, keeping the play in a stalemate. The ball is contested heavily, but no shot is taken toward the goal in this sequence, leaving the play in a state of high-pressure build-up."
+   },
+   {
+    "seq": 173,
+    "ts": "2026-10-31T15:09:14.351Z",
+    "windowTs": 516,
+    "text": "The action intensifies as the white-jerseyed player takes a shot from the edge of the box. The defender in purple tries to close the gap, but the striker gets a clean strike off. The ball flies toward the goal, but it narrowly misses the target, leaving the score unchanged as the play continues."
+   },
+   {
+    "seq": 174,
+    "ts": "2026-10-31T15:09:30.462Z",
+    "windowTs": 519,
+    "text": "The tension is palpable as the white-clad team pushes forward into the final third. A player in white finds a pocket of space and unleashes a strike toward the goal. The purple-clad defender lunges to block, but the ball slips past the initial challenge. It's a high-pressure moment as the ball flies toward the net, but it narrowly misses the mark, leaving the score unchanged and the crowd holding their breath."
+   },
+   {
+    "seq": 175,
+    "ts": "2026-10-31T15:09:46.692Z",
+    "windowTs": 522,
+    "text": "The match is deadlocked at 2-2 as the pressure intensifies in the final minutes. A player in the blue and yellow kit finds space on the edge of the box and unleashes a strike toward the goal. However, the defense holds firm, and the ball fails to find the back of the net, leaving the score unchanged as the clock ticks down."
+   },
+   {
+    "seq": 176,
+    "ts": "2026-10-31T15:10:04.448Z",
+    "windowTs": 525,
+    "text": "Barcelona is pushing forward in a tense 2-2 deadlock. A player finds space in the box and unleashes a strike toward the goal. The goalkeeper is caught out of position as the ball sails past him and into the back of the net! It's a goal for Barcelona, breaking the stalemate!"
+   },
+   {
+    "seq": 177,
+    "ts": "2026-10-31T15:10:24.379Z",
+    "windowTs": 528,
+    "text": "The tension is palpable as the action develops in the final moments of the match. A Barcelona player in the blue and red kit maneuvers toward the ball, while a Real Madrid defender is positioned nearby in the penalty area. As the play unfolds, the ball is moved toward the center of the pitch, narrowly missing a scoring opportunity as it stays out of the net. The crowd remains tense, waiting for a decisive breakthrough in this high-stakes encounter."
+   },
+   {
+    "seq": 178,
+    "ts": "2026-10-31T15:10:42.084Z",
+    "windowTs": 531,
+    "text": "The action intensifies as the player in the blue and red kit maneuvers into a scoring position. With a swift motion, he strikes the ball, sending it past the keeper and into the back of the net! The 'GOL' graphic flashes across the screen, confirming the score. The crowd erupts as the goal is secured, marking a pivotal moment in the match."
+   },
+   {
+    "seq": 179,
+    "ts": "2026-10-31T15:11:04.036Z",
+    "windowTs": 534,
+    "text": "The action intensifies as the player in the blue and purple kit drives toward the goal, looking for an opening. A defender in white anticipates the move, lunging into a sliding block to shut down the attack. The ball is deflected away, narrowly missing the net and keeping the score at a stalemate."
+   },
+   {
+    "seq": 180,
+    "ts": "2026-10-31T15:11:23.446Z",
+    "windowTs": 537,
+    "text": "The tension is palpable as the play develops toward the goal. Suddenly, the ball finds its mark, crossing the line and rippling the net! The crowd erupts in a roar of 'Go!' as the goal is secured, sending the fans into a frenzy."
+   },
+   {
+    "seq": 181,
+    "ts": "2026-10-31T15:11:47.782Z",
+    "windowTs": 540,
+    "text": "The tension is palpable as the play develops into the penalty area. A player from the blue and red side finds a gap in the defense and takes a powerful shot from point-blank range. The goalkeeper is caught out of position and can't react in time as the ball sails past him and into the back of the net! The stadium erupts as the goal is confirmed, and the scoring player breaks into a jubilant celebration while the opposing team looks on in disappointment."
+   },
+   {
+    "seq": 182,
+    "ts": "2026-10-31T15:12:08.676Z",
+    "windowTs": 543,
+    "text": "The tension in the stadium is palpable as the play develops toward the goal. A player manages to find the opening, sending a strike toward the net. The ball sails past the keeper and finds the back of the net, sparking an immediate eruption from the crowd. The commentator shouts 'Let's go!' as the fans celebrate the goal!"
+   },
+   {
+    "seq": 183,
+    "ts": "2026-10-31T15:12:25.688Z",
+    "windowTs": 546,
+    "text": "The action intensifies as the team pushes forward into the final third. A player in the blue and red kit finds a pocket of space and takes a powerful strike toward the goal. The ball flies toward the net, creating a moment of high tension as the defense scrambles to react. However, the sequence cuts just as the ball is in flight, leaving the outcome of the shot hanging in the balance."
+   },
+   {
+    "seq": 184,
+    "ts": "2026-10-31T15:12:41.985Z",
+    "windowTs": 549,
+    "text": "The action intensifies in the final third as the white-clad team pushes forward. Number 6 finds a pocket of space and takes a powerful strike toward the goal, narrowly evading a desperate challenge from the blue defender. The ball sails toward the net, creating a moment of high tension for the fans, but the sequence cuts just as the play reaches its climax, leaving the outcome of the strike hanging in the balance."
+   },
+   {
+    "seq": 185,
+    "ts": "2026-10-31T15:12:59.119Z",
+    "windowTs": 552,
+    "text": "The action intensifies in the middle of the pitch as the player in white, wearing number 6, attempts to navigate through the defense. He is closely shadowed by a purple-clad opponent, who is fighting for possession. The white jersey player manages to get a touch on the ball, looking for an opening to strike, but the pressure from the defense keeps the play contained in the midfield. The ball remains in play as the players jockey for position, with no clear shot on goal occurring in this sequence."
+   },
+   {
+    "seq": 186,
+    "ts": "2026-10-31T15:13:16.454Z",
+    "windowTs": 555,
+    "text": "The action intensifies as the player in white, wearing number 6, takes control of the ball and drives toward the goal. He's being closely shadowed by a defender in purple who is trying to close the gap. The pressure is mounting as the white-jerseyed attacker looks for an opening to strike, but the defender remains glued to his side, forcing a high-stakes duel right at the edge of the box."
+   },
+   {
+    "seq": 187,
+    "ts": "2026-10-31T15:13:45.066Z",
+    "windowTs": 558,
+    "text": "The action unfolds in the midfield as the player in the white kit takes control of the ball, maneuvering past a defender in purple who has been forced to the ground. As the play develops, the referee steps in to manage the situation, making a clear signal that indicates the play is being halted or a non-scoring event has occurred. The ball remains in the center of the pitch, moving away from the goal line, confirming that no scoring opportunity was realized in this sequence."
+   },
+   {
+    "seq": 188,
+    "ts": "2026-10-31T15:14:15.737Z",
+    "windowTs": 561,
+    "text": "The atmosphere is set as the referee takes his position on the pitch, preparing for the proceedings. A group of young children, dressed in the iconic Barcelona kit, stand nearby, likely participating in a ceremonial pre-match presentation. There is no active play occurring; the focus is on the formalities before the match begins."
+   },
+   {
+    "seq": 189,
+    "ts": "2026-10-31T15:14:46.065Z",
+    "windowTs": 564,
+    "text": "The match between Real Madrid and FC Barcelona is currently tied at 2-2. We see a group of young prospects from the Barcelona academy standing on the pitch, appearing to be in a lull in the action or perhaps a pre-match/post-match presentation. There is no active play occurring in this segment as the players remain stationary."
+   },
+   {
+    "seq": 190,
+    "ts": "2026-10-31T15:15:24.573Z",
+    "windowTs": 567,
+    "text": "The atmosphere is tense as the young players line up on the pitch, preparing for the upcoming match. We see the youth academy players standing side-by-side, some looking focused while others seem to be taking in the magnitude of the moment. There is no active play as they wait for the official start or a ceremonial procedure to conclude."
+   },
+   {
+    "seq": 191,
+    "ts": "2026-10-31T15:15:46.296Z",
+    "windowTs": 570,
+    "text": "We are in the heat of the penalty shootout between Real Madrid and FC Barcelona! The tension is palpable as the ball is placed for the strike. With a focused effort, the player steps up and sends the ball flying into the back of the net! The crowd erupts as the scoreboard updates, confirming a successful conversion in this high-stakes competition."
+   },
+   {
+    "seq": 192,
+    "ts": "2026-10-31T15:16:02.842Z",
+    "windowTs": 573,
+    "text": "The tension is palpable as we move into the penalty shootout. A player steps up to the spot, takes a breath, and strikes the ball. It sails past the keeper and finds the back of the net! The scoreboard updates instantly, confirming the goal. The crowd erupts in celebration as the team moves one step closer to victory."
+   },
+   {
+    "seq": 193,
+    "ts": "2026-10-31T15:16:16.989Z",
+    "windowTs": 576,
+    "text": "We are at the high-tension penalty shootout between Real Madrid and FC Barcelona. The atmosphere is electric as the focus shifts to the spot. A Barcelona player steps up, taking a moment to center himself before the kick. He is seen adjusting the ball, preparing for the decisive strike that will determine the winner of this grueling match."
+   },
+   {
+    "seq": 194,
+    "ts": "2026-10-31T15:16:35.785Z",
+    "windowTs": 579,
+    "text": "The tension builds as the team prepares for a set piece. We see a close-up of the player's hands on the ball, meticulously positioning it for the strike. The camera cuts to a wide view of the pitch, showing the player standing over the ball with the goal in the distance. The atmosphere is heavy with anticipation as the player prepares to take the kick, but the sequence ends before the strike occurs, leaving the outcome of the play undecided."
+   },
+   {
+    "seq": 195,
+    "ts": "2026-10-31T15:16:56.281Z",
+    "windowTs": 582,
+    "text": "The tension builds as the player prepares for a long-range strike. He takes his approach and unleashes a shot toward the goal, but the ball fails to find the back of the net. The keeper remains steady, and the play continues without a score."
+   },
+   {
+    "seq": 196,
+    "ts": "2026-10-31T15:17:17.125Z",
+    "windowTs": 585,
+    "text": "The tension is palpable as the player in the blue and red jersey prepares for a strike. He takes a measured run-up and unleashes a shot toward the goal. The ball sails through the air, beating the keeper, and finds the back of the net! The crowd erupts in celebration as the goal is secured."
+   },
+   {
+    "seq": 197,
+    "ts": "2026-10-31T15:17:33.893Z",
+    "windowTs": 588,
+    "text": "The tension is palpable as the game moves to a penalty shootout. A player steps up to the spot, takes a deep breath, and strikes the ball with precision. It sails past the keeper and into the back of the net! The scoreboard flashes, confirming a 0-1 lead for FC Barcelona. The crowd erupts as the goal is secured."
+   },
+   {
+    "seq": 198,
+    "ts": "2026-10-31T15:17:53.439Z",
+    "windowTs": 591,
+    "text": "It's a high-stakes penalty shootout between Real Madrid and FC Barcelona! The tension is palpable as the ball sits on the white spot. The kicker steps up, takes a breath, and strikes the ball. It sails past the keeper and into the back of the net! The scoreboard flashes, confirming a goal for FC Barcelona. The crowd erupts as the pressure mounts in this deciding moment of the match."
+   },
+   {
+    "seq": 199,
+    "ts": "2026-10-31T15:18:10.667Z",
+    "windowTs": 594,
+    "text": "The tension is palpable as the young Madrid prospect stands on the pitch, his head bowed in a moment of heavy reflection. After a sequence of play, he looks down at the turf, his posture signaling a missed opportunity or a difficult moment in the match. The ball sits motionless at his feet, and the scoreboard remains unchanged, confirming that the goal we were hoping for didn't materialize in this sequence."
+   },
+   {
+    "seq": 200,
+    "ts": "2026-10-31T15:18:28.012Z",
+    "windowTs": 597,
+    "text": "The action develops as a player prepares to take a shot from the center of the pitch. He strikes the ball, but it fails to find the back of the net, remaining in front of the goal. The goalkeeper maintains his position, and the play continues without a score."
+   },
+   {
+    "seq": 201,
+    "ts": "2026-10-31T15:18:44.432Z",
+    "windowTs": 600,
+    "text": "The tension builds as the white-clad striker prepares for a decisive strike from the edge of the box. He winds up and fires a shot toward the goal, but the goalkeeper is alert, reacting quickly to parry the ball away. The shot is successfully defended, and the play continues as the defense clears the immediate threat."
+   },
+   {
+    "seq": 202,
+    "ts": "2026-10-31T15:19:07.942Z",
+    "windowTs": 603,
+    "text": "The white-jerseyed striker finds space in the penalty area and takes a decisive shot. The goalkeeper dives to his right, but the ball finds the back of the net! The crowd erupts as the striker celebrates with his arm raised in victory. A massive goal for the team in white!"
+   },
+   {
+    "seq": 203,
+    "ts": "2026-10-31T15:19:27.873Z",
+    "windowTs": 606,
+    "text": "The young striker in the white kit finds a gap in the defense and takes a measured shot. The ball sails past the keeper and finds the back of the net, securing a goal for the team! The scoreboard immediately updates to reflect the new score as the young player celebrates the successful strike."
+   },
+   {
+    "seq": 204,
+    "ts": "2026-10-31T15:19:50.222Z",
+    "windowTs": 609,
+    "text": "The tension is palpable as the play develops toward the goal. A strike comes in from the left, and the ball finds its way past the keeper into the back of the net! The scoreboard updates instantly, confirming the goal. The crowd and the players on the pitch react to the breakthrough as the score changes in this high-stakes match."
+   },
+   {
+    "seq": 205,
+    "ts": "2026-10-31T15:20:06.575Z",
+    "windowTs": 612,
+    "text": "We are looking at a youth match between Real Madrid and FC Barcelona. The tension is palpable as the players take their positions. A young Barcelona player stands ready in front of the goal, while the Real Madrid side prepares for the next phase of play. The atmosphere is heavy with anticipation, but for now, the action remains static as both sides wait for the whistle or the next move."
+   },
+   {
+    "seq": 206,
+    "ts": "2026-10-31T15:20:23.047Z",
+    "windowTs": 615,
+    "text": "The tension builds as the attacker moves into position, looking for a gap in the defense. With a sudden burst of movement, they let fly a shot toward the goal. The goalkeeper reacts instantly, launching into a diving save to parry the ball away. It's a massive defensive stop that keeps the score level and denies the opposition a scoring opportunity."
+   },
+   {
+    "seq": 207,
+    "ts": "2026-10-31T15:20:43.300Z",
+    "windowTs": 618,
+    "text": "The tension is palpable as the team prepares for a set piece. The player steps up, eyes locked on the target, and strikes the ball with intent. It sails toward the goal, but the keeper is ready, reacting with quick reflexes to parry the shot away. The crowd holds its breath as the ball is denied, leaving the score unchanged for now."
+   },
+   {
+    "seq": 208,
+    "ts": "2026-10-31T15:21:11.273Z",
+    "windowTs": 621,
+    "text": "The tension is palpable as the team prepares for a set piece. A player in the blue and yellow kit steps up, eyes locked on the target. He strikes the ball, sending it toward the goal, but the keeper remains alert and ready. The ball doesn't find the back of the net, and the play continues as the defense prepares for the next move."
+   },
+   {
+    "seq": 209,
+    "ts": "2026-10-31T15:21:28.406Z",
+    "windowTs": 624,
+    "text": "The tension is palpable as the play develops toward the goal. A player in the blue and red kit takes a decisive shot from the center of the pitch. The goalkeeper is caught out of position and can't react in time as the ball sails past him and into the back of the net! It's a goal! The crowd erupts in celebration as the team secures the score."
+   },
+   {
+    "seq": 210,
+    "ts": "2026-10-31T15:21:46.261Z",
+    "windowTs": 627,
+    "text": "It's a high-stakes penalty shootout! The tension is palpable as the player steps up to the spot. He takes a measured run-up and strikes the ball with precision. The goalkeeper dives, but he's too late\u2014the ball sails past him and into the back of the net! The scoreboard updates instantly, reflecting the goal. The crowd erupts as the team takes the lead in this thrilling finish!"
+   },
+   {
+    "seq": 211,
+    "ts": "2026-10-31T15:22:03.361Z",
+    "windowTs": 630,
+    "text": "It's a high-stakes penalty shootout! The tension is palpable as the player steps up to the spot. He takes a deep breath, focuses on the goal, and strikes the ball. It sails past the keeper and into the back of the net! The scoreboard flashes, confirming the goal for FC Barcelona. The crowd erupts in celebration as the pressure shifts!"
+   },
+   {
+    "seq": 212,
+    "ts": "2026-10-31T15:22:19.675Z",
+    "windowTs": 633,
+    "text": "We are in the high-tension penalty shootout between Real Madrid and FC Barcelona. The atmosphere is electric as the players prepare for the final decisive kicks. A Real Madrid player stands at the spot, taking a moment to focus before the strike, while the Barcelona keeper remains poised in the net, waiting for the moment of impact."
+   },
+   {
+    "seq": 213,
+    "ts": "2026-10-31T15:22:37.638Z",
+    "windowTs": 636,
+    "text": "The tension builds as the player in white prepares for the strike. He takes a measured shot from the edge of the area, and the ball sails perfectly into the back of the net! The goalkeeper, caught off guard, can only watch as the ball finds its mark, eventually raising his arms in a gesture of acknowledgment or celebration as the goal is confirmed. The crowd erupts as the score changes!"
+   },
+   {
+    "seq": 214,
+    "ts": "2026-10-31T15:23:01.905Z",
+    "windowTs": 639,
+    "text": "The attack develops rapidly as the player in white finds space in the box. He takes a clinical shot that beats the keeper and finds the back of the net! The crowd erupts as the goal is confirmed, and the teammates immediately swarm him in a jubilant celebration to mark the scoring play."
+   },
+   {
+    "seq": 215,
+    "ts": "2026-10-31T15:23:18.066Z",
+    "windowTs": 642,
+    "text": "The action builds as the player prepares for a strike from the center of the pitch. With a clean strike, the ball sails toward the goal, catching the keeper off guard. The ball flies past the diving goalkeeper and finds the back of the net, securing a goal for the team!"
+   },
+   {
+    "seq": 216,
+    "ts": "2026-10-31T15:23:39.429Z",
+    "windowTs": 645,
+    "text": "The tension is palpable as the white-clad striker prepares for the decisive strike. He takes his approach, eyes locked on the target, and unleashes a powerful shot toward the goal. The ball sails through the air, past the reaching keeper, and finds the back of the net! The scoreboard flashes, confirming the goal and sending the crowd into a frenzy as the team celebrates the breakthrough."
+   },
+   {
+    "seq": 217,
+    "ts": "2026-10-31T15:24:03.419Z",
+    "windowTs": 648,
+    "text": "We are at the climax of the match, with the score tied at 2-2 between Real Madrid and FC Barcelona. The tension is palpable as the game moves into a penalty shootout. A Barcelona player steps up to the spot, taking a deep breath before the strike. The crowd holds its breath as the player prepares to take the decisive shot."
+   },
+   {
+    "seq": 218,
+    "ts": "2026-10-31T15:24:24.166Z",
+    "windowTs": 651,
+    "text": "The match between Real Madrid and FC Barcelona is in a tense penalty shootout phase. We see a young Barcelona player standing on the pitch, looking down at the ball as the pressure builds. The atmosphere is heavy as both teams wait for the next decisive strike."
+   },
+   {
+    "seq": 219,
+    "ts": "2026-10-31T15:24:43.538Z",
+    "windowTs": 654,
+    "text": "The action develops as the ball is played into the attacking third. A player takes a shot toward the goal, but the ball fails to find the back of the net, remaining outside the goal area."
+   },
+   {
+    "seq": 220,
+    "ts": "2026-10-31T15:25:02.679Z",
+    "windowTs": 657,
+    "text": "The defense holds firm as the opposition pushes forward into the final third. A player in purple finds a gap and unleashes a strike toward the goal, but the keeper in blue remains alert, reacting quickly to block the attempt. The ball is denied, and the pressure remains high as the play continues."
+   },
+   {
+    "seq": 221,
+    "ts": "2026-10-31T15:25:24.124Z",
+    "windowTs": 660,
+    "text": "The action intensifies as the team moves into the final third of the pitch. A player in the blue and red kit finds space and prepares to take a shot on goal. He strikes the ball, but it lacks the necessary power or accuracy to beat the keeper, sailing past the goal line and into the open field. The defense remains solid as the opportunity for a score slips away."
+   },
+   {
+    "seq": 222,
+    "ts": "2026-10-31T15:25:41.809Z",
+    "windowTs": 663,
+    "text": "The tension builds as the player prepares for the strike, eyes locked on the target. With a swift motion, he unleashes a powerful shot that sails across the turf. The goalkeeper, already down, is left helpless as the ball finds the back of the net! It's a clinical finish that sends the crowd into a frenzy!"
+   },
+   {
+    "seq": 223,
+    "ts": "2026-10-31T15:26:04.745Z",
+    "windowTs": 666,
+    "text": "The tension is palpable as the play develops toward the goal. A strike is launched, and the ball finds its way past the keeper, rippling the back of the net! The scoreboard flashes, confirming the score has shifted to 2-4. The crowd erupts in a wave of energy as the team secures the point."
+   },
+   {
+    "seq": 224,
+    "ts": "2026-10-31T15:26:19.539Z",
+    "windowTs": 669,
+    "text": "It's a high-stakes penalty shootout! The tension is palpable as the player steps up to the spot. With the crowd watching intently, he takes the strike, sending the ball past the keeper and into the back of the net! The scoreboard flickers, confirming the goal and sending the fans into a frenzy. A massive moment for the team as they move one step closer to victory!"
+   },
+   {
+    "seq": 225,
+    "ts": "2026-10-31T15:26:33.577Z",
+    "windowTs": 672,
+    "text": "We are at the climax of the penalty shootout between Real Madrid and FC Barcelona. The tension is palpable as the white-clad player steps up to the spot, taking a moment to focus before the strike. The goalkeeper stands ready, eyes locked on the ball, as the stadium holds its breath for the deciding moment."
+   },
+   {
+    "seq": 226,
+    "ts": "2026-10-31T15:26:52.337Z",
+    "windowTs": 675,
+    "text": "The tension is palpable as the white-clad striker steps up to the penalty spot. He takes a measured run-up and strikes the ball with precision. The goalkeeper lunges to his right, but he's just a fraction of a second too late! The ball slips past his grasp and nestles into the back of the net. The crowd erupts as the striker celebrates his clinical finish, securing a massive moment for the team."
+   },
+   {
+    "seq": 227,
+    "ts": "2026-10-31T15:27:15.507Z",
+    "windowTs": 678,
+    "text": "The pressure builds as the white-clad team moves into the final third. A player finds space on the edge of the box and unleashes a strike toward the goal. The goalkeeper dives, but it's not enough\u2014the ball finds the back of the net! The stadium erupts as the white team celebrates the goal, with players embracing in joy as the scoreboard reflects the new tally."
+   },
+   {
+    "seq": 228,
+    "ts": "2026-10-31T15:27:32.215Z",
+    "windowTs": 681,
+    "text": "The pressure builds as the white-clad team pushes forward into the final third. A player finds a gap in the defense and unleashes a strike that finds the back of the net! The goal is confirmed as the ball ripples the net, and the scorer erupts in celebration, pumping their fists in the air as the crowd goes wild."
+   },
+   {
+    "seq": 229,
+    "ts": "2026-10-31T15:27:54.660Z",
+    "windowTs": 684,
+    "text": "The tension is palpable as the white-clad striker prepares for a decisive strike. He takes his run-up and fires a powerful shot toward the goal. The ball sails through the air, past the keeper, and finds the back of the net! The stadium erupts as the player lets out a roar of triumph, pumping his fists into the air in celebration. The scoreboard updates, confirming the goal and sending the fans into a frenzy."
+   },
+   {
+    "seq": 230,
+    "ts": "2026-10-31T15:28:10.253Z",
+    "windowTs": 687,
+    "text": "It's a high-stakes penalty shootout! The tension is palpable as the ball sits on the spot. The kicker steps up, takes a deep breath, and strikes the ball with precision. It sails past the keeper and into the back of the net! The crowd erupts as the scoreboard updates, confirming the goal. The player celebrates wildly with his arms raised in triumph, securing a massive moment in this intense match."
+   },
+   {
+    "seq": 231,
+    "ts": "2026-10-31T15:28:28.533Z",
+    "windowTs": 690,
+    "text": "We are at the climax of the penalty shootout between Real Madrid and FC Barcelona. The tension is palpable as the player steps up to the spot. He takes a measured run-up and strikes the ball toward the goal. The keeper stays ready, and the ball appears to be heading toward the side of the net, narrowly missing the mark. A heart-stopping moment for the fans as the ball fails to find the back of the net."
+   },
+   {
+    "seq": 232,
+    "ts": "2026-10-31T15:28:47.921Z",
+    "windowTs": 693,
+    "text": "The tension is palpable as the game reaches a critical juncture in the penalty shootout. A player steps up, eyes locked on the target, and strikes the ball with precision. It sails past the keeper and into the back of the net, sending the crowd into a frenzy! The scoreboard flickers, confirming the score has shifted to 3-5, securing a massive victory for FC Barcelona in this high-stakes match."
+   },
+   {
+    "seq": 233,
+    "ts": "2026-10-31T15:28:59.869Z",
+    "windowTs": 696,
+    "text": "The tension is palpable as the ball is worked into the final third. A striker takes the shot, and the ball finds the back of the net! The crowd erupts as the scoreboard updates to confirm the goal. It's a massive moment for the team!"
+   },
+   {
+    "seq": 234,
+    "ts": "2026-10-31T15:29:16.321Z",
+    "windowTs": 699,
+    "text": "We are in the high-stakes penalty shootout between Real Madrid and FC Barcelona. The tension is palpable as the ball is placed on the spot. A player steps up, takes a deep breath, and strikes the ball. It sails past the keeper and into the back of the net! A massive goal for Barcelona, moving them closer to victory in this dramatic shootout."
+   },
+   {
+    "seq": 235,
+    "ts": "2026-10-31T15:29:35.914Z",
+    "windowTs": 702,
+    "text": "We are at the climax of the penalty shootout! The tension is palpable as the player steps up to the spot, taking a deep breath before the strike. The goalkeeper is set, eyes locked on the ball, as the stadium holds its breath for the deciding moment."
+   },
+   {
+    "seq": 236,
+    "ts": "2026-10-31T15:29:56.606Z",
+    "windowTs": 705,
+    "text": "The tension builds as the white-clad attacker prepares for a strike from the edge of the box. He takes his wind-up and fires a shot toward the goal, but the keeper in black is alert, reacting quickly to block the attempt. The ball is parried away, and the scoring opportunity is neutralized, leaving the defense relieved as the play resets."
+   },
+   {
+    "seq": 237,
+    "ts": "2026-10-31T15:30:17.878Z",
+    "windowTs": 708,
+    "text": "The pressure builds as the white-clad striker finds space at the edge of the box. With a clinical strike, he sends the ball flying toward the goal! The keeper is caught out of position, and the ball ripples the back of the net\u2014GOAL! The crowd erupts as the team celebrates a massive breakthrough."
+   },
+   {
+    "seq": 238,
+    "ts": "2026-10-31T15:30:43.346Z",
+    "windowTs": 711,
+    "text": "The tension is palpable as the game reaches a critical juncture in this penalty shootout. A player from the white-clad team steps up, takes a measured strike, and the ball finds the back of the net! The scoreboard flickers, confirming the score change as the crowd erupts in a frenzy of emotion. It's a massive moment in this high-stakes clash between Real Madrid and FC Barcelona."
+   },
+   {
+    "seq": 239,
+    "ts": "2026-10-31T15:31:01.955Z",
+    "windowTs": 714,
+    "text": "It's a high-stakes penalty shootout between Real Madrid and FC Barcelona! The tension is palpable as the ball sits on the spot. Real Madrid steps up to the line, and with a clinical strike, they send the ball past the keeper and into the back of the net! The scoreboard flickers, confirming the score moves to 5-4. The crowd is on its feet as Real Madrid takes a commanding lead in the shootout!"
+   },
+   {
+    "seq": 240,
+    "ts": "2026-10-31T15:31:18.933Z",
+    "windowTs": 717,
+    "text": "It's a high-stakes penalty shootout between Real Madrid and FC Barcelona! The tension is palpable as the ball is placed on the spot. A player steps up, takes the strike, and the ball flies past the keeper into the back of the net! The crowd erupts as the 'Go!' call echoes through the stadium, marking a crucial point in this 4-4 deadlock."
+   },
+   {
+    "seq": 241,
+    "ts": "2026-10-31T15:31:37.393Z",
+    "windowTs": 720,
+    "text": "The young player stands ready near the goal, but the play develops into a missed opportunity. The ball moves away from the net, leaving the player looking on with a disappointed expression as the chance passes by."
+   },
+   {
+    "seq": 242,
+    "ts": "2026-10-31T15:31:58.222Z",
+    "windowTs": 723,
+    "text": "The action develops rapidly as the player on the left side of the field takes a powerful shot toward the goal. The goalkeeper is caught out of position, and the ball sails past them, rippling the back of the net for a clean goal! The crowd erupts in celebration as the team secures the score."
+   },
+   {
+    "seq": 243,
+    "ts": "2026-10-31T15:32:18.440Z",
+    "windowTs": 726,
+    "text": "The young talent in the Barcelona kit takes control of the ball, moving with purpose toward the goal. He finds a gap in the defense and unleashes a strike that finds the back of the net! The crowd erupts as the scoreboard flickers, confirming the score has shifted to 4-6. A massive moment for the young star as he secures the win!"
+   },
+   {
+    "seq": 244,
+    "ts": "2026-10-31T15:32:39.190Z",
+    "windowTs": 729,
+    "text": "The tension is palpable as the match reaches a critical juncture in the penalty shootout. A player takes the strike, and the ball finds its mark, sailing past the keeper and into the back of the net! The scoreboard flickers, confirming the score moves to 4-5 in favor of FC Barcelona. The crowd erupts in celebration as the momentum shifts in a high-stakes finish."
+   },
+   {
+    "seq": 245,
+    "ts": "2026-10-31T15:32:55.525Z",
+    "windowTs": 732,
+    "text": "We are deep into the penalty shootout between Real Madrid and FC Barcelona. The tension is palpable as the young Madrid player steps up to the spot, looking focused. The Barcelona keeper is ready, braced for the strike. The atmosphere is electric as both sides wait for the next decisive moment in this high-stakes competition."
+   },
+   {
+    "seq": 246,
+    "ts": "2026-10-31T15:33:12.590Z",
+    "windowTs": 735,
+    "text": "The action builds as the player prepares for a strike from the edge of the box. With a focused look, they let fly a shot aimed toward the bottom corner of the net. The ball travels through the air, but it narrowly misses the target, failing to find the back of the net. The keeper remains in position as the ball falls away, leaving the score unchanged."
+   },
+   {
+    "seq": 247,
+    "ts": "2026-10-31T15:33:30.150Z",
+    "windowTs": 738,
+    "text": "The tension is palpable as the team prepares for a set-piece. The player in white steps up, eyes locked on the target, and strikes the ball with precision. It's a powerful shot that seems destined for the back of the net, but the goalkeeper is alert! He reacts with incredible reflexes, parrying the ball away to keep the score unchanged. A massive near-miss that leaves the fans on the edge of their seats!"
+   },
+   {
+    "seq": 248,
+    "ts": "2026-10-31T15:33:51.444Z",
+    "windowTs": 741,
+    "text": "The tension builds as the team prepares for a set piece. A player steps up to take the shot, eyes locked on the target. He strikes the ball, sending it flying toward the goal. The goalkeeper reacts quickly, and the ball fails to find the back of the net, resulting in a near-miss as the play continues."
+   },
+   {
+    "seq": 249,
+    "ts": "2026-10-31T15:34:12.337Z",
+    "windowTs": 744,
+    "text": "The action slows down as the play moves toward the goal. A player in a white kit stands ready near the goal line, while the referee keeps a close watch on the situation. The ball is positioned nearby, but the play remains static without a shot being taken or a goal being scored. The sequence concludes with the players in position, awaiting the next phase of play."
+   },
+   {
+    "seq": 250,
+    "ts": "2026-10-31T15:34:38.862Z",
+    "windowTs": 747,
+    "text": "The referee stands ready on the pitch as the goalkeeper prepares for the next phase of play. The ball is held firmly by the keeper, and the atmosphere remains tense as the game waits for the next move."
+   },
+   {
+    "seq": 251,
+    "ts": "2026-10-31T15:35:02.679Z",
+    "windowTs": 750,
+    "text": "The match is at a standstill as the referee stands ready near the goal line. The goalkeeper remains in position, watching the proceedings as the ball sits motionless on the turf, awaiting the next phase of play."
+   },
+   {
+    "seq": 252,
+    "ts": "2026-10-31T15:35:27.430Z",
+    "windowTs": 753,
+    "text": "The match pauses as the referee prepares for a set piece. A player in a white kit takes his position, looking down at the ball as he prepares to take a free kick. In the background, a line of young players in team kits stands ready, watching the proceedings. The atmosphere is one of anticipation before the restart."
+   },
+   {
+    "seq": 253,
+    "ts": "2026-10-31T15:35:49.763Z",
+    "windowTs": 756,
+    "text": "The atmosphere is tense as the game pauses for a set piece. A player in the white kit takes his position, carefully placing the ball for a free kick. However, the action shifts as a group of children takes the field, lining up in a ceremonial formation. There is no goal scored in this sequence; it is a moment of ceremony and preparation."
+   },
+   {
+    "seq": 254,
+    "ts": "2026-10-31T15:36:09.940Z",
+    "windowTs": 759,
+    "text": "The action builds as the player in the white kit prepares for a strike from the edge of the box. He takes a measured shot toward the goal, but the keeper remains alert and the ball fails to find the back of the net, resulting in a near-miss as the play continues."
+   },
+   {
+    "seq": 255,
+    "ts": "2026-10-31T15:36:29.399Z",
+    "windowTs": 762,
+    "text": "It's a high-stakes moment as the team steps up to the penalty spot. The striker takes a deep breath, eyes locked on the goal. With a precise strike, the ball sails past the keeper and into the back of the net! The crowd erupts as the player celebrates, securing a crucial point in this intense match."
+   },
+   {
+    "seq": 256,
+    "ts": "2026-10-31T15:36:52.416Z",
+    "windowTs": 765,
+    "text": "The tension is palpable as the penalty shootout reaches its climax! A player from FC Barcelona steps up to the spot, facing a wall of pressure. He strikes the ball with precision, and it finds the back of the net! The crowd erupts as the scoreboard flickers, confirming the score at 4-5. It's a massive moment for Barcelona as they secure the victory in this high-stakes encounter!"
+   },
+   {
+    "seq": 257,
+    "ts": "2026-10-31T15:37:13.307Z",
+    "windowTs": 768,
+    "text": "In a high-stakes penalty shootout between Real Madrid and FC Barcelona, the tension reaches its breaking point. Barcelona takes the final shot, and the ball finds the back of the net, securing their victory. The stadium erupts as the Barcelona players storm the pitch, collapsing into a massive celebration pile. The scoreboard reflects the finality of the result, marking a dramatic conclusion to the match."
+   },
+   {
+    "seq": 258,
+    "ts": "2026-10-31T15:37:41.004Z",
+    "windowTs": 771,
+    "text": "In a high-stakes penalty shootout between Real Madrid and FC Barcelona, the tension reaches its breaking point. Barcelona successfully converts their final attempt, sending the ball into the back of the net to secure a 5-4 victory. The stadium erupts as the Barcelona players storm the pitch, collapsing into a massive celebratory pile-up to celebrate their Medimagol Cup triumph."
+   },
+   {
+    "seq": 259,
+    "ts": "2026-10-31T15:38:13.370Z",
+    "windowTs": 774,
+    "text": "The atmosphere is electric as the team gathers in a massive celebratory huddle! Players are swarming each other, some diving to the turf in a heap of joy, marking a significant moment in the Mediapol Cup. While the goal itself has already passed, the sheer energy of the celebration captures the team's triumph on the pitch."
+   },
+   {
+    "seq": 260,
+    "ts": "2026-10-31T15:38:44.673Z",
+    "windowTs": 777,
+    "text": "The scene opens on a group of youth soccer players gathered on the pitch, appearing to be in a pre-match huddle or a team instruction session. Players from different teams, including those in Barcelona's iconic colors, are standing together with coaches, creating a moment of focus before the action begins. There is no active play occurring in this segment; the atmosphere is one of preparation and organization rather than competitive action."
+   }
+  ]
+ },
+ "highlights": [
+  {
+   "id": "7527c031-6292-4f37-b3b7-d5730cbfb113",
+   "start": 31.300000000000004,
+   "end": 46.300000000000004,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 100
+  },
+  {
+   "id": "32f88be9-9bfd-4bd9-8983-2811282e8138",
+   "start": 69.49999999999999,
+   "end": 84.49999999999999,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 100
+  },
+  {
+   "id": "6436d319-3efc-4977-bf83-1bcfc9cda3ef",
+   "start": 115.59999999999992,
+   "end": 130.5999999999999,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": null,
+   "corroborated": null,
+   "corroborationSource": null,
+   "score": 100
+  },
+  {
+   "id": "ea7adce8-d6ad-4659-b67d-79ac30e1bf44",
+   "start": 141.1999999999999,
+   "end": 156.1999999999999,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 60
+  },
+  {
+   "id": "c2af4ede-d21d-4b36-98f3-b99fc43173a2",
+   "start": 171.09999999999982,
+   "end": 186.09999999999982,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 100
+  },
+  {
+   "id": "965ebe36-3b81-4c34-929f-f2e257e90404",
+   "start": 245.59999999999968,
+   "end": 260.5999999999997,
+   "eventType": "GOAL",
+   "status": "rejected",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": null,
+   "corroborated": null,
+   "corroborationSource": null,
+   "score": 100
+  },
+  {
+   "id": "51153074-953f-430c-b07f-691de508d0b3",
+   "start": 273.8999999999998,
+   "end": 288.8999999999998,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 100
+  },
+  {
+   "id": "1bf34f24-7c2b-47b2-bdf1-3ffacb5aae30",
+   "start": 341.80000000000035,
+   "end": 356.80000000000035,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": null,
+   "corroborated": null,
+   "corroborationSource": null,
+   "score": 95
+  },
+  {
+   "id": "6eebfb87-d125-460a-b733-8a45ead0a61a",
+   "start": 351.8000000000004,
+   "end": 366.8000000000004,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 95
+  },
+  {
+   "id": "66eabac3-171b-42c9-9056-1db8954dd1e0",
+   "start": 359.20000000000044,
+   "end": 374.20000000000044,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 100
+  },
+  {
+   "id": "d459d1df-08ae-4882-8d49-293ed210ffc2",
+   "start": 394.7000000000007,
+   "end": 409.7000000000007,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 95
+  },
+  {
+   "id": "e5860f29-f566-4622-92f5-fd752f71848f",
+   "start": 410.30000000000086,
+   "end": 425.30000000000086,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 100
+  },
+  {
+   "id": "abd6b78b-cdf1-4e05-af96-905bfae18639",
+   "start": 457.7000000000012,
+   "end": 472.7000000000012,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 85
+  },
+  {
+   "id": "e7bdda17-9a48-4830-981b-9777092507c0",
+   "start": 565.800000000002,
+   "end": 580.800000000002,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": null,
+   "corroborated": null,
+   "corroborationSource": null,
+   "score": 100
+  },
+  {
+   "id": "a6976d26-37ab-4623-8624-abdb47627fa7",
+   "start": 579.4000000000021,
+   "end": 594.4000000000021,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "scoreboard",
+   "score": 100
+  },
+  {
+   "id": "feffaa20-45d0-4e21-bc06-c7bb08b3b401",
+   "start": 601.1000000000023,
+   "end": 616.1000000000023,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "scoreboard",
+   "score": 85
+  },
+  {
+   "id": "20999ab7-aa85-4553-a3ad-97ce31ff932f",
+   "start": 629.6000000000024,
+   "end": 644.6000000000024,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 100
+  },
+  {
+   "id": "458fee3c-0a88-4fc1-ba63-09522079c521",
+   "start": 660.2000000000027,
+   "end": 675.2000000000027,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "scoreboard",
+   "score": 100
+  },
+  {
+   "id": "f03e158a-81fc-4754-b588-ffba80dafb9e",
+   "start": 678.2000000000028,
+   "end": 693.2000000000028,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 100
+  },
+  {
+   "id": "1ac55b45-f2eb-4a7a-956d-dbfae13ec555",
+   "start": 688.6000000000029,
+   "end": 703.6000000000029,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "scoreboard",
+   "score": 60
+  },
+  {
+   "id": "1f0dc237-26b6-4278-904b-88dd0f45e8b3",
+   "start": 701.0000000000028,
+   "end": 716.0000000000028,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "scoreboard",
+   "score": 100
+  },
+  {
+   "id": "d938ecf8-e9bd-49a3-bd1e-2f721744114c",
+   "start": 717.300000000003,
+   "end": 732.300000000003,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 100
+  },
+  {
+   "id": "63205b13-cec3-45b7-b114-06de39af12cc",
+   "start": 755.0000000000033,
+   "end": 770.0000000000033,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "scoreboard",
+   "score": 95
+  },
+  {
+   "id": "d6fd609b-d61d-4c4e-b91d-c547043ccc93",
+   "start": 765.1000000000033,
+   "end": 780.1000000000033,
+   "eventType": "GOAL",
+   "status": "accepted",
+   "outcome": "scoring_play",
+   "nearMiss": false,
+   "goalConfirmed": "confirmed_goal",
+   "corroborated": true,
+   "corroborationSource": "frame_attestation",
+   "score": 95
+  }
+ ]
+}
