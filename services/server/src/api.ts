@@ -46,6 +46,7 @@ import {
   type JobDecision,
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
+import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
@@ -2356,12 +2357,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     attachWindowAudioUris(sectionList, job.id);
     const traces = buildTraces(obs);
 
+    // ADAAAA-7623: the summary ladder (match summary -> chapters -> window
+    // narratives) derived from STORED data only. Zero decide calls / GPU
+    // seconds — the read re-shapes `summaryLog` + the persisted highlights.
+    const summaryLadder = buildSummaryLadder({
+      summaryLog: job.summaryLog,
+      highlights: store.highlightsForJob(job.id),
+      gameHint: job.gameHint,
+    });
+
     return JobDetailSchema.parse({
       job,
       highlights: store.highlightsForJob(job.id),
       traces,
       sections: sectionList,
       maxTraces,
+      summaryLadder,
     });
   });
 
