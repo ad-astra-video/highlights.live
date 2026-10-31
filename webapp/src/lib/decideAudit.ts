@@ -118,8 +118,18 @@ export function parseDecideAuditDate(value: unknown): Date | null {
   return null;
 }
 
+/** Oldest plausible epoch-seconds value (1973-03-03T09:46:40Z). Both descriptor
+ * shapes the decide service records today sit around 1.7e9 (and a millisecond
+ * value is around 1.7e12), so a smaller number is a placeholder or garbled
+ * value, not a timestamp (ADAAAA-7630). */
+const EPOCH_SECONDS_FLOOR = 1e8;
+
 function epochToDate(n: number): Date | null {
   if (!Number.isFinite(n) || n <= 0) return null;
+  // A short numeric value (`"1234"`) would otherwise be read as epoch
+  // milliseconds and render a 1970 wall clock; refuse it so the row says
+  // `time not recorded` instead of fabricating a time (ADAAAA-7630).
+  if (n < EPOCH_SECONDS_FLOOR) return null;
   // Epoch seconds (~1.7e9) vs epoch milliseconds (~1.7e12).
   const ms = n >= 1e12 ? n : n * 1000;
   const d = new Date(ms);

@@ -92,6 +92,13 @@ describe("decide-audit time decoding (ADAAAA-7625)", () => {
     expect(decideAuditWallClock(1793464987312)).toBe("2026-10-31 16:43:07 UTC");
     expect(decideAuditWallClock(null)).toBe("time not recorded");
     expect(decideAuditWallClock("not a date")).toBe("time not recorded");
+    // ADAAAA-7630: a short numeric value is not a timestamp. It used to be read
+    // as epoch milliseconds and render a 1970 wall clock.
+    expect(decideAuditWallClock("1234")).toBe("time not recorded");
+    expect(decideAuditWallClock(1234)).toBe("time not recorded");
+    expect(decideAuditWallClock(1e7)).toBe("time not recorded");
+    // The epoch-seconds floor itself is still a real, renderable time.
+    expect(decideAuditWallClock(1e8)).toBe("1973-03-03 09:46:40 UTC");
   });
 
   it("shows elapsed ms only when recorded", () => {
@@ -164,6 +171,14 @@ describe("DecideAuditRow (ADAAAA-7625)", () => {
     expect(html).toContain("2026-10-31 16:43:07 UTC");
     expect(html).toContain("frames not recorded");
     expect(html).toContain("candidates not recorded");
+  });
+
+  // ADAAAA-7630: an implausible numeric `createdAt` is not a timestamp, so the
+  // wall clock reads `time not recorded` instead of 1970-01-01.
+  it("renders `time not recorded` for an implausible numeric createdAt", () => {
+    const html = renderRow({ groupKey: "g99:confirm", createdAt: "1234" });
+    expect(html).toContain("time not recorded");
+    expect(html).not.toContain("1970");
   });
 
   // AC2 over a batch: no row derives a count from a null field.
