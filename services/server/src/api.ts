@@ -2379,10 +2379,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const job = store.getJob(req.params.id);
       if (!job) return reply.code(404).send({ error: "not found" });
       if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
-      const all = await db.listDecideAudits();
-      const forJob = all.filter((a) => a.jobId === job.id);
+      const all = await db.decideAuditsForJob(job.id);
       const groupKey = (req.query as any).groupKey as string | undefined;
-      const rows = groupKey ? forJob.filter((a) => a.groupKey === groupKey) : forJob;
+      const rows = groupKey ? all.filter((a) => a.groupKey === groupKey) : all;
       return { jobId: job.id, groupKey: groupKey ?? null, audits: rows };
     }
   );

@@ -287,13 +287,17 @@ export interface MediaSession {
 }
 
 /** A durable decide request/response audit row (ADAAAA-7028). One row per frame
- * group, keyed by (session_id, group_key). Media bytes are content-addressed by
- * sha256 and live in the decide audit dir/blobs, not duplicated in the row. */
+ * group PER JOB (ADAAAA-7626: identity is the job, so two jobs deciding the same
+ * in-video group key produce two disjoint rows). Media bytes are
+ * content-addressed by sha256 and live in the decide audit dir/blobs, not
+ * duplicated in the row. */
 export interface DecideAuditRecord {
   id: string;
   jobId?: string | null;
   sessionId: string;
   groupKey: string;
+  /** ADAAAA-7626: the candidate's in-video timestamp (Stage-2 confirm rows). */
+  timestamp?: number | null;
   frameCount?: number | null;
   candidateCount?: number | null;
   systemPromptVersion?: string | null;
@@ -314,6 +318,7 @@ export function hydrateDecideAudit(r: {
   job_id?: string | null;
   session_id: string;
   group_key: string;
+  timestamp?: number | null;
   frame_count?: number | null;
   candidate_count?: number | null;
   system_prompt_version?: string | null;
@@ -332,6 +337,7 @@ export function hydrateDecideAudit(r: {
     jobId: r.job_id ?? null,
     sessionId: r.session_id,
     groupKey: r.group_key,
+    timestamp: r.timestamp === null || r.timestamp === undefined ? null : Number(r.timestamp),
     frameCount: r.frame_count ?? null,
     candidateCount: r.candidate_count ?? null,
     systemPromptVersion: r.system_prompt_version ?? null,
@@ -406,10 +412,12 @@ export interface Db {
   jobCandidatesForJob(jobId: string): Promise<JobCandidate[]>;
   /** Every decide note across all jobs (hydrates the Store on boot). */
   listJobCandidates(): Promise<JobCandidate[]>;
-  /** Upsert one decide audit record (keyed by session_id + group_key). */
+  /** Upsert one decide audit record (row id = `${job identity}::${groupKey}`). */
   saveDecideAudit(a: DecideAuditRecord): Promise<void>;
   /** The audit record for one frame group (queryable by group key). */
   decideAuditForGroup(sessionId: string, groupKey: string): Promise<DecideAuditRecord | undefined>;
+  /** Every decide audit row attributable to ONE job (ADAAAA-7626 read path). */
+  decideAuditsForJob(jobId: string): Promise<DecideAuditRecord[]>;
   /** Every decide audit record (hydrates the decision-trail / frame debugger). */
   listDecideAudits(): Promise<DecideAuditRecord[]>;
   /** Retention: keep only the `max` newest records (oldest-first trim). */
@@ -803,19 +811,21 @@ export class SqliteDb implements Db {
   async saveDecideAudit(a: DecideAuditRecord): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO decide_audit (id, job_id, session_id, group_key, frame_count, candidate_count,
+        `INSERT INTO decide_audit (id, job_id, session_id, group_key, timestamp, frame_count, candidate_count,
            system_prompt_version, prompt_text, media_hashes, params, raw_reply, verdicts, timings,
            fallback, replayable, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-         ON CONFLICT(session_id, group_key) DO UPDATE SET
-           job_id=excluded.job_id, frame_count=excluded.frame_count, candidate_count=excluded.candidate_count,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET
+           job_id=excluded.job_id, session_id=excluded.session_id, timestamp=excluded.timestamp,
+           frame_count=excluded.frame_count, candidate_count=excluded.candidate_count,
            system_prompt_version=excluded.system_prompt_version, prompt_text=excluded.prompt_text,
            media_hashes=excluded.media_hashes, params=excluded.params, raw_reply=excluded.raw_reply,
            verdicts=excluded.verdicts, timings=excluded.timings, fallback=excluded.fallback,
            replayable=excluded.replayable, created_at=excluded.created_at`
       )
       .run(
-        a.id, a.jobId ?? null, a.sessionId, a.groupKey, a.frameCount ?? null, a.candidateCount ?? null,
+        a.id, a.jobId ?? null, a.sessionId, a.groupKey, a.timestamp ?? null, a.frameCount ?? null,
+        a.candidateCount ?? null,
         a.systemPromptVersion ?? null, a.promptText ?? null, JSON.stringify(a.mediaHashes),
         a.params ? JSON.stringify(a.params) : null, a.rawReply ?? null,
         a.verdicts ? JSON.stringify(a.verdicts) : null, a.timings ? JSON.stringify(a.timings) : null,
@@ -828,6 +838,14 @@ export class SqliteDb implements Db {
       .prepare("SELECT * FROM decide_audit WHERE session_id = ? AND group_key = ?")
       .get(sessionId, groupKey) as any;
     return r ? hydrateDecideAudit(r) : undefined;
+  }
+
+  /** ADAAAA-7626: job-scoped read path (was: list everything, filter in memory). */
+  async decideAuditsForJob(jobId: string): Promise<DecideAuditRecord[]> {
+    const rows = this.db
+      .prepare("SELECT * FROM decide_audit WHERE job_id = ? ORDER BY created_at DESC")
+      .all(jobId) as any[];
+    return rows.map(hydrateDecideAudit);
   }
 
   async listDecideAudits(): Promise<DecideAuditRecord[]> {
@@ -1506,18 +1524,20 @@ export class PgDb implements Db {
 
   async saveDecideAudit(a: DecideAuditRecord): Promise<void> {
     await this.pool.query(
-      `INSERT INTO decide_audit (id, job_id, session_id, group_key, frame_count, candidate_count,
+      `INSERT INTO decide_audit (id, job_id, session_id, group_key, timestamp, frame_count, candidate_count,
          system_prompt_version, prompt_text, media_hashes, params, raw_reply, verdicts, timings,
          fallback, replayable, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-       ON CONFLICT (session_id, group_key) DO UPDATE SET
-         job_id=EXCLUDED.job_id, frame_count=EXCLUDED.frame_count, candidate_count=EXCLUDED.candidate_count,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+       ON CONFLICT (id) DO UPDATE SET
+         job_id=EXCLUDED.job_id, session_id=EXCLUDED.session_id, timestamp=EXCLUDED.timestamp,
+         frame_count=EXCLUDED.frame_count, candidate_count=EXCLUDED.candidate_count,
          system_prompt_version=EXCLUDED.system_prompt_version, prompt_text=EXCLUDED.prompt_text,
          media_hashes=EXCLUDED.media_hashes, params=EXCLUDED.params, raw_reply=EXCLUDED.raw_reply,
          verdicts=EXCLUDED.verdicts, timings=EXCLUDED.timings, fallback=EXCLUDED.fallback,
          replayable=EXCLUDED.replayable, created_at=EXCLUDED.created_at`,
       [
-        a.id, a.jobId ?? null, a.sessionId, a.groupKey, a.frameCount ?? null, a.candidateCount ?? null,
+        a.id, a.jobId ?? null, a.sessionId, a.groupKey, a.timestamp ?? null, a.frameCount ?? null,
+        a.candidateCount ?? null,
         a.systemPromptVersion ?? null, a.promptText ?? null, JSON.stringify(a.mediaHashes),
         a.params ? JSON.stringify(a.params) : null, a.rawReply ?? null,
         a.verdicts ? JSON.stringify(a.verdicts) : null, a.timings ? JSON.stringify(a.timings) : null,
@@ -1532,6 +1552,15 @@ export class PgDb implements Db {
       [sessionId, groupKey]
     );
     return r.rows.length ? hydrateDecideAudit(r.rows[0]) : undefined;
+  }
+
+  /** ADAAAA-7626: job-scoped read path (was: list everything, filter in memory). */
+  async decideAuditsForJob(jobId: string): Promise<DecideAuditRecord[]> {
+    const r = await this.pool.query(
+      "SELECT * FROM decide_audit WHERE job_id = $1 ORDER BY created_at DESC",
+      [jobId]
+    );
+    return r.rows.map(hydrateDecideAudit);
   }
 
   async listDecideAudits(): Promise<DecideAuditRecord[]> {
@@ -2030,6 +2059,7 @@ const SCHEMA_SQLITE = `
     job_id TEXT,
     session_id TEXT NOT NULL,
     group_key TEXT NOT NULL,
+    timestamp REAL,
     frame_count INTEGER,
     candidate_count INTEGER,
     system_prompt_version TEXT,
@@ -2044,6 +2074,7 @@ const SCHEMA_SQLITE = `
     created_at TEXT NOT NULL,
     UNIQUE (session_id, group_key)
   );
+  CREATE INDEX IF NOT EXISTS decide_audit_job_id ON decide_audit (job_id);
   CREATE TABLE IF NOT EXISTS train_runs (
     id TEXT PRIMARY KEY,
     record TEXT NOT NULL,
@@ -2218,6 +2249,7 @@ const SCHEMA_PG = `
     job_id TEXT,
     session_id TEXT NOT NULL,
     group_key TEXT NOT NULL,
+    timestamp REAL,
     frame_count INTEGER,
     candidate_count INTEGER,
     system_prompt_version TEXT,
@@ -2232,6 +2264,7 @@ const SCHEMA_PG = `
     created_at TEXT NOT NULL,
     UNIQUE (session_id, group_key)
   );
+  CREATE INDEX IF NOT EXISTS decide_audit_job_id ON decide_audit (job_id);
   CREATE TABLE IF NOT EXISTS train_runs (
     id TEXT PRIMARY KEY,
     record TEXT NOT NULL,
@@ -2465,6 +2498,26 @@ const MIGRATIONS: Migration[] = [
       if (!(await hasColumn("media_sessions", "node_id"))) {
         await exec("ALTER TABLE media_sessions ADD COLUMN node_id TEXT");
       }
+    },
+  },
+  {
+    version: 9,
+    name: "decide-audit-job-scoped-identity",
+    up: async (exec, hasColumn) => {
+      // ADAAAA-7626: decide_audit rows are job-scoped, not session-scoped.
+      // `timestamp` records the candidate's in-video time on Stage-2 confirm
+      // rows. The baseline CREATE covers fresh DBs; this brings existing
+      // on-disk DBs up to shape.
+      if (!(await hasColumn("decide_audit", "timestamp"))) {
+        await exec("ALTER TABLE decide_audit ADD COLUMN timestamp REAL");
+      }
+      // Purge the legacy rows whose identity was the shared "job" sentinel
+      // (`id = 'job::gNNN'`, session_id 'job'): two jobs deciding the same 3 s
+      // group overwrote one row, so those rows are mis-attributable by
+      // construction and cannot be repaired.
+      await exec("DELETE FROM decide_audit WHERE session_id = 'job' OR id LIKE 'job::%'");
+      // Job-scoped read path support (GET /jobs/:id/decide-audit).
+      await exec("CREATE INDEX IF NOT EXISTS decide_audit_job_id ON decide_audit (job_id)");
     },
   },
 ];
