@@ -194,6 +194,13 @@ export interface JobDetailHighlight {
   // ADAAAA-7248: ASR transcript surfaced on the card for corroboration.
   asrTranscript?: string;
   createdAt: string;
+  // ADAAAA-7622: the deterministic localized highlight instant (seconds from
+  // stream start) the delivered clip is centered on, plus the signal that
+  // produced it. Declared here so the posting caption can seed from the
+  // summary-log window at that instant. Additive optional — legacy rows carry
+  // neither (mirrors HighlightRecordSchema in @highlights/events).
+  localizedTs?: number;
+  localizeSignal?: "peak_frame" | "peak_audio" | "trigger";
   // ADAAAA-6798 Inc 2: link to the JobCandidate that started this highlight and
   // the de-normalized trigger metadata (kind + timestamp + eventType) so the
   // detail can show "what trigger started this". Absent on legacy rows without

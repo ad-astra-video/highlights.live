@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Play, Check, X, Loader2, ChevronDown, ChevronRight, VolumeX, Search } from "lucide-react";
+import { ArrowLeft, Play, Check, X, Loader2, ChevronDown, ChevronRight, VolumeX, Search, Download, Link2 } from "lucide-react";
 import { api, getToken } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { VideoClip } from "../components/VideoClip";
 import { WindowAnalysisPanel } from "../components/WindowAnalysis";
+import { batchManifest, clipFileName, clipUrl, copyText, saveBlob, seedCaption, type BatchItem } from "../lib/highlightPost";
+import { buildZip, type ZipFile } from "../lib/zip";
 import {
   fetchJobDetail,
   isJobInFlight,
@@ -408,20 +410,60 @@ export interface HighlightCardProps {
   /** Which review action is currently in-flight for this card (drives the
    * per-control loading state; disables both controls while pending). */
   pendingStatus?: "accepted" | "rejected" | null;
+  /** ADAAAA-7622: the current caption for this clip. Edited inline on the
+   * card; the page owns the value so the batch export ships the edit. */
+  caption?: string;
+  onCaptionChange?: (h: JobDetailHighlight, value: string) => void;
+  /** ADAAAA-7622: cards in the accepted (postable) feed can join a batch. */
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (h: JobDetailHighlight) => void;
 }
 
-export function HighlightCard({ highlight: h, onDecision, pendingStatus = null }: HighlightCardProps) {
+export function HighlightCard({
+  highlight: h,
+  onDecision,
+  pendingStatus = null,
+  caption = "",
+  onCaptionChange,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
+}: HighlightCardProps) {
   const pending = pendingStatus !== null;
   const busyAccept = pendingStatus === "accepted";
   const busyReject = pendingStatus === "rejected";
+  // ADAAAA-7622: one click must yield either a file or a clipboard URL, with
+  // no DevTools in the happy path. `download` on a same-origin anchor saves
+  // the clip; the copy button reports its own state so a blocked clipboard is
+  // visible instead of silently doing nothing.
+  const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
+  const url = clipUrl(h.clipUri);
+  async function copyLink() {
+    const ok = await copyText(url);
+    setCopied(ok ? "copied" : "failed");
+    setTimeout(() => setCopied("idle"), 1800);
+  }
   return (
     <div className="card card-hover overflow-hidden" data-detail-highlight>
       <VideoClip src={h.clipUri} label={h.eventType} error={h.clipError} />
       <div className="p-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">
             {h.eventType || "EVENT"}
           </span>
+          {selectable && onToggleSelect && (
+            <label className="flex cursor-pointer items-center gap-1 text-xs text-mut" data-detail-select-label>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-neon"
+                checked={selected}
+                onChange={() => onToggleSelect(h)}
+                data-detail-select-highlight
+              />
+              Batch
+            </label>
+          )}
           <span className={`text-xs font-bold ${h.status === "rejected" ? "text-red" : "text-ink"}`} data-detail-status>
             {h.status}
           </span>
@@ -450,6 +492,56 @@ export function HighlightCard({ highlight: h, onDecision, pendingStatus = null }
         </div>
         <div className="mt-1 rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut" data-detail-trigger>
           Trigger: <span className="font-bold text-ink">{triggerLabel(h.trigger)}</span>
+        </div>
+        {/* ADAAAA-7622: editable posting caption, seeded by the page from the
+            summary-log narrative for this clip's window with the event type and
+            timestamp prefilled. The edit is what the batch export ships. */}
+        <label className="mt-3 block">
+          <span className="text-xs uppercase tracking-wide text-mut">Caption</span>
+          <textarea
+            className="mt-1 w-full resize-y rounded-lg border border-neon/30 bg-dusk px-2 py-1 text-xs text-ink"
+            rows={3}
+            value={caption}
+            onChange={(e) => onCaptionChange?.(h, e.target.value)}
+            data-detail-caption
+          />
+        </label>
+        {/* ADAAAA-7622: Download + Copy link. The clip URL is public, so the
+            copied link plays in a fresh private window with no login. */}
+        <div className="mt-2 flex gap-2">
+          {h.clipUri ? (
+            <a
+              className="btn-neon flex-1 px-2 py-1 text-center text-xs"
+              href={url}
+              download={clipFileName(h)}
+              data-detail-download
+            >
+              <Download className="mr-1 inline h-3.5 w-3.5" aria-hidden /> Download
+            </a>
+          ) : (
+            <button className="btn-neon flex-1 px-2 py-1 text-xs" disabled data-detail-download>
+              <Download className="mr-1 inline h-3.5 w-3.5" aria-hidden /> Download
+            </button>
+          )}
+          <button
+            className="btn-neon flex-1 px-2 py-1 text-xs"
+            onClick={copyLink}
+            disabled={!h.clipUri}
+            data-detail-copy-link
+            data-copy-state={copied}
+          >
+            {copied === "copied" ? (
+              <>
+                <Check className="mr-1 inline h-3.5 w-3.5" aria-hidden /> Copied
+              </>
+            ) : copied === "failed" ? (
+              "Copy failed"
+            ) : (
+              <>
+                <Link2 className="mr-1 inline h-3.5 w-3.5" aria-hidden /> Copy link
+              </>
+            )}
+          </button>
         </div>
         {/* ADAAAA-7248: surface audio state explicitly — a silent clip (e.g. a
             screen/window share, or an audio-less upload) reads as "no audio
@@ -667,6 +759,16 @@ export function JobDetail() {
   const [loading, setLoading] = useState(true);
   // Which review action is in-flight for which highlight id (per-control loading).
   const [pendingReview, setPendingReview] = useState<{ id: string; status: "accepted" | "rejected" } | null>(null);
+  // ADAAAA-7622: posting workflow. Captions are page-owned so an inline edit
+  // survives the 5 s detail poll (which replaces `detail`) and is what the
+  // batch export ships; the batch selection covers the accepted feed only, so
+  // the export mirrors the postable list rather than raw candidates.
+  const [captions, setCaptions] = useState<Record<string, string>>({});
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [batchState, setBatchState] = useState<{ kind: "idle" | "working" | "done" | "error"; message: string }>({
+    kind: "idle",
+    message: "",
+  });
   // ADAAAA-7045 (Inc 2, follow-up to ADAAAA-7039): durable decide_audit rows for
   // this job (one per frame group), surfaced as the "Decide LLM audit" section.
   // Best-effort: a failed fetch just leaves the section empty.
@@ -776,6 +878,20 @@ export function JobDetail() {
   const partition = useMemo(() => (detail ? assertFramePartition(detail.sections) : null), [detail]);
   const frameCount = useMemo(() => (detail ? detail.sections.reduce((n, s) => n + s.frames.length, 0) : 0), [detail]);
   const acceptedCount = useMemo(() => (detail ? detail.highlights.filter((h) => h.status !== "rejected").length : 0), [detail]);
+  // ADAAAA-7622: the postable list is the accepted feed (rejected clips are
+  // excluded server-side semantics too) — batch export only ever covers this.
+  const postableHighlights = useMemo(
+    () => (detail ? detail.highlights.filter((h) => h.status !== "rejected") : []),
+    [detail]
+  );
+  const selectedHighlights = useMemo(
+    () => postableHighlights.filter((h) => selectedIds.includes(h.id)),
+    [postableHighlights, selectedIds]
+  );
+  const captionOf = useCallback(
+    (h: JobDetailHighlight) => captions[h.id] ?? seedCaption(h, detail?.job.summaryLog),
+    [captions, detail]
+  );
   const title = useMemo(() => (detail ? jobTitle(detail.job, acceptedCount) : ""), [detail, acceptedCount]);
 
   // ADAAAA-6943/6946: click-to-enlarge + multi-select enlarge. `framesBySeq`
@@ -886,6 +1002,73 @@ export function JobDetail() {
     }
   }
 
+  function toggleSelectHighlight(h: JobDetailHighlight) {
+    setSelectedIds((prev) => (prev.includes(h.id) ? prev.filter((x) => x !== h.id) : [...prev, h.id]));
+  }
+
+  function setHighlightCaption(h: JobDetailHighlight, value: string) {
+    setCaptions((prev) => ({ ...prev, [h.id]: value }));
+  }
+
+  /**
+   * Batch export (ADAAAA-7622): N selected highlights -> ONE .zip containing
+   * every clip plus `captions.txt`, so a 5-clip social batch needs no DevTools
+   * and no per-clip download loop. A clip whose bytes cannot be fetched still
+   * contributes its caption + public URL to the manifest, so the export is
+   * never silently short: the user gets a usable URL for it either way.
+   */
+  async function exportBatch() {
+    if (selectedHighlights.length === 0 || batchState.kind === "working") return;
+    const jobId = detail?.job.id || id;
+    setBatchState({ kind: "working", message: `Preparing ${selectedHighlights.length} clip(s)…` });
+    const files: ZipFile[] = [];
+    const items: BatchItem[] = [];
+    for (const h of selectedHighlights) {
+      const url = clipUrl(h.clipUri);
+      const caption = captionOf(h);
+      let failure: string | undefined;
+      if (!h.clipUri) {
+        failure = "no clip was produced for this highlight";
+      } else {
+        try {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const bytes = new Uint8Array(await res.arrayBuffer());
+          if (bytes.length === 0) throw new Error("empty clip file");
+          files.push({ name: clipFileName(h), data: bytes });
+        } catch (e: any) {
+          failure = String(e?.message || e);
+        }
+      }
+      items.push({ caption, url, error: failure });
+    }
+    // Always ship the manifest: it is the deliverable when a fetch failed and
+    // the posting sheet when every clip made it into the archive.
+    files.push({ name: "captions.txt", data: new TextEncoder().encode(batchManifest(items)) });
+    const clipCount = files.length - 1;
+    saveBlob(buildZip(files), `highlights-${jobId}-${clipCount}clips.zip`);
+    const failed = items.filter((i) => i.error).length;
+    setBatchState({
+      kind: failed ? "error" : "done",
+      message: failed
+        ? `${clipCount} clip(s) + captions.txt downloaded — ${failed} clip(s) could not be fetched, their URL is in captions.txt`
+        : `${clipCount} clip(s) + captions.txt downloaded`,
+    });
+  }
+
+  /** Copy the batch manifest (captions + public URLs) to the clipboard. */
+  async function copyBatchManifest() {
+    if (selectedHighlights.length === 0) return;
+    const items: BatchItem[] = selectedHighlights.map((h) => ({ caption: captionOf(h), url: clipUrl(h.clipUri) }));
+    const ok = await copyText(batchManifest(items));
+    setBatchState({
+      kind: ok ? "done" : "error",
+      message: ok
+        ? `${selectedHighlights.length} caption(s) + URL(s) copied`
+        : "clipboard write failed — use Download .zip instead",
+    });
+  }
+
   // Streamed acceptance state → the task must not be left as `loading` forever.
   if (loading && !detail) {
     return (
@@ -976,6 +1159,53 @@ export function JobDetail() {
           {/* Highlights — accepted feed. Rejected clips move out of this feed
               into the Rejected presentation below (recoverable via Accept). */}
           <h3 className="mt-8 text-2xl font-black">Highlights</h3>
+          {/* ADAAAA-7622: batch export bar. Selection + export live on the
+              accepted feed so a 5-clip social batch is one action: tick the
+              clips, Download .zip (clips + captions.txt) or Copy URLs. */}
+          {postableHighlights.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-purple/40 bg-mut/10 px-3 py-2" data-detail-batch>
+              <span className="text-xs font-bold text-mut" data-detail-batch-count>
+                {selectedHighlights.length} of {postableHighlights.length} selected
+              </span>
+              <button
+                className="btn-neon px-2 py-1 text-xs"
+                onClick={() => setSelectedIds(selectedHighlights.length === postableHighlights.length ? [] : postableHighlights.map((h) => h.id))}
+                data-detail-batch-toggle-all
+              >
+                {selectedHighlights.length === postableHighlights.length ? "Clear" : "Select all"}
+              </button>
+              <button
+                className="btn-neon btn-purple px-2 py-1 text-xs"
+                onClick={exportBatch}
+                disabled={selectedHighlights.length === 0 || batchState.kind === "working"}
+                data-detail-batch-export
+              >
+                {batchState.kind === "working" ? (
+                  <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <Download className="mr-1 inline h-3.5 w-3.5" aria-hidden />
+                )}
+                {batchState.kind === "working" ? "Preparing…" : `Download .zip (${selectedHighlights.length})`}
+              </button>
+              <button
+                className="btn-neon px-2 py-1 text-xs"
+                onClick={copyBatchManifest}
+                disabled={selectedHighlights.length === 0}
+                data-detail-batch-copy
+              >
+                <Link2 className="mr-1 inline h-3.5 w-3.5" aria-hidden /> Copy URLs
+              </button>
+              {batchState.message && (
+                <span
+                  className={`text-xs ${batchState.kind === "error" ? "text-yellow" : "text-mut"}`}
+                  data-detail-batch-status
+                  data-batch-kind={batchState.kind}
+                >
+                  {batchState.message}
+                </span>
+              )}
+            </div>
+          )}
           <div className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {detail.highlights.filter((h) => h.status !== "rejected").length === 0 && (
               <div className="text-mut" data-detail-no-highlights>No accepted highlights for this job.</div>
@@ -988,6 +1218,11 @@ export function JobDetail() {
                   highlight={h}
                   onDecision={review}
                   pendingStatus={pendingReview?.id === h.id ? pendingReview.status : null}
+                  caption={captionOf(h)}
+                  onCaptionChange={setHighlightCaption}
+                  selectable
+                  selected={selectedIds.includes(h.id)}
+                  onToggleSelect={toggleSelectHighlight}
                 />
               ))}
           </div>
