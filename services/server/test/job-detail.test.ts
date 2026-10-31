@@ -212,6 +212,48 @@ describe("attachWindowAudioUris (ADAAAA-7285)", () => {
   });
 });
 
+describe("buildSections frame inventory (ADAAAA-7624)", () => {
+  it("keeps every on-disk frame when the observation window was capped", () => {
+    // The reported job (d61e52f6): 2334 frames at 3 fps, observations capped to
+    // the newest 2000 rows (seq 334..2333), so windows 0-36 (0-111 s) rendered
+    // `0 frames` although every JPEG exists and serves 200.
+    const observations = Array.from({ length: 2000 }, (_, i) => obs(334 + i, (334 + i) / 3));
+    const sections = buildSections(observations, [], "job-1", { frameCount: 2334, sampleFps: 3 });
+
+    expect(sections).toHaveLength(260); // 780 s / 3 s
+    expect(sections.every((s) => s.frames.length > 0)).toBe(true);
+    expect(sections.reduce((n, s) => n + s.frames.length, 0)).toBe(2334);
+    const seqs = sections.flatMap((s) => s.frames.map((f) => f.seq));
+    expect(new Set(seqs).size).toBe(2334); // partition invariant: no duplicates
+    expect(Math.min(...seqs)).toBe(0);
+    expect(Math.max(...seqs)).toBe(2333);
+    // A restored frame keeps its seq-derived timestamp and has no tracks.
+    expect(sections[0].frames[0]).toMatchObject({ seq: 0, timestamp: 0, tracks: [] });
+    expect(sections[0].frames[0].uri).toBe("/jobs/job-1/frames/0");
+  });
+
+  it("does not duplicate a seq that appears in both the observations and the inventory", () => {
+    const observations = [obs(0, 0), obs(1, 1 / 3), obs(1, 1 / 3)];
+    const sections = buildSections(observations, [], "job-1", { frameCount: 5, sampleFps: 3 });
+    const seqs = sections.flatMap((s) => s.frames.map((f) => f.seq));
+    expect(seqs).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("is a no-op without an inventory (live jobs keep the observation window)", () => {
+    const observations = [obs(0, 0.2), obs(1, 2.9)];
+    const sections = buildSections(observations, [], "job-1");
+    expect(sections).toHaveLength(1);
+    expect(sections[0].frames.map((f) => f.seq)).toEqual([0, 1]);
+  });
+
+  it("ignores a zero/absent frame count (missing frame dir)", () => {
+    const observations = [obs(4, 1.5)];
+    const sections = buildSections(observations, [], "job-1", { frameCount: 0, sampleFps: 3 });
+    expect(sections).toHaveLength(1);
+    expect(sections[0].frames.map((f) => f.seq)).toEqual([4]);
+  });
+});
+
 describe("durable observations + candidates survive a restart (ADAAAA-6851 Inc 1/2)", () => {
   it("round-trips observations and candidates through a reopen of the DB file", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "hl-jd-"));

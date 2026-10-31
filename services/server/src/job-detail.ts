@@ -38,12 +38,35 @@ export interface Section {
   }[];
 }
 
+/**
+ * On-disk frame inventory for a VOD job (ADAAAA-7624).
+ *
+ * Per-frame observations are a CAPPED durable window (store trims the oldest
+ * rows past the job's cap), while the sampled JPEGs are complete on disk. A job
+ * longer than the cap therefore loses the observation rows for its first
+ * windows and those windows rendered `0 frames` even though the frame files
+ * exist and serve 200. The inventory lets the section builder join every frame
+ * back in: `frameCount` is the number of sampled frames (seq 0..frameCount-1)
+ * and `sampleFps` derives a timestamp for a frame with no observation row.
+ */
+export interface FrameInventory {
+  frameCount: number;
+  sampleFps: number;
+}
+
 /** Partition per-frame observations into fixed 3 s sections. A frame belongs to
- * exactly one section (index = floor(timestamp/3)), so no seq appears twice. */
+ * exactly one section (index = floor(timestamp/3)), so no seq appears twice.
+ *
+ * ADAAAA-7624: when a frame `inventory` is supplied, every on-disk frame that
+ * has no surviving observation row is added to its section (tracks `[]`,
+ * timestamp derived from `sampleFps`) so a capped observation read can never
+ * blank the first windows of a long job. The frame seq stays the partition key,
+ * so the partition invariant (one seq, one section) still holds. */
 export function buildSections(
   observations: StoredObservation[],
   candidates: JobCandidate[],
-  jobId: string
+  jobId: string,
+  inventory?: FrameInventory
 ): Section[] {
   const sections = new Map<number, Section>();
   const sectionOf = (ts: number): number => Math.floor(ts / SECTION_WINDOW);
@@ -55,9 +78,27 @@ export function buildSections(
     }
     return s;
   };
+  const seenSeq = new Set<number>();
   for (const o of observations) {
+    // ADAAAA-7624: one frame seq must land in exactly one section even if a
+    // duplicate observation row slips through (first row wins, like the DB read).
+    if (seenSeq.has(o.seq)) continue;
+    seenSeq.add(o.seq);
     const s = getSection(sectionOf(o.timestamp));
     s.frames.push({ seq: o.seq, timestamp: o.timestamp, uri: `/jobs/${jobId}/frames/${o.seq}`, tracks: o.tracks });
+  }
+  // ADAAAA-7624: restore the on-disk frames the capped observation window
+  // dropped. A frame with no row keeps its seq-derived timestamp and an empty
+  // track list — the tile renders the servable JPEG instead of "no frames".
+  const frameCount = Math.max(0, Math.floor(inventory?.frameCount ?? 0));
+  if (frameCount > 0) {
+    const fps = inventory && Number.isFinite(inventory.sampleFps) && inventory.sampleFps > 0 ? inventory.sampleFps : 1;
+    for (let seq = 0; seq < frameCount; seq++) {
+      if (seenSeq.has(seq)) continue;
+      const timestamp = seq / fps;
+      const s = getSection(sectionOf(timestamp));
+      s.frames.push({ seq, timestamp, uri: `/jobs/${jobId}/frames/${seq}`, tracks: [] });
+    }
   }
   for (const c of candidates) {
     const s = getSection(sectionOf(c.timestamp));
@@ -78,7 +119,11 @@ export function buildSections(
       confirm: c.confirm,
     });
   }
-  return [...sections.values()].sort((a, b) => a.index - b.index);
+  const list = [...sections.values()].sort((a, b) => a.index - b.index);
+  // Deterministic frame order inside a window (seq ascending) regardless of
+  // whether a frame came from an observation row or the on-disk inventory.
+  for (const s of list) s.frames.sort((a, b) => a.seq - b.seq);
+  return list;
 }
 
 /** Aggregate tracked-object identities across a job, grouped by trackId. */
