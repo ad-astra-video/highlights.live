@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildTestApp, waitForJob } from "./helpers";
+import { HighlightRecordSchema } from "@highlights/events";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-test-"));
 const videoPath = path.join(tmp, "test.mp4");
@@ -364,9 +365,83 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     const other = await register(app, "other22@test.dev", "password123");
     const forbidden = await app.inject({ method: "GET", url: `/jobs/${jobId}/detail`, headers: { authorization: scheme + " " + other } });
     expect(forbidden.statusCode).toBe(403);
-    const notFound = await app.inject({ method: "GET", url: "/jobs/unknown-id/detail", headers: { authorization: scheme + " " + token } });
+    const notFound = await app.inject({ method: "GET", url: "/jobs/unknown-id/detail", headers: { authorization: `${scheme} ${token}` } });
     expect(notFound.statusCode).toBe(404);
 
+    await app.close();
+  });
+
+  it("job-detail highlights are the precision-gated, deduped postable list (ADAAAA-7621)", async () => {
+    const { app, store } = await buildTestApp();
+    const token = await register(app, "postable@test.dev", "password123");
+    const scheme = "Bearer";
+    const job = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `${scheme} ${token}` },
+      payload: { videoPath },
+    });
+    const jobId = job.json().job.id;
+    await waitForJob(app, jobId, token);
+
+    // Seed the persisted highlights the deployed job actually carries: two
+    // overlapping GOAL clips, one rejected clip, one self-contradicting accept
+    // (a Stage-1 near_miss a later pass "rescued") and one notable near miss.
+    const seed = async (id: string, start: number, over: Record<string, unknown> = {}) => {
+      await store.addHighlight(
+        HighlightRecordSchema.parse({
+          id,
+          jobId,
+          clipUri: `/clips/${id}.mp4`,
+          start,
+          end: start + 15,
+          eventType: "GOAL",
+          score: 100,
+          reason: "The ball clearly enters the net after a strike by the player in the blue jersey.",
+          outcome: "scoring_play",
+          status: "accepted",
+          createdAt: new Date().toISOString(),
+          ...over,
+        })
+      );
+    };
+    await seed("hl-weak", 1000, { score: 90 });
+    await seed("hl-strong", 1004); // overlaps hl-weak -> merged into one moment
+    await seed("hl-rej", 3000, { status: "rejected" });
+    await seed("hl-contra", 4000, {
+      score: 60,
+      reason: "The ball is seen moving towards the goal but does not enter the net; outcome=near_miss is not a scoring highlight",
+    });
+    await seed("hl-near", 5000, { outcome: "near_miss", eventType: "NEAR_MISS", nearMiss: true });
+
+    const d = await app.inject({ method: "GET", url: `/jobs/${jobId}/detail`, headers: { authorization: `${scheme} ${token}` } });
+    expect(d.statusCode).toBe(200);
+    const detail = d.json();
+    const ids = detail.highlights.map((h: any) => h.id);
+    expect(ids).toContain("hl-strong");
+    expect(ids).not.toContain("hl-weak"); // merged duplicate
+    expect(ids).not.toContain("hl-rej"); // rejected is never postable
+    expect(ids).not.toContain("hl-contra"); // self-contradicting verdict
+    expect(ids).not.toContain("hl-near"); // non-scoring -> notable lane
+    expect(detail.notableHighlights.map((h: any) => h.id)).toEqual(["hl-near"]);
+    expect(detail.duplicateHighlights.map((h: any) => [h.id, h.duplicateOf])).toEqual([["hl-weak", "hl-strong"]]);
+    // Merged moment exposes the duplicate count; no postable windows overlap.
+    const moment = detail.highlights.find((h: any) => h.id === "hl-strong");
+    expect(moment.duplicateCount).toBe(1);
+    for (const a of detail.highlights) {
+      for (const b of detail.highlights) {
+        if (a.id !== b.id) expect(a.start < b.end && b.start < a.end).toBe(false);
+      }
+    }
+    // Every postable clip is a scoring play with a self-consistent verdict.
+    for (const h of detail.highlights) {
+      expect(h.outcome).toBe("scoring_play");
+      expect(h.status).not.toBe("rejected");
+    }
+    // The persisted row is untouched: the gate is a read-side projection, not a
+    // delete, so the raw review surface (/highlights, /feed) still sees it.
+    expect(store.getHighlight("hl-rej")!.status).toBe("rejected");
+    expect(store.highlightsForJob(jobId).map((h) => h.id)).toContain("hl-rej");
     await app.close();
   });
 

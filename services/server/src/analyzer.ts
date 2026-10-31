@@ -24,6 +24,7 @@ import {
   OBSERVE_WINDOW_S,
 } from "./observe-loop";
 import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
+import { isGoalRefutingReason } from "./highlight-postable";
 
 export interface ReserveResult {
   sessionId: string;
@@ -409,7 +410,13 @@ function highlightEventType(decision: DecisionResult, fallback?: string): string
 export function isAcceptedHighlight(d: DecisionResult, preferLabels?: string[]): boolean {
   if (!d.isHighlight) return false;
   if (d.outcome === undefined) return true; // legacy verdict, trust isHighlight
-  if (d.outcome === "scoring_play") return true; // goal always a highlight
+  // ADAAAA-7621: precision gate — a scoring_play whose OWN verdict text refutes
+  // the goal is not accepted, regardless of eventType. This is the false-positive
+  // class found on job d61e52f6: a Stage-1 read said the ball "does not enter the
+  // net", a later scoreboard/frame pass overrode it and handed back
+  // isHighlight=true + outcome=scoring_play, and the clip was persisted as an
+  // accepted GOAL. The record's own evidence wins over the aggregate verdict.
+  if (d.outcome === "scoring_play") return !isGoalRefutingReason(d.reason);
   return requestedOutcomes(preferLabels).has(d.outcome);
 }
 
