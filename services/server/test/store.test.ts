@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { JobCandidateSchema } from "@highlights/events";
+import { JobCandidateSchema, type JobCandidate } from "@highlights/events";
 import { Store } from "../src/store";
 
 describe("Store (in-memory)", () => {
@@ -131,7 +131,12 @@ describe("Store (in-memory)", () => {
   it("recordJobCandidate dedupes a re-persisted decide call by timestamp|eventType|status (ADAAAA-7505)", async () => {
     const s = new Store();
     const j = await s.createJob({ ownerId: "u", source: "file" });
-    const mk = (id: string, timestamp: number, eventType = "goal", status = "rejected" as const) =>
+    const mk = (
+      id: string,
+      timestamp: number,
+      eventType = "goal",
+      status: JobCandidate["status"] = "rejected"
+    ) =>
       JobCandidateSchema.parse({
         id,
         jobId: j.id,
