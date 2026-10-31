@@ -707,3 +707,122 @@ describe("media write hardening: a closed peer must not kill the process (ADAAAA
   });
 });
 
+
+describe("live VP8 rail must not go silent on a large decode segment (ADAAAA-7594)", () => {
+  // Deployed evidence: a REAL headless-Chrome `getDisplayMedia` VP8 session
+  // keeps encoding (461 client frames, 1219 video RTP packets) while the
+  // trickle `video-in` rail stops after 3-4 observations. A local repro of the
+  // same path (real MediaServer + real Chrome VP8 + real ffmpeg) isolates the
+  // cause: each sample is a one-shot ffmpeg fed the whole since-keyframe
+  // segment on stdin. Once that segment exceeds the kernel pipe buffer
+  // (~128 KB, reached ~4 s into a VP8 screen share whose encoder has not
+  // refreshed its keyframe) ffmpeg decodes every frame, emits the JPEG and
+  // exits while node still has bytes queued; libuv then reports EPIPE on stdin
+  // AFTER a complete JPEG has landed on stdout. sampleFrame() settled null on
+  // that EPIPE, discarding a good decode — so the rail went silent while the
+  // process stayed healthy (the ADAAAA-7591 guard prevented the crash, not the
+  // silence). Only the child's own 'close' may settle a sample.
+  const uncaught: Error[] = [];
+  const onUncaught = (e: Error) => uncaught.push(e);
+
+  it("keeps the frame when the decoder exits before draining its stdin (EPIPE)", async () => {
+    uncaught.length = 0;
+    process.on("uncaughtException", onUncaught);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const dir = mkdtempSync(path.join(tmpdir(), "hl-media-epipe-jpeg-"));
+    const bin = path.join(dir, "decoder-exits-early");
+    // A decoder that produces a complete JPEG and exits WITHOUT reading stdin —
+    // the exact shape of the pipe-buffer/exit race on a large VP8 segment.
+    writeFileSync(
+      bin,
+      [
+        "#!/usr/bin/env node",
+        "const jpeg = Buffer.concat([Buffer.from([0xff,0xd8]), Buffer.alloc(400, 0x41), Buffer.from([0xff,0xd9])]);",
+        "process.stdout.write(jpeg);",
+        "process.exit(0);",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    try {
+      const session = new WebRtcIngestSession({ sampleFps: 1, ffmpegBin: bin, sessionId: "sess-epipe-jpeg" });
+      const frames: Buffer[] = [];
+      session.on("frame", (f: any) => frames.push(f.jpeg));
+      session.on("error", () => {});
+      session.on("ffmpeg", () => {});
+      // 2 MiB segment: far past the 64 KiB child-stdin pipe buffer, so the exit
+      // lands while the write is still queued (the crashing/silencing shape).
+      (session as any).seg = [{ data: Buffer.alloc(2 * 1024 * 1024, 7), pts: 0 }];
+      (session as any).vclCount = 1;
+      await (session as any).sampleFrame(Date.now() / 1000, 0);
+      await new Promise((r) => setTimeout(r, 250)); // let the EPIPE land
+      expect(uncaught).toEqual([]);
+      // The decode is kept: EPIPE on stdin is not "no frame".
+      expect(session.framesEmitted).toBe(1);
+      expect(frames).toHaveLength(1);
+      expect(frames[0][0]).toBe(0xff);
+      expect(frames[0][1]).toBe(0xd8);
+      // ... and the failing write is still logged/attributable (7591 guard).
+      const logged = warn.mock.calls.map((c) => String(c[0]));
+      expect(logged.some((s) => s.includes("write-failed") && s.includes("session=sess-epipe-jpeg"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      process.off("uncaughtException", onUncaught);
+    }
+  });
+
+  it("emits frames from consecutive samples of a real VP8 segment larger than the stdin pipe", async () => {
+    // A real libvpx VP8 GOP big enough to cross the pipe-buffer threshold
+    // (~800 KB over 120 frames at 640x360), i.e. the geometry of a real screen
+    // share a few seconds after its last keyframe.
+    const bigPath = path.join(tmpdir(), `hl-rtc-${process.pid}.big.vp8.ivf`);
+    execFileSync("ffmpeg", [
+      "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=15",
+      "-t", "8", "-c:v", "libvpx", "-b:v", "900k", "-f", "ivf", bigPath,
+    ]);
+    const frames = ivfFrames(bigPath);
+    expect(frames.length).toBeGreaterThan(60);
+    const session = new WebRtcIngestSession({ sampleFps: 1, sessionId: "sess-big-vp8" });
+    const emitted: number[] = [];
+    session.on("frame", (f: any) => emitted.push(f.seq));
+    session.on("error", () => {});
+    session.on("ffmpeg", () => {});
+    (session as any).codecMime = "video/VP8";
+    (session as any).seg = frames.map((data, i) => ({ data, pts: i * 3000 }));
+    (session as any).vclCount = frames.length;
+    const segBytes = (session as any).buildSegment().length;
+    expect(segBytes).toBeGreaterThan(200 * 1024); // past the pipe buffer
+    await (session as any).sampleFrame(Date.now() / 1000, 0);
+    expect(emitted).toEqual([0]);
+    // A second sample at the same cadence must ALSO yield a frame: the rail is
+    // alive, not stuck on the first decode (the deployed VP8 stall).
+    await (session as any).sampleFrame(Date.now() / 1000, 0);
+    expect(emitted).toEqual([0, 1]);
+    expect(session.framesEmitted).toBe(2);
+  });
+
+  it("asks for a fresh keyframe once the since-keyframe segment grows (bounded decode)", () => {
+    // Unbounded segment growth is what makes the decode (and its stdin write)
+    // expensive: ask the browser for a keyframe (RTCP PLI) so the segment
+    // resets. Best-effort, rate-limited, never throws.
+    const pli = vi.fn(async () => {});
+    const session = new WebRtcIngestSession({ sampleFps: 1, maxSegmentFrames: 3, keyframeRequestMinMs: 2000 });
+    session.on("error", () => {});
+    (session as any).codecMime = "video/VP8";
+    (session as any).pc = { getReceivers: () => [{ kind: "video", sendRtcpPLI: pli }] };
+    (session as any).videoSsrc = 4242;
+    const vp8Inter = Buffer.from([0xb1, 0x00, 0x00, 0x00]);
+    const key = Buffer.from([0x50, 0x00, 0x00, 0x00]);
+    for (let i = 0; i < 4; i++) (session as any).processAccessUnit(vp8Inter, i * 3000);
+    expect(pli).toHaveBeenCalledTimes(1);
+    expect(pli).toHaveBeenCalledWith(4242);
+    // Rate-limited: a further batch inside the window does not spam PLIs.
+    for (let i = 0; i < 4; i++) (session as any).processAccessUnit(vp8Inter, (i + 5) * 3000);
+    expect(pli).toHaveBeenCalledTimes(1);
+    // A keyframe resets the segment, so the next sample decodes from it.
+    (session as any).processAccessUnit(key, 99999);
+    expect((session as any).seg.length).toBe(1);
+    expect((session as any).vclCount).toBe(1);
+  });
+});
