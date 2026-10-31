@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@highlights/events": ["../packages/events/src/index.ts"]
+    },
+    "noEmit": true
+  },
+  "include": ["src", "vite.config.ts"]
+}
