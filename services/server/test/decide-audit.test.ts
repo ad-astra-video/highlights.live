@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { SqliteDb } from "../src/db";
 import {
   decideAuditIdentity,
@@ -197,6 +200,50 @@ describe("confirm audit descriptor (ADAAAA-7626, AC3)", () => {
     expect(rows[0].timings).toEqual({ elapsedMs: 1234 });
     expect(rows[0].groupKey).toBe("g114:confirm");
     await db.close();
+  });
+});
+
+// ADAAAA-7626: the mis-attributable legacy rows must actually be cleared on an
+// upgrade, not just on fresh installs (migration 9).
+describe("decide_audit legacy row purge on upgrade (ADAAAA-7626)", () => {
+  it("deletes pre-fix shared-session rows when migration 9 re-runs", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hl-decide-audit-"));
+    const file = path.join(dir, "audit.db");
+    const db1 = new SqliteDb(file);
+    // Fresh install: every migration is applied and recorded, as openDb does.
+    await db1.migrate();
+    // A pre-fix row: identity was the shared "job" session sentinel.
+    await db1.saveDecideAudit({
+      id: "job::g7",
+      jobId: "job-legacy",
+      sessionId: "job",
+      groupKey: "g7",
+      timestamp: null,
+      frameCount: 3,
+      candidateCount: 1,
+      systemPromptVersion: "1",
+      promptText: "legacy prompt",
+      mediaHashes: [],
+      params: null,
+      rawReply: "{}",
+      verdicts: {},
+      timings: { elapsedMs: 9 },
+      fallback: false,
+      replayable: true,
+      createdAt: new Date().toISOString(),
+    });
+    expect(await db1.listDecideAudits()).toHaveLength(1);
+    // Force the version-9 migration to re-apply on the next open.
+    (db1 as any).db.prepare("DELETE FROM _schema_migrations WHERE version = 9").run();
+    await db1.close();
+
+    const db2 = new SqliteDb(file);
+    // The upgrade path: reopening re-runs the version-9 migration, which purges
+    // rows whose identity was the shared "job" sentinel.
+    await db2.migrate();
+    expect(await db2.listDecideAudits()).toHaveLength(0);
+    await db2.close();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
