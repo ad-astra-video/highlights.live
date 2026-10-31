@@ -1,0 +1,162 @@
+[
+ {
+  "t0": 23,
+  "t1": 23,
+  "maxdiff": 22.2,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 29,
+  "t1": 29,
+  "maxdiff": 9.4,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 35,
+  "t1": 37,
+  "maxdiff": 66.8,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 42,
+  "t1": 42,
+  "maxdiff": 8.5,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 92,
+  "t1": 93,
+  "maxdiff": 12.6,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 99,
+  "t1": 99,
+  "maxdiff": 8.0,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 226,
+  "t1": 226,
+  "maxdiff": 9.6,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 229,
+  "t1": 229,
+  "maxdiff": 11.4,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 273,
+  "t1": 273,
+  "maxdiff": 14.8,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 282,
+  "t1": 282,
+  "maxdiff": 13.4,
+  "near_known_goal": [
+   282
+  ],
+  "note": ""
+ },
+ {
+  "t0": 308,
+  "t1": 309,
+  "maxdiff": 42.3,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 335,
+  "t1": 335,
+  "maxdiff": 16.1,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 359,
+  "t1": 361,
+  "maxdiff": 15.3,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 380,
+  "t1": 380,
+  "maxdiff": 15.7,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 385,
+  "t1": 386,
+  "maxdiff": 22.6,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 393,
+  "t1": 393,
+  "maxdiff": 28.3,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 480,
+  "t1": 480,
+  "maxdiff": 8.4,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 503,
+  "t1": 503,
+  "maxdiff": 9.7,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 507,
+  "t1": 507,
+  "maxdiff": 11.6,
+  "near_known_goal": [],
+  "note": "CANDIDATE - inspect frames"
+ },
+ {
+  "t0": 535,
+  "t1": 537,
+  "maxdiff": 13.9,
+  "near_known_goal": [
+   541
+  ],
+  "note": ""
+ },
+ {
+  "t0": 710,
+  "t1": 712,
+  "maxdiff": 64.5,
+  "near_known_goal": [
+   705
+  ],
+  "note": ""
+ },
+ {
+  "t0": 340,
+  "t1": 341,
+  "maxdiff": 22.7,
+  "near_known_goal": [],
+  "note": "DISCOVERED GOAL: scoreboard 1-1 -> 2-1 at t=340->341, scorer graphic at 343-346; NOT in labelled set (was 14 goals, now 15 in 336-569 region)"
+ }
+]
