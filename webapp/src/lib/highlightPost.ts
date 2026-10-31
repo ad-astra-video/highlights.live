@@ -92,7 +92,7 @@ function slug(value: string): string {
 export function clipFileName(h: Pick<JobDetailHighlight, "id" | "eventType" | "localizedTs" | "start">): string {
   const label = slug(h.eventType || "highlight") || "highlight";
   const instant = Math.round(highlightInstant(h));
-  const id = slug(h.id).slice(0, 8) || "clip";
+  const id = slug(h.id).slice(0, 8).replace(/-+$/, "") || "clip";
   return `${label}-t${instant}s-${id}.mp4`;
 }
 
