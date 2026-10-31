@@ -961,6 +961,72 @@ export const FrameSectionSchema = z.object({
 });
 export type FrameSection = z.infer<typeof FrameSectionSchema>;
 
+// ADAAAA-7623: the SUMMARY LADDER derived from STORED data only (the
+// append-only `job.summaryLog` + persisted accepted highlights). No inference,
+// no GPU seconds: the server derives it at read time, so a cost delta of ~$0 is
+// structural rather than promised. Rungs (broadest first):
+//   match summary -> chapters (<= 10) -> window narratives -> frame/decide audit.
+//
+// The fact gate lives in the same derivation: any scoreboard/score string the
+// accepted evidence does not corroborate is SUPPRESSED (and reported in
+// `refusedScoreClaims` for audit), the goal timeline is monotonic by
+// construction (index 1..N in time order), and stock template openers are
+// stripped from the narrative text.
+export const SummaryChapterGoalSchema = z.object({
+  /** 1-based, monotonic in time order across the whole match. */
+  index: z.number().int().min(1),
+  /** Video-relative seconds of the accepted GOAL moment. */
+  ts: z.number(),
+  /** Corroborated by a measured attestation (frame_attestation / scoreboard / audio). */
+  verified: z.boolean(),
+});
+export type SummaryChapterGoal = z.infer<typeof SummaryChapterGoalSchema>;
+
+export const SummaryChapterSchema = z.object({
+  index: z.number().int().min(0),
+  kind: z.enum(["build-up", "goal-cluster", "lull", "phase"]),
+  title: z.string(),
+  startS: z.number(),
+  endS: z.number(),
+  /** One-line chapter rollup (fact-gated, de-templated). */
+  summary: z.string(),
+  goalCount: z.number().int().min(0),
+  goals: z.array(SummaryChapterGoalSchema).default([]),
+  /** Inclusive summary-log seq range covered by this chapter (detail-on-demand). */
+  seqFrom: z.number().int().min(1),
+  seqTo: z.number().int().min(1),
+  /** Fact-gated window narratives for this chapter (rung 3). */
+  entries: z
+    .array(z.object({ seq: z.number().int().min(1), windowTs: z.number(), text: z.string() }))
+    .default([]),
+});
+export type SummaryChapter = z.infer<typeof SummaryChapterSchema>;
+
+export const MatchSummarySchema = z.object({
+  /** <= 1500 chars by construction. */
+  text: z.string(),
+  charCount: z.number().int().min(0),
+  chapterCount: z.number().int().min(0),
+  goalCount: z.number().int().min(0),
+  verifiedGoalCount: z.number().int().min(0),
+  /** Goal timeline in order; strictly increasing indices = monotonic count. */
+  goalTimeline: z.array(SummaryChapterGoalSchema).default([]),
+  /** Score strings the fact gate REFUSED (audit trail of what was suppressed). */
+  refusedScoreClaims: z.array(z.string()).default([]),
+});
+export type MatchSummary = z.infer<typeof MatchSummarySchema>;
+
+export const SummaryLadderSchema = z.object({
+  chapters: z.array(SummaryChapterSchema).max(10).default([]),
+  matchSummary: MatchSummarySchema,
+  /** Provenance: this ladder adds zero decide calls / GPU seconds. */
+  derivedFrom: z.object({
+    summaryLogEntries: z.number().int().min(0),
+    acceptedHighlights: z.number().int().min(0),
+  }),
+});
+export type SummaryLadder = z.infer<typeof SummaryLadderSchema>;
+
 /** Composite payload of GET /jobs/:id/detail (ADAAAA-6851 Inc 3). */
 export const JobDetailSchema = z.object({
   job: JobSchema,
@@ -978,6 +1044,8 @@ export const JobDetailSchema = z.object({
   sections: z.array(FrameSectionSchema).default([]),
   /** Capacity budget the job ran under (3 live / 8 VOD) so the UI can show headroom. */
   maxTraces: z.number().int().min(0),
+  /** ADAAAA-7623: summary ladder derived from stored data (additive optional). */
+  summaryLadder: SummaryLadderSchema.optional(),
 });
 export type JobDetail = z.infer<typeof JobDetailSchema>;
 

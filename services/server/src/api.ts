@@ -47,6 +47,7 @@ import {
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
 import { buildPostableHighlights } from "./highlight-postable";
+import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
@@ -2365,6 +2366,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // trail of every decide evaluation is unaffected — it rides `sections`.
     const postable = buildPostableHighlights(store.highlightsForJob(job.id));
 
+    // ADAAAA-7623: the summary ladder (match summary -> chapters -> window
+    // narratives) derived from STORED data only. Zero decide calls / GPU
+    // seconds — the read re-shapes `summaryLog` + the postable highlights.
+    const summaryLadder = buildSummaryLadder({
+      summaryLog: job.summaryLog,
+      highlights: postable.highlights,
+      gameHint: job.gameHint,
+    });
+
     return JobDetailSchema.parse({
       job,
       highlights: postable.highlights,
@@ -2373,6 +2383,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       traces,
       sections: sectionList,
       maxTraces,
+      summaryLadder,
     });
   });
 
