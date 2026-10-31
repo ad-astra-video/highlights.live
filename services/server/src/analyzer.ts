@@ -1,7 +1,7 @@
 // Worker orchestration: one persistent perceive session per job, sample 1fps,
 // feed frames to perceive, compute evidence, call decide on candidates, cut a
 // clip on each highlight, and stop the session in `finally`.
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
 import { StageAMetrics } from "./stage-a-metrics";
@@ -589,6 +589,11 @@ export interface GroupDecodeRequest {
   gameHint?: string;
   preferLabels?: string[];
   reasoningEffort?: string;
+  /** ADAAAA-7626: audit identity for the merged group review. Without these the
+   * decide service emits a descriptor with no job/group identity, so the merged
+   * path would lose decide_audit attribution entirely. */
+  jobId?: string;
+  groupKey?: string;
   /** The whole group's frame sequence (full frames, temporal order). */
   frames?: { role: string; base64: string }[];
   /** Surrounding audio clip (mono 16 kHz WAV, base64) for the group. */
@@ -713,7 +718,7 @@ export interface PipelineClient {
    * passthrough (goalConfirmed null) when disabled/unparseable, and a transport
    * failure is a rejected promise — either way the caller keeps Stage-1.
    */
-  confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string }): Promise<ConfirmDecision>;
+  confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string; jobId?: string }): Promise<ConfirmDecision>;
   /**
    * Submit a single-shot fine-tune job to the highlights-train runner
    * (Florence-2 <OD> LoRA). The runner blocks until the job finishes and the
@@ -3008,6 +3013,10 @@ export async function confirmReconcile(
   const goalTs = goalEventTs ?? candidate.timestamp;
   const ctx = await buildConfirmContext(shared, cfg, candidate, stage1, goalTs);
   try {
+    // ADAAAA-7626: measure the /confirm wall time HERE, server-side, around the
+    // call — the /confirm service emits no timings of its own. The carrier opts
+    // also carry the jobId so the confirm payload's audit session is job-scoped.
+    const confirmStartedAt = Date.now();
     const confirm = await client.confirm({
       eventType: candidate.eventType,
       timestamp: goalTs,
@@ -3017,16 +3026,26 @@ export async function confirmReconcile(
       ballOutcome: candidate.ballOutcome,
       goalCrossed: candidate.goalCrossed,
       scoreBoardChanged: candidate.scoreBoardChanged,
-    } as ConfirmRequest);
+    } as ConfirmRequest, { jobId: cfg.jobId });
+    const confirmElapsedMs = Date.now() - confirmStartedAt;
     shared.recordConfirm({ stage1Disagreed: confirm.stage1Disagreed === true });
     // ADAAAA-7185: emit a decide-audit descriptor from the /confirm pass
     // (run_confirmation_pass) so the corroboration result for an accepted GOAL
-    // is queryable after the fact (currently nothing is written to
-    // decide_audit for the confirm pass). Keyed by (jobId, group:confirm) so it
-    // never collides with the primary /highlight decide-audit row.
+    // is queryable after the fact. Keyed by (jobId, group:confirm) so it never
+    // collides with the primary /highlight decide-audit row.
+    // ADAAAA-7626: the row now describes itself — candidate in-video timestamp,
+    // frame count, sha256 of the frames actually sent (CPU only, no GPU call),
+    // and the server-measured confirm elapsed time.
     if (cfg.onDecideAudit) {
       try {
-        cfg.onDecideAudit(confirmAuditDescriptor(cfg, candidate, confirm));
+        cfg.onDecideAudit(
+          confirmAuditDescriptor(cfg, {
+            timestamp: goalTs,
+            frames: ctx.frames ?? [],
+            elapsedMs: confirmElapsedMs,
+            confirm,
+          })
+        );
       } catch (e: any) {
         console.error(`[confirm-audit:${cfg.jobId}] ingest failed:`, String(e?.message || e));
       }
@@ -3050,18 +3069,36 @@ export async function confirmReconcile(
   }
 }
 
-/** ADAAAA-7185: build a decide-audit descriptor for a Stage-2 /confirm pass
- * (run_confirmation_pass). Small + stable enough for the decide_audit index:
- * jobId/sessionId identity + the confirm verdict + the corroboration evidence. */
-function confirmAuditDescriptor(
-  cfg: AnalyzerConfig,
-  candidate: { timestamp: number },
-  confirm: ConfirmDecision
+/** ADAAAA-7185 / ADAAAA-7626: build a decide-audit descriptor for a Stage-2
+ * /confirm pass (run_confirmation_pass). Identity is job-scoped (jobId /
+ * sessionId / groupKey), and — unlike the original thin row — the descriptor
+ * describes itself: the candidate's in-video `timestamp`, `frameCount` = the
+ * number of frames actually sent, `candidateCount` = 1, sha256 `mediaHashes` for
+ * those frames (CPU only, no extra GPU call), the /confirm verdict, and the
+ * server-measured `timings.elapsedMs` around the `client.confirm` call (the
+ * /confirm service emits no timings of its own). */
+export function confirmAuditDescriptor(
+  cfg: { jobId?: string },
+  input: {
+    /** The candidate's in-video time the dive looked at. */
+    timestamp: number;
+    /** The frames actually sent in the confirm request. */
+    frames?: { role?: string; base64?: string }[];
+    /** Server-measured wall time of the client.confirm call. */
+    elapsedMs?: number;
+    confirm: ConfirmDecision;
+  }
 ): Record<string, unknown> {
+  const { timestamp, frames, elapsedMs, confirm } = input;
+  const jobId = cfg.jobId ?? null;
   return {
-    jobId: cfg.jobId,
-    sessionId: cfg.jobId,
-    groupKey: `${decideGroupKey(candidate.timestamp)}:confirm`,
+    jobId,
+    sessionId: jobId,
+    groupKey: `${decideGroupKey(timestamp)}:confirm`,
+    timestamp,
+    frameCount: frames?.length ?? 0,
+    candidateCount: 1,
+    mediaHashes: frameMediaHashes(frames),
     verdicts: {
       runConfirmationPass: true,
       goalConfirmed: confirm?.goalConfirmed ?? null,
@@ -3071,8 +3108,33 @@ function confirmAuditDescriptor(
     },
     params: { stage1Disagreed: confirm?.stage1Disagreed ?? false },
     rawReply: confirm?.reason ?? "",
+    timings: {
+      elapsedMs: typeof elapsedMs === "number" && Number.isFinite(elapsedMs) ? Math.round(elapsedMs) : null,
+    },
     createdAt: new Date().toISOString(),
   };
+}
+
+/** ADAAAA-7626: content-address the frames actually sent to the decide service
+ * (sha256 of the decoded bytes, CPU only). A frame that cannot be hashed is
+ * skipped — building an audit descriptor must never fail a confirm pass. */
+function frameMediaHashes(frames?: { role?: string; base64?: string }[]): {
+  type: string;
+  sha256: string;
+  mime: string;
+  role?: string;
+}[] {
+  const out: { type: string; sha256: string; mime: string; role?: string }[] = [];
+  for (const f of frames ?? []) {
+    if (!f || typeof f.base64 !== "string" || !f.base64) continue;
+    try {
+      const sha256 = createHash("sha256").update(Buffer.from(f.base64, "base64")).digest("hex");
+      out.push({ type: "image", sha256, mime: "image/jpeg", ...(f.role ? { role: f.role } : {}) });
+    } catch {
+      // ignore an unhashable frame — never fail the pass for audit detail
+    }
+  }
+  return out;
 }
 
 /** ADAAAA-7185: when the Stage-2 gate RAN for this un-attested goal but could

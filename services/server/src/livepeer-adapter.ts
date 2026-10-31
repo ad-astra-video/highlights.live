@@ -537,7 +537,10 @@ export class OrchestratorAdapter implements PipelineClient {
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
     const payload = {
-      sessionId: "job",
+      // ADAAAA-7626: job-scoped audit identity. `sessionId` used to be the
+      // hardcoded "job" on every decide payload, so two jobs deciding the same
+      // in-video group key upserted ONE decide_audit row (last writer won).
+      sessionId: opts?.jobId ?? "job",
       eventType: evidence.eventType,
       timestamp: 0,
       gameHint: opts?.gameHint || "",
@@ -606,11 +609,15 @@ export class OrchestratorAdapter implements PipelineClient {
   async decideGroup(req: GroupDecodeRequest): Promise<{ verdicts: DecisionResult[] }> {
     const payerAddress = this.payerAddress;
     const payload = {
-      sessionId: "job",
+      // ADAAAA-7626: the merged group review carries its audit identity too, so
+      // wiring this path never silently loses decide_audit attribution.
+      sessionId: req.jobId ?? "job",
       eventType: req.candidates[0]?.eventType ?? "",
       timestamp: req.candidates[0]?.timestamp ?? 0,
       gameHint: req.gameHint || "",
       reasoningEffort: req.reasoningEffort || "none",
+      jobId: req.jobId,
+      groupKey: req.groupKey,
       // ADAAAA-6935: the merged group-review payload (one gemma call).
       candidates: req.candidates.map((c) => ({ eventType: c.eventType, timestamp: c.timestamp, evidence: c.evidence })),
       images: [],
@@ -662,10 +669,12 @@ export class OrchestratorAdapter implements PipelineClient {
    * runner returns a passthrough (goalConfirmed null) when disabled or
    * unparseable; a transport failure rejects so the caller keeps the Stage-1
    * verdict. */
-  async confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string }): Promise<ConfirmDecision> {
+  async confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string; jobId?: string }): Promise<ConfirmDecision> {
     const payerAddress = this.payerAddress;
     const payload = {
-      sessionId: "job",
+      // ADAAAA-7626: job-scoped audit identity for the confirm pass (the audit
+      // descriptor keys its row by job, not by the shared "job" sentinel).
+      sessionId: opts?.jobId ?? "job",
       eventType: req.eventType,
       timestamp: req.timestamp,
       gameHint: req.gameHint || "",
@@ -928,7 +937,9 @@ export class DirectAdapter implements PipelineClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sessionId: this.fakeSession,
+        // ADAAAA-7626: job-scoped audit identity (the dev rail used a fixed
+        // fake session, which collapsed same-group decisions across jobs).
+        sessionId: opts?.jobId ?? this.fakeSession,
         eventType: evidence.eventType,
         timestamp: 0,
         gameHint: opts?.gameHint || "",
@@ -953,11 +964,14 @@ export class DirectAdapter implements PipelineClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sessionId: this.fakeSession,
+        // ADAAAA-7626: merged-group audit identity (job-scoped).
+        sessionId: req.jobId ?? this.fakeSession,
         eventType: req.candidates[0]?.eventType ?? "",
         timestamp: req.candidates[0]?.timestamp ?? 0,
         gameHint: req.gameHint || "",
         reasoningEffort: req.reasoningEffort || "none",
+        jobId: req.jobId,
+        groupKey: req.groupKey,
         // ADAAAA-6935: merged group review (one gemma call) — every candidate
         // in the 3 s group + the group's frame sequence.
         candidates: req.candidates.map((c) => ({ eventType: c.eventType, timestamp: c.timestamp, evidence: c.evidence })),
@@ -975,12 +989,13 @@ export class DirectAdapter implements PipelineClient {
    * POST straight to decide `/app/confirm`. The runner returns a passthrough
    * (goalConfirmed null) when disabled/unparseable; a transport failure rejects
    * so the caller keeps the Stage-1 verdict. */
-  async confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string }): Promise<ConfirmDecision> {
+  async confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string; jobId?: string }): Promise<ConfirmDecision> {
     const r = await fetch(`${this.cfg.decideUrl}/app/confirm`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sessionId: this.fakeSession,
+        // ADAAAA-7626: job-scoped audit identity for the confirm pass.
+        sessionId: opts?.jobId ?? this.fakeSession,
         eventType: req.eventType,
         timestamp: req.timestamp,
         gameHint: req.gameHint || "",
