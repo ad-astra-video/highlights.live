@@ -1,0 +1,359 @@
+{
+  "$comment": "ADAAAA-7590 — frame-derived ground truth for kids_soccer.mp4 (777 s, multi-goal compilation). Labels were read from the pixels only (the job's 3 fps frames, seq = 3*t, fetched from GET /jobs/{id}/frames/{seq}), never from decide's reason text. Goal instants are the moment the ball is in the net / the GOL graphic appears / the scoreboard changes. Non-goal windows were inspected at 1 s steps around the window: 'evidence' is what the frames show (post/saved/wide/blocked when a shot is visible, 'none' when the window holds no shot at goal).",
+  "video": {
+    "id": "kids-soccer",
+    "path": "/data/uploads/3f8e8d8d-f00d-410c-b4c1-1a781b2fffc7/kids-soccer.mp4",
+    "duration_s": 777,
+    "frame_source": "highlights.live job frames at 3 fps (frameScale 640:360, seq = round(3 * t))",
+    "labels_by": "Developer (Paperclip run e34a4597-93a8-4d6b-bc25-56f1337c52e8)",
+    "labelled_at": "2026-10-30",
+    "label_method": "contact sheets at 1 s steps per window + full-resolution single frames for every disputed call; evidence cites the frame timestamps that carry the proof",
+    "confidence_note": "Goal instants are ±1 s (1 s frame grid). Windows labelled 'none' rule out a goal inside the stated bounds; they do not claim a shot occurred."
+  },
+  "coverage": {
+    "goal_windows": 14,
+    "non_goal_windows": 22,
+    "non_goal_shot_class": 9,
+    "note": "The goal catalogue was seeded from the pipeline's candidate neighbourhoods and then verified frame-by-frame, so recall over this manifest is recall on the labelled set, not an exhaustive whole-video goal count. The 660-720 s segment was inspected densely (1 s steps) end to end."
+  },
+  "windows": [
+    {
+      "id": "ks-g-0117",
+      "t_start": 114,
+      "t_end": 126,
+      "instant": 117,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "t=119-121 players celebrating plus the 'LAMINE YAMAL NASRAOUI' scorer graphic; ball in the net at t=125",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-g-0280",
+      "t_start": 277,
+      "t_end": 284,
+      "instant": 280,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "t=280 ball in net; scoreboard 0-0 at t=274 -> 1-0 at t=282",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-g-0413",
+      "t_start": 410,
+      "t_end": 418,
+      "instant": 413,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "t=413 ball in net, white player celebrating; scoreboard 0-0 before -> 1-0 after",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-g-0435",
+      "t_start": 431,
+      "t_end": 437,
+      "instant": 435,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "t=434 shot on target, t=435 ball in net and scoreboard -> 1-0",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-g-0541",
+      "t_start": 537,
+      "t_end": 544,
+      "instant": 541,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "t=538 scoreboard 0-0 -> t=542 scoreboard 1-0 with celebration close-ups at t=539-543",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-g-0584",
+      "t_start": 581,
+      "t_end": 588,
+      "instant": 584,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "t=584 broadcast 'GOL' graphic; t=586 ball visible inside the net with the keeper beaten",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-g-0602",
+      "t_start": 600,
+      "t_end": 606,
+      "instant": 602,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "t=602 'GOL' graphic with the ball near/in the net; t=603 ball at the net; scoreboard 1-1",
+      "confidence": "medium"
+    },
+    {
+      "id": "ks-g-0616",
+      "t_start": 612,
+      "t_end": 620,
+      "instant": 616,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "full-res t=616: ball inside the goal net, keeper diving; t=618 sideline reaction shot",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-g-0643",
+      "t_start": 638,
+      "t_end": 646,
+      "instant": 643,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "t=638-639 Real Madrid celebration; t=642 ball in net on the replay; scoreboard 1-2 -> 2-2 at t=643",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-g-0662",
+      "t_start": 660,
+      "t_end": 665,
+      "instant": 662,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "t=662 ball visibly inside the goal net; scoreboard 2-3 at t=663",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-g-0678",
+      "t_start": 675,
+      "t_end": 684,
+      "instant": 678,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "t=678 'GOL' graphic; t=681-682 celebration; scoreboard 3-3 at t=683",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-g-0705",
+      "t_start": 700,
+      "t_end": 710,
+      "instant": 705,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "penalty shoot-out conversion between t=702 (scoreboard 3-4) and t=709 (4-4); t=701 keeper in the goal, t=700 ball held by the taker",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-g-0719",
+      "t_start": 714,
+      "t_end": 722,
+      "instant": 719,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "scoreboard 4-4 at t=709-711 -> 4-5 at t=725; t=721-722 show the red-card aftermath, no ball in net inside the gap",
+      "confidence": "medium"
+    },
+    {
+      "id": "ks-g-0770",
+      "t_start": 767,
+      "t_end": 774,
+      "instant": 770,
+      "ground_truth": "goal",
+      "evidence": "ball_in_net",
+      "frames": "scoreboard 4-5 from t=765; Barcelona celebration from t=768-771",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0054",
+      "t_start": 51,
+      "t_end": 57,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=54 open play, ball at a player's feet; scoreboard 01:52 0-0; no net, no GOL graphic",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0090",
+      "t_start": 87,
+      "t_end": 93,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=90 midfield open play, goal net empty on the far right; scoreboard 04:06 0-0",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0105",
+      "t_start": 102,
+      "t_end": 108,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=105 open play, player running with the ball; scoreboard 04:24 0-0; no GOL graphic",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0130",
+      "t_start": 126,
+      "t_end": 133,
+      "ground_truth": "no_goal",
+      "evidence": "saved",
+      "frames": "t=127-133 keeper in the goal, at t=132 he has the ball in his hands; no net bulge, no celebration; scoreboard 1-1",
+      "confidence": "medium"
+    },
+    {
+      "id": "ks-n-0144",
+      "t_start": 141,
+      "t_end": 147,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=144 wide midfield view, no goalmouth action; scoreboard 06:07 0-1",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0162",
+      "t_start": 159,
+      "t_end": 165,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=162 white attacker running at a ball with the keeper nearby, ball outside the net; scoreboard 11:56 1-1",
+      "confidence": "medium"
+    },
+    {
+      "id": "ks-n-0178",
+      "t_start": 171,
+      "t_end": 186,
+      "ground_truth": "no_goal",
+      "evidence": "blocked",
+      "frames": "t=175-177 and t=179-185: sliding challenge near the byline, no goal net in play; full-res t=178/t=180/t=184 all show open play with scoreboard RMA 1-1 BAR at 06:50-06:57",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0201",
+      "t_start": 196,
+      "t_end": 211,
+      "ground_truth": "no_goal",
+      "evidence": "saved",
+      "frames": "t=196-202 ball out by the advertising boards and a player down; full-res t=201 keeper lying on the ground after a dive with the ball outside the net by the left post; scoreboard 08:12 1-1",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0237",
+      "t_start": 234,
+      "t_end": 240,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=237 dribble/tackle in midfield, goal frame empty; scoreboard 09:43 1-1",
+      "confidence": "medium"
+    },
+    {
+      "id": "ks-n-0244",
+      "t_start": 244,
+      "t_end": 252,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=244-252 empty net and midfield play; scoreboard 09:36 1-1",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0254",
+      "t_start": 254,
+      "t_end": 262,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=254-262 empty net, midfield play; scoreboard 2-1",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0282",
+      "t_start": 279,
+      "t_end": 285,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=282 open play, ball on the field; scoreboard 15:00 1-1",
+      "confidence": "medium"
+    },
+    {
+      "id": "ks-n-0312",
+      "t_start": 294,
+      "t_end": 333,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=294-333 open play, referee/player close-ups, ball boy; scoreboard RMA 1-1 BAR unchanged",
+      "confidence": "medium"
+    },
+    {
+      "id": "ks-n-0351",
+      "t_start": 348,
+      "t_end": 356,
+      "ground_truth": "no_goal",
+      "evidence": "saved",
+      "frames": "t=350-351 white attacker shoots, blue keeper dives; t=352 attacker and keeper both on the ground, ball not in the net; scoreboard 1-3",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0359",
+      "t_start": 357,
+      "t_end": 366,
+      "ground_truth": "no_goal",
+      "evidence": "saved",
+      "frames": "t=352-354 goalmouth action with players down, no ball in the net; t=360-366 midfield play; scoreboard 1-0 unchanged",
+      "confidence": "medium"
+    },
+    {
+      "id": "ks-n-0402",
+      "t_start": 395,
+      "t_end": 409,
+      "ground_truth": "no_goal",
+      "evidence": "saved",
+      "frames": "t=397-401 keeper saves and holds the ball; t=403-405 still holding it; t=406 keeper close-up; scoreboard 1-0 both ends",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0426",
+      "t_start": 421,
+      "t_end": 428,
+      "ground_truth": "no_goal",
+      "evidence": "saved",
+      "frames": "t=426 shot is saved/wide, ball not in the net at t=427; scoreboard 0-0 until the separate goal at t=435",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0622",
+      "t_start": 618,
+      "t_end": 624,
+      "ground_truth": "no_goal",
+      "evidence": "saved",
+      "frames": "t=622 keeper diving to his left, attacker on the ground near the goal, no ball in the net; t=623-624 close-ups of the empty net",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0628",
+      "t_start": 626,
+      "t_end": 632,
+      "ground_truth": "no_goal",
+      "evidence": "wide",
+      "frames": "t=627-630 Real Madrid penalty taken, keeper standing at t=631; scoreboard 1-2 unchanged at 87:31",
+      "confidence": "medium"
+    },
+    {
+      "id": "ks-n-0696",
+      "t_start": 689,
+      "t_end": 703,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=689-703 no ball in the net (t=701 keeper in the goal, no ball); scoreboard 3-4 pending the penalty conversion that lands at t=~705",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0722",
+      "t_start": 717,
+      "t_end": 731,
+      "ground_truth": "no_goal",
+      "evidence": "blocked",
+      "frames": "t=721-722 red card shown to a Barcelona player, not a goal; t=729 keeper in front of the empty net; scoreboard 4-5",
+      "confidence": "high"
+    },
+    {
+      "id": "ks-n-0760",
+      "t_start": 755,
+      "t_end": 766,
+      "ground_truth": "no_goal",
+      "evidence": "none",
+      "frames": "t=755-766 penalty shoot-out build-up, keeper in the goal, no ball in the net; scoreboard RMA 4-4 BAR, PENALTIS 4-4",
+      "confidence": "medium"
+    }
+  ]
+}
