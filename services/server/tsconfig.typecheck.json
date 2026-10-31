@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@highlights/events": ["../../packages/events/src/index.ts"],
+      "@highlights/livepeer-session": ["../../packages/livepeer-session/src/index.ts"]
+    },
+    "noEmit": true
+  },
+  "include": ["src", "test"]
+}

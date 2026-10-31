@@ -46,6 +46,7 @@ import {
   type JobDecision,
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
+import { candidateCountForJob, stageAMetricsForJob } from "./job-counters";
 import { buildPostableHighlights } from "./highlight-postable";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
@@ -2350,7 +2351,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const obs = store.observationsForJob(job.id);
     const candidates = store.candidatesForJob(job.id);
 
-    const sectionList = buildSections(obs, candidates, job.id);
+    // ADAAAA-7624: per-frame observations are a capped durable window, so a VOD
+    // job longer than the cap loses the rows for its first windows and those
+    // sections rendered `0 frames` although the JPEGs exist and serve 200. Join
+    // the on-disk frame inventory for VOD `file` jobs (the only source whose
+    // frames live in dataDir/frames/<jobId>) so every frame keeps its section.
+    // Live/browser frames are a rolling capture, not a completed filmstrip.
+    const inventory =
+      job.source === "file"
+        ? { frameCount: jobFrameCount(job.id), sampleFps: job.sampleFps ?? cfg.vodDetailFps }
+        : undefined;
+
+    const sectionList = buildSections(obs, candidates, job.id, inventory);
     // ADAAAA-7285: point each analysis window that captured audio at a real
     // per-window audio resource (re-extracted on demand from the source), so
     // the analysis-window player has something to play. Silent windows (audio
@@ -2796,6 +2808,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const vod = path.join(cfg.dataDir, "frames", jobId);
     if (existsSync(vod)) return vod;
     return null;
+  }
+
+  /** ADAAAA-7624: count the sampled JPEGs a job wrote to disk (seq 0..n-1), so
+   * `GET /jobs/:id/detail` can partition every frame even when the per-frame
+   * observation window was trimmed. Best-effort: 0 when the dir is missing. */
+  function jobFrameCount(jobId: string): number {
+    const dir = jobFrameDir(jobId);
+    if (!dir) return 0;
+    try {
+      return readdirSync(dir).filter((f) => f.endsWith(".jpg")).length;
+    } catch {
+      return 0;
+    }
   }
 
   app.get<{ Params: { id: string } }>("/jobs/:id/observations", { preHandler: authReq }, async (req: any, reply) => {
