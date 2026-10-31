@@ -1020,7 +1020,15 @@ export function JobDetail() {
               only the color-coded type summary), a sticky top bar (filter +
               search + select/enlarge), a type filter, and a text search. */}
           <div className="mt-8" data-analysis-section>
-            <div className="sticky top-0 z-20 -mx-4 border-b border-purple/30 bg-dusk/95 px-4 py-3 backdrop-blur" data-analysis-toolbar>
+            {/* ADAAAA-7619: `-top-8` is NOT a typo and must not be "cleaned up"
+                back to `top-0`. The scroll container is Shell's
+                `<main class="flex-1 overflow-y-auto p-8">`, so the scrollport
+                is inset by p-8 (2rem) and a `top-0` sticky child parks 32px
+                below the window top. `-top-8` cancels that padding so the bar
+                sticks flush at the window top. The `-mx-8 px-8` bleed matches
+                the same 2rem so the stuck bar spans the full content area
+                edge-to-edge (no see-through strips beside it). */}
+            <div className="sticky -top-8 z-20 -mx-8 border-b border-purple/30 bg-dusk/95 px-8 py-3 backdrop-blur" data-analysis-toolbar>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <h3 className="text-2xl font-black">Analysis</h3>
                 <span className="text-xs text-mut">
