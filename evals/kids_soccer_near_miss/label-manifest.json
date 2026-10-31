@@ -11,10 +11,11 @@
     "confidence_note": "Goal instants are ±1 s (1 s frame grid). Windows labelled 'none' rule out a goal inside the stated bounds; they do not claim a shot occurred."
   },
   "coverage": {
-    "goal_windows": 14,
+    "goal_windows": 15,
     "non_goal_windows": 22,
-    "non_goal_shot_class": 9,
-    "note": "The goal catalogue was seeded from the pipeline's candidate neighbourhoods and then verified frame-by-frame, so recall over this manifest is recall on the labelled set, not an exhaustive whole-video goal count. The 660-720 s segment was inspected densely (1 s steps) end to end."
+    "non_goal_shot_class": 10,
+    "note": "Exhaustive goal catalogue for 336-777s added the t=341 goal (scoreboard 1-1->2-1, scorer graphic t=344) that the original 14-goal labelled set missed; the other 21 scoreboard-change candidates in that region are committed as candidates and are still awaiting a 1 s frame confirm/refute pass (see RESULTS.md -> Goal catalogue). Every goal in the 660-720s segment is still labelled (t=662,678,705,719); that segment was inspected densely at 1 s steps in ADAAAA-7590 and the catalogue scan raised no extra candidate inside it. Recall is over the 15-goal catalogue, not a whole-video goal count; see RESULTS.md caveats.",
+    "non_goal_shot_class_note": "10 shot-class windows (7 saved, 2 blocked, 1 wide). AC-1 asks for >=20; the remaining 12 evidence:'none' windows were re-scanned at 24s and 12s contact-sheet granularity and no shot could be confirmed, so they stay 'none'. Additional shot windows need a dense 1 s pass once the vision model returns reproducible frame reads."
   },
   "windows": [
     {
@@ -354,6 +355,16 @@
       "evidence": "none",
       "frames": "t=755-766 penalty shoot-out build-up, keeper in the goal, no ball in the net; scoreboard RMA 4-4 BAR, PENALTIS 4-4",
       "confidence": "medium"
+    },
+    {
+      "id": "ks-g-0341",
+      "t_start": 339,
+      "t_end": 346,
+      "instant": 341,
+      "ground_truth": "goal",
+      "evidence": "scoreboard_change",
+      "frames": "scoreboard RMA 1-1 BAR at t=340 -> RMA 2-1 BAR at t=341 (frame diff confirms the digit flip); scorer graphic '11 MANUEL ORDOÑEZ, GOLES: 1' at t=344; players celebrating t=341-343. Discovered by the 336-777s exhaustive catalogue (scoreboard-digit diff detector + 1 s frame verification).",
+      "confidence": "high"
     }
   ]
 }
