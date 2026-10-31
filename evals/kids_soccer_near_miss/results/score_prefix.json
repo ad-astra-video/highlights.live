@@ -1,0 +1,89 @@
+{
+  "accepted": 21,
+  "ground_truth_goals": 14,
+  "true_positive_cards": 16,
+  "precision": 0.7619,
+  "recall": 0.9286,
+  "false_positives": [
+    {
+      "t": 203.2,
+      "window": [
+        196.2,
+        211.2
+      ],
+      "reason": "The ball clearly enters the net after a shot from a player in a white kit, followed by a goal celebration.; confirmation pass: goal confirmed (deep frame dive); The ball clearly enters the net after a shot from a player in a white kit, as seen in the dense frame sequence and confirmed by the ball's trajectory crossing the goal line into the net."
+    },
+    {
+      "t": 252.6,
+      "window": [
+        245.6,
+        260.6
+      ],
+      "reason": "The ball is seen entering the net, and the scoreboard confirms a score change from 1-1 to 2-1.; scoreboard score change confirmed"
+    },
+    {
+      "t": 348.8,
+      "window": [
+        341.8,
+        356.8
+      ],
+      "reason": "The ball clearly enters the net, the scoreboard updates from 1-1 to 2-1, and the referee signals the goal.; scoreboard score change confirmed"
+    },
+    {
+      "t": 358.8,
+      "window": [
+        351.8,
+        366.8
+      ],
+      "reason": "The ball clearly enters the net after a strike by the player in the white jersey.; confirmation pass: goal confirmed (deep frame dive); The frames clearly show the ball entering the net after a strike by the player in the white jersey, with the ball trajectory crossing the goal line into the net."
+    },
+    {
+      "t": 401.7,
+      "window": [
+        394.7,
+        409.7
+      ],
+      "reason": "The ball clearly enters the net as the striker follows through on a shot, and the goalkeeper is beaten.; confirmation pass: goal confirmed (deep frame dive); The ball trajectory clearly shows the ball entering the net (crossing the goal line) after a shot, and the visual frames confirm the ball is in the net with the goalkeeper beaten."
+    }
+  ],
+  "false_negatives": [
+    {
+      "id": "ks-g-0616",
+      "window": [
+        612,
+        620
+      ],
+      "evidence": "ball_in_net",
+      "frames": "full-res t=616: ball inside the goal net, keeper diving; t=618 sideline reaction shot"
+    }
+  ],
+  "duplicate_cards": [
+    {
+      "goal": "ks-g-0117",
+      "cards": [
+        130.5999999999999
+      ]
+    },
+    {
+      "goal": "ks-g-0705",
+      "cards": [
+        708.0000000000026
+      ]
+    },
+    {
+      "goal": "ks-g-0770",
+      "cards": [
+        772.1000000000031
+      ]
+    }
+  ],
+  "self_refuting": [
+    {
+      "t": 695.6,
+      "reason": "The ball is clearly seen being struck and moving towards the goal, but it does not enter the net; it appears to be a shot that is either saved or misses.; outcome=near_miss is not a scoring highlight; confirmation pass: goal confirmed (deep frame dive); The ball trajectory shows the ball moving from the penalty spot towards the goal and clearly entering the net, which is confirmed by the scoreboard showing a penalty tally change from 4 to 5 for FC Barcelona."
+    }
+  ],
+  "commit": "pre-da2d21a",
+  "job_id": "cc06fb4a-ae9d-4eb9-8ffd-9a24129510e8",
+  "manifest": "evals/kids_soccer_near_miss/label-manifest.json"
+}

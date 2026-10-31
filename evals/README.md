@@ -55,6 +55,25 @@ Runner self-check for the paired accounting (no ffmpeg/GPU):
 python3 evals/tests/test_metrics_runner_depth.py  # or pytest evals/tests/test_metrics_runner_depth.py
 ```
 
+## kids_soccer near-miss eval set + goal-acceptance precision (ADAAAA-7590)
+
+`kids_soccer_near_miss/` is the frame-labelled eval set for the post-bounce
+near-miss class on `kids_soccer.mp4`: 36 labelled windows (14 goal, 22 no-goal,
+9 of them shot-class) with window bounds, `ground_truth`, `evidence` and the
+frame timestamps that carry the proof. `kids_soccer_near_miss/score_goal_precision.py`
+scores a job detail against it and prints precision, recall, the false-positive
+list with decide's reason text, missed goals and duplicate cards; results for
+`da2d21a` (73.91 % precision / 100 % recall on the labelled set) and the pre-fix
+control job are in `kids_soccer_near_miss/results/` with the analysis in
+`kids_soccer_near_miss/RESULTS.md`.
+
+```bash
+python3 evals/kids_soccer_near_miss/score_goal_precision.py \
+    --manifest evals/kids_soccer_near_miss/label-manifest.json \
+    --job-detail <job detail json> --commit da2d21a --fail-under-precision 0.70
+python3 -m pytest evals/kids_soccer_near_miss/tests/test_score_goal_precision.py
+```
+
 ## Evidence status (updated each QA heartbeat)
 
 - Mechanism-level bars verified by the repo test suites on the integrated
