@@ -65,3 +65,32 @@ export function stageAMetricsForJob(snapshot: StageAMetricsSnapshot): JobStageAM
   }
   return { stageAMetricsStatus: "n/a" };
 }
+
+/** Counter fields persisted on a COMPLETED job record. Both completion paths
+ * (VOD `file` and live) go through this, so a job that produced highlights via
+ * the observe cadence is recorded as `candidatesTriggered: <observed>` with
+ * `candidatePath: "observe"` and its Stage-A counters read n/a when the audio
+ * gate never judged a candidate. */
+export interface CompletedCounterFields extends JobStageAMetrics {
+  candidatesTriggered: number;
+  candidatePath: CandidatePath;
+}
+
+/**
+ * The counter portion of the job-completion patch (ADAAAA-7624). `observeAccepted`
+ * is the cadence observer's accepted-candidate count (undefined when the observe
+ * path did not run); `rawCandidateEvents` is the legacy perceive candidate
+ * counter used as the fallback.
+ */
+export function completedCounterFields(
+  stageASnapshot: StageAMetricsSnapshot,
+  observeAccepted: number | undefined,
+  rawCandidateEvents: number
+): CompletedCounterFields {
+  const candidates = candidateCountForJob(observeAccepted, rawCandidateEvents);
+  return {
+    candidatesTriggered: candidates.count,
+    candidatePath: candidates.path,
+    ...stageAMetricsForJob(stageASnapshot),
+  };
+}

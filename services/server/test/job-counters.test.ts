@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StageAMetricsSnapshot } from "@highlights/events";
-import { candidateCountForJob, stageAMetricsForJob } from "../src/job-counters";
+import { candidateCountForJob, completedCounterFields, stageAMetricsForJob } from "../src/job-counters";
 
 // ADAAAA-7624: honest per-job candidate + Stage-A counters.
 //
@@ -68,5 +68,26 @@ describe("stageAMetricsForJob (ADAAAA-7624)", () => {
     expect(out.stageAMetricsStatus).toBe("measured");
     expect(out.stageAMetrics).toEqual(snap);
     expect(out.stageAMetrics?.fpRate).toBeCloseTo(0.25);
+  });
+});
+
+describe("completedCounterFields (ADAAAA-7624)", () => {
+  it("persists the reported job shape as 24 observe candidates with n/a Stage-A", () => {
+    // The deployed bug: 24 observe-path highlights persisted as `0 candidates`
+    // plus a measured-looking all-zero Stage-A snapshot.
+    const fields = completedCounterFields(zeroSnapshot(), 24, 0);
+    expect(fields.candidatesTriggered).toBe(24);
+    expect(fields.candidatePath).toBe("observe");
+    expect(fields.stageAMetricsStatus).toBe("n/a");
+    expect(fields.stageAMetrics).toBeUndefined();
+  });
+
+  it("keeps a measured Stage-A snapshot next to the legacy candidate fallback", () => {
+    const snap = measuredSnapshot(4, 1);
+    const fields = completedCounterFields(snap, undefined, 3);
+    expect(fields.candidatesTriggered).toBe(3);
+    expect(fields.candidatePath).toBe("perceive_gate");
+    expect(fields.stageAMetricsStatus).toBe("measured");
+    expect(fields.stageAMetrics).toEqual(snap);
   });
 });
