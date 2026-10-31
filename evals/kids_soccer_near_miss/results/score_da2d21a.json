@@ -1,8 +1,8 @@
 {
   "accepted": 23,
-  "ground_truth_goals": 14,
-  "true_positive_cards": 17,
-  "precision": 0.7391,
+  "ground_truth_goals": 15,
+  "true_positive_cards": 18,
+  "precision": 0.7826,
   "recall": 1.0,
   "false_positives": [
     {
@@ -28,14 +28,6 @@
         260.6
       ],
       "reason": "The ball enters the net and the scoreboard updates from 1-1 to 2-1.; scoreboard score change confirmed"
-    },
-    {
-      "t": 348.8,
-      "window": [
-        341.8,
-        356.8
-      ],
-      "reason": "The ball is seen entering the net, the scoreboard updates from 1-1 to 2-1, and players celebrate.; scoreboard score change confirmed"
     },
     {
       "t": 358.8,
