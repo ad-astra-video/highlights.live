@@ -46,7 +46,7 @@ import {
   type JobDecision,
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
-import { candidateCountForJob, stageAMetricsForJob } from "./job-counters";
+import { completedCounterFields, stageAMetricsForJob } from "./job-counters";
 import { buildPostableHighlights } from "./highlight-postable";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
@@ -746,7 +746,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       await store.patchJob(job.id, {
         status: "done",
         perceiveSessionId: outcome.sessionId,
-        stageAMetrics: stageA,
+        // ADAAAA-7624: persist the Stage-A status alongside the snapshot so a
+        // gate that judged no candidate reads n/a instead of a measured 0%.
+        ...stageAMetricsForJob(stageA),
         // ADAAAA-7011: cadence + decide gemma E2E latency snapshot from the live
         // decide-observer, so the Livepeer runner shows the ~30 s budget
         // utilization. Absent when the observer was not enabled.
@@ -1251,7 +1253,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       status: "done",
       stage: "done",
       perceiveSessionId: outcome.sessionId,
-      stageAMetrics: stageA,
+      // ADAAAA-7624: candidates are counted by the path that actually ran (the
+      // observe cadence pass) and the Stage-A snapshot is only persisted when it
+      // is a real measurement, so the completed record cannot report a
+      // fabricated `0 candidates` / `0% FP` for a stage that never judged one.
+      ...completedCounterFields(stageA, outcome.vodObserveMetrics?.accepted, candidatesTriggered),
       confirmMetrics,
       sampleFps,
       frameScale: cfg.vodFrameScale,
@@ -1262,7 +1268,6 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-7118: completed record surfaces the ABSOLUTE persisted highlight
       // count from the store (source of truth), matching what addHighlight wrote.
       highlightsFound: store.highlightsForJob(jobId).length,
-      candidatesTriggered,
       decideCalls,
       perceiveSessionS: Number(perceiveSessionS.toFixed(1)),
       costUsd: Number(costUsd.toFixed(4)),
