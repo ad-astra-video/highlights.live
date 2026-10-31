@@ -60,6 +60,18 @@ export interface RtcIngestOptions {
   /** Session id, used ONLY for log correlation (write-failure warnings name the
    *  session so a dead peer is attributable — ADAAAA-7591). */
   sessionId?: string;
+  /** Maximum decode-segment length (access units) before asking the browser for
+   *  a fresh keyframe. VP8/VP9 can only be decoded from a keyframe onward, and a
+   *  screen-share encoder may go many seconds without emitting one, so the
+   *  segment — and with it every one-shot decode and its stdin write — grows
+   *  without bound. Bounding it keeps the decode cost flat and keeps the
+   *  decoder's stdin write small (ADAAAA-7594). Default 90 AUs (~3 s at 30 fps). */
+  maxSegmentFrames?: number;
+  /** Minimum interval (ms) between keyframe (PLI) requests. Default 2000. */
+  keyframeRequestMinMs?: number;
+  /** Hard bound (ms) on one one-shot decode, so a decoder that never closes
+   *  cannot leave a sample pending forever. Default 15000. */
+  ffmpegWatchdogMs?: number;
 }
 
 export interface DecodedFrame {
@@ -199,6 +211,10 @@ export class WebRtcIngestSession extends EventEmitter {
   /** NAL header byte of the last access unit (to detect VCL / IDR). */
   private lastNalType = -1;
   private lastSampleWall = 0;
+  /** Remote (browser) video SSRC — the target of a keyframe request (PLI). */
+  private videoSsrc = 0;
+  /** Wall-clock ms of the last keyframe request (rate limit). */
+  private lastKeyframeRequest = 0;
 
   constructor(private opts: RtcIngestOptions = {}) {
     super();
@@ -345,6 +361,8 @@ export class WebRtcIngestSession extends EventEmitter {
     this.vclCount = 0;
     this.lastNalType = -1;
     this.lastSampleWall = 0;
+    this.videoSsrc = 0;
+    this.lastKeyframeRequest = 0;
     this.packetsReceived = 0;
     this.framesEmitted = 0;
     this.lastPacketAt = 0;
@@ -358,6 +376,9 @@ export class WebRtcIngestSession extends EventEmitter {
   private onRtp(rtp: RtpPacket) {
     this.packetsReceived++;
     this.lastPacketAt = Date.now();
+    // Remember the browser's video SSRC: it is the media source a keyframe
+    // request (PLI) has to name (ADAAAA-7594).
+    this.videoSsrc = rtp.header.ssrc;
     this.au.push(rtp);
     if (!rtp.header.marker) return; // more packets in this access unit
     // Access unit complete -> reassemble Annex-B/IVF and schedule a decode.
@@ -429,10 +450,38 @@ export class WebRtcIngestSession extends EventEmitter {
     // Sample cadence: emit a JPEG at ~sampleFps.
     const sampleFps = this.opts.sampleFps ?? 1;
     const now = Date.now();
+    // Bound the since-keyframe segment. Without this a VP8/VP9 screen share
+    // that goes seconds without an IDR keeps every access unit (unbounded
+    // memory), makes each one-shot decode slower, and makes the decoder's
+    // stdin write large enough to race its own exit (the EPIPE that silenced
+    // the VP8 rail, ADAAAA-7594). Ask for a fresh keyframe so the segment
+    // resets. Rate-limited and best-effort.
+    const maxSeg = this.opts.maxSegmentFrames ?? 90;
+    if (this.seg.length >= maxSeg) this.requestKeyframe(now);
     const due = this.lastSampleWall === 0 || now - this.lastSampleWall >= 1000 / sampleFps;
     if (due && isVCL) {
       this.lastSampleWall = now;
       void this.sampleFrame(now / 1000, rtpTs).catch((e) => this.emit("error", e));
+    }
+  }
+
+  /** Ask the browser for a fresh keyframe (RTCP PLI) so the decode segment can
+   *  restart. Best-effort: a peer/transport that does not answer simply keeps
+   *  the segment as-is, which is what happened before this existed. */
+  private requestKeyframe(now: number): void {
+    const minMs = this.opts.keyframeRequestMinMs ?? 2000;
+    if (now - this.lastKeyframeRequest < minMs) return;
+    this.lastKeyframeRequest = now;
+    const pc = this.pc;
+    if (!pc || !this.videoSsrc) return;
+    try {
+      // The video receiver (kind === "video") owns the PLI sender for the
+      // browser's video SSRC.
+      const receiver = pc.getReceivers().find((r: any) => r?.kind === "video") as any;
+      const p = receiver?.sendRtcpPLI?.(this.videoSsrc);
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } catch {
+      /* peer gone or PLI unsupported — keep decoding the current segment */
     }
   }
 
@@ -475,6 +524,13 @@ export class WebRtcIngestSession extends EventEmitter {
 
     const jpeg = await new Promise<Buffer | null>((resolve) => {
       let done = false;
+      let watchdog: NodeJS.Timeout | undefined;
+      const settle = (v: Buffer | null) => {
+        if (done) return;
+        done = true;
+        if (watchdog) clearTimeout(watchdog);
+        resolve(v);
+      };
       const ff: ChildProcessWithoutNullStreams = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
       // The decoder is one-shot and short-lived: it can exit on the very first
       // segment it cannot parse (or be killed), which closes its stdin pipe
@@ -490,7 +546,8 @@ export class WebRtcIngestSession extends EventEmitter {
       let out = Buffer.alloc(0);
       let errBuf = "";
       ff.on("error", (e) => {
-        if (!done) { done = true; this.emit("ffmpeg", String(e?.message || e)); resolve(null); }
+        if (!done) this.emit("ffmpeg", String(e?.message || e));
+        settle(null);
       });
       ff.stdout.on("data", (d: Buffer) => {
         out = Buffer.concat([out, d]);
@@ -504,23 +561,40 @@ export class WebRtcIngestSession extends EventEmitter {
       });
       ff.on("close", () => {
         if (done) return;
-        done = true;
         // Final JPEG: last SOI..EOI in the stream.
         const soi = out.indexOf(Buffer.from([0xff, 0xd8]));
         const eoi = out.indexOf(Buffer.from([0xff, 0xd9]), Math.max(0, soi));
-        if (soi >= 0 && eoi > soi) resolve(out.subarray(soi, eoi + 2));
+        if (soi >= 0 && eoi > soi) settle(out.subarray(soi, eoi + 2));
         else {
           if (errBuf) this.emit("ffmpeg", errBuf.trim().slice(0, 300));
-          resolve(null);
+          settle(null);
         }
       });
-      // A failed write means ffmpeg exited before consuming the segment: the
-      // 'close' handler above settles the promise (bounded by the child's own
-      // exit), so nothing here may throw.
+      // A failed write does NOT mean "no frame". With `-frames:v vclCount` the
+      // decoder consumes exactly the access units in the segment and exits as
+      // soon as it has produced them, so when the segment is larger than the
+      // kernel pipe buffer (a VP8 GOP that has grown past ~128 KB) node still
+      // has bytes queued by the time ffmpeg exits: libuv then reports EPIPE on
+      // stdin *after* the complete JPEG has already landed on stdout. Settling
+      // null on that event threw away a good decode and silenced the VP8 rail a
+      // few seconds into every stream (ADAAAA-7594). Only the child's own
+      // 'close' settles a sample; the watchdog below bounds a decoder that
+      // never closes, and never leaves a sample unresolved.
       safeWrite(ff.stdin, segment, `${label}.stdin`, () => {
-        if (!done) { done = true; this.emit("ffmpeg", "stdin write failed (peer closed)"); resolve(null); }
+        /* logged by the guard listener ('[media] write-failed ...'); the
+           decoder's own 'close' settles this sample from stdout */
       });
       safeEnd(ff.stdin, `${label}.stdin`); // EOF -> ffmpeg flushes + emits, then closes
+      watchdog = setTimeout(() => {
+        if (done) return;
+        this.emit("ffmpeg", `decode watchdog fired after ${this.opts.ffmpegWatchdogMs ?? 15000}ms`);
+        try {
+          ff.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+        settle(null);
+      }, this.opts.ffmpegWatchdogMs ?? 15000);
     });
 
     if (jpeg && jpeg.length > 2) {
