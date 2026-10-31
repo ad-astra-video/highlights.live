@@ -722,6 +722,15 @@ export const HighlightRecordSchema = z.object({
   // without a candidate degrade to the highlight's own anchored metadata.
   candidateId: z.string().optional(),
   trigger: HighlightTriggerSchema.optional(),
+  // ADAAAA-7621: overlap dedupe of the postable list. Overlapping clip windows
+  // collapse into ONE moment; the winning clip carries `duplicateCount` (number
+  // of clips merged into it) and `mergedIds`, while each merged-away clip is
+  // returned (out of the postable list) with `duplicateOf` = the winner's id.
+  // Additive optional — absent on records that had no overlapping sibling, so
+  // legacy rows and single-clip moments are unchanged.
+  duplicateOf: z.string().optional(),
+  duplicateCount: z.number().int().min(0).optional(),
+  mergedIds: z.array(z.string()).optional(),
   // When the clip entered `rejected` (soft-delete undo grace start). Set on
   // reject, cleared on reject->accept (cancels pending TTL purge). Only
   // `rejected` clips with a `rejectedAt` aged >= rejectTtlMs are ever purge
@@ -955,7 +964,16 @@ export type FrameSection = z.infer<typeof FrameSectionSchema>;
 /** Composite payload of GET /jobs/:id/detail (ADAAAA-6851 Inc 3). */
 export const JobDetailSchema = z.object({
   job: JobSchema,
+  /** ADAAAA-7621: the POSTABLE list — precision-gated (rejected / non-scoring /
+   * self-contradicting records excluded) and deduped, so no two windows overlap.
+   * The full audit trail of every decide evaluation stays in `sections`. */
   highlights: z.array(HighlightRecordSchema).default([]),
+  /** ADAAAA-7621: "notable, not a goal" lane — non-rejected near_miss /
+   * big_play clips, which are never postable as a GOAL. */
+  notableHighlights: z.array(HighlightRecordSchema).default([]),
+  /** ADAAAA-7621: overlapping clips merged out of `highlights`, each carrying
+   * `duplicateOf` = the id of the moment that owns the footage. */
+  duplicateHighlights: z.array(HighlightRecordSchema).default([]),
   traces: z.array(JobTraceSchema).default([]),
   sections: z.array(FrameSectionSchema).default([]),
   /** Capacity budget the job ran under (3 live / 8 VOD) so the UI can show headroom. */

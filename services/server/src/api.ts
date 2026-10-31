@@ -46,6 +46,7 @@ import {
   type JobDecision,
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
+import { buildPostableHighlights } from "./highlight-postable";
 import { applyJobTitle } from "./job-title";
 import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
@@ -2356,9 +2357,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     attachWindowAudioUris(sectionList, job.id);
     const traces = buildTraces(obs);
 
+    // ADAAAA-7621: `highlights` is the POSTABLE list, not the raw persisted
+    // rows. Rejected clips, non-scoring outcomes and self-contradicting verdicts
+    // are excluded, and overlapping clip windows collapse into one moment
+    // (`duplicateCount` / `mergedIds` on the winner, `duplicateOf` on the
+    // merged-away clips, which move to `duplicateHighlights`). The full audit
+    // trail of every decide evaluation is unaffected — it rides `sections`.
+    const postable = buildPostableHighlights(store.highlightsForJob(job.id));
+
     return JobDetailSchema.parse({
       job,
-      highlights: store.highlightsForJob(job.id),
+      highlights: postable.highlights,
+      notableHighlights: postable.notable,
+      duplicateHighlights: postable.duplicates,
       traces,
       sections: sectionList,
       maxTraces,
