@@ -8,14 +8,26 @@ asserts it is measure-only.
 """
 import base64
 import json
+import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
 import numpy as np
 
+# Perceive keeps one SessionState per X-Session-Id for the life of the process,
+# and the audio gates keep their fired-at timestamp (``_last_fired_ts``) on it to
+# enforce the cooldown. A fixed session id therefore makes a rerun inherit the
+# previous run's cooldown: ``ts`` restarts at 0.0 while ``_last_fired_ts`` is
+# still ~3.2, so the tone phase never clears the 2.0 s cooldown and the probe
+# fails without any regression in the deployed path. Use a fresh id per
+# invocation (and per warm-up session) so reruns against one long-lived process
+# are independent.
+RUN_TAG = "%d-%d" % (int(time.time() * 1000), os.getpid())
+
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
-SID = "qa-ad7682-whistle"
+SID = "qa-ad7682-whistle-" + RUN_TAG
 SR = 16000
 N = int(SR * 0.1)
 
@@ -59,7 +71,7 @@ path = find_path()
 print("route:", path)
 
 # Fresh session for the real run so the warm-up frames are the only history.
-SID = "qa-ad7682-whistle-run"
+SID = "qa-ad7682-whistle-run-" + RUN_TAG
 ts = 0.0
 whistle = None
 stage_a = 0
@@ -77,7 +89,9 @@ for _ in range(8):
 
 print("stageA candidates during tone:", stage_a)
 print("whistle evidence:", json.dumps(whistle, indent=1))
-assert whistle is not None, "deployed path did not report a whistle fire"
+assert whistle is not None, (
+    "deployed path did not report a whistle fire (session %s)" % SID
+)
 assert whistle["measureOnly"] is True and whistle["emitted"] is False
 assert whistle["thresholdId"] == "stageB/whistle/2.4-3.4k/5x/0.3s", whistle["thresholdId"]
 assert 0.0 <= whistle["onsetLatencyS"] <= 5.0
