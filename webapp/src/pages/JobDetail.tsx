@@ -660,11 +660,13 @@ export function SecondaryHighlightLane({
             <span className="font-bold text-ink">
               T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
             </span>
-            <span className="ml-2">score {Math.round(h.score)}</span>
-            {h.eventType && <span className="ml-2">{h.eventType}</span>}
-            {h.outcome && <span className="ml-2">outcome {h.outcome}</span>}
+            <span className="ml-2">
+              · score {Math.round(h.score)}
+            </span>
+            {h.eventType && <span className="ml-2">· {h.eventType}</span>}
+            {h.outcome && <span className="ml-2">· outcome {h.outcome}</span>}
             {lane === "merged" && h.duplicateOf && (
-              <span className="ml-2">merged into {h.duplicateOf.slice(0, 8)}</span>
+              <span className="ml-2">· merged into {h.duplicateOf.slice(0, 8)}</span>
             )}
             {h.reason && <div className="mt-0.5 text-slate-ink">{h.reason}</div>}
           </li>
