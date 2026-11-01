@@ -63,6 +63,7 @@ import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./
 import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribeFunnel, recordSignupFunnel } from "./funnel";
 import { reportMonitoring, RELIABILITY_FLOOR } from "./monitoring";
 import { buildMediaNodeReport } from "./media-node";
+import { attributeLiveIngest } from "./media-ingest";
 import { AuthService, BetaGateError, adminRequired, adminReadonlyRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError, canRetrieveDataset } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
@@ -762,6 +763,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-6798 Inc 1: generate the LLM job title once the job reaches
       // `done` (fire-and-forget; fallback title on any failure; never blocks).
       void applyJobTitle(store, cfg, job.id);
+      // ADAAAA-7670: if the media node was unreachable when the ingest started,
+      // retry the attribution once now that the spend is settled. Idempotent —
+      // an existing row keeps the node that carried the stream.
+      await attributeLiveIngest({
+        db,
+        mediaServerUrl: cfg.mediaServerUrl,
+        jobId: job.id,
+        source: store.getJob(job.id)?.source,
+      }).catch(() => {});
       if (stageA.totalCandidates > 0) {
         console.log(
           `[live:${job.id}] stageA fpRate=${stageA.fpRate} (${stageA.rejected}/${stageA.totalCandidates} rejected), ` +
@@ -2134,6 +2144,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         });
         await ingest.start();
         liveSessions.set(job.id, ingest);
+        // ADAAAA-7670: attribute this live job's GPU spend to the media node
+        // that carries the live pipeline. RTMP-pull (and the other live
+        // sources) never provision a session through `POST /sessions`, so
+        // without this row the job's costUsd groups under `unattributed` in
+        // `GET /media/node`. Best-effort: an unreachable node leaves the job
+        // honestly unattributed and never blocks the ingest.
+        await attributeLiveIngest({
+          db,
+          mediaServerUrl: cfg.mediaServerUrl,
+          jobId: job.id,
+          source: req.body.source,
+        }).catch((e: any) =>
+          console.error(`[live:${job.id}] media-node attribution failed:`, String(e?.message || e))
+        );
         runLiveJob(ingest, job, user, sub).catch(() => {});
         return { job: store.getJob(job.id), status: "ingesting", framesAnalyzed: 0 };
       }

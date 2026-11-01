@@ -56,7 +56,8 @@ export interface NodeCost {
   jobs: number;
   /** Sum of `job.costUsd` — the Livepeer inference spend attributed here. */
   costUsd: number;
-  /** Sessions this node provisioned (from media_sessions), when reachable. */
+  /** Rows this node carries: provisioned media sessions + attributed live
+   * ingests (RTMP-pull etc.), from media_sessions. */
   sessions: number;
 }
 
