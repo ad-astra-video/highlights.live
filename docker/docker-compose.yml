@@ -409,6 +409,13 @@ services:
       # come from the compose project .env (docker/.env).
       - LIVE_OBSERVE_LOOP=${LIVE_OBSERVE_LOOP:-0}
       - OBSERVE_LOOP=${OBSERVE_LOOP:-0}
+      # ADAAAA-7676: live observe lag budget (wall-clock seconds). Once a live
+      # window's CONTENT time falls further behind wall time than this, the pass
+      # drops the stale frames/windows (counted on the job as
+      # observeMetrics.skippedStaleWindows) instead of deciding them late — the
+      # unbounded 5.7x lag was a window labelled T+42s decided at wall +242s.
+      # 30 s = the cadence + decide-E2E budget; 0 disables the drop.
+      - LIVE_OBSERVE_LAG_BUDGET_S=${LIVE_OBSERVE_LAG_BUDGET_S:-30}
       # ADAAAA-6973/7051: the live goal-confirm gate. DECIDE_CONFIRM_ENABLED=1
       # arms the Stage-2 confirm goal-leg pass (server `shouldRunConfirm`,
       # decide `_confirm_pass_enabled`) so a candidate is only published when

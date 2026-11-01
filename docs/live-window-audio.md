@@ -29,6 +29,13 @@ window after the first. `setAudioSeries()` had the same shape for a second
 reason: it REPLACED the array with perceive's latest ~1.7 s lookback snapshot,
 which sat far past the lagging window's content time.
 
+> ADAAAA-7676 bounds the two-clock gap itself: the live loop now drops stale
+> frames once the content clock falls more than `LIVE_OBSERVE_LAG_BUDGET_S`
+> (default 30 s) behind wall time, so the ratio quoted above is capped instead of
+> growing without bound. See `docs/live-observe-lag.md`. Retention anchoring on
+> the analysis position (rule 1 below) still holds — a dropped frame simply does
+> not advance it, and the window at the resynced position still finds its slice.
+
 ## The invariant
 
 1. **Retention is anchored on the analysis position.** `addFrame()` advances

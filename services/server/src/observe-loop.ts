@@ -234,6 +234,14 @@ export function assembleLiveWindow(
   return { centerTs: nowTs, frames: items, capped, droppedCount };
 }
 
+/** ADAAAA-7676: the live observe lag budget (wall-clock seconds). A live window
+ * whose CONTENT time is further behind wall time than this is STALE: deciding
+ * it would land the result even later, so the pass drops it (and its frames)
+ * instead of deciding it late. 30 s is the cadence + decide-E2E budget the spec
+ * quotes for the Livepeer runner, so a decided window inside it is still
+ * "live". Override with `LIVE_OBSERVE_LAG_BUDGET_S`. */
+export const LIVE_OBSERVE_LAG_BUDGET_S = 30;
+
 /** One measured live observe iteration: cadence tick that fired a decide, plus
  * the end-to-end latency budget accounting the spec requires to be measured and
  * reported on the Livepeer runner (cadence + gemma E2E). */
@@ -246,6 +254,14 @@ export interface LiveObserveLatencySample {
   e2eMs: number;
   /** Content-time cadence delta from the previous fired tick (ms). */
   cadenceMs: number;
+  /** ADAAAA-7676: wall-clock lag of this window's CONTENT time behind the live
+   * edge when the decide was scheduled (ms). The result reaches the feed at
+   * ~`lagMs + e2eMs`, i.e. `completedLagMs`. */
+  lagMs?: number;
+  /** ADAAAA-7676: wall-clock lag at the moment the decide verdict returned
+   * (ms) — the number a live viewer experiences (`summaryLog` `windowTs` vs
+   * wall `ts`). */
+  completedLagMs?: number;
 }
 
 /**
@@ -296,6 +312,15 @@ export class LiveObserver {
   /** Decide fires scheduled by an audio trigger (anchored) vs blind cadence. */
   private anchoredFires = 0;
   private cadenceFires = 0;
+  /** ADAAAA-7676: frames dropped as stale (content time behind the lag budget)
+   * and the cadence windows those drops swallowed. `skippedStaleWindows` is the
+   * job-visible counter (AC2): windows that were NOT decided late. */
+  private staleFrames = 0;
+  private skippedStaleWindows = 0;
+  /** ADAAAA-7676: worst (and mean) wall-clock lag observed on a dropped frame. */
+  private maxLagMs = 0;
+  private lagSumMs = 0;
+  private lagCount = 0;
 
   constructor(opts: {
     cadenceS?: number;
@@ -337,16 +362,65 @@ export class LiveObserver {
   }
 
   /** Fire a rolling-past decide when the cadence is due. `force` ignores the
-   * cadence (used at end-of-stream to observe the tail). */
-  async maybeFire(nowTs: number, force = false): Promise<boolean> {
-    await this.fire(nowTs, force);
+   * cadence (used at end-of-stream to observe the tail). `lagMs` is the measured
+   * content-vs-wall lag of this window (ADAAAA-7676), recorded on the sample so
+   * the job shows how fresh the decided moment was. */
+  async maybeFire(nowTs: number, force = false, lagMs?: number): Promise<boolean> {
+    await this.fire(nowTs, force, lagMs);
     return this.lastFireTs === nowTs;
   }
 
   /** Force one final observation at end-of-stream. */
-  async flush(): Promise<void> {
+  async flush(lagMs?: number): Promise<void> {
     const last = this.frames[this.frames.length - 1];
-    if (last) await this.fire(last.ts, true);
+    if (last) await this.fire(last.ts, true, lagMs);
+  }
+
+  /**
+   * ADAAAA-7676: DROP a stale frame instead of deciding it late.
+   *
+   * On a loaded box one decide costs ~8–13 s wall per ~3 s of content, so a
+   * serial live loop falls further behind the capture clock every tick and the
+   * backlog grows without bound: the measured symptom was a window labelled
+   * `T+42s` reaching the feed at wall `+242s` (~5.7x). The caller measures each
+   * frame's content-vs-wall lag and, once it exceeds the observe budget, hands
+   * the frame here instead of to `record` + `maybeFire`.
+   *
+   * `record` is NOT called for a stale frame (its image/seed would only widen
+   * the gap), but the cadence clock still advances through the dropped content
+   * time — every `cadenceS` of dropped content is ONE skipped stale window, so
+   * the next fired window is still ~`cadenceS` of content later (AC3's cadence
+   * stays ≤ 3 s; freshness is bought by dropping work, never by deciding more
+   * often). Returns the number of windows swallowed by this frame.
+   */
+  noteStaleFrame(ts: number, lagS: number): number {
+    this.staleFrames++;
+    const lagMs = Math.max(0, Math.round(lagS * 1000));
+    if (lagMs > this.maxLagMs) this.maxLagMs = lagMs;
+    this.lagSumMs += lagMs;
+    this.lagCount++;
+    this.refillBudget(ts);
+    let skipped = 0;
+    if (this.lastFireTs === null) {
+      // No window decided yet: anchor the cadence clock here so the first real
+      // fire is one cadence later, not immediately on a stale backlog.
+      this.lastFireTs = ts;
+      this.triggers.coverThrough(ts - this.windowS, ts);
+      return 0;
+    }
+    const elapsed = ts - this.lastFireTs;
+    if (elapsed >= this.cadenceS - 1e-9) {
+      skipped = Math.floor((elapsed + 1e-9) / this.cadenceS);
+      this.lastFireTs = ts;
+    }
+    if (skipped > 0) {
+      this.skippedStaleWindows += skipped;
+      // Triggers whose onset fell inside the dropped span can no longer be
+      // anchored to a retained frame — cover them so they expire instead of
+      // firing on a window that no longer contains them.
+      this.triggers.coverThrough(ts - this.windowS, ts);
+    }
+    return skipped;
   }
 
   /**
@@ -370,7 +444,7 @@ export class LiveObserver {
     this.lastBudgetTs = Math.max(this.lastBudgetTs, nowTs);
   }
 
-  private async fire(nowTs: number, force: boolean): Promise<void> {
+  private async fire(nowTs: number, force: boolean, lagMs?: number): Promise<void> {
     this.refillBudget(nowTs);
     const cadenceDue = shouldFireObserve(this.lastFireTs, nowTs, this.cadenceS);
     // A due trigger replaces the cadence tick at the same budget price. When
@@ -425,7 +499,15 @@ export class LiveObserver {
       const accepted = await this.onDecide(payload);
       e2eMs = Date.now() - started;
       if (accepted) this.accepts++;
-      this.latency.push({ centerTs: nowTs, frameCount: payload.frames.length, e2eMs, cadenceMs });
+      const lag = lagMs ?? 0;
+      this.latency.push({
+        centerTs: nowTs,
+        frameCount: payload.frames.length,
+        e2eMs,
+        cadenceMs,
+        lagMs: lag,
+        completedLagMs: lag + e2eMs,
+      });
     }
   }
 
@@ -480,6 +562,34 @@ export class LiveObserver {
    *  covered / expired / fired). */
   triggerStats(): TriggerSchedulerStats {
     return this.triggers.stats();
+  }
+  /** ADAAAA-7676: cadence windows DROPPED because their content was beyond the
+   *  lag budget — the job-visible AC2 counter (`observeMetrics
+   *  .skippedStaleWindows`). */
+  skippedStaleWindowCount(): number {
+    return this.skippedStaleWindows;
+  }
+  /** ADAAAA-7676: frames dropped as stale (the ingest backlog the drop drained). */
+  staleFrameCount(): number {
+    return this.staleFrames;
+  }
+  /** ADAAAA-7676: worst wall-clock content-vs-wall lag seen on a dropped frame. */
+  maxObservedLagMs(): number {
+    return this.maxLagMs;
+  }
+  /** ADAAAA-7676: mean wall-clock lag over the dropped frames. */
+  meanObservedLagMs(): number {
+    return this.lagCount === 0 ? 0 : this.lagSumMs / this.lagCount;
+  }
+  /** ADAAAA-7676: the most recent fired window's sample (lag/e2e for the
+   *  `[live-lag]` evidence line). */
+  lastSample(): LiveObserveLatencySample | null {
+    return this.latency.length ? this.latency[this.latency.length - 1] : null;
+  }
+  /** ADAAAA-7676: content time of the newest RECORDED frame (the tail the
+   *  end-of-stream flush observes), for its wall-lag measurement. */
+  lastRecordedTs(): number | null {
+    return this.frames.length ? this.frames[this.frames.length - 1].ts : null;
   }
 }
 

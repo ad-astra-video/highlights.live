@@ -20,6 +20,7 @@ import {
   type SignalGateOptions,
   OBSERVE_MAX_FRAMES,
   LIVE_OBSERVE_MAX_FRAMES,
+  LIVE_OBSERVE_LAG_BUDGET_S,
   OBSERVE_CONTENT_FPS,
   OBSERVE_WINDOW_S,
 } from "./observe-loop";
@@ -1051,6 +1052,20 @@ export interface AnalyzerConfig {
    * Wired from `LIVE_OBSERVE_LOOP` (server config).
    */
   liveObserveLoop?: boolean;
+  /**
+   * ADAAAA-7676: wall-clock lag budget for the LIVE observe pass. A frame whose
+   * content time is further behind wall time than this is STALE — one decide
+   * costs ~8–13 s wall per ~3 s of content, so the serial live loop fell ~5.7x
+   * behind and a window labelled `T+42s` reached the feed at wall `+242s`. Once
+   * the lag exceeds this budget the pass DROPS the stale frames/windows (counted
+   * as `observeMetrics.skippedStaleWindows`) and samples the live edge at the
+   * same ~3 s content cadence, instead of deciding them late. Before the decide
+   * fires the threshold also reserves one measured `meanE2eMs` so the RESULT
+   * lands inside the budget. Default 30 s (`LIVE_OBSERVE_LAG_BUDGET_S`); <= 0
+   * disables the drop (legacy unbounded behaviour). Wired from
+   * `LIVE_OBSERVE_LAG_BUDGET_S` (server config).
+   */
+  liveObserveLagBudgetS?: number;
   /** ADAAAA-7028 Inc 2: persist the decide audit descriptor returned on the
    * decision (`_audit`) so the durable decide_audit index + decision-trail has
    * one row per frame group. Best-effort: a throwing onDecideAudit is caught
@@ -1217,6 +1232,18 @@ export interface LiveObserveMetricsSnapshot {
    *  windows) vs the blind cadence. `trigger + cadence == decideCalls`. */
   triggerFires: number;
   cadenceFires: number;
+  /** ADAAAA-7676: cadence windows DROPPED as stale (content time beyond the lag
+   *  budget) instead of being decided late. Proves the live pass is bounded, not
+   *  unbounded-queueing. */
+  skippedStaleWindows?: number;
+  /** ADAAAA-7676: worst / mean wall-clock content-vs-wall lag (ms) seen on a
+   *  dropped frame. `maxLagMs <= budget + one frame` by construction. */
+  maxLagMs?: number;
+  meanLagMs?: number;
+  /** ADAAAA-7676: worst completed wall lag (ms) of a DECIDED window — the
+   *  content-vs-wall lag a live viewer actually experiences (`windowTs` vs wall
+   *  `ts`). Bounded by the lag budget when the drop is active. */
+  maxCompletedLagMs?: number;
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
@@ -1265,6 +1292,10 @@ export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSn
     maxCadenceMs: cadences.length ? Number(Math.max(...cadences).toFixed(1)) : 0,
     triggerFires: obs.triggerFireCount(),
     cadenceFires: obs.cadenceFireCount(),
+    skippedStaleWindows: obs.skippedStaleWindowCount(),
+    maxLagMs: Math.round(obs.maxObservedLagMs()),
+    meanLagMs: Number(obs.meanObservedLagMs().toFixed(1)),
+    maxCompletedLagMs: Number((samples.length ? Math.max(...samples.map((s) => s.completedLagMs ?? 0)) : 0).toFixed(1)),
   };
 }
 
@@ -3584,6 +3615,23 @@ export async function analyzeJob(
       : null;
   let framesAnalyzed = 0;
   let planApplied = false;
+  // ADAAAA-7676: bound the LIVE observe lag against the WALL clock. A frame's
+  // `timestamp` is the pipeline's CONTENT clock (seq / sampleFps) while the
+  // capture runs in real time, so a slow decide (~8–13 s wall per ~3 s content)
+  // pulls the two apart and the captured-frame backlog grows without bound
+  // (measured: window `T+42s` decided at wall `+242s`, ~5.7x). Anchor the content
+  // clock to the wall time the first frame arrived, measure every later frame's
+  // lag, and DROP frames/windows past the budget instead of deciding them late.
+  // `<= 0` keeps the legacy unbounded behaviour (opt-out).
+  const lagBudgetS = cfg.liveObserveLagBudgetS ?? LIVE_OBSERVE_LAG_BUDGET_S;
+  // The lag is measured whenever the live observer owns the loop (cheap, and it
+  // is the AC1 evidence); only the DROP depends on an active budget (`<= 0`
+  // keeps the legacy unbounded behaviour — opt-out control).
+  const lagMeasured = !!liveObserver;
+  const lagBounded = lagMeasured && lagBudgetS > 0;
+  let streamWallStartMs: number | null = null;
+  let lastFrameLagMs = 0;
+  let staleFrameDrops = 0;
   // ADAAAA-7152 Gap 1: adaptive perceive cadence for the VOD detail-first pass.
   // The per-frame `client.analyze` (perceive `process_frame` -> Florence detect)
   // is the dominant VOD E2E cost. When active, cool (no-signal) regions run at a
@@ -3609,6 +3657,24 @@ export async function analyzeJob(
     for await (const frame of iterFrames) {
       framesAnalyzed++;
       onProgress?.(framesAnalyzed);
+      // ADAAAA-7676: drop stale content instead of deciding it late. Measured
+      // against the wall clock since the stream's first frame, minus one decide
+      // E2E already observed: the number that matters is the lag when the RESULT
+      // lands, not the lag when the window is picked. A dropped frame is NOT
+      // recorded (its image would only widen the gap); the observer advances its
+      // cadence clock through the dropped content time and counts the swallowed
+      // windows as `skippedStaleWindows`.
+      if (lagMeasured) {
+        if (streamWallStartMs === null) streamWallStartMs = Date.now() - frame.timestamp * 1000;
+        const lagS = Math.max(0, (Date.now() - streamWallStartMs) / 1000 - frame.timestamp);
+        const reserveS = Math.min(liveObserver!.meanE2eMs() / 1000, lagBudgetS / 2);
+        if (lagBounded && lagS > lagBudgetS - reserveS) {
+          staleFrameDrops++;
+          liveObserver!.noteStaleFrame(frame.timestamp, lagS);
+          continue;
+        }
+        lastFrameLagMs = Math.round(lagS * 1000);
+      }
       run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
       let res!: ObservationResult;
       let reReserved = 0;
@@ -3797,7 +3863,21 @@ export async function analyzeJob(
           }
         }
         if (observeDecider) await observeDecider.maybeFire(frame.timestamp);
-        if (liveObserver) await liveObserver.maybeFire(frame.timestamp);
+        if (liveObserver) {
+          await liveObserver.maybeFire(frame.timestamp, false, lagMeasured ? lastFrameLagMs : undefined);
+          // ADAAAA-7676: one evidence line per DECIDED window — the content
+          // moment, its wall lag, the decide E2E and the resulting lag, so a
+          // deployed run can be measured from `docker logs highlights-server`
+          // (the job's `summaryLog` gives the same windowTs-vs-wall pair).
+          const sample = liveObserver.lastSample();
+          if (lagMeasured && sample && sample.centerTs === frame.timestamp) {
+            console.log(
+              `[live-lag:${cfg.jobId}] decide @${sample.centerTs.toFixed(2)}s lag=${((sample.lagMs ?? 0) / 1000).toFixed(1)}s ` +
+                `e2e=${Math.round(sample.e2eMs)}ms completed=${((sample.completedLagMs ?? sample.e2eMs) / 1000).toFixed(1)}s ` +
+                `staleSkips=${liveObserver.skippedStaleWindowCount()} budget=${lagBudgetS}s`
+            );
+          }
+        }
         // ADAAAA-7152 Gap 1: arm the full-perceive hot window when this frame
         // escalates the Tier-2 gate (the SAME predicate the decide observer uses),
         // so the goal window around it keeps FULL perceive treatment going forward.
@@ -3807,9 +3887,20 @@ export async function analyzeJob(
       }
     }
     // Force one final observer tick at end-of-stream so the tail of the feed is
-    // still observed (no-op if nothing was recorded).
+    // still observed (no-op if nothing was recorded). ADAAAA-7676: the tail is
+    // measured on the same wall clock as every other window.
     await observeDecider?.flush();
-    await liveObserver?.flush();
+    const tailLagS =
+      lagMeasured && streamWallStartMs !== null
+        ? Math.max(0, (Date.now() - streamWallStartMs) / 1000 - (liveObserver!.lastRecordedTs() ?? 0))
+        : 0;
+    await liveObserver?.flush(lagMeasured ? Math.round(tailLagS * 1000) : undefined);
+    if (lagMeasured) {
+      console.log(
+        `[live-lag:${cfg.jobId}] summary droppedFrames=${staleFrameDrops} skippedStaleWindows=${liveObserver!.skippedStaleWindowCount()} ` +
+          `maxLag=${(liveObserver!.maxObservedLagMs() / 1000).toFixed(1)}s budget=${lagBudgetS}s frames=${framesAnalyzed}`
+      );
+    }
   } finally {
     // Stop / un-pay every session we reserved this pass. Sessions the server
     // already released are a no-op on the orchestrator but still drop their

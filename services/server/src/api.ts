@@ -3612,6 +3612,9 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // (config-gated). When on, decide runs on the ~3 s cadence regardless
     // of whether perceive emitted a candidate.
     liveObserveLoop: cfg.liveObserveLoop,
+    // ADAAAA-7676: bound the live observe lag against the wall clock — see
+    // AnalyzerConfig.liveObserveLagBudgetS. Default 30 s (`LIVE_OBSERVE_LAG_BUDGET_S`).
+    liveObserveLagBudgetS: cfg.liveObserveLagBudgetS,
     // ADAAAA-7145: gate the live decide-observer's billable decide calls on
     // a real highlight signal (recall-safe). Default off.
     observeSignalGate: cfg.observeSignalGate,
