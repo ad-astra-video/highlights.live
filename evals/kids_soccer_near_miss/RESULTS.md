@@ -269,6 +269,74 @@ Two things follow for AC-1, and neither is a second voter problem:
    secret, no prompt-family layer can be calibrated — the deterministic path is
    the only one that runs offline, and it is now measured dead on this cache.
 
+### Agent-vision single-frame layer, measured (2026-11-01)
+
+A third reader was tried and measured this heartbeat: the agent's own vision tool
+on the **1x** cached frames (`/tmp/hl7590_frames/f_<t:04d>.jpg`, 640x360), one
+frame per request, `temperature=0`, plus a serial direct-endpoint reader
+(`deepseek-v4.1-flash`, thinking on) cross-checking the same seconds. All reads
+are committed in `results/agent_vision_reads.jsonl` (29 reads, each names the
+frame second it was made on).
+
+It is **better than the previous layers on static facts and still unusable for
+shot labels**:
+
+| fact class | behaviour |
+| --- | --- |
+| scoreboard digits, read on a 6x/8x crop of the score box | stable and correct: `0-1` at 144/147/148/149, `1-1` at 150/165/235/249/262/279/281/282/283/318, `1-1 -> 2-1` at 340/341, `2-1` at 351/366 |
+| close-up vs open play vs replay inlay | stable (318 = close-up, 283 = replay with a running `00:05` inlay) |
+| **"is a shot happening"** | **not reproducible**: t=456, identical frame, returned `SHOT=yes KIND=saved` and then `SHOT=no KIND=none` on the immediate repeat |
+
+So the layer reproduces the *facts around* a shot (score, scene type) but not the
+shot call itself — the same failure mode as the thinking-on 2x calibration
+(5/10 windows reproduced). No window was promoted on it.
+
+What the pass did establish, seconded by both readers:
+
+- **t=235 is a real shot and window `ks-n-0237` (234–240) is the strongest AC-1
+  promotion candidate**: both readers saw a white-kitted player airborne after
+  striking, the ball in the air at the goalmouth past the blue keeper. It is not
+  a goal (`SCOREBOARD 09:33 RMA 1-1 BAR`, unchanged at 236–237; by t=236 a player
+  is sliding and the ball is back in play), so it is a shot-class non-goal. It
+  stays unpromoted until a reproducible second read exists, per the AC-1 gate.
+- The 1 s-scan hints that the previous runs treated as promotion candidates are
+  **refuted** on the frames: t=51, 249, 255, 262, 318, 366 are open play, a
+  close-up or a player on the ground — no shot. The 1 s scan's
+  `goal_mouth_shot`/`keeper_save` labels are not evidence.
+- t=165 (scan hint `ball_in_net`) is **not** a goal: scoreboard `11:59 RMA 1-1`
+  and the ball is not visible; t=147/149 the same.
+
+### Scoreboard deltas are not goal evidence on this reel
+
+The reel is **not chronological and cuts between passages of the match**, so the
+overlay clock and the score do not move together with video time:
+
+- clock reads `01:36` (t=45), `02:39` (t=66), `04:06` (t=90), `06:10` (t=144),
+  `11:59` (t=165), `09:33` (t=235), `11:26` (t=249), `15:00` (t=281), `16:57`
+  (t=318), `20:00` (t=351), `19:47` (t=366) — it goes **backwards** after 351.
+- the score reads `0-1` at 144–149 and `1-1` from 150 onward, while the labelled
+  goal at t=280 sits inside that `1-1` stretch, and the `1-1 -> 2-1` flip
+  happens at t=341.
+- a score flip at t=149/150 (`0-1 -> 1-1`) has **no goal action** in 147–149, so
+  a delta across a cut is a cut artifact, not a scored goal.
+
+Consequence: the scoreboard corroboration the pipeline leans on ("scoreboard
+update from X to Y") is weak on this clip — it is exactly the class that produced
+the dominant FP set (see caveats). The manifest's own `frames` citations that
+quote scoreboards from the earlier labelling pass (`1-3` at 351, `1-0` at 359,
+`0-0` at 426) do **not** match the frames (`RMA 2-1 BAR` at 351/366); those
+strings came from an unreliable read and should not be quoted as evidence. The
+labels themselves stand on the ball-in-net frames, not on those strings.
+
+### 686–776 s is a penalty shoot-out, so the score-diff catalogue does not apply
+
+`f_0712` reads `REAL MADRID 4-4 FC BARCELONA / PENALTIS 4 5 6` — the tail of the
+video is a penalty shoot-out, and the score-digit diff detector finds only one
+candidate there (`710–712`, `maxdiff=64.5`, which is the shoot-out scoreboard
+updating). Each penalty can be a goal, so the tail's goal count needs a
+per-kick frame pass (kick → keeper/ball) rather than the scoreboard method used
+for 336–777 s. Coverage gap for the catalogue remains **686–776 s**.
+
 ### Window count
 
 The manifest carries **10** shot-class non-goal windows, not the 20 AC-1 asks
