@@ -637,38 +637,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // receive it as a plain function reference, so an unbound method loses
       // `this` and throws (job->failed) the moment a highlight needs a clip.
       const cut = (ts: number) => ingest.cut(ts);
-      const anaCfg: AnalyzerConfig = {
-        jobId: job.id,
-        clipBeforeS: cw.clipBeforeS,
-        clipAfterS: cw.clipAfterS,
-        clipWindowMinSec: cw.clipWindowMinSec,
-        gameHint: job.gameHint || cfg.gameHintDefault,
-        preferLabels: job.preferLabels,
-        // ADAAAA-6577: bounded exponential backoff between a perceive
-        // session-lost re-reserve and the retry of the same frame.
-        sessionRetryBackoffMs: cfg.vodSessionRetryBackoffMs,
-        sessionRetryBackoffMaxMs: cfg.vodSessionRetryBackoffMaxMs,
-        // ADAAAA-6314 Path 2: live trigger candidates forward the surrounding
-        // audio clip so the decide prompt gets ASR'd audio context (env-gated).
-        audioContext: cfg.audioContext,
-        // Increment D (ADAAAA-6467): the what-to-track planner's warm-up window
-        // + out-of-band re-check cadence on the LIVE pass (cap 3).
-        warmupSeconds: cfg.warmupSeconds,
-        recheckIntervalSeconds: cfg.recheckIntervalSeconds,
-        planMode: "live",
-        // ADAAAA-7011: wire the LIVE decide-observer into the live job path
-        // (config-gated). When on, decide runs on the ~3 s cadence regardless
-        // of whether perceive emitted a candidate.
-        liveObserveLoop: cfg.liveObserveLoop,
-        // ADAAAA-7145: gate the live decide-observer's billable decide calls on
-        // a real highlight signal (recall-safe). Default off.
-        observeSignalGate: cfg.observeSignalGate,
-        observeSignalGateOpts: buildObserveSignalGateOpts(cfg),
-        // ADAAAA-7152 (Gap 2): per-camera pitch calibration forwarded to the
-        // perceive session via the `configure` control so perceive emits a REAL
-        // goalCrossed/ballOutcome attestation. Resolved per camera; absent =>
-        // no `configure` sent (uncalibrated, recall-safe, unchanged).
-        perceiveCalibration: resolvePerceiveCalibration(cfg.perceiveCalibration, (job as any).cameraId),
+      const anaCfg: AnalyzerConfig = buildLiveAnalyzerConfig({
+        cfg,
+        job,
+        clipWindow: cw,
         // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
         onDecision: persistDecision,
         // ADAAAA-7028 Inc 2: ingest the decide audit descriptor durably.
@@ -681,19 +653,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           appendSummaryEntry(store, job.id, summary, meta).catch((e: any) =>
             console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))
           ),
-        // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
-        // evidence). Live uses the default analysis_fps / windows.
-        analysisFps: cfg.analysisFps,
-        maxFramesPerAnalysis: cfg.maxFramesPerAnalysis,
-        preWindowS: cfg.analysisPreWindowS,
-        postWindowS: cfg.analysisPostWindowS,
-        // ADAAAA-6489 / ADAAAA-7159 Gap 2: per-camera/per-clip goal-line
-        // calibration for this live stream/job (absent -> no goal-line signal,
-        // reported not_captured, never fabricated). Keyed by job id (a live
-        // stream has no stable clip id configured on the job), then `default`
-        // (ADAAAA-7163 Blocker 1).
-        calibration: resolveGoalLineCalibration(cfg, [job.id]),
-      };
+      });
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
       // the live session runs (ADAAAA-5777). jobEventHook fans the same event
@@ -1053,10 +1013,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // signal). Keyed by job id, then the clip filename/source, then `default`
       // (ADAAAA-7163 Blocker 1).
       calibration: resolveGoalLineCalibration(cfg, [jobId, stableClipCalibrationKey(videoPath)]),
-      // ADAAAA-6797: Stage-2 goal/near-miss confirmation pass. VOD-first: only
-      // the VOD pass ever sets `confirmEnabled` (from the server config flag
-      // DECIDE_CONFIRM_ENABLED, default off), so the live pass is untouched and
-      // the flag-off path is a strict no-op.
+      // ADAAAA-6797: Stage-2 goal/near-miss confirmation pass. ADAAAA-7663: the
+      // live pass builds the same gate through `buildLiveAnalyzerConfig`, so
+      // `DECIDE_CONFIRM_ENABLED` now covers both passes; off is a strict no-op
+      // on both. VOD keys exactly-once on the goal's content time (no reuse
+      // window), which is unchanged.
       confirmEnabled: cfg.decideConfirmEnabled,
       confirmWindowExtraS: cfg.decideConfirmExtraWindowS,
     };
@@ -3545,6 +3506,99 @@ function buildObserveSignalGateOpts(cfg: ServerConfig): SignalGateOptions | unde
   return {
     ...(cfg.observeSignalGateBallMinSpeedMps !== undefined ? { ballMinSpeedMps: cfg.observeSignalGateBallMinSpeedMps } : {}),
     suppressQuietUncalibrated: cfg.observeSignalGateSuppressQuiet,
+  };
+}
+
+/**
+ * ADAAAA-7663: build the LIVE pass's `AnalyzerConfig`.
+ *
+ * Extracted from `runLiveJob` so the live wiring is directly unit-testable — in
+ * particular the Stage-2 confirm gate. The live observe pass used to omit
+ * `confirmEnabled` entirely (VOD-first rollout), so `shouldRunConfirm()`
+ * early-returned and a live RTMP job that accepted goal-shaped Stage-1 reads
+ * still wrote 0 `gNNN:confirm` decide-audit rows. Both passes now derive the
+ * gate from `DECIDE_CONFIRM_ENABLED`; flag off => `confirmEnabled: false`, which
+ * is a strict no-op (the Stage-1 path is byte-identical to today).
+ *
+ * `confirmReuseWindowS` is LIVE-only: the live observer's rolling window center
+ * slides with the cadence, so one goal is re-read by several overlapping windows
+ * and the center-keyed identity is not stable. The horizon matches the accept
+ * path's goal burst window, which keeps the dive at one per distinct goal.
+ */
+export interface LiveAnalyzerConfigDeps {
+  cfg: ServerConfig;
+  job: { id: string; gameHint?: string; preferLabels?: string[]; cameraId?: string };
+  clipWindow: { clipBeforeS: number; clipAfterS: number; clipWindowMinSec?: number };
+  onDecision?: AnalyzerConfig["onDecision"];
+  onDecideAudit?: AnalyzerConfig["onDecideAudit"];
+  getRunningSummary?: AnalyzerConfig["getRunningSummary"];
+  onRunningSummary?: AnalyzerConfig["onRunningSummary"];
+}
+
+export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerConfig {
+  const { cfg, job, clipWindow: cw, onDecision, onDecideAudit, getRunningSummary, onRunningSummary } = deps;
+  return {
+    jobId: job.id,
+    clipBeforeS: cw.clipBeforeS,
+    clipAfterS: cw.clipAfterS,
+    clipWindowMinSec: cw.clipWindowMinSec,
+    gameHint: job.gameHint || cfg.gameHintDefault,
+    preferLabels: job.preferLabels,
+    // ADAAAA-6577: bounded exponential backoff between a perceive
+    // session-lost re-reserve and the retry of the same frame.
+    sessionRetryBackoffMs: cfg.vodSessionRetryBackoffMs,
+    sessionRetryBackoffMaxMs: cfg.vodSessionRetryBackoffMaxMs,
+    // ADAAAA-6314 Path 2: live trigger candidates forward the surrounding
+    // audio clip so the decide prompt gets ASR'd audio context (env-gated).
+    audioContext: cfg.audioContext,
+    // Increment D (ADAAAA-6467): the what-to-track planner's warm-up window
+    // + out-of-band re-check cadence on the LIVE pass (cap 3).
+    warmupSeconds: cfg.warmupSeconds,
+    recheckIntervalSeconds: cfg.recheckIntervalSeconds,
+    planMode: "live",
+    // ADAAAA-7011: wire the LIVE decide-observer into the live job path
+    // (config-gated). When on, decide runs on the ~3 s cadence regardless
+    // of whether perceive emitted a candidate.
+    liveObserveLoop: cfg.liveObserveLoop,
+    // ADAAAA-7145: gate the live decide-observer's billable decide calls on
+    // a real highlight signal (recall-safe). Default off.
+    observeSignalGate: cfg.observeSignalGate,
+    observeSignalGateOpts: buildObserveSignalGateOpts(cfg),
+    // ADAAAA-7152 (Gap 2): per-camera pitch calibration forwarded to the
+    // perceive session via the `configure` control so perceive emits a REAL
+    // goalCrossed/ballOutcome attestation. Resolved per camera; absent =>
+    // no `configure` sent (uncalibrated, recall-safe, unchanged).
+    perceiveCalibration: resolvePerceiveCalibration(cfg.perceiveCalibration, job.cameraId),
+    // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
+    onDecision,
+    // ADAAAA-7028 Inc 2: ingest the decide audit descriptor durably.
+    onDecideAudit,
+    // ADAAAA-7111 (Increment D): maintain the job's running video summary
+    // (story-so-far) across cadence observe ticks — read it to carry into
+    // the decide request, persist the updated one for the job-detail UI.
+    getRunningSummary,
+    onRunningSummary,
+    // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
+    // evidence). Live uses the default analysis_fps / windows.
+    analysisFps: cfg.analysisFps,
+    maxFramesPerAnalysis: cfg.maxFramesPerAnalysis,
+    preWindowS: cfg.analysisPreWindowS,
+    postWindowS: cfg.analysisPostWindowS,
+    // ADAAAA-6489 / ADAAAA-7159 Gap 2: per-camera/per-clip goal-line
+    // calibration for this live stream/job (absent -> no goal-line signal,
+    // reported not_captured, never fabricated). Keyed by job id (a live
+    // stream has no stable clip id configured on the job), then `default`
+    // (ADAAAA-7163 Blocker 1).
+    calibration: resolveGoalLineCalibration(cfg, [job.id]),
+    // ADAAAA-7663: Stage-2 goal/near-miss confirmation pass on the LIVE pass.
+    // The live pass previously left this unset, so shouldRunConfirm() returned
+    // false on every live read and no gNNN:confirm row could ever be written.
+    // Flag off => false => the Stage-1 path is a strict no-op (AC5).
+    confirmEnabled: cfg.decideConfirmEnabled,
+    confirmWindowExtraS: cfg.decideConfirmExtraWindowS,
+    // One confirm dive per distinct goal across the overlapping rolling windows
+    // (the accept path's own burst horizon; see LiveRunShared.confirmedGoalNear).
+    confirmReuseWindowS: cfg.decideConfirmLiveReuseWindowS,
   };
 }
 

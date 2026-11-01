@@ -430,8 +430,9 @@ export function isAcceptedHighlight(d: DecisionResult, preferLabels?: string[]):
 // data the server already holds (cached frame window / trajectories / audio
 // tap), (3) routes the candidate through the adapter `confirm()` call, and
 // (4) adopts the reconciled decision (or keeps Stage-1 on passthrough / any
-// failure). It is gated by `cfg.confirmEnabled` (VOD-first; the live pass
-// never sets it) so the flag-off path is a strict no-op.
+// failure). It is gated by `cfg.confirmEnabled`, which BOTH the VOD and the live
+// pass wire from `DECIDE_CONFIRM_ENABLED` (ADAAAA-7663 removed the VOD-only
+// restriction), so the flag-off path is a strict no-op on both passes.
 // ---------------------------------------------------------------------------
 
 /** The Stage-2 confirmation-pass response (mirror of ConfirmDecision). */
@@ -912,11 +913,13 @@ export interface AnalyzerConfig {
    */
   onDecision?: (cand: JobCandidate) => void;
   /** ADAAAA-6797: run the Stage-2 goal/near-miss confirmation pass on this
-   * pass. Only the VOD path sets it (from `DECIDE_CONFIRM_ENABLED`); the live
-   * pass leaves it unset so live is untouched during VOD-first rollout. When
-   * set, an un-attested goal-type candidate whose Stage-1 read is a
-   * scoring_play accept is routed through the decide `/confirm` deep frame
-   * dive and the reconciled verdict is adopted in its place. */
+   * pass. ADAAAA-7663: BOTH the VOD and the live pass set it from
+   * `DECIDE_CONFIRM_ENABLED` — the live observe pass used to omit the wiring, so
+   * `shouldRunConfirm()` early-returned and a live job could never emit a
+   * `gNNN:confirm` decide-audit row. When set, an un-attested goal-type
+   * candidate whose Stage-1 read is a scoring_play accept is routed through the
+   * decide `/confirm` deep frame dive and the reconciled verdict is adopted in
+   * its place. Off => strict no-op (Stage-1 path byte-identical). */
   confirmEnabled?: boolean;
   /**
    * ADAAAA-7162 (CEO feedback on ADAAAA-7134): extra seconds (each side) the
@@ -926,6 +929,19 @@ export interface AnalyzerConfig {
    * per the requirement); `DECIDE_CONFIRM_EXTRA_WINDOW_S`.
    */
   confirmWindowExtraS?: number;
+  /**
+   * ADAAAA-7663: the LIVE pass's exactly-once horizon (seconds) for the Stage-2
+   * confirm dive. The live observer decides over a ROLLING window whose center
+   * slides with the cadence, so the same goal is re-read by several overlapping
+   * windows and its center-based `confirmCandidateIdentity` differs each time.
+   * When set, a goal-shaped candidate whose goal-event instant is within this
+   * window of an already-confirmed goal REUSES that outcome instead of running
+   * another `/confirm` dive — one dive per distinct goal (AC3). The horizon is
+   * the same one the accept path uses to burst-suppress duplicate GOALs, so a
+   * reuse never merges two goals that could both have been accepted. Only the
+   * live pass sets it; VOD keeps the stable content-time identity (unset =>
+   * exact-key behaviour, unchanged). */
+  confirmReuseWindowS?: number;
   /**
    * ADAAAA-7007: enable the VOD decide-observer architecture. When set (with
    * `decideWindowN` also set, i.e. the VOD detail-first pass), the vision LLM
@@ -1492,8 +1508,15 @@ export class LiveRunShared {
    * overlapping 10 s window that contains the goal, so without this the Stage-2
    * confirm dive re-fires ~5x per distinct candidate (60 confirms / 12 goals).
    * Caching the outcome lets a re-produced window reuse the FIRST dive's verdict
-   * instead of re-billing / re-confirming / re-cutting it. Bounded. */
-  private readonly confirmedGoals = new Map<string, { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision }>();
+   * instead of re-billing / re-confirming / re-cutting it. Bounded.
+   * ADAAAA-7663: each entry also carries the goal EVENT instant it was keyed on
+   * so the LIVE pass — whose window center slides and therefore has no stable
+   * content-time key — can reuse a confirmed goal within `confirmReuseWindowS`
+   * (see `confirmedGoalNear`). */
+  private readonly confirmedGoals = new Map<
+    string,
+    { ts: number; outcome: { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision } }
+  >();
   /** Rolling window of cached frames + their already-computed findings (plan
    * §A). Time-bounded to DECIDE_WINDOW_SECONDS and hard-capped at
    * CACHE_MAX_FRAMES, so it never grows on long streams. Findings are REUSED
@@ -1881,17 +1904,43 @@ export class LiveRunShared {
   confirmedGoalOutcome(
     key: string
   ): { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision } | undefined {
-    return this.confirmedGoals.get(key);
+    return this.confirmedGoals.get(key)?.outcome;
+  }
+  /** ADAAAA-7663: reuse an already-confirmed goal whose EVENT instant is within
+   * `windowS` of `goalEventTs`. The live observer re-reads one goal across
+   * overlapping ROLLING windows whose center slides with the cadence, so its
+   * center-derived identity changes window to window; this proximity reuse keeps
+   * the dive at one per distinct goal. `windowS` is the accept path's burst
+   * window, so a reuse can never merge two goals that could both have been
+   * accepted. Nearest match wins; undefined when nothing is in range. */
+  confirmedGoalNear(
+    goalEventTs: number,
+    windowS: number
+  ): { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision } | undefined {
+    if (!Number.isFinite(goalEventTs) || !(windowS > 0)) return undefined;
+    let best: { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision } | undefined;
+    let bestDiff = Infinity;
+    for (const v of this.confirmedGoals.values()) {
+      if (!Number.isFinite(v.ts)) continue;
+      const diff = Math.abs(v.ts - goalEventTs);
+      if (diff <= windowS && diff < bestDiff) {
+        bestDiff = diff;
+        best = v.outcome;
+      }
+    }
+    return best;
   }
   /** ADAAAA-7365: remember the outcome of the (first) confirm dive for a goal
    * candidate so re-produced overlapping observe windows reuse it instead of
-   * re-billing / re-confirming / re-cutting. Bounded to avoid growth on long
-   * streams. */
+   * re-billing / re-confirming / re-cutting. ADAAAA-7663: `goalEventTs` records
+   * the event instant the key was derived from, enabling `confirmedGoalNear`.
+   * Bounded to avoid growth on long streams. */
   rememberConfirmedGoal(
     key: string,
-    outcome: { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision }
+    outcome: { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision },
+    goalEventTs?: number
   ): void {
-    this.confirmedGoals.set(key, outcome);
+    this.confirmedGoals.set(key, { ts: goalEventTs ?? NaN, outcome });
     if (this.confirmedGoals.size > 256) {
       const first = this.confirmedGoals.keys().next().value;
       if (first !== undefined) this.confirmedGoals.delete(first);
@@ -2845,8 +2894,8 @@ export function isGateRejectedBareGoal(d: DecisionResult): boolean {
  * rescue, ADAAAA-7357), enters the confirmation dive. Everything else (non-goal
  * type, attested, a requested near-miss / big-play highlight — isHighlight=true
  * with a non-scoring outcome — or a true non-goal read) keeps the existing
- * path. `cfg.confirmEnabled` is the VOD-first config gate — when off this is a
- * strict no-op. */
+ * path (recommended near-miss / big-play, attested goal, true non-goal). The
+ * config gate is `cfg.confirmEnabled` — off is a strict no-op. */
 export function shouldRunConfirm(
   cfg: AnalyzerConfig,
   candidate: { eventType: string; ballOutcome?: string; goalCrossed?: boolean; scoreBoardChanged?: boolean },
@@ -3042,13 +3091,27 @@ export async function confirmReconcile(
   // the untouched base). Once a goal candidate has had its confirm dive, reuse the
   // FIRST outcome so a re-produced window neither re-bills the confirm dive nor
   // re-cuts the highlight. Keyed on goal-event identity, not the window center.
-  const key = confirmCandidateIdentity(cfg, goalEventTs ?? candidate.timestamp);
+  // ADAAAA-7663: `eventTs` is that goal-event instant (the stable content time on
+  // VOD; the candidate trigger / window center on live).
+  const eventTs = goalEventTs ?? candidate.timestamp;
+  const key = confirmCandidateIdentity(cfg, eventTs);
   const cached = shared.confirmedGoalOutcome(key);
   if (cached) return cached;
+  // ADAAAA-7663: the LIVE pass has no stable content-time identity — its rolling
+  // window center slides by the cadence, so the same goal maps to a different
+  // key per window. Reuse a goal confirmed within `confirmReuseWindowS` of this
+  // one (the accept path's own burst horizon) so the dive stays at one per
+  // distinct goal instead of one per overlapping window. Unset => no-op, which
+  // keeps the VOD exact-key behaviour byte-identical.
+  const reuseWindowS = cfg.confirmReuseWindowS;
+  if (reuseWindowS && reuseWindowS > 0) {
+    const near = shared.confirmedGoalNear(eventTs, reuseWindowS);
+    if (near) return near;
+  }
   // ADAAAA-7543: center the deep dive's frame window on the goal EVENT instant —
   // the observe-window center can sit several seconds past the crossing, and a
   // post-goal restart window made the pass refute genuine goals.
-  const goalTs = goalEventTs ?? candidate.timestamp;
+  const goalTs = eventTs;
   const ctx = await buildConfirmContext(shared, cfg, candidate, stage1, goalTs);
   try {
     // ADAAAA-7626: measure the /confirm wall time HERE, server-side, around the
@@ -3092,17 +3155,17 @@ export async function confirmReconcile(
     // passthrough (goalConfirmed null) keep the Stage-1 verdict unchanged.
     if (confirm.goalConfirmed && confirm.decision && typeof confirm.decision === "object") {
       const outcome = { decision: confirm.decision, confirmRan: true, confirm };
-      shared.rememberConfirmedGoal(key, outcome);
+      shared.rememberConfirmedGoal(key, outcome, eventTs);
       return outcome;
     }
     const outcome = { decision: stage1, confirmRan: true, confirm };
-    shared.rememberConfirmedGoal(key, outcome);
+    shared.rememberConfirmedGoal(key, outcome, eventTs);
     return outcome;
   } catch {
     // Transport failure — keep the Stage-1 verdict (no behavior change).
     shared.recordConfirm({ stage1Disagreed: false });
     const outcome = { decision: stage1, confirmRan: true };
-    shared.rememberConfirmedGoal(key, outcome);
+    shared.rememberConfirmedGoal(key, outcome, eventTs);
     return outcome;
   }
 }

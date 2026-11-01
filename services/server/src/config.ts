@@ -308,15 +308,24 @@ export interface ServerConfig {
   /** Fixed fee per decide call (single shot, USD). Default $0.01. */
   decideFee: number;
   /** Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). When true, the
-   * VOD pass runs the decide `/confirm` deep-frame-dive for un-attested
-   * goal-type candidates and adopts the reconciled verdict. Wired from
-   * `DECIDE_CONFIRM_ENABLED` (default "0"). VOD-first: only the VOD pass reads
-   * this flag (the live pass never sets `confirmEnabled`), so rollout is safe. */
+   * pass runs the decide `/confirm` deep-frame-dive for un-attested goal-type
+   * candidates and adopts the reconciled verdict. Wired from
+   * `DECIDE_CONFIRM_ENABLED` (default "0"). ADAAAA-7663: BOTH the VOD and the
+   * live pass read this flag (the live pass used to omit the wiring, so live
+   * could never emit a `gNNN:confirm` decide-audit row); off => strict no-op. */
   decideConfirmEnabled: boolean;
   /** ADAAAA-7162: extra seconds (each side) the Stage-2 confirmation frame
    * window is expanded beyond the Stage-1 pre/post window. `DECIDE_CONFIRM_EXTRA_WINDOW_S`
    * (default 4). */
   decideConfirmExtraWindowS: number;
+  /** ADAAAA-7663: LIVE-only exactly-once horizon (seconds) for the Stage-2
+   * confirm dive. The live observer's rolling window center slides with the
+   * cadence, so one goal is re-read by several overlapping windows; a goal
+   * confirmed within this window of a new goal-shaped read reuses that outcome
+   * instead of diving again (one dive per distinct goal). Matches the accept
+   * path's goal burst-suppression window. `DECIDE_CONFIRM_LIVE_REUSE_WINDOW_S`
+   * (default 30). Unused by the VOD pass, which keys on the goal's content time. */
+  decideConfirmLiveReuseWindowS: number;
   /** Free plan included decide calls before gating (dev-friendly). */
   freeDecides: number;
   /** Dev-only: wireframe billing (no real Stripe). Enables /dev/billing/*. */
@@ -551,10 +560,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     freeHighlights: Number(env.FREE_HIGHLIGHTS ?? 10),
     decideFee: Number(env.DECIDE_FEE ?? 0.01),
     // Stage-2 goal/near-miss confirmation pass config flag (ADAAAA-6797).
-    // Default OFF (VOD-first rollout); the VOD pass reads it. Only when "1" do
-    // the VOD candidates go through the decide /confirm deep frame dive.
+    // Default OFF; ADAAAA-7663 makes it gate BOTH the VOD and the live pass, so
+    // a flag-off deploy keeps the Stage-1 path byte-identical on both.
     decideConfirmEnabled: env.DECIDE_CONFIRM_ENABLED === "1",
     decideConfirmExtraWindowS: Number(env.DECIDE_CONFIRM_EXTRA_WINDOW_S ?? 4),
+    // ADAAAA-7663: live exactly-once confirm horizon (see ServerConfig).
+    decideConfirmLiveReuseWindowS: Number(env.DECIDE_CONFIRM_LIVE_REUSE_WINDOW_S ?? 30),
     freeDecides: Number(env.FREE_DECIDES ?? 5),
     billingWireframe: env.BILLING_WIREFRAME === "1" || env.BILLING_WIREFRAME === "true",
     betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),
