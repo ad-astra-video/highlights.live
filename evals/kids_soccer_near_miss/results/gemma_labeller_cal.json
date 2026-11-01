@@ -1,0 +1,262 @@
+{
+ "tool": "local gemma-4-12B via http://gemma:8088/v1/chat/completions (vLLM, chat_template_kwargs.enable_thinking=false)",
+ "purpose": "ADAAAA-7611 AC-1: is a fast local frame labeller available for shot-class windows?",
+ "shot_windows_reproduced": 10,
+ "shot_windows": 10,
+ "control_windows_false_shot": 12,
+ "control_windows": 12,
+ "control_false_shot_frames": 74,
+ "control_frames": 134,
+ "strict_bar": {
+  "shots_reproduced": 6,
+  "shot_windows": 10,
+  "control_windows_false": 4,
+  "control_windows": 12,
+  "criterion": "SHOT=yes and KIND in saved/post/wide/blocked"
+ },
+ "reads": 245,
+ "goal_yes_frames": 2,
+ "model": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4",
+ "prompt": "Answer only, one line, no explanation: BALL=yes/no; SHOT=yes/no; KIND=saved/post/wide/blocked/none; GOAL=yes/no",
+ "provenance": {
+  "host": "livepeer-ai-x99",
+  "endpoint": "http://gemma:8088/v1/chat/completions",
+  "model": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4",
+  "runner": "highlights-perceive container",
+  "frames": "ffmpeg fps=1,scale=960:540 from the 1280x720 upload",
+  "read_s": "~0.4 s/frame"
+ },
+ "per_window": {
+  "ks-n-0130": {
+   "frames": 8,
+   "shot_frames": 2,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 126,
+   "errs": 0
+  },
+  "ks-n-0178": {
+   "frames": 16,
+   "shot_frames": 11,
+   "kinds": [
+    "none",
+    "saved"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 171,
+   "errs": 0
+  },
+  "ks-n-0201": {
+   "frames": 16,
+   "shot_frames": 5,
+   "kinds": [
+    "none",
+    "saved"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 199,
+   "errs": 0
+  },
+  "ks-n-0351": {
+   "frames": 9,
+   "shot_frames": 6,
+   "kinds": [
+    "none",
+    "saved"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 349,
+   "errs": 0
+  },
+  "ks-n-0359": {
+   "frames": 10,
+   "shot_frames": 7,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 357,
+   "errs": 0
+  },
+  "ks-n-0402": {
+   "frames": 15,
+   "shot_frames": 7,
+   "kinds": [
+    "none",
+    "saved"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 395,
+   "errs": 0
+  },
+  "ks-n-0426": {
+   "frames": 8,
+   "shot_frames": 5,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 423,
+   "errs": 0
+  },
+  "ks-n-0622": {
+   "frames": 7,
+   "shot_frames": 5,
+   "kinds": [
+    "none",
+    "saved"
+   ],
+   "goal_frames": 1,
+   "first_shot_t": 620,
+   "errs": 0
+  },
+  "ks-n-0628": {
+   "frames": 7,
+   "shot_frames": 2,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 626,
+   "errs": 0
+  },
+  "ks-n-0722": {
+   "frames": 15,
+   "shot_frames": 2,
+   "kinds": [
+    "none",
+    "saved"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 718,
+   "errs": 0
+  },
+  "ks-n-0054": {
+   "frames": 7,
+   "shot_frames": 4,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 51,
+   "errs": 0
+  },
+  "ks-n-0090": {
+   "frames": 7,
+   "shot_frames": 1,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 93,
+   "errs": 0
+  },
+  "ks-n-0105": {
+   "frames": 7,
+   "shot_frames": 3,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 102,
+   "errs": 0
+  },
+  "ks-n-0144": {
+   "frames": 7,
+   "shot_frames": 3,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 142,
+   "errs": 0
+  },
+  "ks-n-0162": {
+   "frames": 7,
+   "shot_frames": 4,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 160,
+   "errs": 0
+  },
+  "ks-n-0237": {
+   "frames": 7,
+   "shot_frames": 7,
+   "kinds": [
+    "none",
+    "saved"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 234,
+   "errs": 0
+  },
+  "ks-n-0244": {
+   "frames": 9,
+   "shot_frames": 4,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 245,
+   "errs": 0
+  },
+  "ks-n-0254": {
+   "frames": 9,
+   "shot_frames": 8,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 254,
+   "errs": 0
+  },
+  "ks-n-0282": {
+   "frames": 7,
+   "shot_frames": 4,
+   "kinds": [
+    "none",
+    "saved"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 279,
+   "errs": 0
+  },
+  "ks-n-0312": {
+   "frames": 40,
+   "shot_frames": 16,
+   "kinds": [
+    "none"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 306,
+   "errs": 0
+  },
+  "ks-n-0696": {
+   "frames": 15,
+   "shot_frames": 10,
+   "kinds": [
+    "none",
+    "saved"
+   ],
+   "goal_frames": 1,
+   "first_shot_t": 689,
+   "errs": 0
+  },
+  "ks-n-0760": {
+   "frames": 12,
+   "shot_frames": 10,
+   "kinds": [
+    "none",
+    "saved"
+   ],
+   "goal_frames": 0,
+   "first_shot_t": 757,
+   "errs": 0
+  }
+ },
+ "verdict": "not a labeller: the loose rule (any SHOT=yes) flags every window on both sides, and the strict rule (SHOT=yes and KIND in saved/post/wide/blocked) reaches only 6/10 shot windows against 4/12 control windows falsely shot (bar: >=8/10 and <=2). It is the cheapest layer to iterate on (>0.4 s/frame, no key, local GPU)."
+}
