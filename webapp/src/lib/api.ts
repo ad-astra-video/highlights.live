@@ -451,6 +451,9 @@ export interface Job {
   framesAnalyzed?: number;
   candidatesTriggered?: number;
   decideCalls?: number;
+  // ADAAAA-7664: a LIVE job records its decide invocations in the observe
+  // snapshot rather than the job-level `decideCalls`; the tile falls back to it.
+  observeMetrics?: { decideCalls?: number };
   perceiveSessionS?: number;
   costUsd?: number;
   scheduledAt?: string;

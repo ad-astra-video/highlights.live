@@ -30,6 +30,7 @@ import {
   summaryEntryTimestamp,
   candidateCountLabel,
   stageACountLabel,
+  decideCallsCount,
 } from "../lib/jobDetail";
 import {
   drawFrameWithBoxes,
@@ -1316,9 +1317,9 @@ export function JobDetail() {
                 <div className="text-xs uppercase tracking-wide text-mut">Frames</div>
                 <div>{detail.job.framesAnalyzed ?? frameCount}</div>
               </div>
-              <div>
+              <div data-detail-decide-calls>
                 <div className="text-xs uppercase tracking-wide text-mut">Decide calls</div>
-                <div>{detail.job.decideCalls ?? 0}</div>
+                <div>{decideCallsCount(detail.job)}</div>
               </div>
               {/* ADAAAA-7624: candidates are counted by the path that actually
                   ran (the observe cadence decide pass), and the audio Stage-A

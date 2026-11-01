@@ -159,3 +159,34 @@ describe("completedCounterFields (ADAAAA-7624)", () => {
     expect(fields.stageAMetrics).toEqual(snap);
   });
 });
+
+// ADAAAA-7664: the live observe pass counted its decide invocations in
+// `observeMetrics.decideCalls` and never wrote the job-level `decideCalls`
+// field, so a live job with 17 real decides (fixture 2118ea32) read
+// `decideCalls: null` and every header rendered "Decide calls 0".
+describe("decide-call count projection (ADAAAA-7664)", () => {
+  it("reports the observe-pass count for a live job with no job-level field", () => {
+    const live = { observeMetrics: { decideCalls: 17 }, candidatesTriggered: 0, candidatePath: "none" as const };
+    const fields = counterFieldsForJob(live);
+    expect(fields.decideCalls).toBe(17);
+    // The header reads the projected job, so the count is >= the audit rows.
+    expect({ ...live, ...fields }.decideCalls).toBe(17);
+  });
+
+  it("leaves a VOD job's job-level decideCalls untouched (including 0)", () => {
+    expect(counterFieldsForJob({ decideCalls: 18 }).decideCalls).toBeUndefined();
+    expect({ decideCalls: 18, ...counterFieldsForJob({ decideCalls: 18 }) }.decideCalls).toBe(18);
+    expect({ decideCalls: 0, ...counterFieldsForJob({ decideCalls: 0 }) }.decideCalls).toBe(0);
+  });
+
+  it("prefers the job-level field when both are recorded", () => {
+    const fields = counterFieldsForJob({ decideCalls: 4, observeMetrics: { decideCalls: 99 } });
+    expect(fields.decideCalls).toBeUndefined();
+    expect({ decideCalls: 4, ...fields }.decideCalls).toBe(4);
+  });
+
+  it("projects 0 for a live observer that fired no decide, and nothing when neither ran", () => {
+    expect(counterFieldsForJob({ observeMetrics: { decideCalls: 0 } }).decideCalls).toBe(0);
+    expect(counterFieldsForJob({}).decideCalls).toBeUndefined();
+  });
+});

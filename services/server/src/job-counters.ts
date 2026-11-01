@@ -75,6 +75,8 @@ export interface CounterReadableJob {
   vodObserveMetrics?: { accepted?: number };
   stageAMetrics?: StageAMetricsSnapshot;
   stageAMetricsStatus?: "measured" | "n/a";
+  decideCalls?: number;
+  observeMetrics?: { decideCalls?: number };
 }
 
 /**
@@ -121,6 +123,18 @@ export function counterFieldsForJob(job: CounterReadableJob): Partial<CompletedC
     // Never hand a reader the all-zero snapshot as if it were a measurement.
     if (!measured) out.stageAMetrics = undefined;
   }
+  // ADAAAA-7664: a live job records its decide invocations in
+  // `observeMetrics.decideCalls` and (before this fix) never wrote the job-level
+  // `decideCalls` field — so a live job with 17 real decides read
+  // `decideCalls: null` and every header rendered `Decide calls 0`. Project the
+  // observe count onto the field for records written before the fix; a record
+  // that already carries `decideCalls` (the VOD path) is untouched.
+  if (job.decideCalls === undefined) {
+    const observed = job.observeMetrics?.decideCalls;
+    if (observed !== undefined && observed !== null) {
+      out.decideCalls = Math.max(0, Math.floor(observed));
+    }
+  }
   return out;
 }
 
@@ -132,6 +146,8 @@ export function counterFieldsForJob(job: CounterReadableJob): Partial<CompletedC
 export interface CompletedCounterFields extends JobStageAMetrics {
   candidatesTriggered: number;
   candidatePath: CandidatePath;
+  /** ADAAAA-7664: decide invocations recorded for the job. */
+  decideCalls?: number;
 }
 
 /**

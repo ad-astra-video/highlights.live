@@ -9,6 +9,7 @@ import {
   isJobInFlight,
   candidateCountLabel,
   stageACountLabel,
+  decideCallsCount,
   type FrameSection,
   type DecideNote,
   noteKind,
@@ -259,5 +260,33 @@ describe("job-detail counters (ADAAAA-7624)", () => {
         },
       })
     ).toBe("4 judged · 25% FP");
+  });
+});
+
+// ADAAAA-7664: a live observe-path job (fixture 2118ea32) made 17 decide calls
+// and wrote 16 decide-audit rows, but the header rendered `0` because it read
+// only the VOD-populated `job.decideCalls` field.
+describe("decideCallsCount (ADAAAA-7664)", () => {
+  it("shows the observe-pass count for a live job whose job-level field is null", () => {
+    expect(decideCallsCount({ decideCalls: null, observeMetrics: { decideCalls: 17 } } as any)).toBe(17);
+    expect(decideCallsCount({ observeMetrics: { decideCalls: 17 } })).toBe(17);
+  });
+
+  it("never shows fewer decides than the decide-audit rows for a live job", () => {
+    const rows = 16;
+    const calls = decideCallsCount({ decideCalls: null, observeMetrics: { decideCalls: 17 } } as any);
+    expect(calls).toBeGreaterThanOrEqual(rows);
+  });
+
+  it("keeps a VOD job's count unchanged, including 0 when no decide ran", () => {
+    expect(decideCallsCount({ decideCalls: 18 })).toBe(18);
+    expect(decideCallsCount({ decideCalls: 0 })).toBe(0);
+    // A VOD record that also carries an observe snapshot still prefers its own field.
+    expect(decideCallsCount({ decideCalls: 4, observeMetrics: { decideCalls: 9 } })).toBe(4);
+  });
+
+  it("falls back to 0 only when neither path recorded a count", () => {
+    expect(decideCallsCount({})).toBe(0);
+    expect(decideCallsCount({ observeMetrics: {} })).toBe(0);
   });
 });

@@ -4,6 +4,7 @@ import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Trash2 } from "lu
 import { api, getToken, type Highlight, type Job, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { isOverLimit, oversizedHelp } from "../lib/vodUpload";
+import { decideCallsCount } from "../lib/jobDetail";
 import { useAuth } from "../lib/auth";
 import {
   useProcessingJobs,
@@ -615,7 +616,7 @@ function JobTile({ job, acceptedCount, rejectedCount, onOpen, onDelete }: {
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-mut" data-job-tile-metrics>
           <span>{job.framesAnalyzed ?? 0} frames</span>
           <span>${(job.costUsd ?? 0).toFixed(2)}</span>
-          <span>{job.decideCalls ?? 0} decide</span>
+          <span>{decideCallsCount(job)} decide</span>
           <span data-job-tile-accepted>{acceptedCount} accepted</span>
           {rejectedCount > 0 && <span className="text-mut" data-job-tile-rejected>{rejectedCount} rejected</span>}
           {span && <span data-job-span>{span}</span>}
