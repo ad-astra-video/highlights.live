@@ -2,28 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Radio, Send } from "lucide-react";
 import { getToken, api } from "../lib/api";
 import { readSSE } from "../lib/sse";
+import { MediaNodeStrip } from "./MediaNodeStrip";
 
 interface FeedItem {
   key: number;
   kind: string;
   text: string;
 }
-
-// Media-node capacity/health + per-node cost readout (ADAAAA-6869 Phase 4).
-// Shape mirrors services/server/src/media-node.ts MediaNodeReport — only the
-// fields the console renders.
-interface NodeStatus {
-  reachable: boolean;
-  node: { id: string; role: string; uptimeS: number } | null;
-  capacity: { maxSessions: number; activeSessions: number; availableSessions: number; loadPct: number; saturated: boolean } | null;
-  leases: { active: number; grace: number; awaitingClient: number; paying: number; total: number } | null;
-  payment: { onchain: boolean; payingSessions: number } | null;
-  cost: { total: { nodes: number; jobs: number; costUsd: number }; perNode: { nodeId: string; jobs: number; costUsd: number }[] };
-}
-
-// Poll interval for the node readout. Cheap (one proxied GET) and slow enough
-// that an idle console does not hammer the media node.
-const NODE_POLL_MS = 6000;
 
 // Live-console panel: streams perceive observations / candidates / highlights
 // for a running job over the /jobs/:id/events SSE endpoint and lets the operator
@@ -34,27 +19,8 @@ export function LiveConsole({ jobId, onHighlight }: { jobId: string; onHighlight
   const [connected, setConnected] = useState(false);
   const [control, setControl] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [node, setNode] = useState<NodeStatus | null>(null);
   const keyRef = useRef(0);
   const feedRef = useRef<HTMLDivElement>(null);
-
-  // Node capacity/health + cost attribution: poll GET /media/node. A failure
-  // here must never break the console, so a rejected poll just leaves the last
-  // reading (or `null` -> "node unavailable") in place.
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      api<NodeStatus>("/media/node")
-        .then((r) => !cancelled && setNode(r))
-        .catch(() => !cancelled && setNode((prev) => prev));
-    };
-    load();
-    const t = setInterval(load, NODE_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, []);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -103,22 +69,6 @@ export function LiveConsole({ jobId, onHighlight }: { jobId: string; onHighlight
     }
   }
 
-  const nodeLabel = node
-    ? node.reachable
-      ? `${node.node?.id ?? "media node"} healthy`
-      : `${node.node?.id ?? "media node"} unreachable`
-    : "media node …";
-  const loadLine = node?.capacity
-    ? `${node.capacity.activeSessions}/${node.capacity.maxSessions} sessions (${node.capacity.loadPct}%)`
-    : null;
-  const leaseLine = node?.leases
-    ? `${node.leases.active} active · ${node.leases.grace} grace · ${node.leases.awaitingClient} waiting`
-    : null;
-  const payLine = node?.payment ? (node.payment.onchain ? `${node.payment.payingSessions} paying` : "offchain") : null;
-  const spendLine = node
-    ? `${node.cost.total.costUsd.toFixed(2)} over ${node.cost.total.jobs} job(s) on ${node.cost.total.nodes} node(s)`
-    : null;
-
   return (
     <div className="mt-6 rounded-2xl border border-neon/40 bg-black/40 p-4">
       <div className="mb-3 flex items-center justify-between">
@@ -131,18 +81,7 @@ export function LiveConsole({ jobId, onHighlight }: { jobId: string; onHighlight
       </div>
 
       {/* Media-node capacity/health + per-node Livepeer spend (ADAAAA-6869). */}
-      <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 rounded-lg border border-mut/20 bg-black/60 px-3 py-2 font-mono text-xs text-slate-300">
-        <span className={node?.reachable ? "text-green" : node ? "text-red" : "text-mut"}>{nodeLabel}</span>
-        {loadLine && <span>load {loadLine}</span>}
-        {leaseLine && <span>leases {leaseLine}</span>}
-        {payLine && <span>{payLine}</span>}
-        {spendLine && (
-          <span>
-            node spend ${spendLine}
-          </span>
-        )}
-        {!node && <span className="text-mut">waiting for node readout…</span>}
-      </div>
+      <MediaNodeStrip className="mb-3" />
 
       <div
         ref={feedRef}
