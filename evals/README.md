@@ -184,3 +184,13 @@ Manifest shape for the whistle class:
 `--gate-opt whistle_ratio=6 --gate-opt max_flatness=0.25`. Results, the
 operating point, the ships/measure-only call and the cost statement live in
 `docs/audio-trigger-contract.md`.
+
+Deployed-path check (run inside the perceive container, no GPU, ~4 s):
+
+```bash
+docker cp evals/qa_whistle_live.py highlights-perceive:/tmp/ && \
+docker exec highlights-perceive python3 /tmp/qa_whistle_live.py http://127.0.0.1:8080
+```
+
+It feeds crowd ambient (must not fire the whistle path) then a 2.8 kHz tone over
+that ambient (must fire once, `measureOnly: true`), and prints the evidence.
