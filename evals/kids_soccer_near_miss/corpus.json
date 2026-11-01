@@ -1,0 +1,12 @@
+{
+  "$comment": "Eval corpus for the pooled scorer (ADAAAA-7692). One clip today (kids-soccer, build da2d21a); the second clip is a data append to this list, not a code change (ADAAAA-7690). 'manifest' paths are repo-relative; 'job_detail' is a local cache of GET /jobs/{id}/detail — re-fetch it per RESULTS.md 'Reproduction' if the cache is gone. Pooling rule (weighted ratios, never the mean of per-clip ratios) is in RESULTS.md 'Corpus mode'.",
+  "clips": [
+    {
+      "label": "kids-soccer",
+      "commit": "da2d21a",
+      "job_id": "ac6bf37f-6a03-4d14-a307-de5b9e200405",
+      "manifest": "evals/kids_soccer_near_miss/label-manifest.json",
+      "job_detail": "/tmp/job_detail_ac6bf37f-6a03-4d14-a307-de5b9e200405.json"
+    }
+  ]
+}
