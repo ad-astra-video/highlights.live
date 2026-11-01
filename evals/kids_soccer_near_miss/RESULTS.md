@@ -769,6 +769,67 @@ network) pins the block statistic, the cut rule, the sweep accounting and the
 recorded verdicts, so an edit cannot silently change what the negative results
 mean.
 
+## AC-4 — shot-window false positives measured at the confirm stage (ADAAAA-7687)
+
+`da2d21a` accepts 23 cards against 15 labelled goals: precision 78.26 %, recall
+100 %, the five FPs at `178.1, 203.2, 252.6, 358.8, 401.7`. Four of the five sit
+inside labelled shot-class windows (`ks-n-0178` blocked, `ks-n-0201` saved,
+`ks-n-0359` saved, `ks-n-0402` saved); the fifth (`252.6`) sits in the
+`evidence:none` window `ks-n-0244`.
+
+Before writing any rule into `services/decide/app/confirm.py` the candidate
+confirm-stage discriminators were measured against the real accepted set with
+`shot_vs_goal_discrimination.py` (persisted job detail only — no GPU pass, no
+re-inference). Full table: `results/shot_vs_goal_discrimination.json`.
+
+| rule (reject at confirm)                            | accepted | precision | recall | rejects |
+|---|---|---|---|---|
+| baseline (accept everything `da2d21a` accepts)      | 23 | 78.26 % | 100 % | — |
+| blanket `frame_attestation`                         | 11 | 90.91 % | 53.33 % | 8 goals + all 4 shot FPs |
+| `score_change` trigger with no confirm dive         | 19 | 78.95 % | 86.67 % | 3 goals + `252.6` |
+| window-cluster majority not-a-goal                  | 2 | 100 % | 13.33 % | 18 goals + all 5 FPs |
+| no goal-shaped read in the prior 15 s               | 18 | 77.78 % | 80.00 % | 4 goals + `203.2` |
+| ball track keeps travelling after the instant       | 8 | 100 % | 46.67 % | 13 goals + all 5 FPs |
+| Stage-1 criteria recorded no crowd eruption         | 22 | 81.82 % | 100 % | `203.2` only |
+| oracle (rejects exactly the five known FPs)         | 18 | 100 % | 100 % | the 5 FPs |
+
+**No deterministic confirm-stage rule reaches 0.94 precision at recall 1.0.**
+The reason is structural, not a tuning miss: all four shot-window FPs enter the
+accept set through the same anchor — the deep dive's own
+`ballInNet` + `ballTrajectoryCrossedLine` read (`corroborationSource:
+frame_attestation`, ratified policy ADAAAA-7555 Option 1) — and the eight
+labelled goals that also enter through it are textually and numerically
+indistinguishable from them:
+
+- the confirm `reason` of the FPs and the TPs both narrate a ball crossing the
+  line and entering the net (no lexical separator),
+- the per-window Stage-1 criteria are all-true for both (the model asserts
+  `ballInNet`, `ballCrossedLineBetweenPosts`, `crowdErupted` for a blocked shot),
+- the confirm verdict of the *neighbouring* windows does not separate them:
+  the labelled goals at `545.4` (1 goal read out of 10 windows) and `580.3`
+  (0 of 10) look exactly like a shot FP,
+- the cached ball track does not separate them (§*Native-resolution source* §5:
+  per-window max ball speed puts controls above shots; path length here is
+  1.35-3.20 for TPs and 1.71-2.51 for the FPs).
+
+The only full-recall rule found (`Stage-1 criteria recorded no crowd eruption`)
+kills one FP (`203.2`) for +3.5 points at zero recall cost — recorded, **not
+shipped**: it is n=1, it vetoes on a Stage-1 self-read the family has already
+measured as unreliable, and a clip with no crowd would lose real goals. It stays
+in the harness as a measured candidate until a re-run can A/B it.
+
+### Native single-frame probe (negative)
+
+The next lever was tested cheaply before committing to it: native
+1280x720 frames were extracted from the source on the box (`ffmpeg -ss <t> -t 6
+-vf fps=4,scale=1280:720`, 24 frames per window, `/tmp/shotgo_n`) around
+`fp203` (save) and `tp280` (goal). Single native frames do not resolve the
+question either — `f_020` of the `fp203` window reads ball in open play with no
+net, and `f_015` of the `tp280` window reads open play with the ball not
+visible, i.e. the read is still a coin flip at the frame level. Resolution plus
+a *single instant* is not the missing ingredient; a dense sequence bracketing
+the crossing instant is.
+
 ## AC-4b — dense native crossing-instant strip read (ADAAAA-7693)
 
 The follow-up to *AC-4* ([ADAAAA-7687](/ADAAAA/issues/ADAAAA-7687)) tested the one
@@ -874,14 +935,17 @@ temporal density inside the measured sheet budget does not create ball evidence.
    configured on the endpoint (`GET /v1/models` → `deepseek-v4.1-flash` only),
    so a second-model vote is not available; a second independent layer has to
    be built and calibrated (tracked as [ADAAAA-7643](/ADAAAA/issues/ADAAAA-7643)).
-5. ~~Dense native crossing-instant strip read~~ — **measured negative**
-   (ADAAAA-7693, *AC-4b* above): inside the ~0.9 MPix sheet budget the local
-   channel sees the ball on only 11/24 `dense30` sheets and on 1/24 full-frame
-   sheets, so no strip read refutes a shot-window FP (0/4) and the bar is not
-   met; no confirm-stage guard was shipped. The remaining lever on this family
-   is a per-window goal-mouth **crop** (localisation first, then crop, then
-   read twice — the prerequisite recorded in *Native resolution*), not more
-   temporal density.
+5. ~~AC-1 precision at the confirm stage~~ — **measured, not reachable from the
+   confirm-stage signals** (*AC-4* section above): no deterministic rule lifts
+   precision past 81.82 % at recall 1.0, because every shot-window FP and the
+   eight `frame_attestation` goals enter through the same model self-read. The
+   dense native crossing-instant strip ([ADAAAA-7693](/ADAAAA/issues/ADAAAA-7693))
+   was then measured too and is also **negative** (*AC-4b* above): inside the
+   ~0.9 MPix sheet budget the local channel sees the ball on only 11/24 `dense30`
+   sheets and 1/24 full-frame sheets, so it refutes 0/4 shot-window FPs. The
+   remaining lever on this family is a per-window goal-mouth **crop**
+   (localisation first, then crop, then read twice — the prerequisite recorded in
+   *Native resolution*), not more temporal density.
 
 ## Reproduction
 
