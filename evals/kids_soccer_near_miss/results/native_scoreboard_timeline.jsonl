@@ -1,0 +1,778 @@
+{"cut": false, "presence": 15.0, "present": false, "raw_diff": 0.0, "state": null, "state_dist": null, "t": 0}
+{"cut": false, "presence": 11.3, "present": false, "raw_diff": 38.51, "state": null, "state_dist": null, "t": 1}
+{"cut": false, "presence": 4.6, "present": false, "raw_diff": 52.89, "state": null, "state_dist": null, "t": 2}
+{"cut": false, "presence": -0.7, "present": false, "raw_diff": 51.17, "state": null, "state_dist": null, "t": 3}
+{"cut": false, "presence": -8.8, "present": false, "raw_diff": 43.29, "state": null, "state_dist": null, "t": 4}
+{"cut": false, "presence": 0.8, "present": false, "raw_diff": 41.09, "state": null, "state_dist": null, "t": 5}
+{"cut": false, "presence": -11.6, "present": false, "raw_diff": 51.56, "state": null, "state_dist": null, "t": 6}
+{"cut": false, "presence": -16.6, "present": false, "raw_diff": 12.89, "state": null, "state_dist": null, "t": 7}
+{"cut": false, "presence": 2.5, "present": false, "raw_diff": 17.0, "state": null, "state_dist": null, "t": 8}
+{"cut": false, "presence": -2.4, "present": false, "raw_diff": 44.9, "state": null, "state_dist": null, "t": 9}
+{"cut": false, "presence": -3.4, "present": false, "raw_diff": 39.39, "state": null, "state_dist": null, "t": 10}
+{"cut": false, "presence": -5.6, "present": false, "raw_diff": 45.62, "state": null, "state_dist": null, "t": 11}
+{"cut": false, "presence": -4.0, "present": false, "raw_diff": 24.09, "state": null, "state_dist": null, "t": 12}
+{"cut": true, "presence": -1.3, "present": false, "raw_diff": 75.61, "state": null, "state_dist": null, "t": 13}
+{"cut": false, "presence": -3.0, "present": false, "raw_diff": 37.95, "state": null, "state_dist": null, "t": 14}
+{"cut": false, "presence": -10.5, "present": false, "raw_diff": 49.99, "state": null, "state_dist": null, "t": 15}
+{"cut": false, "presence": -9.5, "present": false, "raw_diff": 28.08, "state": null, "state_dist": null, "t": 16}
+{"cut": true, "presence": 14.3, "present": false, "raw_diff": 64.45, "state": null, "state_dist": null, "t": 17}
+{"cut": true, "presence": -3.9, "present": false, "raw_diff": 64.32, "state": null, "state_dist": null, "t": 18}
+{"cut": false, "presence": -1.9, "present": false, "raw_diff": 32.44, "state": null, "state_dist": null, "t": 19}
+{"cut": true, "presence": -18.1, "present": false, "raw_diff": 69.11, "state": null, "state_dist": null, "t": 20}
+{"cut": false, "presence": -20.0, "present": false, "raw_diff": 23.55, "state": null, "state_dist": null, "t": 21}
+{"cut": false, "presence": -16.4, "present": false, "raw_diff": 24.19, "state": null, "state_dist": null, "t": 22}
+{"cut": false, "presence": 0.0, "present": false, "raw_diff": 25.97, "state": null, "state_dist": null, "t": 23}
+{"cut": false, "presence": 68.2, "present": true, "raw_diff": 32.75, "state": null, "state_dist": null, "t": 24}
+{"cut": false, "presence": 65.6, "present": true, "raw_diff": 27.93, "state": 0, "state_dist": 0.0013, "t": 25}
+{"cut": false, "presence": 68.1, "present": true, "raw_diff": 25.14, "state": 0, "state_dist": 0.0126, "t": 26}
+{"cut": false, "presence": 68.4, "present": true, "raw_diff": 53.23, "state": 1, "state_dist": 0.1164, "t": 27, "verdict": "score_change"}
+{"cut": true, "presence": 69.6, "present": true, "raw_diff": 69.9, "state": 0, "state_dist": 0.1247, "t": 28, "verdict": "cut_artifact"}
+{"cut": false, "presence": 67.9, "present": true, "raw_diff": 50.38, "state": 0, "state_dist": 0.0377, "t": 29, "verdict": "score_change"}
+{"cut": false, "presence": 73.3, "present": true, "raw_diff": 28.79, "state": 2, "state_dist": 0.0761, "t": 30, "verdict": "score_change"}
+{"cut": false, "presence": 73.8, "present": true, "raw_diff": 27.85, "state": 2, "state_dist": 0.043, "t": 31, "verdict": "score_change"}
+{"cut": false, "presence": 73.3, "present": true, "raw_diff": 24.92, "state": 2, "state_dist": 0.0235, "t": 32, "verdict": "score_change"}
+{"cut": false, "presence": 70.9, "present": true, "raw_diff": 25.81, "state": 2, "state_dist": 0.0103, "t": 33}
+{"cut": false, "presence": 0.0, "present": false, "raw_diff": 52.6, "state": null, "state_dist": null, "t": 34}
+{"cut": false, "presence": 6.1, "present": false, "raw_diff": 54.13, "state": null, "state_dist": null, "t": 35}
+{"cut": false, "presence": 2.9, "present": false, "raw_diff": 42.7, "state": null, "state_dist": null, "t": 36}
+{"cut": false, "presence": -1.2, "present": false, "raw_diff": 58.4, "state": null, "state_dist": null, "t": 37}
+{"cut": true, "presence": 68.9, "present": true, "raw_diff": 62.8, "state": null, "state_dist": null, "t": 38}
+{"cut": false, "presence": 70.8, "present": true, "raw_diff": 50.44, "state": 3, "state_dist": 0.0724, "t": 39, "verdict": "score_change"}
+{"cut": false, "presence": 71.6, "present": true, "raw_diff": 19.78, "state": 3, "state_dist": 0.0483, "t": 40, "verdict": "score_change"}
+{"cut": false, "presence": 71.5, "present": true, "raw_diff": 22.93, "state": 3, "state_dist": 0.0506, "t": 41, "verdict": "score_change"}
+{"cut": false, "presence": 71.2, "present": true, "raw_diff": 19.05, "state": 3, "state_dist": 0.0529, "t": 42, "verdict": "score_change"}
+{"cut": false, "presence": 68.9, "present": true, "raw_diff": 23.42, "state": 4, "state_dist": 0.0866, "t": 43, "verdict": "score_change"}
+{"cut": false, "presence": 66.1, "present": true, "raw_diff": 35.65, "state": 0, "state_dist": 0.0916, "t": 44, "verdict": "score_change"}
+{"cut": false, "presence": 72.6, "present": true, "raw_diff": 31.73, "state": 5, "state_dist": 0.0913, "t": 45, "verdict": "score_change"}
+{"cut": false, "presence": 66.7, "present": true, "raw_diff": 31.9, "state": 2, "state_dist": 0.0856, "t": 46, "verdict": "score_change"}
+{"cut": false, "presence": 66.5, "present": true, "raw_diff": 28.47, "state": 0, "state_dist": 0.0509, "t": 47, "verdict": "score_change"}
+{"cut": false, "presence": 68.6, "present": true, "raw_diff": 31.64, "state": 0, "state_dist": 0.0013, "t": 48}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 24.83, "state": 0, "state_dist": 0.0003, "t": 49}
+{"cut": false, "presence": 70.2, "present": true, "raw_diff": 18.5, "state": 0, "state_dist": 0.0007, "t": 50}
+{"cut": false, "presence": 70.4, "present": true, "raw_diff": 12.68, "state": 0, "state_dist": 0.0013, "t": 51}
+{"cut": false, "presence": 70.2, "present": true, "raw_diff": 12.3, "state": 0, "state_dist": 0.0, "t": 52}
+{"cut": true, "presence": 69.5, "present": true, "raw_diff": 70.93, "state": 6, "state_dist": 0.2255, "t": 53, "verdict": "cut_artifact"}
+{"cut": false, "presence": 66.9, "present": true, "raw_diff": 51.05, "state": 5, "state_dist": 0.128, "t": 54, "verdict": "score_change"}
+{"cut": true, "presence": 69.6, "present": true, "raw_diff": 60.21, "state": 6, "state_dist": 0.0899, "t": 55, "verdict": "cut_artifact"}
+{"cut": false, "presence": 71.0, "present": true, "raw_diff": 34.35, "state": 5, "state_dist": 0.0698, "t": 56, "verdict": "score_change"}
+{"cut": false, "presence": 71.2, "present": true, "raw_diff": 37.55, "state": 7, "state_dist": 0.0638, "t": 57, "verdict": "score_change"}
+{"cut": false, "presence": 71.0, "present": true, "raw_diff": 45.52, "state": 6, "state_dist": 0.1498, "t": 58, "verdict": "score_change"}
+{"cut": false, "presence": 70.9, "present": true, "raw_diff": 49.63, "state": 7, "state_dist": 0.1488, "t": 59, "verdict": "score_change"}
+{"cut": false, "presence": 68.9, "present": true, "raw_diff": 56.77, "state": 0, "state_dist": 0.0767, "t": 60, "verdict": "score_change"}
+{"cut": false, "presence": 68.9, "present": true, "raw_diff": 26.41, "state": 0, "state_dist": 0.0026, "t": 61}
+{"cut": false, "presence": 69.5, "present": true, "raw_diff": 29.79, "state": 0, "state_dist": 0.0036, "t": 62}
+{"cut": false, "presence": 69.8, "present": true, "raw_diff": 27.61, "state": 0, "state_dist": 0.0023, "t": 63}
+{"cut": false, "presence": 70.6, "present": true, "raw_diff": 23.91, "state": 0, "state_dist": 0.0007, "t": 64}
+{"cut": false, "presence": 70.4, "present": true, "raw_diff": 22.72, "state": 0, "state_dist": 0.0007, "t": 65}
+{"cut": false, "presence": 70.4, "present": true, "raw_diff": 18.13, "state": 0, "state_dist": 0.0007, "t": 66}
+{"cut": false, "presence": 70.0, "present": true, "raw_diff": 22.57, "state": 0, "state_dist": 0.0, "t": 67}
+{"cut": true, "presence": 69.4, "present": true, "raw_diff": 84.27, "state": 6, "state_dist": 0.209, "t": 68, "verdict": "cut_artifact"}
+{"cut": false, "presence": 68.7, "present": true, "raw_diff": 54.92, "state": 8, "state_dist": 0.1144, "t": 69, "verdict": "score_change"}
+{"cut": true, "presence": 69.2, "present": true, "raw_diff": 71.01, "state": 6, "state_dist": 0.1068, "t": 70, "verdict": "cut_artifact"}
+{"cut": false, "presence": 69.6, "present": true, "raw_diff": 40.97, "state": 6, "state_dist": 0.003, "t": 71}
+{"cut": true, "presence": 63.6, "present": true, "raw_diff": 63.18, "state": 6, "state_dist": 0.0017, "t": 72}
+{"cut": false, "presence": 67.2, "present": true, "raw_diff": 28.76, "state": 6, "state_dist": 0.0013, "t": 73}
+{"cut": true, "presence": 69.2, "present": true, "raw_diff": 84.32, "state": 0, "state_dist": 0.2252, "t": 74, "verdict": "cut_artifact"}
+{"cut": false, "presence": 69.2, "present": true, "raw_diff": 19.88, "state": 0, "state_dist": 0.001, "t": 75}
+{"cut": false, "presence": 69.1, "present": true, "raw_diff": 21.09, "state": 0, "state_dist": 0.0007, "t": 76}
+{"cut": false, "presence": 69.0, "present": true, "raw_diff": 21.83, "state": 0, "state_dist": 0.0, "t": 77}
+{"cut": false, "presence": 68.8, "present": true, "raw_diff": 22.96, "state": 0, "state_dist": 0.0, "t": 78}
+{"cut": false, "presence": 69.0, "present": true, "raw_diff": 25.15, "state": 0, "state_dist": 0.0003, "t": 79}
+{"cut": true, "presence": 70.7, "present": true, "raw_diff": 71.2, "state": 6, "state_dist": 0.2245, "t": 80, "verdict": "cut_artifact"}
+{"cut": false, "presence": 72.0, "present": true, "raw_diff": 57.34, "state": 6, "state_dist": 0.0258, "t": 81, "verdict": "score_change"}
+{"cut": false, "presence": 67.8, "present": true, "raw_diff": 39.19, "state": 6, "state_dist": 0.0308, "t": 82, "verdict": "score_change"}
+{"cut": false, "presence": 69.7, "present": true, "raw_diff": 44.76, "state": 1, "state_dist": 0.0777, "t": 83, "verdict": "score_change"}
+{"cut": false, "presence": 70.4, "present": true, "raw_diff": 44.47, "state": 1, "state_dist": 0.0522, "t": 84, "verdict": "score_change"}
+{"cut": false, "presence": 67.7, "present": true, "raw_diff": 53.03, "state": 1, "state_dist": 0.0489, "t": 85, "verdict": "score_change"}
+{"cut": true, "presence": 69.8, "present": true, "raw_diff": 64.01, "state": 6, "state_dist": 0.0853, "t": 86, "verdict": "cut_artifact"}
+{"cut": false, "presence": 73.3, "present": true, "raw_diff": 45.47, "state": 6, "state_dist": 0.0559, "t": 87, "verdict": "score_change"}
+{"cut": false, "presence": 65.9, "present": true, "raw_diff": 34.24, "state": 0, "state_dist": 0.1706, "t": 88, "verdict": "score_change"}
+{"cut": false, "presence": 69.4, "present": true, "raw_diff": 38.85, "state": 0, "state_dist": 0.0003, "t": 89}
+{"cut": false, "presence": 69.2, "present": true, "raw_diff": 29.85, "state": 0, "state_dist": 0.0, "t": 90}
+{"cut": false, "presence": 67.8, "present": true, "raw_diff": 41.19, "state": 0, "state_dist": 0.0, "t": 91}
+{"cut": false, "presence": 68.3, "present": true, "raw_diff": 32.06, "state": 0, "state_dist": 0.0036, "t": 92}
+{"cut": true, "presence": 68.4, "present": true, "raw_diff": 65.15, "state": 6, "state_dist": 0.2255, "t": 93, "verdict": "cut_artifact"}
+{"cut": true, "presence": 69.2, "present": true, "raw_diff": 67.78, "state": 0, "state_dist": 0.2235, "t": 94, "verdict": "cut_artifact"}
+{"cut": false, "presence": 69.2, "present": true, "raw_diff": 54.77, "state": 0, "state_dist": 0.0026, "t": 95}
+{"cut": false, "presence": 69.7, "present": true, "raw_diff": 37.83, "state": 0, "state_dist": 0.0083, "t": 96}
+{"cut": false, "presence": 69.9, "present": true, "raw_diff": 22.66, "state": 0, "state_dist": 0.0212, "t": 97, "verdict": "score_change"}
+{"cut": false, "presence": 69.6, "present": true, "raw_diff": 25.72, "state": 0, "state_dist": 0.0129, "t": 98}
+{"cut": true, "presence": 70.8, "present": true, "raw_diff": 61.25, "state": 0, "state_dist": 0.0149, "t": 99}
+{"cut": true, "presence": 66.1, "present": true, "raw_diff": 67.22, "state": 0, "state_dist": 0.0099, "t": 100}
+{"cut": false, "presence": 69.8, "present": true, "raw_diff": 58.87, "state": 1, "state_dist": 0.121, "t": 101, "verdict": "score_change"}
+{"cut": true, "presence": 70.4, "present": true, "raw_diff": 79.53, "state": 6, "state_dist": 0.1025, "t": 102, "verdict": "cut_artifact"}
+{"cut": false, "presence": 68.8, "present": true, "raw_diff": 49.7, "state": 6, "state_dist": 0.0017, "t": 103}
+{"cut": false, "presence": 69.7, "present": true, "raw_diff": 47.8, "state": 3, "state_dist": 0.0833, "t": 104, "verdict": "score_change"}
+{"cut": true, "presence": 69.6, "present": true, "raw_diff": 61.79, "state": 0, "state_dist": 0.1438, "t": 105, "verdict": "cut_artifact"}
+{"cut": true, "presence": 68.8, "present": true, "raw_diff": 72.86, "state": 3, "state_dist": 0.122, "t": 106, "verdict": "cut_artifact"}
+{"cut": false, "presence": 69.5, "present": true, "raw_diff": 30.45, "state": 6, "state_dist": 0.08, "t": 107, "verdict": "score_change"}
+{"cut": true, "presence": 69.8, "present": true, "raw_diff": 61.65, "state": 6, "state_dist": 0.0394, "t": 108, "verdict": "cut_artifact"}
+{"cut": true, "presence": 68.9, "present": true, "raw_diff": 82.47, "state": 0, "state_dist": 0.2235, "t": 109, "verdict": "cut_artifact"}
+{"cut": false, "presence": 69.0, "present": true, "raw_diff": 28.57, "state": 0, "state_dist": 0.0003, "t": 110}
+{"cut": false, "presence": 69.5, "present": true, "raw_diff": 28.38, "state": 0, "state_dist": 0.003, "t": 111}
+{"cut": false, "presence": 74.3, "present": true, "raw_diff": 29.64, "state": 2, "state_dist": 0.0506, "t": 112, "verdict": "score_change"}
+{"cut": false, "presence": 72.9, "present": true, "raw_diff": 27.19, "state": 2, "state_dist": 0.0225, "t": 113, "verdict": "score_change"}
+{"cut": false, "presence": 72.9, "present": true, "raw_diff": 24.91, "state": 2, "state_dist": 0.0136, "t": 114}
+{"cut": false, "presence": 73.6, "present": true, "raw_diff": 30.31, "state": 2, "state_dist": 0.0248, "t": 115, "verdict": "score_change"}
+{"cut": false, "presence": 73.9, "present": true, "raw_diff": 15.54, "state": 2, "state_dist": 0.0142, "t": 116}
+{"cut": true, "presence": 71.4, "present": true, "raw_diff": 63.5, "state": 9, "state_dist": 0.1071, "t": 117, "verdict": "cut_artifact"}
+{"cut": false, "presence": 70.7, "present": true, "raw_diff": 47.81, "state": 10, "state_dist": 0.0817, "t": 118, "verdict": "score_change"}
+{"cut": false, "presence": 72.7, "present": true, "raw_diff": 39.86, "state": 6, "state_dist": 0.1597, "t": 119, "verdict": "score_change"}
+{"cut": false, "presence": 72.5, "present": true, "raw_diff": 33.34, "state": 6, "state_dist": 0.0, "t": 120}
+{"cut": false, "presence": 72.3, "present": true, "raw_diff": 40.87, "state": 6, "state_dist": 0.0003, "t": 121}
+{"cut": true, "presence": 0.9, "present": false, "raw_diff": 68.16, "state": null, "state_dist": null, "t": 122}
+{"cut": false, "presence": -8.7, "present": false, "raw_diff": 58.83, "state": null, "state_dist": null, "t": 123}
+{"cut": false, "presence": -8.8, "present": false, "raw_diff": 49.34, "state": null, "state_dist": null, "t": 124}
+{"cut": false, "presence": -20.3, "present": false, "raw_diff": 48.55, "state": null, "state_dist": null, "t": 125}
+{"cut": false, "presence": 5.3, "present": false, "raw_diff": 45.83, "state": null, "state_dist": null, "t": 126}
+{"cut": false, "presence": 0.6, "present": false, "raw_diff": 40.36, "state": null, "state_dist": null, "t": 127}
+{"cut": false, "presence": 2.4, "present": false, "raw_diff": 43.73, "state": null, "state_dist": null, "t": 128}
+{"cut": false, "presence": 74.9, "present": true, "raw_diff": 41.55, "state": null, "state_dist": null, "t": 129}
+{"cut": false, "presence": 69.3, "present": true, "raw_diff": 35.53, "state": 11, "state_dist": 0.124, "t": 130, "verdict": "score_change"}
+{"cut": true, "presence": 72.1, "present": true, "raw_diff": 60.42, "state": 6, "state_dist": 0.1214, "t": 131, "verdict": "cut_artifact"}
+{"cut": false, "presence": 71.9, "present": true, "raw_diff": 50.19, "state": 6, "state_dist": 0.0208, "t": 132, "verdict": "score_change"}
+{"cut": true, "presence": 70.7, "present": true, "raw_diff": 65.12, "state": 12, "state_dist": 0.0903, "t": 133, "verdict": "cut_artifact"}
+{"cut": false, "presence": 71.3, "present": true, "raw_diff": 36.13, "state": 13, "state_dist": 0.1339, "t": 134, "verdict": "score_change"}
+{"cut": false, "presence": 70.4, "present": true, "raw_diff": 25.88, "state": 12, "state_dist": 0.1128, "t": 135, "verdict": "score_change"}
+{"cut": true, "presence": 72.0, "present": true, "raw_diff": 66.03, "state": 6, "state_dist": 0.1104, "t": 136, "verdict": "cut_artifact"}
+{"cut": true, "presence": 71.4, "present": true, "raw_diff": 80.62, "state": 0, "state_dist": 0.2159, "t": 137, "verdict": "cut_artifact"}
+{"cut": false, "presence": 71.7, "present": true, "raw_diff": 4.51, "state": 0, "state_dist": 0.0, "t": 138}
+{"cut": false, "presence": 71.7, "present": true, "raw_diff": 17.65, "state": 0, "state_dist": 0.0003, "t": 139}
+{"cut": false, "presence": 71.6, "present": true, "raw_diff": 18.41, "state": 0, "state_dist": 0.0013, "t": 140}
+{"cut": false, "presence": 71.7, "present": true, "raw_diff": 22.39, "state": 0, "state_dist": 0.0007, "t": 141}
+{"cut": false, "presence": 69.5, "present": true, "raw_diff": 31.41, "state": 0, "state_dist": 0.0023, "t": 142}
+{"cut": false, "presence": 70.7, "present": true, "raw_diff": 24.89, "state": 0, "state_dist": 0.0103, "t": 143}
+{"cut": false, "presence": 70.4, "present": true, "raw_diff": 20.17, "state": 0, "state_dist": 0.0116, "t": 144}
+{"cut": false, "presence": 69.8, "present": true, "raw_diff": 24.0, "state": 0, "state_dist": 0.005, "t": 145}
+{"cut": false, "presence": 68.2, "present": true, "raw_diff": 30.18, "state": 0, "state_dist": 0.0023, "t": 146}
+{"cut": false, "presence": 70.6, "present": true, "raw_diff": 34.64, "state": 0, "state_dist": 0.0, "t": 147}
+{"cut": false, "presence": 69.9, "present": true, "raw_diff": 20.59, "state": 0, "state_dist": 0.0, "t": 148}
+{"cut": false, "presence": 71.4, "present": true, "raw_diff": 24.4, "state": 0, "state_dist": 0.0301, "t": 149, "verdict": "score_change"}
+{"cut": true, "presence": 73.3, "present": true, "raw_diff": 61.56, "state": 14, "state_dist": 0.2037, "t": 150, "verdict": "cut_artifact"}
+{"cut": false, "presence": 76.4, "present": true, "raw_diff": 40.92, "state": 14, "state_dist": 0.0218, "t": 151, "verdict": "score_change"}
+{"cut": false, "presence": 72.4, "present": true, "raw_diff": 47.17, "state": 14, "state_dist": 0.0208, "t": 152, "verdict": "score_change"}
+{"cut": false, "presence": 76.4, "present": true, "raw_diff": 57.81, "state": 14, "state_dist": 0.0271, "t": 153, "verdict": "score_change"}
+{"cut": false, "presence": 78.4, "present": true, "raw_diff": 46.26, "state": 14, "state_dist": 0.0152, "t": 154}
+{"cut": false, "presence": 72.9, "present": true, "raw_diff": 56.94, "state": 14, "state_dist": 0.0238, "t": 155, "verdict": "score_change"}
+{"cut": false, "presence": 73.0, "present": true, "raw_diff": 53.0, "state": 14, "state_dist": 0.0284, "t": 156, "verdict": "score_change"}
+{"cut": true, "presence": 72.0, "present": true, "raw_diff": 70.95, "state": 15, "state_dist": 0.0982, "t": 157, "verdict": "cut_artifact"}
+{"cut": false, "presence": 72.5, "present": true, "raw_diff": 54.3, "state": 16, "state_dist": 0.1736, "t": 158, "verdict": "score_change"}
+{"cut": true, "presence": 74.3, "present": true, "raw_diff": 60.26, "state": 14, "state_dist": 0.1035, "t": 159, "verdict": "cut_artifact"}
+{"cut": false, "presence": 76.4, "present": true, "raw_diff": 54.16, "state": 14, "state_dist": 0.0066, "t": 160}
+{"cut": false, "presence": 75.4, "present": true, "raw_diff": 32.96, "state": 14, "state_dist": 0.004, "t": 161}
+{"cut": false, "presence": 76.4, "present": true, "raw_diff": 40.83, "state": 14, "state_dist": 0.001, "t": 162}
+{"cut": false, "presence": 80.8, "present": true, "raw_diff": 43.25, "state": 14, "state_dist": 0.0152, "t": 163}
+{"cut": false, "presence": 72.4, "present": true, "raw_diff": 40.79, "state": 17, "state_dist": 0.0823, "t": 164, "verdict": "score_change"}
+{"cut": false, "presence": -4.3, "present": false, "raw_diff": 41.8, "state": null, "state_dist": null, "t": 165}
+{"cut": false, "presence": 1.8, "present": false, "raw_diff": 54.92, "state": null, "state_dist": null, "t": 166}
+{"cut": false, "presence": -4.2, "present": false, "raw_diff": 57.67, "state": null, "state_dist": null, "t": 167}
+{"cut": false, "presence": 7.7, "present": false, "raw_diff": 51.71, "state": null, "state_dist": null, "t": 168}
+{"cut": false, "presence": -3.9, "present": false, "raw_diff": 48.62, "state": null, "state_dist": null, "t": 169}
+{"cut": false, "presence": 74.4, "present": true, "raw_diff": 54.82, "state": null, "state_dist": null, "t": 170}
+{"cut": false, "presence": 78.4, "present": true, "raw_diff": 33.43, "state": 17, "state_dist": 0.1164, "t": 171, "verdict": "score_change"}
+{"cut": false, "presence": 74.1, "present": true, "raw_diff": 33.81, "state": 0, "state_dist": 0.1025, "t": 172, "verdict": "score_change"}
+{"cut": false, "presence": 74.1, "present": true, "raw_diff": 24.17, "state": 0, "state_dist": 0.0003, "t": 173}
+{"cut": false, "presence": 73.8, "present": true, "raw_diff": 28.32, "state": 0, "state_dist": 0.001, "t": 174}
+{"cut": false, "presence": 74.0, "present": true, "raw_diff": 26.89, "state": 0, "state_dist": 0.003, "t": 175}
+{"cut": false, "presence": 74.0, "present": true, "raw_diff": 32.0, "state": 0, "state_dist": 0.0, "t": 176}
+{"cut": false, "presence": 73.4, "present": true, "raw_diff": 54.31, "state": 0, "state_dist": 0.0013, "t": 177}
+{"cut": true, "presence": 74.1, "present": true, "raw_diff": 67.84, "state": 0, "state_dist": 0.0017, "t": 178}
+{"cut": false, "presence": 73.8, "present": true, "raw_diff": 32.89, "state": 0, "state_dist": 0.0003, "t": 179}
+{"cut": false, "presence": 75.2, "present": true, "raw_diff": 32.78, "state": 18, "state_dist": 0.0413, "t": 180, "verdict": "score_change"}
+{"cut": false, "presence": 75.6, "present": true, "raw_diff": 30.17, "state": 18, "state_dist": 0.0046, "t": 181}
+{"cut": false, "presence": 75.8, "present": true, "raw_diff": 33.94, "state": 18, "state_dist": 0.0046, "t": 182}
+{"cut": false, "presence": 75.1, "present": true, "raw_diff": 36.25, "state": 18, "state_dist": 0.0013, "t": 183}
+{"cut": true, "presence": 73.7, "present": true, "raw_diff": 67.25, "state": 14, "state_dist": 0.1673, "t": 184, "verdict": "cut_artifact"}
+{"cut": false, "presence": 74.0, "present": true, "raw_diff": 57.44, "state": 18, "state_dist": 0.2087, "t": 185, "verdict": "score_change"}
+{"cut": false, "presence": 74.4, "present": true, "raw_diff": 23.67, "state": 18, "state_dist": 0.001, "t": 186}
+{"cut": false, "presence": 74.5, "present": true, "raw_diff": 19.29, "state": 18, "state_dist": 0.0079, "t": 187}
+{"cut": false, "presence": 74.4, "present": true, "raw_diff": 14.28, "state": 18, "state_dist": 0.0069, "t": 188}
+{"cut": false, "presence": 74.3, "present": true, "raw_diff": 17.66, "state": 18, "state_dist": 0.0142, "t": 189}
+{"cut": false, "presence": 74.2, "present": true, "raw_diff": 24.72, "state": 18, "state_dist": 0.0079, "t": 190}
+{"cut": false, "presence": 74.4, "present": true, "raw_diff": 20.82, "state": 18, "state_dist": 0.0013, "t": 191}
+{"cut": false, "presence": 74.3, "present": true, "raw_diff": 16.16, "state": 18, "state_dist": 0.0007, "t": 192}
+{"cut": false, "presence": 74.4, "present": true, "raw_diff": 21.21, "state": 18, "state_dist": 0.0, "t": 193}
+{"cut": false, "presence": 74.5, "present": true, "raw_diff": 22.37, "state": 18, "state_dist": 0.0, "t": 194}
+{"cut": false, "presence": 74.6, "present": true, "raw_diff": 23.77, "state": 18, "state_dist": 0.0003, "t": 195}
+{"cut": false, "presence": 78.3, "present": true, "raw_diff": 27.28, "state": 18, "state_dist": 0.0364, "t": 196, "verdict": "score_change"}
+{"cut": true, "presence": 76.6, "present": true, "raw_diff": 68.42, "state": 14, "state_dist": 0.1911, "t": 197, "verdict": "cut_artifact"}
+{"cut": false, "presence": 75.4, "present": true, "raw_diff": 58.89, "state": 14, "state_dist": 0.006, "t": 198}
+{"cut": true, "presence": 79.4, "present": true, "raw_diff": 74.01, "state": 18, "state_dist": 0.1938, "t": 199, "verdict": "cut_artifact"}
+{"cut": false, "presence": 80.3, "present": true, "raw_diff": 31.17, "state": 18, "state_dist": 0.004, "t": 200}
+{"cut": false, "presence": 78.9, "present": true, "raw_diff": 31.43, "state": 18, "state_dist": 0.0023, "t": 201}
+{"cut": false, "presence": 78.8, "present": true, "raw_diff": 32.78, "state": 18, "state_dist": 0.0241, "t": 202, "verdict": "score_change"}
+{"cut": true, "presence": 73.9, "present": true, "raw_diff": 78.53, "state": 17, "state_dist": 0.0959, "t": 203, "verdict": "cut_artifact"}
+{"cut": true, "presence": 84.4, "present": true, "raw_diff": 64.49, "state": 14, "state_dist": 0.1131, "t": 204, "verdict": "cut_artifact"}
+{"cut": true, "presence": 73.9, "present": true, "raw_diff": 61.7, "state": 14, "state_dist": 0.0632, "t": 205, "verdict": "cut_artifact"}
+{"cut": false, "presence": 72.5, "present": true, "raw_diff": 39.35, "state": 19, "state_dist": 0.082, "t": 206, "verdict": "score_change"}
+{"cut": false, "presence": 74.2, "present": true, "raw_diff": 33.35, "state": 14, "state_dist": 0.0856, "t": 207, "verdict": "score_change"}
+{"cut": false, "presence": 75.1, "present": true, "raw_diff": 25.92, "state": 14, "state_dist": 0.0516, "t": 208, "verdict": "score_change"}
+{"cut": false, "presence": 74.3, "present": true, "raw_diff": 24.44, "state": 14, "state_dist": 0.0066, "t": 209}
+{"cut": false, "presence": 76.2, "present": true, "raw_diff": 25.09, "state": 17, "state_dist": 0.1002, "t": 210, "verdict": "score_change"}
+{"cut": false, "presence": 75.6, "present": true, "raw_diff": 27.14, "state": 14, "state_dist": 0.0992, "t": 211, "verdict": "score_change"}
+{"cut": false, "presence": 77.5, "present": true, "raw_diff": 30.39, "state": 19, "state_dist": 0.0949, "t": 212, "verdict": "score_change"}
+{"cut": false, "presence": 78.0, "present": true, "raw_diff": 33.44, "state": 20, "state_dist": 0.0843, "t": 213, "verdict": "score_change"}
+{"cut": false, "presence": 79.7, "present": true, "raw_diff": 29.0, "state": 21, "state_dist": 0.1015, "t": 214, "verdict": "score_change"}
+{"cut": false, "presence": 72.5, "present": true, "raw_diff": 30.72, "state": 18, "state_dist": 0.0962, "t": 215, "verdict": "score_change"}
+{"cut": false, "presence": 75.7, "present": true, "raw_diff": 34.93, "state": 19, "state_dist": 0.0708, "t": 216, "verdict": "score_change"}
+{"cut": false, "presence": 76.2, "present": true, "raw_diff": 34.57, "state": 14, "state_dist": 0.1396, "t": 217, "verdict": "score_change"}
+{"cut": false, "presence": 76.1, "present": true, "raw_diff": 33.15, "state": 14, "state_dist": 0.0146, "t": 218}
+{"cut": false, "presence": 73.6, "present": true, "raw_diff": 33.47, "state": 18, "state_dist": 0.1759, "t": 219, "verdict": "score_change"}
+{"cut": false, "presence": 74.2, "present": true, "raw_diff": 38.55, "state": 20, "state_dist": 0.0456, "t": 220, "verdict": "score_change"}
+{"cut": false, "presence": 74.2, "present": true, "raw_diff": 34.88, "state": 22, "state_dist": 0.0681, "t": 221, "verdict": "score_change"}
+{"cut": true, "presence": 75.3, "present": true, "raw_diff": 63.97, "state": 14, "state_dist": 0.13, "t": 222, "verdict": "cut_artifact"}
+{"cut": false, "presence": 74.8, "present": true, "raw_diff": 47.02, "state": 14, "state_dist": 0.0298, "t": 223, "verdict": "score_change"}
+{"cut": false, "presence": 71.6, "present": true, "raw_diff": 52.27, "state": 18, "state_dist": 0.164, "t": 224, "verdict": "score_change"}
+{"cut": false, "presence": 74.4, "present": true, "raw_diff": 24.55, "state": 19, "state_dist": 0.078, "t": 225, "verdict": "score_change"}
+{"cut": false, "presence": 78.3, "present": true, "raw_diff": 32.99, "state": 18, "state_dist": 0.1065, "t": 226, "verdict": "score_change"}
+{"cut": false, "presence": 75.4, "present": true, "raw_diff": 27.14, "state": 18, "state_dist": 0.0503, "t": 227, "verdict": "score_change"}
+{"cut": false, "presence": 75.0, "present": true, "raw_diff": 23.96, "state": 18, "state_dist": 0.0013, "t": 228}
+{"cut": false, "presence": 78.5, "present": true, "raw_diff": 29.86, "state": 18, "state_dist": 0.0284, "t": 229, "verdict": "score_change"}
+{"cut": false, "presence": 78.9, "present": true, "raw_diff": 26.9, "state": 18, "state_dist": 0.0053, "t": 230}
+{"cut": false, "presence": 78.5, "present": true, "raw_diff": 23.65, "state": 18, "state_dist": 0.0017, "t": 231}
+{"cut": false, "presence": 78.0, "present": true, "raw_diff": 27.03, "state": 18, "state_dist": 0.0136, "t": 232}
+{"cut": false, "presence": 77.9, "present": true, "raw_diff": 27.49, "state": 18, "state_dist": 0.0076, "t": 233}
+{"cut": false, "presence": 79.5, "present": true, "raw_diff": 29.44, "state": 18, "state_dist": 0.0162, "t": 234}
+{"cut": false, "presence": 80.1, "present": true, "raw_diff": 25.41, "state": 18, "state_dist": 0.0159, "t": 235}
+{"cut": false, "presence": 76.6, "present": true, "raw_diff": 47.6, "state": 14, "state_dist": 0.1819, "t": 236, "verdict": "score_change"}
+{"cut": false, "presence": 74.6, "present": true, "raw_diff": 32.66, "state": 23, "state_dist": 0.0595, "t": 237, "verdict": "score_change"}
+{"cut": false, "presence": 75.1, "present": true, "raw_diff": 38.74, "state": 14, "state_dist": 0.0675, "t": 238, "verdict": "score_change"}
+{"cut": false, "presence": 75.5, "present": true, "raw_diff": 36.67, "state": 14, "state_dist": 0.0149, "t": 239}
+{"cut": false, "presence": 73.6, "present": true, "raw_diff": 58.12, "state": 18, "state_dist": 0.2259, "t": 240, "verdict": "score_change"}
+{"cut": false, "presence": 73.8, "present": true, "raw_diff": 44.43, "state": 18, "state_dist": 0.0043, "t": 241}
+{"cut": false, "presence": 73.9, "present": true, "raw_diff": 48.08, "state": 17, "state_dist": 0.1214, "t": 242, "verdict": "score_change"}
+{"cut": false, "presence": 69.7, "present": true, "raw_diff": 51.75, "state": 22, "state_dist": 0.1081, "t": 243, "verdict": "score_change"}
+{"cut": false, "presence": 75.4, "present": true, "raw_diff": 50.13, "state": 14, "state_dist": 0.1389, "t": 244, "verdict": "score_change"}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 45.9, "state": 18, "state_dist": 0.2077, "t": 245, "verdict": "score_change"}
+{"cut": false, "presence": 76.6, "present": true, "raw_diff": 35.48, "state": 24, "state_dist": 0.1068, "t": 246, "verdict": "score_change"}
+{"cut": false, "presence": 76.5, "present": true, "raw_diff": 31.45, "state": 14, "state_dist": 0.1194, "t": 247, "verdict": "score_change"}
+{"cut": false, "presence": 76.7, "present": true, "raw_diff": 30.09, "state": 14, "state_dist": 0.0007, "t": 248}
+{"cut": false, "presence": 76.1, "present": true, "raw_diff": 32.25, "state": 14, "state_dist": 0.0007, "t": 249}
+{"cut": false, "presence": 73.9, "present": true, "raw_diff": 49.3, "state": 14, "state_dist": 0.0056, "t": 250}
+{"cut": false, "presence": 86.0, "present": true, "raw_diff": 31.76, "state": 14, "state_dist": 0.0013, "t": 251}
+{"cut": false, "presence": 76.0, "present": true, "raw_diff": 35.28, "state": 24, "state_dist": 0.0691, "t": 252, "verdict": "score_change"}
+{"cut": false, "presence": 77.0, "present": true, "raw_diff": 36.82, "state": 14, "state_dist": 0.0427, "t": 253, "verdict": "score_change"}
+{"cut": false, "presence": 74.2, "present": true, "raw_diff": 43.54, "state": 14, "state_dist": 0.0476, "t": 254, "verdict": "score_change"}
+{"cut": false, "presence": 74.4, "present": true, "raw_diff": 52.26, "state": 25, "state_dist": 0.0933, "t": 255, "verdict": "score_change"}
+{"cut": false, "presence": 75.2, "present": true, "raw_diff": 16.91, "state": 25, "state_dist": 0.0536, "t": 256, "verdict": "score_change"}
+{"cut": false, "presence": 75.3, "present": true, "raw_diff": 18.62, "state": 24, "state_dist": 0.0542, "t": 257, "verdict": "score_change"}
+{"cut": false, "presence": 73.2, "present": true, "raw_diff": 22.48, "state": 24, "state_dist": 0.0317, "t": 258, "verdict": "score_change"}
+{"cut": false, "presence": 72.7, "present": true, "raw_diff": 30.64, "state": 24, "state_dist": 0.0377, "t": 259, "verdict": "score_change"}
+{"cut": false, "presence": 71.9, "present": true, "raw_diff": 25.3, "state": 18, "state_dist": 0.127, "t": 260, "verdict": "score_change"}
+{"cut": false, "presence": 71.2, "present": true, "raw_diff": 30.04, "state": 18, "state_dist": 0.0628, "t": 261, "verdict": "score_change"}
+{"cut": false, "presence": 73.6, "present": true, "raw_diff": 28.76, "state": 18, "state_dist": 0.0288, "t": 262, "verdict": "score_change"}
+{"cut": false, "presence": 74.5, "present": true, "raw_diff": 25.17, "state": 19, "state_dist": 0.0486, "t": 263, "verdict": "score_change"}
+{"cut": false, "presence": 75.0, "present": true, "raw_diff": 20.71, "state": 19, "state_dist": 0.0169, "t": 264}
+{"cut": false, "presence": 74.2, "present": true, "raw_diff": 22.84, "state": 18, "state_dist": 0.0559, "t": 265, "verdict": "score_change"}
+{"cut": true, "presence": 75.8, "present": true, "raw_diff": 75.39, "state": 18, "state_dist": 0.0493, "t": 266, "verdict": "cut_artifact"}
+{"cut": true, "presence": 75.3, "present": true, "raw_diff": 69.3, "state": 14, "state_dist": 0.1763, "t": 267, "verdict": "cut_artifact"}
+{"cut": true, "presence": 93.9, "present": true, "raw_diff": 66.48, "state": 14, "state_dist": 0.0013, "t": 268}
+{"cut": true, "presence": 73.2, "present": true, "raw_diff": 104.99, "state": 18, "state_dist": 0.2229, "t": 269, "verdict": "cut_artifact"}
+{"cut": false, "presence": 73.2, "present": true, "raw_diff": 22.37, "state": 18, "state_dist": 0.0, "t": 270}
+{"cut": false, "presence": 72.8, "present": true, "raw_diff": 23.87, "state": 18, "state_dist": 0.0013, "t": 271}
+{"cut": false, "presence": 74.6, "present": true, "raw_diff": 22.95, "state": 18, "state_dist": 0.002, "t": 272}
+{"cut": false, "presence": 79.1, "present": true, "raw_diff": 25.7, "state": 20, "state_dist": 0.0321, "t": 273, "verdict": "score_change"}
+{"cut": false, "presence": 77.9, "present": true, "raw_diff": 28.39, "state": 20, "state_dist": 0.041, "t": 274, "verdict": "score_change"}
+{"cut": false, "presence": 72.0, "present": true, "raw_diff": 51.27, "state": 14, "state_dist": 0.1402, "t": 275, "verdict": "score_change"}
+{"cut": false, "presence": 71.9, "present": true, "raw_diff": 38.39, "state": 14, "state_dist": 0.0026, "t": 276}
+{"cut": true, "presence": 74.2, "present": true, "raw_diff": 67.08, "state": 18, "state_dist": 0.1958, "t": 277, "verdict": "cut_artifact"}
+{"cut": false, "presence": 74.0, "present": true, "raw_diff": 33.04, "state": 18, "state_dist": 0.0063, "t": 278}
+{"cut": false, "presence": 74.4, "present": true, "raw_diff": 39.99, "state": 18, "state_dist": 0.0033, "t": 279}
+{"cut": false, "presence": 71.4, "present": true, "raw_diff": 52.78, "state": 18, "state_dist": 0.0526, "t": 280, "verdict": "score_change"}
+{"cut": false, "presence": 75.2, "present": true, "raw_diff": 54.85, "state": 18, "state_dist": 0.0565, "t": 281, "verdict": "score_change"}
+{"cut": false, "presence": 74.7, "present": true, "raw_diff": 25.76, "state": 18, "state_dist": 0.0043, "t": 282}
+{"cut": false, "presence": 74.5, "present": true, "raw_diff": 22.03, "state": 18, "state_dist": 0.002, "t": 283}
+{"cut": true, "presence": 72.0, "present": true, "raw_diff": 77.74, "state": 26, "state_dist": 0.1134, "t": 284, "verdict": "cut_artifact"}
+{"cut": false, "presence": 74.9, "present": true, "raw_diff": 45.15, "state": 14, "state_dist": 0.1134, "t": 285, "verdict": "score_change"}
+{"cut": false, "presence": 75.6, "present": true, "raw_diff": 52.01, "state": 14, "state_dist": 0.0003, "t": 286}
+{"cut": true, "presence": 71.7, "present": true, "raw_diff": 72.49, "state": 18, "state_dist": 0.2269, "t": 287, "verdict": "cut_artifact"}
+{"cut": false, "presence": 71.3, "present": true, "raw_diff": 30.81, "state": 18, "state_dist": 0.0268, "t": 288, "verdict": "score_change"}
+{"cut": false, "presence": 81.6, "present": true, "raw_diff": 33.38, "state": 14, "state_dist": 0.1647, "t": 289, "verdict": "score_change"}
+{"cut": false, "presence": 73.1, "present": true, "raw_diff": 34.28, "state": 20, "state_dist": 0.1224, "t": 290, "verdict": "score_change"}
+{"cut": false, "presence": 73.8, "present": true, "raw_diff": 32.13, "state": 27, "state_dist": 0.0761, "t": 291, "verdict": "score_change"}
+{"cut": false, "presence": 74.3, "present": true, "raw_diff": 32.03, "state": 18, "state_dist": 0.0724, "t": 292, "verdict": "score_change"}
+{"cut": false, "presence": 85.9, "present": true, "raw_diff": 28.39, "state": 24, "state_dist": 0.1068, "t": 293, "verdict": "score_change"}
+{"cut": false, "presence": 84.5, "present": true, "raw_diff": 28.39, "state": 28, "state_dist": 0.0797, "t": 294, "verdict": "score_change"}
+{"cut": false, "presence": 74.0, "present": true, "raw_diff": 34.99, "state": 21, "state_dist": 0.1366, "t": 295, "verdict": "score_change"}
+{"cut": false, "presence": 74.8, "present": true, "raw_diff": 30.87, "state": 19, "state_dist": 0.1243, "t": 296, "verdict": "score_change"}
+{"cut": false, "presence": 73.5, "present": true, "raw_diff": 28.33, "state": 29, "state_dist": 0.0665, "t": 297, "verdict": "score_change"}
+{"cut": false, "presence": 73.2, "present": true, "raw_diff": 23.14, "state": 30, "state_dist": 0.0704, "t": 298, "verdict": "score_change"}
+{"cut": false, "presence": 79.2, "present": true, "raw_diff": 44.98, "state": 14, "state_dist": 0.1114, "t": 299, "verdict": "score_change"}
+{"cut": false, "presence": 77.0, "present": true, "raw_diff": 45.22, "state": 14, "state_dist": 0.0701, "t": 300, "verdict": "score_change"}
+{"cut": false, "presence": -15.9, "present": false, "raw_diff": 47.2, "state": null, "state_dist": null, "t": 301}
+{"cut": true, "presence": 0.8, "present": false, "raw_diff": 70.32, "state": null, "state_dist": null, "t": 302}
+{"cut": true, "presence": 56.2, "present": true, "raw_diff": 75.54, "state": null, "state_dist": null, "t": 303}
+{"cut": false, "presence": 29.9, "present": false, "raw_diff": 38.43, "state": null, "state_dist": null, "t": 304}
+{"cut": true, "presence": 22.9, "present": false, "raw_diff": 63.71, "state": null, "state_dist": null, "t": 305}
+{"cut": true, "presence": -16.2, "present": false, "raw_diff": 60.04, "state": null, "state_dist": null, "t": 306}
+{"cut": false, "presence": -16.7, "present": false, "raw_diff": 11.32, "state": null, "state_dist": null, "t": 307}
+{"cut": false, "presence": -5.2, "present": false, "raw_diff": 27.28, "state": null, "state_dist": null, "t": 308}
+{"cut": false, "presence": 5.3, "present": false, "raw_diff": 30.55, "state": null, "state_dist": null, "t": 309}
+{"cut": false, "presence": 6.2, "present": false, "raw_diff": 30.63, "state": null, "state_dist": null, "t": 310}
+{"cut": false, "presence": 0.0, "present": false, "raw_diff": 23.95, "state": null, "state_dist": null, "t": 311}
+{"cut": true, "presence": 73.8, "present": true, "raw_diff": 77.93, "state": null, "state_dist": null, "t": 312}
+{"cut": false, "presence": 74.3, "present": true, "raw_diff": 39.39, "state": 14, "state_dist": 0.001, "t": 313}
+{"cut": true, "presence": 73.8, "present": true, "raw_diff": 78.42, "state": 18, "state_dist": 0.2239, "t": 314, "verdict": "cut_artifact"}
+{"cut": false, "presence": 73.6, "present": true, "raw_diff": 14.13, "state": 18, "state_dist": 0.0033, "t": 315}
+{"cut": false, "presence": 73.6, "present": true, "raw_diff": 27.67, "state": 18, "state_dist": 0.0003, "t": 316}
+{"cut": false, "presence": 74.4, "present": true, "raw_diff": 30.41, "state": 21, "state_dist": 0.081, "t": 317, "verdict": "score_change"}
+{"cut": false, "presence": 75.4, "present": true, "raw_diff": 57.23, "state": 14, "state_dist": 0.1478, "t": 318, "verdict": "score_change"}
+{"cut": false, "presence": 74.3, "present": true, "raw_diff": 56.1, "state": 14, "state_dist": 0.0589, "t": 319, "verdict": "score_change"}
+{"cut": false, "presence": 71.5, "present": true, "raw_diff": 32.2, "state": 14, "state_dist": 0.0565, "t": 320, "verdict": "score_change"}
+{"cut": false, "presence": 72.2, "present": true, "raw_diff": 33.07, "state": 18, "state_dist": 0.1895, "t": 321, "verdict": "score_change"}
+{"cut": false, "presence": 77.8, "present": true, "raw_diff": 36.8, "state": 14, "state_dist": 0.1677, "t": 322, "verdict": "score_change"}
+{"cut": false, "presence": 81.0, "present": true, "raw_diff": 29.56, "state": 31, "state_dist": 0.0688, "t": 323, "verdict": "score_change"}
+{"cut": false, "presence": 74.8, "present": true, "raw_diff": 33.48, "state": 14, "state_dist": 0.0876, "t": 324, "verdict": "score_change"}
+{"cut": false, "presence": 75.6, "present": true, "raw_diff": 27.97, "state": 14, "state_dist": 0.0046, "t": 325}
+{"cut": false, "presence": 78.2, "present": true, "raw_diff": 28.06, "state": 32, "state_dist": 0.1022, "t": 326, "verdict": "score_change"}
+{"cut": false, "presence": 73.7, "present": true, "raw_diff": 32.1, "state": 18, "state_dist": 0.1197, "t": 327, "verdict": "score_change"}
+{"cut": false, "presence": 77.4, "present": true, "raw_diff": 27.96, "state": 19, "state_dist": 0.0489, "t": 328, "verdict": "score_change"}
+{"cut": false, "presence": 78.7, "present": true, "raw_diff": 22.11, "state": 18, "state_dist": 0.0394, "t": 329, "verdict": "score_change"}
+{"cut": true, "presence": 74.7, "present": true, "raw_diff": 63.82, "state": 14, "state_dist": 0.1997, "t": 330, "verdict": "cut_artifact"}
+{"cut": false, "presence": 73.5, "present": true, "raw_diff": 31.45, "state": 14, "state_dist": 0.002, "t": 331}
+{"cut": false, "presence": 70.8, "present": true, "raw_diff": 42.04, "state": 14, "state_dist": 0.041, "t": 332, "verdict": "score_change"}
+{"cut": true, "presence": 73.2, "present": true, "raw_diff": 78.66, "state": 18, "state_dist": 0.1845, "t": 333, "verdict": "cut_artifact"}
+{"cut": false, "presence": 73.5, "present": true, "raw_diff": 33.61, "state": 18, "state_dist": 0.0007, "t": 334}
+{"cut": false, "presence": 78.4, "present": true, "raw_diff": 44.9, "state": 20, "state_dist": 0.0446, "t": 335, "verdict": "score_change"}
+{"cut": false, "presence": 77.6, "present": true, "raw_diff": 29.99, "state": 20, "state_dist": 0.0341, "t": 336, "verdict": "score_change"}
+{"cut": false, "presence": 74.3, "present": true, "raw_diff": 26.52, "state": 20, "state_dist": 0.0519, "t": 337, "verdict": "score_change"}
+{"cut": false, "presence": 74.8, "present": true, "raw_diff": 25.09, "state": 20, "state_dist": 0.0532, "t": 338, "verdict": "score_change"}
+{"cut": false, "presence": 74.7, "present": true, "raw_diff": 29.65, "state": 20, "state_dist": 0.0559, "t": 339, "verdict": "score_change"}
+{"cut": true, "presence": 72.8, "present": true, "raw_diff": 67.11, "state": 14, "state_dist": 0.2024, "t": 340, "verdict": "cut_artifact"}
+{"cut": false, "presence": 73.0, "present": true, "raw_diff": 49.85, "state": 14, "state_dist": 0.0116, "t": 341}
+{"cut": false, "presence": 69.8, "present": true, "raw_diff": 42.8, "state": 33, "state_dist": 0.1283, "t": 342, "verdict": "score_change"}
+{"cut": false, "presence": 69.1, "present": true, "raw_diff": 55.4, "state": 18, "state_dist": 0.1091, "t": 343, "verdict": "score_change"}
+{"cut": true, "presence": 72.7, "present": true, "raw_diff": 84.67, "state": 34, "state_dist": 0.1197, "t": 344, "verdict": "cut_artifact"}
+{"cut": false, "presence": 72.7, "present": true, "raw_diff": 35.7, "state": 35, "state_dist": 0.1475, "t": 345, "verdict": "score_change"}
+{"cut": true, "presence": 73.1, "present": true, "raw_diff": 86.68, "state": 14, "state_dist": 0.1293, "t": 346, "verdict": "cut_artifact"}
+{"cut": false, "presence": 73.1, "present": true, "raw_diff": 59.86, "state": 36, "state_dist": 0.1267, "t": 347, "verdict": "score_change"}
+{"cut": true, "presence": 73.4, "present": true, "raw_diff": 74.64, "state": 18, "state_dist": 0.1022, "t": 348, "verdict": "cut_artifact"}
+{"cut": false, "presence": 73.0, "present": true, "raw_diff": 29.24, "state": 18, "state_dist": 0.0017, "t": 349}
+{"cut": false, "presence": 72.6, "present": true, "raw_diff": 40.45, "state": 18, "state_dist": 0.0139, "t": 350}
+{"cut": false, "presence": 72.5, "present": true, "raw_diff": 46.21, "state": 37, "state_dist": 0.0731, "t": 351, "verdict": "score_change"}
+{"cut": false, "presence": 72.8, "present": true, "raw_diff": 41.96, "state": 37, "state_dist": 0.0298, "t": 352, "verdict": "score_change"}
+{"cut": false, "presence": 72.1, "present": true, "raw_diff": 41.17, "state": 18, "state_dist": 0.1108, "t": 353, "verdict": "score_change"}
+{"cut": false, "presence": 75.3, "present": true, "raw_diff": 31.09, "state": 38, "state_dist": 0.0529, "t": 354, "verdict": "score_change"}
+{"cut": false, "presence": 72.4, "present": true, "raw_diff": 31.65, "state": 18, "state_dist": 0.0532, "t": 355, "verdict": "score_change"}
+{"cut": false, "presence": 72.2, "present": true, "raw_diff": 31.0, "state": 18, "state_dist": 0.001, "t": 356}
+{"cut": false, "presence": 72.5, "present": true, "raw_diff": 29.38, "state": 18, "state_dist": 0.0023, "t": 357}
+{"cut": false, "presence": 72.5, "present": true, "raw_diff": 26.94, "state": 18, "state_dist": 0.0, "t": 358}
+{"cut": false, "presence": 76.0, "present": true, "raw_diff": 29.98, "state": 39, "state_dist": 0.1561, "t": 359, "verdict": "score_change"}
+{"cut": false, "presence": 74.5, "present": true, "raw_diff": 30.13, "state": 40, "state_dist": 0.0873, "t": 360, "verdict": "score_change"}
+{"cut": false, "presence": 77.8, "present": true, "raw_diff": 27.64, "state": 14, "state_dist": 0.0866, "t": 361, "verdict": "score_change"}
+{"cut": false, "presence": 74.1, "present": true, "raw_diff": 35.61, "state": 14, "state_dist": 0.0407, "t": 362, "verdict": "score_change"}
+{"cut": false, "presence": 79.0, "present": true, "raw_diff": 24.67, "state": 14, "state_dist": 0.0255, "t": 363, "verdict": "score_change"}
+{"cut": false, "presence": 74.3, "present": true, "raw_diff": 24.62, "state": 14, "state_dist": 0.005, "t": 364}
+{"cut": false, "presence": 74.2, "present": true, "raw_diff": 28.06, "state": 39, "state_dist": 0.0595, "t": 365, "verdict": "score_change"}
+{"cut": false, "presence": 71.8, "present": true, "raw_diff": 33.28, "state": 38, "state_dist": 0.1273, "t": 366, "verdict": "score_change"}
+{"cut": false, "presence": 73.8, "present": true, "raw_diff": 31.63, "state": 14, "state_dist": 0.166, "t": 367, "verdict": "score_change"}
+{"cut": false, "presence": 73.8, "present": true, "raw_diff": 28.61, "state": 14, "state_dist": 0.0132, "t": 368}
+{"cut": false, "presence": 73.3, "present": true, "raw_diff": 28.62, "state": 14, "state_dist": 0.0093, "t": 369}
+{"cut": false, "presence": 73.5, "present": true, "raw_diff": 37.26, "state": 39, "state_dist": 0.04, "t": 370, "verdict": "score_change"}
+{"cut": false, "presence": 69.9, "present": true, "raw_diff": 33.49, "state": 39, "state_dist": 0.0288, "t": 371, "verdict": "score_change"}
+{"cut": false, "presence": 71.1, "present": true, "raw_diff": 45.81, "state": 41, "state_dist": 0.0569, "t": 372, "verdict": "score_change"}
+{"cut": false, "presence": 71.8, "present": true, "raw_diff": 29.94, "state": 14, "state_dist": 0.0522, "t": 373, "verdict": "score_change"}
+{"cut": false, "presence": 72.9, "present": true, "raw_diff": 50.06, "state": 39, "state_dist": 0.0668, "t": 374, "verdict": "score_change"}
+{"cut": false, "presence": 73.3, "present": true, "raw_diff": 44.88, "state": 41, "state_dist": 0.0559, "t": 375, "verdict": "score_change"}
+{"cut": false, "presence": 73.7, "present": true, "raw_diff": 38.81, "state": 14, "state_dist": 0.0231, "t": 376, "verdict": "score_change"}
+{"cut": false, "presence": 72.1, "present": true, "raw_diff": 51.08, "state": 41, "state_dist": 0.0231, "t": 377, "verdict": "score_change"}
+{"cut": false, "presence": 72.1, "present": true, "raw_diff": 29.42, "state": 41, "state_dist": 0.046, "t": 378, "verdict": "score_change"}
+{"cut": false, "presence": 73.8, "present": true, "raw_diff": 32.87, "state": 42, "state_dist": 0.082, "t": 379, "verdict": "score_change"}
+{"cut": false, "presence": 72.5, "present": true, "raw_diff": 35.08, "state": 18, "state_dist": 0.1184, "t": 380, "verdict": "score_change"}
+{"cut": false, "presence": 73.0, "present": true, "raw_diff": 34.78, "state": 18, "state_dist": 0.0023, "t": 381}
+{"cut": false, "presence": 72.9, "present": true, "raw_diff": 29.95, "state": 38, "state_dist": 0.0413, "t": 382, "verdict": "score_change"}
+{"cut": false, "presence": 72.1, "present": true, "raw_diff": 30.47, "state": 18, "state_dist": 0.038, "t": 383, "verdict": "score_change"}
+{"cut": false, "presence": 75.6, "present": true, "raw_diff": 38.19, "state": 41, "state_dist": 0.1481, "t": 384, "verdict": "score_change"}
+{"cut": false, "presence": 74.6, "present": true, "raw_diff": 28.3, "state": 14, "state_dist": 0.0539, "t": 385, "verdict": "score_change"}
+{"cut": false, "presence": 72.2, "present": true, "raw_diff": 49.4, "state": 18, "state_dist": 0.1898, "t": 386, "verdict": "score_change"}
+{"cut": false, "presence": 75.5, "present": true, "raw_diff": 39.23, "state": 43, "state_dist": 0.1323, "t": 387, "verdict": "score_change"}
+{"cut": false, "presence": 79.5, "present": true, "raw_diff": 25.94, "state": 37, "state_dist": 0.1068, "t": 388, "verdict": "score_change"}
+{"cut": false, "presence": 73.1, "present": true, "raw_diff": 29.24, "state": 18, "state_dist": 0.1227, "t": 389, "verdict": "score_change"}
+{"cut": false, "presence": 72.1, "present": true, "raw_diff": 35.13, "state": 18, "state_dist": 0.0017, "t": 390}
+{"cut": false, "presence": 72.1, "present": true, "raw_diff": 26.81, "state": 18, "state_dist": 0.0003, "t": 391}
+{"cut": false, "presence": 72.3, "present": true, "raw_diff": 31.6, "state": 18, "state_dist": 0.0013, "t": 392}
+{"cut": false, "presence": 71.8, "present": true, "raw_diff": 31.45, "state": 39, "state_dist": 0.1756, "t": 393, "verdict": "score_change"}
+{"cut": false, "presence": 73.1, "present": true, "raw_diff": 30.96, "state": 14, "state_dist": 0.0506, "t": 394, "verdict": "score_change"}
+{"cut": false, "presence": 79.9, "present": true, "raw_diff": 30.88, "state": 14, "state_dist": 0.0046, "t": 395}
+{"cut": false, "presence": 75.6, "present": true, "raw_diff": 23.56, "state": 14, "state_dist": 0.0069, "t": 396}
+{"cut": false, "presence": 74.1, "present": true, "raw_diff": 21.33, "state": 14, "state_dist": 0.0023, "t": 397}
+{"cut": false, "presence": 74.2, "present": true, "raw_diff": 28.78, "state": 39, "state_dist": 0.0632, "t": 398, "verdict": "score_change"}
+{"cut": false, "presence": 70.7, "present": true, "raw_diff": 53.29, "state": 14, "state_dist": 0.078, "t": 399, "verdict": "score_change"}
+{"cut": false, "presence": 70.7, "present": true, "raw_diff": 55.0, "state": 14, "state_dist": 0.0165, "t": 400}
+{"cut": true, "presence": 75.6, "present": true, "raw_diff": 69.27, "state": 39, "state_dist": 0.0585, "t": 401, "verdict": "cut_artifact"}
+{"cut": false, "presence": 75.9, "present": true, "raw_diff": 23.15, "state": 39, "state_dist": 0.0026, "t": 402}
+{"cut": true, "presence": 69.5, "present": true, "raw_diff": 60.64, "state": 39, "state_dist": 0.0427, "t": 403, "verdict": "cut_artifact"}
+{"cut": false, "presence": 68.6, "present": true, "raw_diff": 36.17, "state": 44, "state_dist": 0.1065, "t": 404, "verdict": "score_change"}
+{"cut": false, "presence": 67.5, "present": true, "raw_diff": 48.46, "state": 45, "state_dist": 0.085, "t": 405, "verdict": "score_change"}
+{"cut": false, "presence": 69.8, "present": true, "raw_diff": 58.16, "state": 41, "state_dist": 0.131, "t": 406, "verdict": "score_change"}
+{"cut": false, "presence": 68.1, "present": true, "raw_diff": 43.32, "state": 39, "state_dist": 0.0394, "t": 407, "verdict": "score_change"}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 21.45, "state": 6, "state_dist": 0.0562, "t": 408, "verdict": "score_change"}
+{"cut": false, "presence": 70.6, "present": true, "raw_diff": 31.05, "state": 41, "state_dist": 0.0192, "t": 409}
+{"cut": false, "presence": 70.5, "present": true, "raw_diff": 38.53, "state": 46, "state_dist": 0.0837, "t": 410, "verdict": "score_change"}
+{"cut": false, "presence": 67.7, "present": true, "raw_diff": 38.84, "state": 41, "state_dist": 0.0787, "t": 411, "verdict": "score_change"}
+{"cut": false, "presence": 71.9, "present": true, "raw_diff": 32.44, "state": 46, "state_dist": 0.0433, "t": 412, "verdict": "score_change"}
+{"cut": false, "presence": 72.4, "present": true, "raw_diff": 42.13, "state": 6, "state_dist": 0.0476, "t": 413, "verdict": "score_change"}
+{"cut": false, "presence": 71.1, "present": true, "raw_diff": 44.17, "state": 6, "state_dist": 0.0033, "t": 414}
+{"cut": false, "presence": 71.7, "present": true, "raw_diff": 53.74, "state": 6, "state_dist": 0.003, "t": 415}
+{"cut": true, "presence": 71.5, "present": true, "raw_diff": 69.11, "state": 47, "state_dist": 0.1971, "t": 416, "verdict": "cut_artifact"}
+{"cut": false, "presence": 66.7, "present": true, "raw_diff": 36.2, "state": 47, "state_dist": 0.0337, "t": 417, "verdict": "score_change"}
+{"cut": false, "presence": 79.1, "present": true, "raw_diff": 51.41, "state": 46, "state_dist": 0.162, "t": 418, "verdict": "score_change"}
+{"cut": false, "presence": 68.7, "present": true, "raw_diff": 55.85, "state": 48, "state_dist": 0.0655, "t": 419, "verdict": "score_change"}
+{"cut": false, "presence": 73.9, "present": true, "raw_diff": 52.53, "state": 47, "state_dist": 0.0843, "t": 420, "verdict": "score_change"}
+{"cut": false, "presence": 73.0, "present": true, "raw_diff": 29.31, "state": 44, "state_dist": 0.0625, "t": 421, "verdict": "score_change"}
+{"cut": false, "presence": 73.3, "present": true, "raw_diff": 22.91, "state": 44, "state_dist": 0.0407, "t": 422, "verdict": "score_change"}
+{"cut": false, "presence": 70.9, "present": true, "raw_diff": 26.9, "state": 47, "state_dist": 0.0728, "t": 423, "verdict": "score_change"}
+{"cut": false, "presence": 72.6, "present": true, "raw_diff": 31.72, "state": 44, "state_dist": 0.0655, "t": 424, "verdict": "score_change"}
+{"cut": false, "presence": 78.9, "present": true, "raw_diff": 27.3, "state": 39, "state_dist": 0.128, "t": 425, "verdict": "score_change"}
+{"cut": false, "presence": 71.1, "present": true, "raw_diff": 28.57, "state": 44, "state_dist": 0.0896, "t": 426, "verdict": "score_change"}
+{"cut": false, "presence": 71.3, "present": true, "raw_diff": 27.94, "state": 44, "state_dist": 0.0479, "t": 427, "verdict": "score_change"}
+{"cut": false, "presence": 69.7, "present": true, "raw_diff": 28.66, "state": 45, "state_dist": 0.0552, "t": 428, "verdict": "score_change"}
+{"cut": false, "presence": 75.7, "present": true, "raw_diff": 31.42, "state": 46, "state_dist": 0.1865, "t": 429, "verdict": "score_change"}
+{"cut": false, "presence": 69.3, "present": true, "raw_diff": 30.68, "state": 49, "state_dist": 0.1422, "t": 430, "verdict": "score_change"}
+{"cut": false, "presence": 70.5, "present": true, "raw_diff": 30.04, "state": 50, "state_dist": 0.1336, "t": 431, "verdict": "score_change"}
+{"cut": false, "presence": 73.8, "present": true, "raw_diff": 33.27, "state": 39, "state_dist": 0.1303, "t": 432, "verdict": "score_change"}
+{"cut": false, "presence": 72.0, "present": true, "raw_diff": 32.59, "state": 44, "state_dist": 0.0747, "t": 433, "verdict": "score_change"}
+{"cut": false, "presence": 70.1, "present": true, "raw_diff": 46.55, "state": 47, "state_dist": 0.1005, "t": 434, "verdict": "score_change"}
+{"cut": false, "presence": 70.5, "present": true, "raw_diff": 29.79, "state": 47, "state_dist": 0.0076, "t": 435}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 42.87, "state": 47, "state_dist": 0.0083, "t": 436}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 25.83, "state": 47, "state_dist": 0.001, "t": 437}
+{"cut": false, "presence": 70.6, "present": true, "raw_diff": 19.36, "state": 47, "state_dist": 0.0007, "t": 438}
+{"cut": false, "presence": 71.1, "present": true, "raw_diff": 29.53, "state": 47, "state_dist": 0.002, "t": 439}
+{"cut": false, "presence": 71.4, "present": true, "raw_diff": 28.62, "state": 47, "state_dist": 0.0007, "t": 440}
+{"cut": false, "presence": 71.3, "present": true, "raw_diff": 28.79, "state": 47, "state_dist": 0.0007, "t": 441}
+{"cut": false, "presence": 70.9, "present": true, "raw_diff": 29.26, "state": 47, "state_dist": 0.0, "t": 442}
+{"cut": false, "presence": 71.1, "present": true, "raw_diff": 26.99, "state": 47, "state_dist": 0.0, "t": 443}
+{"cut": false, "presence": 68.0, "present": true, "raw_diff": 43.23, "state": 39, "state_dist": 0.1954, "t": 444, "verdict": "score_change"}
+{"cut": false, "presence": 70.6, "present": true, "raw_diff": 58.33, "state": 47, "state_dist": 0.1941, "t": 445, "verdict": "score_change"}
+{"cut": false, "presence": 66.6, "present": true, "raw_diff": 33.37, "state": 47, "state_dist": 0.0, "t": 446}
+{"cut": false, "presence": 75.5, "present": true, "raw_diff": 27.75, "state": 37, "state_dist": 0.087, "t": 447, "verdict": "score_change"}
+{"cut": false, "presence": 70.7, "present": true, "raw_diff": 39.85, "state": 47, "state_dist": 0.089, "t": 448, "verdict": "score_change"}
+{"cut": false, "presence": 71.2, "present": true, "raw_diff": 36.08, "state": 44, "state_dist": 0.126, "t": 449, "verdict": "score_change"}
+{"cut": false, "presence": 71.7, "present": true, "raw_diff": 38.06, "state": 6, "state_dist": 0.0999, "t": 450, "verdict": "score_change"}
+{"cut": true, "presence": 70.8, "present": true, "raw_diff": 68.21, "state": 51, "state_dist": 0.1267, "t": 451, "verdict": "cut_artifact"}
+{"cut": false, "presence": 70.8, "present": true, "raw_diff": 40.35, "state": 6, "state_dist": 0.1207, "t": 452, "verdict": "score_change"}
+{"cut": false, "presence": 68.6, "present": true, "raw_diff": 46.25, "state": 51, "state_dist": 0.1134, "t": 453, "verdict": "score_change"}
+{"cut": false, "presence": 71.0, "present": true, "raw_diff": 43.82, "state": 52, "state_dist": 0.1888, "t": 454, "verdict": "score_change"}
+{"cut": true, "presence": 72.5, "present": true, "raw_diff": 71.14, "state": 6, "state_dist": 0.0837, "t": 455, "verdict": "cut_artifact"}
+{"cut": false, "presence": 71.9, "present": true, "raw_diff": 13.41, "state": 6, "state_dist": 0.0017, "t": 456}
+{"cut": false, "presence": 71.7, "present": true, "raw_diff": 20.71, "state": 6, "state_dist": 0.001, "t": 457}
+{"cut": false, "presence": 71.5, "present": true, "raw_diff": 18.85, "state": 6, "state_dist": 0.0013, "t": 458}
+{"cut": false, "presence": 70.0, "present": true, "raw_diff": 29.2, "state": 6, "state_dist": 0.0122, "t": 459}
+{"cut": false, "presence": 69.5, "present": true, "raw_diff": 29.5, "state": 41, "state_dist": 0.0284, "t": 460, "verdict": "score_change"}
+{"cut": false, "presence": 69.0, "present": true, "raw_diff": 30.4, "state": 41, "state_dist": 0.0298, "t": 461, "verdict": "score_change"}
+{"cut": false, "presence": 72.7, "present": true, "raw_diff": 55.22, "state": 6, "state_dist": 0.0304, "t": 462, "verdict": "score_change"}
+{"cut": false, "presence": 71.2, "present": true, "raw_diff": 39.17, "state": 6, "state_dist": 0.0093, "t": 463}
+{"cut": false, "presence": 71.0, "present": true, "raw_diff": 34.59, "state": 53, "state_dist": 0.0582, "t": 464, "verdict": "score_change"}
+{"cut": false, "presence": 70.8, "present": true, "raw_diff": 25.64, "state": 6, "state_dist": 0.0582, "t": 465, "verdict": "score_change"}
+{"cut": false, "presence": 70.7, "present": true, "raw_diff": 54.14, "state": 6, "state_dist": 0.0033, "t": 466}
+{"cut": true, "presence": 66.9, "present": true, "raw_diff": 79.44, "state": 47, "state_dist": 0.2249, "t": 467, "verdict": "cut_artifact"}
+{"cut": false, "presence": 68.8, "present": true, "raw_diff": 44.67, "state": 6, "state_dist": 0.207, "t": 468, "verdict": "score_change"}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 50.99, "state": 47, "state_dist": 0.21, "t": 469, "verdict": "score_change"}
+{"cut": false, "presence": 70.7, "present": true, "raw_diff": 44.99, "state": 47, "state_dist": 0.002, "t": 470}
+{"cut": false, "presence": 70.8, "present": true, "raw_diff": 21.95, "state": 47, "state_dist": 0.0003, "t": 471}
+{"cut": false, "presence": 70.8, "present": true, "raw_diff": 17.78, "state": 47, "state_dist": 0.0003, "t": 472}
+{"cut": false, "presence": 71.0, "present": true, "raw_diff": 25.7, "state": 47, "state_dist": 0.0089, "t": 473}
+{"cut": false, "presence": 71.2, "present": true, "raw_diff": 22.32, "state": 47, "state_dist": 0.0089, "t": 474}
+{"cut": false, "presence": 71.2, "present": true, "raw_diff": 24.8, "state": 47, "state_dist": 0.0003, "t": 475}
+{"cut": false, "presence": 70.9, "present": true, "raw_diff": 37.91, "state": 47, "state_dist": 0.0003, "t": 476}
+{"cut": false, "presence": 70.7, "present": true, "raw_diff": 31.73, "state": 47, "state_dist": 0.0136, "t": 477}
+{"cut": false, "presence": 68.1, "present": true, "raw_diff": 42.84, "state": 47, "state_dist": 0.0175, "t": 478}
+{"cut": false, "presence": 71.3, "present": true, "raw_diff": 31.84, "state": 47, "state_dist": 0.0063, "t": 479}
+{"cut": false, "presence": 72.9, "present": true, "raw_diff": 35.58, "state": 47, "state_dist": 0.0274, "t": 480, "verdict": "score_change"}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 46.32, "state": 47, "state_dist": 0.0384, "t": 481, "verdict": "score_change"}
+{"cut": false, "presence": 70.7, "present": true, "raw_diff": 35.98, "state": 47, "state_dist": 0.0205, "t": 482, "verdict": "score_change"}
+{"cut": false, "presence": 70.6, "present": true, "raw_diff": 20.42, "state": 47, "state_dist": 0.0013, "t": 483}
+{"cut": false, "presence": 70.5, "present": true, "raw_diff": 14.08, "state": 47, "state_dist": 0.001, "t": 484}
+{"cut": false, "presence": 70.6, "present": true, "raw_diff": 20.64, "state": 47, "state_dist": 0.0003, "t": 485}
+{"cut": false, "presence": 70.8, "present": true, "raw_diff": 26.88, "state": 47, "state_dist": 0.0, "t": 486}
+{"cut": false, "presence": 70.8, "present": true, "raw_diff": 26.9, "state": 47, "state_dist": 0.0, "t": 487}
+{"cut": false, "presence": 74.7, "present": true, "raw_diff": 30.21, "state": 54, "state_dist": 0.1634, "t": 488, "verdict": "score_change"}
+{"cut": false, "presence": 67.6, "present": true, "raw_diff": 27.46, "state": 39, "state_dist": 0.0665, "t": 489, "verdict": "score_change"}
+{"cut": false, "presence": 67.3, "present": true, "raw_diff": 24.54, "state": 39, "state_dist": 0.039, "t": 490, "verdict": "score_change"}
+{"cut": false, "presence": 69.3, "present": true, "raw_diff": 27.43, "state": 39, "state_dist": 0.0248, "t": 491, "verdict": "score_change"}
+{"cut": false, "presence": 70.5, "present": true, "raw_diff": 27.83, "state": 39, "state_dist": 0.0245, "t": 492, "verdict": "score_change"}
+{"cut": false, "presence": 72.8, "present": true, "raw_diff": 48.4, "state": 39, "state_dist": 0.037, "t": 493, "verdict": "score_change"}
+{"cut": false, "presence": 69.5, "present": true, "raw_diff": 41.15, "state": 39, "state_dist": 0.0479, "t": 494, "verdict": "score_change"}
+{"cut": false, "presence": 74.7, "present": true, "raw_diff": 47.26, "state": 47, "state_dist": 0.1726, "t": 495, "verdict": "score_change"}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 40.38, "state": 55, "state_dist": 0.0466, "t": 496, "verdict": "score_change"}
+{"cut": false, "presence": 71.2, "present": true, "raw_diff": 31.79, "state": 44, "state_dist": 0.0919, "t": 497, "verdict": "score_change"}
+{"cut": false, "presence": 70.8, "present": true, "raw_diff": 35.43, "state": 47, "state_dist": 0.0503, "t": 498, "verdict": "score_change"}
+{"cut": false, "presence": 70.7, "present": true, "raw_diff": 27.18, "state": 47, "state_dist": 0.0013, "t": 499}
+{"cut": false, "presence": 70.2, "present": true, "raw_diff": 20.52, "state": 47, "state_dist": 0.0063, "t": 500}
+{"cut": false, "presence": 68.5, "present": true, "raw_diff": 23.41, "state": 47, "state_dist": 0.0076, "t": 501}
+{"cut": false, "presence": 71.0, "present": true, "raw_diff": 36.0, "state": 47, "state_dist": 0.005, "t": 502}
+{"cut": false, "presence": 73.8, "present": true, "raw_diff": 29.34, "state": 47, "state_dist": 0.0427, "t": 503, "verdict": "score_change"}
+{"cut": false, "presence": 69.6, "present": true, "raw_diff": 29.4, "state": 47, "state_dist": 0.0529, "t": 504, "verdict": "score_change"}
+{"cut": false, "presence": 69.9, "present": true, "raw_diff": 28.43, "state": 47, "state_dist": 0.0334, "t": 505, "verdict": "score_change"}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 46.92, "state": 47, "state_dist": 0.0562, "t": 506, "verdict": "score_change"}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 42.57, "state": 47, "state_dist": 0.0222, "t": 507, "verdict": "score_change"}
+{"cut": false, "presence": 70.4, "present": true, "raw_diff": 41.59, "state": 55, "state_dist": 0.0592, "t": 508, "verdict": "score_change"}
+{"cut": false, "presence": 69.7, "present": true, "raw_diff": 43.11, "state": 55, "state_dist": 0.039, "t": 509, "verdict": "score_change"}
+{"cut": false, "presence": 64.0, "present": true, "raw_diff": 39.08, "state": 46, "state_dist": 0.1253, "t": 510, "verdict": "score_change"}
+{"cut": false, "presence": 63.6, "present": true, "raw_diff": 36.26, "state": 41, "state_dist": 0.0433, "t": 511, "verdict": "score_change"}
+{"cut": false, "presence": 65.3, "present": true, "raw_diff": 39.64, "state": 46, "state_dist": 0.0599, "t": 512, "verdict": "score_change"}
+{"cut": false, "presence": 72.2, "present": true, "raw_diff": 46.31, "state": 47, "state_dist": 0.1594, "t": 513, "verdict": "score_change"}
+{"cut": false, "presence": 72.3, "present": true, "raw_diff": 17.7, "state": 47, "state_dist": 0.0007, "t": 514}
+{"cut": false, "presence": 74.6, "present": true, "raw_diff": 31.99, "state": 47, "state_dist": 0.0165, "t": 515}
+{"cut": false, "presence": 68.7, "present": true, "raw_diff": 35.14, "state": 47, "state_dist": 0.0155, "t": 516}
+{"cut": false, "presence": 72.7, "present": true, "raw_diff": 32.66, "state": 44, "state_dist": 0.0724, "t": 517, "verdict": "score_change"}
+{"cut": false, "presence": 70.0, "present": true, "raw_diff": 32.79, "state": 47, "state_dist": 0.0754, "t": 518, "verdict": "score_change"}
+{"cut": false, "presence": 71.0, "present": true, "raw_diff": 35.25, "state": 47, "state_dist": 0.002, "t": 519}
+{"cut": false, "presence": 71.3, "present": true, "raw_diff": 38.43, "state": 47, "state_dist": 0.0007, "t": 520}
+{"cut": false, "presence": 67.0, "present": true, "raw_diff": 39.6, "state": 39, "state_dist": 0.1799, "t": 521, "verdict": "score_change"}
+{"cut": false, "presence": 74.0, "present": true, "raw_diff": 36.41, "state": 6, "state_dist": 0.0463, "t": 522, "verdict": "score_change"}
+{"cut": false, "presence": 73.0, "present": true, "raw_diff": 30.62, "state": 6, "state_dist": 0.004, "t": 523}
+{"cut": false, "presence": 70.8, "present": true, "raw_diff": 59.25, "state": 47, "state_dist": 0.1974, "t": 524, "verdict": "score_change"}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 43.6, "state": 47, "state_dist": 0.004, "t": 525}
+{"cut": false, "presence": 71.4, "present": true, "raw_diff": 53.27, "state": 47, "state_dist": 0.003, "t": 526}
+{"cut": true, "presence": 70.5, "present": true, "raw_diff": 71.48, "state": 39, "state_dist": 0.1462, "t": 527, "verdict": "cut_artifact"}
+{"cut": false, "presence": 63.3, "present": true, "raw_diff": 32.9, "state": 41, "state_dist": 0.0476, "t": 528, "verdict": "score_change"}
+{"cut": false, "presence": 64.0, "present": true, "raw_diff": 26.65, "state": 54, "state_dist": 0.0774, "t": 529, "verdict": "score_change"}
+{"cut": false, "presence": 69.3, "present": true, "raw_diff": 22.67, "state": 45, "state_dist": 0.1197, "t": 530, "verdict": "score_change"}
+{"cut": false, "presence": 66.3, "present": true, "raw_diff": 50.18, "state": 6, "state_dist": 0.1673, "t": 531, "verdict": "score_change"}
+{"cut": true, "presence": 69.8, "present": true, "raw_diff": 62.83, "state": 6, "state_dist": 0.0222, "t": 532, "verdict": "cut_artifact"}
+{"cut": true, "presence": 71.5, "present": true, "raw_diff": 62.03, "state": 45, "state_dist": 0.1511, "t": 533, "verdict": "cut_artifact"}
+{"cut": false, "presence": 72.0, "present": true, "raw_diff": 19.66, "state": 56, "state_dist": 0.0632, "t": 534, "verdict": "score_change"}
+{"cut": false, "presence": 71.9, "present": true, "raw_diff": 28.41, "state": 57, "state_dist": 0.0645, "t": 535, "verdict": "score_change"}
+{"cut": false, "presence": 72.2, "present": true, "raw_diff": 26.59, "state": 47, "state_dist": 0.0837, "t": 536, "verdict": "score_change"}
+{"cut": true, "presence": 72.0, "present": true, "raw_diff": 60.81, "state": 41, "state_dist": 0.1693, "t": 537, "verdict": "cut_artifact"}
+{"cut": false, "presence": 73.9, "present": true, "raw_diff": 50.02, "state": 6, "state_dist": 0.0155, "t": 538}
+{"cut": false, "presence": 70.3, "present": true, "raw_diff": 55.95, "state": 41, "state_dist": 0.0192, "t": 539}
+{"cut": false, "presence": 72.8, "present": true, "raw_diff": 53.01, "state": 6, "state_dist": 0.0202, "t": 540, "verdict": "score_change"}
+{"cut": false, "presence": 72.3, "present": true, "raw_diff": 44.45, "state": 6, "state_dist": 0.002, "t": 541}
+{"cut": false, "presence": 71.4, "present": true, "raw_diff": 53.98, "state": 45, "state_dist": 0.1812, "t": 542, "verdict": "score_change"}
+{"cut": false, "presence": 71.2, "present": true, "raw_diff": 29.26, "state": 47, "state_dist": 0.0503, "t": 543, "verdict": "score_change"}
+{"cut": false, "presence": 70.1, "present": true, "raw_diff": 28.89, "state": 47, "state_dist": 0.0165, "t": 544}
+{"cut": false, "presence": 71.1, "present": true, "raw_diff": 26.52, "state": 47, "state_dist": 0.0007, "t": 545}
+{"cut": false, "presence": 70.1, "present": true, "raw_diff": 29.42, "state": 47, "state_dist": 0.0003, "t": 546}
+{"cut": false, "presence": 70.2, "present": true, "raw_diff": 25.52, "state": 47, "state_dist": 0.0096, "t": 547}
+{"cut": false, "presence": 68.2, "present": true, "raw_diff": 23.64, "state": 47, "state_dist": 0.0063, "t": 548}
+{"cut": false, "presence": 69.9, "present": true, "raw_diff": 42.4, "state": 47, "state_dist": 0.0046, "t": 549}
+{"cut": false, "presence": 70.5, "present": true, "raw_diff": 46.89, "state": 47, "state_dist": 0.004, "t": 550}
+{"cut": false, "presence": 70.4, "present": true, "raw_diff": 34.63, "state": 47, "state_dist": 0.001, "t": 551}
+{"cut": false, "presence": 70.2, "present": true, "raw_diff": 40.98, "state": 47, "state_dist": 0.001, "t": 552}
+{"cut": false, "presence": 70.4, "present": true, "raw_diff": 32.61, "state": 47, "state_dist": 0.003, "t": 553}
+{"cut": false, "presence": 69.5, "present": true, "raw_diff": 43.79, "state": 47, "state_dist": 0.0007, "t": 554}
+{"cut": false, "presence": 70.6, "present": true, "raw_diff": 46.16, "state": 47, "state_dist": 0.0043, "t": 555}
+{"cut": false, "presence": 70.4, "present": true, "raw_diff": 57.35, "state": 58, "state_dist": 0.1812, "t": 556, "verdict": "score_change"}
+{"cut": true, "presence": 19.4, "present": false, "raw_diff": 69.01, "state": null, "state_dist": null, "t": 557}
+{"cut": false, "presence": 12.9, "present": false, "raw_diff": 53.18, "state": null, "state_dist": null, "t": 558}
+{"cut": false, "presence": -19.3, "present": false, "raw_diff": 47.54, "state": null, "state_dist": null, "t": 559}
+{"cut": false, "presence": -17.2, "present": false, "raw_diff": 16.46, "state": null, "state_dist": null, "t": 560}
+{"cut": false, "presence": 7.3, "present": false, "raw_diff": 47.92, "state": null, "state_dist": null, "t": 561}
+{"cut": true, "presence": 28.8, "present": false, "raw_diff": 69.28, "state": null, "state_dist": null, "t": 562}
+{"cut": true, "presence": 10.9, "present": false, "raw_diff": 60.07, "state": null, "state_dist": null, "t": 563}
+{"cut": true, "presence": 0.3, "present": false, "raw_diff": 65.72, "state": null, "state_dist": null, "t": 564}
+{"cut": false, "presence": 2.7, "present": false, "raw_diff": 38.15, "state": null, "state_dist": null, "t": 565}
+{"cut": false, "presence": -1.9, "present": false, "raw_diff": 36.87, "state": null, "state_dist": null, "t": 566}
+{"cut": false, "presence": -0.5, "present": false, "raw_diff": 57.61, "state": null, "state_dist": null, "t": 567}
+{"cut": false, "presence": -4.7, "present": false, "raw_diff": 33.47, "state": null, "state_dist": null, "t": 568}
+{"cut": false, "presence": -2.5, "present": false, "raw_diff": 58.07, "state": null, "state_dist": null, "t": 569}
+{"cut": false, "presence": -2.5, "present": false, "raw_diff": 23.1, "state": null, "state_dist": null, "t": 570}
+{"cut": false, "presence": 10.3, "present": false, "raw_diff": 53.3, "state": null, "state_dist": null, "t": 571}
+{"cut": false, "presence": 2.7, "present": false, "raw_diff": 46.84, "state": null, "state_dist": null, "t": 572}
+{"cut": false, "presence": -13.2, "present": false, "raw_diff": 41.43, "state": null, "state_dist": null, "t": 573}
+{"cut": false, "presence": -21.3, "present": false, "raw_diff": 28.2, "state": null, "state_dist": null, "t": 574}
+{"cut": false, "presence": -1.3, "present": false, "raw_diff": 55.6, "state": null, "state_dist": null, "t": 575}
+{"cut": false, "presence": 0.3, "present": false, "raw_diff": 52.34, "state": null, "state_dist": null, "t": 576}
+{"cut": false, "presence": -0.7, "present": false, "raw_diff": 15.59, "state": null, "state_dist": null, "t": 577}
+{"cut": false, "presence": -0.5, "present": false, "raw_diff": 6.25, "state": null, "state_dist": null, "t": 578}
+{"cut": false, "presence": -1.8, "present": false, "raw_diff": 11.87, "state": null, "state_dist": null, "t": 579}
+{"cut": false, "presence": -1.4, "present": false, "raw_diff": 10.55, "state": null, "state_dist": null, "t": 580}
+{"cut": false, "presence": -2.7, "present": false, "raw_diff": 43.79, "state": null, "state_dist": null, "t": 581}
+{"cut": false, "presence": -23.8, "present": false, "raw_diff": 48.63, "state": null, "state_dist": null, "t": 582}
+{"cut": true, "presence": -0.9, "present": false, "raw_diff": 62.69, "state": null, "state_dist": null, "t": 583}
+{"cut": true, "presence": -2.0, "present": false, "raw_diff": 61.19, "state": null, "state_dist": null, "t": 584}
+{"cut": false, "presence": 0.4, "present": false, "raw_diff": 44.35, "state": null, "state_dist": null, "t": 585}
+{"cut": false, "presence": -1.6, "present": false, "raw_diff": 45.9, "state": null, "state_dist": null, "t": 586}
+{"cut": false, "presence": -1.4, "present": false, "raw_diff": 16.68, "state": null, "state_dist": null, "t": 587}
+{"cut": true, "presence": 5.9, "present": false, "raw_diff": 61.0, "state": null, "state_dist": null, "t": 588}
+{"cut": false, "presence": -19.6, "present": false, "raw_diff": 55.36, "state": null, "state_dist": null, "t": 589}
+{"cut": true, "presence": -3.1, "present": false, "raw_diff": 63.23, "state": null, "state_dist": null, "t": 590}
+{"cut": false, "presence": -21.7, "present": false, "raw_diff": 38.33, "state": null, "state_dist": null, "t": 591}
+{"cut": false, "presence": -20.1, "present": false, "raw_diff": 31.6, "state": null, "state_dist": null, "t": 592}
+{"cut": false, "presence": -2.5, "present": false, "raw_diff": 51.7, "state": null, "state_dist": null, "t": 593}
+{"cut": false, "presence": -4.3, "present": false, "raw_diff": 57.23, "state": null, "state_dist": null, "t": 594}
+{"cut": false, "presence": -3.8, "present": false, "raw_diff": 16.24, "state": null, "state_dist": null, "t": 595}
+{"cut": false, "presence": -4.9, "present": false, "raw_diff": 40.56, "state": null, "state_dist": null, "t": 596}
+{"cut": false, "presence": -5.0, "present": false, "raw_diff": 17.88, "state": null, "state_dist": null, "t": 597}
+{"cut": false, "presence": -5.0, "present": false, "raw_diff": 18.21, "state": null, "state_dist": null, "t": 598}
+{"cut": false, "presence": -3.8, "present": false, "raw_diff": 18.54, "state": null, "state_dist": null, "t": 599}
+{"cut": false, "presence": -16.4, "present": false, "raw_diff": 46.02, "state": null, "state_dist": null, "t": 600}
+{"cut": false, "presence": 218.1, "present": true, "raw_diff": 26.79, "state": null, "state_dist": null, "t": 601}
+{"cut": false, "presence": -3.2, "present": false, "raw_diff": 39.59, "state": null, "state_dist": null, "t": 602}
+{"cut": false, "presence": 4.1, "present": false, "raw_diff": 32.31, "state": null, "state_dist": null, "t": 603}
+{"cut": false, "presence": 1.1, "present": false, "raw_diff": 41.09, "state": null, "state_dist": null, "t": 604}
+{"cut": true, "presence": -3.5, "present": false, "raw_diff": 61.05, "state": null, "state_dist": null, "t": 605}
+{"cut": false, "presence": 9.9, "present": false, "raw_diff": 56.68, "state": null, "state_dist": null, "t": 606}
+{"cut": false, "presence": -3.0, "present": false, "raw_diff": 45.04, "state": null, "state_dist": null, "t": 607}
+{"cut": false, "presence": -6.0, "present": false, "raw_diff": 40.39, "state": null, "state_dist": null, "t": 608}
+{"cut": false, "presence": -2.1, "present": false, "raw_diff": 56.41, "state": null, "state_dist": null, "t": 609}
+{"cut": false, "presence": -2.0, "present": false, "raw_diff": 22.59, "state": null, "state_dist": null, "t": 610}
+{"cut": false, "presence": 15.7, "present": false, "raw_diff": 48.69, "state": null, "state_dist": null, "t": 611}
+{"cut": false, "presence": 16.1, "present": false, "raw_diff": 18.44, "state": null, "state_dist": null, "t": 612}
+{"cut": false, "presence": 20.7, "present": false, "raw_diff": 18.63, "state": null, "state_dist": null, "t": 613}
+{"cut": false, "presence": 20.3, "present": false, "raw_diff": 8.23, "state": null, "state_dist": null, "t": 614}
+{"cut": false, "presence": 20.7, "present": false, "raw_diff": 8.08, "state": null, "state_dist": null, "t": 615}
+{"cut": false, "presence": 20.0, "present": false, "raw_diff": 7.56, "state": null, "state_dist": null, "t": 616}
+{"cut": true, "presence": 25.6, "present": false, "raw_diff": 67.21, "state": null, "state_dist": null, "t": 617}
+{"cut": false, "presence": 34.8, "present": false, "raw_diff": 29.75, "state": null, "state_dist": null, "t": 618}
+{"cut": false, "presence": 10.9, "present": false, "raw_diff": 32.23, "state": null, "state_dist": null, "t": 619}
+{"cut": true, "presence": 1.5, "present": false, "raw_diff": 91.16, "state": null, "state_dist": null, "t": 620}
+{"cut": false, "presence": 0.3, "present": false, "raw_diff": 52.06, "state": null, "state_dist": null, "t": 621}
+{"cut": false, "presence": -1.3, "present": false, "raw_diff": 34.13, "state": null, "state_dist": null, "t": 622}
+{"cut": false, "presence": -1.1, "present": false, "raw_diff": 42.93, "state": null, "state_dist": null, "t": 623}
+{"cut": false, "presence": -5.0, "present": false, "raw_diff": 44.6, "state": null, "state_dist": null, "t": 624}
+{"cut": false, "presence": 8.7, "present": false, "raw_diff": 58.41, "state": null, "state_dist": null, "t": 625}
+{"cut": false, "presence": -13.8, "present": false, "raw_diff": 48.46, "state": null, "state_dist": null, "t": 626}
+{"cut": false, "presence": -21.9, "present": false, "raw_diff": 27.57, "state": null, "state_dist": null, "t": 627}
+{"cut": false, "presence": -6.7, "present": false, "raw_diff": 52.88, "state": null, "state_dist": null, "t": 628}
+{"cut": true, "presence": 45.9, "present": true, "raw_diff": 60.11, "state": null, "state_dist": null, "t": 629}
+{"cut": true, "presence": -3.0, "present": false, "raw_diff": 68.99, "state": null, "state_dist": null, "t": 630}
+{"cut": false, "presence": -2.4, "present": false, "raw_diff": 22.97, "state": null, "state_dist": null, "t": 631}
+{"cut": false, "presence": 1.3, "present": false, "raw_diff": 54.7, "state": null, "state_dist": null, "t": 632}
+{"cut": false, "presence": 2.3, "present": false, "raw_diff": 7.1, "state": null, "state_dist": null, "t": 633}
+{"cut": false, "presence": 1.5, "present": false, "raw_diff": 9.54, "state": null, "state_dist": null, "t": 634}
+{"cut": false, "presence": 1.6, "present": false, "raw_diff": 7.47, "state": null, "state_dist": null, "t": 635}
+{"cut": false, "presence": -18.1, "present": false, "raw_diff": 47.07, "state": null, "state_dist": null, "t": 636}
+{"cut": false, "presence": -14.0, "present": false, "raw_diff": 38.63, "state": null, "state_dist": null, "t": 637}
+{"cut": false, "presence": -14.0, "present": false, "raw_diff": 47.47, "state": null, "state_dist": null, "t": 638}
+{"cut": false, "presence": 4.6, "present": false, "raw_diff": 50.85, "state": null, "state_dist": null, "t": 639}
+{"cut": false, "presence": 5.4, "present": false, "raw_diff": 46.03, "state": null, "state_dist": null, "t": 640}
+{"cut": false, "presence": -0.4, "present": false, "raw_diff": 40.58, "state": null, "state_dist": null, "t": 641}
+{"cut": false, "presence": -1.4, "present": false, "raw_diff": 44.52, "state": null, "state_dist": null, "t": 642}
+{"cut": false, "presence": -0.9, "present": false, "raw_diff": 17.43, "state": null, "state_dist": null, "t": 643}
+{"cut": true, "presence": -9.4, "present": false, "raw_diff": 66.1, "state": null, "state_dist": null, "t": 644}
+{"cut": true, "presence": -5.2, "present": false, "raw_diff": 67.27, "state": null, "state_dist": null, "t": 645}
+{"cut": false, "presence": -11.0, "present": false, "raw_diff": 56.77, "state": null, "state_dist": null, "t": 646}
+{"cut": true, "presence": 10.8, "present": false, "raw_diff": 66.22, "state": null, "state_dist": null, "t": 647}
+{"cut": false, "presence": -4.1, "present": false, "raw_diff": 54.62, "state": null, "state_dist": null, "t": 648}
+{"cut": false, "presence": -9.3, "present": false, "raw_diff": 54.94, "state": null, "state_dist": null, "t": 649}
+{"cut": false, "presence": -22.0, "present": false, "raw_diff": 25.98, "state": null, "state_dist": null, "t": 650}
+{"cut": false, "presence": -2.5, "present": false, "raw_diff": 44.11, "state": null, "state_dist": null, "t": 651}
+{"cut": false, "presence": -1.3, "present": false, "raw_diff": 25.15, "state": null, "state_dist": null, "t": 652}
+{"cut": false, "presence": -0.3, "present": false, "raw_diff": 34.94, "state": null, "state_dist": null, "t": 653}
+{"cut": false, "presence": 10.9, "present": false, "raw_diff": 50.71, "state": null, "state_dist": null, "t": 654}
+{"cut": false, "presence": 12.2, "present": false, "raw_diff": 7.86, "state": null, "state_dist": null, "t": 655}
+{"cut": false, "presence": 10.5, "present": false, "raw_diff": 7.05, "state": null, "state_dist": null, "t": 656}
+{"cut": false, "presence": -6.7, "present": false, "raw_diff": 36.88, "state": null, "state_dist": null, "t": 657}
+{"cut": false, "presence": -2.2, "present": false, "raw_diff": 17.62, "state": null, "state_dist": null, "t": 658}
+{"cut": false, "presence": -0.6, "present": false, "raw_diff": 53.45, "state": null, "state_dist": null, "t": 659}
+{"cut": true, "presence": 6.0, "present": false, "raw_diff": 63.6, "state": null, "state_dist": null, "t": 660}
+{"cut": false, "presence": -4.0, "present": false, "raw_diff": 35.23, "state": null, "state_dist": null, "t": 661}
+{"cut": false, "presence": -6.6, "present": false, "raw_diff": 24.55, "state": null, "state_dist": null, "t": 662}
+{"cut": false, "presence": -34.9, "present": false, "raw_diff": 46.45, "state": null, "state_dist": null, "t": 663}
+{"cut": true, "presence": 9.9, "present": false, "raw_diff": 65.35, "state": null, "state_dist": null, "t": 664}
+{"cut": false, "presence": 10.2, "present": false, "raw_diff": 25.34, "state": null, "state_dist": null, "t": 665}
+{"cut": false, "presence": 4.8, "present": false, "raw_diff": 26.52, "state": null, "state_dist": null, "t": 666}
+{"cut": false, "presence": 3.6, "present": false, "raw_diff": 24.51, "state": null, "state_dist": null, "t": 667}
+{"cut": false, "presence": 4.0, "present": false, "raw_diff": 24.74, "state": null, "state_dist": null, "t": 668}
+{"cut": false, "presence": 1.5, "present": false, "raw_diff": 31.52, "state": null, "state_dist": null, "t": 669}
+{"cut": false, "presence": -5.6, "present": false, "raw_diff": 57.88, "state": null, "state_dist": null, "t": 670}
+{"cut": false, "presence": -1.7, "present": false, "raw_diff": 56.18, "state": null, "state_dist": null, "t": 671}
+{"cut": false, "presence": -2.0, "present": false, "raw_diff": 13.36, "state": null, "state_dist": null, "t": 672}
+{"cut": false, "presence": 3.9, "present": false, "raw_diff": 30.6, "state": null, "state_dist": null, "t": 673}
+{"cut": false, "presence": 7.6, "present": false, "raw_diff": 31.52, "state": null, "state_dist": null, "t": 674}
+{"cut": false, "presence": -5.0, "present": false, "raw_diff": 51.16, "state": null, "state_dist": null, "t": 675}
+{"cut": false, "presence": -10.8, "present": false, "raw_diff": 43.89, "state": null, "state_dist": null, "t": 676}
+{"cut": false, "presence": 9.8, "present": false, "raw_diff": 59.76, "state": null, "state_dist": null, "t": 677}
+{"cut": true, "presence": -1.1, "present": false, "raw_diff": 63.61, "state": null, "state_dist": null, "t": 678}
+{"cut": false, "presence": 11.3, "present": false, "raw_diff": 28.01, "state": null, "state_dist": null, "t": 679}
+{"cut": false, "presence": 0.8, "present": false, "raw_diff": 42.17, "state": null, "state_dist": null, "t": 680}
+{"cut": true, "presence": 11.9, "present": false, "raw_diff": 67.95, "state": null, "state_dist": null, "t": 681}
+{"cut": true, "presence": 0.8, "present": false, "raw_diff": 65.89, "state": null, "state_dist": null, "t": 682}
+{"cut": true, "presence": -5.4, "present": false, "raw_diff": 76.44, "state": null, "state_dist": null, "t": 683}
+{"cut": false, "presence": -8.1, "present": false, "raw_diff": 55.3, "state": null, "state_dist": null, "t": 684}
+{"cut": false, "presence": -1.9, "present": false, "raw_diff": 38.49, "state": null, "state_dist": null, "t": 685}
+{"cut": true, "presence": -4.6, "present": false, "raw_diff": 60.65, "state": null, "state_dist": null, "t": 686}
+{"cut": false, "presence": -4.0, "present": false, "raw_diff": 22.99, "state": null, "state_dist": null, "t": 687}
+{"cut": false, "presence": -3.8, "present": false, "raw_diff": 13.64, "state": null, "state_dist": null, "t": 688}
+{"cut": false, "presence": -30.2, "present": false, "raw_diff": 53.34, "state": null, "state_dist": null, "t": 689}
+{"cut": false, "presence": 0.4, "present": false, "raw_diff": 56.29, "state": null, "state_dist": null, "t": 690}
+{"cut": false, "presence": 4.2, "present": false, "raw_diff": 42.33, "state": null, "state_dist": null, "t": 691}
+{"cut": false, "presence": 3.6, "present": false, "raw_diff": 51.89, "state": null, "state_dist": null, "t": 692}
+{"cut": false, "presence": -4.3, "present": false, "raw_diff": 36.08, "state": null, "state_dist": null, "t": 693}
+{"cut": false, "presence": 6.0, "present": false, "raw_diff": 24.95, "state": null, "state_dist": null, "t": 694}
+{"cut": false, "presence": 9.9, "present": false, "raw_diff": 26.73, "state": null, "state_dist": null, "t": 695}
+{"cut": false, "presence": 3.4, "present": false, "raw_diff": 26.96, "state": null, "state_dist": null, "t": 696}
+{"cut": false, "presence": 0.3, "present": false, "raw_diff": 56.62, "state": null, "state_dist": null, "t": 697}
+{"cut": false, "presence": 0.9, "present": false, "raw_diff": 59.44, "state": null, "state_dist": null, "t": 698}
+{"cut": true, "presence": -21.3, "present": false, "raw_diff": 63.0, "state": null, "state_dist": null, "t": 699}
+{"cut": false, "presence": -3.5, "present": false, "raw_diff": 50.01, "state": null, "state_dist": null, "t": 700}
+{"cut": false, "presence": 11.3, "present": false, "raw_diff": 54.24, "state": null, "state_dist": null, "t": 701}
+{"cut": false, "presence": 7.7, "present": false, "raw_diff": 22.58, "state": null, "state_dist": null, "t": 702}
+{"cut": false, "presence": 5.6, "present": false, "raw_diff": 26.33, "state": null, "state_dist": null, "t": 703}
+{"cut": false, "presence": 6.4, "present": false, "raw_diff": 17.7, "state": null, "state_dist": null, "t": 704}
+{"cut": false, "presence": -6.2, "present": false, "raw_diff": 49.07, "state": null, "state_dist": null, "t": 705}
+{"cut": false, "presence": -4.9, "present": false, "raw_diff": 57.67, "state": null, "state_dist": null, "t": 706}
+{"cut": false, "presence": 13.8, "present": false, "raw_diff": 53.14, "state": null, "state_dist": null, "t": 707}
+{"cut": false, "presence": -5.5, "present": false, "raw_diff": 36.61, "state": null, "state_dist": null, "t": 708}
+{"cut": false, "presence": 9.1, "present": false, "raw_diff": 52.99, "state": null, "state_dist": null, "t": 709}
+{"cut": false, "presence": 9.0, "present": false, "raw_diff": 18.75, "state": null, "state_dist": null, "t": 710}
+{"cut": false, "presence": 8.3, "present": false, "raw_diff": 7.12, "state": null, "state_dist": null, "t": 711}
+{"cut": false, "presence": -0.9, "present": false, "raw_diff": 25.13, "state": null, "state_dist": null, "t": 712}
+{"cut": false, "presence": 3.0, "present": false, "raw_diff": 51.48, "state": null, "state_dist": null, "t": 713}
+{"cut": false, "presence": -11.5, "present": false, "raw_diff": 46.98, "state": null, "state_dist": null, "t": 714}
+{"cut": false, "presence": 0.3, "present": false, "raw_diff": 59.54, "state": null, "state_dist": null, "t": 715}
+{"cut": false, "presence": -2.7, "present": false, "raw_diff": 50.63, "state": null, "state_dist": null, "t": 716}
+{"cut": false, "presence": 2.1, "present": false, "raw_diff": 57.82, "state": null, "state_dist": null, "t": 717}
+{"cut": false, "presence": 1.8, "present": false, "raw_diff": 14.69, "state": null, "state_dist": null, "t": 718}
+{"cut": false, "presence": 3.4, "present": false, "raw_diff": 24.26, "state": null, "state_dist": null, "t": 719}
+{"cut": false, "presence": 3.9, "present": false, "raw_diff": 20.27, "state": null, "state_dist": null, "t": 720}
+{"cut": false, "presence": -4.5, "present": false, "raw_diff": 36.88, "state": null, "state_dist": null, "t": 721}
+{"cut": false, "presence": -2.2, "present": false, "raw_diff": 31.02, "state": null, "state_dist": null, "t": 722}
+{"cut": false, "presence": -4.9, "present": false, "raw_diff": 44.18, "state": null, "state_dist": null, "t": 723}
+{"cut": false, "presence": 0.9, "present": false, "raw_diff": 34.0, "state": null, "state_dist": null, "t": 724}
+{"cut": true, "presence": 13.5, "present": false, "raw_diff": 65.3, "state": null, "state_dist": null, "t": 725}
+{"cut": false, "presence": 6.2, "present": false, "raw_diff": 40.05, "state": null, "state_dist": null, "t": 726}
+{"cut": true, "presence": 1.9, "present": false, "raw_diff": 72.5, "state": null, "state_dist": null, "t": 727}
+{"cut": false, "presence": 16.5, "present": false, "raw_diff": 45.49, "state": null, "state_dist": null, "t": 728}
+{"cut": true, "presence": -4.2, "present": false, "raw_diff": 75.63, "state": null, "state_dist": null, "t": 729}
+{"cut": false, "presence": -3.0, "present": false, "raw_diff": 43.39, "state": null, "state_dist": null, "t": 730}
+{"cut": false, "presence": -0.5, "present": false, "raw_diff": 54.86, "state": null, "state_dist": null, "t": 731}
+{"cut": false, "presence": -0.3, "present": false, "raw_diff": 19.51, "state": null, "state_dist": null, "t": 732}
+{"cut": false, "presence": -2.2, "present": false, "raw_diff": 27.52, "state": null, "state_dist": null, "t": 733}
+{"cut": false, "presence": -1.9, "present": false, "raw_diff": 21.65, "state": null, "state_dist": null, "t": 734}
+{"cut": false, "presence": -2.0, "present": false, "raw_diff": 19.92, "state": null, "state_dist": null, "t": 735}
+{"cut": false, "presence": -2.8, "present": false, "raw_diff": 18.46, "state": null, "state_dist": null, "t": 736}
+{"cut": false, "presence": -2.0, "present": false, "raw_diff": 22.67, "state": null, "state_dist": null, "t": 737}
+{"cut": false, "presence": 2.8, "present": false, "raw_diff": 20.14, "state": null, "state_dist": null, "t": 738}
+{"cut": false, "presence": 7.7, "present": false, "raw_diff": 18.77, "state": null, "state_dist": null, "t": 739}
+{"cut": true, "presence": 14.8, "present": false, "raw_diff": 65.28, "state": null, "state_dist": null, "t": 740}
+{"cut": false, "presence": 2.8, "present": false, "raw_diff": 55.03, "state": null, "state_dist": null, "t": 741}
+{"cut": true, "presence": -3.6, "present": false, "raw_diff": 69.08, "state": null, "state_dist": null, "t": 742}
+{"cut": false, "presence": -2.8, "present": false, "raw_diff": 39.61, "state": null, "state_dist": null, "t": 743}
+{"cut": false, "presence": -4.3, "present": false, "raw_diff": 41.77, "state": null, "state_dist": null, "t": 744}
+{"cut": false, "presence": -4.0, "present": false, "raw_diff": 28.24, "state": null, "state_dist": null, "t": 745}
+{"cut": false, "presence": -3.0, "present": false, "raw_diff": 33.34, "state": null, "state_dist": null, "t": 746}
+{"cut": false, "presence": -2.9, "present": false, "raw_diff": 26.51, "state": null, "state_dist": null, "t": 747}
+{"cut": true, "presence": -4.2, "present": false, "raw_diff": 65.1, "state": null, "state_dist": null, "t": 748}
+{"cut": false, "presence": -3.6, "present": false, "raw_diff": 46.92, "state": null, "state_dist": null, "t": 749}
+{"cut": false, "presence": 11.8, "present": false, "raw_diff": 58.78, "state": null, "state_dist": null, "t": 750}
+{"cut": false, "presence": 12.7, "present": false, "raw_diff": 39.53, "state": null, "state_dist": null, "t": 751}
+{"cut": true, "presence": 3.2, "present": false, "raw_diff": 61.39, "state": null, "state_dist": null, "t": 752}
+{"cut": false, "presence": 2.6, "present": false, "raw_diff": 37.29, "state": null, "state_dist": null, "t": 753}
+{"cut": true, "presence": 12.4, "present": false, "raw_diff": 63.63, "state": null, "state_dist": null, "t": 754}
+{"cut": true, "presence": -8.2, "present": false, "raw_diff": 62.75, "state": null, "state_dist": null, "t": 755}
+{"cut": false, "presence": -9.3, "present": false, "raw_diff": 40.18, "state": null, "state_dist": null, "t": 756}
+{"cut": true, "presence": 8.7, "present": false, "raw_diff": 62.43, "state": null, "state_dist": null, "t": 757}
+{"cut": false, "presence": 2.4, "present": false, "raw_diff": 28.45, "state": null, "state_dist": null, "t": 758}
+{"cut": false, "presence": 4.0, "present": false, "raw_diff": 22.2, "state": null, "state_dist": null, "t": 759}
+{"cut": false, "presence": 1.7, "present": false, "raw_diff": 21.91, "state": null, "state_dist": null, "t": 760}
+{"cut": false, "presence": 2.9, "present": false, "raw_diff": 36.1, "state": null, "state_dist": null, "t": 761}
+{"cut": false, "presence": 6.1, "present": false, "raw_diff": 43.33, "state": null, "state_dist": null, "t": 762}
+{"cut": false, "presence": -1.5, "present": false, "raw_diff": 33.91, "state": null, "state_dist": null, "t": 763}
+{"cut": false, "presence": 11.0, "present": false, "raw_diff": 33.78, "state": null, "state_dist": null, "t": 764}
+{"cut": false, "presence": 17.1, "present": false, "raw_diff": 28.47, "state": null, "state_dist": null, "t": 765}
+{"cut": false, "presence": 19.2, "present": false, "raw_diff": 25.37, "state": null, "state_dist": null, "t": 766}
+{"cut": false, "presence": 17.7, "present": false, "raw_diff": 56.95, "state": null, "state_dist": null, "t": 767}
+{"cut": false, "presence": 4.6, "present": false, "raw_diff": 40.37, "state": null, "state_dist": null, "t": 768}
+{"cut": false, "presence": 3.8, "present": false, "raw_diff": 44.36, "state": null, "state_dist": null, "t": 769}
+{"cut": false, "presence": 3.4, "present": false, "raw_diff": 33.78, "state": null, "state_dist": null, "t": 770}
+{"cut": false, "presence": 3.0, "present": false, "raw_diff": 30.07, "state": null, "state_dist": null, "t": 771}
+{"cut": true, "presence": -1.6, "present": false, "raw_diff": 65.28, "state": null, "state_dist": null, "t": 772}
+{"cut": true, "presence": 2.0, "present": false, "raw_diff": 63.28, "state": null, "state_dist": null, "t": 773}
+{"cut": true, "presence": -1.0, "present": false, "raw_diff": 74.18, "state": null, "state_dist": null, "t": 774}
+{"cut": true, "presence": -1.2, "present": false, "raw_diff": 60.84, "state": null, "state_dist": null, "t": 775}
+{"cut": false, "presence": -0.1, "present": false, "raw_diff": 51.2, "state": null, "state_dist": null, "t": 776}
+{"cut": false, "presence": 3.3, "present": false, "raw_diff": 56.65, "state": null, "state_dist": null, "t": 777}

@@ -132,8 +132,10 @@ clearly enters the net" reason) is **unchanged**: 5 → 5 post-fix, 4 pre-fix.
 
 - **Recall is recall on the 15-goal catalogue, not yet a whole-video goal
   count.** 336–777 s now has an objective scoreboard-change catalogue and every
-  goal it confirmed is labelled, but 19 of its 22 candidates are still awaiting
-  a committed 1 s frame pass. 0–335 s was only scanned at 24 s contact-sheet
+  goal it confirmed is labelled, but 16 of its 21 candidates are still awaiting
+  a committed 1 s frame pass — and the native-resolution pass (see the section
+  above) shows a pixel statistic cannot settle them, so they stay queued for a
+  localised frame read. 0–335 s was only scanned at 24 s contact-sheet
   granularity in this run. Until those passes are committed, quote recall as
   "recall on the 15-goal catalogue".
 - Goal instants are ±1 s (1 s frame grid); a card within 10 s of an instant
@@ -374,15 +376,115 @@ independent read layer or an objective shot detector, then a dense 1 s pass
 (`build_contact_sheet.py --from … --to … --per-sheet 12`, or
 `scan_goalmouth.py` for per-second reads).
 
+## Native-resolution source measured (2026-11-01): resolution is not the blocker
+
+The pipeline's frames are a downscale: the job detail records `frameScale = 640:360`
+and `sampleFps = 3`, while `sourceUrl` points at
+`/data/uploads/3f8e8d8d-f00d-410c-b4c1-1a781b2fffc7/kids-soccer.mp4` — the upload
+itself is **1280x720 at 60 fps** (ffprobe: 46673 frames, 777.9 s, 330 MB). The
+unblock earlier revisions of this document recorded — "needs a higher-resolution /
+30 fps frame source" — was tested against that source this run, twice, with
+deterministic readers that stream decoded frames straight out of ffmpeg. No
+vision model, no key.
+
+### 1. Motion layer at source resolution (`native_shot_motion.py`)
+
+Same statistic as `detect_shot_motion.py` (max mean |cur − shift(prev)| over 8x8
+blocks inside the pitch band, with the scoreboard strip masked and a cut rule),
+but sampled at 1280x720 / 12 fps instead of the 640x360 / 3 fps cache:
+
+| metric | 640x360 @ 3 fps (cache) | 1280x720 @ 12 fps (source) |
+| --- | --- | --- |
+| score AUC | 0.481 | **0.440** |
+| shot median score | 184.1 | 210.9 |
+| control median score | 189.1 | 217.6 |
+| shot windows reproduced | 5/10 (two-layer vote) | 10/10 at every threshold >= 20 |
+| control seconds falsely called | 3/34 | 116 |
+| thresholds in the sweep meeting the bar | 0 | **0** |
+
+The layer reproduces *everything* at every threshold — the score saturates at
+210 of 255 — and ranks worse than chance. So resolution was not the limiting
+factor for this statistic: a max over ~13000 8x8 blocks always finds at least one
+moving player, and a kids' soccer pitch at 12 fps is full of them. Artefacts:
+`results/native_shot_motion_summary.json`, `results/native_shot_motion_windows.jsonl`.
+
+### 2. Scoreboard catalogue at source resolution (`native_scoreboard_timeline.py`)
+
+The 16 candidates still marked "needs frame confirm" survived the 1x pass because
+that detector diffs digits rendered at ~42x17 px on a **semi-transparent** red
+bar, so scene changes bleed through as digit changes. At 1280x720 the digits are
+84x34, so the catalogue was rebuilt as a per-second *state* timeline: a white-glyph
+mask inside the bar, clustered into score states, with a whole-frame cut signal to
+separate a real score update from a cut that re-renders the overlay.
+
+| metric | value |
+| --- | --- |
+| seconds scanned | 778 |
+| score bar on screen | 509 s |
+| broadcast cuts | 107 s |
+| glyph-mask changes | 312 |
+| changes with **no** cut ("score change") | **259** |
+| changes at a cut (artifact) | 53 |
+| distinct score states | 59 |
+| real goals in the manifest | 15 |
+
+259 "no-cut score changes" against 15 real goals (~17x) means the mask moves with
+the scene, not with the score — a translucent bar makes no pixel statistic of the
+digits scene-independent. **The scoreboard catalogue method is measured dead at
+source resolution too**, which is also the honest explanation for why the 1x
+detector's small-diff candidates (8.0-9.7) never resolved either way.
+Artefacts: `results/native_scoreboard_timeline.json`, `.jsonl`.
+
+### 3. First native-res crop read (negative, and why)
+
+The vision endpoint can read native-resolution frames; the 1x frames it was
+calibrated on (`results/calib_thinking_on_summary.json`, 5/10) are 4x smaller in
+ball area. A crop of the labelled save window `ks-n-0130` (native 640x360 region
+x 320-960, y 300-660, upscaled 2x) was read twice and returned
+`SHOT=no KIND=none BALL=no` both times — **self-consistent**, but disagreeing with
+that window's `saved` label and with a full-frame read of the same second
+(`BALL=yes`). So the fixed crop does not reliably contain the goal mouth: crop
+localisation has to precede crop reads. Nothing was promoted, and the 8/10 +
+<= 2/35 calibration on native crops is the next measurable step.
+
+### What this changes for the AC set
+
+- AC-1's recorded unblock ("higher-resolution / 30 fps frame source") is
+  **falsified for the deterministic layer**. The remaining candidate is a
+  perception labeller over native-resolution, per-window localised crops.
+- AC-2's remaining 16 candidates cannot be resolved by a pixel statistic; they
+  need the same localised frame reads as AC-1, and `RESULTS.md` keeps them
+  queued rather than judged.
+
+Both readers are committed and re-runnable in about a minute each:
+
+```bash
+python3 evals/kids_soccer_near_miss/native_shot_motion.py \
+  --video /data/uploads/<id>/kids-soccer.mp4 --manifest evals/kids_soccer_near_miss/label-manifest.json \
+  --out results/native_shot_motion_windows.jsonl --json results/native_shot_motion_summary.json
+
+python3 evals/kids_soccer_near_miss/native_scoreboard_timeline.py \
+  --video /data/uploads/<id>/kids-soccer.mp4 --fps 1 \
+  --out results/native_scoreboard_timeline.jsonl --json results/native_scoreboard_timeline.json
+```
+
+Self-check for both: `tests/test_native_readers.py` (6 tests, no ffmpeg, no
+network) pins the block statistic, the cut rule, the sweep accounting and the
+recorded verdicts, so an edit cannot silently change what the negative results
+mean.
+
 ## Not yet done (tracked as a follow-up)
 
 1. AC-1: extend the shot-class set from 10 to >= 20 windows. Measured blocker
    (see *AC-1 status*): the primary read layer reproduces 5/10 known shot
-   windows, the objective motion layer carries no signal (AUC 0.481), and the
-   unanimous vote is capped by the primary layer, so no window can be promoted
-   under the bar (>= 8/10, <= 2/35). Unblock needs either a prompt-family second
-   layer (`SCAN_KEY` provisioned as a Paperclip secret) or a higher-resolution /
-   30 fps frame source, since a ~10 px ball sits below this cache's noise floor.
+   windows, the objective motion layer carries no signal (AUC 0.481 at 640x360
+   and 0.440 at the source's own 1280x720 — see *Native-resolution source*), and
+   the unanimous vote is capped by the primary layer, so no window can be
+   promoted under the bar (>= 8/10, <= 2/35). The "higher-resolution / 30 fps
+   frame source" unblock is **falsified**; the remaining path is a perception
+   labeller over native-resolution crops localised per window, which needs
+   `SCAN_KEY` provisioned as a Paperclip secret for a prompt-family layer, or a
+   vision calibration on localised native crops under the same bar.
 2. AC-2: confirm or refute the remaining catalogue evidence on 1 s frames. From
    `results/goal_catalogue_reconciliation.json` (re-run with
    `reconcile_goal_catalogue.py`):
