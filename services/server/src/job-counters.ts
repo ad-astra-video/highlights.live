@@ -104,6 +104,12 @@ export function counterFieldsForJob(job: CounterReadableJob): Partial<CompletedC
     } else if (stored > 0) {
       out.candidatesTriggered = stored;
       out.candidatePath = "perceive_gate";
+    } else if (produced > 0) {
+      // A decision trail without the legacy counter: only the observe cadence
+      // records decisions (the legacy perceive path also incremented `stored`),
+      // so an in-flight job mid-analyze reports its candidates, not a 0.
+      out.candidatesTriggered = produced;
+      out.candidatePath = "observe";
     } else {
       out.candidatesTriggered = 0;
       out.candidatePath = "none";

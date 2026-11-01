@@ -119,6 +119,13 @@ describe("counterFieldsForJob (ADAAAA-7624 read-time projection)", () => {
     expect(fields.candidatePath).toBe("perceive_gate");
   });
 
+  it("reports the trail's candidates for an in-flight job with no legacy counter", () => {
+    // Mid-analyze: decisions persisted, completion counters not yet written.
+    const fields = counterFieldsForJob({ candidatesTriggered: 0, candidates: [{ seq: 1 }, { seq: 9 }], highlightsFound: 2 });
+    expect(fields.candidatesTriggered).toBe(2);
+    expect(fields.candidatePath).toBe("observe");
+  });
+
   it("reports none when no path produced a candidate", () => {
     const fields = counterFieldsForJob({ candidatesTriggered: 0, highlightsFound: 0, candidates: [] });
     expect(fields.candidatesTriggered).toBe(0);
