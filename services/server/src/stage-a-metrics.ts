@@ -16,6 +16,7 @@
 //
 // The module is a pure accumulator (no IO) so it is unit-testable in isolation.
 import type { StageAMetricsSnapshot } from "@highlights/events";
+import { AUDIO_TRIGGER_COALESCE_S } from "./audio-trigger";
 
 const FP_RATE_BUDGET = 0.6; // acceptance bound: <= 60% false positives
 
@@ -94,4 +95,142 @@ export class StageAMetrics {
       fpRateWithinBudget: this.fpRate() <= FP_RATE_BUDGET,
     };
   }
+}
+
+/** One Stage-A trigger waiting for the decide window that judges its onset. */
+interface PendingStageATrigger {
+  onsetTs: number;
+  onsetLatencyS?: number;
+}
+
+/**
+ * Maps Stage-A audio triggers onto the verdict of the decide window that judges
+ * them (ADAAAA-7694).
+ *
+ * Under the observe architecture an audio candidate no longer gets its own
+ * `decide()`: the trigger is provenance and (on the live rail) a window anchor,
+ * so the only honest outcome to record for it is the verdict of the decide
+ * window whose evidence span CONTAINS its onset — `accepted` means that window
+ * cut a highlight, `rejected` means it judged the moment and produced none.
+ * This class keeps the trigger timeline and writes exactly one
+ * {@link StageAMetrics.recordOutcome} row per judged trigger, carrying the
+ * gate-reported `onsetLatencyS` so the p50/p95 latency budget is measured on
+ * real samples instead of the all-zero snapshot.
+ *
+ * Rules (documented in `docs/audio-trigger-contract.md`):
+ *
+ * - **Coalesced re-fires are one audible event.** Two onsets closer than
+ *   `AUDIO_TRIGGER_COALESCE_S` (2.5 s — the gate's own 2 s cooldown plus slack)
+ *   describe ONE event, so only the first is counted. This keeps the rate a
+ *   per-event rate instead of a per-chunk rate.
+ * - **First covering window judges.** A trigger is judged once, by the first
+ *   decide window whose span contains its onset; it is then removed so a later
+ *   overlapping window cannot re-count it.
+ * - **Unjudged is not rejected.** A trigger inside a window that was never
+ *   decided (stale-frame drop, Tier-2 gate skip, past the stream tail) is
+ *   dropped or left pending — never recorded as a fabricated reject, so the FP
+ *   rate can only be inflated by real decisions.
+ *
+ * Pure (no IO) and bounded (never grows on a long stream), so it is
+ * unit-testable in isolation.
+ */
+export class StageAOutcomeLedger {
+  private readonly metrics: StageAMetrics;
+  private readonly coalesceS: number;
+  private readonly maxPending: number;
+  private pending: PendingStageATrigger[] = [];
+  private lastOnsetTs: number | null = null;
+
+  constructor(metrics: StageAMetrics, opts: { coalesceS?: number; maxPending?: number } = {}) {
+    this.metrics = metrics;
+    this.coalesceS = opts.coalesceS ?? AUDIO_TRIGGER_COALESCE_S;
+    this.maxPending = opts.maxPending ?? 64;
+  }
+
+  /**
+   * Track a fired Stage-A trigger until a decide window judges it. Returns
+   * false (and records nothing) for a missing/invalid onset or a coalesced
+   * re-fire of the same audible event.
+   */
+  recordTrigger(trigger: { onsetTs: number; onsetLatencyS?: number } | null | undefined): boolean {
+    if (!trigger || !Number.isFinite(trigger.onsetTs)) return false;
+    if (this.lastOnsetTs !== null && Math.abs(trigger.onsetTs - this.lastOnsetTs) < this.coalesceS) {
+      return false;
+    }
+    this.lastOnsetTs = trigger.onsetTs;
+    this.pending.push({ onsetTs: trigger.onsetTs, onsetLatencyS: trigger.onsetLatencyS });
+    if (this.pending.length > this.maxPending) {
+      this.pending.splice(0, this.pending.length - this.maxPending);
+    }
+    return true;
+  }
+
+  /** Record the outcome of ONE specific trigger (the anchored one), when it is
+   * still pending. Returns whether a row was written. */
+  judgeTrigger(trigger: { onsetTs: number } | null | undefined, accepted: boolean): boolean {
+    if (!trigger) return false;
+    const i = this.pending.findIndex((t) => t.onsetTs === trigger.onsetTs);
+    if (i < 0) return false;
+    const [t] = this.pending.splice(i, 1);
+    this.metrics.recordOutcome(accepted, t.onsetLatencyS);
+    return true;
+  }
+
+  /**
+   * Record the verdict of a decide window over `[loTs, hiTs]`: every pending
+   * trigger whose onset falls inside the window is judged by it (and removed,
+   * so overlapping windows never re-count one trigger). Returns the number of
+   * rows written.
+   */
+  judgeWindow(loTs: number, hiTs: number, accepted: boolean): number {
+    if (!Number.isFinite(loTs) || !Number.isFinite(hiTs) || hiTs < loTs) return 0;
+    let judged = 0;
+    const remaining: PendingStageATrigger[] = [];
+    for (const t of this.pending) {
+      if (t.onsetTs >= loTs && t.onsetTs <= hiTs) {
+        this.metrics.recordOutcome(accepted, t.onsetLatencyS);
+        judged++;
+      } else {
+        remaining.push(t);
+      }
+    }
+    this.pending = remaining;
+    return judged;
+  }
+
+  /**
+   * Forget triggers whose onset fell inside a span that was DROPPED without a
+   * decide (stale-frame drop). They were never judged, so they must not be
+   * recorded — this only keeps the pending list clean/bounded.
+   */
+  dropThrough(loTs: number, hiTs: number): number {
+    if (!Number.isFinite(loTs) || !Number.isFinite(hiTs)) return 0;
+    const before = this.pending.length;
+    this.pending = this.pending.filter((t) => !(t.onsetTs >= loTs && t.onsetTs <= hiTs));
+    return before - this.pending.length;
+  }
+
+  /** Triggers still waiting for a decide window (never counted as rejects). */
+  pendingCount(): number {
+    return this.pending.length;
+  }
+}
+
+/**
+ * The per-job Stage-A evidence line (`[live:<job>] / [vod:<job>] stageA ...`),
+ * or null when the gate judged nothing — a job that never had an audio
+ * candidate must not print a fabricated 0% FP rate. `suffix` carries the VOD
+ * cost tail so the format stays byte-identical to the pre-existing log lines.
+ */
+export function stageAEvidenceLine(
+  kind: "live" | "vod",
+  jobId: string,
+  s: StageAMetricsSnapshot,
+  suffix = ""
+): string | null {
+  if (!(s.totalCandidates > 0)) return null;
+  return (
+    `[${kind}:${jobId}] stageA fpRate=${s.fpRate} (${s.rejected}/${s.totalCandidates} rejected), ` +
+    `latency mean/max=${s.meanOnsetLatencyS}/${s.maxOnsetLatencyS}s, withinBudget=${s.fpRateWithinBudget}${suffix}`
+  );
 }

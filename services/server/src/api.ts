@@ -49,6 +49,7 @@ import {
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
 import { completedCounterFields, completedLiveCounterFields, counterFieldsForJob } from "./job-counters";
+import { stageAEvidenceLine } from "./stage-a-metrics";
 import { buildPostableHighlights } from "./highlight-postable";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
@@ -868,12 +869,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         jobId: job.id,
         source: store.getJob(job.id)?.source,
       }).catch(() => {});
-      if (stageA.totalCandidates > 0) {
-        console.log(
-          `[live:${job.id}] stageA fpRate=${stageA.fpRate} (${stageA.rejected}/${stageA.totalCandidates} rejected), ` +
-            `latency mean/max=${stageA.meanOnsetLatencyS}/${stageA.maxOnsetLatencyS}s, withinBudget=${stageA.fpRateWithinBudget}`
-        );
-      }
+      const stageALine = stageAEvidenceLine("live", job.id, stageA);
+      if (stageALine) console.log(stageALine);
     } catch (e) {
       await markJobFailed(job.id, e);
       console.error(`[live:${job.id}]`, e);
@@ -1396,6 +1393,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               streamId: jobId,
             });
             if (res?.series?.length) shared.setAudioSeries(res.series);
+            // ADAAAA-7694: a fired Stage-A trigger enters the run's outcome
+            // ledger so the VOD decide pass can record the verdict of the
+            // window that judges its onset (`stageAMetrics` -> "measured").
+            // The VOD rail never anchors a decide window to a trigger (there
+            // is no frame ahead of the decode to anchor to) — measurement only.
+            if (res?.candidate?.audio) {
+              const trig = audioTriggerFromCandidate(res.candidate as any);
+              if (trig) shared.recordAudioTrigger(trig);
+            }
           } catch {
             /* gate best-effort — keep going */
           }
@@ -1513,13 +1519,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // (fire-and-forget; fallback title on any failure; never blocks the job).
     void applyJobTitle(store, cfg, jobId);
     emitJobProgress(jobId, 100, "done");
-    if (stageA.totalCandidates > 0) {
-      console.log(
-        `[vod:${jobId}] stageA fpRate=${stageA.fpRate} (${stageA.rejected}/${stageA.totalCandidates} rejected), ` +
-          `latency mean/max=${stageA.meanOnsetLatencyS}/${stageA.maxOnsetLatencyS}s, withinBudget=${stageA.fpRateWithinBudget}, ` +
-          `costUsd=${costUsd.toFixed(4)} (${decideCalls} decide @ $${cfg.decideFee}, ${perceiveSessionS.toFixed(0)}s perceive)`
-      );
-    }
+    const stageALine = stageAEvidenceLine(
+      "vod",
+      jobId,
+      stageA,
+      `, costUsd=${costUsd.toFixed(4)} (${decideCalls} decide @ $${cfg.decideFee}, ${perceiveSessionS.toFixed(0)}s perceive)`
+    );
+    if (stageALine) console.log(stageALine);
     if (confirmTotal > 0) {
       console.log(
         `[vod:${jobId}] stage2 confirm=${confirmTotal} run(s), disagreed=${confirmDisagreed}, ` +

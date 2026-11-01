@@ -4,7 +4,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
-import { StageAMetrics } from "./stage-a-metrics";
+import { StageAMetrics, StageAOutcomeLedger } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
 import type { PerceiveCalibration } from "./perceive-calibration";
 import { clipWindow } from "./config";
@@ -1575,6 +1575,11 @@ export class LiveRunShared {
    * Every audio gate outcome records here; the job runner snapshots it onto the
    * job at completion. */
   readonly stageA = new StageAMetrics();
+  /** ADAAAA-7694: the Stage-A trigger timeline → decided-window verdict
+   * mapping. Fed by the audio tap (`recordAudioTrigger`, both rails) and written
+   * to by the decide observer that judges each trigger's onset, so
+   * `stageA.snapshot()` is a real measurement instead of the all-zero one. */
+  readonly stageAOutcomes = new StageAOutcomeLedger(this.stageA);
   /** Stage-1 vs Stage-2 confirmation-pass metric (ADAAAA-6797). Every confirm
    * dive attempted records its outcome here; runVodJob snapshots it onto the
    * job at completion as `confirmMetrics` (disagreement rate = disagreed /
@@ -1976,9 +1981,16 @@ export class LiveRunShared {
    * candidate) so the live decide loop can schedule ONE analysis window
    * anchored to its onset instead of only blind cadence. The record is
    * provenance + schedule request, never a decide verdict.
+   *
+   * ADAAAA-7694: the same record also enters the Stage-A outcome ledger, which
+   * BOTH rails measure through — the trigger's outcome is the verdict of the
+   * decide window that judges its onset. On the VOD rail there is no anchoring
+   * (no frame to anchor to ahead of the decode), so the ledger is the only
+   * consumer there.
    */
   recordAudioTrigger(trigger: AudioTriggerRecord | null | undefined): boolean {
     if (!trigger) return false;
+    this.stageAOutcomes.recordTrigger(trigger);
     this.audioTriggerQueue.push(trigger);
     if (this.audioTriggerQueue.length > 32) this.audioTriggerQueue.shift();
     return true;
@@ -3622,6 +3634,7 @@ export async function analyzeJob(
           fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
           signalGate: cfg.observeSignalGate,
           signalGateOpts: cfg.observeSignalGateOpts,
+          stageA: run.stageAOutcomes,
           onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
         })
       : null;
@@ -3641,6 +3654,7 @@ export async function analyzeJob(
           fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
           signalGate: cfg.observeSignalGate,
           signalGateOpts: cfg.observeSignalGateOpts,
+          stageA: run.stageAOutcomes,
           onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
         })
       : null;
