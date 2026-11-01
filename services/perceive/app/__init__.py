@@ -1046,6 +1046,8 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[
         "onsetLatencyS": round(sig.onset_latency_s, 3),
         "peakEnergy": round(sig.peak_energy, 6),
         "baselineEnergy": round(sig.baseline_energy, 6),
+        # ADAAAA-7658 AC5: which operating point fired.
+        "thresholdId": sig.threshold_id,
     }
     cand = {
         "type": "candidate",
