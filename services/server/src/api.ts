@@ -14,6 +14,7 @@ import { Store } from "./store";
 import {
   analyzeJob,
   EvidenceTracker,
+  LIVE_AUDIO_RETAIN_S,
   LiveRunShared,
   decideGroupKey,
   highlightIdempotencyKey,
@@ -678,7 +679,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // /analyze leg and the audio tap leg both feed their frames + evidence
       // into this so an audio-triggered candidate can be decided on the
       // anchored video frame, exactly like a video candidate.
-      const shared = new LiveRunShared();
+      // ADAAAA-7671: retain LIVE_AUDIO_RETAIN_S of tapped audio (20 s) so a
+      // window's whole 10 s span + margins survives even when the decide loop
+      // lags the real-time tap.
+      const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S });
       // Drive the audio tap (a second ffmpeg decoding 0:a:0 -> mono pcm_s16le)
       // in parallel with the video pass at ~10 Hz. Best-effort: a dropped
       // chunk or a stopped tap never aborts the video look. When the gate
