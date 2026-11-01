@@ -1,5 +1,6 @@
 """Stage-A audio noise-change gate (ADAAAA-4325 / INC-2; ADAAAA-4970 noise-adaptive
-tune; ADAAAA-6312 baseline normalization + rolling lookback anomaly detector).
+tune; ADAAAA-6312 baseline normalization + rolling lookback anomaly detector;
+ADAAAA-7674 ambient-window re-tune, 8 s -> 6 s).
 
 Cheap candidate trigger on the audio track: detects commentary/crowd energy
 *change* (spectral burst or sustained swell) and emits a *candidate signal*.
@@ -71,7 +72,18 @@ class GateConfig:
     # becomes baseline over time (no re-trigger). ``calibration_s`` is set
     # small so a real event in the first second of a stream is still caught.
     calibration_s: float = 0.5    # disarm + establish the ambient baseline
-    lookback_s: float = 8.0       # rolling lookback window for the baseline percentile
+    # ADAAAA-7674 re-tune: 8.0 -> 6.0 s. At 8 s the frames of a roar stay inside
+    # the rolling percentile window long enough that the *following* roar in the
+    # same celebration wave is measured against a baseline that still contains
+    # the previous roar, so it never reaches `burst_ratio` (nearby roars
+    # coalesce into one fire). 6 s clears a roar from the ambient window before
+    # the next one lands, restoring the distinct fire without touching the
+    # trigger ratio — measured on `real_goal_3080`: recall 0.78 (25/32) ->
+    # 0.875 (28/32), trigger-window FP rate 0.14 -> 0.095, p50/p95 latency
+    # unchanged at 0.20 s, and cross-clip trigger volume on `real_match_70s`
+    # unchanged (13 candidates / 70 s), i.e. recall was not bought with
+    # sensitivity. `thresholdId` is unchanged (`stageA/burst/1.3x/0.3s`).
+    lookback_s: float = 6.0       # rolling lookback window for the baseline percentile
     baseline_percentile: float = 0.55  # percentile of the window = baseline
     baseline_floor: float = 1e-4  # floor so silence never divides to zero
     # Adaptive delta (relative rise over the rolling baseline) + sustain window.

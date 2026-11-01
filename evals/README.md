@@ -110,3 +110,14 @@ find-and-track work:
 - No regression: full `services/perceive` suite green (165 passed) on the
   integrated branch, including INC-2/2b/3/4 tests and the INC-5 eval runner
   self-check (all 10 acceptance bars PASS on `evals/fixtures/synthetic-pass.json`).
+
+## Audio-trigger per-class fidelity (ADAAAA-7674)
+
+`audio-labels.json` is the labeled trigger corpus (one entry per class:
+`goal_roar`, `whistle`, `pa_announcement`, `music_bed`) and
+`measure_audio_recall.py --labels evals/audio-labels.json --clip-root /data`
+prints the fidelity table (recall, trigger-window FP rate, onset->fire p50/p95).
+Classes with no footage carry `clip: null` + a `gapReason` and print `N/A`.
+Add `--compare-lookback 8.0` to column the tuning delta against the previous
+operating point. Results and the operating-point rule live in
+`docs/audio-trigger-contract.md`.

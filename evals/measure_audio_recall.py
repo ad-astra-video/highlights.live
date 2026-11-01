@@ -1,36 +1,42 @@
 #!/usr/bin/env python3
-"""Real-audio before/after measurement for the Stage-A audio gate (ADAAAA-4970).
+"""Real-audio measurement for the Stage-A audio gate (ADAAAA-4970 / ADAAAA-7674).
 
-Quantifies audio-gate goal recall under continuous crowd noise on a real
-soccer clip, comparing the ORIGINAL INC-2 operating point (burst 3x/1s/5s
-cooldown) with the ADAAAA-4970 noise-adaptive operating point (burst 1.8x/0.3s
-/2s cooldown, the new default). Pure DSP — ffmpeg only to decode the audio
-track; no gemma, no billed GPU path.
+Quantifies audio-gate fidelity per trigger class under continuous crowd noise on
+real clips. Pure DSP — ffmpeg only to decode the audio track; no gemma, no billed
+GPU path.
 
-Usage:
+Two modes:
 
-    python3 evals/measure_audio_recall.py \
-        --clip /data/real_goal_3080.mp4 \
-        --goals 0,2,11,13,15,17,19,21,23,25,28,32,34,36,39,56,58,60,62,64,66,68,70,71,74,76,77,82,83,86,89,93 \
-        [--frame-s 0.1] [--sr 8000] [--match-pre 3.0] [--match-post 2.0]
+1. **Per-class mode (ADAAAA-7674 AC1/AC2)** — score every class in the label
+   manifest and print the fidelity table:
 
-``--goals`` are the video-rail accepted GOAL timestamps (seconds) for the clip
-(ground truth); recall = fraction with a gate candidate within [ts-pre, ts+post].
-``--old``/``--new`` select which operating points to report (default: both).
+       python3 evals/measure_audio_recall.py \
+           --labels evals/audio-labels.json --clip-root /data
 
-Prints per-config: candidate count, recalled/goals, recall, FP-rate (fraction
-of candidates not near any goal), onset->fire latency p50/p95/max.
+   Each class reports recall, trigger-window false-positive rate, and
+   onset->fire p50/p95. A class whose manifest entry has ``clip: null`` is
+   printed as ``N/A`` with its recorded gap reason — a gap is not a pass.
+
+2. **Before/after mode (ADAAAA-4970)** — compare the legacy INC-2 operating
+   point with the current defaults on one clip/goal list:
+
+       python3 evals/measure_audio_recall.py \
+           --clip /data/real_goal_3080.mp4 \
+           --goals 0,2,11,... [--frame-s 0.1] [--sr 8000]
+
+``--goals`` are the video-rail accepted GOAL timestamps (seconds) for the clip;
+recall = fraction with a gate candidate within [ts-pre, ts+post].
 
 Needs numpy + the gate module (run where perceive deps exist, e.g. the box
-perceive venv/container). The energy extractor is pure stdlib.
+perceive venv/container or the box host). The energy extractor is pure stdlib.
 """
 import argparse
 import json
+import os
 import struct
 import subprocess
 import sys
 import tempfile
-import os
 
 import numpy as np
 
@@ -74,12 +80,14 @@ def run_gate(gate_cls, cfg, energies, frame_s):
     g = gate_cls(cfg)
     fires = []
     lats = []
+    kinds = []
     for i, e in enumerate(energies):
         sig = g.update(np.full(800, min(1.0, e)), ts=i * frame_s)
         if sig is not None:
             fires.append(sig.ts)
             lats.append(sig.onset_latency_s)
-    return fires, lats
+            kinds.append(sig.threshold_id or sig.kind)
+    return fires, lats, kinds
 
 
 def pc(lats, p):
@@ -89,52 +97,134 @@ def pc(lats, p):
     return s[min(len(s) - 1, int(p * len(s)))]
 
 
-def measure(gate_cls, cfg, energies, frame_s, goals, pre, post):
-    fires, lats = run_gate(gate_cls, cfg, energies, frame_s)
-    goals = sorted(set(goals))
-    rec = sum(1 for t in goals if any(f >= t - pre and f <= t + post for f in fires))
-    fp = sum(1 for f in fires if not any(f >= t - pre and f <= t + post for t in goals))
+def measure(gate_cls, cfg, energies, frame_s, onsets, pre, post):
+    fires, lats, kinds = run_gate(gate_cls, cfg, energies, frame_s)
+    onsets = sorted(set(onsets))
+    rec = sum(1 for t in onsets if any(f >= t - pre and f <= t + post for f in fires))
+    fp = sum(1 for f in fires if not any(t - pre <= f <= t + post for t in onsets))
     return {
         "candidates": len(fires),
-        "goals": len(goals),
+        "events": len(onsets),
         "recalled": rec,
-        "recall": rec / len(goals) if goals else 0.0,
+        "recall": rec / len(onsets) if onsets else 0.0,
+        "fp": fp,
         "fp_rate": fp / len(fires) if fires else 0.0,
         "p50": pc(lats, 0.5),
         "p95": pc(lats, 0.95),
         "max_lat": max(lats) if lats else 0.0,
+        "threshold_ids": sorted(set(kinds)),
     }
+
+
+def per_class(args):
+    """Score every class in the manifest; return the table rows."""
+    manifest = json.load(open(args.labels))
+    gate_cls, GateConfig = load_gate()
+    rows = []
+    for cls in manifest["classes"]:
+        row = {"id": cls["id"], "clip": cls.get("clip"), "measured": bool(cls.get("measured"))}
+        if not cls.get("clip"):
+            row.update(measured=False, gap_reason=cls.get("gapReason", ""))
+            rows.append(row)
+            continue
+        path = cls["clip"]
+        if args.clip_root:
+            path = os.path.join(args.clip_root, cls["clip"])
+        if not os.path.exists(path):
+            row.update(measured=False, gap_reason=f"clip not found at {path}")
+            rows.append(row)
+            continue
+        energies = extract_energies(path, manifest.get("sr", args.sr), manifest.get("frameS", args.frame_s))
+        cfg = GateConfig(frame_s=manifest.get("frameS", args.frame_s))
+        m = measure(gate_cls, cfg, energies,
+                    manifest.get("frameS", args.frame_s), cls["onsets"],
+                    manifest.get("matchPre", args.match_pre), manifest.get("matchPost", args.match_post))
+        row.update(m, measured=True)
+        if args.compare_lookback is not None:
+            base_cfg = GateConfig(frame_s=manifest.get("frameS", args.frame_s),
+                                  lookback_s=args.compare_lookback)
+            row["baseline"] = measure(gate_cls, base_cfg, energies,
+                                      manifest.get("frameS", args.frame_s), cls["onsets"],
+                                      manifest.get("matchPre", args.match_pre),
+                                      manifest.get("matchPost", args.match_post))
+        rows.append(row)
+    return rows
+
+
+def print_table(rows, compare):
+    print("| class | clip | events | candidates | recall | FP windows | FP rate | onset->fire p50 | p95 |")
+    print("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    for r in rows:
+        if not r.get("measured"):
+            print(f"| {r['id']} | N/A | N/A | N/A | **N/A** | N/A | N/A | N/A | N/A |")
+            continue
+        print(f"| {r['id']} | `{r['clip']}` | {r['events']} | {r['candidates']} | "
+              f"{r['recall']:.2f} ({r['recalled']}/{r['events']}) | {r['fp']} | {r['fp_rate']:.2f} | "
+              f"{r['p50']:.2f} s | {r['p95']:.2f} s |")
+    if compare:
+        print("\n| class | lookback | recall | FP rate | candidates | p50 | p95 |")
+        print("| --- | --- | --- | --- | --- | --- | --- |")
+        for r in rows:
+            if not r.get("measured") or "baseline" not in r:
+                continue
+            b, c = r["baseline"], r
+            print(f"| {r['id']} | {compare:.1f} s -> current | "
+                  f"{b['recall']:.2f} -> {c['recall']:.2f} | {b['fp_rate']:.2f} -> {c['fp_rate']:.2f} | "
+                  f"{b['candidates']} -> {c['candidates']} | {b['p50']:.2f} -> {c['p50']:.2f} | "
+                  f"{b['p95']:.2f} -> {c['p95']:.2f} |")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--clip", required=True)
-    ap.add_argument("--goals", required=True, help="comma-separated goal timestamps (s)")
+    ap.add_argument("--clip", help="clip path (before/after mode)")
+    ap.add_argument("--goals", help="comma-separated goal timestamps (s) (before/after mode)")
+    ap.add_argument("--labels", help="label manifest path (per-class mode)")
+    ap.add_argument("--clip-root", help="directory the manifest clip names resolve against (e.g. /data)")
+    ap.add_argument("--class", dest="classes", action="append",
+                    help="only score these class ids (repeatable; default: all)")
     ap.add_argument("--frame-s", type=float, default=0.1)
     ap.add_argument("--sr", type=int, default=8000)
     ap.add_argument("--match-pre", type=float, default=3.0)
     ap.add_argument("--match-post", type=float, default=2.0)
+    ap.add_argument("--compare-lookback", type=float, default=None,
+                    help="also score the class at this lookback_s to show the tuning delta")
+    ap.add_argument("--json", help="write the machine-readable result to this path")
     ap.add_argument("--only", choices=["old", "new"], default=None)
     a = ap.parse_args()
+
+    if a.labels:
+        rows = per_class(a)
+        if a.classes:
+            rows = [r for r in rows if r["id"] in a.classes]
+        print_table(rows, a.compare_lookback)
+        for r in rows:
+            if not r.get("measured"):
+                print(f"\nN/A — {r['id']}: {r.get('gap_reason', 'no footage')}")
+        if a.json:
+            json.dump({"classes": rows, "frameS": a.frame_s}, open(a.json, "w"), indent=2)
+        return
+
+    if not (a.clip and a.goals):
+        ap.error("either --labels or both --clip and --goals are required")
     goals = [float(x) for x in a.goals.split(",") if x.strip() != ""]
     energies = extract_energies(a.clip, a.sr, a.frame_s)
     gate_cls, GateConfig = load_gate()
 
     old = GateConfig(frame_s=a.frame_s, burst_ratio=3.0, burst_min_frames=10,
                      swell_ratio=1.5, swell_seconds=3.0, cooldown_s=5.0)
-    new = GateConfig(frame_s=a.frame_s)  # ADAAAA-4970 noise-adaptive defaults
+    new = GateConfig(frame_s=a.frame_s)  # current noise-adaptive defaults
 
     def show(label, cfg):
         m = measure(gate_cls, cfg, energies, a.frame_s, goals, a.match_pre, a.match_post)
-        print(f"{label}: candidates={m['candidates']} goals={m['goals']} "
+        print(f"{label}: candidates={m['candidates']} goals={m['events']} "
               f"recalled={m['recalled']} recall={m['recall']:.2f} "
-              f"fp_rate={m['fp_rate']:.2f} p50={m['p50']:.2f}s p95={m['p95']:.2f}s "
-              f"max_lat={m['max_lat']:.2f}s")
+              f"fp={m['fp']} fp_rate={m['fp_rate']:.2f} p50={m['p50']:.2f}s p95={m['p95']:.2f}s "
+              f"max_lat={m['max_lat']:.2f}s threshold={m['threshold_ids']}")
 
     if a.only in (None, "old"):
         show("OLD (INC-2 budget)", old)
     if a.only in (None, "new"):
-        show("NEW (ADAAAA-4970)", new)
+        show("NEW (current)", new)
 
 
 if __name__ == "__main__":

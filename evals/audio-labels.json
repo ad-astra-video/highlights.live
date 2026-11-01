@@ -1,0 +1,39 @@
+{
+  "$comment": "Labeled audio-trigger eval corpus (ADAAAA-7674, closing the AC1 exception from ADAAAA-7658). One entry per trigger class. A class with `clip: null` is an explicitly recorded gap and is reported as N/A — it is not a pass. Onsets are video-rail seconds; the match window used by the scorer is [-matchPre, +matchPost] around each onset. Clip files live on the box under the perceive /data volume (or docker/data); point --clip-root at them.",
+  "frameS": 0.1,
+  "sr": 8000,
+  "matchPre": 3.0,
+  "matchPost": 2.0,
+  "classes": [
+    {
+      "id": "goal_roar",
+      "clip": "real_goal_3080.mp4",
+      "onsets": [0, 2, 11, 13, 15, 17, 19, 21, 23, 25, 28, 32, 34, 36, 39, 56, 58, 60, 62, 64, 66, 68, 70, 71, 74, 76, 77, 82, 83, 86, 89, 93],
+      "labelSource": "video-rail accepted GOAL timestamps for the clip (ADAAAA-4970 baseline corpus)",
+      "measured": true
+    },
+    {
+      "id": "whistle",
+      "clip": "clips/9c09c609-e762-4034-a1e2-b370e4bbfbd8.mp4",
+      "onsets": [3.4, 4.2],
+      "labelSource": "referee whistle: narrowband 2.4-3.4 kHz tonal burst verified independently of the gate — band energy 74x (3.4 s) / 85x (4.2 s) ambient while the 0.3-2 kHz speech band rose only 7.4x / 2.6x and the <0.3 kHz low band 8.2x / 11.6x, i.e. a tonal rise, not a broadband crowd roar; the same clip at 8.0 s shows no such rise (6.6x with speech/low also elevated)",
+      "measured": true
+    },
+    {
+      "id": "pa_announcement",
+      "clip": null,
+      "onsets": [],
+      "labelSource": null,
+      "measured": false,
+      "gapReason": "no footage with a stadium PA announcement in the corpus: a 240-clip acoustic survey of the box clip corpus (docker/data/clips) plus the named real clips found speech-dominated stretches only in broadcaster voice-over, and PA speech is not acoustically separable from commentary without source metadata we do not have. Remains N/A; acquisition needs a clip with a known PA call (stadium feed / goal announcement)."
+    },
+    {
+      "id": "music_bed",
+      "clip": null,
+      "onsets": [],
+      "labelSource": null,
+      "measured": false,
+      "gapReason": "no footage with a music bed: the harmonicity check (stable fundamental + integer harmonic stack) on the corpus' low-frequency-dominant stretches scored 0.25-0.38 harmonicity — the same as control stretches of the same clips — so those are stadium rumble, not music. Remains N/A until a clip with a broadcast intro bed is acquired."
+    }
+  ]
+}
