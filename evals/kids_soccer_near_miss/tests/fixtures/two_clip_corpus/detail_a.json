@@ -1,0 +1,11 @@
+{
+  "job": {"id": "job-clip-a"},
+  "highlights": [
+    {"id": "a-1", "eventType": "GOAL", "status": "accepted",
+     "start": 46.5, "end": 61.5, "localizedTs": 54.0,
+     "reason": "The ball clearly enters the net and the keeper is beaten."},
+    {"id": "a-2", "eventType": "GOAL", "status": "accepted",
+     "start": 114.5, "end": 129.5, "localizedTs": 122.0,
+     "reason": "The ball clearly enters the net and the keeper is beaten."}
+  ]
+}

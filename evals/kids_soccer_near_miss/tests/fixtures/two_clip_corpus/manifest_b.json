@@ -1,0 +1,26 @@
+{
+  "video": {"id": "clip-b", "duration_s": 400},
+  "coverage": {"goal_windows": 5, "non_goal_windows": 5, "non_goal_shot_class": 3},
+  "windows": [
+    {"id": "ks-b-goal-013", "t_start": 10, "t_end": 16, "instant": 13,
+     "ground_truth": "goal", "evidence": "ball_in_net"},
+    {"id": "ks-b-goal-033", "t_start": 30, "t_end": 36, "instant": 33,
+     "ground_truth": "goal", "evidence": "ball_in_net"},
+    {"id": "ks-b-goal-053", "t_start": 50, "t_end": 56, "instant": 53,
+     "ground_truth": "goal", "evidence": "ball_in_net"},
+    {"id": "ks-b-goal-073", "t_start": 70, "t_end": 76, "instant": 73,
+     "ground_truth": "goal", "evidence": "ball_in_net"},
+    {"id": "ks-b-goal-093", "t_start": 90, "t_end": 96, "instant": 93,
+     "ground_truth": "goal", "evidence": "ball_in_net"},
+    {"id": "ks-b-n-118", "t_start": 110, "t_end": 126, "ground_truth": "no_goal",
+     "evidence": "saved"},
+    {"id": "ks-b-n-138", "t_start": 130, "t_end": 146, "ground_truth": "no_goal",
+     "evidence": "blocked"},
+    {"id": "ks-b-n-158", "t_start": 150, "t_end": 166, "ground_truth": "no_goal",
+     "evidence": "wide"},
+    {"id": "ks-b-n-178", "t_start": 170, "t_end": 186, "ground_truth": "no_goal",
+     "evidence": "none"},
+    {"id": "ks-b-n-198", "t_start": 190, "t_end": 206, "ground_truth": "no_goal",
+     "evidence": "none"}
+  ]
+}
