@@ -539,9 +539,11 @@ services:
     # case — and read to users as "live stream got no frames". `unless-stopped`
     # restarts the process after any exit and still honours a deliberate
     # `docker stop` / `compose stop`. Cost is zero GPU: docker only acts when
-    # the process is already gone, and a crash loop is still visible as
-    # Exited/Restarting to the box-health routine (which alerts on any state
-    # other than running), so this does not mask a real fault.
+    # the process is already gone. A crash loop is still visible: the container
+    # reads Exited/Restarting to the box-health routine (which alerts on any
+    # state other than running), and the media process publishes its restart
+    # ledger on /health (boot count, last exit code, last restart time) which
+    # flips status to "degraded" once it restarts too often inside the window.
     restart: unless-stopped
     environment:
       - PORT=4070

@@ -1,9 +1,33 @@
 import { HttpSignerClient } from "@highlights/livepeer-session";
 import { loadConfig } from "./config";
 import { MediaServer } from "./server";
+import { loadLedger, recordBoot, recordExit, saveLedger, snapshot } from "./lifecycle";
 
 async function main() {
   const cfg = loadConfig();
+
+  // ADAAAA-7656: the service runs with `restart: unless-stopped`, so an exit is
+  // recovered by docker instead of waiting for the hourly box-health tick. That
+  // makes a persistent fault a restart loop that answers /health fine, so keep a
+  // small crash ledger next to the process and publish it on `/health`
+  // (`status` flips to "degraded" once the node restarts too often in the window).
+  const ledger = recordBoot(loadLedger(cfg.stateDir));
+  saveLedger(ledger, cfg.stateDir);
+  const lifecycle = () => snapshot(ledger, { windowS: cfg.restartWindowS, threshold: cfg.restartDegradedThreshold });
+  // Record exits this process can actually see. SIGKILL / OOM run no handler;
+  // the next boot then records `unobserved-exit` instead of inventing a code.
+  process.on("exit", (code) => {
+    recordExit(ledger, { code, signal: null, reason: "exit" });
+    saveLedger(ledger, cfg.stateDir);
+  });
+  for (const signal of ["SIGTERM", "SIGINT"] as NodeJS.Signals[]) {
+    process.on(signal, () => {
+      recordExit(ledger, { code: 0, signal, reason: "signal" });
+      saveLedger(ledger, cfg.stateDir);
+      process.exit(0);
+    });
+  }
+
   // On-chain: point the media server at the remote signer so it pays the
   // orchestrator for the whole time a stream is open. Offchain (no signer) the
   // media server runs unpaid.
@@ -32,11 +56,18 @@ async function main() {
     nodeId: cfg.nodeId,
     maxSessions: cfg.maxSessions,
     healthToken: cfg.healthToken,
+    // ADAAAA-7656 restart/crash ledger for `/health`.
+    lifecycle,
   });
   const app = await media.build();
   await app.listen({ port: cfg.port, host: "0.0.0.0" });
   // eslint-disable-next-line no-console
   console.log(`media server on :${cfg.port} (orchestrator=${cfg.orchBase})`);
+  const boot = lifecycle();
+  // eslint-disable-next-line no-console
+  console.log(
+    `[media] lifecycle boots=${boot.boots} lastExit=${boot.lastExit ? `${boot.lastExit.reason}:${boot.lastExit.code ?? "-"}` : "none"} bootsInWindow=${boot.bootsInWindow}/${boot.threshold} degraded=${boot.degraded}`,
+  );
 }
 
 main().catch((e) => {

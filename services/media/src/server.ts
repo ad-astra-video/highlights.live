@@ -21,6 +21,7 @@ import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
 import { WebRtcIngestSession } from "./rtc";
 import { guardStream, safeEnd, safeWrite } from "./guarded-write";
+import type { LifecycleSnapshot } from "./lifecycle";
 
 interface ActiveStream {
   streamId: string;
@@ -95,6 +96,15 @@ export interface MediaServerOptions {
   /** Bearer token gating `GET /node` (per-session detail). Unset => 404, so a
    *  public media origin never exposes session/job ids. */
   healthToken?: string;
+  /**
+   * Live restart/crash ledger snapshot for `/health` (ADAAAA-7656). With
+   * `restart: unless-stopped` the container comes back by itself after an exit,
+   * so the plain `status:"ok"` of a freshly restarted process cannot distinguish
+   * "recovered once" from "flapping". When the ledger crosses its threshold the
+   * snapshot reports `status:"degraded"`; without a ledger the field is omitted
+   * (tests and embedders).
+   */
+  lifecycle?: () => LifecycleSnapshot;
 }
 
 const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
@@ -432,8 +442,13 @@ export class MediaServer {
     };
     const activeSessions = sessions.length;
     const availableSessions = Math.max(0, this.maxSessions - activeSessions);
+    // ADAAAA-7656: a policy-restarted process answers /health just like a fresh
+    // one, so the restart ledger is what separates "recovered once" from a
+    // crash loop. Degraded (not failed) keeps the 200 the box-health routine and
+    // the LB probe expect, while the payload stops reading green.
+    const lifecycle = this.opts.lifecycle?.();
     return {
-      status: "ok",
+      status: lifecycle?.degraded ? "degraded" : "ok",
       node: { id: this.nodeId, role: "media", uptimeS: Math.round((now - this.startedAt) / 1000) },
       capacity: {
         maxSessions: this.maxSessions,
@@ -452,6 +467,19 @@ export class MediaServer {
         sessionsCompleted: this.counters.sessionsCompleted,
         sessionSeconds: Number(this.counters.sessionSeconds.toFixed(1)),
       },
+      ...(lifecycle
+        ? {
+            restarts: {
+              boots: lifecycle.boots,
+              lastStartAt: lifecycle.lastStartAt,
+              lastExit: lifecycle.lastExit,
+              windowS: lifecycle.windowS,
+              threshold: lifecycle.threshold,
+              bootsInWindow: lifecycle.bootsInWindow,
+              degraded: lifecycle.degraded,
+            },
+          }
+        : {}),
       ...(opts.detail ? { sessions } : {}),
     };
   }

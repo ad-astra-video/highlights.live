@@ -67,6 +67,17 @@ export interface MediaConfig {
    * to anonymous callers.
    */
   healthToken?: string;
+  /**
+   * Restart-loop visibility (ADAAAA-7656). With `restart: unless-stopped` the
+   * media process comes back by itself after an exit, so `/health` must publish
+   * the crash ledger (boot count, last exit code, last restart time) and turn
+   * `degraded` when the node restarts `restartDegradedThreshold` times inside
+   * `restartWindowS`. Defaults: 600 s window, threshold 3.
+   */
+  restartWindowS: number;
+  restartDegradedThreshold: number;
+  /** Directory holding the lifecycle ledger across process restarts. */
+  stateDir?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
@@ -88,5 +99,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     nodeId: env.MEDIA_NODE_ID ?? "media-0",
     maxSessions: env.MEDIA_MAX_SESSIONS ? Number(env.MEDIA_MAX_SESSIONS) : 1,
     healthToken: env.MEDIA_HEALTH_TOKEN,
+    // ADAAAA-7656: restart-loop visibility for the `restart: unless-stopped`
+    // policy — how wide the loop window is and how many restarts inside it turn
+    // `/health` from green to degraded.
+    restartWindowS: env.MEDIA_RESTART_WINDOW_S ? Number(env.MEDIA_RESTART_WINDOW_S) : 600,
+    restartDegradedThreshold: env.MEDIA_RESTART_DEGRADED_THRESHOLD ? Number(env.MEDIA_RESTART_DEGRADED_THRESHOLD) : 3,
+    stateDir: env.MEDIA_STATE_DIR,
   };
 }
