@@ -1,0 +1,171 @@
+{
+ "reader": {
+  "model": "deepseek-v4.1-flash",
+  "max_tokens": 12000,
+  "temperature": 0,
+  "enable_thinking": true,
+  "frame": "2x (1280x720)",
+  "api": "https://vllm.dpn.chat/v1/chat/completions"
+ },
+ "records": 74,
+ "finish_reasons": {
+  "stop": 65,
+  "null": 9
+ },
+ "elapsed_s": {
+  "min": 4.1,
+  "max": 78.8,
+  "mean": 12.3
+ },
+ "repeatability": {
+  "pairs": 8,
+  "agree": 6,
+  "agreement_pct": 75.0,
+  "failed_reads": [],
+  "pairs_detail": [
+   {
+    "id": "ks-n-0201",
+    "t": 201,
+    "pass1": "goal_mouth_shot",
+    "pass2": "goal_mouth_shot",
+    "agree": true
+   },
+   {
+    "id": "ks-n-0244",
+    "t": 249,
+    "pass1": "goal_mouth_shot",
+    "pass2": "goal_mouth_shot",
+    "agree": true
+   },
+   {
+    "id": "ks-n-0351",
+    "t": 352,
+    "pass1": "keeper_save",
+    "pass2": "keeper_save",
+    "agree": true
+   },
+   {
+    "id": "ks-n-0359",
+    "t": 362,
+    "pass1": "goal_mouth_shot",
+    "pass2": "goal_mouth_shot",
+    "agree": true
+   },
+   {
+    "id": "ks-n-0402",
+    "t": 397,
+    "pass1": "keeper_save",
+    "pass2": "keeper_save",
+    "agree": true
+   },
+   {
+    "id": "ks-n-0622",
+    "t": 622,
+    "pass1": "keeper_save",
+    "pass2": "keeper_save",
+    "agree": true
+   },
+   {
+    "id": "ks-n-0760",
+    "t": 759,
+    "pass1": "goal_mouth_shot",
+    "pass2": "keeper_save",
+    "agree": false
+   },
+   {
+    "id": "ks-n-0760",
+    "t": 760,
+    "pass1": "keeper_save",
+    "pass2": "open_play",
+    "agree": false
+   }
+  ]
+ },
+ "reproduction": {
+  "shot_windows": 10,
+  "windows_with_a_shot_second": 5,
+  "reproduction_pct": 50.0,
+  "reproduced": [
+   "ks-n-0201",
+   "ks-n-0351",
+   "ks-n-0359",
+   "ks-n-0402",
+   "ks-n-0622"
+  ],
+  "missed": [
+   "ks-n-0130",
+   "ks-n-0178",
+   "ks-n-0426",
+   "ks-n-0628",
+   "ks-n-0722"
+  ],
+  "per_window_classes": {
+   "ks-n-0130": [
+    "open_play",
+    "closeup_elsewhere"
+   ],
+   "ks-n-0178": [
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "ks-n-0201": [
+    "open_play",
+    "goal_mouth_shot"
+   ],
+   "ks-n-0351": [
+    "open_play",
+    "keeper_save"
+   ],
+   "ks-n-0359": [
+    "open_play",
+    "open_play",
+    "goal_mouth_shot"
+   ],
+   "ks-n-0402": [
+    "keeper_save",
+    "celebration",
+    "closeup_elsewhere"
+   ],
+   "ks-n-0426": [
+    "open_play",
+    "open_play"
+   ],
+   "ks-n-0622": [
+    "keeper_save",
+    "open_play"
+   ],
+   "ks-n-0628": [
+    "closeup_elsewhere",
+    "closeup_elsewhere"
+   ],
+   "ks-n-0722": [
+    "closeup_elsewhere",
+    "closeup_elsewhere"
+   ]
+  }
+ },
+ "control": {
+  "windows": 12,
+  "seconds_read": 35,
+  "shot_seconds": 3,
+  "false_shot_pct": 8.6,
+  "false_shot_detail": [
+   {
+    "id": "ks-n-0244",
+    "t": 249,
+    "class": "goal_mouth_shot"
+   },
+   {
+    "id": "ks-n-0760",
+    "t": 759,
+    "class": "goal_mouth_shot"
+   },
+   {
+    "id": "ks-n-0760",
+    "t": 760,
+    "class": "keeper_save"
+   }
+  ]
+ }
+}

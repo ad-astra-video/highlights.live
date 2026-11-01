@@ -156,45 +156,113 @@ clearly enters the net" reason) is **unchanged**: 5 → 5 post-fix, 4 pre-fix.
 
 ## AC-1 status (shot-class non-goal windows: 10 of >= 20)
 
+### Measured reproducibility of the read layer (`results/frame_read_audit.json`)
+
+`audit_frame_reads.py` measures the read layer from recorded JSONL only — no
+network, no model call — so the AC-1 gate is a number, not an impression:
+
+| metric | value |
+| --- | --- |
+| primary read seconds | 686 (`results/goalmouth_scan_1s.jsonl`) |
+| repeat layer seconds | 85 (`results/goalmouth_scan_cross_prompt.jsonl`) |
+| cross-read agreement on shared seconds | **80.0 %** (68 agree / 17 differ) |
+| primary "shot" seconds confirmed by the repeat | **0 of 12** |
+| shot-class instability | **100 %** (every shot second is open play or a cut in the repeat) |
+| template collapse (distinct first sentences) | 96.5 % — the reader is not emitting one canned sentence |
+
+So the disagreement is concentrated exactly on the class AC-1 needs: open play
+is stable, shot is not. `promote_shot_windows.py` implements the strict
+promotion rule (a second must be a shot class in *every* read layer, sit clear
+of a goal instant, and raise no scoreboard candidate), which is why 0 windows
+were promoted: no second cleared the unanimity bar.
+
+### Thinking-on single-frame calibration (`results/calib_thinking_on_summary.json`)
+
+The thinking-off layer above was the old configuration. The reader was then
+re-calibrated on single frames (2x, `temperature=0`,
+`enable_thinking=true`, `max_tokens=12000`) with
+`calibrate_shot_reader.py`; 74 recorded reads, mean 12.3 s per frame
+(4.1–78.8 s), `finish_reason=stop` on all but 9 endpoint 502s, which were
+retried:
+
+| metric | value |
+| --- | --- |
+| repeat reads of shot-class seconds | 8 |
+| identical `ACTION=` class on both reads | **6 / 8 = 75 %** |
+| coarse shot-vs-not-shot agreement | 7 / 8 = 87.5 % (one flip: `ks-n-0760` t=760 `keeper_save` → `open_play`) |
+| known shot windows the reader reproduces (>= 1 shot second) | **5 / 10 = 50 %** (missed `ks-n-0130`, `-0178`, `-0426`, `-0628`, `-0722`) |
+| false-shot seconds on the 12 `evidence: "none"` controls | **3 / 35 = 8.6 %** (two of them in `ks-n-0760`, a penalty-shoot-out frame) |
+
+So thinking-on is far more repeatable than thinking-off (75 % vs 0 of 12), but
+it is **not a ground-truth labeller**: it misses half of the windows the manifest
+already knows contain a shot, and it flips one shot/no-shot call between reads.
+Promoting windows from it would bias the shot-class set towards the shots this
+one model happens to see, and its silence cannot certify that a window has no
+shot. AC-1 therefore stays open, and the gate is now a number rather than an
+impression: clearing it needs a second independent read layer (or an objective
+shot detector) for a vote, because the endpoint serves exactly one multimodal
+model.
+
+### Window count
+
 The manifest carries **10** shot-class non-goal windows, not the 20 AC-1 asks
 for. The 12 remaining `evidence: "none"` windows were re-scanned this run at
 24 s and 12 s contact-sheet granularity; no shot could be *confirmed* inside
 them under the reads, so none was promoted (see the reproducibility caveat
 below). New shot windows have to be found elsewhere on the video.
 
-Frame-level labelling is blocked on the vision model, not on the frames: all
+Frame-level labelling is blocked on the read layer, not on the frames: all
 777 frames are cached locally and the contact-sheet + scan helpers are
-committed, but the model endpoint at `vllm.dpn.chat` is not usable as a
-labeller in this environment right now:
+committed. What the endpoint does and does not support:
 
-- Thinking **on**: every read runs away into reasoning tokens
+- Thinking **on, contact sheets**: every read runs away into reasoning tokens
   (`finish_reason=length` with `reasoning_tokens` = the whole budget — 8000
   tokens consumed on one 24-frame sheet with no answer emitted), 40–60 s per
-  sheet.
+  sheet. That is a sheet-size/budget effect, not a property of the model: a
+  single 2x frame at `max_tokens=12000` terminates in 4–19 s (see the
+  calibration table above).
 - Thinking **off**: fast (4–6 s per sheet) but **not reproducible** — the same
   9-frame strip of t=126–134 s (a labelled save, `ks-n-0130`) returned
   "purple attacker shooting toward goal; the ball goes wide at t=128–129" on one
   read and "no strike, save/dive, post, wide or block is visible" on the next.
   Known-shot calibration windows t=628 (wide) and t=722 (blocked) both came
   back "none", and a known non-goal window came back as a goal.
-- A three-way read of a goal window would fix the variance, but at 40–60 s per
-  thinking-on read that is hours of wall clock for a whole-video pass.
+- Thinking **on, single frames**: the most repeatable configuration measured
+  (75 % class agreement, 87.5 % shot-vs-not agreement), but it still misses
+  50 % of the known shot windows, so it screens shots rather than labelling
+  them.
+- The endpoint serves exactly one multimodal model (`GET /v1/models`), so there
+  is no second model to vote with.
 
 So promoting additional shot windows on these reads would be guesswork, and
-AC-1 explicitly forbids labelling on decide's text. The next run should resume
-the dense 1 s pass once the endpoint produces reproducible reads (or when a
-second VL model is available for a vote), using
-`build_contact_sheet.py --from … --to … --per-sheet 12`.
+AC-1 explicitly forbids labelling on decide's text. Clearing AC-1 needs a second
+independent read layer or an objective shot detector, then a dense 1 s pass
+(`build_contact_sheet.py --from … --to … --per-sheet 12`, or
+`scan_goalmouth.py` for per-second reads).
 
 ## Not yet done (tracked as a follow-up)
 
 1. AC-1: extend the shot-class set from 10 to >= 20 windows (blocked on
    reproducible frame reads — see *AC-1 status*).
-2. Verify the 19 remaining goal-catalogue candidates on 1 s frames, so recall
-   can be quoted as pipeline recall.
+2. AC-2: confirm or refute the remaining catalogue evidence on 1 s frames. From
+   `results/goal_catalogue_reconciliation.json` (re-run with
+   `reconcile_goal_catalogue.py`):
+
+   - **21** whole-video scoreboard candidates; **5** sit on a labelled goal,
+     **16** are still unconfirmed (no goal class in the read layer);
+   - **5** read-layer `celebration`/`ball_in_net` seconds fall outside every
+     labelled goal (t=152–165 cluster and the t≈240 cluster) and need a frame
+     check before they can be dismissed as crowd/CU cuts;
+   - the dense read layer covers 0–685 s, so **686–776 s has no read coverage**
+     (the scoreboard layer raises no candidate after t=712, and every goal in
+     the 660–720 s segment is labelled).
 3. AC-3: the reverted-guard VOD A/B, which needs a decide image deploy and one
    GPU VOD pass (blocked while the Komodo manager endpoint is unreachable from
-   the agent container).
+   the agent container; tracked as [ADAAAA-7628](/ADAAAA/issues/ADAAAA-7628)).
+4. The read-layer reproducibility gate itself: one multimodal model is
+   configured on the endpoint (`GET /v1/models` → `deepseek-v4.1-flash` only),
+   so a second-model vote is not available; a second independent layer has to
+   be built and calibrated (tracked as [ADAAAA-7643](/ADAAAA/issues/ADAAAA-7643)).
 
 ## Reproduction
 
@@ -204,4 +272,30 @@ curl -sS "https://highlights-server.dpn.gg/jobs/ac6bf37f-6a03-4d14-a307-de5b9e20
 python3 evals/kids_soccer_near_miss/score_goal_precision.py \
   --manifest evals/kids_soccer_near_miss/label-manifest.json \
   --job-detail /tmp/detail_da2d21a.json --commit da2d21a
+```
+
+Read-layer evidence, all offline except the calibration reads:
+
+```bash
+# 1. reproducibility of the recorded thinking-off layer (no network)
+python3 evals/kids_soccer_near_miss/audit_frame_reads.py \
+  --primary evals/kids_soccer_near_miss/results/goalmouth_scan_1s.jsonl \
+  --repeat evals/kids_soccer_near_miss/results/goalmouth_scan_cross_prompt.jsonl \
+  --json evals/kids_soccer_near_miss/results/frame_read_audit.json
+
+# 2. objective goal-candidate reconciliation (no network)
+python3 evals/kids_soccer_near_miss/reconcile_goal_catalogue.py \
+  --manifest evals/kids_soccer_near_miss/label-manifest.json \
+  --scoreboard evals/kids_soccer_near_miss/results/scoreboard_candidates_whole_video.json \
+  --scan evals/kids_soccer_near_miss/results/goalmouth_scan_1s.jsonl \
+  --json evals/kids_soccer_near_miss/results/goal_catalogue_reconciliation.json
+
+# 3. summary of the recorded thinking-on calibration (no network)
+python3 evals/kids_soccer_near_miss/calibrate_shot_reader.py \
+  --summarize evals/kids_soccer_near_miss/results/calib_thinking_on.jsonl \
+  --json evals/kids_soccer_near_miss/results/calib_thinking_on_summary.json
+
+# 4. record a fresh calibration (serial, ~12 s per frame, needs SCAN_KEY)
+SCAN_KEY=... python3 evals/kids_soccer_near_miss/calibrate_shot_reader.py \
+  --frames /tmp/x2frames --out evals/kids_soccer_near_miss/results/calib_thinking_on.jsonl
 ```

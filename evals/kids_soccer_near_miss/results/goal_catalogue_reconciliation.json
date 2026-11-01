@@ -1,0 +1,486 @@
+{
+ "goals_labelled": 15,
+ "goal_instants": [
+  117,
+  280,
+  341,
+  413,
+  435,
+  541,
+  584,
+  602,
+  616,
+  643,
+  662,
+  678,
+  705,
+  719,
+  770
+ ],
+ "scan_seconds_covered": 686,
+ "scan_max_second": 685,
+ "scan_gap": [
+  {
+   "from": 686,
+   "to": 776
+  }
+ ],
+ "scoreboard_candidates": [
+  {
+   "t0": 23,
+   "t1": 23,
+   "score_maxdiff": 22.2,
+   "scan_around": [
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0117",
+    "instant": 117,
+    "delta_s": 94
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 29,
+   "t1": 29,
+   "score_maxdiff": 9.4,
+   "scan_around": [
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0117",
+    "instant": 117,
+    "delta_s": 88
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 35,
+   "t1": 37,
+   "score_maxdiff": 66.8,
+   "scan_around": [
+    "open_play",
+    "open_play",
+    "goal_mouth_shot",
+    "goal_mouth_shot",
+    "keeper_save",
+    "closeup_elsewhere",
+    "closeup_elsewhere"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0117",
+    "instant": 117,
+    "delta_s": 82
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 42,
+   "t1": 42,
+   "score_maxdiff": 8.5,
+   "scan_around": [
+    "goal_mouth_shot",
+    "goal_mouth_shot",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0117",
+    "instant": 117,
+    "delta_s": 75
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 92,
+   "t1": 93,
+   "score_maxdiff": 12.6,
+   "scan_around": [
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0117",
+    "instant": 117,
+    "delta_s": 25
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 99,
+   "t1": 99,
+   "score_maxdiff": 8.0,
+   "scan_around": [
+    "open_play",
+    "keeper_save",
+    "closeup_elsewhere",
+    "closeup_elsewhere",
+    "closeup_elsewhere"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0117",
+    "instant": 117,
+    "delta_s": 18
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 226,
+   "t1": 226,
+   "score_maxdiff": 9.6,
+   "scan_around": [
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0280",
+    "instant": 280,
+    "delta_s": 54
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 229,
+   "t1": 229,
+   "score_maxdiff": 11.4,
+   "scan_around": [
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0280",
+    "instant": 280,
+    "delta_s": 51
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 273,
+   "t1": 273,
+   "score_maxdiff": 14.8,
+   "scan_around": [
+    "open_play",
+    "goal_mouth_shot",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0280",
+    "instant": 280,
+    "delta_s": 7
+   },
+   "verdict": "goal_already_labelled"
+  },
+  {
+   "t0": 282,
+   "t1": 282,
+   "score_maxdiff": 13.4,
+   "scan_around": [
+    "keeper_save",
+    "open_play",
+    "open_play",
+    "open_play",
+    "closeup_elsewhere"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0280",
+    "instant": 280,
+    "delta_s": -2
+   },
+   "verdict": "goal_already_labelled"
+  },
+  {
+   "t0": 308,
+   "t1": 309,
+   "score_maxdiff": 42.3,
+   "scan_around": [
+    "closeup_elsewhere",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0280",
+    "instant": 280,
+    "delta_s": -28
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 335,
+   "t1": 335,
+   "score_maxdiff": 16.1,
+   "scan_around": [
+    "open_play",
+    "open_play",
+    "goal_mouth_shot",
+    "open_play",
+    "keeper_save"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0341",
+    "instant": 341,
+    "delta_s": 6
+   },
+   "verdict": "goal_already_labelled"
+  },
+  {
+   "t0": 359,
+   "t1": 361,
+   "score_maxdiff": 15.3,
+   "scan_around": [
+    "open_play",
+    "open_play",
+    "goal_mouth_shot",
+    "open_play",
+    "open_play",
+    "goal_mouth_shot",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0341",
+    "instant": 341,
+    "delta_s": -18
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 380,
+   "t1": 380,
+   "score_maxdiff": 15.7,
+   "scan_around": [
+    "goal_mouth_shot",
+    "open_play",
+    "open_play",
+    "open_play",
+    "keeper_save"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0413",
+    "instant": 413,
+    "delta_s": 33
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 385,
+   "t1": 386,
+   "score_maxdiff": 22.6,
+   "scan_around": [
+    "open_play",
+    "goal_mouth_shot",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0413",
+    "instant": 413,
+    "delta_s": 28
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 393,
+   "t1": 393,
+   "score_maxdiff": 28.3,
+   "scan_around": [
+    "open_play",
+    "goal_mouth_shot",
+    "open_play",
+    "keeper_save",
+    "keeper_save"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0413",
+    "instant": 413,
+    "delta_s": 20
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 480,
+   "t1": 480,
+   "score_maxdiff": 8.4,
+   "scan_around": [
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0435",
+    "instant": 435,
+    "delta_s": -45
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 503,
+   "t1": 503,
+   "score_maxdiff": 9.7,
+   "scan_around": [
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0541",
+    "instant": 541,
+    "delta_s": 38
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 507,
+   "t1": 507,
+   "score_maxdiff": 11.6,
+   "scan_around": [
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play",
+    "open_play"
+   ],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0541",
+    "instant": 541,
+    "delta_s": 34
+   },
+   "verdict": "candidate_needs_frame_confirm"
+  },
+  {
+   "t0": 535,
+   "t1": 537,
+   "score_maxdiff": 13.9,
+   "scan_around": [
+    "closeup_elsewhere",
+    "goal_mouth_shot",
+    "open_play",
+    "open_play",
+    "open_play",
+    "keeper_save",
+    "ball_in_net"
+   ],
+   "scan_has_goal_class": true,
+   "nearest_goal": {
+    "id": "ks-g-0541",
+    "instant": 541,
+    "delta_s": 6
+   },
+   "verdict": "goal_already_labelled"
+  },
+  {
+   "t0": 710,
+   "t1": 712,
+   "score_maxdiff": 64.5,
+   "scan_around": [],
+   "scan_has_goal_class": false,
+   "nearest_goal": {
+    "id": "ks-g-0705",
+    "instant": 705,
+    "delta_s": -5
+   },
+   "verdict": "goal_already_labelled"
+  }
+ ],
+ "scan_goal_class_not_labelled": [
+  {
+   "t": 152,
+   "scan_class": "celebration",
+   "nearest_goal": {
+    "id": "ks-g-0117",
+    "instant": 117,
+    "delta_s": -35
+   }
+  },
+  {
+   "t": 153,
+   "scan_class": "celebration",
+   "nearest_goal": {
+    "id": "ks-g-0117",
+    "instant": 117,
+    "delta_s": -36
+   }
+  },
+  {
+   "t": 154,
+   "scan_class": "celebration",
+   "nearest_goal": {
+    "id": "ks-g-0117",
+    "instant": 117,
+    "delta_s": -37
+   }
+  },
+  {
+   "t": 165,
+   "scan_class": "ball_in_net",
+   "nearest_goal": {
+    "id": "ks-g-0117",
+    "instant": 117,
+    "delta_s": -48
+   }
+  },
+  {
+   "t": 353,
+   "scan_class": "celebration",
+   "nearest_goal": {
+    "id": "ks-g-0341",
+    "instant": 341,
+    "delta_s": -12
+   }
+  }
+ ],
+ "counts": {
+  "scoreboard_candidates": 21,
+  "scoreboard_candidates_on_labelled_goal": 5,
+  "scoreboard_candidates_unconfirmed": 16,
+  "scan_goal_class_seconds": 31,
+  "scan_goal_class_not_labelled": 5
+ }
+}
