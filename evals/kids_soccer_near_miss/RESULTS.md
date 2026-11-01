@@ -128,6 +128,83 @@ control 76.19 % → 80.95 % because the t=341 goal is now credited in both. The
 dominant false-positive class (saves/blocks accepted with a confident "ball
 clearly enters the net" reason) is **unchanged**: 5 → 5 post-fix, 4 pre-fix.
 
+## AC-3 — reverted-guard A/B (`results/ac3_guard_ab.json`)
+
+AC-3 asks for the guarded build's numbers against a build with
+`services/decide/app/confirm.py::goal_corroborated` reverted (the
+`stage1_contradicts` guard dropped), on the same upload, with both FP lists side
+by side.
+
+The pair is a controlled A/B, not two arbitrary builds: `git show --stat da2d21a`
+touches **only** `services/decide/app/confirm.py` (the guard) plus
+`services/decide/tests/test_confirm.py`. The guarded job `ac6bf37f` ran that
+commit; the pre-fix control `cc06fb4a` is the same pipeline built before it, i.e.
+the reverted-guard build, on the same `kids-soccer.mp4` upload.
+
+| build | job | accepted | precision | recall | FP |
+|---|---|---|---|---|---|
+| guarded `da2d21a` | `ac6bf37f` | 23 | **78.26 %** (18/23) | **100 %** (15/15) | 5 |
+| reverted guard (pre-fix control) | `cc06fb4a` | 21 | **80.95 %** (17/21) | **93.33 %** (14/15) | 4 |
+
+False positives side by side (`t` = card `localizedTs`; the classes are the same
+near-miss cards in both builds):
+
+| t | guarded `da2d21a` | reverted guard | what the frames show |
+|---|---|---|---|
+| 178.1 | FP | — | sliding challenge in open play, scoreboard 1–1 |
+| 203.2 | FP | FP | keeper on the ground, ball outside the net |
+| 252.6 | FP | FP | empty net / midfield, no goalmouth event |
+| 358.8 | FP | FP | the same save, no ball in the net |
+| 401.7 | FP | FP | keeper saves and holds 400–405 |
+| 695.6 | — | FP (`stage1Disagreed: true`) | the t=688.6 shape: window read says no goal |
+
+**So the revert does not lower precision — it raises it** (80.95 % vs 78.26 %),
+exactly the direction AC-3 anticipated, and the guard's net effect on this clip is
+**+1 goal of recall and +1 save-class false positive**: reverting adds the
+`t=695.6` card *and* removes the `t=178.1` card, while `t=624.8` (the card that
+recovers goal `ks-g-0616`, 612–620 s — the pre-fix control's only false negative)
+is only found by the guarded build.
+
+**The class the guard actually catches** is narrow and specific: a card whose own
+Stage-1 read says *no goal* (`stage1Disagreed: true`) accepted on **window-level**
+corroboration (`corroborationSource: scoreboard`, or a narrated penalty tally)
+with no instant-anchored evidence. `guard_ab.py` counts it directly:
+
+- guarded build: **0** accepted cards of that class (and no card may exist — the
+  guard rejects them, `tests/test_guard_ab.py` pins the rule);
+- reverted build: **1** — `ts=690`, `localizedTs=695.6`, `goalConfirmed:
+  confirmed_goal`, `stage1Disagreed: true`, `corroborationSource: scoreboard`.
+
+Two honest caveats on that class:
+
+- **It is stage-1 dependent, so it is not reproducible run-to-run.** The *same*
+  window `t=690` came back `stage1Disagreed: false` in the guarded run and
+  `true` in the reverted run; the disagreement rate was 21/229 confirm runs
+  (9.2 %) guarded vs 26/230 (11.3 %) reverted. The guard can only bite when the
+  window's own read actually disagrees, so its measured effect moves with the
+  model's run-to-run read.
+- **The guard does not touch the dominant FP class at all.** Saves/blocks
+  accepted with a confident "ball clearly enters the net" reason stay 4 → 5;
+  the guard is a corroboration gate, not a shot/save classifier.
+
+Why this A/B uses the recorded control job instead of a fresh revert deploy:
+production `highlights-decide` is in active QA use (the live audio-noise trigger
+verification on [ADAAAA-7668](/ADAAAA/issues/ADAAAA-7668), with the box's
+`hl-rtmp-7670` live job up during this run). Reverting the guard there for the
+~90 min of a VOD pass would have changed decide's acceptance behaviour under that
+concurrent verification. AC-3's own fallback clause names the pre-fix control for
+exactly this case, and the build equivalence above is the proof that the pair is
+the same experiment.
+
+```bash
+python3 evals/kids_soccer_near_miss/guard_ab.py \
+  --guarded  /tmp/job_detail_ac6bf37f-*.json \
+  --reverted /tmp/job_detail_cc06fb4a-*.json \
+  --score-guarded  evals/kids_soccer_near_miss/results/score_da2d21a.json \
+  --score-reverted evals/kids_soccer_near_miss/results/score_prefix.json \
+  --json evals/kids_soccer_near_miss/results/ac3_guard_ab.json --assert-checks
+```
+
 ## Caveats (read before quoting these numbers)
 
 - **Recall is recall on the 15-goal catalogue, not yet a whole-video goal
@@ -447,6 +524,29 @@ that window's `saved` label and with a full-frame read of the same second
 localisation has to precede crop reads. Nothing was promoted, and the 8/10 +
 <= 2/35 calibration on native crops is the next measurable step.
 
+### 4. Region-first motion at native resolution (`localised_shot_motion.py`, 2026-11-01)
+
+The crop-read negative in §3 said localisation has to come first. That insight
+was applied to the **deterministic** layer instead of the model: build a 12x7
+cell map of maximum per-pair residual inside each labelled goal window, derive a
+goal-mouth region from the cells that are hot at goals and cool on quiet seconds
+(goal windows only — the shot/control windows never inform the region), then score
+every shot and control window as the max residual **inside that region**.
+
+Result on the source video at 1280x720 / 12 fps (`results/localised_shot_motion_summary.json`):
+
+- region = **3 of 84 cells** ([[5,0],[5,3],[6,0]] — bottom-centre / bottom-right band,
+  3.6 % of the frame);
+- **AUC 0.442** shot vs control (chance), shot median 74.64 vs control 76.66;
+- best threshold on the sweep catches 5/10 shots with 6/12 controls also above it;
+- the 15 goals themselves span 30–233 inside the same region, i.e. even a
+  *confirmed* goal does not reliably light the goal-mouth cells at 12 fps.
+
+Three independent deterministic settings now agree on chance: **0.481** (640x360
+cache, whole pitch), **0.440** (1280x720 source, whole pitch), **0.442**
+(1280x720 source, goal-mouth region). Resolution and a region prior are both
+excluded as the limiting factor; the statistic is.
+
 ### What this changes for the AC set
 
 - AC-1's recorded unblock ("higher-resolution / 30 fps frame source") is
@@ -477,14 +577,15 @@ mean.
 
 1. AC-1: extend the shot-class set from 10 to >= 20 windows. Measured blocker
    (see *AC-1 status*): the primary read layer reproduces 5/10 known shot
-   windows, the objective motion layer carries no signal (AUC 0.481 at 640x360
-   and 0.440 at the source's own 1280x720 — see *Native-resolution source*), and
-   the unanimous vote is capped by the primary layer, so no window can be
-   promoted under the bar (>= 8/10, <= 2/35). The "higher-resolution / 30 fps
-   frame source" unblock is **falsified**; the remaining path is a perception
-   labeller over native-resolution crops localised per window, which needs
-   `SCAN_KEY` provisioned as a Paperclip secret for a prompt-family layer, or a
-   vision calibration on localised native crops under the same bar.
+   windows, and the objective motion layer now carries no signal in three
+   independent settings (AUC 0.481 at 640x360 whole-pitch, 0.440 at the source's
+   own 1280x720 whole-pitch, 0.442 at 1280x720 restricted to a goal-mouth region
+   derived from the labelled goals — see *Native-resolution source* §4). The
+   unanimous vote is capped by the primary layer, so no window can be promoted
+   under the bar (>= 8/10, <= 2/35). **Resolution and localisation are both
+   falsified as the blocker**; the remaining path is a perception labeller on
+   localised native crops (`SCAN_KEY` as a Paperclip secret, or a calibrated
+   vision read).
 2. AC-2: confirm or refute the remaining catalogue evidence on 1 s frames. From
    `results/goal_catalogue_reconciliation.json` (re-run with
    `reconcile_goal_catalogue.py`):
@@ -497,9 +598,11 @@ mean.
    - the dense read layer covers 0–685 s, so **686–776 s has no read coverage**
      (the scoreboard layer raises no candidate after t=712, and every goal in
      the 660–720 s segment is labelled).
-3. AC-3: the reverted-guard VOD A/B, which needs a decide image deploy and one
-   GPU VOD pass (blocked while the Komodo manager endpoint is unreachable from
-   the agent container; tracked as [ADAAAA-7628](/ADAAAA/issues/ADAAAA-7628)).
+3. ~~AC-3: the reverted-guard VOD A/B~~ — **done** from the recorded control job
+   `cc06fb4a` (the reverted-guard build) against `ac6bf37f`, with
+   `results/ac3_guard_ab.json` as the evidence and both FP lists in the AC-3
+   section. A fresh current-build revert pass stays optional (production decide
+   is in active QA use; see that section).
 4. The read-layer reproducibility gate itself: one multimodal model is
    configured on the endpoint (`GET /v1/models` → `deepseek-v4.1-flash` only),
    so a second-model vote is not available; a second independent layer has to
