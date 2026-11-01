@@ -2831,9 +2831,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const body = req.body ?? {};
     const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
     const bj = browserJobs.get(job.id);
-    // A stale close (the browser re-provisioned onto a fresh media session) must
-    // not finalize the stream that is still live.
-    if (sessionId && bj?.mediaSessionId && sessionId !== bj.mediaSessionId) {
+    // A close must only end the job when NO media session is still carrying it.
+    // The node reports how many sessions for this job remain live after the one
+    // that closed (`liveSessionsForJob`); a newer session can exist when the
+    // browser re-provisioned (or when a harness provisioned its own instead of
+    // adopting the control plane's). Older nodes do not send the count — then
+    // fall back to session-id matching and ignore a close for a stale session.
+    const liveForJob = typeof body.liveSessionsForJob === "number" ? body.liveSessionsForJob : null;
+    if (liveForJob !== null) {
+      if (liveForJob > 0) {
+        return reply.send({ ok: true, ignored: "another media session is still live for this job", liveSessionsForJob: liveForJob });
+      }
+    } else if (sessionId && bj?.mediaSessionId && sessionId !== bj.mediaSessionId) {
       return reply.send({ ok: true, ignored: "stale session", sessionId });
     }
     const reason = typeof body.reason === "string" ? body.reason : "unknown";

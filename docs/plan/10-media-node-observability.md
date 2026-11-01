@@ -80,12 +80,15 @@ A browser job owns exactly ONE media session.
   no stream, so it must not inflate the per-node cost meter.
 - On teardown the node POSTs `{CALLBACK_URL}/jobs/{jobId}/media/session-closed`
   (bearer `MEDIA_HEALTH_TOKEN` when configured) with
-  `{ sessionId, jobId, reason, neverAttached, seconds, nodeId, transport }`, where
-  `reason` is one of `client-closed` | `control-close` | `no-client-timeout` |
-  `payment-failure`. The control plane then finalizes the browser job (same path as
-  `POST /jobs/:id/stop`, run once per job) so `GET /jobs` shows no `active` job after
-  a run. The callback is fire-and-forget: a missed callback degrades to the old
-  explicit-stop behaviour, never to a leaked slot.
+  `{ sessionId, jobId, reason, liveSessionsForJob, neverAttached, seconds, nodeId, transport }`,
+  where `reason` is one of `client-closed` | `control-close` | `no-client-timeout` |
+  `payment-failure` and `liveSessionsForJob` is the number of sessions still carrying
+  the job after this one closed. The control plane finalizes the browser job only
+  when that count is 0 (same path as `POST /jobs/:id/stop`, run once per job), so
+  `GET /jobs` shows no `active` job after a run — including when the closing session
+  is one the control plane never tracked (a harness that provisioned its own). The
+  callback is fire-and-forget: a missed callback degrades to the old explicit-stop
+  behaviour, never to a leaked slot.
 
 `restarts.bootId` + `restarts.buildRef` + `restarts.restartCause` make a restart
 attributable from the edge: `deploy` means the revision changed, `crash` means the

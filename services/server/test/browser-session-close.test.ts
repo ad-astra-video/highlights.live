@@ -153,9 +153,43 @@ describe("browser job lifecycle on media session close (ADAAAA-7689 AC3)", () =>
     });
     expect(stale.statusCode).toBe(200);
     expect(stale.json().ignored).toBe("stale session");
+    // ...and with the node's live count, a close is ignored while another session
+    // for the job is still live.
+    const stillLive = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/media/session-closed`,
+      payload: { sessionId: m.json().mediaSessionId, reason: "client-closed", liveSessionsForJob: 1 },
+    });
+    expect(stillLive.json().ignored).toBe("another media session is still live for this job");
     // The live stream is untouched.
     expect(await jobStatus(app, token, jobId)).toBe("active");
 
+    await app.close();
+    await media.close();
+  });
+
+  it("finalizes when the closing session is one the control plane never tracked", async () => {
+    // The harness provisioned its own session (instead of adopting the control
+    // plane's) and the control plane's provision already idled out: the close of
+    // that untracked session is the LAST one for the job, so the job must not be
+    // left `active` (ADAAAA-7689 F2/AC3).
+    const media = await mediaStub();
+    const { app } = await buildTestApp({ MEDIA_SERVER_URL: media.url });
+    const token = await register(app, "life6@test.dev", "password123");
+    const jobId = await browserJob(app, token);
+    await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/media`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {},
+    });
+    const r = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/media/session-closed`,
+      payload: { sessionId: "sess-harness-own", reason: "client-closed", liveSessionsForJob: 0 },
+    });
+    expect(r.statusCode).toBe(200);
+    expect(await jobStatus(app, token, jobId)).toBe("done");
     await app.close();
     await media.close();
   });
