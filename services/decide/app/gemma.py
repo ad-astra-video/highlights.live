@@ -996,11 +996,33 @@ def _asr_url() -> str | None:
     return u or None
 
 
+# ADAAAA-7669: whisper's task knob. "transcribe" (default) keeps the source
+# language — the deployed behaviour. "translate" makes whisper emit English, so
+# Spanish/Catalan commentary reaches the prompt in a language gemma-4 handles
+# confidently. Opting in is a per-deployment env decision (ASR_TASK=translate),
+# never a code default: translation rewrites the prompt text, so enabling it
+# requires re-running the goal-acceptance check on a real clip.
+ASR_TASKS = ("transcribe", "translate")
+ASR_DEFAULT_TASK = "transcribe"
+
+
+def asr_task() -> str:
+    """Effective whisper task for Path 2 ASR (``ASR_TASK``, default transcribe).
+
+    An unrecognised value falls back to ``transcribe`` rather than erroring, so a
+    typo degrades to today's source-language behaviour instead of breaking the
+    decide path. The ASR endpoint echoes what actually ran as ``asrTask``.
+    """
+    t = (os.environ.get("ASR_TASK", "") or "").strip().lower()
+    return t if t in ASR_TASKS else ASR_DEFAULT_TASK
+
+
 def transcribe_audio(
     url: str,
     audio_b64: str,
     sample_rate: int = 16000,
     timeout_s: float = 20.0,
+    task: str | None = None,
 ) -> tuple[str, float]:
     """Transcribe a mono WAV (base64, e.g. 16 kHz 16-bit PCM) to text via the ASR
     endpoint (Path 2). Returns (text, elapsed_seconds). Any failure returns
@@ -1008,21 +1030,28 @@ def transcribe_audio(
     ASR glitch.
 
     Contract (newly introduced by this task): POST {url}/transcribe with JSON
-    ``{"audio": "<wav base64>", "sample_rate": 16000}`` -> ``{"text": "..."}``.
-    Kept tiny so any cheap ASR (faster-whisper server, hosted endpoint) can
-    serve it; it never runs the gemma GPU for audio."""
+    ``{"audio": "<wav base64>", "sample_rate": 16000, "task": "transcribe"}``
+    -> ``{"text": "...", "asrTask": "transcribe"}``. The ``task`` field is
+    additive (ADAAAA-7669): an ASR server that predates it ignores the extra key
+    and still answers, so an old endpoint never breaks. Kept tiny so any cheap
+    ASR (faster-whisper server, hosted endpoint) can serve it; it never runs the
+    gemma GPU for audio."""
     import time
 
     import httpx
 
     if not audio_b64:
         return "", 0.0
+    # ADAAAA-7669: explicit arg wins; otherwise the deployment's ASR_TASK.
+    effective_task = (task or "").strip().lower() or asr_task()
+    if effective_task not in ASR_TASKS:
+        effective_task = ASR_DEFAULT_TASK
     t0 = time.monotonic()
     text = ""
     try:
         resp = httpx.post(
             url.rstrip("/") + "/transcribe",
-            json={"audio": audio_b64, "sample_rate": sample_rate},
+            json={"audio": audio_b64, "sample_rate": sample_rate, "task": effective_task},
             timeout=timeout_s,
         )
         resp.raise_for_status()
@@ -1032,6 +1061,9 @@ def transcribe_audio(
         # "You") and punctuation-only output so the prompt/analysis block only
         # ever carries real commentary. `audio.path` then falls back to "none"
         # for a window that carried no usable speech (ADAAAA-7248/7277).
+        # ADAAAA-7669: the guard runs AFTER translation on purpose — whisper's
+        # translate task answers silence with the same English filler set, so a
+        # translated window must pass through this filter too.
         text = usable_transcript(text)
     except Exception:
         text = ""

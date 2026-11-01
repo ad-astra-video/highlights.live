@@ -4,11 +4,19 @@ Serves POST /transcribe so services/decide can ASR the trigger-window audio
 into text to inject into the gemma decide prompt. Contract (see
 services/decide/app/gemma.py::transcribe_audio):
 
-    POST {url}/transcribe  {"audio": "<wav base64>", "sample_rate": 16000}
+    POST {url}/transcribe  {"audio": "<wav base64>", "sample_rate": 16000,
+                            "task": "transcribe"|"translate"}
     -> {"text": "<transcript>",
         "asrFormat": "int16/16000Hz/ch1",   # ADAAAA-7665 additive evidence
         "asrRms": 0.1277, "asrSampleRate": 16000, "asrSeconds": 11.9,
+        "asrTask": "transcribe",            # ADAAAA-7669: effective task
         "asrError": ""}
+
+`task` (ADAAAA-7669) is whisper's own knob: "transcribe" keeps the source
+language, "translate" emits English. It defaults to "transcribe" so an existing
+caller that never sends the field sees byte-identical behaviour, and the
+effective task always rides the response as `asrTask` (a typo shows up as the
+coerced value instead of silently pretending translation is on).
 
 Any failure returns {"text": ""} with HTTP 200 (never 5xx) so the decide path
 degrades to text-only instead of dying on an ASR glitch — that contract is the
@@ -57,6 +65,17 @@ N_THREADS = int(os.environ.get("ASR_THREADS", "8"))
 MIN_USABLE_SECONDS = float(os.environ.get("ASR_MIN_SECONDS", "0.5"))
 # Below this RMS the window is effectively silent; still 200 + "" but visible.
 SILENCE_RMS = float(os.environ.get("ASR_SILENCE_RMS", "0.002"))
+# ADAAAA-7669: whisper's task knob. "transcribe" keeps the source language,
+# "translate" emits English. The deployed default stays "transcribe" — the
+# decide side opts in per-deployment with ASR_TASK=translate.
+ASR_TASKS = ("transcribe", "translate")
+DEFAULT_TASK = "transcribe"
+
+
+def normalize_task(raw: str | None) -> str:
+    """Coerce a requested whisper task to a supported one (default transcribe)."""
+    t = (raw or "").strip().lower()
+    return t if t in ASR_TASKS else DEFAULT_TASK
 
 _model = None
 _model_lock = False
@@ -83,6 +102,9 @@ def _get_model():
 class TranscribeRequest(BaseModel):
     audio: str  # base64 of a mono WAV (e.g. 16 kHz 16-bit PCM)
     sample_rate: int = 16000
+    # ADAAAA-7669: whisper task. Additive with a default, so every existing
+    # caller keeps source-language (transcribe) behaviour.
+    task: str = DEFAULT_TASK
 
 
 class TranscribeResponse(BaseModel):
@@ -93,6 +115,8 @@ class TranscribeResponse(BaseModel):
     asrRms: float = 0.0
     asrSampleRate: int = 0
     asrSeconds: float = 0.0
+    # ADAAAA-7669: the task that actually ran (never the raw request value).
+    asrTask: str = DEFAULT_TASK
     asrError: str = ""
 
 
@@ -166,6 +190,14 @@ def transcribe(req: TranscribeRequest) -> TranscribeResponse:
     seconds = 0.0
     rms = 0.0
     err = ""
+    # ADAAAA-7669: resolve the effective task up front so `asrTask` is truthful
+    # even on an early-exit path (payload error / silence / too short).
+    task = normalize_task(req.task)
+    if (req.task or "").strip().lower() not in ASR_TASKS:
+        log.warning("[asr] unsupported task %r — running %s", req.task, DEFAULT_TASK)
+        task_note = f"bad_task:{req.task}"
+    else:
+        task_note = ""
     try:
         raw = base64.b64decode(req.audio)
         audio, sr, fmt, err = decode_wav_bytes(raw)
@@ -173,8 +205,8 @@ def transcribe(req: TranscribeRequest) -> TranscribeResponse:
         seconds = round(audio.shape[0] / float(sr), 3) if sr else 0.0
         rms = round(_rms(audio), 5)
         log.info(
-            "[asr] bytes=%d b64=%d fmt=%s secs=%s rms=%s err=%s",
-            len(raw), len(req.audio), fmt, seconds, rms, err or "-",
+            "[asr] bytes=%d b64=%d fmt=%s secs=%s rms=%s task=%s err=%s",
+            len(raw), len(req.audio), fmt, seconds, rms, task, err or "-",
         )
         if err:
             # Visible payload problem: 200 + "" keeps the caller alive, the
@@ -197,19 +229,22 @@ def transcribe(req: TranscribeRequest) -> TranscribeResponse:
                     np.linspace(0, audio.shape[0] - 1, n), np.arange(audio.shape[0]), audio
                 ).astype(np.float32)
             model = _get_model()
-            segments, _info = model.transcribe(audio, beam_size=1, language=None)
+            # ADAAAA-7669: `task` is whisper's source-language/English switch.
+            segments, _info = model.transcribe(audio, beam_size=1, language=None, task=task)
             text = " ".join(seg.text for seg in segments).strip()
     except Exception as exc:  # degrade to empty transcript — never 5xx
         text = ""
         err = err or f"transcribe_failed:{type(exc).__name__}"
         log.warning("[asr] transcribe failed: %s", type(exc).__name__)
     elapsed = round(time.monotonic() - t0, 3)
-    log.info("[asr] done %.3fs text_len=%d", elapsed, len(text))
+    log.info("[asr] done %.3fs task=%s text_len=%d", elapsed, task, len(text))
     return TranscribeResponse(
         text=text,
         asrFormat=fmt,
         asrRms=rms,
         asrSampleRate=rate,
         asrSeconds=seconds,
-        asrError=err,
+        asrTask=task,
+        # A bad task request is reported but never suppresses a real transcript.
+        asrError=err or task_note,
     )
