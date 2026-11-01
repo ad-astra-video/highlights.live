@@ -48,8 +48,23 @@ export interface AudioTriggerRecord {
  *  real soccer audio is ~1 s, p95 <= 2.9 s, ADAAAA-4970). */
 export const AUDIO_TRIGGER_LEAD_S = 1.0;
 /** Two triggers whose onsets are closer than this are ONE audible event (the
- *  gate's own cooldown is 2 s) — one analysis, not a storm. */
+ *  gate's own cooldown is 2 s) — one analysis, not a storm. Coalescing is
+ *  scoped to one trigger FAMILY (see {@link triggerFamily}): a whistle and the
+ *  crowd roar of the same celebration describe different evidence and must not
+ *  collapse into one analysis (the ADAAAA-6312 defect class). */
 export const AUDIO_TRIGGER_COALESCE_S = 2.5;
+
+/** Path family of a trigger, from its `thresholdId` prefix.
+ *
+ *  `stageA/*` is the broadband level-change gate (roar / swell);
+ *  `stageB/*` is the band-limited tonal path (whistle). Two fires from
+ *  different families within the coalesce window are separate evidence — a
+ *  whistle marks the stoppage even when the roar lands 2 s later — so they get
+ *  one analysis each. Unknown/legacy ids fall back to their whole string. */
+export function triggerFamily(thresholdId: string): string {
+  const i = thresholdId.indexOf("/");
+  return i > 0 ? thresholdId.slice(0, i) : thresholdId;
+}
 /** A trigger older than this (relative to the frame clock) can no longer be
  *  anchored to a retained frame — drop it instead of analyzing a stale window. */
 export const AUDIO_TRIGGER_MAX_STALE_S = 8.0;
@@ -117,6 +132,9 @@ export class TriggerWindowScheduler {
   private readonly maxStaleS: number;
   private pending: AudioTriggerRecord[] = [];
   private lastAcceptedOnset: number | null = null;
+  /** Last accepted onset PER trigger family: a whistle and a roar in the same
+   *  celebration are distinct evidence (ADAAAA-7682 AC4). */
+  private readonly lastAcceptedOnsetByFamily = new Map<string, number>();
   private readonly counters: TriggerSchedulerStats = {
     accepted: 0,
     coalesced: 0,
@@ -146,11 +164,17 @@ export class TriggerWindowScheduler {
       this.counters.invalid++;
       return false;
     }
-    if (this.lastAcceptedOnset !== null && Math.abs(t.onsetTs - this.lastAcceptedOnset) < this.coalesceS) {
-      // Same audible event (or a re-fire inside the gate's cooldown).
+    const family = triggerFamily(t.thresholdId);
+    const lastForFamily = this.lastAcceptedOnsetByFamily.get(family);
+    if (lastForFamily !== undefined && lastForFamily !== null
+        && Math.abs(t.onsetTs - lastForFamily) < this.coalesceS) {
+      // Same audible event (or a re-fire inside the gate's cooldown) — but
+      // only inside ONE family. A whistle and a roar of the same celebration
+      // are separate evidence and each keeps its own anchored analysis.
       this.counters.coalesced++;
       return false;
     }
+    this.lastAcceptedOnsetByFamily.set(family, t.onsetTs);
     this.lastAcceptedOnset = t.onsetTs;
     this.pending.push(t);
     // Bounded: the pending list can never outgrow the max-stale horizon at the

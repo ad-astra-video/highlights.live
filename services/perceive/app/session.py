@@ -18,7 +18,7 @@ import numpy as np
 
 log = logging.getLogger("highlights.perceive.session")
 
-from .audio_gate import AudioEnergyGate
+from .audio_gate import AudioEnergyGate, BandLimitedWhistleGate
 from .tracker import IoUTracker, LIVE_MAX_TRACKS, VOD_MAX_TRACKS
 from .sam_tracker import HybridTracker, make_tracker
 from .scoreboard import ScoreboardTracker
@@ -76,6 +76,17 @@ class SessionState:
     # candidate trigger fed by the server's ffmpeg audio tap (own ~10 Hz
     # cadence, independent of the 1 fps video /analyze). Never touches the GPU.
     audio_gate: AudioEnergyGate = field(default_factory=AudioEnergyGate)
+    # Stage-B band-limited whistle path (ADAAAA-7682). The referee whistle is a
+    # narrowband tonal burst whose RMS sits at the crowd floor, so the broadband
+    # Stage-A gate above cannot see it. This path baselines the 2.4-3.4 kHz band
+    # instead. It is MEASURE-ONLY until its measured ship gate (recall >= 0.80,
+    # trigger-window FP <= 0.10) is accepted by the PO: fires are counted and
+    # reported, never emitted into candidate scheduling, because every emitted
+    # candidate becomes a GPU-priced gemma analysis.
+    whistle_gate: BandLimitedWhistleGate = field(default_factory=BandLimitedWhistleGate)
+    # per-session whistle candidates seen (measure-only counter, never a schedule)
+    whistle_candidates: int = 0
+    whistle_emitted: int = 0
     # per-session audio chunk counter (event seq for audio-sourced candidates).
     audio_seq: int = 0
     # Ball-centric candidate signal (INC-2b). `homography` is the image->field

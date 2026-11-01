@@ -140,3 +140,47 @@ Classes with no footage carry `clip: null` + a `gapReason` and print `N/A`.
 Add `--compare-lookback 8.0` to column the tuning delta against the previous
 operating point. Results and the operating-point rule live in
 `docs/audio-trigger-contract.md`.
+
+## Band-limited whistle path (ADAAAA-7682)
+
+The whistle class now has a second detector path, scored on its own labelled
+corpus rather than on Stage-A's broadband gate (which measures 0.00 recall on a
+narrowband tonal burst). Run:
+
+```bash
+# per-class table (goal_roar unchanged + whistle Stage-B + negatives)
+python3 evals/measure_audio_recall.py --labels evals/audio-labels.json \
+    --clip-root /data --json /tmp/whistle.json
+
+# AC1 sample-rate fidelity: 2.4-3.4 kHz rise at 16 kHz vs the manifest's 8 kHz
+python3 evals/verify_whistle_onsets.py --clip-root /data --compare-sr 8000 \
+    clips/<clip>.mp4:<ts> ...
+
+# AC3 cross-clip trigger-volume budget
+python3 evals/measure_audio_recall.py --volume-clip real_match_70s.mp4 \
+    --volume-gate whistle --clip-root /data
+```
+
+`verify_whistle_onsets.py` is the **independent** verifier: it measures the
+2.4-3.4 kHz band rise over a 10 s ambient window, the speech/low-band rises, the
+band's spectral flatness and its peak frequency — thresholds that are not the
+gate's trigger condition. Use it to admit or reject an onset before it enters
+the manifest; never label a class from a detector score.
+
+Manifest shape for the whistle class:
+
+- `gate: "whistle"` selects the band-limited path; `sr: 16000` scores it at the
+  production decode rate.
+- `clips: [{clip, onsets, detectedOnsets}]` — several clips per class, each
+  scored as its own stream (fires never match across clips).
+- `detectedOnsets` are verified onsets found after labelling: they count as true
+  positives for FP accounting but not as recall, so recall is never inflated by
+  points taken from the detector's own output.
+- `negatives: [{clip, start, end}]` — windows decoded with a fresh gate for the
+  FP rate. A window is only a negative if verified free of the target sound; the
+  ADAAAA-7682 run removed three windows that contained real whistles.
+
+`--gate-opt KEY=VALUE` (repeatable) sweeps an operating point, e.g.
+`--gate-opt whistle_ratio=6 --gate-opt max_flatness=0.25`. Results, the
+operating point, the ships/measure-only call and the cost statement live in
+`docs/audio-trigger-contract.md`.

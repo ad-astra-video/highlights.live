@@ -236,19 +236,156 @@ it is not a pass.
 | class | clip | events | recall | FP rate | onset->fire p50 / p95 |
 | --- | --- | --- | --- | --- | --- |
 | `goal_roar` | `real_goal_3080` | 32 | 0.88 (28/32) | 0.10 (2/21) | 0.20 s / 0.20 s |
-| `whistle` | corpus clip `9c09c609` | 2 | 0.00 (0/2) | 1.00 (5/5) | 0.20 s / 0.50 s |
+| `whistle` (Stage-A, pre-ADAAAA-7682) | corpus clip `9c09c609` | 2 | 0.00 (0/2) | 1.00 (5/5) | 0.20 s / 0.50 s |
+| `whistle` (Stage-B, ADAAAA-7682) | 9 clips | 10 | 1.00 (10/10) | 0.00 (0/12) | 0.20 s / 0.20 s |
 | `pa_announcement` | — | — | **N/A** | N/A | N/A |
 | `music_bed` | — | — | **N/A** | N/A | N/A |
 
-`whistle` is the honest negative result: the gate is a **broadband level-change**
-detector, and a referee whistle is a narrowband tonal burst whose RMS sits at the
-crowd floor (2.4-3.4 kHz band energy 74x ambient while the speech and low bands
-stay flat), so it produces no level anomaly to fire on. Measuring the class
-surfaced that; a whistle path would need a band-limited detector, which is not
-this gate. `pa_announcement` and `music_bed` remain `N/A` because the corpus has
-no footage for them (see the `gapReason` fields in the manifest).
+The Stage-A `whistle` row is the honest negative result that motivated the
+second path: Stage-A is a **broadband level-change** detector, and a referee
+whistle is a narrowband tonal burst whose RMS sits at the crowd floor
+(2.4-3.4 kHz band energy 74x ambient while the speech and low bands stay flat),
+so it produces no level anomaly to fire on. The Stage-B row is the band-limited
+path documented below. `pa_announcement` and `music_bed` remain `N/A` because
+the corpus has no footage for them (see the `gapReason` fields in the manifest).
 
 AC1 is a **re-measurement** of this operating point on the media-relay path
 against the real clips in hand, reported per class with explicit `N/A` where a
 class has no footage. It is not a new detector and it is not gated on a new
 labeled corpus.
+
+## Stage-B: band-limited whistle path (ADAAAA-7682)
+
+A referee whistle is a **trigger/boundary** class: it anchors a gemma analysis
+window (stoppage / foul / offside, often *before* the crowd roar and on
+free kicks / offside / VAR where the roar rail has no signal). It is not a
+highlight finding class. Detection is pure DSP over the PCM chunks the media
+relay and the server tap already decode — **0 added Livepeer GPU sessions**.
+
+### Operating point
+
+`WhistleConfig` in `services/perceive/app/audio_gate.py`:
+
+| field | value | meaning |
+| --- | --- | --- |
+| `band_lo_hz` / `band_hi_hz` | 2400 / 3400 | the pea-whistle band |
+| `sample_rate` | 16000 | production PCM on both rails |
+| `lookback_s` | 6.0 | same rolling ambient percentile window as Stage-A |
+| `baseline_percentile` | 0.55 | band-energy ambient baseline |
+| `whistle_ratio` | **5.0** | band energy >= 5x the rolling band baseline |
+| `sustain_frames` | 3 | consecutive elevated frames (~0.3 s at `frameS` 0.1) |
+| `guard_max_ratio` | 3.0 | speech (0.3-2 kHz) and low (<0.3 kHz) bands must stay near ambient |
+| `min_tonality` | 6.0 | band peak / band mean |
+| `max_flatness` | 0.25 | spectral flatness inside the band (tonal vs broadband) |
+| `cooldown_s` | 2.0 | same anti-storm rule as Stage-A |
+| `emitted` | **false** | measure-only switch (see below) |
+
+`thresholdId` is `stageB/whistle/2.4-3.4k/5x/0.3s`. The `kind` stays `"burst"`
+so the frozen `AudioSignalSchema` in `packages/events` is unchanged; the two
+paths are discriminated by the `thresholdId` family prefix (`stageA/` vs
+`stageB/`). A later re-tune must change the id and this table together, so a
+historical trigger can never be silently redefined.
+
+**Measure-only on first land.** `process_audio()` runs both paths on every
+chunk. A Stage-B fire is counted (`state.whistle_candidates`), logged, and
+returned as a `whistle` block on the `/audio` response with `emitted: false` /
+`measureOnly: true` — it is **never** put on the candidate stream, because every
+emitted candidate becomes a GPU-priced gemma analysis. Graduating the path to
+emitting is a PO decision on the measured gate below, not an implementation
+detail.
+
+### AC1 — sample-rate fidelity
+
+The manifest decodes at `sr: 8000` (Nyquist 4000 Hz). Measured with
+`evals/verify_whistle_onsets.py --compare-sr 8000` on all 10 whistle onsets, the
+2.4-3.4 kHz band-energy rise differs by **0.0-0.3 %** between the 8 kHz and
+16 kHz decode (the band sits below the 8 kHz Nyquist), i.e. inside the 10 %
+tolerance — so the per-class override is **not required** by the AC's
+conditional. It is set anyway (`"sr": 16000` on the whistle class, honoured at
+`evals/measure_audio_recall.py` per class) because that is the rate production
+PCM carries, and the whistle class is scored at it. **Scored at 16000 Hz.**
+
+### AC3 — measured precision (the ship gate)
+
+`evals/measure_audio_recall.py --labels evals/audio-labels.json --clip-root /data`
+on the AC0 corpus (10 labelled onsets across 7 clips + 2 post-hoc verified clips,
+27 negative windows, scored at 16 kHz):
+
+| metric | gate | measured |
+| --- | --- | --- |
+| recall | >= 0.80 | **1.00 (10/10)** |
+| trigger-window FP rate | <= 0.10 | **0.00 (0/12)** |
+| negative-window FP rate | (AC0 FP denominator) | **0.00 (0/27)** |
+| onset->fire p50 | <= 1.0 s | **0.20 s** |
+| added trigger volume on `real_match_70s` | <= 2 candidates/min | **+0.0/min** (0 candidates / 70 s; Stage-A stays 11.1/min) |
+
+All five gates pass, so the detector **ships**. It still ships **measure-only**
+on first land (above): AC3 is the gate for *shipping the detector*, while the
+emit switch is the separate PO call priced in AC5. Nothing was bought with
+sensitivity — the operating point was swept (`whistle_ratio` 3-12 x
+`max_flatness` 0.12-0.35) and 5x/0.25 is the point that holds 10/10 recall at
+0 FP; 6x drops recall to 0.80 and 3x adds FPs.
+
+**Corpus corrections this measurement forced** (all verified independently by
+`evals/verify_whistle_onsets.py`, not by the detector):
+
+- `9c09c609` 15.5 s, `09dccf1b` 6.2 s and `02a5105d` 8.3 s / 12.3 s are
+  referee whistles that the original survey missed (band rise 6.2x-10.1x,
+  flatness 0.012-0.135, peak 2.49-3.15 kHz). They are recorded as
+  `detectedOnsets`: a fire there counts as a true positive for FP accounting
+  but **not** as recall, so the detector is never credited for points taken
+  from its own output.
+- Three "negative" windows contained those whistles and were removed (30 -> 27
+  windows). A negative window is only a negative if it is verified clean.
+
+### AC4 — no regression, and no mixed-evidence coalescing
+
+`goal_roar` is unchanged at **0.88 (28/32) / FP 0.10 (2/21)** and Stage-A's
+`thresholdId` (`stageA/burst/1.3x/0.3s`) is untouched; Stage-A was not re-tuned.
+
+`services/server/src/audio-trigger.ts` now coalesces **per trigger family**
+(`triggerFamily(thresholdId)` -> `stageA` / `stageB`). A whistle fire and a roar
+fire inside one celebration are different evidence — the whistle marks the
+stoppage even when the roar lands seconds later — so each keeps its own
+anchored analysis instead of collapsing into one (the ADAAAA-6312 defect class).
+Same-family re-fires still coalesce, so the anti-storm rule is unchanged.
+Covered by `services/server/test/audio-trigger.test.ts` and
+`services/perceive/tests/test_audio_gate.py`.
+
+### AC5 — cost, stated
+
+Detection and eval add **0 Livepeer GPU sessions**; the eval is CPU DSP
+(ffmpeg + numpy). The cost that emit-behaviour would add is one gemma analysis
+per candidate, priced at the current live-runner decide rate (~$0.01/decide):
+
+- `real_match_70s` (ordinary match footage): 0 whistle candidates -> **$0.00
+  added**.
+- Whistle-dense corpus clips: 12 candidates over 179.5 s of footage =
+  **4.0 candidates/min** -> ~**$0.04/min (~$2.40/hr)** *if every candidate were
+  emitted*, on footage that is unrepresentative of ordinary play.
+
+That worst case is the number the PO needs to decide graduation from
+measure-only to emitting.
+
+### Ships / measure-only call
+
+- **Detector: ships** — all AC3 gates pass on the AC0 corpus at 16 kHz.
+- **Emit switch: measure-only** — `WhistleConfig.emitted = False`. No whistle
+  candidate reaches candidate scheduling, so the added gemma spend is $0 until
+  the PO accepts the AC5 number above.
+
+## Eval corpus shape (ADAAAA-7682)
+
+`evals/audio-labels.json` keeps one entry per trigger class. A class may now
+carry:
+
+- `gate`: `stageA` (default) or `whistle` (the Stage-B path).
+- `sr`: per-class decode-rate override (`whistle` = 16000, production rate).
+- `clips: [{clip, onsets, detectedOnsets}]`: several clips per class, each a
+  separate stream scored on its own — fires from one clip can never "match" an
+  onset in another.
+- `negatives: [{clip, start, end}]`: windows decoded with a fresh gate for the
+  false-positive rate; each must be verified free of the target sound.
+
+`pa_announcement` and `music_bed` stay `null` with a `gapReason`; they are
+recorded gaps, not passes, and are out of scope for this increment.

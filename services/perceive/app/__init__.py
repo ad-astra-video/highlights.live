@@ -1018,14 +1018,19 @@ def _decode_audio(b64: str) -> np.ndarray:
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32)
 
 
-def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[dict | None, list]:
-    """Run one audio chunk through the Stage-A noise-change gate (INC-2).
+def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[dict | None, list, dict | None]:
+    """Run one audio chunk through the audio trigger paths (INC-2 / ADAAAA-7682).
 
-    Pure DSP — NEVER touches the detector / SAM / Gemma (no billed GPU on the
-    gate path). When the gate fires it returns a *candidate* event carrying the
-    AudioSignal evidence (kind, onset ts, firedAt, onsetLatencyS, peakEnergy,
-    baselineEnergy) and enqueues it onto any SSE subscribers. It does NOT
-    decide a highlight — the decide stage (Gemma) runs later, on candidates.
+    Two DSP paths, both pure and GPU-free:
+
+    - **Stage-A** (`audio_gate`, broadband level change) — unchanged; a fire
+      returns a *candidate* event carrying the AudioSignal evidence.
+    - **Stage-B whistle** (`whistle_gate`, 2.4-3.4 kHz band-limited tonal) —
+      MEASURE-ONLY. A fire is counted, logged and returned as ``whistle``
+      evidence so the live log and the eval harness can see it, but it is NOT
+      emitted as a candidate: every emitted candidate would become a
+      GPU-priced gemma analysis, and the ship gate (measured recall/FP) is a PO
+      call, not an implementation decision.
 
     ADAAAA-7255: returns the bounded per-chunk ``(t, energy, baseline)``
     inspection series (oldest -> newest, whole lookback window) alongside the
@@ -1034,10 +1039,37 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[
     """
     samples = _decode_audio(samples_b64)
     sig = state.audio_gate.update(samples, ts=timestamp)
+    wsig = state.whistle_gate.update(samples, ts=timestamp)
     state.audio_seq = seq if seq >= 0 else state.audio_seq + 1
     series = state.audio_gate.series_snapshot()
+
+    whistle = None
+    if wsig is not None:
+        # Measure-only accounting. `emitted` stays False until the path is
+        # deliberately graduated; the switch lives in WhistleConfig.
+        emitted = bool(state.whistle_gate.cfg.emitted)
+        state.whistle_candidates += 1
+        if emitted:
+            state.whistle_emitted += 1
+        whistle = {
+            "kind": wsig.kind,
+            "ts": round(wsig.ts, 3),
+            "firedAt": round(wsig.fired_at, 3),
+            "onsetLatencyS": round(wsig.onset_latency_s, 3),
+            "peakEnergy": round(wsig.peak_energy, 6),
+            "baselineEnergy": round(wsig.baseline_energy, 6),
+            "thresholdId": wsig.threshold_id,
+            "emitted": emitted,
+            "measureOnly": not emitted,
+            "sessionCandidates": state.whistle_candidates,
+        }
+        log.info(
+            "whistle candidate session=%s ts=%.2f latency=%.2f threshold=%s emitted=%s",
+            state.session_id, wsig.ts, wsig.onset_latency_s, wsig.threshold_id, emitted,
+        )
+
     if sig is None:
-        return None, series
+        return None, series, whistle
     # AudioSignalSchema (packages/events) camelCase keys.
     audio = {
         "kind": sig.kind,
@@ -1069,7 +1101,7 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[
             q.put_nowait(cand)
         except Exception:
             pass
-    return cand, series
+    return cand, series, whistle
 
 
 def handle_control(state, msg: dict) -> dict:
@@ -1334,8 +1366,8 @@ def create_app() -> FastAPI:
         state = registry.get_or_create(sid, req.stream_id)
         if req.stream_id:
             state.stream_id = req.stream_id
-        cand, series = process_audio(state, req.seq, req.timestamp, req.samples)
-        return {"candidate": cand, "series": series}
+        cand, series, whistle = process_audio(state, req.seq, req.timestamp, req.samples)
+        return {"candidate": cand, "series": series, "whistle": whistle}
 
     @router.get("/events")
     async def events(
