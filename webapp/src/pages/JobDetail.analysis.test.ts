@@ -81,3 +81,58 @@ describe("AnalysisWindow (ADAAAA-7274 collapsible time window)", () => {
     expect(html).not.toContain("data-analysis-kind");
   });
 });
+
+// ADAAAA-7672: the collapsed decide-note banner carries one line of ASR. Before
+// this, the transcript existed only inside the expanded "Inspect window" panel,
+// so a job scanned collapsed looked like it had no ASR at all.
+describe("DecideNoteBanner ASR summary (ADAAAA-7672)", () => {
+  const analysisWith = (transcript?: string, latencyS?: number): DecideNote["analysis"] => ({
+    prompt: "p",
+    dataItems: [],
+    frames: [],
+    images: [],
+    audio: { path: "asr_text", sampleRate: 16000 },
+    asr: { transcript, latencyS },
+  });
+
+  it("shows one ASR line on the collapsed banner and keeps the transcript blob expanded-only", () => {
+    const html = renderWindow(
+      section(0, [
+        note({ seq: 1, timestamp: 1.2, status: "accepted", analysis: analysisWith("con un muy buen ambiente.", 0.76) }),
+      ]),
+      true
+    );
+    // collapsed banner: the new marker + the exact one-line summary
+    expect(html).toContain("data-window-asr-summary");
+    expect(html).toContain("ASR 0.76s");
+    expect(html).toContain('&quot;con un muy buen ambiente.&quot;');
+    // the expanded block still holds the full transcript, unchanged
+    expect(html).not.toContain("data-audio-asr");
+  });
+
+  it("stays silent for whisper filler (no badge for a silent window)", () => {
+    for (const filler of ["", "What?", "Thank you very much.", "Yes, yes, yes"]) {
+      const html = renderWindow(
+        section(0, [note({ seq: 1, timestamp: 1.2, status: "accepted", analysis: analysisWith(filler, 0.4) })]),
+        true
+      );
+      expect(html, filler).not.toContain("data-window-asr-summary");
+    }
+  });
+
+  it("stays silent when the window's audio channel is none", () => {
+    const a = analysisWith("con un muy buen ambiente.", 0.76);
+    a!.audio = { path: "none" };
+    const html = renderWindow(
+      section(0, [note({ seq: 1, timestamp: 1.2, status: "accepted", analysis: a })]),
+      true
+    );
+    expect(html).not.toContain("data-window-asr-summary");
+  });
+
+  it("stays silent for a legacy decide note with no analysis block", () => {
+    const html = renderWindow(section(0, [note({ seq: 1, timestamp: 1.2, status: "accepted" })]), true);
+    expect(html).toContain("data-decide-note");
+    expect(html).not.toContain("data-window-asr-summary");
+  });
+});
