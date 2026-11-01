@@ -1,0 +1,85 @@
+{"t": 218, "read": "BALL=right side mid-air near referee; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 219, "read": "BALL=midfield left; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 220, "read": "BALL=right side near midfield; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 221, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 222, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 223, "read": "BALL=absent; G=no; V=close_up", "prompt": "goal/shot/visibility strip"}
+{"t": 224, "read": "BALL=lower-left, on grass; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 225, "read": "BALL=left side, near midfield; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 226, "read": "BALL=lower center-right, on the ground at a player's feet; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 227, "read": "BALL=lower center-right on the grass; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 228, "read": "BALL=lower left near penalty area; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 229, "read": "BALL=lower left, on ground; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 230, "read": "BALL=lower left near the byline; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 232, "read": "BALL=lower-left on ground near defender; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 233, "read": "BALL=lower left, on ground near player; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 234, "read": "BALL=lower left, on ground near player in blue; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 235, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 236, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 237, "read": "BALL=lower left, on ground near player; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 238, "read": "BALL=lower left, on ground near player 3; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 239, "read": "BALL=right side near penalty area; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 240, "read": "BALL=lower right on the field; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 241, "read": "BALL=lower center-left on ground; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 242, "read": "BALL=lower center-left on ground; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 243, "read": "BALL=right of goal, near post; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 244, "read": "BALL=absent; G=yes; V=close_up", "prompt": "goal/shot/visibility strip"}
+{"t": 245, "read": "BALL=absent; G=yes; V=close_up", "prompt": "goal/shot/visibility strip"}
+{"t": 250, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 251, "read": "BALL=absent; G=no; V=close_up", "prompt": "goal/shot/visibility strip"}
+{"t": 252, "read": "BALL=lower left on grass; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 253, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 254, "read": "BALL=lower-left on ground; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 255, "read": "BALL=airborne near player's feet; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 256, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 257, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 258, "read": "BALL=lower right near the byline, at the feet of a player in dark blue; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 259, "read": "BALL=lower right midfield near white player; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 260, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 261, "read": "BALL=lower right of center, on ground near players; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 262, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 263, "read": "BALL=lower right midfield near white #10; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 264, "read": "BALL=lower center-right on the ground; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 265, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 266, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 267, "read": "BALL=absent; G=yes; V=close_up", "prompt": "goal/shot/visibility strip"}
+{"t": 268, "read": "BALL=absent; G=no; V=close_up", "prompt": "goal/shot/visibility strip"}
+{"t": 270, "read": "BALL=lower left midfield near player in blue; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 271, "read": "BALL=lower center-left on grass; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 272, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 273, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 274, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 275, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 276, "read": "BALL=absent; G=no; V=close_up", "prompt": "goal/shot/visibility strip"}
+{"t": 277, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 278, "read": "BALL=lower right near player 3; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 283, "read": "BALL=midfield left; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 284, "read": "BALL=lower center-left on pitch; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 285, "read": "BALL=lower right, on ground; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 286, "read": "BALL=lower center-left on ground; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 287, "read": "BALL=right side near penalty area; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 288, "read": "BALL=right side near penalty area; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 289, "read": "BALL=left midfield near sideline; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 290, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 291, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 292, "read": "BALL=left side near sideline; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 293, "read": "BALL=lower center-right near player in dark kit; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 294, "read": "BALL=lower center-left near players; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 295, "read": "BALL=lower-left midfield near white-shirted player; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 296, "read": "BALL=midfield center-right; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 297, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 298, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 328, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 329, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 330, "read": "BALL=lower center-right on ground; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 331, "read": "BALL=lower right near white player's feet; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 332, "read": "BALL=lower center on grass; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 333, "read": "BALL=lower left, on ground; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 334, "read": "BALL=lower left, on ground near white-jerseyed player; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 335, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 336, "read": "BALL=absent; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 367, "read": "BALL=center-left near #12; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 368, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 369, "read": "BALL=absent; G=no; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 370, "read": "BALL=right side near goal; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}
+{"t": 371, "read": "BALL=right side near goal line; G=yes; V=open_play", "prompt": "goal/shot/visibility strip"}

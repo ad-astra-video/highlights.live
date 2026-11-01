@@ -1,0 +1,142 @@
+{
+ "primary_seconds": 686,
+ "repeat_layers": 1,
+ "pairs": [
+  {
+   "repeat": "evals/kids_soccer_near_miss/results/goalmouth_scan_cross_prompt.jsonl",
+   "shared_seconds": 85,
+   "agree": 68,
+   "disagree": 17,
+   "agreement_pct": 80.0,
+   "primary_shot_seconds": 12,
+   "shot_confirmed_by_repeat": 0,
+   "shot_instability_pct": 100.0,
+   "disagreements": [
+    {
+     "t": 218,
+     "primary": "keeper_save",
+     "repeat": "open_play"
+    },
+    {
+     "t": 221,
+     "primary": "keeper_save",
+     "repeat": "open_play"
+    },
+    {
+     "t": 222,
+     "primary": "goal_mouth_shot",
+     "repeat": "open_play"
+    },
+    {
+     "t": 223,
+     "primary": "open_play",
+     "repeat": "close_up"
+    },
+    {
+     "t": 235,
+     "primary": "goal_mouth_shot",
+     "repeat": "open_play"
+    },
+    {
+     "t": 239,
+     "primary": "keeper_save",
+     "repeat": "open_play"
+    },
+    {
+     "t": 243,
+     "primary": "keeper_save",
+     "repeat": "open_play"
+    },
+    {
+     "t": 250,
+     "primary": "closeup_elsewhere",
+     "repeat": "open_play"
+    },
+    {
+     "t": 255,
+     "primary": "goal_mouth_shot",
+     "repeat": "open_play"
+    },
+    {
+     "t": 262,
+     "primary": "keeper_save",
+     "repeat": "open_play"
+    },
+    {
+     "t": 266,
+     "primary": "closeup_elsewhere",
+     "repeat": "open_play"
+    },
+    {
+     "t": 272,
+     "primary": "goal_mouth_shot",
+     "repeat": "open_play"
+    },
+    {
+     "t": 276,
+     "primary": "open_play",
+     "repeat": "close_up"
+    },
+    {
+     "t": 284,
+     "primary": "closeup_elsewhere",
+     "repeat": "open_play"
+    },
+    {
+     "t": 335,
+     "primary": "goal_mouth_shot",
+     "repeat": "open_play"
+    },
+    {
+     "t": 370,
+     "primary": "keeper_save",
+     "repeat": "open_play"
+    },
+    {
+     "t": 371,
+     "primary": "keeper_save",
+     "repeat": "open_play"
+    }
+   ]
+  }
+ ],
+ "template_collapse": {
+  "reads": 686,
+  "distinct_first_sentences": 662,
+  "distinct_pct": 96.5,
+  "most_repeated": [
+   {
+    "sentence": "The image shows an open play situation in the midfield with players from both teams positioned across the pitch and no immediate threat on goal",
+    "count": 5
+   },
+   {
+    "sentence": "The image shows players in open play in the midfield area, with no action occurring near either goalmouth",
+    "count": 4
+   },
+   {
+    "sentence": "A goalkeeper dives to his right to stop a low shot heading toward the goal mouth",
+    "count": 3
+   },
+   {
+    "sentence": "The goalkeeper is diving to his right in an attempt to save a shot on goal",
+    "count": 3
+   },
+   {
+    "sentence": "A player stands over the ball at the penalty spot while the goalkeeper waits on the line during a penalty shootout",
+    "count": 3
+   }
+  ]
+ },
+ "primary_class_counts": {
+  "celebration": 19,
+  "elsewhere": 146,
+  "goal": 12,
+  "open_play": 408,
+  "other": 1,
+  "shot": 100
+ },
+ "primary_file": "evals/kids_soccer_near_miss/results/goalmouth_scan_1s.jsonl",
+ "repeat_files": [
+  "evals/kids_soccer_near_miss/results/goalmouth_scan_cross_prompt.jsonl"
+ ]
+}
