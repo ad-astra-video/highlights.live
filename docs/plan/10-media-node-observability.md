@@ -65,6 +65,18 @@ curl -s "$MEDIA_SERVER_URL/health" | jq
 curl -s "$MEDIA_SERVER_URL/node" -H "Authorization: Bearer $MEDIA_HEALTH_TOKEN" | jq
 ```
 
+### Observation socket (`/stream/:sid`)
+
+The node relays every runner observation to each socket attached to a session as a
+**TEXT** JSON frame — `{"type":"observation","observation":{...}}` — so a browser can
+`JSON.parse(e.data)` directly (`services/media/src/guarded-write.ts` `sendText`).
+Frames used to be **BINARY** (`@fastify/websocket`'s SocketStream passes a string
+write through as a Buffer, and `ws.send()` then picks the BINARY opcode): a browser
+receives a `Blob`, `JSON.parse` throws, and a healthy fan-out reads as "zero
+observations" on the client while the log shows `[rtc] obs seq=1..N` (ADAAAA-7678).
+A client-side observation count is only meaningful next to `GET /node`
+`sessions[].sockets` — that is the server-side "did the socket attach?" answer.
+
 ## 2. Console readout (control-plane join)
 
 `GET /media/node` — authenticated (any signed-in user; the live console renders it
@@ -181,7 +193,7 @@ Config:
 |-----|-------|---------|---------|
 | `MEDIA_NODE_ID` | media | `media-0` | node identity on `/health`, `POST /sessions`, `media_sessions.node_id` |
 | `MEDIA_MAX_SESSIONS` | media | `1` | advertised concurrent capacity (perceive runner is capacity-1) |
-| `MEDIA_HEALTH_TOKEN` | media + server | unset | bearer for `GET /node`; unset => detail off (404) |
+| `MEDIA_HEALTH_TOKEN` | media + server | unset | bearer for `GET /node`; unset => detail off (404). Set it in the deploy env (`docker/.env` on the box, not committed): both services read the same `${MEDIA_HEALTH_TOKEN}` from `docker/docker-compose.yml`, but a container created before that line existed keeps an EMPTY value until it is recreated — check with `docker exec highlights-media printenv MEDIA_HEALTH_TOKEN` (ADAAAA-7678). `sessions[].sockets` is the server-side answer to "did the observer socket attach?". |
 
 ## 5. Deferred / next
 
