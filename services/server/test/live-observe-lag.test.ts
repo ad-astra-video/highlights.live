@@ -91,14 +91,23 @@ describe("liveLagReserveS (ADAAAA-7676)", () => {
   // The reserve must cover the decide that has not landed yet, so the RESULT
   // lands inside the budget, not the pick-up.
   it("reserves the WORST decide E2E, so a jittery decide still lands inside the budget", () => {
-    // Measured on job `4f8d47bd` (130 s rtmp, budget 30 s).
-    const reserve = liveLagReserveS(11679, 8520, 30);
-    expect(reserve).toBeCloseTo(12.679, 3);
+    // Measured on job `4f8d47bd` (130 s rtmp, budget 30 s): mean 8.52 s, worst
+    // 11.679 s. The 1.5x-mean term (12.78 s) is the larger one, plus 1 s margin.
+    const steady = liveLagReserveS(11679, 8520, 30);
+    expect(steady).toBeCloseTo(13.78, 3);
     // Pre-fix shape (mean-based reserve): the window was picked at 21.48 s and
     // the 11.679 s decide landed it at 33.2 s — past the budget.
     expect(LIVE_OBSERVE_LAG_BUDGET_S - 8.52 + 11.679).toBeGreaterThan(LIVE_OBSERVE_LAG_BUDGET_S);
-    // Worst-based reserve: picked at 17.32 s, landed at 29.0 s — inside it.
-    expect(30 - reserve + 11.679).toBeLessThanOrEqual(30);
+    expect(30 - steady + 11.679).toBeLessThanOrEqual(30);
+
+    // Measured on job `8b88a472`: the startup decides RAMPED 8.833 s -> 12.827 s,
+    // so a worst-only reserve (9.833 s) admitted a window at 19.3 s lag that
+    // landed at a completed 32.1 s. The reserve must cross that pick-up lag.
+    const ramp = liveLagReserveS(8833, 8833, 30);
+    expect(ramp).toBeCloseTo(14.25, 3);
+    expect(30 - ramp).toBeLessThan(19.3);
+    // ... and 32.1 s / 19.3 s = the completed lag the worst-only reserve allowed.
+    expect(30 - 9.833).toBeGreaterThan(19.3);
   });
 
   it("caps the reserve at half the budget (never starves the pass) and handles a pre-sample observer", () => {
