@@ -3,6 +3,10 @@
 Status: live increment [ADAAAA-7658](/ADAAAA/issues/ADAAAA-7658) · Option A approved
 on [ADAAAA-7592](/ADAAAA/issues/ADAAAA-7592) (decision packet
 `audio-trigger-decision` rev 2 §7, amendments A1–A4) · owner Developer.
+Revised by [ADAAAA-7691](/ADAAAA/issues/ADAAAA-7691), which added the
+tap-vs-counter sections below (tap candidates are event-only; refire at the tap
+is cooldown-bounded while coalescing happens downstream) and made the
+anchored-window count readable as `observeMetrics.triggerFires`.
 
 This document is the authoritative definition of an **audio trigger** — the
 change/noise signal that anchors a gemma analysis window on the live path, and
@@ -98,8 +102,103 @@ A trigger is **evidence and a schedule request, never a decision**:
 5. On the media RTC rail the control plane owns no frame, so a trigger there is
    surfaced on the job SSE stream and counted on the media node
    (`/health` → `audio.triggerCandidates`); it does not by itself issue a decide.
-   Anchored decide scheduling applies to the rails that own the frames (server
-   live ingest and browser `/ingest`).
+   Anchored decide scheduling runs on **one** rail today: the server-side live
+   ingest (`runLiveJob` → `LiveRunShared.recordAudioTrigger` → `LiveObserver`),
+   and only when the live decide-observer is enabled (`liveObserveLoop` on with
+   `decideWindowN` unset). The client `/ingest` rail and the VOD pass never call
+   `recordAudioTrigger`, so no window is anchored to a trigger there — see
+   "Where the anchored-window count is observable" below before asserting a
+   window count on those rails.
+
+## Tap candidates are evidence only (ADAAAA-7691 AC1)
+
+`POST /jobs/:id/audio` (and the identical server-side and VOD taps) returns the
+fired candidate to the caller and emits it on the job's SSE stream as a
+`candidate` event. It writes **nothing** into the job's counters. Every counter
+on the job record is produced by the decide/observe path
+(`services/server/src/job-counters.ts`), never by the tap, so a tap-only feed
+reads exactly this and it is **correct**:
+
+```
+candidatesTriggered 0 · candidates 0 · highlightsFound 0 · stageAMetricsStatus "n/a"
+```
+
+Read that as "the decide/observe path produced nothing", **not** as "the gate
+never fired". A zero counter is never evidence of a silent gate.
+
+Where tap candidates *are* observable:
+
+| surface | what it counts | notes |
+| --- | --- | --- |
+| per-chunk response body | `{ candidate, series }` — `candidate` non-null exactly when the gate fired for that chunk | the authoritative tap count; carries the full record incl. `audio.thresholdId` |
+| job SSE stream | `type: "candidate"` events | one per fired candidate; same record as the response |
+| media node `GET /health` | `audio.triggerCandidates` (cumulative), with `audio.chunksPosted` / `audio.chunksDropped` | RTC-rail provenance; counts only, no ids on the public surface |
+
+`stageAMetrics` / `stageAMetricsStatus` describe the **decide outcome** of
+Stage-A candidates (accepted vs rejected by gemma), not the tap: the snapshot is
+only `"measured"` once a candidate has been decided and recorded, and no
+production path calls `StageAMetrics.recordOutcome()` today, so `"n/a"` is
+currently the expected value on every job — see
+[ADAAAA-7694](/ADAAAA/issues/ADAAAA-7694) for that separate defect.
+
+## Cooldown-bounded refire at the tap vs ONE anchored window (ADAAAA-7691 AC2)
+
+The two counts are different layers. Do not judge the anchored-window rule from
+the `/audio` candidate count.
+
+**Tap level — refire is bounded by the gate's cooldown, not by the coalescing
+window.** `AudioEnergyGate._fire()` stamps `_last_fired_ts = firedAt` (the FIRE
+time, not the onset) and `_in_cooldown()` suppresses any further fire while
+`ts - _last_fired_ts < cooldown_s` (2.0 s). One sustained burst therefore emits
+one candidate per `cooldown_s` of burst, each with its own onset. The window that
+accumulates while suppressed keeps the *earliest* onset, so a refire's
+`onsetLatencyS` climbs toward `cooldown_s`. Measured 2026-11-01 on one sustained
+broadband burst:
+
+| candidate | `ts` (onset) | `firedAt` | `onsetLatencyS` |
+| --- | --- | --- | --- |
+| 1 | 4.0 | 4.2 | 0.2 |
+| 2 | 4.3 | 6.2 | 1.9 |
+
+4.3 s sits inside the cooldown opened at the 4.2 s fire, and 6.2 s is exactly
+`4.2 + cooldown_s`, so this is cooldown-bounded refire — not two audible events.
+Tap candidate count for one burst is `>= 1` and grows with burst length; never
+assert "one burst = one candidate".
+
+**Downstream — coalescing makes it one anchored window.**
+`LiveObserver.recordTrigger` → `TriggerWindowScheduler.record` drops a trigger
+whose `|onsetTs - lastAcceptedOnset| < AUDIO_TRIGGER_COALESCE_S` (2.5 s) as
+`coalesced`, so the 4.0 s and 4.3 s candidates above produce **one** scheduled
+analysis, anchored at the earlier onset. A trigger whose `onset + AUDIO_TRIGGER_LEAD_S`
+(1.0 s) is due fires the window and spends one cadence budget token (it may fire
+early once 40% of a token has accrued; the balance is repaid before the next
+cadence tick), so a trigger window replaces a cadence window instead of adding
+one. The scheduler's
+`accepted / coalesced / covered / expired / fired` tallies are **in-process only**
+(`TriggerWindowScheduler.stats()`, surfaced as `LiveObserver.triggerStats()`);
+they are not persisted, so a post-run reader cannot count coalesces.
+
+### Where the anchored-window count is observable
+
+| rail | anchored windows? | assert the window count from |
+| --- | --- | --- |
+| server live ingest (`rtmp` / `screen` / `file-sim`, live observe loop on) | yes | `job.observeMetrics.triggerFires`, with `cadenceFires`, on `GET /jobs/{id}` and `GET /jobs/{id}/detail`. Invariant: `triggerFires + cadenceFires == decideCalls`. |
+| client `/ingest` rail (browser streams sampled frames) | no — frames arrive per chunk, no `TriggerWindowScheduler` | no anchored-window counter; judge the decide trail (`job.candidates` / detail `sections`) |
+| VOD (`file` / `url`) | no — the VOD tap only feeds the level-curve series + bias hints; `recordAudioTrigger` is never called | `job.vodObserveMetrics.decideCalls`; the VOD snapshot carries no trigger counter |
+| media RTC relay | no — the control plane owns no frame to anchor to | tap candidates only (`/health` → `audio.triggerCandidates`) |
+
+QA recipe for "ONE anchored window" on the live rail:
+
+1. Feed one sustained burst and count its tap candidates from the per-chunk
+   response (or the SSE `candidate` events). Expect `>= 1`, spaced by roughly
+   `cooldown_s` — that number is *not* the window count.
+2. Read `GET /jobs/{id}` after the job completes and take
+   `job.observeMetrics.triggerFires`. For one burst it must be `1` at most, and
+   `triggerFires + cadenceFires` must equal `decideCalls`.
+3. Treat a **missing** `triggerFires`/`cadenceFires` pair as "not recorded"
+   (optional additive fields: records written before ADAAAA-7691 had them
+   stripped out of the persisted snapshot), never as zero.
+
 
 ## Operating point (AC1 context, A3)
 

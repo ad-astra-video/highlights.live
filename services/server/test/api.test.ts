@@ -1427,3 +1427,66 @@ describe("live job candidate counters (ADAAAA-7667)", () => {
     await app.close();
   });
 });
+
+// ADAAAA-7691 (contract AC2): the anchored-window count has to be READABLE, not
+// just computed. `LiveObserver.triggerFireCount()` has always produced
+// `observeMetrics.triggerFires` / `cadenceFires`, but those keys were missing
+// from `ObserveMetricsSnapshotSchema`, so `JobSchema.parse` inside
+// `store.patchJob` silently STRIPPED them before persistence and neither
+// `GET /jobs/{id}` nor `/jobs/{id}/detail` could expose an anchored-window
+// count. A QA run then had no way to assert "ONE anchored window" from the API
+// (docs/audio-trigger-contract.md).
+describe("audio-trigger anchored-window counters (ADAAAA-7691)", () => {
+  async function adminToken(app: any, cfg: any): Promise<string> {
+    const r = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: cfg.adminEmail, password: cfg.adminPassword },
+    });
+    expect(r.statusCode).toBe(200);
+    return r.json().token as string;
+  }
+
+  it("persists triggerFires/cadenceFires from the live observe snapshot and serves them on every read route", async () => {
+    const { app, cfg, store } = await buildTestApp();
+    const token = await adminToken(app, cfg);
+    const job = await store.createJob({ source: "rtmp" });
+    // Completion exactly as runLiveJob writes it: 5 decide windows, 2 of them
+    // anchored to an audio trigger, 3 on the blind cadence.
+    await store.patchJob(job.id, {
+      status: "done",
+      decideCalls: 5,
+      observeMetrics: {
+        decideCalls: 5,
+        accepted: 2,
+        maxFrames: 30,
+        meanE2eMs: 900,
+        maxE2eMs: 1200,
+        meanCadenceMs: 3000,
+        maxCadenceMs: 4200,
+        triggerFires: 2,
+        cadenceFires: 3,
+      } as any,
+    });
+
+    const headers = { authorization: `Bearer ${token}` };
+    const one = await app.inject({ method: "GET", url: `/jobs/${job.id}`, headers });
+    expect(one.statusCode).toBe(200);
+    expect(one.json().job.observeMetrics.triggerFires).toBe(2);
+    expect(one.json().job.observeMetrics.cadenceFires).toBe(3);
+    // The invariant the contract states for the QA assertion.
+    expect(one.json().job.observeMetrics.triggerFires + one.json().job.observeMetrics.cadenceFires).toBe(
+      one.json().job.observeMetrics.decideCalls
+    );
+
+    const detail = await app.inject({ method: "GET", url: `/jobs/${job.id}/detail`, headers });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().job.observeMetrics.triggerFires).toBe(2);
+
+    // Survives on the STORED row too — the count is persisted evidence, not a
+    // read-time projection.
+    expect(store.getJob(job.id)?.observeMetrics?.triggerFires).toBe(2);
+    expect(store.getJob(job.id)?.observeMetrics?.cadenceFires).toBe(3);
+    await app.close();
+  });
+});
