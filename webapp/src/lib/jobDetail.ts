@@ -271,6 +271,14 @@ export interface JobDetailHighlight {
   // a candidate — those degrade to "trigger unknown".
   candidateId?: string;
   trigger?: HighlightTrigger;
+  // ADAAAA-7621: overlap dedupe of the postable list. The winning clip of a
+  // merged moment carries `duplicateCount` (clips folded into it) plus
+  // `mergedIds`; a folded-away clip — returned in `duplicateHighlights`, never
+  // in the postable list — carries `duplicateOf` = the id of the moment that
+  // owns the footage. Absent on legacy rows and single-clip moments.
+  duplicateOf?: string;
+  duplicateCount?: number;
+  mergedIds?: string[];
 }
 
 export interface JobDetail {
@@ -329,6 +337,13 @@ export interface JobDetail {
     createdAt: string;
   };
   highlights: JobDetailHighlight[];
+  /** ADAAAA-7621: "notable, not a goal" lane — non-rejected near_miss /
+   * big_play clips, which the precision gate keeps OUT of the postable list.
+   * Absent on servers that predate the gate. */
+  notableHighlights?: JobDetailHighlight[];
+  /** ADAAAA-7621: clips the overlap dedupe folded into a moment that stays in
+   * `highlights`; each carries `duplicateOf` = the owning moment's id. */
+  duplicateHighlights?: JobDetailHighlight[];
   traces: JobTrace[];
   sections: FrameSection[];
   /** Capacity budget the job ran under (3 live / 8 VOD). */

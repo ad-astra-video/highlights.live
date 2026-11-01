@@ -463,8 +463,23 @@ export function HighlightCard({
       <VideoClip src={h.clipUri} label={h.eventType} error={h.clipError} />
       <div className="p-4">
         <div className="flex items-center justify-between gap-2">
-          <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">
-            {h.eventType || "EVENT"}
+          <span className="flex items-center gap-1">
+            <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">
+              {h.eventType || "EVENT"}
+            </span>
+            {/* ADAAAA-7621: overlap dedupe is invisible without this — the
+                winning clip stands in for every overlapping clip folded into
+                it, so the card states how many moments it absorbed. The folded
+                clips themselves are listed once, below the gallery. */}
+            {(h.duplicateCount ?? 0) > 0 && (
+              <span
+                className="rounded-full border border-yellow/50 bg-yellow/10 px-2 py-0.5 text-xs font-bold text-yellow"
+                data-detail-duplicate-count={h.duplicateCount}
+                title={`${h.duplicateCount} overlapping clip(s) merged into this moment`}
+              >
+                {h.duplicateCount} merged
+              </span>
+            )}
           </span>
           {selectable && onToggleSelect && (
             <label className="flex cursor-pointer items-center gap-1 text-xs text-mut" data-detail-select-label>
@@ -604,6 +619,57 @@ export function HighlightCard({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Compact row list for the lanes ADAAAA-7621 put beside the postable gallery:
+ * `duplicateHighlights` (overlapping clips the dedupe folded into a kept
+ * moment) and `notableHighlights` (non-scoring near_miss / big_play clips the
+ * precision gate keeps out of the postable list). Rows are deliberately
+ * text-only — a second grid of playable cards would re-present merged footage
+ * as if it were its own highlight, which is the bug this ticket closed.
+ */
+export function SecondaryHighlightLane({
+  title,
+  note,
+  highlights,
+  tone = "mut",
+  lane,
+}: {
+  title: string;
+  note: string;
+  highlights: JobDetailHighlight[];
+  tone?: "mut" | "yellow";
+  /** `data-detail-lane` value so tests/QA can target the lane. */
+  lane: "merged" | "notable";
+}) {
+  if (highlights.length === 0) return null;
+  return (
+    <div className="mt-6" data-detail-lane={lane}>
+      <h4 className={`text-sm font-bold ${tone === "yellow" ? "text-yellow" : "text-mut"}`}>{title}</h4>
+      <div className="mt-1 text-xs text-mut">{note}</div>
+      <ul className="mt-2 space-y-1">
+        {highlights.map((h) => (
+          <li
+            key={h.id}
+            className="rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut"
+            data-detail-lane-row={lane}
+          >
+            <span className="font-bold text-ink">
+              T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
+            </span>
+            <span className="ml-2">score {Math.round(h.score)}</span>
+            {h.eventType && <span className="ml-2">{h.eventType}</span>}
+            {h.outcome && <span className="ml-2">outcome {h.outcome}</span>}
+            {lane === "merged" && h.duplicateOf && (
+              <span className="ml-2">merged into {h.duplicateOf.slice(0, 8)}</span>
+            )}
+            {h.reason && <div className="mt-0.5 text-slate-ink">{h.reason}</div>}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -1361,6 +1427,24 @@ export function JobDetail() {
                 />
               ))}
           </div>
+
+          {/* ADAAAA-7621: the two lanes the dedupe/precision gate moved out of
+              the postable gallery. Merged clips are listed once here (their
+              footage lives in the moment they were folded into) and notable
+              non-scoring clips are visible but never presented as goals. */}
+          <SecondaryHighlightLane
+            lane="merged"
+            title="Merged into a highlight"
+            note="Overlapping clips folded into the moment above so the same footage is not posted twice."
+            highlights={detail.duplicateHighlights ?? []}
+          />
+          <SecondaryHighlightLane
+            lane="notable"
+            title="Notable — not a goal"
+            note="Non-scoring plays (near miss / big play). They stay off the postable goal list."
+            tone="yellow"
+            highlights={detail.notableHighlights ?? []}
+          />
 
           {/* Rejected presentation (ADAAAA-6953): rejected clips leave the
               accepted feed and appear here so the user can still recover
