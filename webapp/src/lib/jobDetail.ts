@@ -144,6 +144,55 @@ export interface SummaryLogEntry {
   text: string;
 }
 
+/**
+ * ADAAAA-7623: the summary LADDER — the high-level layer above the flat
+ * per-window `summaryLog`, derived server-side at read time from STORED rows
+ * only (`services/server/src/summary-ladder.ts`). Mirrored locally from
+ * `SummaryLadderSchema` in @highlights/events; additive + optional, so legacy
+ * jobs without a ladder render exactly as before.
+ *
+ * Rungs, broadest first: match summary -> chapters -> window narratives
+ * (a chapter's `entries`) -> the existing Analysis windows (frame/decide audit).
+ */
+export interface SummaryChapterGoal {
+  index: number;
+  ts: number;
+  verified: boolean;
+}
+
+export interface SummaryChapter {
+  index: number;
+  kind: "build-up" | "goal-cluster" | "lull" | "phase";
+  title: string;
+  startS: number;
+  endS: number;
+  /** One-line chapter rollup (the rung-2 text). */
+  summary: string;
+  goalCount: number;
+  goals: SummaryChapterGoal[];
+  seqFrom: number;
+  seqTo: number;
+  /** The window narratives this chapter covers, in time order. */
+  entries: { seq: number; windowTs: number; text: string }[];
+}
+
+export interface MatchSummary {
+  text: string;
+  charCount: number;
+  chapterCount: number;
+  goalCount: number;
+  verifiedGoalCount: number;
+  goalTimeline: SummaryChapterGoal[];
+  /** Scoreboard strings the fact gate refused to emit (audit trail). */
+  refusedScoreClaims: string[];
+}
+
+export interface SummaryLadder {
+  chapters: SummaryChapter[];
+  matchSummary: MatchSummary;
+  derivedFrom: { summaryLogEntries: number; acceptedHighlights: number };
+}
+
 /** Stage-A (audio noise-change gate) counters (ADAAAA-7624). Mirrors
  * `StageAMetricsSnapshotSchema` in @highlights/events. Present only when
  * `stageAMetricsStatus === "measured"`. */
@@ -284,6 +333,10 @@ export interface JobDetail {
   sections: FrameSection[];
   /** Capacity budget the job ran under (3 live / 8 VOD). */
   maxTraces: number;
+  // ADAAAA-7623: the high-level summary ladder (match summary + chapters +
+  // their window narratives). Absent on jobs that predate the derivation or
+  // carry no stored `summaryLog`.
+  summaryLadder?: SummaryLadder;
 }
 
 /**
@@ -303,6 +356,63 @@ export function summaryEntryTimestamp(e: SummaryLogEntry): string {
 /** Fetch the composite job-detail payload for one job. */
 export async function fetchJobDetail(id: string): Promise<JobDetail> {
   return api<JobDetail>(`/jobs/${id}/detail`);
+}
+
+/**
+ * `M:SS` clock for a ladder timestamp (seconds into the match). Rounds down so
+ * a chapter boundary and the goal it contains never disagree about the minute.
+ */
+export function ladderClock(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** Human label for a chapter kind. */
+export function chapterKindLabel(kind: SummaryChapter["kind"]): string {
+  switch (kind) {
+    case "goal-cluster":
+      return "Goal cluster";
+    case "build-up":
+      return "Build-up";
+    case "lull":
+      return "Lull";
+    case "phase":
+      return "Phase";
+  }
+}
+
+/**
+ * Detail-on-demand hop: the Analysis window that covers a ladder entry.
+ * Job-detail sections are fixed 3 s buckets (`index = floor(timestamp / 3)`),
+ * so a window narrative at `windowTs` drills into `floor(windowTs / 3)`, which
+ * carries the frames + decide-note audit for that same instant.
+ */
+export function ladderSectionIndex(windowTs: number): number {
+  return Math.max(0, Math.floor(windowTs / 3));
+}
+
+/**
+ * Drill-down hop (used by the job page): scroll the Analysis window that covers
+ * `sectionIndex` into view and flash a ring on it, so the frame/decide-audit
+ * panel for that instant is unmistakable.
+ *
+ * Instant, not smooth: the Analysis list is >100k px tall on a 260-window job
+ * and an rAF-driven smooth animation is suspended in a background tab (it
+ * silently scrolls nowhere — measured on the live `d61e52f6` page).
+ */
+export function focusAnalysisWindow(
+  root: Pick<Document, "querySelector">,
+  sectionIndex: number,
+  flashMs = 1600
+): HTMLElement | null {
+  const el = root.querySelector<HTMLElement>(`[data-analysis-window][data-section-index="${sectionIndex}"]`);
+  if (!el) return null;
+  el.scrollIntoView({ block: "center" });
+  el.classList.add("ring-2", "ring-neon");
+  if (flashMs > 0 && typeof window !== "undefined") {
+    window.setTimeout(() => el.classList.remove("ring-2", "ring-neon"), flashMs);
+  }
+  return el;
 }
 
 /**

@@ -35,6 +35,35 @@ export function decideAuditIdentity(desc: any): {
   return { identity: identity ?? "anon", jobId, groupKey };
 }
 
+/** ADAAAA-7626: normalize a descriptor `createdAt` to an ISO-8601 UTC string.
+ *
+ * The decide service stamps `createdAt` as an epoch NUMBER (`round(time.time(),3)`),
+ * while Stage-2 confirm descriptors are stamped server-side as ISO. The table's
+ * `created_at` is TEXT and BOTH the retention trim and every read path
+ * `ORDER BY created_at` lexicographically — an epoch string ("1762…") sorts BELOW
+ * every ISO timestamp ("2026-…"). With the table at its retention cap every
+ * insert triggers a trim, so a freshly written Stage-1 row was classified as the
+ * OLDEST row and deleted in the same write path; only the confirm rows survived.
+ * That is why a job showed `gNNN:confirm` rows and no Stage-1 rows even after the
+ * identity fix. Normalize to ISO so retention is real wall-clock order. */
+export function decideAuditCreatedAt(v: unknown, now: number = Date.now()): string {
+  let ms: number | null = null;
+  if (typeof v === "number" && Number.isFinite(v) && v > 0) {
+    // seconds (< 1e11) vs milliseconds (>= 1e11) — epoch seconds now ~1.7e9.
+    ms = v >= 1e11 ? v : v * 1000;
+  } else if (typeof v === "string" && v.trim()) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) ms = n >= 1e11 ? n : n * 1000;
+    else {
+      const parsed = Date.parse(v);
+      if (!Number.isNaN(parsed)) ms = parsed;
+    }
+  }
+  if (ms === null || !Number.isFinite(ms) || ms <= 0) return new Date(now).toISOString();
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? new Date(now).toISOString() : d.toISOString();
+}
+
 /** Map a decide-service compact audit descriptor (as emitted by gemma.py
  * `_audit_descriptor`, read off the decision as `_audit`) to a
  * DecideAuditRecord. Returns null when the descriptor is absent or lacks
@@ -63,7 +92,7 @@ export function decideAuditRecordFromDescriptor(desc: any): DecideAuditRecord | 
     timings: desc.timings ?? null,
     fallback: !!desc.fallback,
     replayable: !!desc.replayable,
-    createdAt: desc.createdAt ? String(desc.createdAt) : new Date().toISOString(),
+    createdAt: decideAuditCreatedAt(desc.createdAt),
   };
 }
 
