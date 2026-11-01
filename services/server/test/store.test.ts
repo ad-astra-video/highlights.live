@@ -70,6 +70,29 @@ describe("Store (in-memory)", () => {
     expect(s.getJob(activeDone.id)!.status).toBe("active"); // completedAt present -> not stranded
   });
 
+  it("sweepStrandedJobs records the failure attribution it is given (ADAAAA-7700)", async () => {
+    const s = new Store();
+    const share = await s.createJob({ ownerId: "u", source: "browser" });
+    await s.patchJob(share.id, { status: "active" });
+    const vod = await s.createJob({ ownerId: "u", source: "file" });
+    await s.patchJob(vod.id, { status: "active" });
+
+    // A browser share stranded with a media_sessions row died WITH the media node.
+    const reaped = await s.sweepStrandedJobs((job) =>
+      job.source === "browser"
+        ? { failureReason: "media-session-lost", error: "Media node restarted — click Start to share again." }
+        : { failureReason: "server-restart", error: "The analyzer restarted mid-run." }
+    );
+    expect(reaped).toBe(2);
+    const shareAfter = s.getJob(share.id)!;
+    expect(shareAfter.status).toBe("failed");
+    expect(shareAfter.failureReason).toBe("media-session-lost");
+    expect(shareAfter.error).toMatch(/media node restarted/i);
+    const vodAfter = s.getJob(vod.id)!;
+    expect(vodAfter.status).toBe("failed");
+    expect(vodAfter.failureReason).toBe("server-restart");
+  });
+
   it("patchJob persists optional async progress + progressLabel (ADAAAA-6760)", async () => {
     const s = new Store();
     const j = await s.createJob({ ownerId: "u", source: "file" });
