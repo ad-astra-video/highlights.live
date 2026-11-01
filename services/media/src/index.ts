@@ -11,7 +11,9 @@ async function main() {
   // makes a persistent fault a restart loop that answers /health fine, so keep a
   // small crash ledger next to the process and publish it on `/health`
   // (`status` flips to "degraded" once the node restarts too often in the window).
-  const ledger = recordBoot(loadLedger(cfg.stateDir));
+  // ADAAAA-7689 AC4: the ledger also carries a per-boot id and the image
+  // revision, so a restart reads as a deploy or a crash from `/health` alone.
+  const ledger = recordBoot(loadLedger(cfg.stateDir), { buildRef: cfg.buildRef });
   saveLedger(ledger, cfg.stateDir);
   const lifecycle = () => snapshot(ledger, { windowS: cfg.restartWindowS, threshold: cfg.restartDegradedThreshold });
   // Record exits this process can actually see. SIGKILL / OOM run no handler;
@@ -66,7 +68,7 @@ async function main() {
   const boot = lifecycle();
   // eslint-disable-next-line no-console
   console.log(
-    `[media] lifecycle boots=${boot.boots} lastExit=${boot.lastExit ? `${boot.lastExit.reason}:${boot.lastExit.code ?? "-"}` : "none"} bootsInWindow=${boot.bootsInWindow}/${boot.threshold} degraded=${boot.degraded}`,
+    `[media] lifecycle boots=${boot.boots} bootId=${boot.bootId ?? "-"} buildRef=${boot.buildRef ?? "-"} cause=${boot.restartCause} lastExit=${boot.lastExit ? `${boot.lastExit.reason}:${boot.lastExit.code ?? "-"}` : "none"} bootsInWindow=${boot.bootsInWindow}/${boot.threshold} degraded=${boot.degraded}`,
   );
 }
 

@@ -544,6 +544,14 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.media
+      args:
+        # ADAAAA-7689 AC4: the shipped revision is baked into the image so
+        # `/health` can name the running build (`buildRef`) and a restart can be
+        # attributed to a deploy (revision changed) instead of a crash (same
+        # revision, unobserved exit). Deploy with the revision in scope:
+        #   BUILD_REF=$(git rev-parse --short HEAD) docker compose ... up -d --build media
+        # Unset => "unknown", published verbatim rather than guessed.
+        BUILD_REF: ${BUILD_REF:-unknown}
     container_name: highlights-media
     # Availability (ADAAAA-7656): the live rail must not depend on the hourly
     # box-health tick to come back from an exit. Before this key, a media crash
@@ -595,6 +603,15 @@ services:
       - MEDIA_NODE_ID=${MEDIA_NODE_ID:-media-0}
       - MEDIA_MAX_SESSIONS=${MEDIA_MAX_SESSIONS:-1}
       - MEDIA_HEALTH_TOKEN=${MEDIA_HEALTH_TOKEN:-}
+      # ADAAAA-7689 AC4: keep the lifecycle ledger on the mounted state volume
+      # instead of the container's /tmp, so boots and their `buildRef` survive a
+      # recreate. Without it a deploy looks like a first boot and a restart
+      # cannot be attributed to one.
+      - MEDIA_STATE_DIR=/state
+    volumes:
+      # Lifecycle ledger (boot ids + build revisions + last exit). Host-side so
+      # `docker compose up -d --build` (a deploy) does not erase the history.
+      - ./media-state:/state
     ports:
       - "4070:4070"
     depends_on:

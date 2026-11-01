@@ -25,4 +25,7 @@ data/
 services/**/.venv/
 docker/keystore/
 docker/*-keystore/
+# Media lifecycle ledger (ADAAAA-7689): bind-mounted host dir for the boot
+# ledger, so a deploy does not wipe restart attribution.
+docker/media-state/
 webapp/dist

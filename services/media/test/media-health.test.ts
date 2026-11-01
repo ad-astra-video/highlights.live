@@ -113,14 +113,20 @@ describe("media node capacity/health surface (ADAAAA-6869)", () => {
     await app.close();
   });
 
-  it("accrues the per-node cost meter when a session is torn down", async () => {
+  it("counts an abandoned provision as unused, not as a completed session", async () => {
+    // ADAAAA-7689 F1: a session that no client ever joined carries no stream, so
+    // it must not be billed into the completed meter (the double-charge a
+    // provision-only browser QA run used to produce). It stays visible through
+    // `sessionsUnused`. The "carried a client -> sessionsCompleted +1" case is
+    // pinned in session-ownership.test.ts.
     const app = await build({ nodeId: "media-0" });
     await app.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-h3" } });
     const closed = await app.inject({ method: "POST", url: "/sessions/sess-health/close" });
     expect(closed.statusCode).toBe(200);
     const h = (await app.inject({ method: "GET", url: "/health" })).json();
-    expect(h.cost.sessionsCompleted).toBe(1);
-    expect(h.cost.sessionSeconds).toBeGreaterThanOrEqual(0);
+    expect(h.cost.sessionsCompleted).toBe(0);
+    expect(h.cost.sessionSeconds).toBe(0);
+    expect(h.cost.sessionsUnused).toBe(1);
     expect(h.capacity.activeSessions).toBe(0);
     await app.close();
   });
