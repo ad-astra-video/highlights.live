@@ -21,7 +21,7 @@ import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
 import { WebRtcIngestSession } from "./rtc";
 import { AudioRelay, type AudioPcmChunk } from "./audio-relay";
-import { guardStream, safeEnd, safeWrite } from "./guarded-write";
+import { guardStream, safeEnd, safeWrite, sendText } from "./guarded-write";
 import type { LifecycleSnapshot } from "./lifecycle";
 
 interface ActiveStream {
@@ -580,11 +580,16 @@ export class MediaServer {
   private relay(stream: ActiveStream, socket: any, obs: any) {
     const payload = JSON.stringify({ type: "observation", observation: obs });
     // Guarded: a socket can be destroyed between the read and the write (the
-    // browser dropped between frames). `safeWrite` skips closed sockets, logs a
+    // browser dropped between frames). `sendText` skips closed sockets, logs a
     // warn with the session id, and drops the dead socket from the session.
+    //
+    // TEXT is load-bearing (ADAAAA-7678): @fastify/websocket wraps the peer in a
+    // `SocketStream`, whose write path turns a string chunk into a BINARY frame,
+    // so a browser receives a Blob and `JSON.parse(e.data)` throws — a healthy
+    // relay then reads as "zero observations" to every browser client.
     const label = `ws session=${stream.provisioned.sessionId}`;
     for (const s of stream.sockets) {
-      safeWrite(s, payload, label, () => {
+      sendText(s, payload, label, () => {
         stream.sockets.delete(s);
       });
     }

@@ -83,6 +83,53 @@ export function canWrite(stream: Writable | undefined | null): boolean {
 }
 
 /**
+ * Send one JSON payload to a WebSocket peer as a **TEXT** frame.
+ *
+ * Why not just `safeWrite()`: @fastify/websocket hands the route a
+ * `SocketStream`, and `ws`'s `createWebSocketStream()` write path passes every
+ * chunk through as a Buffer -> `ws.send()` classifies it as BINARY. A browser
+ * then receives a `Blob` and `JSON.parse(e.data)` throws, so a perfectly healthy
+ * relay looked like "zero observations" to every browser client (ADAAAA-7678:
+ * the measurement harness counted 0 on sessions whose log showed
+ * `[rtc] obs seq=1..N`). Writing through the underlying `ws` socket keeps the
+ * TEXT opcode, so any browser can `JSON.parse` the frame directly.
+ *
+ * The write is still guarded (peer gone => warn + destroy, never an unhandled
+ * 'error'), and it falls back to `safeWrite` when the underlying socket is not
+ * addressable (plain Duplex streams in tests/other transports).
+ */
+export function sendText(
+  stream: any,
+  text: string,
+  label: string,
+  onError?: (err: NodeJS.ErrnoException) => void
+): boolean {
+  if (!stream) return false;
+  guardStream(stream, label, onError);
+  const ws = stream.socket;
+  // ws readyState 1 === OPEN. Anything else: let safeWrite decide.
+  if (ws && typeof ws.send === "function" && ws.readyState === 1) {
+    try {
+      ws.send(text, (err?: Error | null) => {
+        if (err) onError?.(err as NodeJS.ErrnoException);
+      });
+      return true;
+    } catch (err) {
+      // Synchronous throw (socket closed between the check and the send).
+      // eslint-disable-next-line no-console
+      console.warn(`[media] write-failed ${label} code=${(err as NodeJS.ErrnoException)?.code ?? "?"} err=${(err as Error)?.message ?? err}`);
+      try {
+        onError?.(err as NodeJS.ErrnoException);
+      } catch {
+        /* ignore */
+      }
+      return false;
+    }
+  }
+  return safeWrite(stream, text, label, onError);
+}
+
+/**
  * Write to a possibly-closed stream without risking an unhandled 'error'.
  * Returns false when the write was skipped (stream already gone) or threw
  * synchronously. Errors delivered asynchronously land on the `guardStream`
