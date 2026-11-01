@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StageAMetricsSnapshot } from "@highlights/events";
-import { candidateCountForJob, completedCounterFields, stageAMetricsForJob } from "../src/job-counters";
+import { candidateCountForJob, completedCounterFields, counterFieldsForJob, stageAMetricsForJob } from "../src/job-counters";
 
 // ADAAAA-7624: honest per-job candidate + Stage-A counters.
 //
@@ -68,6 +68,67 @@ describe("stageAMetricsForJob (ADAAAA-7624)", () => {
     expect(out.stageAMetricsStatus).toBe("measured");
     expect(out.stageAMetrics).toEqual(snap);
     expect(out.stageAMetrics?.fpRate).toBeCloseTo(0.25);
+  });
+});
+
+describe("counterFieldsForJob (ADAAAA-7624 read-time projection)", () => {
+  // The stored record of the reported job `d61e52f6` as written BEFORE the fix:
+  // legacy counter 0, no candidatePath/stageAMetricsStatus, an all-zero Stage-A
+  // snapshot, the observe cadence metrics present, and 24 persisted decision
+  // rows (its distinct produced highlights).
+  const legacyJob = () => ({
+    candidatesTriggered: 0,
+    highlightsFound: 24,
+    candidates: Array.from({ length: 24 }, (_, i) => ({ seq: i, ts: i, eventType: "GOAL", decision: "scoring_play" })),
+    vodObserveMetrics: { decideCalls: 261, accepted: 75, maxFrames: 16, subsampledCalls: 0, framesPerCall: [] },
+    stageAMetrics: zeroSnapshot(),
+  });
+
+  it("derives 24 observe candidates and n/a Stage-A from a pre-fix record", () => {
+    const fields = counterFieldsForJob(legacyJob());
+    // 24 distinct produced candidates, NOT the observe observer's 75-window tally.
+    expect(fields.candidatesTriggered).toBe(24);
+    expect(fields.candidatePath).toBe("observe");
+    expect(fields.stageAMetricsStatus).toBe("n/a");
+    expect(fields.stageAMetrics).toBeUndefined();
+  });
+
+  it("leaves a record that already carries the fields untouched", () => {
+    const snap = measuredSnapshot(4, 1);
+    const fields = counterFieldsForJob({
+      candidatesTriggered: 24,
+      candidatePath: "observe",
+      stageAMetrics: snap,
+      stageAMetricsStatus: "measured",
+      candidates: [],
+      highlightsFound: 24,
+    });
+    expect(fields).toEqual({});
+  });
+
+  it("keeps a real Stage-A measurement when the snapshot judged candidates", () => {
+    const snap = measuredSnapshot(4, 1);
+    const fields = counterFieldsForJob({ ...legacyJob(), stageAMetrics: snap });
+    expect(fields.stageAMetricsStatus).toBe("measured");
+    expect(fields.stageAMetrics).toBeUndefined(); // nothing to override
+  });
+
+  it("falls back to the legacy perceive-gate counter when the observer never ran", () => {
+    const fields = counterFieldsForJob({ candidatesTriggered: 7, highlightsFound: 7, stageAMetrics: zeroSnapshot() });
+    expect(fields.candidatesTriggered).toBe(7);
+    expect(fields.candidatePath).toBe("perceive_gate");
+  });
+
+  it("reports none when no path produced a candidate", () => {
+    const fields = counterFieldsForJob({ candidatesTriggered: 0, highlightsFound: 0, candidates: [] });
+    expect(fields.candidatesTriggered).toBe(0);
+    expect(fields.candidatePath).toBe("none");
+  });
+
+  it("uses highlightsFound when the decision trail predates it", () => {
+    const fields = counterFieldsForJob({ highlightsFound: 9, vodObserveMetrics: { accepted: 30 } });
+    expect(fields.candidatesTriggered).toBe(9);
+    expect(fields.candidatePath).toBe("observe");
   });
 });
 
