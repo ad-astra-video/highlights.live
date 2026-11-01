@@ -1,0 +1,113 @@
+{
+ "tool": "local gemma-4-12B (cyankiwi/gemma-4-12B-it-qat-AWQ-INT4) via http://gemma:8088/v1/chat/completions, enable_thinking=false, temperature 0",
+ "purpose": "ADAAAA-7611 AC-1: can a prompt family separate shot-class non-goal windows from the 12 evidence:none controls? Harness: labeller_variants.py",
+ "frames_read_per_variant": 245,
+ "windows": {
+  "shot": 10,
+  "control": 12
+ },
+ "provenance": {
+  "host": "livepeer-ai-x99",
+  "runner": "host python3 (gemma reached at container IP 172.20.0.6:8088)",
+  "frames": "ffmpeg fps=1,scale=960:540 from the 1280x720 upload",
+  "read_s": "~0.5 s/frame (1225 reads in ~10 min)"
+ },
+ "variants": {
+  "v0_baseline": {
+   "any_frame_rule": {
+    "shot_windows_reproduced": 6,
+    "shot_windows": 10,
+    "control_windows_false": 4,
+    "control_windows": 12,
+    "control_false_frames": 5,
+    "control_frames": 134
+   },
+   "two_frame_run_rule": {
+    "shot_windows_reproduced": 4,
+    "shot_windows": 10,
+    "control_windows_false": 0,
+    "control_windows": 12,
+    "control_false_frames": 5,
+    "control_frames": 134
+   }
+  },
+  "v1_scene": {
+   "any_frame_rule": {
+    "shot_windows_reproduced": 6,
+    "shot_windows": 10,
+    "control_windows_false": 4,
+    "control_windows": 12,
+    "control_false_frames": 9,
+    "control_frames": 134
+   },
+   "two_frame_run_rule": {
+    "shot_windows_reproduced": 3,
+    "shot_windows": 10,
+    "control_windows_false": 1,
+    "control_windows": 12,
+    "control_false_frames": 9,
+    "control_frames": 134
+   }
+  },
+  "v2_facts": {
+   "any_frame_rule": {
+    "shot_windows_reproduced": 10,
+    "shot_windows": 10,
+    "control_windows_false": 12,
+    "control_windows": 12,
+    "control_false_frames": 73,
+    "control_frames": 134
+   },
+   "two_frame_run_rule": {
+    "shot_windows_reproduced": 10,
+    "shot_windows": 10,
+    "control_windows_false": 10,
+    "control_windows": 12,
+    "control_false_frames": 73,
+    "control_frames": 134
+   }
+  },
+  "v3_defined": {
+   "any_frame_rule": {
+    "shot_windows_reproduced": 8,
+    "shot_windows": 10,
+    "control_windows_false": 8,
+    "control_windows": 12,
+    "control_false_frames": 20,
+    "control_frames": 134
+   },
+   "two_frame_run_rule": {
+    "shot_windows_reproduced": 7,
+    "shot_windows": 10,
+    "control_windows_false": 3,
+    "control_windows": 12,
+    "control_false_frames": 20,
+    "control_frames": 134
+   }
+  },
+  "v4_moment": {
+   "any_frame_rule": {
+    "shot_windows_reproduced": 7,
+    "shot_windows": 10,
+    "control_windows_false": 8,
+    "control_windows": 12,
+    "control_false_frames": 15,
+    "control_frames": 134
+   },
+   "two_frame_run_rule": {
+    "shot_windows_reproduced": 4,
+    "shot_windows": 10,
+    "control_windows_false": 3,
+    "control_windows": 12,
+    "control_false_frames": 15,
+    "control_frames": 134
+   }
+  }
+ },
+ "verdict": "No variant of the five meets the bar. v3_defined (explicit class-boundary prompt) comes closest at 8/10 shot windows with the any-frame rule, but it also flags 8/12 controls; adding a >=2-frame persistence rule cuts controls to 3/12 at the cost of 7/10 shots. v2_facts (net/ball/keeper facts) saturates at 10/10 shots and 12/12 controls, i.e. it reports 'ball near net' almost always at this resolution/scale. v0_baseline reproduces the earlier 6/10 vs 4/12 result exactly. Conclusion: prompt family is not the fix; the 12B model at 960x540 cannot resolve a ~10 px ball and a distant goal mouth reliably, so AC-1 promotion needs a real verification channel (native full-res vision), not another prompt.",
+ "bar": {
+  "shots_needed": 8,
+  "controls_allowed": 2,
+  "note": "window-level: >=8/10 shot windows flagged and <=2/12 evidence:none controls falsely flagged"
+ }
+}
