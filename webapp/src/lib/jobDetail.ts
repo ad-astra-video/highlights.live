@@ -327,6 +327,11 @@ export interface JobDetail {
     stageAMetrics?: StageAMetricsSnapshot;
     stageAMetricsStatus?: "measured" | "n/a";
     decideCalls?: number;
+    // ADAAAA-7664: a LIVE job records its decide invocations in the observe
+    // snapshot (`observeMetrics.decideCalls`) rather than the job-level
+    // `decideCalls` field, which only the VOD path wrote. The header must fall
+    // back to it, else a live job with N real decides renders `0`.
+    observeMetrics?: { decideCalls?: number };
     perceiveSessionS?: number;
     costUsd?: number;
     durationMs?: number;
@@ -522,6 +527,26 @@ export function stageACountLabel(job: {
 
 export function sectionLabel(s: FrameSection): string {
   return `T+${s.startS.toFixed(0)}s – T+${s.endS.toFixed(0)}s`;
+}
+
+/**
+ * Decide-call count for a job header/tile (ADAAAA-7664).
+ *
+ * The two paths record the count in different places: the VOD pass writes the
+ * job-level `decideCalls`, the LIVE observe pass writes
+ * `observeMetrics.decideCalls`. Reading only `job.decideCalls` made a live job
+ * with 17 real decides (and 16 decide-audit rows) render "Decide calls 0".
+ * Prefer the job-level field, then the observe snapshot, and fall back to 0 only
+ * when neither is recorded (a job that never ran a decide pass).
+ */
+export function decideCallsCount(job: {
+  decideCalls?: number | null;
+  observeMetrics?: { decideCalls?: number | null } | null;
+}): number {
+  if (typeof job.decideCalls === "number" && Number.isFinite(job.decideCalls)) return job.decideCalls;
+  const observed = job.observeMetrics?.decideCalls;
+  if (typeof observed === "number" && Number.isFinite(observed)) return observed;
+  return 0;
 }
 
 /**

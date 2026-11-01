@@ -775,7 +775,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // ADAAAA-7011: cadence + decide gemma E2E latency snapshot from the live
         // decide-observer, so the Livepeer runner shows the ~30 s budget
         // utilization. Absent when the observer was not enabled.
-        ...(outcome.observeMetrics ? { observeMetrics: outcome.observeMetrics } : {}),
+        // ADAAAA-7664: the observer owns the decide count for a live job, so
+        // mirror it onto the job-level `decideCalls` field (only the VOD path
+        // used to write it). Without this, a live job with 17 real decides
+        // reported `decideCalls: null` and the job-detail header read 0.
+        ...(outcome.observeMetrics
+          ? { observeMetrics: outcome.observeMetrics, decideCalls: outcome.observeMetrics.decideCalls }
+          : {}),
       });
       // ADAAAA-6798 Inc 1: generate the LLM job title once the job reaches
       // `done` (fire-and-forget; fallback title on any failure; never blocks).
