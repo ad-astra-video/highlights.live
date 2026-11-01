@@ -3521,9 +3521,10 @@ function buildObserveSignalGateOpts(cfg: ServerConfig): SignalGateOptions | unde
  * is a strict no-op (the Stage-1 path is byte-identical to today).
  *
  * `confirmReuseWindowS` is LIVE-only: the live observer's rolling window center
- * slides with the cadence, so one goal is re-read by several overlapping windows
- * and the center-keyed identity is not stable. The horizon matches the accept
- * path's goal burst window, which keeps the dive at one per distinct goal.
+ * slides with the cadence, so one goal is re-read by every window that still
+ * contains it and the center-keyed identity is not stable. The horizon is the
+ * observe window plus one cadence tick of slack, which keeps the dive at one per
+ * distinct goal without letting a nearby dive refute a genuinely different one.
  */
 export interface LiveAnalyzerConfigDeps {
   cfg: ServerConfig;
@@ -3597,7 +3598,9 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     confirmEnabled: cfg.decideConfirmEnabled,
     confirmWindowExtraS: cfg.decideConfirmExtraWindowS,
     // One confirm dive per distinct goal across the overlapping rolling windows
-    // (the accept path's own burst horizon; see LiveRunShared.confirmedGoalNear).
+    // (the observe window + a cadence tick of slack; see
+    // LiveRunShared.confirmedGoalNear). Deliberately smaller than the goal burst
+    // window so a nearby distinct goal keeps its own dive.
     confirmReuseWindowS: cfg.decideConfirmLiveReuseWindowS,
   };
 }
