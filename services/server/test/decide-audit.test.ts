@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { SqliteDb } from "../src/db";
 import {
+  decideAuditCreatedAt,
   decideAuditIdentity,
   decideAuditRecordFromDescriptor,
   recordDecideAudit,
@@ -199,6 +200,75 @@ describe("confirm audit descriptor (ADAAAA-7626, AC3)", () => {
     expect(rows[0].candidateCount).toBe(1);
     expect(rows[0].timings).toEqual({ elapsedMs: 1234 });
     expect(rows[0].groupKey).toBe("g114:confirm");
+    await db.close();
+  });
+
+  it("records the confirm pass prompt and marks the row replayable (AC1)", () => {
+    // The /confirm service returns its own pass analysis; the exact prompt rides
+    // on `analysis.request.prompt`. No extra confirm call is made to get it.
+    const withPrompt = confirmAuditDescriptor(
+      { jobId: "job-c" },
+      {
+        timestamp: 342.5,
+        frames: [{ role: "full", base64: frame("frame-1") }],
+        elapsedMs: 42,
+        confirm: {
+          ...confirm,
+          analysis: { request: { prompt: "CONFIRM: is this a goal?" }, decision: {} } as any,
+        },
+      }
+    );
+    expect(withPrompt.promptText).toBe("CONFIRM: is this a goal?");
+    expect(withPrompt.replayable).toBe(true);
+    expect((withPrompt.mediaHashes as unknown[]).length).toBe(1);
+
+    // Passthrough with no analysis: no prompt, so NOT replayable — never claim a
+    // replay we cannot serve.
+    expect(desc.promptText).toBeNull();
+    expect(desc.replayable).toBe(false);
+  });
+});
+
+// ADAAAA-7626 (AC1): the decide service stamps `createdAt` as epoch SECONDS while
+// confirm rows are stamped server-side as ISO. The retention trim and read path
+// order the TEXT column lexicographically, so a fresh Stage-1 row ("1762…")
+// ranked below every ISO row and was deleted by the trim in the same write path —
+// exactly why a post-identity-fix job still showed only `gNNN:confirm` rows.
+describe("decide_audit created_at ordering (ADAAAA-7626, AC1)", () => {
+  it("normalizes the decide service's epoch createdAt to ISO", () => {
+    const ms = Date.parse("2026-11-01T12:00:00.000Z");
+    expect(decideAuditCreatedAt(ms / 1000)).toBe(new Date(ms).toISOString());
+    expect(decideAuditCreatedAt(ms)).toBe(new Date(ms).toISOString()); // ms epoch
+    expect(decideAuditCreatedAt(String(ms / 1000))).toBe(new Date(ms).toISOString());
+    expect(decideAuditCreatedAt("2026-11-01T12:00:00.000Z")).toBe("2026-11-01T12:00:00.000Z");
+    // Missing / unparseable falls back to the ingest wall clock, never "Invalid Date".
+    const now = Date.parse("2026-11-01T13:00:00.000Z");
+    expect(decideAuditCreatedAt(undefined, now)).toBe(new Date(now).toISOString());
+    expect(decideAuditCreatedAt("not-a-date", now)).toBe(new Date(now).toISOString());
+    expect(decideAuditCreatedAt(0, now)).toBe(new Date(now).toISOString());
+  });
+
+  it("stores ISO created_at for a Stage-1 descriptor", () => {
+    const rec = decideAuditRecordFromDescriptor({ ...descriptor, createdAt: 1793534400.5 })!;
+    expect(rec.createdAt).toBe("2026-11-01T12:00:00.500Z");
+  });
+
+  it("keeps the newest row when retention trims a mixed epoch/ISO table", async () => {
+    const db = new SqliteDb(":memory:");
+    // A confirm row stamped server-side (ISO) one second EARLIER than the Stage-1 row.
+    await recordDecideAudit(
+      db,
+      { ...descriptor, jobId: "job-iso", sessionId: "job-iso", groupKey: "g1:confirm", createdAt: "2026-11-01T11:59:59.000Z" },
+      1
+    );
+    // Same instant, but from the decide service as epoch seconds — the NEWEST row.
+    await recordDecideAudit(
+      db,
+      { ...descriptor, jobId: "job-new", sessionId: "job-new", groupKey: "g2", createdAt: 1793534400.0 },
+      1
+    );
+    const rows = await db.listDecideAudits();
+    expect(rows.map((r) => r.groupKey)).toEqual(["g2"]);
     await db.close();
   });
 });

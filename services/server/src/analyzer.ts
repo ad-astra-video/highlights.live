@@ -3098,6 +3098,16 @@ export function confirmAuditDescriptor(
 ): Record<string, unknown> {
   const { timestamp, frames, elapsedMs, confirm } = input;
   const jobId = cfg.jobId ?? null;
+  // ADAAAA-7626 (AC1): the /confirm service builds its own prompt and returns it
+  // in the pass analysis record (`analysis.request.prompt`). Persisting that exact
+  // prompt makes the confirm row self-describing and replayable — prompt +
+  // per-frame sha256 is everything needed to re-submit the dive. Reading it off
+  // the SAME response is CPU-only: no added confirm call, no added GPU work.
+  // Absent on a passthrough that never built a prompt (then promptText stays null
+  // and replayable stays false rather than claiming a replay we cannot serve).
+  const promptText = (confirm as any)?.analysis?.request?.prompt;
+  const prompt = typeof promptText === "string" && promptText.trim() ? promptText : null;
+  const mediaHashes = frameMediaHashes(frames);
   return {
     jobId,
     sessionId: jobId,
@@ -3105,7 +3115,9 @@ export function confirmAuditDescriptor(
     timestamp,
     frameCount: frames?.length ?? 0,
     candidateCount: 1,
-    mediaHashes: frameMediaHashes(frames),
+    promptText: prompt,
+    mediaHashes,
+    replayable: !!(prompt && mediaHashes.length > 0),
     verdicts: {
       runConfirmationPass: true,
       goalConfirmed: confirm?.goalConfirmed ?? null,
