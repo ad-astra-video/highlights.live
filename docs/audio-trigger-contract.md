@@ -99,17 +99,24 @@ A trigger is **evidence and a schedule request, never a decision**:
    cadence ticks; decide invocations per stream-minute are unchanged or lower
    (0 added steady-state Livepeer GPU sessions, AC3). A trigger-anchored window
    is never skipped by the Tier-2 signal gate — a trigger *is* a signal.
-5. On the media RTC rail the control plane owns no frame, so a trigger there is
-   surfaced on the job SSE stream and counted on the media node
-   (`/health` → `audio.triggerCandidates`); it does not by itself issue a decide.
-   Anchored decide scheduling runs on **one** rail today: the server-side live
-   ingest (`runLiveJob` → `LiveRunShared.recordAudioTrigger` → `LiveObserver`),
-   and only when the live decide-observer is enabled (`liveObserveLoop` on with
-   `decideWindowN` unset). The client `/ingest` and media-RTC rails never feed a
-   trigger to an observer, so no window is anchored there. The VOD pass feeds
-   `recordAudioTrigger` since [ADAAAA-7694](/ADAAAA/issues/ADAAAA-7694) but only
-   for MEASUREMENT (the Stage-A outcome ledger) — it never anchors a window,
-   because a decoded VOD pass has no frame ahead of the decode to anchor to.
+5. On the media RTC rail the media node relays the decoded anchor JPEG with each
+   observation (`frameB64` on `POST /jobs/:id/observe`), so the control plane
+   DOES own the pixels and the rail runs the same observer
+   (`services/server/src/media-rail.ts` `MediaRailObserver`): the trigger is
+   queued by `POST /jobs/:id/audio`, drained on the next relayed observation and
+   fires ONE anchored window on the 'already paid-for' perceive session
+   ([ADAAAA-7699](/ADAAAA/issues/ADAAAA-7699)). The trigger is still surfaced on
+   the job SSE stream and counted on the media node
+   (`/health` → `audio.triggerCandidates`).
+   Anchored decide scheduling therefore runs on TWO rails: the server-side live
+   ingest (`runLiveJob` → `LiveRunShared.recordAudioTrigger` → `LiveObserver`)
+   and the media RTC rail (`/jobs/:id/audio` → `MediaRailObserver`), both only
+   when the decide-observer is enabled (`liveObserveLoop` on). The client
+   `/ingest` rail still never feeds a trigger to an observer, so no window is
+   anchored there. The VOD pass feeds `recordAudioTrigger` since
+   [ADAAAA-7694](/ADAAAA/issues/ADAAAA-7694) but only for MEASUREMENT (the
+   Stage-A outcome ledger) — it never anchors a window, because a decoded VOD
+   pass has no frame ahead of the decode to anchor to.
    See "Where the anchored-window count is observable" below before asserting a
    window count on those rails.
 
@@ -165,8 +172,9 @@ observers write their verdicts into:
 | rail | window span used as "judged" | who writes the verdict |
 | --- | --- | --- |
 | server live ingest (`LiveObserver`) | `[tickTs - observeWindowS, tickTs]` (rolling PAST) | `LiveObserver.fire()` after its decide returns |
+| media RTC relay (`MediaRailObserver` → `LiveObserver`) | `[tickTs - observeWindowS, tickTs]` (rolling PAST, content clock rebased to the share start) | `LiveObserver.fire()` after its decide returns |
 | VOD (`ObserveDecider`) | `[tickTs - observeWindowS/2, tickTs + observeWindowS/2]` (centred) | `ObserveDecider.fire()` after its decide returns |
-| client `/ingest`, media RTC relay | — | no observer owns the frames, so nothing is recorded (`"n/a"`, correct) |
+| client `/ingest` | — | no observer owns the frames, so nothing is recorded (`"n/a"`, correct) |
 
 Consequences you can rely on when reading a job:
 
@@ -196,6 +204,53 @@ Consequences you can rely on when reading a job:
   `LiveRunShared.recordAudioTrigger` so its fired triggers reach the ledger, but
   no VOD window is anchored to a trigger (the decode has no frame ahead of it) —
   the anchored-window table below is unchanged.
+
+## The media (RTC / screen-share) rail decides (ADAAAA-7699)
+
+A browser screen share takes the media rail (browser → media node → perceive over
+WebRTC), not the control-plane `/ingest` rail. Until
+[ADAAAA-7699](/ADAAAA/issues/ADAAAA-7699) that rail relayed observations and
+surfaced audio triggers but never called `decide`, so a share produced
+observations into nothing. The wiring is now:
+
+1. **The anchor frame travels with the observation.** The media node already
+   holds the decoded JPEG when it reads the runner's events-out
+   (`services/media/src/server.ts` `publishAndObserve`); it attaches it as
+   `frameB64` on the `POST /jobs/:id/observe` callback (size-bounded). The
+   control plane strips it before stepping evidence or fanning the observation
+   over SSE, so pixels never ride the console stream. No second session is
+   opened to fetch frames, and the share is never routed back onto `/ingest`.
+2. **`MediaRailObserver`** (`services/server/src/media-rail.ts`) records the
+   frame + its perceive-derived seed into the same `LiveRunShared` /
+   `LiveObserver` pair the RTMP rail uses, drains queued audio triggers (one
+   anchored window each, coalesced), and fires on the cadence **or** the trigger
+   anchor. Decides run on a serial chain, so the observe callback returns
+   immediately and concurrent frames cannot double-fire the cadence.
+3. **Content clock.** Frame/audio timestamps on this rail are wall-clock epoch
+   seconds; the observer rebases everything to the first sampled moment so
+   highlight windows (`start`/`end`) are share-relative and the stop path can cut
+   clips from the recording.
+4. **Clips are deferred, not skipped.** A highlight is persisted at decision
+   time (with `clipUri: ""`) so the live feed updates during the share; the
+   existing finalize path (`finishBrowserJob`) cuts every clip-less highlight
+   from the browser recording once the share ends.
+5. **Job record parity.** At share end the rail patches `decideCalls`,
+   `observeMetrics` (same snapshot shape as a live RTMP job, incl.
+   `triggerFires`/`cadenceFires`), `candidatesTriggered`/`candidatePath`
+   (`observe`), `stageAMetrics*` when the audio gate judged something, and
+   `perceiveSessionS`/`costUsd`. The decide fee is waived on the streaming
+   session ([ADAAAA-5341](/ADAAAA/issues/ADAAAA-5341)): `canDecide(…,
+   {streaming:true})` never 402s mid-share and `onDecideCompleted` meters at $0.
+6. **No new GPU session.** The decide is a gemma call on the perceive session the
+   media node already paid for; the rail never reserves one.
+
+**A due trigger is never swallowed by a budget-refused tick.** The decide budget
+is one token per `cadenceS` and an anchored fire spends the same token. The
+observer now PEEKS a due trigger (`TriggerWindowScheduler.peekDue`) and consumes
+it only once the budget gate passes, so a trigger that falls due while the budget
+cannot afford the fire stays pending (bounded by the 8 s max-stale horizon) and
+anchors the next affordable tick, instead of being popped and lost (`fired++`
+with no decide).
 
 ## Cooldown-bounded refire at the tap vs ONE anchored window (ADAAAA-7691 AC2)
 

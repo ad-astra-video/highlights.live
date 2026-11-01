@@ -464,7 +464,14 @@ export class LiveObserver {
     // the cadence is already due the trigger simply wins (better anchor and
     // better latency, same cost); when it is not due the anchored fire may
     // spend half a token early (repaid before the next cadence tick).
-    const dueTrigger = force ? null : this.triggers.due(nowTs);
+    //
+    // ADAAAA-7699: PEEK the due trigger first and consume it only once the
+    // budget gate passes. The previous order consumed it (`triggers.due()`)
+    // before the budget check, so an anchored tick that was refused for budget
+    // dropped the trigger entirely — one fired audible event produced no decide
+    // at all. The trigger now stays pending (bounded by the scheduler's
+    // max-stale horizon) and anchors the next affordable tick.
+    const dueTrigger = force ? null : this.triggers.peekDue(nowTs);
     const anchored = !!dueTrigger;
     if (!force) {
       // Epsilon: the budget refill is a float accumulation, so an exactly-due
@@ -477,6 +484,7 @@ export class LiveObserver {
         return;
       }
     }
+    if (anchored) this.triggers.consume();
     const prevFire = this.lastFireTs;
     this.lastFireTs = nowTs;
     this.budgetTokens -= 1;
