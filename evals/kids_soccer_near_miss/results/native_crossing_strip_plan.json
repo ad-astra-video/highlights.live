@@ -1,0 +1,251 @@
+{
+ "plan": [
+  {
+   "id": "fa_goal_00130.6",
+   "kind": "goal",
+   "instant": 130.6,
+   "card_t": 130.6,
+   "goal_label": "ks-g-0117",
+   "source": "frame_attestation"
+  },
+  {
+   "id": "fa_goal_00280.9",
+   "kind": "goal",
+   "instant": 280.9,
+   "card_t": 280.9,
+   "goal_label": "ks-g-0280",
+   "source": "frame_attestation"
+  },
+  {
+   "id": "fa_goal_00417.3",
+   "kind": "goal",
+   "instant": 417.3,
+   "card_t": 417.3,
+   "goal_label": "ks-g-0413",
+   "source": "frame_attestation"
+  },
+  {
+   "id": "fa_goal_00427.7",
+   "kind": "goal",
+   "instant": 427.7,
+   "card_t": 427.7,
+   "goal_label": "ks-g-0435",
+   "source": "frame_attestation"
+  },
+  {
+   "id": "fa_goal_00545.4",
+   "kind": "goal",
+   "instant": 545.4,
+   "card_t": 545.4,
+   "goal_label": "ks-g-0541",
+   "source": "frame_attestation"
+  },
+  {
+   "id": "fa_goal_00636.6",
+   "kind": "goal",
+   "instant": 636.6,
+   "card_t": 636.6,
+   "goal_label": "ks-g-0643",
+   "source": "frame_attestation"
+  },
+  {
+   "id": "fa_goal_00676.3",
+   "kind": "goal",
+   "instant": 676.3,
+   "card_t": 676.3,
+   "goal_label": "ks-g-0678",
+   "source": "frame_attestation"
+  },
+  {
+   "id": "fa_goal_00724.3",
+   "kind": "goal",
+   "instant": 724.3,
+   "card_t": 724.3,
+   "goal_label": "ks-g-0719",
+   "source": "frame_attestation"
+  },
+  {
+   "id": "fa_shotfp_00178.1",
+   "kind": "shot_fp",
+   "instant": 178.1,
+   "card_t": 178.1,
+   "goal_label": null,
+   "source": "frame_attestation"
+  },
+  {
+   "id": "fa_shotfp_00203.2",
+   "kind": "shot_fp",
+   "instant": 203.2,
+   "card_t": 203.2,
+   "goal_label": null,
+   "source": "frame_attestation"
+  },
+  {
+   "id": "fa_shotfp_00358.8",
+   "kind": "shot_fp",
+   "instant": 358.8,
+   "card_t": 358.8,
+   "goal_label": null,
+   "source": "frame_attestation"
+  },
+  {
+   "id": "fa_shotfp_00401.7",
+   "kind": "shot_fp",
+   "instant": 401.7,
+   "card_t": 401.7,
+   "goal_label": null,
+   "source": "frame_attestation"
+  },
+  {
+   "id": "ks-n-0054",
+   "kind": "control",
+   "instant": 54.0,
+   "window": [
+    51,
+    57
+   ],
+   "overlaps_goal_window": false,
+   "instant_in_goal_window": false,
+   "source": "manifest_evidence_none"
+  },
+  {
+   "id": "ks-n-0090",
+   "kind": "control",
+   "instant": 90.0,
+   "window": [
+    87,
+    93
+   ],
+   "overlaps_goal_window": false,
+   "instant_in_goal_window": false,
+   "source": "manifest_evidence_none"
+  },
+  {
+   "id": "ks-n-0105",
+   "kind": "control",
+   "instant": 105.0,
+   "window": [
+    102,
+    108
+   ],
+   "overlaps_goal_window": false,
+   "instant_in_goal_window": false,
+   "source": "manifest_evidence_none"
+  },
+  {
+   "id": "ks-n-0144",
+   "kind": "control",
+   "instant": 144.0,
+   "window": [
+    141,
+    147
+   ],
+   "overlaps_goal_window": false,
+   "instant_in_goal_window": false,
+   "source": "manifest_evidence_none"
+  },
+  {
+   "id": "ks-n-0162",
+   "kind": "control",
+   "instant": 162.0,
+   "window": [
+    159,
+    165
+   ],
+   "overlaps_goal_window": false,
+   "instant_in_goal_window": false,
+   "source": "manifest_evidence_none"
+  },
+  {
+   "id": "ks-n-0237",
+   "kind": "control",
+   "instant": 237.0,
+   "window": [
+    234,
+    240
+   ],
+   "overlaps_goal_window": false,
+   "instant_in_goal_window": false,
+   "source": "manifest_evidence_none"
+  },
+  {
+   "id": "ks-n-0244",
+   "kind": "control",
+   "instant": 248.0,
+   "window": [
+    244,
+    252
+   ],
+   "overlaps_goal_window": false,
+   "instant_in_goal_window": false,
+   "source": "manifest_evidence_none"
+  },
+  {
+   "id": "ks-n-0254",
+   "kind": "control",
+   "instant": 258.0,
+   "window": [
+    254,
+    262
+   ],
+   "overlaps_goal_window": false,
+   "instant_in_goal_window": false,
+   "source": "manifest_evidence_none"
+  },
+  {
+   "id": "ks-n-0282",
+   "kind": "control",
+   "instant": 282.0,
+   "window": [
+    279,
+    285
+   ],
+   "overlaps_goal_window": true,
+   "instant_in_goal_window": true,
+   "source": "manifest_evidence_none"
+  },
+  {
+   "id": "ks-n-0312",
+   "kind": "control",
+   "instant": 313.5,
+   "window": [
+    294,
+    333
+   ],
+   "overlaps_goal_window": false,
+   "instant_in_goal_window": false,
+   "source": "manifest_evidence_none"
+  },
+  {
+   "id": "ks-n-0696",
+   "kind": "control",
+   "instant": 696.0,
+   "window": [
+    689,
+    703
+   ],
+   "overlaps_goal_window": true,
+   "instant_in_goal_window": false,
+   "source": "manifest_evidence_none"
+  },
+  {
+   "id": "ks-n-0760",
+   "kind": "control",
+   "instant": 760.5,
+   "window": [
+    755,
+    766
+   ],
+   "overlaps_goal_window": false,
+   "instant_in_goal_window": false,
+   "source": "manifest_evidence_none"
+  }
+ ],
+ "counts": {
+  "goal": 8,
+  "shot_fp": 4,
+  "control": 12
+ },
+ "commit": "da2d21a",
+ "job_id": "ac6bf37f-6a03-4d14-a307-de5b9e200405"
+}

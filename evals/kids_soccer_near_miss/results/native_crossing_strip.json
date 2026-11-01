@@ -1,0 +1,543 @@
+{
+ "model": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4",
+ "prompt": "ONE contact sheet: 30 consecutive video frames of a football match, 1/30 s apart, numbered left-to-right then top-to-bottom. Tile 16 (red outline) is the anchor instant. Does the BALL cross the goal line between the posts and go in the net around the anchor instant? Answer only, one line, no explanation: CROSS=yes/no; BALL=yes/no; SCENE=crossing/shot_stopped/wide/open_play/celebration/replay; ANCHOR=<tile number or none>",
+ "repeats": 2,
+ "candidates": 24,
+ "goals": {
+  "n": 8,
+  "ball_yes": [
+   "fa_goal_00417.3",
+   "fa_goal_00545.4",
+   "fa_goal_00724.3"
+  ],
+  "refuted": [],
+  "crossed": [
+   "fa_goal_00417.3",
+   "fa_goal_00545.4",
+   "fa_goal_00724.3"
+  ],
+  "unmeasured": [],
+  "unmeasured_ball": [
+   "fa_goal_00130.6",
+   "fa_goal_00280.9",
+   "fa_goal_00427.7",
+   "fa_goal_00636.6",
+   "fa_goal_00676.3"
+  ],
+  "refuted_on_every_read": []
+ },
+ "shot_fps": {
+  "n": 4,
+  "ball_yes": [
+   "fa_shotfp_00203.2",
+   "fa_shotfp_00358.8"
+  ],
+  "refuted": [],
+  "crossed": [
+   "fa_shotfp_00203.2",
+   "fa_shotfp_00358.8"
+  ],
+  "unmeasured": [],
+  "unmeasured_ball": [
+   "fa_shotfp_00178.1",
+   "fa_shotfp_00401.7"
+  ],
+  "refuted_on_every_read": []
+ },
+ "controls": {
+  "n": 12,
+  "ball_yes": [
+   "ks-n-0090",
+   "ks-n-0162",
+   "ks-n-0237",
+   "ks-n-0244",
+   "ks-n-0696",
+   "ks-n-0760"
+  ],
+  "crossed": [
+   "ks-n-0090",
+   "ks-n-0162",
+   "ks-n-0237",
+   "ks-n-0244",
+   "ks-n-0696",
+   "ks-n-0760"
+  ],
+  "refuted": [],
+  "unmeasured": [],
+  "unmeasured_ball": [
+   "ks-n-0054",
+   "ks-n-0105",
+   "ks-n-0144",
+   "ks-n-0254",
+   "ks-n-0282",
+   "ks-n-0312"
+  ]
+ },
+ "reproducible_candidates": 24,
+ "mean_read_s": 0.35,
+ "table": [
+  {
+   "id": "ks-n-0054",
+   "kind": "control",
+   "instant": 54.0,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.41,
+    0.31
+   ]
+  },
+  {
+   "id": "ks-n-0090",
+   "kind": "control",
+   "instant": 90.0,
+   "verdicts": [
+    "crossed",
+    "crossed"
+   ],
+   "verdict": "crossed",
+   "consistent": true,
+   "scenes": [
+    "crossing",
+    "crossing"
+   ],
+   "elapsed_s": [
+    0.38,
+    0.29
+   ]
+  },
+  {
+   "id": "ks-n-0105",
+   "kind": "control",
+   "instant": 105.0,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.41,
+    0.31
+   ]
+  },
+  {
+   "id": "ks-n-0144",
+   "kind": "control",
+   "instant": 144.0,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.41,
+    0.32
+   ]
+  },
+  {
+   "id": "ks-n-0162",
+   "kind": "control",
+   "instant": 162.0,
+   "verdicts": [
+    "crossed",
+    "crossed"
+   ],
+   "verdict": "crossed",
+   "consistent": true,
+   "scenes": [
+    "crossing",
+    "crossing"
+   ],
+   "elapsed_s": [
+    0.38,
+    0.29
+   ]
+  },
+  {
+   "id": "ks-n-0237",
+   "kind": "control",
+   "instant": 237.0,
+   "verdicts": [
+    "crossed",
+    "crossed"
+   ],
+   "verdict": "crossed",
+   "consistent": true,
+   "scenes": [
+    "crossing",
+    "crossing"
+   ],
+   "elapsed_s": [
+    0.38,
+    0.29
+   ]
+  },
+  {
+   "id": "ks-n-0244",
+   "kind": "control",
+   "instant": 248.0,
+   "verdicts": [
+    "crossed",
+    "crossed"
+   ],
+   "verdict": "crossed",
+   "consistent": true,
+   "scenes": [
+    "crossing",
+    "crossing"
+   ],
+   "elapsed_s": [
+    0.38,
+    0.29
+   ]
+  },
+  {
+   "id": "ks-n-0254",
+   "kind": "control",
+   "instant": 258.0,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.41,
+    0.32
+   ]
+  },
+  {
+   "id": "ks-n-0282",
+   "kind": "control",
+   "instant": 282.0,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.41,
+    0.32
+   ]
+  },
+  {
+   "id": "ks-n-0312",
+   "kind": "control",
+   "instant": 313.5,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.4,
+    0.32
+   ]
+  },
+  {
+   "id": "ks-n-0696",
+   "kind": "control",
+   "instant": 696.0,
+   "verdicts": [
+    "crossed",
+    "crossed"
+   ],
+   "verdict": "crossed",
+   "consistent": true,
+   "scenes": [
+    "crossing",
+    "crossing"
+   ],
+   "elapsed_s": [
+    0.38,
+    0.29
+   ]
+  },
+  {
+   "id": "ks-n-0760",
+   "kind": "control",
+   "instant": 760.5,
+   "verdicts": [
+    "crossed",
+    "crossed"
+   ],
+   "verdict": "crossed",
+   "consistent": true,
+   "scenes": [
+    "crossing",
+    "crossing"
+   ],
+   "elapsed_s": [
+    0.38,
+    0.29
+   ]
+  },
+  {
+   "id": "fa_goal_00130.6",
+   "kind": "goal",
+   "instant": 130.6,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.45,
+    0.32
+   ]
+  },
+  {
+   "id": "fa_goal_00280.9",
+   "kind": "goal",
+   "instant": 280.9,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.41,
+    0.31
+   ]
+  },
+  {
+   "id": "fa_goal_00417.3",
+   "kind": "goal",
+   "instant": 417.3,
+   "verdicts": [
+    "crossed",
+    "crossed"
+   ],
+   "verdict": "crossed",
+   "consistent": true,
+   "scenes": [
+    "crossing",
+    "crossing"
+   ],
+   "elapsed_s": [
+    0.38,
+    0.29
+   ]
+  },
+  {
+   "id": "fa_goal_00427.7",
+   "kind": "goal",
+   "instant": 427.7,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.41,
+    0.32
+   ]
+  },
+  {
+   "id": "fa_goal_00545.4",
+   "kind": "goal",
+   "instant": 545.4,
+   "verdicts": [
+    "crossed",
+    "crossed"
+   ],
+   "verdict": "crossed",
+   "consistent": true,
+   "scenes": [
+    "crossing",
+    "crossing"
+   ],
+   "elapsed_s": [
+    0.38,
+    0.29
+   ]
+  },
+  {
+   "id": "fa_goal_00636.6",
+   "kind": "goal",
+   "instant": 636.6,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.4,
+    0.32
+   ]
+  },
+  {
+   "id": "fa_goal_00676.3",
+   "kind": "goal",
+   "instant": 676.3,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.4,
+    0.32
+   ]
+  },
+  {
+   "id": "fa_goal_00724.3",
+   "kind": "goal",
+   "instant": 724.3,
+   "verdicts": [
+    "crossed",
+    "crossed"
+   ],
+   "verdict": "crossed",
+   "consistent": true,
+   "scenes": [
+    "crossing",
+    "crossing"
+   ],
+   "elapsed_s": [
+    0.38,
+    0.29
+   ]
+  },
+  {
+   "id": "fa_shotfp_00178.1",
+   "kind": "shot_fp",
+   "instant": 178.1,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.4,
+    0.31
+   ]
+  },
+  {
+   "id": "fa_shotfp_00203.2",
+   "kind": "shot_fp",
+   "instant": 203.2,
+   "verdicts": [
+    "crossed",
+    "crossed"
+   ],
+   "verdict": "crossed",
+   "consistent": true,
+   "scenes": [
+    "crossing",
+    "crossing"
+   ],
+   "elapsed_s": [
+    0.38,
+    0.29
+   ]
+  },
+  {
+   "id": "fa_shotfp_00358.8",
+   "kind": "shot_fp",
+   "instant": 358.8,
+   "verdicts": [
+    "crossed",
+    "crossed"
+   ],
+   "verdict": "crossed",
+   "consistent": true,
+   "scenes": [
+    "crossing",
+    "crossing"
+   ],
+   "elapsed_s": [
+    0.38,
+    0.29
+   ]
+  },
+  {
+   "id": "fa_shotfp_00401.7",
+   "kind": "shot_fp",
+   "instant": 401.7,
+   "verdicts": [
+    "unmeasured_ball",
+    "unmeasured_ball"
+   ],
+   "verdict": "unmeasured_ball",
+   "consistent": true,
+   "scenes": [
+    "open_play",
+    "open_play"
+   ],
+   "elapsed_s": [
+    0.41,
+    0.31
+   ]
+  }
+ ],
+ "bar": {
+  "fp_all_refuted_reproducible": false,
+  "no_goal_refuted": true,
+  "goals_all_crossed": false,
+  "met": false,
+  "promotion_ready": false
+ }
+}
