@@ -49,6 +49,49 @@ log = logging.getLogger("highlights.decide.gemma")
 
 DEFAULT_GEMMA_URL = "http://127.0.0.1:8088"
 
+# --- ASR transcript quality guard (ADAAAA-7665) ------------------------------
+# Whisper emits a canonical set of STOCK phrases when it transcribes silence or a
+# ~100 ms fragment: "What?", "Go!", "Oh", "Bye.", "You", "Okay.", "And",
+# "Thank you very much.", "Yes, yes, yes, yes…". Production stored exactly those
+# and the decide prompt then fed the model `audio commentary transcript: What?`.
+# Treat filler/punctuation as EMPTY so a silent window keeps the honest
+# `audio.path = "none"` semantics (ADAAAA-7248/7277) instead of a fake one.
+MIN_TRANSCRIPT_WORDS = 3
+ASR_HALLUCINATION_SET = frozenset(
+    {
+        "", "what", "go", "oh", "bye", "you", "and", "okay", "ok", "yes", "no",
+        "hmm", "mm", "ah", "uh", "thanks", "thank you", "thank you very much",
+        "you know", "bye bye", "yes yes yes", "no no no", "please subscribe",
+    }
+)
+
+
+def usable_transcript(text: str) -> str:
+    """Return ``text`` when it reads like real commentary, else ``""``.
+
+    ADAAAA-7665 quality guard: a transcript that is only punctuation, shorter
+    than ``MIN_TRANSCRIPT_WORDS`` words, a single repeated token, or one of
+    whisper's canonical silence hallucinations carries no information and must
+    never enter the decide prompt as "audio commentary transcript".
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    # Strip punctuation so "What?" / "Bye." / ". . . . . . ." normalize to words.
+    norm = re.sub(r"[^\w\s']", " ", t.lower(), flags=re.UNICODE)
+    norm = re.sub(r"\s+", " ", norm).strip()
+    if not norm:
+        return ""
+    if norm in ASR_HALLUCINATION_SET:
+        return ""
+    words = norm.split(" ")
+    if len(words) < MIN_TRANSCRIPT_WORDS:
+        return ""
+    # "Yes, yes, yes, yes" — one token repeated is filler, not commentary.
+    if len(set(words)) == 1:
+        return ""
+    return t
+
 # --- decide audit (ADAAAA-7027 / ADAAAA-7028) ---------------------------------
 # Versioned system prompt so an audit record can re-create the EXACT request the
 # model saw. Additive relative to the pre-audit user-only request: the current
@@ -985,6 +1028,11 @@ def transcribe_audio(
         resp.raise_for_status()
         data = resp.json()
         text = (data.get("text") or data.get("transcript") or "").strip()
+        # ADAAAA-7665: drop whisper's silence hallucinations ("What?", "Go!",
+        # "You") and punctuation-only output so the prompt/analysis block only
+        # ever carries real commentary. `audio.path` then falls back to "none"
+        # for a window that carried no usable speech (ADAAAA-7248/7277).
+        text = usable_transcript(text)
     except Exception:
         text = ""
     return text, round(time.monotonic() - t0, 4)

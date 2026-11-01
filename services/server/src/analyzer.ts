@@ -97,6 +97,22 @@ export function rmsNormalized(pcm: Buffer): number {
   if (!n) return 0;
   return Math.min(1, Math.sqrt(sum / n) / 32768);
 }
+/** Join one or more INDEPENDENTLY base64-encoded int16 PCM parts into a single
+ * base64 string of the concatenated bytes.
+ *
+ * ADAAAA-7665 (verified on the box): the audio tap stores each ~100 ms chunk as
+ * its own base64 string. 3200 bytes is not a multiple of 3, so every chunk
+ * string carries trailing `=` padding — and `Buffer.from(parts.join(""), "base64")`
+ * STOPS at the first `=`. Every window therefore sent only its first 100 ms to
+ * the ASR endpoint, which is why whisper answered `""` (~80%) or a canonical
+ * silence hallucination (`"What?"`, `"Go!"`, `"You"`). Decode each part, join
+ * the BYTES, then encode once. Pure + unit-testable. */
+export function joinPcmB64Parts(parts: string[]): string {
+  const kept = (parts ?? []).filter((p) => typeof p === "string" && p.length > 0);
+  if (!kept.length) return "";
+  if (kept.length === 1) return kept[0];
+  return Buffer.concat(kept.map((p) => Buffer.from(p, "base64"))).toString("base64");
+}
 /** Build the reaction evidence object for a candidate from whatever reaction
  * signals it carries (audio gate energy, ball velocity/possession) plus the
  * cheap visual cue (tracked-object count as humans-in-motion proxy). Fields
@@ -1764,7 +1780,7 @@ export class LiveRunShared {
    * "" when the tap has buffered nothing yet. */
   audioClipB64(): string {
     if (!this.audio.length) return "";
-    return pcmInt16ToWavB64(this.audio.map((a) => a.samples).join(""));
+    return pcmInt16ToWavB64(joinPcmB64Parts(this.audio.map((a) => a.samples)));
   }
   /** ADAAAA-7399: the buffered audio as a mono 16 kHz WAV (base64) SLICED to
    * the chunks whose ts falls in `[centerTs - preS, centerTs + postS]` — the
@@ -1780,7 +1796,9 @@ export class LiveRunShared {
     const hi = centerTs + postS;
     const inWin = this.audio.filter((a) => a.ts >= lo && a.ts <= hi);
     if (!inWin.length) return "";
-    return pcmInt16ToWavB64(inWin.map((a) => a.samples).join(""));
+    // ADAAAA-7665: join the chunk BYTES (not their padded base64 strings) — the
+    // padded-string join truncated every window to its first 100 ms.
+    return pcmInt16ToWavB64(joinPcmB64Parts(inWin.map((a) => a.samples)));
   }
   /** ADAAAA-7399 (instrumentation): number of audio tap chunks currently
    * buffered. Logged at the VOD decide so on-box runs reveal whether the tap
