@@ -142,8 +142,32 @@ i.e. 25 decide calls (~$0.0025 ea) + 22.9 min of paid perceive on the capacity-1
 `media_sessions.node_id` (migration v8, `ALTER TABLE media_sessions ADD COLUMN node_id TEXT`)
 records which node provisioned each session; `POST /sessions` returns `nodeId` and the
 control plane persists it. Spend is attributed by joining `media_sessions.node_id` ->
-`jobs.costUsd`. Jobs with no node on their session row (pre-v8 data) group under
+`jobs.costUsd`. Jobs with no node on their session row group under
 `unattributed` so the total never silently drops spend.
+
+**Live ingest that never provisions a session (ADAAAA-7670).** An RTMP-pull live job
+is pulled server-side (`services/server/src/live.ts`) and never calls
+`POST {MEDIA_SERVER_URL}/sessions`, so before this it had no row at all and all of its
+spend grouped under `unattributed`. `attributeLiveIngest()`
+(`services/server/src/media-ingest.ts`) now writes a settled attribution row from the
+ingest path: `session_id` = `ingest:<jobId>`, `status` = `closed` (no live media-server
+session exists), `node_id` = the id the media node reports about ITSELF on
+`GET /health` (`node.id`, i.e. the media service's `MEDIA_NODE_ID`) — the node is
+asked, never assumed from server config. A node that is down, unconfigured, or does
+not report an id leaves the job under `unattributed` (the honest answer; no invented
+node id). The row is written when ingest starts and retried once at completion; an
+existing row is never overwritten, so a re-run cannot relabel historical spend.
+
+### Which source is attributable (the rule)
+
+| Source | Media-tier | Why |
+|--------|-----------|-----|
+| `rtmp` | yes | live pull into the live GPU pipeline; row written from the ingest path (ADAAAA-7670) |
+| `webrtc`, `screenshare` | yes | same live pipeline (`LiveIngest`, one perceive session per live job) |
+| `screen`, `file-sim` | yes | same live pipeline (dev/synthetic live sources) |
+| `browser` | yes | provisioned via `POST /sessions`; `provisionMedia()` persists the returned `nodeId` |
+| `file` (VOD incl. uploads) | **no — deliberately `unattributed`** | the perceive pass runs in the control-plane VOD worker and holds no media-node lease (§5) |
+| pre-v8 rows (`node_id` NULL) | **no — `unattributed`** | written before the column existed; kept historical on purpose |
 
 Config:
 
@@ -160,7 +184,9 @@ Config:
 - Settled on-chain ticket totals per node (the node publishes session seconds today;
   actual ETH/ticket settlement is the signer's ledger).
 - Media-node capacity in the VOD path: VOD runs through the control-plane worker, so
-  its perceive session time is `job.perceiveSessionS`, not a media-node lease.
+  its perceive session time is `job.perceiveSessionS`, not a media-node lease. VOD
+  spend therefore stays in the `unattributed` bucket **by design** (ADAAAA-7670), not
+  because attribution is missing.
 
 ## Verification
 
