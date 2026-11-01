@@ -244,3 +244,34 @@ def test_single_clip_output_shape_is_unchanged(tmp_path):
                             "manifest", "precision", "recall", "self_refuting",
                             "true_positive_cards"]
     assert data["precision"] == 1.0 and data["recall"] == 1.0
+
+
+def test_restated_ac1_precision_block_matches_the_committed_score():
+    """AC-1 scope decision (ADAAAA-7703) is a quoted metric, so pin it.
+
+    The restated AC-1 is "precision >= 0.78 at recall 1.0 with every accepted FP
+    enumerated and classified". If the committed score moves, the manifest's
+    recorded figure has to move with it — otherwise the quoted build metric and
+    the measured build silently disagree.
+    """
+    import json
+
+    manifest = json.loads((HERE / "label-manifest.json").read_text())
+    score = json.loads((HERE / "results" / "score_da2d21a.json").read_text())
+    ac1 = manifest["coverage"]["ac1_precision"]
+
+    assert ac1["decision_issue"] == "ADAAAA-7703"
+    assert ac1["status"] == "met"
+    assert "confirm stage is closed" in ac1["restated"]
+    measured = ac1["measured"]
+    assert measured["build"] == score["commit"]
+    assert measured["precision"] == score["precision"]
+    assert measured["recall"] == score["recall"]
+    assert measured["accepted_cards"] == score["accepted"]
+    assert measured["tp_cards"] == score["true_positive_cards"]
+    assert measured["false_positive_instants"] == [
+        fp["t"] for fp in score["false_positives"]
+    ]
+    # the withdrawn 0.94 target stays withdrawn: no confirm-stage rule is usable
+    assert "usable_rules: []" in ac1["withdrawn"]
+

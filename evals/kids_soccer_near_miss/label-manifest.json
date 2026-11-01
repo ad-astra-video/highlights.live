@@ -21,6 +21,22 @@
       "status": "met",
       "decision_issue": "ADAAAA-7686",
       "corpus_target": ">=20 hard-negative shot windows across the eval corpus (second clip, ADAAAA-7688)"
+    },
+    "ac1_precision": {
+      "restated": "precision >= 0.78 at recall 1.0 with every accepted FP enumerated and classified; the confirm stage is closed as a precision lever",
+      "measured": {
+        "build": "da2d21a",
+        "precision": 0.7826,
+        "recall": 1.0,
+        "accepted_cards": 23,
+        "tp_cards": 18,
+        "false_positive_instants": [178.1, 203.2, 252.6, 358.8, 401.7],
+        "fp_class": "4 inside labelled shot-class windows (ks-n-0178 blocked, ks-n-0201 saved, ks-n-0359 saved, ks-n-0402 saved) + 1 in evidence:none ks-n-0244"
+      },
+      "status": "met",
+      "decision_issue": "ADAAAA-7703",
+      "withdrawn": "precision >= 0.94 at recall 1.0 from a confirm-stage rule; measured ceiling 0.8182 (reject_no_crowd_criteria, rejects 203.2 only), usable_rules: []",
+      "carried_to": "per-clip FP rate quoted in the corpus increment (ADAAAA-7690); >= 0.94 at recall 1.0 is the success metric of the localisation + goal-mouth crop research item (ADAAAA-7706, trigger-gated)"
     }
   },
   "windows": [

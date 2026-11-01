@@ -843,6 +843,39 @@ replay class, and no highlight field records one. A replay-presence rule would
 therefore have to come from a new read, not from the persisted detail — outside
 the confirm-stage, 0-added-sessions constraint on this issue.
 
+### AC-1 precision scope decision (2026-11-01, [ADAAAA-7703](/ADAAAA/issues/ADAAAA-7703))
+
+AC-1's original `>= 0.94` precision target for `da2d21a` is **withdrawn** and
+restated by product-owner decision (Option 1 of
+[ADAAAA-7703](/ADAAAA/issues/ADAAAA-7703), decision document on that issue).
+The restated AC-1 for this clip and build:
+
+1. **Precision at recall 1.0 is quoted, not targeted at 0.94.** Accepted-goal
+   precision **>= 0.78** at **recall 1.0** on the 15-goal catalogue, with every
+   accepted FP enumerated and classified. Measured: **0.7826 / 1.0** (23 accepted
+   cards, 18 TP; the 5 FPs are `178.1`, `203.2`, `358.8`, `401.7` inside labelled
+   shot-class windows and `252.6` in the `evidence:none` window `ks-n-0244`).
+2. **The confirm stage is closed as a precision lever.** No `confirm.py` rule
+   ships from this issue: the measured ceiling at recall 1.0 is **0.8182**
+   (`reject_no_crowd_criteria`, rejects `203.2` only) and `usable_rules: []`
+   (table above). The gap to 0.94 is a missing **evidence channel**, not a
+   threshold.
+
+The withdrawn `>= 0.94` target is carried forward as the success metric of the
+evidence-channel work, not as an AC on this build: the per-clip shot-vs-goal FP
+rate is a quoted limitation carried into the corpus increment
+([ADAAAA-7690](/ADAAAA/issues/ADAAAA-7690)) and the precision target belongs to
+the localisation + goal-mouth crop research item
+([ADAAAA-7706](/ADAAAA/issues/ADAAAA-7706), parked behind a trigger, not
+scheduled). Option 2 (ship the n=1 `crowdErupted == false` veto for +3.56 points)
+was declined on reliability and content-class grounds (a quiet grassroots match
+must not lose real goals); Option 3 (added inference) is not funded.
+
+Nothing here treats 78.26 % as acceptable product quality — it is the measured
+floor with a documented, classified FP class. No production code changed for this
+issue, so there is no new scored build label: the guard A/B recorded in *AC-3*
+remains the offline `ac6bf37f` / `cc06fb4a` pair and needs no re-run.
+
 ## AC-4b — dense native crossing-instant strip read (ADAAAA-7693)
 
 The follow-up to *AC-4* ([ADAAAA-7687](/ADAAAA/issues/ADAAAA-7687)) tested the one
@@ -958,7 +991,11 @@ temporal density inside the measured sheet budget does not create ball evidence.
    sheets and 1/24 full-frame sheets, so it refutes 0/4 shot-window FPs. The
    remaining lever on this family is a per-window goal-mouth **crop**
    (localisation first, then crop, then read twice — the prerequisite recorded in
-   *Native resolution*), not more temporal density.
+   *Native resolution*), not more temporal density. **Resolved by scope decision**
+   (Option 1, [ADAAAA-7703](/ADAAAA/issues/ADAAAA-7703), recorded in *AC-1
+   precision scope decision*): AC-1 is restated as quoted precision >= 0.78 at
+   recall 1.0, and the crop lever is parked in
+   [ADAAAA-7706](/ADAAAA/issues/ADAAAA-7706).
 
 ## Reproduction
 
