@@ -7,6 +7,8 @@ import {
   sectionFrameCount,
   triggerLabel,
   isJobInFlight,
+  candidateCountLabel,
+  stageACountLabel,
   type FrameSection,
   type DecideNote,
   noteKind,
@@ -212,5 +214,50 @@ describe("sectionMatchesFilter / sectionMatchesSearch / sectionMatches (filter +
     expect(sectionMatches(hl, ["highlight"], "goal")).toBe(true);
     expect(sectionMatches(hl, ["suppressed"], "goal")).toBe(false);
     expect(sectionMatches(hl, ["highlight"], "crowd")).toBe(false);
+  });
+});
+
+describe("job-detail counters (ADAAAA-7624)", () => {
+  it("shows the candidate count the observe path produced", () => {
+    expect(candidateCountLabel({ candidatesTriggered: 24 })).toBe("24");
+  });
+
+  it("shows n/a when the record carries no candidate count (never a fabricated 0)", () => {
+    expect(candidateCountLabel({})).toBe("n/a");
+  });
+
+  it("shows n/a for Stage-A counters when the audio gate is not measured", () => {
+    expect(stageACountLabel({})).toBe("n/a");
+    expect(stageACountLabel({ stageAMetricsStatus: "n/a" })).toBe("n/a");
+    // An all-zero snapshot must not read as a measured 0% FP rate.
+    expect(
+      stageACountLabel({
+        stageAMetricsStatus: "measured",
+        stageAMetrics: {
+          totalCandidates: 0,
+          accepted: 0,
+          rejected: 0,
+          fpRate: 0,
+          meanOnsetLatencyS: 0,
+          maxOnsetLatencyS: 0,
+        },
+      })
+    ).toBe("n/a");
+  });
+
+  it("shows real Stage-A counters when measured", () => {
+    expect(
+      stageACountLabel({
+        stageAMetricsStatus: "measured",
+        stageAMetrics: {
+          totalCandidates: 4,
+          accepted: 3,
+          rejected: 1,
+          fpRate: 0.25,
+          meanOnsetLatencyS: 1.2,
+          maxOnsetLatencyS: 3.4,
+        },
+      })
+    ).toBe("4 judged · 25% FP");
   });
 });

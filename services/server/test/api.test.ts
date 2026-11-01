@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildTestApp, waitForJob } from "./helpers";
 import { HighlightRecordSchema } from "@highlights/events";
+import { completedCounterFields } from "../src/job-counters";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-test-"));
 const videoPath = path.join(tmp, "test.mp4");
@@ -1186,6 +1187,105 @@ describe("GET /jobs (async-VOD job queue, ADAAAA-6760)", () => {
     // limit caps the response (default 50; explicitly cap small).
     const rl = await app.inject({ method: "GET", url: "/jobs?limit=1", headers: { authorization: `Bearer ${a}` } });
     expect(rl.json().jobs.length).toBe(1);
+    await app.close();
+  });
+});
+
+// ADAAAA-7624: the reported job (`d61e52f6`) is a 2334-frame VOD. Its per-frame
+// observation rows are a capped durable window that trims OLDEST-first, so the
+// early filmstrip windows lost every observation row and rendered `0 frames`
+// although the JPEGs existed on disk and served 200. The detail read now joins
+// the on-disk frame inventory back in, so every frame keeps its window.
+describe("job detail integrity for a long capped job (ADAAAA-7624)", () => {
+  const FRAME_COUNT = 2334;
+  const SAMPLE_FPS = 3;
+  // The store's cap kept only the newest rows, so every window before the first
+  // surviving seq has NO observation at all.
+  const SURVIVING_ROWS = 1334;
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+
+  async function adminToken(app: any, cfg: any): Promise<string> {
+    const r = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: cfg.adminEmail, password: cfg.adminPassword },
+    });
+    expect(r.statusCode).toBe(200);
+    return r.json().token as string;
+  }
+
+  it("keeps all 2334 frames, one per seq, with every section populated", async () => {
+    const { app, cfg, store } = await buildTestApp();
+    const token = await adminToken(app, cfg);
+    const job = await store.createJob({ source: "file", sampleFps: SAMPLE_FPS });
+
+    const frameDir = path.join(cfg.dataDir, "frames", job.id);
+    mkdirSync(frameDir, { recursive: true });
+    for (let seq = 0; seq < FRAME_COUNT; seq++) writeFileSync(path.join(frameDir, `${seq}.jpg`), JPEG);
+
+    const firstSurviving = FRAME_COUNT - SURVIVING_ROWS;
+    for (let seq = firstSurviving; seq < FRAME_COUNT; seq++) {
+      await store.recordObservation(job.id, { seq, timestamp: seq / SAMPLE_FPS, tracks: [] } as any);
+    }
+    await store.patchJob(job.id, {
+      status: "done",
+      framesTotal: FRAME_COUNT,
+      framesAnalyzed: FRAME_COUNT,
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/jobs/${job.id}/detail`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const sections = res.json().sections as { index: number; frames: { seq: number }[] }[];
+    const seqs = sections.flatMap((s) => s.frames.map((f) => f.seq));
+    expect(seqs.length).toBe(FRAME_COUNT);
+    expect(new Set(seqs).size).toBe(FRAME_COUNT);
+    expect(sections.every((s) => s.frames.length > 0)).toBe(true);
+
+    // The window that lost every observation row is populated again, in seq order.
+    expect(seqs).toContain(0);
+    expect(sections[0].frames[0].seq).toBe(0);
+    const firstWindow = sections[0].frames.map((f) => f.seq);
+    expect(firstWindow).toEqual([...firstWindow].sort((a, b) => a - b));
+    await app.close();
+  });
+
+  it("reports 24 observe candidates and n/a Stage-A for the reported job shape", async () => {
+    const { app, cfg, store } = await buildTestApp();
+    const token = await adminToken(app, cfg);
+    const job = await store.createJob({ source: "file", sampleFps: SAMPLE_FPS });
+    // Completion exactly as runVodJob persists it for the reported job: 24
+    // accepted cadence-observe candidates, zero legacy perceive candidate
+    // events, and an all-zero Stage-A snapshot (the audio gate judged nothing).
+    const zeroStageA = {
+      totalCandidates: 0,
+      accepted: 0,
+      rejected: 0,
+      fpRate: 0,
+      gemmaFpRate: 0,
+      meanOnsetLatencyS: 0,
+      maxOnsetLatencyS: 0,
+      p50LatencyS: 0,
+      p95LatencyS: 0,
+      fpRateWithinBudget: true,
+    };
+    await store.patchJob(job.id, { status: "done", ...completedCounterFields(zeroStageA, 24, 0) });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/jobs/${job.id}/detail`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const persisted = res.json().job;
+    expect(persisted.candidatesTriggered).toBe(24);
+    expect(persisted.candidatePath).toBe("observe");
+    // Never a fabricated measured 0% FP rate for a gate that judged nothing.
+    expect(persisted.stageAMetricsStatus).toBe("n/a");
+    expect(persisted.stageAMetrics).toBeUndefined();
     await app.close();
   });
 });
