@@ -99,6 +99,38 @@ revision comes from the image's `BUILD_REF` build arg — deploy with
 `BUILD_REF=$(git rev-parse --short HEAD) docker compose -f docker/docker-compose.yml up -d --build media`;
 without it the node publishes `"unknown"` rather than guessing.
 
+### Session loss attribution: `media-session-lost` (ADAAAA-7700)
+
+A recreate or crash of the media node drops every in-flight RTC session. Before
+this, the browser job was indistinguishable from "the pipeline never ran": a bare
+`status: failed` with 0 frames and no reason, and the webapp said nothing.
+
+- The node keeps an **open-session ledger** next to the lifecycle ledger
+  (`MEDIA_STATE_DIR/highlights-media-open-sessions.json`) listing every session it
+  holds, the `jobId` it carries, the transport and whether a client ever attached.
+  It is written on session open/attach and the entry is removed on a clean
+  teardown.
+- At boot the node **drains** that ledger and POSTs the existing
+  `POST {CALLBACK_URL}/jobs/{jobId}/media/session-closed` with
+  `reason: "media-node-restart"` for each leftover session (bounded retry: the
+  control plane is usually restarting at the same instant; the server's boot sweep
+  is the backstop). `/health.cost.sessionsLostReported` counts them.
+- The control plane maps `media-node-restart` to `status: "failed"` with
+  `failureReason: "media-session-lost"` and an actionable `error` ("Media node
+  restarted — … Click Start to share again."). A client/control close still
+  finalizes as `done`.
+- A job stranded at server boot is attributed by the sweep: a browser job that
+  still holds a `media_sessions` row becomes `media-session-lost`, anything else
+  `server-restart`.
+- The transition is appended to the durable `job_lifecycle_events` activity log
+  (`GET /jobs/:id/lifecycle`) and pushed to the live console as a `lifecycle` SSE
+  event.
+- Recovery path: the share is **ended cleanly**, not silently re-provisioned —
+  `POST /jobs/:id/media` answers 409 once the job is terminal, so one share can
+  never open (or be charged for) a second session. The webapp polls the job row
+  every 3 s and turns the attribution into "Media node restarted — click Start to
+  share again".
+
 `GET {MEDIA_SERVER_URL}/node` — **bearer-gated** (`MEDIA_HEALTH_TOKEN`). Same payload
 plus `sessions[]` with `sessionId`, `jobId`, `transport` (`webrtc`/`ws`), `ageS`,
 `sockets`, `paying`, `recording`, `lease.{state,expiresInS}`. Unset token => **404**

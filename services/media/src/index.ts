@@ -60,11 +60,29 @@ async function main() {
     healthToken: cfg.healthToken,
     // ADAAAA-7656 restart/crash ledger for `/health`.
     lifecycle,
+    // ADAAAA-7700 open-session ledger: same state dir as the lifecycle ledger so
+    // the leftover list survives the recreate/deploy that killed the sessions.
+    stateDir: cfg.stateDir,
   });
   const app = await media.build();
   await app.listen({ port: cfg.port, host: "0.0.0.0" });
   // eslint-disable-next-line no-console
   console.log(`media server on :${cfg.port} (orchestrator=${cfg.orchBase})`);
+  // ADAAAA-7700: report every session the PREVIOUS boot took down (deploy /
+  // crash / docker stop) to the control plane, so a browser share that died with
+  // this process becomes `failed` with `failureReason: media-session-lost` and a
+  // reshare hint instead of a bare `failed` row with 0 frames. Fire-and-forget:
+  // recovery reporting must never delay the port from listening, and the server's
+  // own boot sweep is the backstop when both containers restart together.
+  void media
+    .reconcileLostSessions()
+    .then((r) => {
+      if (r.leftover > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`[media] lost-session reconcile leftover=${r.leftover} reported=${r.reported}`);
+      }
+    })
+    .catch((e) => console.error("[media] lost-session reconcile failed:", String(e?.message || e)));
   const boot = lifecycle();
   // eslint-disable-next-line no-console
   console.log(

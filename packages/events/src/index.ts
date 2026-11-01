@@ -573,6 +573,20 @@ export const JobSchema = z.object({
   // so GET /jobs / GET /jobs/:id and the webapp processing-jobs surface render
   // the real reason instead of a generic client string (ADAAAA-6781).
   error: z.string().optional(),
+  // ADAAAA-7700: machine-readable attribution of WHY a job failed, separate from
+  // both the free-text `error` and the `status`. A browser share that dies with
+  // the media node is NOT a user stop, and before this field the row was a bare
+  // `failed` with 0 frames — indistinguishable from "the pipeline never ran".
+  //   media-session-lost  the media/RTC session carrying the share went away
+  //                       (media node restart/crash, session dropped)
+  //   server-restart      the control plane restarted mid-run and the in-flight
+  //                       job could not be resumed
+  //   user-stop           the operator stopped it (explicit /stop, session close)
+  //   pipeline-error      the analyze/decide pipeline threw
+  // Additive optional — absent on rows written before this field existed.
+  failureReason: z
+    .enum(["media-session-lost", "server-restart", "user-stop", "pipeline-error"])
+    .optional(),
   perceiveSessionId: z.string().optional(),
   // Per-job VOD sampling override (ADAAAA-5059). When present, overrides the
   // `vodSampleFpsDefault` config for this job; still bounded by runner

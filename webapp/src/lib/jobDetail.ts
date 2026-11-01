@@ -305,6 +305,10 @@ export interface JobDetail {
       | "failed"
       | "cancelled";
     error?: string;
+    // ADAAAA-7700: machine-readable failure attribution (see packages/events).
+    // A share that died with the media node is `media-session-lost`, NOT a user
+    // stop — the detail header renders it as its own chip.
+    failureReason?: "media-session-lost" | "server-restart" | "user-stop" | "pipeline-error";
     // Short human-readable job title (ADAAAA-6798 Inc 1); absent on legacy jobs
     // where the UI falls back to `<gameHint/source> · <n> highlights · <date>`.
     title?: string;

@@ -143,6 +143,18 @@ export type DatasetRecord = Dataset & { purgingAt: string | null };
 /** One 30-day retention purge of a deactivated account's dataset (ADAAAA-5398
  * C4). Appended by the purge sweep so QA can observe that deletion actually ran
  * (the run/purge log). Stored in `dataset_purge_log`. */
+/** One durable job-lifecycle/activity row (ADAAAA-7700). */
+export interface JobLifecycleEvent {
+  id: string;
+  jobId: string;
+  /** transition kind: `failed` | `stopped` | `boot-swept` | `lost-session-reported` */
+  kind: string;
+  /** free-text detail (the failureReason, the close reason, the node id) */
+  detail: string;
+  at: string;
+}
+export type JobLifecycleEventInput = Omit<JobLifecycleEvent, "id" | "at"> & { id?: string; at?: string };
+
 export interface DatasetPurgeLogEntry {
   id: string;
   datasetId: string;
@@ -382,6 +394,12 @@ export interface Db {
   /** Every tracked media session (one row per job). Feeds the per-node cost
    * attribution readout (ADAAAA-6869 Phase 4). */
   listMediaSessions(): Promise<MediaSession[]>;
+  /** Append one durable job-lifecycle/activity row (ADAAAA-7700). Terminal
+   * transitions (failed with a failureReason, stop, boot sweep) are recorded here
+   * so the attribution survives the in-memory Store and is inspectable later. */
+  appendJobLifecycleEvent(e: JobLifecycleEventInput): Promise<void>;
+  /** Activity rows for one job, oldest first. */
+  jobLifecycleEvents(jobId: string): Promise<JobLifecycleEvent[]>;
   /** Persist a job record (full JSON upsert by id). */
   saveJob(job: Job): Promise<void>;
   getJob(id: string): Promise<Job | undefined>;
@@ -684,6 +702,19 @@ export class SqliteDb implements Db {
   async listMediaSessions(): Promise<MediaSession[]> {
     const rows = this.db.prepare("SELECT * FROM media_sessions ORDER BY created_at ASC").all() as any[];
     return rows.map((r) => rowToMediaSession(r));
+  }
+
+  async appendJobLifecycleEvent(e: JobLifecycleEventInput): Promise<void> {
+    this.db
+      .prepare("INSERT INTO job_lifecycle_events (id,job_id,kind,detail,at) VALUES (?,?,?,?,?)")
+      .run(e.id ?? randomUUID(), e.jobId, e.kind, e.detail, e.at ?? new Date().toISOString());
+  }
+
+  async jobLifecycleEvents(jobId: string): Promise<JobLifecycleEvent[]> {
+    const rows = this.db
+      .prepare("SELECT * FROM job_lifecycle_events WHERE job_id = ? ORDER BY at ASC")
+      .all(jobId) as any[];
+    return rows.map((r) => ({ id: r.id, jobId: r.job_id, kind: r.kind, detail: r.detail, at: r.at }));
   }
 
   async saveJob(job: Job): Promise<void> {
@@ -1402,6 +1433,18 @@ export class PgDb implements Db {
     return r.rows.map((row: any) => rowToMediaSession(row));
   }
 
+  async appendJobLifecycleEvent(e: JobLifecycleEventInput): Promise<void> {
+    await this.pool.query(
+      "INSERT INTO job_lifecycle_events (id,job_id,kind,detail,at) VALUES ($1,$2,$3,$4,$5)",
+      [e.id ?? randomUUID(), e.jobId, e.kind, e.detail, e.at ?? new Date().toISOString()]
+    );
+  }
+
+  async jobLifecycleEvents(jobId: string): Promise<JobLifecycleEvent[]> {
+    const r = await this.pool.query("SELECT * FROM job_lifecycle_events WHERE job_id = $1 ORDER BY at ASC", [jobId]);
+    return r.rows.map((row: any) => ({ id: row.id, jobId: row.job_id, kind: row.kind, detail: row.detail, at: row.at }));
+  }
+
   async saveJob(job: Job): Promise<void> {
     await this.pool.query(
       `INSERT INTO jobs (id, record, owner_id, status, created_at)
@@ -2031,6 +2074,16 @@ const SCHEMA_SQLITE = `
     status TEXT,
     created_at TEXT
   );
+  -- ADAAAA-7700: durable job-lifecycle/activity log. Terminal transitions record
+  -- WHY (failureReason + close reason), so a share that died with the media node
+  -- stays attributable after the in-memory Store is gone.
+  CREATE TABLE IF NOT EXISTS job_lifecycle_events (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS highlights (
     id TEXT PRIMARY KEY,
     job_id TEXT NOT NULL,
@@ -2220,6 +2273,16 @@ const SCHEMA_PG = `
     owner_id TEXT,
     status TEXT,
     created_at TEXT
+  );
+  -- ADAAAA-7700: durable job-lifecycle/activity log. Terminal transitions record
+  -- WHY (failureReason + close reason), so a share that died with the media node
+  -- stays attributable after the in-memory Store is gone.
+  CREATE TABLE IF NOT EXISTS job_lifecycle_events (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS highlights (
     id TEXT PRIMARY KEY,

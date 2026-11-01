@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Square, Play, Share2 } from "lucide-react";
 import { api } from "../lib/api";
+import { captureEndedNotice } from "../lib/captureLoss";
 import { useSettings } from "../lib/settings";
 
 const MAX_RECONNECT = 6; // consecutive media reconnect attempts before falling back to /ingest
@@ -10,6 +11,12 @@ const MAX_RECONNECT = 6; // consecutive media reconnect attempts before falling 
 // NOT silently degrade the screen share onto the HTTP /ingest rail on a transient
 // media error — that was the bug (ADAAAA-7335).
 const MAX_MEDIA_RETRIES = 3;
+// ADAAAA-7700: how often the capture panel re-reads its own job row while a share
+// is live. The media node can die with the RTC session and say nothing to the
+// browser, so the JOB RECORD is the source of truth for "is this share still
+// alive" — polled every 3 s it surfaces a media-node restart well inside the ~10 s
+// budget. Cheap: one small GET per tick, same-origin, already authenticated.
+const JOB_POLL_MS = 3000;
 
 // Is this a transient (retryable) media-provision failure? A `/jobs/:id/media`
 // HTTP 503 (incl. `no capacity available for runner` when the perceive runner's
@@ -67,6 +74,9 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   // is complete when the server cuts clips — the missing piece that left an
   // empty clipUri on every highlight (ADAAAA-6522).
   const pendingUploadsRef = useRef<Set<Promise<void>>>(new Set());
+  // Live job-status poll (ADAAAA-7700). Holds the interval; cleared on every stop
+  // path so an ended share never keeps polling.
+  const jobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /** Build the WebRTC offer -> answer + ICE signaling to the media server.
    *  The media server assigns the pcId on the offer round-trip, so candidates
@@ -284,6 +294,71 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     }
   }
 
+  /** Stop the live job-status poll. Idempotent. */
+  function stopJobPoll() {
+    if (jobPollRef.current) clearInterval(jobPollRef.current);
+    jobPollRef.current = null;
+  }
+
+  /**
+   * End the share from the SERVER's answer, not the user's click (ADAAAA-7700).
+   * The media node can restart under a healthy-looking peer (the browser sees a
+   * frozen preview for a while), so the only reliable signal is the job row:
+   * once it is terminal we stop capturing, release the display tracks and show
+   * the attributed message ("Media node restarted — …"). No /stop call: the job is
+   * already finalized server-side, and re-stopping would race the finalizer.
+   */
+  async function endFromServer(message: string | null) {
+    stoppingRef.current = true;
+    rcRef.current = 0;
+    stopJobPoll();
+    if (ivRef.current) clearInterval(ivRef.current);
+    ivRef.current = null;
+    try {
+      wsRef.current?.close();
+    } catch {
+      /* noop */
+    }
+    wsRef.current = null;
+    teardownRtc();
+    modeRef.current = "pending";
+    const rec = recRef.current;
+    recRef.current = null;
+    if (rec && rec.state !== "inactive") {
+      try {
+        rec.stop();
+      } catch {
+        /* noop */
+      }
+    }
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    jobIdRef.current = null;
+    seqRef.current = 0;
+    setSharing(false);
+    // The attributed message replaces the (stale) "capturing live" hint so the
+    // operator sees the cause AND the next action.
+    setError(message);
+    onDone();
+  }
+
+  /** Poll the job row while sharing; surface a server-side end within JOB_POLL_MS. */
+  function startJobPoll(jobId: string) {
+    stopJobPoll();
+    jobPollRef.current = setInterval(() => {
+      if (stoppingRef.current) return;
+      void api<{ job: { status?: string; failureReason?: string | null; error?: string | null } }>(`/jobs/${jobId}`)
+        .then((res) => {
+          if (stoppingRef.current || jobIdRef.current !== jobId) return;
+          const notice = captureEndedNotice(res?.job);
+          if (notice.stop) void endFromServer(notice.message);
+        })
+        .catch(() => {
+          /* transient poll failure: the next tick retries */
+        });
+    }, JOB_POLL_MS);
+  }
+
   useEffect(() => {
     const onUnmount = () => {
       stopInternal(false);
@@ -307,6 +382,9 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       // create the browser-capture job on the server
       const job = await api<{ job: { id: string } }>("/jobs", { body: { source: "browser", gameHint } });
       jobIdRef.current = job.job.id;
+      // ADAAAA-7700: watch the job row for a server-side end (media-node restart,
+      // analyzer restart) from the moment the job exists.
+      startJobPoll(job.job.id);
 
       // Media-server handshake: stream the live video track over WebRTC
       // (browser -> media server -> orchestrator video-in), with transparent
@@ -368,6 +446,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       // (ADAAAA-7335).
       if (ivRef.current) clearInterval(ivRef.current);
       ivRef.current = null;
+      stopJobPoll();
       teardownRtc();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -389,6 +468,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   async function stopInternal(andNotify: boolean) {
     stoppingRef.current = true;
     rcRef.current = 0;
+    stopJobPoll();
     if (ivRef.current) clearInterval(ivRef.current);
     ivRef.current = null;
     // Media path: closing the WebRTC/WS (after a short reconnect grace on the
