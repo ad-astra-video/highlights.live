@@ -5,10 +5,12 @@ import { api, getToken } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { VideoClip } from "../components/VideoClip";
 import { WindowAnalysisPanel } from "../components/WindowAnalysis";
+import { SummaryLadderView } from "../components/SummaryLadder";
 import { batchManifest, clipFileName, clipUrl, copyText, saveBlob, seedCaption, type BatchItem } from "../lib/highlightPost";
 import { buildZip, type ZipFile } from "../lib/zip";
 import {
   fetchJobDetail,
+  focusAnalysisWindow,
   isJobInFlight,
   assertFramePartition,
   triggerLabel,
@@ -981,6 +983,15 @@ export function JobDetail() {
     return () => poll.stop();
   }, [terminal, id, load]);
 
+  // ADAAAA-7623: detail-on-demand hop from a ladder window narrative into the
+  // Analysis window that covers the same instant (same 3 s bucket, so it holds
+  // that window's frames + decide-note audit). Client-only DOM scroll; the
+  // window opens on its own toggle as it always has.
+  const jumpToAnalysisWindow = useCallback((sectionIndex: number) => {
+    if (typeof document === "undefined") return;
+    focusAnalysisWindow(document, sectionIndex);
+  }, []);
+
   // Aligned requirement: no duplicate frame across sections. Re-assert the
   // server partition on every render so a bug can never show a frame twice.
   const partition = useMemo(() => (detail ? assertFramePartition(detail.sections) : null), [detail]);
@@ -1265,6 +1276,10 @@ export function JobDetail() {
                 </div>
               </div>
             </div>
+            {/* ADAAAA-7623: the summary ladder — match rollup + chapters over
+                the stored summary log, above the flat log itself. Absent on
+                legacy jobs (component renders nothing). */}
+            <SummaryLadderView ladder={detail.summaryLadder} onJump={jumpToAnalysisWindow} />
             {/* ADAAAA-7466: the append-only per-pass summary time log, shown as
                 a collapsible "Video Summary" section (collapsed by default).
                 Replaces the removed running action notes. */}

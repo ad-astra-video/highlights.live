@@ -66,6 +66,64 @@ export function stageAMetricsForJob(snapshot: StageAMetricsSnapshot): JobStageAM
   return { stageAMetricsStatus: "n/a" };
 }
 
+/** The subset of a stored job record the read-time projection needs. */
+export interface CounterReadableJob {
+  candidatePath?: CandidatePath;
+  candidatesTriggered?: number;
+  candidates?: readonly unknown[];
+  highlightsFound?: number;
+  vodObserveMetrics?: { accepted?: number };
+  stageAMetrics?: StageAMetricsSnapshot;
+  stageAMetricsStatus?: "measured" | "n/a";
+}
+
+/**
+ * Honest counters for a job whose record was written BEFORE the completion-time
+ * fix (ADAAAA-7624). Those records carry `candidatesTriggered: 0` from the
+ * legacy perceive counter and no `candidatePath` / `stageAMetricsStatus`, so a
+ * reader that only echoes stored fields still shows `0 candidates` and an
+ * all-zero Stage-A row for a job that ran the observe cadence and judged no
+ * audio candidate. Deriving at READ time keeps the historical record untouched
+ * (no data backfill) while making the tile truthful, and it is a no-op for
+ * records that already carry the fields.
+ *
+ * Count rule: the candidates the observe path actually produced are the
+ * decision rows on the record (`job.candidates`), i.e. distinct highlights —
+ * `vodObserveMetrics.accepted` is a per-window tally that re-counts the same
+ * play across overlapping windows, so it is only a last-resort fallback and is
+ * never the user-facing count.
+ */
+export function counterFieldsForJob(job: CounterReadableJob): Partial<CompletedCounterFields> {
+  const out: Partial<CompletedCounterFields> = {};
+  if (job.candidatePath === undefined) {
+    const produced = Math.max(0, Math.floor(job.candidates?.length ?? 0));
+    const stored = Math.max(0, Math.floor(job.candidatesTriggered ?? 0));
+    if (job.vodObserveMetrics !== undefined) {
+      out.candidatesTriggered = produced > 0 ? produced : Math.max(0, Math.floor(job.highlightsFound ?? 0));
+      out.candidatePath = "observe";
+    } else if (stored > 0) {
+      out.candidatesTriggered = stored;
+      out.candidatePath = "perceive_gate";
+    } else if (produced > 0) {
+      // A decision trail without the legacy counter: only the observe cadence
+      // records decisions (the legacy perceive path also incremented `stored`),
+      // so an in-flight job mid-analyze reports its candidates, not a 0.
+      out.candidatesTriggered = produced;
+      out.candidatePath = "observe";
+    } else {
+      out.candidatesTriggered = 0;
+      out.candidatePath = "none";
+    }
+  }
+  if (job.stageAMetricsStatus === undefined) {
+    const measured = (job.stageAMetrics?.totalCandidates ?? 0) > 0;
+    out.stageAMetricsStatus = measured ? "measured" : "n/a";
+    // Never hand a reader the all-zero snapshot as if it were a measurement.
+    if (!measured) out.stageAMetrics = undefined;
+  }
+  return out;
+}
+
 /** Counter fields persisted on a COMPLETED job record. Both completion paths
  * (VOD `file` and live) go through this, so a job that produced highlights via
  * the observe cadence is recorded as `candidatesTriggered: <observed>` with

@@ -1288,4 +1288,64 @@ describe("job detail integrity for a long capped job (ADAAAA-7624)", () => {
     expect(persisted.stageAMetrics).toBeUndefined();
     await app.close();
   });
+
+  // The deployed `d61e52f6` record was completed BEFORE the counter fix, so it
+  // carries `candidatesTriggered: 0` with no `candidatePath`/`stageAMetricsStatus`
+  // and an all-zero Stage-A snapshot. The read path must derive the honest
+  // counters for it (read-time only — the stored row is never rewritten), or the
+  // tile keeps showing `0 candidates` on a job that produced 24.
+  it("derives 24 observe candidates and n/a Stage-A for a pre-fix record", async () => {
+    const { app, cfg, store } = await buildTestApp();
+    const token = await adminToken(app, cfg);
+    const job = await store.createJob({ source: "file", sampleFps: SAMPLE_FPS });
+    const zeroStageA = {
+      totalCandidates: 0, accepted: 0, rejected: 0, fpRate: 0, gemmaFpRate: 0,
+      meanOnsetLatencyS: 0, maxOnsetLatencyS: 0, p50LatencyS: 0, p95LatencyS: 0,
+      fpRateWithinBudget: true,
+    };
+    await store.patchJob(job.id, {
+      status: "done",
+      framesTotal: FRAME_COUNT,
+      framesAnalyzed: FRAME_COUNT,
+      // Legacy shape: the perceive counter never saw the observe candidates.
+      candidatesTriggered: 0,
+      highlightsFound: 24,
+      candidates: Array.from({ length: 24 }, (_, i) => ({
+        seq: i * 9,
+        ts: i * 3,
+        eventType: "GOAL",
+        decision: "scoring_play",
+      })),
+      // The observe cadence ran (261 calls, 75 accepted windows) ...
+      vodObserveMetrics: { decideCalls: 261, accepted: 75, maxFrames: 16, subsampledCalls: 0, framesPerCall: [] },
+      // ... and the audio Stage-A gate judged nothing, so its snapshot is all zero.
+      stageAMetrics: zeroStageA,
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/jobs/${job.id}/detail`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const reported = res.json().job;
+    // 24 distinct produced candidates, not the observer's 75-window tally.
+    expect(reported.candidatesTriggered).toBe(24);
+    expect(reported.candidatePath).toBe("observe");
+    expect(reported.stageAMetricsStatus).toBe("n/a");
+    expect(reported.stageAMetrics).toBeUndefined();
+
+    // The single-job read and the jobs list agree with the detail tile.
+    const one = await app.inject({ method: "GET", url: `/jobs/${job.id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(one.json().job.candidatesTriggered).toBe(24);
+    expect(one.json().job.candidatePath).toBe("observe");
+    const list = await app.inject({ method: "GET", url: "/jobs", headers: { authorization: `Bearer ${token}` } });
+    const listed = (list.json().jobs as any[]).find((j) => j.id === job.id);
+    expect(listed.candidatesTriggered).toBe(24);
+    expect(listed.candidatePath).toBe("observe");
+
+    // Read-time only: the persisted row still holds the legacy 0.
+    expect(store.getJob(job.id)?.candidatesTriggered).toBe(0);
+    await app.close();
+  });
 });
