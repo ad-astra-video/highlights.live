@@ -13,6 +13,13 @@ export interface ServerConfig {
   orchestratorUrl: string;
   /** When set, bypass the orchestrator and call runners directly (dev). */
   perceiveUrl?: string;
+  /** ADAAAA-7642: base URL of the perceive RUNNER (`perceive:8080`) used ONLY to
+   * drop a session from the runner's own registry on stop. Distinct from
+   * `perceiveUrl`, which switches the whole pipeline to the direct/no-orchestrator
+   * adapter — setting that one would bypass Livepeer payment, so the runner
+   * close needs its own knob. Unset = skip the extra close (orchestrator mode's
+   * previous behaviour). */
+  perceiveRunnerUrl?: string;
   decideUrl?: string;
   /** ADAAAA-6911: server-side knob for the livepeer-session decide-runner gate
    * (`DECIDE_CONCURRENCY`). Left unset -> the client keeps its default (decide
@@ -414,6 +421,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     nodeEnv: env.NODE_ENV ?? "development",
     orchestratorUrl: env.ORCHESTRATOR_URL ?? "http://127.0.0.1:8935",
     perceiveUrl: env.PERCEIVE_URL,
+    perceiveRunnerUrl: env.PERCEIVE_RUNNER_URL,
     decideUrl: env.DECIDE_URL,
     decideConcurrency: env.DECIDE_CONCURRENCY ? Number(env.DECIDE_CONCURRENCY) : undefined,
     trainUrl: env.TRAIN_URL,
