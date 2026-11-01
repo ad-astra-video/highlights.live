@@ -14,6 +14,7 @@ import {
   summaryDelta,
   nextSummarySeq,
   appendSummaryEntry,
+  normalizeWindowTs,
 } from "../src/summary-log";
 
 describe("summaryDelta (ADAAAA-7237)", () => {
@@ -75,5 +76,82 @@ describe("nextSummarySeq / appendSummaryEntry (ADAAAA-7237)", () => {
     const j = s.getJob(job.id)!;
     expect(j.summaryLog!.map((e) => e.text)).toEqual(["a", "b"]);
     expect(s.listJobsForOwner(undefined).find((x) => x.id === job.id)?.summaryLog).toHaveLength(2);
+  });
+});
+
+// ADAAAA-7710: the observe cadence reports a FLOAT window centre whenever the
+// window boundary is not a whole second. That entry was rejected by the
+// persisted integer contract, which threw away the whole patch (entry AND the
+// bounded runningSummary) for that pass. Regression cover below uses a 14 s
+// clip — a duration that is NOT a multiple of the window size — because the
+// whole-second fixtures above never exercise the fractional case.
+describe("normalizeWindowTs (ADAAAA-7710)", () => {
+  it("rounds a fractional window centre to the nearest integer second", () => {
+    expect(normalizeWindowTs(11.666666666666666)).toBe(12);
+    expect(normalizeWindowTs(11.4)).toBe(11);
+    expect(normalizeWindowTs(7.5)).toBe(8);
+    expect(normalizeWindowTs(0.4)).toBe(0);
+  });
+
+  it("passes an already-integral timestamp through unchanged", () => {
+    expect(normalizeWindowTs(0)).toBe(0);
+    expect(normalizeWindowTs(12)).toBe(12);
+    expect(normalizeWindowTs(120)).toBe(120);
+  });
+
+  it("drops non-finite / non-numeric timestamps instead of failing the entry", () => {
+    expect(normalizeWindowTs(undefined)).toBeUndefined();
+    expect(normalizeWindowTs(null)).toBeUndefined();
+    expect(normalizeWindowTs(Number.NaN)).toBeUndefined();
+    expect(normalizeWindowTs(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(normalizeWindowTs(Number.NEGATIVE_INFINITY)).toBeUndefined();
+    expect(normalizeWindowTs("11.6" as unknown as number)).toBeUndefined();
+  });
+});
+
+describe("appendSummaryEntry fractional window boundaries (ADAAAA-7710)", () => {
+  it("persists every entry for a 14 s clip whose last window centre is fractional", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/clip-14s.mp4", gameHint: "soccer" });
+    // Window centres the observe cadence produces for a 14 s clip at the VOD
+    // cadence — the 5th tap is the one that used to drop the whole persist.
+    const centers = [0, 4.666666666666667, 7, 9.333333333333334, 11.666666666666666];
+    const summaries = [
+      "Kickoff.",
+      "Kickoff.\nBall into midfield.",
+      "Kickoff.\nBall into midfield.\nShot wide.",
+      "Kickoff.\nBall into midfield.\nShot wide.\nCorner won.",
+      "Kickoff.\nBall into midfield.\nShot wide.\nCorner won.\nHeader cleared.",
+    ];
+    for (let i = 0; i < centers.length; i += 1) {
+      await appendSummaryEntry(s, job.id, summaries[i], { windowTs: centers[i] });
+    }
+    const j = s.getJob(job.id)!;
+    // No pass is dropped: the fractional-boundary pass persisted its entry.
+    expect(j.summaryLog).toHaveLength(centers.length);
+    expect(j.summaryLog!.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
+    // Stored windowTs values satisfy the persisted integer contract.
+    expect(j.summaryLog!.map((e) => e.windowTs)).toEqual([0, 5, 7, 9, 12]);
+    for (const e of j.summaryLog!) {
+      expect(Number.isInteger(e.windowTs)).toBe(true);
+    }
+    // The fractional pass also persisted the bounded running summary (the old
+    // behaviour lost this too, because the whole patchJob write was rejected).
+    expect(j.runningSummary).toBe(summaries[summaries.length - 1]);
+    expect(j.summaryLog![4].text).toBe("Header cleared.");
+  });
+
+  it("keeps the entry when the window timestamp is unusable (never loses the summary)", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/clip.mp4" });
+    await appendSummaryEntry(s, job.id, "a goal at 120s", { windowTs: Number.NaN });
+    await appendSummaryEntry(s, job.id, "a goal at 120s\nsecond window", {});
+    const j = s.getJob(job.id)!;
+    expect(j.summaryLog).toHaveLength(2);
+    // Unusable metadata degrades to "no windowTs"; the content still lands.
+    expect(j.summaryLog![0].windowTs).toBeUndefined();
+    expect(j.summaryLog![0].text).toBe("a goal at 120s");
+    expect(j.summaryLog![1].text).toBe("second window");
+    expect(j.runningSummary).toBe("a goal at 120s\nsecond window");
   });
 });
