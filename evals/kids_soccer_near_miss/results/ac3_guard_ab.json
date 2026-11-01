@@ -1,0 +1,602 @@
+{
+  "guarded": {
+    "label": "da2d21a",
+    "job_id": "ac6bf37f-6a03-4d14-a307-de5b9e200405",
+    "accepted": 23,
+    "cards": [
+      {
+        "t": 117,
+        "localizedTs": 122.59999999999992,
+        "start": 115.59999999999992,
+        "end": 130.5999999999999,
+        "corroborationSource": null,
+        "stage1Disagreed": null,
+        "corroborated": null,
+        "goalConfirmed": null
+      },
+      {
+        "t": 129,
+        "localizedTs": 130.5999999999999,
+        "start": 123.59999999999991,
+        "end": 138.5999999999999,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 171,
+        "localizedTs": 178.09999999999982,
+        "start": 171.09999999999982,
+        "end": 186.09999999999982,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 201,
+        "localizedTs": 203.1999999999998,
+        "start": 196.1999999999998,
+        "end": 211.1999999999998,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 246,
+        "localizedTs": 252.59999999999968,
+        "start": 245.59999999999968,
+        "end": 260.5999999999997,
+        "corroborationSource": null,
+        "stage1Disagreed": null,
+        "corroborated": null,
+        "goalConfirmed": null
+      },
+      {
+        "t": 279,
+        "localizedTs": 280.8999999999998,
+        "start": 273.8999999999998,
+        "end": 288.8999999999998,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 342,
+        "localizedTs": 348.8000000000003,
+        "start": 341.8000000000003,
+        "end": 356.8000000000003,
+        "corroborationSource": null,
+        "stage1Disagreed": null,
+        "corroborated": null,
+        "goalConfirmed": null
+      },
+      {
+        "t": 351,
+        "localizedTs": 358.8000000000003,
+        "start": 351.8000000000003,
+        "end": 366.8000000000003,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 396,
+        "localizedTs": 401.7000000000006,
+        "start": 394.7000000000006,
+        "end": 409.7000000000006,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 411,
+        "localizedTs": 417.30000000000075,
+        "start": 410.30000000000075,
+        "end": 425.30000000000075,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 420,
+        "localizedTs": 427.70000000000084,
+        "start": 420.70000000000084,
+        "end": 435.70000000000084,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 540,
+        "localizedTs": 545.4000000000016,
+        "start": 538.4000000000016,
+        "end": 553.4000000000016,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 573,
+        "localizedTs": 580.3000000000019,
+        "start": 573.3000000000019,
+        "end": 588.3000000000019,
+        "corroborationSource": null,
+        "stage1Disagreed": null,
+        "corroborated": null,
+        "goalConfirmed": null
+      },
+      {
+        "t": 603,
+        "localizedTs": 608.1000000000021,
+        "start": 601.1000000000021,
+        "end": 616.1000000000021,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 624,
+        "localizedTs": 624.8000000000022,
+        "start": 617.8000000000022,
+        "end": 632.8000000000022,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 636,
+        "localizedTs": 636.6000000000023,
+        "start": 629.6000000000023,
+        "end": 644.6000000000023,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 663,
+        "localizedTs": 667.2000000000025,
+        "start": 660.2000000000025,
+        "end": 675.2000000000025,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 675,
+        "localizedTs": 676.3000000000026,
+        "start": 669.3000000000026,
+        "end": 684.3000000000026,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 690,
+        "localizedTs": 695.6000000000028,
+        "start": 688.6000000000028,
+        "end": 703.6000000000028,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 708,
+        "localizedTs": 708.0000000000028,
+        "start": 701.0000000000028,
+        "end": 716.0000000000028,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 717,
+        "localizedTs": 724.300000000003,
+        "start": 717.300000000003,
+        "end": 732.300000000003,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 762,
+        "localizedTs": 762.0000000000033,
+        "start": 755.0000000000033,
+        "end": 770.0000000000033,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 771,
+        "localizedTs": 772.1000000000033,
+        "start": 765.1000000000033,
+        "end": 780.1000000000033,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      }
+    ],
+    "guard_bite_cards": [],
+    "confirm": {
+      "confirm_runs": 229,
+      "stage1_disagreed": 21,
+      "disagree_rate": 0.0917
+    }
+  },
+  "reverted": {
+    "label": "pre-fix control (reverted guard)",
+    "job_id": "cc06fb4a-ae9d-4eb9-8ffd-9a24129510e8",
+    "accepted": 21,
+    "cards": [
+      {
+        "t": 117,
+        "localizedTs": 122.59999999999991,
+        "start": 115.59999999999991,
+        "end": 130.5999999999999,
+        "corroborationSource": null,
+        "stage1Disagreed": null,
+        "corroborated": null,
+        "goalConfirmed": null
+      },
+      {
+        "t": 129,
+        "localizedTs": 130.5999999999999,
+        "start": 123.59999999999991,
+        "end": 138.5999999999999,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 201,
+        "localizedTs": 203.1999999999998,
+        "start": 196.1999999999998,
+        "end": 211.1999999999998,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 246,
+        "localizedTs": 252.59999999999968,
+        "start": 245.59999999999968,
+        "end": 260.5999999999997,
+        "corroborationSource": null,
+        "stage1Disagreed": null,
+        "corroborated": null,
+        "goalConfirmed": null
+      },
+      {
+        "t": 279,
+        "localizedTs": 280.89999999999986,
+        "start": 273.89999999999986,
+        "end": 288.89999999999986,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 342,
+        "localizedTs": 348.8000000000003,
+        "start": 341.8000000000003,
+        "end": 356.8000000000003,
+        "corroborationSource": null,
+        "stage1Disagreed": null,
+        "corroborated": null,
+        "goalConfirmed": null
+      },
+      {
+        "t": 351,
+        "localizedTs": 358.80000000000024,
+        "start": 351.80000000000024,
+        "end": 366.80000000000024,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 396,
+        "localizedTs": 401.70000000000056,
+        "start": 394.70000000000056,
+        "end": 409.70000000000056,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 411,
+        "localizedTs": 417.3000000000007,
+        "start": 410.3000000000007,
+        "end": 425.3000000000007,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 420,
+        "localizedTs": 427.7000000000007,
+        "start": 420.7000000000007,
+        "end": 435.7000000000007,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 540,
+        "localizedTs": 545.4000000000016,
+        "start": 538.4000000000016,
+        "end": 553.4000000000016,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 573,
+        "localizedTs": 580.3000000000018,
+        "start": 573.3000000000018,
+        "end": 588.3000000000018,
+        "corroborationSource": null,
+        "stage1Disagreed": null,
+        "corroborated": null,
+        "goalConfirmed": null
+      },
+      {
+        "t": 603,
+        "localizedTs": 608.100000000002,
+        "start": 601.100000000002,
+        "end": 616.100000000002,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 636,
+        "localizedTs": 636.6000000000022,
+        "start": 629.6000000000022,
+        "end": 644.6000000000022,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 663,
+        "localizedTs": 667.2000000000024,
+        "start": 660.2000000000024,
+        "end": 675.2000000000024,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 675,
+        "localizedTs": 676.3000000000025,
+        "start": 669.3000000000025,
+        "end": 684.3000000000025,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 690,
+        "localizedTs": 695.6000000000025,
+        "start": 688.6000000000025,
+        "end": 703.6000000000025,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": true,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 708,
+        "localizedTs": 708.0000000000026,
+        "start": 701.0000000000026,
+        "end": 716.0000000000026,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 717,
+        "localizedTs": 724.3000000000028,
+        "start": 717.3000000000028,
+        "end": 732.3000000000028,
+        "corroborationSource": "frame_attestation",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 762,
+        "localizedTs": 762.0000000000031,
+        "start": 755.0000000000031,
+        "end": 770.0000000000031,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      },
+      {
+        "t": 771,
+        "localizedTs": 772.1000000000031,
+        "start": 765.1000000000031,
+        "end": 780.1000000000031,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": false,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      }
+    ],
+    "guard_bite_cards": [
+      {
+        "t": 690,
+        "localizedTs": 695.6000000000025,
+        "start": 688.6000000000025,
+        "end": 703.6000000000025,
+        "corroborationSource": "scoreboard",
+        "stage1Disagreed": true,
+        "corroborated": true,
+        "goalConfirmed": "confirmed_goal"
+      }
+    ],
+    "confirm": {
+      "confirm_runs": 230,
+      "stage1_disagreed": 26,
+      "disagree_rate": 0.113
+    }
+  },
+  "only_guarded": [
+    171,
+    624
+  ],
+  "only_reverted": [],
+  "both": [
+    117,
+    129,
+    201,
+    246,
+    279,
+    342,
+    351,
+    396,
+    411,
+    420,
+    540,
+    573,
+    603,
+    636,
+    663,
+    675,
+    690,
+    708,
+    717,
+    762,
+    771
+  ],
+  "checks": {
+    "guarded_has_no_bite_card": true,
+    "reverted_has_bite_card": true
+  },
+  "build_diff": "da2d21a touches only services/decide/app/confirm.py (the stage1_contradicts guard) plus services/decide/tests/test_confirm.py; `git show --stat da2d21a` is the proof that the guarded job and the pre-fix control differ by the guard.",
+  "guarded_score": {
+    "precision": 0.7826,
+    "recall": 1.0,
+    "accepted": 23,
+    "false_positives": [
+      {
+        "t": 178.1,
+        "window": [
+          171.1,
+          186.1
+        ],
+        "reason": "The ball clearly enters the net, and the goalkeeper is beaten.; confirmation pass: goal confirmed (deep frame dive); The ball trajectory shows the ball moving from the center of th"
+      },
+      {
+        "t": 203.2,
+        "window": [
+          196.2,
+          211.2
+        ],
+        "reason": "The ball clearly enters the net after a shot from a player in a white kit, followed by a goal celebration.; confirmation pass: goal confirmed (deep frame dive); The ball clearly en"
+      },
+      {
+        "t": 252.6,
+        "window": [
+          245.6,
+          260.6
+        ],
+        "reason": "The ball enters the net and the scoreboard updates from 1-1 to 2-1.; scoreboard score change confirmed"
+      },
+      {
+        "t": 358.8,
+        "window": [
+          351.8,
+          366.8
+        ],
+        "reason": "The ball clearly enters the net after a strike by the player in the white jersey.; confirmation pass: goal confirmed (deep frame dive); The ball is clearly seen entering the net af"
+      },
+      {
+        "t": 401.7,
+        "window": [
+          394.7,
+          409.7
+        ],
+        "reason": "The ball clearly enters the net as the striker finishes the play, followed by a celebration from the attacking team.; confirmation pass: goal confirmed (deep frame dive); The ball "
+      }
+    ],
+    "false_negative_goals": []
+  },
+  "reverted_score": {
+    "precision": 0.8095,
+    "recall": 0.9333,
+    "accepted": 21,
+    "false_positives": [
+      {
+        "t": 203.2,
+        "window": [
+          196.2,
+          211.2
+        ],
+        "reason": "The ball clearly enters the net after a shot from a player in a white kit, followed by a goal celebration.; confirmation pass: goal confirmed (deep frame dive); The ball clearly en"
+      },
+      {
+        "t": 252.6,
+        "window": [
+          245.6,
+          260.6
+        ],
+        "reason": "The ball is seen entering the net, and the scoreboard confirms a score change from 1-1 to 2-1.; scoreboard score change confirmed"
+      },
+      {
+        "t": 358.8,
+        "window": [
+          351.8,
+          366.8
+        ],
+        "reason": "The ball clearly enters the net after a strike by the player in the white jersey.; confirmation pass: goal confirmed (deep frame dive); The frames clearly show the ball entering th"
+      },
+      {
+        "t": 401.7,
+        "window": [
+          394.7,
+          409.7
+        ],
+        "reason": "The ball clearly enters the net as the striker follows through on a shot, and the goalkeeper is beaten.; confirmation pass: goal confirmed (deep frame dive); The ball trajectory cl"
+      }
+    ],
+    "false_negative_goals": [
+      "ks-g-0616"
+    ]
+  }
+}

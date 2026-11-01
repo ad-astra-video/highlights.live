@@ -1,0 +1,221 @@
+{
+  "video": "kids-soccer.mp4",
+  "fps": 12.0,
+  "grid": "12x7",
+  "region": {
+    "cells": [
+      [
+        5,
+        0
+      ],
+      [
+        5,
+        3
+      ],
+      [
+        6,
+        0
+      ]
+    ],
+    "n_cells": 3,
+    "fraction_of_grid": 0.036
+  },
+  "auc_shot_vs_control_in_region": 0.442,
+  "shots": [
+    {
+      "id": "ks-n-0130",
+      "score": 66.6
+    },
+    {
+      "id": "ks-n-0178",
+      "score": 53.45
+    },
+    {
+      "id": "ks-n-0201",
+      "score": 143.51
+    },
+    {
+      "id": "ks-n-0351",
+      "score": 43.87
+    },
+    {
+      "id": "ks-n-0359",
+      "score": 11.96
+    },
+    {
+      "id": "ks-n-0402",
+      "score": 90.02
+    },
+    {
+      "id": "ks-n-0426",
+      "score": 4.32
+    },
+    {
+      "id": "ks-n-0622",
+      "score": 233.66
+    },
+    {
+      "id": "ks-n-0628",
+      "score": 82.67
+    },
+    {
+      "id": "ks-n-0722",
+      "score": 166.24
+    }
+  ],
+  "controls": [
+    {
+      "id": "ks-n-0054",
+      "score": 156.01
+    },
+    {
+      "id": "ks-n-0090",
+      "score": 46.44
+    },
+    {
+      "id": "ks-n-0105",
+      "score": 192.61
+    },
+    {
+      "id": "ks-n-0144",
+      "score": 4.71
+    },
+    {
+      "id": "ks-n-0162",
+      "score": 68.26
+    },
+    {
+      "id": "ks-n-0237",
+      "score": 27.01
+    },
+    {
+      "id": "ks-n-0244",
+      "score": 167.68
+    },
+    {
+      "id": "ks-n-0254",
+      "score": 46.48
+    },
+    {
+      "id": "ks-n-0282",
+      "score": 85.07
+    },
+    {
+      "id": "ks-n-0312",
+      "score": 170.76
+    },
+    {
+      "id": "ks-n-0696",
+      "score": 166.69
+    },
+    {
+      "id": "ks-n-0760",
+      "score": 53.2
+    }
+  ],
+  "goals": [
+    {
+      "id": "ks-g-0117",
+      "score": 107.39
+    },
+    {
+      "id": "ks-g-0280",
+      "score": 47.57
+    },
+    {
+      "id": "ks-g-0413",
+      "score": 83.32
+    },
+    {
+      "id": "ks-g-0435",
+      "score": 80.94
+    },
+    {
+      "id": "ks-g-0541",
+      "score": 30.0
+    },
+    {
+      "id": "ks-g-0584",
+      "score": 226.83
+    },
+    {
+      "id": "ks-g-0602",
+      "score": 166.26
+    },
+    {
+      "id": "ks-g-0616",
+      "score": 233.66
+    },
+    {
+      "id": "ks-g-0643",
+      "score": 169.22
+    },
+    {
+      "id": "ks-g-0662",
+      "score": 41.92
+    },
+    {
+      "id": "ks-g-0678",
+      "score": 208.12
+    },
+    {
+      "id": "ks-g-0705",
+      "score": 128.17
+    },
+    {
+      "id": "ks-g-0719",
+      "score": 166.24
+    },
+    {
+      "id": "ks-g-0770",
+      "score": 129.04
+    },
+    {
+      "id": "ks-g-0341",
+      "score": 108.87
+    }
+  ],
+  "threshold_sweep": [
+    {
+      "thr": 82.67,
+      "recall": 0.5,
+      "fp": 6,
+      "precision": 0.455
+    },
+    {
+      "thr": 90.02,
+      "recall": 0.4,
+      "fp": 5,
+      "precision": 0.444
+    },
+    {
+      "thr": 156.01,
+      "recall": 0.2,
+      "fp": 5,
+      "precision": 0.286
+    },
+    {
+      "thr": 166.69,
+      "recall": 0.1,
+      "fp": 4,
+      "precision": 0.2
+    },
+    {
+      "thr": 170.76,
+      "recall": 0.1,
+      "fp": 2,
+      "precision": 0.333
+    }
+  ],
+  "verdict": "region-first statistic does NOT meet the AC-1 labeller bar",
+  "medians": {
+    "shot": 74.64,
+    "control": 76.66
+  },
+  "provenance": {
+    "host": "livepeer-ai-x99",
+    "video": "/home/brad/highlights.live/docker/data/uploads/3f8e8d8d-f00d-410c-b4c1-1a781b2fffc7/kids-soccer.mp4",
+    "command": "python3 localised_shot_motion.py --video <upload> --manifest label-manifest.json --fps 12 --grid 12x7 --json localised_summary.json --out localised_windows.jsonl",
+    "region_derivation": "cells hot at the 15 labelled goal windows and >1.6x the quiet-second median (goal windows only; shot/control windows never inform the region)"
+  }
+}
