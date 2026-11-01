@@ -94,6 +94,7 @@ export interface PaidOrchestratorOptions {
 
 export class OrchestratorAdapter implements PipelineClient {
   private client: LivepeerClient;
+  private cfg: ServerConfig;
   private signer?: SignerClient;
   private payerAddress?: string;
   private paymentIntervalMs: number;
@@ -105,6 +106,7 @@ export class OrchestratorAdapter implements PipelineClient {
   private ticketParamsRetryBackoffMs: number;
 
   constructor(cfg: ServerConfig, opts: PaidOrchestratorOptions = {}) {
+    this.cfg = cfg;
     this.client = new LivepeerClient(
       cfg.orchestratorUrl,
       undefined,
@@ -770,12 +772,38 @@ export class OrchestratorAdapter implements PipelineClient {
       this.payers.delete(sessionId);
     }
     await this.client.stopPerceive(sessionId);
+    // ADAAAA-7642: the orchestrator's `/apps/<app>/session/<id>/stop` answers
+    // 204 but does NOT propagate the close to the self-hosted perceive runner,
+    // whose registry keeps the session (and its trickle) alive — the runner then
+    // keeps burning GPU after a stop the API already reported as released
+    // (verified on the box: session still `active:true` 4.5 min after stop,
+    // perceive GPU at 72%). Close the runner session directly so the release the
+    // stop route reports is real. Best-effort: an unset/unreachable runner must
+    // never fail the stop.
+    await this.closeRunnerSession(sessionId);
     // Drop the durable ledger entry only once the orchestrator confirmed the
     // stop (or already-absent session -> 404 = success), so a failed release
     // stays registered for a later boot reconcile retry (ADAAAA-6586).
     this.ledger?.unregister(sessionId).catch((e) =>
       console.error(`[adapter] ledger unregister ${sessionId} failed:`, (e as Error)?.message || e)
     );
+  }
+
+  /** Drop the perceive runner's OWN registry entry for `sessionId`.
+   * `POST <runner>/session/close` with `X-Session-Id` is the only call that
+   * releases the runner session + trickle (ADAAAA-7642). */
+  private async closeRunnerSession(sessionId: string): Promise<void> {
+    const base = this.cfg.perceiveRunnerUrl;
+    if (!base) return;
+    try {
+      const r = await fetch(`${base}/session/close`, {
+        method: "POST",
+        headers: { "X-Session-Id": sessionId },
+      });
+      if (!r.ok) console.warn(`[adapter] perceive runner close ${sessionId}: HTTP ${r.status}`);
+    } catch (e: any) {
+      console.warn(`[adapter] perceive runner close ${sessionId} failed: ${e?.message || e}`);
+    }
   }
 }
 

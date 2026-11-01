@@ -350,6 +350,13 @@ services:
       # Media-path (b): the browser streams frames to the media server instead
       # of the server's HTTP /ingest when this is set.
       - MEDIA_SERVER_URL=${MEDIA_SERVER_URL:-http://media:4070}
+      # ADAAAA-7642: the perceive RUNNER's internal base URL, used only to drop a
+      # session from the runner registry when a job is stopped. The orchestrator's
+      # session stop does not propagate to the runner, so without this a stopped
+      # job leaves the runner session (and its trickle) active and burning GPU.
+      # Deliberately NOT PERCEIVE_URL: that switches the pipeline to the direct
+      # adapter and bypasses Livepeer payment.
+      - PERCEIVE_RUNNER_URL=${PERCEIVE_RUNNER_URL:-http://perceive:8080}
       # ADAAAA-7286: the SERVER hands the webapp the media origin for the WebRTC
       # screen-share signaling POSTs. It must be the PUBLIC LB origin (a browser
       # cannot resolve the docker-internal `media:4070` service name). config.ts
