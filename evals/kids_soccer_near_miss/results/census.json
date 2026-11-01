@@ -1,0 +1,578 @@
+{
+ "readers": [
+  "v1_scene",
+  "v3_defined"
+ ],
+ "frames_read": 1556,
+ "read_errors": {},
+ "both_reader_seconds": 56,
+ "any_reader_seconds": 121,
+ "clusters_both_ge2s": [
+  {
+   "t_start": 123,
+   "t_end": 124,
+   "len": 2,
+   "windows": [
+    "ks-g-0117"
+   ],
+   "in_labelled_goal": true
+  },
+  {
+   "t_start": 168,
+   "t_end": 170,
+   "len": 3,
+   "windows": [],
+   "in_labelled_goal": false
+  },
+  {
+   "t_start": 370,
+   "t_end": 371,
+   "len": 2,
+   "windows": [],
+   "in_labelled_goal": false
+  },
+  {
+   "t_start": 394,
+   "t_end": 396,
+   "len": 3,
+   "windows": [
+    "ks-n-0402"
+   ],
+   "in_labelled_goal": false
+  },
+  {
+   "t_start": 410,
+   "t_end": 413,
+   "len": 4,
+   "windows": [
+    "ks-g-0413"
+   ],
+   "in_labelled_goal": true
+  },
+  {
+   "t_start": 417,
+   "t_end": 419,
+   "len": 3,
+   "windows": [
+    "ks-g-0413"
+   ],
+   "in_labelled_goal": true
+  },
+  {
+   "t_start": 598,
+   "t_end": 599,
+   "len": 2,
+   "windows": [],
+   "in_labelled_goal": false
+  },
+  {
+   "t_start": 623,
+   "t_end": 625,
+   "len": 3,
+   "windows": [
+    "ks-n-0622"
+   ],
+   "in_labelled_goal": false
+  },
+  {
+   "t_start": 703,
+   "t_end": 704,
+   "len": 2,
+   "windows": [
+    "ks-g-0705"
+   ],
+   "in_labelled_goal": true
+  },
+  {
+   "t_start": 708,
+   "t_end": 709,
+   "len": 2,
+   "windows": [
+    "ks-g-0705"
+   ],
+   "in_labelled_goal": true
+  },
+  {
+   "t_start": 737,
+   "t_end": 738,
+   "len": 2,
+   "windows": [],
+   "in_labelled_goal": false
+  },
+  {
+   "t_start": 758,
+   "t_end": 759,
+   "len": 2,
+   "windows": [
+    "ks-n-0760"
+   ],
+   "in_labelled_goal": false
+  }
+ ],
+ "clusters_both_ge3s": [
+  {
+   "t_start": 168,
+   "t_end": 170,
+   "len": 3,
+   "windows": [],
+   "in_labelled_goal": false
+  },
+  {
+   "t_start": 394,
+   "t_end": 396,
+   "len": 3,
+   "windows": [
+    "ks-n-0402"
+   ],
+   "in_labelled_goal": false
+  },
+  {
+   "t_start": 410,
+   "t_end": 413,
+   "len": 4,
+   "windows": [
+    "ks-g-0413"
+   ],
+   "in_labelled_goal": true
+  },
+  {
+   "t_start": 417,
+   "t_end": 419,
+   "len": 3,
+   "windows": [
+    "ks-g-0413"
+   ],
+   "in_labelled_goal": true
+  },
+  {
+   "t_start": 623,
+   "t_end": 625,
+   "len": 3,
+   "windows": [
+    "ks-n-0622"
+   ],
+   "in_labelled_goal": false
+  }
+ ],
+ "clusters_both_all": 38,
+ "goal_windows": [
+  {
+   "id": "ks-g-0117",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    123,
+    124,
+    126
+   ],
+   "both_readers": [
+    123,
+    124
+   ],
+   "max_run_both": 2
+  },
+  {
+   "id": "ks-g-0280",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    281
+   ],
+   "both_readers": [
+    281
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-g-0413",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    410,
+    411,
+    412,
+    413,
+    415,
+    417,
+    418
+   ],
+   "both_readers": [
+    410,
+    411,
+    412,
+    413,
+    417,
+    418
+   ],
+   "max_run_both": 4
+  },
+  {
+   "id": "ks-g-0435",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    431
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-g-0541",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    538
+   ],
+   "both_readers": [
+    538
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-g-0584",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    581,
+    586,
+    587,
+    588
+   ],
+   "both_readers": [
+    586
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-g-0602",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    604,
+    605
+   ],
+   "both_readers": [
+    605
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-g-0616",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    616,
+    617
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-g-0643",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    642,
+    644
+   ],
+   "both_readers": [
+    642
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-g-0662",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    662,
+    665
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-g-0678",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    681,
+    684
+   ],
+   "both_readers": [
+    681
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-g-0705",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    702,
+    703,
+    704,
+    705,
+    708,
+    709
+   ],
+   "both_readers": [
+    703,
+    704,
+    708,
+    709
+   ],
+   "max_run_both": 2
+  },
+  {
+   "id": "ks-g-0719",
+   "evidence": "ball_in_net",
+   "any_reader": [],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-g-0770",
+   "evidence": "ball_in_net",
+   "any_reader": [
+    767
+   ],
+   "both_readers": [
+    767
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-g-0341",
+   "evidence": "scoreboard_change",
+   "any_reader": [
+    339
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  }
+ ],
+ "nongoal_windows": [
+  {
+   "id": "ks-n-0054",
+   "evidence": "none",
+   "any_reader": [],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0090",
+   "evidence": "none",
+   "any_reader": [
+    87
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0105",
+   "evidence": "none",
+   "any_reader": [],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0130",
+   "evidence": "saved",
+   "any_reader": [
+    126
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0144",
+   "evidence": "none",
+   "any_reader": [],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0162",
+   "evidence": "none",
+   "any_reader": [
+    163
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0178",
+   "evidence": "blocked",
+   "any_reader": [
+    180,
+    184
+   ],
+   "both_readers": [
+    184
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-n-0201",
+   "evidence": "saved",
+   "any_reader": [
+    201,
+    202
+   ],
+   "both_readers": [
+    202
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-n-0237",
+   "evidence": "none",
+   "any_reader": [
+    236,
+    239,
+    240
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0244",
+   "evidence": "none",
+   "any_reader": [
+    249
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0254",
+   "evidence": "none",
+   "any_reader": [
+    262
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0282",
+   "evidence": "none",
+   "any_reader": [
+    281
+   ],
+   "both_readers": [
+    281
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-n-0312",
+   "evidence": "none",
+   "any_reader": [
+    323
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0351",
+   "evidence": "saved",
+   "any_reader": [
+    352,
+    353
+   ],
+   "both_readers": [
+    353
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-n-0359",
+   "evidence": "saved",
+   "any_reader": [
+    359
+   ],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0402",
+   "evidence": "saved",
+   "any_reader": [
+    395,
+    396,
+    397,
+    400,
+    401,
+    409
+   ],
+   "both_readers": [
+    395,
+    396
+   ],
+   "max_run_both": 2
+  },
+  {
+   "id": "ks-n-0426",
+   "evidence": "saved",
+   "any_reader": [],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0622",
+   "evidence": "saved",
+   "any_reader": [
+    623,
+    624
+   ],
+   "both_readers": [
+    623,
+    624
+   ],
+   "max_run_both": 2
+  },
+  {
+   "id": "ks-n-0628",
+   "evidence": "wide",
+   "any_reader": [],
+   "both_readers": [],
+   "max_run_both": 0
+  },
+  {
+   "id": "ks-n-0696",
+   "evidence": "none",
+   "any_reader": [
+    692,
+    693,
+    696,
+    702,
+    703
+   ],
+   "both_readers": [
+    696,
+    703
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-n-0722",
+   "evidence": "blocked",
+   "any_reader": [
+    725
+   ],
+   "both_readers": [
+    725
+   ],
+   "max_run_both": 1
+  },
+  {
+   "id": "ks-n-0760",
+   "evidence": "none",
+   "any_reader": [
+    758,
+    759,
+    760,
+    761,
+    762,
+    765
+   ],
+   "both_readers": [
+    758,
+    759
+   ],
+   "max_run_both": 2
+  }
+ ],
+ "goal_windows_with_both_reader_hit": 10,
+ "nongoal_windows_with_both_reader_hit": 9,
+ "nongoal_windows_with_run_ge2": 3
+}

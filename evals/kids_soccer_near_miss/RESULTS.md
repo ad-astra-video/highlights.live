@@ -566,11 +566,81 @@ So the local gemma read is not a labeller yet, but it is the cheapest layer to
 iterate on: no key, ~0.4 s per frame, and the whole calibration re-runs in about
 two minutes from the committed script plus an `ffmpeg fps=1` frame pass.
 
+### 6. Prompt-family calibration (`labeller_variants.py`, 2026-11-01)
+
+The one cheap lead left on §5 was the prompt itself, so five variants were
+calibrated on the same 245 frames (10 shot windows vs 12 `evidence:none`
+controls) with `results/labeller_variants.json` as the record. All reads are
+`temperature=0`, `enable_thinking=false`; each variant replaces the single
+yes/no question with a rubric (scene class, net/ball/keeper facts, an explicit
+class-boundary definition, or the moment of contact), and the shot decision is
+derived from those fields:
+
+| variant | rule per frame | shot windows | control windows falsely shot |
+|---|---|---|---|
+| `v0_baseline` (1-line `BALL/SHOT/KIND`) | `SHOT=yes` + `KIND∈{saved,post,wide,blocked}` | 6/10 | 4/12 |
+| `v1_scene` | `SCENE∈{shot_at_goal,save}` | 6/10 | 4/12 |
+| `v2_facts` | `BALL=near_net` or `KEEPER∈{diving,collecting}` | **10/10** | **12/12** |
+| `v3_defined` | `SHOT=yes` under an explicit class definition | **8/10** | 8/12 |
+| `v4_moment` | `ON_TARGET=yes` or `WHERE=goalmouth`+ball visible | 7/10 | 8/12 |
+
+`v3_defined` with a one-frame rule is the only variant that reaches the shot
+side of the bar (8/10), and it fails the control side by a factor of four. Adding
+a persistence rule (>= 2 consecutive flagged seconds, which is the natural
+window-level rule for a 6–16 s window) moves it to 7/10 shots against 3/12
+controls — closer, still outside the bar. `v2_facts` saturates at 10/10 and
+12/12: at 960x540 the model reports "net visible, ball near net" almost always,
+which is exactly the ~10 px ball problem, not a prompt problem.
+`v0_baseline` reproduces §5's 6/10 vs 4/12 **exactly**, so the harness,
+frame grid and decision rule are consistent with `gemma_labeller_cal.py`.
+
+**Verdict:** the prompt family is excluded as the AC-1 fix. Iterating prompts on
+a 12B model over 960x540 frames does not produce a labeller; the constraint is
+the resolvable detail (ball ≈ 10 px, goal mouth a few pixels high at this
+scale), which is the same constraint the deterministic motion layer already
+failed on.
+
+### 7. Whole-clip 1 s census (`whole_video_census.py`, 2026-11-01)
+
+A per-window calibration cannot answer "how many shot-class windows does this
+clip contain", so the same two best readers were run over **every second** of the
+777 s clip: 778 frames at 1 fps straight from the 1280x720 upload, 1556 reads,
+**0 read errors**, ~10 min on the box. `results/census.json` holds the summary and
+`results/census_seconds.jsonl` the full 121-second fire list.
+
+- any-reader fires on **121 s**, both readers on **56 s**, clustered into **38**
+  both-reader runs.
+- **Sensitivity check first** (otherwise a silent census proves nothing): the
+  both-reader pair fires on **10 of the 15 labelled goal windows** and on 5 of
+  the 10 shot-class windows. So the pair does track goalmouth action, but it is
+  insensitive, and *absence* of a census hit is weak evidence — which is why the
+  census is used as a bound and a candidate generator, never as a label.
+- Both-reader hits inside the 22 non-goal windows: 9, of which 5 are windows
+  already labelled shot-class (`ks-n-0178/0201/0351/0402/0622`) and 4 land in or
+  adjacent to a goal window (`281` inside `ks-g-0280`; `696/703` with `703`
+  inside `ks-g-0705`). The 12 `evidence:none` windows yield exactly one
+  both-reader run of >= 2 s: `758–759`, i.e. the penalty shoot-out tail.
+- Both-reader runs in **unlabelled** seconds: **168–170** (3 s), **370–371**,
+  **598–599**, **737–738**. `598–599` is 1 s before the t=602 goal window, so it
+  is the shot that produced that goal rather than a non-goal shot window.
+
+That is the measured ceiling: at most three or four new non-goal shot windows
+are even candidate-generating on this clip, and none of them can be promoted
+without a full-resolution frame read (the promotion rule stays: both readers
+agree on >= 2 consecutive seconds, the window is not inside or adjacent to a
+goal window, **and** a native-resolution frame confirms it). The third condition
+was unavailable this run: `vision_analyze` timed out twice on the 1x frames and
+`SCAN_KEY` is still not a provisioned secret, so no window was promoted and the
+manifest is unchanged.
+
 ### What this changes for the AC set
 
 - AC-1's recorded unblock ("higher-resolution / 30 fps frame source") is
-  **falsified for the deterministic layer**. The remaining candidate is a
-  perception labeller over native-resolution, per-window localised crops.
+  **falsified for the deterministic layer**, and the prompt family is now
+  **falsified as well** (§6). What remains is a *verification* channel, not a
+  reader: the whole-clip census (§7) shows the clip offers at most three or four
+  additional non-goal shot candidates, and promoting any of them needs a
+  native-resolution frame check that no provisioned endpoint provides today.
 - AC-2's remaining 16 candidates cannot be resolved by a pixel statistic; they
   need the same localised frame reads as AC-1, and `RESULTS.md` keeps them
   queued rather than judged.
@@ -595,16 +665,20 @@ mean.
 ## Not yet done (tracked as a follow-up)
 
 1. AC-1: extend the shot-class set from 10 to >= 20 windows. Measured blocker
-   (see *AC-1 status*): the primary read layer reproduces 5/10 known shot
-   windows, and the objective motion layer now carries no signal in three
-   independent settings (AUC 0.481 at 640x360 whole-pitch, 0.440 at the source's
-   own 1280x720 whole-pitch, 0.442 at 1280x720 restricted to a goal-mouth region
-   derived from the labelled goals — see *Native-resolution source* §4). The
-   unanimous vote is capped by the primary layer, so no window can be promoted
-   under the bar (>= 8/10, <= 2/35). **Resolution and localisation are both
-   falsified as the blocker**; the remaining path is a perception labeller on
-   localised native crops (`SCAN_KEY` as a Paperclip secret, or a calibrated
-   vision read).
+   (see *AC-1 status*, *Local gemma frame read* §6–§7): the primary read layer
+   reproduces 5/10 known shot windows, the objective motion layer carries no
+   signal in three independent settings (AUC 0.481 at 640x360 whole-pitch, 0.440
+   at the source's own 1280x720 whole-pitch, 0.442 at 1280x720 restricted to a
+   goal-mouth region derived from the labelled goals — see *Native-resolution
+   source* §4), and the five-variant prompt family peaks at 8/10 shots against
+   8/12 false controls. The whole-clip census (§7) then bounds what is left:
+   three to four unlabelled both-reader candidates (`168–170`, `370–371`,
+   `598–599`, `737–738`), one shoot-out-tail run (`758–759`) and no shot-class
+   run at all in the rest of the 12 `evidence:none` windows. So the gap to 20 is
+   **not a reader problem any more**: it needs either a native-resolution
+   verification channel (`SCAN_KEY` as a Paperclip secret) to promote those
+   candidates, or an AC-1 scope decision (a second clip with >= 10 further
+   non-goal shots) — raised with the Product Owner rather than judged here.
 2. AC-2: confirm or refute the remaining catalogue evidence on 1 s frames. From
    `results/goal_catalogue_reconciliation.json` (re-run with
    `reconcile_goal_catalogue.py`):
