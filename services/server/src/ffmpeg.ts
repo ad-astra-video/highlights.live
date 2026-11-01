@@ -52,10 +52,20 @@ function meaningfulFfmpegError(stderr: string): string {
   return msg.length > 500 ? msg.slice(0, 500) + "…" : msg;
 }
 
-async function runFfmpeg(ffmpegPath: string, args: string[]): Promise<void> {
+async function runFfmpeg(ffmpegPath: string, args: string[], signal?: AbortSignal): Promise<void> {
   try {
-    await exec(ffmpegPath, args);
+    // ADAAAA-6625: an optional AbortSignal lets a cancelled VOD job kill the
+    // ffmpeg child instead of letting it decode the rest of the file. execFile
+    // reaps the child on abort and rejects with an AbortError.
+    await exec(ffmpegPath, args, signal ? { signal } : undefined);
   } catch (e: any) {
+    // A cancelled extraction is not an ffmpeg failure — surface it as such so
+    // callers (the VOD stop path) can distinguish stop from a real decode error.
+    if (signal?.aborted) {
+      const aborted = new Error("ffmpeg: extraction aborted");
+      aborted.name = "AbortError";
+      throw aborted;
+    }
     const stderr = String(e?.stderr || e?.message || "");
     const reason = meaningfulFfmpegError(stderr);
     throw new Error(`ffmpeg: ${reason}`);
@@ -126,12 +136,14 @@ export async function extractFrames(
   outDir: string,
   fps = 1,
   scale = "320:180",
-  window?: FrameWindow
+  window?: FrameWindow,
+  /** Optional cancel signal (ADAAAA-6625): a stopped VOD job kills the decode. */
+  signal?: AbortSignal
 ): Promise<string[]> {
   const { mkdir, rm } = await import("node:fs/promises");
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
-  await runFfmpeg(ffmpegPath, buildExtractArgs({ source, outDir, fps, scale, window }));
+  await runFfmpeg(ffmpegPath, buildExtractArgs({ source, outDir, fps, scale, window }), signal);
   const files = (await readdir(outDir)).filter((f) => f.endsWith(".jpg")).sort();
   return files.map((f) => path.join(outDir, f));
 }
@@ -207,13 +219,15 @@ export async function extractBurstFrames(
   beforeS: number,
   afterS: number,
   fps: number,
-  scale = "640:360"
+  scale = "640:360",
+  /** Optional cancel signal (ADAAAA-6625): aborts a burst decode mid-window. */
+  signal?: AbortSignal
 ): Promise<{ timestamp: number; imageB64: string }[]> {
   const inSec = Math.max(0, ts - beforeS);
   const outSec = ts + afterS;
   const burstDir = path.join(outDir, `burst_${Math.round(ts * 1000)}`);
   try {
-    const files = await extractFrames(ffmpegPath, source, burstDir, fps, scale, { inSec, outSec });
+    const files = await extractFrames(ffmpegPath, source, burstDir, fps, scale, { inSec, outSec }, signal);
     const { readFile } = await import("node:fs/promises");
     const out: { timestamp: number; imageB64: string }[] = [];
     for (let i = 0; i < files.length; i++) {
