@@ -199,9 +199,75 @@ already knows contain a shot, and it flips one shot/no-shot call between reads.
 Promoting windows from it would bias the shot-class set towards the shots this
 one model happens to see, and its silence cannot certify that a window has no
 shot. AC-1 therefore stays open, and the gate is now a number rather than an
-impression: clearing it needs a second independent read layer (or an objective
-shot detector) for a vote, because the endpoint serves exactly one multimodal
-model.
+impression: clearing it needs a second independent read layer for a vote,
+because the endpoint serves exactly one multimodal model. The objective
+alternative was built and calibrated in [ADAAAA-7643](/ADAAAA/issues/ADAAAA-7643)
+and is measured dead on this cache (score AUC 0.481 — see the section below), so
+the second layer has to come from a different prompt family, which needs
+`SCAN_KEY` provisioned.
+
+### Second independent layer: objective motion detector (`results/shot_motion_summary.json`)
+
+[ADAAAA-7643](/ADAAAA/issues/ADAAAA-7643) added the second layer and calibrated
+it on the same 10 shot windows and 12 controls. The mechanism is the one the
+issue ranks first: `detect_shot_motion.py`, a deterministic, offline detector
+over the cached frames — no model, no key, no network, no sampling. Its decision
+comes from temporal pixel motion rather than a still-frame prompt
+(`score(t) = max mean |frame(t) - shift(frame(t-1))|` over 8x8 blocks in the
+pitch band, with broadcast cuts excluded), so its errors cannot correlate with
+prompt-family errors. Two runs produce byte-identical output
+(`sha256 1cc2786…` on `results/shot_motion_reads.jsonl`).
+
+**It does not work on this footage.** The calibration numbers, with the layer
+voting with the thinking-on reads at threshold 55:
+
+| metric | value |
+| --- | --- |
+| known shot windows reproduced by the two-layer vote | **5 / 10 = 50 %** |
+| control seconds falsely called a shot (both layers) | **3 / 34 = 8.8 %** (same three as the primary layer: `ks-n-0244` t=249, `ks-n-0760` t=759,760) |
+| agreement between the two layers, same second | **22.8 %** (13 / 57 pairs) |
+| the layer alone | 10 / 10 windows — but 114 / 134 control seconds false (**85.1 %**) |
+| discriminative power of the score | **AUC 0.481** (chance = 0.5; shot median 184.1 vs control 189.1) |
+| thresholds in the 30–125 sweep that meet the bar | **0** |
+
+Calibration bar: >= 8/10 shot windows, <= 2/35 control seconds. **The bar was
+not met.** The failing number is reproduction: **5/10, not 8/10**. The layer
+alone is not a candidate either — at every threshold in the sweep it either
+reproduces everything (10/10) or nothing, with a false-shot rate of 83–85 %,
+because its score is saturated.
+
+Why the objective path fails on this cache, measured:
+
+- **The change between two frames is texture/encoder noise, not motion.** On 20
+  quiet seconds (static camera) the mean |Δ| is 26.7 luma, and global alignment
+  recovers only 1.5 of it (25.2 residual) — a sub-pixel phase-correlation
+  estimate returns (0, 0) throughout, so there is no camera motion left to
+  remove. A ball is ~10 px wide at 1x (job-detail track bbox 0.016 of frame
+  width), which is far below that noise floor.
+- **The 2x frames add no resolution.** They are upscales of the 1x frames
+  (mean |2x→1x resample − 1x| = 2.26 luma, gradient energy per pixel halves from
+  7.0 to 3.8), so a 2x pass measures the same pixels.
+- **Every statistic in the family is flat.** Max block residual, max−median,
+  p95−median, hot-block fraction, block std and a 5-frame temporal median of the
+  residual all land in **AUC 0.47–0.54**; the hot-pixel fraction saturates at
+  1.00 for both classes.
+
+So `detect_shot_motion.py` stays committed as the measured negative result and
+as the reusable artefact (its whole-video read is
+`results/shot_motion_whole.jsonl`, 777 s), but **nothing was promoted from it**
+and `coverage` is unchanged: 15 goal / 22 non-goal / 10 shot-class windows.
+
+Two things follow for AC-1, and neither is a second voter problem:
+
+1. the unanimous vote cannot exceed the weaker layer's recall, so adding a voter
+   cannot lift the 5/10 the primary layer reproduces — the primary read has to
+   get better, not another vote;
+2. the issue's fallback mechanism (a different prompt family / multi-frame strip
+   as a separate layer) needs `SCAN_KEY` for `https://vllm.dpn.chat`, which was
+   not present in this run's environment and is not in
+   `GET /api/agents/me/secrets`. Until that key is provisioned as a Paperclip
+   secret, no prompt-family layer can be calibrated — the deterministic path is
+   the only one that runs offline, and it is now measured dead on this cache.
 
 ### Window count
 
@@ -242,8 +308,13 @@ independent read layer or an objective shot detector, then a dense 1 s pass
 
 ## Not yet done (tracked as a follow-up)
 
-1. AC-1: extend the shot-class set from 10 to >= 20 windows (blocked on
-   reproducible frame reads — see *AC-1 status*).
+1. AC-1: extend the shot-class set from 10 to >= 20 windows. Measured blocker
+   (see *AC-1 status*): the primary read layer reproduces 5/10 known shot
+   windows, the objective motion layer carries no signal (AUC 0.481), and the
+   unanimous vote is capped by the primary layer, so no window can be promoted
+   under the bar (>= 8/10, <= 2/35). Unblock needs either a prompt-family second
+   layer (`SCAN_KEY` provisioned as a Paperclip secret) or a higher-resolution /
+   30 fps frame source, since a ~10 px ball sits below this cache's noise floor.
 2. AC-2: confirm or refute the remaining catalogue evidence on 1 s frames. From
    `results/goal_catalogue_reconciliation.json` (re-run with
    `reconcile_goal_catalogue.py`):
