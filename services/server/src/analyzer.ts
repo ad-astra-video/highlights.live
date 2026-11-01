@@ -1558,6 +1558,17 @@ export class LiveRunShared {
    * video pass, so it must retain the FULL timeline (capped) so the decide can
    * slice audio around each video-window center instead of the file end. */
   private readonly audioRetainS: number;
+  /** ADAAAA-7671: the video rail's CONTENT position — the newest frame
+   * timestamp the pipeline has actually processed. On a live run the decide
+   * loop lags real time (one ~10 s gemma call per ~3 s of content), so the tap's
+   * audio timeline runs far AHEAD of the window being analyzed. Pruning the
+   * audio buffer relative to the newest TAP chunk (real time) therefore discards
+   * exactly the audio the current window needs, and every window after the
+   * first persisted `audio.path:"none"` / no `audioSeries` (measured: 1/9, 1/7,
+   * 1/17 windows). Keep the retention window anchored HERE instead, so the
+   * buffer always covers the pipeline's own position. `null` until the first
+   * frame lands (and for a pure audio-tap run). */
+  private analysisPosTs: number | null = null;
   /** ADAAAA-7255: the bounded per-chunk (t, energy, baseline) audio-gate
    * inspection series, as forwarded by perceive on the /audio event path. Kept
    * as the latest bounded snapshot (perceive already bounds it to its lookback
@@ -1582,6 +1593,9 @@ export class LiveRunShared {
   addFrame(seq: number, timestamp: number, imageB64: string): void {
     this.frames.set(seq, { timestamp, imageB64 });
     this.evictOldest(timestamp);
+    // ADAAAA-7671: advance the analysis position so the audio tap's retention
+    // follows the PIPELINE, not real time (see `analysisPosTs`).
+    this.noteAnalysisPosition(timestamp);
   }
   /** Attach the already-computed perception findings to an in-window frame
    * (A1). The findings are produced by the `/analyze` call the server already
@@ -1769,18 +1783,55 @@ export class LiveRunShared {
     return text;
   }
   /** Buffer one audio tap chunk (base64 mono 16 kHz int16 PCM, ~100 ms) into
-   * the rolling clip, kept ~AUDIO_CLIP_KEEP_S seconds behind `ts`. */
+   * the rolling clip, keeping the retention window anchored on the video rail's
+   * analysis position (ADAAAA-7671 — see `analysisPosTs`). */
   addAudioChunk(ts: number, samples: string): void {
     this.audio.push({ ts, samples });
-    const cutoff = ts - this.audioRetainS;
+    this.pruneAudioBuffer();
+  }
+  /** ADAAAA-7671: advance the video rail's content position and re-prune the
+   * retained audio + audio series against it. Called from `addFrame`, so a run
+   * that never receives frames (pure audio tap) keeps the legacy
+   * "relative to the newest chunk" behaviour. */
+  private noteAnalysisPosition(ts: number): void {
+    if (!Number.isFinite(ts)) return;
+    if (this.analysisPosTs === null || ts > this.analysisPosTs) this.analysisPosTs = ts;
+    this.pruneAudioBuffer();
+    this.pruneAudioSeries();
+  }
+  /** ADAAAA-7671: the retention anchor — the analysis position when known,
+   * otherwise the newest buffered chunk (legacy behaviour). */
+  private retentionAnchor(newestTs: number): number {
+    const pos = this.analysisPosTs;
+    return pos === null ? newestTs : Math.min(pos, newestTs);
+  }
+  /** ADAAAA-7671: drop buffered audio older than the retention window measured
+   * back from the ANALYSIS position (not from the newest tap chunk), so the
+   * audio for the window currently being decided is still buffered. A hard
+   * memory cap bounds the buffer when the tap races far ahead of the pipeline
+   * (live: ~10 s gemma per 3 s of content). */
+  private pruneAudioBuffer(): void {
+    if (!this.audio.length) return;
+    const newest = this.audio[this.audio.length - 1].ts;
+    const cutoff = this.retentionAnchor(newest) - this.audioRetainS;
     while (this.audio.length > 1 && this.audio[0].ts < cutoff) this.audio.shift();
+    // The hard cap must never undercut the CONFIGURED retention: the VOD pass
+    // deliberately retains the whole file timeline (VOD_AUDIO_RETAIN_S).
+    const capCutoff = newest - Math.max(AUDIO_BUFFER_MAX_S, this.audioRetainS);
+    while (this.audio.length > 1 && this.audio[0].ts < capCutoff) this.audio.shift();
   }
   /** The buffered audio as a mono 16 kHz 16-bit PCM WAV (base64), covering the
    * last `AUDIO_CLIP_KEEP_S` seconds — the surrounding audio clip for decide().
-   * "" when the tap has buffered nothing yet. */
+   * ADAAAA-7671: the slice length is independent of the retention window (which
+   * may be longer than the clip on live), so the clip can never balloon into a
+   * multi-minute WAV. "" when the tap has buffered nothing yet. */
   audioClipB64(): string {
     if (!this.audio.length) return "";
-    return pcmInt16ToWavB64(joinPcmB64Parts(this.audio.map((a) => a.samples)));
+    const newest = this.audio[this.audio.length - 1].ts;
+    const from = newest - AUDIO_CLIP_KEEP_S;
+    const parts = this.audio.filter((a) => a.ts > from).map((a) => a.samples);
+    if (!parts.length) return "";
+    return pcmInt16ToWavB64(joinPcmB64Parts(parts));
   }
   /** ADAAAA-7399: the buffered audio as a mono 16 kHz WAV (base64) SLICED to
    * the chunks whose ts falls in `[centerTs - preS, centerTs + postS]` — the
@@ -1806,12 +1857,53 @@ export class LiveRunShared {
   audioChunkCount(): number {
     return this.audio.length;
   }
-  /** ADAAAA-7255: replace the bounded per-chunk (t, energy, baseline) audio-gate
-   * inspection series with the latest snapshot perceive forwarded on the /audio
-   * event path. Perceive bounds the snapshot to its lookback window, so this
-   * never grows unbounded on a long stream. */
+  /** ADAAAA-7671 (instrumentation): the buffered tap audio's content-time span
+   * plus the video rail's analysis position, so a live on-box run shows whether
+   * the tap reached the window being decided (`[live-audio:<job>] decide ...`
+   * log line). Null ends mean nothing buffered yet. */
+  audioSpan(): { from: number | null; to: number | null; pos: number | null } {
+    return {
+      from: this.audio.length ? this.audio[0].ts : null,
+      to: this.audio.length ? this.audio[this.audio.length - 1].ts : null,
+      pos: this.analysisPosTs,
+    };
+  }
+  /** ADAAAA-7255: merge the bounded per-chunk (t, energy, baseline) audio-gate
+   * inspection series that perceive forwarded on the /audio event path.
+   * ADAAAA-7671: perceive's snapshot only covers its own ~1.7 s lookback, and on
+   * live the audio tap runs far AHEAD of the (lagging) analysis window, so
+   * keeping only the LATEST snapshot left every window after the first with an
+   * empty series (the AUDIO energy graph never rendered). Accumulate the points
+   * keyed by content time and prune them against the analysis position, exactly
+   * like the audio buffer. Bounded, so a long stream never grows it. */
   setAudioSeries(points: { t: number; energy: number; baseline: number }[]): void {
-    if (Array.isArray(points)) this.audioSeries = points;
+    if (!Array.isArray(points)) return;
+    // An EMPTY snapshot is the "no tap data at all" signal (fresh session); it
+    // still resets, exactly as the previous replace-only contract did.
+    if (!points.length) {
+      this.audioSeries = [];
+      return;
+    }
+    const byTs = new Map<number, { t: number; energy: number; baseline: number }>();
+    for (const p of this.audioSeries) byTs.set(p.t, p);
+    for (const p of points) {
+      if (p && Number.isFinite(p.t)) byTs.set(p.t, { t: p.t, energy: p.energy, baseline: p.baseline });
+    }
+    this.audioSeries = [...byTs.values()].sort((a, b) => a.t - b.t);
+    this.pruneAudioSeries();
+  }
+  /** ADAAAA-7671: drop inspection-series points older than the retention window
+   * measured from the analysis position (mirrors `pruneAudioBuffer`), and keep a
+   * hard point cap as a memory bound. */
+  private pruneAudioSeries(): void {
+    if (!this.audioSeries.length) return;
+    const newest = this.audioSeries[this.audioSeries.length - 1].t;
+    const cutoff = this.retentionAnchor(newest) - this.audioRetainS;
+    this.audioSeries = this.audioSeries.filter((p) => p.t >= cutoff);
+    const maxPoints = Math.max(AUDIO_SERIES_MAX_POINTS, Math.round(this.audioRetainS * 10) + 200);
+    if (this.audioSeries.length > maxPoints) {
+      this.audioSeries = this.audioSeries.slice(-maxPoints);
+    }
   }
   /** ADAAAA-7658: observed audio-trigger records not yet handed to the live
    * decide observer. Bounded — a trigger is drained (or expires) within a
@@ -2024,6 +2116,19 @@ export class LiveRunShared {
  * (ADAAAA-4954 detail-first; bounded so a long VOD pass doesn't grow unbounded).
  * Roughly the clip-relevant window around a trigger. */
 export const AUDIO_CLIP_KEEP_S = 10;
+/** ADAAAA-7671: how many seconds of tapped audio a LIVE run retains for
+ * window-aligned slicing. Retention is measured back from the pipeline's
+ * analysis position, and a live window is the trailing LIVE_OBSERVE_WINDOW_S
+ * (10 s) plus AUDIO_WINDOW_MARGIN_S on each side, so 10 s clipped the window's
+ * own head. 20 s covers the whole window with headroom at ~640 KB of PCM. */
+export const LIVE_AUDIO_RETAIN_S = 20;
+/** ADAAAA-7671: hard memory cap on the retained tap audio. When the tap races
+ * far ahead of a lagging live analysis position, the retention window itself can
+ * span minutes; this bounds the buffer at ~7.7 MB of PCM. */
+export const AUDIO_BUFFER_MAX_S = 240;
+/** ADAAAA-7671: hard cap on retained audio-gate inspection-series points
+ * (~10 Hz, so 240 s of series). */
+export const AUDIO_SERIES_MAX_POINTS = 2400;
 /** ADAAAA-7399: extra seconds of audio to slice on each side of a decide-window
  * center (beyond the frame span) so the clip brackets the whole window. */
 export const AUDIO_WINDOW_MARGIN_S = 2;
@@ -2660,6 +2765,21 @@ export function buildObserveDecideRequest(
   if (cfg.decideWindowN !== undefined && cfg.jobId) {
     console.error(
       `[vod-audio:${cfg.jobId}] decide @${center}s tapChunks=${run.audioChunkCount()} audioB64Len=${windowAudioB64.length} levels=${windowAudioLevels.length}`
+    );
+  }
+  // ADAAAA-7671 (instrumentation): the SAME reach for the LIVE observe pass.
+  // The live audio tap runs on real time while the decide loop lags it, so the
+  // tap span vs the pipeline position is the number that says whether this
+  // window's audio survived retention (`audioB64Len: 0` with a tap span far
+  // ahead of `pos` = retention, not a silent stream).
+  if (cfg.liveObserveLoop && cfg.jobId) {
+    const span = run.audioSpan();
+    console.error(
+      `[live-audio:${cfg.jobId}] decide @${center.toFixed(2)}s tapChunks=${run.audioChunkCount()} ` +
+        `tap=[${span.from === null ? "-" : span.from.toFixed(2)}..${span.to === null ? "-" : span.to.toFixed(2)}] ` +
+        `pos=${span.pos === null ? "-" : span.pos.toFixed(2)} prePost=${preS.toFixed(1)}/${postS.toFixed(1)} ` +
+        `audioB64Len=${windowAudioB64.length} levels=${windowAudioLevels.length} ` +
+        `series=${run.seriesWindow(center, preS, postS).length}`
     );
   }
   const opts: Parameters<PipelineClient["decide"]>[1] = {
