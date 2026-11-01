@@ -62,6 +62,16 @@ services:
     # (PERCEIVE_MODE=stub / PERCEIVE_DEVICE=cpu). Durable GPU-on-launch fix.
     image: adastravideo/highlights-live:perceive
     container_name: highlights-perceive
+    # Deliberately NO restart policy (ADAAAA-7656 evaluation). perceive is the
+    # GPU runner: its usual hard failure is a GPU/CUDA fault or a CUDA OOM, and
+    # an automatic restart of a broken GPU worker is a tight loop that burns
+    # device memory, fails every in-flight VOD job it re-claims, and can starve
+    # the box. It also holds the in-process SessionRegistry, so a restart frees
+    # leaked leases and is genuinely useful — but the safe shape is a bounded
+    # `on-failure:N` plus a healthcheck, decided with evidence rather than
+    # bundled into this availability fix. Until then the hourly box-health
+    # routine restarts it and raises a FAIL alert, which is the desired
+    # supervised behaviour.
     environment:
       - PERCEIVE_MODE=florence
       - PERCEIVE_DEVICE=cuda
@@ -324,6 +334,16 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.server
     container_name: highlights-server
+    # Deliberately NO restart policy (ADAAAA-7656 evaluation). A server crash is
+    # the most user-visible failure (edge 502), so this is the strongest
+    # candidate for a policy — but server boot re-runs `recoverStaleVodJobs`
+    # (it re-queues every non-terminal job) and re-seeds the in-memory highlight
+    # store, so an unattended crash LOOP would repeatedly re-claim work instead
+    # of recovering once. The safe shape is a bounded `on-failure:3` gated on a
+    # startup probe, evaluated on its own ticket; the hourly box-health routine
+    # already auto-starts a stranded server and alerts if it cannot be revived.
+    # Not changed here to keep this availability fix to one service and one
+    # controlled redeploy.
     environment:
       - PORT=3000
       - ORCHESTRATOR_URL=https://orchestrator:8935
@@ -512,6 +532,17 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.media
     container_name: highlights-media
+    # Availability (ADAAAA-7656): the live rail must not depend on the hourly
+    # box-health tick to come back from an exit. Before this key, a media crash
+    # (OOM, node exception, image fault) left the container down until the next
+    # health run — ~9 min of zero frames on 2026-10-30, up to ~60 min worst
+    # case — and read to users as "live stream got no frames". `unless-stopped`
+    # restarts the process after any exit and still honours a deliberate
+    # `docker stop` / `compose stop`. Cost is zero GPU: docker only acts when
+    # the process is already gone, and a crash loop is still visible as
+    # Exited/Restarting to the box-health routine (which alerts on any state
+    # other than running), so this does not mask a real fault.
+    restart: unless-stopped
     environment:
       - PORT=4070
       - ORCHESTRATOR_URL=https://orchestrator:8935
