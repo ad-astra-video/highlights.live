@@ -119,7 +119,7 @@ export function Highlights() {
       try {
         const r = await api<any>(`/jobs/${liveJob}`);
         setLiveStatus(r.job?.status || "active");
-        if (r.job?.status === "done" || r.job?.status === "failed") {
+        if (r.job?.status === "done" || r.job?.status === "failed" || r.job?.status === "cancelled") {
           clearInterval(iv);
           setDebugJob(liveJob);
           setLiveJob(null);
@@ -152,7 +152,7 @@ export function Highlights() {
     const iv = setInterval(async () => {
       try {
         const r = await api<any>(`/jobs/${vodJobId}`);
-        if (r.job?.status === "done" || r.job?.status === "failed") {
+        if (r.job?.status === "done" || r.job?.status === "failed" || r.job?.status === "cancelled") {
           clearInterval(iv);
           ac.abort();
           setVodJobId(null);

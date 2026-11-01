@@ -10,7 +10,7 @@ import { Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { clipWindow, validateClipWindow } from "./config";
 import type { ServerConfig } from "./config";
-import type { Store } from "./store";
+import { Store } from "./store";
 import {
   analyzeJob,
   EvidenceTracker,
@@ -157,6 +157,17 @@ export async function resolveSampleFps(
  * VOD jobs (ADAAAA-4954 spec §4.1). Flat hour unit, so session billing is
  * proportional to perceiveSessionS. */
 const PERCEIVE_PER_HOUR_USD = 0.01;
+
+/** ADAAAA-6625: thrown inside a VOD pass once `POST /jobs/:id/stop` has
+ * cancelled it, so the run unwinds at the next safe boundary instead of
+ * finalizing a partial pass as `done` (or letting a late session-lost error
+ * overwrite the operator-visible `cancelled` outcome with `failed`). */
+class VodCancelledError extends Error {
+  constructor(readonly jobId: string) {
+    super(`job ${jobId} cancelled`);
+    this.name = "VodCancelledError";
+  }
+}
 
 // Extension-based fallback for sources that ship a generic MIME (mpegts is
 // frequently served as application/octet-stream; some MP4s as audio/mp4).
@@ -382,6 +393,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // /analyze that analyzeJob's `finally` would otherwise wait for), so a job
   // started right after POST /jobs/:id/stop can re-reserve without a 503.
   const livePerceiveSlots = new Map<string, { current?: { sessionId: string; appUrl: string; controlUrl: string }; stopped: boolean }>();
+  // ADAAAA-6625: VOD `file` job cancellation. `POST /jobs/:id/stop` adds the
+  // job here and aborts its controller, so (a) a decode already running inside
+  // extractFrames is killed, (b) runVodJob unwinds at the next phase boundary,
+  // and (c) analyzeJob's frame loop exits on its next frame via the slotRef
+  // instead of re-reserving. Without this, stop only released the perceive
+  // slot and the pass still ran to `done` (or, with no slot held, 409'd and the
+  // row stayed non-terminal until a container restart).
+  const vodStops = new Set<string>();
+  const vodStopControllers = new Map<string, AbortController>();
+  function isVodStopped(jobId: string): boolean {
+    return vodStops.has(jobId);
+  }
 
   // --- Resumable VOD upload sessions (ADAAAA-5714) ---
   // The single-shot POST /jobs/upload is served through a Cloudflare tunnel that
@@ -798,10 +821,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
    * session), throw so the job fails loudly with a clear message instead of
    * hanging forever.
    */
-  async function reservePerceiveWithBackoff() {
+  async function reservePerceiveWithBackoff(jobId?: string) {
     const maxMs = cfg.vodReserveRetryTotalMs;
     const t0 = Date.now();
     for (let attempt = 0; ; attempt++) {
+      // ADAAAA-6625: a stop while queued for capacity must not keep retrying —
+      // otherwise the pass reserves a session for a job the operator cancelled.
+      if (jobId && isVodStopped(jobId)) throw new VodCancelledError(jobId);
       try {
         return await adapter.reservePerceive();
       } catch (e: any) {
@@ -828,9 +854,65 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   }
   async function markJobFailed(jobId: string, e: unknown): Promise<void> {
     try {
+      // ADAAAA-6625: `cancelled` is terminal and operator-visible. The stop
+      // path releases the perceive session, which makes the in-flight /analyze
+      // fail session-lost; that late error must never rewrite a stopped job as
+      // `failed` (or resurrect it from `done`).
+      if (isVodStopped(jobId) || store.getJob(jobId)?.status === "cancelled") return;
       await store.patchJob(jobId, { status: "failed", error: jobErrorMessage(e) });
     } catch {
       /* ignore — job record gone */
+    }
+  }
+
+  /** ADAAAA-6625: release every Livepeer perceive session a VOD `file` job
+   * holds, SYNCHRONOUSLY from the stop path (same contract as the live path's
+   * ADAAAA-6561 release). analyzeJob's `finally` re-leases as a no-op, so this
+   * never double-stops. Media-row reconciliation is included: a VOD job does
+   * not normally open a media session, but a legacy/odd row must not survive
+   * the stop at status=active. Returns the session ids released. */
+  async function releaseVodPerceive(jobId: string): Promise<string[]> {
+    const slot = livePerceiveSlots.get(jobId);
+    if (slot) {
+      // Delete before awaiting the stop so a concurrently-reserved session
+      // cannot re-register this job as live.
+      livePerceiveSlots.delete(jobId);
+      slot.stopped = true;
+    }
+    const ids = new Set<string>();
+    if (slot?.current?.sessionId) ids.add(slot.current.sessionId);
+    const cur = store.getJob(jobId);
+    if (cur?.perceiveSessionId) ids.add(cur.perceiveSessionId);
+    for (const sid of ids) await adapter.stopPerceive(sid).catch(() => {});
+    await db.clearMediaSession(jobId).catch(() => {});
+    return [...ids];
+  }
+
+  /** ADAAAA-6625: move a VOD job to the terminal `cancelled` state. Idempotent
+   * and never overwrites `done`/`failed`. Called synchronously from the stop
+   * route so the row is terminal the moment the caller gets its response —
+   * even if the in-flight pass is still unwinding (or the process dies first). */
+  async function markJobCancelled(jobId: string, progressLabel = "cancelled"): Promise<void> {
+    const cur = store.getJob(jobId);
+    if (!cur) return;
+    if (cur.status === "done" || cur.status === "failed") return;
+    try {
+      await store.patchJob(jobId, {
+        status: "cancelled",
+        stage: "cancelled",
+        progressLabel,
+        finishedAt: cur.finishedAt ?? new Date().toISOString(),
+      });
+      // Wake any open LiveConsole/SSE consumer on the terminal transition.
+      emitJobEvent(jobId, {
+        seq: -1,
+        timestamp: -1,
+        type: "progress",
+        progress: cur.progress ?? 0,
+        progressLabel,
+      } as any);
+    } catch (e: any) {
+      console.error(`[vod:${jobId}] cancel persist failed:`, String(e?.message || e));
     }
   }
 
@@ -853,6 +935,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   async function runVodJob(job: { id: string; gameHint?: string; preferLabels?: string[] }, videoPath: string, user: any, sub: any) {
     const jobId = job.id;
     const scheduledAt = new Date().toISOString();
+    // ADAAAA-6625: a stop that landed before the worker claimed this job wins.
+    // Never start (or resume) compute for an already-cancelled row.
+    const queuedAtClaim = store.getJob(jobId);
+    if (isVodStopped(jobId) || queuedAtClaim?.status === "cancelled" || Store.isTerminalStatus(queuedAtClaim?.status ?? "queued")) {
+      throw new VodCancelledError(jobId);
+    }
+    // Abort handle for the decode + frame loop of this pass; the stop route
+    // aborts it (processVodJob's finally clears it).
+    const stopCtl = new AbortController();
+    vodStopControllers.set(jobId, stopCtl);
     // ADAAAA-7247 (ACC-7): resolve the webui-configured (DB-persisted) per-company
     // clip window once for this job — it wins over the bare env default at
     // assembly (shared by anaCfg and the VOD cut closure below).
@@ -1029,10 +1121,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     let lastProgressAt = 0;
     let framesTotal = 0;
     const persistProgress = async (framesAnalyzed: number, force = false) => {
+      // ADAAAA-6625: a cancelled row is terminal — never resurrect it to
+      // `analyzing` from a late progress write during unwinding.
+      if (isVodStopped(jobId)) return;
       const now = Date.now();
       if (!force && now - lastProgressAt < 1000) return;
       lastProgressAt = now;
       const cur = store.getJob(jobId);
+      if (!cur || cur.status === "cancelled") return;
       if ((cur?.framesAnalyzed ?? 0) >= framesAnalyzed) return; // never regress
       const pct = framesTotal > 0 ? Math.min(100, Math.round((framesAnalyzed / framesTotal) * 100)) : 0;
       await store.patchJobProgress(jobId, {
@@ -1057,6 +1153,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     };
 
     const onEvent: (ev: AnalyzeEvent) => void = (ev) => {
+      // ADAAAA-6625: after a stop, never bill/persist a highlight from a frame
+      // that was already in flight when the operator cancelled the job.
+      if (isVodStopped(jobId) && ev.type === "highlight") return;
       if (ev.type === "candidate") {
         candidatesTriggered++;
         recordTrailDecision(ev);
@@ -1098,14 +1197,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const frameDir = path.join(cfg.dataDir, "frames", jobId);
     const sampleFps = cfg.vodDetailFps;
     emitJobProgress(jobId, 5, "extracting frames");
-    await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps, cfg.vodFrameScale);
+    await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps, cfg.vodFrameScale, undefined, stopCtl.signal);
+    // ADAAAA-6625: a stop during extraction aborts the decode; unwind here
+    // instead of analyzing a frame set the operator just cancelled.
+    if (isVodStopped(jobId)) throw new VodCancelledError(jobId);
     // I7 / ADAAAA-6361: re-sample a higher-FPS burst of frames around each
     // trigger so the ball-goal-crossing instant is present in the decide window
     // (the detail-first pass samples at `sampleFps`, which can skip it). Bounded:
     // only around trigger candidates, at the resample fps. Best-effort ([] on
     // failure) so a burst extraction glitch never aborts the pass.
-    anaCfg.resampleFrames = async (ts: number) =>
-      extractBurstFrames(
+    anaCfg.resampleFrames = async (ts: number) => {
+      // ADAAAA-6625: no burst extraction (and no further frame writes) after a
+      // stop — the pass is unwinding, the operator asked for it to end.
+      if (isVodStopped(jobId)) return [];
+      return extractBurstFrames(
         cfg.ffmpegPath,
         videoPath,
         path.join(frameDir, "bursts"),
@@ -1113,11 +1218,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         cfg.vodResampleWindowS,
         cfg.vodResampleWindowS,
         cfg.vodResampleFps,
-        cfg.vodFrameScale
+        cfg.vodFrameScale,
+        stopCtl.signal
       );
+    };
 
     const clipDir = path.join(cfg.dataDir, "clips");
     const cut = async (ts: number) => {
+      // ADAAAA-6625: a stop in flight wins over a clip cut — never spend ffmpeg
+      // encode time (or write a clip) for a cancelled pass.
+      if (isVodStopped(jobId)) throw new VodCancelledError(jobId);
       emitJobProgress(jobId, 90, "cutting clips");
       const clipId = randomUUID();
       const out = path.join(clipDir, `${clipId}.mp4`);
@@ -1160,7 +1270,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // passed so both legs anchor to the SAME frame window + evidence.
     // ADAAAA-6694: use the no-capacity backoff wrapper so a VOD submitted while
     // the capacity-1 perceive slot is held stays queued and eventually runs.
-    const initial = await reservePerceiveWithBackoff();
+    const initial = await reservePerceiveWithBackoff(jobId);
+    // ADAAAA-6625: a stop during the capacity wait wins — release nothing and
+    // unwind (no session was reserved).
+    if (isVodStopped(jobId)) throw new VodCancelledError(jobId);
     // ADAAAA-6694: track this VOD job's current perceive session so the stop
     // path can release the capacity-1 slot synchronously (mirroring the live
     // path ADAAAA-6561). `slot.stopped` is flipped by the stop route to stop
@@ -1176,6 +1289,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const audioLoop = (async () => {
       try {
         for await (const chunk of extractVodAudioChunks(cfg.ffmpegPath, videoPath)) {
+          // ADAAAA-6625: stop feeding /audio (and stop paying for it) the
+          // moment the operator cancels. Breaking the generator reaps ffmpeg.
+          if (isVodStopped(jobId)) break;
           shared.addAudioChunk(chunk.timestamp, chunk.samples);
           try {
             // Perceive audio gate is a DATA SEEDER (audio level curve context)
@@ -1205,17 +1321,27 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // pass the onProgress hook so the worker persists a throttled, monotonic
       // progress snapshot per frame (the `slotRef` drives the stop-path slot
       // release; onProgress is a trailing optional param).
+      // ADAAAA-6625: a stop between extraction and the first frame must not
+      // resurrect the terminal `cancelled` row as `analyzing`.
+      if (isVodStopped(jobId)) throw new VodCancelledError(jobId);
       await store.patchJob(jobId, { status: "analyzing", stage: "analyzing", framesTotal });
       outcome = await analyzeJob(adapter, iter, cut, anaCfg, onEvent, initial, shared, {
         onReserve: (res) => {
           slot.current = res;
+          // A stop that landed while analyzeJob re-reserved: release the fresh
+          // session immediately instead of letting it bill until the loop ends.
+          if (slot.stopped || isVodStopped(jobId)) void adapter.stopPerceive(res.sessionId).catch(() => {});
         },
-        isStopped: () => slot.stopped,
+        isStopped: () => slot.stopped || isVodStopped(jobId),
       }, onProgress);
     } finally {
       await audioLoop;
       livePerceiveSlots.delete(job.id);
     }
+    // ADAAAA-6625: analyzeJob exits its loop when the slot is stopped, returning
+    // a PARTIAL outcome. That must never be finalized as `done` — the stop
+    // already owns the terminal state, so unwind as cancelled.
+    if (isVodStopped(jobId) || slot.stopped) throw new VodCancelledError(jobId);
     // Every accepted highlight was already persisted + billed + quota-debited
     // at DECISION time by the onEvent `highlight` hook above (ADAAAA-6352),
     // mirroring the live path. The old end-of-job batch loop was removed so a
@@ -1333,7 +1459,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // drain, so a newly-queued or remaining job is never left stranded.
       const queued = store
         .allJobs()
-        .filter((j) => j.status === "queued" && !vodProcessing.has(j.id))
+        .filter((j) => j.status === "queued" && !vodProcessing.has(j.id) && !isVodStopped(j.id))
         .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
       for (const job of queued.slice(0, cfg.vodWorkerConcurrency)) {
         const videoPath = vodJobPaths.get(job.id) ?? job.sourceUrl;
@@ -1354,6 +1480,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   async function processVodJob(jobId: string, videoPath: string): Promise<void> {
     const job = store.getJob(jobId);
     if (!job) return;
+    // ADAAAA-6625: never start (or resume) a pass the operator already stopped.
+    if (job.status === "cancelled" || isVodStopped(jobId)) return;
     const user = job.ownerId ? await db.getUserById(job.ownerId) : undefined;
     if (!user) {
       await store
@@ -1365,8 +1493,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     try {
       await runVodJob(job, videoPath, user, sub);
     } catch (e: any) {
-      console.error(`[vod:${jobId}] failed`, e);
-      await markJobFailed(jobId, e).catch(() => {});
+      // A cancelled pass is a normal terminal outcome, not a failure: the job
+      // is already `cancelled` and markJobFailed refuses to overwrite it. Log
+      // it distinctly so the stop is visible in the server log.
+      if (e instanceof VodCancelledError || isVodStopped(jobId)) {
+        console.log(`[vod:${jobId}] cancelled (stopped via POST /jobs/:id/stop)`);
+        await markJobCancelled(jobId);
+      } else {
+        console.error(`[vod:${jobId}] failed`, e);
+        await markJobFailed(jobId, e).catch(() => {});
+      }
+    } finally {
+      vodStopControllers.delete(jobId);
     }
   }
 
@@ -2493,19 +2631,40 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       }
       return reply.send({ ok: true, job: store.getJob(job.id) });
     }
-    // VOD `file` job (background analyze via runVodJob): release the capacity-1
-    // perceive slot synchronously (mirroring the live stop path ADAAAA-6561)
-    // and flip `slot.stopped` so analyzeJob's frame loop breaks on the next
-    // /analyze/ session failure instead of re-reserving a fresh session once the
-    // slot has been released. The job's own flow records the terminal status.
-    // ADAAAA-6694: without this a stuck VOD job permanently squats the single
-    // perceive slot and every subsequent VOD 503s on reserve.
-    if (job.source === "file" && livePerceiveSlots.has(job.id)) {
-      const slot = livePerceiveSlots.get(job.id)!;
-      livePerceiveSlots.delete(job.id);
-      slot.stopped = true;
-      if (slot.current) await adapter.stopPerceive(slot.current.sessionId).catch(() => {});
-      return reply.send({ ok: true, job: store.getJob(job.id) });
+    // VOD `file` job: the API-level cancel path (ADAAAA-6625). This must work
+    // for an in-flight pass (queued / extracting / analyzing / finalizing) AND
+    // for an orphaned non-terminal row left behind by a previous process — the
+    // ADAAAA-6571 incident, where the only termination path was restarting the
+    // container, which dropped the in-flight runVodJob promise and left the row
+    // at `active`. Before this, a job holding no perceive slot (queued, still
+    // extracting, or orphaned) fell through to the 409 below.
+    if (job.source === "file") {
+      // Idempotent: a repeated stop on a terminal job is a no-op, never an
+      // error, so a caller retrying after a timeout gets a stable answer.
+      if (Store.isTerminalStatus(job.status)) {
+        return reply.send({ ok: true, alreadyTerminal: true, job: store.getJob(job.id) });
+      }
+      // 1. Signal cancellation into the in-flight pass: abort a running decode,
+      //    and have runVodJob/analyzeJob unwind at the next frame/boundary.
+      vodStops.add(job.id);
+      const ctl = vodStopControllers.get(job.id);
+      vodStopControllers.delete(job.id);
+      ctl?.abort();
+      vodJobPaths.delete(job.id);
+      // 2. Release the held perceive session(s) SYNCHRONOUSLY (mirrors the live
+      //    ADAAAA-6561 path). A stop that leaks a perceive session still burns
+      //    Livepeer GPU minutes, which is the cost lens this increment is judged
+      //    against — analyzeJob's `finally` re-leases as a no-op.
+      const released = await releaseVodPerceive(job.id);
+      // 3. Terminal row NOW, not on the run's unwind: no stale status=active /
+      //    analyzing orphan survives even if this process dies immediately.
+      await markJobCancelled(job.id, "stopped (cancelled via API)");
+      return reply.send({
+        ok: true,
+        cancelled: true,
+        releasedPerceiveSessions: released,
+        job: store.getJob(job.id),
+      });
     }
     // Browser capture job: release the perceive session, then cut clips for any
     // recorded highlights from the assembled client recording.
