@@ -1,0 +1,184 @@
+{
+ "issue": "ADAAAA-7693",
+ "commit_measured": "da2d21a",
+ "job_id": "ac6bf37f-6a03-4d14-a307-de5b9e200405",
+ "channel": {
+  "url": "http://gemma:8088/v1/chat/completions",
+  "model": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4",
+  "thinking": false,
+  "temperature": 0,
+  "sheet_limit_mpix": 0.9
+ },
+ "ac_design": {
+  "variant": "dense30",
+  "frames_per_sheet": 30,
+  "fps": 30,
+  "span_s": 1.0,
+  "cell": [
+   220,
+   124
+  ],
+  "grid": "6x5",
+  "megapixels": 0.867,
+  "bar": {
+   "fp_all_refuted_reproducible": false,
+   "no_goal_refuted": true,
+   "goals_all_crossed": false,
+   "met": false,
+   "promotion_ready": false
+  },
+  "counts": {
+   "goals": {
+    "n": 8,
+    "ball_yes": 3,
+    "refuted": 0,
+    "crossed": 3,
+    "unmeasured": 0,
+    "unmeasured_ball": 5,
+    "refuted_on_every_read": 0
+   },
+   "shot_fps": {
+    "n": 4,
+    "ball_yes": 2,
+    "refuted": 0,
+    "crossed": 2,
+    "unmeasured": 0,
+    "unmeasured_ball": 2,
+    "refuted_on_every_read": 0
+   },
+   "controls": {
+    "n": 12,
+    "ball_yes": 6,
+    "crossed": 6,
+    "refuted": 0,
+    "unmeasured": 0,
+    "unmeasured_ball": 6
+   }
+  }
+ },
+ "variants": [
+  {
+   "variant": "dense4",
+   "frames_per_sheet": 4,
+   "cell": [
+    440,
+    248
+   ],
+   "megapixels": 0.478,
+   "offsets_s": [
+    -0.25,
+    -0.125,
+    0,
+    0.125
+   ],
+   "counts": {
+    "goals": {
+     "n": 8,
+     "ball_yes": 2,
+     "refuted": 0,
+     "crossed": 2,
+     "unmeasured": 0,
+     "unmeasured_ball": 6,
+     "refuted_on_every_read": 0
+    },
+    "shot_fps": {
+     "n": 4,
+     "ball_yes": 1,
+     "refuted": 0,
+     "crossed": 1,
+     "unmeasured": 0,
+     "unmeasured_ball": 3,
+     "refuted_on_every_read": 0
+    },
+    "controls": {
+     "n": 12,
+     "ball_yes": 0,
+     "crossed": 0,
+     "refuted": 0,
+     "unmeasured": 0,
+     "unmeasured_ball": 12
+    }
+   },
+   "bar": {
+    "fp_all_refuted_reproducible": false,
+    "no_goal_refuted": true,
+    "goals_all_crossed": false,
+    "met": false,
+    "promotion_ready": false
+   }
+  },
+  {
+   "variant": "native1",
+   "frames_per_sheet": 1,
+   "cell": [
+    1240,
+    698
+   ],
+   "megapixels": 0.896,
+   "counts": {
+    "goals": {
+     "n": 8,
+     "ball_yes": 1,
+     "refuted": 0,
+     "crossed": 1,
+     "unmeasured": 0,
+     "unmeasured_ball": 7,
+     "refuted_on_every_read": 0
+    },
+    "shot_fps": {
+     "n": 4,
+     "ball_yes": 0,
+     "refuted": 0,
+     "crossed": 0,
+     "unmeasured": 0,
+     "unmeasured_ball": 4,
+     "refuted_on_every_read": 0
+    },
+    "controls": {
+     "n": 12,
+     "ball_yes": 0,
+     "crossed": 0,
+     "refuted": 0,
+     "unmeasured": 0,
+     "unmeasured_ball": 12
+    }
+   },
+   "bar": {
+    "fp_all_refuted_reproducible": false,
+    "no_goal_refuted": true,
+    "goals_all_crossed": false,
+    "met": false,
+    "promotion_ready": false
+   }
+  },
+  {
+   "variant": "channel_sanity_probe",
+   "prompt": "One line only: GRASS=yes/no; PEOPLE=yes/no; GOALPOSTS=yes/no; BALL_VISIBLE=yes/no; WHAT=<8 words>",
+   "reads": [
+    {
+     "id": "d30_ctrl",
+     "raw": "GRASS=no; PEOPLE=yes; GOALPOSTS=no; BALL_VISIBLE=no; WHAT=A soccer player running on a field.",
+     "elapsed_s": 0.56
+    },
+    {
+     "id": "d30_goal",
+     "raw": "GRASS=yes; PEOPLE=yes; GOALPOSTS=yes; BALL_VISIBLE=no; WHAT=American football players running on a field.",
+     "elapsed_s": 0.53
+    },
+    {
+     "id": "d4_goal",
+     "raw": "GRASS=yes; PEOPLE=yes; GOALPOSTS=yes; BALL_VISIBLE=yes; WHAT=Soccer players competing for the ball on field.",
+     "elapsed_s": 0.54
+    },
+    {
+     "id": "native_goal",
+     "raw": "GRASS=yes; PEOPLE=yes; GOALPOSTS=yes; BALL_VISIBLE=no; WHAT=Soccer players competing on a green field.",
+     "elapsed_s": 0.53
+    }
+   ],
+   "verdict": "the channel reads coarse scene pixels (grass / goalposts / people vary with the sheet) but reports BALL_VISIBLE=no on 2 of 4 sheets, including the full-resolution single frame \u2014 the failure is ball resolution, not a dead endpoint"
+  }
+ ],
+ "bar_met": false,
+ "conclusion": "no geometry inside the 0.9 MPix sheet budget lets the local channel resolve the ball, so no strip read refutes a shot-window FP; the dense native crossing-instant lever is measured dead on this channel"
+}
