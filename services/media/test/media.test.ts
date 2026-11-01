@@ -337,6 +337,63 @@ describe("media server WebRTC ingest (C1)", () => {
     await pc.close();
   });
 
+  // ADAAAA-7678: the observation fan-out must reach an OBSERVER socket that is
+  // attached to /stream/:sid on a WebRTC session. The relay writes are shared by
+  // both transports, but only the legacy WS-frame path had coverage: an RTC
+  // session whose observer socket received zero observations while the server
+  // logged `[rtc] obs seq=1..N` is the class this pins down.
+  it("relays RTC observations to an observer socket attached on /stream/:sid", async () => {
+    const g = new FakeOrch("sess-rtc-observer");
+    const ms = new MediaServer(
+      { orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", reconnectGraceMs: 3000 },
+      g as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    try {
+      const prov = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-rtc-observer" } });
+      const sid = prov.json().sessionId;
+
+      // The observer is a plain WS listener: it sends NO frames, exactly like the
+      // measurement harness (and the old console) does on an RTC session.
+      const ws = await wsConnect(`${sBase.replace("http", "ws")}/stream/${sid}`);
+      const seen: any[] = [];
+      const frames: Array<{ isBinary: boolean; text: string }> = [];
+      ws.on("message", (d: any, isBinary: boolean) => {
+        frames.push({ isBinary, text: String(d) });
+        try {
+          const m = JSON.parse(String(d));
+          if (m?.type === "observation") seen.push(m.observation);
+        } catch {
+          /* not ours */
+        }
+      });
+
+      const before = g.publishes.length;
+      const { pc } = await rtcPublish(srv, sBase, sid, g);
+      // wait for the fan-out (frames -> publish -> relay)
+      for (let i = 0; i < 40 && seen.length === 0; i++) await new Promise((r) => setTimeout(r, 100));
+      const publishedSeqs = new Set(g.publishes.slice(before).map((p) => p.seq));
+
+      expect(seen.length).toBeGreaterThan(0);
+      // every relayed observation carries the seq the server published...
+      for (const o of seen) expect(publishedSeqs.has(o.seq)).toBe(true);
+      // ...and the relay carries the server's observation payload through untouched.
+      expect(seen[0].sessionId).toBe(sid);
+      // ADAAAA-7678: the frame MUST be a TEXT frame. A binary frame arrives as a
+      // Blob in every browser, where `JSON.parse(e.data)` throws — the relay then
+      // looks stalled to a real browser while the server log shows `[rtc] obs`.
+      expect(frames.length).toBeGreaterThan(0);
+      expect(frames.every((f) => f.isBinary === false)).toBe(true);
+
+      ws.close();
+      await pc.close();
+    } finally {
+      await srv.close();
+    }
+  });
+
   it("same-session reconnect: a fresh offer on an already-ingesting session keeps frames flowing", async () => {
     // Independent media server + fake orch with a long grace so the session
     // survives between connections (mirrors a transport blip on a healthy node).
