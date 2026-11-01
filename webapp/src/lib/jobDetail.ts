@@ -144,6 +144,21 @@ export interface SummaryLogEntry {
   text: string;
 }
 
+/** Stage-A (audio noise-change gate) counters (ADAAAA-7624). Mirrors
+ * `StageAMetricsSnapshotSchema` in @highlights/events. Present only when
+ * `stageAMetricsStatus === "measured"`. */
+export interface StageAMetricsSnapshot {
+  totalCandidates: number;
+  accepted: number;
+  rejected: number;
+  fpRate: number;
+  meanOnsetLatencyS: number;
+  maxOnsetLatencyS: number;
+  p50LatencyS?: number;
+  p95LatencyS?: number;
+  fpRateWithinBudget?: boolean;
+}
+
 /** Metadata for one frame in a section (image bytes stay lazy via `uri`). */
 export interface JobDetailFrame {
   seq: number;
@@ -245,6 +260,15 @@ export interface JobDetail {
     sampleFps?: number;
     framesAnalyzed?: number;
     candidatesTriggered?: number;
+    // ADAAAA-7624: which trigger path produced `candidatesTriggered`. `observe`
+    // = the cadence decide observer that actually runs; `perceive_gate` = the
+    // legacy perceive candidate trigger; `none` = no candidate path ran.
+    candidatePath?: "observe" | "perceive_gate" | "none";
+    // ADAAAA-7624: Stage-A audio-gate snapshot + whether it is a real
+    // measurement. `n/a` (or an absent status on legacy rows) means the audio
+    // gate judged nothing — the counters must render `n/a`, never `0`.
+    stageAMetrics?: StageAMetricsSnapshot;
+    stageAMetricsStatus?: "measured" | "n/a";
     decideCalls?: number;
     perceiveSessionS?: number;
     costUsd?: number;
@@ -340,6 +364,35 @@ export function assertFramePartition(
 /** Count of frames across all sections (the "frames visible" metric). */
 export function sectionFrameCount(sections: FrameSection[]): number {
   return sections.reduce((n, s) => n + s.frames.length, 0);
+}
+
+/**
+ * Header candidate-count label (ADAAAA-7624). Returns the count the path that
+ * actually ran produced, or `n/a` when the record carries no count at all
+ * (legacy row) — never a fabricated `0` for "not recorded".
+ */
+export function candidateCountLabel(job: { candidatesTriggered?: number }): string {
+  if (job.candidatesTriggered === undefined || job.candidatesTriggered === null) return "n/a";
+  return String(job.candidatesTriggered);
+}
+
+/**
+ * Audio Stage-A counter label (ADAAAA-7624). The audio noise-change gate is not
+ * the path that runs on the observe pipeline (ADAAAA-7007/7008), so its
+ * counters must read `n/a` rather than `0` unless the job carries a MEASURED
+ * snapshot (`stageAMetricsStatus: "measured"` with at least one judged
+ * candidate). Legacy rows have no status -> `n/a`.
+ */
+export function stageACountLabel(job: {
+  stageAMetrics?: StageAMetricsSnapshot;
+  stageAMetricsStatus?: "measured" | "n/a";
+}): string {
+  const m = job.stageAMetrics;
+  if (job.stageAMetricsStatus !== "measured" || !m) return "n/a";
+  const total = m.totalCandidates ?? 0;
+  if (total === 0) return "n/a";
+  const fpPct = Math.round((m.fpRate ?? 0) * 1000) / 10;
+  return `${total} judged · ${fpPct}% FP`;
 }
 
 export function sectionLabel(s: FrameSection): string {

@@ -26,6 +26,8 @@ import {
   type NoteKind,
   type SummaryLogEntry,
   summaryEntryTimestamp,
+  candidateCountLabel,
+  stageACountLabel,
 } from "../lib/jobDetail";
 import {
   drawFrameWithBoxes,
@@ -1238,6 +1240,18 @@ export function JobDetail() {
               <div>
                 <div className="text-xs uppercase tracking-wide text-mut">Decide calls</div>
                 <div>{detail.job.decideCalls ?? 0}</div>
+              </div>
+              {/* ADAAAA-7624: candidates are counted by the path that actually
+                  ran (the observe cadence decide pass), and the audio Stage-A
+                  counters read `n/a` when that gate judged nothing — never a
+                  fabricated `0`. */}
+              <div data-detail-candidates>
+                <div className="text-xs uppercase tracking-wide text-mut">Candidates</div>
+                <div>{candidateCountLabel(detail.job)}</div>
+              </div>
+              <div data-detail-stage-a>
+                <div className="text-xs uppercase tracking-wide text-mut">Audio Stage-A</div>
+                <div>{stageACountLabel(detail.job)}</div>
               </div>
               <div>
                 <div className="text-xs uppercase tracking-wide text-mut">Cost</div>

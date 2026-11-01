@@ -16,11 +16,34 @@ export interface StoredObservation {
   tracks: TrackObservation[];
 }
 
-/** Per-job cap on durable per-frame observations (ADAAAA-6870, Increment 3 T1).
- * The VOD detail-first pass emits ~one observation per analyzed frame (2 fps), so
- * a 10-min VOD ≈ 1200 rows; 2000 bounds the `job_observations` table so a
- * pathological job can't bloat it while keeping a completed job's recent traces. */
+/** Per-job FLOOR on durable per-frame observations (ADAAAA-6870, Increment 3 T1).
+ * The VOD detail-first pass emits ~one observation per analyzed frame, so a
+ * 10-min VOD ≈ 1200 rows. This floor bounds jobs whose frame count is unknown.
+ *
+ * ADAAAA-7624: it is NOT a hard cap any more. A fixed 2000-row cap trimmed the
+ * OLDEST rows of any job longer than ~11 min (2334 frames at 3 fps), which
+ * blanked the first filmstrip windows because job-detail sections are built
+ * from observations. The effective cap is now the job's own frame count (see
+ * `observationCapForJob`), so a job keeps one observation row per frame it
+ * actually analyzed; only a pathological job is bounded, by
+ * `ABSOLUTE_MAX_OBSERVATIONS_PER_JOB`. */
 export const MAX_OBSERVATIONS_PER_JOB = 2000;
+
+/** Absolute ceiling so a truncated/garbage `framesTotal` can never unbound the
+ * `job_observations` table (ADAAAA-7624). */
+export const ABSOLUTE_MAX_OBSERVATIONS_PER_JOB = 200_000;
+
+/** Effective per-job observation cap: the job's own frame count (one row per
+ * analyzed frame), never below `MAX_OBSERVATIONS_PER_JOB`, never above
+ * `ABSOLUTE_MAX_OBSERVATIONS_PER_JOB`. Jobs that have not declared their frame
+ * total yet (live jobs, early VOD) keep the 2000-row floor. */
+export function observationCapForJob(job: Job | undefined): number {
+  const frames = job?.framesTotal ?? 0;
+  if (!Number.isFinite(frames) || frames <= 0) return MAX_OBSERVATIONS_PER_JOB;
+  // 10% headroom for re-sampled / burst frames appended around triggers.
+  const wanted = Math.ceil(frames * 1.1);
+  return Math.min(ABSOLUTE_MAX_OBSERVATIONS_PER_JOB, Math.max(MAX_OBSERVATIONS_PER_JOB, wanted));
+}
 
 /**
  * Durable store for jobs + highlights.
@@ -308,21 +331,25 @@ export class Store {
    * sink (ADAAAA-6851 Inc 1) so the job detail survives a server restart. The
    * in-memory working set is updated synchronously; the DB write is awaited.
    *
-   * ADAAAA-6870 (Increment 3 T1): enforce a per-job cap (~MAX_OBSERVATIONS_PER_JOB,
-   * oldest-first trim) so a pathological job can't bloat the `job_observations`
-   * table. The in-memory window and the DB rows are both kept at the cap. */
+   * ADAAAA-6870 (Increment 3 T1): enforce the job's per-job observation cap
+   * (oldest-first trim) so a pathological job can't bloat the
+   * `job_observations` table. ADAAAA-7624: the cap is the job's own frame count
+   * (`observationCapForJob`), not a fixed 2000, so a long job keeps one row per
+   * analyzed frame and its early filmstrip windows stay populated. The
+   * in-memory window and the DB rows are both kept at the cap. */
   async recordObservation(jobId: string, obs: StoredObservation): Promise<void> {
     const list = this.observations.get(jobId) ?? [];
     list.push(obs);
+    const cap = observationCapForJob(this.jobs.get(jobId));
     let overflowed = false;
-    while (list.length > MAX_OBSERVATIONS_PER_JOB) {
+    while (list.length > cap) {
       list.shift();
       overflowed = true;
     }
     this.observations.set(jobId, list);
     if (this.db) {
       await this.db.saveObservation(jobId, obs);
-      if (overflowed) await this.db.trimJobObservations(jobId, MAX_OBSERVATIONS_PER_JOB);
+      if (overflowed) await this.db.trimJobObservations(jobId, cap);
     }
   }
 
