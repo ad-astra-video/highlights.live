@@ -127,15 +127,26 @@ print_counters() {
 
 if [ "$MODE" = "fault" ]; then
   say "AC3: force mid-stream decoder failures (SIGKILL the one-shot ffmpeg children)"
+  # The media container has no `ps`/`pgrep`/`pkill` (node:slim base: `sh: ps: not found`),
+  # so the kill must be driven from the HOST: `docker top` lists host PIDs and the host
+  # kills them. The decoder is one-shot per sampled frame (~100-300 ms), so poll every
+  # 100 ms or the sample misses it and reports a silent no-op "pass".
   BEFORE=$(docker inspect -f '{{.RestartCount}}' "$CONTAINER")
-  for i in $(seq 1 12); do
-    docker exec "$CONTAINER" sh -c 'for p in $(ps -eo pid,args | grep -E "ffmpeg .*ivf|ffmpeg .*h264" | grep -v grep | awk "{print \$1}"); do kill -9 "$p"; done' || true
-    sleep 1
+  KILLS=0
+  i=0
+  while [ "$i" -lt 200 ]; do
+    for p in $(timeout 3 docker top "$CONTAINER" -eo pid,args 2>/dev/null \
+                 | grep 'ffmpeg -hide_banner' | cut -d' ' -f1); do
+      if kill -9 "$p" 2>/dev/null; then KILLS=$((KILLS + 1)); fi
+    done
+    i=$((i + 1))
+    sleep 0.1
   done
   AFTER=$(docker inspect -f '{{.RestartCount}}' "$CONTAINER")
   say "AC3 result"
   docker inspect -f 'status={{.State.Status}} restartCount={{.RestartCount}} exitCode={{.State.ExitCode}}' "$CONTAINER"
-  echo "restartCount before=$BEFORE after=$AFTER  (equal => the process was not replaced)"
+  echo "restartCount before=$BEFORE after=$AFTER forcedKills=$KILLS  (equal + status=running => the process was not replaced)"
+  echo "NOTE: a natural EPIPE (decoder exits before draining stdin) is the production failure class; it logs the same write-failed warn."
   docker logs --since 5m "$CONTAINER" 2>&1 | grep -E 'write-failed|\[media\] write-failed' | tail -10 || echo "NO write-failed warn"
   print_counters 5m
 else

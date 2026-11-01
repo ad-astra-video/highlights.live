@@ -43,6 +43,8 @@ Usage
 -----
     pip install playwright && playwright install chromium
     python3 scripts/rtc-browser-measure.py --codec vp8 --duration 25
+    python3 scripts/rtc-browser-measure.py --codec vp8 --duration 45 --job-id <browser-job-id> \\
+        --json out.json           # job-bound: observations are relayed to the control plane
     python3 scripts/rtc-browser-measure.py --codec h264 --duration 25 --json out.json
 
 Requires a Chromium build that supports fake display capture (tested on
@@ -285,6 +287,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--base", default="https://highlights-media.dpn.gg", help="media node origin")
     ap.add_argument("--codec", choices=["vp8", "h264"], default="vp8")
+    ap.add_argument(
+        "--job-id",
+        help=(
+            "bind the media session to an existing browser-capture job. Observations are "
+            "only produced by the perceive runner for a job-bound session, so the "
+            "frames>=3 + relayed-observation measurement needs this."
+        ),
+    )
     ap.add_argument("--duration", type=float, default=25.0, help="seconds to stream")
     ap.add_argument("--json", help="write the full result JSON here")
     ap.add_argument("--keep-open", action="store_true", help="do not close the media session")
@@ -293,7 +303,7 @@ def main() -> int:
     from playwright.sync_api import sync_playwright
 
     base = args.base.rstrip("/")
-    status, prov = http_json("POST", f"{base}/sessions", {})
+    status, prov = http_json("POST", f"{base}/sessions", {"jobId": args.job_id} if args.job_id else {})
     if status != 200 or not prov or not prov.get("sessionId"):
         print(f"PROVISION_FAIL status={status} body={prov}", file=sys.stderr)
         return 2
