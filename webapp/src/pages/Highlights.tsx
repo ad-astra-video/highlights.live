@@ -18,6 +18,7 @@ import {
 import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
 import { BrowserCapture } from "../components/BrowserCapture";
+import { MediaNodeStrip } from "../components/MediaNodeStrip";
 
 const SOURCES = [
   { id: "file", label: "Upload / file", icon: Upload },
@@ -426,7 +427,13 @@ export function Highlights() {
         <input className="input-neon" value={lookFor} onChange={(e) => setLookFor(e.target.value)} />
 
         {source === "screenshare" ? (
-          <BrowserCapture gameHint={gameHint} onDone={() => refreshHighlights().catch(() => {})} />
+          <>
+            <BrowserCapture gameHint={gameHint} onDone={() => refreshHighlights().catch(() => {})} />
+            {/* A browser-capture job holds the same capacity-1 media node, so it
+                gets the same capacity/health + spend strip as the RTMP console
+                (ADAAAA-7655 gap 3: this path used to have no readout at all). */}
+            <MediaNodeStrip className="mt-4" />
+          </>
         ) : (
           <>
             {liveJob && (

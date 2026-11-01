@@ -93,10 +93,22 @@ next to a running job). It proxies the node's `/health` (2 s timeout) + `/node` 
 Node down => `reachable: false`, `node`/`capacity`/`leases` null, and `cost` still
 published from the DB (attribution never depends on the node answering).
 
-**Live console**: `webapp/src/components/LiveConsole.tsx` polls `/media/node` every
-6 s and renders one strip — node id + healthy/unreachable, `load n/max (pct)`,
-`leases active · grace · waiting`, paying/offchain, and `node spend $X over N job(s)`.
-A failed poll keeps the previous reading; it never breaks the console.
+**Live console**: `webapp/src/components/MediaNodeStrip.tsx` is the single strip,
+polled from `/media/node` every 6 s. Both live surfaces mount it — `LiveConsole`
+(RTMP/file job) and the client-side capture panel (`BrowserCapture` branch in
+`pages/Highlights.tsx`), because a browser-capture job holds the same capacity-1
+node. It renders:
+
+- node id + `healthy` / `unreachable`;
+- `load n/max sessions (pct)`, plus a `saturated` badge when `capacity.saturated`;
+- `leases A active · G grace · W waiting`, then paying / offchain;
+- `node spend $X over N job(s) on M node(s)` and **one row per `cost.perNode[]`
+  entry** — `media-0 $0.00 / 0 job(s)`, `unattributed $26.65 / 84 job(s)` — with
+  legacy `unattributed` rows last.
+
+A failed poll keeps the previous reading; it never breaks the console. The
+formatting lives in `webapp/src/lib/nodeStrip.ts`, so the rendered text is
+unit-tested without a DOM (`webapp/src/lib/nodeStrip.test.ts`).
 
 ## 3. Per-job inference cost readout (the money figure)
 
