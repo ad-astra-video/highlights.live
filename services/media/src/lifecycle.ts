@@ -101,6 +101,11 @@ export function recordBoot(ledger: LifecycleLedger, now: number = Date.now()): L
 
 /** Record an exit this process can see (clean exit, uncaught exception, signal). */
 export function recordExit(ledger: LifecycleLedger, exit: Omit<ExitInfo, "at"> & { at?: number }): LifecycleLedger {
+  const bootAt = ledger.lastBootAt ?? 0;
+  // An exit already recorded for THIS boot wins. The SIGTERM/SIGINT handler runs
+  // first and knows the signal; node's `exit` event fires after it (process.exit)
+  // with signal:null, and must not clobber the richer record.
+  if (ledger.lastExit && ledger.lastExit.at >= bootAt) return ledger;
   ledger.lastExit = { at: exit.at ?? Date.now(), code: exit.code ?? null, signal: exit.signal ?? null, reason: exit.reason };
   return ledger;
 }
