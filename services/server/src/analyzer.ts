@@ -3629,6 +3629,19 @@ export async function analyzeJob(
   // keeps the legacy unbounded behaviour — opt-out control).
   const lagMeasured = !!liveObserver;
   const lagBounded = lagMeasured && lagBudgetS > 0;
+  /**
+   * ADAAAA-7676: reserve part of the budget for the decide that has not landed
+   * yet. What a viewer experiences is `lag_at_fire + decide_e2e`, so the drop
+   * threshold is `budget - reserve` and the reserve must cover the WORST decide
+   * seen so far (not the mean): measured on job `4f8d47bd`, a mean-based reserve
+   * let an 11.7 s decide land at completed 33–40 s on a 30 s budget. 1 s of
+   * margin absorbs the fenceposts of the measurement itself.
+   */
+  const lagReserveS = (): number => {
+    const obs = liveObserver!;
+    const worstE2e = Math.max(obs.maxE2eMs(), obs.meanE2eMs()) / 1000;
+    return Math.min(worstE2e + 1, lagBudgetS / 2);
+  };
   let streamWallStartMs: number | null = null;
   let lastFrameLagMs = 0;
   let staleFrameDrops = 0;
@@ -3667,8 +3680,7 @@ export async function analyzeJob(
       if (lagMeasured) {
         if (streamWallStartMs === null) streamWallStartMs = Date.now() - frame.timestamp * 1000;
         const lagS = Math.max(0, (Date.now() - streamWallStartMs) / 1000 - frame.timestamp);
-        const reserveS = Math.min(liveObserver!.meanE2eMs() / 1000, lagBudgetS / 2);
-        if (lagBounded && lagS > lagBudgetS - reserveS) {
+        if (lagBounded && lagS > lagBudgetS - lagReserveS()) {
           staleFrameDrops++;
           liveObserver!.noteStaleFrame(frame.timestamp, lagS);
           continue;
@@ -3890,11 +3902,22 @@ export async function analyzeJob(
     // still observed (no-op if nothing was recorded). ADAAAA-7676: the tail is
     // measured on the same wall clock as every other window.
     await observeDecider?.flush();
+    // ADAAAA-7676: the end-of-stream tail obeys the same budget. A FORCE flush
+    // ignores the cadence, so without this check the very last decided window of
+    // a loaded run lands `e2e` after a tail that was already stale (measured on
+    // job `4f8d47bd`: the tail, content `T+104s`, landed at wall `+146s`). Drop
+    // it and count it instead — a stale tail is not worth a late decision.
+    const tailTs = liveObserver?.lastRecordedTs() ?? null;
     const tailLagS =
-      lagMeasured && streamWallStartMs !== null
-        ? Math.max(0, (Date.now() - streamWallStartMs) / 1000 - (liveObserver!.lastRecordedTs() ?? 0))
+      lagMeasured && streamWallStartMs !== null && tailTs !== null
+        ? Math.max(0, (Date.now() - streamWallStartMs) / 1000 - tailTs)
         : 0;
-    await liveObserver?.flush(lagMeasured ? Math.round(tailLagS * 1000) : undefined);
+    if (liveObserver && lagBounded && tailTs !== null && tailLagS > lagBudgetS - lagReserveS()) {
+      staleFrameDrops++;
+      liveObserver.noteStaleFrame(tailTs, tailLagS);
+    } else {
+      await liveObserver?.flush(lagMeasured ? Math.round(tailLagS * 1000) : undefined);
+    }
     if (lagMeasured) {
       console.log(
         `[live-lag:${cfg.jobId}] summary droppedFrames=${staleFrameDrops} skippedStaleWindows=${liveObserver!.skippedStaleWindowCount()} ` +
