@@ -206,10 +206,29 @@ describe("session close is reported to the control plane (ADAAAA-7689 AC3)", () 
       jobId: "job-e",
       reason: "control-close",
       neverAttached: true,
+      liveSessionsForJob: 0,
       nodeId: "media-0",
       transport: "ws",
     });
     expect((await health(app)).cost.sessionClosedNotifies).toBe(1);
+  });
+
+  it("reports how many sessions are still live for the job (superseded close)", async () => {
+    const cp = await controlPlaneStub();
+    cleanups.push(cp.close);
+    // Adoption off => two live sessions for one job, the shape a harness that
+    // provisions its own session leaves behind.
+    const { app } = await build({ callbackBase: cp.base, adoptSessionPerJob: false });
+    const first = await app.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-h" } });
+    const second = await app.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-h" } });
+    expect(first.json().sessionId).not.toBe(second.json().sessionId);
+    await app.inject({ method: "POST", url: `/sessions/${first.json().sessionId}/close` });
+    await waitFor(() => cp.calls.length === 1);
+    // One sibling session is still live, so the control plane must NOT finalize.
+    expect(cp.calls[0].body).toMatchObject({ jobId: "job-h", liveSessionsForJob: 1 });
+    await app.inject({ method: "POST", url: `/sessions/${second.json().sessionId}/close` });
+    await waitFor(() => cp.calls.length === 2);
+    expect(cp.calls[1].body).toMatchObject({ jobId: "job-h", liveSessionsForJob: 0 });
   });
 
   it("reports a client close (browser dropped) as client-closed after the grace window", async () => {

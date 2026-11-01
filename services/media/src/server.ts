@@ -899,10 +899,17 @@ export class MediaServer {
    */
   private notifySessionClosed(stream: ActiveStream, reason: SessionCloseReason, neverAttached: boolean): void {
     if (!this.opts.callbackBase || !stream.jobId) return;
+    // Sessions still live for this job AFTER the one that just closed. The
+    // control plane finalizes the job only when this is 0, so a close that
+    // belongs to a superseded session cannot end a stream that is still live —
+    // and a close of a session the control plane never tracked (a harness that
+    // provisioned its own) still ends the job instead of leaking it.
+    const liveSessionsForJob = [...this.active.values()].filter((s) => !s.closed && s.jobId === stream.jobId).length;
     const payload = {
       sessionId: stream.provisioned.sessionId,
       jobId: stream.jobId,
       reason,
+      liveSessionsForJob,
       // true when no client ever joined (an abandoned provision). Diagnostically
       // useful on the control plane: the job is finalized either way, because a
       // provision-only `/jobs/:id/media` call used to leave the job `active`
