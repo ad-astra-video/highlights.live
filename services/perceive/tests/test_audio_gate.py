@@ -445,8 +445,9 @@ def test_audio_endpoint_does_not_run_detector():
         assert r.status_code == 200
         body = r.json()
         assert "tracks" not in body
-        # `whistle` is the measure-only Stage-B report (ADAAAA-7682); it never
-        # carries a candidate, so the GPU-free guarantee for /audio still holds.
+        # `whistle` is the Stage-B report (ADAAAA-7682 / ADAAAA-7707). This run
+        # has no whistle in it, so the block is null; the GPU-free guarantee for
+        # /audio is the absence of detector work, not the absence of a field.
         assert set(body.keys()) == {"candidate", "series", "whistle"}
         assert body["whistle"] is None
     assert client.get("/health").status_code == 200
@@ -584,7 +585,8 @@ def test_threshold_id_names_the_frozen_operating_point():
 # referee whistle (ADAAAA-7674): a whistle is a narrowband tonal burst whose RMS
 # sits at the crowd floor. These tests lock the second path's behaviour on
 # synthetic audio — the band baseline, the tonal guards, the frozen threshold
-# id, and the measure-only gate that keeps it out of candidate scheduling.
+# id, and the emit switch that keeps it out of candidate scheduling when rolled
+# back to measure-only (it ships emitting, ADAAAA-7707).
 
 WHISTLE_SR = 16000
 WHISTLE_N = int(WHISTLE_SR * 0.1)
@@ -659,45 +661,88 @@ def test_whistle_threshold_id_names_the_operating_point():
     assert WhistleConfig().threshold_id == "stageB/whistle/2.4-3.4k/5x/0.3s"
 
 
-def test_whistle_gate_is_measure_only_by_default():
-    """Detection always runs, but a fire is not a scheduling candidate."""
-    cfg = WhistleConfig()
-    assert cfg.emitted is False
-    g = BandLimitedWhistleGate()
-    ts = _warm_whistle(g)
-    for _ in range(5):
-        g.update(_tone() + _crowd(), ts)
-        ts += 0.1
-    assert g.fired_count == 1
-    assert g.emitted_count == 0
+def test_whistle_gate_ships_emitting_and_rolls_back_to_measure_only():
+    """The emit switch is the graduation knob (ADAAAA-7707 / ADAAAA-7705 O3).
 
-
-def test_audio_route_reports_whistle_measure_only_without_emitting_it():
-    """`POST /audio` surfaces the whistle evidence but never a stageB candidate.
-
-    This is the cost guard: a whistle fire must not become a GPU-priced gemma
-    analysis until the PO graduates the path from measure-only.
+    Detection always runs; ``emitted`` only decides whether a fire becomes a
+    scheduling candidate. Shipping default is True; ``emitted=False`` is the
+    config-only rollback and must keep detecting exactly as before.
     """
-    sid = "audio-sess-whistle-measure-only"
+    assert WhistleConfig().emitted is True
+    assert WhistleConfig(emitted=False).emitted is False
+    for cfg in (WhistleConfig(), WhistleConfig(emitted=False)):
+        g = BandLimitedWhistleGate(cfg=cfg)
+        ts = _warm_whistle(g)
+        for _ in range(5):
+            g.update(_tone() + _crowd(), ts)
+            ts += 0.1
+        assert g.fired_count == 1
+        assert g.cfg.threshold_id == "stageB/whistle/2.4-3.4k/5x/0.3s"
+
+
+def test_audio_route_emits_the_whistle_candidate():
+    """`POST /audio` returns the whistle block AND a stageB candidate.
+
+    Emitting is the shipped state (ADAAAA-7707): one anchored gemma analysis
+    per whistle fire. The whistle block stays truthful (`emitted: true`), and
+    the candidate carries the `stageB/` thresholdId so a consumer can never
+    mistake it for a Stage-A roar.
+    """
+    sid = "audio-sess-whistle-emit"
     ts = 0.0
-    r = None
     for _ in range(30):
         r = _post_audio(ts, _pcm_b64(_crowd()), sid=sid)
         assert r.status_code == 200
-        assert r.json()["whistle"] is None  # crowd ambient alone: no whistle
+        body = r.json()
+        # Crowd ambient alone: no whistle, and (AC3) no emitted candidate.
+        assert body["whistle"] is None
+        assert body["candidate"] is None
         ts += 0.1
+    whistle = None
+    emitted_cands = []
+    for _ in range(5):
+        r = _post_audio(ts, _pcm_b64(_tone() + _crowd()), sid=sid)
+        assert r.status_code == 200
+        body = r.json()
+        cand = body["candidate"]
+        if cand is not None:
+            emitted_cands.append(cand)
+            assert cand["eventType"] == "AUDIO"
+            assert cand["type"] == "candidate"
+        if body["whistle"] is not None:
+            whistle = body["whistle"]
+        ts += 0.1
+    assert whistle is not None, "the route must report the whistle fire"
+    assert whistle["emitted"] is True and whistle["measureOnly"] is False
+    assert whistle["thresholdId"].startswith("stageB/whistle/2.4-3.4k/")
+    assert whistle["sessionCandidates"] == 1
+    stage_b = [c for c in emitted_cands if c["audio"]["thresholdId"].startswith("stageB/")]
+    assert len(stage_b) == 1, "exactly one whistle candidate reaches scheduling"
+    cand = stage_b[0]
+    assert cand["audio"]["kind"] == "burst"
+    assert cand["audio"]["ts"] == whistle["ts"]
+    assert cand["timestamp"] == whistle["ts"], "the candidate anchors on the onset"
+
+
+def test_audio_route_rollback_config_suppresses_the_whistle_candidate():
+    """Flipping ``emitted`` back to False restores measure-only reporting."""
+    sid = "audio-sess-whistle-rollback"
+    ts = 0.0
+    for _ in range(30):
+        _post_audio(ts, _pcm_b64(_crowd()), sid=sid)
+        ts += 0.1
+    state = app.state.registry.get_or_create(sid)
+    state.whistle_gate.cfg.emitted = False
     whistle = None
     for _ in range(5):
         r = _post_audio(ts, _pcm_b64(_tone() + _crowd()), sid=sid)
         assert r.status_code == 200
         body = r.json()
         cand = body["candidate"]
-        # Stage-A may fire on the level change; it must never be labelled stageB.
         assert cand is None or not cand["audio"]["thresholdId"].startswith("stageB/")
         if body["whistle"] is not None:
             whistle = body["whistle"]
         ts += 0.1
-    assert whistle is not None, "the route must report the whistle fire"
-    assert whistle["measureOnly"] is True and whistle["emitted"] is False
-    assert whistle["thresholdId"].startswith("stageB/whistle/2.4-3.4k/")
-    assert whistle["sessionCandidates"] == 1
+    assert whistle is not None
+    assert whistle["emitted"] is False and whistle["measureOnly"] is True
+    assert state.whistle_emitted == 0

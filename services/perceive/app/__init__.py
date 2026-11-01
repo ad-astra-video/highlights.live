@@ -1023,14 +1023,20 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[
 
     Two DSP paths, both pure and GPU-free:
 
-    - **Stage-A** (`audio_gate`, broadband level change) — unchanged; a fire
-      returns a *candidate* event carrying the AudioSignal evidence.
+    - **Stage-A** (`audio_gate`, broadband level change) — thresholds frozen;
+      a fire returns a *candidate* event carrying the AudioSignal evidence.
     - **Stage-B whistle** (`whistle_gate`, 2.4-3.4 kHz band-limited tonal) —
-      MEASURE-ONLY. A fire is counted, logged and returned as ``whistle``
-      evidence so the live log and the eval harness can see it, but it is NOT
-      emitted as a candidate: every emitted candidate would become a
-      GPU-priced gemma analysis, and the ship gate (measured recall/FP) is a PO
-      call, not an implementation decision.
+      graduated to EMITTING (ADAAAA-7707 / ADAAAA-7705 Option 3): a fire is
+      counted, logged, reported as ``whistle`` evidence, and (when
+      ``WhistleConfig.emitted`` is True, the shipped default) also emitted as a
+      candidate so one gemma analysis is anchored per whistle. Flipping
+      ``emitted`` back to False restores measure-only reporting with no other
+      change (the rollback in ``docs/audio-trigger-contract.md``).
+
+    One candidate per chunk: a whistle fire takes the candidate slot when it
+    fires (the tone onset is also a Stage-A level rise, and the whistle is the
+    more precise anchor); every other chunk keeps the Stage-A behaviour
+    byte-identical. The ``whistle`` block is still returned in both cases.
 
     ADAAAA-7255: returns the bounded per-chunk ``(t, energy, baseline)``
     inspection series (oldest -> newest, whole lookback window) alongside the
@@ -1044,9 +1050,9 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[
     series = state.audio_gate.series_snapshot()
 
     whistle = None
+    whistle_cand = None
     if wsig is not None:
-        # Measure-only accounting. `emitted` stays False until the path is
-        # deliberately graduated; the switch lives in WhistleConfig.
+        # Emit switch lives in WhistleConfig (True = emit, False = measure-only).
         emitted = bool(state.whistle_gate.cfg.emitted)
         state.whistle_candidates += 1
         if emitted:
@@ -1067,34 +1073,59 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[
             "whistle candidate session=%s ts=%.2f latency=%.2f threshold=%s emitted=%s",
             state.session_id, wsig.ts, wsig.onset_latency_s, wsig.threshold_id, emitted,
         )
+        if emitted:
+            # Same AudioSignalSchema (camelCase) shape as the Stage-A candidate:
+            # `kind` stays "burst", the family is the `stageB/` thresholdId
+            # prefix, so a consumer can never confuse the two paths.
+            whistle_cand = {
+                "type": "candidate",
+                "sessionId": state.session_id,
+                "streamId": state.stream_id,
+                "eventType": "AUDIO",
+                "timestamp": whistle["ts"],
+                "seq": state.audio_seq,
+                "audio": {
+                    "kind": wsig.kind,
+                    "ts": round(wsig.ts, 3),
+                    "firedAt": round(wsig.fired_at, 3),
+                    "onsetLatencyS": round(wsig.onset_latency_s, 3),
+                    "peakEnergy": round(wsig.peak_energy, 6),
+                    "baselineEnergy": round(wsig.baseline_energy, 6),
+                    "thresholdId": wsig.threshold_id,
+                },
+            }
 
-    if sig is None:
+    cand = whistle_cand
+    if cand is None and sig is not None:
+        # AudioSignalSchema (packages/events) camelCase keys.
+        audio = {
+            "kind": sig.kind,
+            "ts": round(sig.ts, 3),
+            "firedAt": round(sig.fired_at, 3),
+            "onsetLatencyS": round(sig.onset_latency_s, 3),
+            "peakEnergy": round(sig.peak_energy, 6),
+            "baselineEnergy": round(sig.baseline_energy, 6),
+            # ADAAAA-7658 AC5: which operating point fired.
+            "thresholdId": sig.threshold_id,
+        }
+        cand = {
+            "type": "candidate",
+            "sessionId": state.session_id,
+            "streamId": state.stream_id,
+            # Audio gate does not classify the event (no vision here); the decide
+            # stage (Gemma) assigns the real eventType from the anchored frame.
+            "eventType": "AUDIO",
+            "timestamp": audio["ts"],
+            "seq": state.audio_seq,
+            "audio": audio,
+        }
+    if cand is None:
         return None, series, whistle
-    # AudioSignalSchema (packages/events) camelCase keys.
-    audio = {
-        "kind": sig.kind,
-        "ts": round(sig.ts, 3),
-        "firedAt": round(sig.fired_at, 3),
-        "onsetLatencyS": round(sig.onset_latency_s, 3),
-        "peakEnergy": round(sig.peak_energy, 6),
-        "baselineEnergy": round(sig.baseline_energy, 6),
-        # ADAAAA-7658 AC5: which operating point fired.
-        "thresholdId": sig.threshold_id,
-    }
-    cand = {
-        "type": "candidate",
-        "sessionId": state.session_id,
-        "streamId": state.stream_id,
-        # Audio gate does not classify the event (no vision here); the decide
-        # stage (Gemma) assigns the real eventType from the anchored frame.
-        "eventType": "AUDIO",
-        "timestamp": audio["ts"],
-        "seq": state.audio_seq,
-        "audio": audio,
-    }
     log.info(
-        "audio trigger fired session=%s seq=%s kind=%s peak=%.4f baseline=%.4f",
-        state.session_id, state.audio_seq, audio.get("kind"), audio.get("peakEnergy", 0.0), audio.get("baselineEnergy", 0.0),
+        "audio trigger fired session=%s seq=%s kind=%s threshold=%s peak=%.4f baseline=%.4f",
+        state.session_id, state.audio_seq, cand["audio"].get("kind"),
+        cand["audio"].get("thresholdId"),
+        cand["audio"].get("peakEnergy", 0.0), cand["audio"].get("baselineEnergy", 0.0),
     )
     for q in state.subscribers:
         try:

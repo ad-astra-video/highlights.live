@@ -79,12 +79,14 @@ class SessionState:
     # Stage-B band-limited whistle path (ADAAAA-7682). The referee whistle is a
     # narrowband tonal burst whose RMS sits at the crowd floor, so the broadband
     # Stage-A gate above cannot see it. This path baselines the 2.4-3.4 kHz band
-    # instead. It is MEASURE-ONLY until its measured ship gate (recall >= 0.80,
-    # trigger-window FP <= 0.10) is accepted by the PO: fires are counted and
-    # reported, never emitted into candidate scheduling, because every emitted
-    # candidate becomes a GPU-priced gemma analysis.
+    # instead. Its measured ship gate (recall >= 0.80, trigger-window FP <=
+    # 0.10) passed and the PO graduated it from measure-only to emitting
+    # (ADAAAA-7705 Option 3, landed ADAAAA-7707): a fire is counted, reported,
+    # and emitted as a candidate that anchors one gemma analysis. Flipping
+    # WhistleConfig.emitted back to False is the config-only rollback.
     whistle_gate: BandLimitedWhistleGate = field(default_factory=BandLimitedWhistleGate)
-    # per-session whistle candidates seen (measure-only counter, never a schedule)
+    # per-session whistle fires seen; `whistle_emitted` is the subset that went
+    # into candidate scheduling (equal to whistle_candidates while emitting).
     whistle_candidates: int = 0
     whistle_emitted: int = 0
     # per-session audio chunk counter (event seq for audio-sourced candidates).

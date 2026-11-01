@@ -182,7 +182,7 @@ Manifest shape for the whistle class:
 
 `--gate-opt KEY=VALUE` (repeatable) sweeps an operating point, e.g.
 `--gate-opt whistle_ratio=6 --gate-opt max_flatness=0.25`. Results, the
-operating point, the ships/measure-only call and the cost statement live in
+operating point, the ships/emit call and the cost statement live in
 `docs/audio-trigger-contract.md`.
 
 Deployed-path check (run inside the perceive container, no GPU, ~4 s):

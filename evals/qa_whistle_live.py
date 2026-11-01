@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Live end-to-end check of the deployed measure-only whistle path (ADAAAA-7682).
+"""Live end-to-end check of the deployed EMITTING whistle path (ADAAAA-7707).
 
 Feeds the deployed perceive /audio endpoint the same synthetic stimulus the unit
-tests use: ~3 s of crowd ambient (no whistle expected), then a 2.8 kHz tonal
-burst over that ambient (one whistle expected). Prints the whistle evidence and
-asserts it is measure-only.
+tests use: ~3 s of crowd ambient (no whistle, zero candidates expected), then a
+2.8 kHz tonal burst over that ambient (one whistle, one emitted stageB
+candidate expected). Prints the whistle evidence and asserts the shipped
+emitting contract (ADAAAA-7705 Option 3).
 """
 import base64
 import json
@@ -71,28 +72,44 @@ path = find_path()
 print("route:", path)
 
 # Fresh session for the real run so the warm-up frames are the only history.
-SID = "qa-ad7682-whistle-run-" + RUN_TAG
+SID = "qa-ad7707-whistle-run-" + RUN_TAG
 ts = 0.0
 whistle = None
 stage_a = 0
+whistle_candidates = []
 for _ in range(30):
     body = post(ts, crowd(), path)
     ts += 0.1
     assert body.get("whistle") is None, "crowd ambient must not fire the whistle path"
+    assert body.get("candidate") is None, "crowd ambient must emit zero candidates"
 for _ in range(8):
     body = post(ts, crowd() + tone(), path)
     ts += 0.1
-    if body.get("candidate"):
-        stage_a += 1
+    cand = body.get("candidate")
+    if cand:
+        if cand["audio"].get("thresholdId", "").startswith("stageB/"):
+            whistle_candidates.append(cand)
+        else:
+            stage_a += 1
     if body.get("whistle"):
         whistle = body["whistle"]
 
 print("stageA candidates during tone:", stage_a)
+print("whistle candidates during tone:", len(whistle_candidates))
 print("whistle evidence:", json.dumps(whistle, indent=1))
 assert whistle is not None, (
     "deployed path did not report a whistle fire (session %s)" % SID
 )
-assert whistle["measureOnly"] is True and whistle["emitted"] is False
+# ADAAAA-7707: the path ships EMITTING (PO Option 3 on ADAAAA-7705).
+assert whistle["emitted"] is True and whistle["measureOnly"] is False
 assert whistle["thresholdId"] == "stageB/whistle/2.4-3.4k/5x/0.3s", whistle["thresholdId"]
 assert 0.0 <= whistle["onsetLatencyS"] <= 5.0
-print("VERDICT: PASS — deployed whistle path fires, measure-only (no candidate emitted)")
+assert len(whistle_candidates) == 1, (
+    "the emitted whistle fire must reach candidate scheduling exactly once "
+    "(got %d)" % len(whistle_candidates)
+)
+wc = whistle_candidates[0]
+assert wc["type"] == "candidate" and wc["eventType"] == "AUDIO", wc
+assert wc["audio"]["thresholdId"] == "stageB/whistle/2.4-3.4k/5x/0.3s", wc["audio"]
+assert wc["timestamp"] == whistle["ts"], (wc["timestamp"], whistle["ts"])
+print("VERDICT: PASS — deployed whistle path fires and EMITS one stageB candidate")
