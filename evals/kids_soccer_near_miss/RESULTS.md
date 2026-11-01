@@ -828,7 +828,20 @@ question either — `f_020` of the `fp203` window reads ball in open play with n
 net, and `f_015` of the `tp280` window reads open play with the ball not
 visible, i.e. the read is still a coin flip at the frame level. Resolution plus
 a *single instant* is not the missing ingredient; a dense sequence bracketing
-the crossing instant is.
+the crossing instant is. That hypothesis was then tested and **refuted** —
+see *AC-4b* below.
+
+### Replay-inlay evidence is not a confirm-stage feature (measured, negative)
+
+One candidate discriminator was still unmeasured: real goals get a replay inlay
+in the reel, a saved or blocked shot does not. It is **not available to the
+confirm stage**: the job detail mentions `replay` 261 times and every one of
+those occurrences sits inside the decide *prompt* text persisted on each note
+(`analysis.prompt`); the parsed Stage-1 response of all 261 notes contains
+`replay` **0** times, no section/frame/`job.candidates` field carries a scene or
+replay class, and no highlight field records one. A replay-presence rule would
+therefore have to come from a new read, not from the persisted detail — outside
+the confirm-stage, 0-added-sessions constraint on this issue.
 
 ## AC-4b — dense native crossing-instant strip read (ADAAAA-7693)
 
