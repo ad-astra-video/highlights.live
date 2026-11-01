@@ -1,0 +1,112 @@
+{
+  "mode": "corpus",
+  "pooling_rule": "precision = sum(TP cards) / (sum(TP cards) + sum(FP cards)); recall = sum(credited goals) / sum(labelled goals)",
+  "clips": [
+    {
+      "label": "kids-soccer",
+      "commit": "da2d21a",
+      "job_id": "ac6bf37f-6a03-4d14-a307-de5b9e200405",
+      "manifest": "evals/kids_soccer_near_miss/label-manifest.json",
+      "accepted": 23,
+      "true_positive_cards": 18,
+      "false_positive_cards": 5,
+      "ground_truth_goals": 15,
+      "credited_goals": 15,
+      "precision": 0.7826,
+      "recall": 1.0,
+      "hard_negatives": 10,
+      "hard_negative_window_ids": [
+        "ks-n-0130",
+        "ks-n-0178",
+        "ks-n-0201",
+        "ks-n-0351",
+        "ks-n-0359",
+        "ks-n-0402",
+        "ks-n-0426",
+        "ks-n-0622",
+        "ks-n-0628",
+        "ks-n-0722"
+      ],
+      "hard_negatives_declared": 10,
+      "hard_negatives_declared_matches": true,
+      "duplicate_cards": [
+        {
+          "goal": "ks-g-0117",
+          "cards": [
+            130.5999999999999
+          ]
+        },
+        {
+          "goal": "ks-g-0705",
+          "cards": [
+            708.0000000000028
+          ]
+        },
+        {
+          "goal": "ks-g-0770",
+          "cards": [
+            772.1000000000033
+          ]
+        }
+      ],
+      "self_refuting_count": 0,
+      "false_positives": [
+        {
+          "t": 178.1,
+          "window": [
+            171.1,
+            186.1
+          ],
+          "reason": "The ball clearly enters the net, and the goalkeeper is beaten.; confirmation pass: goal confirmed (deep frame dive); The ball trajectory shows the ball moving from the center of the field towards the goal and clearly entering the net (ballInNet=true) as seen in the final frames of the sequence."
+        },
+        {
+          "t": 203.2,
+          "window": [
+            196.2,
+            211.2
+          ],
+          "reason": "The ball clearly enters the net after a shot from a player in a white kit, followed by a goal celebration.; confirmation pass: goal confirmed (deep frame dive); The ball clearly enters the net after a shot from a player in a white kit, as seen in the dense frame sequence and confirmed by the ball's trajectory crossing the goal line into the net."
+        },
+        {
+          "t": 252.6,
+          "window": [
+            245.6,
+            260.6
+          ],
+          "reason": "The ball enters the net and the scoreboard updates from 1-1 to 2-1.; scoreboard score change confirmed"
+        },
+        {
+          "t": 358.8,
+          "window": [
+            351.8,
+            366.8
+          ],
+          "reason": "The ball clearly enters the net after a strike by the player in the white jersey.; confirmation pass: goal confirmed (deep frame dive); The ball is clearly seen entering the net after a strike by the player in the white jersey, with the ball trajectory crossing the goal line into the net."
+        },
+        {
+          "t": 401.7,
+          "window": [
+            394.7,
+            409.7
+          ],
+          "reason": "The ball clearly enters the net as the striker finishes the play, followed by a celebration from the attacking team.; confirmation pass: goal confirmed (deep frame dive); The ball trajectory shows the ball entering the net area (y-coordinate moving from 0.44 to 0.50) and the visual frames clearly show the ball crossing the goal line and entering the net, followed by a celebration."
+        }
+      ],
+      "false_negatives": []
+    }
+  ],
+  "corpus": {
+    "clips": 1,
+    "accepted": 23,
+    "true_positive_cards": 18,
+    "false_positive_cards": 5,
+    "ground_truth_goals": 15,
+    "credited_goals": 15,
+    "precision": 0.7826,
+    "recall": 1.0,
+    "hard_negatives": 10,
+    "pooling_rule": "precision = sum(TP cards) / (sum(TP cards) + sum(FP cards)); recall = sum(credited goals) / sum(labelled goals)",
+    "mean_clip_precision_rejected": 0.7826,
+    "min_clip_precision": 0.7826
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "video": {"id": "clip-a", "duration_s": 200},
+  "coverage": {"goal_windows": 2, "non_goal_windows": 2, "non_goal_shot_class": 1},
+  "windows": [
+    {"id": "ks-a-goal-054", "t_start": 51, "t_end": 57, "instant": 54,
+     "ground_truth": "goal", "evidence": "ball_in_net"},
+    {"id": "ks-a-goal-122", "t_start": 119, "t_end": 125, "instant": 122,
+     "ground_truth": "goal", "evidence": "ball_in_net"},
+    {"id": "ks-a-n-105", "t_start": 100, "t_end": 115, "ground_truth": "no_goal",
+     "evidence": "saved"},
+    {"id": "ks-a-n-129", "t_start": 126, "t_end": 132, "ground_truth": "no_goal",
+     "evidence": "none"}
+  ]
+}

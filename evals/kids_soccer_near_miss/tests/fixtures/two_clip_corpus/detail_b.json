@@ -1,0 +1,29 @@
+{
+  "job": {"id": "job-clip-b"},
+  "highlights": [
+    {"id": "b-1", "eventType": "GOAL", "status": "accepted",
+     "start": 5.5, "end": 20.5, "localizedTs": 13.0,
+     "reason": "The ball clearly enters the net and the keeper is beaten."},
+    {"id": "b-2", "eventType": "GOAL", "status": "accepted",
+     "start": 25.5, "end": 40.5, "localizedTs": 33.0,
+     "reason": "The ball clearly enters the net and the keeper is beaten."},
+    {"id": "b-3", "eventType": "GOAL", "status": "accepted",
+     "start": 45.5, "end": 60.5, "localizedTs": 53.0,
+     "reason": "The ball clearly enters the net and the keeper is beaten."},
+    {"id": "b-4", "eventType": "GOAL", "status": "accepted",
+     "start": 65.5, "end": 80.5, "localizedTs": 73.0,
+     "reason": "The ball clearly enters the net and the keeper is beaten."},
+    {"id": "b-5", "eventType": "GOAL", "status": "accepted",
+     "start": 292.5, "end": 307.5, "localizedTs": 300.0,
+     "reason": "The ball clearly enters the net."},
+    {"id": "b-6", "eventType": "GOAL", "status": "accepted",
+     "start": 312.5, "end": 327.5, "localizedTs": 320.0,
+     "reason": "The ball clearly enters the net."},
+    {"id": "b-7", "eventType": "GOAL", "status": "accepted",
+     "start": 332.5, "end": 347.5, "localizedTs": 340.0,
+     "reason": "The ball clearly enters the net."},
+    {"id": "b-8", "eventType": "GOAL", "status": "accepted",
+     "start": 352.5, "end": 367.5, "localizedTs": 360.0,
+     "reason": "The ball clearly enters the net."}
+  ]
+}

@@ -84,9 +84,80 @@ before+after); the second arm keeps a card that surfaces the celebration/replay
 of a goal from being scored as a false positive.
 
 Self-check (no ffmpeg, no GPU, no network): `python3 -m pytest
-evals/kids_soccer_near_miss/tests/test_score_goal_precision.py` — 7 tests,
+evals/kids_soccer_near_miss/tests/test_score_goal_precision.py` — 14 tests,
 including a synthetic "reverted guard" acceptance set whose precision drops to
-66.7 %, so the harness's red/green signal for the post-bounce class is proven.
+66.7 %, so the harness's red/green signal for the post-bounce class is proven,
+and the synthetic two-clip corpus below (7 tests).
+
+### Corpus mode — pooled aggregate across per-clip manifests
+
+The `>= 20` hard-negative target is a **corpus** target (see *AC-1 decision*),
+so the scorer also scores N `(manifest, job detail)` pairs in one invocation and
+emits the per-clip rows plus one **pooled** row. Entry point (one documented
+invocation, no wrapper): `--corpus <file>` or a repeated `--pair
+MANIFEST:JOB_DETAIL[:COMMIT]`.
+
+```bash
+# corpus file: evals/kids_soccer_near_miss/corpus.json
+python3 evals/kids_soccer_near_miss/score_goal_precision.py \
+  --corpus evals/kids_soccer_near_miss/corpus.json \
+  --json evals/kids_soccer_near_miss/results/score_corpus.json \
+  --fail-under-precision 0.70
+```
+
+`corpus.json` is the corpus definition: a `clips` list of `{label, commit,
+job_id, manifest, job_detail}`. `manifest` is repo-relative, `job_detail` is a
+local cache of `GET /jobs/{id}/detail` (re-fetch per *Reproduction*). **Adding a
+clip is a data append to that list — not a code change.** The corpus file itself
+is written by hand; the numbers are only ever produced by re-running the scorer.
+
+**Pooling rule — weighted ratios, never the mean of the per-clip ratios:**
+
+```
+pooled precision = sum(TP cards) / (sum(TP cards) + sum(FP cards))
+pooled recall    = sum(credited goals) / sum(labelled goals)
+```
+
+Averaging percentages over-weights a clip with a small accept set and hides
+corpus variance: 2 cards at 100 % plus 8 cards at 50 % is **60 %** corpus
+precision, not 75 %. The pooled row is a gate input; the naive clip-average is
+still printed (`naive clip-average`, `corpus.mean_clip_precision_rejected`) next
+to the pooled figure purely for contrast — it is never gated on. Per-clip
+precision/recall are printed alongside the pooled row so the spread is visible;
+`min_clip_precision` is reported too. Pooled recall counts *credited goals*, not
+TP cards, so duplicate cards on one goal cannot push recall above 1.0 (identical
+to the TP-card sum whenever there are no duplicates).
+
+Gates: `--fail-under-precision` now applies to the **pooled** figure in corpus
+mode (unchanged, per-clip, in single-clip mode) and
+`--fail-under-clip-precision` additionally floors every clip on its own
+(a clip with no accepted cards has `precision: null` and fails a per-clip
+floor — an unmeasured clip must not silently pass).
+
+**Corpus hard-negative count** (ADAAAA-7690's headline metric) is emitted per
+clip and summed in the pooled row: a *verified shot-class non-goal window* is a
+labelled `no_goal` window whose `evidence` is `saved`, `post`, `blocked` or
+`wide`. Windows labelled `evidence: none` rule out a goal but do not assert a
+shot, so they are not counted. The count is derived from the manifest windows,
+and a manifest that declares `coverage.non_goal_shot_class` is cross-checked
+against the derived number (`hard_negatives_declared_matches`, plus a `WARNING`
+line in the report on mismatch).
+
+Current corpus: **1 clip** — `results/score_corpus.json` reproduces the
+single-clip figure exactly (78.26 % precision / 100 % recall, 10 hard negatives),
+which is also the proof that corpus mode is additive. The second clip
+([ADAAAA-7690](/ADAAAA/issues/ADAAAA-7690)) appends a row and is where the pooled
+figure first differs from the `da2d21a` row.
+
+Self-check for the pooling arithmetic is offline and synthetic
+(`tests/fixtures/two_clip_corpus/`): clip-a is 100 % on 2 cards, clip-b is 50 %
+on 8 cards, and the test asserts pooled precision `0.6` **and** that it is not
+the 75 % clip-average, pooled recall `6/7 = 0.8571` (not 90 %), and corpus hard
+negatives `1 + 3 = 4`.
+
+```bash
+python3 -m pytest evals/kids_soccer_near_miss/tests/test_score_goal_precision.py -q
+```
 
 ## Measured numbers
 

@@ -119,3 +119,128 @@ def test_cli_fail_under_precision(tmp_path):
                      "--fail-under-precision", "0.9"]) == 1
     assert sgp.main(["--manifest", str(mf), "--job-detail", str(jd),
                      "--fail-under-precision", "0.4"]) == 0
+
+
+# --------------------------------------------------------------------------
+# Corpus mode (ADAAAA-7692): pooled aggregate across per-clip manifests.
+#
+# Synthetic two-clip fixture (tests/fixtures/two_clip_corpus):
+#   clip-a  2 accepted cards, both true positives      -> 100 % precision,
+#                                                       2/2 goals, 1 hard neg
+#   clip-b  8 accepted cards, 4 TP + 4 FP, 1 goal missed -> 50 % precision,
+#                                                       4/5 goals, 3 hard negs
+# Pooled precision must be 6/10 = 60 %, NOT the 75 % clip-average: the 2-card
+# clip must not out-vote the 8-card clip. Pooled recall must be 6/7 = 85.71 %,
+# NOT the 90 % clip-average. The corpus hard-negative count is 1 + 3 = 4.
+# --------------------------------------------------------------------------
+FIXTURES = HERE / "tests" / "fixtures" / "two_clip_corpus"
+
+
+def _fixture_specs():
+    return [
+        {"label": "clip-a", "commit": "build-a",
+         "manifest": str(FIXTURES / "manifest_a.json"),
+         "job_detail": str(FIXTURES / "detail_a.json")},
+        {"label": "clip-b", "commit": "build-b",
+         "manifest": str(FIXTURES / "manifest_b.json"),
+         "job_detail": str(FIXTURES / "detail_b.json")},
+    ]
+
+
+def test_corpus_mode_emits_per_clip_rows_and_one_pooled_row():
+    corpus = sgp.score_corpus(_fixture_specs())
+    assert corpus["mode"] == "corpus"
+    assert [row["label"] for row in corpus["clips"]] == ["clip-a", "clip-b"]
+    assert [row["commit"] for row in corpus["clips"]] == ["build-a", "build-b"]
+    a, b = corpus["clips"]
+    assert (a["accepted"], a["true_positive_cards"], a["precision"]) == (2, 2, 1.0)
+    assert (b["accepted"], b["true_positive_cards"], b["precision"]) == (8, 4, 0.5)
+    # per-clip recall stays visible next to the pooled figure
+    assert a["recall"] == 1.0
+    assert b["recall"] == 0.8
+    assert corpus["corpus"]["clips"] == 2
+
+
+def test_corpus_pools_the_weighted_ratio_not_the_clip_average():
+    corpus = sgp.score_corpus(_fixture_specs())
+    pooled = corpus["corpus"]
+    # weighted: 6 TP of 10 accepted cards
+    assert (pooled["true_positive_cards"], pooled["false_positive_cards"]) == (6, 4)
+    assert pooled["precision"] == round(6 / 10, 4)
+    assert pooled["precision"] != round((1.0 + 0.5) / 2, 4)   # not 75 %
+    assert pooled["mean_clip_precision_rejected"] == 0.75
+    # weighted recall: 6 credited goals of 7 labelled
+    assert pooled["precision"] == 0.6
+    assert pooled["recall"] == round(6 / 7, 4)
+    assert pooled["recall"] != round((1.0 + 0.8) / 2, 4)      # not 90 %
+    # a card at 50 % on 8 cards dominates a clip at 100 % on 2 cards
+    assert pooled["min_clip_precision"] == 0.5
+    assert corpus["pooling_rule"].startswith("precision = sum(TP cards)")
+
+
+def test_corpus_emits_hard_negative_count_per_clip_and_summed():
+    corpus = sgp.score_corpus(_fixture_specs())
+    a, b = corpus["clips"]
+    assert a["hard_negatives"] == 1
+    assert a["hard_negative_window_ids"] == ["ks-a-n-105"]
+    assert b["hard_negatives"] == 3
+    assert b["hard_negative_window_ids"] == ["ks-b-n-118", "ks-b-n-138", "ks-b-n-158"]
+    assert corpus["corpus"]["hard_negatives"] == 4
+    # the manifest's own coverage figure agrees with the derived count
+    assert a["hard_negatives_declared"] == 1 and a["hard_negatives_declared_matches"]
+    assert b["hard_negatives_declared"] == 3 and b["hard_negatives_declared_matches"]
+    # evidence:none windows rule out a goal but are not shot-class negatives
+    assert "ks-a-n-129" not in a["hard_negative_window_ids"]
+
+
+def test_corpus_rendered_report_carries_pooled_and_hard_negative_lines():
+    text = sgp.render_corpus(sgp.score_corpus(_fixture_specs()))
+    assert "POOLED precision      : 60.00%" in text
+    assert "POOLED recall         : 85.71%" in text
+    assert "corpus hard negatives : 4 verified shot-class non-goal windows" in text
+    assert "naive clip-average    : 75.00%" in text
+    assert "clip-b" in text and "clip-a" in text
+
+
+def test_corpus_cli_pairs_write_json_and_gate_on_pooled_figure(tmp_path):
+    out = tmp_path / "score_corpus.json"
+    pairs = []
+    for spec in _fixture_specs():
+        pairs += ["--pair", f"{spec['manifest']}:{spec['job_detail']}:{spec['commit']}"]
+    assert sgp.main(pairs + ["--json", str(out),
+                             "--fail-under-precision", "0.6"]) == 0
+    data = __import__("json").loads(out.read_text())
+    assert data["corpus"]["precision"] == 0.6
+    assert data["corpus"]["hard_negatives"] == 4
+    assert len(data["clips"]) == 2
+    # the pooled gate is the weighted figure, so 0.7 must fail even though
+    # clip-a alone is at 100 %
+    assert sgp.main(pairs + ["--fail-under-precision", "0.7"]) == 1
+
+
+def test_corpus_cli_per_clip_floor_and_corpus_file(tmp_path):
+    corpus_file = tmp_path / "corpus.json"
+    corpus_file.write_text(__import__("json").dumps({"clips": _fixture_specs()}))
+    # pooled 60 % clears 0.6, but clip-b at 50 % fails a 0.9 per-clip floor
+    assert sgp.main(["--corpus", str(corpus_file), "--fail-under-precision", "0.6",
+                     "--fail-under-clip-precision", "0.9"]) == 1
+    assert sgp.main(["--corpus", str(corpus_file), "--fail-under-precision", "0.6",
+                     "--fail-under-clip-precision", "0.5"]) == 0
+
+
+def test_single_clip_output_shape_is_unchanged(tmp_path):
+    """The additive corpus work must not touch the single-clip report/JSON."""
+    detail = {"highlights": [_card(54, GOAL_REASON), _card(122, GOAL_REASON)]}
+    mf = tmp_path / "manifest.json"
+    jd = tmp_path / "detail.json"
+    out = tmp_path / "score.json"
+    mf.write_text(__import__("json").dumps(MANIFEST))
+    jd.write_text(__import__("json").dumps(detail))
+    assert sgp.main(["--manifest", str(mf), "--job-detail", str(jd),
+                     "--commit", "x", "--json", str(out)]) == 0
+    data = __import__("json").loads(out.read_text())
+    assert sorted(data) == ["accepted", "commit", "duplicate_cards", "false_negatives",
+                            "false_positives", "ground_truth_goals", "job_id",
+                            "manifest", "precision", "recall", "self_refuting",
+                            "true_positive_cards"]
+    assert data["precision"] == 1.0 and data["recall"] == 1.0
