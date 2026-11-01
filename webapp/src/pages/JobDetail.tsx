@@ -8,6 +8,7 @@ import { WindowAnalysisPanel } from "../components/WindowAnalysis";
 import { SummaryLadderView } from "../components/SummaryLadder";
 import { batchManifest, clipFileName, clipUrl, copyText, saveBlob, seedCaption, type BatchItem } from "../lib/highlightPost";
 import { buildZip, type ZipFile } from "../lib/zip";
+import { asrSummary, asrSummaryLine } from "../lib/windowAsr";
 import {
   fetchJobDetail,
   focusAnalysisWindow,
@@ -157,6 +158,14 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
  *  Increment C). Read-only over the job-detail API data. */
 function DecideNoteBanner({ note, jobId }: { note: DecideNote; jobId: string }) {
   const [open, setOpen] = useState(false);
+  // ADAAAA-7672: surface the window's ASR transcript on the COLLAPSED banner.
+  // The transcript already rendered inside the expanded inspection panel, but a
+  // collapsed window — the state the board scans a job in — showed no ASR text at
+  // all, so a window the decide LLM fed real commentary looked audio-less. The
+  // line is omitted entirely when the transcript is empty/unusable or the window
+  // had no captured audio, so a silent window stays silent.
+  const asr = asrSummary(note.analysis);
+  const asrLine = asrSummaryLine(note.analysis);
   return (
     <div
       className={`rounded-lg border px-3 py-2 text-xs ${
@@ -183,6 +192,17 @@ function DecideNoteBanner({ note, jobId }: { note: DecideNote; jobId: string }) 
         </span>
       </button>
       {note.reason && <div className="mt-0.5 text-mut">{note.reason}</div>}
+      {asr && (
+        <div
+          className="mt-0.5 flex min-w-0 items-baseline gap-1 text-[11px]"
+          data-window-asr-summary
+          data-asr-timing={asr.timing}
+          title={asrLine ?? undefined}
+        >
+          <span className="shrink-0 font-bold uppercase tracking-wide text-purple">{asr.timing}</span>
+          <span className="min-w-0 flex-1 truncate text-slate-ink">{`"${asr.transcript}"`}</span>
+        </div>
+      )}
       {open && <WindowAnalysisPanel analysis={note.analysis} confirm={note.confirm} jobId={jobId} triggerTs={note.timestamp} />}
     </div>
   );
