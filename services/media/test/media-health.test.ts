@@ -125,3 +125,57 @@ describe("media node capacity/health surface (ADAAAA-6869)", () => {
     await app.close();
   });
 });
+
+// ADAAAA-7656: `restart: unless-stopped` recovers the media process on its own,
+// so `/health` has to publish the crash ledger and stop reading green when the
+// node is flapping. One recovery must stay "ok"; a cluster of restarts must read
+// "degraded" without breaking the HTTP 200 that the LB/health probes depend on.
+describe("media node restart-loop visibility (ADAAAA-7656)", () => {
+  const ledger = (boots: number, bootsInWindow: number, threshold = 3) => () => ({
+    boots,
+    lastStartAt: "2026-11-01T13:53:26.964Z",
+    lastExit: { at: "2026-11-01T13:53:26.000Z", code: null, signal: null, reason: "unobserved-exit" },
+    windowS: 600,
+    threshold,
+    bootsInWindow,
+    degraded: bootsInWindow >= threshold,
+  });
+
+  it("publishes boot count, last exit and last restart while recovered once", async () => {
+    const app = await build({ nodeId: "media-0", lifecycle: ledger(2, 2) });
+    const r = await app.inject({ method: "GET", url: "/health" });
+    expect(r.statusCode).toBe(200);
+    const h = r.json();
+    expect(h.status).toBe("ok");
+    expect(h.restarts).toMatchObject({
+      boots: 2,
+      lastStartAt: "2026-11-01T13:53:26.964Z",
+      lastExit: { code: null, reason: "unobserved-exit" },
+      windowS: 600,
+      threshold: 3,
+      bootsInWindow: 2,
+      degraded: false,
+    });
+    await app.close();
+  });
+
+  it("reads degraded (still HTTP 200) when restarts cross the threshold", async () => {
+    const app = await build({ nodeId: "media-0", lifecycle: ledger(4, 3) });
+    const r = await app.inject({ method: "GET", url: "/health" });
+    expect(r.statusCode).toBe(200); // probes keep their 200; the payload stops being green
+    const h = r.json();
+    expect(h.status).toBe("degraded");
+    expect(h.restarts).toMatchObject({ boots: 4, bootsInWindow: 3, degraded: true });
+    // the idle/capacity contract is untouched by the degraded verdict
+    expect(h.capacity).toMatchObject({ maxSessions: 1, activeSessions: 0, availableSessions: 1 });
+    await app.close();
+  });
+
+  it("omits the restarts block when no ledger is wired (embedders/tests)", async () => {
+    const app = await build({ nodeId: "media-0" });
+    const h = (await app.inject({ method: "GET", url: "/health" })).json();
+    expect(h.status).toBe("ok");
+    expect(h.restarts).toBeUndefined();
+    await app.close();
+  });
+});
