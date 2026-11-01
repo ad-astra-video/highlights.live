@@ -120,6 +120,12 @@ Authoritative, per job, in the completed record (`GET /jobs/:id/detail`):
 | `job.decideCalls` | observer decide calls actually made (cadence-driven under the observe architecture) |
 | `job.perceiveSessionS` | paid perceive session seconds the job held |
 
+Live jobs record the same three fields at completion (`costUsd`,
+`perceiveSessionS`, `decideCalls` from the observe pass). ADAAAA-7670 added the
+live `costUsd`/`perceiveSessionS` write: before it a live job carried no cost at
+all, so its spend was invisible in both `GET /media/node` and
+`/admin/monitoring` even when the attribution row existed.
+
 Aggregate readout: `GET /admin/monitoring?days=N` (`admin_readonly`) →
 `totalInferenceCostUsd`, `perClipInferenceCostUsd`, `perChannel[].inferenceUsd`, plus
 the reliability/spend-pause gate.
