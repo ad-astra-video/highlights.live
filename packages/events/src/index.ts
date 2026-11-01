@@ -484,6 +484,18 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // decide input-size distribution (the -67% cost measure input).
   subsampledCalls: z.number().int().min(0).optional(),
   framesPerCall: z.array(z.number().int().min(0)).optional(),
+  // ADAAAA-7676: live observe lag bound. A live window whose content time is
+  // further behind wall time than the budget is DROPPED instead of decided
+  // late; `skippedStaleWindows` is the counter that proves the queue is bounded
+  // (a window labelled T+42s used to reach the feed at wall +242s). Additive
+  // optional (absent on older rows / when no stale window was dropped).
+  skippedStaleWindows: z.number().int().min(0).optional(),
+  // Worst / mean wall-clock content-vs-wall lag (ms) seen on a dropped frame,
+  // and the worst COMPLETED lag (ms) of a decided window (what a live viewer
+  // experiences: `summaryLog` `windowTs` vs wall `ts`).
+  maxLagMs: z.number().min(0).optional(),
+  meanLagMs: z.number().min(0).optional(),
+  maxCompletedLagMs: z.number().min(0).optional(),
 });
 export type ObserveMetricsSnapshot = z.infer<typeof ObserveMetricsSnapshotSchema>;
 

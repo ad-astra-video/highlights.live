@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { GoalLineCalibration } from "./analyzer";
 import { parsePerceiveCalibration, type PerceiveCalibrationMap } from "./perceive-calibration";
+import { LIVE_OBSERVE_LAG_BUDGET_S } from "./observe-loop";
 
 export interface ServerConfig {
   port: number;
@@ -200,6 +201,14 @@ export interface ServerConfig {
    * cap). Default off so the deployed candidate-gated live baseline is unchanged
    * until the observer pass is validated. `LIVE_OBSERVE_LOOP`. */
   liveObserveLoop: boolean;
+  /** ADAAAA-7676: wall-clock lag budget (seconds) for the LIVE observe pass.
+   * Once a frame's content time is further behind wall time than this, the pass
+   * DROPS the stale frames/windows (counted as `observeMetrics
+   * .skippedStaleWindows`) instead of deciding them late; before firing, one
+   * measured decide E2E is reserved so the RESULT lands inside the budget.
+   * Default 30 (the cadence + decide-E2E budget); `<= 0` disables the drop.
+   * `LIVE_OBSERVE_LAG_BUDGET_S`. */
+  liveObserveLagBudgetS: number;
   /** ADAAAA-7007/7011: enable the VOD decide-observer architecture on the
    * detail-first pass (observeLoop + decideWindowN both set in analyzeJob).
    * When on, decide is driven on the ~3 s cadence with a ~10 s overlapping
@@ -494,6 +503,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // with LIVE_OBSERVE_LOOP=1 (default off; the candidate-gated live baseline
     // stays the behavior until the observer pass is validated).
     liveObserveLoop: env.LIVE_OBSERVE_LOOP === "1",
+    // ADAAAA-7676: bound the live observe lag against the wall clock. Once the
+    // content clock falls further behind wall time than this budget, stale
+    // frames/windows are dropped (counted on the job) instead of decided late.
+    liveObserveLagBudgetS: Number(env.LIVE_OBSERVE_LAG_BUDGET_S ?? LIVE_OBSERVE_LAG_BUDGET_S),
     // ADAAAA-7007/7011: wire the VOD decide-observer into the detail-first VOD
     // job path. Opt in with OBSERVE_LOOP=1 (default off; the candidate-gated VOD
     // baseline stays the behavior until the observer pass is validated).
