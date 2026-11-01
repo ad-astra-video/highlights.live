@@ -618,6 +618,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     user: any,
     sub: any
   ) {
+    // ADAAAA-7670: paid-perceive clock for the completed record's costUsd —
+    // the live path never recorded one, so live inference spend could not be
+    // attributed to a node (or counted by /admin/monitoring) at all.
+    const t0 = Date.now();
     try {
       // Reserve ONE perceive session for this live job, shared by the video
       // /analyze leg and the Stage-A audio /audio tap (INC-2 / ADAAAA-4325) so
@@ -744,9 +748,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // the store's DEDUPED highlight count for the job so overlapping live
       // windows cannot re-count one play (the accepted tally is the fallback
       // when no highlight landed yet — see job-counters.ts).
+      // ADAAAA-7670: also record the live job's inference cost the way the VOD
+      // path does (decide fee × decide calls + perceive seconds at list price).
+      // Before this the live path wrote no `costUsd`/`perceiveSessionS`, so live
+      // spend could not be attributed to a node at all and `/admin/monitoring`
+      // silently excluded it. Decide calls come from the observe pass (the only
+      // decide path a live job has; absent => 0 recorded calls).
+      const perceiveSessionS = (Date.now() - t0) / 1000;
+      const liveDecideCalls = outcome.observeMetrics?.decideCalls ?? 0;
+      const liveCostUsd = cfg.decideFee * liveDecideCalls + (perceiveSessionS / 3600) * PERCEIVE_PER_HOUR_USD;
       await store.patchJob(job.id, {
         status: "done",
         perceiveSessionId: outcome.sessionId,
+        perceiveSessionS: Number(perceiveSessionS.toFixed(1)),
+        costUsd: Number(liveCostUsd.toFixed(4)),
         // ADAAAA-7624/7667: Stage-A status + the live candidate counters.
         ...completedLiveCounterFields(stageA, outcome.observeMetrics, store.highlightsForJob(job.id).length),
         // ADAAAA-7011: cadence + decide gemma E2E latency snapshot from the live
