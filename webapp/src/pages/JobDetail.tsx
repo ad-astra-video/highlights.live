@@ -401,6 +401,26 @@ export function VideoSummary({
   );
 }
 
+/**
+ * ADAAAA-7700: the failure attribution chip. `failed` alone said nothing at
+ * 22:16Z — a media-node restart (`media session lost`) must read differently from
+ * a user stop, and the reason must be visible on /app/jobs/:id. Exported so the
+ * rendering is pinned by a test without driving the whole page.
+ */
+export function FailureReasonChip({ reason }: { reason?: string | null }) {
+  const label = failureReasonLabel(reason);
+  if (!label || !reason) return null;
+  return (
+    <span
+      className="rounded-full border border-red/40 bg-red/10 px-2 py-0.5 text-xs font-bold uppercase text-red"
+      data-detail-failure-reason={reason}
+      title={`failureReason: ${reason}`}
+    >
+      reason: {label}
+    </span>
+  );
+}
+
 function statusChip(status: string): string {
   switch (status) {
     case "queued":
@@ -1322,18 +1342,8 @@ export function JobDetail() {
               <span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusChip(detail.job.status)}`}>
                 {detail.job.status}
               </span>
-              {/* ADAAAA-7700: WHY the job failed, as its own attributed chip. A
-                  media-node restart (`media session lost`) must never read like a
-                  user stop, and `failed` alone said nothing at 22:16Z. */}
-              {detail.job.failureReason && (
-                <span
-                  className="rounded-full border border-red/40 bg-red/10 px-2 py-0.5 text-xs font-bold uppercase text-red"
-                  data-detail-failure-reason={detail.job.failureReason}
-                  title={`failureReason: ${detail.job.failureReason}`}
-                >
-                  reason: {failureReasonLabel(detail.job.failureReason)}
-                </span>
-              )}
+              {/* ADAAAA-7700: WHY the job failed, as its own attributed chip. */}
+              <FailureReasonChip reason={detail.job.failureReason} />
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2">
               <div>
