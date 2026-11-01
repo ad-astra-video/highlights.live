@@ -1,5 +1,5 @@
 {
-  "$comment": "Labeled audio-trigger eval corpus (ADAAAA-7674, closing the AC1 exception from ADAAAA-7658). One entry per trigger class. A class with `clip: null` is an explicitly recorded gap and is reported as N/A — it is not a pass. Onsets are video-rail seconds; the match window used by the scorer is [-matchPre, +matchPost] around each onset. Clip files live on the box under the perceive /data volume (or docker/data); point --clip-root at them.",
+  "$comment": "Labeled audio-trigger eval corpus (ADAAAA-7674, closing the AC1 exception from ADAAAA-7658). One entry per trigger class. A class with `clip: null` is an explicitly recorded gap and is reported as N/A \u2014 it is not a pass. Onsets are video-rail seconds; the match window used by the scorer is [-matchPre, +matchPost] around each onset. Clip files live on the box under the perceive /data volume (or docker/data); point --clip-root at them.",
   "frameS": 0.1,
   "sr": 8000,
   "matchPre": 3.0,
@@ -8,15 +8,250 @@
     {
       "id": "goal_roar",
       "clip": "real_goal_3080.mp4",
-      "onsets": [0, 2, 11, 13, 15, 17, 19, 21, 23, 25, 28, 32, 34, 36, 39, 56, 58, 60, 62, 64, 66, 68, 70, 71, 74, 76, 77, 82, 83, 86, 89, 93],
+      "onsets": [
+        0,
+        2,
+        11,
+        13,
+        15,
+        17,
+        19,
+        21,
+        23,
+        25,
+        28,
+        32,
+        34,
+        36,
+        39,
+        56,
+        58,
+        60,
+        62,
+        64,
+        66,
+        68,
+        70,
+        71,
+        74,
+        76,
+        77,
+        82,
+        83,
+        86,
+        89,
+        93
+      ],
       "labelSource": "video-rail accepted GOAL timestamps for the clip (ADAAAA-4970 baseline corpus)",
       "measured": true
     },
     {
       "id": "whistle",
-      "clip": "clips/9c09c609-e762-4034-a1e2-b370e4bbfbd8.mp4",
-      "onsets": [3.4, 4.2],
-      "labelSource": "referee whistle: narrowband 2.4-3.4 kHz tonal burst verified independently of the gate — band energy 74x (3.4 s) / 85x (4.2 s) ambient while the 0.3-2 kHz speech band rose only 7.4x / 2.6x and the <0.3 kHz low band 8.2x / 11.6x, i.e. a tonal rise, not a broadband crowd roar; the same clip at 8.0 s shows no such rise (6.6x with speech/low also elevated)",
+      "gate": "whistle",
+      "sr": 16000,
+      "clips": [
+        {
+          "clip": "clips/9c09c609-e762-4034-a1e2-b370e4bbfbd8.mp4",
+          "onsets": [
+            3.4,
+            23.6,
+            40.4
+          ],
+          "detectedOnsets": [
+            15.5
+          ]
+        },
+        {
+          "clip": "clips/2939eff0-d887-49e7-9427-d65e6e276229.mp4",
+          "onsets": [
+            10.1
+          ]
+        },
+        {
+          "clip": "clips/6f65bdbe-7494-46a7-b428-4cb5a97f8d6f.mp4",
+          "onsets": [
+            3.3
+          ]
+        },
+        {
+          "clip": "clips/11b90ebf-4604-433b-b8c2-29f7673a8e90-300.mp4",
+          "onsets": [
+            7.4
+          ]
+        },
+        {
+          "clip": "clips/cf318d96-75b2-4c00-8e37-34f1af66f0a2-90.mp4",
+          "onsets": [
+            7.2
+          ]
+        },
+        {
+          "clip": "clips/70257120-4674-47c8-b8dc-4fe238a371c9.mp4",
+          "onsets": [
+            8.8,
+            10.8
+          ]
+        },
+        {
+          "clip": "clips/910c9b68-40e1-4a70-abde-c073795562e1.mp4",
+          "onsets": [
+            1.4
+          ]
+        },
+        {
+          "clip": "clips/09dccf1b-3f18-4dba-9106-c112fdfb4cbc.mp4",
+          "onsets": [],
+          "detectedOnsets": [
+            6.2
+          ]
+        },
+        {
+          "clip": "clips/02a5105d-e8ff-4c1d-b451-767ed9cadfbc.mp4",
+          "onsets": [],
+          "detectedOnsets": [
+            8.3,
+            12.3
+          ]
+        }
+      ],
+      "negatives": [
+        {
+          "clip": "clips/013124c4-8240-4a5d-b0c7-05363efcf1bd.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "clips/01e150bf.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "clips/01e150bf.mp4",
+          "start": 11.0,
+          "end": 15.0
+        },
+        {
+          "clip": "clips/01e150bf.mp4",
+          "start": 17.0,
+          "end": 21.0
+        },
+        {
+          "clip": "clips/01e9e5ca-791e-4828-ae15-cccdd37fa075.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "clips/01e9e5ca-791e-4828-ae15-cccdd37fa075.mp4",
+          "start": 11.0,
+          "end": 15.0
+        },
+        {
+          "clip": "clips/01e9e5ca-791e-4828-ae15-cccdd37fa075.mp4",
+          "start": 17.0,
+          "end": 21.0
+        },
+        {
+          "clip": "clips/03aa6889-0efc-4839-acb4-cd045949747b.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "clips/03baa8d8-b01c-4ed7-8da5-1336d4c3c9c4.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "clips/03baa8d8-b01c-4ed7-8da5-1336d4c3c9c4.mp4",
+          "start": 11.0,
+          "end": 15.0
+        },
+        {
+          "clip": "clips/05731e36-f2fb-42ad-bfc8-496d00d7a9e1.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "clips/05731e36-f2fb-42ad-bfc8-496d00d7a9e1.mp4",
+          "start": 11.0,
+          "end": 15.0
+        },
+        {
+          "clip": "clips/0578e1e2-968e-47c8-a792-9bf7a0686846-180.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "clips/0578e1e2-968e-47c8-a792-9bf7a0686846-60.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "clips/069ba092-7d25-49db-91f6-a0d8ccef6aa2.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "clips/069ba092-7d25-49db-91f6-a0d8ccef6aa2.mp4",
+          "start": 11.0,
+          "end": 15.0
+        },
+        {
+          "clip": "clips/08111be8-e4b6-4404-8007-233addd51a0c.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "clips/08111be8-e4b6-4404-8007-233addd51a0c.mp4",
+          "start": 11.0,
+          "end": 15.0
+        },
+        {
+          "clip": "clips/098587d1-a681-486c-a564-8b0e7f69e8ca.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "clips/09dccf1b-3f18-4dba-9106-c112fdfb4cbc.mp4",
+          "start": 11.0,
+          "end": 15.0
+        },
+        {
+          "clip": "clips/0a9c5b05-72fa-4874-a582-b507312d866e.mp4",
+          "start": 5.0,
+          "end": 9.0
+        },
+        {
+          "clip": "real_match_70s.mp4",
+          "start": 10.0,
+          "end": 14.0
+        },
+        {
+          "clip": "real_match_70s.mp4",
+          "start": 40.0,
+          "end": 44.0
+        },
+        {
+          "clip": "real_goal_3080.mp4",
+          "start": 10.0,
+          "end": 14.0
+        },
+        {
+          "clip": "real_goal_3080.mp4",
+          "start": 30.0,
+          "end": 34.0
+        },
+        {
+          "clip": "qa7233_seg.mp4",
+          "start": 20.0,
+          "end": 24.0
+        },
+        {
+          "clip": "qa7233_seg.mp4",
+          "start": 70.0,
+          "end": 74.0
+        }
+      ],
+      "labelSource": "10 verified referee-whistle onsets across 7 distinct clips (the AC0 recall set), plus 4 `detectedOnsets` that were verified AFTER labelling (9c09c609 15.5 s, 09dccf1b 6.2 s, 02a5105d 8.3 s and 12.3 s) and therefore count as true positives for FP accounting only, never as recall. Every onset is verified independently of the detector by evals/verify_whistle_onsets.py at 16 kHz: the 2.4-3.4 kHz band rises over a 10 s ambient window while speech/low stay near ambient, the band is tonal (flatness <= 0.25) and its peak sits inside 2.4-3.4 kHz. Measured rise (whistle x / speech x / low x / peak Hz / flatness): 9c09c609 3.4 s = 7.2x/0.8x/1.0x/3090/0.044, 23.6 s = 9.8x/0.5x/0.5x/3160/0.026, 40.4 s = 35.1x/0.2x/0.0x/3130/0.019, 15.5 s = 8.5x/0.6x/0.5x/3150/0.048; 2939eff0 10.1 s = 25.3x/1.0x/0.0x/2480/0.065; 6f65bdbe 3.3 s = 35.9x/1.0x/0.0x/2490/0.053; 11b90ebf 7.4 s = 16.2x/0.4x/0.5x/2470/0.026; cf318d96 7.2 s = 13.6x/1.0x/0.1x/2830/0.031; 70257120 8.8 s = 28.1x/1.4x/1.8x/2620/0.130 and 10.8 s = 9.2x/2.4x/1.4x/2570/0.080; 910c9b68 1.4 s = 37.2x/0.6x/1.4x/2520/0.026; 09dccf1b 6.2 s = 10.1x/0.9x/2.7x/2510/0.039; 02a5105d 8.3 s = 6.2x/2.5x/0.4x/2490/0.012 and 12.3 s = 6.2x/1.3x/0.2x/2620/0.135. The clip's previously labelled 4.2 s onset was re-measured at 5.9x (+7.7 dB) over ambient and dropped: below the >= 6x verification bound, so it is not quotable as a verified onset. Duplicate footage in the corpus (same audio fingerprint) was collapsed, so the clips are distinct footage, not re-exports of one. The 27 negative windows are 4 s stretches verified free of a narrowband tonal burst; the original 30 included 3 windows that this run found to contain verified whistles (09dccf1b 6.2 s, 02a5105d 8.3 s / 12.3 s) and those were removed. Scored at 16000 Hz because that is the production PCM rate; the 8 kHz vs 16 kHz band-rise delta measured 0.0-0.3% on every onset (AC1).",
       "measured": true
     },
     {
@@ -33,7 +268,7 @@
       "onsets": [],
       "labelSource": null,
       "measured": false,
-      "gapReason": "no footage with a music bed: the harmonicity check (stable fundamental + integer harmonic stack) on the corpus' low-frequency-dominant stretches scored 0.25-0.38 harmonicity — the same as control stretches of the same clips — so those are stadium rumble, not music. Remains N/A until a clip with a broadcast intro bed is acquired."
+      "gapReason": "no footage with a music bed: the harmonicity check (stable fundamental + integer harmonic stack) on the corpus' low-frequency-dominant stretches scored 0.25-0.38 harmonicity \u2014 the same as control stretches of the same clips \u2014 so those are stadium rumble, not music. Remains N/A until a clip with a broadcast intro bed is acquired."
     }
   ]
 }

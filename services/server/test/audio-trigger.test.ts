@@ -14,6 +14,7 @@ import {
   TriggerWindowScheduler,
   audioTriggerFromCandidate,
   audioTriggerFromSignal,
+  triggerFamily,
   type AudioTriggerRecord,
 } from "../src/audio-trigger";
 import { LiveObserver, buildObservePayload, OBSERVE_CADENCE_S } from "../src/observe-loop";
@@ -131,6 +132,27 @@ describe("TriggerWindowScheduler (dedup / coalesce / expiry)", () => {
     expect(s.record(trig(10 + AUDIO_TRIGGER_COALESCE_S + 0.1))).toBe(true);
     expect(s.pendingCount()).toBe(2);
     expect(s.stats().coalesced).toBe(2);
+  });
+
+  it("does not coalesce a whistle fire with a roar fire inside one celebration (ADAAAA-7682 AC4)", () => {
+    const s = new TriggerWindowScheduler();
+    const whistle = trig(10, "burst", { thresholdId: "stageB/whistle/2.4-3.4k/5x/0.3s" });
+    const roar = trig(11.0, "burst", { thresholdId: "stageA/burst/1.3x/0.3s" });
+    expect(s.record(whistle)).toBe(true);
+    // 1 s later: inside the coalesce window, but different evidence — a whistle
+    // marks the stoppage even when the roar lands after it. Two analyses.
+    expect(s.record(roar)).toBe(true);
+    expect(s.pendingCount()).toBe(2);
+    expect(s.stats().coalesced).toBe(0);
+    // Same-family re-fires still coalesce (the anti-storm rule is unchanged).
+    expect(s.record(trig(11.4, "burst", { thresholdId: "stageA/burst/1.3x/0.3s" }))).toBe(false);
+    expect(s.stats().coalesced).toBe(1);
+  });
+
+  it("names the trigger family from the thresholdId prefix", () => {
+    expect(triggerFamily("stageA/burst/1.3x/0.3s")).toBe("stageA");
+    expect(triggerFamily("stageB/whistle/2.4-3.4k/5x/0.3s")).toBe("stageB");
+    expect(triggerFamily("legacy")).toBe("legacy");
   });
 
   it("does not release a trigger before the lead window elapses", () => {

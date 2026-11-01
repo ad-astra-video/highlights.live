@@ -61,6 +61,58 @@ def frame_energy(samples: np.ndarray) -> float:
     return min(1.0, rms)
 
 
+def normalized_samples(samples: np.ndarray) -> np.ndarray:
+    """Mono float samples in ``[-1, 1]`` regardless of int16/float input."""
+    a = np.asarray(samples, dtype=np.float64)
+    if a.size == 0:
+        return a
+    if float(np.max(np.abs(a))) > 1.0:
+        a = a / 32768.0
+    return a
+
+
+def band_energy(samples: np.ndarray, sample_rate: int, lo_hz: float, hi_hz: float) -> float:
+    """Hann-windowed spectral energy inside ``[lo_hz, hi_hz]``, per-sample normalized.
+
+    Returns ``sum(|X(f)|^2) / n`` over the band, which is the band's mean power
+    per sample and therefore comparable between bands of different width.
+    """
+    a = normalized_samples(samples)
+    if a.size < 32 or sample_rate <= 0:
+        return 0.0
+    window = np.hanning(a.size)
+    spec = np.abs(np.fft.rfft(a * window)) ** 2
+    freqs = np.fft.rfftfreq(a.size, 1.0 / sample_rate)
+    idx = (freqs >= lo_hz) & (freqs <= hi_hz)
+    if not np.any(idx):
+        return 0.0
+    return float(spec[idx].sum()) / float(a.size)
+
+
+def band_tonality(samples: np.ndarray, sample_rate: int, lo_hz: float, hi_hz: float) -> tuple[float, float]:
+    """(peak/mean, spectral flatness) of the band — a tonal vs broadband discriminator.
+
+    A referee whistle concentrates its energy in one narrow peak (high
+    peak/mean, low flatness); crowd noise spreads it across the band (flatness
+    near 1). Used to reject broadband transients that merely raise the band.
+    """
+    a = normalized_samples(samples)
+    if a.size < 32 or sample_rate <= 0:
+        return 0.0, 1.0
+    spec = np.abs(np.fft.rfft(a * np.hanning(a.size))) ** 2
+    freqs = np.fft.rfftfreq(a.size, 1.0 / sample_rate)
+    idx = (freqs >= lo_hz) & (freqs <= hi_hz)
+    if not np.any(idx):
+        return 0.0, 1.0
+    band = spec[idx]
+    mean = float(band.mean())
+    if mean <= 0.0:
+        return 0.0, 1.0
+    peak = float(band.max())
+    flat = float(np.exp(np.mean(np.log(np.maximum(band, 1e-20)))) / mean)
+    return peak / mean, flat
+
+
 @dataclass
 class GateConfig:
     frame_s: float = 0.1  # audio chunk duration fed per update()
@@ -307,3 +359,201 @@ class AudioEnergyGate:
         self._series.clear()
         self._last_fired_ts = None
         self._reset_window()
+
+
+# ---------------------------------------------------------------------------
+# Stage-B band-limited whistle path (ADAAAA-7682)
+#
+# Stage-A above is a BROADBAND level-change gate: it compares frame RMS against
+# a rolling percentile of frame RMS. A referee whistle is a narrowband tonal
+# burst whose RMS sits at the crowd floor, so Stage-A measures 0.00 recall on
+# it (ADAAAA-7674: 0/2 onsets, FP 1.00) — that is a property of the detector,
+# not a tuning problem. This path is a separate component: it baselines the
+# *2.4-3.4 kHz band* energy (the band a pea whistle occupies), so a tonal burst
+# 6-30x over its own ambient fires while a crowd roar — which raises the low and
+# speech bands at least as much — does not.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class WhistleConfig:
+    """Operating point of the band-limited whistle path.
+
+    ``emitted`` is the measure-only switch: detection is always computed (so the
+    live log and the eval harness can count candidates), but a fire only becomes
+    a scheduling candidate when the path is explicitly graduated to emitting.
+    The ship gate for that is AC3 (measured recall/FP/latency on the labelled
+    corpus); the default stays measure-only so an FP-happy detector can never
+    silently spend gemma analysis budget.
+    """
+
+    frame_s: float = 0.1
+    sample_rate: int = 16000  # production PCM on both rails (server tap + media relay)
+    band_lo_hz: float = 2400.0
+    band_hi_hz: float = 3400.0
+    # Guards: a whistle band rise is only a whistle if the *other* bands stay
+    # near their ambient level (a roar raises speech/low too) and the band is
+    # tonal (a click/pop is broadband).
+    speech_lo_hz: float = 300.0
+    speech_hi_hz: float = 2000.0
+    low_lo_hz: float = 60.0
+    low_hi_hz: float = 300.0
+    guard_max_ratio: float = 3.0     # speech/low band must stay below this x ambient
+    min_tonality: float = 6.0        # peak/mean inside the whistle band
+    max_flatness: float = 0.25       # spectral flatness inside the whistle band
+    calibration_s: float = 0.5
+    lookback_s: float = 6.0          # same rolling ambient window as Stage-A
+    baseline_percentile: float = 0.55
+    baseline_floor: float = 1e-10
+    whistle_ratio: float = 5.0       # band energy >= ratio x rolling band baseline
+    sustain_frames: int = 3          # consecutive elevated frames (~0.3 s at frame_s 0.1)
+    cooldown_s: float = 2.0
+    max_latency_s: float = 5.0
+    emitted: bool = False            # measure-only until AC3 clears
+
+    @property
+    def threshold_id(self) -> str:
+        """Stable identity of this operating point (named in every trigger record)."""
+        lo = self.band_lo_hz / 1000.0
+        hi = self.band_hi_hz / 1000.0
+        sustain_s = self.sustain_frames * self.frame_s
+        return f"stageB/whistle/{lo:g}-{hi:g}k/{self.whistle_ratio:g}x/{sustain_s:g}s"
+
+
+@dataclass
+class BandLimitedWhistleGate:
+    """Band-limited (2.4-3.4 kHz) tonal-burst detector — the whistle trigger path.
+
+    Mirrors the Stage-A baseline mechanics (rolling percentile ambient baseline,
+    sustain window, cooldown, onset-anchored ``ts``) but on the whistle band
+    instead of broadband RMS. ``update`` returns an :class:`AudioGateSignal` with
+    ``kind="burst"`` and ``threshold_id="stageB/whistle/2.4-3.4k/<ratio>x/<sustain>s"``
+    so the frozen ``AudioSignalSchema`` contract is unchanged and a later re-tune
+    cannot redefine what a historical trigger meant.
+    """
+
+    cfg: WhistleConfig = field(default_factory=WhistleConfig)
+
+    def __post_init__(self) -> None:
+        self.baseline: float | None = None
+        self._history: deque[tuple[float, float]] = deque()  # (ts, band energy)
+        self._guard_history: dict[str, deque[float]] = {
+            "speech": deque(), "low": deque(),
+        }
+        self._elevated: int = 0
+        self._peak_band: float = 0.0
+        self._peak_rms: float = 0.0
+        self._onset_ts: float | None = None
+        self._last_fired_ts: float | None = None
+        self._frames_seen: int = 0
+        # Measure-only accounting: every fire is counted even when it is not
+        # emitted into candidate scheduling.
+        self.fired_count: int = 0
+        self.emitted_count: int = 0
+
+    # -- internals ------------------------------------------------------
+
+    @staticmethod
+    def _percentile(values: list[float], p: float) -> float | None:
+        return AudioEnergyGate._percentile(values, p)
+
+    def _prune(self, ts: float) -> None:
+        cutoff = ts - self.cfg.lookback_s
+        while self._history and self._history[0][0] < cutoff:
+            self._history.popleft()
+        for b in self._guard_history.values():
+            while len(b) > int(self.cfg.lookback_s / self.cfg.frame_s):
+                b.popleft()
+
+    def _recompute_baseline(self, ts: float) -> None:
+        self._prune(ts)
+        energies = [e for _ts, e in self._history]
+        p = self._percentile(energies, self.cfg.baseline_percentile)
+        self.baseline = None if p is None else max(p, self.cfg.baseline_floor)
+
+    def _in_cooldown(self, ts: float) -> bool:
+        return self._last_fired_ts is not None and ts - self._last_fired_ts < self.cfg.cooldown_s
+
+    def _reset_window(self) -> None:
+        self._elevated = 0
+        self._peak_band = 0.0
+        self._peak_rms = 0.0
+        self._onset_ts = None
+
+    # -- main API --------------------------------------------------------
+
+    def update(self, samples: np.ndarray, ts: float) -> AudioGateSignal | None:
+        """Feed one audio chunk at ``ts``; return a whistle signal when it fires."""
+        cfg = self.cfg
+        band = band_energy(samples, cfg.sample_rate, cfg.band_lo_hz, cfg.band_hi_hz)
+        speech = band_energy(samples, cfg.sample_rate, cfg.speech_lo_hz, cfg.speech_hi_hz)
+        low = band_energy(samples, cfg.sample_rate, cfg.low_lo_hz, cfg.low_hi_hz)
+        tonality, flatness = band_tonality(samples, cfg.sample_rate, cfg.band_lo_hz, cfg.band_hi_hz)
+
+        self._history.append((ts, band))
+        self._guard_history["speech"].append(speech)
+        self._guard_history["low"].append(low)
+        self._frames_seen += 1
+        self._recompute_baseline(ts)
+
+        if ts < cfg.calibration_s or self.baseline is None:
+            return None
+
+        ratio = band / max(self.baseline, cfg.baseline_floor)
+        speech_ratio = speech / max(self._percentile(list(self._guard_history["speech"]), cfg.baseline_percentile) or cfg.baseline_floor, cfg.baseline_floor)
+        low_ratio = low / max(self._percentile(list(self._guard_history["low"]), cfg.baseline_percentile) or cfg.baseline_floor, cfg.baseline_floor)
+
+        is_tone = (
+            ratio >= cfg.whistle_ratio
+            and speech_ratio <= cfg.guard_max_ratio
+            and low_ratio <= cfg.guard_max_ratio
+            and tonality >= cfg.min_tonality
+            and flatness <= cfg.max_flatness
+        )
+
+        if self._in_cooldown(ts):
+            return None
+
+        if not is_tone:
+            self._reset_window()
+            return None
+
+        if self._elevated == 0:
+            self._onset_ts = ts
+            self._peak_band = band
+        else:
+            self._peak_band = max(self._peak_band, band)
+        self._elevated += 1
+        self._peak_rms = max(self._peak_rms, frame_energy(samples))
+
+        if self._elevated >= cfg.sustain_frames:
+            return self._fire(ts)
+        return None
+
+    def _fire(self, fired_at: float) -> AudioGateSignal:
+        onset = self._onset_ts if self._onset_ts is not None else fired_at
+        baseline = self.baseline if self.baseline is not None else 0.0
+        sig = AudioGateSignal(
+            kind="burst",
+            ts=onset,
+            fired_at=fired_at,
+            onset_latency_s=round(fired_at - onset, 3),
+            peak_energy=round(min(1.0, self._peak_rms), 6),
+            baseline_energy=round(max(baseline, self.cfg.baseline_floor), 6),
+            frames=self._elevated,
+            threshold_id=self.cfg.threshold_id,
+        )
+        self._last_fired_ts = fired_at
+        self._reset_window()
+        self.fired_count += 1
+        return sig
+
+    def reset(self) -> None:
+        """Clear all state (new session / new stream)."""
+        self.baseline = None
+        self._history.clear()
+        for b in self._guard_history.values():
+            b.clear()
+        self._last_fired_ts = None
+        self._reset_window()
+
