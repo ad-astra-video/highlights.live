@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StageAMetricsSnapshot } from "@highlights/events";
-import { candidateCountForJob, completedCounterFields, counterFieldsForJob, stageAMetricsForJob } from "../src/job-counters";
+import { candidateCountForJob, completedCounterFields, completedLiveCounterFields, counterFieldsForJob, liveCandidateCountForJob, stageAMetricsForJob } from "../src/job-counters";
 
 // ADAAAA-7624: honest per-job candidate + Stage-A counters.
 //
@@ -136,6 +136,109 @@ describe("counterFieldsForJob (ADAAAA-7624 read-time projection)", () => {
     const fields = counterFieldsForJob({ highlightsFound: 9, vodObserveMetrics: { accepted: 30 } });
     expect(fields.candidatesTriggered).toBe(9);
     expect(fields.candidatePath).toBe("observe");
+  });
+});
+
+// ADAAAA-7667: fixture live RTMP job 12927ed6 — 5 decide calls, 2 accepted
+// observe decisions, no persisted highlight (`highlightsFound: 0`). The live
+// record carries `observeMetrics` and NO `candidatePath` (the live completion
+// patch never wrote the counters), so the VOD-only projection fell through to
+// `0 / "none"` and the job-detail "Candidates" header read 0 next to a
+// non-zero Decide-calls header.
+describe("live candidate-count projection (ADAAAA-7667)", () => {
+  // Stored record of the fixture job, as runLiveJob actually persisted it:
+  // stageAMetrics absent, no candidates trail, decideCalls mirrored from the
+  // observe pass (ADAAAA-7664) and no candidate counters at all.
+  const liveFixture = () => ({
+    status: "done" as const,
+    highlightsFound: 0,
+    decideCalls: 5,
+    observeMetrics: {
+      decideCalls: 5,
+      accepted: 2,
+      maxFrames: 30,
+      meanE2eMs: 15204.8,
+      maxE2eMs: 25862,
+      meanCadenceMs: 2500,
+      maxCadenceMs: 3000,
+    },
+  });
+
+  it("reports the fixture live job as 2 observe candidates, not 0/none", () => {
+    const fields = counterFieldsForJob(liveFixture());
+    expect(fields.candidatesTriggered).toBe(2);
+    expect(fields.candidatePath).toBe("observe");
+    // The header renders `candidateCountLabel(job)` over the projected job.
+    expect({ ...liveFixture(), ...fields }.candidatesTriggered).toBe(2);
+  });
+
+  it("prefers the deduped persisted highlight count over the per-window tally", () => {
+    // Overlapping live windows can accept the same play twice (5 accepts, 3
+    // distinct persisted highlights). The persisted count wins.
+    const fields = counterFieldsForJob({
+      highlightsFound: 3,
+      observeMetrics: { decideCalls: 9, accepted: 5 },
+    });
+    expect(fields.candidatesTriggered).toBe(3);
+    expect(fields.candidatePath).toBe("observe");
+  });
+
+  it("uses the decided trail when it is the only per-play evidence", () => {
+    const fields = counterFieldsForJob({
+      candidates: [{ seq: 1 }, { seq: 7 }],
+      highlightsFound: 2,
+      observeMetrics: { decideCalls: 6, accepted: 4 },
+    });
+    expect(fields.candidatesTriggered).toBe(2);
+    expect(fields.candidatePath).toBe("observe");
+  });
+
+  it("reports a measured 0 from the observe path when it accepted nothing", () => {
+    const fields = counterFieldsForJob({ observeMetrics: { decideCalls: 4, accepted: 0 } });
+    expect(fields.candidatesTriggered).toBe(0);
+    // The path that ran IS observe: never "none" for a live job whose observer ran.
+    expect(fields.candidatePath).toBe("observe");
+  });
+
+  it("leaves a live record that already carries counters untouched", () => {
+    expect(
+      counterFieldsForJob({
+        candidatesTriggered: 2,
+        candidatePath: "observe",
+        stageAMetricsStatus: "n/a",
+        decideCalls: 5,
+        observeMetrics: { decideCalls: 5, accepted: 2 },
+      })
+    ).toEqual({});
+  });
+
+  it("never emits a negative or fractional live count", () => {
+    expect(liveCandidateCountForJob(-3, 0)).toEqual({ count: 0, path: "observe" });
+    expect(liveCandidateCountForJob(2.9, 0)).toEqual({ count: 2, path: "observe" });
+    expect(liveCandidateCountForJob(undefined, 0)).toEqual({ count: 0, path: "none" });
+  });
+});
+
+describe("completedLiveCounterFields (ADAAAA-7667)", () => {
+  it("persists the live accepted count with the observe path", () => {
+    const fields = completedLiveCounterFields(zeroSnapshot(), { accepted: 2 }, 0);
+    expect(fields.candidatesTriggered).toBe(2);
+    expect(fields.candidatePath).toBe("observe");
+    // A gate that judged nothing still reads n/a, never a measured 0%.
+    expect(fields.stageAMetricsStatus).toBe("n/a");
+    expect(fields.stageAMetrics).toBeUndefined();
+  });
+
+  it("persists the deduped highlight count when highlights already landed", () => {
+    const fields = completedLiveCounterFields(zeroSnapshot(), { accepted: 4 }, 2);
+    expect(fields.candidatesTriggered).toBe(2);
+    expect(fields.candidatePath).toBe("observe");
+  });
+
+  it("reports none for a live job whose observer never ran", () => {
+    const fields = completedLiveCounterFields(zeroSnapshot(), undefined, 0);
+    expect(fields.candidatesTriggered).toBe(0);
+    expect(fields.candidatePath).toBe("none");
   });
 });
 
