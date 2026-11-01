@@ -279,6 +279,12 @@ services:
       # transcription failure never kills the verdict. `AUDIO_CONTEXT=1` (default
       # on) enables the transcript injection for trigger-passing candidates.
       - ASR_URL=${ASR_URL:-http://asr:8082}
+      # ADAAAA-7669: whisper task for the ASR call above. Default `transcribe`
+      # keeps the commentary in its source language (deployed behaviour);
+      # `translate` returns English for the decide prompt. Opting in is a
+      # measured decision — translation rewrites the prompt text, so re-run the
+      # goal-acceptance check on a real clip before setting it in docker/.env.
+      - ASR_TASK=${ASR_TASK:-transcribe}
       - AUDIO_CONTEXT=${AUDIO_CONTEXT:-1}
       # ADAAAA-6350: native `input_audio` Path-1 block for trigger-passing
       # candidates. GEMMA_SEND_AUDIO=1 turns the decide call from ASR->text
