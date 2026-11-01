@@ -16,6 +16,7 @@
 // the acceptance criteria (<=30-frame cap, ~3 s cadence, ~10 s window, overlap).
 
 import { TriggerWindowScheduler, type AudioTriggerRecord, type TriggerSchedulerStats } from "./audio-trigger";
+import type { StageAOutcomeLedger } from "./stage-a-metrics";
 
 /** Decide invocation cadence in content seconds. CEO-locked (ADAAAA-7000). */
 export const OBSERVE_CADENCE_S = 3;
@@ -321,6 +322,10 @@ export class LiveObserver {
   private maxLagMs = 0;
   private lagSumMs = 0;
   private lagCount = 0;
+  /** ADAAAA-7694: records the Stage-A outcome (accepted/rejected + onset
+   * latency) for every trigger a decided window judges. Owned by the run (the
+   * audio tap feeds it), so the observer only writes the verdicts. */
+  private readonly stageA: StageAOutcomeLedger | null;
 
   constructor(opts: {
     cadenceS?: number;
@@ -332,6 +337,9 @@ export class LiveObserver {
     onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
     /** Minimum budget needed to fire early on a trigger (default 0.4). */
     triggerMinBudget?: number;
+    /** ADAAAA-7694: Stage-A outcome ledger, so each decided window records the
+     *  verdict of the audio triggers whose onset it judged. */
+    stageA?: StageAOutcomeLedger;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
@@ -341,6 +349,7 @@ export class LiveObserver {
     this.signalGateOpts = opts.signalGateOpts ?? {};
     this.onDecide = opts.onDecide ?? null;
     this.triggerMinBudget = opts.triggerMinBudget ?? 0.4;
+    this.stageA = opts.stageA ?? null;
   }
 
   /** Record a frame + its perceive-derived seed context (no re-inference). */
@@ -406,6 +415,7 @@ export class LiveObserver {
       // fire is one cadence later, not immediately on a stale backlog.
       this.lastFireTs = ts;
       this.triggers.coverThrough(ts - this.windowS, ts);
+      this.stageA?.dropThrough(ts - this.windowS, ts);
       return 0;
     }
     const elapsed = ts - this.lastFireTs;
@@ -417,8 +427,11 @@ export class LiveObserver {
       this.skippedStaleWindows += skipped;
       // Triggers whose onset fell inside the dropped span can no longer be
       // anchored to a retained frame — cover them so they expire instead of
-      // firing on a window that no longer contains them.
+      // firing on a window that no longer contains them. They were never
+      // decided, so the Stage-A ledger drops them too (never a fabricated
+      // reject — ADAAAA-7694).
       this.triggers.coverThrough(ts - this.windowS, ts);
+      this.stageA?.dropThrough(ts - this.windowS, ts);
     }
     return skipped;
   }
@@ -499,6 +512,16 @@ export class LiveObserver {
       const accepted = await this.onDecide(payload);
       e2eMs = Date.now() - started;
       if (accepted) this.accepts++;
+      // ADAAAA-7694: this decided window IS the judgement of every Stage-A
+      // trigger whose onset it covers. Record the outcome (accepted/rejected +
+      // the gate's onset latency) so the job persists a MEASURED FP-rate
+      // snapshot instead of the all-zero `n/a` one. The anchored trigger is
+      // judged explicitly too: if the stream lagged far enough that its onset
+      // fell outside this trailing span it would otherwise stay pending.
+      if (this.stageA) {
+        if (anchored && dueTrigger) this.stageA.judgeTrigger(dueTrigger, accepted);
+        this.stageA.judgeWindow(lo, nowTs, accepted);
+      }
       const lag = lagMs ?? 0;
       this.latency.push({
         centerTs: nowTs,
@@ -966,6 +989,10 @@ export class ObserveDecider {
   private subsampledCalls = 0;
   /** Cadence ticks suppressed by the Tier-2 signal gate (ADAAAA-7145). */
   private gatedSkips = 0;
+  /** ADAAAA-7694: Stage-A outcome ledger (fed by the VOD audio tap). A decided
+   *  window records the verdict for every audio trigger whose onset it covers,
+   *  which is the only outcome a trigger has under the observe architecture. */
+  private readonly stageA: StageAOutcomeLedger | null;
 
   constructor(opts: {
     cadenceS?: number;
@@ -975,6 +1002,8 @@ export class ObserveDecider {
     signalGate?: boolean;
     signalGateOpts?: SignalGateOptions;
     onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
+    /** ADAAAA-7694: Stage-A outcome ledger for the VOD rail. */
+    stageA?: StageAOutcomeLedger;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? OBSERVE_WINDOW_S;
@@ -983,6 +1012,7 @@ export class ObserveDecider {
     this.signalGate = opts.signalGate ?? false;
     this.signalGateOpts = opts.signalGateOpts ?? {};
     this.onDecide = opts.onDecide ?? null;
+    this.stageA = opts.stageA ?? null;
   }
 
   /** Record a frame + its perceive-derived seed context (no re-inference). */
@@ -1038,7 +1068,14 @@ export class ObserveDecider {
     }
     this.reportTicks.push(payload.frames.length);
     if (payload.capped) this.subsampledCalls++;
-    if (this.onDecide && (await this.onDecide(payload))) this.accepts++;
+    const accepted = this.onDecide ? await this.onDecide(payload) : undefined;
+    if (accepted) this.accepts++;
+    // ADAAAA-7694: a decided VOD window judges every Stage-A trigger whose
+    // onset falls in its evidence span [lo, hi]; record that verdict so the
+    // job persists a MEASURED Stage-A snapshot. A gate-skipped window never
+    // reaches here, so its triggers stay pending (unjudged, never a fabricated
+    // reject).
+    if (accepted !== undefined) this.stageA?.judgeWindow(lo, hi, accepted);
   }
 
   /** Per-call decide input size (frame count) for the cost report. */

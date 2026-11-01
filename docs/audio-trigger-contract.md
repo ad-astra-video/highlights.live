@@ -105,9 +105,12 @@ A trigger is **evidence and a schedule request, never a decision**:
    Anchored decide scheduling runs on **one** rail today: the server-side live
    ingest (`runLiveJob` → `LiveRunShared.recordAudioTrigger` → `LiveObserver`),
    and only when the live decide-observer is enabled (`liveObserveLoop` on with
-   `decideWindowN` unset). The client `/ingest` rail and the VOD pass never call
-   `recordAudioTrigger`, so no window is anchored to a trigger there — see
-   "Where the anchored-window count is observable" below before asserting a
+   `decideWindowN` unset). The client `/ingest` and media-RTC rails never feed a
+   trigger to an observer, so no window is anchored there. The VOD pass feeds
+   `recordAudioTrigger` since [ADAAAA-7694](/ADAAAA/issues/ADAAAA-7694) but only
+   for MEASUREMENT (the Stage-A outcome ledger) — it never anchors a window,
+   because a decoded VOD pass has no frame ahead of the decode to anchor to.
+   See "Where the anchored-window count is observable" below before asserting a
    window count on those rails.
 
 ## Tap candidates are evidence only (ADAAAA-7691 AC1)
@@ -136,10 +139,63 @@ Where tap candidates *are* observable:
 
 `stageAMetrics` / `stageAMetricsStatus` describe the **decide outcome** of
 Stage-A candidates (accepted vs rejected by gemma), not the tap: the snapshot is
-only `"measured"` once a candidate has been decided and recorded, and no
-production path calls `StageAMetrics.recordOutcome()` today, so `"n/a"` is
-currently the expected value on every job — see
-[ADAAAA-7694](/ADAAAA/issues/ADAAAA-7694) for that separate defect.
+only `"measured"` once a trigger has been judged by a decide window. Before
+[ADAAAA-7694](/ADAAAA/issues/ADAAAA-7694) no production path called
+`StageAMetrics.recordOutcome()`, so `"n/a"` was the value on every job; the
+mapping is now implemented — see **Where a Stage-A outcome is recorded** below.
+
+## Where a Stage-A outcome is recorded (ADAAAA-7694)
+
+Under the observe architecture a fired Stage-A trigger no longer gets its own
+`decide()` call: the observer decides on a cadence and the trigger is provenance
+(plus, on the live rail, a window anchor). So a trigger has no verdict of its
+own, and the honest outcome to persist is **the verdict of the decide window
+that judges its onset**. That mapping is the recorded design decision:
+
+> **Rule.** A Stage-A trigger's outcome is the verdict of the FIRST decide window
+> whose evidence span contains the trigger's onset. `accepted = true` means that
+> window cut a highlight; `accepted = false` means it judged the moment and cut
+> none. `onsetLatencyS` from the trigger record is recorded with it, so the
+> p50/p95 latency budget is measured on real gate samples.
+
+It is implemented once, in `StageAOutcomeLedger`
+(`services/server/src/stage-a-metrics.ts`), which both rails feed and both
+observers write their verdicts into:
+
+| rail | window span used as "judged" | who writes the verdict |
+| --- | --- | --- |
+| server live ingest (`LiveObserver`) | `[tickTs - observeWindowS, tickTs]` (rolling PAST) | `LiveObserver.fire()` after its decide returns |
+| VOD (`ObserveDecider`) | `[tickTs - observeWindowS/2, tickTs + observeWindowS/2]` (centred) | `ObserveDecider.fire()` after its decide returns |
+| client `/ingest`, media RTC relay | — | no observer owns the frames, so nothing is recorded (`"n/a"`, correct) |
+
+Consequences you can rely on when reading a job:
+
+- **One row per judged trigger, never per decide call.** A trigger is removed
+  from the ledger when judged, so the overlapping windows that re-produce the
+  same moment cannot re-count it. `totalCandidates` is therefore a count of
+  audio events judged, not of decide invocations.
+- **Coalesced re-fires are one event.** Two triggers whose onsets are closer
+  than `AUDIO_TRIGGER_COALESCE_S` (2.5 s) are one audible event — the same rule
+  the anchoring scheduler uses — so `totalCandidates` is a per-event count, not
+  a per-chunk one. The tap's own `>= 1 candidate per burst` count is unchanged
+  and stays the raw gate count.
+- **A live trigger-anchored window judges its anchor.** The anchored trigger is
+  judged explicitly even if the stream lagged far enough that its onset sits
+  outside the trailing span; it is still counted once.
+- **Unjudged is not rejected.** A trigger inside a window that was never decided
+  (stale-frame drop, Tier-2 gate skip, past the stream tail) is dropped and
+  never recorded. So `fpRate` can only be inflated by real decisions, and a
+  gate-skipped window can neither lower nor raise it.
+- **`"measured"` needs one judged trigger.** With `totalCandidates > 0` the job
+  persists `stageAMetrics` + `stageAMetricsStatus: "measured"` and
+  `job-counters.stageAMetricsForJob` stops deriving `"n/a"`; with none it stays
+  `"n/a"` (no fabricated 0 % FP rate). The per-job evidence line
+  `[live:<job>] / [vod:<job>] stageA fpRate=… (rejected/total rejected), latency
+  mean/max=…, withinBudget=…` prints exactly when it is measured.
+- **VOD measures, it does not anchor.** The VOD tap now feeds
+  `LiveRunShared.recordAudioTrigger` so its fired triggers reach the ledger, but
+  no VOD window is anchored to a trigger (the decode has no frame ahead of it) —
+  the anchored-window table below is unchanged.
 
 ## Cooldown-bounded refire at the tap vs ONE anchored window (ADAAAA-7691 AC2)
 
@@ -184,7 +240,7 @@ they are not persisted, so a post-run reader cannot count coalesces.
 | --- | --- | --- |
 | server live ingest (`rtmp` / `screen` / `file-sim`, live observe loop on) | yes | `job.observeMetrics.triggerFires`, with `cadenceFires`, on `GET /jobs/{id}` and `GET /jobs/{id}/detail`. Invariant: `triggerFires + cadenceFires == decideCalls`. |
 | client `/ingest` rail (browser streams sampled frames) | no — frames arrive per chunk, no `TriggerWindowScheduler` | no anchored-window counter; judge the decide trail (`job.candidates` / detail `sections`) |
-| VOD (`file` / `url`) | no — the VOD tap only feeds the level-curve series + bias hints; `recordAudioTrigger` is never called | `job.vodObserveMetrics.decideCalls`; the VOD snapshot carries no trigger counter |
+| VOD (`file` / `url`) | no — the VOD tap feeds the level-curve series + bias hints and (ADAAAA-7694) the Stage-A outcome ledger; it never anchors a window | `job.vodObserveMetrics.decideCalls`; the VOD snapshot carries no trigger counter (the measured Stage-A rate is `job.stageAMetrics`) |
 | media RTC relay | no — the control plane owns no frame to anchor to | tap candidates only (`/health` → `audio.triggerCandidates`) |
 
 QA recipe for "ONE anchored window" on the live rail:
