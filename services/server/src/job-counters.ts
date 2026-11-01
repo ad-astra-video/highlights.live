@@ -46,6 +46,40 @@ export function candidateCountForJob(
   return { count: 0, path: "none" };
 }
 
+/**
+ * Count the candidates a LIVE job's observe pass produced (ADAAAA-7667).
+ *
+ * A live job records its observe decisions only as an aggregate
+ * (`observeMetrics.accepted`): the live pass never writes the VOD decision trail
+ * (`job.candidates`) nor a candidates counter, so such a record fell through the
+ * VOD-only read-time projection to `0 / "none"` while the observe path had
+ * accepted highlights, and the job-detail "Candidates" header read 0 next to a
+ * non-zero Decide-calls header.
+ *
+ * Count rule (keeps the ADAAAA-7624 semantics — never re-count one play):
+ * - The persisted highlight count is the deduped source of truth and wins when
+ *   it is non-zero. Consecutive live windows overlap (~3 s cadence over a
+ *   ~7.5 s window), so the same play CAN be accepted by two windows and inflate
+ *   `observeMetrics.accepted`.
+ * - When no highlight is persisted the accepted tally is the only evidence of
+ *   what the pass produced, so it is the count. Live completion patches the
+ *   counters before/while the highlight write lands and every pre-fix record
+ *   carries `highlightsFound: 0`, so this is the common path.
+ * - The path is `observe` whenever the observer ran, even when it accepted
+ *   nothing (a measured 0 from the path that ran, never "no path ran").
+ */
+export function liveCandidateCountForJob(
+  observeAccepted: number | undefined,
+  persistedHighlights: number
+): JobCandidateCount {
+  const produced = Math.max(0, Math.floor(persistedHighlights));
+  if (produced > 0) return { count: produced, path: "observe" };
+  if (observeAccepted !== undefined) {
+    return { count: Math.max(0, Math.floor(observeAccepted)), path: "observe" };
+  }
+  return { count: 0, path: "none" };
+}
+
 export interface JobStageAMetrics {
   /** Present only for a real measurement — never an all-zero snapshot. */
   stageAMetrics?: StageAMetricsSnapshot;
@@ -76,7 +110,8 @@ export interface CounterReadableJob {
   stageAMetrics?: StageAMetricsSnapshot;
   stageAMetricsStatus?: "measured" | "n/a";
   decideCalls?: number;
-  observeMetrics?: { decideCalls?: number };
+  /** Live observe-pass snapshot (ADAAAA-7011/7667). Present only on a live job. */
+  observeMetrics?: { decideCalls?: number; accepted?: number };
 }
 
 /**
@@ -94,6 +129,10 @@ export interface CounterReadableJob {
  * `vodObserveMetrics.accepted` is a per-window tally that re-counts the same
  * play across overlapping windows, so it is only a last-resort fallback and is
  * never the user-facing count.
+ *
+ * ADAAAA-7667: a LIVE record carries `observeMetrics` instead of
+ * `vodObserveMetrics` (it never writes `job.candidates`), so it has its own
+ * branch — see {@link liveCandidateCountForJob}.
  */
 export function counterFieldsForJob(job: CounterReadableJob): Partial<CompletedCounterFields> {
   const out: Partial<CompletedCounterFields> = {};
@@ -103,6 +142,16 @@ export function counterFieldsForJob(job: CounterReadableJob): Partial<CompletedC
     if (job.vodObserveMetrics !== undefined) {
       out.candidatesTriggered = produced > 0 ? produced : Math.max(0, Math.floor(job.highlightsFound ?? 0));
       out.candidatePath = "observe";
+    } else if (job.observeMetrics !== undefined) {
+      // ADAAAA-7667: the live observe pass ran (it is the only path a live job
+      // has). `highlightsFound` is the deduped persisted count; the accepted
+      // tally is a per-window count that can re-count an overlapping play.
+      const live = liveCandidateCountForJob(
+        job.observeMetrics.accepted,
+        Math.max(produced, Math.max(0, Math.floor(job.highlightsFound ?? 0)))
+      );
+      out.candidatesTriggered = live.count;
+      out.candidatePath = live.path;
     } else if (stored > 0) {
       out.candidatesTriggered = stored;
       out.candidatePath = "perceive_gate";
@@ -162,6 +211,27 @@ export function completedCounterFields(
   rawCandidateEvents: number
 ): CompletedCounterFields {
   const candidates = candidateCountForJob(observeAccepted, rawCandidateEvents);
+  return {
+    candidatesTriggered: candidates.count,
+    candidatePath: candidates.path,
+    ...stageAMetricsForJob(stageASnapshot),
+  };
+}
+
+/**
+ * The counter portion of the LIVE job-completion patch (ADAAAA-7667). Mirrors
+ * {@link completedCounterFields} for the live pass, whose only candidate
+ * evidence is `observeMetrics.accepted` (it writes no decision trail and no raw
+ * event counter). `persistedHighlights` must be the store's deduped count for
+ * the job (`store.highlightsForJob(job.id).length`) — not a local tally — so an
+ * overlapping live window can never be counted twice.
+ */
+export function completedLiveCounterFields(
+  stageASnapshot: StageAMetricsSnapshot,
+  observeMetrics: { accepted?: number } | undefined,
+  persistedHighlights: number
+): CompletedCounterFields {
+  const candidates = liveCandidateCountForJob(observeMetrics?.accepted, persistedHighlights);
   return {
     candidatesTriggered: candidates.count,
     candidatePath: candidates.path,

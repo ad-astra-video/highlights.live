@@ -47,7 +47,7 @@ import {
   type JobDecision,
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
-import { completedCounterFields, counterFieldsForJob, stageAMetricsForJob } from "./job-counters";
+import { completedCounterFields, completedLiveCounterFields, counterFieldsForJob } from "./job-counters";
 import { buildPostableHighlights } from "./highlight-postable";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
@@ -734,12 +734,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // snapshotted onto the job so the noise-trigger cost bound (<= 60% of
       // audio candidates rejected by Gemma) is inspectable/queryable post-run.
       const stageA = shared.stageA.snapshot();
+      // ADAAAA-7667: the live pass wrote `observeMetrics` but never the
+      // candidate counters, so a live job that accepted highlights persisted
+      // `candidatesTriggered: 0` / `candidatePath: "none"` (and, before
+      // ADAAAA-7624, no path at all) and the job-detail "Candidates" header
+      // read 0 next to a non-zero Decide-calls header. Persist the counters the
+      // observe pass produced here, exactly like the VOD completion patch, using
+      // the store's DEDUPED highlight count for the job so overlapping live
+      // windows cannot re-count one play (the accepted tally is the fallback
+      // when no highlight landed yet — see job-counters.ts).
       await store.patchJob(job.id, {
         status: "done",
         perceiveSessionId: outcome.sessionId,
-        // ADAAAA-7624: persist the Stage-A status alongside the snapshot so a
-        // gate that judged no candidate reads n/a instead of a measured 0%.
-        ...stageAMetricsForJob(stageA),
+        // ADAAAA-7624/7667: Stage-A status + the live candidate counters.
+        ...completedLiveCounterFields(stageA, outcome.observeMetrics, store.highlightsForJob(job.id).length),
         // ADAAAA-7011: cadence + decide gemma E2E latency snapshot from the live
         // decide-observer, so the Livepeer runner shows the ~30 s budget
         // utilization. Absent when the observer was not enabled.

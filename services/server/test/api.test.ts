@@ -1349,3 +1349,81 @@ describe("job detail integrity for a long capped job (ADAAAA-7624)", () => {
     await app.close();
   });
 });
+
+// ADAAAA-7667: fixture live RTMP job 12927ed6 (5 decide calls, 2 accepted
+// observe decisions, 0 persisted highlights). The live completion patch wrote
+// `observeMetrics` but never the candidate counters, and the read-time
+// projection only understood the VOD shape, so `GET /jobs/{id}` reported
+// `candidatesTriggered: 0` / `candidatePath: "none"` and the job-detail
+// "Candidates" header read 0 next to a non-zero Decide-calls header.
+describe("live job candidate counters (ADAAAA-7667)", () => {
+  async function adminToken(app: any, cfg: any): Promise<string> {
+    const r = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: cfg.adminEmail, password: cfg.adminPassword },
+    });
+    expect(r.statusCode).toBe(200);
+    return r.json().token as string;
+  }
+
+  it("reports the fixture live job shape as 2 observe candidates on every read route", async () => {
+    const { app, cfg, store } = await buildTestApp();
+    const token = await adminToken(app, cfg);
+    const job = await store.createJob({ source: "rtmp" });
+    // Completion exactly as runLiveJob persisted the fixture: the observe
+    // snapshot (5 decide calls, 2 accepted), no candidates trail, no Stage-A
+    // snapshot, and no candidate counters at all.
+    await store.patchJob(job.id, {
+      status: "done",
+      decideCalls: 5,
+      observeMetrics: {
+        decideCalls: 5,
+        accepted: 2,
+        maxFrames: 30,
+        meanE2eMs: 15204.8,
+        maxE2eMs: 25862,
+        meanCadenceMs: 2500,
+        maxCadenceMs: 3000,
+      } as any,
+    });
+
+    const headers = { authorization: `Bearer ${token}` };
+    const one = await app.inject({ method: "GET", url: `/jobs/${job.id}`, headers });
+    expect(one.statusCode).toBe(200);
+    expect(one.json().job.candidatesTriggered).toBe(2);
+    expect(one.json().job.candidatePath).toBe("observe");
+
+    const list = await app.inject({ method: "GET", url: "/jobs", headers });
+    const listed = (list.json().jobs as any[]).find((j) => j.id === job.id);
+    expect(listed.candidatesTriggered).toBe(2);
+    expect(listed.candidatePath).toBe("observe");
+
+    const detail = await app.inject({ method: "GET", url: `/jobs/${job.id}/detail`, headers });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().job.candidatesTriggered).toBe(2);
+    expect(detail.json().job.candidatePath).toBe("observe");
+
+    // Read-time only: the stored row is never rewritten by a read.
+    expect(store.getJob(job.id)?.candidatesTriggered).toBeUndefined();
+    expect(store.getJob(job.id)?.candidatePath).toBeUndefined();
+    await app.close();
+  });
+
+  it("keeps VOD counts unchanged when only the VOD observe snapshot is present", async () => {
+    const { app, cfg, store } = await buildTestApp();
+    const token = await adminToken(app, cfg);
+    const job = await store.createJob({ source: "file" });
+    await store.patchJob(job.id, {
+      status: "done",
+      highlightsFound: 9,
+      vodObserveMetrics: { decideCalls: 30, accepted: 12, maxFrames: 16, subsampledCalls: 0, framesPerCall: [] } as any,
+    });
+    const headers = { authorization: `Bearer ${token}` };
+    const one = await app.inject({ method: "GET", url: `/jobs/${job.id}`, headers });
+    // 9 distinct produced highlights, not the observer's 12-window tally.
+    expect(one.json().job.candidatesTriggered).toBe(9);
+    expect(one.json().job.candidatePath).toBe("observe");
+    await app.close();
+  });
+});
