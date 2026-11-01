@@ -19,6 +19,7 @@ import {
   decideGroupKey,
   highlightIdempotencyKey,
   highlightDedupKey,
+  observeOnDecide,
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
@@ -27,6 +28,7 @@ import {
 } from "./analyzer";
 import type { SignalGateOptions } from "./observe-loop";
 import { audioTriggerFromCandidate } from "./audio-trigger";
+import { MediaRailObserver } from "./media-rail";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
@@ -391,7 +393,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // CLIENT streams sampled frames in via POST /jobs/:id/ingest and a recording
   // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
   // session.
-  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string; mediaIceServers?: any[] }>();
+  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string; mediaIceServers?: any[]; rail?: MediaRailObserver }>();
   // ADAAAA-6561: per live-ingest job, the CURRENT perceive session held by that
   // job plus whether the job has been stopped. The stop path uses this to
   // release the perceive slot SYNCHRONOUSLY (independent of the in-flight GPU
@@ -555,6 +557,32 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const job = store.getJob(jobId);
       const bj = browserJobs.get(jobId);
       if (!job || !bj) return { ok: true, job, reason };
+      // ADAAAA-7699: settle the media-rail decide observer BEFORE the perceive
+      // session is released and before clips are cut — the tail window must be
+      // decided while the session the media node paid for is still alive, and
+      // every accepted highlight must exist before the cut loop runs.
+      if (bj.rail) {
+        await bj.rail.finish().catch((e) => console.error(`[media-rail:${jobId}] finish failed:`, e?.message || e));
+        const railStats = bj.rail.stats();
+        const railMetrics = bj.rail.observeMetrics();
+        await store
+          .patchJob(jobId, {
+            // Mirror a live RTMP job's record: the observer owns the decide
+            // count, the anchored/cadence split and the latency/lag snapshot.
+            decideCalls: railMetrics.decideCalls,
+            observeMetrics: railMetrics,
+            // ADAAAA-7667 semantics: the persisted (deduped) highlight count is
+            // the candidate count; `observe` is the path that ran.
+            ...completedLiveCounterFields(bj.rail.run.stageA.snapshot(), railMetrics, store.highlightsForJob(jobId).length),
+            // ADAAAA-7670: inference cost attribution for the share. The
+            // streaming decide fee is waived at BILLING time (ADAAAA-5341), so
+            // the decide term is the list-price measure of the calls made, not
+            // money charged; the perceive session was already paid by the share.
+            perceiveSessionS: railStats.sessionSeconds,
+            costUsd: Number((cfg.decideFee * railMetrics.decideCalls + (railStats.sessionSeconds / 3600) * PERCEIVE_PER_HOUR_USD).toFixed(4)),
+          })
+          .catch((e: any) => console.error(`[media-rail:${jobId}] metrics persist failed:`, e?.message || e));
+      }
       if (bj.sessionId) await adapter.stopPerceive(bj.sessionId).catch(() => {});
       // Media-path session: tell the media server to stop paying + release the
       // perceive slot (also idempotently triggered by the browser WS closing),
@@ -643,6 +671,76 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     });
     browserFinalizing.set(jobId, task);
     return task;
+  }
+  // ADAAAA-7699: per-share decide observer for the media (RTC) rail. The media
+  // node relays each perceive observation back WITH the anchor JPEG it already
+  // holds at publish time, so this rail can run the same cadence-bound
+  // decide-observer the live RTMP rail uses — without reserving a second
+  // perceive session and without routing the share back onto the control-plane
+  // `/ingest` rail (which would regress the Phase-2 media-server migration,
+  // ADAAAA-6867). Lazily created on the first relayed observation/audio chunk.
+  async function ensureMediaRail(
+    job: { id: string; ownerId?: string; gameHint?: string; preferLabels?: string[]; cameraId?: string },
+    bj: { rail?: MediaRailObserver; mediaSessionId?: string }
+  ): Promise<MediaRailObserver | null> {
+    if (bj.rail) return bj.rail;
+    // Same rollout switch as the live rail's decide-observer.
+    if (!cfg.liveObserveLoop) return null;
+    if (!job.ownerId) return null;
+    const user = await db.getUserById(job.ownerId);
+    if (!user) return null;
+    const sub = await db.getSubscription(user.id);
+    const cw = await resolveClipWindow();
+    const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S });
+    const anaCfg: AnalyzerConfig = buildLiveAnalyzerConfig({
+      cfg,
+      job,
+      clipWindow: cw,
+      // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
+      onDecision: persistDecision,
+      // ADAAAA-7028 Inc 2: durable decide_audit rows (AC-2 parity with the
+      // live rail: promptText / frameCount / timings / replays).
+      onDecideAudit: persistDecideAudit,
+      getRunningSummary: () => store.getJob(job.id)?.runningSummary ?? "",
+      onRunningSummary: (summary, meta) =>
+        appendSummaryEntry(store, job.id, summary, meta).catch((e: any) =>
+          console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))
+        ),
+    });
+    // Clips are cut from the browser recording at share end (finishBrowserJob
+    // cuts every highlight that has no clipUri yet): the recording is still
+    // being written while the share is live, so a decide must not try to cut
+    // from a truncated file. The highlight record persists at DECISION time so
+    // the live feed updates during the share (ADAAAA-5777 behaviour).
+    const deferredCut = async () => ({ clipId: "", clipUri: "" });
+    const onEvent = (ev: AnalyzeEvent) => {
+      emitJobEvent(job.id, ev);
+      if (ev.type === "highlight" && ev.highlight) {
+        persistLiveHighlight({ store, cfg, billing, entitlements, db }, user, sub, ev.highlight).catch((e) =>
+          console.error(`[media-rail:${job.id}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
+        );
+      }
+    };
+    const rail = new MediaRailObserver(
+      {
+        jobId: job.id,
+        stageA: shared.stageAOutcomes,
+        signalGate: cfg.observeSignalGate,
+        signalGateOpts: buildObserveSignalGateOpts(cfg),
+        onDecide: async (payload) => {
+          // Streaming waiver (ADAAAA-5341): the share is an ACTIVE streaming
+          // session, so the per-decide fee is $0 and the gate never 402s
+          // mid-share; the decide is still metered so volume stays observable.
+          await billing.canDecide(user, sub, { streaming: true });
+          const accepted = await observeOnDecide(adapter, shared, deferredCut, anaCfg, onEvent, bj.mediaSessionId ?? "", payload);
+          await billing.onDecideCompleted(user, sub, { streaming: true });
+          return accepted;
+        },
+      },
+      shared
+    );
+    bj.rail = rail;
+    return rail;
   }
   // The same recording as the perceive runner sees it (shared volume): the
   // perceive container mounts this server's dataDir at cfg.perceiveClipRoot, so
@@ -3109,21 +3207,40 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // Internal callback from the media server: relay an observation the perceive
   // runner published to events-out, stepping the per-job evidence and fanning
   // to the live console. The browser streaming to the media server never touches
-  // the Fastify control plane's frame ingest. (Candidate->decide->highlight
-  // wiring is the next increment — the runner currently publishes observation
-  // without a candidate on events-out.)
-  app.post<{ Params: { id: string } }>("/jobs/:id/observe", async (req: any, reply) => {
-    const job = store.getJob(req.params.id);
-    const bj = browserJobs.get(req.params.id);
-    if (!job || job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
-    const obs = req.body;
-    if (!obs || typeof obs !== "object") return reply.code(400).send({ error: "observation required" });
-    const seq = typeof obs.seq === "number" ? obs.seq : 0;
-    const timestamp = typeof obs.timestamp === "number" ? obs.timestamp : 0;
-    bj.evidence.step(obs);
-    emitJobEvent(req.params.id, { seq, timestamp, type: "observation", observation: obs });
-    return { ok: true };
-  });
+  // the Fastify control plane's frame ingest.
+  //
+  // ADAAAA-7699: the media node ALSO posts the decoded anchor JPEG it already
+  // holds at publish time as `frameB64`, which is what lets this rail decide
+  // (candidate/trigger -> decide -> highlight) on the same perceive session —
+  // the frame travels with the observation, so no second session is opened to
+  // fetch pixels. `frameB64` is stripped before the observation is stepped or
+  // fanned to SSE (pixels must not ride the console stream).
+  app.post<{ Params: { id: string } }>(
+    "/jobs/:id/observe",
+    // A 480-px-wide JPEG samples to a few tens of KB, but a WS-rail frame can be
+    // larger; the default 1 MiB JSON limit is too tight for an anchor frame.
+    { bodyLimit: 8 * 1024 * 1024 },
+    async (req: any, reply) => {
+      const job = store.getJob(req.params.id);
+      const bj = browserJobs.get(req.params.id);
+      if (!job || job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
+      const body = req.body;
+      if (!body || typeof body !== "object") return reply.code(400).send({ error: "observation required" });
+      const { frameB64, ...obs } = body as { frameB64?: string } & Record<string, any>;
+      const seq = typeof obs.seq === "number" ? obs.seq : 0;
+      const timestamp = typeof obs.timestamp === "number" ? obs.timestamp : 0;
+      bj.evidence.step(obs as any);
+      emitJobEvent(req.params.id, { seq, timestamp, type: "observation", observation: obs as any });
+      // Media (RTC) rail decide wiring: schedule a cadence/anchored decide on
+      // the frame the media node just handed us. Returns immediately — decides
+      // run on the rail's serial chain so this callback never blocks frames.
+      if (typeof frameB64 === "string" && frameB64) {
+        const rail = await ensureMediaRail(job, bj).catch(() => null);
+        rail?.onObservation(obs as any, frameB64);
+      }
+      return { ok: true };
+    }
+  );
 
   // Media-edge audio relay callback (ADAAAA-7658). The media node decodes the
   // browser's opus RTP with the ffmpeg already in its image and POSTs ~100 ms
@@ -3134,10 +3251,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // runs on the media path too. Pure DSP — no GPU on this path.
   //
   // A fired candidate is surfaced on the job's SSE stream as `candidate`
-  // evidence (provenance for the live console). It does NOT by itself issue a
-  // decide on this rail: the media rail has no frame on the control plane to
-  // anchor a decide to. The trigger-window scheduling that anchors decide runs
-  // on the rails that own the frames (server live ingest + browser /ingest).
+  // evidence (provenance for the live console).
+  //
+  // ADAAAA-7699: it ALSO anchors a decide window on this rail. The media node
+  // relays the decoded anchor JPEG with each observation, so the control plane
+  // holds the pixels the trigger fired on; the rail keeps the chunk as window
+  // audio (ASR text reaches gemma, GEMMA_SEND_AUDIO=0) and queues the trigger
+  // for the per-share decide observer, which coalesces re-fires into ONE
+  // anchored window and spends the same per-cadence decide budget as any other
+  // window (never a per-chunk decide storm).
   app.post<{ Params: { id: string } }>(
     "/jobs/:id/audio",
     // A chunk is ~3.2 KB of base64; reject anything that could be an abuse
@@ -3174,6 +3296,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         const candidate = res?.candidate ?? null;
         if (candidate) {
           emitJobEvent(job.id, { seq: Math.max(0, seq), timestamp, type: "candidate", candidate });
+        }
+        // ADAAAA-7699: hand the chunk + a fired trigger to the per-share decide
+        // observer. Best-effort: the audio gate stays pure DSP evidence on the
+        // media path and a rail hiccup can never fail the chunk forward.
+        if (bj) {
+          const rail = await ensureMediaRail(job, bj).catch(() => null);
+          rail?.onAudioChunk(timestamp, samples);
+          if (candidate) rail?.onAudioCandidate(candidate as any);
         }
         return { candidate, series: res?.series ?? [] };
       } catch (e: any) {

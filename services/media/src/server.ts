@@ -160,6 +160,12 @@ export type SessionCloseReason =
   | "media-node-restart";
 
 const DEFAULT_RECONNECT_GRACE_MS = 8000;
+
+/** ADAAAA-7699: cap on the decoded JPEG attached to an observe callback. The
+ *  RTC decoder samples at <=480 px wide (a few tens of KB); this bound keeps a
+ *  pathological WS-rail frame from turning the internal callback into a large
+ *  upload. Over the cap the observation still relays — only pixels are omitted. */
+const MAX_CALLBACK_FRAME_BYTES = 2 * 1024 * 1024;
 /** Bound on concurrent audio-chunk POSTs per session (ADAAAA-7658). A slow
  *  control plane must drop audio evidence, never grow a media-node backlog. */
 const MAX_AUDIO_POSTS_IN_FLIGHT = 8;
@@ -675,7 +681,7 @@ export class MediaServer {
         // eslint-disable-next-line no-console
         console.log(`[rtc] obs seq=${seq} liveMs=${Math.round((Date.now() / 1000 - ts) * 1000)} decodeMs=${decodeLatencyMs ?? 0}`);
         this.relay(stream, socket, obs);
-        void this.callback(stream, obs);
+        void this.callback(stream, obs, jpeg);
         return;
       }
       await sleep(250);
@@ -730,13 +736,21 @@ export class MediaServer {
     });
   }
 
-  private async callback(stream: ActiveStream, obs: any) {
+  private async callback(stream: ActiveStream, obs: any, jpeg?: Uint8Array) {
     if (!this.opts.callbackBase || !stream.jobId) return;
     try {
+      // ADAAAA-7699: carry the decoded anchor JPEG with the observation. The
+      // media node already holds this frame at publish time, so the control
+      // plane can anchor a decide to the exact pixels the trigger fired on
+      // without re-opening a session (or falling back to the /ingest rail) to
+      // fetch frames. Best-effort and size-bounded: a missing/huge frame only
+      // means the control plane records the observation as evidence.
+      const frameB64 =
+        jpeg && jpeg.length > 0 && jpeg.length <= MAX_CALLBACK_FRAME_BYTES ? Buffer.from(jpeg).toString("base64") : undefined;
       await fetch(`${this.opts.callbackBase}/jobs/${stream.jobId}/observe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(obs),
+        body: JSON.stringify(frameB64 ? { ...obs, frameB64 } : obs),
       });
     } catch {
       /* observe relay is best-effort */

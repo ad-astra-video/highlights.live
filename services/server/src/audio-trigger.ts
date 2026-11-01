@@ -186,21 +186,38 @@ export class TriggerWindowScheduler {
 
   /**
    * The earliest trigger whose analysis window is due at `currentTs` (onset +
+   * lead has elapsed), WITHOUT consuming it, or null. Expired triggers are
+   * dropped on the way.
+   *
+   * ADAAAA-7699: the observer asks this BEFORE it knows whether it can afford
+   * the fire (the decide budget gate). A tick that peeks a due trigger and then
+   * refuses to fire must not swallow it — the previous `due()`-first ordering
+   * popped the trigger (`fired++`) and returned, silently losing the anchored
+   * analysis of a real audible event.
+   */
+  peekDue(currentTs: number): AudioTriggerRecord | null {
+    if (!Number.isFinite(currentTs)) return null;
+    this.expire(currentTs);
+    const head = this.pending[0];
+    if (head && head.onsetTs + this.leadS <= currentTs) return head;
+    return null;
+  }
+
+  /** Consume the trigger {@link peekDue} returned (the fire is happening). */
+  consume(): AudioTriggerRecord | null {
+    const head = this.pending.shift();
+    if (head) this.counters.fired++;
+    return head ?? null;
+  }
+
+  /**
+   * The earliest trigger whose analysis window is due at `currentTs` (onset +
    * lead has elapsed), or null. Expired triggers are dropped on the way.
    */
   due(currentTs: number): AudioTriggerRecord | null {
-    if (!Number.isFinite(currentTs)) return null;
-    this.expire(currentTs);
-    while (this.pending.length > 0) {
-      const head = this.pending[0];
-      if (head.onsetTs + this.leadS <= currentTs) {
-        this.pending.shift();
-        this.counters.fired++;
-        return head;
-      }
-      break;
-    }
-    return null;
+    const head = this.peekDue(currentTs);
+    if (!head) return null;
+    return this.consume();
   }
 
   /** Drop pending triggers whose onset falls inside a window that has already
