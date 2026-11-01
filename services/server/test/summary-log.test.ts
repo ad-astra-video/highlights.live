@@ -79,18 +79,19 @@ describe("nextSummarySeq / appendSummaryEntry (ADAAAA-7237)", () => {
   });
 });
 
-// ADAAAA-7710: the observe cadence reports a FLOAT window centre whenever the
-// window boundary is not a whole second. That entry was rejected by the
-// persisted integer contract, which threw away the whole patch (entry AND the
-// bounded runningSummary) for that pass. Regression cover below uses a 14 s
+// ADAAAA-7711 (supersedes the ADAAAA-7710 rounding): the observe cadence
+// reports a FLOAT window centre whenever a window boundary is not a whole
+// second. That entry used to be rejected by the persisted integer contract,
+// which threw away the whole patch (entry AND the bounded runningSummary) for
+// that pass. The fix relaxes the contract to a finite float and keeps the
+// honest timestamp; only non-finite input is dropped. Cover below uses a 14 s
 // clip — a duration that is NOT a multiple of the window size — because the
 // whole-second fixtures above never exercise the fractional case.
-describe("normalizeWindowTs (ADAAAA-7710)", () => {
-  it("rounds a fractional window centre to the nearest integer second", () => {
-    expect(normalizeWindowTs(11.666666666666666)).toBe(12);
-    expect(normalizeWindowTs(11.4)).toBe(11);
-    expect(normalizeWindowTs(7.5)).toBe(8);
-    expect(normalizeWindowTs(0.4)).toBe(0);
+describe("normalizeWindowTs (ADAAAA-7711)", () => {
+  it("keeps a fractional window centre verbatim (no silent rounding)", () => {
+    expect(normalizeWindowTs(11.666666666666666)).toBe(11.666666666666666);
+    expect(normalizeWindowTs(4.666666666666667)).toBe(4.666666666666667);
+    expect(normalizeWindowTs(0.4)).toBe(0.4);
   });
 
   it("passes an already-integral timestamp through unchanged", () => {
@@ -109,7 +110,24 @@ describe("normalizeWindowTs (ADAAAA-7710)", () => {
   });
 });
 
-describe("appendSummaryEntry fractional window boundaries (ADAAAA-7710)", () => {
+describe("appendSummaryEntry fractional windowTs (ADAAAA-7711)", () => {
+  it("persists an entry whose windowTs is a fractional float (no dropped patch)", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/reallive_goal.mp4", gameHint: "soccer" });
+    // Pre-fix this rejected the whole patch: JobSchema -> summaryLog[0].windowTs
+    // expected integer, received float. The value is lifted verbatim from the
+    // live container log for job acb3c5b8 (`decide @11.666666666666666s`).
+    await expect(
+      appendSummaryEntry(s, job.id, "Kickoff, ball played into midfield.", {
+        windowTs: 11.666666666666666,
+      })
+    ).resolves.toBeDefined();
+    const j = s.getJob(job.id)!;
+    expect(j.summaryLog).toHaveLength(1);
+    expect(j.summaryLog![0].windowTs).toBe(11.666666666666666);
+    expect(j.runningSummary).toBe("Kickoff, ball played into midfield.");
+  });
+
   it("persists every entry for a 14 s clip whose last window centre is fractional", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/clip-14s.mp4", gameHint: "soccer" });
@@ -124,17 +142,15 @@ describe("appendSummaryEntry fractional window boundaries (ADAAAA-7710)", () => 
       "Kickoff.\nBall into midfield.\nShot wide.\nCorner won.\nHeader cleared.",
     ];
     for (let i = 0; i < centers.length; i += 1) {
+      // Every append must round-trip; a rejected patch would throw here.
       await appendSummaryEntry(s, job.id, summaries[i], { windowTs: centers[i] });
     }
     const j = s.getJob(job.id)!;
     // No pass is dropped: the fractional-boundary pass persisted its entry.
     expect(j.summaryLog).toHaveLength(centers.length);
     expect(j.summaryLog!.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
-    // Stored windowTs values satisfy the persisted integer contract.
-    expect(j.summaryLog!.map((e) => e.windowTs)).toEqual([0, 5, 7, 9, 12]);
-    for (const e of j.summaryLog!) {
-      expect(Number.isInteger(e.windowTs)).toBe(true);
-    }
+    // The honest fractional window is preserved end to end.
+    expect(j.summaryLog!.map((e) => e.windowTs)).toEqual(centers);
     // The fractional pass also persisted the bounded running summary (the old
     // behaviour lost this too, because the whole patchJob write was rejected).
     expect(j.runningSummary).toBe(summaries[summaries.length - 1]);
@@ -155,3 +171,4 @@ describe("appendSummaryEntry fractional window boundaries (ADAAAA-7710)", () => 
     expect(j.runningSummary).toBe("a goal at 120s\nsecond window");
   });
 });
+

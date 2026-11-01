@@ -97,6 +97,12 @@ describe("summaryEntryTimestamp (ADAAAA-7466)", () => {
   it("prefers windowTs (as T+Ns) when known", () => {
     expect(summaryEntryTimestamp({ seq: 1, ts: "2026-10-26T10:00:00Z", windowTs: 12, text: "x" })).toBe("T+12s");
   });
+  it("rounds a fractional windowTs for display only (ADAAAA-7711)", () => {
+    // Stored value keeps the honest float; the label must stay readable.
+    expect(
+      summaryEntryTimestamp({ seq: 1, ts: "2026-10-26T10:00:00Z", windowTs: 11.666666666666666, text: "x" })
+    ).toBe("T+12s");
+  });
   it("falls back to the wall-clock ts when windowTs is absent", () => {
     expect(summaryEntryTimestamp({ seq: 1, ts: "2026-10-26T10:00:00Z", text: "x" })).toMatch(/\d{2}:\d{2}:\d{2}/);
   });

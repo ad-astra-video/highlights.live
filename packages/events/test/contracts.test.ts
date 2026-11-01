@@ -347,6 +347,33 @@ describe("Job + StageAMetricsSnapshot (INC-2 / ADAAAA-4325 slice 5: FP-rate metr
         JobSchema.parse({ id: "j", source: "file", createdAt: "2026-10-16T00:00:00Z", progress: -1 })
       ).toThrow();
     });
+
+    // ADAAAA-7711: the observe cadence's `centerTs` is fractional whenever a
+    // window boundary is not a whole second. `summaryLog.windowTs` used to
+    // require an integer, so `JobSchema.parse` rejected the entire patch and
+    // the caller's `.catch` silently dropped that pass's summary entry.
+    it("accepts a fractional summaryLog windowTs (finite float, ADAAAA-7711)", () => {
+      const j = JobSchema.parse({
+        id: "job-frac",
+        source: "file",
+        createdAt: "2026-11-01T22:55:00Z",
+        summaryLog: [{ seq: 1, ts: "2026-11-01T22:55:57Z", windowTs: 11.666666666666666, text: "Kickoff." }],
+      });
+      expect(j.summaryLog?.[0].windowTs).toBe(11.666666666666666);
+    });
+
+    it("still rejects non-finite summaryLog windowTs values (ADAAAA-7711)", () => {
+      for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+        expect(() =>
+          JobSchema.parse({
+            id: "job-bad-ts",
+            source: "file",
+            createdAt: "2026-11-01T22:55:00Z",
+            summaryLog: [{ seq: 1, ts: "2026-11-01T22:55:57Z", windowTs: bad, text: "Kickoff." }],
+          })
+        ).toThrow();
+      }
+    });
   });
 });
 

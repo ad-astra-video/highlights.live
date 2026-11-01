@@ -53,25 +53,26 @@ export interface SummaryAppendMeta {
 }
 
 /**
- * ADAAAA-7710: normalise a window timestamp to the integer the persisted
- * `SummaryLogEntry.windowTs` contract requires (`z.number().int()`).
+ * ADAAAA-7711 (superseding the ADAAAA-7710 rounding): sanitise the observe
+ * cadence's window centre before it is persisted.
  *
- * The observe cadence reports `payload.centerTs`, which is a float whenever the
- * window centre is not a whole second (e.g. a 14 s clip whose last tap is at
- * `11.666666666666666`). Passing that straight through made `store.patchJob`'s
- * `JobSchema.parse` reject the ENTIRE patch, so both the summary-log entry and
- * the bounded `runningSummary` were dropped for that pass — a silent data-loss
- * path, not a cosmetic log line.
+ * `payload.centerTs` is a float whenever the window centre is not a whole
+ * second (e.g. a 14 s clip whose last tap lands at `11.666666666666666`). The
+ * persisted contract (`SummaryLogEntrySchema.windowTs`) accepts any FINITE
+ * float — a fractional timestamp is the honest value and `summary-ladder.ts`
+ * already consumes it — so this function deliberately does NOT round: rounding
+ * here would silently move every entry's window by up to half a second and
+ * disagree with the ladder's interpolation. The webapp rounds only for DISPLAY
+ * (`summaryEntryTimestamp` -> `T+12s`).
  *
- * Rounding at this single write choke point (both the live and VOD callers go
- * through `appendSummaryEntry`) keeps stored summaries integers without the
- * webapp having to format fractions. A non-finite timestamp degrades to "no
- * window metadata" rather than failing the entry, so a bad tick can never cost
- * the summary itself.
+ * Only non-finite input (NaN / ±Infinity) is dropped, because `.finite()` in
+ * the schema would otherwise reject the whole `patchJob` and cost the entry
+ * (plus the bounded `runningSummary`) for that pass. A bad tick degrades to
+ * "no window metadata" rather than failing the summary.
  */
 export function normalizeWindowTs(windowTs: number | undefined | null): number | undefined {
   if (typeof windowTs !== "number" || !Number.isFinite(windowTs)) return undefined;
-  return Math.round(windowTs);
+  return windowTs;
 }
 
 /**
@@ -92,7 +93,7 @@ export function appendSummaryEntry(
   const log = job.summaryLog ?? [];
   const seq = nextSummarySeq(log);
   const delta = summaryDelta(job.runningSummary, summary);
-  // ADAAAA-7710: windowTs is persisted as an integer — see normalizeWindowTs.
+  // ADAAAA-7711: keep the fractional window centre (see normalizeWindowTs).
   const windowTs = normalizeWindowTs(meta?.windowTs);
   const entry: SummaryLogEntry = {
     seq,
