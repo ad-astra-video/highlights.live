@@ -547,6 +547,25 @@ cache, whole pitch), **0.440** (1280x720 source, whole pitch), **0.442**
 (1280x720 source, goal-mouth region). Resolution and a region prior are both
 excluded as the limiting factor; the statistic is.
 
+### 5. Local gemma frame read (`gemma_labeller_cal.py`, 2026-11-01)
+
+The remote multimodal endpoint is not usable from a run (`SCAN_KEY` is not a
+provisioned secret and the Hermes vision path timed out), but the box already
+serves `cyankiwi/gemma-4-12B-it-qat-AWQ-INT4` at `http://gemma:8088` for the
+pipeline itself — free, keyless, local. Calibrated on the same 10 shot-class
+windows and 12 `evidence:none` controls at 1 s steps, 245 frames, **0.4 s per
+frame** (`results/gemma_labeller_cal.json`):
+
+- loose rule (any `SHOT=yes` in the window): **10/10** shot windows … and
+  **12/12** control windows too (74 of 134 control frames), i.e. it answers yes
+  to everything;
+- strict rule (`SHOT=yes` **and** `KIND` in saved/post/wide/blocked):
+  **6/10** shots against **4/12** controls falsely shot (bar: >= 8/10, <= 2).
+
+So the local gemma read is not a labeller yet, but it is the cheapest layer to
+iterate on: no key, ~0.4 s per frame, and the whole calibration re-runs in about
+two minutes from the committed script plus an `ffmpeg fps=1` frame pass.
+
 ### What this changes for the AC set
 
 - AC-1's recorded unblock ("higher-resolution / 30 fps frame source") is
