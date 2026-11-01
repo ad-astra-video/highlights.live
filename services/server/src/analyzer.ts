@@ -3511,11 +3511,16 @@ function downgradeUncorroborated(stage1: DecisionResult): DecisionResult {
 export interface AnalyzeEvent {
   seq: number;
   timestamp: number;
-  type: "observation" | "candidate" | "highlight" | "candidateBlocked";
+  type: "observation" | "candidate" | "highlight" | "candidateBlocked" | "lifecycle";
   observation?: { tracks: TrackObservation[] };
   candidate?: { eventType: string; timestamp: number };
   highlight?: HighlightRecord;
   reason?: string;
+  /** ADAAAA-7700 `lifecycle` events: a terminal/attributable job transition
+   *  pushed to the live console (e.g. the media node restarted under a share). */
+  status?: "done" | "failed" | "cancelled";
+  failureReason?: string;
+  message?: string;
 }
 
 /**

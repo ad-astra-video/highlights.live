@@ -52,6 +52,7 @@ import {
   type DecideAuditRecord,
 } from "../lib/decideAudit";
 import { jobTitle } from "../lib/vodJobs";
+import { failureReasonLabel } from "../lib/failureReason";
 import { startDetailPoll } from "../lib/detailPoll";
 import { frameFetchWindow } from "../lib/frameFetchWindow";
 
@@ -1321,6 +1322,18 @@ export function JobDetail() {
               <span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusChip(detail.job.status)}`}>
                 {detail.job.status}
               </span>
+              {/* ADAAAA-7700: WHY the job failed, as its own attributed chip. A
+                  media-node restart (`media session lost`) must never read like a
+                  user stop, and `failed` alone said nothing at 22:16Z. */}
+              {detail.job.failureReason && (
+                <span
+                  className="rounded-full border border-red/40 bg-red/10 px-2 py-0.5 text-xs font-bold uppercase text-red"
+                  data-detail-failure-reason={detail.job.failureReason}
+                  title={`failureReason: ${detail.job.failureReason}`}
+                >
+                  reason: {failureReasonLabel(detail.job.failureReason)}
+                </span>
+              )}
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2">
               <div>

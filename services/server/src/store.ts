@@ -170,11 +170,23 @@ export class Store {
   /** Reap jobs stranded in `active` (no `completedAt`) to `failed` at boot. No
    * in-flight run survives a server restart, so an active row at startup is dead
    * (ADAAAA-6760 boot-time sweep). Returns the number reaped. */
-  async sweepStrandedJobs(): Promise<number> {
+  async sweepStrandedJobs(
+    /**
+     * ADAAAA-7700 attribution: what to record for a stranded job. Without it the
+     * sweep writes a bare `failed` (0 frames, no reason) — the exact row that
+     * made the 22:16Z media-node restart look like "the pipeline never ran".
+     */
+    attributeFor?: (job: Job) => { failureReason?: Job["failureReason"]; error?: string }
+  ): Promise<number> {
     let reaped = 0;
     for (const j of [...this.jobs.values()]) {
       if (j.status === "active" && !j.completedAt) {
-        await this.patchJob(j.id, { status: "failed" });
+        const attr = attributeFor?.(j);
+        await this.patchJob(j.id, {
+          status: "failed",
+          ...(attr?.failureReason ? { failureReason: attr.failureReason } : {}),
+          ...(attr?.error ? { error: attr.error } : {}),
+        });
         reaped++;
       }
     }

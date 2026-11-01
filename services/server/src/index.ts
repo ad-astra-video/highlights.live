@@ -12,6 +12,7 @@ import { makeMailer } from "./mailer";
 import { runRejectSweep } from "./lifecycle";
 import { runDatasetPurgeSweep, scheduleDatasetsPurgeForOwner } from "./dataset-lifecycle";
 import { filePerceiveSessionLedger, releaseOrphanedPerceiveSessions } from "./perceive-ledger";
+import { outcomeForStrandedJob } from "./job-failure";
 import Stripe from "stripe";
 
 /** Schedule the rejected-clip TTL sweep (runs at least once per `interval`,
@@ -81,8 +82,31 @@ async function main() {
   // job left in `active` (no completedAt) is stranded. Reap it to `failed` so
   // the new processing-jobs surface doesn't show a perpetually-spinning row.
   try {
-    const reaped = await store.sweepStrandedJobs();
-    if (reaped > 0) console.log(`[boot] swept ${reaped} stranded active job(s) -> failed`);
+    // ADAAAA-7700: attribute the sweep. A browser share stranded at boot was
+    // carried by a media session (`media_sessions` row) that died in the same
+    // window — a recreate restarts `highlights-media` alongside `server` — so the
+    // honest reason is `media-session-lost`, not a bare `failed`. Without this the
+    // 22:16Z row read exactly like "the pipeline never ran".
+    const stranded = store.listActiveJobs();
+    const mediaRows = new Set((await db.listMediaSessions()).map((m) => m.jobId));
+    const reaped = await store.sweepStrandedJobs((job) => {
+      const o = outcomeForStrandedJob(job.source, mediaRows.has(job.id));
+      return { failureReason: o.status === "failed" ? o.failureReason : undefined, error: o.status === "failed" ? o.error : undefined };
+    });
+    if (reaped > 0) {
+      const lost = stranded.filter((j) => mediaRows.has(j.id)).length;
+      console.log(`[boot] swept ${reaped} stranded active job(s) -> failed (media-session-lost=${lost})`);
+      for (const job of stranded) {
+        const o = outcomeForStrandedJob(job.source, mediaRows.has(job.id));
+        await db
+          .appendJobLifecycleEvent({
+            jobId: job.id,
+            kind: "boot-swept",
+            detail: `failureReason=${o.status === "failed" ? o.failureReason : "unknown"} source=${job.source} mediaSession=${mediaRows.has(job.id)}`,
+          })
+          .catch(() => {});
+      }
+    }
   } catch (e: any) {
     console.error("[boot] stranded-job sweep failed:", String(e?.message || e));
   }

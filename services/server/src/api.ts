@@ -55,6 +55,7 @@ import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
+import { outcomeForMediaCloseReason, outcomeForStrandedJob, type JobFailureReason, type JobOutcome } from "./job-failure";
 import {
   datasetAccessActive,
   scheduleDatasetsPurgeForOwner,
@@ -543,7 +544,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // exactly once per job. This holds the in-flight promise; the second caller
   // awaits the same finalization instead of cutting clips twice.
   const browserFinalizing = new Map<string, Promise<{ ok: boolean; job: any; reason: string }>>();
-  function finishBrowserJob(jobId: string, reason: string): Promise<{ ok: boolean; job: any; reason: string }> {
+  function finishBrowserJob(
+    jobId: string,
+    reason: string,
+    outcome: JobOutcome = { status: "done" }
+  ): Promise<{ ok: boolean; job: any; reason: string }> {
     const running = browserFinalizing.get(jobId);
     if (running) return running;
     const task = (async () => {
@@ -604,7 +609,33 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         console.error(`[browser:${jobId}] ${missed} highlight(s) produced no clip (recording=${recPath ? "present" : "missing"})`);
       }
       browserJobs.delete(jobId);
-      await store.patchJob(jobId, { status: "done" });
+      // ADAAAA-7700: a share that died with the media node is NOT a user stop —
+      // the job lands `failed` with a machine-readable failureReason and an
+      // actionable message, instead of a bare `failed` with 0 frames (the 22:16Z
+      // report). A client/control close keeps finalizing as `done`.
+      await store.patchJob(
+        jobId,
+        outcome.status === "failed"
+          ? {
+              status: "failed",
+              failureReason: outcome.failureReason,
+              error: outcome.error,
+              finishedAt: new Date().toISOString(),
+            }
+          : { status: "done" }
+      );
+      // Activity log (durable) + live-console event, so the console shows the
+      // attribution within the SSE tick rather than on the next poll.
+      await recordJobLifecycle(jobId, outcome.status === "failed" ? "failed" : "stopped", `reason=${reason}${outcome.status === "failed" ? ` failureReason=${outcome.failureReason}` : ""}`);
+      emitJobEvent(jobId, {
+        seq: -1,
+        timestamp: -1,
+        type: "lifecycle",
+        status: outcome.status,
+        failureReason: outcome.status === "failed" ? outcome.failureReason : undefined,
+        message: outcome.status === "failed" ? outcome.error : "Share ended.",
+        reason,
+      });
       emitJobEvent(jobId, { seq: -1, timestamp: -1, type: "observation", observation: { tracks: [] } }); // wake SSE
       return { ok: true, job: store.getJob(jobId), reason };
     })().finally(() => {
@@ -932,6 +963,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // render the real reason instead of the generic client string. `error` lives
   // on the shared Job contract (packages/events); patchJob writes it through to
   // the durable record. Shared by the runLiveJob + all VOD failure paths.
+  // ADAAAA-7700: durable activity-log row for a job lifecycle transition. The
+  // Store is in-memory (hydrated from `jobs`), so the ATTRIBUTION of a failure
+  // would otherwise live only in the JSON blob; this row is the append-only
+  // activity trail an operator/QA can read back with GET /jobs/:id/lifecycle.
+  function recordJobLifecycle(jobId: string, kind: string, detail: string): Promise<void> {
+    return db.appendJobLifecycleEvent({ jobId, kind, detail }).catch((e: any) => {
+      console.error(`[activity:${jobId}] ${kind} persist failed:`, String(e?.message || e));
+    });
+  }
   const JOB_ERROR_MAX_CHARS = 500;
   function jobErrorMessage(e: unknown): string {
     const raw = e instanceof Error ? e.message : String(e);
@@ -944,7 +984,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // fail session-lost; that late error must never rewrite a stopped job as
       // `failed` (or resurrect it from `done`).
       if (isVodStopped(jobId) || store.getJob(jobId)?.status === "cancelled") return;
-      await store.patchJob(jobId, { status: "failed", error: jobErrorMessage(e) });
+      // ADAAAA-7700: a thrown pipeline error is attributable too — never leave a
+      // bare `failed` that reads the same as "the pipeline never ran".
+      await store.patchJob(jobId, { status: "failed", error: jobErrorMessage(e), failureReason: "pipeline-error" });
+      await recordJobLifecycle(jobId, "failed", `failureReason=pipeline-error error=${jobErrorMessage(e)}`);
     } catch {
       /* ignore — job record gone */
     }
@@ -2597,6 +2640,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return { job: { ...job, ...counterFieldsForJob(job) }, highlights: store.highlightsForJob(job.id), progress };
   });
 
+  // ADAAAA-7700: the durable activity log for one job — the append-only trail of
+  // why it ended (failureReason + close reason + boot sweep). This is what makes a
+  // terminal transition auditable after the in-memory Store is gone, and it is the
+  // surface QA reads to prove the attribution landed.
+  app.get<{ Params: { id: string } }>("/jobs/:id/lifecycle", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user;
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    const events = await db.jobLifecycleEvents(job.id).catch(() => []);
+    return { jobId: job.id, status: job.status, failureReason: job.failureReason ?? null, events };
+  });
+
   // Composite job-detail payload (ADAAAA-6851 Inc 3): { job, highlights, traces,
   // sections }. Frames are grouped into fixed 3 s buckets (section index =
   // floor(timestamp/3)); a frame belongs to exactly one section (partition, no
@@ -2846,7 +2902,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       return reply.send({ ok: true, ignored: "stale session", sessionId });
     }
     const reason = typeof body.reason === "string" ? body.reason : "unknown";
-    const finished = await finishBrowserJob(job.id, `media-session-closed:${reason}`);
+    // ADAAAA-7700: attribute the close. `media-node-restart` means the media node
+    // took the session down with it (recreate/crash) — that is `media-session-lost`,
+    // not a user stop. Every other reason keeps the pre-7700 `done` finalization.
+    const outcome = outcomeForMediaCloseReason(reason);
+    const finished = await finishBrowserJob(job.id, `media-session-closed:${reason}`, outcome);
     // `reason` travels back in the response and in the media node's own
     // `/health` counters; the SSE wake for the transition is emitted by
     // finishBrowserJob.
@@ -2979,6 +3039,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!job) return reply.code(404).send({ error: "no job" });
     if (job.ownerId !== req.user.id && req.user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
     const bj = browserJobs.get(req.params.id);
+    // ADAAAA-7700: a session that already died (media-node restart) must NOT be
+    // re-provisioned onto a fresh paid session for the same job — the browser's
+    // reconnect would silently start a SECOND session for one share. Answer 409
+    // with the attribution so the webapp stops capture and says "reshare".
+    if (Store.isTerminalStatus(job.status)) {
+      return reply.code(409).send({
+        error: job.error || `job already ${job.status}`,
+        status: job.status,
+        failureReason: job.failureReason ?? null,
+      });
+    }
     if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
     // Always consult the DB-backed provisioner: it reuses the live session,
     // or — if the media node serving it went down — transparently re-provisions

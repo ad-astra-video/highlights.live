@@ -23,6 +23,7 @@ import { WebRtcIngestSession } from "./rtc";
 import { AudioRelay, type AudioPcmChunk } from "./audio-relay";
 import { guardStream, safeEnd, safeWrite, sendText } from "./guarded-write";
 import type { LifecycleSnapshot } from "./lifecycle";
+import { drainOpenSessions, forgetOpenSession, recordOpenSession } from "./sessions-ledger";
 
 interface ActiveStream {
   streamId: string;
@@ -135,13 +136,28 @@ export interface MediaServerOptions {
    * session, which is the one the browser then connects to.
    */
   adoptSessionPerJob?: boolean;
+  /**
+   * Dir holding the open-session ledger (ADAAAA-7700). Defaults to
+   * `MEDIA_STATE_DIR` / the OS tmp dir, matching the lifecycle ledger, so the
+   * leftover list survives the recreate that killed the sessions.
+   */
+  stateDir?: string;
 }
 
 const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
 
 /** Why a media session ended (ADAAAA-7689 AC3). Forwarded to the control plane
  *  so the browser job's disposition is attributable, not just "it closed". */
-export type SessionCloseReason = "client-closed" | "control-close" | "no-client-timeout" | "payment-failure";
+export type SessionCloseReason =
+  | "client-closed"
+  | "control-close"
+  | "no-client-timeout"
+  | "payment-failure"
+  /** ADAAAA-7700: the session died with the media node (restart/crash/recreate).
+   *  Reported at boot for every leftover session on the open-session ledger, so
+   *  the control plane can fail the browser job with `media-session-lost`
+   *  instead of leaving it a bare `failed` / a stale `active`. */
+  | "media-node-restart";
 
 const DEFAULT_RECONNECT_GRACE_MS = 8000;
 /** Bound on concurrent audio-chunk POSTs per session (ADAAAA-7658). A slow
@@ -183,6 +199,9 @@ export class MediaServer {
     sessionsUnused: 0,
     /** Session-closed callbacks POSTed to the control plane. */
     sessionClosedNotifies: 0,
+    /** ADAAAA-7700: leftover sessions reported to the control plane at boot
+     *  (the sessions a restart/crash took down with it). */
+    sessionsLostReported: 0,
     /** ADAAAA-7658 media-edge audio relay: PCM chunks POSTed to the control
      *  plane for perceive /audio, and chunks dropped on backlog/error. */
     audioChunksPosted: 0,
@@ -277,6 +296,10 @@ export class MediaServer {
           }, noClientMs),
         });
       }
+      // ADAAAA-7700: remember the session on the open-session ledger BEFORE any
+      // client attaches, so a media-node restart can report every dropped
+      // session to the control plane at the next boot.
+      this.trackSession(stream);
       return this.sessionPayload(stream);
     });
 
@@ -352,6 +375,7 @@ export class MediaServer {
           // A browser attached via RTC — the no-client timer no longer applies.
           stream.everAttached = true;
           this.clearNoClient(req.params.sid);
+          this.trackSession(stream);
         }
         const { session } = stream.rtc;
         try {
@@ -403,6 +427,7 @@ export class MediaServer {
       this.clearGrace(req.params.sid); // a reconnect within the grace window cancels pending teardown
       this.clearNoClient(req.params.sid); // a browser connected, so the no-client timeout is moot
       stream.everAttached = true;
+      this.trackSession(stream);
       connection.on("data", (buf: Buffer) => {
         void this.handleFrame(stream, connection, buf).catch((e) => console.error("[media] frame err", e));
       });
@@ -520,6 +545,9 @@ export class MediaServer {
         // session (ADAAAA-7689 AC1/AC2); it stays visible here instead.
         sessionsUnused: this.counters.sessionsUnused,
         sessionClosedNotifies: this.counters.sessionClosedNotifies,
+        // ADAAAA-7700: sessions that died with the previous boot and were
+        // reported to the control plane as `media-node-restart`.
+        sessionsLostReported: this.counters.sessionsLostReported,
       },
       ...(lifecycle
         ? {
@@ -883,6 +911,10 @@ export class MediaServer {
     // was returned, so an empty control_url can never leave the slot billed.
     await this.orch.releaseSession(stream.provisioned.sessionId, stream.provisioned.controlUrl).catch(() => {});
     this.active.delete(sid);
+    // ADAAAA-7700: this session ended cleanly and its close is reported right
+    // below — drop it from the open-session ledger so the next boot's reconcile
+    // does not double-report (and mis-attribute) a session that already ended.
+    forgetOpenSession(this.opts.stateDir, sid);
     // 4) tell the control plane the job's media session is over (ADAAAA-7689
     // AC3). Before this, a browser job stayed `active` after a clean
     // SESSION_CLOSE until someone called POST /jobs/:id/stop by hand.
@@ -931,5 +963,88 @@ export class MediaServer {
     }).catch(() => {
       /* best-effort: the job can still be stopped explicitly */
     });
+  }
+
+  /**
+   * Keep the open-session ledger (ADAAAA-7700) in step with this process: which
+   * sessions exist RIGHT NOW, which job each carries, and whether a client ever
+   * attached. Rewritten on open/adopt-attach so the next boot can tell the
+   * control plane exactly which browser jobs it killed.
+   */
+  private trackSession(stream: ActiveStream): void {
+    recordOpenSession(this.opts.stateDir, {
+      sessionId: stream.provisioned.sessionId,
+      jobId: stream.jobId,
+      startedAt: stream.startedAt,
+      transport: stream.rtc ? "webrtc" : stream.sockets.size > 0 ? "ws" : "none",
+      everAttached: stream.everAttached,
+    });
+  }
+
+  /**
+   * Boot reconcile (ADAAAA-7700): every session on the ledger at start-up died
+   * with the PREVIOUS boot — a recreate/deploy, a crash, or a docker stop — and
+   * nothing else tells the control plane. Report each one with
+   * `reason: "media-node-restart"` so it fails the browser job with
+   * `failureReason: media-session-lost` and the console can say "the media node
+   * restarted, reshare" instead of the job silently flipping to `failed`.
+   *
+   * Bounded retry: on a compose recreate the control plane is usually restarting
+   * at the same instant, so the first POST can find it down. Three attempts over
+   * ~6 s; if they all fail the server's own boot sweep attributes the stranded
+   * job from `media_sessions`, so the outcome is still attributable.
+   */
+  async reconcileLostSessions(): Promise<{ reported: number; leftover: number }> {
+    const leftover = drainOpenSessions(this.opts.stateDir);
+    if (!leftover.length) return { reported: 0, leftover: 0 };
+    let reported = 0;
+    for (const rec of leftover) {
+      const seconds = rec.startedAt ? Number(Math.max(0, (Date.now() - rec.startedAt) / 1000).toFixed(1)) : 0;
+      const payload = {
+        sessionId: rec.sessionId,
+        jobId: rec.jobId,
+        // The distinct attribution: NOT a user stop, NOT a clean client close.
+        reason: "media-node-restart" as SessionCloseReason,
+        neverAttached: !rec.everAttached,
+        seconds,
+        // ADAAAA-7689 (follow-up): the control plane only finalizes on the LAST
+        // session for a job. After a restart NOTHING is live, so be explicit
+        // instead of relying on its session-id fallback.
+        liveSessionsForJob: 0,
+        nodeId: this.nodeId,
+        transport: rec.transport === "none" ? "ws" : rec.transport,
+      };
+      // eslint-disable-next-line no-console
+      console.log(
+        `[media] session-lost job=${rec.jobId || "-"} session=${rec.sessionId} reason=media-node-restart attached=${rec.everAttached}`
+      );
+      if (!this.opts.callbackBase || !rec.jobId) continue;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (this.healthToken) headers.authorization = `Bearer ${this.healthToken}`;
+      let ok = false;
+      for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+        if (attempt > 0) await sleep(2000);
+        try {
+          const r = await fetch(`${this.opts.callbackBase}/jobs/${rec.jobId}/media/session-closed`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(2500),
+          });
+          ok = r.ok;
+        } catch {
+          /* control plane still starting — retry */
+        }
+      }
+      if (ok) {
+        reported++;
+        this.counters.sessionsLostReported++;
+        this.counters.sessionClosedNotifies++;
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn(`[media] session-lost report FAILED job=${rec.jobId} session=${rec.sessionId}`);
+      }
+    }
+    return { reported, leftover: leftover.length };
   }
 }
