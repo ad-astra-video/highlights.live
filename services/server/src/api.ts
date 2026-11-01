@@ -46,7 +46,7 @@ import {
   type JobDecision,
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
-import { completedCounterFields, stageAMetricsForJob } from "./job-counters";
+import { completedCounterFields, counterFieldsForJob, stageAMetricsForJob } from "./job-counters";
 import { buildPostableHighlights } from "./highlight-postable";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
@@ -1375,6 +1375,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // Durable finalizing transition (ADAAAA-6873 state machine) before done.
     await store.patchJob(jobId, { status: "finalizing", stage: "finalizing" });
     const doneFramesPct = framesTotal > 0 ? Math.min(100, Math.round((outcome.framesAnalyzed / framesTotal) * 100)) : 0;
+    // ADAAAA-7624: the user-facing candidate count is the number of distinct
+    // candidates this job actually produced (the persisted highlights), not the
+    // observer's per-window `accepted` tally — overlapping decide windows
+    // re-count the same play (75 windows vs 24 distinct highlights on
+    // d61e52f6). Deriving it here keeps a new record identical to what the
+    // read-time projection reports for a pre-fix record.
+    const producedCandidates = store.highlightsForJob(jobId).length;
     await store.patchJob(jobId, {
       status: "done",
       stage: "done",
@@ -1383,7 +1390,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // observe cadence pass) and the Stage-A snapshot is only persisted when it
       // is a real measurement, so the completed record cannot report a
       // fabricated `0 candidates` / `0% FP` for a stage that never judged one.
-      ...completedCounterFields(stageA, outcome.vodObserveMetrics?.accepted, candidatesTriggered),
+      // `undefined` when the observe cadence never ran, so the legacy
+      // perceive-gate counter is still the fallback path.
+      ...completedCounterFields(stageA, outcome.vodObserveMetrics ? producedCandidates : undefined, candidatesTriggered),
       confirmMetrics,
       sampleFps,
       frameScale: cfg.vodFrameScale,
@@ -2455,7 +2464,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const limitRaw = Number(req.query?.limit);
     const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(1, Math.floor(limitRaw)), 200) : 50;
     const ownerId = user.role === "admin" ? undefined : user.id;
-    return { jobs: store.listJobsForOwner(ownerId, limit) };
+    // ADAAAA-7624: records written before the counter fix carry no
+    // `candidatePath`; project the honest counters so the board tiles read the
+    // count the job actually produced instead of a legacy 0.
+    return { jobs: store.listJobsForOwner(ownerId, limit).map((j) => ({ ...j, ...counterFieldsForJob(j) })) };
   });
 
   app.get("/jobs/:id", { preHandler: authReq }, async (req: any, reply) => {
@@ -2473,7 +2485,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       framesPct: job.framesPct ?? 0,
       highlightsFound: job.highlightsFound ?? 0,
     };
-    return { job, highlights: store.highlightsForJob(job.id), progress };
+    return { job: { ...job, ...counterFieldsForJob(job) }, highlights: store.highlightsForJob(job.id), progress };
   });
 
   // Composite job-detail payload (ADAAAA-6851 Inc 3): { job, highlights, traces,
@@ -2531,7 +2543,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     });
 
     return JobDetailSchema.parse({
-      job,
+      // ADAAAA-7624: derive the honest counters for records written before the
+      // completion-time fix (read-time, no stored-data mutation).
+      job: { ...job, ...counterFieldsForJob(job) },
       highlights: postable.highlights,
       notableHighlights: postable.notable,
       duplicateHighlights: postable.duplicates,
