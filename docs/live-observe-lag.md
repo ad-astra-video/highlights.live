@@ -45,12 +45,15 @@ ever-widening span.
    rate does not rise.
 3. **The budget is the landing lag, not the pick-up lag.** Before firing, the
    decide that has not landed yet is reserved out of the budget, because what a
-   viewer experiences is `lag_at_fire + e2e`. The reserve is the WORST decide
-   seen so far plus 1 s of measurement margin (`liveLagReserveS`), not the mean:
+   viewer experiences is `lag_at_fire + e2e`. The reserve is `max(worst decide
+   seen so far, 1.5x the mean) + 1 s` (`liveLagReserveS`), not the mean:
    measured on job `4f8d47bd`, a mean-based reserve (8.5 s) let an 11.7 s decide
    land a window picked at 21.5 s at a completed lag of 33.0 s — past the budget
-   the drop exists to enforce. The reserve is capped at half the budget, so a
-   very slow decide cannot starve the pass into deciding nothing. Default budget
+   the drop exists to enforce; and on job `8b88a472` a worst-only reserve
+   (8.8 s + 1 s) still admitted a window at 19.3 s lag whose 12.8 s decide landed
+   at 32.1 s, because the startup decides were still RAMMING up (the observed
+   spread on the runner is 1.35–1.5x the mean). The reserve is capped at half the
+   budget, so a very slow decide cannot starve the pass into deciding nothing. Default budget
    30 s (`LIVE_OBSERVE_LAG_BUDGET_S`) — the cadence + decide-E2E budget the spec
    quotes; `<= 0` disables the drop (legacy unbounded behaviour).
 4. **The end-of-stream tail obeys the same budget.** The FORCE flush ignores the

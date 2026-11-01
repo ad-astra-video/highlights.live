@@ -1288,12 +1288,22 @@ export function buildVodObserveMetrics(obs: ObserveDecider): VodObserveMetricsSn
  * exists to enforce. Worst-based (11.7 s + 1 s of measurement margin) picks the
  * window at 17.3 s and lands the result at ~29 s.
  *
+ * A worst-only reserve still under-covers a RAMP: on job `8b88a472` the startup
+ * decides climbed 8.8 s -> 12.8 s, so worst+1 s (9.8 s) picked a window at
+ * 19.3 s lag whose result landed at 32.1 s. The 1.5x-mean term tracks that ramp
+ * (the observed spread on the runner is 1.35-1.5x the mean).
+ *
  * The reserve is capped at half the budget so a very slow decide cannot starve
  * the pass into deciding nothing at all — dropping work is cheap, deciding
  * nothing is not.
  */
 export function liveLagReserveS(maxE2eMs: number, meanE2eMs: number, budgetS: number): number {
-  const worstE2e = Math.max(maxE2eMs, meanE2eMs) / 1000;
+  // Worst-so-far covers a steady box; 1.5x the mean covers the RAMP. Measured on
+  // job `8b88a472` the startup decides climbed 8.8 s -> 12.8 s (1.45x the mean
+  // seen so far), so a worst+1 s reserve still picked a window at 19.3 s lag that
+  // landed at a completed 32.1 s. 1.5x the mean is the observed spread on the
+  // runner (mean 8.5-9.6 s, max 11.7-12.8 s); +1 s absorbs measurement fenceposts.
+  const worstE2e = Math.max(maxE2eMs / 1000, (meanE2eMs / 1000) * 1.5);
   return Math.min(worstE2e + 1, budgetS / 2);
 }
 
