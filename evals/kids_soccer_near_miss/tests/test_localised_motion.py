@@ -83,3 +83,21 @@ def test_recorded_verdict_is_the_negative_result():
     assert d["medians"]["shot"] == 74.64 and d["medians"]["control"] == 76.66
     assert "does NOT meet" in d["verdict"]
     assert len(d["shots"]) == 10 and len(d["controls"]) == 12
+
+
+GEMMA_CAL = HERE / "results" / "gemma_labeller_cal.json"
+
+
+def test_recorded_gemma_labeller_calibration_is_the_negative_result():
+    """The local gemma layer is fast but not a labeller; pin the numbers."""
+    assert GEMMA_CAL.exists(), "run gemma_labeller_cal.py inside the compose network"
+    with open(GEMMA_CAL) as fh:
+        d = json.load(fh)
+    assert d["reads"] == 245
+    assert d["shot_windows_reproduced"] == 10 and d["shot_windows"] == 10
+    # ... and the loose rule also flags every control window: no discrimination
+    assert d["control_windows_false_shot"] == 12 and d["control_windows"] == 12
+    assert d["strict_bar"]["shots_reproduced"] == 6
+    assert d["strict_bar"]["control_windows_false"] == 4
+    assert "not a labeller" in d["verdict"]
+    assert len(d["per_window"]) == 22
