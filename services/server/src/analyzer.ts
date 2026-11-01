@@ -24,6 +24,7 @@ import {
   OBSERVE_WINDOW_S,
 } from "./observe-loop";
 import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
+import type { AudioTriggerRecord } from "./audio-trigger";
 import { isGoalRefutingReason } from "./highlight-postable";
 
 export interface ReserveResult {
@@ -1180,6 +1181,10 @@ export interface LiveObserveMetricsSnapshot {
   meanCadenceMs: number;
   /** Max content-time cadence between consecutive fired ticks (ms). */
   maxCadenceMs: number;
+  /** ADAAAA-7658: decide fires scheduled by a fired audio trigger (anchored
+   *  windows) vs the blind cadence. `trigger + cadence == decideCalls`. */
+  triggerFires: number;
+  cadenceFires: number;
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
@@ -1226,6 +1231,8 @@ export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSn
     maxE2eMs: Number(obs.maxE2eMs().toFixed(1)),
     meanCadenceMs: Number(avg(cadences).toFixed(1)),
     maxCadenceMs: cadences.length ? Number(Math.max(...cadences).toFixed(1)) : 0,
+    triggerFires: obs.triggerFireCount(),
+    cadenceFires: obs.cadenceFireCount(),
   };
 }
 
@@ -1764,6 +1771,30 @@ export class LiveRunShared {
    * never grows unbounded on a long stream. */
   setAudioSeries(points: { t: number; energy: number; baseline: number }[]): void {
     if (Array.isArray(points)) this.audioSeries = points;
+  }
+  /** ADAAAA-7658: observed audio-trigger records not yet handed to the live
+   * decide observer. Bounded — a trigger is drained (or expires) within a
+   * couple of frames, so this can never accumulate on a long stream. */
+  private audioTriggerQueue: AudioTriggerRecord[] = [];
+  /**
+   * ADAAAA-7658: record a fired audio-noise trigger (from a perceive `/audio`
+   * candidate) so the live decide loop can schedule ONE analysis window
+   * anchored to its onset instead of only blind cadence. The record is
+   * provenance + schedule request, never a decide verdict.
+   */
+  recordAudioTrigger(trigger: AudioTriggerRecord | null | undefined): boolean {
+    if (!trigger) return false;
+    this.audioTriggerQueue.push(trigger);
+    if (this.audioTriggerQueue.length > 32) this.audioTriggerQueue.shift();
+    return true;
+  }
+  /** Drain the pending audio triggers (the live loop feeds them to the
+   * observer each frame). Empty array when none are pending. */
+  takeAudioTriggers(): AudioTriggerRecord[] {
+    if (!this.audioTriggerQueue.length) return [];
+    const out = this.audioTriggerQueue;
+    this.audioTriggerQueue = [];
+    return out;
   }
   /** ADAAAA-7255: the audio-gate inspection series points whose ``t`` falls in
    * ``[centerTs - preS, centerTs + postS]`` (oldest -> newest), for the
@@ -3531,6 +3562,16 @@ export async function analyzeJob(
           : { ts: frame.timestamp, tracks: [], objects: [], ocr: [], signal: undefined };
         observeDecider?.record(frame.timestamp, frame.imageB64, seed);
         liveObserver?.record(frame.timestamp, frame.imageB64, seed);
+        // ADAAAA-7658: hand every fired audio-noise trigger to the live
+        // observer so its window is anchored to the onset (one analysis per
+        // trigger, coalesced inside the scheduler) instead of only blind
+        // cadence. `run` carries the triggers the audio tap leg recorded.
+        if (liveObserver) {
+          for (const trig of run.takeAudioTriggers()) {
+            liveObserver.recordTrigger(trig);
+            liveObserver.addHint(`AUDIO_${trig.kind.toUpperCase()}`, trig.onsetTs);
+          }
+        }
         if (observeDecider) await observeDecider.maybeFire(frame.timestamp);
         if (liveObserver) await liveObserver.maybeFire(frame.timestamp);
         // ADAAAA-7152 Gap 1: arm the full-perceive hot window when this frame

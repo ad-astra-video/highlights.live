@@ -374,6 +374,47 @@ def test_audio_burst_emits_candidate_with_audio_signal():
     assert audio["baselineEnergy"] > 0.0
 
 
+def test_threshold_id_names_the_operating_point():
+    """ADAAAA-7658 AC5: every trigger record says WHICH threshold fired, so the
+    live and VOD passes agree on what a trigger is (and a re-tune cannot
+    silently redefine a historical record)."""
+    g = _quiet_gate()
+    sig = None
+    for i in range(20):
+        sig = g.update(_frame(0.05), ts=10.0 + i * 0.1)
+        if sig is not None:
+            break
+    assert sig is not None
+    cfg = GateConfig()
+    assert sig.threshold_id == f"stageA/burst/{cfg.burst_ratio:g}x/{cfg.burst_min_frames * cfg.frame_s:g}s"
+
+    # a swell-configured gate names the swell path + its sustain
+    g2 = _quiet_gate()
+    g2.cfg = GateConfig(burst_ratio=3.0, swell_ratio=1.3, swell_seconds=2.5)
+    sig2 = None
+    for i in range(40):
+        sig2 = g2.update(_frame(0.02), ts=10.0 + i * 0.1)
+        if sig2 is not None:
+            break
+    assert sig2 is not None and sig2.kind == "swell"
+    assert sig2.threshold_id == f"stageA/swell/{g2.cfg.swell_ratio:g}x/{g2.cfg.swell_seconds:g}s"
+
+
+def test_audio_candidate_carries_threshold_id():
+    """The /audio candidate evidence carries thresholdId on the wire."""
+    sid = "audio-sess-threshold"
+    _warm_audio_gate(sid)
+    cand = None
+    for i in range(20):
+        r = _post_audio(10.0 + i * 0.1, _pcm(0.05), sid=sid)
+        assert r.status_code == 200
+        cand = r.json()["candidate"]
+        if cand is not None:
+            break
+    assert cand is not None
+    assert cand["audio"]["thresholdId"].startswith("stageA/burst/")
+
+
 def test_audio_sustained_rise_emits_candidate():
     sid = "audio-sess-swell"
     _warm_audio_gate(sid)

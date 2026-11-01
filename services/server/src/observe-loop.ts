@@ -15,6 +15,8 @@
 // The streaming driver wires it onto a frame iterator; the pure planners prove
 // the acceptance criteria (<=30-frame cap, ~3 s cadence, ~10 s window, overlap).
 
+import { TriggerWindowScheduler, type AudioTriggerRecord, type TriggerSchedulerStats } from "./audio-trigger";
+
 /** Decide invocation cadence in content seconds. CEO-locked (ADAAAA-7000). */
 export const OBSERVE_CADENCE_S = 3;
 
@@ -271,6 +273,8 @@ export class LiveObserver {
   private readonly fps: number;
   private readonly signalGate: boolean;
   private readonly signalGateOpts: SignalGateOptions;
+  /** Budget threshold for an early trigger-anchored fire (ADAAAA-7658). */
+  private readonly triggerMinBudget: number;
   private readonly onDecide: ((payload: ObserveDecidePayload) => Promise<boolean>) | null;
   private readonly latency: LiveObserveLatencySample[] = [];
   /** Perceive candidate triggers folded into each window as bias hints
@@ -279,6 +283,19 @@ export class LiveObserver {
   private accepts = 0;
   /** Cadence ticks suppressed by the Tier-2 signal gate (ADAAAA-7145). */
   private gatedSkips = 0;
+  /** ADAAAA-7658: fired audio-noise triggers waiting for an anchored window. */
+  private readonly triggers = new TriggerWindowScheduler();
+  /** Decide budget (one token per `cadenceS`, capacity 1). Every fire — cadence
+   *  or trigger-anchored — spends a token, so trigger windows can never add
+   *  decide invocations beyond the blind-cadence baseline (AC3). An anchored
+   *  fire may spend down to -0.6 (40% of a cadence early) to keep the
+   *  level-change -> decide latency inside 1.5 s p95 (AC2); the balance is
+   *  repaid before the next cadence tick. */
+  private budgetTokens = 1;
+  private lastBudgetTs: number | null = null;
+  /** Decide fires scheduled by an audio trigger (anchored) vs blind cadence. */
+  private anchoredFires = 0;
+  private cadenceFires = 0;
 
   constructor(opts: {
     cadenceS?: number;
@@ -288,6 +305,8 @@ export class LiveObserver {
     signalGate?: boolean;
     signalGateOpts?: SignalGateOptions;
     onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
+    /** Minimum budget needed to fire early on a trigger (default 0.4). */
+    triggerMinBudget?: number;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
@@ -296,6 +315,7 @@ export class LiveObserver {
     this.signalGate = opts.signalGate ?? false;
     this.signalGateOpts = opts.signalGateOpts ?? {};
     this.onDecide = opts.onDecide ?? null;
+    this.triggerMinBudget = opts.triggerMinBudget ?? 0.4;
   }
 
   /** Record a frame + its perceive-derived seed context (no re-inference). */
@@ -329,22 +349,76 @@ export class LiveObserver {
     if (last) await this.fire(last.ts, true);
   }
 
+  /**
+   * ADAAAA-7658: queue a fired audio-noise trigger for one anchored analysis.
+   * The trigger's onset becomes the anchor of the decide window; the scheduler
+   * coalesces re-fires of the same audible event so one trigger produces ONE
+   * scheduled analysis (never a per-frame storm). Returns whether it queued.
+   */
+  recordTrigger(trigger: AudioTriggerRecord | null | undefined): boolean {
+    return this.triggers.record(trigger);
+  }
+
+  /** Refill the decide budget by elapsed content time (capacity 1 token). */
+  private refillBudget(nowTs: number): void {
+    if (this.lastBudgetTs === null) {
+      this.lastBudgetTs = nowTs;
+      return;
+    }
+    const dt = nowTs - this.lastBudgetTs;
+    if (dt > 0) this.budgetTokens = Math.min(1, this.budgetTokens + dt / this.cadenceS);
+    this.lastBudgetTs = Math.max(this.lastBudgetTs, nowTs);
+  }
+
   private async fire(nowTs: number, force: boolean): Promise<void> {
-    if (!force && !shouldFireObserve(this.lastFireTs, nowTs, this.cadenceS)) return;
+    this.refillBudget(nowTs);
+    const cadenceDue = shouldFireObserve(this.lastFireTs, nowTs, this.cadenceS);
+    // A due trigger replaces the cadence tick at the same budget price. When
+    // the cadence is already due the trigger simply wins (better anchor and
+    // better latency, same cost); when it is not due the anchored fire may
+    // spend half a token early (repaid before the next cadence tick).
+    const dueTrigger = force ? null : this.triggers.due(nowTs);
+    const anchored = !!dueTrigger;
+    if (!force) {
+      // Epsilon: the budget refill is a float accumulation, so an exactly-due
+      // cadence tick can land at 0.9999999 tokens and be skipped by one frame
+      // (which then drifts every later tick). Compare with a tolerance.
+      const EPS = 1e-9;
+      if (anchored) {
+        if (this.budgetTokens < this.triggerMinBudget - EPS) return;
+      } else if (!cadenceDue || this.budgetTokens < 1 - EPS) {
+        return;
+      }
+    }
     const prevFire = this.lastFireTs;
     this.lastFireTs = nowTs;
+    this.budgetTokens -= 1;
     const win = assembleLiveWindow(this.frames, nowTs, { windowS: this.windowS, maxFrames: this.maxFrames, fps: this.fps });
     if (win.frames.length === 0) return;
     const lo = nowTs - this.windowS;
     const inWindow = this.biasHints.filter((h) => h.ts >= lo && h.ts <= nowTs + 1e-9);
-    const payload = buildObservePayload(win, this.findings, inWindow);
+    // ADAAAA-7658: when this window is trigger-anchored, the trigger itself is
+    // provenance for the window (the gate's threshold identity + energies).
+    if (anchored && dueTrigger) {
+      inWindow.push({
+        eventType: `AUDIO_${dueTrigger.kind.toUpperCase()}`,
+        ts: dueTrigger.onsetTs,
+      });
+    }
+    const payload = buildObservePayload(win, this.findings, inWindow, anchored ? dueTrigger ?? undefined : undefined);
     // ADAAAA-7145: Tier-2 signal gate (recall-safe, same rule as ObserveDecider).
-    if (this.signalGate && !force && !windowHasSignal(payload.seeds, inWindow, this.signalGateOpts)) {
+    // A trigger-anchored window is never gate-skipped: an audio trigger IS a
+    // signal, so gating it off would defeat the trigger.
+    if (this.signalGate && !force && !anchored && !windowHasSignal(payload.seeds, inWindow, this.signalGateOpts)) {
       this.gatedSkips++;
       this.lastFireTs = nowTs;
       return;
     }
     const cadenceMs = prevFire === null ? 0 : (nowTs - prevFire) * 1000;
+    if (anchored) this.anchoredFires++;
+    else this.cadenceFires++;
+    // Triggers already inside the window just analyzed are covered by it.
+    this.triggers.coverThrough(lo, nowTs);
     let e2eMs = 0;
     if (this.onDecide) {
       const started = Date.now();
@@ -393,6 +467,19 @@ export class LiveObserver {
   /** Cadence ticks suppressed by the Tier-2 signal gate (ADAAAA-7145). */
   gatedSkipCount(): number {
     return this.gatedSkips;
+  }
+  /** ADAAAA-7658: decide fires scheduled by an audio trigger (anchored). */
+  triggerFireCount(): number {
+    return this.anchoredFires;
+  }
+  /** ADAAAA-7658: decide fires that came from the blind cadence. */
+  cadenceFireCount(): number {
+    return this.cadenceFires;
+  }
+  /** ADAAAA-7658: trigger scheduler bookkeeping (accepted / coalesced /
+   *  covered / expired / fired). */
+  triggerStats(): TriggerSchedulerStats {
+    return this.triggers.stats();
   }
 }
 
@@ -557,6 +644,10 @@ export interface ObserveDecidePayload {
   biasHints: ObserveBiasHint[];
   capped: boolean;
   droppedCount: number;
+  /** ADAAAA-7658: the audio trigger this window is anchored to, when this
+   *  decide was scheduled by a fired audio-noise trigger rather than the blind
+   *  cadence. Absent on a cadence tick (the pre-trigger behaviour). */
+  trigger?: AudioTriggerRecord;
 }
 
 /**
@@ -618,7 +709,8 @@ export function shouldFireObserve(
 export function buildObservePayload(
   win: ObserveWindow,
   findingsByTs: Map<number, PerFrameSeed>,
-  biasHints: ObserveBiasHint[] = []
+  biasHints: ObserveBiasHint[] = [],
+  trigger?: AudioTriggerRecord
 ): ObserveDecidePayload {
   return {
     centerTs: win.centerTs,
@@ -627,6 +719,7 @@ export function buildObservePayload(
     biasHints: [...biasHints].sort((a, b) => a.ts - b.ts),
     capped: win.capped,
     droppedCount: win.droppedCount,
+    ...(trigger ? { trigger } : {}),
   };
 }
 
