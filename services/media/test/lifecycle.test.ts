@@ -64,6 +64,15 @@ describe("media lifecycle ledger (ADAAAA-7656)", () => {
     expect(snapshot(ledger).lastExit).toMatchObject({ code: 0, signal: "SIGTERM", reason: "signal" });
   });
 
+  it("does not let node's exit event clobber a signalled exit from the same boot", () => {
+    // SIGTERM handler records the signal, then process.exit(0) fires 'exit' with
+    // signal:null — the richer record must survive.
+    let ledger = recordBoot(loadLedger(tmpDir()), 1_000);
+    ledger = recordExit(ledger, { code: 0, signal: "SIGTERM", reason: "signal", at: 1_500 });
+    ledger = recordExit(ledger, { code: 0, signal: null, reason: "exit", at: 1_501 });
+    expect(ledger.lastExit).toMatchObject({ code: 0, signal: "SIGTERM", reason: "signal" });
+  });
+
   it("flips to degraded only when boots cluster inside the window", () => {
     const dir = tmpDir();
     let ledger = loadLedger(dir);
