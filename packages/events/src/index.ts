@@ -478,6 +478,15 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // Mean / max content-time cadence between consecutive fired ticks (ms).
   meanCadenceMs: z.number().min(0),
   maxCadenceMs: z.number().min(0),
+  // ADAAAA-7691: anchored-window evidence. `triggerFires` counts decide windows
+  // the audio-trigger scheduler anchored to a trigger onset; `cadenceFires` the
+  // blind-cadence ones, so `triggerFires + cadenceFires == decideCalls`. The
+  // analyzer has always COMPUTED these, but they were absent from this schema,
+  // so `JobSchema.parse` (store.patchJob) stripped them before persistence and
+  // no reader could see an anchored-window count. Optional additive: absent on
+  // records written before this field existed.
+  triggerFires: z.number().int().min(0).optional(),
+  cadenceFires: z.number().int().min(0).optional(),
   // ADAAAA-7007: VOD decide-observer per-call input-size + cap report. Additive
   // optional (absent on live-only / older records). `subsampledCalls>0` proves
   // the <=30-frame cap was actually exercised; `framesPerCall` is the per-call
