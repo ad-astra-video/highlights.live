@@ -392,6 +392,30 @@ export function ladderSectionIndex(windowTs: number): number {
 }
 
 /**
+ * Drill-down hop (used by the job page): scroll the Analysis window that covers
+ * `sectionIndex` into view and flash a ring on it, so the frame/decide-audit
+ * panel for that instant is unmistakable.
+ *
+ * Instant, not smooth: the Analysis list is >100k px tall on a 260-window job
+ * and an rAF-driven smooth animation is suspended in a background tab (it
+ * silently scrolls nowhere — measured on the live `d61e52f6` page).
+ */
+export function focusAnalysisWindow(
+  root: Pick<Document, "querySelector">,
+  sectionIndex: number,
+  flashMs = 1600
+): HTMLElement | null {
+  const el = root.querySelector<HTMLElement>(`[data-analysis-window][data-section-index="${sectionIndex}"]`);
+  if (!el) return null;
+  el.scrollIntoView({ block: "center" });
+  el.classList.add("ring-2", "ring-neon");
+  if (flashMs > 0 && typeof window !== "undefined") {
+    window.setTimeout(() => el.classList.remove("ring-2", "ring-neon"), flashMs);
+  }
+  return el;
+}
+
+/**
  * True while a job still has background work outstanding (not terminal).
  *
  * ADAAAA-6989: the server persists distinct VOD processing stages as the job

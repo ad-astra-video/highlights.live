@@ -10,6 +10,7 @@ import { batchManifest, clipFileName, clipUrl, copyText, saveBlob, seedCaption, 
 import { buildZip, type ZipFile } from "../lib/zip";
 import {
   fetchJobDetail,
+  focusAnalysisWindow,
   isJobInFlight,
   assertFramePartition,
   triggerLabel,
@@ -988,11 +989,7 @@ export function JobDetail() {
   // window opens on its own toggle as it always has.
   const jumpToAnalysisWindow = useCallback((sectionIndex: number) => {
     if (typeof document === "undefined") return;
-    const el = document.querySelector(`[data-analysis-window][data-section-index="${sectionIndex}"]`);
-    if (!el) return;
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
-    el.classList.add("ring-2", "ring-neon");
-    window.setTimeout(() => el.classList.remove("ring-2", "ring-neon"), 1600);
+    focusAnalysisWindow(document, sectionIndex);
   }, []);
 
   // Aligned requirement: no duplicate frame across sections. Re-assert the
