@@ -532,7 +532,16 @@ export type VodObserveMetricsSnapshot = z.infer<typeof VodObserveMetricsSnapshot
 export const SummaryLogEntrySchema = z.object({
   seq: z.number().int().min(1),
   ts: z.string(),
-  windowTs: z.number().int().optional(),
+  // ADAAAA-7711: the observe cadence reports `payload.centerTs`, which is a
+  // float whenever a window centre is not a whole second (e.g. a 14 s clip
+  // whose last tap lands at 11.666666666666666). Requiring `.int()` here made
+  // `store.patchJob`'s `JobSchema.parse` reject the WHOLE patch, and the
+  // best-effort `.catch` silently dropped that pass's summary entry. A finite
+  // float is the honest window timestamp and matches the sibling consumer
+  // `summary-ladder.ts` (which already accepts any finite number), so the
+  // contract accepts it rather than rounding at the writer. NaN/Infinity stay
+  // rejected — the writer sanitises those away.
+  windowTs: z.number().finite().optional(),
   text: z.string(),
 });
 export type SummaryLogEntry = z.infer<typeof SummaryLogEntrySchema>;

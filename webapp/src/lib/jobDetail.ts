@@ -371,7 +371,11 @@ export interface JobDetail {
  * assertions are stable.
  */
 export function summaryEntryTimestamp(e: SummaryLogEntry): string {
-  if (e.windowTs !== undefined) return `T+${e.windowTs}s`;
+  // ADAAAA-7711: `windowTs` is a float whenever the observe window centre is
+  // not a whole second (e.g. 11.666666666666666). The stored value keeps that
+  // fidelity for the summary ladder; the time log rounds only for display so a
+  // user never sees `T+11.666666666666666s`.
+  if (e.windowTs !== undefined) return `T+${Math.round(e.windowTs)}s`;
   const d = new Date(e.ts);
   if (!Number.isNaN(d.getTime())) return d.toTimeString().slice(0, 8);
   return e.ts;
