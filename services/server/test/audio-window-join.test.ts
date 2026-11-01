@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinPcmB64Parts, LiveRunShared } from "../src/analyzer";
+import { buildConfirmContext, joinPcmB64Parts, LiveRunShared } from "../src/analyzer";
 
 /** ~100 ms mono 16 kHz int16 PCM chunk (3200 bytes — the tap's real chunk size,
  * deliberately NOT a multiple of 3 so its base64 string carries `=` padding). */
@@ -62,5 +62,31 @@ describe("joinPcmB64Parts / window audio assembly (ADAAAA-7665)", () => {
     const run = new LiveRunShared();
     for (let i = 0; i < 10; i++) run.addAudioChunk((i + 1) * 0.1, pcmChunk(i).toString("base64"));
     expect(wavData(run.audioClipB64()).length).toBe(10 * 3200);
+  });
+
+  it("Stage-2 confirm audio is bounded to the confirm window, not the whole VOD", async () => {
+    // VOD wires vodAudioRetainS (default 1800 s), so the rolling clip is the
+    // WHOLE file: an unbounded confirm payload is the entire clip.
+    const run = new LiveRunShared({ audioRetainS: 1800 });
+    for (let i = 0; i < 600; i++) run.addAudioChunk((i + 1) * 0.1, pcmChunk(i).toString("base64"));
+    const cfg = {
+      gameHint: "soccer",
+      preWindowS: 3,
+      postWindowS: 3,
+      confirmWindowExtraS: 4,
+      audioContext: true,
+    } as Parameters<typeof buildConfirmContext>[1];
+    const ctx = await buildConfirmContext(
+      run,
+      cfg,
+      { timestamp: 20 },
+      { isHighlight: true } as Parameters<typeof buildConfirmContext>[3],
+      20
+    );
+    const secs = wavData(ctx.audioB64).length / 2 / 16000;
+    expect(secs).toBeGreaterThan(5); // still a real window
+    // 2 x AUDIO_CLIP_KEEP_S plus the inclusive-boundary chunk — never the 60 s
+    // clip (let alone the whole multi-minute VOD file).
+    expect(secs).toBeLessThanOrEqual(21);
   });
 });

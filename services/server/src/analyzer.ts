@@ -3010,7 +3010,21 @@ export async function buildConfirmContext(
   );
   const motion = shared.motionContext(candidate.timestamp);
   const audioLevels = shared.audioLevelSeries();
-  const audioB64 = shared.audioClipB64();
+  // ADAAAA-7665: slice the confirm audio to the CONFIRM WINDOW, never the whole
+  // rolling clip. `audioClipB64()` is documented as "the last AUDIO_CLIP_KEEP_S"
+  // but VOD sets `vodAudioRetainS` to 1800 s, so the rolling clip IS the entire
+  // file: once the padded-base64 truncation is fixed, sending it to ASR costs
+  // ~77 MB of base64 and tens of seconds on a 13-minute VOD. The window slice
+  // carries the audio the model actually reasons about; no in-window chunk
+  // means no audio context at all (same honest text-only degrade the observe
+  // path uses), never a wrong-region clip.
+  const confirmSpan =
+    (cfg.preWindowS ?? DEFAULT_PRE_WINDOW_S) +
+    (cfg.postWindowS ?? DEFAULT_POST_WINDOW_S) +
+    extra +
+    AUDIO_WINDOW_MARGIN_S;
+  const confirmHalfWindow = Math.min(confirmSpan, AUDIO_CLIP_KEEP_S);
+  const audioB64 = shared.audioWindowB64(center, confirmHalfWindow, confirmHalfWindow);
   return {
     frames,
     keyframes,
