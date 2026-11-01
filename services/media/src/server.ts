@@ -20,6 +20,7 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
 import { WebRtcIngestSession } from "./rtc";
+import { AudioRelay, type AudioPcmChunk } from "./audio-relay";
 import { guardStream, safeEnd, safeWrite } from "./guarded-write";
 import type { LifecycleSnapshot } from "./lifecycle";
 
@@ -38,6 +39,10 @@ interface ActiveStream {
    *  Lazily created on the first muxed chunk; the container's own PTS is the
    *  authoritative clock for clip cutting AND for feeding the analysis rails. */
   recording?: { path: string; mime: string; stream: WriteStream };
+  /** Media-edge audio relay (ADAAAA-7658): resolves the received opus RTP into
+   *  ~100 ms mono PCM chunks for the perceive Stage-A gate. Lazily created on
+   *  the first audio packet; absent when the stream carries no audio. */
+  audioRelay?: AudioRelay;
 }
 
 export interface MediaServerOptions {
@@ -105,11 +110,19 @@ export interface MediaServerOptions {
    * (tests and embedders).
    */
   lifecycle?: () => LifecycleSnapshot;
+  /** Media-edge opus -> PCM audio relay (ADAAAA-7658). On by default; the
+   *  decode uses the ffmpeg already in the media image, bills no GPU, and is
+   *  best-effort (a failure never touches the video rail). Set
+   *  `{ enabled: false }` to run the relay dark. */
+  audioRelay?: { enabled?: boolean; ffmpegBin?: string; maxBacklogBytes?: number };
 }
 
 const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
 
 const DEFAULT_RECONNECT_GRACE_MS = 8000;
+/** Bound on concurrent audio-chunk POSTs per session (ADAAAA-7658). A slow
+ *  control plane must drop audio evidence, never grow a media-node backlog. */
+const MAX_AUDIO_POSTS_IN_FLIGHT = 8;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -128,6 +141,8 @@ export class MediaServer {
   private maxSessions: number;
   private healthToken: string | undefined;
   private startedAt = Date.now();
+  /** Concurrent audio-chunk POSTs in flight, per perceive session id. */
+  private audioInFlight = new Map<string, number>();
   /** Provision/lease counters for the capacity/health surface. */
   private counters = {
     provisionAttempts: 0,
@@ -135,6 +150,12 @@ export class MediaServer {
     noCapacityFailures: 0,
     sessionsCompleted: 0,
     sessionSeconds: 0,
+    /** ADAAAA-7658 media-edge audio relay: PCM chunks POSTed to the control
+     *  plane for perceive /audio, and chunks dropped on backlog/error. */
+    audioChunksPosted: 0,
+    audioChunksDropped: 0,
+    /** Fired audio-gate candidates the control plane reported back. */
+    audioTriggerCandidates: 0,
   };
   constructor(private opts: MediaServerOptions, orch?: MediaOrchestrator) {
     this.rtcSampleFps = opts.rtcSampleFps ?? 1;
@@ -278,12 +299,12 @@ export class MediaServer {
           session.on("close", () => {
             if (stream.sockets.size === 0) this.armGrace(req.params.sid);
           });
-          // Audio (opus) ingest path: receive + count, and relay the raw opus
-          // payload as-is. The media server does NOT assemble audio segments —
-          // that is the livepeer_gateway trickle's job (board direction on
-          // 7513); the perceive orchestrator trickle contract has no audio rail
-          // (only video_in/events_out/control), so audio is surfaced here and
-          // counted on the session for the RTC packet/frame counters (AC).
+          // Audio (opus) ingest path: receive + count, relay the raw opus
+          // payload as-is into the muxed recording, AND (ADAAAA-7658, Option A)
+          // decode it at the media edge into ~100 ms mono int16 PCM chunks that
+          // are POSTed to the control plane for perceive `POST /audio`. The
+          // decode is ffmpeg (already in the image), no GPU, and best-effort:
+          // nothing here can stall the video-in rail.
           session.on("audio", (a: { seq: number; packets: number; ts: number; payload: Buffer | undefined }) => {
             if (a.seq === 0 || a.packets === 1 || a.packets % 50 === 0) {
               // eslint-disable-next-line no-console
@@ -294,12 +315,17 @@ export class MediaServer {
             // Forward the raw opus payload to the muxed session recording (the
             // livepeer_gateway trickle's segment-assembly input), so audio is
             // not silently dropped while the video frames go to the video-in
-            // rail. Best-effort — the orchestrator has no audio-in endpoint.
+            // rail.
             if (stream.recording && a.payload) {
               // Same guarded-write rule as every other socket/stream write here.
               safeWrite(stream.recording.stream, a.payload, `recording session=${stream.provisioned.sessionId}`, () => {
                 stream.recording = undefined;
               });
+            }
+            // ADAAAA-7658: opus -> PCM at the media edge -> perceive /audio.
+            if (this.opts.audioRelay?.enabled !== false && a.payload) {
+              const relay = this.ensureAudioRelay(stream);
+              relay?.pushPacket(a.payload, a.ts * 1000);
             }
           });
           session.on("error", (e) => console.error("[media] rtc err", e));
@@ -480,6 +506,14 @@ export class MediaServer {
             },
           }
         : {}),
+      audio: {
+        // ADAAAA-7658 media-edge audio relay evidence (counts only, no ids on
+        // the public /health surface).
+        chunksPosted: this.counters.audioChunksPosted,
+        chunksDropped: this.counters.audioChunksDropped,
+        triggerCandidates: this.counters.audioTriggerCandidates,
+        sessionsRelaying: [...this.active.values()].filter((s) => !!s.audioRelay && !s.audioRelay.isDisabled).length,
+      },
       ...(opts.detail ? { sessions } : {}),
     };
   }
@@ -599,6 +633,74 @@ export class MediaServer {
     }
   }
 
+  /** Lazily create the per-session opus -> PCM relay (ADAAAA-7658). */
+  private ensureAudioRelay(stream: ActiveStream): AudioRelay | null {
+    if (stream.audioRelay) return stream.audioRelay;
+    if (this.opts.audioRelay?.enabled === false) return null;
+    stream.audioRelay = new AudioRelay({
+      ffmpegBin: this.opts.audioRelay?.ffmpegBin,
+      maxBacklogBytes: this.opts.audioRelay?.maxBacklogBytes,
+      sessionId: stream.provisioned.sessionId,
+      onChunk: (chunk) => this.forwardAudioChunk(stream, chunk),
+    });
+    return stream.audioRelay;
+  }
+
+  /**
+   * POST one decoded ~100 ms PCM chunk to the control plane, which forwards it
+   * to perceive `POST /audio` on the SAME session id the video-in rail uses
+   * (A2: reuse the existing `{seq, timestamp, samples}` shape, no 4th trickle
+   * channel). The live session id travels with the chunk so the control plane
+   * never has to guess which runner session the media node paid for.
+   *
+   * Best-effort by construction: a missing callbackBase/jobId (dev), a slow
+   * control plane (bounded in-flight per session) or a failed POST only drops
+   * audio evidence — the video rail and its frames/observations are untouched.
+   */
+  private forwardAudioChunk(stream: ActiveStream, chunk: AudioPcmChunk): void {
+    if (!this.opts.callbackBase || !stream.jobId) {
+      this.counters.audioChunksDropped++;
+      return;
+    }
+    const sid = stream.provisioned.sessionId;
+    const inFlight = this.audioInFlight.get(sid) ?? 0;
+    if (inFlight >= MAX_AUDIO_POSTS_IN_FLIGHT) {
+      // The gate is ~10 chunks/s; a control plane that falls ~1 s behind is
+      // better served by dropping chunk evidence than by growing a backlog on
+      // the media node (this path must never become a latency source).
+      this.counters.audioChunksDropped++;
+      return;
+    }
+    this.audioInFlight.set(sid, inFlight + 1);
+    void fetch(`${this.opts.callbackBase}/jobs/${stream.jobId}/audio`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        seq: chunk.seq,
+        timestamp: chunk.timestamp,
+        samples: chunk.samples,
+        sessionId: sid,
+      }),
+    })
+      .then(async (r) => {
+        if (!r.ok) {
+          this.counters.audioChunksDropped++;
+          return;
+        }
+        this.counters.audioChunksPosted++;
+        const body: any = await r.json().catch(() => null);
+        if (body?.candidate) this.counters.audioTriggerCandidates++;
+      })
+      .catch(() => {
+        this.counters.audioChunksDropped++;
+      })
+      .finally(() => {
+        const n = (this.audioInFlight.get(sid) ?? 1) - 1;
+        if (n <= 0) this.audioInFlight.delete(sid);
+        else this.audioInFlight.set(sid, n);
+      });
+  }
+
   /** Start the reconnect grace countdown (replacing any pending one). */
   private armGrace(sid: string) {
     this.clearGrace(sid);
@@ -652,6 +754,12 @@ export class MediaServer {
       // asynchronously on 'error', never as a throw (ADAAAA-7591).
       safeEnd(stream.recording.stream, `recording session=${sid}`);
       stream.recording = undefined;
+    }
+    // Close the media-edge audio relay decoder (ADAAAA-7658). Fire-and-forget:
+    // its ffmpeg is a local child process, and teardown must not block on it.
+    if (stream.audioRelay) {
+      void stream.audioRelay.close().catch(() => {});
+      stream.audioRelay = undefined;
     }
     // 1) stop paying (no more ticket refresh). Idempotent.
     this.orch.stopPayment(sid);

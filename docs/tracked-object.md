@@ -10,6 +10,11 @@ increment requires, and it is what the labeled eval set
 (`evals/track_label_manifest.json`) and the accuracy measurement harness
 (`evals/track_metrics.py`) score against.
 
+The change/trigger signal that anchors a live analysis window is defined
+separately in `docs/audio-trigger-contract.md` (the audio trigger record, its
+fields, and what it does not do). Both documents are part of the shared
+detection contract and both are frozen in `packages/events/src/index.ts`.
+
 ## What a "detected object" is vs. a "tracked object"
 
 The perceive detector (Florence-2 `<OD>`, or the background-diff CPU stub)

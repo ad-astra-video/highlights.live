@@ -25,6 +25,7 @@ import {
   type PipelineClient,
 } from "./analyzer";
 import type { SignalGateOptions } from "./observe-loop";
+import { audioTriggerFromCandidate } from "./audio-trigger";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
@@ -741,6 +742,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
                 streamId: job.id,
               });
               if (res?.series?.length) shared.setAudioSeries(res.series);
+              // ADAAAA-7658: a fired audio trigger anchors ONE decide window at
+              // the onset (the live decide-observer drains these each frame).
+              // Provenance for the window, never a decision by itself.
+              if (res?.candidate?.audio) {
+                const trig = audioTriggerFromCandidate(res.candidate as any);
+                if (trig) shared.recordAudioTrigger(trig);
+              }
             } catch {
               /* gate is best-effort — keep going */
             }
@@ -2951,6 +2959,65 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     emitJobEvent(req.params.id, { seq, timestamp, type: "observation", observation: obs });
     return { ok: true };
   });
+
+  // Media-edge audio relay callback (ADAAAA-7658). The media node decodes the
+  // browser's opus RTP with the ffmpeg already in its image and POSTs ~100 ms
+  // mono int16 PCM chunks here (the same `{seq, timestamp, samples}` shape the
+  // server's own Stage-A tap produces). This route forwards the chunk to
+  // perceive `POST /audio` on the SAME runner session the video-in rail uses
+  // (the media node tells us which session it paid for), so the Stage-A gate
+  // runs on the media path too. Pure DSP — no GPU on this path.
+  //
+  // A fired candidate is surfaced on the job's SSE stream as `candidate`
+  // evidence (provenance for the live console). It does NOT by itself issue a
+  // decide on this rail: the media rail has no frame on the control plane to
+  // anchor a decide to. The trigger-window scheduling that anchors decide runs
+  // on the rails that own the frames (server live ingest + browser /ingest).
+  app.post<{ Params: { id: string } }>(
+    "/jobs/:id/audio",
+    // A chunk is ~3.2 KB of base64; reject anything that could be an abuse
+    // payload before touching perceive.
+    { bodyLimit: 256 * 1024 },
+    async (req: any, reply) => {
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "no job" });
+      const body = req.body ?? {};
+      const samples = typeof body.samples === "string" ? body.samples : "";
+      if (!samples) return reply.code(400).send({ error: "samples required" });
+      let pcmBytes = 0;
+      try {
+        pcmBytes = Buffer.from(samples, "base64").length;
+      } catch {
+        return reply.code(400).send({ error: "samples must be base64" });
+      }
+      // int16 mono => even byte count. A misaligned chunk is a broken packet:
+      // drop it with a 400 instead of feeding perceive a half sample.
+      if (pcmBytes === 0 || pcmBytes % 2 !== 0) {
+        return reply.code(400).send({ error: "samples must be aligned int16 PCM" });
+      }
+      const bj = browserJobs.get(req.params.id);
+      const sessionId =
+        (typeof body.sessionId === "string" && body.sessionId) ||
+        bj?.sessionId ||
+        job.perceiveSessionId ||
+        "";
+      if (!sessionId) return reply.code(409).send({ error: "no perceive session for this job" });
+      const seq = Number.isFinite(body.seq) ? Number(body.seq) : -1;
+      const timestamp = Number.isFinite(body.timestamp) ? Number(body.timestamp) : 0;
+      try {
+        const res = await adapter.postAudio(sessionId, { seq, timestamp, samples, streamId: job.id });
+        const candidate = res?.candidate ?? null;
+        if (candidate) {
+          emitJobEvent(job.id, { seq: Math.max(0, seq), timestamp, type: "candidate", candidate });
+        }
+        return { candidate, series: res?.series ?? [] };
+      } catch (e: any) {
+        // A gate POST failure is best-effort evidence: 502 so the media node
+        // counts it as a dropped chunk and keeps the video rail untouched.
+        return reply.code(502).send({ error: String(e?.message || e) });
+      }
+    }
+  );
 
   // Browser-capture rail: client appends a chunk of the recorded capture (base64)
   // so the server can cut highlight clips from it at stop.
