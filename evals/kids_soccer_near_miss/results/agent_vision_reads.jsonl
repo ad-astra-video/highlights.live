@@ -1,0 +1,29 @@
+{"t": 45, "reader": "vision_analyze/deepseek-v4.1-flash", "raw": "SCOREBOARD: 01:36 | RMA 0-0 BAR | BALL: visible left-center near a player in dark blue | SHOT: NO | KIND: none", "shot": false}
+{"t": 66, "raw": "SCOREBOARD: 02:39 RMA 0-0 BAR | BALL: visible near the right-side white player | SHOT: NO | KIND: none", "shot": false}
+{"t": 165, "raw": "SCOREBOARD: 11:59 RMA 1-1 BAR | BALL: not visible | SHOT: NO | KIND: none", "shot": false, "note": "scan hint said ball_in_net at t=165; frame read refutes a goal (ball not visible)"}
+{"t": 51, "raw": "BALL: see note | SHOT: pending", "shot": null, "note": "scan hint goal_mouth_shot at t=51"}
+{"t": 144, "kind": "scoreboard_crop_6x", "raw": "IA 0-1 BAR", "shot": null, "note": "scoreboard value audit"}
+{"t": 147, "kind": "frame", "raw": "SCOREBOARD: 06:10 RMA 0-1 BAR | BALL: at a player's feet | GOAL_SIGNAL: no | PLAYERS: open play", "shot": false}
+{"t": 148, "kind": "scoreboard_crop_6x", "raw": "IA 0-1 BAR", "shot": null}
+{"t": 149, "kind": "frame+8x_crop", "raw": "06:12 RMA 0-1 BAR, open play, ball at feet; 8x crop LEFT_DIGIT 0 RIGHT_DIGIT 1", "shot": false}
+{"t": 150, "kind": "8x_crop", "raw": "LEFT_DIGIT 1 RIGHT_DIGIT 1", "shot": null, "note": "score flips 0-1 -> 1-1 between 149 and 150 with no goal action in 147-149 frames; video cuts passages (clock 06:12 -> 11:59 by 165), so a scoreboard delta across a cut is NOT goal proof. Refuted as a goal."}
+{"t": 235, "reader": "vision_analyze", "raw": "BALL: inside a goal net | SHOT: YES | KIND: ball_in_net | SCOREBOARD: 09:33 RMA 1-1 BAR", "shot": true, "note": "white-kitted player airborne after striking, ball in the air inside the goal-net area past the blue keeper"}
+{"t": 235, "reader": "vllm-serial-thinking-on", "raw": "BALL=net; SHOT=yes; KIND=ball_in_net", "shot": true, "note": "independent second read, 236.7s"}
+{"t": 236, "reader": "vision_analyze", "raw": "BALL: left | SHOT: no | KIND: none | KEEPER: standing | SCOREBOARD: 09:34 RMA 1-1 BAR", "shot": false, "note": "player sliding, ball back in play"}
+{"t": 237, "reader": "vision_analyze", "raw": "BALL: left | SHOT: NO | KIND: none | SCOREBOARD: 09:43 RMA 1-1 BAR", "shot": false}
+{"t": 249, "reader": "vision_analyze", "raw": "BALL: not visible | SHOT: NO | KIND: none | KEEPER: standing | SCOREBOARD: 11:26 RMA 1-1 BAR", "shot": false, "note": "tackle/player on ground; refutes the 1s-scan keeper_save hint at 249-250"}
+{"t": 255, "reader": "vision_analyze", "raw": "BALL: right | SHOT: NO | KIND: none | KEEPER: absent | SCOREBOARD: 11:36 RMA 1-1 BAR", "shot": false, "note": "player on ground near bench, ball airborne at sideline; refutes the 1s-scan goal_mouth_shot hint at 255"}
+{"t": 262, "raw": "BALL: right | SHOT: NO | KIND: none | KEEPER: standing | SCOREBOARD: 11:44 RMA 1-1 BAR", "shot": false}
+{"t": 282, "raw": "BALL: left | SHOT: NO | KIND: none | KEEPER: absent | SCOREBOARD: 15:00 RMA 1-1 BAR 00:04", "shot": false}
+{"t": 318, "raw": "BALL: not visible | SHOT: NO | SCENE: closeup of a person | SCOREBOARD: 16:57 RMA 1-1 BAR", "shot": false}
+{"t": 279, "raw": "BALL: centre | SHOT: NO | KIND: none | SCOREBOARD: 13:51 RMA 1-1 BAR", "shot": false, "note": "open play, no goal net in shot"}
+{"t": 280, "raw": null, "error": "vision_analyze timed out twice; direct endpoint read queued"}
+{"t": 283, "raw": "BALL=center; SHOT=no; KIND=none; SCOREBOARD=15:00 RMA 1-1 BAR 00:05", "shot": false, "note": "replay inlay timer running 00:03->00:05 across 281-283, corroborates an incident at ~280 (does not refute ks-g-0280)"}
+{"t": 366, "raw": "BALL: right | SHOT: NO | KIND: none | KEEPER: standing | SCOREBOARD: 19:47 RMA 2-1 BAR", "shot": false}
+{"t": 455, "raw": "BALL=right; SHOT=no; KIND=none; KEEPER=standing", "shot": false}
+{"t": 456, "rep": 0, "raw": "BALL=right penalty area, near goalkeeper; SHOT=yes; KIND=saved", "shot": true}
+{"t": 456, "rep": 1, "raw": "BALL=at feet of white player near center-right; SHOT=no; KIND=none; KEEPER=standing", "shot": false, "note": "REPRODUCIBILITY FLIP: identical frame + temperature 0, shot=yes then shot=no. Single-read promotion is invalid for this layer."}
+{"t": 690, "raw": "SCOREBOARD=; SCENE=open play; GOAL=no", "shot": false, "note": "no scoreboard overlay drawn at this second"}
+{"t": 705, "raw": "SCOREBOARD=; SCENE=closeup; GOAL=no", "shot": false, "note": "close-up with no overlay; consistent with a celebration close-up, cannot refute the labelled goal"}
+{"t": 711, "raw": null, "error": "vision_analyze timed out (twice)"}
+{"t": 712, "raw": "SCOREBOARD=REAL MADRID 4-4 FC BARCELONA; 74 5 6 PENALTIS 4 5 6; SCENE=open play; GOAL=no", "shot": false, "note": "686-776s tail is a penalty shoot-out segment, not open play: score-digit diff detector is not a valid goal catalogue method there"}

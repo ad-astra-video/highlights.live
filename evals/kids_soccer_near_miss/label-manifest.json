@@ -1,5 +1,5 @@
 {
-  "$comment": "ADAAAA-7590 — frame-derived ground truth for kids_soccer.mp4 (777 s, multi-goal compilation). Labels were read from the pixels only (the job's 3 fps frames, seq = 3*t, fetched from GET /jobs/{id}/frames/{seq}), never from decide's reason text. Goal instants are the moment the ball is in the net / the GOL graphic appears / the scoreboard changes. Non-goal windows were inspected at 1 s steps around the window: 'evidence' is what the frames show (post/saved/wide/blocked when a shot is visible, 'none' when the window holds no shot at goal).",
+  "$comment": "ADAAAA-7590 \u2014 frame-derived ground truth for kids_soccer.mp4 (777 s, multi-goal compilation). Labels were read from the pixels only (the job's 3 fps frames, seq = 3*t, fetched from GET /jobs/{id}/frames/{seq}), never from decide's reason text. Goal instants are the moment the ball is in the net / the GOL graphic appears / the scoreboard changes. Non-goal windows were inspected at 1 s steps around the window: 'evidence' is what the frames show (post/saved/wide/blocked when a shot is visible, 'none' when the window holds no shot at goal).",
   "video": {
     "id": "kids-soccer",
     "path": "/data/uploads/3f8e8d8d-f00d-410c-b4c1-1a781b2fffc7/kids-soccer.mp4",
@@ -8,14 +8,14 @@
     "labels_by": "Developer (Paperclip run e34a4597-93a8-4d6b-bc25-56f1337c52e8)",
     "labelled_at": "2026-10-30",
     "label_method": "contact sheets at 1 s steps per window + full-resolution single frames for every disputed call; evidence cites the frame timestamps that carry the proof",
-    "confidence_note": "Goal instants are ±1 s (1 s frame grid). Windows labelled 'none' rule out a goal inside the stated bounds; they do not claim a shot occurred."
+    "confidence_note": "Goal instants are \u00b11 s (1 s frame grid). Windows labelled 'none' rule out a goal inside the stated bounds; they do not claim a shot occurred."
   },
   "coverage": {
     "goal_windows": 15,
     "non_goal_windows": 22,
     "non_goal_shot_class": 10,
-    "note": "Exhaustive goal catalogue for 336-777s added the t=341 goal (scoreboard 1-1->2-1, scorer graphic t=344) that the original 14-goal labelled set missed; the other 21 scoreboard-change candidates in that region are committed as candidates and are still awaiting a 1 s frame confirm/refute pass (see RESULTS.md -> Goal catalogue). Every goal in the 660-720s segment is still labelled (t=662,678,705,719); that segment was inspected densely at 1 s steps in ADAAAA-7590 and the catalogue scan raised no extra candidate inside it. Recall is over the 15-goal catalogue, not a whole-video goal count; see RESULTS.md caveats.",
-    "non_goal_shot_class_note": "10 shot-class windows (7 saved, 2 blocked, 1 wide). AC-1 asks for >=20; the remaining 12 evidence:'none' windows were re-scanned at 24s and 12s contact-sheet granularity and no shot could be confirmed, so they stay 'none'. Additional shot windows need a dense 1 s pass once the vision model returns reproducible frame reads."
+    "note": "Exhaustive goal catalogue for 336-777s added the t=341 goal (scoreboard 1-1->2-1 at t=340/341, replay inlay corroborates the t=280 goal rather than refuting it) that the original 14-goal labelled set missed. 686-776s is NOT open play: f_0712 reads 'REAL MADRID 4-4 FC BARCELONA / PENALTIS 4 5 6', i.e. a penalty shoot-out, so the score-digit-diff catalogue method does not apply there and that segment needs a per-kick frame pass. The reel is also non-chronological (overlay clock goes backwards after t=351) and scoreboard deltas across cuts are not goal evidence, so recall is over the labelled goal catalogue, not a whole-video goal count; see RESULTS.md caveats.",
+    "non_goal_shot_class_note": "10 shot-class windows (7 saved, 2 blocked, 1 wide). AC-1 asks for >=20. A third read layer (agent vision on the 1x frames, results/agent_vision_reads.jsonl, 29 reads) was measured this run: it reproduces static facts (scoreboard digits, close-up vs open play) but NOT the shot call (t=456 returned shot then no-shot on an identical repeat), so nothing was promoted on it. Strongest unpromoted candidate: t=235 inside ks-n-0237 (234-240) - two readers agree a shot is in frame and the score does not change, i.e. a shot-class non-goal. The 1 s-scan hints at t=51, 249, 255, 262, 318 and 366 are refuted on the frames (open play / close-up / player on the ground)."
   },
   "windows": [
     {
@@ -363,7 +363,7 @@
       "instant": 341,
       "ground_truth": "goal",
       "evidence": "scoreboard_change",
-      "frames": "scoreboard RMA 1-1 BAR at t=340 -> RMA 2-1 BAR at t=341 (frame diff confirms the digit flip); scorer graphic '11 MANUEL ORDOÑEZ, GOLES: 1' at t=344; players celebrating t=341-343. Discovered by the 336-777s exhaustive catalogue (scoreboard-digit diff detector + 1 s frame verification).",
+      "frames": "scoreboard RMA 1-1 BAR at t=340 -> RMA 2-1 BAR at t=341 (frame diff confirms the digit flip); scorer graphic '11 MANUEL ORDO\u00d1EZ, GOLES: 1' at t=344; players celebrating t=341-343. Discovered by the 336-777s exhaustive catalogue (scoreboard-digit diff detector + 1 s frame verification).",
       "confidence": "high"
     }
   ]
