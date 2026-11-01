@@ -48,8 +48,30 @@ export function nextSummarySeq(log: SummaryLogEntry[] | undefined): number {
 
 /** Optional window metadata threaded from the observe tick into the log. */
 export interface SummaryAppendMeta {
-  /** Timestamp (ms) of the observe window / tick this entry summarizes. */
+  /** Video timestamp (seconds) of the observe window this entry summarizes. */
   windowTs?: number;
+}
+
+/**
+ * ADAAAA-7710: normalise a window timestamp to the integer the persisted
+ * `SummaryLogEntry.windowTs` contract requires (`z.number().int()`).
+ *
+ * The observe cadence reports `payload.centerTs`, which is a float whenever the
+ * window centre is not a whole second (e.g. a 14 s clip whose last tap is at
+ * `11.666666666666666`). Passing that straight through made `store.patchJob`'s
+ * `JobSchema.parse` reject the ENTIRE patch, so both the summary-log entry and
+ * the bounded `runningSummary` were dropped for that pass — a silent data-loss
+ * path, not a cosmetic log line.
+ *
+ * Rounding at this single write choke point (both the live and VOD callers go
+ * through `appendSummaryEntry`) keeps stored summaries integers without the
+ * webapp having to format fractions. A non-finite timestamp degrades to "no
+ * window metadata" rather than failing the entry, so a bad tick can never cost
+ * the summary itself.
+ */
+export function normalizeWindowTs(windowTs: number | undefined | null): number | undefined {
+  if (typeof windowTs !== "number" || !Number.isFinite(windowTs)) return undefined;
+  return Math.round(windowTs);
 }
 
 /**
@@ -70,10 +92,12 @@ export function appendSummaryEntry(
   const log = job.summaryLog ?? [];
   const seq = nextSummarySeq(log);
   const delta = summaryDelta(job.runningSummary, summary);
+  // ADAAAA-7710: windowTs is persisted as an integer — see normalizeWindowTs.
+  const windowTs = normalizeWindowTs(meta?.windowTs);
   const entry: SummaryLogEntry = {
     seq,
     ts: new Date().toISOString(),
-    ...(meta?.windowTs != null ? { windowTs: meta.windowTs } : {}),
+    ...(windowTs != null ? { windowTs } : {}),
     // The per-window content the model added this pass; fall back to the whole
     // bounded summary so a pass is never silently dropped from the log.
     text: delta || summary,
