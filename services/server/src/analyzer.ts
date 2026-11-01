@@ -1276,6 +1276,27 @@ export function buildVodObserveMetrics(obs: ObserveDecider): VodObserveMetricsSn
   };
 }
 
+/**
+ * ADAAAA-7676: how much of the live lag budget to reserve for the decide that
+ * has not landed yet.
+ *
+ * What a live viewer experiences is `lag_at_fire + decide_e2e`, so the stale
+ * drop threshold is `budget - reserve` and the reserve must cover the WORST
+ * decide seen so far — not the mean. Measured on job `4f8d47bd` (130 s rtmp,
+ * `LIVE_OBSERVE_LAG_BUDGET_S=30`): a mean-based reserve (8.5 s) let an 11.7 s
+ * decide land at a completed lag of 33.0 s, i.e. past the budget the drop
+ * exists to enforce. Worst-based (11.7 s + 1 s of measurement margin) picks the
+ * window at 17.3 s and lands the result at ~29 s.
+ *
+ * The reserve is capped at half the budget so a very slow decide cannot starve
+ * the pass into deciding nothing at all — dropping work is cheap, deciding
+ * nothing is not.
+ */
+export function liveLagReserveS(maxE2eMs: number, meanE2eMs: number, budgetS: number): number {
+  const worstE2e = Math.max(maxE2eMs, meanE2eMs) / 1000;
+  return Math.min(worstE2e + 1, budgetS / 2);
+}
+
 /** Build the live decide-observer latency/cadence snapshot from the observer's
  * measured samples (pure aggregation of {@link LiveObserver.latencySamples}). */
 export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSnapshot {
@@ -3637,11 +3658,8 @@ export async function analyzeJob(
    * let an 11.7 s decide land at completed 33–40 s on a 30 s budget. 1 s of
    * margin absorbs the fenceposts of the measurement itself.
    */
-  const lagReserveS = (): number => {
-    const obs = liveObserver!;
-    const worstE2e = Math.max(obs.maxE2eMs(), obs.meanE2eMs()) / 1000;
-    return Math.min(worstE2e + 1, lagBudgetS / 2);
-  };
+  const lagReserveS = (): number =>
+    liveLagReserveS(liveObserver!.maxE2eMs(), liveObserver!.meanE2eMs(), lagBudgetS);
   let streamWallStartMs: number | null = null;
   let lastFrameLagMs = 0;
   let staleFrameDrops = 0;
