@@ -1,0 +1,7 @@
+{
+  "$comment": "Synthetic two-clip corpus fixture for the pooled scorer (ADAAAA-7692). clip-a is 100 % precision on 2 cards; clip-b is 50 % precision on 8 cards. Pooled precision must read 60 % (6/10), NOT the 75 % clip-average, and pooled recall 85.71 % (6 credited of 7 goals), NOT the 90 % clip-average. Corpus hard negatives = 1 + 3 = 4.",
+  "clips": [
+    {"label": "clip-a", "commit": "build-a", "manifest": "manifest_a.json", "job_detail": "detail_a.json"},
+    {"label": "clip-b", "commit": "build-b", "manifest": "manifest_b.json", "job_detail": "detail_b.json"}
+  ]
+}
