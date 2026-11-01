@@ -103,6 +103,9 @@ class AudioGateSignal:
     peak_energy: float       # max frame energy in the trigger window
     baseline_energy: float   # baseline at fire time (for FP-rate telemetry)
     frames: int = 1          # number of elevated frames that formed the trigger
+    # ADAAAA-7658 AC5: identity of the operating point that fired, so the live
+    # and VOD passes agree on WHICH threshold produced a trigger record.
+    threshold_id: str = ""
 
 
 @dataclass
@@ -259,6 +262,18 @@ class AudioEnergyGate:
     def _fire(self, kind: str, fired_at: float) -> AudioGateSignal:
         onset = self._onset_ts if self._onset_ts is not None else fired_at
         baseline = self.baseline if self.baseline is not None else 0.0
+        # ADAAAA-7658 AC5: the trigger record names the threshold that fired.
+        # Threshold id = gate path + the ratio/sustain that produced the fire,
+        # e.g. ``stageA/burst/1.3x/0.3s`` — stable enough for live and VOD to
+        # agree on what a trigger is, specific enough to tell two operating
+        # points apart after a re-tune.
+        ratio = self.cfg.burst_ratio if kind == "burst" else self.cfg.swell_ratio
+        sustain_s = (
+            self.cfg.burst_min_frames * self.cfg.frame_s
+            if kind == "burst"
+            else self.cfg.swell_seconds
+        )
+        threshold_id = f"stageA/{kind}/{ratio:g}x/{sustain_s:g}s"
         sig = AudioGateSignal(
             kind=kind,
             ts=onset,
@@ -267,6 +282,7 @@ class AudioEnergyGate:
             peak_energy=round(self._peak, 6),
             baseline_energy=round(max(baseline, self.cfg.baseline_floor), 6),
             frames=self._elevated,
+            threshold_id=threshold_id,
         )
         self._last_fired_ts = fired_at
         self._reset_window()

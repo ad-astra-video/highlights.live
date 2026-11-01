@@ -232,6 +232,11 @@ export const AudioSignalSchema = z.object({
   peakEnergy: z.number().min(0).max(1),
   // Quiet-baseline energy at fire time (feeds the FP-rate cost metric).
   baselineEnergy: z.number().min(0).max(1),
+  // Identity of the threshold/operating point that fired, e.g.
+  // `stageA/burst/1.3x` (ADAAAA-7658 AC5: the trigger record states WHICH
+  // threshold produced it, so live and VOD agree on what a trigger is).
+  // Optional for backward compatibility with already-persisted candidates.
+  thresholdId: z.string().optional(),
 });
 export type AudioSignal = z.infer<typeof AudioSignalSchema>;
 
