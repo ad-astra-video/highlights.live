@@ -561,7 +561,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // session is released and before clips are cut — the tail window must be
       // decided while the session the media node paid for is still alive, and
       // every accepted highlight must exist before the cut loop runs.
-      if (bj.rail) {
+      // ADAAAA-7700: a media-node restart / lost session ends the share as a
+      // FAILURE — do not spend a tail decide on a session that is already gone.
+      if (bj.rail && outcome.status === "done") {
         await bj.rail.finish().catch((e) => console.error(`[media-rail:${jobId}] finish failed:`, e?.message || e));
         const railStats = bj.rail.stats();
         const railMetrics = bj.rail.observeMetrics();
