@@ -379,12 +379,12 @@ class AudioEnergyGate:
 class WhistleConfig:
     """Operating point of the band-limited whistle path.
 
-    ``emitted`` is the measure-only switch: detection is always computed (so the
-    live log and the eval harness can count candidates), but a fire only becomes
-    a scheduling candidate when the path is explicitly graduated to emitting.
-    The ship gate for that is AC3 (measured recall/FP/latency on the labelled
-    corpus); the default stays measure-only so an FP-happy detector can never
-    silently spend gemma analysis budget.
+    ``emitted`` is the emit switch: detection is always computed (so the live
+    log and the eval harness can count candidates), and when it is True a fire
+    becomes a scheduling candidate — one anchored gemma analysis per whistle
+    (ADAAAA-7705 Option 3, priced in ADAAAA-7682 AC5). It ships **True**; the
+    rollback is flipping it back to False (config only — no code revert, no
+    logic redeploy), which restores measure-only reporting.
     """
 
     frame_s: float = 0.1
@@ -409,7 +409,7 @@ class WhistleConfig:
     sustain_frames: int = 3          # consecutive elevated frames (~0.3 s at frame_s 0.1)
     cooldown_s: float = 2.0
     max_latency_s: float = 5.0
-    emitted: bool = False            # measure-only until AC3 clears
+    emitted: bool = True             # graduated to emitting (ADAAAA-7705 Option 3); False = measure-only
 
     @property
     def threshold_id(self) -> str:

@@ -334,7 +334,7 @@ relay and the server tap already decode — **0 added Livepeer GPU sessions**.
 | `min_tonality` | 6.0 | band peak / band mean |
 | `max_flatness` | 0.25 | spectral flatness inside the band (tonal vs broadband) |
 | `cooldown_s` | 2.0 | same anti-storm rule as Stage-A |
-| `emitted` | **false** | measure-only switch (see below) |
+| `emitted` | **true** | emit switch — a whistle fire becomes a scheduling candidate (see below) |
 
 `thresholdId` is `stageB/whistle/2.4-3.4k/5x/0.3s`. The `kind` stays `"burst"`
 so the frozen `AudioSignalSchema` in `packages/events` is unchanged; the two
@@ -342,13 +342,28 @@ paths are discriminated by the `thresholdId` family prefix (`stageA/` vs
 `stageB/`). A later re-tune must change the id and this table together, so a
 historical trigger can never be silently redefined.
 
-**Measure-only on first land.** `process_audio()` runs both paths on every
+**Emitting since ADAAAA-7707.** `process_audio()` runs both paths on every
 chunk. A Stage-B fire is counted (`state.whistle_candidates`), logged, and
-returned as a `whistle` block on the `/audio` response with `emitted: false` /
-`measureOnly: true` — it is **never** put on the candidate stream, because every
-emitted candidate becomes a GPU-priced gemma analysis. Graduating the path to
-emitting is a PO decision on the measured gate below, not an implementation
-detail.
+returned as a `whistle` block on the `/audio` response with `emitted: true` /
+`measureOnly: false`. Since `emitted` is `true`, the fire ALSO becomes a
+candidate event — same `AudioSignalSchema` shape as Stage-A, anchored on the
+onset, discriminated by the `stageB/` `thresholdId` prefix — so it enters
+candidate scheduling and each fire anchors one gemma analysis (ADAAAA-7705
+Option 3). One candidate per chunk: a whistle fire takes the candidate slot on
+the chunk it fires (its tone onset is also a Stage-A level rise and the whistle
+is the more precise anchor); every other chunk keeps the Stage-A candidate
+unchanged. The `whistle` block is returned in both cases, so the response stays
+truthful about which path fired.
+
+**Rollback — config only.** Flip `WhistleConfig.emitted` back to `False`. No
+code revert, no logic redeploy: detection, reporting, `thresholdId`, guards and
+the cooldown all stay as they are; the only change is that a fire stops being a
+scheduling candidate, so the added gemma spend returns to $0. Both states are
+asserted by `services/perceive/tests/test_audio_gate.py`
+(`test_whistle_gate_ships_emitting_and_rolls_back_to_measure_only`,
+`test_audio_route_emits_the_whistle_candidate`,
+`test_audio_route_rollback_config_suppresses_the_whistle_candidate`) and the
+deployed state is checked end-to-end by `evals/qa_whistle_live.py`.
 
 ### AC1 — sample-rate fidelity
 
@@ -375,12 +390,13 @@ on the AC0 corpus (10 labelled onsets across 7 clips + 2 post-hoc verified clips
 | onset->fire p50 | <= 1.0 s | **0.20 s** |
 | added trigger volume on `real_match_70s` | <= 2 candidates/min | **+0.0/min** (0 candidates / 70 s; Stage-A stays 11.1/min) |
 
-All five gates pass, so the detector **ships**. It still ships **measure-only**
-on first land (above): AC3 is the gate for *shipping the detector*, while the
-emit switch is the separate PO call priced in AC5. Nothing was bought with
-sensitivity — the operating point was swept (`whistle_ratio` 3-12 x
-`max_flatness` 0.12-0.35) and 5x/0.25 is the point that holds 10/10 recall at
-0 FP; 6x drops recall to 0.80 and 3x adds FPs.
+All five gates pass, so the detector **ships**. AC3 is the gate for *shipping
+the detector*; the emit switch is the separate PO call priced in AC5 — that call
+is Option 3 on ADAAAA-7705, landed in ADAAAA-7707,
+so the deployed path is **emitting** (see “Ships / emit call” below). Nothing
+was bought with sensitivity — the operating point was swept (`whistle_ratio`
+3-12 x `max_flatness` 0.12-0.35) and 5x/0.25 is the point that holds 10/10
+recall at 0 FP; 6x drops recall to 0.80 and 3x adds FPs.
 
 **Corpus corrections this measurement forced** (all verified independently by
 `evals/verify_whistle_onsets.py`, not by the detector):
@@ -417,18 +433,26 @@ per candidate, priced at the current live-runner decide rate (~$0.01/decide):
 - `real_match_70s` (ordinary match footage): 0 whistle candidates -> **$0.00
   added**.
 - Whistle-dense corpus clips: 12 candidates over 179.5 s of footage =
-  **4.0 candidates/min** -> ~**$0.04/min (~$2.40/hr)** *if every candidate were
-  emitted*, on footage that is unrepresentative of ordinary play.
+  **4.01 candidates/min** -> ~**$0.0401/min (~$2.41/hr)** at the current
+  live-runner decide rate (~$0.01/decide), on footage that is unrepresentative
+  of ordinary play.
 
-That worst case is the number the PO needs to decide graduation from
-measure-only to emitting.
+That worst case is the ceiling the PO accepted when graduating the path from
+measure-only to emitting (Option 3).
 
-### Ships / measure-only call
+### Ships / emit call (ADAAAA-7705 Option 3, landed ADAAAA-7707)
 
 - **Detector: ships** — all AC3 gates pass on the AC0 corpus at 16 kHz.
-- **Emit switch: measure-only** — `WhistleConfig.emitted = False`. No whistle
-  candidate reaches candidate scheduling, so the added gemma spend is $0 until
-  the PO accepts the AC5 number above.
+- **Emit switch: EMITTING** — `WhistleConfig.emitted = True`. A whistle fire
+  becomes a scheduling candidate, so the added gemma spend is the AC5 number
+  below: **0.0 candidates/min on ordinary play (`real_match_70s`); dense-corpus
+  ceiling 4.01 candidates/min ≈ $2.41/hr at ~$0.01/decide** (unrepresentative
+  referee-whistle-heavy footage). The 0.00 trigger-window FP rate is what makes
+  that spend defensible: cheap because whistles are rare, not because the
+  detector is sloppy.
+- **Rollback:** flip `emitted` back to `False` (config only, no code revert, no
+  logic redeploy). Reporting stays intact and truthful (`emitted: false` /
+  `measureOnly: true`); only the candidate emission stops.
 
 ## Eval corpus shape (ADAAAA-7682)
 
