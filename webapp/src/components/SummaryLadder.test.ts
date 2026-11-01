@@ -11,7 +11,7 @@ import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { SummaryLadderView } from "./SummaryLadder";
-import { chapterKindLabel, ladderClock, ladderSectionIndex, type SummaryLadder } from "../lib/jobDetail";
+import { chapterKindLabel, focusAnalysisWindow, ladderClock, ladderSectionIndex, type SummaryLadder } from "../lib/jobDetail";
 
 const ladder: SummaryLadder = {
   chapters: [
@@ -129,5 +129,31 @@ describe("summary ladder view (ADAAAA-7623)", () => {
     expect(chapterKindLabel("build-up")).toBe("Build-up");
     expect(chapterKindLabel("lull")).toBe("Lull");
     expect(chapterKindLabel("phase")).toBe("Phase");
+  });
+});
+
+describe("detail-on-demand hop (ADAAAA-7623)", () => {
+  it("scrolls the Analysis window covering the instant and flags it", () => {
+    const calls: string[] = [];
+    const classes = new Set<string>();
+    const el = {
+      scrollIntoView: (opts: ScrollIntoViewOptions) => calls.push(`scroll:${JSON.stringify(opts)}`),
+      classList: {
+        add: (...c: string[]) => c.forEach((x) => classes.add(x)),
+        remove: (...c: string[]) => c.forEach((x) => classes.delete(x)),
+      },
+    };
+    const root = { querySelector: (sel: string) => (sel.includes('data-section-index="23"') ? el : null) };
+    const hit = focusAnalysisWindow(root as unknown as Pick<Document, "querySelector">, 23, 0);
+    expect(hit).toBe(el);
+    // instant, never `behavior: "smooth"` — a smooth rAF scroll is suspended in
+    // a background tab and silently scrolls nowhere on a >100k px Analysis list
+    expect(calls).toEqual(['scroll:{"block":"center"}']);
+    expect([...classes]).toEqual(["ring-2", "ring-neon"]);
+  });
+
+  it("is a no-op when the job has no Analysis window for that instant", () => {
+    const root = { querySelector: () => null };
+    expect(focusAnalysisWindow(root as unknown as Pick<Document, "querySelector">, 999, 0)).toBeNull();
   });
 });
