@@ -8,13 +8,18 @@
 //       the live-only exactly-once horizon,
 //   (2) flag-off is a strict no-op (no confirm call, no confirm row),
 //   (3) a live goal-shaped accept emits a job-scoped `gNNN:confirm` row that is
-//       self-describing (prompt + per-frame sha256 + timings + replayable), and
+//       self-describing (prompt + per-frame sha256 + timings + replayable),
 //   (4) the rolling live window re-reads one goal across overlapping windows but
-//       spends exactly ONE confirm dive (and one row) per distinct goal.
+//       spends exactly ONE confirm dive (and one row) per distinct goal, and
+//   (5) a nearby REFUTED dive never vetoes a later scoring_play accept.
 import { describe, it, expect } from "vitest";
-import { analyzeJob, LiveRunShared, type PipelineClient } from "../src/analyzer";
+import { analyzeJob, confirmReconcile, LiveRunShared, type PipelineClient } from "../src/analyzer";
 import { buildLiveAnalyzerConfig } from "../src/api";
 import { loadConfig } from "../src/config";
+
+// LIVE_OBSERVE_WINDOW_S: the rolling window is 10 s of PAST content, so a goal is
+// only visible while it sits inside that window and repeat reads span <= 10 s.
+const WINDOW_S = 10;
 
 // A Stage-1 read of an accepted scoring_play goal: the population shouldRunConfirm
 // is scoped to (goal-shaped + no independent attestation).
@@ -24,6 +29,16 @@ const ACCEPTED_GOAL = {
   eventType: "GOAL",
   outcome: "scoring_play",
   reason: "stage-1 goal read",
+};
+
+// The delayed-corroboration population (goal-shaped non-accept) — the same goal
+// read a moment earlier, before the crossing was in frame.
+const BARE_GOAL = {
+  isHighlight: false,
+  score: 0,
+  eventType: "GOAL",
+  outcome: "not_highlight",
+  reason: "celebration only; no ball in net",
 };
 
 const NOT_HIGHLIGHT = { isHighlight: false, score: 0, outcome: "not_highlight", reason: "open play" };
@@ -43,9 +58,14 @@ function liveCfg(env: Record<string, string> = {}) {
   });
 }
 
-/** A mocked live pipeline: decide returns an accepted GOAL whenever the rolling
- * window center falls inside a goal band; confirm records each dive. */
-function makeLiveClient(goalBands: [number, number][]) {
+/** A mocked live pipeline: decide accepts a GOAL when the rolling window
+ * `[center - 10, center]` contains a goal INSTANT; confirm records each dive. */
+function makeLiveClient(
+  goalInstants: number[],
+  confirmVerdict: "confirmed_goal" | "not_goal" = "confirmed_goal",
+  /** Optional per-dive verdict sequence (last value repeats). */
+  verdictSequence?: ("confirmed_goal" | "not_goal")[]
+) {
   const confirmCalls: { timestamp?: number; stage1?: unknown }[] = [];
   const decidedAt: number[] = [];
   let currentTs = 0;
@@ -57,21 +77,25 @@ function makeLiveClient(goalBands: [number, number][]) {
     },
     decide: async () => {
       decidedAt.push(currentTs);
-      const inGoal = goalBands.some(([lo, hi]) => currentTs >= lo && currentTs <= hi);
-      return (inGoal ? ACCEPTED_GOAL : NOT_HIGHLIGHT) as any;
+      const goalInWindow = goalInstants.some((g) => currentTs >= g && currentTs <= g + WINDOW_S);
+      return (goalInWindow ? ACCEPTED_GOAL : NOT_HIGHLIGHT) as any;
     },
     confirm: async (req: any) => {
       confirmCalls.push({ timestamp: req?.timestamp, stage1: req?.stage1 });
+      const verdict =
+        verdictSequence && verdictSequence.length
+          ? verdictSequence[Math.min(confirmCalls.length - 1, verdictSequence.length - 1)]
+          : confirmVerdict;
       return {
         enabled: true,
-        goalConfirmed: "confirmed_goal" as const,
+        goalConfirmed: verdict,
         confidence: 0.9,
-        reason: "ball in net",
-        evidence: { ballInNet: true },
+        reason: verdict === "confirmed_goal" ? "ball in net" : "no ball in net",
+        evidence: { ballInNet: verdict === "confirmed_goal" },
         stage1Disagreed: false,
-        corroborated: true,
-        corroborationSource: "frame_attestation" as const,
-        decision: ACCEPTED_GOAL,
+        corroborated: verdict === "confirmed_goal",
+        corroborationSource: verdict === "confirmed_goal" ? ("frame_attestation" as const) : null,
+        decision: verdict === "confirmed_goal" ? ACCEPTED_GOAL : BARE_GOAL,
         // The /confirm service returns its own prompt in the pass analysis record;
         // the audit descriptor persists it verbatim (ADAAAA-7626).
         analysis: { request: { prompt: "CONFIRM PROMPT: did the ball cross the line?" } },
@@ -102,9 +126,9 @@ async function* liveFrames(fps: number, durationS: number) {
   }
 }
 
-async function runLive(cfg: any, goalBands: [number, number][], durationS: number) {
+async function runLive(cfg: any, goalInstants: number[], durationS: number, confirmVerdict?: "confirmed_goal" | "not_goal") {
   const audits: any[] = [];
-  const { client, confirmCalls, decidedAt } = makeLiveClient(goalBands);
+  const { client, confirmCalls, decidedAt } = makeLiveClient(goalInstants, confirmVerdict);
   const shared = new LiveRunShared();
   const runCfg = { ...cfg, onDecideAudit: (d: any) => audits.push(d) };
   const outcome = await analyzeJob(
@@ -123,6 +147,7 @@ async function runLive(cfg: any, goalBands: [number, number][], durationS: numbe
     outcome,
     confirmRows: audits.filter((a) => typeof a?.groupKey === "string" && a.groupKey.endsWith(":confirm")),
     stage1Rows: audits.filter((a) => !(typeof a?.groupKey === "string" && a.groupKey.endsWith(":confirm"))),
+    goalWindows: decidedAt.filter((t) => goalInstants.some((g) => t >= g && t <= g + WINDOW_S)),
   };
 }
 
@@ -132,14 +157,14 @@ describe("buildLiveAnalyzerConfig — Stage-2 confirm wiring (ADAAAA-7663)", () 
     expect(cfg.planMode).toBe("live");
     expect(cfg.confirmEnabled).toBe(true);
     expect(cfg.confirmWindowExtraS).toBe(4); // DECIDE_CONFIRM_EXTRA_WINDOW_S default
-    expect(cfg.confirmReuseWindowS).toBe(30); // DECIDE_CONFIRM_LIVE_REUSE_WINDOW_S default
+    expect(cfg.confirmReuseWindowS).toBe(12); // DECIDE_CONFIRM_LIVE_REUSE_WINDOW_S default
   });
 
   it("honours the env knobs", () => {
-    const cfg = liveCfg({ DECIDE_CONFIRM_EXTRA_WINDOW_S: "6", DECIDE_CONFIRM_LIVE_REUSE_WINDOW_S: "45" });
+    const cfg = liveCfg({ DECIDE_CONFIRM_EXTRA_WINDOW_S: "6", DECIDE_CONFIRM_LIVE_REUSE_WINDOW_S: "15" });
     expect(cfg.confirmEnabled).toBe(true);
     expect(cfg.confirmWindowExtraS).toBe(6);
-    expect(cfg.confirmReuseWindowS).toBe(45);
+    expect(cfg.confirmReuseWindowS).toBe(15);
   });
 
   it("is a strict no-op with the flag off (confirmEnabled false)", () => {
@@ -157,7 +182,8 @@ describe("buildLiveAnalyzerConfig — Stage-2 confirm wiring (ADAAAA-7663)", () 
 describe("live confirm driver (ADAAAA-7663)", () => {
   it("writes 0 confirm rows and makes 0 confirm calls when the flag is off (AC5)", async () => {
     const cfg = liveCfg({ DECIDE_CONFIRM_ENABLED: "0" });
-    const { confirmCalls, confirmRows, stage1Rows, outcome } = await runLive(cfg, [[30, 45]], 60);
+    const { confirmCalls, confirmRows, stage1Rows, goalWindows, outcome } = await runLive(cfg, [34], 70);
+    expect(goalWindows.length).toBeGreaterThan(0); // the accept population is real
     expect(confirmCalls).toHaveLength(0);
     expect(confirmRows).toHaveLength(0);
     // The Stage-1 audit + accept path is untouched.
@@ -167,7 +193,7 @@ describe("live confirm driver (ADAAAA-7663)", () => {
 
   it("emits a job-scoped, self-describing gNNN:confirm row for a live goal accept (AC1/AC2)", async () => {
     const cfg = liveCfg();
-    const { confirmCalls, confirmRows, stage1Rows, outcome } = await runLive(cfg, [[30, 45]], 60);
+    const { confirmCalls, confirmRows, stage1Rows, outcome } = await runLive(cfg, [34], 70);
     expect(confirmCalls.length).toBeGreaterThan(0);
     expect(confirmRows.length).toBeGreaterThan(0);
     expect(stage1Rows.length).toBeGreaterThan(0);
@@ -195,10 +221,9 @@ describe("live confirm driver (ADAAAA-7663)", () => {
 
   it("spends exactly one confirm dive per distinct goal across overlapping live windows (AC3)", async () => {
     const cfg = liveCfg();
-    // A 15 s goal band with a 3 s cadence over a 10 s rolling window means the
-    // goal is re-read by ~5 overlapping windows — each with a different center.
-    const { confirmCalls, confirmRows, decidedAt } = await runLive(cfg, [[30, 45]], 60);
-    const goalWindows = decidedAt.filter((t) => t >= 30 && t <= 45);
+    // One goal instant is re-read by every rolling window that still contains it
+    // (centers spanning goalTs..goalTs+10) — each with a different center key.
+    const { confirmCalls, confirmRows, goalWindows } = await runLive(cfg, [34], 70);
     expect(goalWindows.length).toBeGreaterThan(1); // the overlap is real
     expect(confirmCalls).toHaveLength(1);
     expect(confirmRows).toHaveLength(1);
@@ -208,7 +233,7 @@ describe("live confirm driver (ADAAAA-7663)", () => {
 
   it("re-dives for a genuinely distinct goal outside the reuse horizon (AC3)", async () => {
     const cfg = liveCfg();
-    const { confirmCalls, confirmRows } = await runLive(cfg, [[20, 30], [75, 85]], 100);
+    const { confirmCalls, confirmRows } = await runLive(cfg, [20, 60], 100);
     expect(confirmCalls).toHaveLength(2);
     expect(confirmRows).toHaveLength(2);
     expect(confirmRows.length).toBe(confirmCalls.length);
@@ -216,8 +241,7 @@ describe("live confirm driver (ADAAAA-7663)", () => {
 
   it("with the reuse horizon disabled the same goal re-dives per window (proves the reuse is load-bearing)", async () => {
     const cfg = liveCfg({ DECIDE_CONFIRM_LIVE_REUSE_WINDOW_S: "0" });
-    const { confirmCalls, confirmRows, decidedAt } = await runLive(cfg, [[30, 45]], 60);
-    const goalWindows = decidedAt.filter((t) => t >= 30 && t <= 45);
+    const { confirmCalls, confirmRows, goalWindows } = await runLive(cfg, [34], 70);
     expect(goalWindows.length).toBeGreaterThan(1);
     // Without the horizon every overlapping window would re-dive the same goal.
     expect(confirmCalls.length).toBe(goalWindows.length);
@@ -228,5 +252,28 @@ describe("live confirm driver (ADAAAA-7663)", () => {
     const cfg = liveCfg();
     const { confirmCalls } = await runLive(cfg, [], 60);
     expect(confirmCalls).toHaveLength(0);
+  });
+});
+
+describe("live exactly-once recall guard (ADAAAA-7663)", () => {
+  it("does not let a nearby REFUTED dive veto a later scoring_play accept", async () => {
+    const { client, confirmCalls } = makeLiveClient([30], "not_goal", ["not_goal", "confirmed_goal"]);
+    const shared = new LiveRunShared();
+    const cfg = { jobId: "job-guard", gameHint: "soccer", confirmEnabled: true, confirmReuseWindowS: 12 } as any;
+
+    // 1) A celebration window reads the goal-shaped non-accept -> dive REFUTES it.
+    const first = await confirmReconcile(client, shared, cfg, BARE_GOAL as any, { eventType: "GOAL", timestamp: 30 });
+    expect(confirmCalls).toHaveLength(1);
+    expect(first.confirm?.goalConfirmed).toBe("not_goal");
+
+    // 2) 6 s later the SAME goal is accepted by Stage-1: the earlier refutation is
+    //    NOT reused (a genuine goal must not be dropped by a celebration read).
+    const second = await confirmReconcile(client, shared, cfg, ACCEPTED_GOAL as any, { eventType: "GOAL", timestamp: 36 });
+    expect(confirmCalls).toHaveLength(2);
+
+    // 3) A further repeat of that accepted goal reuses the accept's dive.
+    const third = await confirmReconcile(client, shared, cfg, ACCEPTED_GOAL as any, { eventType: "GOAL", timestamp: 40 });
+    expect(confirmCalls).toHaveLength(2);
+    expect(third).toBe(second);
   });
 });

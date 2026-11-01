@@ -320,11 +320,14 @@ export interface ServerConfig {
   decideConfirmExtraWindowS: number;
   /** ADAAAA-7663: LIVE-only exactly-once horizon (seconds) for the Stage-2
    * confirm dive. The live observer's rolling window center slides with the
-   * cadence, so one goal is re-read by several overlapping windows; a goal
-   * confirmed within this window of a new goal-shaped read reuses that outcome
-   * instead of diving again (one dive per distinct goal). Matches the accept
-   * path's goal burst-suppression window. `DECIDE_CONFIRM_LIVE_REUSE_WINDOW_S`
-   * (default 30). Unused by the VOD pass, which keys on the goal's content time. */
+   * cadence, so one goal is re-read by every window that still contains it; a
+   * goal confirmed within this window of a new goal-shaped read reuses that
+   * outcome instead of diving again. Default 12 s = the 10 s observe window plus
+   * one cadence tick of slack — deliberately SMALLER than the 30 s goal burst
+   * window, so a nearby but distinct goal (or a post-goal celebration read) is
+   * never refuted by an earlier window's dive.
+   * `DECIDE_CONFIRM_LIVE_REUSE_WINDOW_S` (default 12). Unused by the VOD pass,
+   * which keys on the goal's content time. */
   decideConfirmLiveReuseWindowS: number;
   /** Free plan included decide calls before gating (dev-friendly). */
   freeDecides: number;
@@ -565,7 +568,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     decideConfirmEnabled: env.DECIDE_CONFIRM_ENABLED === "1",
     decideConfirmExtraWindowS: Number(env.DECIDE_CONFIRM_EXTRA_WINDOW_S ?? 4),
     // ADAAAA-7663: live exactly-once confirm horizon (see ServerConfig).
-    decideConfirmLiveReuseWindowS: Number(env.DECIDE_CONFIRM_LIVE_REUSE_WINDOW_S ?? 30),
+    decideConfirmLiveReuseWindowS: Number(env.DECIDE_CONFIRM_LIVE_REUSE_WINDOW_S ?? 12),
     freeDecides: Number(env.FREE_DECIDES ?? 5),
     billingWireframe: env.BILLING_WIREFRAME === "1" || env.BILLING_WIREFRAME === "true",
     betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),

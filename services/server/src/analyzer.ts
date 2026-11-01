@@ -3132,13 +3132,22 @@ export async function confirmReconcile(
   // ADAAAA-7663: the LIVE pass has no stable content-time identity — its rolling
   // window center slides by the cadence, so the same goal maps to a different
   // key per window. Reuse a goal confirmed within `confirmReuseWindowS` of this
-  // one (the accept path's own burst horizon) so the dive stays at one per
-  // distinct goal instead of one per overlapping window. Unset => no-op, which
-  // keeps the VOD exact-key behaviour byte-identical.
+  // one (the observe window + one cadence tick of slack, deliberately SMALLER
+  // than the 30 s burst window) so the dive stays at one per distinct goal
+  // instead of one per overlapping window. Unset => no-op, which keeps the VOD
+  // exact-key behaviour byte-identical.
+  //
+  // Exception (recall guard): a nearby dive that REFUTED the goal (goalConfirmed
+  // not `confirmed_goal`, e.g. a post-goal celebration window that never saw the
+  // ball in the net) must not veto a fresh scoring_play ACCEPT a few seconds
+  // later — the later window is better evidence for the same event and a genuine
+  // goal must never be dropped by an earlier celebration read. That costs at
+  // most one extra dive for the accept.
   const reuseWindowS = cfg.confirmReuseWindowS;
   if (reuseWindowS && reuseWindowS > 0) {
     const near = shared.confirmedGoalNear(eventTs, reuseWindowS);
-    if (near) return near;
+    const refutedByNearby = near ? near.confirm?.goalConfirmed !== "confirmed_goal" : false;
+    if (near && !(isGoalDecision(stage1) && refutedByNearby)) return near;
   }
   // ADAAAA-7543: center the deep dive's frame window on the goal EVENT instant —
   // the observe-window center can sit several seconds past the crossing, and a
