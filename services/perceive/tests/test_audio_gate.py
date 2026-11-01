@@ -511,3 +511,59 @@ def test_audio_bad_payload_rejected():
         headers={"X-Session-Id": "audio-sess-bad2"},
     )
     assert r2.status_code == 400
+
+
+# --- ADAAAA-7674 re-tune guardrails -------------------------------------
+
+def test_two_roars_in_one_loud_wave_stay_distinct():
+    """Two roars inside ONE celebration wave fire as two distinct candidates.
+
+    This is the ADAAAA-6312 coalescing defect that ADAAAA-7674 re-tuned for: the
+    second roar arrives while the crowd is still loud, so its evidence is a
+    relative rise over a baseline that is still partly the first roar. A
+    baseline window that keeps a roar in the percentile window too long
+    collapses the pair into one candidate and loses recall. Guard the
+    distinct-fire property, not the exact window length.
+    """
+    g = AudioEnergyGate()
+    t = _warm(g, 0.02, 10.0)  # quiet ambient floor
+    for i in range(20):  # crowd wave rising toward the roar
+        g.update(_frame(0.02 + 0.025 * i / 19), ts=t)
+        t += 0.1
+    fires = []
+    for i in range(10):  # roar 1 (~3x the ambient floor)
+        sig = g.update(_frame(0.062), ts=t)
+        if sig is not None:
+            fires.append(sig)
+        t += 0.1
+    for i in range(25):  # wave decays, but stays well above ambient
+        g.update(_frame(0.045 - 0.017 * i / 24), ts=t)
+        t += 0.1
+    for i in range(10):  # roar 2 in the same wave
+        sig = g.update(_frame(0.062), ts=t)
+        if sig is not None:
+            fires.append(sig)
+        t += 0.1
+    assert len(fires) == 2, (
+        f"both roars in one loud wave must surface separately (got {len(fires)}); "
+        "coalescing nearby roars is the ADAAAA-7674 recall defect"
+    )
+    # the second fire is anchored on the second onset, not the first
+    assert fires[1].ts > fires[0].ts
+
+
+def test_threshold_id_names_the_frozen_operating_point():
+    """The emitted threshold id keeps naming the operating point (AC5).
+
+    The re-tune moves the ambient window, not the ratio/sustain, so the frozen
+    record shape stays ``stageA/burst/1.3x/0.3s``. A future re-tune that changes
+    the ratio or sustain must change this id AND update
+    ``docs/audio-trigger-contract.md`` with it.
+    """
+    g = _quiet_gate()
+    sig = None
+    for i in range(15):
+        sig = g.update(_frame(0.05), ts=10.0 + i * 0.1)
+        if sig is not None:
+            break
+    assert sig is not None and sig.threshold_id == "stageA/burst/1.3x/0.3s"

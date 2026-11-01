@@ -104,14 +104,52 @@ A trigger is **evidence and a schedule request, never a decision**:
 ## Operating point (AC1 context, A3)
 
 The gate's tuned operating point is defined by `GateConfig` in
-`services/perceive/app/audio_gate.py`: rolling-percentile baseline over an
-`lookback_s` (8 s) window, `burst_ratio`/`swell_ratio` 1.3x, `burst_min_frames`
-3 (~0.3 s), `swell_seconds` 2.5, `cooldown_s` 2.0. The `thresholdId` on every
-record names the ratio and sustain that fired, so a re-tune cannot silently
-redefine what a historical trigger was.
+`services/perceive/app/audio_gate.py`: rolling-percentile baseline over a
+`lookback_s` (**6 s** since ADAAAA-7674, was 8 s) window, `burst_ratio` /
+`swell_ratio` 1.3x, `burst_min_frames` 3 (~0.3 s), `swell_seconds` 2.5,
+`cooldown_s` 2.0. The `thresholdId` on every record names the ratio and sustain
+that fired, so a re-tune cannot silently redefine what a historical trigger was.
+
+**ADAAAA-7674 re-tune (8 s -> 6 s ambient window).** At 8 s the frames of a roar
+stay inside the baseline percentile window long enough that the next roar of the
+same celebration wave is measured against a baseline that still contains the
+previous one, so it never reaches 1.3x and the pair coalesces into a single fire.
+Clearing a roar from the ambient window before the next one lands restores the
+distinct fire **without changing the ratio, the sustain window or the
+`thresholdId`** (`stageA/burst/1.3x/0.3s` unchanged, so historical records stay
+comparable). Measured on `real_goal_3080` with `evals/measure_audio_recall.py`:
+recall 0.78 (25/32) -> 0.88 (28/32), trigger-window FP rate 0.14 -> 0.10
+(2/21), onset->fire p50/p95 unchanged at 0.20 s / 0.20 s, and cross-clip trigger
+volume on `real_match_70s` unchanged (13 candidates / 70 s, 11.1/min) — i.e. the
+recall was not bought with sensitivity.
+
+The residual misses (4/32) have no usable acoustic onset: they sit in a
+continuous loud crowd where the frame ratio never exceeds 1.31x for more than
+one 0.1 s chunk, which no level-change gate can separate from the crowd.
+
+## Per-class fidelity (ADAAAA-7674 AC1/AC2)
+
+`evals/audio-labels.json` is the labeled corpus, one entry per trigger class;
+`evals/measure_audio_recall.py --labels evals/audio-labels.json --clip-root /data`
+prints the table. A class with `clip: null` is a recorded gap and prints `N/A` —
+it is not a pass.
+
+| class | clip | events | recall | FP rate | onset->fire p50 / p95 |
+| --- | --- | --- | --- | --- | --- |
+| `goal_roar` | `real_goal_3080` | 32 | 0.88 (28/32) | 0.10 (2/21) | 0.20 s / 0.20 s |
+| `whistle` | corpus clip `9c09c609` | 2 | 0.00 (0/2) | 1.00 (5/5) | 0.20 s / 0.50 s |
+| `pa_announcement` | — | — | **N/A** | N/A | N/A |
+| `music_bed` | — | — | **N/A** | N/A | N/A |
+
+`whistle` is the honest negative result: the gate is a **broadband level-change**
+detector, and a referee whistle is a narrowband tonal burst whose RMS sits at the
+crowd floor (2.4-3.4 kHz band energy 74x ambient while the speech and low bands
+stay flat), so it produces no level anomaly to fire on. Measuring the class
+surfaced that; a whistle path would need a band-limited detector, which is not
+this gate. `pa_announcement` and `music_bed` remain `N/A` because the corpus has
+no footage for them (see the `gapReason` fields in the manifest).
 
 AC1 is a **re-measurement** of this operating point on the media-relay path
-against the real clips in hand (`evals/measure_audio_recall.py`,
-`real_goal_3080` / `real_match_70s`), reported per class with explicit `N/A`
-where a class has no footage. It is not a new detector and it is not gated on a
-new labeled corpus.
+against the real clips in hand, reported per class with explicit `N/A` where a
+class has no footage. It is not a new detector and it is not gated on a new
+labeled corpus.
