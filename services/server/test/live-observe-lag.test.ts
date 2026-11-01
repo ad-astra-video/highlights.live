@@ -12,7 +12,7 @@
 //       metrics (AC2), with the completed lag bounded (AC1),
 //   (d) budget <= 0 keeps the legacy unbounded behaviour (opt-out control).
 import { describe, it, expect } from "vitest";
-import { analyzeJob, buildLiveObserveMetrics, type PipelineClient } from "../src/analyzer";
+import { analyzeJob, buildLiveObserveMetrics, liveLagReserveS, type PipelineClient } from "../src/analyzer";
 import { LiveObserver, LIVE_OBSERVE_LAG_BUDGET_S } from "../src/observe-loop";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -87,14 +87,39 @@ describe("LiveObserver stale-window drop (ADAAAA-7676)", () => {
   });
 });
 
+describe("liveLagReserveS (ADAAAA-7676)", () => {
+  // The reserve must cover the decide that has not landed yet, so the RESULT
+  // lands inside the budget, not the pick-up.
+  it("reserves the WORST decide E2E, so a jittery decide still lands inside the budget", () => {
+    // Measured on job `4f8d47bd` (130 s rtmp, budget 30 s).
+    const reserve = liveLagReserveS(11679, 8520, 30);
+    expect(reserve).toBeCloseTo(12.679, 3);
+    // Pre-fix shape (mean-based reserve): the window was picked at 21.48 s and
+    // the 11.679 s decide landed it at 33.2 s — past the budget.
+    expect(LIVE_OBSERVE_LAG_BUDGET_S - 8.52 + 11.679).toBeGreaterThan(LIVE_OBSERVE_LAG_BUDGET_S);
+    // Worst-based reserve: picked at 17.32 s, landed at 29.0 s — inside it.
+    expect(30 - reserve + 11.679).toBeLessThanOrEqual(30);
+  });
+
+  it("caps the reserve at half the budget (never starves the pass) and handles a pre-sample observer", () => {
+    // Before the first decide lands there is no measurement: only the 1 s margin.
+    expect(liveLagReserveS(0, 0, 30)).toBeCloseTo(1, 6);
+    // A decide slower than half the budget cannot take more than half of it.
+    expect(liveLagReserveS(20000, 9000, 4)).toBeCloseTo(2, 6);
+    expect(liveLagReserveS(0, 0, 1)).toBeCloseTo(0.5, 6);
+  });
+});
+
 // --- analyzeJob integration: a slow live producer/consumer -------------------
 
 function frameTs(b64: string): number {
   return Number(b64.replace(/^f/, ""));
 }
 
-function makeClient(decideMs: number) {
+function makeClient(decideMs: number | number[]) {
   const decided: { evidence: any; opts: any; tickTs: number }[] = [];
+  const latencyAt = (i: number): number =>
+    Array.isArray(decideMs) ? decideMs[i % decideMs.length] : decideMs;
   let currentFrameTs = 0;
   const client: PipelineClient = {
     reservePerceive: async () => ({ sessionId: "sess-lag", appUrl: "", controlUrl: "" }),
@@ -103,8 +128,9 @@ function makeClient(decideMs: number) {
       return { observation: { tracks: [], seq: frame.seq, timestamp: frame.timestamp } as any };
     },
     decide: async (evidence: any, dOpts: any) => {
+      const ms = latencyAt(decided.length);
       decided.push({ evidence, opts: dOpts, tickTs: currentFrameTs });
-      if (decideMs > 0) await sleep(decideMs);
+      if (ms > 0) await sleep(ms);
       return { isHighlight: false, score: 0, outcome: "not_highlight" } as any;
     },
     plan: async () => ({
@@ -187,6 +213,64 @@ describe("analyzeJob live lag bound (ADAAAA-7676)", () => {
     expect(m.maxCompletedLagMs).toBeLessThanOrEqual(300 + 300 + 300);
     const lastTs = decided[decided.length - 1].opts.frames.map((f: any) => frameTs(f.base64));
     expect(lastTs.length).toBeGreaterThan(0);
+  }, 30000);
+
+  it("(e): a jittery decide (a spike well above the mean) still lands the result inside the budget", async () => {
+    // Alternating fast/slow decides: the mean (380 ms) under-states the slow one
+    // (700 ms), so a mean-based reserve lands the spike past a 2 s budget.
+    const { client, decided } = makeClient([60, 700]);
+    const outcome = await analyzeJob(
+      client,
+      slowFrames(0.04, 60, 4) as any,
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { ...BASE_CFG, liveObserveLagBudgetS: 2 } as any,
+      undefined
+    );
+    const m = outcome.observeMetrics!;
+    expect(m.skippedStaleWindows).toBeGreaterThan(0);
+    expect(m.maxE2eMs).toBeGreaterThanOrEqual(600);
+    // AC1 under jitter: the completed lag (pick-up lag + the decide that had not
+    // landed) stays inside the budget.
+    expect(m.maxCompletedLagMs).toBeLessThanOrEqual(2000);
+    // AC3: dropping work never slows the content cadence.
+    expect(m.meanCadenceMs).toBeLessThanOrEqual(200 * 1.05);
+    expect(decided.length).toBe(m.decideCalls);
+  }, 30000);
+
+  it("(f): a stale end-of-stream tail is dropped and counted, a fresh tail is still observed", async () => {
+    // Slow decides (700 ms) push the tail far past a 2 s budget by end-of-stream.
+    const staleClient = makeClient(700);
+    const stale = await analyzeJob(
+      staleClient.client,
+      slowFrames(0.04, 60, 4) as any,
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { ...BASE_CFG, liveObserveLagBudgetS: 2 } as any,
+      undefined
+    );
+    const sm = stale.observeMetrics!;
+    const lastFrameTs = Number(((60 - 1) * 0.04).toFixed(6));
+    // The FORCE flush does not get to decide a tail whose result would land past
+    // the budget (measured on `4f8d47bd`: tail `T+104s` decided at wall `+146s`).
+    expect(sm.maxCompletedLagMs).toBeLessThanOrEqual(2000);
+    expect(sm.skippedStaleWindows).toBeGreaterThan(0);
+    const windowEnd = (d: { opts: any }): number =>
+      Math.max(...d.opts.frames.map((f: any) => frameTs(f.base64)));
+    const staleLast = staleClient.decided.at(-1)!;
+    expect(windowEnd(staleLast)).toBeLessThan(lastFrameTs);
+
+    // Control: with the budget far above the lag the tail is inside it, so the
+    // end-of-stream window is still observed (freshness is not bought by never
+    // looking at the tail).
+    const freshClient = makeClient(20);
+    const fresh = await analyzeJob(
+      freshClient.client,
+      slowFrames(0.04, 60, 4) as any,
+      async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
+      { ...BASE_CFG, liveObserveLagBudgetS: 30 } as any,
+      undefined
+    );
+    expect(fresh.observeMetrics!.skippedStaleWindows).toBe(0);
+    expect(windowEnd(freshClient.decided.at(-1)!)).toBe(lastFrameTs);
   }, 30000);
 
   it("(d): budget <= 0 keeps the legacy unbounded behaviour (control)", async () => {

@@ -37,21 +37,31 @@ ever-widening span.
    clock to `Date.now()` at the stream's first frame and measures
    `lag = wallElapsed - frameTs` for every later frame.
 2. **A bound is enforced by DROPPING, never by deciding more often.** When
-   `lag > budget - observedDecideE2e`, the frame is not recorded and no decide is
+   `lag > budget - reserve`, the frame is not recorded and no decide is
    fired for it: `LiveObserver.noteStaleFrame` advances the cadence clock through
    the dropped content and counts the swallowed windows as
    `skippedStaleWindows`. The next fired window is still one `cadenceS` (3 s) of
    content after the drop, so `meanCadenceMs` stays ≤ 3 s and the billable decide
    rate does not rise.
-3. **The budget is the landing lag, not the pick-up lag.** Before firing, one
-   measured `meanE2eMs` is reserved out of the budget, because what a viewer
-   experiences is `lag_at_fire + e2e`. Default budget 30 s
-   (`LIVE_OBSERVE_LAG_BUDGET_S`) — the cadence + decide-E2E budget the spec
+3. **The budget is the landing lag, not the pick-up lag.** Before firing, the
+   decide that has not landed yet is reserved out of the budget, because what a
+   viewer experiences is `lag_at_fire + e2e`. The reserve is the WORST decide
+   seen so far plus 1 s of measurement margin (`liveLagReserveS`), not the mean:
+   measured on job `4f8d47bd`, a mean-based reserve (8.5 s) let an 11.7 s decide
+   land a window picked at 21.5 s at a completed lag of 33.0 s — past the budget
+   the drop exists to enforce. The reserve is capped at half the budget, so a
+   very slow decide cannot starve the pass into deciding nothing. Default budget
+   30 s (`LIVE_OBSERVE_LAG_BUDGET_S`) — the cadence + decide-E2E budget the spec
    quotes; `<= 0` disables the drop (legacy unbounded behaviour).
-4. **Dropped frames carry no content into a window.** A stale frame is not
+4. **The end-of-stream tail obeys the same budget.** The FORCE flush ignores the
+   cadence, so an already-stale tail is dropped and counted like any other stale
+   window instead of being decided `e2e` later (measured on `4f8d47bd`: the tail,
+   content `T+104s`, landed at wall `+146s` and duplicated that window's summary
+   entry). A tail inside the budget is still observed.
+5. **Dropped frames carry no content into a window.** A stale frame is not
    `record`ed, so a window assembled after a drop contains only the frames that
    were actually analyzed (at the live edge), never the stale backlog.
-5. **Audio alignment is preserved.** Retention pruning is anchored on
+6. **Audio alignment is preserved.** Retention pruning is anchored on
    `LiveRunShared.analysisPosTs` (ADAAAA-7671), which advances with the recorded
    frames; the tap keeps running in real time, so the window at the new position
    still finds its slice. The `[live-audio]` line's `audioB64Len > 0` invariant
