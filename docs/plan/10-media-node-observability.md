@@ -42,17 +42,59 @@ must not leak identifiers (the media origin sits behind the public LB).
   "capacity": {
     "maxSessions": 1, "activeSessions": 1, "availableSessions": 0,
     "loadPct": 100, "saturated": true,
-    "provisionAttempts": 12, "provisionFailures": 3, "noCapacityFailures": 2
+    "provisionAttempts": 12, "provisionFailures": 3, "noCapacityFailures": 2,
+    "provisionReuses": 4
   },
   "leases": { "active": 1, "grace": 0, "awaitingClient": 0, "paying": 1, "total": 1 },
   "payment": { "onchain": true, "payingSessions": 1 },
-  "cost": { "basis": "media-node session meter …", "sessionsCompleted": 9, "sessionSeconds": 1371.2 }
+  "cost": {
+    "basis": "media-node session meter …",
+    "sessionsCompleted": 9, "sessionSeconds": 1371.2,
+    "sessionsUnused": 0, "sessionClosedNotifies": 9
+  },
+  "restarts": {
+    "boots": 3, "bootId": "…", "buildRef": "abc1234", "restartCause": "deploy",
+    "previousBoot": { "bootId": "…", "buildRef": "def5678", "atIso": "…", "exit": null },
+    "lastStartAt": "…", "lastExit": null,
+    "windowS": 600, "threshold": 3, "bootsInWindow": 1, "degraded": false
+  }
 }
 ```
 
 Lease states: `active` (client attached, frames flowing), `grace` (last client
 dropped, slot held for `reconnectGraceMs` so a blip reconnects to the SAME session),
 `awaiting-client` (provisioned, no browser yet — released by `MEDIA_PROVISION_NO_CLIENT_MS`).
+
+### Session ownership, close attribution and boot identity (ADAAAA-7689)
+
+A browser job owns exactly ONE media session.
+
+- `POST /sessions { jobId }` **adopts** the job's live session when it already has
+  one and returns it (`reused: true`) instead of reserving a second perceive
+  session. The browser QA path calls this twice — once through the control plane's
+  `POST /jobs/{id}/media`, once from the harness/browser — and the second reservation
+  used to idle out on the no-client timer while still being charged a full 60 s of
+  `sessionSeconds`. `capacity.provisionReuses` counts the adopted calls.
+- A provisioned session that no client ever joins is counted in
+  `cost.sessionsUnused`, **not** in `sessionsCompleted`/`sessionSeconds`: it carried
+  no stream, so it must not inflate the per-node cost meter.
+- On teardown the node POSTs `{CALLBACK_URL}/jobs/{jobId}/media/session-closed`
+  (bearer `MEDIA_HEALTH_TOKEN` when configured) with
+  `{ sessionId, jobId, reason, neverAttached, seconds, nodeId, transport }`, where
+  `reason` is one of `client-closed` | `control-close` | `no-client-timeout` |
+  `payment-failure`. The control plane then finalizes the browser job (same path as
+  `POST /jobs/:id/stop`, run once per job) so `GET /jobs` shows no `active` job after
+  a run. The callback is fire-and-forget: a missed callback degrades to the old
+  explicit-stop behaviour, never to a leaked slot.
+
+`restarts.bootId` + `restarts.buildRef` + `restarts.restartCause` make a restart
+attributable from the edge: `deploy` means the revision changed, `crash` means the
+same revision with an exit the process never observed (SIGKILL/OOM), `restart` means
+an observed exit (clean exit / SIGTERM). The ledger lives on the `media-state`
+volume (`MEDIA_STATE_DIR=/state`), so a recreate does not erase the comparison. The
+revision comes from the image's `BUILD_REF` build arg — deploy with
+`BUILD_REF=$(git rev-parse --short HEAD) docker compose -f docker/docker-compose.yml up -d --build media`;
+without it the node publishes `"unknown"` rather than guessing.
 
 `GET {MEDIA_SERVER_URL}/node` — **bearer-gated** (`MEDIA_HEALTH_TOKEN`). Same payload
 plus `sessions[]` with `sessionId`, `jobId`, `transport` (`webrtc`/`ws`), `ageS`,

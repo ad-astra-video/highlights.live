@@ -535,6 +535,83 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       await new Promise((r) => setTimeout(r, 100));
     }
   }
+  // ADAAAA-7689 AC3: browser finalization now has TWO triggers — the client's
+  // `POST /jobs/:id/stop` and the media node's session-closed callback (the
+  // browser's RTC/WS session ended). They can fire within milliseconds of each
+  // other (the webapp closes the peer, then posts /stop), so the work must run
+  // exactly once per job. This holds the in-flight promise; the second caller
+  // awaits the same finalization instead of cutting clips twice.
+  const browserFinalizing = new Map<string, Promise<{ ok: boolean; job: any; reason: string }>>();
+  function finishBrowserJob(jobId: string, reason: string): Promise<{ ok: boolean; job: any; reason: string }> {
+    const running = browserFinalizing.get(jobId);
+    if (running) return running;
+    const task = (async () => {
+      const job = store.getJob(jobId);
+      const bj = browserJobs.get(jobId);
+      if (!job || !bj) return { ok: true, job, reason };
+      if (bj.sessionId) await adapter.stopPerceive(bj.sessionId).catch(() => {});
+      // Media-path session: tell the media server to stop paying + release the
+      // perceive slot (also idempotently triggered by the browser WS closing),
+      // and forget the DB record so a fresh session is provisioned next time.
+      if (bj.mediaSessionId && cfg.mediaServerUrl) {
+        await fetch(`${cfg.mediaServerUrl}/sessions/${bj.mediaSessionId}/close`, { method: "POST" }).catch(() => {});
+        await db.clearMediaSession(jobId).catch(() => {});
+      }
+      const recPath = await waitForRecording(jobId, 4000);
+      const { mkdir } = await import("node:fs/promises");
+      const outDir = path.join(cfg.dataDir, "clips");
+      await mkdir(outDir, { recursive: true });
+      // ADAAAA-7247 (ACC-7): use the webui-configured (DB-persisted) per-company
+      // clip window for the final browser clip cuts.
+      const cw = await resolveClipWindow();
+      // Cut a clip for every highlight that doesn't already have one. If the
+      // recording is missing or a cut fails, surface the miss on the highlight
+      // (clipError) instead of silently leaving an empty clipUri -> blank card.
+      let missed = 0;
+      for (const h of store.highlightsForJob(jobId)) {
+        if (h.clipUri) continue;
+        if (!recPath) {
+          missed++;
+          await store.patchHighlight(h.id, {
+            clipError: "No screen-share recording was captured, so this highlight's clip could not be produced.",
+          });
+          continue;
+        }
+        try {
+          const name = `${jobId}-${Math.round(h.start * 10)}`;
+          const out = path.join(outDir, `${name}.mp4`);
+          const win = clipWindow(h.start, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
+          const dur = Math.max(h.end - h.start, win.end - win.start);
+          await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), dur);
+          // ADAAAA-7248: record whether the source recording carried audio so
+          // the card can show an explicit "no audio captured" state (e.g. a
+          // screen/window share yields no audio track) instead of implying
+          // sound. `-c copy` preserves the source's audio, so a `false` here
+          // means the source itself had no audio stream. A probe failure leaves
+          // it unset (unknown) rather than mislabeling.
+          const hasAudio = await probeHasAudio(cfg.ffmpegPath, recPath);
+          await store.patchHighlight(h.id, {
+            clipUri: `/clips/${name}.mp4`,
+            ...(hasAudio != null ? { hasAudio } : {}),
+          });
+        } catch (e: any) {
+          missed++;
+          await store.patchHighlight(h.id, { clipError: `Clip cut failed: ${String(e?.message || e)}` });
+        }
+      }
+      if (missed > 0) {
+        console.error(`[browser:${jobId}] ${missed} highlight(s) produced no clip (recording=${recPath ? "present" : "missing"})`);
+      }
+      browserJobs.delete(jobId);
+      await store.patchJob(jobId, { status: "done" });
+      emitJobEvent(jobId, { seq: -1, timestamp: -1, type: "observation", observation: { tracks: [] } }); // wake SSE
+      return { ok: true, job: store.getJob(jobId), reason };
+    })().finally(() => {
+      browserFinalizing.delete(jobId);
+    });
+    browserFinalizing.set(jobId, task);
+    return task;
+  }
   // The same recording as the perceive runner sees it (shared volume): the
   // perceive container mounts this server's dataDir at cfg.perceiveClipRoot, so
   // hand perceive the in-container path and it SAM-tracks THAT stream in the
@@ -2707,68 +2784,58 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       });
     }
     // Browser capture job: release the perceive session, then cut clips for any
-    // recorded highlights from the assembled client recording.
-    if (job.source === "browser" && browserJobs.has(job.id)) {
-      const bj = browserJobs.get(job.id)!;
-      if (bj.sessionId) await adapter.stopPerceive(bj.sessionId).catch(() => {});
-      // Media-path session: tell the media server to stop paying + release the
-      // perceive slot (also idempotently triggered by the browser WS closing),
-      // and forget the DB record so a fresh session is provisioned next time.
-      if (bj.mediaSessionId && cfg.mediaServerUrl) {
-        await fetch(`${cfg.mediaServerUrl}/sessions/${bj.mediaSessionId}/close`, { method: "POST" }).catch(() => {});
-        await db.clearMediaSession(job.id).catch(() => {});
-      }
-      const recPath = await waitForRecording(job.id, 4000);
-      const { mkdir } = await import("node:fs/promises");
-      const outDir = path.join(cfg.dataDir, "clips");
-      await mkdir(outDir, { recursive: true });
-      // ADAAAA-7247 (ACC-7): use the webui-configured (DB-persisted) per-company
-      // clip window for the final browser clip cuts.
-      const cw = await resolveClipWindow();
-      // Cut a clip for every highlight that doesn't already have one. If the
-      // recording is missing or a cut fails, surface the miss on the highlight
-      // (clipError) instead of silently leaving an empty clipUri -> blank card.
-      let missed = 0;
-      for (const h of store.highlightsForJob(job.id)) {
-        if (h.clipUri) continue;
-        if (!recPath) {
-          missed++;
-          await store.patchHighlight(h.id, {
-            clipError: "No screen-share recording was captured, so this highlight's clip could not be produced.",
-          });
-          continue;
+    // recorded highlights from the assembled client recording. Idempotent — a
+    // job the media node already finalized on session close (ADAAAA-7689 AC3)
+    // answers 200 instead of 409, so the webapp's own stop is harmless.
+    if (job.source === "browser") {
+      if (!browserJobs.has(job.id) && !browserFinalizing.has(job.id)) {
+        if (!Store.isTerminalStatus(job.status)) {
+          return reply.code(409).send({ error: "job is not a live ingest or browser capture" });
         }
-        try {
-          const name = `${job.id}-${Math.round(h.start * 10)}`;
-          const out = path.join(outDir, `${name}.mp4`);
-          const win = clipWindow(h.start, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
-          const dur = Math.max(h.end - h.start, win.end - win.start);
-          await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), dur);
-          // ADAAAA-7248: record whether the source recording carried audio so
-          // the card can show an explicit "no audio captured" state (e.g. a
-          // screen/window share yields no audio track) instead of implying
-          // sound. `-c copy` preserves the source's audio, so a `false` here
-          // means the source itself had no audio stream. A probe failure leaves
-          // it unset (unknown) rather than mislabeling.
-          const hasAudio = await probeHasAudio(cfg.ffmpegPath, recPath);
-          await store.patchHighlight(h.id, {
-            clipUri: `/clips/${name}.mp4`,
-            ...(hasAudio != null ? { hasAudio } : {}),
-          });
-        } catch (e: any) {
-          missed++;
-          await store.patchHighlight(h.id, { clipError: `Clip cut failed: ${String(e?.message || e)}` });
-        }
+        return reply.send({ ok: true, alreadyTerminal: true, job: store.getJob(job.id) });
       }
-      if (missed > 0) {
-        console.error(`[browser:${job.id}] ${missed} highlight(s) produced no clip (recording=${recPath ? "present" : "missing"})`);
-      }
-      browserJobs.delete(job.id);
-      await store.patchJob(job.id, { status: "done" });
-      emitJobEvent(job.id, { seq: -1, timestamp: -1, type: "observation", observation: { tracks: [] } }); // wake SSE
-      return reply.send({ ok: true, job: store.getJob(job.id) });
+      const finished = await finishBrowserJob(job.id, "stop");
+      return reply.send({ ok: true, job: finished.job });
     }
     return reply.code(409).send({ error: "job is not a live ingest or browser capture" });
+  });
+
+  // Media node -> control plane: the media/RTC session carrying this browser
+  // job has ended (ADAAAA-7689 AC3). Before this route, a browser job stayed
+  // `status: active` after a clean SESSION_CLOSE until someone called
+  // `POST /jobs/:id/stop` by hand, which also left the console's
+  // `capacity.activeSessions` reading a stream that no longer existed.
+  //
+  // Called by the media node's teardown path (best-effort, fire-and-forget), so
+  // it must be safe to miss, safe to repeat, and safe to arrive late. When the
+  // shared MEDIA_HEALTH_TOKEN is configured on both sides the callback is
+  // bearer-gated; unset (dev) it behaves like the sibling `/observe` callback.
+  app.post<{ Params: { id: string } }>("/jobs/:id/media/session-closed", async (req: any, reply) => {
+    if (cfg.mediaHealthToken) {
+      const presented = String(req.headers?.authorization ?? "").replace(/^Bearer /, "");
+      if (presented !== cfg.mediaHealthToken) return reply.code(401).send({ error: "unauthorized" });
+    }
+    const job = store.getJob(req.params.id);
+    // Not a browser job / unknown / already finalized: 200 with `ignored` so the
+    // media node's fire-and-forget call never retries a dead job.
+    if (!job || job.source !== "browser") return reply.send({ ok: true, ignored: "not a browser capture job" });
+    if (!browserJobs.has(job.id) && !browserFinalizing.has(job.id)) {
+      return reply.send({ ok: true, ignored: "job already finalized", job });
+    }
+    const body = req.body ?? {};
+    const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+    const bj = browserJobs.get(job.id);
+    // A stale close (the browser re-provisioned onto a fresh media session) must
+    // not finalize the stream that is still live.
+    if (sessionId && bj?.mediaSessionId && sessionId !== bj.mediaSessionId) {
+      return reply.send({ ok: true, ignored: "stale session", sessionId });
+    }
+    const reason = typeof body.reason === "string" ? body.reason : "unknown";
+    const finished = await finishBrowserJob(job.id, `media-session-closed:${reason}`);
+    // `reason` travels back in the response and in the media node's own
+    // `/health` counters; the SSE wake for the transition is emitted by
+    // finishBrowserJob.
+    return reply.send({ ok: true, job: finished.job, reason });
   });
 
   // Browser-capture rail: client posts a sampled frame; run it through the

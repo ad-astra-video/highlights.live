@@ -43,6 +43,14 @@ interface ActiveStream {
    *  ~100 ms mono PCM chunks for the perceive Stage-A gate. Lazily created on
    *  the first audio packet; absent when the stream carries no audio. */
   audioRelay?: AudioRelay;
+  /**
+   * True once ANY client attached (WS socket or RTC offer). Distinguishes a
+   * session that carried a stream from an abandoned provision — the presence of
+   * a no-client timer is NOT a reliable signal because the timer is disabled in
+   * some configurations and removes itself before teardown runs
+   * (ADAAAA-7689 F1/AC2).
+   */
+  everAttached: boolean;
 }
 
 export interface MediaServerOptions {
@@ -115,9 +123,25 @@ export interface MediaServerOptions {
    *  best-effort (a failure never touches the video rail). Set
    *  `{ enabled: false }` to run the relay dark. */
   audioRelay?: { enabled?: boolean; ffmpegBin?: string; maxBacklogBytes?: number };
+  /**
+   * Adopt an already-provisioned session for the same job instead of reserving
+   * a second one (ADAAAA-7689 AC1). Default true.
+   *
+   * `POST /sessions { jobId }` is called twice on the browser QA path — once by
+   * the control plane (`POST /jobs/:id/media`) and once by the harness/browser
+   * itself. Without adoption both reserved their own perceive session, so a
+   * 24 s browser run billed TWO completed sessions (one used, one idling out on
+   * the no-client timer). With adoption the second call returns the SAME
+   * session, which is the one the browser then connects to.
+   */
+  adoptSessionPerJob?: boolean;
 }
 
 const EXT_BY_MIME: Record<string, string> = { "video/webm": "webm", "video/mp4": "mp4" };
+
+/** Why a media session ended (ADAAAA-7689 AC3). Forwarded to the control plane
+ *  so the browser job's disposition is attributable, not just "it closed". */
+export type SessionCloseReason = "client-closed" | "control-close" | "no-client-timeout" | "payment-failure";
 
 const DEFAULT_RECONNECT_GRACE_MS = 8000;
 /** Bound on concurrent audio-chunk POSTs per session (ADAAAA-7658). A slow
@@ -148,8 +172,17 @@ export class MediaServer {
     provisionAttempts: 0,
     provisionFailures: 0,
     noCapacityFailures: 0,
+    /** ADAAAA-7689 AC1: `POST /sessions` calls answered by adopting the live
+     *  session of the same job instead of reserving a second perceive slot. */
+    provisionReuses: 0,
     sessionsCompleted: 0,
     sessionSeconds: 0,
+    /** Sessions torn down before any client ever attached (an abandoned
+     *  provision). Counted so a doubled/rejected provision stays visible even
+     *  though it is excluded from the completed meter (ADAAAA-7689). */
+    sessionsUnused: 0,
+    /** Session-closed callbacks POSTed to the control plane. */
+    sessionClosedNotifies: 0,
     /** ADAAAA-7658 media-edge audio relay: PCM chunks POSTed to the control
      *  plane for perceive /audio, and chunks dropped on backlog/error. */
     audioChunksPosted: 0,
@@ -173,7 +206,7 @@ export class MediaServer {
         discoverOrchestrators: opts.discoverOrchestrators,
         // A failed payment refresh closes the stream (release the slot rather
         // than let the runner work for free).
-        onPaymentFailure: (sessionId, err) => void this.teardown(sessionId).catch(() => {}),
+        onPaymentFailure: (sessionId, err) => void this.teardown(sessionId, "payment-failure").catch(() => {}),
       });
   }
 
@@ -192,6 +225,20 @@ export class MediaServer {
     // browser connects to.
     app.post<{ Body: { jobId?: string } }>("/sessions", async (_, reply) => {
       this.counters.provisionAttempts++;
+      const requestedJobId = typeof _.body?.jobId === "string" ? _.body.jobId : "";
+      // ADAAAA-7689 AC1 — a job owns ONE live session. The browser QA path calls
+      // this twice for the same job (control plane `POST /jobs/:id/media`, then
+      // the harness/browser itself); reserving twice billed a second perceive
+      // session that no client ever joined and that still counted a full
+      // no-client timeout of session seconds. Adopt the live session instead so
+      // the second call hands back the session the browser actually connects to.
+      if (requestedJobId && this.opts.adoptSessionPerJob !== false) {
+        const existing = [...this.active.values()].find((s) => !s.closed && s.jobId === requestedJobId);
+        if (existing) {
+          this.counters.provisionReuses++;
+          return this.sessionPayload(existing, true);
+        }
+      }
       let p: ProvisionedSession;
       try {
         p = await this.orch.provision();
@@ -207,11 +254,12 @@ export class MediaServer {
       }
       const stream: ActiveStream = {
         streamId: randomUUID(),
-        jobId: (_.body?.jobId as string) || "",
+        jobId: requestedJobId,
         provisioned: p,
         sockets: new Set(),
         closed: false,
         startedAt: Date.now(),
+        everAttached: false,
       };
       this.active.set(p.sessionId, stream);
       // Pay the orchestrator for as long as the stream is open (no-op offchain).
@@ -225,40 +273,11 @@ export class MediaServer {
           at,
           t: setTimeout(() => {
             this.noClientTimers.delete(p.sessionId);
-            void this.teardown(p.sessionId);
+            void this.teardown(p.sessionId, "no-client-timeout");
           }, noClientMs),
         });
       }
-      // Full ingest WS URL (LB/public front), when the operator tells us the
-      // public origin. Clients that can't route by LB fall back to wsPath.
-      const publicBase = (this.opts.publicBaseUrl || "").replace(/\/+$/, "");
-      const wsBase = publicBase.replace(/^http/, "ws");
-      return {
-        sessionId: p.sessionId,
-        wsPath: `/stream/${p.sessionId}`,
-        wsUrl: wsBase ? `${wsBase}/stream/${p.sessionId}` : undefined,
-        // Public origin the browser uses for the RTC signaling (offer/ICE)
-        // POSTs — the browser cannot reach the docker-internal service name,
-        // so it must signal to the LB/public front (ADAAAA-7286). When unset,
-        // clients fall back to the control plane's own MEDIA_PUBLIC_BASE_URL /
-        // MEDIA_SERVER_URL.
-        rtcOrigin: publicBase || undefined,
-        // WebRTC ingest is enabled: the browser signals via
-        // POST /sessions/:sid/rtc/offer + /rtc/ice/:pcId instead of WS frame
-        // posting. Older WS clients may still connect to /stream/:sid.
-        // ICE/STUN/TURN servers the browser should configure its peer with
-        // (same relay the media server gathers with), so the media path can be
-        // held instead of the browser reconnect-looping on unreachable host
-        // candidates (ADAAAA-7304 finding 4).
-        iceServers: this.opts.rtcIceServers,
-        rtc: true,
-        streamId: stream.streamId,
-        jobId: stream.jobId,
-        // Node identity so the control plane can attribute this job's Livepeer
-        // GPU spend to the media node that carried it (ADAAAA-6869 Phase 4).
-        nodeId: this.nodeId,
-        maxSessions: this.maxSessions,
-      };
+      return this.sessionPayload(stream);
     });
 
     // ---- WebRTC ingest signaling (browser -> media server) --------
@@ -331,6 +350,7 @@ export class MediaServer {
           session.on("error", (e) => console.error("[media] rtc err", e));
           stream.rtc = { pcId: randomUUID(), session };
           // A browser attached via RTC — the no-client timer no longer applies.
+          stream.everAttached = true;
           this.clearNoClient(req.params.sid);
         }
         const { session } = stream.rtc;
@@ -382,6 +402,7 @@ export class MediaServer {
       });
       this.clearGrace(req.params.sid); // a reconnect within the grace window cancels pending teardown
       this.clearNoClient(req.params.sid); // a browser connected, so the no-client timeout is moot
+      stream.everAttached = true;
       connection.on("data", (buf: Buffer) => {
         void this.handleFrame(stream, connection, buf).catch((e) => console.error("[media] frame err", e));
       });
@@ -402,7 +423,7 @@ export class MediaServer {
     app.post<{ Params: { sid: string } }>("/sessions/:sid/close", async (req, reply) => {
       const stream = this.active.get(req.params.sid);
       if (!stream) return reply.code(404).send({ error: "no such session" });
-      await this.teardown(req.params.sid);
+      await this.teardown(req.params.sid, "control-close");
       return { ok: true };
     });
 
@@ -485,6 +506,9 @@ export class MediaServer {
         provisionAttempts: this.counters.provisionAttempts,
         provisionFailures: this.counters.provisionFailures,
         noCapacityFailures: this.counters.noCapacityFailures,
+        // ADAAAA-7689 AC1: attempts answered by adopting the job's live session
+        // instead of reserving a second perceive session.
+        provisionReuses: this.counters.provisionReuses,
       },
       leases: { ...leaseCounts, paying: this.orch.payingCount(), total: activeSessions },
       payment: { onchain: this.orch.paysOnchain(), payingSessions: this.orch.payingCount() },
@@ -492,11 +516,21 @@ export class MediaServer {
         basis: "media-node session meter (control plane attributes job.costUsd per node)",
         sessionsCompleted: this.counters.sessionsCompleted,
         sessionSeconds: Number(this.counters.sessionSeconds.toFixed(1)),
+        // A provision that never carried a client is NOT billed as a completed
+        // session (ADAAAA-7689 AC1/AC2); it stays visible here instead.
+        sessionsUnused: this.counters.sessionsUnused,
+        sessionClosedNotifies: this.counters.sessionClosedNotifies,
       },
       ...(lifecycle
         ? {
             restarts: {
               boots: lifecycle.boots,
+              // ADAAAA-7689 AC4: per-boot identity + the running image revision,
+              // and the attribution of THIS boot (deploy vs crash vs restart).
+              bootId: lifecycle.bootId,
+              buildRef: lifecycle.buildRef,
+              restartCause: lifecycle.restartCause,
+              previousBoot: lifecycle.previousBoot,
               lastStartAt: lifecycle.lastStartAt,
               lastExit: lifecycle.lastExit,
               windowS: lifecycle.windowS,
@@ -515,6 +549,49 @@ export class MediaServer {
         sessionsRelaying: [...this.active.values()].filter((s) => !!s.audioRelay && !s.audioRelay.isDisabled).length,
       },
       ...(opts.detail ? { sessions } : {}),
+    };
+  }
+
+  /**
+   * The `POST /sessions` response body for a stream. Shared by the fresh
+   * provision path and the adopt path (ADAAAA-7689 AC1) so an adopted session
+   * looks exactly like a newly provisioned one to the caller.
+   */
+  private sessionPayload(stream: ActiveStream, reused = false) {
+    const sid = stream.provisioned.sessionId;
+    // Full ingest WS URL (LB/public front), when the operator tells us the
+    // public origin. Clients that can't route by LB fall back to wsPath.
+    const publicBase = (this.opts.publicBaseUrl || "").replace(/\/+$/, "");
+    const wsBase = publicBase.replace(/^http/, "ws");
+    return {
+      sessionId: sid,
+      wsPath: `/stream/${sid}`,
+      wsUrl: wsBase ? `${wsBase}/stream/${sid}` : undefined,
+      // Public origin the browser uses for the RTC signaling (offer/ICE)
+      // POSTs — the browser cannot reach the docker-internal service name,
+      // so it must signal to the LB/public front (ADAAAA-7286). When unset,
+      // clients fall back to the control plane's own MEDIA_PUBLIC_BASE_URL /
+      // MEDIA_SERVER_URL.
+      rtcOrigin: publicBase || undefined,
+      // WebRTC ingest is enabled: the browser signals via
+      // POST /sessions/:sid/rtc/offer + /rtc/ice/:pcId instead of WS frame
+      // posting. Older WS clients may still connect to /stream/:sid.
+      // ICE/STUN/TURN servers the browser should configure its peer with
+      // (same relay the media server gathers with), so the media path can be
+      // held instead of the browser reconnect-looping on unreachable host
+      // candidates (ADAAAA-7304 finding 4).
+      iceServers: this.opts.rtcIceServers,
+      rtc: true,
+      streamId: stream.streamId,
+      jobId: stream.jobId,
+      // Node identity so the control plane can attribute this job's Livepeer
+      // GPU spend to the media node that carried it (ADAAAA-6869 Phase 4).
+      nodeId: this.nodeId,
+      maxSessions: this.maxSessions,
+      // True when this response adopted an already-provisioned session for the
+      // same job instead of reserving a new one (ADAAAA-7689 AC1). Lets the
+      // caller tell "I created it" from "I joined the live one".
+      reused,
     };
   }
 
@@ -711,14 +788,14 @@ export class MediaServer {
     this.clearGrace(sid);
     const ms = this.opts.reconnectGraceMs ?? DEFAULT_RECONNECT_GRACE_MS;
     if (ms <= 0) {
-      void this.teardown(sid);
+      void this.teardown(sid, "client-closed");
       return;
     }
     this.graceTimers.set(sid, {
       at: Date.now() + ms,
       t: setTimeout(() => {
         this.graceTimers.delete(sid);
-        void this.teardown(sid);
+        void this.teardown(sid, "client-closed");
       }, ms),
     });
   }
@@ -741,18 +818,36 @@ export class MediaServer {
     }
   }
 
-  /** Stop paying + release the perceive slot. Idempotent. */
-  private async teardown(sid: string) {
+  /**
+   * Stop paying + release the perceive slot. Idempotent.
+   *
+   * `reason` says WHY the session ended, and it is forwarded to the control
+   * plane in the session-closed callback (ADAAAA-7689 AC3): the browser job is
+   * flipped out of `active` on session close instead of waiting for someone to
+   * call `POST /jobs/:id/stop`.
+   */
+  private async teardown(sid: string, reason: SessionCloseReason = "client-closed") {
     this.clearGrace(sid);
     this.clearNoClient(sid);
     const stream = this.active.get(sid);
     if (!stream || stream.closed) return;
     stream.closed = true;
+    // A provisioned session that never got a client is an ABANDONED provision,
+    // not a session that carried inference (ADAAAA-7689 F1).
+    const neverAttached = !stream.everAttached;
     // Per-node cost meter (ADAAAA-6869 Phase 4): accrue the paid session time
     // this node carried, so the console can attribute Livepeer GPU spend to the
     // node even when the job record itself has not landed yet.
-    this.counters.sessionsCompleted++;
-    this.counters.sessionSeconds += Math.max(0, (Date.now() - stream.startedAt) / 1000);
+    if (neverAttached) {
+      // Excluded from the completed meter: no browser ever connected, so this
+      // meter entry would claim a stream this session never carried. It stays
+      // visible via `cost.sessionsUnused` so a doubled provision is still
+      // observable (ADAAAA-7689 AC1/AC2).
+      this.counters.sessionsUnused++;
+    } else {
+      this.counters.sessionsCompleted++;
+      this.counters.sessionSeconds += Math.max(0, (Date.now() - stream.startedAt) / 1000);
+    }
     // Close the reassembled muxed recording (flush pending chunk bytes).
     if (stream.recording) {
       // Guarded end(): a destroyed/errored file stream reports its failure
@@ -788,5 +883,46 @@ export class MediaServer {
     // was returned, so an empty control_url can never leave the slot billed.
     await this.orch.releaseSession(stream.provisioned.sessionId, stream.provisioned.controlUrl).catch(() => {});
     this.active.delete(sid);
+    // 4) tell the control plane the job's media session is over (ADAAAA-7689
+    // AC3). Before this, a browser job stayed `active` after a clean
+    // SESSION_CLOSE until someone called POST /jobs/:id/stop by hand.
+    this.notifySessionClosed(stream, reason, neverAttached);
+  }
+
+  /**
+   * Best-effort `POST {callbackBase}/jobs/{jobId}/media/session-closed`.
+   *
+   * Fire-and-forget on purpose: teardown must never wait on the control plane
+   * (it is on the path that releases a capacity-1 perceive slot), and a missed
+   * callback only leaves the job for the next explicit `/jobs/:id/stop` — the
+   * pre-7689 behaviour, not a regression.
+   */
+  private notifySessionClosed(stream: ActiveStream, reason: SessionCloseReason, neverAttached: boolean): void {
+    if (!this.opts.callbackBase || !stream.jobId) return;
+    const payload = {
+      sessionId: stream.provisioned.sessionId,
+      jobId: stream.jobId,
+      reason,
+      // true when no client ever joined (an abandoned provision). Diagnostically
+      // useful on the control plane: the job is finalized either way, because a
+      // provision-only `/jobs/:id/media` call used to leave the job `active`
+      // forever (ADAAAA-7689 F1).
+      neverAttached,
+      seconds: Number(Math.max(0, (Date.now() - stream.startedAt) / 1000).toFixed(1)),
+      nodeId: this.nodeId,
+      transport: stream.rtc ? "webrtc" : "ws",
+    };
+    this.counters.sessionClosedNotifies++;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    // Same shared bearer that gates GET /node, when configured, so the control
+    // plane can reject a spoofed close on a public origin (AC3 guardrail).
+    if (this.healthToken) headers.authorization = `Bearer ${this.healthToken}`;
+    void fetch(`${this.opts.callbackBase}/jobs/${stream.jobId}/media/session-closed`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    }).catch(() => {
+      /* best-effort: the job can still be stopped explicitly */
+    });
   }
 }

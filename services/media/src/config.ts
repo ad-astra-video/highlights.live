@@ -78,6 +78,15 @@ export interface MediaConfig {
   restartDegradedThreshold: number;
   /** Directory holding the lifecycle ledger across process restarts. */
   stateDir?: string;
+  /**
+   * Revision of the running image, published on `/health` as `buildRef`
+   * (ADAAAA-7689 AC4). The Dockerfile bakes it at build time from the
+   * `BUILD_REF` build arg (`docker compose ... up -d --build` with
+   * `BUILD_REF=$(git rev-parse --short HEAD)`); an operator can also set
+   * `MEDIA_BUILD_REF` at runtime. Unset => `"unknown"`, which is published
+   * verbatim rather than guessed.
+   */
+  buildRef: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
@@ -105,5 +114,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     restartWindowS: env.MEDIA_RESTART_WINDOW_S ? Number(env.MEDIA_RESTART_WINDOW_S) : 600,
     restartDegradedThreshold: env.MEDIA_RESTART_DEGRADED_THRESHOLD ? Number(env.MEDIA_RESTART_DEGRADED_THRESHOLD) : 3,
     stateDir: env.MEDIA_STATE_DIR,
+    // ADAAAA-7689 AC4: the shipped revision. `BUILD_REF` is the build arg the
+    // media Dockerfile bakes into the image; `MEDIA_BUILD_REF` is the runtime
+    // override for an operator running the source tree directly.
+    buildRef: env.MEDIA_BUILD_REF || env.BUILD_REF || "unknown",
   };
 }

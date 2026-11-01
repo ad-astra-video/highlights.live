@@ -18,9 +18,13 @@
 //     `reason: "unobserved-exit"` with a null code instead of inventing one.
 //
 // Persistence is a small JSON file under `MEDIA_STATE_DIR` (default: the OS tmp
-// dir). It survives a process restart — the case that matters for a crash loop —
-// and resets on a container recreate, which is a deploy and should reset it.
+// dir). It survives a process restart — the case that matters for a crash loop.
+// The default tmp dir is container-local, so a recreate (a deploy) also wipes
+// it; the compose service points MEDIA_STATE_DIR at a mounted volume so boots
+// and their revisions survive a deploy too, which is what makes `buildRef`
+// comparable across a restart (ADAAAA-7689 AC4).
 
+import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +39,17 @@ export type ExitInfo = {
   reason: "exit" | "signal" | "unobserved-exit";
 };
 
+export type BootRecord = {
+  /** boot timestamp (ms) */
+  at: number;
+  /** identifier of THIS process boot (ADAAAA-7689 AC4) */
+  bootId: string;
+  /** image revision the booted code came from (`unknown` when not injected) */
+  buildRef: string;
+};
+
+export type ExitInfoIso = { at: string; code: number | null; signal: string | null; reason: string };
+
 export type LifecycleLedger = {
   /** process starts observed on this container (1 = first boot) */
   boots: number;
@@ -43,12 +58,39 @@ export type LifecycleLedger = {
   /** start timestamp of the previous boot (used to detect an unobserved exit) */
   lastBootAt: number | null;
   lastExit: ExitInfo | null;
+  /**
+   * Per-boot identity, oldest first (ADAAAA-7689 AC4). `bootAt` alone can say
+   * THAT a process restarted; the build reference is what lets a reader tell a
+   * deploy (the revision changed) from a crash (same revision, unobserved exit)
+   * without box shell access.
+   */
+  bootHistory: BootRecord[];
 };
+
+/**
+ * Why the current boot started. This is the attribution AC4 asks for:
+ *
+ *   - `first-boot`  no previous boot in the ledger (fresh container / wiped state)
+ *   - `deploy`      the running revision differs from the previous boot's
+ *   - `crash`       same revision and the previous process never recorded an exit
+ *                   (SIGKILL / OOM — node cannot observe those)
+ *   - `restart`     same revision and the previous process exited observably
+ *                   (clean exit, uncaught exception, or a SIGTERM stop)
+ */
+export type RestartCause = "first-boot" | "deploy" | "crash" | "restart";
 
 export type LifecycleSnapshot = {
   boots: number;
+  /** identifier of the currently running boot */
+  bootId: string | null;
+  /** revision of the running image (`unknown` when the build did not inject one) */
+  buildRef: string | null;
   lastStartAt: string | null;
-  lastExit: { at: string; code: number | null; signal: string | null; reason: string } | null;
+  lastExit: ExitInfoIso | null;
+  /** The boot before this one, with the revision it ran (null on a first boot). */
+  previousBoot: (BootRecord & { atIso: string; exit: ExitInfoIso | null }) | null;
+  /** Attribution of the current boot: deploy vs crash vs plain restart. */
+  restartCause: RestartCause;
   windowS: number;
   threshold: number;
   bootsInWindow: number;
@@ -59,7 +101,13 @@ export type LifecycleSnapshot = {
 const LEDGER_FILE = "highlights-media-lifecycle.json";
 const MAX_BOOT_HISTORY = 200;
 
-const emptyLedger = (): LifecycleLedger => ({ boots: 0, bootAt: [], lastBootAt: null, lastExit: null });
+const emptyLedger = (): LifecycleLedger => ({
+  boots: 0,
+  bootAt: [],
+  lastBootAt: null,
+  lastExit: null,
+  bootHistory: [],
+});
 
 export function ledgerPath(dir: string = process.env.MEDIA_STATE_DIR || os.tmpdir()): string {
   return path.join(dir, LEDGER_FILE);
@@ -70,23 +118,51 @@ export function loadLedger(dir?: string): LifecycleLedger {
   try {
     const raw = JSON.parse(readFileSync(ledgerPath(dir), "utf8"));
     if (!raw || typeof raw.boots !== "number" || !Array.isArray(raw.bootAt)) return emptyLedger();
+    const bootAt = raw.bootAt.filter((t: unknown) => typeof t === "number");
+    // A ledger written by a pre-7689 build has no bootHistory: keep the boot
+    // count/window semantics and leave the per-boot identity empty rather than
+    // inventing a revision that was never recorded.
+    const bootHistory: BootRecord[] = Array.isArray(raw.bootHistory)
+      ? raw.bootHistory
+          .filter((b: any) => b && typeof b.at === "number")
+          .map((b: any) => ({
+            at: b.at,
+            bootId: typeof b.bootId === "string" ? b.bootId : "",
+            buildRef: typeof b.buildRef === "string" ? b.buildRef : "unknown",
+          }))
+      : [];
     return {
       boots: raw.boots,
-      bootAt: raw.bootAt.filter((t: unknown) => typeof t === "number"),
+      bootAt,
       lastBootAt: typeof raw.lastBootAt === "number" ? raw.lastBootAt : null,
       lastExit: raw.lastExit ?? null,
+      bootHistory,
     };
   } catch {
     return emptyLedger();
   }
 }
 
+export type BootOptions = {
+  /** boot timestamp (ms); defaults to now */
+  now?: number;
+  /** explicit boot id; generated when omitted */
+  bootId?: string;
+  /** image revision this process booted from (`unknown` when not injected) */
+  buildRef?: string;
+};
+
+const asBootOptions = (v: number | BootOptions | undefined): BootOptions =>
+  typeof v === "number" ? { now: v } : v ?? {};
+
 /**
  * Record this process start. If the previous boot never wrote an exit, the
  * process died in a way node cannot observe (SIGKILL / OOM) — record that
  * explicitly so `/health` shows the gap instead of implying a clean recovery.
  */
-export function recordBoot(ledger: LifecycleLedger, now: number = Date.now()): LifecycleLedger {
+export function recordBoot(ledger: LifecycleLedger, when?: number | BootOptions): LifecycleLedger {
+  const opts = asBootOptions(when);
+  const now = opts.now ?? Date.now();
   const previous = ledger.lastBootAt;
   const exitAt = ledger.lastExit?.at ?? 0;
   if (previous !== null && exitAt < previous) {
@@ -96,6 +172,16 @@ export function recordBoot(ledger: LifecycleLedger, now: number = Date.now()): L
   ledger.bootAt.push(now);
   if (ledger.bootAt.length > MAX_BOOT_HISTORY) ledger.bootAt = ledger.bootAt.slice(-MAX_BOOT_HISTORY);
   ledger.lastBootAt = now;
+  // ADAAAA-7689 AC4: keep a per-boot identity so a reader can attribute the
+  // current boot to a deploy or a crash from `/health` alone.
+  ledger.bootHistory.push({
+    at: now,
+    bootId: opts.bootId ?? randomUUID(),
+    buildRef: opts.buildRef ?? "unknown",
+  });
+  if (ledger.bootHistory.length > MAX_BOOT_HISTORY) {
+    ledger.bootHistory = ledger.bootHistory.slice(-MAX_BOOT_HISTORY);
+  }
   return ledger;
 }
 
@@ -138,18 +224,38 @@ export function snapshot(
   const threshold = opts.threshold ?? 3;
   const from = now - windowS * 1000;
   const bootsInWindow = ledger.bootAt.filter((t) => t >= from && t <= now).length;
+  const lastExit: ExitInfoIso | null =
+    ledger.lastExit === null
+      ? null
+      : {
+          at: new Date(ledger.lastExit.at).toISOString(),
+          code: ledger.lastExit.code,
+          signal: ledger.lastExit.signal,
+          reason: ledger.lastExit.reason,
+        };
+  const current = ledger.bootHistory.length ? ledger.bootHistory[ledger.bootHistory.length - 1] : null;
+  const previous =
+    ledger.bootHistory.length > 1 ? ledger.bootHistory[ledger.bootHistory.length - 2] : null;
+  // ADAAAA-7689 AC4 — attribute this boot from the ledger alone. A revision
+  // change is a deploy; the same revision with an exit node never saw is a
+  // crash; the same revision with an observed exit is an ordinary restart.
+  const restartCause: RestartCause = !previous
+    ? "first-boot"
+    : previous.buildRef !== (current?.buildRef ?? "unknown")
+    ? "deploy"
+    : lastExit?.reason === "unobserved-exit"
+    ? "crash"
+    : "restart";
   return {
     boots: ledger.boots,
+    bootId: current?.bootId ?? null,
+    buildRef: current?.buildRef ?? null,
     lastStartAt: ledger.lastBootAt === null ? null : new Date(ledger.lastBootAt).toISOString(),
-    lastExit:
-      ledger.lastExit === null
-        ? null
-        : {
-            at: new Date(ledger.lastExit.at).toISOString(),
-            code: ledger.lastExit.code,
-            signal: ledger.lastExit.signal,
-            reason: ledger.lastExit.reason,
-          },
+    lastExit,
+    previousBoot: previous
+      ? { ...previous, atIso: new Date(previous.at).toISOString(), exit: lastExit }
+      : null,
+    restartCause,
     windowS,
     threshold,
     bootsInWindow,

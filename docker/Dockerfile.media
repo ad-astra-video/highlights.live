@@ -1,4 +1,9 @@
 FROM node:24-slim
+# ADAAAA-7689 AC4: the shipped revision, published on the media node's `/health`
+# as `buildRef`. Defaults to "unknown" rather than guessing; the compose service
+# passes BUILD_REF from the deploy (`BUILD_REF=$(git rev-parse --short HEAD)`).
+ARG BUILD_REF=unknown
+ENV BUILD_REF=${BUILD_REF}
 # ffmpeg decodes the WebRTC-ingested H264/VP8/VP9 stream to sampled JPEGs
 # on the media server (C1 — browser WebRTC -> media server -> video-in rail).
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl && rm -rf /var/lib/apt/lists/*
