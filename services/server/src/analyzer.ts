@@ -3908,12 +3908,16 @@ export async function analyzeJob(
   const liveInvoke = cfg.liveObserveInFlight;
   const liveInFlight = Math.max(1, Math.floor(liveInvoke ?? 1));
   // ADAAAA-7771: the in-flight depth is a SHARED budget. The orchestrated decide
-  // client admits only `DECIDE_CONCURRENCY` (default 2) decide app-calls at once,
-  // so depth above that admission does not add throughput — it only queues, and a
-  // queued window lands later (measured at depth 4: 1 stream 11.6 s/decide and
-  // 31.3 s lag; 2 streams 24.8-26.6 s and 50.8-52.0 s lag, worse than the serial
-  // 32.6-34.5 s). Each live stream therefore gets `admission / activeStreams`,
-  // never more than `liveObserveInFlight`.
+  // client admits only `DECIDE_CONCURRENCY` decide app-calls at once, so depth
+  // above that admission does not add throughput — it only queues, and a queued
+  // window lands later (measured at depth 4 with a 2-wide gate: 1 stream
+  // 11.6 s/decide and 31.3 s lag; 2 streams 24.8-26.6 s and 50.8-52.0 s lag,
+  // worse than the serial 32.6-34.5 s). ADAAAA-7773: docker-compose now ships
+  // `DECIDE_CONCURRENCY=8` (the box's real 4+4 decide slots), so two streams get
+  // 4 each instead of falling back to the serial pass; the fallback below stays
+  // at the client's own default (2) so an unset env behaves like the client.
+  // Each live stream therefore gets `admission / activeStreams`, never more than
+  // `liveObserveInFlight`.
   const liveDecideAdmissionBudget = Math.max(1, Math.floor(cfg.liveDecideAdmission ?? 2));
   if (liveInFlight > 1) liveDecideAdmission.registerLiveJob(cfg.jobId);
   const liveObserver =
