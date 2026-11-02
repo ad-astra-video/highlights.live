@@ -823,5 +823,16 @@ def test_american_football_motion_numbers_match_the_committed_run():
     assert caps["idPersistence"].startswith("not_captured")
     assert caps["iou"].startswith("not_captured")
 
-    # AC6: motion is measured here but not certified until QA's verdict lands
-    assert "pending" in ref["qaCertificationMotion"]
+    # AC6: motion is measured here but may only be quoted as certified once a QA
+    # verdict exists. The guard accepts the pending form and the post-verdict
+    # form, so recording the verdict is a data change, not a test edit - but a
+    # "pass" must name the QA issue that gave it, and the ceiling miss stays
+    # recorded either way (a certified measurement is not an enablement).
+    qa_motion = ref["qaCertificationMotion"]
+    assert isinstance(qa_motion, str) and qa_motion
+    assert "ADAAAA-" in qa_motion
+    if qa_motion.startswith("pass"):
+        assert motion["fpCeilingMet"] is False
+        assert ref["audioHarness"]["fpCeilingMet"] is False
+    else:
+        assert "pending" in qa_motion
