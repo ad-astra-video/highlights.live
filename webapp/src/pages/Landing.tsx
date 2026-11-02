@@ -224,6 +224,11 @@ export function Landing() {
             <span>© {new Date().getFullYear()}</span>
           </div>
           <nav className="flex flex-wrap items-center gap-4">
+            {/* Inbound surface for the content-referral explainer placement
+                (ADAAAA-6384). Plain path, no UTM here: the explainer's own CTAs
+                carry the content_referral tag set, so attribution happens on the
+                placement that actually converts. */}
+            <Link to="/creators-2026" className="hover:text-ink">For creators</Link>
             <Link to="/privacy" className="hover:text-ink">Privacy</Link>
             <Link to="/terms" className="hover:text-ink">Terms</Link>
             <Link to="/retention" className="hover:text-ink">Data retention</Link>

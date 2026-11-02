@@ -18,7 +18,21 @@ import { Zap, Film, Radio, Clapperboard, ArrowRight, Check } from "lucide-react"
 // The landing page (/auth + /waitlist) carries utm_source/utm_medium/
 // utm_campaign/utm_content through to register + waitlist so per-placement CAC
 // attribution survives the funnel (ADAAAA-6368, ADAAAA-6384).
-const UTM = "utm_source=content_referral&utm_medium=page&utm_campaign=creators-2026&utm_content=explainer";
+//
+// ADAAAA-6384 places 4 distinct in-page placements on this explainer and tags
+// each CTA group with its own `utm_content`, so /admin/funnel + /admin/spend can
+// tell which placement converted (the spec asks for 2–4 placements sharing
+// utm_source/utm_medium/utm_campaign but distinct utm_content):
+//
+//   creators-hero    top bar + hero primary CTA (above the fold)
+//   creators-mid     "how it works" -> "who it's for" inline CTA (mid-page)
+//   creators-footer  closing CTA band, "Try it free"
+//   creators-auth    closing CTA band, "Create account" (direct signup)
+const UTM_BASE = "utm_source=content_referral&utm_medium=page&utm_campaign=creators-2026";
+const UTM_HERO = `${UTM_BASE}&utm_content=creators-hero`;
+const UTM_MID = `${UTM_BASE}&utm_content=creators-mid`;
+const UTM_FOOTER = `${UTM_BASE}&utm_content=creators-footer`;
+const UTM_AUTH = `${UTM_BASE}&utm_content=creators-auth`;
 
 export function ContentReferral() {
   return (
@@ -31,7 +45,7 @@ export function ContentReferral() {
             highlights<span className="text-neon glow-text">.live</span>
           </span>
         </Link>
-        <Link to={`/?${UTM}`} className="btn-fill inline-flex items-center gap-1 text-sm">
+        <Link to={`/?${UTM_HERO}`} className="btn-fill inline-flex items-center gap-1 text-sm">
           Try it free <ArrowRight className="h-4 w-4" />
         </Link>
       </header>
@@ -53,7 +67,7 @@ export function ContentReferral() {
 
         {/* Primary CTA */}
         <div className="mx-auto mt-8 max-w-xl">
-          <Link to={`/?${UTM}`} className="btn-fill inline-flex items-center justify-center gap-2 text-lg">
+          <Link to={`/?${UTM_HERO}`} className="btn-fill inline-flex items-center justify-center gap-2 text-lg">
             Try it free <ArrowRight className="h-5 w-5" />
           </Link>
           <p className="mt-3 text-xs text-mut">Free during beta — no card required.</p>
@@ -89,6 +103,13 @@ export function ContentReferral() {
         </div>
       </section>
 
+      {/* Mid-page CTA — the "who it's for" placement (utm_content=creators-mid) */}
+      <section className="mt-16 text-center">
+        <Link to={`/?${UTM_MID}`} className="btn-neon inline-flex items-center gap-2 text-base">
+          Start clipping free <ArrowRight className="h-5 w-5" />
+        </Link>
+      </section>
+
       {/* CTA band */}
       <section className="mt-24 rounded-2xl border border-neon/40 bg-neon/5 p-8 text-center">
         <h2 className="text-2xl font-black sm:text-3xl">Clip the moment — free during beta.</h2>
@@ -97,10 +118,10 @@ export function ContentReferral() {
           highlight clips in seconds.
         </p>
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-          <Link to={`/?${UTM}`} className="btn-fill inline-flex items-center gap-2 text-base">
+          <Link to={`/?${UTM_FOOTER}`} className="btn-fill inline-flex items-center gap-2 text-base">
             Try it free <ArrowRight className="h-5 w-5" />
           </Link>
-          <Link to={`/auth?${UTM}`} className="btn-neon inline-flex items-center gap-2 text-base">
+          <Link to={`/auth?${UTM_AUTH}`} className="btn-neon inline-flex items-center gap-2 text-base">
             Create account
           </Link>
         </div>
