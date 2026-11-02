@@ -12,6 +12,10 @@ import type { ProvisionedSession } from "../src/orch";
 class FakeOrch {
   publishes: Array<{ seq: number; jpeg: Buffer; ts: number }> = [];
   obsBySeq = new Map<number, any>();
+  /** When false the observation comes back WITHOUT the timestamp the media node
+   *  published — the shape a runner that does not echo the frame clock returns
+   *  (and the shape that silently poisoned the media rail's lag gate). */
+  echoTs = true;
   provisioned: ProvisionedSession = {
     sessionId: "sess-7699",
     appUrl: "http://fake",
@@ -40,7 +44,7 @@ class FakeOrch {
       type: "observation",
       sessionId: this.provisioned.sessionId,
       seq,
-      timestamp: ts,
+      ...(this.echoTs ? { timestamp: ts } : {}),
       tracks: [{ trackId: "t1", bbox: [0.1, 0.1, 0.2, 0.2], kind: "player", slot: 0, lostFrames: 0 }],
       evidence: { ballInNet: false },
     });
@@ -118,5 +122,35 @@ describe("media node observe callback carries the anchor frame (ADAAAA-7699)", (
 
     ws.close();
     await srv.inject({ method: "POST", url: `/sessions/${sid}/close` });
+  });
+
+  it("stamps the frame clock when the runner does not echo it (no 1970 content clock)", async () => {
+    cbBodies = [];
+    g.echoTs = false;
+    try {
+      const prov = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-7699-nots" } });
+      const sid = prov.json().sessionId as string;
+      const ws = await wsConnect(`${sBase.replace("http", "ws")}/stream/${sid}`);
+      const image = Buffer.from("decoded-jpeg-pixels").toString("base64");
+      const ts = Date.now() / 1000;
+      ws.send(JSON.stringify({ seq: 7, image, timestamp: ts }));
+
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline && !cbBodies.some((b) => b.url === "/jobs/job-7699-nots/observe")) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      const call = cbBodies.find((b) => b.url === "/jobs/job-7699-nots/observe");
+      expect(call).toBeTruthy();
+      // The control plane dates every window off this value; a runner that
+      // omits it must not leave the rail on a 1970 clock (which made the lag
+      // gate drop every frame and produced 0 decides on a live share).
+      expect(call.body.timestamp).toBeCloseTo(ts, 3);
+      expect(call.body.frameB64).toBe(image);
+
+      ws.close();
+      await srv.inject({ method: "POST", url: `/sessions/${sid}/close` });
+    } finally {
+      g.echoTs = true;
+    }
   });
 });

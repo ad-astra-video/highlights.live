@@ -132,6 +132,11 @@ export function attestationFromObservation(
   return attested ? att : null;
 }
 
+/** The smallest plausible epoch-second content clock (1970-01-12). Anything
+ *  below this is not a wall-clock timestamp and must never set the rail's
+ *  content origin. */
+export const MIN_EPOCH_SECONDS = 1_000_000;
+
 /** Per-share decide traffic the completion report reads. */
 export interface MediaRailStats {
   /** Observations relayed by the media node (frames with pixels). */
@@ -151,6 +156,11 @@ export interface MediaRailStats {
   cadenceFires: number;
   /** Windows dropped for exceeding the lag budget. */
   skippedStaleWindows: number;
+  /** Observations ignored because their timestamp was not an epoch-second
+   *  content clock (a client that does not stamp its frames). Evidence-only:
+   *  deciding on a frame whose clock we cannot trust would date every window
+   *  against 1970 (ADAAAA-7699). */
+  clockRejected: number;
   /** Wall seconds the rail was observed for (per-share cost reporting). */
   sessionSeconds: number;
   /** AC-1 measurement: content-time delay from a fired trigger's onset to the
@@ -183,6 +193,8 @@ export class MediaRailObserver {
   private frames = 0;
   private audioChunks = 0;
   private triggers = 0;
+  /** Observations dropped for carrying a non-epoch timestamp clock. */
+  private clockRejected = 0;
   /** Onset (content seconds) of the newest trigger queued for an anchored fire. */
   private lastQueuedTriggerOnset: number | null = null;
   /** Measured onset -> anchored decide window delays (ms, content clock). */
@@ -213,6 +225,19 @@ export class MediaRailObserver {
     return Math.max(0, rawTs - this.originTs);
   }
 
+  /** Count and (once) surface a relayed observation whose timestamp is not an
+   *  epoch-second clock, so a mis-stamping media node is diagnosable from the
+   *  server log instead of reading as "0 decides for no reason". */
+  private rejectClock(rawTs: number): void {
+    if (this.clockRejected++ === 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[media-rail:${this.jobId}] observation timestamp ${rawTs} is not an epoch-second content clock; ` +
+          `frame is evidence-only (the media node must stamp the frame it decoded)`
+      );
+    }
+  }
+
   /** The share's content-clock origin (wall-clock epoch seconds). */
   contentOrigin(): number | null {
     return this.originTs;
@@ -233,6 +258,17 @@ export class MediaRailObserver {
     if (!frameB64 || typeof frameB64 !== "string") return;
     const rawTs = Number(obs?.timestamp);
     if (!Number.isFinite(rawTs)) return;
+    // The rail's content clock is wall-clock epoch seconds and every window,
+    // clip boundary and lag measurement is dated off the FIRST timestamp seen.
+    // A relayed observation with 0/absent timestamps would pin that origin at
+    // 1970, so the lag gate then reads every frame as decades stale, drops all
+    // of them and only the finish()-tail decide ever fires. Reject an
+    // implausible clock (evidence-only, the same rule as a missing frame)
+    // rather than silently poisoning the whole share.
+    if (rawTs < MIN_EPOCH_SECONDS) {
+      this.rejectClock(rawTs);
+      return;
+    }
     const ts = this.contentTs(rawTs);
     const seq = Number.isFinite(Number(obs?.seq)) ? Number(obs?.seq) : this.observations;
     this.observations++;
@@ -331,7 +367,8 @@ export class MediaRailObserver {
     console.log(
       `[media-rail:${this.jobId}] decided frames=${s.frames} audioChunks=${s.audioChunks} triggers=${s.triggers} ` +
         `decideCalls=${s.decideCalls} triggerFires=${s.triggerFires} cadenceFires=${s.cadenceFires} ` +
-        `accepted=${s.accepted} triggerLatencyP50=${s.anchoredLatencyP50Ms}ms p95=${s.anchoredLatencyP95Ms}ms`
+        `accepted=${s.accepted} clockRejected=${s.clockRejected} ` +
+        `triggerLatencyP50=${s.anchoredLatencyP50Ms}ms p95=${s.anchoredLatencyP95Ms}ms`
     );
   }
 
@@ -360,6 +397,7 @@ export class MediaRailObserver {
       triggerFires: this.live.triggerFireCount(),
       cadenceFires: this.live.cadenceFireCount(),
       skippedStaleWindows: this.live.skippedStaleWindowCount(),
+      clockRejected: this.clockRejected,
       sessionSeconds: Number(((Date.now() - this.startedAt) / 1000).toFixed(1)),
       anchoredLatencyMs: [...sorted],
       anchoredLatencyP50Ms: pct(50),
