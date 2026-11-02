@@ -32,6 +32,12 @@ export const LIVE_PROGRESS_CAUGHT_UP_S = 5;
  * this in sync (same convention as DEFAULT_WINDOW_PRE_S in job-detail.ts). */
 export const LIVE_PROGRESS_CADENCE_S = 3;
 
+/** Sources whose frames arrive in real time — the only ones with a "live edge"
+ * to measure a lag against. A VOD (`file`) job's content clock is the source
+ * timeline, not wall time, so comparing the two would fabricate a lag: those
+ * jobs read `unknown` and the UI renders no chip. */
+const LIVE_SOURCES = new Set(["rtmp", "screen", "file-sim", "browser", "webrtc", "screenshare"]);
+
 /** Jobs in one of these states have no live edge any more; the projection
  * freezes at the completion wall clock and the UI renders the completion state
  * instead of a lag chip. */
@@ -58,7 +64,7 @@ export interface LiveProgress {
 export interface LiveProgressInput {
   /** The stored job record (in-flight or terminal). */
   job: Partial<
-    Pick<Job, "status" | "startedAt" | "finishedAt" | "completedAt" | "createdAt" | "summaryLog">
+    Pick<Job, "status" | "source" | "startedAt" | "finishedAt" | "completedAt" | "createdAt" | "summaryLog">
   > & {
     /** Read server-side only to honour the exact skip count a COMPLETED run
      * recorded; never surfaced as `observeMetrics`. */
@@ -212,7 +218,11 @@ export function deriveLiveProgress(input: LiveProgressInput): LiveProgress {
   const skippedWindows = Math.max(derivedSkips, recordedSkips);
 
   const state: LiveProgress["state"] =
-    anchorMs === null || windows.length === 0 ? "unknown" : lagSec <= LIVE_PROGRESS_CAUGHT_UP_S ? "caught_up" : "behind";
+    !LIVE_SOURCES.has(String(job.source ?? "")) || anchorMs === null || windows.length === 0
+      ? "unknown"
+      : lagSec <= LIVE_PROGRESS_CAUGHT_UP_S
+        ? "caught_up"
+        : "behind";
 
   // A terminal job has no live edge, so it always reads `unknown`; the lag is
   // kept (frozen) for an operator inspecting the API, never for the chip.
