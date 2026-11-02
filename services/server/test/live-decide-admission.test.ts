@@ -16,6 +16,7 @@ import { LiveDecideAdmission, LIVE_DECIDE_ADMISSION_TTL_MS } from "../src/live-d
 import { LiveObserver } from "../src/observe-loop";
 
 const seed = (ts: number) => ({ ts, tracks: [], objects: [], ocr: [] });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe("LiveDecideAdmission (ADAAAA-7758)", () => {
   it("(a) disabled: every live job is admitted, no arbitration", () => {
@@ -146,5 +147,83 @@ describe("LiveObserver admission skip (ADAAAA-7758)", () => {
     expect(payloads).toEqual([]);
     expect(observer.admissionSkipCount()).toBe(1);
     expect(observer.decideCalls()).toBe(0);
+  });
+});
+
+describe("LiveDecideAdmission in-flight depth sharing (ADAAAA-7771)", () => {
+  it("shares the decide admission across live streams: a lone stream gets the full depth, two get half, three degrade to serial", () => {
+    const gate = new LiveDecideAdmission({ enabled: false });
+    // maxPerStream = 4, admission = 2 (the shipped DECIDE_CONCURRENCY default)
+    gate.registerLiveJob("job-a");
+    expect(gate.activeLiveJobCount()).toBe(1);
+    // a LONE stream keeps the full per-stream depth (queueing above the 2-wide
+    // gate is harmless for one stream and buys coverage)
+    expect(gate.depthFor("job-a", 4, 2)).toBe(4);
+    gate.registerLiveJob("job-b");
+    // two streams share a 2-wide gate: one each (serial), NOT two each
+    expect(gate.depthFor("job-a", 4, 2)).toBe(1);
+    expect(gate.depthFor("job-b", 4, 2)).toBe(1);
+    gate.registerLiveJob("job-c");
+    expect(gate.depthFor("job-a", 4, 2)).toBe(1);
+    // a 8-wide admission (both decide cards) gives a lone stream its full depth
+    gate.releaseLiveJob("job-b");
+    gate.releaseLiveJob("job-c");
+    expect(gate.depthFor("job-a", 4, 8)).toBe(4);
+    // two streams over an 8-wide admission: 4 each
+    gate.registerLiveJob("job-b");
+    expect(gate.depthFor("job-a", 4, 8)).toBe(4);
+    expect(gate.depthFor("job-b", 4, 8)).toBe(4);
+    // ...and three streams: floor(8/3) = 2 each
+    gate.registerLiveJob("job-c");
+    expect(gate.depthFor("job-a", 4, 8)).toBe(2);
+    // a stream leaving restores the others' share
+    gate.releaseLiveJob("job-b");
+    gate.releaseLiveJob("job-c");
+    expect(gate.depthFor("job-a", 4, 8)).toBe(4);
+    // never below 1 even when the admission is crowded, and never above the cap
+    gate.registerLiveJob("job-b");
+    gate.registerLiveJob("job-c");
+    gate.registerLiveJob("job-d");
+    gate.registerLiveJob("job-e");
+    expect(gate.depthFor("job-a", 4, 2)).toBe(1);
+    expect(gate.depthFor("job-a", 1, 8)).toBe(1);
+    // release is idempotent
+    gate.releaseLiveJob("job-e");
+    gate.releaseLiveJob("job-e");
+    expect(gate.activeLiveJobCount()).toBe(4);
+  });
+
+  it("(f) LiveObserver: a shrinking depth budget is honoured as backpressure, not as oversubscription", async () => {
+    let active = 0;
+    let maxActive = 0;
+    let budget = 2;
+    const observer = new LiveObserver({
+      cadenceS: 0.2,
+      windowS: 1,
+      fps: 10,
+      maxInFlight: 4,
+      depthBudget: () => budget,
+      onDecideStaged: () => ({
+        decide: async () => {
+          active++;
+          maxActive = Math.max(maxActive, active);
+          await sleep(40);
+          active--;
+        },
+        accept: async () => false,
+      }),
+    });
+    const seedAt = (ts: number) => ({ ts, tracks: [], objects: [], ocr: [] });
+    for (let i = 0; i <= 10; i++) {
+      const ts = Number((i * 0.2).toFixed(6));
+      observer.record(ts, `f${ts}`, seedAt(ts) as any);
+      if (i === 5) budget = 1; // a second live stream arrives mid-pass
+      await observer.maybeFire(ts, false, 0);
+    }
+    await observer.flush();
+    expect(maxActive).toBeLessThanOrEqual(2);
+    expect(observer.maxInFlightDepth()).toBe(2);
+    expect(observer.backpressureSkipCount()).toBeGreaterThan(0);
+    expect(observer.currentDepthBudget()).toBe(1);
   });
 });

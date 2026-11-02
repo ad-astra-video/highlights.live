@@ -1090,6 +1090,14 @@ export interface AnalyzerConfig {
    * Wired from `LIVE_OBSERVE_IN_FLIGHT` (server config, default 4).
    */
   liveObserveInFlight?: number;
+  /**
+   * ADAAAA-7771: how many decide app-calls the box ADMITS at once — the
+   * orchestrated decide client's `DECIDE_CONCURRENCY` (default 2). The live
+   * in-flight depth is shared out of this budget (`depth = admission /
+   * activeLiveStreams`), so a crowded box degrades to the serial pass instead of
+   * queueing every stream behind a 2-wide gate. Wired from `DECIDE_CONCURRENCY`.
+   */
+  liveDecideAdmission?: number;
   /** ADAAAA-7028 Inc 2: persist the decide audit descriptor returned on the
    * decision (`_audit`) so the durable decide_audit index + decision-trail has
    * one row per frame group. Best-effort: a throwing onDecideAudit is caught
@@ -3899,6 +3907,15 @@ export async function analyzeJob(
   // accept path is shared via observeOnDecide -> acceptVideoDecision.
   const liveInvoke = cfg.liveObserveInFlight;
   const liveInFlight = Math.max(1, Math.floor(liveInvoke ?? 1));
+  // ADAAAA-7771: the in-flight depth is a SHARED budget. The orchestrated decide
+  // client admits only `DECIDE_CONCURRENCY` (default 2) decide app-calls at once,
+  // so depth above that admission does not add throughput — it only queues, and a
+  // queued window lands later (measured at depth 4: 1 stream 11.6 s/decide and
+  // 31.3 s lag; 2 streams 24.8-26.6 s and 50.8-52.0 s lag, worse than the serial
+  // 32.6-34.5 s). Each live stream therefore gets `admission / activeStreams`,
+  // never more than `liveObserveInFlight`.
+  const liveDecideAdmissionBudget = Math.max(1, Math.floor(cfg.liveDecideAdmission ?? 2));
+  if (liveInFlight > 1) liveDecideAdmission.registerLiveJob(cfg.jobId);
   const liveObserver =
     cfg.liveObserveLoop && cfg.decideWindowN === undefined
       ? new LiveObserver({
@@ -3924,6 +3941,7 @@ export async function analyzeJob(
           ...(liveInFlight > 1
             ? {
                 maxInFlight: liveInFlight,
+                depthBudget: () => liveDecideAdmission.depthFor(cfg.jobId, liveInFlight, liveDecideAdmissionBudget),
                 onDecideStaged: (payload: ObserveDecidePayload) => {
                   let verdict: Awaited<ReturnType<typeof observeDecideOnly>> = null;
                   return {
@@ -4265,6 +4283,9 @@ export async function analyzeJob(
     // ADAAAA-7758: give the live decide slot back so the next live job can take
     // it (idempotent; a no-op for a VOD pass, which never held it).
     liveDecideAdmission.release(cfg.jobId);
+    // ADAAAA-7771: this stream no longer shares the in-flight decide budget, so
+    // the remaining live streams get their full share back (idempotent).
+    liveDecideAdmission.releaseLiveJob(cfg.jobId);
     // Stop / un-pay every session we reserved this pass. Sessions the server
     // already released are a no-op on the orchestrator but still drop their
     // adapter payment refiller, so stopping them is required to avoid leaks.
