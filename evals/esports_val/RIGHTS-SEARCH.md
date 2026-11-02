@@ -57,15 +57,28 @@ whether it qualifies or not, so the next reader does not re-screen it.
 - file actually served: `…-240p.mp4`, **426x240**, h264 + aac 48 kHz stereo,
   435,639,290 bytes, sha256
   `3da355cc6ffc5e0fa5bbffa25c3025b165cee7bbddd3e96b8f0746a11801b264`.
-- **why it cannot carry labels:** the stream is an **observer/spectator** capture
-  — the on-screen banner reads *"You are a Spectator. Press 'Y' to change teams."*
-  at t=300 s and t=1500 s — and frame review at t=300/900/1500/2700 s found **no
-  legible numeric scoreboard and no kill feed**; the left overlay (event schedule
-  + chat) and the top-right webcam panel occupy the regions where a HUD would sit.
-  At 426x240 a score digit is ≈ 6 px tall, so no event instant is readable to the
-  ±1 s the label method needs. **No automated HUD parse was attempted**, because
-  the issue forbids one: labels parsed from the HUD and then scored against the
-  same parse is circular.
+- **what carries labels, and what does not:** the **SuperTuxKart tournament**
+  half (t ≳ 4245 s) carries a native-resolution **race clock** (`MM:SS.mmm`
+  readable at 1x), an official **event banner** (`Final lap!`,
+  `You finished the race in rank N`) and a **lap counter** (`N/3`) — that half is
+  labelled in `evals/supertuxkart_val/label-manifest.json` (15 objective events,
+  13 non-event windows; see `evals/supertuxkart_val/RESULTS.md`). The earlier
+  **Hypersomnia** half does **not** carry a label-grade event channel: at 426x240
+  the HUD bands read empty at 6x beyond the `onFOSS` brand, and the left overlay
+  (event schedule + chat) and the top-right webcam occupy where a HUD would sit,
+  so no event instant is readable to ±1 s there. That half is **unlabelled** and
+  is reported separately rather than scored.
+- **erratum (revision 2, from QA on [ADAAAA-7793](/ADAAAA/issues/ADAAAA-7793)):**
+  revision 1 described this as an *observer/spectator* capture quoting a banner
+  *"You are a Spectator. Press 'Y' to change teams."* at t=300 s and t=1500 s. QA
+  read those frames: the string is **not** there (only `onFOSS` and the schedule
+  panel), and a 10 s sweep finds "spectator" only twice, both in chat lines
+  (t≈5325, 5505). The quote is withdrawn; it was never the reason labels were
+  missing, and the SuperTuxKart clock was.
+- **No automated HUD parse was attempted**, because the issue forbids one:
+  labels parsed from the HUD and then scored against the same parse is circular.
+  The label pass reads text bands (clock / banner / lap counter) as a reader, and
+  the audio gate that scores them never sees the HUD.
 - the item's **1080p original is not served**: only a BitTorrent stub is listed
   (`…-1080p.torrent`) and the HTTP path for the 1080p file redirects to a **404**
   (verified). The 240p derivative is the whole obtainable file.
