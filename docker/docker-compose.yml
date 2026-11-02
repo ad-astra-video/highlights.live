@@ -551,6 +551,20 @@ services:
       # queue is backpressure, counted as backpressureSkippedWindows) and the lag
       # budget remains the outer bound. 1 restores the serial behaviour exactly.
       - LIVE_OBSERVE_IN_FLIGHT=${LIVE_OBSERVE_IN_FLIGHT:-4}
+      # ADAAAA-7777 (lever B): the three live decide per-call TRIM knobs, each
+      # defaulting to the pre-trim behaviour so an unset .env is byte-identical.
+      #   trim 1 LIVE_OBSERVE_MAX_FRAMES: the live window's frame budget (30 = the
+      #     historic shared cap). A live decide call is decode-bound, so this trims
+      #     the smaller per-frame multimodal prefill term. VOD keeps its own cap.
+      #   trim 2 LIVE_DECIDE_AUDIO_CLIP: 1 = the window audio clip rides the live
+      #     decide payload (so decide ASRs it). 0 drops the clip + transcript but
+      #     KEEPS the audio-energy level curve, which is the noise-change trigger
+      #     contract (LIVE_AUDIO_CONTEXT still gates that curve).
+      #   trim 3 LIVE_DECIDE_CONFIRM: 0 skips the Stage-2 /confirm dive on the live
+      #     rail only; DECIDE_CONFIRM_ENABLED stays the master gate for both rails.
+      - LIVE_OBSERVE_MAX_FRAMES=${LIVE_OBSERVE_MAX_FRAMES:-30}
+      - LIVE_DECIDE_AUDIO_CLIP=${LIVE_DECIDE_AUDIO_CLIP:-1}
+      - LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}
       # ADAAAA-7773: how many decide app-calls the orchestrated decide CLIENT
       # admits at once (`LivepeerClient` decideConcurrency). ADAAAA-7771 kept 4
       # windows in flight per stream but the client gate was still 2 (the compose
