@@ -741,6 +741,11 @@ export interface PipelineClient {
        * carried into this cadence decide so the model EXTENDS it. Empty on the
        * first tick. Absent = no prior summary (unchanged behaviour). */
       storySoFar?: string;
+      /** ADAAAA-7781: ask the decide service for the COMPACT verdict contract on
+       * the live rail (short prose, no evidenceAttested, 400-token cap). The live
+       * pass is decode-bound, so output tokens per call IS its throughput
+       * ceiling. Absent/false = the full long-form contract. */
+      compact?: boolean;
     }
   ): Promise<DecisionResult>;
   /**
