@@ -730,3 +730,60 @@ def test_client_shape_empty_frame_is_none():
     backend = Sam3Backend(predictor_factory=lambda: fake, clip_path="x.mp4")
     backend.advance({0: (0.2, 0.2, 0.4, 0.4)})
     assert backend.get(0) is None
+
+
+def test_jittered_carried_prompt_does_not_reset_a_lost_slot():
+    # ADAAAA-7345 MEASURED DEFECT (B6, clip 01e9e5ca): the mid-stream player
+    # slot is empty for a few frames while `track-player` re-detects it, and the
+    # caller's carried box differs from the seed by a couple of percent. The
+    # pre-fix rule compared prompts for EXACT equality, so every one of those
+    # boxes read as an EXTERNAL target change and issued `reset_session` — B6's
+    # timeline shows resets at frames 6, 12, 18, ... Each reset discarded SAM's
+    # hotstart buffer (hotstart_delay=15) before it could flush, so the stream
+    # yielded frames with no objects at all and the clip measured 0 masks.
+    frames = [{0: None}] * 40
+    fake, backend = _make(frames)
+    seed = (0.40, 0.30, 0.50, 0.46)
+    backend.advance({0: seed})
+    for f in range(1, 20):
+        # same player, box jittered 1% per frame (well inside PROMPT_KEEP_IOU)
+        jitter = 0.01 * f
+        backend.advance({0: (seed[0] - jitter, seed[1], seed[2] + jitter, seed[3])},
+                        frame_index=f)
+    assert fake.resets == 0, "a jittered carried prompt must not reset the session"
+
+
+def test_reanchor_bookkeeping_does_not_readd_every_frame():
+    # A re-anchor prompt is the prompt SAM now tracks, so the caller's next
+    # carried box must not be re-classified (and re-added) frame after frame.
+    fake, backend = _make([{0: None}] * 30)
+    box = (0.2, 0.2, 0.4, 0.4)
+    adds = {"n": 0}
+    orig = fake.handle_request
+
+    def counting(req):
+        if req.get("type") == "add_prompt":
+            adds["n"] += 1
+        return orig(req)
+
+    fake.handle_request = counting
+    for f in range(10):
+        backend.advance({0: box}, frame_index=f)
+    # initial seed + at most one re-anchor per missed frame (capped), never the
+    # double "external + re-anchor" pair the stale seed used to produce.
+    assert adds["n"] <= 1 + 10
+
+
+def test_propagate_failure_is_recorded_not_swallowed():
+    # A propagate that raises used to return {} silently, which is exactly how
+    # a session with unregistered prompts looked like an objectless clip.
+    class Boom(FakePredictor):
+        def handle_stream_request(self, req):
+            raise RuntimeError("No points are provided; please add points first")
+
+    fake = Boom([{0: (0.2, 0.2, 0.4, 0.4)}])
+    backend = Sam3Backend(predictor_factory=lambda: fake, clip_path="x.mp4")
+    backend.advance({0: (0.2, 0.2, 0.4, 0.4)})
+    assert backend.get(0) is None
+    assert backend.propagate_errors >= 1
+    assert "No points are provided" in (backend.last_propagate_error or "")
