@@ -30,7 +30,15 @@ A profile carries exactly seven fields (no others are part of the contract):
 | `evalSet` | The real held-out labeled manifest the type was measured on (`None` = unmeasured). Carries the eval label space and the recorded reference numbers. |
 
 Metadata that is not one of the seven: the profile's `key` (registry name) and
-derived helpers (`measured` is `eval_set is not None`).
+two derived, deliberately separate facts:
+
+- `measured` — a held-out labeled `eval_set` exists for the type (`eval_set is not None`);
+- `certified` — `eval_set.reference["qaCertification"]` records a **passing** QA
+  verdict. Keep them apart: an eval set legitimately exists before QA has read it,
+  so a gate on "the numbers were checked" reads `certified`, never `measured`
+  (the overload was flagged on ADAAAA-7806 and is pinned by a test). `False`
+  means *no passing verdict is recorded as data*, not "QA failed" — soccer's
+  certification lives in `evals/INC9-RESULTS.md` and reads False here.
 
 ## Loader and resolution
 
@@ -84,11 +92,22 @@ Shipped trigger subsets:
 |---|---|
 | `soccer` | `audio` |
 | `basketball` (ADAAAA-7765) | `audio` |
+| `american football` (ADAAAA-7767) | `audio`, `motion` |
+| `supertuxkart` (ADAAAA-7768, esports leg) | `audio`, `motion` |
 | `safe-default` | `audio` |
-| canned but unmeasured (`tennis`, `american football`, `valorant`) | `audio` |
+| canned but unmeasured (`tennis`, `valorant`) | `audio` |
+
+`supertuxkart` is the esports leg registered in ADAAAA-7768, under the title the
+rights-cleared manifest describes — never under the canned FPS key `valorant`,
+which keeps its `player/agent/weapon/head` roster and its strict `KeyError`. It
+declares `no-zone` (zone trigger dropped at construction) and carries
+`evals/supertuxkart_val/label-manifest.json`. Its measured audio result is
+negative: the noise gate does not transfer to the type (`evals/supertuxkart_val/RESULTS.md`),
+so no enablement follows from registering it, and the HUD/kill-feed trigger plus
+its oracle remain separate gated builds.
 
 Basketball is registered as a **measured** type in ADAAAA-7765: it carries
-`evalSet.manifest = evals/basketball_val/label-manifest.json` (14 frame-verified
+`evalSet.manifest = evals/basketball_val/label-manifest.json` (15 frame-verified
 scoring events and 13 verified non-event windows over 850 s of Q1 play from a
 CC BY 3.0 TBF broadcast) and `evalSet.vocabulary = ("score",)` because the
 scoring window is what was actually labelled — no frame-level detection boxes

@@ -180,7 +180,7 @@ HEAD.
 | 6 | Live detection latency p95 event→flag within the 1–5 s budget | **`not_captured`** — no GPU run, no served path touched. The only latency measured here is the **audio** onset→fire p95 (0.40 s), which is a different quantity and is not reported as live e2e latency. |
 | 7 | Tracking: 3 live / 8 VOD caps, ID persistence, IoU, roster caps exercised | **`not_captured`** — no esports track manifest (needs florence detections). Caps are declared and enforced by the profile (`live 3 / vod 8`, roster `("kart",)`), but no concurrency number is claimed. |
 | 8 | VOD depth `D_detail` against the +10 % bar | **`not_captured`** — no paired `--vod/--live` traces could be captured without a clip run. |
-| 9 | QA re-certification child exists and its verdict is recorded | **Filed this pass** (re-certification of the clauses that changed: 1, 2, 3, 4, 5, 10). The prior child [ADAAAA-7793](/ADAAAA/issues/ADAAAA-7793) FAILed clauses 2 and 6 on the superseded blocker and its verdict is recorded there; this issue is `blocked` on the new child, and `measured=True` for the type only when the run **and** QA's verdict both exist. |
+| 9 | QA re-certification child exists and its verdict is recorded | **Met (AC9)** — two children, both `done` with recorded verdicts: [ADAAAA-7793](/ADAAAA/issues/ADAAAA-7793) **FAILed** the superseded revision-1 blocker (its clause 2 is what falsified it and produced this revision), and [ADAAAA-7806](/ADAAAA/issues/ADAAAA-7806) **PASSed clauses 1, 2, 4, 5, 10** with clause 3 `not_captured` (out of scope there). Section 10 below. |
 | 10 | No automated HUD parse touched the labels; no synthetic/fixture/re-used-soccer number as an esports result | **Met** — no HUD parser exists in the branch; labels come from a text reader over the race clock / banner / lap counter and each event names its channel; the audio gate is independent of the HUD, so there is no circularity. The soccer reference is labelled as soccer and used only as an untouched reference; INC-9's 36.7 % appears only as "not used". |
 
 ## 5. What was NOT done, and why
@@ -227,13 +227,66 @@ ffmpeg -ss 4875 -i sh_onfoss_20230923_tournament.mp4 -frames:v 1 \
 # clock_4490 -> 01:00.5 ; banner_4875 -> "Final lap!"
 ```
 
+## 10. QA certification — PASS (ADAAAA-7806), and the one discrepancy it flagged
+
+Re-certification child [ADAAAA-7806](/ADAAAA/issues/ADAAAA-7806), Highlights.live
+Reviewer, verdict **PASS on clauses 1, 2, 4, 5, 10**; clause 3 `not_captured`
+(that child's scope excluded it). Certified against branch
+`feat/adaaa-7768-esports-eval` at `b6a90d2`.
+
+What QA independently established:
+
+- **Provenance re-derived** — sha256 `3da355cc…801b264`, 435,639,290 bytes,
+  duration 5950.549 s, 426x240 h264 + aac 48 kHz stereo.
+- **Independent pixel re-read** of the label set with its own OCR env (not the
+  reader dump behind this pass): race-clock zeros, the `Final lap!` banner, the
+  `finished the race in rank 6` banner, and the race-D `2/3 → 3/3` lap-counter
+  crossing all confirmed. The ~0.3–0.5 s offset it measured is seek/frame
+  alignment, not label drift.
+- **Every number reproduced** in section 2 — recall 0.80 / 1.00, in-window FP
+  0.9417 / 0.8957, whole-clip 0.9864, p50 0.20 s / p95 0.40 s / max 1.90 s,
+  13/13 non-event windows firing, 14.48 candidates/min vs 1.08 real events/min —
+  from a byte-identical fire list. Numbers it could not reproduce: **none**.
+- **Clause 1 grading call:** graded on the **15-event** reading because the
+  final-lap instants are themselves official on-screen reads. The narrow
+  (start + finish only) reading is **10** and remains a stated floor miss
+  (`coverage.narrow_reading_events = 10`) — the board can grade the narrow one.
+
+Two non-blocking notes QA raised, both recorded rather than argued away:
+
+1. `video.label_confidence_note` claims the default −3/+2 s window "covers every
+   bracket in this file". It does not literally: B-start is bracketed
+   `[4763.1, 4769]` (5.9 s) and C-start `[5125.0, 5130]` (5.0 s). The clock
+   arithmetic still places both starts where labelled, so this is an overstated
+   sentence, not a wrong instant.
+2. `coverage.race_spans_s` sums race spans to 832.6 s while start→finish is
+   ≈810 s (race D's span ends 5483 but its finish is 5490; race E's 5693 vs
+   5698). The ≥ 5 min / ≥ 2 races floor is met either way.
+
+**The discrepancy QA asked the Developer to fix, and the fix.** This record and
+`eval_set.reference.qaVerdict` used to say `measured=True` only once the run *and*
+QA's verdict both exist. The code never tested that: `GameProfile.measured`
+returned True from `eval_set` presence alone, so it read True before any verdict
+existed. Collapsing the two was the mistake — an eval set legitimately exists
+before QA has read it. The contract now separates them:
+
+- `GameProfile.measured` — a held-out labeled `eval_set` exists (measurement fact);
+- `GameProfile.certified` — `eval_set.reference["qaCertification"]` records a
+  **passing** QA verdict (review fact), also surfaced in `to_dict()`.
+
+`SUPERTUXKART_PROFILE.eval_set.reference["qaCertification"]` now reads
+`pass (ADAAAA-7806, label revision 1, 15-event reading)`, and
+`services/perceive/tests/test_game_profile.py` pins that a `pending` / `fail` /
+absent certification reads `certified == False` while `measured` stays True —
+so neither fact can masquerade as the other again. 32 tests pass.
+
 ## Next action and owner
 
-- **QA re-certification (Highlights.live Reviewer)**: the child filed from this
-  pass re-reads clauses 1, 2, 3, 4, 5 and 10 against the numbers above. A FAIL is
-  an acceptable verdict; the clause that matters most is whether the 15 events are
-  honestly read from the pixels (and whether the narrow 10-event reading is the
-  one the board should grade).
+- **QA re-certification — landed.** [ADAAAA-7806](/ADAAAA/issues/ADAAAA-7806)
+  returned **PASS on clauses 1, 2, 4, 5, 10** (clause 3 `not_captured` there),
+  reproducing every number in section 2 and re-reading the pixel evidence
+  independently. Section 10 records the verdict and the certification-vs-
+  measurement fix. No further QA pass is needed for these clauses.
 - **Owner of the next engineering step (Developer)**: the HUD/kill-feed trigger
   question is now answerable in the affirmative direction — audio does not gate
   this type. That build needs its own scoped, costed issue (CEO cost approval
