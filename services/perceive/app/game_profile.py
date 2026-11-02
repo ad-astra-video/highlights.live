@@ -632,6 +632,113 @@ AMERICAN_FOOTBALL_PROFILE = GameProfile(
     ),
 )
 
+# SuperTuxKart (ADAAAA-7768, per-type step 2 — the esports leg). Measured on the
+# rights-cleared CC0 onFOSS 2023-09-23 tournament livestream: the SuperTuxKart
+# tournament half carries a native-resolution race clock, an official event
+# banner ("Final lap!", "You finished the race in rank N") and a lap counter, so
+# `evals/supertuxkart_val/label-manifest.json` labels 15 objective events
+# (5 race starts / 5 final laps / 5 race finishes) across 5 races of one grand
+# prix (833 s of competitive play) plus 13 verified non-event windows.
+#
+# Why the key is the TITLE and not `valorant`: `valorant` is the canned FPS entry
+# with the vocabulary `[player, agent, weapon, head]`. The footage is a kart
+# racer. Registering it under `valorant` would score the closed vocabulary
+# against classes that do not describe the video, so `valorant` stays exactly as
+# it is (canned, unmeasured) and `supertuxkart` is its own registered key.
+#
+# What this profile does NOT claim:
+# - No frame-level detection slice was labelled, so `evalSet.vocabulary` is the
+#   EVENT label space ("objective_event"), not a detection roster, and
+#   `detect_precision` has no esports label space yet (`detectionSlice: null`).
+# - No HUD/kill-feed trigger and no corroboration oracle: both are gated
+#   follow-ons on ADAAAA-7768, and building a HUD parser here would make the
+#   measurement circular.
+# - The audio operating point is the corpus-wide default, recorded as the
+#   BASELINE measured on this clip; nothing was tuned on the type.
+# - The motion trigger is in the subset because the type's measured subset is
+#   audio+motion, but its operating point is the structural
+#   `stage_a.MOTION_MIN_STEP`, not a kart number: motion needs florence track
+#   steps and this pass produced no detection slice, so it was not scored.
+# - Not reachable from a game hint: `supertuxkart` is deliberately absent from
+#   `florence._GAME_VOCABULARIES`, so `profile_for` can never bind it to a live
+#   session and registering it cannot change what the detector looks for.
+_SUPERTUXKART_EVAL_VOCABULARY: Tuple[str, ...] = ("objective_event",)
+
+_SUPERTUXKART_EVAL_REFERENCE: Mapping[str, Any] = {
+    "source": "evals/supertuxkart_val/label-manifest.json (ADAAAA-7768)",
+    "clipSpanS": 5950,
+    "competitivePlayS": 833,
+    "races": 5,
+    "objectiveEvents": 15,
+    "nonEventWindows": 13,
+    "rightsBasis": "CC0 1.0 (onFOSS, via the Internet Archive)",
+    "detectionSlice": None,
+    # ADAAAA-7768 measured run (evals/supertuxkart_val/RESULTS.md).
+    # Baseline at the profile's UNCHANGED audio defaults; not tuned on the type.
+    "audioHarness": {
+        "harness": "evals/measure_audio_recall.py",
+        # Pure DSP (ffmpeg decode + numpy gate): no GPU job was spent on a rule
+        # that cannot use one.
+        "host": "local CPU (pure DSP harness; no GPU job needed for this rule)",
+        "clip": "sh_onfoss_20230923_tournament.mp4 (5950 s, CC0 1.0)",
+        "labelRevision": 1,
+        "thresholdId": "stageA/burst/1.3x/0.3s",
+        "matchWindowS": [-3.0, 2.0],
+        "events": 15,
+        "candidates": 1392,
+        "candidatesPerMinute": 14.0,
+        "recall": 0.8,
+        "fpRate": 0.9864,
+        "p50S": 0.2,
+        "p95S": 0.4,
+        "maxLatencyS": 1.9,
+        # The certified denominators are the labelled SuperTuxKart window: fires
+        # in the unlabelled Hypersomnia half are NOT certified non-events, so
+        # the honest primary FP rate is the in-window one.
+        "labelledWindowS": [4380, 5731],
+        "labelledWindowCandidates": 326,
+        "labelledWindowCandidatesPerMinute": 14.48,
+        "labelledWindowFpRate": 0.9417,
+        "negativeWindowFpRate": 1.0,
+        "negativeWindowsWithFire": 13,
+        "negativeWindowFires": 75,
+        # label-tolerance sensitivity: the three misses sit 2.45-2.50 s after
+        # their instant, i.e. just outside the default +2 s post window. Recall
+        # is timing-sensitive; the FP rate is not (0.94 -> 0.90 in-window).
+        "recallAtDefaultWindow": 0.8,
+        "recallAtGenerousWindow": 1.0,
+        "labelledWindowFpRateAtGenerousWindow": 0.8957,
+        "fpCeiling": 0.1,
+        "fpCeilingMet": False,
+        "result": "evals/supertuxkart_val/RESULTS.md",
+    },
+    "qaCertification": "pending (re-certification child filed from ADAAAA-7768)",
+    "qaVerdict": "not yet recorded — measured=true only once the run AND QA's verdict exist",
+}
+
+SUPERTUXKART_PROFILE = GameProfile(
+    key="supertuxkart",
+    # The type's tracking subject. No detection measurement exists for it, so
+    # this is not claimed as a measured detection roster (see the comment above).
+    vocabulary=("kart",),
+    # A kart race has no scoring zone, so the profile declares `no-zone` and the
+    # detection-in-zone trigger is dropped at construction.
+    zone_model=ZoneModel.no_zone(),
+    # The HUD/kill-feed oracle is an explicit out-of-scope follow-on: no oracle
+    # is claimed, and none may be built from these labels.
+    corroboration_oracle=None,
+    # Measured subset for the type: the audio noise gate plus the tracker motion
+    # trigger (motion not separately scored — no detection slice this pass).
+    triggers=TriggerSubset.of(TRIGGER_AUDIO, TRIGGER_MOTION),
+    audio_thresholds=AudioThresholds(),
+    tracking_roster=TrackingRoster(labels=("kart",)),
+    eval_set=EvalSet(
+        manifest="evals/supertuxkart_val/label-manifest.json",
+        vocabulary=_SUPERTUXKART_EVAL_VOCABULARY,
+        reference=_SUPERTUXKART_EVAL_REFERENCE,
+    ),
+)
+
 # Unmapped/unknown hint: today's generic closed roster, no zone model, audio
 # trigger only. `vocabulary=()` means "no type-specific vocabulary" so the
 # legacy resolution chain (preferLabels -> SAFE_DEFAULT_VOCABULARY) still runs.
@@ -660,6 +767,11 @@ PROFILES: Mapping[str, GameProfile] = {
     # already keeps a US football game out of the soccer roster).
     "american football": AMERICAN_FOOTBALL_PROFILE,
     "football": AMERICAN_FOOTBALL_PROFILE,
+    # Esports leg (ADAAAA-7768): registered under the TITLE the rights-cleared
+    # manifest actually describes (SuperTuxKart), never under the canned FPS key
+    # `valorant` -- that entry keeps its `player/agent/weapon/head` vocabulary
+    # and stays unmeasured.
+    "supertuxkart": SUPERTUXKART_PROFILE,
 }
 
 
@@ -770,6 +882,7 @@ __all__ = [
     "SOCCER_PROFILE",
     "BASKETBALL_PROFILE",
     "AMERICAN_FOOTBALL_PROFILE",
+    "SUPERTUXKART_PROFILE",
     "SAFE_DEFAULT_PROFILE",
     "DEFAULT_PROFILE",
     "PROFILES",

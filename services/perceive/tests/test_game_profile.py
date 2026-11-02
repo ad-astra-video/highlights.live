@@ -28,6 +28,7 @@ from app.game_profile import (
     BASKETBALL_PROFILE,
     DEFAULT_PROFILE,
     ORACLE_SCOREBOARD_OCR,
+    PROFILES,
     SOCCER_PROFILE,
     TRIGGER_AUDIO,
     TRIGGER_BALL_VELOCITY,
@@ -203,28 +204,21 @@ def test_tennis_stays_unmeasured_until_a_rights_cleared_manifest_is_committed():
 
 
 def test_esports_stays_unmeasured_until_a_rights_cleared_manifest_is_committed():
-    """ADAAAA-7768: esports registration is tied to a real, rights-cleared manifest.
+    """ADAAAA-7768: `valorant` is never overloaded with a roster it does not describe.
 
-    Stage 1 of the esports pass DID find a rights-cleared clip (CC0 onFOSS
-    2023-09-23 tournament livestream), but frame review shows it is an
-    observer-mode 426x240 derivative with no legible numeric scoreboard or kill
-    feed, so it carries no pixel-readable event clock and cannot produce the
-    issue's >= 15 verified kill/objective events + >= 10 non-event windows.
-    `evals/esports_val/VERDICT.md` therefore records `not_captured`.
+    Stage 1 of the esports pass found a rights-cleared clip (CC0 onFOSS
+    2023-09-23 tournament livestream). QA re-certification on ADAAAA-7793
+    corrected this pass's original reading: the SuperTuxKart half *does* carry a
+    native-resolution race clock, an event banner and a lap counter, so that half
+    is labelled at `evals/supertuxkart_val/` and registered under its own key,
+    `supertuxkart`.
 
-    Registering `valorant` (or any esports key) without that manifest would
-    invent evidence the gate is missing, and overloading `valorant` with a
-    SuperTuxKart/Hypersomnia roster would score the closed vocabulary against
-    classes that do not describe the video. So the canned esports profile stays
-    unmeasured and the strict KeyError is retained; once a real manifest is
-    committed the registration assertions in the basketball test are the model.
+    What must never happen is registering `valorant` off that manifest: the
+    footage is a kart racer, and the canned FPS roster (player/agent/weapon/head)
+    does not describe the video. So `valorant` keeps its strict KeyError and its
+    canned unmeasured profile, and the esports leg is registered under the title
+    the manifest actually describes.
     """
-    manifests = [
-        os.path.join(_REPO_ROOT, "evals", "esports_val", "label-manifest.json"),
-        os.path.join(_REPO_ROOT, "evals", "valorant_val", "label-manifest.json"),
-    ]
-    if any(os.path.exists(m) for m in manifests):
-        pytest.skip("an esports manifest is committed; the registration tests own that state")
     with pytest.raises(KeyError):
         load_game_profile("valorant")
     prof = profile_for("valorant")
@@ -236,7 +230,11 @@ def test_esports_stays_unmeasured_until_a_rights_cleared_manifest_is_committed()
     assert prof.vocabulary == ("player", "agent", "weapon", "head")
     verdict = os.path.join(_REPO_ROOT, "evals", "esports_val", "VERDICT.md")
     with open(verdict, encoding="utf-8") as fh:
-        assert "not_captured" in fh.read()
+        text = fh.read()
+    # revision 2 superseded revision 1's blocker (ADAAAA-7793) and kept the four
+    # genuinely unmeasured clauses as not_captured
+    assert "supersede" in text.lower()
+    assert "not_captured" in text
 
 
 def test_basketball_is_registered_and_measured_against_its_own_eval_set():
@@ -783,3 +781,91 @@ def test_american_football_eval_set_matches_the_committed_labels_and_run():
     # a stale "awaiting re-certification" can never outlive the verdict
     assert ref["qaCertification"] == "pass (ADAAAA-7785, label revision 2)"
     assert "fpCeilingMet false" in ref["qaVerdict"]
+
+
+# --- 9. esports leg: SuperTuxKart (ADAAAA-7768, per-type step 2) -----------
+
+
+def test_supertuxkart_is_registered_and_measured_against_its_own_eval_set():
+    """ADAAAA-7768 AC2: the title key resolves and carries its own held-out set.
+
+    The esports leg registers under the TITLE its rights-cleared manifest
+    actually describes, so `load_game_profile("supertuxkart")` resolves while the
+    canned FPS key `valorant` keeps its strict KeyError.
+    """
+    from app.game_profile import SUPERTUXKART_PROFILE
+
+    prof = load_game_profile("supertuxkart")
+    assert prof.key == "supertuxkart"
+    assert prof is SUPERTUXKART_PROFILE
+    assert prof.measured is True
+    assert prof.eval_set is not None
+    assert prof.eval_set.manifest == "evals/supertuxkart_val/label-manifest.json"
+    # the eval label space is the EVENT class that was labelled, not a detection
+    # roster: no box slice exists for this type
+    assert prof.eval_set.vocabulary == ("objective_event",)
+    assert prof.eval_set.reference["detectionSlice"] is None
+    # `valorant` is untouched: no roster was transplanted onto the canned FPS key
+    assert "valorant" not in PROFILES
+    assert profile_for("valorant").eval_set is None
+
+
+def test_supertuxkart_no_zone_drops_the_zone_trigger_at_construction():
+    """`no-zone` is a declared property of an esports type with no scoring zone."""
+    prof = load_game_profile("supertuxkart")
+    assert prof.zone_model.is_no_zone
+    assert prof.zone_model.zones == ()
+    assert prof.triggers.names() == (TRIGGER_MOTION, TRIGGER_AUDIO)
+    assert prof.allows(TRIGGER_DETECTION_IN_ZONE) is False
+    forced = prof.with_triggers(
+        TriggerSubset.of(TRIGGER_MOTION, TRIGGER_AUDIO, TRIGGER_DETECTION_IN_ZONE)
+    )
+    assert forced.allows(TRIGGER_DETECTION_IN_ZONE) is False
+    # the HUD/kill-feed oracle is an out-of-scope follow-on: none is claimed
+    assert prof.corroboration_oracle is None
+    # registering the type does not change what the detector looks for: the key
+    # is not reachable from a game hint / plan category
+    assert profile_for("supertuxkart").key == "safe-default"
+
+
+def test_supertuxkart_eval_set_matches_the_committed_labels_and_run():
+    """The registered numbers ARE the committed labels'/run's numbers (drift guard)."""
+    import json
+
+    stk = os.path.join(_REPO_ROOT, "evals", "supertuxkart_val")
+    man = json.load(open(os.path.join(stk, "label-manifest.json")))
+    labels = json.load(open(os.path.join(stk, "audio-labels.json")))
+    run_json = json.load(open(os.path.join(stk, "run", "stk_audio_recall.json")))
+
+    events = [w for w in man["windows"] if w["ground_truth"] != "no_objective_event"]
+    negs = [w for w in man["windows"] if w["ground_truth"] == "no_objective_event"]
+    ref = load_game_profile("supertuxkart").eval_set.reference
+    assert len(events) == ref["objectiveEvents"] == 15
+    assert len(negs) == ref["nonEventWindows"] == 13
+    assert man["coverage"]["objective_events_floor_met"] is True
+    assert man["coverage"]["non_event_windows_floor_met"] is True
+    # the narrow reading (start + finish only) is recorded, not quietly dropped
+    assert man["coverage"]["narrow_reading_events"] == 10
+
+    # no label came from a HUD/kill-feed parse: every window names its channel
+    channels = {w.get("channel") for w in events}
+    assert channels == {"race-clock-zero", "banner", "lap-counter", "clock-stop"}
+
+    cls = [c for c in labels["classes"] if c["id"] == "objective_event"][0]
+    assert sorted(cls["onsets"]) == sorted(w["instant"] for w in events)
+    assert len(cls["negatives"]) == len(negs)
+
+    # the measured run is recorded as data, including that it MISSED the ceiling
+    run = ref["audioHarness"]
+    measured = run_json["classes"][0]
+    assert run["events"] == measured["events"] == 15
+    assert run["candidates"] == measured["candidates"] == 1392
+    assert run["recall"] == pytest.approx(measured["recall"]) == pytest.approx(0.8)
+    assert run["fpRate"] == pytest.approx(measured["fp_rate"], abs=1e-4)
+    assert run["fpRate"] > 9 * run["fpCeiling"]
+    assert run["fpCeiling"] == 0.10 and run["fpCeilingMet"] is False
+    # recall is timing-sensitive, the FP rate is not (RESULTS.md section 1a)
+    assert run["recallAtGenerousWindow"] == 1.0
+    assert run["labelledWindowFpRateAtGenerousWindow"] > 8 * run["fpCeiling"]
+    # the certification is not claimed before QA records it
+    assert ref["qaCertification"].startswith("pending")
