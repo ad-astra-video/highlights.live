@@ -3,6 +3,7 @@ import { Square, Play, Share2 } from "lucide-react";
 import { api } from "../lib/api";
 import { captureEndedNotice } from "../lib/captureLoss";
 import { useSettings } from "../lib/settings";
+import { blobToBase64 } from "../lib/blobToBase64";
 
 const MAX_RECONNECT = 6; // consecutive media reconnect attempts before falling back to /ingest
 // Transient /jobs/:id/media failures (e.g. HTTP 503 `no capacity available for
@@ -546,15 +547,6 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       {error && <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{error}</div>}
     </div>
   );
-}
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(String(fr.result).split(",")[1]);
-    fr.onerror = reject;
-    fr.readAsDataURL(blob);
-  });
 }
 
 function sleep(ms: number): Promise<void> {
