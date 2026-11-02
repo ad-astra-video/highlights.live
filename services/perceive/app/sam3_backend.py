@@ -215,6 +215,7 @@ class Sam3Backend(SamBackend):
         # last TIGHT mask bbox per slot — the mask-derived prompt used on
         # re-anchor instead of the stale detection/seed box.
         self._last_mask_box: Dict[int, BBox] = {}
+        self._last_mask_ids: List[int] = []
         self._prompt_source: Dict[int, str] = {}
         # ADAAAA-7820 instrumentation: per-frame slot timeline, only recorded
         # when PERCEIVE_SAM_DEBUG is set so the production path is unchanged.
@@ -335,6 +336,7 @@ class Sam3Backend(SamBackend):
         # the slot stay dark for the rest of the clip.
         self._removed_obj_ids = {int(x) for x in (out.get("removed_obj_ids") or [])}
         obj_id_to_mask = out.get("obj_id_to_mask") or {}
+        self._last_mask_ids = sorted(int(o) for o in obj_id_to_mask)
         parsed: Dict[int, Optional[BBox]] = {}
         for oid, m in obj_id_to_mask.items():
             oid = int(oid)
@@ -462,6 +464,7 @@ class Sam3Backend(SamBackend):
             "frame": int(self._frame_idx - 1),
             "reset": bool(reset),
             "removed_obj_ids": sorted(self._removed_obj_ids),
+            "mask_obj_ids": list(self._last_mask_ids),
             "slots": slots,
         })
         if len(self.timeline) > 4000:  # bound memory on very long clips
