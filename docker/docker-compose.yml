@@ -233,6 +233,70 @@ services:
               capabilities: [gpu]
     networks: [hl]
 
+  # ADAAAA-7769: SECOND decide VLM worker on the idle 24 GB RTX 3090 Ti (GPU 0),
+  # the zero-purchase capacity lever (CEO direction on ADAAAA-7757). Same image,
+  # model volume and flags as `gemma` at the PRODUCTION vision budget (280 soft
+  # tokens/frame) so the detection contract is unchanged; only the card differs.
+  # `decide-b` fronts it and `decide-router` load-balances the two decide
+  # workers, which is what lifts the cadence-bound ~28% live coverage ceiling.
+  #
+  # VRAM gate: perceive lives on GPU 0 too (~5.4 GB resident). The 24 GB card is
+  # therefore shared: GEMMA_B_GPU_MEM_UTIL=0.65 requests ~16 GB, leaving ~8.5 GB
+  # free (perceive + ~3 GB headroom) — a perceive OOM fails the experiment, so
+  # raise this only after checking `nvidia-smi` on GPU 0.
+  # KV dtype: the 16 GB card runs fp8 KV; on Ampere (sm_86) this vLLM build may
+  # reject fp8, in which case GEMMA_B_KV_CACHE_DTYPE=float16 in docker/.env is
+  # the documented fallback (`f16` is not a valid value on this build).
+  gemma-b:
+    image: ${GEMMA_IMAGE:-vllm/vllm-openai:latest}
+    container_name: highlights-gemma-b
+    command:
+      - /models/gemma-4-12b-it-qat-AWQ-INT4
+      - --served-model-name
+      - ${GEMMA_MODEL:-cyankiwi/gemma-4-12B-it-qat-AWQ-INT4}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8088"
+      # Same concurrency as `gemma` (4 slots), so the pair is a true 2x capacity
+      # increase rather than a re-tune of one worker.
+      - --max-num-seqs
+      - "${GEMMA_MAX_CONCURRENCY:-4}"
+      - --max-model-len
+      - "${GEMMA_MAX_MODEL_LEN:-32768}"
+      - --gpu-memory-utilization
+      - "${GEMMA_B_GPU_MEM_UTIL:-0.65}"
+      - --kv-cache-dtype
+      - "${GEMMA_B_KV_CACHE_DTYPE:-fp8}"
+      - --limit-mm-per-prompt
+      - '{"image": 64, "audio": 1, "video": 0}'
+      # PRODUCTION vision budget: 280 soft tokens per frame, same as `gemma`
+      # (do NOT lower it here — a lower budget changes detection quality and
+      # would confound the capacity measurement).
+      - --mm-processor-kwargs
+      - "{\"max_soft_tokens\": ${GEMMA_MAX_SOFT_TOKENS:-280}}"
+      - --trust-remote-code
+    volumes:
+      - ./models:/models:ro
+    expose: ["8088"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8088/health || exit 1"]
+      interval: 15s
+      timeout: 15s
+      retries: 60
+      # First INT4 load on the 3090 Ti is slower than on the 5070 Ti; keep the
+      # start period generous so a slow load is not mistaken for a crash.
+      start_period: 600s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # Pinned to GPU 0 (RTX 3090 Ti, 24 GB) which perceive also uses.
+            - driver: nvidia
+              device_ids: ["${GEMMA_B_GPU_ID:-0}"]
+              capabilities: [gpu]
+    networks: [hl]
+
   # Cheap ASR endpoint (ADAAAA-6314 Path 2): faster-whisper /transcribe. The
   # decide service POSTs the trigger-window audio here and injects the returned
   # text into the gemma decide prompt. CPU-only (ASR_DEVICE=cpu) small model so
@@ -335,6 +399,64 @@ services:
               capabilities: [gpu]
     networks: [hl]
 
+  # ADAAAA-7769: second decide worker, identical build/image to `decide` but
+  # pointed at the GPU-0 VLM (`gemma-b`). It carries NO GPU reservation: decide
+  # is a thin HTTP client of the VLM (DECIDE_MODE=gemma), so all GPU compute for
+  # this worker happens inside `gemma-b`.
+  decide-b:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.decide
+    container_name: highlights-decide-b
+    expose: ["8081"]
+    environment:
+      - DECIDE_MODE=${DECIDE_MODE:-gemma}
+      - GEMMA_URL=http://gemma-b:8088
+      - GEMMA_MODEL=${GEMMA_MODEL:-cyankiwi/gemma-4-12B-it-qat-AWQ-INT4}
+      - ASR_URL=${ASR_URL:-http://asr:8082}
+      - ASR_TASK=${ASR_TASK:-transcribe}
+      - AUDIO_CONTEXT=${AUDIO_CONTEXT:-1}
+      - GEMMA_SEND_AUDIO=${GEMMA_SEND_AUDIO:-0}
+      - DECIDE_LOG_LEVEL=${DECIDE_LOG_LEVEL:-INFO}
+      - DECIDE_NOTABILITY_MIN=${DECIDE_NOTABILITY_MIN:-60}
+      - DECIDE_AUDIT_DIR=${DECIDE_AUDIT_DIR:-/srv/decide/audit}
+      - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-1}
+      - DECIDE_CONFIRM_EXTRA_WINDOW_S=${DECIDE_CONFIRM_EXTRA_WINDOW_S:-4}
+    depends_on:
+      gemma-b:
+        condition: service_healthy
+      asr:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8081/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks: [hl]
+
+  # ADAAAA-7769: routing layer. The server keeps talking to ONE decide origin
+  # (`DECIDE_URL`), so the 3 s window, the cadence and the detection contract are
+  # untouched; nginx spreads decide HTTP requests across the two workers with
+  # `least_conn`. Single-worker fallback is automatic: a backend that fails twice
+  # is taken out for fail_timeout, and proxy_next_upstream retries the request on
+  # the remaining healthy backend.
+  decide-router:
+    image: ${DECIDE_ROUTER_IMAGE:-nginx:alpine}
+    container_name: highlights-decide-router
+    volumes:
+      - ./decide-router.conf:/etc/nginx/nginx.conf:ro
+    expose: ["8081"]
+    depends_on:
+      decide:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/nginx-health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [hl]
+
   server:
     build:
       context: ..
@@ -396,8 +518,13 @@ services:
       # ADAAAA-6372/6373: the server is the VOD payer and calls `${decideUrl}/app/highlight`
       # (livepeer-adapter.ts). config.ts reads `decideUrl: env.DECIDE_URL` with NO default and
       # falls back to the server's own relative path -> 404 `decide failed`. Default to the
-      # compose decide service so it survives a server recreate; config.ts is left unchanged.
-      - DECIDE_URL=${DECIDE_URL:-http://decide:8081}
+      # compose decide-router so it survives a server recreate; config.ts is left unchanged.
+      # ADAAAA-7769: DECIDE_URL now points at `decide-router`, the nginx least_conn
+      # upstream of `decide` (GPU 1) and `decide-b` (GPU 0). Still ONE decide origin
+      # from the server's point of view — the detection contract is unchanged.
+      # docker/.env must set DECIDE_URL=http://decide-router:8081 too, because the
+      # box .env overrides this default.
+      - DECIDE_URL=${DECIDE_URL:-http://decide-router:8081}
       # ADAAAA-6314 Path 2 (live): forward the surrounding audio clip on LIVE
       # trigger candidates so the decide prompt gets ASR'd audio context. Off by
       # default so the deployed live baseline sends no new payload until an
