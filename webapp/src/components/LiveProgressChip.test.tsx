@@ -10,6 +10,10 @@ import type { LiveProgress } from "../lib/jobDetail";
 // more than the 5 s threshold — the run's lag table shows 8.2 s on the fastest
 // window and 21-29 s afterwards), so the caught-up branch is pinned here instead
 // of by a screenshot. Both states are asserted on the real rendered markup.
+//
+// ADAAAA-7759: the stale branch. The chip keeps the last honest lag number when
+// the light read fails, but past the stale threshold it must say so in the
+// markup (`data-live-progress-stale`) rather than look live forever.
 
 const base: LiveProgress = {
   liveEdgeTs: 60,
@@ -20,8 +24,8 @@ const base: LiveProgress = {
   updatedAt: "2026-11-02T04:01:00.000Z",
 };
 
-function render(p: LiveProgress | null | undefined): string {
-  return renderToStaticMarkup(React.createElement(LiveProgressChip, { progress: p }));
+function render(p: LiveProgress | null | undefined, staleSec = 0): string {
+  return renderToStaticMarkup(React.createElement(LiveProgressChip, { progress: p, staleSec }));
 }
 
 describe("LiveProgressChip (ADAAAA-7741 AC3/AC4/AC6)", () => {
@@ -29,6 +33,7 @@ describe("LiveProgressChip (ADAAAA-7741 AC3/AC4/AC6)", () => {
     const html = render(base);
     expect(html).toContain("Processing - 26 s behind live");
     expect(html).toContain('data-live-progress-state="behind"');
+    expect(html).toContain('data-live-progress-stale="false"');
   });
 
   it("renders the caught-up state with the lag seconds", () => {
@@ -46,5 +51,19 @@ describe("LiveProgressChip (ADAAAA-7741 AC3/AC4/AC6)", () => {
     expect(render(undefined)).toBe("");
     expect(render(null)).toBe("");
     expect(render({ ...base, state: "unknown" })).toBe("");
+  });
+
+  it("states staleness in the markup when the light read keeps failing (ADAAAA-7759)", () => {
+    const html = render(base, 21);
+    expect(html).toContain("Processing - 26 s behind live");
+    expect(html).toContain("stale: last read 21 s ago");
+    expect(html).toContain('data-live-progress-stale="true"');
+    expect(html).toContain("staleSec=21");
+  });
+
+  it("renders an explicit unavailable chip when no projection arrived and reads fail", () => {
+    const html = render({ ...base, state: "unknown" }, 21);
+    expect(html).toContain("Processing - live lag unavailable");
+    expect(html).toContain('data-live-progress-state="unavailable"');
   });
 });

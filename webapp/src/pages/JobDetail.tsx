@@ -41,6 +41,12 @@ import {
 import { LiveProgressChip } from "../components/LiveProgressChip";
 import { CaptureNotice } from "../components/CaptureNotice";
 import {
+  LIVE_PROGRESS_STALE_AFTER_FAILED_READS,
+  LIVE_READ_HEALTH_FRESH,
+  nextLiveReadHealth,
+  type LiveReadHealth,
+} from "../lib/liveProgress";
+import {
   drawFrameWithBoxes,
   drawFrameFullBleed,
   coverTransform,
@@ -1189,6 +1195,13 @@ export function JobDetail() {
   // composite refresh and the SSE-driven deltas keep feeding it too: the effect
   // below always keeps the NEWER of the two readings.
   const [liveProgress, setLiveProgress] = useState<LiveProgress | undefined>();
+  // ADAAAA-7759: health of that light read. A failed read keeps the last honest
+  // number (by design), but the chip must say when the reading has gone stale —
+  // QA saw one source of failed reads hold a 36 s number for ~21 s while the
+  // pipeline kept moving, which reads as a silent freeze. `staleSec` is folded
+  // from every light-read outcome; the banner below appears once the failure is
+  // persistent (3 consecutive misses = 15 s).
+  const [lightHealth, setLightHealth] = useState<LiveReadHealth>(LIVE_READ_HEALTH_FRESH);
   useEffect(() => {
     const lp = detail?.liveProgress;
     if (!lp) return;
@@ -1203,10 +1216,21 @@ export function JobDetail() {
       onTick: () => {
         api<{ liveProgress?: LiveProgress }>(`/jobs/${id}`)
           .then((r) => {
-            if (aliveRef.current && r?.liveProgress) setLiveProgress(r.liveProgress);
+            if (!aliveRef.current) return;
+            setLightHealth((h: LiveReadHealth) => nextLiveReadHealth(h, { ok: true, at: Date.now() }));
+            if (r?.liveProgress) setLiveProgress(r.liveProgress);
           })
-          // Best-effort: a failed light read keeps the last honest reading.
-          .catch(() => {});
+          // Best-effort: a failed light read keeps the last honest reading, and
+          // ADAAAA-7759 makes that failure stated (stale chip + banner) rather
+          // than silent. A 400 here is an edge/client rejection (the route
+          // itself has no 400 path), so it is reported with its HTTP status.
+          .catch((e: any) => {
+            if (!aliveRef.current) return;
+            const reason = e?.status ? `HTTP ${e.status}` : String(e?.message || "network error");
+            setLightHealth((h: LiveReadHealth) =>
+              nextLiveReadHealth(h, { ok: false, at: Date.now(), error: reason }),
+            );
+          });
       },
     });
     return () => poll.stop();
@@ -1630,10 +1654,26 @@ export function JobDetail() {
                   refreshed by its own 5 s light job poll (see the poll effect).
                   In-flight only — a terminal job's completion state is the status
                   chip above, so a frozen lag number is never left on screen. */}
-              {isJobInFlight(detail.job.status) && <LiveProgressChip progress={liveProgress} />}
+              {isJobInFlight(detail.job.status) && (
+                <LiveProgressChip progress={liveProgress} staleSec={lightHealth.staleSec} />
+              )}
               {/* ADAAAA-7700: WHY the job failed, as its own attributed chip. */}
               <FailureReasonChip reason={detail.job.failureReason} />
             </div>
+            {/* ADAAAA-7759: once the light lag read has failed 3 consecutive
+                times (15 s) the failure is stated on the same banner pattern as
+                the rest of the page, so a stale chip never reads as a live one
+                while the pipeline keeps moving. Cleared by the next good read. */}
+            {isJobInFlight(detail.job.status) &&
+              lightHealth.consecutiveFailures >= LIVE_PROGRESS_STALE_AFTER_FAILED_READS && (
+                <div
+                  className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red"
+                  data-live-progress-error
+                >
+                  Live lag refresh failing ({lightHealth.lastError ?? "read failed"}) — the chip shows the last reading
+                  from {lightHealth.staleSec} s ago. The job keeps processing.
+                </div>
+              )}
             <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2">
               {/* ADAAAA-7727: Source/Game/Frames are customer-facing; the
                   decide/candidates/Stage-A/cost/partition readouts inside the
