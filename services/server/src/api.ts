@@ -4199,6 +4199,10 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // stays wired through `audioContext`; only the raw clip + its ASR transcript
     // are gated here.
     decideAudioClip: cfg.liveDecideAudioClip,
+    // ADAAAA-7781: the COMPACT verdict contract on the live rail only. The live
+    // pass is decode-bound, so the per-call output-token count IS its throughput
+    // ceiling; VOD keeps the full long-form contract.
+    liveDecideCompact: cfg.liveDecideCompact,
     // ADAAAA-7777 (lever B, trim 1): the live window's frame budget (default 30,
     // the historic shared cap). A live decide call's wall time is decode-bound,
     // so this trims the smaller per-frame prefill term without touching VOD.

@@ -988,3 +988,130 @@ def test_outcome_is_highlight_only_scoring_play_surfaces():
     assert outcome_is_highlight("near_miss") is False
     assert outcome_is_highlight("big_play") is False
     assert outcome_is_highlight("not_highlight") is False
+
+
+# --- ADAAAA-7781: COMPACT live decide contract ------------------------------
+# The live rail's decide throughput is decode-bound, so the per-call OUTPUT token
+# count is the throughput ceiling (measured: p50 9.4 s and ~1340 chars per verdict;
+# the box's gemma pair decodes ~150 output tok/s => 0.36 decides/s, while two live
+# streams demand 0.66/s). The compact contract drops the duplicated long-form prose
+# and the evidenceAttested list, caps each free-text field, and caps the completion.
+
+def _compact_reply() -> str:
+    return json.dumps({
+        "isHighlight": False,
+        "score": 3,
+        "eventType": "SPORTING_EVENT",
+        "outcome": "not_highlight",
+        "reason": "midfield build-up, no shot on goal",
+        "reasoning": "Observed a midfield build-up; no ball in net.",
+        "verdict": {
+            "hypothesis": "GOAL",
+            "independentlyObserved": "players in the centre circle",
+            "criteria": {
+                "ballCrossedLineBetweenPosts": False,
+                "ballInNet": False,
+                "scoreboardChanged": False,
+                "crowdErupted": False,
+            },
+            "contradictedBy": "ball stayed in midfield",
+        },
+        "runningSummary": "Midfield standoff; the ball stays central.",
+    })
+
+
+def test_compact_contract_keeps_fields_the_server_consumes():
+    p = build_prompt("GOAL", {"trackCount": 2}, "soccer", n_frames=8, compact=True)
+    # every field the server reads (accept gate + UI rationale) survives
+    for field in ('"isHighlight"', '"score"', '"outcome"', '"reason"', '"eventType"',
+                  '"criteria"', '"ballInNet"', '"runningSummary"', '"reasoning"',
+                  '"independentlyObserved"', '"contradictedBy"'):
+        assert field in p, field
+    # the long-form-only field is dropped (nothing on the server reads it)
+    assert "evidenceAttested" not in p
+    # prose is capped instead of free-form
+    assert "max 20 words" in p and "max 220 chars" in p
+
+
+def test_compact_and_full_prompts_share_the_context_prefix():
+    ev = {"trackCount": 3, "ballOutcome": "off_target", "goalCrossed": True}
+    full = build_prompt("GOAL", ev, "soccer", n_frames=6, story_so_far="so far")
+    compact = build_prompt("GOAL", ev, "soccer", n_frames=6, story_so_far="so far", compact=True)
+    head = "Now answer with ONLY one JSON object"
+    assert full.split(head)[0] == compact.split(head)[0]
+    # the full contract is untouched (VOD byte-identical)
+    assert "evidenceAttested" in full and "~1800 chars max" in full
+    assert "max 220 chars" not in full
+
+
+def test_compact_caps_the_completion_and_sends_the_compact_prompt():
+    reply = _compact_reply()
+    mock = MockLlama(reply)
+    try:
+        d = decide_with_gemma(
+            event_type="GOAL",
+            evidence={"trackCount": 2},
+            game_hint="soccer",
+            url=f"http://127.0.0.1:{mock.port}",
+            compact=True,
+        )
+    finally:
+        mock.stop()
+    sent = mock.requests[0]
+    assert sent["max_tokens"] == 400
+    text = [c["text"] for c in sent["messages"][-1]["content"] if c.get("type") == "text"][0]
+    assert "evidenceAttested" not in text
+    # the compact verdict still parses into the full decision shape
+    assert d["isHighlight"] is False
+    assert d["outcome"] == "not_highlight"
+    assert d["verdict"]["criteria"]["ballInNet"] is False
+    assert d["evidenceAttested"] == []
+
+
+def test_full_contract_keeps_its_1200_cap():
+    reply = _compact_reply()
+    mock = MockLlama(reply)
+    try:
+        decide_with_gemma(
+            event_type="GOAL",
+            evidence={"trackCount": 2},
+            game_hint="soccer",
+            url=f"http://127.0.0.1:{mock.port}",
+        )
+    finally:
+        mock.stop()
+    assert mock.requests[0]["max_tokens"] == 1200
+
+
+def test_highlight_route_forwards_compact(monkeypatch):
+    # The /highlight route is what the server actually calls; the compact flag has
+    # to reach the model request (cap 400 + compact prompt) with no other change.
+    from app import app as decide_app
+
+    reply = _compact_reply()
+    mock = MockLlama(reply)
+    monkeypatch.setenv("GEMMA_URL", f"http://127.0.0.1:{mock.port}")
+    monkeypatch.setenv("DECIDE_MODE", "gemma")
+    try:
+        c = TestClient(decide_app)
+        r = c.post(
+            "/app/highlight",
+            json={
+                "sessionId": "compact-1",
+                "eventType": "GOAL",
+                "timestamp": 12.0,
+                "gameHint": "soccer",
+                "evidence": {"trackCount": 2},
+                "compact": True,
+            },
+        )
+    finally:
+        mock.stop()
+    assert r.status_code == 200
+    sent = mock.requests[0]
+    assert sent["max_tokens"] == 400
+    text = [c["text"] for c in sent["messages"][-1]["content"] if c.get("type") == "text"][0]
+    assert "evidenceAttested" not in text
+    assert "max 220 chars" in text
+    # the compact verdict still comes back in the full response shape
+    assert r.json()["outcome"] == "not_highlight"

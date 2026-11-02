@@ -223,6 +223,12 @@ class HighlightRequest(BaseModel):
     # carried from the previous cadence observe tick so the model EXTENDS it
     # (not rewrite from scratch). Empty/absent on the first tick. Additive.
     storySoFar: Optional[str] = None
+    # ADAAAA-7781: ask for the COMPACT verdict contract (shorter prose fields, no
+    # evidenceAttested list) and a 400-token completion cap. The live rail sets
+    # it because its decide throughput is decode-bound and the cadence demand
+    # (0.33 decides/s per stream) is set by output tokens per call. Absent/false
+    # keeps the full contract byte-for-byte (VOD default).
+    compact: bool = False
 
 
 # --- Response contract ------------------------------------------------------
@@ -611,6 +617,7 @@ def create_app() -> FastAPI:
                     "candidateCount": 1,
                 },
                 story_so_far=req.storySoFar or "",
+                compact=req.compact,
             )
             # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
             # goal-line ground-truth signal. A non-"goal" ballOutcome forces

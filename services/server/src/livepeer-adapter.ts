@@ -967,6 +967,9 @@ export class DirectAdapter implements PipelineClient {
       /** ADAAAA-7111 (Increment D): the running video summary (story-so-far)
        * carried into this cadence decide so the model EXTENDS it. */
       storySoFar?: string;
+      /** ADAAAA-7781: request the COMPACT verdict contract (short prose, no
+       * evidenceAttested, 400-token cap). Live rail only; absent = full contract. */
+      compact?: boolean;
     }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
@@ -985,6 +988,9 @@ export class DirectAdapter implements PipelineClient {
         // ADAAAA-7111 (Increment D): forward the running video summary so the
         // decide brain extends it (monotonic growth). Empty on the first tick.
         storySoFar: opts?.storySoFar ?? "",
+        // ADAAAA-7781: compact verdict contract (live rail). false/absent sends
+        // the byte-identical full-contract request.
+        compact: opts?.compact === true,
         evidence,
         images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
         frames: opts?.frames ?? [],
