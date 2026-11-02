@@ -4,7 +4,7 @@ so the state machine + geometry are testable without triton/weights/GPU."""
 import numpy as np
 import pytest
 
-from app.sam3_backend import Sam3Backend, box_to_point, mask_to_bbox
+from app.sam3_backend import Sam3Backend, box_to_point, box_to_points, mask_to_bbox
 from app.sam_tracker import HybridTracker
 
 
@@ -252,3 +252,98 @@ def test_hybrid_sam_loss_triggers_florence_redetect():
     tr.step_frame(_white(), 3.0)  # miss>=1 -> Florence re-detect + reseed
     assert det.calls >= 1
     assert len(tr._prompts) >= 1  # reseed repopulated prompts
+
+
+# --- ADAAAA-7345: mid-stream masklet recovery + player point calibration -----
+class StrictSinglePointPredictor(FakePredictor):
+    """Rejects multi-point prompts the way an older client build would."""
+
+    def handle_request(self, req):
+        if req.get("type") == "add_prompt" and len(np.asarray(req["points"])) > 1:
+            raise RuntimeError("multi-point prompts unsupported")
+        return super().handle_request(req)
+
+
+def test_box_to_points_ball_single_player_cluster():
+    # small (ball-sized) box keeps the verified single center point
+    ball = box_to_points((0.500, 0.500, 0.510, 0.510))
+    assert ball.shape == (1, 2)
+    assert ball[0][0] == pytest.approx(0.505)
+    # player-sized box gets a center-first positive cluster inside the box
+    player = box_to_points((0.455, 0.264, 0.551, 0.437))
+    assert player.shape == (5, 2)
+    assert player[0][0] == pytest.approx((0.455 + 0.551) / 2)
+    assert player[0][1] == pytest.approx((0.264 + 0.437) / 2)
+    assert bool(((player[:, 0] >= 0.455) & (player[:, 0] <= 0.551)).all())
+    assert bool(((player[:, 1] >= 0.264) & (player[:, 1] <= 0.437)).all())
+
+
+def test_recover_readds_prompt_after_masklet_loss():
+    # SAM loses the mid-stream object on frames 1-2 and never re-registers it by
+    # itself (real SAM3 behaviour: dropped masklets stay dropped). The backend
+    # must re-anchor the slot's prompt at the CURRENT frame so tracking resumes.
+    frames = [
+        {0: (0.2, 0.2, 0.4, 0.4)},
+        {0: None},
+        {0: None},
+        {0: (0.2, 0.2, 0.4, 0.4)},
+    ]
+    fake, backend = _make(frames)
+    box = (0.2, 0.2, 0.4, 0.4)
+    backend.advance({0: box})
+    assert backend.get(0) is not None
+    assert fake.prompts[0][0] == 0
+    backend.advance({0: box})
+    assert backend.get(0) is None          # lost this frame
+    backend.advance({0: box})              # -> recovery re-adds at frame 2
+    assert fake.prompts[0][0] == 2
+    backend.advance({0: box})
+    assert backend.get(0) is not None      # tracking resumed
+
+
+def test_recover_stops_after_max_misses():
+    fake, backend = _make([{0: (0.2, 0.2, 0.4, 0.4)}] + [{0: None}] * 60)
+    backend.recover_max_misses = 5
+    adds = {"n": 0}
+    orig = fake.handle_request
+
+    def counting(req):
+        if req.get("type") == "add_prompt":
+            adds["n"] += 1
+        return orig(req)
+
+    fake.handle_request = counting
+    box = (0.2, 0.2, 0.4, 0.4)
+    for _ in range(20):
+        backend.advance({0: box})
+    assert adds["n"] == 1 + 5     # initial seed + capped recoveries, then stop
+
+
+def test_recover_does_not_readd_while_tracking():
+    frames = [{0: (0.2, 0.2, 0.4, 0.4)}] * 10
+    fake, backend = _make(frames)
+    adds = {"n": 0}
+    orig = fake.handle_request
+
+    def counting(req):
+        if req.get("type") == "add_prompt":
+            adds["n"] += 1
+        return orig(req)
+
+    fake.handle_request = counting
+    box = (0.2, 0.2, 0.4, 0.4)
+    for _ in range(5):
+        backend.advance({0: box})
+    assert adds["n"] == 1         # healthy track is never re-prompted
+
+
+def test_add_prompt_falls_back_to_single_point_when_cluster_rejected():
+    fake = StrictSinglePointPredictor([{0: (0.455, 0.264, 0.551, 0.437)}] * 3)
+    backend = Sam3Backend(predictor_factory=lambda: fake, clip_path="x.mp4")
+    box = (0.455, 0.264, 0.551, 0.437)
+    backend.advance({0: box})
+    fi, pt = fake.prompts[0]
+    assert fi == 0
+    assert pt is not None
+    assert pt[0] == pytest.approx((0.455 + 0.551) / 2)
+    assert backend.get(0) is not None
