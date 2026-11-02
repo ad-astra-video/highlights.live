@@ -530,6 +530,10 @@ export const ObserveMetricsSnapshotSchema = z.object({
       perceiveSkipped: z.number().int().min(0),
       perceiveHotCalls: z.number().int().min(0),
       analysisFps: z.number().min(0),
+      // ADAAAA-7774: mean measured `client.analyze` wall cost (ms); the
+      // cost-aware stride steps by it, so `> 1000/analysisFps` proves the box's
+      // shared-GPU perceive limit (not the ingest rate) is the binding rate.
+      perceiveMeanCostMs: z.number().min(0).optional(),
     })
     .optional(),
   // Worst / mean wall-clock content-vs-wall lag (ms) seen on a dropped frame,
