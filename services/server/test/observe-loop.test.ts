@@ -505,11 +505,11 @@ describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
     return { obs, fired };
   }
 
-  it("keeps a deterministic fraction of decide opportunities (5 of 8)", async () => {
-    const { obs, fired } = await drive(0.625);
-    // 30 s at a 3 s cadence = 10 opportunities (ts 0,3,...,27). The credit starts
-    // at 1 (first window decides) and accrues 0.625 per opportunity, so 7 of the
-    // 10 decide and 3 are counted as throttle skips.
+  it("keeps a deterministic fraction of decide opportunities (2 of 3)", async () => {
+    const { obs, fired } = await drive(0.66);
+    // 30 s at a 3 s cadence = 10 opportunities (ts 0,3,...,27), one per window.
+    // The credit starts at 1 (first window decides) and accrues 0.66 per
+    // opportunity, so 7 of the 10 decide and 3 are counted as throttle skips.
     expect(obs.decideCalls()).toBe(7);
     expect(obs.throttleSkipCount()).toBe(3);
     expect(fired.map((p) => p.centerTs)).toEqual([0, 3, 9, 12, 18, 21, 27]);
@@ -536,7 +536,7 @@ describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
       baselineEnergy: 0.2,
       thresholdId: "stageA/roar",
     };
-    const { obs, fired } = await drive(0.625, trigger);
+    const { obs, fired } = await drive(0.66, trigger);
     expect(obs.triggerStats().fired).toBe(1);
     expect(obs.triggerStats().expired).toBe(0);
     expect(obs.throttleSkipCount()).toBeGreaterThanOrEqual(1);
