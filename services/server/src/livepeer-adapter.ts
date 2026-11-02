@@ -539,6 +539,10 @@ export class OrchestratorAdapter implements PipelineClient {
       preferLabels?: string[];
       jobId?: string;
       groupKey?: string;
+      /** ADAAAA-7781: request the COMPACT verdict contract on the live rail. The
+       * live pass is decode-bound, so output tokens per call IS its throughput
+       * ceiling; absent/false sends the full long-form contract. */
+      compact?: boolean;
     }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -562,6 +566,11 @@ export class OrchestratorAdapter implements PipelineClient {
       frames: opts?.frames ?? [],
       audioB64: opts?.audioB64 ?? "",
       audioSampleRate: 16_000,
+      // ADAAAA-7781: the COMPACT verdict contract (live rail). This is the client
+      // the LIVE pass actually uses, so the flag has to ride this payload — an
+      // earlier attempt wired only the plain HTTP client and the live decide kept
+      // sending max_tokens 1200 / ~1340-char verdicts.
+      compact: opts?.compact === true,
     };
     // The decide runner is a fixed-price single-shot live runner; the first
     // unpaid call 402s with a payment challenge. On-chain (signer + payer

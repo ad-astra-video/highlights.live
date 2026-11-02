@@ -105,3 +105,31 @@ describe("live decide compact contract (ADAAAA-7781)", () => {
     expect(server).toContain("LIVE_DECIDE_COMPACT=${LIVE_DECIDE_COMPACT:-0}");
   });
 });
+
+describe("the LIVE adapter forwards the compact flag (ADAAAA-7781)", () => {
+  it("OrchestratorAdapter.decide carries compact on the decide payload", async () => {
+    // The live pass runs on OrchestratorAdapter (the go-livepeer client), not the
+    // direct-HTTP one — wiring only DirectAdapter left the deployed live decide
+    // sending max_tokens 1200 / ~1340-char verdicts.
+    const { OrchestratorAdapter } = await import("../src/livepeer-adapter");
+    const { cfg } = liveConfig({ LIVE_DECIDE_COMPACT: "1" });
+    const adapter = new OrchestratorAdapter(cfg);
+    const captured: Record<string, any>[] = [];
+    (adapter as any).client = {
+      decide: async (_app: string, payload: Record<string, any>) => {
+        captured.push(payload);
+        return { status: 200, data: { isHighlight: false, score: 0, outcome: "not_highlight" } };
+      },
+    };
+    await adapter.decide(
+      { eventType: "GOAL", trackCount: 1, maxVelocity: 0, ocrHits: 0 },
+      { jobId: "j1", groupKey: "g0", compact: true, frames: [] }
+    );
+    expect(captured[0].compact).toBe(true);
+    await adapter.decide(
+      { eventType: "GOAL", trackCount: 1, maxVelocity: 0, ocrHits: 0 },
+      { jobId: "j1", groupKey: "g0", frames: [] }
+    );
+    expect(captured[1].compact).toBe(false);
+  });
+});
