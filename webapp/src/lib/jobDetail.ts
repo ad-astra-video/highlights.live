@@ -361,6 +361,27 @@ export interface JobDetail {
   // their window narratives). Absent on jobs that predate the derivation or
   // carry no stored `summaryLog`.
   summaryLadder?: SummaryLadder;
+  // ADAAAA-7741: the customer-facing "how live is this" projection derived at
+  // read time from stored data. Mirrors LiveProgressSchema in @highlights/events
+  // — additive optional, absent on servers that predate it.
+  liveProgress?: LiveProgress;
+}
+
+/** ADAAAA-7741: processing-lag projection on GET /jobs/:id and
+ * GET /jobs/:id/detail. It carries only the customer's own lag reading — never
+ * `observeMetrics`, `costUsd`, `decideCalls` or `stageAMetrics`. */
+export interface LiveProgress {
+  /** Content seconds available at the tap. */
+  liveEdgeTs: number;
+  /** Content ts of the newest decided window. */
+  processedThroughTs: number;
+  /** liveEdgeTs - processedThroughTs, clamped >= 0. */
+  lagSec: number;
+  /** Cadence windows dropped past the lag budget on this run. */
+  skippedWindows: number;
+  /** `unknown` before the first decided window and on a terminal job. */
+  state: "caught_up" | "behind" | "unknown";
+  updatedAt: string;
 }
 
 /**

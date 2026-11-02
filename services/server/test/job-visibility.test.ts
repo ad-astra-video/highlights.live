@@ -112,6 +112,27 @@ describe("job-visibility projection", () => {
     expect(visible.job).not.toHaveProperty("costUsd");
     expect(visible.seq).toBe(3); // frame/stream identity is not spend data
   });
+
+  it("keeps the deliberate liveProgress exception while dropping every internal diagnostic (ADAAAA-7741)", () => {
+    const liveProgress = {
+      liveEdgeTs: 60,
+      processedThroughTs: 34,
+      lagSec: 26,
+      skippedWindows: 2,
+      state: "behind" as const,
+      updatedAt: "2026-11-02T04:01:00.000Z",
+    };
+    const payload = { job: { id: "l1", ...INTERNAL_FIELDS }, highlights: [], sections: [], traces: [], liveProgress };
+    const visible = jobDetailForRole(payload, "user") as Record<string, any>;
+    // The customer's own "how live is this" reading survives untouched …
+    expect(visible.liveProgress).toEqual(liveProgress);
+    // … and it is still not a side door to the diagnostics it projects.
+    for (const key of INTERNAL_JOB_KEYS) expect(visible.job).not.toHaveProperty(key);
+    for (const key of ["observeMetrics", "costUsd", "decideCalls", "stageAMetrics"]) {
+      expect(visible.liveProgress).not.toHaveProperty(key);
+      expect(visible.job).not.toHaveProperty(key);
+    }
+  });
 });
 
 describe("job responses are role-filtered end to end", () => {
@@ -202,6 +223,39 @@ describe("job responses are role-filtered end to end", () => {
     });
     expect(asAdmin.statusCode).toBe(200);
     expect(asAdmin.json().job.costUsd).toBe(INTERNAL_FIELDS.costUsd);
+  });
+
+  it("GET /jobs/:id and /detail return liveProgress to a non-admin without the diagnostics (ADAAAA-7741 AC2)", async () => {
+    // A live job mid-run: content clock started 60 s ago, newest decided window
+    // 34 s of content. No pipeline runs — the derivation is pure read-path.
+    const startedAt = new Date(Date.now() - 60_000);
+    const live = await t.store.createJob({ ownerId: t.store.getJob(jobId)!.ownerId!, source: "rtmp" });
+    await t.store.patchJob(live.id, {
+      status: "active",
+      startedAt: startedAt.toISOString(),
+      summaryLog: [
+        { seq: 1, ts: new Date(startedAt.getTime() + 35_000).toISOString(), windowTs: 21, text: "a" },
+        { seq: 2, ts: new Date(startedAt.getTime() + 62_000).toISOString(), windowTs: 34, text: "b" },
+      ],
+      ...INTERNAL_FIELDS,
+    } as any);
+
+    for (const url of [`/jobs/${live.id}`, `/jobs/${live.id}/detail`]) {
+      const res = await t.app.inject({ method: "GET", url, headers: { authorization: `Bearer ${userToken}` } });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, any>;
+      expect(body.liveProgress).toBeTruthy();
+      expect(body.liveProgress.processedThroughTs).toBe(34);
+      // AC1: lagSec agrees with an independent recompute from the same payload.
+      const independent = (Date.now() - Date.parse(body.job.startedAt)) / 1000 - body.liveProgress.processedThroughTs;
+      expect(Math.abs(body.liveProgress.lagSec - independent)).toBeLessThanOrEqual(2);
+      expect(body.liveProgress.state).toBe("behind");
+      // AC2: the projection is not a side door to the internal diagnostics.
+      for (const key of ["observeMetrics", "costUsd", "decideCalls", "stageAMetrics"]) {
+        expect(body.job).not.toHaveProperty(key);
+        expect(body.liveProgress).not.toHaveProperty(key);
+      }
+    }
   });
 
   it("GET /media/node is admin-only (403 for role=user, 200 for admin)", async () => {

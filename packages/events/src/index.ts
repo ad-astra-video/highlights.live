@@ -1176,6 +1176,32 @@ export const SummaryLadderSchema = z.object({
 });
 export type SummaryLadder = z.infer<typeof SummaryLadderSchema>;
 
+/** ADAAAA-7741: the customer-facing "how live is this job" projection.
+ *
+ * Derived at READ time from stored data (the content-clock anchor, the
+ * append-only `summaryLog` wall/content pairs and the newest persisted
+ * observation) — zero decide calls, zero GPU seconds. It is the customer-safe
+ * projection of the internal lag diagnostics: `observeMetrics`, `costUsd`,
+ * `decideCalls` and `stageAMetrics` are NEVER part of it (and stay admin-gated
+ * by ADAAAA-7727). Additive optional on the job payloads, so no contract
+ * version bump. */
+export const LiveProgressSchema = z.object({
+  /** Content seconds available at the tap. */
+  liveEdgeTs: z.number().min(0),
+  /** Content ts of the newest decided window. */
+  processedThroughTs: z.number().min(0),
+  /** liveEdgeTs - processedThroughTs, clamped >= 0. */
+  lagSec: z.number().min(0),
+  /** Cadence windows dropped past the lag budget this run. */
+  skippedWindows: z.number().int().min(0),
+  /** `unknown` when the derivation has no anchor / no decided window yet, and
+   * for a terminal job (no live edge — the UI shows the completion state). */
+  state: z.enum(["caught_up", "behind", "unknown"]),
+  updatedAt: z.string(),
+});
+export type LiveProgress = z.infer<typeof LiveProgressSchema>;
+
+
 /** Composite payload of GET /jobs/:id/detail (ADAAAA-6851 Inc 3). */
 export const JobDetailSchema = z.object({
   job: JobSchema,
@@ -1195,6 +1221,9 @@ export const JobDetailSchema = z.object({
   maxTraces: z.number().int().min(0),
   /** ADAAAA-7623: summary ladder derived from stored data (additive optional). */
   summaryLadder: SummaryLadderSchema.optional(),
+  /** ADAAAA-7741: customer-facing processing-lag projection (additive optional —
+   * absent on servers that predate it / payloads that never carried it). */
+  liveProgress: LiveProgressSchema.optional(),
 });
 export type JobDetail = z.infer<typeof JobDetailSchema>;
 
