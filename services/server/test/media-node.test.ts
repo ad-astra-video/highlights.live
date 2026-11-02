@@ -103,6 +103,27 @@ describe("GET /media/node", () => {
     return r.json().token as string;
   }
 
+  /** ADAAAA-7727: the media-node report is media-server + spend internals, so
+   * the route is admin-only — its success paths are asserted as the seeded
+   * admin, and a customer session is asserted to get 403. */
+  async function adminToken(app: any): Promise<string> {
+    const r = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: "admin@test.local", password: "adminpass" },
+    });
+    expect(r.statusCode).toBe(200);
+    return r.json().token as string;
+  }
+
+  it("is admin-only: a customer session gets 403", async () => {
+    const { app } = await buildTestApp({ MEDIA_SERVER_URL: "http://media:4070" });
+    const token = await register(app);
+    const r = await app.inject({ method: "GET", url: "/media/node", headers: { authorization: `Bearer ${token}` } });
+    expect(r.statusCode).toBe(403);
+    await app.close();
+  });
+
   it("requires authentication", async () => {
     const { app } = await buildTestApp({ MEDIA_SERVER_URL: "http://media:4070" });
     const r = await app.inject({ method: "GET", url: "/media/node" });
@@ -115,7 +136,7 @@ describe("GET /media/node", () => {
       throw new Error("ECONNREFUSED");
     });
     const { app } = await buildTestApp({ MEDIA_SERVER_URL: "http://media:4070" });
-    const token = await register(app);
+    const token = await adminToken(app);
     const r = await app.inject({ method: "GET", url: "/media/node", headers: { authorization: `Bearer ${token}` } });
     expect(r.statusCode).toBe(200);
     const body = r.json();
@@ -136,7 +157,7 @@ describe("GET /media/node", () => {
       return { ok: true, status: 200, json: async () => payload } as any;
     });
     const { app } = await buildTestApp({ MEDIA_SERVER_URL: "http://media:4070", MEDIA_HEALTH_TOKEN: "hel-tok" });
-    const token = await register(app);
+    const token = await adminToken(app);
     const r = await app.inject({ method: "GET", url: "/media/node", headers: { authorization: `Bearer ${token}` } });
     expect(r.statusCode).toBe(200);
     const body = r.json();

@@ -13,6 +13,8 @@ import { Train } from "./pages/Train";
 import { FineTune } from "./pages/FineTune";
 import { Legal } from "./pages/Legal";
 import { ContentReferral } from "./pages/ContentReferral";
+import { Admin } from "./pages/Admin";
+import { AdminRoute } from "./components/AdminGate";
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { token, ready } = useAuth();
@@ -48,6 +50,16 @@ export default function App() {
         </Route>
         <Route path="billing" element={<Billing />} />
         <Route path="settings" element={<Settings />} />
+        {/* ADAAAA-7727: operator-only diagnostics skeleton. A non-admin session
+            navigating here is redirected to /app by AdminRoute. */}
+        <Route
+          path="admin"
+          element={
+            <AdminRoute>
+              <Admin />
+            </AdminRoute>
+          }
+        />
         <Route path="dataset" element={<Navigate to="/app/train/dataset" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

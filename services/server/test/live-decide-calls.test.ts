@@ -18,6 +18,20 @@ async function register(app: any, email: string, pw: string): Promise<string> {
   return r.json().token as string;
 }
 
+// ADAAAA-7727: the decide-call counters are internal pipeline diagnostics, so
+// only an admin session reads them back. The projection contract below is
+// asserted as the seeded admin; the same routes are asserted to omit the
+// counters for the customer session in the last test.
+async function adminToken(app: any): Promise<string> {
+  const r = await app.inject({
+    method: "POST",
+    url: "/auth/login",
+    payload: { email: "admin@test.local", password: "adminpass" },
+  });
+  expect(r.statusCode).toBe(200);
+  return r.json().token as string;
+}
+
 const LIVE_OBSERVE_METRICS = {
   decideCalls: 17,
   accepted: 6,
@@ -44,13 +58,14 @@ async function seedLiveJob(store: any, ownerId: string) {
 describe("live job decide-call count in the job API (ADAAAA-7664)", () => {
   it("reports the observe-pass count on GET /jobs/:id, /jobs and /jobs/:id/detail", async () => {
     const { app, store } = await buildTestApp();
-    const token = await register(app, "live-decides@test.dev", "password123");
+    const ownerToken = await register(app, "live-decides@test.dev", "password123");
     const job = await seedLiveJob(store, (await app.inject({
       method: "GET",
       url: "/auth/me",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${ownerToken}` },
     })).json().user.id);
-    const headers = { authorization: `Bearer ${token}` };
+    // ADAAAA-7727: internal counters are readable by an admin session.
+    const headers = { authorization: `Bearer ${await adminToken(app)}` };
 
     const single = await app.inject({ method: "GET", url: `/jobs/${job.id}`, headers });
     expect(single.statusCode).toBe(200);
@@ -71,8 +86,9 @@ describe("live job decide-call count in the job API (ADAAAA-7664)", () => {
   it("leaves a VOD job's decideCalls untouched (18, and 0 when no decide ran)", async () => {
     const { app, store } = await buildTestApp();
     const token = await register(app, "vod-decides@test.dev", "password123");
-    const headers = { authorization: `Bearer ${token}` };
-    const ownerId = (await app.inject({ method: "GET", url: "/auth/me", headers })).json().user.id;
+    const ownerId = (await app.inject({ method: "GET", url: "/auth/me", headers: { authorization: `Bearer ${token}` } })).json().user.id;
+    // ADAAAA-7727: read the internal counters back as the admin session.
+    const headers = { authorization: `Bearer ${await adminToken(app)}` };
 
     const vod = await store.createJob({ ownerId, source: "file", sourceUrl: "/data/clips/x.mp4" });
     await store.patchJob(vod.id, { status: "done", decideCalls: 18 });
@@ -92,5 +108,31 @@ describe("live job decide-call count in the job API (ADAAAA-7664)", () => {
     await store.patchJob(job.id, { status: "done" });
     // Absent (not fabricated 0): the webapp header falls back to 0 itself.
     expect((await app.inject({ method: "GET", url: `/jobs/${job.id}`, headers })).json().job.decideCalls).toBeUndefined();
+  });
+
+  // ADAAAA-7727: the same routes must not hand the counters to a customer
+  // session — the field and its source snapshot are both omitted.
+  it("omits the decide counters for the customer session on every job route", async () => {
+    const { app, store } = await buildTestApp();
+    const token = await register(app, "customer-decides@test.dev", "password123");
+    const headers = { authorization: `Bearer ${token}` };
+    const ownerId = (await app.inject({ method: "GET", url: "/auth/me", headers })).json().user.id;
+    const job = await seedLiveJob(store, ownerId);
+    await store.patchJob(job.id, { status: "done", costUsd: 0.02, perceiveSessionS: 12 });
+
+    const single = await app.inject({ method: "GET", url: `/jobs/${job.id}`, headers });
+    expect(single.statusCode).toBe(200);
+    expect(single.json().job.decideCalls).toBeUndefined();
+    expect(single.json().job.observeMetrics).toBeUndefined();
+    expect(single.json().job.costUsd).toBeUndefined();
+
+    const list = await app.inject({ method: "GET", url: "/jobs", headers });
+    const listed = list.json().jobs.find((j: any) => j.id === job.id);
+    expect(listed.decideCalls).toBeUndefined();
+    expect(listed.costUsd).toBeUndefined();
+
+    const detail = await app.inject({ method: "GET", url: `/jobs/${job.id}/detail`, headers });
+    expect(detail.json().job.decideCalls).toBeUndefined();
+    expect(detail.json().job.costUsd).toBeUndefined();
   });
 });

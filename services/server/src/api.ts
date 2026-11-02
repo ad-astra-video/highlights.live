@@ -56,6 +56,7 @@ import { aggregateLiveWatchMinutes, monthKeyUtc } from "./live-watch-minutes";
 import { buildPostableHighlights } from "./highlight-postable";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
+import { jobDetailForRole, jobEventForRole, jobForRole, jobsForRole } from "./job-visibility";
 import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
 import { outcomeForMediaCloseReason, outcomeForStrandedJob, type JobFailureReason, type JobOutcome } from "./job-failure";
@@ -2414,7 +2415,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // sampled frames to /jobs/:id/ingest and a recording to
         // /jobs/:id/recording. Nothing to pull server-side.
         browserJobs.set(job.id, { evidence: new EvidenceTracker() });
-        return { job: store.getJob(job.id), status: "ready" };
+        return { job: jobForRole(store.getJob(job.id), (req as any).user.role), status: "ready" };
       }
       if (live) {
         // Live ingest: capture/pull the stream, record it to disk, and sample
@@ -2465,7 +2466,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           console.error(`[live:${job.id}] media-node attribution failed:`, String(e?.message || e))
         );
         runLiveJob(ingest, job, user, sub).catch(() => {});
-        return { job: store.getJob(job.id), status: "ingesting", framesAnalyzed: 0 };
+        return { job: jobForRole(store.getJob(job.id), user.role), status: "ingesting", framesAnalyzed: 0 };
       }
       // Durable non-blocking submit (ADAAAA-6873): enqueue the file/URL VOD job
       // for the durable worker and return 202 immediately so the upload POST
@@ -2477,7 +2478,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       enqueueVodJob(job.id, videoPath!);
       const q = store.getJob(job.id)!;
       return reply.code(202).send({
-        job: q,
+        job: jobForRole(q, user.role),
         accepted: true,
         status: "queued",
         progress: { stage: "queued", framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
@@ -2610,7 +2611,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     enqueueVodJob(job.id, finalPath);
     const q = store.getJob(job.id)!;
     return reply.code(202).send({
-      job: q,
+      job: jobForRole(q, user.role),
       accepted: true,
       status: "queued",
       progress: { stage: "queued", framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
@@ -2760,7 +2761,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     enqueueVodJob(job.id, session.finalPath);
     const q = store.getJob(job.id)!;
     return reply.code(202).send({
-      job: q,
+      job: jobForRole(q, user.role),
       accepted: true,
       status: "queued",
       progress: { stage: "queued", framesAnalyzed: 0, framesTotal: 0, framesPct: 0, highlightsFound: 0 },
@@ -2780,7 +2781,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // ADAAAA-7624: records written before the counter fix carry no
     // `candidatePath`; project the honest counters so the board tiles read the
     // count the job actually produced instead of a legacy 0.
-    return { jobs: store.listJobsForOwner(ownerId, limit).map((j) => ({ ...j, ...counterFieldsForJob(j) })) };
+    // ADAAAA-7727: a non-admin caller never sees the cost/decide/perceive
+    // diagnostics on a job (they are internal pipeline + spend data).
+    return {
+      jobs: jobsForRole(store.listJobsForOwner(ownerId, limit).map((j) => ({ ...j, ...counterFieldsForJob(j) })), user.role),
+    };
   });
 
   app.get("/jobs/:id", { preHandler: authReq }, async (req: any, reply) => {
@@ -2798,7 +2803,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       framesPct: job.framesPct ?? 0,
       highlightsFound: job.highlightsFound ?? 0,
     };
-    return { job: { ...job, ...counterFieldsForJob(job) }, highlights: store.highlightsForJob(job.id), progress };
+    return {
+      job: jobForRole({ ...job, ...counterFieldsForJob(job) }, user.role),
+      highlights: store.highlightsForJob(job.id),
+      progress,
+    };
   });
 
   // ADAAAA-7700: the durable activity log for one job — the append-only trail of
@@ -2868,18 +2877,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       gameHint: job.gameHint,
     });
 
-    return JobDetailSchema.parse({
-      // ADAAAA-7624: derive the honest counters for records written before the
-      // completion-time fix (read-time, no stored-data mutation).
-      job: { ...job, ...counterFieldsForJob(job) },
-      highlights: postable.highlights,
-      notableHighlights: postable.notable,
-      duplicateHighlights: postable.duplicates,
-      traces,
-      sections: sectionList,
-      maxTraces,
-      summaryLadder,
-    });
+    // ADAAAA-7727: the embedded job record is filtered for a non-admin caller
+    // exactly like GET /jobs/:id, so the composite detail route can never be a
+    // side door to the cost/decide/perceive diagnostics.
+    return jobDetailForRole(
+      JobDetailSchema.parse({
+        // ADAAAA-7624: derive the honest counters for records written before the
+        // completion-time fix (read-time, no stored-data mutation).
+        job: { ...job, ...counterFieldsForJob(job) },
+        highlights: postable.highlights,
+        notableHighlights: postable.notable,
+        duplicateHighlights: postable.duplicates,
+        traces,
+        sections: sectionList,
+        maxTraces,
+        summaryLadder,
+      }),
+      user.role
+    );
   });
 
   // ADAAAA-7028 Inc 2: queryable decide-audit surface. Returns the durable
@@ -2969,7 +2984,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         slot.stopped = true;
         if (slot.current) await adapter.stopPerceive(slot.current.sessionId).catch(() => {});
       }
-      return reply.send({ ok: true, job: store.getJob(job.id) });
+      return reply.send({ ok: true, job: jobForRole(store.getJob(job.id), req.user.role) });
     }
     // VOD `file` job: the API-level cancel path (ADAAAA-6625). This must work
     // for an in-flight pass (queued / extracting / analyzing / finalizing) AND
@@ -2982,7 +2997,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // Idempotent: a repeated stop on a terminal job is a no-op, never an
       // error, so a caller retrying after a timeout gets a stable answer.
       if (Store.isTerminalStatus(job.status)) {
-        return reply.send({ ok: true, alreadyTerminal: true, job: store.getJob(job.id) });
+        return reply.send({ ok: true, alreadyTerminal: true, job: jobForRole(store.getJob(job.id), req.user.role) });
       }
       // 1. Signal cancellation into the in-flight pass: abort a running decode,
       //    and have runVodJob/analyzeJob unwind at the next frame/boundary.
@@ -3003,7 +3018,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         ok: true,
         cancelled: true,
         releasedPerceiveSessions: released,
-        job: store.getJob(job.id),
+        job: jobForRole(store.getJob(job.id), req.user.role),
       });
     }
     // Browser capture job: release the perceive session, then cut clips for any
@@ -3015,10 +3030,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         if (!Store.isTerminalStatus(job.status)) {
           return reply.code(409).send({ error: "job is not a live ingest or browser capture" });
         }
-        return reply.send({ ok: true, alreadyTerminal: true, job: store.getJob(job.id) });
+        return reply.send({ ok: true, alreadyTerminal: true, job: jobForRole(store.getJob(job.id), req.user.role) });
       }
       const finished = await finishBrowserJob(job.id, "stop");
-      return reply.send({ ok: true, job: finished.job });
+      return reply.send({ ok: true, job: jobForRole(finished.job, req.user.role) });
     }
     return reply.code(409).send({ error: "job is not a live ingest or browser capture" });
   });
@@ -3239,8 +3254,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // Sources: the node's public `/health` (counts-only), its bearer-gated `/node`
   // detail (session leases — only when MEDIA_HEALTH_TOKEN is configured), and
   // the durable attribution join `media_sessions.node_id` -> `job.costUsd`.
-  // Authenticated (not admin): the console is a per-user operator page.
-  app.get("/media/node", { preHandler: authReq }, async () => {
+  // ADAAAA-7727: admin-only. This is media-server + spend internals (node ids,
+  // session leases, per-node cost), never a customer readout — a non-admin call
+  // is 403 and the webapp renders the strip only for an admin session.
+  app.get("/media/node", { preHandler: adminReq }, async () => {
     const origin = (cfg.mediaServerUrl ?? "").replace(/\/+$/, "");
     if (!origin) {
       return buildMediaNodeReport({ origin: "", health: null, mediaSessions: [], jobs: [] });
@@ -3528,7 +3545,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     });
     const send = (event: string, data: unknown) => {
       try {
-        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        // ADAAAA-7727: the event stream is fanned to the caller, so it is
+        // filtered for a non-admin viewer at the send boundary (cost/decide/
+        // perceive diagnostics never ride a customer SSE channel).
+        const payload = jobEventForRole(data as Record<string, any>, req.user?.role);
+        res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
       } catch {
         /* client gone */
       }
@@ -3579,7 +3600,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           console.error(`[control:${job.id}] forward ${type} failed:`, e?.message || e);
         });
       }
-      return { ok: true, control: { type, args, at: new Date().toISOString() }, job: store.getJob(job.id) };
+      return { ok: true, control: { type, args, at: new Date().toISOString() }, job: jobForRole(store.getJob(job.id), req.user.role) };
     }
   );
 

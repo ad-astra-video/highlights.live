@@ -446,6 +446,10 @@ export interface Job {
   perceiveSessionId?: string;
   sampleFps?: number;
   stageAMetrics?: Record<string, unknown>;
+  // ADAAAA-7727: whether the audio Stage-A counters are a real measurement
+  // (`measured`) or `n/a`. Admin-only diagnostic — the raw admin job table reads
+  // it; customer surfaces never render it.
+  stageAMetricsStatus?: "measured" | "n/a";
   frameScale?: string;
   decideWindowN?: number;
   framesAnalyzed?: number;
