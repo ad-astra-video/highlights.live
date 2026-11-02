@@ -528,6 +528,7 @@ export const ObserveMetricsSnapshotSchema = z.object({
       framesStrided: z.number().int().min(0),
       perceiveCalls: z.number().int().min(0),
       perceiveSkipped: z.number().int().min(0),
+      perceiveBudgetSkipped: z.number().int().min(0).optional(),
       perceiveHotCalls: z.number().int().min(0),
       analysisFps: z.number().min(0),
       // ADAAAA-7774: mean measured `client.analyze` wall cost (ms); the
