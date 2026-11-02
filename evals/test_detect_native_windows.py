@@ -120,6 +120,75 @@ def test_fetch_range_refuses_a_server_that_ignores_range(tmp_path):
         srv.shutdown()
 
 
+class _RedirectingHandler(BaseHTTPRequestHandler):
+    """302 to a sibling path that DOES honour Range - archive.org's shape."""
+
+    def do_GET(self):  # noqa: N802 - http.server naming
+        if self.path == "/big.ts":
+            self.send_response(302)
+            self.send_header("Location", "/node/big.ts")
+            self.end_headers()
+            return
+        rng = self.headers.get("Range") or ""
+        # bytes=a-b -> a 206 of exactly that slice
+        a, b = rng.split("=")[1].split("-")
+        start, end = int(a), int(b)
+        body = bytes((i * 7) % 251 for i in range(start, end + 1))
+        self.send_response(206)
+        self.send_header("Content-Range", f"bytes {start}-{end}/21812283016")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+def test_fetch_range_follows_a_redirect_to_a_range_honouring_node(tmp_path):
+    # archive.org answers the download URL with 302; only the data node returns
+    # 206. Following the redirect is what makes the producer work on this item.
+    srv = HTTPServer(("127.0.0.1", 0), _RedirectingHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    dest = str(tmp_path / "chunk.ts")
+    try:
+        url = f"http://127.0.0.1:{srv.server_address[1]}/big.ts"
+        got = dnw.fetch_range(url, 4096, 6143, dest)
+        assert got["bytes"] == 2048
+        with open(dest, "rb") as fh:
+            body = fh.read()
+        assert body == bytes((i * 7) % 251 for i in range(4096, 6144))
+        assert not os.path.exists(dest + ".headers")
+    finally:
+        srv.shutdown()
+
+
+class _WrongRangeHandler(BaseHTTPRequestHandler):
+    """Answers 206 for a DIFFERENT window than the one requested."""
+
+    def do_GET(self):  # noqa: N802
+        body = b"X" * 1024
+        self.send_response(206)
+        self.send_header("Content-Range", f"bytes 0-1023/{SRC_BYTES}")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+def test_fetch_range_refuses_a_206_for_the_wrong_window(tmp_path):
+    srv = HTTPServer(("127.0.0.1", 0), _WrongRangeHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_address[1]}/big.ts"
+        with pytest.raises(SystemExit) as exc:
+            dnw.fetch_range(url, 500000000, 500001023, str(tmp_path / "chunk.ts"))
+        assert "different range" in str(exc.value)
+    finally:
+        srv.shutdown()
+
+
 # --- stage 2: stubbed detector, no torch, no perceive app -------------------
 
 

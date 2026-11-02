@@ -98,10 +98,16 @@ def fetch_range(url: str, start: int, end: int, dest: str, chunk: int = DEFAULT_
     that is 21.8 GB. The response header is checked for `206` and a matching
     `Content-Range` before any of it is written, so a Range-refusing mirror fails
     the fetch instead of quietly pulling the whole file.
+
+    archive.org answers this item with a `302` to a data node (`dn710106.ca.
+    archive.org`) and only the node honours `Range`, so redirects are followed
+    and the guard reads the FINAL response: without `-L` the producer saw `302`,
+    wrote 0 bytes and reported "refused a byte range", which blamed the source
+    for a redirect it simply had not followed.
     """
     expected = end - start + 1
     hdr = dest + ".headers"
-    cmd = ["curl", "-sS", "-f", "--retry", "3", "--retry-delay", "2",
+    cmd = ["curl", "-sS", "-f", "-L", "--max-redirs", "5", "--retry", "3", "--retry-delay", "2",
            "-H", f"Range: bytes={start}-{end}", "-D", hdr, url]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     h = hashlib.sha256()
@@ -116,6 +122,12 @@ def fetch_range(url: str, start: int, end: int, dest: str, chunk: int = DEFAULT_
                         raise SystemExit(
                             f"source refused a byte range (status {status}, "
                             f"content-range {content_range!r}) - refusing to fetch the whole file")
+                    got_start = str(content_range).split()[1].split("-")[0]
+                    if got_start != str(start):
+                        proc.kill()
+                        raise SystemExit(
+                            f"source answered a different range (asked {start}-{end}, "
+                            f"got {content_range}) - the window would measure the wrong minute")
                 fh.write(blk)
                 h.update(blk)
                 written += len(blk)
