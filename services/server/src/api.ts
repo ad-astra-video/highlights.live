@@ -4225,9 +4225,9 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-7771: the box's decide admission width, so the per-stream in-flight
     // depth is shared instead of oversubscribing the client's decide gate.
     liveDecideAdmission: cfg.decideConcurrency ?? 2,
-    // ADAAAA-7799 (lever C): the decide-rate cap (fixed stride over decide
-    // opportunities). Forwarded verbatim; undefined leaves the pass unbounded.
-    liveDecideSkipEvery: cfg.liveDecideSkipEvery,
+    // ADAAAA-7799 (lever C): the decide-rate cap (fraction of decide
+    // opportunities kept). Forwarded verbatim; undefined leaves it unbounded.
+    liveDecideKeepRatio: cfg.liveDecideKeepRatio,
     // ADAAAA-7791: the four LIVE perceive knobs were parsed by config.ts but
     // never forwarded here, so the live rail always fell back to the defaults
     // (OBSERVE_CONTENT_FPS=2, cadence auto-on, utilisation 0.6) and an operator
