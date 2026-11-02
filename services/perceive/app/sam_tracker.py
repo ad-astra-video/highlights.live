@@ -104,6 +104,31 @@ class HybridTracker:
         self._ball_on_screen_frames = 0
         self._ball_present_frames = 0
         self._ball_tail_frames = 0
+        # ADAAAA-7820: the CLIP frame index, advanced on EVERY step_frame (not
+        # only when SAM runs). The SAM backend used to count its own advances,
+        # which drifts whenever SAM is idle for a stretch and puts a mid-stream
+        # prompt annotation on the wrong frame.
+        self._frame_no = 0
+        # ADAAAA-7820 lever 4: bounded re-seed of a lost SELECTED player slot
+        # from a fresh one-shot player detection on the current frame. Off by
+        # default (PERCEIVE_SAM_RESEED_AFTER=0) so the production path is
+        # unchanged; the measure runs enable it explicitly.
+        self.reseed_after = int(os.environ.get("PERCEIVE_SAM_RESEED_AFTER", "0") or 0)
+        self.reseed_max = int(os.environ.get("PERCEIVE_SAM_RESEED_MAX", "3") or 0)
+        self._reseed_done: Dict[int, int] = {}
+        self.reseed_calls = 0
+        # Callable(frame_rgb) -> player-class detections, installed by
+        # process_frame; falls back to `_detect` when absent.
+        self._player_detect: Optional[DetectFn] = None
+        # ADAAAA-7820 lever 2: per-frame boxes recovered by the backward pass
+        # (frames BEFORE the mid-stream seed), for whole-clip on-screen
+        # measurement. Empty unless PERCEIVE_SAM_BACKFILL is enabled.
+        self.backfill_frames: List[dict] = []
+
+    @property
+    def frame_index(self) -> int:
+        """The clip frame index of the NEXT frame to be stepped."""
+        return self._frame_no
 
     @property
     def tracks(self) -> List[Track]:
@@ -211,7 +236,8 @@ class HybridTracker:
         label so tracks are seeded with it instead of "unknown" (ADAAAA-5056).
         With no SAM backend this degrades to pure Florence -> IoU."""
         if self._backend is not None and self._backend.ready():
-            boxes, box_labels, box_slots = self._sam_step(frame_rgb, florence_boxes, labels)
+            boxes, box_labels, box_slots = self._sam_step(frame_rgb, florence_boxes, labels,
+                                                          frame_index=self._frame_no)
         else:
             # No SAM (or not ready): ADAAAA-7540 — before degrading to the pure
             # Florence -> IoU path, OWN the ball-first roster ball in the locked
@@ -223,9 +249,12 @@ class HybridTracker:
             # gets no per-slot match hint.
             box_slots = None
             self._since_detect += 1
+        self._frame_no += 1
         return self._iou.step(boxes, ts, labels=box_labels, box_slots=box_slots)
 
-    def _sam_step(self, frame_rgb: np.ndarray, florence_boxes: Optional[List[BBox]] = None, labels: Optional[List[str]] = None) -> tuple[List[BBox], Optional[List[str]], Optional[List[Optional[int]]]]:
+    def _sam_step(self, frame_rgb: np.ndarray, florence_boxes: Optional[List[BBox]] = None,
+                  labels: Optional[List[str]] = None,
+                  frame_index: Optional[int] = None) -> tuple[List[BBox], Optional[List[str]], Optional[List[Optional[int]]]]:
         """Run SAM one frame ahead for every tracked slot.
 
         Gating (rule: Florence IDENTIFIES, SAM TRACKS — SAM never runs with
@@ -251,7 +280,7 @@ class HybridTracker:
             else:
                 return (florence_boxes or []), labels, None  # nothing identified -> skip SAM
         need_redetect = self._since_detect >= self.redetect_every
-        self._backend.advance(dict(self._prompts))  # one frame's compute for all slots
+        self._advance_backend(dict(self._prompts), frame_index)  # one frame's compute for all slots
         sam_boxes: List[BBox] = []
         sam_labels: List[str] = []
         sam_slots: List[Optional[int]] = []   # ADAAAA-7305: slot provenance for IoU same-slot matching
@@ -290,6 +319,11 @@ class HybridTracker:
             if is_ball:
                 self._update_ball_state(b)  # b may be None (held handled above)
 
+        # ADAAAA-7820 lever 4: bounded re-seed — a SELECTED player slot lost for
+        # more than `reseed_after` frames is re-seeded from a fresh one-shot
+        # player detection on THIS frame (same plausibility gate), capped at
+        # `reseed_max` attempts so cost cannot run away. Disabled by default.
+        self._maybe_reseed_lost_players(frame_rgb)
         if need_redetect:
             if florence_boxes is None and self._detect is not None:
                 det = self._detect(frame_rgb) or []
@@ -313,6 +347,101 @@ class HybridTracker:
             ret_slots = sam_slots if sam_boxes else None
             return ret_boxes, ret_labels, ret_slots
         return sam_boxes, sam_labels, sam_slots
+
+    def _advance_backend(self, prompts: Dict[int, BBox], frame_index: Optional[int]) -> None:
+        """`backend.advance(prompts)` plus the clip frame index when supported.
+
+        ADAAAA-7820: backends that know their frame index (Sam3Backend) take it
+        explicitly; older/stub backends keep the single-argument contract.
+        """
+        if frame_index is not None and getattr(self._backend, "supports_frame_index", False):
+            self._backend.advance(prompts, frame_index=frame_index)
+        else:
+            self._backend.advance(prompts)
+
+    # --- ADAAAA-7820 lever 4: bounded re-seed --------------------------------
+    def _player_detections(self, frame_rgb: np.ndarray) -> List[BBox]:
+        """Fresh one-shot PLAYER-class detections for the current frame.
+
+        Uses the player-vocabulary detector installed by process_frame; falls
+        back to the roster detector so a caller that only wired `_detect` still
+        works. Returns normalized boxes only.
+        """
+        fn = self._player_detect or self._detect
+        if fn is None:
+            return []
+        try:
+            out = fn(frame_rgb) or []
+        except Exception:  # noqa: BLE001 - a re-seed must never break the frame
+            return []
+        boxes: List[BBox] = []
+        for d in out:
+            b = d.get("bbox") if isinstance(d, dict) else None
+            if not b or len(b) != 4:
+                continue
+            boxes.append(tuple(float(v) for v in b))
+        return boxes
+
+    def _maybe_reseed_lost_players(self, frame_rgb: Optional[np.ndarray]) -> int:
+        """Re-seed a lost SELECTED player slot from a fresh detection (bounded).
+
+        Only when PERCEIVE_SAM_RESEED_AFTER > 0. A slot must be a selected
+        player track (the operator's `track player #N` target), have been lost
+        for more than `reseed_after` consecutive SAM frames, and have budget
+        left. The new box must pass the player plausibility gate and be near
+        the last known box, so a fresh detection cannot teleport the track onto
+        a different person. Returns the number of slots re-seeded.
+        """
+        if self.reseed_after <= 0 or frame_rgb is None or self.reseed_max <= 0:
+            return 0
+        lost = [
+            s for s in list(self._prompts)
+            if s != self._ball_slot
+            and self._miss.get(s, 0) > self.reseed_after
+            and self._reseed_done.get(s, 0) < self.reseed_max
+        ]
+        if not lost:
+            return 0
+        tracks = {t.slot: t for t in self._iou.tracks}
+        if not any(tracks.get(s) is not None and tracks[s].selected and tracks[s].kind == "player"
+                   for s in lost):
+            return 0
+        boxes = self._player_detections(frame_rgb)
+        n = 0
+        for s in lost:
+            tr = tracks.get(s)
+            if tr is None or not tr.selected or tr.kind != "player":
+                continue
+            cur = self._prompts.get(s) or tr.bbox
+            box = _nearest_plausible_player(cur, boxes)
+            if box is None:
+                continue
+            self._reseed_done[s] = self._reseed_done.get(s, 0) + 1
+            self.reseed_calls += 1
+            self._prompts[s] = box
+            self._miss[s] = 0
+            tr.bbox = box
+            tr.lost_frames = 0
+            n += 1
+        return n
+
+    # --- ADAAAA-7820 lever 2: reverse propagation ----------------------------
+    def backfill_slot(self, slot: int, frame_index: int) -> List[dict]:
+        """Propagate a tracked slot BACKWARD from `frame_index` to frame 0.
+
+        The forward pass has already consumed the frames before a mid-stream
+        seed, so a backward SAM pass is the only way to know whether the target
+        was on screen there. Boxes are cached on `backfill_frames` for
+        whole-clip on-screen measurement. Returns [] when the backend has no
+        backward capability or the slot is not tracked.
+        """
+        fn = getattr(self._backend, "backfill_backward", None)
+        if fn is None or slot not in self._prompts:
+            return []
+        frames = fn(int(frame_index), {slot: self._prompts[slot]}) or []
+        if frames:
+            self.backfill_frames = list(frames)
+        return frames
 
     def _reseed_from(self, boxes: List[BBox], labels: Optional[List[str]] = None) -> None:
         """Re-prompt SAM slots from a fresh Florence detection set."""
@@ -525,6 +654,36 @@ def make_tracker(clip_path: str | None = None, capacity: int = MAX_TRACKS, ancho
         if b is not None:
             return HybridTracker(detect=None, backend=b, capacity=capacity, anchor_label=anchor_label)
     return IoUTracker(capacity=capacity, anchor_label=anchor_label)
+
+
+def _nearest_plausible_player(ref: BBox, boxes: List[BBox],
+                              max_dist: float = 0.35,
+                              min_area: float = 0.004, max_area: float = 0.12,
+                              min_aspect: float = 1.2, max_aspect: float = 4.5) -> Optional[BBox]:
+    """Pick the detection nearest `ref` that passes the player plausibility gate.
+
+    A fresh re-seed must not teleport the selected player onto the pitch, a
+    banner, or a neighbouring person: the candidate has to be person-sized
+    (normalized area + aspect) and within `max_dist` of the last known box.
+    """
+    best, bestd = None, None
+    for b in boxes or []:
+        x1, y1, x2, y2 = b
+        w, h = x2 - x1, y2 - y1
+        if w <= 0 or h <= 0:
+            continue
+        area = w * h
+        if not (min_area <= area <= max_area):
+            continue
+        aspect = h / w
+        if not (min_aspect <= aspect <= max_aspect):
+            continue
+        d = abs(ref[0] - b[0]) + abs(ref[1] - b[1]) + abs(ref[2] - b[2]) + abs(ref[3] - b[3])
+        if d > max_dist:
+            continue
+        if bestd is None or d < bestd:
+            best, bestd = b, d
+    return best
 
 
 def _nearest_box(ref: BBox, boxes: List[BBox]) -> Optional[BBox]:
