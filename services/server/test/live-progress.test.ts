@@ -146,6 +146,28 @@ describe("deriveLiveProgress terminal state (ADAAAA-7741 AC6)", () => {
       ["lagSec", "liveEdgeTs", "processedThroughTs", "skippedWindows", "state", "updatedAt"].sort()
     );
   });
+
+  it("reports SUPPLY skips at completion, never the throttled windows (ADAAAA-7808)", () => {
+    // The 2-stream ship row measured exactly this shape: the rate cap leaves
+    // cadence gaps the gap heuristic reads as 33-35 skipped windows, while the
+    // rail failed to serve 1 and 0 of them. `skippedWindows` is the supply
+    // number, so the throttle must not leak into it.
+    const job = liveJob({
+      status: "done",
+      finishedAt: new Date(T0 + 120_000).toISOString(),
+      // Windows 3 s apart for the first two (no gap) then 33 s apart: the gap
+      // heuristic alone would report 10 skips on this log.
+      summaryLog: [
+        { seq: 1, ts: "", windowTs: 0 },
+        { seq: 2, ts: "", windowTs: 3 },
+        { seq: 3, ts: "", windowTs: 36 },
+      ],
+      observeMetrics: { skippedStaleWindows: 0, supplySkippedWindows: 1 },
+    });
+    const p = deriveLiveProgress({ job, nowMs: T0 + 120_000 });
+    expect(skippedWindowsFromSummaryLog(job.summaryLog as any)).toBe(10);
+    expect(p.skippedWindows).toBe(1);
+  });
 });
 
 describe("skippedWindowsFromSummaryLog (ADAAAA-7741 AC4)", () => {

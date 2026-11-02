@@ -54,7 +54,10 @@ export interface LiveProgress {
   processedThroughTs: number;
   /** liveEdgeTs - processedThroughTs, clamped >= 0. */
   lagSec: number;
-  /** Cadence windows dropped past the lag budget on this run. */
+  /** SUPPLY skip count: cadence windows the rail could not serve (stale lag
+   * drops + admission + backpressure). The funded decide-rate throttle is NOT
+   * included — it is a spend decision, not missing coverage (ADAAAA-7808, PO
+   * ruling on ADAAAA-7802). */
   skippedWindows: number;
   state: "caught_up" | "behind" | "unknown";
   /** Wall clock this projection was derived at. */
@@ -68,7 +71,7 @@ export interface LiveProgressInput {
   > & {
     /** Read server-side only to honour the exact skip count a COMPLETED run
      * recorded; never surfaced as `observeMetrics`. */
-    observeMetrics?: { skippedStaleWindows?: number } | null;
+    observeMetrics?: { skippedStaleWindows?: number; supplySkippedWindows?: number } | null;
   };
   /** Content ts of the newest persisted observation for this job, if any. */
   newestObservationTs?: number | null;
@@ -234,7 +237,19 @@ export function deriveLiveProgress(input: LiveProgressInput): LiveProgress {
   // the COUNT is surfaced, never the observe snapshot it came from.
   const derivedSkips = skippedWindowsFromSummaryLog(entries, input.cadenceS);
   const recordedSkips = terminal ? Math.max(0, Math.round(finiteNumber(job.observeMetrics?.skippedStaleWindows) ?? 0)) : 0;
-  const skippedWindows = Math.max(derivedSkips, recordedSkips);
+  // ADAAAA-7808 (PO ruling on ADAAAA-7802): on the shipped rail `skippedWindows`
+  // is the SUPPLY count — stale drops + admission + backpressure — and NEVER the
+  // throttle, which is a funded rate decision. A terminal record now carries that
+  // exact number, so it wins over the gap heuristic: with the rate cap on, the
+  // throttled windows leave cadence gaps the heuristic reads as skipped SUPPLY
+  // (measured 35 and 33 on the 2-stream ship row against a true supply of 1 and
+  // 0). The heuristic stays the fallback for records written before the field
+  // existed.
+  const exactSupply = terminal ? finiteNumber(job.observeMetrics?.supplySkippedWindows) : null;
+  const skippedWindows =
+    exactSupply !== null && exactSupply >= 0
+      ? Math.max(0, Math.round(exactSupply))
+      : Math.max(derivedSkips, recordedSkips);
 
   const state: LiveProgress["state"] =
     !LIVE_SOURCES.has(String(job.source ?? "")) || anchorMs === null || windows.length === 0
