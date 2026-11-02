@@ -551,6 +551,25 @@ services:
       # queue is backpressure, counted as backpressureSkippedWindows) and the lag
       # budget remains the outer bound. 1 restores the serial behaviour exactly.
       - LIVE_OBSERVE_IN_FLIGHT=${LIVE_OBSERVE_IN_FLIGHT:-4}
+      # ADAAAA-7791: the four LIVE perceive knobs. `config.ts` has parsed these
+      # since ADAAAA-7774/7152 but compose never passed them into the server (no
+      # `env_file:` here), so they were unreachable from docker/.env and the live
+      # pass always ran the built-in defaults. Defaults below are the values that
+      # reproduce today's deployed live shape exactly:
+      #   LIVE_OBSERVE_CONTENT_FPS 2 => consume/stride to 2 fps (0 = perceive every
+      #     ingested frame, the pre-7774 stride-off mode).
+      #   PERCEIVE_CADENCE 1 => adaptive cadence on (0 = off, 1 = on, empty = the
+      #     tri-state auto rule). Shared with the VOD detail-first pass
+      #     (`api.ts` forwards it to both config builders), so this line also
+      #     activates `docker/.env`'s VOD cadence intent.
+      #   PERCEIVE_QUIET_STRIDE 2 => cool-region perceive stride (used only when
+      #     the cadence is on; 1 = full pass).
+      #   LIVE_PERCEIVE_UTILIZATION 0.6 => fraction of wall clock the live pass
+      #     may spend in blocking perceive.
+      - LIVE_OBSERVE_CONTENT_FPS=${LIVE_OBSERVE_CONTENT_FPS:-2}
+      - PERCEIVE_CADENCE=${PERCEIVE_CADENCE:-1}
+      - PERCEIVE_QUIET_STRIDE=${PERCEIVE_QUIET_STRIDE:-2}
+      - LIVE_PERCEIVE_UTILIZATION=${LIVE_PERCEIVE_UTILIZATION:-0.6}
       # ADAAAA-7777 (lever B): the three live decide per-call TRIM knobs, each
       # defaulting to the pre-trim behaviour so an unset .env is byte-identical.
       #   trim 1 LIVE_OBSERVE_MAX_FRAMES: the live window's frame budget (30 = the
