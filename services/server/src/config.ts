@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { GoalLineCalibration } from "./analyzer";
 import { parsePerceiveCalibration, type PerceiveCalibrationMap } from "./perceive-calibration";
-import { LIVE_OBSERVE_LAG_BUDGET_S } from "./observe-loop";
+import { LIVE_OBSERVE_LAG_BUDGET_S, LIVE_OBSERVE_MAX_FRAMES } from "./observe-loop";
 
 export interface ServerConfig {
   port: number;
@@ -219,6 +219,29 @@ export interface ServerConfig {
    * cadence is held. Acceptance still runs in content order. Default 4.
    * `LIVE_OBSERVE_IN_FLIGHT`. */
   liveObserveInFlight: number;
+  /** ADAAAA-7777 (lever B, trim 1): hard cap on the frames ONE live decide
+   * window carries. The live window is `OBSERVE_WINDOW_S` (10 s) resolved on an
+   * `OBSERVE_CONTENT_FPS` (2) grid, so the natural window is <= 20 frames and the
+   * historic cap was the shared 30. Measured on the box (ADAAAA-7777): a decide
+   * call's wall time is dominated by the verdict DECODE (~8 s fixed for the
+   * ~1.3 KB JSON reply) with a smaller per-frame multimodal prefill term, so the
+   * live rail caps at a narrower budget than VOD. Default 30 keeps the pre-trim
+   * behaviour byte-identical; the trim ladder sets it per level.
+   * `LIVE_OBSERVE_MAX_FRAMES`. */
+  liveObserveMaxFrames: number;
+  /** ADAAAA-7777 (lever B, trim 2): forward the window AUDIO CLIP (`opts
+   * .audioB64`) on the LIVE decide payload. `audioContext` still computes the
+   * audio-ENERGY LEVEL curve — that is the shared noise-change detection
+   * contract and must stay wired — but the raw clip (and the ASR transcript the
+   * decide service derives from it) is what this flag stops riding the payload.
+   * Default true (pre-trim behaviour); `LIVE_DECIDE_AUDIO_CLIP=0` drops the clip
+   * while keeping the level curve. */
+  liveDecideAudioClip: boolean;
+  /** ADAAAA-7777 (lever B, trim 3): run the Stage-2 `/confirm` dive on the LIVE
+   * pass. `DECIDE_CONFIRM_ENABLED` stays the master gate; this is the live-rail
+   * opt-out, so VOD keeps its confirmation pass when the live rail skips it.
+   * Default true; `LIVE_DECIDE_CONFIRM=0` skips the dive on live only. */
+  liveDecideConfirm: boolean;
   /** ADAAAA-7774: frame-consumption rate (content fps) of the LIVE observe pass.
    * The live ingest delivers ~5 fps (rtmp/file-sim decode) while the decide
    * window only ever carries `OBSERVE_CONTENT_FPS` (2) frames per content second
@@ -549,6 +572,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // self-corrects instead of queueing unbounded. `LIVE_OBSERVE_IN_FLIGHT=1`
     // restores the old serial behaviour exactly.
     liveObserveInFlight: Number(env.LIVE_OBSERVE_IN_FLIGHT ?? 4),
+    // ADAAAA-7777 (lever B, trim 1): the live window's frame budget. Defaults to
+    // the historic shared cap (30) so an unset env is byte-identical.
+    liveObserveMaxFrames: Number(env.LIVE_OBSERVE_MAX_FRAMES ?? LIVE_OBSERVE_MAX_FRAMES),
+    // ADAAAA-7777 (lever B, trim 2): the window audio CLIP on the live decide
+    // payload. The audio-energy level curve (noise-change trigger contract) is
+    // still computed from `audioContext`; only the raw clip is gated here.
+    liveDecideAudioClip: env.LIVE_DECIDE_AUDIO_CLIP !== "0",
+    // ADAAAA-7777 (lever B, trim 3): the Stage-2 /confirm dive on the live rail.
+    // `DECIDE_CONFIRM_ENABLED` remains the master gate.
+    liveDecideConfirm: env.LIVE_DECIDE_CONFIRM !== "0",
     // ADAAAA-7758: one live decide slot per box (opt-in). Off by default: the
     // queued-stream wording is a CEO decision (ADAAAA-7757), so the shipped
     // behaviour only changes once the flag is enabled on the deployment.

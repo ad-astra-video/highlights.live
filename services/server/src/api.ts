@@ -4194,6 +4194,15 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-6314 Path 2: live trigger candidates forward the surrounding
     // audio clip so the decide prompt gets ASR'd audio context (env-gated).
     audioContext: cfg.audioContext,
+    // ADAAAA-7777 (lever B, trim 2): the live window's AUDIO CLIP is a per-call
+    // trim knob. The audio-ENERGY level curve (noise-change detection contract)
+    // stays wired through `audioContext`; only the raw clip + its ASR transcript
+    // are gated here.
+    decideAudioClip: cfg.liveDecideAudioClip,
+    // ADAAAA-7777 (lever B, trim 1): the live window's frame budget (default 30,
+    // the historic shared cap). A live decide call's wall time is decode-bound,
+    // so this trims the smaller per-frame prefill term without touching VOD.
+    observeMaxFrames: cfg.liveObserveMaxFrames,
     // Increment D (ADAAAA-6467): the what-to-track planner's warm-up window
     // + out-of-band re-check cadence on the LIVE pass (cap 3).
     warmupSeconds: cfg.warmupSeconds,
@@ -4245,8 +4254,10 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-7663: Stage-2 goal/near-miss confirmation pass on the LIVE pass.
     // The live pass previously left this unset, so shouldRunConfirm() returned
     // false on every live read and no gNNN:confirm row could ever be written.
-    // Flag off => false => the Stage-1 path is a strict no-op (AC5).
-    confirmEnabled: cfg.decideConfirmEnabled,
+    // ADAAAA-7777 (lever B, trim 3): the live rail can skip the Stage-2 dive
+    // without touching VOD (`LIVE_DECIDE_CONFIRM=0`). DECIDE_CONFIRM_ENABLED
+    // stays the master gate, so `off` is still a strict no-op.
+    confirmEnabled: cfg.decideConfirmEnabled && cfg.liveDecideConfirm,
     confirmWindowExtraS: cfg.decideConfirmExtraWindowS,
     // One confirm dive per distinct goal across the overlapping rolling windows
     // (the observe window + a cadence tick of slack; see

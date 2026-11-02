@@ -852,6 +852,15 @@ export interface AnalyzerConfig {
    * operator enables it. `LIVE_AUDIO_CONTEXT`.
    */
    audioContext?: boolean;
+  /**
+   * ADAAAA-7777 (lever B, trim 2): include the window AUDIO CLIP on the observe
+   * decide payload (`opts.audioB64`). `audioContext` still drives the audio-energy
+   * level curve (`evidence.audioLevels` + reaction crowdEnergy) — that is the
+   * shared noise-change detection contract, so it stays wired when this flag is
+   * off. Only the raw clip (and the ASR transcript the decide service derives
+   * from it) is gated here. Unset = include, the pre-trim behaviour.
+   */
+  decideAudioClip?: boolean;
   /** Increment F / ADAAAA-6465 (plan §4.9): analysis FPS cap for the assembly
    * of the frame sequence the LLM watches per trigger. Default 5 (live). The
    * sequence is sampled at this rate around the trigger, always includes the
@@ -2969,7 +2978,7 @@ export function buildObserveDecideRequest(
   const frameTs = payload.frames.map((f) => f.ts).filter((t) => Number.isFinite(t));
   const preS = frameTs.length ? Math.max(center - Math.min(...frameTs), 0) + AUDIO_WINDOW_MARGIN_S : AUDIO_DEFAULT_WINDOW_S;
   const postS = frameTs.length ? Math.max(Math.max(...frameTs) - center, 0) + AUDIO_WINDOW_MARGIN_S : AUDIO_DEFAULT_WINDOW_S;
-  const windowAudioB64 = cfg.audioContext ? run.audioWindowB64(center, preS, postS) : "";
+  const windowAudioB64 = cfg.audioContext && cfg.decideAudioClip !== false ? run.audioWindowB64(center, preS, postS) : "";
   const windowAudioLevels = cfg.audioContext ? run.audioWindowLevels(center, preS, postS) : [];
   const audioPeak = windowAudioLevels.length ? Math.max(...windowAudioLevels) : 0;
   const evidence: Parameters<PipelineClient["decide"]>[0] = {
