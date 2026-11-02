@@ -11,6 +11,7 @@ to pin the three ways this producer can lie:
     not leave a slice, and a slice must carry the weights identity).
 """
 import io
+import hashlib
 import json
 import os
 import sys
@@ -344,3 +345,56 @@ def test_detect_needs_a_profile_or_a_vocabulary(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         dnw.cmd_detect(_detect_args(root, str(tmp_path / "slice.json"), profile=None))
     assert "--profile or --vocabulary" in str(exc.value)
+
+
+def test_weights_identity_hashes_a_local_model_dir_on_cpu(tmp_path):
+    # The scene the Reviewer asked for: check the served weights from the slice
+    # on a CPU host, with no torch and no detector method.
+    model = tmp_path / "Florence-2-base-finetuned"
+    model.mkdir()
+    (model / "model.safetensors").write_bytes(b"weights-bytes")
+    (model / "adapter_model.safetensors").write_bytes(b"adapter-bytes")
+    (model / "config.json").write_text("{}")
+    ident = dnw.weights_identity(str(model), device_label="cpu")
+    assert ident["sourceKind"] == "local_dir"
+    assert ident["modelPath"] == str(model)
+    assert ident["deviceLabel"] == "cpu"
+    files = {w["file"]: w for w in ident["weights"]}
+    # Only weight files are hashed; config.json is not part of the model bytes.
+    assert set(files) == {"model.safetensors", "adapter_model.safetensors"}
+    assert files["model.safetensors"]["sha256"] == hashlib.sha256(b"weights-bytes").hexdigest()
+    assert files["model.safetensors"]["bytes"] == len(b"weights-bytes")
+
+
+def test_weights_identity_records_the_env_value_verbatim(tmp_path, monkeypatch):
+    monkeypatch.setenv("FLORENCE_MODEL", "microsoft/Florence-2-base")
+    ident = dnw.weights_identity(None, digest=False)
+    assert ident["envValue"] == "microsoft/Florence-2-base"
+    assert ident["sourceKind"] == "hub_id"
+    assert ident["weights"] == []
+
+
+def test_detector_identity_falls_back_when_the_image_has_no_method(tmp_path, monkeypatch):
+    # The serving image's FlorenceDetector has no weights_identity(); the slice
+    # must still carry the weights, not crash after the frames were spent.
+    model = tmp_path / "served-weights"
+    model.mkdir()
+    (model / "model.safetensors").write_bytes(b"x")
+    monkeypatch.setenv("FLORENCE_MODEL", str(model))
+
+    class _OldDetector:
+        device_label = "cpu"
+
+    ident = dnw.detector_weights_identity(_OldDetector())
+    assert ident["source"] == str(model)
+    assert ident["weights"][0]["sha256"] == hashlib.sha256(b"x").hexdigest()
+
+
+def test_detector_identity_prefers_the_detector_method():
+    class _NewDetector:
+        device_label = "cuda:0"
+
+        def weights_identity(self, digest=True):
+            return {"source": "/served", "method": "detector", "digest": digest}
+
+    assert dnw.detector_weights_identity(_NewDetector())["method"] == "detector"
