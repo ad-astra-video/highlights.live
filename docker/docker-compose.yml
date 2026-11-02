@@ -613,6 +613,14 @@ services:
       # makes the extra stream wait, and that customer wording is a CEO decision
       # (ADAAAA-7757 option C). Enabling it is an operator/deploy choice.
       - LIVE_DECIDE_ADMISSION=${LIVE_DECIDE_ADMISSION:-0}
+      # ADAAAA-7799 (lever C): the decide-rate CAP. Spend is a pure function of
+      # decided windows ($/h/stream = decideCalls * 12 * 0.0033), so the funded
+      # $2.75 ceiling is ~69 decides per 300 s per stream against 104 cadence
+      # windows. This drops every Nth decide OPPORTUNITY on a fixed stride
+      # (3 = two of every three windows ~69 of 104, counted as
+      # observeMetrics.throttleSkippedWindows) without touching the cadence, the
+      # window span or the audio noise-change trigger. Unset/1 = off.
+      - LIVE_DECIDE_SKIP_EVERY=${LIVE_DECIDE_SKIP_EVERY:-}
       # ADAAAA-6973/7051: the live goal-confirm gate. DECIDE_CONFIRM_ENABLED=1
       # arms the Stage-2 confirm goal-leg pass (server `shouldRunConfirm`,
       # decide `_confirm_pass_enabled`) so a candidate is only published when

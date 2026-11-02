@@ -462,6 +462,23 @@ export class LiveObserver {
    *  was not late. */
   private backpressureSkips = 0;
   private lastBackpressureSkipTs: number | null = null;
+  /** ADAAAA-7799 (lever C): decide-rate CAP. Spend is a pure function of decided
+   *  windows (`decideCalls * 12 * 0.0033` $/h/stream), so the funded ceiling is
+   *  held by DROPPING decide opportunities on a fixed stride instead of deciding
+   *  every cadence tick: `null` = off (byte-identical), N >= 2 = every Nth
+   *  opportunity is dropped (N = 3 => 2 of every 3 windows decided). The pattern
+   *  is deterministic and the drops are counted, so the gap between the cadence
+   *  and the decide count is auditable rather than random. The window span and
+   *  the audio noise-change trigger are NOT touched: a trigger that comes due on
+   *  a dropped window stays PENDING (never consumed) and anchors the next kept
+   *  window. */
+  private readonly decideSkipEvery: number | null;
+  /** ADAAAA-7799: decide opportunities dropped by the rate cap. */
+  private throttleSkips = 0;
+  /** ADAAAA-7799: 1-based index of the decide opportunity under consideration.
+   *  Opportunities are counted per WINDOW (a dropped window advances the
+   *  cadence, so a frame-by-frame retry never inflates this). */
+  private decideOpportunities = 0;
   /** ADAAAA-7771: serialized accept chain + the first decide/accept failure.
    *  A failure is rethrown by `flush()`, matching the serial pass (which threw
    *  out of the frame loop). */
@@ -505,6 +522,12 @@ export class LiveObserver {
     depthBudget?: () => number;
     /** Minimum budget needed to fire early on a trigger (default 0.4). */
     triggerMinBudget?: number;
+    /** ADAAAA-7799 (lever C): decide-rate cap. Drop every Nth decide
+     *  opportunity on a fixed stride (N >= 2), so the decided-window rate — and
+     *  therefore spend — is bounded deterministically. `undefined`/1/<2 = off,
+     *  byte-identical to the unbounded pass. Wired from
+     *  `LIVE_DECIDE_SKIP_EVERY`. */
+    decideSkipEvery?: number;
     /** ADAAAA-7758: admission predicate evaluated before this tick spends a
      *  decide. `false` skips the tick (no decide, no latency sample, no budget
      *  token, pending triggers stay pending) and counts an admission skip — the
@@ -530,6 +553,10 @@ export class LiveObserver {
     this.maxInFlight = Math.max(1, Math.floor(opts.maxInFlight ?? 1));
     this.depthBudget = opts.depthBudget ?? null;
     this.triggerMinBudget = opts.triggerMinBudget ?? 0.4;
+    // ADAAAA-7799: normalise the stride. Anything below 2 (unset, 1, 0, NaN)
+    // leaves the pass unbounded, so an unset env is byte-identical.
+    const skipEvery = Math.floor(opts.decideSkipEvery ?? 1);
+    this.decideSkipEvery = Number.isFinite(skipEvery) && skipEvery >= 2 ? skipEvery : null;
     this.stageA = opts.stageA ?? null;
     this.stageB = opts.stageB ?? null;
     // ADAAAA-7723: the stale horizon is the FRAME RETENTION horizon, not the
@@ -811,6 +838,10 @@ export class LiveObserver {
   backpressureSkipCount(): number {
     return this.backpressureSkips;
   }
+  /** ADAAAA-7799: decide opportunities the rate cap dropped (fixed stride). */
+  throttleSkipCount(): number {
+    return this.throttleSkips;
+  }
   /** ADAAAA-7771: the last window ISSUED (content ts + measured lag), for the
    *  `[live-lag]` evidence line. Independent of the settle ordering. */
   lastFiredWindow(): { centerTs: number; lagMs: number } | null {
@@ -929,6 +960,21 @@ export class LiveObserver {
         this.lastAdmissionSkipTs = nowTs;
       }
       return;
+    }
+    // ADAAAA-7799 (lever C): decide-rate CAP. Every Nth opportunity that would
+    // otherwise decide now is DROPPED: the cadence advances past the window
+    // (`lastFireTs` moves, so it is not retried frame by frame), no budget token
+    // is spent, and a due audio trigger is NOT consumed — it stays pending and
+    // anchors the next kept window (the trigger contract and the window span are
+    // untouched; only the decide slot rate is capped). A FORCE fire (the
+    // end-of-stream tail) always decides: dropping it would lose the tail window.
+    if (this.decideSkipEvery !== null && !force) {
+      this.decideOpportunities++;
+      if (this.decideOpportunities % this.decideSkipEvery === 0) {
+        this.throttleSkips++;
+        this.lastFireTs = nowTs;
+        return;
+      }
     }
     if (anchored) this.triggers.consume(dueTrigger);
     const prevFire = this.lastFireTs;

@@ -512,6 +512,9 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // optional: absent on records written before these fields existed.
   maxDecideInFlight: z.number().int().min(0).optional(),
   backpressureSkippedWindows: z.number().int().min(0).optional(),
+  // ADAAAA-7799: decide opportunities the rate cap DROPPED on its fixed stride
+  // (LIVE_DECIDE_SKIP_EVERY). Additive optional: absent when the cap is off.
+  throttleSkippedWindows: z.number().int().min(0).optional(),
   // ADAAAA-7774: the LIVE perceive stride (ingest -> analysis fps). The live
   // ingest delivers ~5 fps while the decide window only carries ~2 fps of
   // content, so the pass now CONSUMES frames at the analysis fps and runs the
