@@ -672,3 +672,61 @@ def test_window_cache_dropped_when_reanchor_fires():
     for f in range(5):
         backend.advance({0: prompt}, frame_index=f)
     assert fake.windows[-1] == (4, 8), "re-anchor must invalidate the cached window"
+
+
+def test_parses_client_postprocessed_arrays_not_obj_id_to_mask():
+    # ADAAAA-7345 ROOT CAUSE: Sam3VideoInference._postprocess_output returns
+    # `out_obj_ids` / `out_binary_masks` (parallel arrays) and never
+    # `obj_id_to_mask`. Reading the dict made every frame parse as "no
+    # objects", which is why the whole chain measured zero masks.
+    class ClientShapePredictor(FakePredictor):
+        def handle_stream_request(self, req):
+            if "start_frame_index" not in req:
+                raise KeyError("propagate request must use `start_frame_index`")
+            start = req["start_frame_index"]
+            row = self.frames[min(start, len(self.frames) - 1)]
+            ids, masks = [], []
+            for oid, b in row.items():
+                m = _mask(b)
+                if m is None:
+                    continue
+                ids.append(oid)
+                masks.append(m)
+            yield {
+                "frame_index": start,
+                "outputs": {
+                    "out_obj_ids": np.array(ids, dtype=np.int64),
+                    "out_probs": np.ones(len(ids), dtype=np.float32),
+                    "out_boxes_xywh": np.zeros((len(ids), 4), dtype=np.float32),
+                    "out_binary_masks": (
+                        np.stack(masks) if masks else np.zeros((0, 16, 16), bool)
+                    ),
+                },
+            }
+
+    fake = ClientShapePredictor([{0: (0.2, 0.2, 0.4, 0.4), 1: (0.6, 0.6, 0.8, 0.8)}])
+    backend = Sam3Backend(predictor_factory=lambda: fake, clip_path="x.mp4")
+    backend.advance({0: (0.2, 0.2, 0.4, 0.4), 1: (0.6, 0.6, 0.8, 0.8)})
+    assert backend.get(0) is not None and backend.get(1) is not None
+    assert backend.get(0)[0] == pytest.approx(0.2, abs=0.06)
+    assert backend.get(1)[0] == pytest.approx(0.6, abs=0.06)
+    assert backend._last_mask_ids == [0, 1]
+
+
+def test_client_shape_empty_frame_is_none():
+    class Empty(WindowPredictor):
+        def handle_stream_request(self, req):
+            yield {
+                "frame_index": req["start_frame_index"],
+                "outputs": {
+                    "out_obj_ids": np.zeros(0, dtype=np.int64),
+                    "out_probs": np.zeros(0, dtype=np.float32),
+                    "out_boxes_xywh": np.zeros((0, 4), dtype=np.float32),
+                    "out_binary_masks": np.zeros((0, 16, 16), bool),
+                },
+            }
+
+    fake = Empty([{0: (0.2, 0.2, 0.4, 0.4)}])
+    backend = Sam3Backend(predictor_factory=lambda: fake, clip_path="x.mp4")
+    backend.advance({0: (0.2, 0.2, 0.4, 0.4)})
+    assert backend.get(0) is None
