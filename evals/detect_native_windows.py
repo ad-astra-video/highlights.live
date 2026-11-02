@@ -261,12 +261,26 @@ def cmd_detect(args) -> int:
             f"planned {planned} frames exceeds the approved envelope {args.max_frames} - "
             "stop and return a revised proposal")
 
-    from app.game_profile import load_game_profile
+    if args.vocabulary:
+        # The deploy image ships the detector but NOT the repo's
+        # `app.game_profile` module, so a run inside `highlights-perceive` cannot
+        # import the profile. The closed vocabulary is what the slice actually
+        # needs; it is passed explicitly (from the image's own game-hint map) and
+        # `profileKey` records which roster it belongs to.
+        vocab = [v.strip() for v in args.vocabulary.split(",") if v.strip()]
+        profile_key = args.profile or args.type_key or ""
+        if not vocab:
+            raise SystemExit("--vocabulary was empty")
+    else:
+        if not args.profile:
+            raise SystemExit("the detect stage needs either --profile or --vocabulary")
+        from app.game_profile import load_game_profile
 
-    profile = load_game_profile(args.profile)
-    vocab = list(profile.vocabulary)
+        profile = load_game_profile(args.profile)
+        vocab = list(profile.vocabulary)
+        profile_key = profile.key
     if not vocab:
-        raise SystemExit(f"profile {profile.key!r} declares no detection vocabulary")
+        raise SystemExit(f"profile {profile_key!r} declares no detection vocabulary")
 
     from app.florence import FlorenceDetector
 
@@ -331,8 +345,8 @@ def cmd_detect(args) -> int:
 
     src = index["source"]
     slice_doc = build_slice_doc(
-        profile_key=profile.key,
-        type_key=args.type_key or profile.key,
+        profile_key=profile_key,
+        type_key=args.type_key or profile_key,
         vocabulary=vocab,
         fps=index["fps"],
         clip_name=os.path.basename(src["url"]),
@@ -394,7 +408,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("detect", help="run the deployed detector over the fetched frames")
     d.add_argument("--fetch-dir", required=True)
-    d.add_argument("--profile", required=True)
+    d.add_argument("--profile", default=None,
+                   help="game profile whose roster defines the vocabulary (needs app.game_profile)")
+    d.add_argument("--vocabulary", default=None,
+                   help="comma-separated closed vocabulary; use inside the deploy image, "
+                        "which ships the detector but not app.game_profile")
     d.add_argument("--type-key", default=None)
     d.add_argument("--model", default=None, help="override FLORENCE_MODEL")
     d.add_argument("--max-frames", type=int, required=True, help="approved frame envelope")

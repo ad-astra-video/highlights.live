@@ -275,8 +275,9 @@ def _write_fetch_dir(root, windows, width=8, height=6):
     return root
 
 
-def _detect_args(root, out, max_frames=63, budget=2.0):
-    return types.SimpleNamespace(fetch_dir=root, profile="american football", type_key=None,
+def _detect_args(root, out, max_frames=63, budget=2.0, vocabulary=None, profile="american football"):
+    return types.SimpleNamespace(fetch_dir=root, profile=profile, type_key=None,
+                                 vocabulary=vocabulary,
                                  model=None, max_frames=max_frames,
                                  budget_gpu_minutes=budget, out=out)
 
@@ -316,3 +317,30 @@ def test_detect_aborts_mid_run_on_the_minute_envelope(tmp_path, stub_app):
     with pytest.raises(SystemExit):
         dnw.cmd_detect(_detect_args(root, out, max_frames=63, budget=-1.0))
     assert not os.path.exists(out)
+
+
+def test_detect_runs_with_an_explicit_vocabulary_and_no_game_profile(tmp_path, monkeypatch):
+    # The deploy image ships app.florence but not app.game_profile, so a run
+    # inside highlights-perceive passes the closed vocabulary explicitly.
+    app = types.ModuleType("app")
+    fl = types.ModuleType("app.florence")
+    fl.FlorenceDetector = _StubDetector
+    monkeypatch.setitem(sys.modules, "app", app)
+    monkeypatch.setitem(sys.modules, "app.florence", fl)
+    monkeypatch.delitem(sys.modules, "app.game_profile", raising=False)
+
+    root = _write_fetch_dir(str(tmp_path / "fetch"), [("E01", 2)])
+    out = str(tmp_path / "slice.json")
+    args = _detect_args(root, out, vocabulary="football, player, referee")
+    assert dnw.cmd_detect(args) == 0
+    doc = json.load(open(out))
+    assert doc["vocabulary"] == ["football", "player", "referee"]
+    assert doc["profile"] == "american football"
+
+
+def test_detect_needs_a_profile_or_a_vocabulary(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "app", types.ModuleType("app"))
+    root = _write_fetch_dir(str(tmp_path / "fetch"), [("E01", 1)])
+    with pytest.raises(SystemExit) as exc:
+        dnw.cmd_detect(_detect_args(root, str(tmp_path / "slice.json"), profile=None))
+    assert "--profile or --vocabulary" in str(exc.value)
