@@ -1201,6 +1201,33 @@ export const LiveProgressSchema = z.object({
 });
 export type LiveProgress = z.infer<typeof LiveProgressSchema>;
 
+/** ADAAAA-7750: WHY a live job has no analysis windows yet, as a customer-safe
+ * projection derived read-time from stored counters. Additive optional on the
+ * job-detail payload, so no contract version bump; absent on servers that
+ * predate it. `cause` + `action` are user-facing copy, `frames`/`windows`/
+ * `highlights` are counters the job page already renders. */
+export const LiveCaptureSchema = z.object({
+  state: z.enum([
+    "connecting",
+    "waiting_first_window",
+    "capturing",
+    "interrupted",
+    "no_capture",
+    "no_highlights",
+    "unknown",
+  ]),
+  frames: z.number().int().min(0),
+  windows: z.number().int().min(0),
+  highlights: z.number().int().min(0),
+  /** Seconds until the first window is due; only on connecting/waiting states. */
+  firstWindowInS: z.number().min(0).nullable(),
+  cause: z.string().nullable(),
+  action: z.string().nullable(),
+  updatedAt: z.string(),
+});
+export type LiveCapture = z.infer<typeof LiveCaptureSchema>;
+
+
 
 /** Composite payload of GET /jobs/:id/detail (ADAAAA-6851 Inc 3). */
 export const JobDetailSchema = z.object({
@@ -1224,6 +1251,9 @@ export const JobDetailSchema = z.object({
   /** ADAAAA-7741: customer-facing processing-lag projection (additive optional —
    * absent on servers that predate it / payloads that never carried it). */
   liveProgress: LiveProgressSchema.optional(),
+  /** ADAAAA-7750: the capture-state projection for a zero-window job (additive
+   * optional — absent on servers that predate it). */
+  capture: LiveCaptureSchema.optional(),
 });
 export type JobDetail = z.infer<typeof JobDetailSchema>;
 

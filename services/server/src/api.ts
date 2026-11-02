@@ -59,6 +59,7 @@ import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { jobDetailForRole, jobEventForRole, jobForRole, jobsForRole } from "./job-visibility";
 import { deriveLiveProgress, newestObservationTs } from "./live-progress";
+import { deriveLiveCapture } from "./live-capture";
 import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
 import { outcomeForMediaCloseReason, outcomeForStrandedJob, type JobFailureReason, type JobOutcome } from "./job-failure";
@@ -2116,6 +2117,25 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // capacity-1 perceive runner instead of dropping its session mid-pass.
   app.get("/admin/inflight-jobs", { preHandler: adminReadOnlyReq }, async () => {
     const inflight = store.listActiveJobs();
+    // ADAAAA-7750 AC4: the gate also has to cover LIVE MEDIA sessions, not only
+    // mid-pass analyze jobs. The 2026-11-01 22:16Z incident (ADAAAA-7700) was a
+    // `highlights-media` recreate landing mid-share, which fails the job as
+    // `media-session-lost` even though the analyze queue was empty - so a gate
+    // that only reads `inflight` reports a clear runway during a live share.
+    // `liveSessions` is the durable `media_sessions` row per job still `active`.
+    const sessions = await db
+      .listMediaSessions()
+      .catch(() => [] as Array<{ jobId: string; sessionId: string; status: string; createdAt: string }>);
+    const liveSessions = sessions
+      .filter((s) => s.status === "active")
+      .map((s) => ({
+        jobId: s.jobId,
+        sessionId: s.sessionId,
+        createdAt: s.createdAt,
+        // The job that owns the session, when it is still tracked in memory.
+        status: store.getJob(s.jobId)?.status ?? "unknown",
+        source: store.getJob(s.jobId)?.source ?? "unknown",
+      }));
     return {
       generatedAt: new Date().toISOString(),
       inflight: inflight.map((j) => ({
@@ -2124,6 +2144,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         gameHint: j.gameHint ?? "",
         createdAt: j.createdAt,
       })),
+      liveSessions,
     };
   });
 
@@ -2968,6 +2989,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // Top-level (not under `job`) so the role filter keeps it: it carries no
         // pipeline/spend internals, only the lag projection.
         liveProgress: deriveLiveProgress({ job, newestObservationTs: newestObservationTs(obs) }),
+        // ADAAAA-7750: WHY the window list is empty, when it is. Derived from
+        // stored counters only (no decide, no GPU): a dead capture surface, a
+        // share still inside the first-window budget, and a run whose windows
+        // were all judged "not a highlight" are three different answers and used
+        // to render as the same bare `No analysis windows for this job.`
+        capture: deriveLiveCapture({
+          job,
+          observationCount: obs.length,
+          highlightCount: postable.highlights.length,
+          // A live share holds an `active` media_sessions row while a media node
+          // is carrying it; the row is cleared when the job ends.
+          hasLiveMediaSession:
+            (await db.getMediaSession(job.id).catch(() => undefined))?.status === "active",
+        }),
       }),
       user.role
     );
