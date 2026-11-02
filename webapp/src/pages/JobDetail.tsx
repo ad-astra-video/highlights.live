@@ -35,9 +35,11 @@ import {
   type NoteKind,
   type SummaryLogEntry,
   type LiveProgress,
+  type LiveCapture,
   summaryEntryTimestamp,
 } from "../lib/jobDetail";
 import { LiveProgressChip } from "../components/LiveProgressChip";
+import { CaptureNotice } from "../components/CaptureNotice";
 import {
   drawFrameWithBoxes,
   drawFrameFullBleed,
@@ -1054,12 +1056,18 @@ export function DecideAuditRow({ audit: a }: { audit: DecideAuditRecord }) {
  * select/enlarge frame controls, no filmstrip. The admin block below keeps all
  * of it on the same job id.
  */
-export function CustomerAnalysisSection({ sections }: { sections: FrameSection[] }) {
+export function CustomerAnalysisSection({ sections, capture }: { sections: FrameSection[]; capture?: LiveCapture }) {
   return (
     <>
       <h3 className="text-2xl font-black">Analysis</h3>
       {sections.length === 0 ? (
-        <div className="mt-3 text-mut" data-analysis-empty>No analysis windows for this job.</div>
+        <div className="mt-3" data-analysis-empty>
+          {/* ADAAAA-7750: the empty list gets a cause. A healthy share inside the
+              first-window budget, a dead capture surface and a run whose windows
+              were all judged "not a highlight" must never read the same. */}
+          <CaptureNotice capture={capture} />
+          <div className="text-mut">No analysis windows yet.</div>
+        </div>
       ) : (
         <div className="mt-3 flex flex-col gap-2" data-analysis-windows>
           {sections.map((s) => (
@@ -1866,7 +1874,7 @@ export function JobDetail() {
             )}
               </>
             ) : (
-              <CustomerAnalysisSection sections={detail.sections} />
+              <CustomerAnalysisSection sections={detail.sections} capture={detail.capture} />
             )}
           </div>
 

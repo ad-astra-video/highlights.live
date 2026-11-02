@@ -365,6 +365,30 @@ export interface JobDetail {
   // read time from stored data. Mirrors LiveProgressSchema in @highlights/events
   // — additive optional, absent on servers that predate it.
   liveProgress?: LiveProgress;
+  // ADAAAA-7750: WHY the window list is empty, when it is — derived read-time
+  // from stored counters. Additive optional, absent on servers that predate it.
+  capture?: LiveCapture;
+}
+
+/** ADAAAA-7750: capture-state projection for a zero-window job. Mirrors
+ * LiveCaptureSchema in @highlights/events. `cause`/`action` are the customer
+ * copy; the counters are the same ones the job page already renders. */
+export interface LiveCapture {
+  state:
+    | "connecting"
+    | "waiting_first_window"
+    | "capturing"
+    | "interrupted"
+    | "no_capture"
+    | "no_highlights"
+    | "unknown";
+  frames: number;
+  windows: number;
+  highlights: number;
+  firstWindowInS: number | null;
+  cause: string | null;
+  action: string | null;
+  updatedAt: string;
 }
 
 /** ADAAAA-7741: processing-lag projection on GET /jobs/:id and

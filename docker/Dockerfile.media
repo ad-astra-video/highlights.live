@@ -13,4 +13,13 @@ COPY . .
 RUN npm ci
 ENV NODE_ENV=production
 EXPOSE 4070
-CMD ["npx", "tsx", "services/media/src/index.ts"]
+# ADAAAA-7750: run the service as PID 1 instead of behind `npx`. With npm as PID 1
+# a container restart (docker restart, compose recreate) delivered SIGTERM to npm,
+# which killed the tsx child before the media process's `SIGTERM` handler could
+# write its exit to the lifecycle ledger - so the next boot recorded the previous
+# boot as `unobserved-exit` and `/health` reported `restartCause: "crash"` for a
+# deploy. That mislabel is what made the 05:47Z recreate read as a 23-minute
+# crash outage (ADAAAA-7750 AC1). Node as PID 1 receives the signal itself and
+# records `{code:0, signal:"SIGTERM", reason:"signal"}` (verified locally), which
+# the ledger reports as `restartCause: "restart"`.
+CMD ["node", "--import", "tsx", "services/media/src/index.ts"]
