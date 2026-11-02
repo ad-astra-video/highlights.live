@@ -43,6 +43,7 @@ fetched bytes; stage 2 records the weights identity via the same
 from __future__ import annotations
 
 import argparse
+import glob
 import hashlib
 import json
 import os
@@ -58,6 +59,80 @@ import numpy as np  # noqa: E402
 from detect_slice_from_windows import build_slice_doc  # noqa: E402
 
 DEFAULT_CHUNK_BYTES = 2 * 1024 * 1024
+
+# The files whose BYTES are the served weights (same allowlist as
+# services/perceive/app/provenance.py). Hashing every file in a model dir would
+# inflate the slice and scan a multi-GB tree; these are the model itself.
+WEIGHT_FILE_PATTERNS = (
+    "*.safetensors",
+    "pytorch_model*.bin",
+    "*.onnx",
+    "openvino_model*.xml",
+)
+
+
+def sha256_file(path: str, chunk: int = 1024 * 1024) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for blk in iter(lambda: fh.read(chunk), b""):
+            h.update(blk)
+    return h.hexdigest()
+
+
+def weights_identity(source: str | None = None, digest: bool = True,
+                     device_label: str | None = None) -> dict:
+    """Weights identity for the slice document, computed with no GPU.
+
+    Prefers a detector's own `weights_identity()` (the newer perceive image
+    resolves what it actually loaded). The image this slice was produced on
+    predates that method, so the identity is derived here from the resolved
+    model path instead: `FLORENCE_MODEL` is what the process loaded, and a
+    per-file sha256 makes the claim checkable on CPU against any copy of the
+    dir - which is exactly what ADAAAA-7797 could not do with `detector: cuda:0`.
+    """
+    src = source or os.environ.get("FLORENCE_MODEL")
+    out = {
+        "modelName": os.environ.get("FLORENCE_MODEL") or None,
+        "modelPath": src if src and os.path.isdir(src) else None,
+        "source": src,
+        "sourceKind": "local_dir" if src and os.path.isdir(src) else "hub_id",
+        "envVar": "FLORENCE_MODEL",
+        # Recorded verbatim: an unset env var and an explicit id are different
+        # facts, and a slice without it cannot be re-derived from the code.
+        "envValue": os.environ.get("FLORENCE_MODEL"),
+        "deviceLabel": device_label,
+        "hubCommit": None,
+        "weights": [],
+    }
+    if src and os.path.isdir(src):
+        seen: set[str] = set()
+        for pattern in WEIGHT_FILE_PATTERNS:
+            for path in sorted(glob.glob(os.path.join(src, pattern))):
+                name = os.path.basename(path)
+                if name in seen or not os.path.isfile(path):
+                    continue
+                seen.add(name)
+                rec = {"file": name, "bytes": os.path.getsize(path)}
+                if digest:
+                    rec["sha256"] = sha256_file(path)
+                out["weights"].append(rec)
+    return out
+
+
+def detector_weights_identity(det, digest: bool = True) -> dict:
+    """Ask the detector first; fall back to the env-resolved path.
+
+    `FlorenceDetector.weights_identity()` exists only on images newer than the
+    one serving american football, so a missing method must degrade to the
+    env-derived identity (with hashes) instead of losing the slice after the
+    frames were already paid for.
+    """
+    fn = getattr(det, "weights_identity", None)
+    if callable(fn):
+        return fn(digest=digest)
+    return weights_identity(getattr(det, "model_path", None), digest=digest,
+                            device_label=getattr(det, "device_label", None))
+
 
 
 def parse_window(spec: str) -> dict:
@@ -337,11 +412,11 @@ def cmd_detect(args) -> int:
 
     wall_s = time.time() - started
     try:
-        detector_model = det.weights_identity()
+        detector_model = detector_weights_identity(det)
     except OSError as exc:
         print(f"WARNING: weight digest failed ({exc}); recording identity without hashes",
               file=sys.stderr)
-        detector_model = det.weights_identity(digest=False)
+        detector_model = detector_weights_identity(det, digest=False)
 
     src = index["source"]
     slice_doc = build_slice_doc(
