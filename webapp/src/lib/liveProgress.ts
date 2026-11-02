@@ -89,6 +89,21 @@ export function nextLiveReadHealth(
 }
 
 /**
+ * ADAAAA-7759: the stated-failure banner copy for a persistent failed light
+ * read, or `null` while the failure is still within the transient window.
+ *
+ * Below LIVE_PROGRESS_STALE_AFTER_FAILED_READS the chip alone carries the stale
+ * clause (a single dropped read is normal); at/after it the page also says which
+ * read failed and how old the number on screen is, so a long outage is never a
+ * silent freeze.
+ */
+export function liveProgressFailureNotice(health: LiveReadHealth): string | null {
+  if (health.consecutiveFailures < LIVE_PROGRESS_STALE_AFTER_FAILED_READS) return null;
+  const age = Math.max(0, Math.round(health.staleSec));
+  return `Live lag refresh failing (${health.lastError ?? "read failed"}) — the chip shows the last reading from ${age} s ago. The job keeps processing.`;
+}
+
+/**
  * The lag chip copy for an in-flight job, or `null` when there is nothing
  * honest to show yet (no decided window, or a terminal job whose completion
  * state belongs in the status chip).

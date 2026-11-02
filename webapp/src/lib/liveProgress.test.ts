@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   LIVE_PROGRESS_BUDGET_S,
+  LIVE_PROGRESS_STALE_AFTER_FAILED_READS,
   LIVE_PROGRESS_STALE_MIN_SEC,
   LIVE_READ_HEALTH_FRESH,
   liveProgressChipLabel,
+  liveProgressFailureNotice,
   nextLiveReadHealth,
 } from "./liveProgress";
 import type { LiveProgress } from "./jobDetail";
@@ -106,5 +108,37 @@ describe("nextLiveReadHealth (ADAAAA-7759)", () => {
     expect(rec.staleSec).toBe(0);
     expect(rec.lastError).toBeNull();
     expect(rec.lastOkAt).toBe(t0 + 30_000);
+  });
+});
+
+describe("liveProgressFailureNotice (ADAAAA-7759)", () => {
+  const t0 = 1_700_000_000_000;
+
+  it("stays quiet for a single transient failed read", () => {
+    const ok = nextLiveReadHealth(LIVE_READ_HEALTH_FRESH, { ok: true, at: t0 });
+    const f1 = nextLiveReadHealth(ok, { ok: false, at: t0 + 5_000, error: "HTTP 400" });
+    expect(liveProgressFailureNotice(f1)).toBeNull();
+  });
+
+  it("states the failing read, the stale age and that the job keeps processing once persistent", () => {
+    const ok = nextLiveReadHealth(LIVE_READ_HEALTH_FRESH, { ok: true, at: t0 });
+    let h = ok;
+    for (let i = 1; i <= LIVE_PROGRESS_STALE_AFTER_FAILED_READS; i += 1) {
+      h = nextLiveReadHealth(h, { ok: false, at: t0 + i * 5_000, error: "HTTP 400" });
+    }
+    expect(h.consecutiveFailures).toBe(LIVE_PROGRESS_STALE_AFTER_FAILED_READS);
+    expect(liveProgressFailureNotice(h)).toBe(
+      "Live lag refresh failing (HTTP 400) — the chip shows the last reading from 15 s ago. The job keeps processing.",
+    );
+  });
+
+  it("goes quiet again after a successful read", () => {
+    const ok = nextLiveReadHealth(LIVE_READ_HEALTH_FRESH, { ok: true, at: t0 });
+    let h = ok;
+    for (let i = 0; i < LIVE_PROGRESS_STALE_AFTER_FAILED_READS; i += 1) {
+      h = nextLiveReadHealth(h, { ok: false, at: t0 + (i + 1) * 5_000, error: "network error" });
+    }
+    expect(liveProgressFailureNotice(h)).toContain("Live lag refresh failing");
+    expect(liveProgressFailureNotice(nextLiveReadHealth(h, { ok: true, at: t0 + 60_000 }))).toBeNull();
   });
 });
