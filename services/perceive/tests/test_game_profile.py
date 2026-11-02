@@ -179,6 +179,29 @@ def test_unregistered_profile_key_is_never_silently_soccer():
     assert profile_for("some-unknown-game").key == "safe-default"
 
 
+def test_tennis_stays_unmeasured_until_a_rights_cleared_manifest_is_committed():
+    """ADAAAA-7766: registration is tied to a real, rights-cleared manifest.
+
+    Stage 1 of the tennis pass screened the open-licence corpora that carry
+    match recordings and found no rights-cleared clip of >= 5 minutes of
+    continuous match play, so `evals/tennis_val/VERDICT.md` records
+    `not_captured` / `no rights-cleared broadcast sample`. Registering tennis in
+    `PROFILES` without that manifest would invent the evidence the gate is
+    missing, so this test keeps the door shut until the manifest exists; once it
+    does, the registration assertions in the basketball test are the model.
+    """
+    manifest = os.path.join(_REPO_ROOT, "evals", "tennis_val", "label-manifest.json")
+    if os.path.exists(manifest):
+        pytest.skip("a tennis manifest is committed; the registration tests own that state")
+    with pytest.raises(KeyError):
+        load_game_profile("tennis")
+    assert profile_for("tennis").eval_set is None
+    assert profile_for("tennis").measured is False
+    verdict = os.path.join(_REPO_ROOT, "evals", "tennis_val", "VERDICT.md")
+    with open(verdict, encoding="utf-8") as fh:
+        assert "not_captured" in fh.read()
+
+
 def test_basketball_is_registered_and_measured_against_its_own_eval_set():
     """ADAAAA-7765: basketball resolves now, and it carries its own held-out set.
 

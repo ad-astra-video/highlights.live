@@ -74,6 +74,21 @@ python3 evals/kids_soccer_near_miss/score_goal_precision.py \
 python3 -m pytest evals/kids_soccer_near_miss/tests/test_score_goal_precision.py
 ```
 
+## tennis stage-1 rights search — `not_captured` (ADAAAA-7766)
+
+`tennis_val/` holds the stage-1 outcome for the tennis leg of the per-type
+programme: `RIGHTS-SEARCH.md` (what was screened, why each candidate fails),
+`VERDICT.md` (acceptance criteria, all `not_captured` with the blocker
+`no rights-cleared broadcast sample`), `rights-candidates.json` (machine-
+readable candidate record) and `scan_rights_candidates.py` (reproduces it).
+There is deliberately no `label-manifest.json` here: registering tennis against
+one would invent evidence the rights gate is missing.
+
+```bash
+python3 evals/tennis_val/scan_rights_candidates.py \
+    --out evals/tennis_val/rights-candidates.json   # exit 7 = nothing qualifies
+```
+
 ## Evidence status (updated each QA heartbeat)
 
 - Mechanism-level bars verified by the repo test suites on the integrated
