@@ -529,6 +529,109 @@ BASKETBALL_PROFILE = GameProfile(
     ),
 )
 
+# American football (ADAAAA-7767, per-type step 2). Measured on a rights-cleared
+# community-access broadcast: evals/american_football_val/label-manifest.json
+# carries 11 frame-verified scoring plays and 14 score-stable non-event windows
+# across the whole 8391 s recording of one game (Belmont HS vs Westford,
+# 2023-09-21, CC0 1.0, Belmont Media Center).
+#
+# The declared scope call for this type is the `no-zone` fallback: american
+# football has no canned scoring zone, building an end-zone model is out of
+# scope by the approved plan, so the profile is `zoneModel: no-zone` and
+# `GameProfile.__post_init__` drops the detection-in-zone trigger at
+# construction. The measured trigger subset is therefore motion + audio.
+#
+# What this profile does NOT claim:
+# - No frame-level detection slice was labelled, so `evalSet.vocabulary` is the
+#   scoring-window class ("score"), not a detection roster, and
+#   `evals/detect_precision.py --backend florence` has no american-football
+#   label space yet (`reference["detectionSlice"]` is null on purpose).
+# - The audio operating point is the corpus-wide default, recorded as the
+#   BASELINE measured on this clip; it was not tuned on american football.
+# - The motion trigger's operating point is the structural
+#   `stage_a.MOTION_MIN_STEP` (0.15 normalized peak step), not a football number:
+#   the tracker path needs florence detections to produce track steps, and this
+#   pass produced no detection slice, so motion was not separately measured.
+# The deployed per-frame roster is unchanged from the canned type so registering
+# the profile cannot change what the detector looks for.
+_AMERICAN_FOOTBALL_EVAL_VOCABULARY: Tuple[str, ...] = ("score",)
+
+_AMERICAN_FOOTBALL_EVAL_REFERENCE: Mapping[str, Any] = {
+    "source": "evals/american_football_val/label-manifest.json (ADAAAA-7767)",
+    "clipSpanS": 8391,
+    "scoringPlays": 11,
+    "nonEventWindows": 14,
+    "rightsBasis": "CC0 1.0 (Belmont Media Center, via the Internet Archive)",
+    "detectionSlice": None,
+    # ADAAAA-7767 measured run (evals/american_football_val/RESULTS.md).
+    # Baseline at the profile's UNCHANGED audio defaults; not tuned on football.
+    "audioHarness": {
+        "harness": "evals/measure_audio_recall.py",
+        # Pure DSP (ffmpeg decode + numpy gate): no GPU. The box-side and local
+        # CPU runs are byte-identical for the same labels (basketball proved that
+        # on ADAAAA-7770), so this pass measured on local CPU over the same clip.
+        "host": "local CPU (pure DSP harness; no GPU job needed for this rule)",
+        "clip": "af_belmont_vs_westford_092123.mp4 (8391 s, CC0 1.0)",
+        "labelRevision": 2,
+        "thresholdId": "stageA/burst/1.3x/0.3s",
+        "matchWindowS": [-6.0, 3.0],
+        "events": 11,
+        "candidates": 1979,
+        "candidatesPerMinute": 14.2,
+        "recall": 1.0,
+        "fpRate": 0.9853,
+        "p50S": 0.2,
+        "p95S": 0.5,
+        "negativeWindowFpRate": 1.0,
+        "negativeWindowsWithFire": 14,
+        "negativeWindowFires": 87,
+        # label-tolerance sensitivity: recall 0.91 at the harness default -3/+2,
+        # 1.00 at -6/+3 and 1.00 at -10/+5, while the candidate FP rate only
+        # moves 0.99 -> 0.98. The verdict is not an artefact of label timing.
+        "recallAtDefaultWindow": 0.9091,
+        "fpRateAtDefaultWindow": 0.9919,
+        "fpRateAtGenerousWindow": 0.9778,
+        "fpCeiling": 0.10,
+        "fpCeilingMet": False,
+        "result": "evals/american_football_val/RESULTS.md",
+    },
+    # ADAAAA-7784 (Highlights.live Reviewer): label revision 1 FAILED on one
+    # clause -- E09's bracket [7405,7420] contained no score transition (the bug
+    # flips at 7401) -- and reproduced every other number byte-identically.
+    # Label revision 2 corrects E09 and re-pins the run; ADAAAA-7785 certified
+    # revision 2 PASS on 5/5 clauses with the run artifacts cmp-identical to the
+    # committed ones (see RESULTS.md section 10).
+    "qaCertification": "pass (ADAAAA-7785, label revision 2)",
+    "qaVerdict": (
+        "measurement true; fpCeilingMet false - audio alone does not carry the "
+        "type and motion stays not_captured, so american football stays disabled"
+    ),
+}
+
+AMERICAN_FOOTBALL_PROFILE = GameProfile(
+    key="american football",
+    # Unchanged from the canned type's deployed roster (florence._GAME_VOCABULARIES).
+    vocabulary=("football", "player", "referee"),
+    # No end-zone / scoring-zone model exists for this type (declared out of
+    # scope), so the profile is `no-zone` and the zone trigger is inert.
+    zone_model=ZoneModel.no_zone(),
+    # Football has no trustworthy overlay oracle today: the community-access
+    # score bug was observed displaying 14 at half time and 13 in the third
+    # quarter on the very clip this type is measured on (see the label
+    # manifest's `video.bug_anomaly`). The oracle seam stays absent rather than
+    # claiming scoreboard OCR corroboration the type cannot support yet.
+    corroboration_oracle=None,
+    # Measured subset: the audio noise gate plus the tracker motion trigger.
+    triggers=TriggerSubset.of(TRIGGER_AUDIO, TRIGGER_MOTION),
+    audio_thresholds=AudioThresholds(),
+    tracking_roster=TrackingRoster(labels=("football", "player", "referee")),
+    eval_set=EvalSet(
+        manifest="evals/american_football_val/label-manifest.json",
+        vocabulary=_AMERICAN_FOOTBALL_EVAL_VOCABULARY,
+        reference=_AMERICAN_FOOTBALL_EVAL_REFERENCE,
+    ),
+)
+
 # Unmapped/unknown hint: today's generic closed roster, no zone model, audio
 # trigger only. `vocabulary=()` means "no type-specific vocabulary" so the
 # legacy resolution chain (preferLabels -> SAFE_DEFAULT_VOCABULARY) still runs.
@@ -550,6 +653,13 @@ DEFAULT_PROFILE = SOCCER_PROFILE
 PROFILES: Mapping[str, GameProfile] = {
     "soccer": SOCCER_PROFILE,
     "basketball": BASKETBALL_PROFILE,
+    # American football registers under BOTH canonical spellings and both map to
+    # the SAME object, so the legacy `football` hint can never resolve to an
+    # unmeasured duplicate of the measured type (ADAAAA-7767). `football` stays
+    # its own canonical key in `_GAME_VOCABULARIES`/`canonical_sport` (ADAAAA-6463
+    # already keeps a US football game out of the soccer roster).
+    "american football": AMERICAN_FOOTBALL_PROFILE,
+    "football": AMERICAN_FOOTBALL_PROFILE,
 }
 
 
@@ -659,6 +769,7 @@ __all__ = [
     "GameProfile",
     "SOCCER_PROFILE",
     "BASKETBALL_PROFILE",
+    "AMERICAN_FOOTBALL_PROFILE",
     "SAFE_DEFAULT_PROFILE",
     "DEFAULT_PROFILE",
     "PROFILES",
