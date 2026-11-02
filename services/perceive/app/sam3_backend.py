@@ -56,6 +56,36 @@ def box_to_point(box: BBox) -> "np.ndarray":
     return np.array([[(box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0]], dtype=np.float32)
 
 
+# ADAAAA-7345: a single center point is a weak prompt for a LARGE target such as
+# a player: on the census clip the `player #N` masklet died a few frames after
+# the mid-stream seed while the tiny frame-0 ball propagated at 100%. Give
+# player-sized boxes a small positive point cluster (center + 4 inset corners)
+# so the tracker anchors on the torso rather than one pixel that may land on a
+# jersey number, the pitch, or a neighbouring shirt.
+# Below this normalized area the box is a small object (e.g. the ball), and the
+# single center point is kept unchanged so the verified 100% ball propagation
+# is not perturbed.
+MULTI_POINT_MIN_AREA = 0.008
+_INSET_FRACTIONS = ((0.5, 0.5), (0.3, 0.3), (0.7, 0.3), (0.3, 0.7), (0.7, 0.7))
+
+
+def box_to_points(box: BBox, min_area: float = MULTI_POINT_MIN_AREA) -> "np.ndarray":
+    """Box prompt -> positive points (normalized) for SAM3's tracker path.
+
+    Small boxes (the ball) get the classic single center point; player-sized
+    boxes get a center + inset-corner cluster. The center point is ALWAYS first
+    so callers/tests that read `points[0]` keep seeing the box center.
+    """
+    x1, y1, x2, y2 = box
+    w = max(0.0, x2 - x1)
+    h = max(0.0, y2 - y1)
+    if w * h < min_area:
+        return box_to_point(box)
+    pts = np.array([[x1 + fx * w, y1 + fy * h] for fx, fy in _INSET_FRACTIONS],
+                   dtype=np.float32)
+    return pts
+
+
 def _as_numpy_mask(m) -> Optional["np.ndarray"]:
     try:
         if hasattr(m, "cpu"):
@@ -125,6 +155,18 @@ class Sam3Backend(SamBackend):
         self._last_returned: Dict[int, Optional[BBox]] = {} # slot -> box we last returned
         self._current: Dict[int, Optional[BBox]] = {}       # slot -> this frame's box
         self._started = False
+        # ADAAAA-7345: per-slot consecutive miss counter + the last box SAM
+        # produced for that slot. SAM3's video tracker drops a masklet it loses
+        # confidence in (`removed_obj_ids`), and it never re-registers it by
+        # itself: the mid-stream `player #N` slot then returns None forever
+        # (measured 0.2 accuracy / 3.9% on-screen) while the easy frame-0 ball
+        # survives. When a slot misses, re-anchor its prompt at the CURRENT
+        # frame from the last known box so the tracker re-detects the object
+        # instead of writing it off.
+        self._misses: Dict[int, int] = {}
+        self._removed_obj_ids: set[int] = set()
+        self.recover_after_misses = 1     # re-prompt on the first missed frame
+        self.recover_max_misses = 30      # stop re-prompting after this many misses
 
     # --- plumbing -----------------------------------------------------------
     @staticmethod
@@ -187,6 +229,10 @@ class Sam3Backend(SamBackend):
         if not result:
             return {}
         out = result.get("outputs") or {}
+        # ADAAAA-7345: SAM3 reports masklets it dropped this frame. Record them
+        # so advance() can re-register a mid-stream target instead of letting
+        # the slot stay dark for the rest of the clip.
+        self._removed_obj_ids = {int(x) for x in (out.get("removed_obj_ids") or [])}
         obj_id_to_mask = out.get("obj_id_to_mask") or {}
         parsed: Dict[int, Optional[BBox]] = {}
         for oid, m in obj_id_to_mask.items():
@@ -238,23 +284,64 @@ class Sam3Backend(SamBackend):
         for s in list(self._seeded):
             if s not in prompts:  # dropped target
                 self._seeded.pop(s, None)
+                self._misses.pop(s, None)
+        # ADAAAA-7345: re-anchor any slot that came back empty on the previous
+        # frame (SAM dropped the masklet or lost it) at the CURRENT frame, using
+        # the last known box HybridTracker carried forward. This is the
+        # per-object re-detection a mid-stream-seeded player needs: without it a
+        # lost `player #N` obj_id never comes back and the selected track's
+        # accuracy freezes (~0.2 / 3.9% on-screen on the census clip).
+        for s in list(self._seeded):
+            if s not in prompts:
+                continue
+            misses = self._misses.get(s, 0)
+            if misses >= self.recover_after_misses and misses <= self.recover_max_misses:
+                self._add_prompt(s, prompts[s])
         self._current = self._propagate_one_frame(self._frame_idx)
         self._frame_idx += 1
+        # per-slot miss accounting drives the recovery above
+        for s in prompts:
+            if self._current.get(s) is None:
+                self._misses[s] = self._misses.get(s, 0) + 1
+            else:
+                self._misses[s] = 0
         # remember the boxes WE produced this frame -> drift won't look like a
         # target change on the next advance
         self._last_returned = {s: self._current.get(s) for s in prompts}
 
     def _add_prompt(self, obj_id: int, box: BBox) -> None:
         # ADAAAA-7305: obj_id-based video tracking uses SAM3's TRACKER prompt
-        # path (`add_tracker_new_points`), which requires `points` (+`points` +
-        # `obj_id`) and FORBIDS a box at the same time. The client's
+        # path (`add_tracker_new_points`), which requires `points` (+`obj_id`)
+        # and FORBIDS a box at the same time. The client's
         # `sam3_video_inference.add_prompt` asserts points XOR boxes, and the
         # box path (`super().add_prompt`) is a semantic single-object prompt
         # that `reset_state`s and does NOT register per-obj_id tracking — so
         # sending `bounding_boxes` either crashes the call or drops obj_id.
-        # We therefore keep the single center-point + obj_id prompt, which is
-        # the only form that yields the per-slot `obj_id_to_mask` this backend
-        # consumes. (Verified against the real client in the perceive image.)
+        # We therefore keep the point prompt(s) + obj_id, which is the only form
+        # that yields the per-slot `obj_id_to_mask` this backend consumes.
+        # (Verified against the real client in the perceive image.)
+        #
+        # ADAAAA-7345: player-sized boxes get a positive point CLUSTER
+        # (center + 4 inset corners) instead of a lone center pixel; small
+        # objects (the ball) keep the single center point. A predictor that
+        # rejects multi-point prompts falls back to the single point so the
+        # tracker never dies on a prompt-form change.
+        pts = box_to_points(box)
+        if len(pts) > 1:
+            try:
+                self._request(
+                    {
+                        "type": "add_prompt",
+                        "session_id": self._session_id,
+                        "frame_index": self._frame_idx,
+                        "points": pts,
+                        "point_labels": np.ones(len(pts), dtype=np.int32),
+                        "obj_id": obj_id,
+                    }
+                )
+                return
+            except Exception:
+                pass
         self._request(
             {
                 "type": "add_prompt",
