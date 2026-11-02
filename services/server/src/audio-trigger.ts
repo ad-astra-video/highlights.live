@@ -65,6 +65,71 @@ export function triggerFamily(thresholdId: string): string {
   const i = thresholdId.indexOf("/");
   return i > 0 ? thresholdId.slice(0, i) : thresholdId;
 }
+
+/** Threshold identity of the Stage-B whistle operating point. Frozen by the
+ *  ADAAAA-7705 decision — this module names it so the server can never build a
+ *  whistle trigger under a different id (and so a re-tune is a visible diff). */
+export const WHISTLE_THRESHOLD_ID = "stageB/whistle/2.4-3.4k/5x/0.3s";
+/** Family prefix of the Stage-B (band-limited whistle) path. */
+export const STAGE_B_FAMILY = "stageB";
+
+/** Whether a trigger belongs to the Stage-B whistle family. The family — not
+ *  the `kind` (`"burst"` on both paths) — is the identity at the boundary, so a
+ *  whistle can never be judged into the Stage-A ledger
+ *  ({@link ../stage-a-metrics.StageAOutcomeLedger}) or coalesced against a roar
+ *  (ADAAAA-7707 AC3). Unknown ids are Stage-A/legacy. */
+export function isStageBTrigger(thresholdId: string | undefined | null): boolean {
+  return typeof thresholdId === "string" && triggerFamily(thresholdId) === STAGE_B_FAMILY;
+}
+
+/** The additive `whistle` block perceive puts on the `/audio` response
+ *  (`services/perceive/app/__init__.py`), carrying the Stage-B fire plus the
+ *  emit-switch state. Always present when the whistle gate fires, whether or
+ *  not it emitted — so a consumer must gate on `emitted`. */
+export interface WhistleFireBlock {
+  kind?: string;
+  ts: number;
+  firedAt: number;
+  onsetLatencyS: number;
+  peakEnergy: number;
+  baselineEnergy: number;
+  thresholdId: string;
+  /** Perceive-side emit switch state. `false` = measure-only reporting. */
+  emitted?: boolean;
+  measureOnly?: boolean;
+  sessionCandidates?: number;
+}
+
+/**
+ * Build the Stage-B trigger record from the perceive `whistle` block
+ * (ADAAAA-7707 AC1). Returns null — never a partial record — when the block is
+ * absent, malformed, or MEASURE-ONLY: a measure-only fire is reporting, not a
+ * scheduling candidate, so the rollback (`WhistleConfig.emitted = False`,
+ * config only) leaves this wiring inert instead of needing a code revert.
+ *
+ * The threshold id is the frozen Stage-B identity: a block that reports a
+ * `stageA/*` id is not a whistle fire and is rejected rather than silently
+ * recorded as one.
+ */
+export function audioTriggerFromWhistle(block: WhistleFireBlock | undefined | null): AudioTriggerRecord | null {
+  if (!block || typeof block !== "object") return null;
+  if (block.emitted !== true || block.measureOnly === true) return null;
+  if (!isStageBTrigger(block.thresholdId)) return null;
+  const onsetTs = Number(block.ts);
+  const firedAt = Number(block.firedAt);
+  const latency = Number(block.onsetLatencyS);
+  if (!Number.isFinite(onsetTs) || !Number.isFinite(firedAt) || !Number.isFinite(latency)) return null;
+  if (latency < 0 || latency > 5) return null;
+  return {
+    kind: block.kind === "swell" ? "swell" : "burst",
+    onsetTs,
+    firedAt,
+    onsetLatencyS: latency,
+    peakEnergy: clamp01(Number(block.peakEnergy)),
+    baselineEnergy: clamp01(Number(block.baselineEnergy)),
+    thresholdId: block.thresholdId,
+  };
+}
 /** A trigger older than this (relative to the frame clock) can no longer be
  *  anchored to a retained frame — drop it instead of analyzing a stale window. */
 export const AUDIO_TRIGGER_MAX_STALE_S = 8.0;

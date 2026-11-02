@@ -217,6 +217,37 @@ export class StageAOutcomeLedger {
 }
 
 /**
+ * The per-job Stage-B (whistle) crowding line
+ * (`[live:<job>] stageB whistle fires=N decides=M share=P% ...`), or null when
+ * the live observer decided nothing — a run with no decide call has no window
+ * to measure a share on, so it must not print a fabricated 0%.
+ *
+ * The ADAAAA-7713 envelope makes the whistle SHARE of a window's decides the
+ * hard tripwire (> 25%) and the added volume the alert threshold, so this line
+ * prints both numbers on every live completion: the guardrail is checkable from
+ * `docker logs highlights-server` alone, without a post-hoc audit.
+ */
+export const WHISTLE_SHARE_TRIPWIRE = 0.25;
+
+export function whistleEvidenceLine(
+  kind: "live" | "vod",
+  jobId: string,
+  m: { decideCalls?: number; whistleFires?: number; whistleDecides?: number; whistleShare?: number } | undefined
+): string | null {
+  if (!m) return null;
+  const decideCalls = Number(m.decideCalls ?? 0);
+  if (!(decideCalls > 0)) return null;
+  const fires = Number(m.whistleFires ?? 0);
+  const decides = Number(m.whistleDecides ?? 0);
+  const share = m.whistleShare ?? decides / decideCalls;
+  return (
+    `[${kind}:${jobId}] stageB whistle fires=${fires} decides=${decides} ` +
+    `share=${(share * 100).toFixed(1)}% decideCalls=${decideCalls} ` +
+    `withinTripwire=${share <= WHISTLE_SHARE_TRIPWIRE}`
+  );
+}
+
+/**
  * The per-job Stage-A evidence line (`[live:<job>] / [vod:<job>] stageA ...`),
  * or null when the gate judged nothing — a job that never had an audio
  * candidate must not print a fabricated 0% FP rate. `suffix` carries the VOD
