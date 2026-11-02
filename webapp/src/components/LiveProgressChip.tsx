@@ -1,5 +1,5 @@
 import type { LiveProgress } from "../lib/jobDetail";
-import { liveProgressChipLabel } from "../lib/liveProgress";
+import { LIVE_PROGRESS_STALE_MIN_SEC, liveProgressChipLabel } from "../lib/liveProgress";
 
 /**
  * ADAAAA-7741: the customer's "how live is this" chip for an in-flight live job.
@@ -16,20 +16,31 @@ import { liveProgressChipLabel } from "../lib/liveProgress";
  * (AC6). `liveProgress.state === "unknown"` (no decided window yet) also renders
  * nothing rather than a fabricated "caught up".
  *
+ * ADAAAA-7759: `staleSec` is how long the light 5 s read has been failing. The
+ * number is still the last honest reading, but past LIVE_PROGRESS_STALE_MIN_SEC
+ * the chip states that it is stale (and how old) instead of freezing silently
+ * while the pipeline keeps moving.
+ *
  * Stateless + DOM-free rendering so both states are pinned by a render test.
  */
-export function LiveProgressChip({ progress }: { progress?: LiveProgress | null }) {
-  const label = liveProgressChipLabel(progress);
+export function LiveProgressChip({ progress, staleSec = 0 }: { progress?: LiveProgress | null; staleSec?: number }) {
+  const label = liveProgressChipLabel(progress, staleSec);
   if (!label) return null;
+  const stale = Math.max(0, Math.round(staleSec)) >= LIVE_PROGRESS_STALE_MIN_SEC;
   const behind = progress?.state === "behind";
+  // ADAAAA-7759: a stale chip with no projection at all (no light read has ever
+  // succeeded) reports `unavailable`, not `unknown`, so the stale branch is
+  // machine-distinguishable from "no decided window yet".
+  const state = !progress || progress.state === "unknown" ? "unavailable" : progress.state;
   return (
     <span
       className={`rounded-full border px-2 py-0.5 text-xs font-bold ${
-        behind ? "border-yellow/40 bg-yellow/10 text-yellow" : "border-green/40 bg-green/10 text-green"
+        stale || behind ? "border-yellow/40 bg-yellow/10 text-yellow" : "border-green/40 bg-green/10 text-green"
       }`}
       data-live-progress
-      data-live-progress-state={progress?.state}
-      title={`liveProgress: liveEdgeTs=${progress?.liveEdgeTs} processedThroughTs=${progress?.processedThroughTs} lagSec=${progress?.lagSec}`}
+      data-live-progress-state={state}
+      data-live-progress-stale={stale ? "true" : "false"}
+      title={`liveProgress: liveEdgeTs=${progress?.liveEdgeTs} processedThroughTs=${progress?.processedThroughTs} lagSec=${progress?.lagSec} staleSec=${staleSec}`}
     >
       {label}
     </span>
