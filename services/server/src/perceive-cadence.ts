@@ -31,6 +31,18 @@
 //
 // This module is pure + deterministic (no GPU, no network) so it is
 // unit-testable in isolation.
+//
+// ADAAAA-7774 (LIVE rail): the same state machine now also gates the LIVE
+// observe pass, applied to the set of frames the pass CONSUMES (the ingest is
+// strided to the analysis fps first — see `liveObserveContentFps`). Live ingest
+// delivers ~5 fps while the decide window only carries ~2 fps of content
+// (`assembleLiveWindow`), so perceiving every ingested frame paid ~0.36 s of
+// blocking `client.analyze` for output the assembler discarded and left the loop
+// slower than realtime at every decide depth. The recall-safety argument is
+// identical to VOD: the hot window is armed by the same `escalatesToTier2`
+// predicate the decide observer uses, plus (live only) by any trigger-anchored
+// window (`armHot`), and a skipped frame is recorded with an EMPTY seed
+// (`signal: undefined`), which the gate treats as recall-safe.
 import { escalatesToTier2, type PerFrameSignal, type SignalGateOptions } from "./observe-loop";
 
 /** Cadence tuning ({@link PerceiveCadence}). All fields optional; sane defaults. */
@@ -86,7 +98,16 @@ export class PerceiveCadence {
    * full-perceive hot window starting at `ts` for `hotAfterS` seconds. */
   noteFrameSignal(ts: number, signal: PerFrameSignal | undefined, opts: SignalGateOptions): void {
     if (!escalatesToTier2(signal, opts)) return;
-    const until = ts + this.hotAfterS;
+    this.armHot(ts);
+  }
+
+  /** Arm the full-perceive hot window explicitly (ADAAAA-7774: the LIVE rail
+   * arms it for a trigger-anchored window, and any other out-of-band escalation),
+   * so every consumed frame in `[ts, ts + afterS]` is perceived instead of
+   * waiting for the next perceived frame's Tier-2 signal. Max-merged with any
+   * window already armed; never shortens one. */
+  armHot(ts: number, afterS = this.hotAfterS): void {
+    const until = ts + Math.max(0, afterS);
     this.hotUntilTs = this.hotUntilTs === null ? until : Math.max(this.hotUntilTs, until);
   }
 

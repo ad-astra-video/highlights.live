@@ -82,6 +82,13 @@ const LIVE_OBSERVE_CFG = {
   observeWindowS: 10,
   observeMaxFrames: LIVE_OBSERVE_MAX_FRAMES,
   sampleFps: 8, // dense assembly so a 10 s window would exceed 30 -> cap exercised
+  // ADAAAA-7774: this suite pins the PRE-STRIDE wiring contract (the decided
+  // window is anchored at the tick frame, every payload <= the 30-frame cap,
+  // candidate hints ride every window), so both the ingest stride and the live
+  // perceive cadence are off here — every frame is consumed and perceived. The
+  // stride itself is pinned in live-perceive-stride.test.ts.
+  liveObserveContentFps: 1000,
+  perceiveCadence: false,
 } as const;
 
 describe("LIVE decide-observer wiring (ADAAAA-7011)", () => {

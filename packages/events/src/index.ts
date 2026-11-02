@@ -512,6 +512,26 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // optional: absent on records written before these fields existed.
   maxDecideInFlight: z.number().int().min(0).optional(),
   backpressureSkippedWindows: z.number().int().min(0).optional(),
+  // ADAAAA-7774: the LIVE perceive stride (ingest -> analysis fps). The live
+  // ingest delivers ~5 fps while the decide window only carries ~2 fps of
+  // content, so the pass now CONSUMES frames at the analysis fps and runs the
+  // adaptive perceive cadence on that set: `perceiveCalls < framesAnalyzed`
+  // proves the cool stride, `framesStrided` of `framesSeen` never entered
+  // perceive at all (they were never perceived, recorded or seeded — each
+  // recorded skipped frame carries an EMPTY seed, i.e. `signal: undefined`).
+  // Additive optional: absent on records written before this field existed and
+  // on the media-rail share (its perceive runs in the media node).
+  perceive: z
+    .object({
+      framesSeen: z.number().int().min(0),
+      framesAnalyzed: z.number().int().min(0),
+      framesStrided: z.number().int().min(0),
+      perceiveCalls: z.number().int().min(0),
+      perceiveSkipped: z.number().int().min(0),
+      perceiveHotCalls: z.number().int().min(0),
+      analysisFps: z.number().min(0),
+    })
+    .optional(),
   // Worst / mean wall-clock content-vs-wall lag (ms) seen on a dropped frame,
   // and the worst COMPLETED lag (ms) of a decided window (what a live viewer
   // experiences: `summaryLog` `windowTs` vs wall `ts`).

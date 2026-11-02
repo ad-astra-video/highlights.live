@@ -190,6 +190,11 @@ const BASE_CFG = {
   observeWindowS: 1,
   observeMaxFrames: 30,
   sampleFps: 25,
+  // ADAAAA-7774: this suite drives a synthetic 25 fps CONTENT rail (0.04 s per
+  // frame) and measures the lag BOUND, so the ingest->analysis stride is off —
+  // every frame must reach the cadence for the window/cadence expectations to
+  // hold. The stride is pinned in live-perceive-stride.test.ts.
+  liveObserveContentFps: 1000,
 } as const;
 
 /** Cadence windows the 60-frame / 0.04 s-content-per-frame rail spans. */

@@ -1,0 +1,219 @@
+// ADAAAA-7774: the LIVE observe loop was PERCEIVE-BOUND, not decide-bound.
+// Measured on the box (job `b627dec0`, 1 stream / 305 s): 1504 frames arrived
+// (~5 fps) and 847 were perceived at ~0.36 s of blocking `client.analyze` each
+// (`perceiveSessionS` 304.9 s) — the loop ran ~1.8x slower than realtime, so the
+// lag budget dropped the surplus in bursts and each ~3 s of dropped content
+// counted as a skipped window (56-86 of ~100 windows lost per 300 s at EVERY
+// decide depth). The decide window never carried more than ~2 fps of content
+// anyway (`assembleLiveWindow` thins to `OBSERVE_CONTENT_FPS`), so 3 of every 5
+// ingested frames were perceived and then discarded.
+//
+// This suite pins the fix:
+//   (a) the pass CONSUMES frames at the analysis fps (content-time stride), so
+//       `framesAnalyzed` ~ wall seconds x 2 while the ingest delivered ~5/s,
+//   (b) the adaptive perceive cadence runs on the consumed set, so
+//       `perceiveCalls < framesAnalyzed` in a cool region (`PERCEIVE_QUIET_STRIDE`),
+//   (c) a perceive-skipped frame is still RECORDED with an EMPTY seed
+//       (`signal: undefined`) — recall-safe, exactly like the VOD cadence path —
+//       so the decide payload keeps ~2 fps of frames with no fabricated signal,
+//   (d) total perceive work drops ≥2x versus the pre-7774 pass, which is the
+//       cause of the lag/skip loss (the fixed loop stays inside the budget),
+//   (e) a trigger / Tier-2 escalation arms FULL perceive (`armHot`), so the
+//       goal moment is never under-sampled by the cool stride.
+import { describe, it, expect } from "vitest";
+import { analyzeJob, type PipelineClient } from "../src/analyzer";
+import { PerceiveCadence } from "../src/perceive-cadence";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function frameTs(b64: string): number {
+  return Number(b64.replace(/^f/, ""));
+}
+
+/** Perceive that costs real wall time (0.36 s on the box; 60 ms here so the
+ *  suite stays fast) and returns a plain observation with no signal. */
+function makeClient(analyzeMs: number) {
+  const decided: { frames: number[]; tickTs: number }[] = [];
+  let currentFrameTs = 0;
+  let analyzeCalls = 0;
+  const client: PipelineClient = {
+    reservePerceive: async () => ({ sessionId: "sess-stride", appUrl: "", controlUrl: "" }),
+    analyze: async (_sid: string, frame: any) => {
+      analyzeCalls++;
+      currentFrameTs = frame.timestamp;
+      await sleep(analyzeMs);
+      return { observation: { tracks: [], seq: frame.seq, timestamp: frame.timestamp } as any };
+    },
+    decide: async (_evidence: any, dOpts: any) => {
+      decided.push({ frames: dOpts.frames.map((f: any) => frameTs(f.base64)), tickTs: currentFrameTs });
+      return { isHighlight: false, score: 0, outcome: "not_highlight" } as any;
+    },
+    plan: async () => ({
+      planVersion: 1,
+      category: "soccer",
+      intent: "",
+      source: "planner-fallback",
+      maxTracks: 3,
+      targets: [{ label: "player", role: "player" }],
+      reason: "test",
+    }),
+    postAudio: async () => ({ candidate: null, series: [] }),
+    controlForward: async () => {},
+    train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
+    stopPerceive: async () => {},
+    confirm: async () => ({
+      enabled: false,
+      confidence: 0,
+      reason: "",
+      evidence: {},
+      stage1Disagreed: false,
+      decision: { isHighlight: false, score: 0, outcome: "not_highlight" },
+    }),
+  } as any;
+  return { client, decided, analyzeCalls: () => analyzeCalls };
+}
+
+/** Realtime-shaped rail: frames arrive on a wall clock (as ffmpeg ingest does)
+ *  at `frameEveryMs`, with their arrival time as the content timestamp — so the
+ *  ingest rate is ~`1000/frameEveryMs` fps, exactly like the deployed ~5 fps. */
+async function* bufferedFrames(durationMs: number, frameEveryMs = 200) {
+  const queue: { seq: number; timestamp: number; imageB64: string }[] = [];
+  const t0 = Date.now();
+  let seq = 0;
+  let finished = false;
+  void (async () => {
+    while (Date.now() - t0 < durationMs) {
+      await sleep(frameEveryMs);
+      const ts = Number(((Date.now() - t0) / 1000).toFixed(3));
+      queue.push({ seq: seq++, timestamp: ts, imageB64: `f${ts}` });
+    }
+    finished = true;
+  })();
+  for (;;) {
+    while (queue.length) yield queue.shift()!;
+    if (finished) return;
+    await sleep(5);
+  }
+}
+
+const CFG = {
+  jobId: "job-live-stride",
+  clipBeforeS: 1,
+  clipAfterS: 1,
+  gameHint: "soccer",
+  liveObserveLoop: true,
+  observeCadenceS: 1,
+  observeWindowS: 2,
+  observeMaxFrames: 30,
+  sampleFps: 5,
+  liveObserveLagBudgetS: 30,
+} as const;
+
+const cut = async (ts: number) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` });
+
+describe("analyzeJob live perceive stride (ADAAAA-7774)", () => {
+  it("(a)+(b)+(c): consumes ~2 fps of the ~5 fps ingest, perceives less than it consumes, and keeps the ~2 fps decide payload", async () => {
+    const strided = makeClient(60);
+    const outcome = await analyzeJob(
+      strided.client,
+      bufferedFrames(6000, 200) as any, // ~5 fps ingest for 6 s of content
+      cut as any,
+      { ...CFG, liveObserveContentFps: 2, perceiveQuietStride: 2 } as any,
+      undefined
+    );
+    const m = outcome.observeMetrics!;
+    const p = m.perceive!;
+    expect(p).toBeDefined();
+    expect(p.analysisFps).toBe(2);
+    // The ingest delivered ~5 fps for ~6 s (>= 20 frames); the pass consumed
+    // ~2 per content second, so most frames never entered perceive at all.
+    expect(p.framesSeen).toBeGreaterThanOrEqual(20);
+    expect(p.framesAnalyzed).toBeGreaterThanOrEqual(8);
+    expect(p.framesAnalyzed).toBeLessThanOrEqual(16);
+    expect(p.framesStrided).toBeGreaterThan(p.framesAnalyzed);
+    // Every ingested frame is accounted for: consumed + strided (no stale drops
+    // in this run — the loop kept up, which is the point).
+    expect(p.framesSeen).toBe(p.framesAnalyzed + p.framesStrided);
+    // The cadence runs INSIDE the consumed set: a cool region perceives every
+    // `quietStride`-th consumed frame, so perceiveCalls < framesAnalyzed.
+    expect(p.perceiveCalls).toBeLessThan(p.framesAnalyzed);
+    expect(p.perceiveSkipped).toBe(p.framesAnalyzed - p.perceiveCalls);
+    expect(p.perceiveCalls).toBe(strided.analyzeCalls());
+    // The decide payload contract is unchanged: every decided window still
+    // carries ~2 fps of content (<= windowS * 2 + keyframes), even though only
+    // some of those frames were perceived (the rest were recorded seed-less).
+    expect(strided.decided.length).toBeGreaterThanOrEqual(3);
+    const counts = strided.decided.map((d) => d.frames.length);
+    // ~2 fps of a 2 s window: a couple of frames early on, ~4 once warmed. The
+    // hard cap (windowS * 2 + keyframes) is never breached — the stride cannot
+    // widen the payload.
+    expect(Math.min(...counts)).toBeGreaterThanOrEqual(1);
+    expect(Math.max(...counts)).toBeGreaterThanOrEqual(2);
+    expect(Math.max(...counts)).toBeLessThanOrEqual(CFG.observeWindowS * 2 + 3);
+    for (const d of strided.decided) {
+      // Content order, no fabricated frames.
+      expect([...d.frames].sort((a, b) => a - b)).toEqual(d.frames);
+    }
+    // A missing seed can never be turned into a signal: nothing was accepted
+    // (the stub always answers not_highlight) and no stale window was dropped,
+    // i.e. the loop kept up with the wall clock — the whole point of the stride.
+    expect(m.skippedStaleWindows).toBe(0);
+    expect(m.accepted).toBe(0);
+  }, 60000);
+
+  it("(d): the stride cuts perceive work >=2x versus perceiving every ingested frame", async () => {
+    const before = makeClient(20);
+    const after = makeClient(20);
+    const liveCfg = { ...CFG, observeCadenceS: 5 } as any;
+    // The control is the PRE-7774 pass: no ingest stride AND no perceive cadence
+    // (the live cadence did not exist before this ticket), i.e. every ingested
+    // frame goes to perceive.
+    const un = await analyzeJob(
+      before.client,
+      bufferedFrames(4000, 200) as any,
+      cut as any,
+      { ...liveCfg, liveObserveContentFps: 0, perceiveCadence: false } as any,
+      undefined
+    );
+    const st = await analyzeJob(after.client, bufferedFrames(4000, 200) as any, cut as any, { ...liveCfg, liveObserveContentFps: 2, perceiveQuietStride: 2 } as any, undefined);
+    const unP = un.observeMetrics!.perceive!;
+    const stP = st.observeMetrics!.perceive!;
+    // No stride = the pre-7774 behaviour: the cadence is off the loop's hands,
+    // every ingested frame is perceived.
+    expect(unP.analysisFps).toBe(0);
+    expect(unP.framesStrided).toBe(0);
+    expect(unP.perceiveCalls).toBe(unP.framesSeen);
+    // With the stride, at least half of the perceive work is gone — the ~1.8x
+    // slower-than-realtime loop that caused the stale drops can no longer happen
+    // at this ingest rate.
+    expect(stP.perceiveCalls * 2).toBeLessThanOrEqual(unP.perceiveCalls);
+    expect(after.analyzeCalls()).toBe(stP.perceiveCalls);
+    expect(before.analyzeCalls()).toBe(unP.perceiveCalls);
+  }, 60000);
+});
+
+describe("PerceiveCadence hot escalation for the live rail (ADAAAA-7774)", () => {
+  it("(e): armHot forces full perceive for the hot window, then the cool stride resumes", () => {
+    const cadence = new PerceiveCadence({ quietStride: 2, hotAfterS: 2 });
+    // Cool region: every other frame.
+    const cool = [0, 0.5, 1, 1.5].map((ts) => cadence.shouldPerceive(ts));
+    expect(cool).toEqual([true, false, true, false]);
+    // A trigger (or Tier-2 escalation) at 2 s arms full perceive from its onset.
+    cadence.armHot(2);
+    expect(cadence.tier(2)).toBe("hot");
+    const hot = [2, 2.5, 3, 3.5, 4].map((ts) => cadence.shouldPerceive(ts));
+    expect(hot).toEqual([true, true, true, true, true]);
+    // After the 2 s hot window the cool stride resumes (never stuck hot).
+    expect(cadence.tier(4.5)).toBe("cool");
+    expect(cadence.shouldPerceive(4.5)).toBe(true);
+    expect(cadence.shouldPerceive(5)).toBe(false);
+  });
+
+  it("(e): a Tier-2 signal arms the SAME hot window as a trigger (one predicate, no disagreement)", () => {
+    const cadence = new PerceiveCadence({ quietStride: 2, hotAfterS: 3 });
+    const signal = { goalCrossed: true } as any;
+    cadence.noteFrameSignal(10, signal, { ballMinSpeedMps: 18 } as any);
+    expect(cadence.tier(10)).toBe("hot");
+    expect(cadence.shouldPerceive(12.5)).toBe(true);
+  });
+});

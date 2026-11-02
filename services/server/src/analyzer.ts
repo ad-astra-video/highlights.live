@@ -1098,6 +1098,18 @@ export interface AnalyzerConfig {
    * queueing every stream behind a 2-wide gate. Wired from `DECIDE_CONCURRENCY`.
    */
   liveDecideAdmission?: number;
+  /**
+   * ADAAAA-7774: content fps the LIVE observe pass CONSUMES frames at (the
+   * ingest-to-analysis stride). Live ingest runs at ~5 fps while the decide
+   * window only carries `OBSERVE_CONTENT_FPS` (2) frames per content second, so
+   * perceiving every ingested frame (measured `perceiveSessionS` 304.9 s for 847
+   * frames = ~0.36 s of blocking `client.analyze` each) made the loop ~1.8x
+   * slower than realtime and the lag budget dropped 3 of every 5 frames — which
+   * is what consumed 56-86 of ~100 cadence windows per 300 s. Default 2; `<= 0`
+   * disables the stride (perceive every ingested frame). Wired from
+   * `LIVE_OBSERVE_CONTENT_FPS` (server config).
+   */
+  liveObserveContentFps?: number;
   /** ADAAAA-7028 Inc 2: persist the decide audit descriptor returned on the
    * decision (`_audit`) so the durable decide_audit index + decision-trail has
    * one row per frame group. Best-effort: a throwing onDecideAudit is caught
@@ -1323,6 +1335,31 @@ export interface LiveObserveMetricsSnapshot {
    *  against 0.33/s demand); distinct from `skippedStaleWindows` (content was
    *  late) and `admissionSkippedWindows` (another live job held the box slot). */
   backpressureSkippedWindows?: number;
+  /** ADAAAA-7774: the LIVE perceive stride — the ingest-to-analysis frame rate
+   *  the pass consumed at, plus the counts that prove the stride ran:
+   *  `perceiveCalls < framesAnalyzed` in a cool region (the cadence skipped
+   *  frames, each recorded with an EMPTY seed) and `framesStrided` of
+   *  `framesSeen` never entered perceive at all. Absent on a pass that ran no
+   *  stride (the media-rail share, whose perceive runs in the media node). */
+  perceive?: LivePerceiveStrideSnapshot;
+}
+
+/** ADAAAA-7774: the LIVE observe pass's ingest -> analysis stride evidence. */
+export interface LivePerceiveStrideSnapshot {
+  /** Frames the ingest delivered (every loop iteration). */
+  framesSeen: number;
+  /** Frames the pass CONSUMED (recorded + decide-seeded) at `analysisFps`. */
+  framesAnalyzed: number;
+  /** Frames skipped by the ingest stride (never perceived/recorded/seeded). */
+  framesStrided: number;
+  /** Perceive invocations (<= framesAnalyzed; < in a cool region). */
+  perceiveCalls: number;
+  /** Consumed frames the cooler cadence did NOT perceive (empty seed). */
+  perceiveSkipped: number;
+  /** Perceive invocations inside an armed full-perceive hot window. */
+  perceiveHotCalls: number;
+  /** Content fps the pass consumed at (0 = stride disabled). */
+  analysisFps: number;
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
@@ -1387,8 +1424,13 @@ export function liveLagReserveS(maxE2eMs: number, meanE2eMs: number, budgetS: nu
 }
 
 /** Build the live decide-observer latency/cadence snapshot from the observer's
- * measured samples (pure aggregation of {@link LiveObserver.latencySamples}). */
-export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSnapshot {
+ * measured samples (pure aggregation of {@link LiveObserver.latencySamples}).
+ * `stride` carries the ADAAAA-7774 ingest -> analysis frame counters from the
+ * pass (absent for a pass that ran no stride). */
+export function buildLiveObserveMetrics(
+  obs: LiveObserver,
+  stride?: LivePerceiveStrideSnapshot
+): LiveObserveMetricsSnapshot {
   const samples = obs.latencySamples();
   const cadences = samples.map((s) => s.cadenceMs).filter((c) => c > 0);
   const avg = (xs: number[]): number => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
@@ -1435,6 +1477,9 @@ export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSn
     // (another live job held the slot).
     maxDecideInFlight: obs.maxInFlightDepth(),
     backpressureSkippedWindows: obs.backpressureSkipCount(),
+    // ADAAAA-7774: the ingest -> analysis stride evidence (absent when the pass
+    // ran no stride — e.g. the media-rail share, perceived in the media node).
+    ...(stride ? { perceive: { ...stride } } : {}),
   };
 }
 
@@ -3999,23 +4044,47 @@ export async function analyzeJob(
   // exactly when the gated VOD detail-first pass is present — the configuration
   // the gap targets (ObserveDecider + Tier-2 signal gate + decideWindowN).
   // see perceive-cadence.ts for the recall-safety argument.
+  // ADAAAA-7774: the LIVE observe pass owns the same cadence on the frames it
+  // CONSUMES. The live ingest is strided to the analysis fps first (`liveStrideS`
+  // below), then the cadence's cool stride runs inside that set — so the pass
+  // perceives ~`OBSERVE_CONTENT_FPS` frames per content second in a cool region,
+  // the decide window still gets ~2 fps of frames, and `perceiveCalls <
+  // framesAnalyzed` proves the stride. Auto-enable for the live observer unless
+  // explicitly forced off (`PERCEIVE_CADENCE=0`).
+  const livePerceiveCadence = !!liveObserver && cfg.perceiveCadence !== false;
   const perceiveCadenceEnabled =
     cfg.perceiveCadence === true ||
     (cfg.perceiveCadence === undefined &&
-      cfg.observeLoop === true &&
-      cfg.observeSignalGate === true &&
-      cfg.decideWindowN !== undefined);
+      ((cfg.observeLoop === true &&
+        cfg.observeSignalGate === true &&
+        cfg.decideWindowN !== undefined) ||
+        livePerceiveCadence));
   const perceiveCadence: PerceiveCadence | null = perceiveCadenceEnabled
     ? new PerceiveCadence({
         quietStride: cfg.perceiveQuietStride,
         hotAfterS: cfg.perceiveHotAfterS ?? cfg.observeWindowS ?? OBSERVE_WINDOW_S,
       })
     : null;
+  // ADAAAA-7774: ingest -> analysis stride for the LIVE pass. The rail delivers
+  // ~5 fps of content while the decide window only carries `OBSERVE_CONTENT_FPS`
+  // (2) frames per content second, so the surplus frames were perceived (0.36 s
+  // of blocking `client.analyze` each) and then discarded by the window
+  // assembler — and the resulting ~1.8x-slower-than-realtime loop is what made
+  // the lag budget drop frames and swallow 56-86 of ~100 cadence windows per
+  // 300 s. Consuming frames at the analysis fps instead keeps the loop inside
+  // the budget (droppedFrames/skippedStaleWindows -> 0) with no payload change.
+  // `<= 0` disables the stride (perceive every ingested frame = pre-7774).
+  const liveContentFps = Number(cfg.liveObserveContentFps ?? OBSERVE_CONTENT_FPS);
+  const liveStrideS = !!liveObserver && Number.isFinite(liveContentFps) && liveContentFps > 0 ? 1 / liveContentFps : 0;
+  let lastConsumedTs: number | null = null;
+  let framesSeen = 0;
+  let framesStrided = 0;
+  let perceiveSkipped = 0;
+  let perceiveHotCalls = 0;
   let perceiveCalls = 0;
   try {
     for await (const frame of iterFrames) {
-      framesAnalyzed++;
-      onProgress?.(framesAnalyzed);
+      framesSeen++;
       // ADAAAA-7676: drop stale content instead of deciding it late. Measured
       // against the wall clock since the stream's first frame, minus one decide
       // E2E already observed: the number that matters is the lag when the RESULT
@@ -4033,6 +4102,21 @@ export async function analyzeJob(
         }
         lastFrameLagMs = Math.round(lagS * 1000);
       }
+      // ADAAAA-7774: ingest -> analysis stride. A frame whose content time is
+      // closer than one analysis period to the last CONSUMED frame is skipped
+      // entirely: it is not perceived (~0.36 s of blocking work saved), not
+      // recorded, and not decide-seeded. The decide window only ever carries
+      // ~`OBSERVE_CONTENT_FPS` frames per content second anyway (assembleLiveWindow
+      // thins to it), so the payload contract is unchanged while the loop stops
+      // falling behind the wall clock — which is what let the lag budget drop
+      // content and swallow 56-86 of ~100 cadence windows per 300 s.
+      if (liveStrideS > 0 && lastConsumedTs !== null && frame.timestamp - lastConsumedTs < liveStrideS - 1e-9) {
+        framesStrided++;
+        continue;
+      }
+      lastConsumedTs = frame.timestamp;
+      framesAnalyzed++;
+      onProgress?.(framesAnalyzed);
       run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
       let res!: ObservationResult;
       let reReserved = 0;
@@ -4078,10 +4162,13 @@ export async function analyzeJob(
       // feed it to the decide observer below with NO fabricated signal — the gate
       // treats an absent signal as recall-safe — so the decide window keeps full
       // frame coverage and the decide cadence keeps ticking.
+      const perceiveTier = perceiveCadence?.tier(frame.timestamp) ?? "cool";
       const shouldPerceive = perceiveCadence ? perceiveCadence.shouldPerceive(frame.timestamp) : true;
+      if (!shouldPerceive) perceiveSkipped++;
       let stoppedRun = false;
       if (shouldPerceive) {
         perceiveCalls++;
+        if (perceiveTier === "hot") perceiveHotCalls++;
         for (;;) {
           try {
             res = await client.analyze(sessionId, frame, vocab);
@@ -4221,6 +4308,11 @@ export async function analyzeJob(
           for (const trig of run.takeAudioTriggers()) {
             liveObserver.recordTrigger(trig);
             liveObserver.addHint(`AUDIO_${trig.kind.toUpperCase()}`, trig.onsetTs);
+            // ADAAAA-7774: a fired trigger arms the FULL-perceive window from
+            // its onset, so the audible event's moment is judged on every
+            // consumed frame (never under-sampled by the cool stride) — the same
+            // escalation the Tier-2 signal path arms.
+            perceiveCadence?.armHot(trig.onsetTs);
           }
         }
         if (observeDecider) await observeDecider.maybeFire(frame.timestamp);
@@ -4280,7 +4372,13 @@ export async function analyzeJob(
     if (lagMeasured) {
       console.log(
         `[live-lag:${cfg.jobId}] summary droppedFrames=${staleFrameDrops} skippedStaleWindows=${liveObserver!.skippedStaleWindowCount()} ` +
-          `maxLag=${(liveObserver!.maxObservedLagMs() / 1000).toFixed(1)}s budget=${lagBudgetS}s frames=${framesAnalyzed}`
+          `maxLag=${(liveObserver!.maxObservedLagMs() / 1000).toFixed(1)}s budget=${lagBudgetS}s frames=${framesAnalyzed} ` +
+          // ADAAAA-7774: the perceive stride. `frames` is what the pass consumed
+          // (~wall x analysisFps); `framesSeen` is what the ingest delivered;
+          // `perceiveCalls < frames` proves the cool-region cadence skipped
+          // frames, and each skipped frame was recorded with an EMPTY seed.
+          `framesSeen=${framesSeen} framesStrided=${framesStrided} perceiveCalls=${perceiveCalls} ` +
+          `perceiveSkipped=${perceiveSkipped} perceiveHot=${perceiveHotCalls} analysisFps=${liveStrideS > 0 ? (1 / liveStrideS).toFixed(1) : "off"}`
       );
     }
   } finally {
@@ -4307,7 +4405,19 @@ export async function analyzeJob(
     highlights,
     framesAnalyzed,
     ...(perceiveCadenceEnabled ? { perceiveCalls } : {}),
-    ...(liveObserver ? { observeMetrics: buildLiveObserveMetrics(liveObserver) } : {}),
+    ...(liveObserver
+      ? {
+          observeMetrics: buildLiveObserveMetrics(liveObserver, {
+            framesSeen,
+            framesAnalyzed,
+            framesStrided,
+            perceiveCalls,
+            perceiveSkipped,
+            perceiveHotCalls,
+            analysisFps: liveStrideS > 0 ? 1 / liveStrideS : 0,
+          }),
+        }
+      : {}),
     ...(observeDecider ? { vodObserveMetrics: buildVodObserveMetrics(observeDecider) } : {}),
   };
 }
