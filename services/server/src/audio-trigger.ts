@@ -286,9 +286,12 @@ export class TriggerWindowScheduler {
   }
 
   /** Drop pending triggers whose onset falls inside a window that has already
-   *  been analyzed — a cadence fire covers them, so they must not fire again. */
+   *  been analyzed — a cadence fire covers them, so they must not fire again.
+   *  `fromTs` may be `-Infinity` to drop every onset older than `toTs`
+   *  (ADAAAA-7707: a dropped stale span only unanchors onsets past the retained
+   *  window horizon, not the whole span it swept). */
   coverThrough(fromTs: number, toTs: number): number {
-    if (!Number.isFinite(fromTs) || !Number.isFinite(toTs)) return 0;
+    if (Number.isNaN(fromTs) || !Number.isFinite(toTs)) return 0;
     const before = this.pending.length;
     this.pending = this.pending.filter((t) => !(t.onsetTs >= fromTs && t.onsetTs <= toTs));
     const dropped = before - this.pending.length;
