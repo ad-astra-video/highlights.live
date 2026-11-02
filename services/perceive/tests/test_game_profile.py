@@ -867,5 +867,48 @@ def test_supertuxkart_eval_set_matches_the_committed_labels_and_run():
     # recall is timing-sensitive, the FP rate is not (RESULTS.md section 1a)
     assert run["recallAtGenerousWindow"] == 1.0
     assert run["labelledWindowFpRateAtGenerousWindow"] > 8 * run["fpCeiling"]
-    # the certification is not claimed before QA records it
-    assert ref["qaCertification"].startswith("pending")
+    # the certification is recorded as data and names the issue that gave it, so
+    # a stale "awaiting re-certification" can never outlive the verdict
+    assert ref["qaCertification"] == "pass (ADAAAA-7806, label revision 1, 15-event reading)"
+    assert "does not transfer" in ref["qaVerdict"]
+    # the narrow reading is graded explicitly, not silently in the type's favour
+    assert man["coverage"]["narrow_reading_events"] == 10
+
+
+def test_certification_is_a_separate_fact_from_measurement():
+    """ADAAAA-7806 flagged the overload: `measured` must not imply certification.
+
+    This type's own history proves the two differ -- labels and the run were
+    committed while `qaCertification` was still `pending` -- so a
+    certification-gated `measured` would have reported a checked measurement
+    that nobody had checked. `certified` is the review fact; `measured` stays a
+    plain statement about the eval set.
+    """
+    from dataclasses import replace
+
+    prof = load_game_profile("supertuxkart")
+    assert prof.measured is True
+    assert prof.certified is True
+    es = prof.eval_set
+    assert es is not None
+
+    def with_cert(value):
+        reference = dict(es.reference)
+        if value is None:
+            reference.pop("qaCertification", None)
+        else:
+            reference["qaCertification"] = value
+        return replace(prof, eval_set=replace(es, reference=reference))
+
+    assert with_cert("pending (re-certification child filed)").certified is False
+    assert with_cert("fail (ADAAAA-7793)").certified is False
+    assert with_cert(None).certified is False
+    # the measurement fact is unchanged by any certification state
+    assert all(with_cert(v).measured is True for v in ("pending", "fail", None))
+    # an unmeasured type is neither measured nor certified
+    assert profile_for("valorant").measured is False
+    assert profile_for("valorant").certified is False
+    # the serialized view carries both, so a consumer can gate on the review fact
+    view = prof.to_dict()
+    assert view["measured"] is True
+    assert view["certified"] is True

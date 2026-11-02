@@ -73,18 +73,26 @@ the type is unmeasured: the audio rule is measured, and its answer is "no".
 
 - Child [ADAAAA-7793](/ADAAAA/issues/ADAAAA-7793) — re-certification of revision
   1 — is `done` with its **FAIL** verdict, which is what produced this revision.
-- A fresh re-certification child is filed from this pass covering only the clauses
-  that changed (1, 2, 3, 4, 5, 10), and this issue is `blocked` on it.
-- `measured=True` for the type only when the run **and** QA's verdict both exist.
-  Today the run exists and the verdict does not, so the operator UI stays off and
-  the profile's `qaCertification` reads `pending`.
+- The revision-2 re-certification child [ADAAAA-7806](/ADAAAA/issues/ADAAAA-7806)
+  is `done` with verdict **PASS on clauses 1, 2, 4, 5, 10**; clause 3 stays
+  `not_captured` (out of scope for that child, not a FAIL). QA reproduced every
+  number in this record and found none it could not reproduce, and independently
+  re-read the pixel evidence (clock/banner/lap-counter bands decoded with its own
+  OCR env) for the label set. Certified at branch `b6a90d2`.
+- **Measurement vs certification are now separate facts in code.** This record
+  and `eval_set.reference` previously said `measured=True` only once the run *and*
+  QA's verdict exist, but `GameProfile.measured` tested only for an eval set:
+  QA flagged the overload on ADAAAA-7806. The contract now exposes
+  `GameProfile.certified` (True only when `qaCertification` records a passing
+  verdict) beside `measured` (the eval set exists), and `qaCertification` reads
+  `pass (ADAAAA-7806, label revision 1, 15-event reading)`.
+- **Nothing here enables the type.** Esports is certified for the clauses that
+  were measured and still `not_captured` for detection, live latency, tracking
+  and VOD depth; the audio trigger measured negative, so the operator UI stays off
+  for this type.
 
 ## Next action and owner
 
-- **QA re-certification (Highlights.live Reviewer):** read the fresh child; a FAIL
-  is an acceptable verdict. The clause that matters most is whether the 15 events
-  are honestly read from pixels, and whether the **narrow** reading (race start +
-  finish only = 10 events, a floor miss) is the one the board should grade.
 - **Developer, next engineering step:** the HUD/kill-feed trigger is now
   justified by measurement rather than assumed — audio does not gate this type.
   That is a new build with its own scoped, costed issue and CEO cost approval

@@ -29,6 +29,14 @@ Two rules this module enforces in code:
   the corpus-wide defaults only (audio trigger only, no zone geometry). It never
   copies soccer's zone model, and it cannot enable a trigger that needs a
   measured operating point without a profile of its own.
+
+Two read-only facts a profile exposes, deliberately NOT collapsed into one:
+
+- ``measured``   — a held-out labeled ``eval_set`` exists for the type.
+- ``certified``  — ``eval_set.reference["qaCertification"]`` records a **passing**
+  QA verdict. An eval set can exist before QA has read it, so this stays a
+  separate property: a gate on "the numbers were checked" reads ``certified``,
+  never ``measured`` (QA flagged the overload on ADAAAA-7806).
 """
 from __future__ import annotations
 
@@ -343,6 +351,33 @@ class GameProfile:
         """True only when the type has a real held-out labeled eval set."""
         return self.eval_set is not None
 
+    @property
+    def certified(self) -> bool:
+        """True only when a QA verdict on that measurement is recorded and passing.
+
+        ``measured`` and ``certified`` are deliberately separate facts:
+        ``measured`` is a *measurement* fact (a held-out eval set exists);
+        ``certified`` is the *review* fact (a QA verdict exists and passed).
+
+        Overloading one onto the other is wrong in both directions. An eval set
+        can exist before QA has read it -- ADAAAA-7768 committed its labels and
+        run while ``qaCertification`` was still ``pending`` -- so a
+        certification-gated ``measured`` would have reported True too early,
+        which is exactly what QA flagged on ADAAAA-7806. Consumers that gate a
+        user-visible enablement on "the numbers were checked" read ``certified``;
+        ``measured`` stays a plain statement about the eval set.
+
+        ``False`` here means "no passing verdict is RECORDED as data", not "QA
+        failed": a type certified before this field existed (soccer, certified
+        through the INC-9 record at ``evals/INC9-RESULTS.md``) reads False. Record
+        the verdict string in ``eval_set.reference["qaCertification"]`` when a
+        type's certification is claimed.
+        """
+        if self.eval_set is None:
+            return False
+        cert = str(self.eval_set.reference.get("qaCertification", ""))
+        return cert.strip().lower().startswith("pass")
+
     def vocabulary_list(self) -> list:
         return list(self.vocabulary)
 
@@ -401,6 +436,8 @@ class GameProfile:
                 }
             ),
             "measured": self.measured,
+            # measurement vs review: see `GameProfile.certified`
+            "certified": self.certified,
         }
 
 
@@ -712,8 +749,16 @@ _SUPERTUXKART_EVAL_REFERENCE: Mapping[str, Any] = {
         "fpCeilingMet": False,
         "result": "evals/supertuxkart_val/RESULTS.md",
     },
-    "qaCertification": "pending (re-certification child filed from ADAAAA-7768)",
-    "qaVerdict": "not yet recorded — measured=true only once the run AND QA's verdict exist",
+    "qaCertification": "pass (ADAAAA-7806, label revision 1, 15-event reading)",
+    "qaVerdict": (
+        "measurement certified PASS on clauses 1, 2, 4, 5, 10; clauses 3, 6, 7, 8 "
+        "stay not_captured with named blockers; fpCeilingMet false - the audio "
+        "trigger does not transfer to this type (recall 1.00 at FP 0.8957, 14.5 "
+        "candidates/min against 1.08 real events/min), so the HUD/kill-feed "
+        "and/or motion path are mandatory and the type stays disabled. Clause 1 "
+        "is certified on the 15-event reading; the narrow (start+finish only) "
+        "reading is 10 and is a stated floor miss."
+    ),
 }
 
 SUPERTUXKART_PROFILE = GameProfile(
