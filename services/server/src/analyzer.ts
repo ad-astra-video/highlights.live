@@ -1360,6 +1360,10 @@ export interface LivePerceiveStrideSnapshot {
   perceiveHotCalls: number;
   /** Content fps the pass consumed at (0 = stride disabled). */
   analysisFps: number;
+  /** ADAAAA-7774: mean measured `client.analyze` wall cost (ms). The cost-aware
+   *  stride steps by this, so a value above `1000 / analysisFps` is the box's
+   *  shared-GPU perceive limit rather than the ingest rate. */
+  perceiveMeanCostMs?: number;
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
@@ -4076,6 +4080,18 @@ export async function analyzeJob(
   // `<= 0` disables the stride (perceive every ingested frame = pre-7774).
   const liveContentFps = Number(cfg.liveObserveContentFps ?? OBSERVE_CONTENT_FPS);
   const liveStrideS = !!liveObserver && Number.isFinite(liveContentFps) && liveContentFps > 0 ? 1 / liveContentFps : 0;
+  // ADAAAA-7774: the stride is also COST-AWARE. A fixed 0.5 s step assumes the
+  // box can perceive ~2 frames/content-second; measured on the box at decide
+  // depth 4 the shared GPU made one `client.analyze` take ~1.6 s, so a fixed
+  // step let the loop fall behind the wall clock again and the lag budget
+  // dropped 2 of every 3 frames (614 of 857, 56 skipped windows) exactly like
+  // the pre-7774 pass. Stepping by the MEASURED perceive cost keeps every
+  // consumed frame at the live edge (lag ~= one perceive), so the budget never
+  // drops content and no cadence window is swallowed; when perceive is fast the
+  // step falls back to `1 / analysisFps` (2 per content second).
+  let perceiveCostS = 0;
+  let perceiveCostSumS = 0;
+  let perceiveCostCount = 0;
   let lastConsumedTs: number | null = null;
   let framesSeen = 0;
   let framesStrided = 0;
@@ -4110,9 +4126,18 @@ export async function analyzeJob(
       // thins to it), so the payload contract is unchanged while the loop stops
       // falling behind the wall clock — which is what let the lag budget drop
       // content and swallow 56-86 of ~100 cadence windows per 300 s.
-      if (liveStrideS > 0 && lastConsumedTs !== null && frame.timestamp - lastConsumedTs < liveStrideS - 1e-9) {
-        framesStrided++;
-        continue;
+      if (liveStrideS > 0 && lastConsumedTs !== null) {
+        // ADAAAA-7774: cost-aware step (see `perceiveCostS`). In a cool region
+        // only every `quietStride`-th consumed frame pays perceive, so the step
+        // can be that much shorter; the 5 % margin keeps the loop just behind
+        // the edge instead of exactly on it.
+        const quietStrideN = Math.max(1, Math.floor(cfg.perceiveQuietStride ?? 2));
+        const coolRatio = !perceiveCadence || perceiveCadence.tier(frame.timestamp) === "hot" ? 1 : 1 / quietStrideN;
+        const stepS = Math.max(liveStrideS, perceiveCostS * coolRatio * 1.05);
+        if (frame.timestamp - lastConsumedTs < stepS - 1e-9) {
+          framesStrided++;
+          continue;
+        }
       }
       lastConsumedTs = frame.timestamp;
       framesAnalyzed++;
@@ -4171,7 +4196,14 @@ export async function analyzeJob(
         if (perceiveTier === "hot") perceiveHotCalls++;
         for (;;) {
           try {
+            const tPerceive = Date.now();
             res = await client.analyze(sessionId, frame, vocab);
+            // ADAAAA-7774: the stride that keeps the loop at the live edge is
+            // driven by this measurement (shared-GPU perceive is the real rate
+            // limit, not the ingest rate).
+            perceiveCostS = (Date.now() - tPerceive) / 1000;
+            perceiveCostSumS += perceiveCostS;
+            perceiveCostCount++;
             break;
           } catch (err) {
             // ADAAAA-6561: the stop path released the perceive slot synchronously,
@@ -4345,7 +4377,19 @@ export async function analyzeJob(
         // escalates the Tier-2 gate (the SAME predicate the decide observer uses),
         // so the goal window around it keeps FULL perceive treatment going forward.
         if (perceiveCadence) {
-          perceiveCadence.noteFrameSignal(frame.timestamp, seed.signal, cfg.observeSignalGateOpts ?? {});
+          // ADAAAA-7774: on the LIVE rail an ABSENT / uncalibrated signal must not
+          // arm the hot window. The decide gate escalates on absence by design
+          // (recall-safe), and inheriting that here armed full perceive for the
+          // WHOLE run (measured: `perceiveHot=182` of 183 perceive calls at 1
+          // stream), i.e. the cadence never cut anything. The cadence arms on a
+          // REAL Tier-2 signal (goal crossed / ball in net / goal outcome /
+          // scoreboard change / motion+audio burst / meaningful ball speed) or on
+          // a trigger (`armHot` above); a seed-less frame simply carries no
+          // signal into the decide window, which keeps the gate recall-safe.
+          const cadenceOpts = liveObserver
+            ? { ...(cfg.observeSignalGateOpts ?? {}), suppressQuietUncalibrated: true }
+            : cfg.observeSignalGateOpts ?? {};
+          perceiveCadence.noteFrameSignal(frame.timestamp, seed.signal, cadenceOpts);
         }
       }
     }
@@ -4378,7 +4422,11 @@ export async function analyzeJob(
           // `perceiveCalls < frames` proves the cool-region cadence skipped
           // frames, and each skipped frame was recorded with an EMPTY seed.
           `framesSeen=${framesSeen} framesStrided=${framesStrided} perceiveCalls=${perceiveCalls} ` +
-          `perceiveSkipped=${perceiveSkipped} perceiveHot=${perceiveHotCalls} analysisFps=${liveStrideS > 0 ? (1 / liveStrideS).toFixed(1) : "off"}`
+          `perceiveSkipped=${perceiveSkipped} perceiveHot=${perceiveHotCalls} analysisFps=${liveStrideS > 0 ? (1 / liveStrideS).toFixed(1) : "off"} ` +
+          // ADAAAA-7774: the measured cost that sets the cost-aware stride — the
+          // number that proves the loop is bounded by the shared GPU, not by the
+          // ingest, when it exceeds `1 / analysisFps`.
+          `perceiveCostMs=${perceiveCostCount ? Math.round((perceiveCostSumS / perceiveCostCount) * 1000) : 0}`
       );
     }
   } finally {
@@ -4415,6 +4463,7 @@ export async function analyzeJob(
             perceiveSkipped,
             perceiveHotCalls,
             analysisFps: liveStrideS > 0 ? 1 / liveStrideS : 0,
+            perceiveMeanCostMs: perceiveCostCount ? Math.round((perceiveCostSumS / perceiveCostCount) * 1000) : 0,
           }),
         }
       : {}),

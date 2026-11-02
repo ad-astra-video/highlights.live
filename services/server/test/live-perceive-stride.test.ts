@@ -216,4 +216,50 @@ describe("PerceiveCadence hot escalation for the live rail (ADAAAA-7774)", () =>
     expect(cadence.tier(10)).toBe("hot");
     expect(cadence.shouldPerceive(12.5)).toBe(true);
   });
+
+  it("(f): an ABSENT/uncalibrated signal does NOT arm the hot window on the live rail (the decide gate's recall-safe escalate must not disable the cadence)", () => {
+    const liveOpts = { suppressQuietUncalibrated: true } as any;
+    // No signal at all: the decide gate escalates (recall-safe), the cadence
+    // must not — otherwise the whole run is "hot" (measured: perceiveHot=182 of
+    // 183 calls at 1 stream, i.e. the cadence cut nothing).
+    const absent = new PerceiveCadence({ quietStride: 2, hotAfterS: 10 });
+    absent.noteFrameSignal(1, undefined, liveOpts);
+    expect(absent.tier(2)).toBe("cool");
+    // A frame the goal channel judged as NOT a goal is also cool.
+    absent.noteFrameSignal(2, { goalInfra: true } as any, liveOpts);
+    expect(absent.tier(3)).toBe("cool");
+    // A REAL Tier-2 signal still arms the full-perceive window.
+    absent.noteFrameSignal(3, { ballInNet: true } as any, liveOpts);
+    expect(absent.tier(4)).toBe("hot");
+    expect(absent.shouldPerceive(12)).toBe(true);
+  });
+});
+
+describe("analyzeJob live cost-aware stride (ADAAAA-7774)", () => {
+  it("(g): a slow shared-GPU perceive keeps the pass at the live edge instead of dropping stale frames", async () => {
+    // 0.3 s of blocking perceive against a 5 fps ingest: the fixed 2 fps stride
+    // would still leave the loop ~1.5x slower than realtime and the 2 s budget
+    // would drop content (the measured box behaviour: 614 of 857 frames dropped,
+    // 56 skipped windows). The cost-aware stride steps by the MEASURED cost, so
+    // every consumed frame is at the edge and nothing is dropped.
+    const slow = makeClient(300);
+    const outcome = await analyzeJob(
+      slow.client,
+      bufferedFrames(6000, 200) as any, // ~5 fps ingest
+      cut as any,
+      { ...CFG, liveObserveContentFps: 2, perceiveQuietStride: 2, liveObserveLagBudgetS: 2 } as any,
+      undefined
+    );
+    const m = outcome.observeMetrics!;
+    const p = m.perceive!;
+    // No stale content was dropped and no cadence window was swallowed...
+    expect(m.skippedStaleWindows).toBe(0);
+    expect(p.framesSeen).toBe(p.framesAnalyzed + p.framesStrided);
+    // ...because the step tracks the measured perceive cost (>= 150 ms with the
+    // cool ratio, i.e. the pass perceives only what it can afford).
+    expect(p.perceiveMeanCostMs).toBeGreaterThanOrEqual(150);
+    expect(p.framesAnalyzed).toBeLessThan(p.framesSeen);
+    // It still decides on the cadence (the pass is not starved).
+    expect(m.decideCalls).toBeGreaterThanOrEqual(2);
+  }, 60000);
 });
