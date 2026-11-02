@@ -1179,7 +1179,9 @@ export function applyOnDemandRecall(
  * perceive remain the data seeder (seed context) and on-demand provider.
  */
 export class ObserveDecider {
-  private readonly frames: { ts: number; imageB64: string }[] = [];
+  /** `seq` is the frame's global rail position when the caller knows it (the
+   *  VOD rail's extracted inventory position, ADAAAA-7736); absent otherwise. */
+  private readonly frames: { ts: number; imageB64: string; seq?: number }[] = [];
   private readonly findings = new Map<number, PerFrameSeed>();
   private readonly biasHints: ObserveBiasHint[] = [];
   private lastFireTs: number | null = null;
@@ -1230,9 +1232,13 @@ export class ObserveDecider {
     this.stageB = opts.stageB ?? null;
   }
 
-  /** Record a frame + its perceive-derived seed context (no re-inference). */
-  record(ts: number, imageB64: string, seed: PerFrameSeed): void {
-    this.frames.push({ ts, imageB64 });
+  /** Record a frame + its perceive-derived seed context (no re-inference).
+   *  `seq` (optional) is the frame's global rail position — the frame file's
+   *  position on disk. The VOD rail passes it (its extracted inventory IS
+   *  `frame_%06d.jpg`, sorted position == seq) so a decided window can name the
+   *  exact frame files it saw in the decide note (ADAAAA-7736). */
+  record(ts: number, imageB64: string, seed: PerFrameSeed, seq?: number): void {
+    this.frames.push(Number.isFinite(seq) ? { ts, imageB64, seq: Math.floor(seq as number) } : { ts, imageB64 });
     this.findings.set(ts, seed);
     const cutoff = ts - Math.max(this.windowS, 30);
     while (this.frames.length && this.frames[0].ts < cutoff) this.frames.shift();

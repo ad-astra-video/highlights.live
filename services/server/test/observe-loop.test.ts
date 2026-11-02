@@ -328,6 +328,48 @@ describe("ObserveDecider (in-loop integration seam)", () => {
     await d.maybeFire(3.0);
     expect(calls).toBe(2); // cadence elapsed -> fires
   });
+
+  // ADAAAA-7736: the VOD rail knows each analysed frame's position in its
+  // extracted `frame_%06d.jpg` inventory (that position IS the seq the
+  // /jobs/:id/frames route serves), so stamping it on the decide payload lets
+  // the decide note name the exact JPEGs the window saw — same contract the
+  // media rail already had. Assert the note-facing shape end to end here:
+  // every ref has a seq, the run is dense/contiguous, the LAST ref is the frame
+  // at the note's own moment, and the window never exceeds maxFrames.
+  it("stamps each recorded frame's inventory seq onto the decided payload", async () => {
+    const fired: ObserveDecidePayload[] = [];
+    const fps = 3; // VOD_DETAIL_FPS default
+    const maxFrames = 30; // OBSERVE_MAX_FRAMES default
+    const d = new ObserveDecider({
+      cadenceS: 3,
+      windowS: 10,
+      maxFrames,
+      fps,
+      onDecide: async (p) => {
+        fired.push(p);
+        return true;
+      },
+    });
+    for (let i = 0; i < fps * 40; i++) {
+      const ts = i / fps;
+      d.record(ts, `f${i}`, { ts }, i); // seq == extracted inventory position
+      await d.maybeFire(ts);
+    }
+    await d.flush();
+    expect(fired.length).toBeGreaterThan(5);
+    for (const p of fired) {
+      expect(p.frames.length).toBeGreaterThan(0);
+      expect(p.frames.length).toBeLessThanOrEqual(maxFrames);
+      const seqs = p.frames.map((f) => f.seq);
+      // seq is known for every carried frame (never a guessed placeholder)
+      expect(seqs.every((s) => Number.isFinite(s))).toBe(true);
+      const s = seqs as number[];
+      // dense contiguous run, oldest -> newest
+      for (let i = 1; i < s.length; i++) expect(s[i]).toBe(s[i - 1] + 1);
+      // the ref list ENDS at the note's window frame: the frame at centerTs
+      expect(Math.abs(p.frames[p.frames.length - 1].ts - p.centerTs)).toBeLessThan(1e-9);
+    }
+  });
 });
 
 describe("assembleLiveWindow (ADAAAA-7008: rolling PAST window, no decode ahead)", () => {

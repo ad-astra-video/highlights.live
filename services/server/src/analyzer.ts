@@ -3037,8 +3037,8 @@ export function nextRunningSummary(prior: string | undefined, decision: Decision
  * `/jobs/<jobId>/frames/<seq>` delivery (the same route the job-detail filmstrip
  * and decide-note thumbnails use).
  *
- * Pure and conservative: a payload whose frames carry no global seq (the VOD
- * detail pass, legacy rows) leaves the analysis untouched — never a guessed seq.
+ * Pure and conservative: a payload whose frames carry no global seq (legacy
+ * rows, test fakes) leaves the analysis untouched — never a guessed seq.
  */
 export function withWindowFrameRefs(
   analysis: WindowAnalysis | undefined,
@@ -3110,8 +3110,10 @@ export async function observeOnDecide(
   }
   // ADAAAA-7734: replace the decide service's placeholder frame refs with the
   // frames this window actually carried, each resolvable at
-  // /jobs/<jobId>/frames/<seq> (the media rail persists those JPEGs). Absent on
-  // payloads without global seqs (VOD), so that path is byte-identical.
+  // /jobs/<jobId>/frames/<seq> (the media rail persists those JPEGs).
+  // ADAAAA-7736: the VOD rail stamps its extracted frame seq the same way, so
+  // its decide notes now name the exact frames the window analysed too. A
+  // payload with no seqs at all (legacy rows) is left byte-identical.
   decision.analysis = withWindowFrameRefs(decision.analysis, payload.frames, cfg.jobId);
   // ADAAAA-7028 Inc 2: ingest the decide audit descriptor into the durable
   // decide_audit index (best-effort; never a pipeline failure). Gated by
@@ -4072,7 +4074,7 @@ export async function analyzeJob(
               signal: seedSignalFromEvidence(res.observation.evidence),
             }
           : { ts: frame.timestamp, tracks: [], objects: [], ocr: [], signal: undefined };
-        observeDecider?.record(frame.timestamp, frame.imageB64, seed);
+        observeDecider?.record(frame.timestamp, frame.imageB64, seed, frame.seq);
         // ADAAAA-7734: the live rail's frames are on disk at the same position as
         // `frame.seq` (ffmpeg `frame_%06d.jpg`, position == seq), so stamp it and
         // the decided window's analysis refs resolve to the exact JPEG.
