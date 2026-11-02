@@ -383,6 +383,11 @@ export class LiveObserver {
    * the box's single live decide slot (admission control). Counted separately
    * from stale drops so a queued stream is never mistaken for a lagging one. */
   private admissionSkips = 0;
+  /** ADAAAA-7758: content ts of the last counted admission skip, so a refusal
+   *  is counted once per cadence WINDOW rather than once per retried frame
+   *  (a refused tick leaves the cadence due, so every ~1/3 s frame would
+   *  otherwise inflate the counter). */
+  private lastAdmissionSkipTs: number | null = null;
   /** ADAAAA-7758: admission predicate (undefined = no arbitration, the shipped
    * default). False means "no decide slot right now". */
   private readonly canDecide: ((centerTs: number) => boolean) | null;
@@ -632,12 +637,21 @@ export class LiveObserver {
     // advanced: nothing was decided, so the cadence stays due and the very next
     // frame can take the slot the moment it frees up.
     if (this.canDecide && !this.canDecide(nowTs)) {
-      this.admissionSkips++;
+      // Count ONE skip per cadence window refused, not one per retried frame:
+      // `lastFireTs` stays put, so the cadence keeps being due while the slot is
+      // held elsewhere and every frame would re-ask.
+      if (this.lastAdmissionSkipTs === null || nowTs - this.lastAdmissionSkipTs >= this.cadenceS - 1e-9) {
+        this.admissionSkips++;
+        this.lastAdmissionSkipTs = nowTs;
+      }
       return;
     }
     if (anchored) this.triggers.consume(dueTrigger);
     const prevFire = this.lastFireTs;
     this.lastFireTs = nowTs;
+    // The interval this decide covers is not a queued window: only refusals
+    // after this moment count as admission skips.
+    this.lastAdmissionSkipTs = nowTs;
     this.budgetTokens -= 1;
     const cadenceMs = prevFire === null ? 0 : (nowTs - prevFire) * 1000;
     if (anchored) this.anchoredFires++;

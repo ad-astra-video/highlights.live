@@ -107,6 +107,28 @@ describe("LiveObserver admission skip (ADAAAA-7758)", () => {
     expect(observer.admissionSkipCount()).toBe(1);
   });
 
+  it("(e) a refusal is counted once per cadence window, not once per retried frame", async () => {
+    const observer = new LiveObserver({
+      cadenceS: 3,
+      windowS: 10,
+      fps: 2,
+      canDecide: () => false,
+      onDecide: async () => false,
+    });
+    observer.record(0, "f0", seed(0));
+    // the slot is held elsewhere: every frame re-asks, one window is queued
+    for (const ts of [0, 0.3, 0.7, 1.2, 2.0, 2.9]) {
+      observer.record(ts, `f${ts}`, seed(ts));
+      await observer.maybeFire(ts, false, 500);
+    }
+    expect(observer.admissionSkipCount()).toBe(1);
+    // the next cadence window that cannot be decided is a second queued window
+    observer.record(3.2, "f3.2", seed(3.2));
+    await observer.maybeFire(3.2, false, 500);
+    expect(observer.admissionSkipCount()).toBe(2);
+    expect(observer.decideCalls()).toBe(0);
+  });
+
   it("(e) a refused forced tail (flush) is also skipped and counted", async () => {
     const payloads: number[] = [];
     const observer = new LiveObserver({
