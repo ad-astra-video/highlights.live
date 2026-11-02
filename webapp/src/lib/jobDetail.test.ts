@@ -19,6 +19,8 @@ import {
   sectionMatchesFilter,
   sectionMatchesSearch,
   sectionMatches,
+  mergeSections,
+  SECTION_WINDOW_S,
 } from "./jobDetail";
 
 function frame(seq: number, timestamp: number) {
@@ -288,5 +290,49 @@ describe("decideCallsCount (ADAAAA-7664)", () => {
   it("falls back to 0 only when neither path recorded a count", () => {
     expect(decideCallsCount({})).toBe(0);
     expect(decideCallsCount({ observeMetrics: {} })).toBe(0);
+  });
+});
+
+// ADAAAA-7742: the open live detail page appends the windows it does not hold
+// yet instead of re-fetching the accumulated composite payload. The merge must
+// keep the 3 s bucket order, replace a re-sent tail bucket (so a decide note
+// that landed into it shows), and leave every earlier bucket untouched.
+describe("mergeSections + SECTION_WINDOW_S (ADAAAA-7742)", () => {
+  it("appends new buckets in 3 s order and keeps the ones already rendered", () => {
+    const existing = [section(0, [frame(0, 0.2)]), section(1, [frame(1, 3.4)])];
+    const incoming = [section(2, [frame(2, 6.4)]), section(3, [frame(3, 9.4)])];
+    const merged = mergeSections(existing, incoming);
+    expect(merged.map((s) => s.index)).toEqual([0, 1, 2, 3]);
+    expect(merged[0]).toBe(existing[0]); // untouched copy
+    expect(sectionFrameCount(merged)).toBe(4);
+    expect(assertFramePartition(merged).ok).toBe(true);
+  });
+
+  it("replaces the re-sent tail bucket so its new decide note renders", () => {
+    const stale = section(2, [frame(2, 6.4)]);
+    const existing = [section(1, [frame(1, 3.4)]), stale];
+    const freshTail = section(2, [frame(2, 6.4)], [note({ status: "accepted", timestamp: 6.6, reason: "ball in net" })]);
+    const merged = mergeSections(existing, [freshTail]);
+    expect(merged.map((s) => s.index)).toEqual([1, 2]);
+    expect(merged[1]).toBe(freshTail);
+    expect(merged[1].decideNotes.map((n) => n.reason)).toEqual(["ball in net"]);
+  });
+
+  it("is a no-op when the delta carries nothing (page already caught up)", () => {
+    const existing = [section(0, [frame(0, 0.2)])];
+    expect(mergeSections(existing, [])).toBe(existing);
+  });
+
+  it("sorts an out-of-order delta and never duplicates a bucket index", () => {
+    const merged = mergeSections([section(0, [frame(0, 0.2)])], [section(4, [frame(4, 12.2)]), section(3, [frame(3, 9.2)])]);
+    expect(merged.map((s) => s.index)).toEqual([0, 3, 4]);
+    expect(new Set(merged.map((s) => s.index)).size).toBe(merged.length);
+  });
+
+  it("keeps SECTION_WINDOW_S in sync with the server bucket width", () => {
+    // services/server/src/job-detail.ts partitions at SECTION_WINDOW = 3 s; a
+    // client-side drift here would make the page ask for the wrong bucket.
+    expect(SECTION_WINDOW_S).toBe(3);
+    expect(Math.floor(9.4 / SECTION_WINDOW_S)).toBe(3);
   });
 });

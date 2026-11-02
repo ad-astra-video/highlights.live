@@ -408,6 +408,66 @@ export async function fetchJobDetail(id: string): Promise<JobDetail> {
 }
 
 /**
+ * ADAAAA-7742: the fixed bucket width the server partitions frames into
+ * (`SECTION_WINDOW` in services/server/src/job-detail.ts). Section index =
+ * floor(timestamp / SECTION_WINDOW_S), so the index is stable and monotonic and
+ * an open live page can ask the server for "everything after bucket N" instead
+ * of re-fetching the whole accumulated composite payload.
+ */
+export const SECTION_WINDOW_S = 3;
+
+/**
+ * ADAAAA-7742: the tail of an open job's composite detail — only the sections
+ * after `afterIndex`, plus the small mutable companions the same page renders
+ * (job status/summary, postable highlights, the summary ladder). This is the
+ * incremental response of `/jobs/:id/sections-delta`; the composite
+ * `/jobs/:id/detail` stays the contract for the initial load and for recovery
+ * after a dropped SSE socket.
+ */
+export interface SectionsDelta {
+  jobId: string;
+  /** The bucket index the client asked to continue after (-1 = from the top). */
+  afterIndex: number;
+  /** Highest bucket index the server holds for this job (-1 when empty). */
+  maxIndex: number;
+  /** Total buckets the server holds (append-vs-replace audit). */
+  sectionCount: number;
+  sections: FrameSection[];
+  job: JobDetail["job"];
+  highlights: JobDetailHighlight[];
+  notableHighlights?: JobDetailHighlight[];
+  duplicateHighlights?: JobDetailHighlight[];
+  maxTraces: number;
+  summaryLadder?: SummaryLadder;
+}
+
+/**
+ * Fetch only the sections an open live detail page does not already hold.
+ * `afterIndex = -1` returns the whole section list (used when the page has no
+ * baseline yet); any other value returns buckets strictly greater than it.
+ */
+export async function fetchSectionsDelta(id: string, afterIndex: number): Promise<SectionsDelta> {
+  const after = Number.isInteger(afterIndex) && afterIndex >= 0 ? afterIndex : -1;
+  return api<SectionsDelta>(`/jobs/${id}/sections-delta?afterIndex=${after}`);
+}
+
+/**
+ * Merge a sections-delta into the sections already rendered. Buckets keep their
+ * 3 s order, an incoming bucket REPLACES the stale copy with the same index (the
+ * server re-sends the tail bucket so a decide note that landed into it still
+ * shows), and every bucket the client already had but the delta did not return
+ * is left untouched. Keyed by bucket index, so the frame partition invariant
+ * (each frame seq in exactly one bucket) still holds afterwards.
+ */
+export function mergeSections(existing: FrameSection[], incoming: FrameSection[]): FrameSection[] {
+  if (!incoming.length) return existing;
+  const byIndex = new Map<number, FrameSection>();
+  for (const s of existing) byIndex.set(s.index, s);
+  for (const s of incoming) byIndex.set(s.index, s);
+  return [...byIndex.values()].sort((a, b) => a.index - b.index);
+}
+
+/**
  * `M:SS` clock for a ladder timestamp (seconds into the match). Rounds down so
  * a chapter boundary and the goal it contains never disagree about the minute.
  */
