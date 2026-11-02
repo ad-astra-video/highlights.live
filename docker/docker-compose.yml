@@ -21,10 +21,18 @@ services:
       - -orchSecret=${ORCHESTRATOR_SECRET:-highlights-secret}
       - -network=arbitrum-one-mainnet
       - -ethUrl=${ARBITRUM_RPC}
-      # On-chain orchestrator account pinned per board direction. go-livepeer
-      # holds/unlocks the orchestrator keystore under the writable ./lpdata-orch
-      # datadir mount (account 0x3b28...bf79); -ethOrchAddr selects it.
+      # -ethOrchAddr sets the ticket RECIPIENT (the on-chain registered
+      # orchestrator address that receives redeemed ticket value). It does NOT
+      # select the signing account: the redeem tx is signed - and its gas paid -
+      # by the keystore account pinned below (0x27931e...d0ab), which
+      # go-livepeer otherwise picks implicitly as "first ETH account in
+      # keystore". ADAAAA-7804: funding 0x3b28...bf79 did not unblock redemption
+      # for exactly that reason. Keep -ethAcctAddr pinned to the funded keystore
+      # account so a keystore reorder cannot silently switch the gas-paying
+      # account again (a missing account now fails loudly at startup instead of
+      # silently switching wallets).
       - -ethOrchAddr=0x3b28a7d785356dc67c7970666747e042305bfb79
+      - -ethAcctAddr=0x27931eAEf2d699E846C9Ca7D6D83bb84A3e5d0ab
       - -ethPassword=${ORCHESTRATOR_ETH_PASSWORD:-highlights-orch}
       # On-chain orchestrator requires an explicit price per unit (wei/pixel).
       - -pricePerUnit=${PRICE_PER_UNIT:-1}
