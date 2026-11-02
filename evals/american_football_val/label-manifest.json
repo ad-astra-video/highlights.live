@@ -1,0 +1,471 @@
+{
+ "$comment": "ADAAAA-7767 - frame-derived ground truth for a rights-cleared american-football broadcast. Labels were read from the pixels only: the broadcast score bug (two teal score boxes, one per team, plus period/clock) was read at 1 fps from native frames, and a scoring instant is the first frame whose score digits show the new value. No label comes from decide reason text, from a detection model's output, or from a soccer/basketball clip. Every instant is reported with the bracket it was narrowed to; several brackets are +-5 s rather than +-1 s because the community-access operator updates the bug a few seconds after the play (recorded per event in labelConfidence).",
+ "video": {
+  "id": "belmont-vs-westford-2023-09-21",
+  "path": "af_belmont_vs_westford_092123.mp4",
+  "source": "https://archive.org/details/snafuinfinityfootball_092123-vs-westford",
+  "source_file": "https://archive.org/download/snafuinfinityfootball_092123-vs-westford/football_092123-vs-westford.mp4",
+  "rights_basis": "CC0 1.0 (public-domain dedication)",
+  "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "rights_holder": "Belmont Media Center (producing community-access station; uploader access@belmontmedia.org)",
+  "attribution": "Belmont Media Center, Belmont HS Boys Varsity Football: Marauders vs Westford, 2023-09-21, CC0 1.0, via the Internet Archive",
+  "sha256": "ad12b10b804c5a8cd164e3a4bf32281ed18098bc03b9ee510fc9df87a6df1aeb",
+  "bytes": 817579377,
+  "duration_s": 8391.232,
+  "width": 854,
+  "height": 480,
+  "fps": 29.97,
+  "audio": "aac, commentary + crowd + PA whistle bed (the reason this clip is usable for the audio-trigger measurement)",
+  "frame_source": "native 854x480 frames decoded at 1 fps; the score bug band (source y 400-446) was cropped per frame and read at native resolution",
+  "labels_by": "Highlights.live Developer (Paperclip run 90123f8a-a0a5-4456-9220-e7b30940a4ad)",
+  "labelled_at": "2026-11-02",
+  "label_method": "score-bug catalogue: 1 fps crops of the two score boxes (source x 243-288 and 462-508, y 409-436) read visually from native frames, bracketed by 4-row strips at 2-60 s steps until the transition was pinned; the instant is the first 1 fps frame showing the new digits. Non-event windows lie strictly inside a score-stable interval and were read at both ends.",
+  "label_confidence_note": "The score bug is updated by the host operator a few seconds after the play, so an instant is the BUG UPDATE, not the snap-to-score moment; each event records the bracket it was narrowed to. A \u00b15 s label error is bounded by the brackets below, and the audio harness is scored with a widened -6 s/+3 s match window for that reason (see evals/american_football_val/audio-labels.json).",
+  "bug_anomaly": "The bug displayed Westford 14 at halftime (first read at t=3800) while every third-quarter read shows 13. The half-time value is an operator entry error: the +2 at t~3795 is a two-point conversion / extra-point entry that was corrected to 13 before the third quarter. Recorded rather than silently repaired, and relevant to the corroboration-oracle follow-on: this score bug is NOT a trustworthy oracle for football.",
+  "segment": {
+   "start_s": 0,
+   "end_s": 8391,
+   "duration_s": 8391,
+   "note": "the whole rights-cleared recording is the clip: one continuous community-access broadcast of one game (pregame overlay, four quarters, halftime). The clip carries 11 verified scoring plays across 8391 s, which clears the >= 5 min / >= 6 scoring plays floor with the real count stated rather than a padded one."
+  }
+ },
+ "coverage": {
+  "clip_span_s": 8391,
+  "scoring_plays_verified": 11,
+  "scoring_play_floor": 6,
+  "scoring_floor_met": true,
+  "non_event_windows": 14,
+  "non_event_floor": 10,
+  "non_event_floor_met": true,
+  "note": "Football scoring is sparse, which is why the clip is the whole game rather than a 5-minute slice: a 5-minute slice of this game holds at most one scoring play. The real count (11) is stated; nothing was padded to reach the floor."
+ },
+ "windows": [
+  {
+   "id": "E01",
+   "kind": "scoring",
+   "team": "Westford",
+   "delta": 6,
+   "event_type": "touchdown",
+   "score_before": "0-0",
+   "score_after": "0-6",
+   "instant_s": 1609,
+   "bracket_s": [
+    1608,
+    1610
+   ],
+   "confidence_s": 2,
+   "t_start": 1599,
+   "t_end": 1620,
+   "evidence": [
+    "1 fps band frames 1608 (0-0) and 1610 (0-6)",
+    "contrast: 1590/1600/1608 all 0-0, 1616/1620 0-6"
+   ],
+   "ground_truth": "score",
+   "instant": 1609
+  },
+  {
+   "id": "E02",
+   "kind": "scoring",
+   "team": "Belmont",
+   "delta": 6,
+   "event_type": "touchdown",
+   "score_before": "0-6",
+   "score_after": "6-6",
+   "instant_s": 3522,
+   "bracket_s": [
+    3520,
+    3524
+   ],
+   "confidence_s": 3,
+   "t_start": 3512,
+   "t_end": 3535,
+   "evidence": [
+    "1 fps band frames 3520 (0-6) and 3524 (6-6)",
+    "574 s after E01; end of Q2 (bug clock 0:21)"
+   ],
+   "ground_truth": "score",
+   "instant": 3522
+  },
+  {
+   "id": "E03",
+   "kind": "scoring",
+   "team": "Belmont",
+   "delta": 1,
+   "event_type": "extra_point",
+   "score_before": "6-6",
+   "score_after": "7-6",
+   "instant_s": 3557,
+   "bracket_s": [
+    3555,
+    3558
+   ],
+   "confidence_s": 2,
+   "t_start": 3547,
+   "t_end": 3568,
+   "evidence": [
+    "1 fps band frames 3555 (6-6) and 3558 (7-6)",
+    "two plays apart from E02, so the TD and the XP are separate labelled scoring plays"
+   ],
+   "ground_truth": "score",
+   "instant": 3557
+  },
+  {
+   "id": "E04",
+   "kind": "scoring",
+   "team": "Westford",
+   "delta": 6,
+   "event_type": "touchdown",
+   "score_before": "7-6",
+   "score_after": "7-12",
+   "instant_s": 3751,
+   "bracket_s": [
+    3749,
+    3752
+   ],
+   "confidence_s": 2,
+   "t_start": 3741,
+   "t_end": 3762,
+   "evidence": [
+    "1 fps band frames 3749 (7-6) and 3752 (7-12)",
+    "bug clock 2nd 0:06"
+   ],
+   "ground_truth": "score",
+   "instant": 3751
+  },
+  {
+   "id": "E05",
+   "kind": "scoring",
+   "team": "Westford",
+   "delta": 2,
+   "event_type": "two_point_conversion_or_extra_point",
+   "score_before": "7-12",
+   "score_after": "7-14",
+   "instant_s": 3796,
+   "bracket_s": [
+    3788,
+    3800
+   ],
+   "confidence_s": 8,
+   "t_start": 3786,
+   "t_end": 3807,
+   "evidence": [
+    "1 fps band frames 3788 (7-12) and 3800 (7-14, bug state HALF 0:01)",
+    "delta 2 read at the half-time graphic; the third-quarter bug shows 13, so this entry was corrected by the operator (see video.bug_anomaly)"
+   ],
+   "ground_truth": "score",
+   "instant": 3796
+  },
+  {
+   "id": "E06",
+   "kind": "scoring",
+   "team": "Westford",
+   "delta": 6,
+   "event_type": "touchdown",
+   "score_before": "7-13",
+   "score_after": "7-19",
+   "instant_s": 5405,
+   "bracket_s": [
+    5400,
+    5410
+   ],
+   "confidence_s": 5,
+   "t_start": 5395,
+   "t_end": 5416,
+   "evidence": [
+    "1 fps band frames 5400 (7-13) and 5410 (7-19)",
+    "third quarter, bug clock 5:03"
+   ],
+   "ground_truth": "score",
+   "instant": 5405
+  },
+  {
+   "id": "E07",
+   "kind": "scoring",
+   "team": "Belmont",
+   "delta": 6,
+   "event_type": "touchdown",
+   "score_before": "7-19",
+   "score_after": "13-19",
+   "instant_s": 6628,
+   "bracket_s": [
+    6620,
+    6635
+   ],
+   "confidence_s": 8,
+   "t_start": 6618,
+   "t_end": 6639,
+   "evidence": [
+    "1 fps band frames 6620 (7-19) and 6635 (13-19)",
+    "fourth quarter, bug clock 8:16"
+   ],
+   "ground_truth": "score",
+   "instant": 6628
+  },
+  {
+   "id": "E08",
+   "kind": "scoring",
+   "team": "Belmont",
+   "delta": 1,
+   "event_type": "extra_point",
+   "score_before": "13-19",
+   "score_after": "14-19",
+   "instant_s": 6670,
+   "bracket_s": [
+    6650,
+    6690
+   ],
+   "confidence_s": 20,
+   "t_start": 6660,
+   "t_end": 6681,
+   "evidence": [
+    "1 fps band frames 6650 (13-19) and 6690 (14-19)",
+    "the TD/XP pair E07/E08 is 42 s apart"
+   ],
+   "ground_truth": "score",
+   "instant": 6670
+  },
+  {
+   "id": "E09",
+   "kind": "scoring",
+   "team": "Westford",
+   "delta": 6,
+   "event_type": "touchdown",
+   "score_before": "14-19",
+   "score_after": "14-25",
+   "instant_s": 7412,
+   "bracket_s": [
+    7405,
+    7420
+   ],
+   "confidence_s": 8,
+   "t_start": 7402,
+   "t_end": 7423,
+   "evidence": [
+    "1 fps band frames 7405 (14-19/25 boundary read at 7420) and 7420 (14-25)",
+    "fourth quarter, bug clock 2:16"
+   ],
+   "ground_truth": "score",
+   "instant": 7412
+  },
+  {
+   "id": "E10",
+   "kind": "scoring",
+   "team": "Westford",
+   "delta": 1,
+   "event_type": "extra_point",
+   "score_before": "14-25",
+   "score_after": "14-26",
+   "instant_s": 7448,
+   "bracket_s": [
+    7440,
+    7448
+   ],
+   "confidence_s": 8,
+   "t_start": 7438,
+   "t_end": 7459,
+   "evidence": [
+    "1 fps band frames 7435 (14-25) and 7448 (14-26)"
+   ],
+   "ground_truth": "score",
+   "instant": 7448
+  },
+  {
+   "id": "E11",
+   "kind": "scoring",
+   "team": "Belmont",
+   "delta": 6,
+   "event_type": "touchdown",
+   "score_before": "14-26",
+   "score_after": "20-26",
+   "instant_s": 8035,
+   "bracket_s": [
+    8030,
+    8038
+   ],
+   "confidence_s": 4,
+   "t_start": 8025,
+   "t_end": 8046,
+   "evidence": [
+    "1 fps band frames 8030 (14-26) and 8038 (20-26)",
+    "final score 20-26 confirmed at t=8150/8300; no extra point followed in the bug"
+   ],
+   "ground_truth": "score",
+   "instant": 8035
+  },
+  {
+   "id": "N01",
+   "kind": "non_event",
+   "t_start": 800,
+   "t_end": 824,
+   "score_state": "0-0",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 0-0 at 800 and 824 (read in the 1000 s bracket: 0-0 at 1000)",
+    "24 s window inside the score-stable 0-0 interval (300-1608)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N02",
+   "kind": "non_event",
+   "t_start": 1200,
+   "t_end": 1224,
+   "score_state": "0-0",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 0-0 at 1200 and 1224 (bracket reads 1200 = 0-0, 1400 = 0-0)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N03",
+   "kind": "non_event",
+   "t_start": 1400,
+   "t_end": 1424,
+   "score_state": "0-0",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 0-0 at 1400 and 1424 (bracket reads 1400 = 0-0, 1600 = 0-0)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N04",
+   "kind": "non_event",
+   "t_start": 2100,
+   "t_end": 2124,
+   "score_state": "0-6",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 0-6 at 2100 and 2124 (bracket reads 2000 = 0-6, 2500 = 0-6)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N05",
+   "kind": "non_event",
+   "t_start": 2400,
+   "t_end": 2424,
+   "score_state": "0-6",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 0-6 at 2400 and 2424 (bracket reads 2000/2500 = 0-6)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N06",
+   "kind": "non_event",
+   "t_start": 3000,
+   "t_end": 3024,
+   "score_state": "0-6",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 0-6 at 3000 and 3024 (bracket reads 2500 = 0-6, 3500 = 0-6)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N07",
+   "kind": "non_event",
+   "t_start": 4700,
+   "t_end": 4724,
+   "score_state": "7-13",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 7-13 at 4700 and 4724 (bracket reads 4650/4800 = 7-13)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N08",
+   "kind": "non_event",
+   "t_start": 4950,
+   "t_end": 4974,
+   "score_state": "7-13",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 7-13 at 4950 and 4974 (bracket reads 4950 = 7-13, 5400 = 7-13)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N09",
+   "kind": "non_event",
+   "t_start": 5100,
+   "t_end": 5124,
+   "score_state": "7-13",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 7-13 at 5100 and 5124 (bracket reads 5100/5200 = 7-13)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N10",
+   "kind": "non_event",
+   "t_start": 5700,
+   "t_end": 5724,
+   "score_state": "7-19",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 7-19 at 5700 and 5724 (bracket reads 5430-5500 = 7-19, 6700 = 14-19)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N11",
+   "kind": "non_event",
+   "t_start": 6100,
+   "t_end": 6124,
+   "score_state": "7-19",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 7-19 at 6100 and 6124 (bracket reads 5500 = 7-19, 6540 = 7-19)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N12",
+   "kind": "non_event",
+   "t_start": 6900,
+   "t_end": 6924,
+   "score_state": "14-19",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 14-19 at 6900 and 6924 (bracket reads 6900/7100 = 14-19)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N13",
+   "kind": "non_event",
+   "t_start": 7600,
+   "t_end": 7624,
+   "score_state": "14-26",
+   "window_class": "live_play_no_score",
+   "evidence": [
+    "score bug 14-26 at 7600 and 7624 (bracket reads 7700 = 14-26)"
+   ],
+   "ground_truth": "no_score"
+  },
+  {
+   "id": "N14",
+   "kind": "non_event",
+   "t_start": 8250,
+   "t_end": 8274,
+   "score_state": "20-26",
+   "window_class": "dead_ball",
+   "evidence": [
+    "score bug 20-26 at 8250 and 8274 (final reads 8150/8300 = 20-26)",
+    "end-of-game handshake window, scored as a dead-ball window"
+   ],
+   "ground_truth": "no_score"
+  }
+ ],
+ "known_gaps": [
+  "No frame-level detection (box) slice was labelled for american football in this pass, so evals/detect_precision.py --backend florence has no american-football label space to score yet; evals/american_football_val/detect_val.jsonl is therefore absent rather than fabricated.",
+  "No american-football track manifest exists, so evals/track_metrics.py was not run for this type.",
+  "The score bug is not an oracle: it showed 14 at half time and 13 in the third quarter (video.bug_anomaly). Any future corroboration-oracle work must not assume overlay OCR is trustworthy on community-access football."
+ ]
+}

@@ -1,0 +1,50 @@
+{
+ "$comment": "ADAAAA-7767 - american-football audio-trigger eval corpus. One measured class: the crowd/PA roar around a scoring play. Onsets are the frame-verified score-bug transitions in evals/american_football_val/label-manifest.json (first 1 fps frame whose digits show the new score). Negatives are score-stable 24 s windows from the same clip: no scoring transition inside the window by the score bug at both ends. The clip is a box-side clip-root artifact (CC0 1.0, sha256 in the label manifest); it is not committed to the repo. The match window is widened to -6 s/+3 s because the community-access operator updates the score bug a few seconds after the play, so an onset is bounded by the recording, not by the snap.",
+ "frameS": 0.1,
+ "sr": 8000,
+ "matchPre": 6.0,
+ "matchPost": 3.0,
+ "classes": [
+  {
+   "id": "score_roar",
+   "clip": "af_belmont_vs_westford_092123.mp4",
+   "onsets": [
+    1609,
+    3522,
+    3557,
+    3751,
+    3796,
+    5405,
+    6628,
+    6670,
+    7412,
+    7448,
+    8035
+   ],
+   "labelSource": "evals/american_football_val/label-manifest.json scoring windows (frame-verified score-bug transitions)",
+   "measured": true,
+   "negatives": [
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 800, "end": 824, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 1200, "end": 1224, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 1400, "end": 1424, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 2100, "end": 2124, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 2400, "end": 2424, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 3000, "end": 3024, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 4700, "end": 4724, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 4950, "end": 4974, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 5100, "end": 5124, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 5700, "end": 5724, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 6100, "end": 6124, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 6900, "end": 6924, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 7600, "end": 7624, "window_class": "live_play_no_score"},
+    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 8250, "end": 8274, "window_class": "dead_ball"}
+   ]
+  },
+  {
+   "id": "whistle",
+   "clip": null,
+   "measured": false,
+   "gap_reason": "Football has a real whistle/PA cue, but in football the whistle marks EVERY play ending (a dead-ball signal, tens per quarter), not a scoring cue. Labelling it as a scoring-trigger class would measure a signal that fires on every down and would inflate the candidate count without carrying the type. Recorded as an explicit gap, not as a pass; the whistle class in evals/audio-labels.json is untouched and is not re-used as a football result."
+  }
+ ]
+}

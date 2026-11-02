@@ -650,3 +650,93 @@ def test_eval_harnesses_take_the_profile_not_soccer_constants():
     assert tm.PROFILE is SOCCER_PROFILE
     assert tm.PROFILE.tracking_roster.capacity("live") == 3
     assert tm.PROFILE.tracking_roster.capacity("vod") == 8
+
+
+# --- 8. american football (ADAAAA-7767, per-type step 2) ------------------
+
+
+def test_american_football_is_registered_and_measured_against_its_own_eval_set():
+    """ADAAAA-7767: the strict KeyError for american football is gone.
+
+    The type carries a real committed manifest with 11 frame-verified scoring
+    plays, declares the no-zone fallback, and both canonical spellings resolve
+    to the SAME measured object (never to an unmeasured duplicate).
+    """
+    prof = load_game_profile("american football")
+    assert prof.key == "american football"
+    assert prof.measured is True
+    assert prof.eval_set is not None
+    assert prof.eval_set.manifest == "evals/american_football_val/label-manifest.json"
+    # the eval label space is the scoring-window class that was labelled, NOT
+    # the deployed per-frame detection roster
+    assert prof.eval_set.vocabulary == ("score",)
+    assert prof.vocabulary == ("football", "player", "referee")
+
+    # the legacy `football` hint is the same measured profile, not a duplicate
+    assert load_game_profile("football") is prof
+    assert profile_for("football") is prof
+    # league aliases resolve through canonical_sport to the same object
+    assert profile_for("NFL") is prof
+    assert profile_for("gridiron") is prof
+    assert profile_for("college football") is prof
+    # and the soccer roster is untouched by the football registration
+    assert profile_for("Premier League") is SOCCER_PROFILE
+
+
+def test_american_football_no_zone_drops_the_zone_trigger_at_construction():
+    """`no-zone` is a declared property of the type, not a failure.
+
+    American football has no canned scoring zone and an end-zone model is out of
+    scope, so the profile declares `no-zone` and `__post_init__` drops the
+    detection-in-zone trigger even if data asks for it.
+    """
+    prof = load_game_profile("american football")
+    assert prof.zone_model.is_no_zone
+    assert prof.zone_model.zones == ()
+    assert prof.triggers.names() == (TRIGGER_MOTION, TRIGGER_AUDIO)
+    assert prof.allows(TRIGGER_DETECTION_IN_ZONE) is False
+    # data that asks for the zone trigger anyway is auto-disabled, not raised
+    forced = prof.with_triggers(
+        TriggerSubset.of(TRIGGER_MOTION, TRIGGER_AUDIO, TRIGGER_DETECTION_IN_ZONE)
+    )
+    assert forced.allows(TRIGGER_DETECTION_IN_ZONE) is False
+    # no oracle is claimed: the measured clip's score bug was shown to disagree
+    # with itself (14 at half time, 13 in the third quarter)
+    assert prof.corroboration_oracle is None
+
+
+def test_american_football_eval_set_matches_the_committed_labels_and_run():
+    """The registered numbers ARE the committed labels' numbers (drift guard)."""
+    import json
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    af = os.path.normpath(os.path.join(here, "..", "..", "..", "evals", "american_football_val"))
+    man = json.load(open(os.path.join(af, "label-manifest.json")))
+    labels = json.load(open(os.path.join(af, "audio-labels.json")))
+
+    events = [w for w in man["windows"] if w["ground_truth"] == "score"]
+    negs = [w for w in man["windows"] if w["ground_truth"] == "no_score"]
+    prof = load_game_profile("american football")
+    ev = prof.eval_set
+    assert ev is not None
+    ref = ev.reference
+    assert len(events) == ref["scoringPlays"] == 11
+    assert len(negs) == ref["nonEventWindows"] == 14
+    assert man["coverage"]["scoring_floor_met"] is True
+
+    # the onsets in the audio corpus are the manifest's instants
+    cls = [c for c in labels["classes"] if c["id"] == "score_roar"][0]
+    assert sorted(cls["onsets"]) == sorted(w["instant"] for w in events)
+    assert len(cls["negatives"]) == len(negs)
+
+    # the measured run is recorded as data, including that it MISSED the ceiling
+    run = ref["audioHarness"]
+    assert run["events"] == 11 and run["candidates"] == 1979
+    assert run["recall"] == pytest.approx(1.0)
+    assert run["fpRate"] == pytest.approx(1951 / 1979, abs=1e-4)
+    assert run["fpCeiling"] == 0.10 and run["fpCeilingMet"] is False
+    # and it misses under a generous label tolerance too, so the verdict is not
+    # an artefact of the score-bug update lag
+    assert run["fpRateAtGenerousWindow"] > 5 * run["fpCeiling"]
+    # no detection slice was invented for the type
+    assert ref["detectionSlice"] is None
