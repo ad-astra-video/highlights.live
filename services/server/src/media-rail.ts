@@ -51,6 +51,7 @@ import {
 } from "./observe-loop";
 import { LiveRunShared, buildLiveObserveMetrics, seedSignalFromEvidence, type LiveObserveMetricsSnapshot } from "./analyzer";
 import type { StageAOutcomeLedger } from "./stage-a-metrics";
+import { liveDecideAdmission } from "./live-decide-admission";
 import {
   audioTriggerFromCandidate,
   isStageBTrigger,
@@ -254,6 +255,10 @@ export class MediaRailObserver {
       // whistle-anchored decide on this rail is judged in its OWN family ledger
       // and `stageAMetrics` stays whistle-free here as well.
       stageB: this.run.stageBOutcomes,
+      // ADAAAA-7758: the browser rail shares the SAME process-wide live decide
+      // slot as the rtmp/file-sim rail, so a screen share can never interleave
+      // decides with another live job and stretch both past the budget.
+      canDecide: () => liveDecideAdmission.admit(this.jobId),
     });
   }
 
@@ -412,6 +417,9 @@ export class MediaRailObserver {
     }
     this.closed = true;
     await this.chain.catch(() => {});
+    // ADAAAA-7758: the share is over — give the live decide slot back (the tail
+    // decide above already ran while the share still held it).
+    liveDecideAdmission.release(this.jobId);
     // Per-share evidence line: the deployment proof (AC-1/AC-2/AC-3) reads this
     // from `docker logs highlights-server` alongside the job's persisted
     // counters. ADAAAA-7723 adds the trigger LEDGER and the per-family latency,

@@ -499,6 +499,10 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // (a window labelled T+42s used to reach the feed at wall +242s). Additive
   // optional (absent on older rows / when no stale window was dropped).
   skippedStaleWindows: z.number().int().min(0).optional(),
+  // ADAAAA-7758: windows a live run did NOT decide because another live job held
+  // the box's single live decide slot (admission control). Additive optional:
+  // absent/zero when admission control is off, which is the shipped default.
+  admissionSkippedWindows: z.number().int().min(0).optional(),
   // Worst / mean wall-clock content-vs-wall lag (ms) seen on a dropped frame,
   // and the worst COMPLETED lag (ms) of a decided window (what a live viewer
   // experiences: `summaryLog` `windowTs` vs wall `ts`).

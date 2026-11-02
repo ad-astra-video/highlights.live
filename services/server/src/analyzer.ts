@@ -25,6 +25,7 @@ import {
   OBSERVE_WINDOW_S,
 } from "./observe-loop";
 import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
+import { liveDecideAdmission } from "./live-decide-admission";
 import type { AudioTriggerRecord, TriggerSchedulerStats } from "./audio-trigger";
 import type { TriggerFamilyLatency } from "./observe-loop";
 import { isStageBTrigger, triggerFamily, type WhistleFireBlock } from "./audio-trigger";
@@ -1247,6 +1248,12 @@ export interface LiveObserveMetricsSnapshot {
    *  budget) instead of being decided late. Proves the live pass is bounded, not
    *  unbounded-queueing. */
   skippedStaleWindows?: number;
+  /** ADAAAA-7758: cadence windows this run did NOT decide because ANOTHER live
+   *  job held the box's single live decide slot (admission control). Zero when
+   *  admission control is off (the shipped default) or when this job held the
+   *  slot; a positive count means this stream was QUEUED behind another live
+   *  stream, which is a different condition from a lag-driven stale skip. */
+  admissionSkippedWindows?: number;
   /** ADAAAA-7676: worst / mean wall-clock content-vs-wall lag (ms) seen on a
    *  dropped frame. `maxLagMs <= budget + one frame` by construction. */
   maxLagMs?: number;
@@ -1368,6 +1375,9 @@ export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSn
     triggerFires: obs.triggerFireCount(),
     cadenceFires: obs.cadenceFireCount(),
     skippedStaleWindows: obs.skippedStaleWindowCount(),
+    // ADAAAA-7758: a queued stream's wait is its own counter, never folded into
+    // the lag-driven stale drops above.
+    admissionSkippedWindows: obs.admissionSkipCount(),
     maxLagMs: Math.round(obs.maxObservedLagMs()),
     meanLagMs: Number(obs.meanObservedLagMs().toFixed(1)),
     maxCompletedLagMs: Number((samples.length ? Math.max(...samples.map((s) => s.completedLagMs ?? 0)) : 0).toFixed(1)),
@@ -3825,6 +3835,11 @@ export async function analyzeJob(
           // ADAAAA-7707: the whistle family gets its own verdict ledger, so a
           // judged whistle window never lands in the Stage-A FP-rate.
           stageB: run.stageBOutcomes,
+          // ADAAAA-7758: one live decide slot per box. When another live job
+          // holds it this tick is skipped (counted as an admission skip) instead
+          // of interleaving a second decide that would stretch BOTH streams past
+          // the 30 s budget. Default off until the CEO approves queue wording.
+          canDecide: () => liveDecideAdmission.admit(cfg.jobId),
           onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
         })
       : null;
@@ -4140,6 +4155,9 @@ export async function analyzeJob(
       );
     }
   } finally {
+    // ADAAAA-7758: give the live decide slot back so the next live job can take
+    // it (idempotent; a no-op for a VOD pass, which never held it).
+    liveDecideAdmission.release(cfg.jobId);
     // Stop / un-pay every session we reserved this pass. Sessions the server
     // already released are a no-op on the orchestrator but still drop their
     // adapter payment refiller, so stopping them is required to avoid leaks.
