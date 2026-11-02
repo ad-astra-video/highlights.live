@@ -4225,6 +4225,17 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-7771: the box's decide admission width, so the per-stream in-flight
     // depth is shared instead of oversubscribing the client's decide gate.
     liveDecideAdmission: cfg.decideConcurrency ?? 2,
+    // ADAAAA-7791: the four LIVE perceive knobs were parsed by config.ts but
+    // never forwarded here, so the live rail always fell back to the defaults
+    // (OBSERVE_CONTENT_FPS=2, cadence auto-on, utilisation 0.6) and an operator
+    // could not put it into stride-off mode from the environment. Forwarded
+    // verbatim — `0` and `false` included, those are the falsy values that used
+    // to be silently replaced by the fallbacks. Undefined keeps today's defaults.
+    liveObserveContentFps: cfg.liveObserveContentFps,
+    livePerceiveUtilization: cfg.livePerceiveUtilization,
+    perceiveCadence: cfg.perceiveCadence,
+    perceiveQuietStride: cfg.perceiveQuietStride,
+    perceiveHotAfterS: cfg.perceiveHotAfterS,
     // ADAAAA-7145: gate the live decide-observer's billable decide calls on
     // a real highlight signal (recall-safe). Default off.
     observeSignalGate: cfg.observeSignalGate,
