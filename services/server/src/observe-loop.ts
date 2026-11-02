@@ -477,6 +477,12 @@ export class LiveObserver {
   private throttleSkips = 0;
   /** ADAAAA-7799: decide opportunities seen (kept + dropped). */
   private decideOpportunities = 0;
+  /** ADAAAA-7799: content ts of the last counted opportunity. One opportunity
+   *  per cadence window: a dropped window leaves a due audio trigger PENDING, and
+   *  without this guard the trigger re-presents an opportunity on every
+   *  intervening frame (measured on the first cut: 154 opportunities / 300 s
+   *  against 97 decides, which re-inflated the rate the cap exists to bound). */
+  private lastOpportunityTs: number | null = null;
   /** ADAAAA-7799: fractional decide credit; starts at 1 so the first window of a
    *  stream always decides. */
   private decideCredit = 1;
@@ -972,6 +978,10 @@ export class LiveObserver {
     // at 2/3 two of every three), and every drop is counted. A FORCE fire (the
     // end-of-stream tail) always decides: dropping it would lose the tail window.
     if (this.decideKeepRatio < 1 && !force) {
+      if (this.lastOpportunityTs !== null && nowTs - this.lastOpportunityTs < this.cadenceS - 1e-9) {
+        return;
+      }
+      this.lastOpportunityTs = nowTs;
       this.decideOpportunities++;
       this.decideCredit += this.decideKeepRatio;
       if (this.decideCredit < 1 - 1e-9) {
