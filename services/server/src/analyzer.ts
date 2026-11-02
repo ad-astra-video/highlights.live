@@ -1398,6 +1398,15 @@ export interface LiveObserveMetricsSnapshot {
    *  cadence windows, so the throttle gap is auditable instead of inferred from
    *  a coverage number. Absent when the cap is off (unset env). */
   throttleSkippedWindows?: number;
+  /** ADAAAA-7808: stale FRAMES the lag budget dropped (the count the
+   *  `[live-lag] summary` line prints as `droppedFrames`). Persisted so a ship
+   *  row can quote it from the job record instead of grepping the container log. */
+  droppedFrames?: number;
+  /** ADAAAA-7808 (PO ruling on ADAAAA-7802): SUPPLY skips — the cadence windows
+   *  the RAIL could not serve: stale lag drops + backpressure + admission.
+   *  Deliberately EXCLUDES `throttleSkippedWindows`, which is a funded rate
+   *  decision and must never be folded into the supply number. */
+  supplySkippedWindows?: number;
   /** ADAAAA-7774: the LIVE perceive stride — the ingest-to-analysis frame rate
    *  the pass consumed at, plus the counts that prove the stride ran:
    *  `perceiveCalls < framesAnalyzed` in a cool region (the cadence skipped
@@ -1550,6 +1559,14 @@ export function buildLiveObserveMetrics(
     backpressureSkippedWindows: obs.backpressureSkipCount(),
     // ADAAAA-7799 (lever C): dropped decide opportunities from the rate cap.
     throttleSkippedWindows: obs.throttleSkipCount(),
+    // ADAAAA-7808: the two numbers a ship row has to quote per stream. The
+    // supply total is the rail's own shortfall (stale + backpressure +
+    // admission) and NEVER includes the throttle: on the shipped rail the
+    // throttle is a funded rate decision, so folding it in would read as
+    // missing coverage the rail chose to spend less on.
+    droppedFrames: obs.staleFrameCount(),
+    supplySkippedWindows:
+      obs.skippedStaleWindowCount() + obs.backpressureSkipCount() + obs.admissionSkipCount(),
     // ADAAAA-7774: the ingest -> analysis stride evidence (absent when the pass
     // ran no stride — e.g. the media-rail share, perceived in the media node).
     ...(stride ? { perceive: { ...stride } } : {}),
@@ -4547,8 +4564,20 @@ export async function analyzeJob(
       await liveObserver?.flush(lagMeasured ? Math.round(tailLagS * 1000) : undefined);
     }
     if (lagMeasured) {
+      // ADAAAA-7808 (PO ruling on ADAAAA-7802): `skippedWindows` on the shipped
+      // rail means SUPPLY skips — stale drops + admission/backpressure. The
+      // throttle is a FUNDED rate decision, so it is printed as its own labelled
+      // field and never folded into the supply total: the ruling must be readable
+      // from the log, not derived from gaps between decided windows.
+      const supplyStaleSkips = liveObserver!.skippedStaleWindowCount();
+      const supplyBackpressureSkips = liveObserver!.backpressureSkipCount();
+      const supplyAdmissionSkips = liveObserver!.admissionSkipCount();
+      const supplySkippedWindows = supplyStaleSkips + supplyBackpressureSkips + supplyAdmissionSkips;
       console.log(
         `[live-lag:${cfg.jobId}] summary droppedFrames=${staleFrameDrops} skippedStaleWindows=${liveObserver!.skippedStaleWindowCount()} ` +
+          `decides=${liveObserver!.decideCalls()} throttleSkippedWindows=${liveObserver!.throttleSkipCount()} ` +
+          `supplySkippedWindows=${supplySkippedWindows} ` +
+          `supplyBreakdown=stale:${supplyStaleSkips},backpressure:${supplyBackpressureSkips},admission:${supplyAdmissionSkips} ` +
           `maxLag=${(liveObserver!.maxObservedLagMs() / 1000).toFixed(1)}s budget=${lagBudgetS}s frames=${framesAnalyzed} ` +
           // ADAAAA-7774: the perceive stride. `frames` is what the pass consumed
           // (~wall x analysisFps); `framesSeen` is what the ingest delivered;

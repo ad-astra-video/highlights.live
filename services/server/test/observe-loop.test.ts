@@ -21,6 +21,7 @@ import {
   type PerFrameSeed,
 } from "../src/observe-loop";
 import type { AudioTriggerRecord } from "../src/audio-trigger";
+import { buildLiveObserveMetrics } from "../src/analyzer";
 
 /** Build a synthetic VOD frame timeline at a given fps over [0, durationS). */
 function timeline(fps: number, durationS: number, endExclusive = true): { ts: number; imageB64: string }[] {
@@ -566,5 +567,17 @@ describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
     expect(obs.triggerStats().expired).toBe(0);
     expect(obs.throttleSkipCount()).toBeGreaterThanOrEqual(1);
     expect(fired.some((p) => p.trigger?.onsetTs === 4)).toBe(true);
+  });
+
+  it("reports throttle skips separately from supply skips (ADAAAA-7808 PO ruling)", async () => {
+    const { obs } = await drive(0.66);
+    const m = buildLiveObserveMetrics(obs);
+    // 7 decides + 3 throttle drops over the 10 opportunities, and NOTHING the
+    // rail failed to serve: the throttle is a funded rate decision, so it must
+    // never appear in the supply total the coverage clause reads.
+    expect(m.decideCalls).toBe(7);
+    expect(m.throttleSkippedWindows).toBe(3);
+    expect(m.supplySkippedWindows).toBe(0);
+    expect(m.droppedFrames).toBe(0);
   });
 });
