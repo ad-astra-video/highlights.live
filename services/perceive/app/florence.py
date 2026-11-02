@@ -499,6 +499,20 @@ class FlorenceDetector:
         # how many were gated as weak/unlabeled, and the resulting Unknown rate.
         self.stats: Optional[dict] = None
 
+    # --- provenance ---------------------------------------------------------
+    def weights_identity(self, digest: bool = True) -> dict:
+        """Identity of the weights this detector serves (ADAAAA-7801).
+
+        `device_label` alone ("cuda:0") names a device, not a model, so an
+        artifact that records only that cannot be checked without the GPU it ran
+        on. This returns the env-resolved source plus a sha256 per weight file
+        for a local model dir (or the hub commit for a hub id) so a slice can be
+        provenance-checked on a CPU host.
+        """
+        from .provenance import detector_identity
+
+        return detector_identity(self, digest=digest)
+
     # --- device resolution --------------------------------------------------
     def _pick_device(self):
         if self._device in ("cpu", "CPU"):

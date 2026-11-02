@@ -90,6 +90,48 @@ def decode_window(path, start_s, dur_s, width, height, fps):
         proc.wait()
 
 
+def build_slice_doc(
+    *,
+    profile_key,
+    type_key=None,
+    vocabulary,
+    fps,
+    clip_name,
+    clip_sha256,
+    clip_bytes,
+    label_manifest,
+    frames,
+    latency,
+    detector_label,
+    detector_model,
+    envelope,
+    windows,
+):
+    """Assemble the slice document.
+
+    Kept separate from `main()` so the artifact shape (and, ADAAAA-7801, the
+    weights identity it carries) is testable on a CPU host without ffmpeg, torch
+    or a GPU.
+    """
+    return {
+        "type": type_key or profile_key,
+        "profile": profile_key,
+        "vocabulary": list(vocabulary),
+        "fps": fps,
+        "clip": {"name": clip_name, "sha256": clip_sha256, "bytes": clip_bytes},
+        "labelManifest": label_manifest,
+        "frames": frames,
+        "latency": latency,
+        "detector": detector_label,
+        # ADAAAA-7801: `detector` is a device label, not a model. The weights
+        # identity is recorded here so a committed slice can be checked on a CPU
+        # host (per-file sha256 for a local model dir, hub commit for a hub id).
+        "detectorModel": detector_model,
+        "envelope": envelope,
+        "windows": windows,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--labels", required=True, help="label manifest with the windows to score")
@@ -190,30 +232,44 @@ def main():
         print(f"  {w['id']:<4} {len(frames):>3} frames  objects/frame max={out_windows[-1]['objectsPerFrame']['max']}")
 
     wall_s = time.time() - started
-    slice_doc = {
-        "type": manifest.get("sport") or profile.key,
-        "profile": profile.key,
-        "vocabulary": vocab,
-        "fps": args.fps,
-        "clip": {"name": clip_name, "sha256": digest, "bytes": os.path.getsize(clip_path)},
-        "labelManifest": args.labels,
-        "frames": total_frames,
-        "latency": {
+    # ADAAAA-7801: recorded AFTER load() so the device label and the resolved
+    # source are the ones actually serving the frames. If a weight file cannot be
+    # read, keep the identity (source/device/env) and drop only the hashes rather
+    # than losing the whole slice after the GPU minutes were spent.
+    try:
+        detector_model = det.weights_identity()
+    except OSError as exc:
+        print(f"WARNING: weight digest failed ({exc}); recording identity without hashes",
+              file=sys.stderr)
+        detector_model = det.weights_identity(digest=False)
+    slice_doc = build_slice_doc(
+        profile_key=profile.key,
+        type_key=manifest.get("sport") or profile.key,
+        vocabulary=vocab,
+        fps=args.fps,
+        clip_name=clip_name,
+        clip_sha256=digest,
+        clip_bytes=os.path.getsize(clip_path),
+        label_manifest=args.labels,
+        frames=total_frames,
+        latency={
             "totalMs": round(total_ms, 1),
             "meanMsPerFrame": round(total_ms / total_frames, 1) if total_frames else None,
             "framesPerSecond": round(1000.0 * total_frames / total_ms, 3) if total_ms else None,
             "wallSeconds": round(wall_s, 1),
         },
-        "detector": det.device_label,
-        "envelope": {"maxFrames": args.max_frames, "budgetGpuMinutes": args.budget_gpu_minutes},
-        "windows": out_windows,
-    }
+        detector_label=det.device_label,
+        detector_model=detector_model,
+        envelope={"maxFrames": args.max_frames, "budgetGpuMinutes": args.budget_gpu_minutes},
+        windows=out_windows,
+    )
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
     with open(args.out, "w") as fh:
         json.dump(slice_doc, fh, indent=1)
     print(f"wrote {args.out}: {total_frames} frames, "
           f"mean {slice_doc['latency']['meanMsPerFrame']} ms/frame, "
-          f"{slice_doc['latency']['wallSeconds']} s wall")
+          f"{slice_doc['latency']['wallSeconds']} s wall, "
+          f"weights {detector_model['source']}")
     return 0
 
 
