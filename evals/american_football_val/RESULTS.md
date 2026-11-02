@@ -245,6 +245,11 @@ What changed in revision 2 and what did not:
 - **The finding does not move**: audio recall 1.00 at candidate FP 0.9853, ~10x
   the 0.10 ceiling, and motion still `not_captured`. The label fix shifts the FP
   count by one candidate (1951 → 1950) and nothing else.
+- Run artifacts are committed under `evals/american_football_val/run/` so the
+  re-certification can diff instead of only re-running:
+  `af_audio.json` (reported −6/+3 run, md5 `34c5baac…e904f`),
+  `af_audio_default.json` (−3/+2, md5 `2ae7ff17…d9df0`),
+  `af_audio_generous.json` (−10/+5, md5 `bb2369bb…64c26e`).
 
 ## 9. Remaining work, and who owns it
 
