@@ -451,6 +451,73 @@ SOCCER_PROFILE = GameProfile(
     ),
 )
 
+# Basketball (ADAAAA-7765, per-type step 2). Measured on a rights-cleared
+# broadcast clip: evals/basketball_val/label-manifest.json carries 14
+# frame-verified scoring events and 13 verified non-event windows across 850 s
+# of Q1 play from a CC BY 3.0 full match (TBF, Wikimedia Commons).
+#
+# What this profile does NOT claim:
+# - No detection slice was labelled for basketball, so `evalSet.vocabulary` is
+#   the scoring-window class ("score"), not a detection roster. `detect_precision`
+#   has no basketball label space until a frame-level box slice exists
+#   (`reference["detectionSlice"]` is null on purpose).
+# - The audio operating point is the corpus-wide default, recorded as the
+#   BASELINE measured on this clip; it was not tuned on basketball.
+# - Zone geometry stays `no-zone`: no hoop-key geometry was measured.
+# The deployed per-frame roster is unchanged from the canned type so registering
+# the profile cannot change what the detector looks for.
+_BASKETBALL_EVAL_VOCABULARY: Tuple[str, ...] = ("score",)
+
+_BASKETBALL_EVAL_REFERENCE: Mapping[str, Any] = {
+    "source": "evals/basketball_val/label-manifest.json (ADAAAA-7765)",
+    "clipSpanS": 850,
+    "scoringEvents": 14,
+    "nonEventWindows": 13,
+    "livePlayNonEventWindows": 7,
+    "rightsBasis": "CC BY 3.0 (TBF, Wikimedia Commons)",
+    "detectionSlice": None,
+    # ADAAAA-7765 measured run (box livepeer-ai-x99, evals/basketball_val/RESULTS.md)
+    "audioHarness": {
+        "harness": "evals/measure_audio_recall.py",
+        "host": "livepeer-ai-x99",
+        "clip": "bb_q1_1100_1950.mp4 (850 s, CC BY 3.0)",
+        "thresholdId": "stageA/burst/1.3x/0.3s",
+        "events": 14,
+        "candidates": 80,
+        "recall": 0.42857142857142855,
+        "fpRate": 0.875,
+        "p50S": 0.2,
+        "p95S": 1.9,
+        "negativeWindowFpRate": 0.6153846153846154,
+        "livePlayNegativeWindowFpRate": 1.0,
+        "artifactMd5": "8c2991cb0cb2b90d4b51e16707ab1038",
+        "fpCeiling": 0.10,
+        "fpCeilingMet": False,
+        "result": "evals/basketball_val/RESULTS.md",
+    },
+    "qaCertification": "pending",
+}
+
+BASKETBALL_PROFILE = GameProfile(
+    key="basketball",
+    # Unchanged from the canned type's deployed roster (florence._GAME_VOCABULARIES).
+    vocabulary=("basketball", "player", "hoop", "referee"),
+    # Hoop-key geometry is not measured for this type yet, so the profile
+    # declares `no-zone`; the detection-in-zone trigger stays inert.
+    zone_model=ZoneModel.no_zone(),
+    # The score overlay is basketball's corroboration seam, and it is what the
+    # held-out set was labelled from.
+    corroboration_oracle=ScoreboardOcrOracle(),
+    triggers=TriggerSubset.of(TRIGGER_AUDIO),
+    audio_thresholds=AudioThresholds(),
+    tracking_roster=TrackingRoster(labels=("basketball", "player", "hoop")),
+    eval_set=EvalSet(
+        manifest="evals/basketball_val/label-manifest.json",
+        vocabulary=_BASKETBALL_EVAL_VOCABULARY,
+        reference=_BASKETBALL_EVAL_REFERENCE,
+    ),
+)
+
 # Unmapped/unknown hint: today's generic closed roster, no zone model, audio
 # trigger only. `vocabulary=()` means "no type-specific vocabulary" so the
 # legacy resolution chain (preferLabels -> SAFE_DEFAULT_VOCABULARY) still runs.
@@ -467,9 +534,12 @@ SAFE_DEFAULT_PROFILE = GameProfile(
 
 DEFAULT_PROFILE = SOCCER_PROFILE
 
-# Registered per-type profiles. Only soccer is measured today; steps 2-5 of the
-# ADAAAA-7435 plan register the rest once each has a held-out eval set.
-PROFILES: Mapping[str, GameProfile] = {"soccer": SOCCER_PROFILE}
+# Registered per-type profiles. Soccer and basketball are measured today; steps
+# 3-5 of the ADAAAA-7435 plan register the rest once each has a held-out eval set.
+PROFILES: Mapping[str, GameProfile] = {
+    "soccer": SOCCER_PROFILE,
+    "basketball": BASKETBALL_PROFILE,
+}
 
 
 def unmeasured_profile(
@@ -577,6 +647,7 @@ __all__ = [
     "ScoreboardOcrOracle",
     "GameProfile",
     "SOCCER_PROFILE",
+    "BASKETBALL_PROFILE",
     "SAFE_DEFAULT_PROFILE",
     "DEFAULT_PROFILE",
     "PROFILES",

@@ -83,8 +83,21 @@ Shipped trigger subsets:
 | Profile | Triggers |
 |---|---|
 | `soccer` | `audio` |
+| `basketball` (ADAAAA-7765) | `audio` |
 | `safe-default` | `audio` |
-| canned but unmeasured (`basketball`, `tennis`, `american football`, `valorant`) | `audio` |
+| canned but unmeasured (`tennis`, `american football`, `valorant`) | `audio` |
+
+Basketball is registered as a **measured** type in ADAAAA-7765: it carries
+`evalSet.manifest = evals/basketball_val/label-manifest.json` (14 frame-verified
+scoring events and 13 verified non-event windows over 850 s of Q1 play from a
+CC BY 3.0 TBF broadcast) and `evalSet.vocabulary = ("score",)` because the
+scoring window is what was actually labelled — no frame-level detection boxes
+were labelled, so `reference["detectionSlice"]` is `null` and
+`evals/detect_precision.py` has no basketball label space yet. The deployed
+per-frame roster (`basketball, player, hoop, referee`) and the corpus-wide
+`AudioThresholds()` are unchanged: the audio operating point is recorded as a
+measured **baseline**, not a tuned one, and zone geometry stays `no-zone`
+(hoop-key geometry was not measured).
 
 Soccer runs `audio` only because ADAAAA-7108 removed the GOAL/detection-in-zone
 and tracker fast-movement candidate triggers from perceive; the profile records

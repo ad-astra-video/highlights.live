@@ -163,15 +163,53 @@ def test_soccer_is_the_seeded_default_and_the_reference_oracle():
 
 def test_unregistered_profile_key_is_never_silently_soccer():
     with pytest.raises(KeyError):
-        load_game_profile("basketball")
+        load_game_profile("tennis")
     # non-strict degrades to the safe default, never to soccer's numbers
-    assert load_game_profile("basketball", strict=False).key == "safe-default"
+    assert load_game_profile("tennis", strict=False).key == "safe-default"
     # a canned but unmeasured type keeps its OWN vocabulary
-    assert profile_for("NBA").key == "basketball"
-    assert "hoop" in profile_for("NBA").vocabulary
-    assert profile_for("NBA").eval_set is None  # unmeasured
+    assert profile_for("tennis").key == "tennis"
+    assert "racket" in profile_for("tennis").vocabulary
+    assert profile_for("tennis").eval_set is None  # unmeasured
     # an unknown hint maps to the generic safe default (today's behaviour)
     assert profile_for("some-unknown-game").key == "safe-default"
+
+
+def test_basketball_is_registered_and_measured_against_its_own_eval_set():
+    """ADAAAA-7765: basketball resolves now, and it carries its own held-out set.
+
+    The mechanical core of the issue: the strict `load_game_profile` KeyError
+    for basketball is gone because the type has a real committed manifest.
+    """
+    prof = load_game_profile("basketball")
+    assert prof.key == "basketball"
+    assert prof is profile_for("NBA")  # registered beats the canned fallback
+    assert prof.eval_set is not None and prof.measured is True
+    assert prof.eval_set.manifest == "evals/basketball_val/label-manifest.json"
+    # the eval label space is the scoring-window class that was actually
+    # labelled, NOT the deployed per-frame detection roster
+    assert prof.eval_set.vocabulary == ("score",)
+    assert prof.vocabulary == ("basketball", "player", "hoop", "referee")
+    # no measured geometry or tuning was claimed for the type
+    assert prof.zone_model.is_no_zone
+    assert prof.triggers.names() == (TRIGGER_AUDIO,)
+    assert prof.audio_thresholds == AudioThresholds()
+    # the score overlay is the type's corroboration seam
+    assert isinstance(prof.corroboration_oracle, ScoreboardOcrOracle)
+    # 3 live / 8 VOD caps hold, and the roster fits the live cap
+    assert prof.tracking_roster.live_capacity == 3
+    assert prof.tracking_roster.vod_capacity == 8
+    assert len(prof.tracking_roster.labels) <= prof.tracking_roster.live_capacity
+    # the reference states the coverage the set actually achieved
+    ref = prof.eval_set.reference
+    assert ref["scoringEvents"] == 14 and ref["nonEventWindows"] == 13
+    assert ref["detectionSlice"] is None  # no detection labels: detect_precision N/A
+    # the measured audio run is recorded as data, including that it MISSED the
+    # ceiling: the flag must never be read as "basketball is ready"
+    run = ref["audioHarness"]
+    assert run["events"] == 14 and run["candidates"] == 80
+    assert run["recall"] == pytest.approx(6 / 14)
+    assert run["fpRate"] == pytest.approx(70 / 80)
+    assert run["fpCeiling"] == 0.10 and run["fpCeilingMet"] is False
 
 
 def test_unmeasured_profile_has_no_zone_and_audio_only():
@@ -256,7 +294,7 @@ def test_configure_binds_an_explicit_profile_and_unknown_never_wins():
     assert state.game_profile is SOCCER_PROFILE
     assert state.game_profile_explicit is True
 
-    handle_control(state, {"type": "configure", "gameProfile": "basketball"})
+    handle_control(state, {"type": "configure", "gameProfile": "tennis"})
     assert state.game_profile is SOCCER_PROFILE  # unregistered: ignored
 
     # an explicit choice is not reverted by a later hint sync
