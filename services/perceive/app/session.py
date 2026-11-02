@@ -18,20 +18,32 @@ import numpy as np
 
 log = logging.getLogger("highlights.perceive.session")
 
-from .audio_gate import AudioEnergyGate, BandLimitedWhistleGate
+from .audio_gate import AudioEnergyGate, BandLimitedWhistleGate, GateConfig
 from .tracker import IoUTracker, LIVE_MAX_TRACKS, VOD_MAX_TRACKS
 from .sam_tracker import HybridTracker, make_tracker
 from .scoreboard import ScoreboardTracker
 from .scoreboard_vision import ScoreboardVerdict
 from .tracking_plan import TrackingPlan
+from .game_profile import (
+    BALL_SPEED_WINDOW,
+    DEFAULT_PROFILE,
+    GameProfile,
+    profile_for,
+)
 
 RECENT_FRAMES = 30  # ~30 sampled frames kept for clip/confirm
 
 
-def mode_capacity(clip_path: str = "") -> int:
+def mode_capacity(clip_path: str = "", profile: GameProfile | None = None) -> int:
     """INC-6 / ADAAAA-4330: charter is 3 live / 8 VOD tracked objects. A session
-    with a clip_path is a VOD pass (deep-detail budget) -> 8; a live session -> 3."""
-    return VOD_MAX_TRACKS if clip_path else LIVE_MAX_TRACKS
+    with a clip_path is a VOD pass (deep-detail budget) -> 8; a live session -> 3.
+
+    ADAAAA-7754: the caps now come from the session type's
+    `GameProfile.tracking_roster`, which clamps to the same charter ceilings (the
+    default profile reproduces 3/8 exactly).
+    """
+    roster = (profile or DEFAULT_PROFILE).tracking_roster
+    return roster.capacity_for_clip(clip_path)
 
 
 @dataclass
@@ -75,7 +87,11 @@ class SessionState:
     # Stage-A audio noise-change gate (INC-2 / ADAAAA-4325). Cheap pure-DSP
     # candidate trigger fed by the server's ffmpeg audio tap (own ~10 Hz
     # cadence, independent of the 1 fps video /analyze). Never touches the GPU.
-    audio_gate: AudioEnergyGate = field(default_factory=AudioEnergyGate)
+    audio_gate: AudioEnergyGate = field(
+        default_factory=lambda: AudioEnergyGate(
+            GateConfig(**DEFAULT_PROFILE.audio_thresholds.as_gate_kwargs())
+        )
+    )
     # Stage-B band-limited whistle path (ADAAAA-7682). The referee whistle is a
     # narrowband tonal burst whose RMS sits at the crowd floor, so the broadband
     # Stage-A gate above cannot see it. This path baselines the 2.4-3.4 kHz band
@@ -126,10 +142,75 @@ class SessionState:
     # asked to track (control `track-player`). None until such a request. Used
     # to label the surfaced track + record the request for the observer.
     requested_player_number: Optional[int] = None
+    # ADAAAA-7754: the video type's game profile — the one per-type source of
+    # truth for vocabulary / zone model / corroboration oracle / trigger subset /
+    # audio thresholds / tracking roster / eval set. Defaults to the reference
+    # profile (soccer) so a session that never declares a type keeps today's
+    # behaviour; the registry/worker re-binds it from the job's gameHint.
+    game_profile: GameProfile = field(default_factory=lambda: DEFAULT_PROFILE)
+    # True when the profile was bound explicitly (control/analyze `gameProfile`
+    # key or a direct bind): hint-derived sync then leaves it alone, so an
+    # explicit per-type choice is never silently reverted by a later frame.
+    game_profile_explicit: bool = False
+    # Bounded recent ball-speed window. Only appended while the profile enables
+    # the ball-velocity trigger, so a default-profile session never touches it.
+    ball_speeds: Deque[float] = field(default_factory=lambda: deque(maxlen=BALL_SPEED_WINDOW))
 
     @property
     def is_idle(self) -> bool:
         return (time.time() - self.health_ts) > self.idle_timeout_s
+
+
+def apply_game_profile(
+    state: SessionState, profile: GameProfile, *, explicit: bool = False
+) -> bool:
+    """Bind a game profile to a session (ADAAAA-7754).
+
+    Applies the parts that are session state: the audio gate's operating point,
+    the tracker's roster capacity, and the profile itself (vocabulary / zone
+    model / oracle / trigger subset are read from `state.game_profile` at their
+    own sites). Returns True when the session changed.
+
+    A profile whose audio thresholds differ re-arms the gate: its baseline is
+    tuned against the old operating point, so carrying it over would score the
+    new thresholds against the wrong ambient floor. Identical thresholds (the
+    default profile) leave the live gate — and therefore the firing set — alone.
+    """
+    if explicit:
+        state.game_profile_explicit = True
+    if profile is state.game_profile:
+        return False
+    state.game_profile = profile
+
+    thresholds = profile.audio_thresholds
+    if thresholds.differs_from(state.audio_gate.cfg):
+        state.audio_gate = AudioEnergyGate(GateConfig(**thresholds.as_gate_kwargs()))
+        log.info(
+            "session audio gate re-armed id=%s profile=%s thresholds=%s",
+            state.session_id, profile.key, thresholds.as_gate_kwargs(),
+        )
+
+    capacity = profile.capacity_for_clip(state.clip_path)
+    tracker = getattr(state, "tracker", None)
+    if tracker is not None and getattr(tracker, "capacity", None) != capacity:
+        tracker.capacity = capacity
+        log.info(
+            "session track capacity id=%s profile=%s capacity=%d",
+            state.session_id, profile.key, capacity,
+        )
+    return True
+
+
+def sync_game_profile(state: SessionState) -> bool:
+    """Resolve the session's profile from its game hint and bind it.
+
+    Never raises for an unknown hint: unmapped types resolve to the safe-default
+    profile (today's generic roster + corpus-wide audio defaults). A profile
+    that was bound explicitly is authoritative and is left alone.
+    """
+    if state.game_profile_explicit:
+        return False
+    return apply_game_profile(state, profile_for(state.game_hint))
 
 
 class SessionRegistry:
@@ -139,7 +220,14 @@ class SessionRegistry:
         # Optional sync hook fired on drop (e.g. tear down a trickle rail).
         self.on_drop = None
 
-    def get_or_create(self, session_id: str, stream_id: str = "", clip_path: str = "", anchor_label: str | None = None) -> SessionState:
+    def get_or_create(
+        self,
+        session_id: str,
+        stream_id: str = "",
+        clip_path: str = "",
+        anchor_label: str | None = None,
+        profile: GameProfile | None = None,
+    ) -> SessionState:
         s = self._sessions.get(session_id)
         if s is None:
             if len(self._sessions) >= self.max_sessions:
@@ -152,17 +240,31 @@ class SessionRegistry:
             # ADAAAA-6463: when a plan/anchor is known up front, pass it so the
             # tracker reserves the anchor's primary slot; otherwise it is applied
             # later via control `configure` (set_anchor).
-            s.tracker = make_tracker(clip_path or None, capacity=mode_capacity(clip_path), anchor_label=anchor_label)
+            # ADAAAA-7754: the capacity comes from the type's profile roster.
+            if profile is not None:
+                apply_game_profile(s, profile)
+            s.tracker = make_tracker(
+                clip_path or None,
+                capacity=mode_capacity(clip_path, s.game_profile),
+                anchor_label=anchor_label,
+            )
             self._sessions[session_id] = s
             log.info(
-                "session start id=%s stream=%s clip=%s capacity=%d active=%d",
-                session_id, stream_id, clip_path or "", s.tracker.capacity, len(self._sessions),
+                "session start id=%s stream=%s clip=%s profile=%s capacity=%d active=%d",
+                session_id, stream_id, clip_path or "", s.game_profile.key, s.tracker.capacity,
+                len(self._sessions),
             )
         elif clip_path and clip_path != s.clip_path:
             # A (new) clip was declared for an existing session -> (re)bind SAM
             # so the persistent session tracks THIS stream, not a stale/global one.
             s.clip_path = clip_path
-            s.tracker = make_tracker(clip_path or None, capacity=mode_capacity(clip_path), anchor_label=anchor_label)
+            s.tracker = make_tracker(
+                clip_path or None,
+                capacity=mode_capacity(clip_path, s.game_profile),
+                anchor_label=anchor_label,
+            )
+        if profile is not None:
+            apply_game_profile(s, profile)
         s.health_ts = time.time()
         return s
 

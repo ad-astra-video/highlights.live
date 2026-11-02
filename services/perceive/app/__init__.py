@@ -28,7 +28,12 @@ from sse_starlette.sse import EventSourceResponse
 
 from . import preload  # noqa: E402  (startup model preload)
 from .audio_gate import AudioEnergyGate
-from .session import RECENT_FRAMES, SessionRegistry
+from .session import (
+    RECENT_FRAMES,
+    SessionRegistry,
+    apply_game_profile,
+    sync_game_profile,
+)
 from .tracker import MAX_TRACKS, foreground_blobs
 from .florence import capability, get_detector, record_analyze, resolve_vocabulary
 from .sam_tracker import HybridTracker
@@ -36,6 +41,12 @@ from .player_id import identify_player_by_number
 from .trickle import TrickleError, TrickleRail, TrickleSession
 from .ball_signal import BallSignalPipeline, is_ball_label
 from .goal_plane import GoalLineDetector, GoalLineSpec
+from .game_profile import (
+    TRIGGER_AUDIO,
+    TRIGGER_BALL_VELOCITY,
+    load_game_profile,
+)
+from .stage_a import evaluate_stage_a
 from .scoreboard import (
     ScoreboardLocator,
     ScoreboardRoi,
@@ -191,6 +202,10 @@ class AnalyzeRequest(BaseModel):
     # Field names are CAMEL case to match the over-the-wire contract the VOD
     # worker sends (mirrors handle_control's configure message keys).
     gameHint: str = ""
+    # ADAAAA-7754: optional explicit registered game-profile key for this job
+    # ("soccer" today). Empty -> the profile is resolved from gameHint. An
+    # unknown key is ignored (logged) rather than silently substituting soccer.
+    gameProfile: str = ""
     # PreferLabels delivered as a JSON array; a valid empty array clears.
     preferLabels: list[str] = Field(default_factory=list)
     # Per-stream LoRA injection (ADAAAA-5324): optional ref to this stream's
@@ -502,6 +517,28 @@ def _apply_tracking_plan(state, raw_plan) -> "TrackingPlan":
     return plan
 
 
+def _apply_explicit_profile(state, key: str) -> bool:
+    """Bind an explicitly named registered game profile (ADAAAA-7754).
+
+    An unregistered key is NEVER silently replaced by soccer: it is logged and
+    the session keeps whatever profile it already had (the hint-derived one).
+    """
+    try:
+        profile = load_game_profile(key)
+    except KeyError:
+        log.warning(
+            "unknown gameProfile %r ignored session=%s (registered: soccer); keeping %s",
+            key, state.session_id, state.game_profile.key,
+        )
+        return False
+    changed = apply_game_profile(state, profile, explicit=True)
+    log.info(
+        "game profile bound session=%s profile=%s triggers=%s measured=%s",
+        state.session_id, profile.key, list(profile.triggers.names()), profile.measured,
+    )
+    return changed
+
+
 def _player_tracks(tracks) -> dict:
     """Build {track_id: bbox} for on-screen player tracks, excluding the ball.
 
@@ -641,6 +678,12 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     """
     objects: list[dict] = []
     vocabulary: list[str] | None = None
+    # ADAAAA-7754: the session's per-type game profile drives vocabulary, the
+    # trigger subset, the audio operating point and the tracking roster. Re-sync
+    # from the game hint here so ANY front door (analyze / trickle / audio) sees
+    # the type's profile; the sync is an identity check on the common path.
+    sync_game_profile(state)
+    profile = state.game_profile
     # DEBUG per-frame entry (ADAAAA-6525): one line per sampled frame with the
     # session + seq so it correlates to the rail/timeline. Only at DEBUG.
     log.debug(
@@ -658,7 +701,12 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # detection is gated out inside florence._parse (no more fake
         # 1.0-confidence boxes). Plan-first (ADAAAA-6463): when a TrackingPlan is
         # present its roster is the active vocabulary.
-        vocabulary = resolve_vocabulary(state.game_hint, state.prefer_labels, plan=state.tracking_plan)
+        vocabulary = resolve_vocabulary(
+            state.game_hint,
+            state.prefer_labels,
+            plan=state.tracking_plan,
+            profile=profile,
+        )
         # ADAAAA-7217 (Increment A): once the dedicated ball SAM slot is live,
         # SAM owns the ball — DROP the ball from the per-frame full-frame
         # Florence <OD> pass (no per-frame ball re-detection). Florence
@@ -727,7 +775,12 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             if state.tracker._detect is None:
                 _d = detector
                 _v = (
-                    resolve_vocabulary(state.game_hint, state.prefer_labels, plan=state.tracking_plan)
+                    resolve_vocabulary(
+                        state.game_hint,
+                        state.prefer_labels,
+                        plan=state.tracking_plan,
+                        profile=state.game_profile,
+                    )
                     if detector is not None
                     else None
                 )
@@ -889,6 +942,53 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     # still reach decide as the additive `evidence` field on the observation
     # (kept above) so the goal-attestation gate can attest a real scoring_play.
     cand_dict = None
+    # ADAAAA-7754: the frame-path Stage-A triggers are now routed through the
+    # session's game profile. A profile that enables none of them (the shipped
+    # soccer default: audio only) never enters this block at all, so the default
+    # firing set is byte-identical to today. When a type does enable one, the
+    # sites are evaluated in `stage_a` — and a site the profile does not enable
+    # is never evaluated (its inputs are never consulted), which is what makes
+    # the trigger-subset contract checkable rather than "does not crash".
+    if profile.has_frame_triggers():
+        _velocity = ball_signal_fields.get("ballVelocity")
+        _speed = _velocity.get("speedMps") if isinstance(_velocity, dict) else None
+        _trackplan = getattr(state, "tracking_plan", None)
+        stage_a_fires = evaluate_stage_a(
+            profile,
+            tracks=tracks,
+            objects=objects,
+            ball_velocity=_velocity,
+            ball_recent_speeds=list(getattr(state, "ball_speeds", ())),
+            plan_zones=getattr(_trackplan, "zones", None),
+        )
+        # Maintain the ball-speed window only for profiles that score it.
+        if profile.allows(TRIGGER_BALL_VELOCITY) and _speed is not None:
+            try:
+                state.ball_speeds.append(float(_speed))
+            except (TypeError, ValueError):
+                pass
+        if stage_a_fires:
+            primary = stage_a_fires[0]
+            obs["stageATriggers"] = [
+                {"trigger": f.trigger, **dict(f.detail)} for f in stage_a_fires
+            ]
+            # Perceive carries no event classification (the decide stage assigns
+            # the real eventType from the anchored frame); the generic MOVE type
+            # keeps the candidate out of the GOAL-attestation path.
+            cand_dict = {
+                "type": "candidate",
+                "sessionId": state.session_id,
+                "streamId": state.stream_id,
+                "eventType": "MOVE",
+                "timestamp": timestamp,
+                "seq": seq,
+                "trigger": primary.trigger,
+            }
+            log.info(
+                "stage-A trigger fired session=%s seq=%s ts=%.2f triggers=%s profile=%s",
+                state.session_id, seq, timestamp,
+                [f.trigger for f in stage_a_fires], profile.key,
+            )
     # ADAAAA-7081/7084/7086/7094: scoreboard OCR scoped to a scoreboard region
     # of interest, on the observe cadence. The scoreboard graphic is cropped to
     # a stable region before the `<OCR>` pass so crowd / banner / jersey /
@@ -967,7 +1067,13 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                     score = alt
                     obs["ocr"] = full_ocr
         state.scoreboard_tracker.record(timestamp, score)
-        if state.scoreboard_tracker.changed(timestamp):
+        # ADAAAA-7754: secondary confirmation now goes through the type's named
+        # corroboration-oracle seam. Soccer is the reference implementation
+        # (scoreboard OCR -> the same `ScoreboardTracker.changed` reading as
+        # before); a type with no oracle yields an explicit no-signal instead of
+        # inheriting soccer's confirmation.
+        _verdict = profile.corroborate(timestamp, state.scoreboard_tracker)
+        if _verdict.corroborated:
             obs["scoreBoardChanged"] = True
     # ADAAAA-7008 / ADAAAA-7012: cache this frame's derived context (the "data
     # seeder" contract) so the on-demand `/app/evidence` recall endpoint can serve
@@ -1044,6 +1150,12 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[
     series is captured passively and never affects triggering.
     """
     samples = _decode_audio(samples_b64)
+    # ADAAAA-7754: the audio trigger (Stage-A noise-change + Stage-B whistle) is
+    # part of the type's trigger subset. A profile that does not enable `audio`
+    # runs neither gate on this chunk and emits no audio candidate.
+    sync_game_profile(state)
+    if not state.game_profile.allows(TRIGGER_AUDIO):
+        return None, [], None
     sig = state.audio_gate.update(samples, ts=timestamp)
     wsig = state.whistle_gate.update(samples, ts=timestamp)
     state.audio_seq = seq if seq >= 0 else state.audio_seq + 1
@@ -1148,6 +1260,12 @@ def handle_control(state, msg: dict) -> dict:
             state.sample_fps = float(msg["sampleFps"])
         if msg.get("gameHint") is not None:
             state.game_hint = str(msg["gameHint"])
+        # ADAAAA-7754: bind the type's game profile (from the hint) and let an
+        # explicit `gameProfile` key (registered type key) win over the hint.
+        if msg.get("gameHint") is not None or msg.get("gameProfile") is not None:
+            sync_game_profile(state)
+        if msg.get("gameProfile") is not None:
+            _apply_explicit_profile(state, str(msg["gameProfile"]))
         # Per-stream LoRA injection (ADAAAA-5324): reconfigure this session's
         # adapter (or clear to base with empty string).
         if "loraRef" in msg:
@@ -1332,6 +1450,13 @@ def create_app() -> FastAPI:
         # `configure` — applies to resolve_vocabulary() inside process_frame.
         if req.gameHint:
             state.game_hint = req.gameHint
+        # ADAAAA-7754: bind this job's per-type game profile BEFORE the frame
+        # runs, so vocabulary / trigger subset / audio operating point are the
+        # type's (an explicit registered profile key wins over the hint).
+        if req.gameHint or req.gameProfile:
+            sync_game_profile(state)
+        if req.gameProfile:
+            _apply_explicit_profile(state, req.gameProfile)
         if req.preferLabels:
             state.prefer_labels = list(req.preferLabels)
         # Per-stream LoRA injection (ADAAAA-5324): an attached adapter selects

@@ -64,6 +64,33 @@ def load_gate():
     return mod
 
 
+def load_profile(name="soccer"):
+    """Load the type's GAME PROFILE (ADAAAA-7754).
+
+    `game_profile.py` is import-free at module scope on purpose, so the harness
+    can load it standalone exactly like it loads `audio_gate`.
+    """
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "..", "services", "perceive", "app", "game_profile.py")
+    spec = importlib.util.spec_from_file_location("game_profile", os.path.normpath(path))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["game_profile"] = mod
+    spec.loader.exec_module(mod)
+    return mod.load_game_profile(name)
+
+
+def profile_gate_config(profile, frame_s: float):
+    """A GateConfig at the profile's per-type audio operating point.
+
+    No soccer threshold is hard-coded here: the defaults come from the profile,
+    so a type's measured burst/swell/cooldown/latency set is what the harness
+    scores.
+    """
+    gate_mod = load_gate()
+    return gate_mod.GateConfig(frame_s=frame_s, **profile.audio_thresholds.as_gate_kwargs())
+
+
 def run_gate_stream(path, sr, frame_s, gate, start_s=0.0, dur_s=None):
     """Feed real decoded PCM frames (mono s16le, ``sr``) into ``gate``.
 
@@ -371,6 +398,8 @@ def main():
     ap.add_argument("--volume-gate", default="whistle", choices=["whistle", "stageA"],
                     help="which path to stream for --volume-clip (default whistle)")
     ap.add_argument("--json", help="write the machine-readable result to this path")
+    ap.add_argument("--profile", default="soccer",
+                    help="game profile whose audioThresholds the NEW run scores (ADAAAA-7754)")
     ap.add_argument("--only", choices=["old", "new"], default=None)
     a = ap.parse_args()
     opts = {}
@@ -430,9 +459,12 @@ def main():
     mod = load_gate()
     gate_cls, GateConfig = mod.AudioEnergyGate, mod.GateConfig
 
+    profile = load_profile(a.profile)
     old = GateConfig(frame_s=a.frame_s, burst_ratio=3.0, burst_min_frames=10,
                      swell_ratio=1.5, swell_seconds=3.0, cooldown_s=5.0)
-    new = GateConfig(frame_s=a.frame_s)  # current noise-adaptive defaults
+    # ADAAAA-7754: the NEW operating point is the profile's per-type thresholds
+    # (the soccer default reproduces the shipped defaults exactly).
+    new = profile_gate_config(profile, a.frame_s)
 
     def show(label, cfg):
         fires, lats, kinds = run_gate_stream(a.clip, a.sr, a.frame_s, gate_cls(cfg))

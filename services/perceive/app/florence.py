@@ -32,7 +32,8 @@ from typing import Optional
 
 import numpy as np
 
-from .tracking_plan import plan_vocabulary
+from .tracking_plan import plan_vocabulary  # noqa: F401  (re-exported for the plan path)
+from .game_profile import GameProfile, SOCCER_PROFILE
 
 log = logging.getLogger("highlights.perceive.florence")
 
@@ -103,15 +104,18 @@ _GAME_VOCABULARIES: dict[str, list[str]] = {
     # on demand when the user requests a specific player (plan target with
     # `track` / control seed), which is handled separately from this roster.
     # "goal" stays because it is a non-player object, not a player.
-    "soccer": ["soccer ball", "goal"],
+    # ADAAAA-7754: soccer's roster is OWNED by the game profile (one source of
+    # truth per type). This entry mirrors it for the legacy hint path so the
+    # canned map and the profile can never drift apart.
+    "soccer": list(SOCCER_PROFILE.vocabulary),
     # American-football synonym fix (ADAAAA-6463, plan §7 B): a US "football"
     # game must NOT resolve to the soccer vocabulary. "football" (and its
     # league aliases) now maps to an American-football roster; soccer keeps the
     # explicit "soccer" key + competition aliases ("football match", leagues).
     "football": ["football", "player", "referee"],
     "american football": ["football", "player", "referee"],
-    "fa cup": ["soccer ball", "goal"],
-    "soccer ball": ["soccer ball", "goal"],
+    "fa cup": list(SOCCER_PROFILE.vocabulary),
+    "soccer ball": list(SOCCER_PROFILE.vocabulary),
     "basketball": ["basketball", "player", "hoop", "referee"],
     "tennis": ["tennis ball", "player", "racket", "net"],
     "valorant": ["player", "agent", "weapon", "head"],
@@ -361,24 +365,30 @@ def resolve_vocabulary(
     game_hint: Optional[str] = None,
     prefer_labels: Optional[list[str]] = None,
     plan: Optional[object] = None,
+    profile: Optional[GameProfile] = None,
 ) -> Optional[list[str]]:
     """Resolve the CLOSED detection vocabulary for a perceive session.
 
     Priority (plan-first tracking, plan §7 A/B, preserving ADAAAA-6412):
+      0. ADAAAA-7754: when the session carries a `GameProfile`, the profile's
+         `vocabulary` is the type's authoritative roster — it replaces the
+         canned per-sport map below (it IS that map for a registered type, and
+         it carries the type's own canned roster for an unmeasured one). A
+         profile with an empty vocabulary (the safe-default profile) means "no
+         type-specific roster", so the legacy chain below still applies.
       1. an LLM `TrackingPlan`'s roster when present and non-empty — the plan is
          the active closed vocabulary (detect/seeding is scoped to plan targets,
          off-plan objects are dropped). The American-football fix: the plan's
          own roster is authoritative, so a "Football" plan never leaks the
          soccer vocab even if gameHint is a stale/ambiguous "football".
       2. a known `game_hint` -> its canned object-class vocabulary (e.g. soccer
-         => [soccer ball, player, goalkeeper, goal, referee]). IMPORTANT
-         (ADAAAA-6412 regression): when a sport is known its canned vocabulary
-         ALWAYS dominates `prefer_labels` — UI preferLabels are the user's
-         requested highlight EVENT categories (goals / saves / red cards /
-         near-misses / counter-attacks), NOT object classes, and treating them
-         as the closed detection vocabulary voided every real detection
-         (verified live: same clip, preferLabels=[] -> 3 tracks; event
-         preferLabels -> 0 tracks).
+         => [soccer ball, goal]). IMPORTANT (ADAAAA-6412 regression): when a
+         sport is known its canned vocabulary ALWAYS dominates `prefer_labels` —
+         UI preferLabels are the user's requested highlight EVENT categories
+         (goals / saves / red cards / near-misses / counter-attacks), NOT object
+         classes, and treating them as the closed detection vocabulary voided
+         every real detection (verified live: same clip, preferLabels=[] -> 3
+         tracks; event preferLabels -> 0 tracks).
       3. `prefer_labels` — only as a fallback when no sport vocabulary is known
          (legacy object-label use for unknown games / custom closed sets).
       4. otherwise a safe-default closed roster for no-map/unknown categories —
@@ -393,6 +403,8 @@ def resolve_vocabulary(
         roster = plan_vocabulary(plan)
         if roster:
             return roster
+    if profile is not None and profile.vocabulary:
+        return list(profile.vocabulary)
     hint = (game_hint or "").strip().lower()
     for alias, canonical in _GAME_HINT_ALIASES.items():
         if alias in hint:

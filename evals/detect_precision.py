@@ -54,9 +54,17 @@ sys.path.insert(0, os.path.join(HERE, "..", "services", "perceive"))
 
 import detect_schema  # noqa: E402
 
-# Closed soccer vocabulary (mirrors packages/events SOCCER_DETECTION_VOCAB and
-# services/perceive/app/florence.py _GAME_VOCABULARIES["soccer"]).
-DEFAULT_VOCAB = ["player", "soccer ball", "goalkeeper", "goal", "referee"]
+from app.game_profile import load_game_profile  # noqa: E402
+
+# ADAAAA-7754: the harness takes the type's GAME PROFILE instead of hard-coded
+# soccer constants. The eval label space is the profile's `evalSet.vocabulary`
+# (the classes this held-out set was labeled with), which is deliberately NOT
+# the profile's deployed per-frame detection roster. `--profile` selects a type.
+DEFAULT_PROFILE_KEY = os.environ.get("HL_EVAL_PROFILE", "soccer")
+PROFILE = load_game_profile(DEFAULT_PROFILE_KEY)
+if PROFILE.eval_set is None:  # an unmeasured type has no label space to score
+    raise SystemExit(f"eval profile {PROFILE.key!r} has no evalSet (unmeasured); pass --profile")
+DEFAULT_VOCAB = list(PROFILE.eval_set.vocabulary)
 
 ACCEPT_IOU = 0.5  # detection match threshold (IoU)
 ACCEPT_ID_PERSIST = 0.95
@@ -529,7 +537,10 @@ def main():
     ap.add_argument("--backend", choices=["florence", "fixture"], default="fixture")
     ap.add_argument("--model-base", default="microsoft/Florence-2-base")
     ap.add_argument("--model-finetuned", default=None)
-    ap.add_argument("--vocab", nargs="*", default=DEFAULT_VOCAB)
+    ap.add_argument("--profile", default=DEFAULT_PROFILE_KEY,
+                    help="game profile key whose evalSet supplies the label space (ADAAAA-7754)")
+    ap.add_argument("--vocab", nargs="*", default=None,
+                    help="override the label space (defaults to the profile's evalSet.vocabulary)")
     ap.add_argument("--iou", type=float, default=ACCEPT_IOU)
     ap.add_argument("--max-frames", type=int, default=None)
     ap.add_argument("--drop-class", default=None, help="class to drop (fixture only)")
@@ -540,7 +551,10 @@ def main():
     ap.add_argument("--report-out", default=None, help="write JSON report to PATH")
     args = ap.parse_args()
 
-    vocab = list(args.vocab) or DEFAULT_VOCAB
+    profile = load_game_profile(args.profile)
+    if profile.eval_set is None:
+        ap.error(f"game profile {profile.key!r} has no evalSet (unmeasured); pass --profile")
+    vocab = list(args.vocab or profile.eval_set.vocabulary)
 
     # --- validate manifests via the shared contract ---
     manifests = {}
