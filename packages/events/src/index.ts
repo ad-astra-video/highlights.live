@@ -671,6 +671,21 @@ export const SummaryLogEntrySchema = z.object({
 });
 export type SummaryLogEntry = z.infer<typeof SummaryLogEntrySchema>;
 
+// ADAAAA-7821: measured per-job VOD cost meter (see services/server/src/vod-meter.ts).
+// `sourceDurationS` / `perVideoHourCostUsd` / `rtf` are null
+// when the source duration probe failed, so a completed job never implies a
+// runtime it could not measure.
+export const VodMeterSchema = z.object({
+  wallClockS: z.number().min(0),
+  decideCalls: z.number().int().min(0),
+  sourceDurationS: z.number().min(0).nullable(),
+  costUsd: z.number().min(0),
+  decideFeeUsd: z.number().min(0),
+  perVideoHourCostUsd: z.number().min(0).nullable(),
+  rtf: z.number().min(0).nullable(),
+});
+export type VodMeter = z.infer<typeof VodMeterSchema>;
+
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -796,6 +811,11 @@ export const JobSchema = z.object({
   // job so the webapp result card can show the clip's source duration. Additive
   // optional — absent on live jobs and older records.
   durationMs: z.number().min(0).optional(),
+  // ADAAAA-7821: measured per-job VOD cost meter. Converts the three inputs the
+  // ratified price points modelled (wall clock, decide count, source duration)
+  // into values recorded on the completed record, so $/video-hour is measured
+  // rather than derived. Additive optional — absent on live jobs and older rows.
+  vodMeter: VodMeterSchema.optional(),
   // Live decision trail (ADAAAA-6870, Increment 3 T1): bounded ordered array of
   // candidate/highlight decisions appended by runVodJob via the onEvent hook
   // (throttled patchJob). Additive optional — absent on older records.
