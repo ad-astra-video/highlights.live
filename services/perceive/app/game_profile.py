@@ -550,8 +550,10 @@ BASKETBALL_PROFILE = GameProfile(
 #   BASELINE measured on this clip; it was not tuned on american football.
 # - The motion trigger's operating point is the structural
 #   `stage_a.MOTION_MIN_STEP` (0.15 normalized peak step), not a football number:
-#   the tracker path needs florence detections to produce track steps, and this
-#   pass produced no detection slice, so motion was not separately measured.
+#   it was NOT tuned on this type. Motion IS measured (ADAAAA-7788) on a bounded
+#   florence detection slice of the 25 manifest windows, and at the deployed
+#   1 fps VOD cadence that operating point is effectively always-on here (see
+#   `motionHarness`: FP rate 0.7931, every non-event window fires).
 # The deployed per-frame roster is unchanged from the canned type so registering
 # the profile cannot change what the detector looks for.
 _AMERICAN_FOOTBALL_EVAL_VOCABULARY: Tuple[str, ...] = ("score",)
@@ -660,10 +662,13 @@ _AMERICAN_FOOTBALL_EVAL_REFERENCE: Mapping[str, Any] = {
         "iou": "not_captured - same blocker",
     },
     "qaCertification": "pass (ADAAAA-7785, label revision 2)",
-    # AC6 of ADAAAA-7788: motion is measured here but is NOT certified yet, so it
-    # must not be quoted as `measured` by QA or by the operator-UI gate until the
-    # re-certification verdict lands and this key is updated with it.
-    "qaCertificationMotion": "pending (QA re-certification child of ADAAAA-7788)",
+    # AC6 of ADAAAA-7788: motion may only be quoted as certified once the QA
+    # re-certification verdict exists. ADAAAA-7797 graded the four harness
+    # commands plus both suites PASS on 7/7 clauses at head `3aaaab1` (it ran
+    # the identical commands on `0caa73b` and got identical output; the two
+    # heads differ only in the test that relaxes this guard). Certification is
+    # NOT enablement: `fpCeilingMet` stays False for both triggers.
+    "qaCertificationMotion": "pass (ADAAAA-7797, 7/7 clauses, head 3aaaab1)",
     "qaVerdict": (
         "measurement true; fpCeilingMet false - audio 0.9853 and motion 0.7931 "
         "both miss the 0.10 candidate-FP ceiling, so no trigger carries the type "
