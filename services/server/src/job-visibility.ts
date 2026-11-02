@@ -13,6 +13,17 @@
 // detail, create/upload responses and the SSE job-event stream.
 //
 // Deliberate exceptions (never filtered):
+// - `liveProgress` (ADAAAA-7741) on GET /jobs/:id and GET /jobs/:id/detail.
+//   This is the customer's OWN "how live is this" reading: the live edge, the
+//   content ts of the newest decided window, the delta between them and how many
+//   windows the lag budget swallowed. It is a read-time PROJECTION of the lag
+//   diagnostics, not the diagnostics themselves — it never carries
+//   `observeMetrics`, `costUsd`, `decideCalls`, `stageAMetrics` or any per-call
+//   spend/pipeline detail (derivation: services/server/src/live-progress.ts). The
+//   CEO reported that live analysis "does not stream as it is done" with no way
+//   to see how far behind it is; suppressing this object would leave the customer
+//   with no honest answer. It rides TOP-LEVEL on the payload (not inside `job`),
+//   so the projections below carry it through untouched.
 // - `wsUrl` / `mediaOrigin` / `mediaSessionId` on the POST /jobs/:id/media
 //   HANDSHAKE response. Those are transport credentials the capture client needs
 //   to stream (WebRTC signaling uses origin + session id; the WS fallback uses

@@ -58,6 +58,7 @@ import { buildPostableHighlights } from "./highlight-postable";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { jobDetailForRole, jobEventForRole, jobForRole, jobsForRole } from "./job-visibility";
+import { deriveLiveProgress, newestObservationTs } from "./live-progress";
 import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
 import { outcomeForMediaCloseReason, outcomeForStrandedJob, type JobFailureReason, type JobOutcome } from "./job-failure";
@@ -880,6 +881,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const persistDecideAudit = (desc: unknown): void => {
     recordDecideAudit(db, desc, cfg.decideAuditRetention);
   };
+  /**
+   * ADAAAA-7741: stamp the job's content-clock anchor (`startedAt`) when a LIVE
+   * ingest / browser share starts. VOD writes it on the worker claim; the live
+   * paths never did, which left `liveProgress.lagSec` with no wall anchor to
+   * measure against (the read path would have to infer it, conservatively, from
+   * the summary log's first `ts`/`windowTs` pair). Metadata only — no compute, no
+   * decide call, and idempotent: a reconnect/re-fetch never moves the anchor.
+   */
+  async function stampContentClockStart(jobId: string): Promise<void> {
+    const job = store.getJob(jobId);
+    if (!job || job.startedAt) return;
+    await store.patchJob(jobId, { startedAt: new Date().toISOString() }).catch((e: any) =>
+      console.error(`[live-progress:${jobId}] startedAt stamp failed:`, String(e?.message || e))
+    );
+  }
   async function runLiveJob(
     ingest: LiveIngest,
     job: { id: string; gameHint?: string; preferLabels?: string[] },
@@ -2470,6 +2486,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           headroom: cfg.liveSampleHeadroom,
         });
         await store.patchJob(job.id, { sampleFps });
+        // ADAAAA-7741: anchor the content clock at the live tap's start so the
+        // read-time liveProgress can measure wall-vs-content lag exactly.
+        await stampContentClockStart(job.id);
         const kind: LiveKind =
           req.body.source === "screen" ? "screen" : (req.body.source as LiveKind) === "file-sim" ? "file-sim" : "rtmp";
         // ADAAAA-7247 (ACC-7): the live session's `cut` reads `this.cfg`, so hand
@@ -2836,10 +2855,23 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       framesPct: job.framesPct ?? 0,
       highlightsFound: job.highlightsFound ?? 0,
     };
+    // ADAAAA-7741: the customer-facing "how live is this" projection, derived at
+    // READ time from stored data only (content-clock anchor + summaryLog pairs +
+    // newest observation). Zero decide calls, zero GPU. For a terminal job the
+    // observation set is not read at all — the edge freezes at completion and the
+    // UI renders the completion state instead of a lag chip.
+    const liveProgress = deriveLiveProgress({
+      job,
+      newestObservationTs:
+        job.status === "done" || job.status === "failed" || job.status === "cancelled"
+          ? 0
+          : newestObservationTs(store.observationsForJob(job.id)),
+    });
     return {
       job: jobForRole({ ...job, ...counterFieldsForJob(job) }, user.role),
       highlights: store.highlightsForJob(job.id),
       progress,
+      liveProgress,
     };
   });
 
@@ -2931,6 +2963,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         sections: sectionList,
         maxTraces,
         summaryLadder,
+        // ADAAAA-7741: the customer's own "how live is this" reading, derived
+        // read-time from the same stored data the sections are rebuilt from.
+        // Top-level (not under `job`) so the role filter keeps it: it carries no
+        // pipeline/spend internals, only the lag projection.
+        liveProgress: deriveLiveProgress({ job, newestObservationTs: newestObservationTs(obs) }),
       }),
       user.role
     );
@@ -3140,6 +3177,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
       const { seq = 0, timestamp = 0, image } = req.body ?? {};
       if (!image) return reply.code(400).send({ error: "image required" });
+      // ADAAAA-7741: anchor the content clock on the first frame of a WS-rail
+      // browser share (no media handshake ran on this path). Idempotent.
+      await stampContentClockStart(req.params.id);
       try {
         if (!bj.sessionId) {
           const r = await adapter.reservePerceive();
@@ -3266,6 +3306,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       });
     }
     if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
+    // ADAAAA-7741: anchor the content clock at the share's start (the media
+    // handshake is the first client call of a capture). Idempotent — a reconnect
+    // that reuses the session must not move the anchor.
+    await stampContentClockStart(req.params.id);
     // Always consult the DB-backed provisioner: it reuses the live session,
     // or — if the media node serving it went down — transparently re-provisions
     // on a healthy node so the browser's reconnect is seamlessly re-routed.
