@@ -41,8 +41,8 @@ import {
 import { LiveProgressChip } from "../components/LiveProgressChip";
 import { CaptureNotice } from "../components/CaptureNotice";
 import {
-  LIVE_PROGRESS_STALE_AFTER_FAILED_READS,
   LIVE_READ_HEALTH_FRESH,
+  liveProgressFailureNotice,
   nextLiveReadHealth,
   type LiveReadHealth,
 } from "../lib/liveProgress";
@@ -1430,6 +1430,8 @@ export function JobDetail() {
     [captions, detail]
   );
   const title = useMemo(() => (detail ? jobTitle(detail.job, acceptedCount) : ""), [detail, acceptedCount]);
+  // ADAAAA-7759: the stated-failure banner for a persistent failed lag read.
+  const lagFailureNotice = liveProgressFailureNotice(lightHealth);
 
   // ADAAAA-6943/6946: click-to-enlarge + multi-select enlarge. `framesBySeq`
   // maps a frame seq to its full frame for the enlarged lightbox; `gallery` is
@@ -1664,16 +1666,14 @@ export function JobDetail() {
                 times (15 s) the failure is stated on the same banner pattern as
                 the rest of the page, so a stale chip never reads as a live one
                 while the pipeline keeps moving. Cleared by the next good read. */}
-            {isJobInFlight(detail.job.status) &&
-              lightHealth.consecutiveFailures >= LIVE_PROGRESS_STALE_AFTER_FAILED_READS && (
-                <div
-                  className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red"
-                  data-live-progress-error
-                >
-                  Live lag refresh failing ({lightHealth.lastError ?? "read failed"}) — the chip shows the last reading
-                  from {lightHealth.staleSec} s ago. The job keeps processing.
-                </div>
-              )}
+            {isJobInFlight(detail.job.status) && lagFailureNotice && (
+              <div
+                className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red"
+                data-live-progress-error
+              >
+                {lagFailureNotice}
+              </div>
+            )}
             <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2">
               {/* ADAAAA-7727: Source/Game/Frames are customer-facing; the
                   decide/candidates/Stage-A/cost/partition readouts inside the
