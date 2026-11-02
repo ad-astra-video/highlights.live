@@ -1070,6 +1070,71 @@ def transcribe_audio(
     return text, round(time.monotonic() - t0, 4)
 
 
+# ADAAAA-7781: COMPACT live verdict contract. The live rail's decide throughput
+# is decode-bound (measured on the box: p50 9.4 s per decide for a ~1340-char
+# verdict, and the box's two gemma cards together decode ~150 tok/s), so total
+# decides/s = decode_tokens_per_s / tokens_per_decide. At 2 live streams the pass
+# needs 0.66 decides/s but the full contract costs ~420 output tokens -> 0.36/s
+# and 55+ skipped cadence windows per stream. This variant keeps every field the
+# server ACTUALLY consumes (isHighlight/score/outcome/reason/eventType/verdict
+# .criteria) plus the one-sentence reviewer rationale and the attestation
+# discipline (independentlyObserved BEFORE the hypothesis), and drops the
+# duplicated long-form prose + the evidenceAttested list. Live rail only; the
+# VOD path keeps the full contract byte-for-byte.
+_OUTPUT_CONTRACT_COMPACT = (
+    "Now answer with ONLY one JSON object, no markdown, no preamble, no "
+    "leading/trailing prose, exactly of this shape (keep every free-text field "
+    "to the stated word cap — shorter is better, do NOT restate the criteria):\n"
+    "{\"isHighlight\": true|false, \"score\": 0..100, \"eventType\": \"<type>\", "
+    "\"outcome\": \"scoring_play|near_miss|big_play|not_highlight\", "
+    "\"reason\": \"<max 20 words: the deciding evidence>\", "
+    "\"reasoning\": \"<ONE sentence, max 25 words: what you observed FIRST, then "
+    "how that tests the hypothesis>\", "
+    "\"verdict\": {\"hypothesis\": \"<the candidate type you were testing>\", "
+    "\"independentlyObserved\": \"<max 15 words, stated before the hypothesis>\", "
+    "\"criteria\": {\"ballCrossedLineBetweenPosts\": true|false|null, "
+    "\"ballInNet\": true|false|null, \"scoreboardChanged\": true|false|null, "
+    "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<max 12 words, or "
+    "null when the hypothesis is not contradicted>\"}, "
+    "\"runningSummary\": \"<the RUNNING story so far, EXTENDED, max 220 chars: ONE "
+    "announcer sentence with the concrete action (MVPNetPlayer scores at 72s), no "
+    "boilerplate opener like 'The video shows'>\"}"
+)
+_OUTPUT_CONTRACT_FULL = (
+        "Now answer with ONLY one JSON object, no markdown, no preamble, no "
+        "leading/trailing prose, exactly of this shape:\n"
+        "{\"isHighlight\": true|false, \"score\": 0..100, \"eventType\": \"<type>\", "
+        "\"reason\": \"<short grounded reason that names the deciding evidence>\", "
+        "\"outcome\": \"scoring_play|near_miss|big_play|not_highlight\", "
+        "\"reasoning\": \"<2-4 sentences: what you independently observed FIRST, then "
+        "how that tests the hypothesis>\", "
+        "\"verdict\": {\"hypothesis\": \"<the candidate type you were testing>\", "
+        "\"independentlyObserved\": \"<what you actually saw, stated before the "
+        "hypothesis>\", \"criteria\": {\"ballCrossedLineBetweenPosts\": true|false|null, "
+        "\"ballInNet\": true|false|null, \"scoreboardChanged\": true|false|null, "
+        "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<the evidence that "
+        "contradicts the hypothesis, or the null when it does not>\"}, "
+        "\"evidenceAttested\": [\"<each concrete piece of grounded evidence you relied on>\"], "
+        "\"runningSummary\": \"<your updated RUNNING video story so far, ~1800 chars max. "
+        "Write it like a LIVE SPORTS ANNOUNCER calling the game, as ONE continuous narrative — "
+        "NOT a list of static scene descriptions. NARRATIVE CONTINUITY: each new line must build "
+        "on the previous one — reference or advance the ongoing action (e.g. 'the pressure moves "
+        "down the right channel', 'the keeper can't hold it and the rebound falls to the striker') "
+        "instead of re-stating a fresh still. SCENE-CHANGE FRAMING: frame every change in the scene "
+        "as an EVENT that happens in the story with a clear before/after (a new phase starts, the "
+        "referee steps in, the attack develops, a shot is taken, a goal or near-miss happens). "
+        "SPECIFICITY: name who is pressing, where the ball is, and what happens next — replace "
+        "generic 'players close together' phrasing, and DROP or REWRITE dry sceneless items. "
+        "FLOW: the whole thing reads as one continuous game call from the first item to the last. "
+        "Chronological + forward-only: if a STORY SO FAR was given you must EXTEND it, never rewrite "
+        "from scratch or delete captured events, only tighten wording; if none was given start it "
+        "fresh. Cover the whole video so far, not just this window. Do NOT start a runningSummary "
+        "line with a boilerplate opener such as 'The video begins', 'The video starts with', "
+        "'The video shows', or 'The sequence ...' — start directly with the concrete action/observation "
+        "(e.g. 'Goal: player scores at 72s')>\"}"
+)
+
+
 def build_prompt(
     event_type: str,
     evidence: dict,
@@ -1078,6 +1143,7 @@ def build_prompt(
     has_audio: bool = False,
     transcript: str = "",
     story_so_far: str = "",
+    compact: bool = False,
 ) -> str:
     ev = event_type.upper()
     meta = [
@@ -1243,37 +1309,7 @@ def build_prompt(
         "`score` in a lower band (e.g. <60) for near_miss, and set `nearMiss`/the "
         "flag so downstream assembly can label it distinctly.\n"
         "Context:\n- " + "\n- ".join(meta) + "\n\n"
-        "Now answer with ONLY one JSON object, no markdown, no preamble, no "
-        "leading/trailing prose, exactly of this shape:\n"
-        "{\"isHighlight\": true|false, \"score\": 0..100, \"eventType\": \"<type>\", "
-        "\"reason\": \"<short grounded reason that names the deciding evidence>\", "
-        "\"outcome\": \"scoring_play|near_miss|big_play|not_highlight\", "
-        "\"reasoning\": \"<2-4 sentences: what you independently observed FIRST, then "
-        "how that tests the hypothesis>\", "
-        "\"verdict\": {\"hypothesis\": \"<the candidate type you were testing>\", "
-        "\"independentlyObserved\": \"<what you actually saw, stated before the "
-        "hypothesis>\", \"criteria\": {\"ballCrossedLineBetweenPosts\": true|false|null, "
-        "\"ballInNet\": true|false|null, \"scoreboardChanged\": true|false|null, "
-        "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<the evidence that "
-        "contradicts the hypothesis, or the null when it does not>\"}, "
-        "\"evidenceAttested\": [\"<each concrete piece of grounded evidence you relied on>\"], "
-        "\"runningSummary\": \"<your updated RUNNING video story so far, ~1800 chars max. "
-        "Write it like a LIVE SPORTS ANNOUNCER calling the game, as ONE continuous narrative — "
-        "NOT a list of static scene descriptions. NARRATIVE CONTINUITY: each new line must build "
-        "on the previous one — reference or advance the ongoing action (e.g. 'the pressure moves "
-        "down the right channel', 'the keeper can't hold it and the rebound falls to the striker') "
-        "instead of re-stating a fresh still. SCENE-CHANGE FRAMING: frame every change in the scene "
-        "as an EVENT that happens in the story with a clear before/after (a new phase starts, the "
-        "referee steps in, the attack develops, a shot is taken, a goal or near-miss happens). "
-        "SPECIFICITY: name who is pressing, where the ball is, and what happens next — replace "
-        "generic 'players close together' phrasing, and DROP or REWRITE dry sceneless items. "
-        "FLOW: the whole thing reads as one continuous game call from the first item to the last. "
-        "Chronological + forward-only: if a STORY SO FAR was given you must EXTEND it, never rewrite "
-        "from scratch or delete captured events, only tighten wording; if none was given start it "
-        "fresh. Cover the whole video so far, not just this window. Do NOT start a runningSummary "
-        "line with a boilerplate opener such as 'The video begins', 'The video starts with', "
-        "'The video shows', or 'The sequence ...' — start directly with the concrete action/observation "
-        "(e.g. 'Goal: player scores at 72s')>\"}"
+        + (_OUTPUT_CONTRACT_COMPACT if compact else _OUTPUT_CONTRACT_FULL)
     )
 
 
@@ -1468,6 +1504,7 @@ def ask(
     transcript: str = "",
     audit_ctx: dict | None = None,
     story_so_far: str = "",
+    compact: bool = False,
 ) -> dict | None:
     """Call the gemma multimodal completion (vLLM OpenAI-compat server). Returns
     a parsed/validated HighlightDecision dict, or None on any transport/parse
@@ -1523,6 +1560,7 @@ def ask(
         has_audio=bool(send_audio or transcript),
         transcript=transcript,
         story_so_far=story_so_far,
+        compact=compact,
     )
     content.append({"type": "text", "text": prompt})
     # 3) audio AFTER the text (modality-order rule) — only when the raw-send gate
@@ -1561,7 +1599,10 @@ def ask(
         # enable_thinking). Explicit so a vLLM build that keeps thinking on by
         # default still returns the JSON immediately.
         "chat_template_kwargs": {"enable_thinking": False},
-        "max_tokens": 1200,
+        # ADAAAA-7781: the compact live contract needs far fewer output tokens;
+        # capping the completion keeps a rambling reply from paying the full
+        # decode cost it no longer needs (the full contract keeps its 1200).
+        "max_tokens": 400 if compact else 1200,
         "stream": False,
     }
     # llama-server is fine without "model"; OpenAI-compatible servers (Ollama)
@@ -1634,6 +1675,7 @@ def decide_with_gemma(
     score_board_changed: bool = False,
     audit_ctx: dict | None = None,
     story_so_far: str = "",
+    compact: bool = False,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision.
@@ -1673,6 +1715,7 @@ def decide_with_gemma(
         transcript=transcript,
         audit_ctx=audit_ctx,
         story_so_far=story_so_far,
+        compact=compact,
     )
     if g is not None:
         result = g

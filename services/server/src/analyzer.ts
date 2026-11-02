@@ -870,6 +870,14 @@ export interface AnalyzerConfig {
    * from it) is gated here. Unset = include, the pre-trim behaviour.
    */
   decideAudioClip?: boolean;
+  /** ADAAAA-7781: ask the decide service for the COMPACT verdict contract on the
+   * live observe rail (short prose fields, no `evidenceAttested` list, 400-token
+   * completion cap). Live decide throughput is decode-bound — decisions/s =
+   * output tokens/s ÷ tokens per call — so the per-call token count IS the
+   * ceiling: the full contract (~420 tokens) gives 0.36 decides/s at 2 streams
+   * against a 0.66/s cadence demand, the compact one ~150 tokens. Unset = the
+   * full contract, byte-identical to the pre-flag request. */
+  liveDecideCompact?: boolean;
   /** Increment F / ADAAAA-6465 (plan §4.9): analysis FPS cap for the assembly
    * of the frame sequence the LLM watches per trigger. Default 5 (live). The
    * sequence is sampled at this rate around the trigger, always includes the
@@ -3088,6 +3096,9 @@ export function buildObserveDecideRequest(
     // ADAAAA-7111 (Increment D): carry the job's running video summary
     // (story-so-far) so the decide brain EXTENDS it (monotonic growth).
     storySoFar: cfg.getRunningSummary?.() ?? "",
+    // ADAAAA-7781: compact verdict contract on the live rail (decode-bound
+    // throughput). `false` — the default — sends the byte-identical request.
+    compact: cfg.liveDecideCompact === true,
   };
   return { evidence, opts };
 }

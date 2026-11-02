@@ -242,6 +242,15 @@ export interface ServerConfig {
    * opt-out, so VOD keeps its confirmation pass when the live rail skips it.
    * Default true; `LIVE_DECIDE_CONFIRM=0` skips the dive on live only. */
   liveDecideConfirm: boolean;
+  /** ADAAAA-7781: ask the decide service for the COMPACT verdict contract on the
+   * LIVE pass (short prose fields, no evidenceAttested list, 400-token cap).
+   * Live decide throughput is decode-bound at ~150 output tok/s for the box's
+   * gemma pair, so decisions/s = tokens/s / tokens-per-call: the full contract
+   * costs ~420 tokens (0.36 decides/s, 55+ skipped windows per stream at 2
+   * streams) while the compact one costs ~150. VOD keeps the full contract.
+   * Default false (an unset env is byte-identical); `LIVE_DECIDE_COMPACT=1`
+   * enables it. */
+  liveDecideCompact: boolean;
   /** ADAAAA-7774: frame-consumption rate (content fps) of the LIVE observe pass.
    * The live ingest delivers ~5 fps (rtmp/file-sim decode) while the decide
    * window only ever carries `OBSERVE_CONTENT_FPS` (2) frames per content second
@@ -588,6 +597,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // ADAAAA-7777 (lever B, trim 3): the Stage-2 /confirm dive on the live rail.
     // `DECIDE_CONFIRM_ENABLED` remains the master gate.
     liveDecideConfirm: env.LIVE_DECIDE_CONFIRM !== "0",
+    // ADAAAA-7781: the COMPACT live verdict contract (decode-bound throughput —
+    // see AnalyzerConfig.liveDecideCompact). Opt-in: unset keeps the full
+    // contract byte-identical for both rails.
+    liveDecideCompact: env.LIVE_DECIDE_COMPACT === "1",
     // ADAAAA-7758: one live decide slot per box (opt-in). Off by default: the
     // queued-stream wording is a CEO decision (ADAAAA-7757), so the shipped
     // behaviour only changes once the flag is enabled on the deployment.

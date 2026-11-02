@@ -565,6 +565,14 @@ services:
       - LIVE_OBSERVE_MAX_FRAMES=${LIVE_OBSERVE_MAX_FRAMES:-30}
       - LIVE_DECIDE_AUDIO_CLIP=${LIVE_DECIDE_AUDIO_CLIP:-1}
       - LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}
+      # ADAAAA-7781: COMPACT verdict contract on the live decide rail. The live
+      # pass is decode-bound (measured: p50 9.4 s for a ~1340-char verdict; the
+      # box's gemma pair decodes ~150 output tok/s), so decisions/s = tok/s /
+      # tokens-per-call. The full contract costs ~420 tokens => 0.36 decides/s at
+      # 2 streams against the 0.66/s cadence demand (55+ skipped windows per
+      # stream); the compact contract (~150 tokens) doubles it. 0 keeps the full
+      # contract byte-identical (VOD always does).
+      - LIVE_DECIDE_COMPACT=${LIVE_DECIDE_COMPACT:-0}
       # ADAAAA-7773: how many decide app-calls the orchestrated decide CLIENT
       # admits at once (`LivepeerClient` decideConcurrency). ADAAAA-7771 kept 4
       # windows in flight per stream but the client gate was still 2 (the compose
