@@ -46,8 +46,14 @@ Non-event windows (14 verified score-stable windows, 24 s each):
 | negative set | windows | windows with ≥1 fire | window FP rate | fires |
 |---|---|---|---|---|
 | all | 14 | **14** | **1.00** | 87 |
-| `live_play_no_score` | 13 | 13 | **1.00** | 79 |
-| `dead_ball` | 1 | 1 | 1.00 | 8 |
+| `score_stable_no_score` | 13 | 13 | **1.00** | 79 |
+| `score_stable_no_score_end_of_game` | 1 | 1 | 1.00 | 8 |
+
+Window content classes are deliberately NOT claimed: the windows are verified
+**score-stable** (the score bug shows no transition across the window at 1 fps),
+which is the property the FP rate needs. Whether a given window is a huddle, a
+replay or live play was not frame-classified in this pass, so the class names
+say what was actually verified rather than guessing.
 
 Artifact: `out/af_audio.json`, md5 `06ffc8ba5938fad71b646a3fbc61741d`.
 

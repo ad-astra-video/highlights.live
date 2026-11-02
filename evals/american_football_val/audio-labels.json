@@ -24,20 +24,90 @@
    "labelSource": "evals/american_football_val/label-manifest.json scoring windows (frame-verified score-bug transitions)",
    "measured": true,
    "negatives": [
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 800, "end": 824, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 1200, "end": 1224, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 1400, "end": 1424, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 2100, "end": 2124, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 2400, "end": 2424, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 3000, "end": 3024, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 4700, "end": 4724, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 4950, "end": 4974, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 5100, "end": 5124, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 5700, "end": 5724, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 6100, "end": 6124, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 6900, "end": 6924, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 7600, "end": 7624, "window_class": "live_play_no_score"},
-    {"clip": "af_belmont_vs_westford_092123.mp4", "start": 8250, "end": 8274, "window_class": "dead_ball"}
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 800,
+     "end": 824,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 1200,
+     "end": 1224,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 1400,
+     "end": 1424,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 2100,
+     "end": 2124,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 2400,
+     "end": 2424,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 3000,
+     "end": 3024,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 4700,
+     "end": 4724,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 4950,
+     "end": 4974,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 5100,
+     "end": 5124,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 5700,
+     "end": 5724,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 6100,
+     "end": 6124,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 6900,
+     "end": 6924,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 7600,
+     "end": 7624,
+     "window_class": "score_stable_no_score"
+    },
+    {
+     "clip": "af_belmont_vs_westford_092123.mp4",
+     "start": 8250,
+     "end": 8274,
+     "window_class": "score_stable_no_score"
+    }
    ]
   },
   {

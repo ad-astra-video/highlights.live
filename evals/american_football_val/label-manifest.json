@@ -298,7 +298,7 @@
    "t_start": 800,
    "t_end": 824,
    "score_state": "0-0",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 0-0 at 800 and 824 (read in the 1000 s bracket: 0-0 at 1000)",
     "24 s window inside the score-stable 0-0 interval (300-1608)"
@@ -311,7 +311,7 @@
    "t_start": 1200,
    "t_end": 1224,
    "score_state": "0-0",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 0-0 at 1200 and 1224 (bracket reads 1200 = 0-0, 1400 = 0-0)"
    ],
@@ -323,7 +323,7 @@
    "t_start": 1400,
    "t_end": 1424,
    "score_state": "0-0",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 0-0 at 1400 and 1424 (bracket reads 1400 = 0-0, 1600 = 0-0)"
    ],
@@ -335,7 +335,7 @@
    "t_start": 2100,
    "t_end": 2124,
    "score_state": "0-6",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 0-6 at 2100 and 2124 (bracket reads 2000 = 0-6, 2500 = 0-6)"
    ],
@@ -347,7 +347,7 @@
    "t_start": 2400,
    "t_end": 2424,
    "score_state": "0-6",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 0-6 at 2400 and 2424 (bracket reads 2000/2500 = 0-6)"
    ],
@@ -359,7 +359,7 @@
    "t_start": 3000,
    "t_end": 3024,
    "score_state": "0-6",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 0-6 at 3000 and 3024 (bracket reads 2500 = 0-6, 3500 = 0-6)"
    ],
@@ -371,7 +371,7 @@
    "t_start": 4700,
    "t_end": 4724,
    "score_state": "7-13",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 7-13 at 4700 and 4724 (bracket reads 4650/4800 = 7-13)"
    ],
@@ -383,7 +383,7 @@
    "t_start": 4950,
    "t_end": 4974,
    "score_state": "7-13",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 7-13 at 4950 and 4974 (bracket reads 4950 = 7-13, 5400 = 7-13)"
    ],
@@ -395,7 +395,7 @@
    "t_start": 5100,
    "t_end": 5124,
    "score_state": "7-13",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 7-13 at 5100 and 5124 (bracket reads 5100/5200 = 7-13)"
    ],
@@ -407,7 +407,7 @@
    "t_start": 5700,
    "t_end": 5724,
    "score_state": "7-19",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 7-19 at 5700 and 5724 (bracket reads 5430-5500 = 7-19, 6700 = 14-19)"
    ],
@@ -419,7 +419,7 @@
    "t_start": 6100,
    "t_end": 6124,
    "score_state": "7-19",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 7-19 at 6100 and 6124 (bracket reads 5500 = 7-19, 6540 = 7-19)"
    ],
@@ -431,7 +431,7 @@
    "t_start": 6900,
    "t_end": 6924,
    "score_state": "14-19",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 14-19 at 6900 and 6924 (bracket reads 6900/7100 = 14-19)"
    ],
@@ -443,7 +443,7 @@
    "t_start": 7600,
    "t_end": 7624,
    "score_state": "14-26",
-   "window_class": "live_play_no_score",
+   "window_class": "score_stable_no_score",
    "evidence": [
     "score bug 14-26 at 7600 and 7624 (bracket reads 7700 = 14-26)"
    ],
@@ -455,7 +455,7 @@
    "t_start": 8250,
    "t_end": 8274,
    "score_state": "20-26",
-   "window_class": "dead_ball",
+   "window_class": "score_stable_no_score_end_of_game",
    "evidence": [
     "score bug 20-26 at 8250 and 8274 (final reads 8150/8300 = 20-26)",
     "end-of-game handshake window, scored as a dead-ball window"
