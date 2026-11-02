@@ -1,0 +1,112 @@
+{
+ "$comment": "ADAAAA-7768 - SuperTuxKart audio-trigger eval corpus. One measured class: the objective-event moments of a kart grand prix (race start / final lap / race finish), read from the race clock and the centre event banner in evals/supertuxkart_val/label-manifest.json. Negatives are 24 s mid-race windows from the same clip that carry the race clock running at both ends and no labelled instant within +/-10 s (rotations/pack racing between events, not a menu or a replay cutaway). The clip is a box-side clip-root artifact (CC0 1.0, sha256 in the label manifest); it is not committed to the repo.",
+ "frameS": 0.1,
+ "sr": 8000,
+ "matchPre": 3.0,
+ "matchPost": 2.0,
+ "classes": [
+  {
+   "id": "objective_event",
+   "clip": "sh_onfoss_20230923_tournament.mp4",
+   "onsets": [
+    4429.67,
+    4547,
+    4596,
+    4764.05,
+    4873,
+    4974,
+    5126.0,
+    5222,
+    5251,
+    5341.81,
+    5440,
+    5490,
+    5544.85,
+    5649,
+    5698
+   ],
+   "labelSource": "evals/supertuxkart_val/label-manifest.json objective-event windows (race clock zero / 'Final lap!' banner / 'You finished the race in rank N' banner)",
+   "measured": true,
+   "negatives": [
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 4460,
+     "end": 4484,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 4500,
+     "end": 4524,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 4560,
+     "end": 4584,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 4795,
+     "end": 4819,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 4830,
+     "end": 4854,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 4890,
+     "end": 4914,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 5140,
+     "end": 5164,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 5175,
+     "end": 5199,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 5360,
+     "end": 5384,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 5390,
+     "end": 5414,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 5455,
+     "end": 5479,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 5560,
+     "end": 5584,
+     "window_class": "mid_race_no_objective_event"
+    },
+    {
+     "clip": "sh_onfoss_20230923_tournament.mp4",
+     "start": 5600,
+     "end": 5624,
+     "window_class": "mid_race_no_objective_event"
+    }
+   ]
+  }
+ ]
+}

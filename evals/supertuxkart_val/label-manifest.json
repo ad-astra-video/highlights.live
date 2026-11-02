@@ -1,0 +1,456 @@
+{
+ "$comment": "ADAAAA-7768 - frame-derived window labels for the SuperTuxKart half of the rights-cleared CC0 onFOSS 2023-09-23 tournament livestream. Labels were read from the pixels only: the race clock digits at native resolution (1 fps), the centre event banner ('Final lap!', 'You finished the race in rank N') and, for the one race whose banner the reader could not resolve, the lap counter going 2/3 -> 3/3. No label comes from decide reason text, from a detection model's output, from any kill-feed/HUD parser (none was built), or from a soccer/football clip. Each instant carries the bracket it was narrowed to; the per-second grid bounds most brackets at 1-2 s and one at 3 s (race D final lap).",
+ "video": {
+  "id": "onfoss-2023-09-23-stk-tournament",
+  "path": "sh_onfoss_20230923_tournament.mp4",
+  "source": "https://archive.org/details/on-foss-2023-09-23-hypersomnia-and-stk-tournament-livestream",
+  "source_file": "https://archive.org/download/on-foss-2023-09-23-hypersomnia-and-stk-tournament-livestream/onFOSS_%202023-09-23%20-%20Hypersomnia%20and%20STK-Tournament%20Livestream-240p.mp4",
+  "rights_basis": "CC0 1.0 (public-domain dedication)",
+  "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "rights_holder": "onFOSS (event organiser publishing its own tournament stream; uploader gnudist@tutanota.com)",
+  "attribution": "onFOSS 2023-09-23 Hypersomnia and STK-Tournament livestream, CC0 1.0, via the Internet Archive",
+  "sha256": "3da355cc6ffc5e0fa5bbffa25c3025b165cee7bbddd3e96b8f0746a11801b264",
+  "bytes": 435639290,
+  "duration_s": 5950.549,
+  "width": 426,
+  "height": 240,
+  "audio": "aac 48 kHz stereo; caster commentary over game SFX (the bed this type's audio trigger is measured on)",
+  "frame_source": "native 426x240 frames decoded at 1 fps; the race-clock band (x 364-428, y 30-56), the centre banner band (x 120-320, y 60-110) and the grand-prix panel (x 60-170, y 50-180) were cropped per frame and read at 4x-6x Lanczos",
+  "labels_by": "Highlights.live Developer (Paperclip run 4bdaad60-108d-4961-b36c-46918a1a7024)",
+  "labelled_at": "2026-11-02",
+  "label_method": "race-clock catalogue: every frame of the SuperTuxKart half (t=4380-5731) cropped to the clock/banner/panel bands at 1 fps and read as text; a race start is the instant where (frame time - clock value) is constant across the race's reads, a final lap is the centre banner (or the lap counter's 3/3 transition), a finish is the 'You finished the race in rank N' banner, and non-event windows are 24 s mid-race windows with the clock running at both ends and no labelled instant within +/-10 s.",
+  "label_confidence_note": "The 1 fps grid bounds an instant to 1 s. Race D's final lap is bracketed at 3 s because its banner was not resolvable by the reader and the lap counter transition sits between two frames (5436 -> 5440). The audio harness is scored at its default -3 s/+2 s match window, which covers every bracket in this file.",
+  "segment_note": "Only the SuperTuxKart tournament half is labelled. The earlier Hypersomnia (2D arena shooter) half carries no label-grade event channel at 426x240 and is NOT labelled, so fires there are outside the labelled window and are reported separately rather than counted as certified false positives."
+ },
+ "coverage": {
+  "competitive_races": 5,
+  "race_spans_s": {
+   "A": [
+    4429.7,
+    4631
+   ],
+   "B": [
+    4764.1,
+    4975
+   ],
+   "C": [
+    5126.0,
+    5257
+   ],
+   "D": [
+    5341.8,
+    5483
+   ],
+   "E": [
+    5544.9,
+    5693
+   ]
+  },
+  "competitive_play_s": 832.619999999999,
+  "objective_events": 15,
+  "non_event_windows": 13,
+  "non_event_window_s": 24,
+  "event_classes": {
+   "race_start": 5,
+   "final_lap": 5,
+   "race_finish": 5
+  },
+  "floor_note": "the issue's floor is >=15 objective events and >=10 non-event windows; met at 15 and 13 on 833 s of one grand prix across five races. Read narrowly (only start + finish count as objective events, laps do not) the set is 10 events and misses the floor; that reading is stated in RESULTS.md so the margin is not smuggled in.",
+  "objective_events_floor_met": true,
+  "non_event_windows_floor_met": true,
+  "narrow_reading_events": 10
+ },
+ "windows": [
+  {
+   "id": "A-start",
+   "race": "A",
+   "event_type": "race_start",
+   "instant": 4429.67,
+   "bracket": [
+    4428.7,
+    4430
+   ],
+   "channel": "race-clock-zero",
+   "ground_truth": "objective_event",
+   "evidence": [
+    "clock 0.33 s at t=4430",
+    "clock absent in the frame before the reset (menu / prior race)"
+   ]
+  },
+  {
+   "id": "A-final-lap",
+   "race": "A",
+   "event_type": "final_lap",
+   "instant": 4547,
+   "bracket": [
+    4547,
+    4548
+   ],
+   "channel": "banner",
+   "evidence": [
+    "'Final lap!' read at t=4547 (0.762) and t=4548 (0.810)"
+   ],
+   "ground_truth": "objective_event"
+  },
+  {
+   "id": "A-finish",
+   "race": "A",
+   "event_type": "race_finish",
+   "instant": 4596,
+   "bracket": [
+    4596,
+    4597
+   ],
+   "channel": "banner",
+   "evidence": [
+    "'finished the race in rank 5' read at t=4596 (0.783) and t=4597 (0.853)"
+   ],
+   "ground_truth": "objective_event"
+  },
+  {
+   "id": "B-start",
+   "race": "B",
+   "event_type": "race_start",
+   "instant": 4764.05,
+   "bracket": [
+    4763.1,
+    4769
+   ],
+   "channel": "race-clock-zero",
+   "ground_truth": "objective_event",
+   "evidence": [
+    "clock 4.95 s at t=4769",
+    "clock absent in the frame before the reset (menu / prior race)"
+   ]
+  },
+  {
+   "id": "B-final-lap",
+   "race": "B",
+   "event_type": "final_lap",
+   "instant": 4873,
+   "bracket": [
+    4873,
+    4874
+   ],
+   "channel": "banner",
+   "evidence": [
+    "'Finallap!' read at t=4873 (0.763) and 'Final lap!' at t=4874 (0.779)"
+   ],
+   "ground_truth": "objective_event"
+  },
+  {
+   "id": "B-finish",
+   "race": "B",
+   "event_type": "race_finish",
+   "instant": 4974,
+   "bracket": [
+    4974,
+    4975
+   ],
+   "channel": "banner",
+   "evidence": [
+    "'You finished the race in rank 6' read at t=4974 (0.791)"
+   ],
+   "ground_truth": "objective_event"
+  },
+  {
+   "id": "C-start",
+   "race": "C",
+   "event_type": "race_start",
+   "instant": 5126.0,
+   "bracket": [
+    5125.0,
+    5130
+   ],
+   "channel": "race-clock-zero",
+   "ground_truth": "objective_event",
+   "evidence": [
+    "clock 4.00 s at t=5130",
+    "clock absent in the frame before the reset (menu / prior race)"
+   ]
+  },
+  {
+   "id": "C-final-lap",
+   "race": "C",
+   "event_type": "final_lap",
+   "instant": 5222,
+   "bracket": [
+    5222,
+    5223
+   ],
+   "channel": "banner",
+   "evidence": [
+    "'Finallap!' read at t=5222 (0.789)"
+   ],
+   "ground_truth": "objective_event"
+  },
+  {
+   "id": "C-finish",
+   "race": "C",
+   "event_type": "race_finish",
+   "instant": 5251,
+   "bracket": [
+    5251,
+    5252
+   ],
+   "channel": "banner",
+   "evidence": [
+    "'You finished the race in rank 6!' read at t=5251 (0.827) and t=5252 (0.883)"
+   ],
+   "ground_truth": "objective_event"
+  },
+  {
+   "id": "D-start",
+   "race": "D",
+   "event_type": "race_start",
+   "instant": 5341.81,
+   "bracket": [
+    5340.8,
+    5343
+   ],
+   "channel": "race-clock-zero",
+   "ground_truth": "objective_event",
+   "evidence": [
+    "clock 1.19 s at t=5343",
+    "clock absent in the frame before the reset (menu / prior race)"
+   ]
+  },
+  {
+   "id": "D-final-lap",
+   "race": "D",
+   "event_type": "final_lap",
+   "instant": 5440,
+   "bracket": [
+    5437,
+    5440
+   ],
+   "channel": "lap-counter",
+   "evidence": [
+    "lap counter '2/38' (=2/3) at t=5436, counter unread at 5437-5439, '3/38' (=3/3) from t=5440"
+   ],
+   "ground_truth": "objective_event"
+  },
+  {
+   "id": "D-finish",
+   "race": "D",
+   "event_type": "race_finish",
+   "instant": 5490,
+   "bracket": [
+    5490,
+    5492
+   ],
+   "channel": "banner",
+   "evidence": [
+    "'You finished the race in rank 5' read at t=5490 (garbled OCR 'YotfiaispecheraceinransS')"
+   ],
+   "ground_truth": "objective_event"
+  },
+  {
+   "id": "E-start",
+   "race": "E",
+   "event_type": "race_start",
+   "instant": 5544.85,
+   "bracket": [
+    5543.9,
+    5545
+   ],
+   "channel": "race-clock-zero",
+   "ground_truth": "objective_event",
+   "evidence": [
+    "clock 0.15 s at t=5545",
+    "clock absent in the frame before the reset (menu / prior race)"
+   ]
+  },
+  {
+   "id": "E-final-lap",
+   "race": "E",
+   "event_type": "final_lap",
+   "instant": 5649,
+   "bracket": [
+    5649,
+    5650
+   ],
+   "channel": "banner",
+   "evidence": [
+    "'Fral lape' (=Final lap!) read at t=5649 (0.660)"
+   ],
+   "ground_truth": "objective_event"
+  },
+  {
+   "id": "E-finish",
+   "race": "E",
+   "event_type": "race_finish",
+   "instant": 5698,
+   "bracket": [
+    5697,
+    5699
+   ],
+   "channel": "clock-stop",
+   "evidence": [
+    "last coherent clock read 02:31.675 at t=5697, no clock at t=5698, race-results overlay ('Best lap time') at t=5699"
+   ],
+   "ground_truth": "objective_event"
+  },
+  {
+   "id": "N01",
+   "kind": "non_event",
+   "t_start": 4460,
+   "t_end": 4484,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race A clock 30.55 s at t=4460 and 54.53 s at t=4484 (delta 23.98 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 30 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N02",
+   "kind": "non_event",
+   "t_start": 4500,
+   "t_end": 4524,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race A clock 68.53 s at t=4498 and 96.54 s at t=4526 (delta 28.01 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 23 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N03",
+   "kind": "non_event",
+   "t_start": 4560,
+   "t_end": 4584,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race A clock 130.51 s at t=4560 and 155.54 s at t=4585 (delta 25.03 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 12 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N04",
+   "kind": "non_event",
+   "t_start": 4795,
+   "t_end": 4819,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race B clock 29.97 s at t=4794 and 54.97 s at t=4819 (delta 25.00 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 31 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N05",
+   "kind": "non_event",
+   "t_start": 4830,
+   "t_end": 4854,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race B clock 64.97 s at t=4829 and 89.95 s at t=4854 (delta 24.98 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 19 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N06",
+   "kind": "non_event",
+   "t_start": 4890,
+   "t_end": 4914,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race B clock 125.93 s at t=4890 and 149.95 s at t=4913 (delta 24.02 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 17 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N07",
+   "kind": "non_event",
+   "t_start": 5140,
+   "t_end": 5164,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race C clock 14.00 s at t=5140 and 38.99 s at t=5165 (delta 24.99 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 14 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N08",
+   "kind": "non_event",
+   "t_start": 5175,
+   "t_end": 5199,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race C clock 48.00 s at t=5174 and 74.00 s at t=5200 (delta 26.00 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 23 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N09",
+   "kind": "non_event",
+   "t_start": 5360,
+   "t_end": 5384,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race D clock 18.19 s at t=5360 and 43.20 s at t=5385 (delta 25.01 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 18 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N10",
+   "kind": "non_event",
+   "t_start": 5390,
+   "t_end": 5414,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race D clock 48.69 s at t=5390 and 73.80 s at t=5415 (delta 25.10 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 26 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N11",
+   "kind": "non_event",
+   "t_start": 5455,
+   "t_end": 5479,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race D clock 113.19 s at t=5455 and 135.19 s at t=5477 (delta 22.00 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 11 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N12",
+   "kind": "non_event",
+   "t_start": 5560,
+   "t_end": 5584,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race E clock 15.15 s at t=5560 and 40.10 s at t=5585 (delta 24.95 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 15 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  },
+  {
+   "id": "N13",
+   "kind": "non_event",
+   "t_start": 5600,
+   "t_end": 5624,
+   "window_class": "mid_race_no_objective_event",
+   "evidence": [
+    "race E clock 54.13 s at t=5599 and 79.15 s at t=5624 (delta 25.02 s; the race is running, not a menu)",
+    "no labelled start/final-lap/finish instant within +/-10 s of the window (nearest 25 s outside)"
+   ],
+   "ground_truth": "no_objective_event"
+  }
+ ],
+ "known_gaps": [
+  "race E's finish banner was not resolvable by the reader, so its finish instant is the clock stop (bracket 2 s) rather than a banner read",
+  "the Hypersomnia half of the stream has no label-grade event channel at 426x240 and is unlabelled",
+  "no frame-level detection slice exists for this type, so detect_precision has no esports label space (reference.detectionSlice stays null)"
+ ]
+}
