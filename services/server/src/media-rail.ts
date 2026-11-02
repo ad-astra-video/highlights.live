@@ -42,6 +42,7 @@ import {
   OBSERVE_CADENCE_S,
   OBSERVE_CONTENT_FPS,
   GOAL_OUTCOMES,
+  percentile,
   type ObserveDecidePayload,
   type PerFrameSeed,
   type PerFrameSignal,
@@ -49,7 +50,13 @@ import {
 } from "./observe-loop";
 import { LiveRunShared, buildLiveObserveMetrics, seedSignalFromEvidence, type LiveObserveMetricsSnapshot } from "./analyzer";
 import type { StageAOutcomeLedger } from "./stage-a-metrics";
-import { audioTriggerFromCandidate, type AudioTriggerRecord } from "./audio-trigger";
+import {
+  audioTriggerFromCandidate,
+  isStageBTrigger,
+  triggerFamily,
+  type AudioTriggerRecord,
+  type TriggerSchedulerStats,
+} from "./audio-trigger";
 
 /** The observation shape the media node relays (a perceive events-out step).
  *  `candidate` is optional: perceive publishes a candidate only on the frames
@@ -147,6 +154,18 @@ export interface MediaRailStats {
   audioChunks: number;
   /** Fired audio triggers accepted by the scheduler (one anchored window each). */
   triggers: number;
+  /** ADAAAA-7723 AC-1: accepted triggers in the Stage-A (roar/swell) family. */
+  stageATriggers: number;
+  /** ADAAAA-7723 AC-1: accepted triggers in the Stage-B (whistle) family. */
+  stageBTriggers: number;
+  /** ADAAAA-7723 AC-1: the trigger ledger. `accepted === fired + covered +
+   *  expired + pending` is the invariant; a share where `triggers (accepted)`
+   *  outnumbers these buckets dropped a trigger silently. */
+  triggerWindows: TriggerSchedulerStats;
+  /** ADAAAA-7723 AC-1: whether {@link triggerWindows} balances. */
+  triggersReconciled: boolean;
+  /** ADAAAA-7723 AC-2: onset -> anchored window latency PER family. */
+  triggerLatencyByFamily: { family: string; samples: number; p50Ms: number; p95Ms: number; maxMs: number }[];
   /** Decide calls the observer actually issued. */
   decideCalls: number;
   /** Accepted highlights. */
@@ -193,12 +212,12 @@ export class MediaRailObserver {
   private frames = 0;
   private audioChunks = 0;
   private triggers = 0;
+  /** ADAAAA-7723: accepted triggers per family (a whistle and a roar in the
+   *  same celebration are separate evidence, so the counts are separate too). */
+  private stageATriggers = 0;
+  private stageBTriggers = 0;
   /** Observations dropped for carrying a non-epoch timestamp clock. */
   private clockRejected = 0;
-  /** Onset (content seconds) of the newest trigger queued for an anchored fire. */
-  private lastQueuedTriggerOnset: number | null = null;
-  /** Measured onset -> anchored decide window delays (ms, content clock). */
-  private anchoredLatencies: number[] = [];
   private closed = false;
   private flushing = false;
 
@@ -306,7 +325,12 @@ export class MediaRailObserver {
       if (!this.live.recordTrigger({ ...trig, onsetTs: onset, firedAt: Math.max(onset, fired) })) continue;
       this.live.addHint(`AUDIO_${trig.kind.toUpperCase()}`, onset);
       this.triggers++;
-      this.lastQueuedTriggerOnset = onset;
+      // ADAAAA-7723: the onset->window latency is measured by the OBSERVER, in
+      // the window that actually anchored the trigger (per family). The rail no
+      // longer guesses it from "the newest drained onset vs the next fire",
+      // which mis-paired whenever a batch of triggers arrived at one frame.
+      if (isStageBTrigger(trig.thresholdId)) this.stageBTriggers++;
+      else this.stageATriggers++;
     }
 
     // ADAAAA-7676: a frame whose content time is already far behind the wall
@@ -319,16 +343,7 @@ export class MediaRailObserver {
         this.live.noteStaleFrame(ts, lagMs / 1000);
         return;
       }
-      const triggerFiresBefore = this.live.triggerFireCount();
       await this.live.maybeFire(ts, false, lagMs);
-      // AC-1 measurement: if THAT tick anchored the queued trigger, the delay
-      // from the trigger onset to the decide window is the latency budget the
-      // acceptance criterion names (content clock ~= wall clock on a live rail).
-      if (this.live.triggerFireCount() > triggerFiresBefore && this.lastQueuedTriggerOnset !== null) {
-        const sample = this.live.lastSample();
-        if (sample) this.anchoredLatencies.push(Math.max(0, Math.round((sample.centerTs - this.lastQueuedTriggerOnset) * 1000)));
-        this.lastQueuedTriggerOnset = null;
-      }
     });
   }
 
@@ -364,15 +379,24 @@ export class MediaRailObserver {
     }
     this.closed = true;
     await this.chain.catch(() => {});
-    // Per-share evidence line: the deployment proof (AC-1/AC-3) reads this from
-    // `docker logs highlights-server` alongside the job's persisted counters.
+    // Per-share evidence line: the deployment proof (AC-1/AC-2/AC-3) reads this
+    // from `docker logs highlights-server` alongside the job's persisted
+    // counters. ADAAAA-7723 adds the trigger LEDGER and the per-family latency,
+    // so "triggers=N but only one decide was anchored" is no longer a silent
+    // discrepancy: the buckets must sum to `triggers`.
     const s = this.stats();
+    const tw = s.triggerWindows;
     // eslint-disable-next-line no-console
     console.log(
       `[media-rail:${this.jobId}] decided frames=${s.frames} audioChunks=${s.audioChunks} triggers=${s.triggers} ` +
+        `stageA=${s.stageATriggers} stageB=${s.stageBTriggers} ` +
         `decideCalls=${s.decideCalls} triggerFires=${s.triggerFires} cadenceFires=${s.cadenceFires} ` +
         `accepted=${s.accepted} clockRejected=${s.clockRejected} ` +
-        `triggerLatencyP50=${s.anchoredLatencyP50Ms}ms p95=${s.anchoredLatencyP95Ms}ms`
+        `triggerWindows accepted=${tw.accepted} coalesced=${tw.coalesced} covered=${tw.covered} ` +
+        `expired=${tw.expired ?? 0} fired=${tw.fired} pending=${tw.pending ?? 0} invalid=${tw.invalid} ` +
+        `reconciled=${s.triggersReconciled} ` +
+        `triggerLatency p50=${s.anchoredLatencyP50Ms}ms p95=${s.anchoredLatencyP95Ms}ms ` +
+        s.triggerLatencyByFamily.map((f) => `${f.family}(n=${f.samples}) p50=${f.p50Ms}ms p95=${f.p95Ms}ms`).join(" ")
     );
   }
 
@@ -389,13 +413,19 @@ export class MediaRailObserver {
   }
 
   stats(): MediaRailStats {
-    const sorted = [...this.anchoredLatencies].sort((a, b) => a - b);
-    const pct = (p: number): number => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))] : 0);
+    const sorted = [...this.live.anchoredLatencySamples()].sort((a, b) => a - b);
+    const tw = this.live.triggerStats();
+    const recon = this.live.triggerReconciliation();
     return {
       observations: this.observations,
       frames: this.frames,
       audioChunks: this.audioChunks,
       triggers: this.triggers,
+      stageATriggers: this.stageATriggers,
+      stageBTriggers: this.stageBTriggers,
+      triggerWindows: tw,
+      triggersReconciled: recon.ok,
+      triggerLatencyByFamily: this.live.anchoredLatencyByFamilyStats(),
       decideCalls: this.live.decideCalls(),
       accepted: this.live.acceptedCount(),
       triggerFires: this.live.triggerFireCount(),
@@ -404,8 +434,8 @@ export class MediaRailObserver {
       clockRejected: this.clockRejected,
       sessionSeconds: Number(((Date.now() - this.startedAt) / 1000).toFixed(1)),
       anchoredLatencyMs: [...sorted],
-      anchoredLatencyP50Ms: pct(50),
-      anchoredLatencyP95Ms: pct(95),
+      anchoredLatencyP50Ms: percentile(sorted, 50),
+      anchoredLatencyP95Ms: percentile(sorted, 95),
       anchoredLatencyMaxMs: sorted.length ? sorted[sorted.length - 1] : 0,
     };
   }
