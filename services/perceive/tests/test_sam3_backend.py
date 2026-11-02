@@ -513,6 +513,39 @@ def test_backfill_backward_runs_a_second_session_in_reverse():
     assert fake.closed  # the throwaway session is closed
 
 
+def test_session_resource_uses_frame_list_when_given():
+    # ADAAAA-7820: the perceive image has no cv2/torchcodec, so a .mp4 session
+    # could not start (silently). SAM3 also accepts a list of PIL images.
+    class Recording(FakePredictor):
+        def __init__(self):
+            super().__init__([{0: (0.2, 0.2, 0.4, 0.4)}])
+            self.resource = None
+
+        def handle_request(self, req):
+            if req.get("type") == "start_session":
+                self.resource = req["resource_path"]
+            return super().handle_request(req)
+
+    fake = Recording()
+    frames = [object(), object()]
+    backend = Sam3Backend(predictor_factory=lambda: fake, clip_path="x.mp4", frames=frames)
+    assert backend.ready()
+    assert fake.resource is frames
+
+
+def test_start_failure_is_recorded_not_swallowed():
+    class Boom(FakePredictor):
+        def handle_request(self, req):
+            if req.get("type") == "start_session":
+                raise ImportError("No module named 'cv2'")
+            return super().handle_request(req)
+
+    backend = Sam3Backend(predictor_factory=lambda: Boom([{0: (0.2, 0.2, 0.4, 0.4)}]),
+                          clip_path="x.mp4")
+    assert backend.ready() is False
+    assert backend.start_error and "cv2" in backend.start_error
+
+
 class LostPlayerBackend:
     supports_frame_index = True
 
