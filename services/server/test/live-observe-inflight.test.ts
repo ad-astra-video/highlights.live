@@ -287,6 +287,11 @@ const CFG = {
   observeMaxFrames: 30,
   sampleFps: 25,
   liveObserveLagBudgetS: 30,
+  // ADAAAA-7774: the ingest->analysis frame stride is OFF here on purpose — this
+  // suite measures the decide DEPTH (the frame loop must keep feeding the
+  // cadence), so every ingested frame is consumed. The stride itself is pinned
+  // in live-perceive-stride.test.ts.
+  liveObserveContentFps: 1000,
 } as const;
 
 describe("analyzeJob pipelined live pass (ADAAAA-7771)", () => {

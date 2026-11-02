@@ -219,6 +219,22 @@ export interface ServerConfig {
    * cadence is held. Acceptance still runs in content order. Default 4.
    * `LIVE_OBSERVE_IN_FLIGHT`. */
   liveObserveInFlight: number;
+  /** ADAAAA-7774: frame-consumption rate (content fps) of the LIVE observe pass.
+   * The live ingest delivers ~5 fps (rtmp/file-sim decode) while the decide
+   * window only ever carries `OBSERVE_CONTENT_FPS` (2) frames per content second
+   * (`assembleLiveWindow` thinning), so perceiving every ingested frame spent
+   * ~0.36 s of blocking `client.analyze` on 3 of every 5 frames whose output the
+   * window assembler then discarded — and the surplus made the loop ~1.8x slower
+   * than realtime, so the lag budget dropped frames/windows (56-86 of ~100
+   * windows per 300 s at every decide depth). The pass now CONSUMES frames at
+   * this rate (content-time stride) and runs the adaptive perceive cadence on
+   * the consumed set, so ~`2` frames per content second are perceived, recorded
+   * and decide-seeded, `perceiveCalls < framesAnalyzed` in cool regions, and a
+   * perceive skipped frame is recorded with an EMPTY seed (no fabricated
+   * signal — recall-safe, exactly like the VOD cadence path). Default 2
+   * (`OBSERVE_CONTENT_FPS`); `LIVE_OBSERVE_CONTENT_FPS`. `<= 0` disables the
+   * stride (perceive every ingested frame = the pre-7774 behaviour). */
+  liveObserveContentFps?: number;
   /** ADAAAA-7758: live decide ADMISSION control. When on, at most ONE live job
    * holds the box's live decide slot; a second concurrent live job's decide is
    * skipped (counted as `observeMetrics.admissionSkippedWindows`) instead of
@@ -557,6 +573,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // exactly when OBSERVE_LOOP + OBSERVE_SIGNAL_GATE are both on (the gated VOD
     // detail-first pass the gap targets). The cool-region stride and the
     // full-perceive hot window after an escalation are separately tunable.
+    liveObserveContentFps: env.LIVE_OBSERVE_CONTENT_FPS !== undefined ? Number(env.LIVE_OBSERVE_CONTENT_FPS) : undefined,
     perceiveCadence: env.PERCEIVE_CADENCE === "1" ? true : env.PERCEIVE_CADENCE === "0" ? false : undefined,
     perceiveQuietStride: env.PERCEIVE_QUIET_STRIDE !== undefined ? Number(env.PERCEIVE_QUIET_STRIDE) : undefined,
     perceiveHotAfterS: env.PERCEIVE_HOT_AFTER_S !== undefined ? Number(env.PERCEIVE_HOT_AFTER_S) : undefined,
