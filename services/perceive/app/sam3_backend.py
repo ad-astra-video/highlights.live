@@ -29,11 +29,20 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from .sam_tracker import SamBackend
-from .tracker import BBox
+from .tracker import BBox, _iou
 
 # Schema ceiling (VOD target, INC-6). Live sessions cap lower; the capacity is
 # threaded through the tracker the backend serves.
 MAX_TRACKS = 8
+
+# ADAAAA-7345: how much a caller's prompt may differ from the box we are
+# tracking before it counts as a NEW target. HybridTracker carries our own mask
+# bbox forward every frame, and the OD re-detect that seeds a lost slot returns
+# the same player a few percent larger/smaller — those are NOT target changes.
+# Comparing for exact equality (the pre-fix rule) made every carried box look
+# external, which reset the SAM session every few frames and blanked the whole
+# clip. A real switch to a different object is well below this overlap.
+PROMPT_KEEP_IOU = 0.5
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -231,6 +240,11 @@ class Sam3Backend(SamBackend):
         # when PERCEIVE_SAM_DEBUG is set so the production path is unchanged.
         self.debug = _env_flag("PERCEIVE_SAM_DEBUG")
         self.timeline: List[dict] = []
+        # ADAAAA-7345: propagate failures are counted (and logged) instead of
+        # vanishing, so "SAM returned nothing" can be told apart from "SAM was
+        # never asked a valid question".
+        self.propagate_errors = 0
+        self.last_propagate_error: Optional[str] = None
         self.backfill_frames: List[dict] = []
         self.backfill_calls = 0
 
@@ -410,7 +424,17 @@ class Sam3Backend(SamBackend):
                     int(x) for x in (out.get("removed_obj_ids") or [])
                 }
                 out_by_frame[fi] = self._parse_outputs(out)
-        except Exception:
+        except Exception as e:
+            # ADAAAA-7345: this swallowed EVERY propagate failure, so a session
+            # whose prompts never registered looked exactly like a clip with no
+            # objects in it (the whole B6 run reported "SAM returns nothing").
+            # Record it and surface it once per backend on the run log.
+            self.propagate_errors += 1
+            self.last_propagate_error = repr(e)
+            import logging
+            logging.getLogger(__name__).warning(
+                "sam3 propagate failed at frame %d: %r", frame_idx, e
+            )
             return out_by_frame
         return out_by_frame
 
@@ -461,14 +485,35 @@ class Sam3Backend(SamBackend):
         # baseline can be measured on the SAME build as the fixes. Off by
         # default -> new behaviour.
         legacy_recover = _env_flag("PERCEIVE_SAM_RECOVER_LEGACY")
-        changed = {
-            s: p
-            for s, p in prompts.items()
-            if self._seeded.get(s) != p and self._last_returned.get(s) != p
-        }
+        changed = {}
+        for s, p in prompts.items():
+            seeded = self._seeded.get(s)
+            if seeded is None:
+                changed[s] = p          # a slot SAM has never been asked about
+                continue
+            if p == seeded or p == self._last_returned.get(s):
+                continue                # identical prompt / our own carried box
+            if _iou(seeded, p) >= PROMPT_KEEP_IOU:
+                continue                # same target, jittered box
+            changed[s] = p              # a genuinely different object
         reset = False
         if changed:
-            if self._seeded:  # already tracking prompts -> reset then re-add all
+            # ADAAAA-7345 MEASURED DEFECT: `track-player` re-detects the target
+            # every few frames while the slot is still empty, so every one of
+            # those boxes counted as an EXTERNAL target change and issued a
+            # `reset_session`. B6's timeline shows a reset every 6 frames
+            # (6, 12, 18, ...): each one wiped SAM's hotstart buffer
+            # (hotstart_delay=15) before it could flush, so the propagate
+            # stream yielded frames with NO objects for the whole 487-frame
+            # clip and every slot read "lost" forever. A re-prompt on a slot
+            # that has no live track is not a target change: SAM holds no
+            # masklet to invalidate, so prompt in place instead of resetting.
+            live = {
+                s: p
+                for s, p in changed.items()
+                if self._last_returned.get(s) is not None
+            }
+            if self._seeded and live:  # an established track really changed
                 self._request({"type": "reset_session", "session_id": self._session_id})
                 reset = True
                 # The window cache was computed under the previous prompts;
@@ -487,6 +532,10 @@ class Sam3Backend(SamBackend):
             for s, p in changed.items():
                 self._add_prompt(s, p, source="external")
                 self._seeded[s] = p
+                # A prompt we just issued IS what SAM is tracking from this
+                # frame on; remembering it keeps the next carried box from
+                # being misread as another external change.
+                self._last_returned[s] = p
         for s in list(self._seeded):
             if s not in prompts:  # dropped target
                 self._seeded.pop(s, None)
@@ -504,10 +553,17 @@ class Sam3Backend(SamBackend):
             if s not in prompts:
                 continue
             misses = self._misses.get(s, 0)
-            if not (misses >= self.recover_after_misses and misses <= self.recover_max_misses):
-                continue
             oid = self._obj_id(s)
             removed = oid in self._removed_obj_ids
+            # ADAAAA-7345: re-prompt at once only when SAM actually dropped the
+            # masklet. Ordinary gaps are expected (hotstart buffering, one
+            # occluded frame) and a prompt per missed frame thrashes the
+            # session: it re-anchors on a stale box, which is what used to feed
+            # the reset storm above.
+            if not removed and not (
+                misses >= self.recover_after_misses and misses <= self.recover_max_misses
+            ):
+                continue
             if legacy_recover:
                 box = prompts[s]
             else:
@@ -515,6 +571,11 @@ class Sam3Backend(SamBackend):
                     oid = self._fresh_obj_id(s)
                 box = self._last_mask_box.get(s) or prompts[s]
             self._add_prompt(s, box, source="mask", obj_id=oid)
+            # The re-anchor prompt replaces what SAM is tracking for this slot,
+            # so it becomes the seeded prompt too. Leaving it stale made the
+            # caller's very next carried box look like an EXTERNAL change.
+            self._seeded[s] = box
+            self._last_returned[s] = box
             reanchored.add(s)
         if reanchored:
             # Cached outputs for this frame and later were computed BEFORE the
