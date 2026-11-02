@@ -215,6 +215,9 @@ export class TriggerWindowScheduler {
   /** Last accepted onset PER trigger family: a whistle and a roar in the same
    *  celebration are distinct evidence (ADAAAA-7682 AC4). */
   private readonly lastAcceptedOnsetByFamily = new Map<string, number>();
+  /** ADAAAA-7723 AC-2: onset -> covering-window latency samples (ms), per
+   *  family, for triggers judged by a window that did not anchor them. */
+  private readonly coveredLatencies = new Map<string, number[]>();
   private readonly counters: TriggerSchedulerStats = {
     accepted: 0,
     coalesced: 0,
@@ -339,14 +342,42 @@ export class TriggerWindowScheduler {
    *  been analyzed — a cadence fire covers them, so they must not fire again.
    *  `fromTs` may be `-Infinity` to drop every onset older than `toTs`
    *  (ADAAAA-7707: a dropped stale span only unanchors onsets past the retained
-   *  window horizon, not the whole span it swept). */
+   *  window horizon, not the whole span it swept).
+   *
+   *  ADAAAA-7723 AC-2: a covered trigger IS judged by the window that covered
+   *  it, so its onset -> judging-window latency (`toTs - onset`) is recorded per
+   *  family. That is the only latency a covered trigger has, and without it a
+   *  family that is always covered (the whistle usually rides `2.4 s` behind a
+   *  roar whose window then covers it) would report no measurable latency at
+   *  all and look unverified. */
   coverThrough(fromTs: number, toTs: number): number {
     if (Number.isNaN(fromTs) || !Number.isFinite(toTs)) return 0;
     const before = this.pending.length;
-    this.pending = this.pending.filter((t) => !(t.onsetTs >= fromTs && t.onsetTs <= toTs));
+    this.pending = this.pending.filter((t) => {
+      const covered = t.onsetTs >= fromTs && t.onsetTs <= toTs;
+      if (covered) {
+        // Only a REAL judged window [fromTs, toTs] yields a latency sample; the
+        // expiry sweep (`fromTs === -Infinity`, frames already evicted) does not
+        // judge anything and must not inflate the covered latency.
+        if (Number.isFinite(fromTs)) {
+          const family = triggerFamily(t.thresholdId);
+          const latMs = Math.max(0, Math.round((toTs - t.onsetTs) * 1000));
+          const samples = this.coveredLatencies.get(family);
+          if (samples) samples.push(latMs);
+          else this.coveredLatencies.set(family, [latMs]);
+        }
+      }
+      return !covered;
+    });
     const dropped = before - this.pending.length;
     this.counters.covered += dropped;
     return dropped;
+  }
+
+  /** ADAAAA-7723 AC-2: onset -> covering-window latency samples (ms), per
+   *  family, for the triggers a decided window judged without anchoring it. */
+  coveredLatencyStats(): { family: string; samples: number[] }[] {
+    return [...this.coveredLatencies.entries()].map(([family, samples]) => ({ family, samples: [...samples] }));
   }
 
   private expire(currentTs: number): void {

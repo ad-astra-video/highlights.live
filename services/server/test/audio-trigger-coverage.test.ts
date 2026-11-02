@@ -131,6 +131,25 @@ describe("TriggerWindowScheduler coverage ledger (ADAAAA-7723)", () => {
     expect(s.stats().accepted).toBe(1);
     expectReconciled(s);
   });
+
+  it("records the covering window's latency per family for covered triggers", () => {
+    const s = new TriggerWindowScheduler();
+    s.record(whistle(2.2));
+    s.record(trig(4));
+    // A window centered at 5 s judges both onsets (the whistle separately from
+    // the roar: different family). Neither anchored its own window.
+    expect(s.coverThrough(0, 5)).toBe(2);
+    const byFamily = Object.fromEntries(s.coveredLatencyStats().map((c) => [c.family, c.samples]));
+    expect(byFamily.stageB).toEqual([2800]);
+    expect(byFamily.stageA).toEqual([1000]);
+    // The expiry sweep (`fromTs = -Infinity`, frames already evicted) judges
+    // nothing, so it must not report a covered latency.
+    const expiry = new TriggerWindowScheduler();
+    expiry.record(trig(1));
+    expiry.coverThrough(-Infinity, 2);
+    expect(expiry.stats().covered).toBe(1);
+    expect(expiry.coveredLatencyStats()).toEqual([]);
+  });
 });
 
 describe("LiveObserver trigger coverage (ADAAAA-7723)", () => {
@@ -177,6 +196,31 @@ describe("LiveObserver trigger coverage (ADAAAA-7723)", () => {
     for (const f of Object.values(fams)) {
       expect(f.p50Ms).toBeGreaterThanOrEqual(1000);
       expect(f.p50Ms).toBeLessThanOrEqual(AUDIO_TRIGGER_MAX_ANCHOR_LATENCY_S * 1000);
+    }
+  });
+
+  it("reports a covered trigger's onset -> judging-window latency in its family", async () => {
+    const { obs } = isolated();
+    let injected = false;
+    await runStream(obs, 12, (ts) => {
+      if (injected || ts < 4 - 1e-9) return;
+      injected = true;
+      // The whistle (onset 2.2 s) is already due and is the EARLIEST pending
+      // trigger, so it anchors this window; the roar due at the same tick has
+      // its onset inside that window, so it is COVERED — judged by it.
+      expect(obs.recordTrigger(whistle(2.2))).toBe(true);
+      expect(obs.recordTrigger(trig(4))).toBe(true);
+    });
+    const fams = Object.fromEntries(obs.anchoredLatencyByFamilyStats().map((f) => [f.family, f]));
+    expect(fams.stageB.samples).toBe(1); // whistle anchored its own window
+    expect(fams.stageB.p50Ms).toBe(1800);
+    expect(fams.stageA.samples).toBe(0); // roar did not anchor
+    expect(fams.stageA.coveredSamples).toBe(1); // ... the whistle window judged it
+    expect(fams.stageA.coveredP50Ms).toBe(0);
+    // AC-2: every family that was judged reports a latency, whichever path won.
+    for (const f of Object.values(fams)) {
+      expect(f.judgedSamples).toBeGreaterThan(0);
+      expect(f.judgedP95Ms).toBeLessThanOrEqual(AUDIO_TRIGGER_MAX_ANCHOR_LATENCY_S * 1000);
     }
   });
 

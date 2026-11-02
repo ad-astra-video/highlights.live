@@ -35,6 +35,24 @@ export function percentile(sorted: number[], p: number): number {
   return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
 }
 
+/** ADAAAA-7723 AC-2: onset -> judging-window latency for ONE trigger family.
+ *  `samples`/`p50Ms`/`p95Ms` are the ANCHORED windows (the trigger anchored its
+ *  own decide); `covered*` are the triggers a decided window judged without
+ *  anchoring them; `judged*` pools both. */
+export interface TriggerFamilyLatency {
+  family: string;
+  samples: number;
+  p50Ms: number;
+  p95Ms: number;
+  maxMs: number;
+  coveredSamples: number;
+  coveredP50Ms: number;
+  coveredP95Ms: number;
+  judgedSamples: number;
+  judgedP50Ms: number;
+  judgedP95Ms: number;
+}
+
 /** Decide invocation cadence in content seconds. CEO-locked (ADAAAA-7000). */
 export const OBSERVE_CADENCE_S = 3;
 
@@ -732,26 +750,39 @@ export class LiveObserver {
   triggerReconciliation(): { ok: boolean; unaccounted: number } {
     return this.triggers.reconciled();
   }
-  /** ADAAAA-7723 AC-2: onset -> anchored window latency, measured PER trigger
-   *  family (Stage-A roar vs Stage-B whistle). Families with no anchored window
-   *  are reported with `samples: 0` so a missing path is visible, not implied
-   *  healthy by an empty array. */
-  anchoredLatencyByFamilyStats(): { family: string; samples: number; p50Ms: number; p95Ms: number; maxMs: number }[] {
-    return [...this.anchoredLatencyByFamily.entries()]
-      .map(([family, raw]) => {
-        const sorted = [...raw].sort((a, b) => a - b);
+  /** ADAAAA-7723 AC-2: onset -> judging-window latency, measured PER trigger
+   *  family (Stage-A roar vs Stage-B whistle). Two ways a trigger gets judged:
+   *  it ANCHORS its own window (`samples`/`p50Ms`/`p95Ms`), or a decided window
+   *  COVERS its onset (`coveredSamples`/`coveredP50Ms`/`coveredP95Ms`). The
+   *  `judged*` fields pool both — the pool is what "onset -> gemma saw it"
+   *  means. A family with no judged trigger still appears with zero samples, so
+   *  a missing path is visible instead of implied healthy by an absent row. */
+  anchoredLatencyByFamilyStats(): TriggerFamilyLatency[] {
+    const covered = new Map(this.triggers.coveredLatencyStats().map((c) => [c.family, c.samples] as const));
+    const families = new Set([...this.anchoredLatencyByFamily.keys(), ...covered.keys()]);
+    return [...families]
+      .map((family) => {
+        const anchoredSorted = [...(this.anchoredLatencyByFamily.get(family) ?? [])].sort((a, b) => a - b);
+        const coveredSorted = [...(covered.get(family) ?? [])].sort((a, b) => a - b);
+        const judgedSorted = [...anchoredSorted, ...coveredSorted].sort((a, b) => a - b);
         return {
           family,
-          samples: sorted.length,
-          p50Ms: percentile(sorted, 50),
-          p95Ms: percentile(sorted, 95),
-          maxMs: sorted.length ? sorted[sorted.length - 1] : 0,
+          samples: anchoredSorted.length,
+          p50Ms: percentile(anchoredSorted, 50),
+          p95Ms: percentile(anchoredSorted, 95),
+          maxMs: anchoredSorted.length ? anchoredSorted[anchoredSorted.length - 1] : 0,
+          coveredSamples: coveredSorted.length,
+          coveredP50Ms: percentile(coveredSorted, 50),
+          coveredP95Ms: percentile(coveredSorted, 95),
+          judgedSamples: judgedSorted.length,
+          judgedP50Ms: percentile(judgedSorted, 50),
+          judgedP95Ms: percentile(judgedSorted, 95),
         };
       })
       .sort((a, b) => a.family.localeCompare(b.family));
   }
-  /** ADAAAA-7723 AC-2: every anchored latency sample (ms), pooled across
-   *  families, for the per-share p50/p95 evidence line. */
+  /** ADAAAA-7723 AC-2: every latency sample pooled across families — anchored
+   *  samples from the observer plus covered samples from the scheduler. */
   anchoredLatencySamples(): number[] {
     return [...this.anchoredLatencyByFamily.values()].flat();
   }
