@@ -4206,6 +4206,9 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-7676: bound the live observe lag against the wall clock — see
     // AnalyzerConfig.liveObserveLagBudgetS. Default 30 s (`LIVE_OBSERVE_LAG_BUDGET_S`).
     liveObserveLagBudgetS: cfg.liveObserveLagBudgetS,
+    // ADAAAA-7771: keep K decide windows in flight per live stream so the ~3 s
+    // cadence is held (acceptance stays serial in content order). Default 4.
+    liveObserveInFlight: cfg.liveObserveInFlight,
     // ADAAAA-7145: gate the live decide-observer's billable decide calls on
     // a real highlight signal (recall-safe). Default off.
     observeSignalGate: cfg.observeSignalGate,

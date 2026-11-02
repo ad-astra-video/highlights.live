@@ -108,3 +108,37 @@ non-zero on a loaded box, `meanCadenceMs <= 3000`, `meanE2eMs` not grown, and
 `services/server/test/live-observe-lag.test.ts` (drop accounting, dropped frames
 never entering a window, bounded completed lag on a slow rail, and the
 `budget <= 0` unbounded control).
+
+## In-flight decide depth (ADAAAA-7771)
+
+The lag budget above is a BACKSTOP, not the fix for coverage. Measured on the
+deployed box (ADAAAA-7769): the decide pair sustains 1.56-1.60 decides/s against
+0.33 decides/s per stream, yet coverage stayed at 33 % / 21-24 % / 15-16 % at
+1/2/3 streams because the pass AWAITED each decide — one decide in flight, so
+coverage = `cadence / decideWall` regardless of how much decide capacity exists.
+
+`LIVE_OBSERVE_IN_FLIGHT` (default 4, `1` = the old serial pass) lets the pass keep
+K windows in flight per stream:
+
+- **Only the expensive half overlaps.** `observeDecideOnly` (gemma decide +
+  on-demand recall + decide audit) runs K-wide; `observeAcceptOnly` (running
+  summary, candidate build, `acceptVideoDecision`: clip cut, burst suppression,
+  highlight record, decision-time billing) is applied strictly in CONTENT order,
+  one at a time, so the accept path keeps its serial semantics.
+- **The queue is bounded by K.** With all K slots busy the tick is not decided
+  and the cadence stays due, so the next frame retries; refusals are counted as
+  `observeMetrics.backpressureSkippedWindows` (never as stale skips, which mean
+  late content, or admission skips, which mean another live job held the box
+  slot).
+- **`flush()` drains every outstanding decide** before the job reports, and
+  rethrows a decide failure, so metrics/accepts are complete and a failed decide
+  still fails the run.
+- **Billing is unchanged per decide call**: one decide per window issued, no
+  window is decided twice by the pipeline. `observeMetrics.maxDecideInFlight`
+  reports the depth actually used (>1 proves the pipeline ran; the serial pass
+  reads 0).
+
+Unit coverage: `services/server/test/live-observe-inflight.test.ts` (K-wide
+overlap, accept order with reversed completion, bounded backpressure, flush
+drain, fail-through, and an end-to-end `analyzeJob` comparison against the serial
+pass on a buffered realtime rail).

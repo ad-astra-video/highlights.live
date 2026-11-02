@@ -503,6 +503,15 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // the box's single live decide slot (admission control). Additive optional:
   // absent/zero when admission control is off, which is the shipped default.
   admissionSkippedWindows: z.number().int().min(0).optional(),
+  // ADAAAA-7771: live observe PIPELINING evidence. `maxDecideInFlight` is the
+  // deepest in-flight decide queue the pass observed (>1 proves the in-flight
+  // depth was used; the serial loop reads 1); `backpressureSkippedWindows`
+  // counts cadence windows the depth itself refused (all K slots busy). Kept
+  // apart from `skippedStaleWindows` (content was late) and
+  // `admissionSkippedWindows` (another live job held the box slot). Additive
+  // optional: absent on records written before these fields existed.
+  maxDecideInFlight: z.number().int().min(0).optional(),
+  backpressureSkippedWindows: z.number().int().min(0).optional(),
   // Worst / mean wall-clock content-vs-wall lag (ms) seen on a dropped frame,
   // and the worst COMPLETED lag (ms) of a decided window (what a live viewer
   // experiences: `summaryLog` `windowTs` vs wall `ts`).
