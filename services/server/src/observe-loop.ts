@@ -433,7 +433,11 @@ export class LiveObserver {
       // No window decided yet: anchor the cadence clock here so the first real
       // fire is one cadence later, not immediately on a stale backlog.
       this.lastFireTs = ts;
-      this.triggers.coverThrough(ts - this.windowS, ts);
+      // ADAAAA-7707: only onsets already OLDER than the retained window are
+      // unanchorable. A trigger whose onset is still inside a future window is
+      // kept — the audio tap runs ahead of a lagging video rail, so a whistle
+      // fire is recorded before the frame clock reaches its onset.
+      this.triggers.coverThrough(-Infinity, ts - this.windowS);
       this.stageA?.dropThrough(ts - this.windowS, ts);
       return 0;
     }
@@ -444,12 +448,15 @@ export class LiveObserver {
     }
     if (skipped > 0) {
       this.skippedStaleWindows += skipped;
-      // Triggers whose onset fell inside the dropped span can no longer be
-      // anchored to a retained frame — cover them so they expire instead of
-      // firing on a window that no longer contains them. They were never
-      // decided, so the Stage-A ledger drops them too (never a fabricated
+      // Triggers whose onset is already older than the retained window can no
+      // longer be anchored and are dropped. A trigger still INSIDE the window
+      // horizon is kept (and bounded by the scheduler's max-stale expiry):
+      // ADAAAA-7707 measured a whistle fire recorded while the frame clock was
+      // ~10 s behind being swallowed here by the dropped span's cover, so the
+      // one anchored analysis the fire is entitled to never happened. They were
+      // never decided, so the Stage-A ledger drops them too (never a fabricated
       // reject — ADAAAA-7694).
-      this.triggers.coverThrough(ts - this.windowS, ts);
+      this.triggers.coverThrough(-Infinity, ts - this.windowS);
       this.stageA?.dropThrough(ts - this.windowS, ts);
     }
     return skipped;

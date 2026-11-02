@@ -180,6 +180,54 @@ describe("family-aware ledger (ADAAAA-7707 AC3)", () => {
 });
 
 describe("one whistle fire = one anchored analysis (ADAAAA-7707 AC2)", () => {
+  it("keeps a whistle recorded ahead of a lagging frame clock and anchors it once", async () => {
+    // Measured on job 4e54c757 (deployed, 2026-11-02): the audio tap runs ~10 s
+    // ahead of a decide-lagged video rail, so the whistle block arrived while
+    // the frame clock was still at ~32 s. The dropped (stale) spans then COVERED
+    // the trigger's onset and the anchored analysis never fired
+    // (`whistleFires:1, whistleDecides:0`). The dropped span must only cover
+    // onsets older than the retained window.
+    const seen: any[] = [];
+    const run = new LiveRunShared();
+    const obs = new LiveObserver({
+      cadenceS: OBSERVE_CADENCE_S,
+      windowS: 10,
+      maxFrames: 30,
+      fps: 3,
+      stageA: run.stageAOutcomes,
+      onDecide: async (p) => {
+        seen.push(p);
+        return false;
+      },
+    });
+    for (let i = 0; i <= 99; i++) {
+      const ts = Number((i / 3).toFixed(4));
+      obs.record(ts, `frame-${ts}`, { ts });
+      await obs.maybeFire(ts);
+    }
+    // the whistle fires at content 42.3 while the frame clock is at 33
+    expect(obs.recordTrigger(whistleTrigger(42.3, 0.2))).toBe(true);
+    // the lagging rail drops 33.3..44.9 as stale frames
+    for (let i = 100; i <= 134; i++) obs.noteStaleFrame(Number((i / 3).toFixed(4)), 18);
+    // the first affordable frame after the onset's lead fires ANCHORED
+    obs.record(45, "frame-45", { ts: 45 });
+    await obs.maybeFire(45);
+
+    const anchored = seen.filter((p) => p.trigger);
+    expect(anchored).toHaveLength(1);
+    expect(anchored[0].trigger.thresholdId).toBe(WHISTLE_THRESHOLD_ID);
+    expect(obs.whistleDecideCount()).toBe(1);
+    expect(obs.whistleFireCount()).toBe(1);
+  });
+
+  it("still drops a trigger older than the retained window", () => {
+    const obs = new LiveObserver({ cadenceS: 3, windowS: 10, maxFrames: 30, fps: 3, onDecide: async () => false });
+    obs.recordTrigger(whistleTrigger(20));
+    obs.record(45, "frame-45", { ts: 45 });
+    obs.noteStaleFrame(45, 18);
+    expect(obs.triggerStats().covered).toBe(1);
+  });
+
   it("anchors exactly one decide window at the whistle onset", async () => {
     const seen: any[] = [];
     const run = new LiveRunShared();
