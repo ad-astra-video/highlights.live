@@ -452,9 +452,10 @@ SOCCER_PROFILE = GameProfile(
 )
 
 # Basketball (ADAAAA-7765, per-type step 2). Measured on a rights-cleared
-# broadcast clip: evals/basketball_val/label-manifest.json carries 14
-# frame-verified scoring events and 13 verified non-event windows across 850 s
-# of Q1 play from a CC BY 3.0 full match (TBF, Wikimedia Commons).
+# broadcast clip: evals/basketball_val/label-manifest.json (revision 2) carries
+# 15 frame-verified scoring events and 13 verified non-event windows across 850 s
+# of one continuous feed (Q1 into early Q2) from a CC BY 3.0 full match
+# (TBF, Wikimedia Commons).
 #
 # What this profile does NOT claim:
 # - No detection slice was labelled for basketball, so `evalSet.vocabulary` is
@@ -471,26 +472,33 @@ _BASKETBALL_EVAL_VOCABULARY: Tuple[str, ...] = ("score",)
 _BASKETBALL_EVAL_REFERENCE: Mapping[str, Any] = {
     "source": "evals/basketball_val/label-manifest.json (ADAAAA-7765)",
     "clipSpanS": 850,
-    "scoringEvents": 14,
+    "scoringEvents": 15,
     "nonEventWindows": 13,
     "livePlayNonEventWindows": 7,
     "rightsBasis": "CC BY 3.0 (TBF, Wikimedia Commons)",
     "detectionSlice": None,
-    # ADAAAA-7765 measured run (box livepeer-ai-x99, evals/basketball_val/RESULTS.md)
+    # ADAAAA-7765 measured run, label revision 2 (evals/basketball_val/RESULTS.md).
+    # Baseline at the profile's UNCHANGED audio defaults; not tuned on basketball.
     "audioHarness": {
         "harness": "evals/measure_audio_recall.py",
-        "host": "livepeer-ai-x99",
+        # Pure DSP (ffmpeg decode + numpy gate): the box job on livepeer-ai-x99 and a
+        # local CPU re-run are byte-identical for the same labels (QA verified this on
+        # ADAAAA-7770). Revision 2 was produced by that same re-run.
+        "host": "local CPU re-run, byte-identical to the livepeer-ai-x99 box job",
         "clip": "bb_q1_1100_1950.mp4 (850 s, CC BY 3.0)",
+        "labelRevision": 2,
         "thresholdId": "stageA/burst/1.3x/0.3s",
-        "events": 14,
+        "events": 15,
         "candidates": 80,
-        "recall": 0.42857142857142855,
-        "fpRate": 0.875,
+        "recall": 0.26666666666666666,
+        "fpRate": 0.925,
         "p50S": 0.2,
         "p95S": 1.9,
         "negativeWindowFpRate": 0.6153846153846154,
         "livePlayNegativeWindowFpRate": 1.0,
-        "artifactMd5": "8c2991cb0cb2b90d4b51e16707ab1038",
+        "artifactMd5": "151192a9dd67dc2342b320b389cb3a75",
+        # label-tolerance sensitivity: recall 0.53/0.67/0.87 at -5/-6/-10 s pre-window
+        # but candidate FP rate only falls to 0.85/0.81/0.76 - still far over the ceiling
         "fpCeiling": 0.10,
         "fpCeilingMet": False,
         "result": "evals/basketball_val/RESULTS.md",

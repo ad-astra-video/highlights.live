@@ -25,6 +25,7 @@ from app import florence
 from app.audio_gate import AudioEnergyGate, GateConfig
 from app.game_profile import (
     ALL_TRIGGERS,
+    BASKETBALL_PROFILE,
     DEFAULT_PROFILE,
     ORACLE_SCOREBOARD_OCR,
     SOCCER_PROFILE,
@@ -51,6 +52,10 @@ from app.session import (
     sync_game_profile,
 )
 from app.tracker import IoUTracker
+
+_REPO_ROOT = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")
+)
 
 SEVEN_FIELDS = {
     "vocabulary",
@@ -199,17 +204,68 @@ def test_basketball_is_registered_and_measured_against_its_own_eval_set():
     assert prof.tracking_roster.live_capacity == 3
     assert prof.tracking_roster.vod_capacity == 8
     assert len(prof.tracking_roster.labels) <= prof.tracking_roster.live_capacity
-    # the reference states the coverage the set actually achieved
+    # the reference states the coverage the set actually achieved (label revision 2)
     ref = prof.eval_set.reference
-    assert ref["scoringEvents"] == 14 and ref["nonEventWindows"] == 13
+    assert ref["scoringEvents"] == 15 and ref["nonEventWindows"] == 13
     assert ref["detectionSlice"] is None  # no detection labels: detect_precision N/A
     # the measured audio run is recorded as data, including that it MISSED the
     # ceiling: the flag must never be read as "basketball is ready"
     run = ref["audioHarness"]
-    assert run["events"] == 14 and run["candidates"] == 80
-    assert run["recall"] == pytest.approx(6 / 14)
-    assert run["fpRate"] == pytest.approx(70 / 80)
+    assert run["events"] == 15 and run["candidates"] == 80
+    assert run["recall"] == pytest.approx(4 / 15)
+    assert run["fpRate"] == pytest.approx(74 / 80)
     assert run["fpCeiling"] == 0.10 and run["fpCeilingMet"] is False
+    # the ceiling is missed even under a generous label tolerance (RESULTS.md §1a),
+    # so the verdict is not an artefact of the 1 fps instant grid
+    assert run["fpRate"] > 5 * run["fpCeiling"]
+
+
+
+def test_basketball_eval_set_matches_the_committed_labels():
+    """The registered numbers ARE the committed labels' numbers (ADAAAA-7765 rev 2).
+
+    Guardrail for the drift class QA found on ADAAAA-7770: constants in code that
+    disagree with `evals/basketball_val/*.json` after a label revision.
+    """
+    import json
+
+    bb = os.path.join(_REPO_ROOT, "evals", "basketball_val")
+    man = json.load(open(os.path.join(bb, "label-manifest.json")))
+    labels = json.load(open(os.path.join(bb, "audio-labels.json")))
+
+    events = [w for w in man["windows"] if w["ground_truth"] == "score"]
+    negs = [w for w in man["windows"] if w["ground_truth"] == "no_score"]
+    ev = BASKETBALL_PROFILE.eval_set
+    assert ev is not None
+    ref = ev.reference
+    assert len(events) == ref["scoringEvents"]
+    assert len(negs) == ref["nonEventWindows"]
+    assert (sum(1 for w in negs if w["window_class"] == "live_play_no_score")
+            == ref["livePlayNonEventWindows"])
+
+    seg = man["video"]["segment"]["start_s"]
+    instants = [w["instant"] - seg for w in events]
+    # the audio corpus is exactly the manifest's instants, rebased onto the clip
+    assert labels["classes"][0]["onsets"] == instants
+
+    # each instant is the FIRST frame of the state it names, and the state
+    # intervals tile the whole clip (so every second is classified once)
+    states = man["coverage"]["state_intervals_clip_s"]
+    for w in events:
+        assert states[w["score_after"]][0] == w["instant"] - seg, w["id"]
+    bounds = sorted(states.values())
+    assert bounds[0][0] == 0
+    assert bounds[-1][1] == man["coverage"]["clip_span_s"] - 1
+    for (a1, b1), (a2, _b2) in zip(bounds, bounds[1:]):
+        assert b1 + 1 == a2, (a1, b1, a2)
+
+    # no non-event window may contain a scoring transition
+    for w in negs:
+        a, b = w["t_start"] - seg, w["t_end"] - seg
+        assert not any(a <= t <= b for t in instants), w["id"]
+        # its recorded score is the state that contains the window
+        containing = [k for k, (s, e) in states.items() if s <= a and b <= e]
+        assert containing == [w["score"]], w["id"]
 
 
 def test_unmeasured_profile_has_no_zone_and_audio_only():
