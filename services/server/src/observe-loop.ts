@@ -448,6 +448,8 @@ export class LiveObserver {
   /** ADAAAA-7771: two-phase decide fork. Present only when depth > 1; absent
    *  keeps the serial `onDecide` path byte-identical. */
   private readonly onDecideStaged: ((payload: ObserveDecidePayload) => StagedObserveDecide) | null;
+  /** ADAAAA-7771: live depth budget (shared decide admission across streams). */
+  private readonly depthBudget: (() => number) | null;
   /** ADAAAA-7771: issued-but-unapplied decides, in content order. */
   private pending: PendingObserveDecide[] = [];
   /** ADAAAA-7771: decides whose `decide()` is still running. */
@@ -496,6 +498,11 @@ export class LiveObserver {
     onDecideStaged?: (payload: ObserveDecidePayload) => StagedObserveDecide;
     /** ADAAAA-7771: bounded in-flight decide depth (default 1 = serial). */
     maxInFlight?: number;
+    /** ADAAAA-7771: LIVE depth budget evaluated per fire. Lets the caller SHARE
+     *  the box's decide admission across concurrent live streams (a lone stream
+     *  gets `maxInFlight`, two streams get half each, and so on) instead of
+     *  oversubscribing a fixed-width admission. Clamped to `maxInFlight`. */
+    depthBudget?: () => number;
     /** Minimum budget needed to fire early on a trigger (default 0.4). */
     triggerMinBudget?: number;
     /** ADAAAA-7758: admission predicate evaluated before this tick spends a
@@ -521,6 +528,7 @@ export class LiveObserver {
     this.canDecide = opts.canDecide ?? null;
     this.onDecideStaged = opts.onDecideStaged ?? null;
     this.maxInFlight = Math.max(1, Math.floor(opts.maxInFlight ?? 1));
+    this.depthBudget = opts.depthBudget ?? null;
     this.triggerMinBudget = opts.triggerMinBudget ?? 0.4;
     this.stageA = opts.stageA ?? null;
     this.stageB = opts.stageB ?? null;
@@ -812,6 +820,16 @@ export class LiveObserver {
   pendingApplyCount(): number {
     return this.pending.length;
   }
+  /** ADAAAA-7771: the in-flight depth this pass may use right now (the shared
+   *  decide budget clamped to `maxInFlight`; 1 = serial). */
+  currentDepthBudget(): number {
+    return this.effectiveDepth();
+  }
+  private effectiveDepth(): number {
+    const raw = this.depthBudget ? this.depthBudget() : this.maxInFlight;
+    const d = Math.floor(Number.isFinite(raw) ? raw : 1);
+    return Math.max(1, Math.min(this.maxInFlight, d));
+  }
   /** Refill the decide budget by elapsed content time (capacity 1 token). */
   private refillBudget(nowTs: number): void {
     if (this.lastBudgetTs === null) {
@@ -858,7 +876,7 @@ export class LiveObserver {
     // per cadence window (not once per retried frame) and kept distinct from a
     // stale skip: the content was not late, the box had no free slot. A FORCE
     // fire (the end-of-stream tail) bypasses this — `flush()` drains first.
-    if (this.onDecideStaged && !force && this.inFlight >= this.maxInFlight) {
+    if (this.onDecideStaged && !force && this.inFlight >= this.effectiveDepth()) {
       if (this.lastBackpressureSkipTs === null || nowTs - this.lastBackpressureSkipTs >= this.cadenceS - 1e-9) {
         this.backpressureSkips++;
         this.lastBackpressureSkipTs = nowTs;
@@ -937,7 +955,7 @@ export class LiveObserver {
     this.triggers.coverThrough(lo, nowTs);
     const lag = lagMs ?? 0;
     this.lastFired = { centerTs: nowTs, lagMs: lag };
-    if (this.onDecideStaged && this.maxInFlight > 1) {
+    if (this.onDecideStaged) {
       // ADAAAA-7771: issue the decide and return immediately. The expensive
       // half runs K-wide; the verdict is applied in content order by the drain
       // chain (`accept` -> acceptVideoDecision), so the accept path keeps its

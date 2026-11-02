@@ -120,6 +120,60 @@ export class LiveDecideAdmission {
     }
   }
 
+  // --- ADAAAA-7771: in-flight decide SHARING -------------------------------
+  //
+  // The observe pass may keep K decide windows in flight per stream, but the
+  // orchestrated decide client admits only `decideAdmission` decide app-calls at
+  // once (measured: DECIDE_CONCURRENCY unset => 2, while the box has 8 decide
+  // slots). Depth above that admission does not add throughput — it only queues,
+  // and a queued window lands later, which is exactly the viewer-visible lag this
+  // pipeline is measured on. Measured at depth 4: 1 stream 11.6 s/decide and 31.3 s
+  // lag (fine), 2 streams 24.8-26.6 s/decide and 50.8-52.0 s lag (a regression
+  // against the serial 32.6-34.5 s). So the depth is a SHARED budget: each live
+  // stream gets `floor(admission / activeLiveStreams)`, at least 1 (serial).
+
+  /** Live jobs currently running an observe pass. */
+  private readonly activeLiveJobs = new Set<string>();
+
+  /** Mark a live pass as active so the decide depth can be shared across them.
+   *  Idempotent; always paired with {@link releaseLiveJob}. */
+  registerLiveJob(jobId: string): void {
+    this.activeLiveJobs.add(jobId);
+  }
+
+  /** Drop a live pass from the sharing set (idempotent). */
+  releaseLiveJob(jobId: string): void {
+    this.activeLiveJobs.delete(jobId);
+  }
+
+  /** Live observe passes currently running in this process. */
+  activeLiveJobCount(): number {
+    return this.activeLiveJobs.size;
+  }
+
+  /**
+   * ADAAAA-7771: in-flight decide depth for ONE stream.
+   *
+   * `admission` is how many decide app-calls the box admits at once
+   * (`DECIDE_CONCURRENCY`, default 2 = the client's own default). Measured on the
+   * deployed box: a LONE stream may safely queue above the admission (depth 4
+   * with a 2-wide gate gave 11.6 s/decide, 31.3 s lag, 56 skipped windows —
+   * better coverage than depth 2 at the same lag), but two streams must split the
+   * admission (2-wide gate: one each = the serial pass, 33 s lag; two each = 41-52 s
+   * lag, a regression). So: a lone stream gets the full per-stream depth, and a
+   * shared box gets `floor(admission / activeStreams)`, never below 1.
+   */
+  depthFor(jobId: string, maxPerStream: number, admission: number): number {
+    const cap = Math.max(1, Math.floor(maxPerStream));
+    const admit = Math.max(1, Math.floor(admission));
+    // `jobId` is normally registered, so the set size IS the number of streams
+    // sharing the admission.
+    const active = Math.max(1, this.activeLiveJobs.size);
+    if (active <= 1) return cap;
+    const share = Math.max(1, Math.floor(admit / active));
+    return Math.max(1, Math.min(cap, share));
+  }
+
   snapshot(): LiveDecideAdmissionSnapshot {
     return {
       enabled: this.enabledState,

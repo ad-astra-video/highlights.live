@@ -4209,6 +4209,9 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-7771: keep K decide windows in flight per live stream so the ~3 s
     // cadence is held (acceptance stays serial in content order). Default 4.
     liveObserveInFlight: cfg.liveObserveInFlight,
+    // ADAAAA-7771: the box's decide admission width, so the per-stream in-flight
+    // depth is shared instead of oversubscribing the client's decide gate.
+    liveDecideAdmission: cfg.decideConcurrency ?? 2,
     // ADAAAA-7145: gate the live decide-observer's billable decide calls on
     // a real highlight signal (recall-safe). Default off.
     observeSignalGate: cfg.observeSignalGate,
