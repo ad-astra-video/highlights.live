@@ -57,6 +57,7 @@ import { aggregateLiveWatchMinutes, monthKeyUtc } from "./live-watch-minutes";
 import { buildPostableHighlights } from "./highlight-postable";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
+import { buildVodMeter, formatVodMeterLine } from "./vod-meter";
 import { jobDetailForRole, jobEventForRole, jobForRole, jobsForRole } from "./job-visibility";
 import { deriveLiveProgress, newestObservationTs } from "./live-progress";
 import { deriveLiveCapture } from "./live-capture";
@@ -1263,6 +1264,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
   async function runVodJob(job: { id: string; gameHint?: string; preferLabels?: string[] }, videoPath: string, user: any, sub: any) {
     const jobId = job.id;
+    // ADAAAA-7821: VOD processing wall clock starts at the worker claim and
+    // ends when the record reaches `done`. Measured here (not derived from
+    // createdAt) so queue wait is excluded from the meter.
+    const runStartedMs = Date.now();
     const scheduledAt = new Date().toISOString();
     // ADAAAA-6625: a stop that landed before the worker claimed this job wins.
     // Never start (or resume) compute for an already-cancelled row.
@@ -1711,6 +1716,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // Source runtime (D-I2.2 / ADAAAA-6838): probe the media duration so the
     // completed result card can show it. Best-effort (ms; null on probe failure).
     const durationS = await probeDuration(cfg.ffmpegPath, videoPath).catch(() => null);
+    // ADAAAA-7821: measured cost meter for this job — wall clock, decide count,
+    // source duration, plus the $/video-hour pulled from the recorded spend so
+    // the VOD price row is read off a job record instead of re-modelled.
+    const vodMeter = buildVodMeter({
+      wallClockS: (Date.now() - runStartedMs) / 1000,
+      decideCalls,
+      sourceDurationS: durationS,
+      costUsd,
+      decideFeeUsd: cfg.decideFee,
+    });
     // Durable finalizing transition (ADAAAA-6873 state machine) before done.
     await store.patchJob(jobId, { status: "finalizing", stage: "finalizing" });
     const doneFramesPct = framesTotal > 0 ? Math.min(100, Math.round((outcome.framesAnalyzed / framesTotal) * 100)) : 0;
@@ -1755,6 +1770,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       progress: 100,
       progressLabel: "done",
       durationMs: durationS ? Math.round(durationS * 1000) : undefined,
+      vodMeter,
       // ADAAAA-6870 (Increment 3 T1): persist the full decision trail on the
       // completed job record so it survives a server restart.
       candidates: [...jobTrail],
@@ -1763,6 +1779,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // (fire-and-forget; fallback title on any failure; never blocks the job).
     void applyJobTitle(store, cfg, jobId);
     emitJobProgress(jobId, 100, "done");
+    // ADAAAA-7821: fixed-prefix completion meter line — greppable in the server
+    // log (`docker logs highlights-server | grep '\[vod-meter\]'`) and emitted
+    // for every completed VOD job, including jobs that judged no candidate.
+    console.log(formatVodMeterLine(jobId, vodMeter));
     const stageALine = stageAEvidenceLine(
       "vod",
       jobId,
