@@ -282,3 +282,155 @@ So the measurement is certified and the type's `qaCertification` reads
 `qaVerdict: measurement true; fpCeilingMet false`. **Certified measurement is not
 enablement**: american football stays disabled for the operator UI until the
 motion number in section 9 exists and is itself certified.
+
+## 11. Motion trigger — measured (ADAAAA-7788)
+
+`motion_fire` was `not_captured` in section 1b. It is measured now, on the same
+label manifest (label revision 2: the same 11 onsets and the same 14 non-event
+windows the audio rule was scored on) and on the same sha256-verified clip.
+
+### 11.1 The bounded job (what ran, what it cost)
+
+| item | value |
+|---|---|
+| approved envelope | `<= 35 GPU-minutes`, 569 frames, one pass, no sweeps (CEO approval `77972ad0`) |
+| windows decoded | 25 of 25 manifest windows (11 scoring 21-23 s, 14 non-event 24 s) = 569 s |
+| frames | **569** at 1 fps (6.78% of the 8391 s clip; no whole-game pass) |
+| host | `livepeer-ai-x99`, RTX 3090 Ti GPU 0, inside the deployed perceive image `adastravideo/highlights-live:perceive-7707` |
+| detector | deployed `FLORENCE_MODEL=/runs/Florence-2-base-finetuned-ft6404gpu`, `cuda:0`, vocabulary `[football, player, referee]` |
+| clip | `af_belmont_vs_westford_092123.mp4`, sha256 `ad12b10b…6df1aeb` re-verified on the box before decoding |
+| measured latency | **364.0 ms/frame** mean, 212.7 s wall = **3.5 GPU-minutes** |
+| repeat pass (determinism) | 569/569 frames produced **identical boxes and scores** (213.2 ms/frame, 3.1 GPU-min); the file md5 differs only in the `latency` block |
+| total spend | **~6.6 of the approved 35 GPU-minutes** |
+
+Runtime note (environment, not a harness change): the perceive image ships no
+`ffmpeg`, so the window decoder is a static `ffmpeg 7.0.2` binary mounted
+read-only at `/opt/ffbin` and prepended to `PATH` inside the container. The
+harness itself is unmodified at commit `0c45064`.
+
+```
+python3 evals/detect_slice_from_windows.py \
+    --labels evals/american_football_val/label-manifest.json \
+    --clip-root /clips --profile "american football" --fps 1 \
+    --max-frames 569 --budget-gpu-minutes 35 --out /out/af_detect_slice.json
+
+python3 evals/measure_motion_recall.py \
+    --slice /out/af_detect_slice.json \
+    --labels evals/american_football_val/label-manifest.json \
+    --profile "american football" --mode vod --json /out/af_motion_vod.json
+```
+
+### 11.2 The two triggers, side by side at the same label tolerance (-6 / +3 s)
+
+| trigger | candidates | denominator | recall | candidate FP rate | candidate FP rate / 0.10 ceiling | non-event windows firing | onset p50 | p95 |
+|---|---|---|---|---|---|---|---|---|
+| `score_roar` (audio) | 1979 | whole clip (8391 s) | 1.00 (11/11) | **0.9853** (1950/1979) | 9.85x | **14/14** | +0.20 s | +0.50 s |
+| `MOVE` (motion, cap 8) | 435 | the 25 manifest windows (569 s = 6.78% of the clip) | 1.00 (11/11) | **0.7931** (345/435) | 7.93x | **14/14** | -6.00 s | +3.00 s |
+
+**The denominators differ and are not interchangeable.** Audio's 1979 candidates
+come from decoding the whole clip; motion's 435 come from the 6.78% stratified
+window sample the approved envelope bought. The artifact records that share
+(`candidateSpace.stratifiedSample = 0.06781`) next to every number, and the
+whole-clip motion pass (8391 frames, 14.7x this envelope) was **not** approved
+and was not run.
+
+Motion is scored at the harness default (-3/+2) and at both audio tolerances so
+the pair is comparable at the same setting:
+
+| motion label tolerance | recall | candidate FP rate | onset p50 | p95 |
+|---|---|---|---|---|
+| -3 / +2 (manifest default) | 0.91 (10/11) | 0.8644 (376/435) | -3.00 s | +2.00 s |
+| **-6 / +3 (audio's headline)** | **1.00 (11/11)** | **0.7931 (345/435)** | -6.00 s | +3.00 s |
+| -10 / +5 (audio's generous) | 1.00 (11/11) | 0.7195 (313/435) | -7.00 s | +3.00 s |
+
+### 11.3 Why the motion recall is not a real detection of the event
+
+`motion_fire` is on for **435 of 569 frames (76.4%)**, in every window
+(per-window fires: 8-21 of 21-24 frames), and every one of the 14 non-event
+windows fires (256 fires). The onset latency is at the **pre-window edge**
+(-6.00 s p50), i.e. the rule is already firing when the window opens, so a
+"hit" is whatever fire happens to sit inside the tolerance — not a fire caused
+by the scoring play.
+
+The cause is a cadence mismatch, and it is a property of the deployed
+operating point rather than a defect in this harness: `MOTION_MIN_STEP = 0.15`
+is a *per-step* displacement threshold tuned for live steps of ~0.2 s, while
+this measurement steps at 1 fps (the deployed VOD detection cap). Over a 1 s
+step a player running 10 m/s in a 50 m frame moves ~0.2 of frame width, so
+0.15 is tripped by ordinary play. Peak single-step displacement was 0.18-0.70
+in every window, including every negative. Wide-open thresholds are not a
+tuning exercise this issue may take (threshold sweeps are out of scope), so the
+number is reported as measured at the shipped operating point.
+
+### 11.4 Tracking caps — 3 live / 8 VOD on this clip
+
+`--mode` selects the profile's roster capacity; both were scored from the same
+slice.
+
+| mode | cap | frames at cap | detections dropped (`unkept`) | max concurrent tracks | objects/frame max |
+|---|---|---|---|---|---|
+| VOD | **8** | 129 / 569 (22.7%) | **0 of 1071** | 8 | 6 |
+| live | **3** | 440 / 569 (77.3%) | **30 of 1071 (2.8%)** | 3 | 6 |
+
+So at VOD the 8-object roster never drops a detection on this clip; at live the
+3-object roster is saturated on 77% of frames and drops ~2.8% of detections,
+which also degrades recall (the team-sport case the charter expects).
+
+**The 22-player case is `not_captured`.** The deployed detector tops out at
+**6 boxes/frame** on this clip at 854x480 (mean 1.9), so no 22-player frame
+exists in this slice and "what the cap keeps on a 22-player frame" cannot be
+answered from it. Stating a 22-player number here would require a
+native-resolution window, which this envelope did not buy.
+
+**ID persistence and IoU are `not_captured`.** `evals/track_metrics.py` needs a
+ground-truth track manifest (per-frame identity labels); american football has
+none, and feeding these detections back in as "labels" would score the tracker
+against its own input — which the harness refuses to do by construction. The
+blocker is named in section 11.6 and owned.
+
+### 11.5 Verdict — which trigger carries american football
+
+**Neither.** At the same label tolerance both rules recall the event set and both
+miss the stated 0.10 candidate-FP ceiling by an order of magnitude: audio
+**0.9853** (9.85x the ceiling, whole-clip denominator) and motion **0.7931**
+(7.93x the ceiling, window-scoped denominator). No surviving subset meets 0.10,
+and the detection-in-zone trigger does not exist for this type (`zoneModel:
+no-zone`). Motion is the only trigger left and it is saturated, so:
+
+- **american football stays disabled for the operator UI.**
+- `measured` for the type remains a statement about the *labelled eval set and
+  the audio run*; motion is now measured too but does not pass, and its QA
+  re-certification is the outstanding clause (AC6).
+
+One finding is worth carrying to the type's next operator decision: the motion
+rule as deployed at 1 fps is effectively always-on for football, so its cost is
+not "missed highlights" but Stage-B volume — a `MOVE` candidate on 76% of frames
+means the expensive decide pass would run on nearly every second.
+
+### 11.6 Artifacts
+
+Committed under `evals/american_football_val/run/` (md5 as fetched from the box):
+
+| artifact | md5 | what it is |
+|---|---|---|
+| `af_detect_slice.json` | `239fb30d69da86bd30d7b258e400f581` | the 569-frame florence detection slice (windows only) |
+| `af_motion_vod.json` | `da5ab15ce08acb81e2c3d2b57d5bb625` | `motion_fire` scored, cap 8, -3/+2 |
+| `af_motion_live.json` | `c45e21dd4a8c9d52a7516e679be38a66` | `motion_fire` scored, cap 3, -3/+2 |
+| `af_motion_vod_m6_3.json` | `a064adce0016f0fe45ca114da692d9d4` | sensitivity row, -6/+3 |
+| `af_motion_vod_m10_5.json` | `dcb2c647fe0d9af9dfdfc7174324a907` | sensitivity row, -10/+5 |
+
+Re-scoring the committed slice is free (no GPU, no decode) and was checked to be
+**byte-identical**: the second `measure_motion_recall.py` run over the same slice
+produced md5 `da5ab15ce08acb81e2c3d2b57d5bb625` again.
+
+### 11.7 Remaining work (named blockers, owners)
+
+- **GT track slice for ID persistence and IoU (AC4).** Needs a per-frame
+  identity-labelled manifest at native resolution (1280x720) over a bounded
+  window; owner: Developer, separate costed job.
+- **Whole-clip motion denominator.** Only needed if the window-scoped FP rate
+  had landed near 0.10 — it landed at 0.79, so the revised proposal is not
+  warranted for the ship/no-ship call.
+- **QA re-certification of the motion numbers.** Child of this issue assigned to
+  Highlights.live Reviewer; `motionHarness.qaCertification` stays `pending`
+  until that verdict lands.
