@@ -70,6 +70,28 @@ DEPLOY_GATE_ENABLED=1 \
   token (minted with the server `JWT_SECRET`), which is rejected by every write
   route. The read-only principal is accepted on `GET /admin/inflight-jobs`.
 
+### Funnel + CAC readout (ADAAAA-6385 / ADAAAA-6384)
+
+`docker/admin-readout.sh` prints the ADAAAA-6368 conversion funnel
+(`signup -> activate -> generate -> subscribe -> retain`), the per-channel
+breakdown and the per-channel CAC (spend / paying subscribers) from the RUNNING
+server, using the same read-only credential as the deploy gate:
+
+```sh
+docker/admin-readout.sh              # formatted readout
+docker/admin-readout.sh --json       # raw /admin/funnel + /admin/spend payloads
+HIGHLIGHTS_API_BASE=https://highlights-server.dpn.gg docker/admin-readout.sh
+```
+
+- GET-only: the `admin_readonly` token is accepted on `GET` and rejected by
+  every write route, so this script can measure and report but can never record
+  spend.
+- Exit codes: `1` = no token found, `2` = an `/admin` request failed (server
+  down or token rejected) — never a silent empty report.
+- An empty `cac` array means the spend ledger has no rows for that channel, so
+  CAC is **undefined** (no numerator). It is not `$0` and it is not evidence
+  that the channel is cheap.
+
 The server-side in-flight resilience (ADAAAA-7203) additionally maps a
 `502/503/504` from the perceive analyze proxy to a re-reservable
 `SessionLostError` (`analyze interrupted (deploy-recreate)`), so even a recreate
