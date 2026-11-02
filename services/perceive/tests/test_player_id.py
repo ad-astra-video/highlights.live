@@ -449,3 +449,120 @@ def test_embedded_read_is_still_a_fallback_match():
     match = match_player_by_number(objects, 18, lambda b: ["R.MARIN18PEACE"])
     assert match is not None
     assert match["ocr_confidence"] == "embedded"
+
+
+# --- ADAAAA-7345: anchor-frame retry ---------------------------------------
+
+def _retry_state(det, monkeypatch, session_id="s-pn-retry"):
+    monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: det)
+    state = SessionState(session_id=session_id)
+    state.last_rgb = np.zeros((64, 64, 3), np.uint8)
+    state.tracker = IoUTracker(capacity=3)
+    return state
+
+
+def _banner_numbers():
+    # A broadcast graphic frame: the only <OD> hit is a full-width banner that is
+    # not a plausible single-player seed box, and its OCR reads no jersey.
+    return {}
+
+
+def test_no_match_keeps_the_request_alive_as_a_retry(monkeypatch):
+    det = _FakeDetector(
+        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
+        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["7"]},
+    )
+    state = _retry_state(det, monkeypatch)
+    ack = handle_control(state, {"type": "track-player", "number": 9})
+    assert ack["ok"] is False
+    assert ack["retrying"] is True
+    assert ack["retryWindowFrames"] == app_mod.PLAYER_RETRY_STRIDE * app_mod.PLAYER_RETRY_ATTEMPTS
+    assert state.pending_player_number == 9
+    assert state.pending_player_attempts_left == app_mod.PLAYER_RETRY_ATTEMPTS
+    # Nothing is seeded or claimed until a frame actually identifies the player.
+    assert state.requested_player_number is None
+    assert len(state.tracker.tracks) == 0
+
+
+def test_retry_is_stride_limited(monkeypatch):
+    det = _FakeDetector(
+        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
+        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["7"]},
+    )
+    state = _retry_state(det, monkeypatch)
+    handle_control(state, {"type": "track-player", "number": 9})
+    before = len(det.detect_calls)
+    for _ in range(app_mod.PLAYER_RETRY_STRIDE - 1):
+        app_mod._try_pending_player(state, det)
+    assert len(det.detect_calls) == before, "no inference before the stride elapses"
+    app_mod._try_pending_player(state, det)
+    assert len(det.detect_calls) == before + 1, "one attempt when the stride elapses"
+
+
+def test_retry_seeds_the_selected_slot_once_a_live_frame_identifies(monkeypatch):
+    det = _FakeDetector(
+        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
+        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["7"]},
+    )
+    state = _retry_state(det, monkeypatch)
+    handle_control(state, {"type": "track-player", "number": 9})  # graphic anchor frame
+    # The graphic clears: the same box now reads the requested jersey.
+    det.numbers[_px_key([0.2, 0.2, 0.4, 0.5])] = ["9"]
+    for _ in range(app_mod.PLAYER_RETRY_STRIDE):
+        app_mod._try_pending_player(state, det)
+    assert state.pending_player_number is None
+    assert state.requested_player_number == 9
+    selected = [t for t in state.tracker.tracks if t.selected]
+    assert len(selected) == 1
+    assert selected[0].label == "player #9"
+
+
+def test_retry_window_expires_and_clears_the_request(monkeypatch):
+    det = _FakeDetector(
+        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
+        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["7"]},
+    )
+    state = _retry_state(det, monkeypatch)
+    handle_control(state, {"type": "track-player", "number": 9})
+    for _ in range(app_mod.PLAYER_RETRY_STRIDE * (app_mod.PLAYER_RETRY_ATTEMPTS + 2)):
+        app_mod._try_pending_player(state, det)
+    assert state.pending_player_number is None
+    assert state.requested_player_number is None
+    assert len(state.tracker.tracks) == 0
+    # exactly PLAYER_RETRY_ATTEMPTS inference attempts, then silence
+    assert len(det.detect_calls) - 1 == app_mod.PLAYER_RETRY_ATTEMPTS
+
+
+def test_retry_is_inert_without_a_pending_request(monkeypatch):
+    det = _FakeDetector(
+        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
+        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["9"]},
+    )
+    state = _retry_state(det, monkeypatch)
+    app_mod._try_pending_player(state, det)
+    assert det.detect_calls == []
+    assert state.requested_player_number is None
+
+
+def test_retry_survives_a_detector_exception_and_keeps_retrying(monkeypatch):
+    class _FlakyDetector(_FakeDetector):
+        fail = True
+
+        def detect(self, rgb, vocabulary=None, roi_pass=True):
+            if self.fail:
+                raise RuntimeError("gpu hiccup")
+            return super().detect(rgb, vocabulary=vocabulary, roi_pass=roi_pass)
+
+    det = _FlakyDetector(
+        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
+        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["9"]},
+    )
+    state = _retry_state(det, monkeypatch)
+    state.pending_player_number = 9
+    state.pending_player_attempts_left = 2
+    app_mod._try_pending_player(state, det)  # raises internally, must not propagate
+    assert state.pending_player_number == 9
+    det.fail = False
+    for _ in range(app_mod.PLAYER_RETRY_STRIDE):
+        app_mod._try_pending_player(state, det)
+    assert state.requested_player_number == 9

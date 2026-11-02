@@ -113,6 +113,11 @@ class SessionState:
     # asked to track (control `track-player`). None until such a request. Used
     # to label the surfaced track + record the request for the observer.
     requested_player_number: Optional[int] = None
+    # ADAAAA-7345: anchor retry state for a `track-player` request whose anchor
+    # frame carried no plausible player (graphic/watermark/replay overlay).
+    pending_player_number: Optional[int] = None
+    pending_player_attempts_left: int = 0
+    pending_player_stride: int = 0
 
     @property
     def is_idle(self) -> bool:

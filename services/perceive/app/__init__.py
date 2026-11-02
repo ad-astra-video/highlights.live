@@ -80,6 +80,18 @@ _gpu_lock = threading.Lock()
 # detail is emitted only at DEBUG.
 HEARTBEAT_EVERY = 30
 
+# ADAAAA-7345: a "track player #N" request identifies the player on its anchor
+# frame. Broadcast edits do put frames on screen where the one-shot <OD> pass
+# finds NO plausible player at all (a graphic/watermark/replay overlay split
+# screen: the only detection on the anchor frame of clip 01e9e5ca was a
+# full-width banner reading "Vinctory"), so a single-shot identification failed
+# the operator's request outright even though the very next second of the clip
+# identifies the player cleanly. Retry on a stride for a bounded window instead:
+# every PLAYER_RETRY_STRIDE-th sampled frame, up to PLAYER_RETRY_ATTEMPTS tries
+# (~13 s of a 15 fps stream). Cost stays bounded to an explicit request.
+PLAYER_RETRY_STRIDE = 5
+PLAYER_RETRY_ATTEMPTS = 40
+
 # ADAAAA-7086: re-attempt scoreboard region discovery only every Nth candidate
 # while no scoreboard has been found (bounded region pass; recall preserved).
 _SCOREBOARD_DETECT_BACKOFF = 5
@@ -629,6 +641,14 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         labels = []
         state.prev_gray = gray
 
+    # ADAAAA-7345: a "track player #N" request whose anchor frame carried no
+    # plausible player (broadcast graphic / watermark / replay split screen)
+    # keeps retrying here until it identifies the player on a live frame or its
+    # bounded window expires. Seeding happens BEFORE the tracker step so the new
+    # slot propagates on this very frame.
+    if detector is not None and state.last_rgb is not None:
+        _try_pending_player(state, detector)
+
     if isinstance(state.tracker, HybridTracker):
         # HybridTracker has NO `.step()` — only `step_frame()`. The seed
         # /analyze that opens the live session can carry an empty image
@@ -970,6 +990,64 @@ def process_audio(state, seq: int, timestamp: float, samples_b64: str) -> tuple[
     return cand, series
 
 
+def _seed_player_track(state, matched: dict, requested: int):
+    """Seed + lock the selected `player #N` slot for a matched identification.
+
+    Shared by the one-shot control handler and the ADAAAA-7345 anchor retry so
+    both paths produce an identical selected/locked slot. Returns
+    ``(track, bbox, label)``.
+    """
+    bbox = tuple(matched["bbox"])
+    # Surface the matched player's identity on the box the operator sees:
+    # request "track player #9" -> the track carries label "player #9".
+    label = f"player #{requested}"
+    tr = state.tracker.seed(bbox, kind="player", label=label, selected=True)
+    # ADAAAA-7305: an operator-selected `player #N` is a deliberate tracked
+    # target — pin its slot so a transient SAM miss cannot auto-evict it and
+    # drop the selected track (and its accuracy/on-screen metric) to null.
+    # Mirrors the dedicated ball slot's eviction guard (ADAAAA-7217).
+    state.tracker.lock(tr.slot)
+    state.requested_player_number = requested
+    return tr, bbox, label
+
+
+def _try_pending_player(state, detector) -> None:
+    """Retry a failed player-by-number identification on this frame (ADAAAA-7345).
+
+    Only runs while a request is pending. Attempts every ``PLAYER_RETRY_STRIDE``
+    sampled frames, at most ``PLAYER_RETRY_ATTEMPTS`` times, then gives up and
+    clears the request (an operator whose player never appears gets no track,
+    exactly as before this change — just without burning GPU every frame).
+    """
+    number = getattr(state, "pending_player_number", None)
+    if number is None or detector is None:
+        return
+    left = int(getattr(state, "pending_player_attempts_left", 0) or 0)
+    if left <= 0:
+        state.pending_player_number = None
+        log.info("player retry expired session=%s number=%s", state.session_id, number)
+        return
+    state.pending_player_stride = int(getattr(state, "pending_player_stride", 0) or 0) + 1
+    if state.pending_player_stride < max(1, PLAYER_RETRY_STRIDE):
+        return
+    state.pending_player_stride = 0
+    state.pending_player_attempts_left = left - 1
+    try:
+        matched = identify_player_by_number(state.last_rgb, int(number), detector)
+    except Exception as e:  # noqa: BLE001 - a retry must never break the frame path
+        log.warning("player retry failed session=%s number=%s: %s", state.session_id, number, e)
+        return
+    if matched is None:
+        return
+    _seed_player_track(state, matched, int(number))
+    state.pending_player_number = None
+    state.pending_player_attempts_left = 0
+    log.info(
+        "player retry identified session=%s number=%s conf=%s bbox=%s",
+        state.session_id, number, matched.get("ocr_confidence"), matched.get("ocr_bbox"),
+    )
+
+
 def handle_control(state, msg: dict) -> dict:
     """Apply a ControlMessage (shared schema, plan §3.4) and return an ack
     object. Shared by the WebSocket control channel and (future) trickle control."""
@@ -1068,21 +1146,27 @@ def handle_control(state, msg: dict) -> dict:
         except (TypeError, ValueError):
             return {"type": "ack", "ok": False, "cmd": ctype, "error": f"bad jersey number: {number!r}"}
         detector = get_detector(state.lora_ref or None)
+        if state.last_rgb is not None:
+            _try_pending_player(state, detector)
         matched = identify_player_by_number(state.last_rgb, requested, detector)
         if matched is None:
-            return {"type": "ack", "ok": False, "cmd": ctype, "error": f"no player with number {requested} identified on the anchor frame"}
-        bbox = tuple(matched["bbox"])
-        kind = "player"
-        # Surface the matched player's identity on the box the operator sees:
-        # request "track player #9" -> the track carries label "player #9".
-        label = f"player #{requested}"
-        tr = state.tracker.seed(bbox, kind=kind, label=label, selected=True)
-        # ADAAAA-7305: an operator-selected `player #N` is a deliberate tracked
-        # target — pin its slot so a transient SAM miss cannot auto-evict it and
-        # drop the selected track (and its accuracy/on-screen metric) to null.
-        # Mirrors the dedicated ball slot's eviction guard (ADAAAA-7217).
-        state.tracker.lock(tr.slot)
-        state.requested_player_number = requested
+            # ADAAAA-7345: keep the operator's request alive instead of failing
+            # it on a graphic/watermark anchor frame — retry on a stride for a
+            # bounded window (see PLAYER_RETRY_*). A successful retry seeds the
+            # same selected slot this handler would have seeded.
+            state.pending_player_number = requested
+            state.pending_player_attempts_left = PLAYER_RETRY_ATTEMPTS
+            state.pending_player_stride = 0
+            return {
+                "type": "ack",
+                "ok": False,
+                "cmd": ctype,
+                "number": requested,
+                "retrying": True,
+                "retryWindowFrames": PLAYER_RETRY_STRIDE * PLAYER_RETRY_ATTEMPTS,
+                "error": f"no player with number {requested} identified on the anchor frame",
+            }
+        tr, bbox, label = _seed_player_track(state, matched, requested)
         return {
             "type": "ack",
             "ok": True,
