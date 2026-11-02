@@ -193,8 +193,11 @@ const COPY_SAFE: Record<string, { video: string[]; audio: string[] }> = {
   mp4: {
     // Keep h264/av1 copyable: the H.264 browser path and AV1 VOD sources cut
     // today with `-c copy` and must not start paying for a re-encode.
-    video: ["h264", "hevc", "av1", "mpeg4", "vp9"],
-    audio: ["aac", "mp3", "opus", "ac3", "eac3", "alac"],
+    video: ["h264", "hevc", "av1", "mpeg4"],
+    // VP9+opus *can* be muxed into mp4 by ffmpeg, but that container/codec
+    // pair is not universally playable and it is precisely the pair a webm
+    // MediaRecorder produces — re-encode those to h264/aac instead.
+    audio: ["aac", "mp3", "ac3", "eac3", "alac"],
   },
   webm: {
     video: ["vp8", "vp9", "av1"],
