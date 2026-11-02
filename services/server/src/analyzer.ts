@@ -26,6 +26,7 @@ import {
 } from "./observe-loop";
 import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
 import type { AudioTriggerRecord } from "./audio-trigger";
+import { isStageBTrigger, type WhistleFireBlock } from "./audio-trigger";
 import { isGoalRefutingReason } from "./highlight-postable";
 
 export interface ReserveResult {
@@ -552,6 +553,11 @@ export interface AudioCandidate {
 export interface AudioPostResult {
   candidate: AudioCandidate | null;
   series: { t: number; energy: number; baseline: number }[];
+  /** ADAAAA-7707: the Stage-B whistle fire (`stageB/whistle/2.4-3.4k/5x/0.3s`)
+   *  plus perceive's emit-switch state. Present whenever the whistle gate fired,
+   *  emitted or not — the live loop gates on `emitted` so the config-only
+   *  rollback is inert. `null` when no whistle fired on this chunk. */
+  whistle?: WhistleFireBlock | null;
 }
 /** The decide brain's single-shot what-to-track plan (plan §4.4 / §7 D).
  * Returned by PipelineClient.plan(). `maxTracks` arrives already clamped to
@@ -1244,6 +1250,17 @@ export interface LiveObserveMetricsSnapshot {
    *  content-vs-wall lag a live viewer actually experiences (`windowTs` vs wall
    *  `ts`). Bounded by the lag budget when the drop is active. */
   maxCompletedLagMs?: number;
+  /** ADAAAA-7707: whistle triggers this live window emitted (Stage-B emission
+   *  volume — the 2.0/min alert threshold's numerator, expected 0.0/min on
+   *  ordinary play). */
+  whistleFires?: number;
+  /** ADAAAA-7707: decide windows anchored on a whistle trigger — the crowding
+   *  numerator of the CEO tripwire (whistle share of a window's decides). */
+  whistleDecides?: number;
+  /** ADAAAA-7707: `whistleDecides / decideCalls`. The ADAAAA-7713 hard tripwire
+   *  is > 0.25 -> flip `WhistleConfig.emitted = False`. Persisted so the share is
+   *  measurable on a deployed window without a post-hoc audit. */
+  whistleShare?: number;
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
@@ -1313,8 +1330,10 @@ export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSn
   const samples = obs.latencySamples();
   const cadences = samples.map((s) => s.cadenceMs).filter((c) => c > 0);
   const avg = (xs: number[]): number => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+  const decideCalls = obs.decideCalls();
+  const whistleDecides = obs.whistleDecideCount();
   return {
-    decideCalls: obs.decideCalls(),
+    decideCalls,
     accepted: obs.acceptedCount(),
     maxFrames: obs.maxFrameCount(),
     meanE2eMs: Number(obs.meanE2eMs().toFixed(1)),
@@ -1327,6 +1346,11 @@ export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSn
     maxLagMs: Math.round(obs.maxObservedLagMs()),
     meanLagMs: Number(obs.meanObservedLagMs().toFixed(1)),
     maxCompletedLagMs: Number((samples.length ? Math.max(...samples.map((s) => s.completedLagMs ?? 0)) : 0).toFixed(1)),
+    // ADAAAA-7707: Stage-B crowding counters. Additive on every live record, so
+    // the whistle share is measurable on a deployed window (ADAAAA-7713).
+    whistleFires: obs.whistleFireCount(),
+    whistleDecides,
+    whistleShare: decideCalls === 0 ? 0 : Number((whistleDecides / decideCalls).toFixed(4)),
   };
 }
 
@@ -1580,6 +1604,19 @@ export class LiveRunShared {
    * to by the decide observer that judges each trigger's onset, so
    * `stageA.snapshot()` is a real measurement instead of the all-zero one. */
   readonly stageAOutcomes = new StageAOutcomeLedger(this.stageA);
+  /** ADAAAA-7707: the Stage-B (band-limited whistle) accumulator. The whistle
+   * path gets its OWN counters so a whistle fire — accepted or rejected — can
+   * never move the published Stage-A fidelity numbers (`stageAMetrics.fpRate` /
+   * `meanOnsetLatencyS` / `totalCandidates`), which is the CEO spend guardrail
+   * restated on ADAAAA-7713. `stageA/*` triggers feed `stageA` only; `stageB/*`
+   * triggers feed this. */
+  readonly stageB = new StageAMetrics();
+  /** ADAAAA-7707: trigger timeline -> decided-window verdict mapping for the
+   *  whistle family (same rules as `stageAOutcomes`, different ledger). */
+  readonly stageBOutcomes = new StageAOutcomeLedger(this.stageB);
+  /** ADAAAA-7707: whistle triggers this run recorded (one per emitted fire) —
+   *  the emission-volume counter behind the 2.0/min alert threshold. */
+  private whistleTriggerTally = 0;
   /** Stage-1 vs Stage-2 confirmation-pass metric (ADAAAA-6797). Every confirm
    * dive attempted records its outcome here; runVodJob snapshots it onto the
    * job at completion as `confirmMetrics` (disagreement rate = disagreed /
@@ -1990,10 +2027,23 @@ export class LiveRunShared {
    */
   recordAudioTrigger(trigger: AudioTriggerRecord | null | undefined): boolean {
     if (!trigger) return false;
-    this.stageAOutcomes.recordTrigger(trigger);
+    // ADAAAA-7707: family-aware routing. A `stageB/*` (whistle) trigger is
+    // recorded in its own ledger and NEVER in the Stage-A one, so the published
+    // Stage-A fidelity numbers cannot move because the whistle path emits.
+    if (isStageBTrigger(trigger.thresholdId)) {
+      // Counted only when the ledger ACCEPTS it: a re-fire inside the coalesce
+      // window is one audible event, so the volume counter is a per-event rate.
+      if (this.stageBOutcomes.recordTrigger(trigger)) this.whistleTriggerTally++;
+    } else {
+      this.stageAOutcomes.recordTrigger(trigger);
+    }
     this.audioTriggerQueue.push(trigger);
     if (this.audioTriggerQueue.length > 32) this.audioTriggerQueue.shift();
     return true;
+  }
+  /** ADAAAA-7707: whistle triggers recorded on this run (emission volume). */
+  whistleTriggerCount(): number {
+    return this.whistleTriggerTally;
   }
   /** Drain the pending audio triggers (the live loop feeds them to the
    * observer each frame). Empty array when none are pending. */
@@ -3660,6 +3710,9 @@ export async function analyzeJob(
           signalGate: cfg.observeSignalGate,
           signalGateOpts: cfg.observeSignalGateOpts,
           stageA: run.stageAOutcomes,
+          // ADAAAA-7707: the whistle family gets its own verdict ledger, so a
+          // judged whistle window never lands in the Stage-A FP-rate.
+          stageB: run.stageBOutcomes,
           onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
         })
       : null;

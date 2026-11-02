@@ -509,6 +509,44 @@ measure-only to emitting (Option 3).
   logic redeploy). Reporting stays intact and truthful (`emitted: false` /
   `measureOnly: true`); only the candidate emission stops.
 
+### Wiring on the live rail (ADAAAA-7707)
+
+The switch alone was not the graduation: `emitted = True` made the whistle ride
+the generic `res.candidate` slot with no family identity at the server boundary,
+so a whistle verdict was judged into `stageAMetrics` and no crowding counter
+existed. The wiring that makes the anchor real:
+
+- **The live loop consumes the `whistle` block explicitly** —
+  `services/server/src/api.ts` (`runLiveJob` audio tap) reads `res.whistle` and
+  builds the trigger through `audioTriggerFromWhistle` (`audio-trigger.ts`). The
+  block WINS over the generic candidate on the same chunk (perceive puts the
+  whistle in the candidate slot too, and the tone onset is also a Stage-A level
+  rise; the whistle is the more precise anchor). One fire = one anchored window;
+  the 2.5 s same-family coalesce remains the anti-storm bound.
+- **Measure-only is inert.** `audioTriggerFromWhistle` returns null unless the
+  block says `emitted: true` / `measureOnly: false`, so the rollback above needs
+  no code change.
+- **Live rail only.** The VOD tap records its triggers but does not anchor ahead
+  of the decode, and the media/browser rail has no control-plane frame — the
+  whistle → decide path is the live rail, which is the product case.
+- **Family-aware ledgers.** `LiveRunShared.recordAudioTrigger` routes by
+  `triggerFamily(thresholdId)`: `stageA/*` feeds `stageAMetrics` (unchanged),
+  `stageB/*` feeds its own `StageAMetrics` + `StageAOutcomeLedger`, and the live
+  observer judges a trigger in its family's ledger. A whistle fire — accepted or
+  rejected — cannot move the published Stage-A `fpRate` / `totalCandidates` /
+  `meanOnsetLatencyS`.
+- **Crowding counters (ADAAAA-7713 tripwires).** The live job persists
+  `observeMetrics.whistleFires` (whistle triggers scheduled), `whistleDecides`
+  (decide windows a whistle anchored) and `whistleShare`
+  (= `whistleDecides / decideCalls`), and the completion log prints
+  `[live:<job>] stageB whistle fires=… decides=… share=…% decideCalls=… withinTripwire=…`.
+  The hard tripwire is share > 25% (flip `emitted = False`, escalate to the
+  ADAAAA-7713 decision record with the window's raw counts); added volume is the
+  alert threshold (expected 0.0/min on ordinary play).
+- **Tests:** `services/server/test/whistle-trigger.test.ts` pins the trigger
+  build (including measure-only = nothing), the family-aware ledger, the
+  one-fire-one-anchored-window rule and the persisted share counters.
+
 ## Eval corpus shape (ADAAAA-7682)
 
 `evals/audio-labels.json` keeps one entry per trigger class. A class may now

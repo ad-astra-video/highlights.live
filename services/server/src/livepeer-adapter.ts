@@ -470,6 +470,10 @@ export class OrchestratorAdapter implements PipelineClient {
     return {
       candidate: (data?.candidate ?? null) as AudioCandidate | null,
       series: Array.isArray(data?.series) ? (data.series as AudioPostResult["series"]) : [],
+      // ADAAAA-7707: the Stage-B whistle fire rides its own block on the
+      // response (it is also the candidate when the emit switch is on). Pass it
+      // through verbatim so the live loop can gate on `emitted`.
+      whistle: (data?.whistle ?? null) as AudioPostResult["whistle"],
     };
   }
   async controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<void> {
@@ -892,10 +896,14 @@ export class DirectAdapter implements PipelineClient {
     // (ADAAAA-7255) for the request-inspection energy-vs-baseline graph.
     if (r.status >= 500) throw new Error(`postAudio failed: HTTP ${r.status}`);
     if (r.status < 200 || r.status >= 300) return { candidate: null, series: [] };
-    const body = (await r.json().catch(() => null)) as { candidate?: AudioCandidate; series?: AudioPostResult["series"] } | null;
+    const body = (await r.json().catch(() => null)) as
+      | { candidate?: AudioCandidate; series?: AudioPostResult["series"]; whistle?: AudioPostResult["whistle"] }
+      | null;
     return {
       candidate: body?.candidate ?? null,
       series: Array.isArray(body?.series) ? body.series! : [],
+      // ADAAAA-7707: the Stage-B whistle block (see the orchestrator path).
+      whistle: body?.whistle ?? null,
     };
   }
   async controlForward(_sessionId: string, control: { type: string; [k: string]: any }): Promise<void> {

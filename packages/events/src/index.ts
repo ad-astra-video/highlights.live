@@ -505,6 +505,17 @@ export const ObserveMetricsSnapshotSchema = z.object({
   maxLagMs: z.number().min(0).optional(),
   meanLagMs: z.number().min(0).optional(),
   maxCompletedLagMs: z.number().min(0).optional(),
+  // ADAAAA-7707: the Stage-B (band-limited whistle) crowding counters. The CEO
+  // spend envelope (ADAAAA-7713) makes the whistle SHARE of a window's decides
+  // the hard tripwire (>25%) and added volume the alert threshold, so both
+  // numbers must be measurable on a deployed window instead of a post-hoc
+  // audit. `whistleFires` = whistle triggers the run recorded (the emission
+  // volume); `whistleDecides` = decide windows anchored on a whistle trigger
+  // (the crowding numerator); `whistleShare` = whistleDecides / decideCalls.
+  // Additive optional: absent on records written before this field existed.
+  whistleFires: z.number().int().min(0).optional(),
+  whistleDecides: z.number().int().min(0).optional(),
+  whistleShare: z.number().min(0).optional(),
 });
 export type ObserveMetricsSnapshot = z.infer<typeof ObserveMetricsSnapshotSchema>;
 

@@ -27,7 +27,7 @@ import {
   type PipelineClient,
 } from "./analyzer";
 import type { SignalGateOptions } from "./observe-loop";
-import { audioTriggerFromCandidate } from "./audio-trigger";
+import { audioTriggerFromCandidate, audioTriggerFromWhistle } from "./audio-trigger";
 import { MediaRailObserver } from "./media-rail";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
@@ -51,7 +51,7 @@ import {
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
 import { completedCounterFields, completedLiveCounterFields, counterFieldsForJob } from "./job-counters";
-import { stageAEvidenceLine } from "./stage-a-metrics";
+import { stageAEvidenceLine, whistleEvidenceLine } from "./stage-a-metrics";
 import { buildPostableHighlights } from "./highlight-postable";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
@@ -920,10 +920,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
                 streamId: job.id,
               });
               if (res?.series?.length) shared.setAudioSeries(res.series);
-              // ADAAAA-7658: a fired audio trigger anchors ONE decide window at
-              // the onset (the live decide-observer drains these each frame).
-              // Provenance for the window, never a decision by itself.
-              if (res?.candidate?.audio) {
+              // ADAAAA-7707: the perceive `whistle` block is the Stage-B fire and
+              // it WINS over the generic candidate on the same chunk (perceive
+              // puts the whistle in the candidate slot too, and the tone onset is
+              // also a Stage-A level rise — the whistle is the more precise
+              // anchor). One fire = one anchored window; the 2.5 s coalesce in
+              // audio-trigger.ts stays the anti-storm bound. `audioTriggerFromWhistle`
+              // returns null while the emit switch is off, so the config-only
+              // rollback leaves this wiring inert.
+              const whistleTrig = audioTriggerFromWhistle(res?.whistle);
+              if (whistleTrig) {
+                shared.recordAudioTrigger(whistleTrig);
+              } else if (res?.candidate?.audio) {
+                // ADAAAA-7658: a fired audio trigger anchors ONE decide window at
+                // the onset (the live decide-observer drains these each frame).
+                // Provenance for the window, never a decision by itself.
                 const trig = audioTriggerFromCandidate(res.candidate as any);
                 if (trig) shared.recordAudioTrigger(trig);
               }
@@ -1002,6 +1013,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       }).catch(() => {});
       const stageALine = stageAEvidenceLine("live", job.id, stageA);
       if (stageALine) console.log(stageALine);
+      // ADAAAA-7707: the Stage-B crowding guardrail, printed on every live
+      // completion so the ADAAAA-7713 whistle-share tripwire is measurable from
+      // the server log alone (fires / decides / share / decideCalls).
+      const whistleLine = whistleEvidenceLine("live", job.id, outcome.observeMetrics);
+      if (whistleLine) console.log(whistleLine);
     } catch (e) {
       await markJobFailed(job.id, e);
       console.error(`[live:${job.id}]`, e);

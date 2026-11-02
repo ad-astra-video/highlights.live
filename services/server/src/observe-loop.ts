@@ -15,7 +15,12 @@
 // The streaming driver wires it onto a frame iterator; the pure planners prove
 // the acceptance criteria (<=30-frame cap, ~3 s cadence, ~10 s window, overlap).
 
-import { TriggerWindowScheduler, type AudioTriggerRecord, type TriggerSchedulerStats } from "./audio-trigger";
+import {
+  TriggerWindowScheduler,
+  isStageBTrigger,
+  type AudioTriggerRecord,
+  type TriggerSchedulerStats,
+} from "./audio-trigger";
 import type { StageAOutcomeLedger } from "./stage-a-metrics";
 
 /** Decide invocation cadence in content seconds. CEO-locked (ADAAAA-7000). */
@@ -313,6 +318,13 @@ export class LiveObserver {
   /** Decide fires scheduled by an audio trigger (anchored) vs blind cadence. */
   private anchoredFires = 0;
   private cadenceFires = 0;
+  /** ADAAAA-7707: whistle-family accounting. `whistleTriggers` = Stage-B
+   *  triggers the scheduler accepted (accepted, not coalesced — one audible
+   *  event per count); `whistleAnchoredFires` = decide windows anchored on one.
+   *  Kept apart from `anchoredFires` so the crowding share
+   *  (`whistleDecides / decideCalls`) is measurable on a live window. */
+  private whistleTriggers = 0;
+  private whistleAnchoredFires = 0;
   /** ADAAAA-7676: frames dropped as stale (content time behind the lag budget)
    * and the cadence windows those drops swallowed. `skippedStaleWindows` is the
    * job-visible counter (AC2): windows that were NOT decided late. */
@@ -326,6 +338,9 @@ export class LiveObserver {
    * latency) for every trigger a decided window judges. Owned by the run (the
    * audio tap feeds it), so the observer only writes the verdicts. */
   private readonly stageA: StageAOutcomeLedger | null;
+  /** ADAAAA-7707: the Stage-B (whistle) verdict ledger. Whistle windows judge
+   *  here, never into `stageA`, so the published Stage-A fidelity is untouched. */
+  private readonly stageB: StageAOutcomeLedger | null;
 
   constructor(opts: {
     cadenceS?: number;
@@ -340,6 +355,9 @@ export class LiveObserver {
     /** ADAAAA-7694: Stage-A outcome ledger, so each decided window records the
      *  verdict of the audio triggers whose onset it judged. */
     stageA?: StageAOutcomeLedger;
+    /** ADAAAA-7707: Stage-B (whistle) outcome ledger — the whistle family's own
+     *  counters, so a whistle verdict never moves the Stage-A FP-rate. */
+    stageB?: StageAOutcomeLedger;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
@@ -350,6 +368,7 @@ export class LiveObserver {
     this.onDecide = opts.onDecide ?? null;
     this.triggerMinBudget = opts.triggerMinBudget ?? 0.4;
     this.stageA = opts.stageA ?? null;
+    this.stageB = opts.stageB ?? null;
   }
 
   /** Record a frame + its perceive-derived seed context (no re-inference). */
@@ -443,7 +462,11 @@ export class LiveObserver {
    * scheduled analysis (never a per-frame storm). Returns whether it queued.
    */
   recordTrigger(trigger: AudioTriggerRecord | null | undefined): boolean {
-    return this.triggers.record(trigger);
+    const queued = this.triggers.record(trigger);
+    // ADAAAA-7707: count the Stage-B fires the scheduler ACCEPTED. A coalesced
+    // re-fire is the same whistle, so the volume counter stays a per-event rate.
+    if (queued && isStageBTrigger(trigger?.thresholdId)) this.whistleTriggers++;
+    return queued;
   }
 
   /** Refill the decide budget by elapsed content time (capacity 1 token). */
@@ -512,6 +535,8 @@ export class LiveObserver {
     const cadenceMs = prevFire === null ? 0 : (nowTs - prevFire) * 1000;
     if (anchored) this.anchoredFires++;
     else this.cadenceFires++;
+    // ADAAAA-7707: the whistle share numerator — windows a whistle anchored.
+    if (anchored && dueTrigger && isStageBTrigger(dueTrigger.thresholdId)) this.whistleAnchoredFires++;
     // Triggers already inside the window just analyzed are covered by it.
     this.triggers.coverThrough(lo, nowTs);
     let e2eMs = 0;
@@ -526,9 +551,17 @@ export class LiveObserver {
       // snapshot instead of the all-zero `n/a` one. The anchored trigger is
       // judged explicitly too: if the stream lagged far enough that its onset
       // fell outside this trailing span it would otherwise stay pending.
-      if (this.stageA) {
-        if (anchored && dueTrigger) this.stageA.judgeTrigger(dueTrigger, accepted);
-        this.stageA.judgeWindow(lo, nowTs, accepted);
+      if (this.stageA || this.stageB) {
+        // ADAAAA-7707: a trigger is judged by its FAMILY's ledger. A whistle
+        // verdict must never land in `stageA` (the published Stage-A fidelity),
+        // and `judgeWindow` on the stage-A ledger must not swallow a stage-B
+        // trigger that a cadence window happened to cover.
+        if (anchored && dueTrigger) {
+          if (isStageBTrigger(dueTrigger.thresholdId)) this.stageB?.judgeTrigger(dueTrigger, accepted);
+          else this.stageA?.judgeTrigger(dueTrigger, accepted);
+        }
+        this.stageA?.judgeWindow(lo, nowTs, accepted);
+        this.stageB?.judgeWindow(lo, nowTs, accepted);
       }
       const lag = lagMs ?? 0;
       this.latency.push({
@@ -588,6 +621,16 @@ export class LiveObserver {
   /** ADAAAA-7658: decide fires that came from the blind cadence. */
   cadenceFireCount(): number {
     return this.cadenceFires;
+  }
+  /** ADAAAA-7707: Stage-B triggers this observer scheduled (accepted, not
+   *  coalesced) — the whistle emission volume. */
+  whistleFireCount(): number {
+    return this.whistleTriggers;
+  }
+  /** ADAAAA-7707: decide windows anchored on a whistle trigger — the crowding
+   *  numerator (`whistleShare = whistleDecides / decideCalls`). */
+  whistleDecideCount(): number {
+    return this.whistleAnchoredFires;
   }
   /** ADAAAA-7658: trigger scheduler bookkeeping (accepted / coalesced /
    *  covered / expired / fired). */
