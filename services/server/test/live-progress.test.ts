@@ -109,16 +109,20 @@ describe("deriveLiveProgress (ADAAAA-7741 AC1)", () => {
 });
 
 describe("deriveLiveProgress terminal state (ADAAAA-7741 AC6)", () => {
-  it("freezes the edge at finishedAt and reports unknown so no number keeps ticking", () => {
+  it("freezes the edge at the last landed window and reports unknown so no number keeps ticking", () => {
     const job = liveJob({
       status: "done",
-      finishedAt: new Date(T0 + 62_000).toISOString(),
-      completedAt: new Date(T0 + 62_500).toISOString(),
+      finishedAt: new Date(T0 + 95_000).toISOString(), // finalization ran 35 s after the last decide
+      completedAt: new Date(T0 + 95_500).toISOString(),
     });
-    const atFinish = deriveLiveProgress({ job, nowMs: T0 + 62_000 });
+    const atFinish = deriveLiveProgress({ job, nowMs: T0 + 95_000 });
     const muchLater = deriveLiveProgress({ job, nowMs: T0 + 600_000 });
     expect(atFinish.state).toBe("unknown");
     expect(muchLater.state).toBe("unknown");
+    // Frozen at the newest append (T0+60s) minus the newest window (34 s): the
+    // completed lag the viewer experienced, not the finalize tail.
+    expect(atFinish.liveEdgeTs).toBe(60);
+    expect(atFinish.lagSec).toBe(26);
     expect(muchLater.liveEdgeTs).toBe(atFinish.liveEdgeTs);
     expect(muchLater.lagSec).toBe(atFinish.lagSec);
   });
