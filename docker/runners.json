@@ -26,7 +26,7 @@
     {
       "label": "highlights-decide",
       "routing": "label",
-      "runner_url": "http://decide:8081",
+      "runner_url": "http://decide-router:8081",
       "health_url": "/health",
       "healthy_status_code": 200,
       "app": "highlights-live/decide",
