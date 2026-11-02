@@ -507,3 +507,103 @@ describe("WindowAnalysis + ConfirmRecord (ADAAAA-7137 / ADAAAA-7155 Incr A)", ()
     expect(WindowAnalysisSchema.parse({ prompt: "p" }).dataItems).toEqual([]);
   });
 });
+
+// ADAAAA-7723: the audio-trigger coverage ledger must SURVIVE persistence.
+// JobSchema.parse runs on every store.patchJob write and strips unknown keys, so
+// a ledger the analyzer computes but this schema does not name is silently lost
+// (the ADAAAA-7691 trap: `triggerFires` was computed for weeks and never
+// persisted). Pin the round-trip.
+describe("ObserveMetricsSnapshot trigger ledger (ADAAAA-7723)", () => {
+  const ledger = {
+    accepted: 8,
+    coalesced: 0,
+    invalid: 0,
+    covered: 6,
+    expired: 0,
+    fired: 2,
+    pending: 0,
+  };
+  const latency = [
+    {
+      family: "stageA",
+      samples: 2,
+      p50Ms: 4233,
+      p95Ms: 4233,
+      maxMs: 4233,
+      coveredSamples: 2,
+      coveredP50Ms: 8699,
+      coveredP95Ms: 8699,
+      judgedSamples: 4,
+      judgedP50Ms: 7701,
+      judgedP95Ms: 8699,
+    },
+    {
+      family: "stageB",
+      samples: 0,
+      p50Ms: 0,
+      p95Ms: 0,
+      maxMs: 0,
+      coveredSamples: 4,
+      coveredP50Ms: 6300,
+      coveredP95Ms: 7900,
+      judgedSamples: 4,
+      judgedP50Ms: 6300,
+      judgedP95Ms: 7900,
+    },
+  ];
+
+  it("keeps triggerWindows / triggerReconciled / triggerLatencyByFamily on a job", () => {
+    const job = JobSchema.parse({
+      id: "j-7723",
+      status: "done",
+      createdAt: new Date().toISOString(),
+      source: "browser",
+      observeMetrics: {
+        decideCalls: 18,
+        accepted: 0,
+        maxFrames: 30,
+        meanE2eMs: 5602,
+        maxE2eMs: 9000,
+        meanCadenceMs: 5000,
+        maxCadenceMs: 6000,
+        triggerFires: 2,
+        cadenceFires: 16,
+        triggerWindows: ledger,
+        triggerReconciled: true,
+        triggerLatencyByFamily: latency,
+      },
+    });
+    const m = job.observeMetrics!;
+    expect(m.triggerWindows).toEqual(ledger);
+    expect(m.triggerReconciled).toBe(true);
+    expect(m.triggerLatencyByFamily).toEqual(latency);
+    // the reconciliation invariant the ledger exists to make visible
+    expect(m.triggerWindows!.accepted).toBe(
+      (m.triggerWindows!.fired ?? 0) +
+        (m.triggerWindows!.covered ?? 0) +
+        (m.triggerWindows!.expired ?? 0) +
+        (m.triggerWindows!.pending ?? 0)
+    );
+  });
+
+  it("rejects a negative ledger count", () => {
+    expect(() =>
+      JobSchema.parse({
+        id: "j-7723-bad",
+        status: "done",
+        createdAt: new Date().toISOString(),
+        source: "browser",
+        observeMetrics: {
+          decideCalls: 1,
+          accepted: 0,
+          maxFrames: 1,
+          meanE2eMs: 1,
+          maxE2eMs: 1,
+          meanCadenceMs: 1,
+          maxCadenceMs: 1,
+          triggerWindows: { ...ledger, fired: -1 },
+        },
+      })
+    ).toThrow();
+  });
+});

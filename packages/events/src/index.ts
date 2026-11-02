@@ -538,6 +538,50 @@ export const ObserveMetricsSnapshotSchema = z.object({
       })
     )
     .optional(),
+  // ADAAAA-7723: the audio-trigger coverage LEDGER. Every trigger the scheduler
+  // ACCEPTED must be accounted for — `accepted === fired + covered + expired +
+  // pending` — so a share can never report a healthy `triggers` count while
+  // silently dropping the anchored analysis of an audible event (measured on
+  // the deployed rail: 4 accepted, 1 anchored, and no counter saying where the
+  // other 3 went). `fired` = anchored a decide window; `covered` = a decided
+  // window judged its onset; `expired` = its frames left the retained window;
+  // `coalesced` = folded into an accepted neighbour (never queued); `invalid` =
+  // a structurally broken record. Additive optional (older rows lack it).
+  triggerWindows: z
+    .object({
+      accepted: z.number().int().min(0),
+      coalesced: z.number().int().min(0),
+      invalid: z.number().int().min(0),
+      covered: z.number().int().min(0),
+      expired: z.number().int().min(0),
+      fired: z.number().int().min(0),
+      pending: z.number().int().min(0).optional(),
+    })
+    .optional(),
+  // ADAAAA-7723: whether that ledger balances (`unaccounted === 0`).
+  triggerReconciled: z.boolean().optional(),
+  // ADAAAA-7723 AC-2: onset -> judging-window latency per trigger FAMILY. The
+  // anchored arm is the decide window the trigger anchored itself; the covered
+  // arm is the window that judged its onset without anchoring it (the only
+  // latency a covered trigger has); `judged*` pools both. Reported instead of
+  // one pooled number so the Stage-B (whistle) path is measurable on its own.
+  triggerLatencyByFamily: z
+    .array(
+      z.object({
+        family: z.string(),
+        samples: z.number().int().min(0),
+        p50Ms: z.number().min(0),
+        p95Ms: z.number().min(0),
+        maxMs: z.number().min(0),
+        coveredSamples: z.number().int().min(0),
+        coveredP50Ms: z.number().min(0),
+        coveredP95Ms: z.number().min(0),
+        judgedSamples: z.number().int().min(0),
+        judgedP50Ms: z.number().min(0),
+        judgedP95Ms: z.number().min(0),
+      })
+    )
+    .optional(),
 });
 export type ObserveMetricsSnapshot = z.infer<typeof ObserveMetricsSnapshotSchema>;
 
