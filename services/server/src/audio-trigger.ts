@@ -134,6 +134,16 @@ export function audioTriggerFromWhistle(block: WhistleFireBlock | undefined | nu
  *  anchored to a retained frame — drop it instead of analyzing a stale window. */
 export const AUDIO_TRIGGER_MAX_STALE_S = 8.0;
 
+/** Largest onset -> anchored-window latency an anchored fire may report
+ *  (ADAAAA-7723). The contract's budget is 1-5 s (`docs/audio-trigger-contract.md`,
+ *  measured p50 ~1 s / p95 2.9 s on real soccer audio, ADAAAA-4970), so a
+ *  trigger that has been pending longer than this is never fired late: it is
+ *  either COVERED by the window that judged its onset or EXPIRED once its
+ *  frames leave the retained window. Firing a 7 s-late window would satisfy
+ *  "one window per trigger" on paper while breaking the latency budget the
+ *  same contract names. */
+export const AUDIO_TRIGGER_MAX_ANCHOR_LATENCY_S = 5.0;
+
 /**
  * Normalize an `AudioSignal` (perceive candidate evidence) into a trigger
  * record. Returns null for missing/invalid evidence so a malformed candidate
@@ -173,7 +183,9 @@ function clamp01(n: number): number {
 }
 
 export interface TriggerSchedulerStats {
-  /** Triggers accepted and queued (after coalescing). */
+  /** Triggers accepted and queued (after coalescing). This is the ledger's
+   *  total: `accepted === coalesced + covered + expired + fired + pending` is
+   *  the ADAAAA-7723 reconciliation invariant. */
   accepted: number;
   /** Triggers folded into a neighbouring trigger (one audible event). */
   coalesced: number;
@@ -185,6 +197,8 @@ export interface TriggerSchedulerStats {
   expired: number;
   /** Triggers handed to the observer for an anchored fire. */
   fired: number;
+  /** Accepted triggers still awaiting an anchored window. */
+  pending?: number;
 }
 
 /**
@@ -195,6 +209,7 @@ export class TriggerWindowScheduler {
   private readonly leadS: number;
   private readonly coalesceS: number;
   private readonly maxStaleS: number;
+  private readonly maxAnchorLatencyS: number;
   private pending: AudioTriggerRecord[] = [];
   private lastAcceptedOnset: number | null = null;
   /** Last accepted onset PER trigger family: a whistle and a roar in the same
@@ -209,10 +224,11 @@ export class TriggerWindowScheduler {
     fired: 0,
   };
 
-  constructor(opts: { leadS?: number; coalesceS?: number; maxStaleS?: number } = {}) {
+  constructor(opts: { leadS?: number; coalesceS?: number; maxStaleS?: number; maxAnchorLatencyS?: number } = {}) {
     this.leadS = opts.leadS ?? AUDIO_TRIGGER_LEAD_S;
     this.coalesceS = opts.coalesceS ?? AUDIO_TRIGGER_COALESCE_S;
     this.maxStaleS = opts.maxStaleS ?? AUDIO_TRIGGER_MAX_STALE_S;
+    this.maxAnchorLatencyS = opts.maxAnchorLatencyS ?? AUDIO_TRIGGER_MAX_ANCHOR_LATENCY_S;
   }
 
   /**
@@ -250,29 +266,51 @@ export class TriggerWindowScheduler {
   }
 
   /**
-   * The earliest trigger whose analysis window is due at `currentTs` (onset +
-   * lead has elapsed), WITHOUT consuming it, or null. Expired triggers are
-   * dropped on the way.
+   * The trigger whose analysis window is due at `currentTs` (onset + lead has
+   * elapsed) and whose onset->window latency is still inside the 1-5 s budget,
+   * WITHOUT consuming it, or null. Expired triggers are dropped on the way.
    *
    * ADAAAA-7699: the observer asks this BEFORE it knows whether it can afford
    * the fire (the decide budget gate). A tick that peeks a due trigger and then
    * refuses to fire must not swallow it — the previous `due()`-first ordering
    * popped the trigger (`fired++`) and returned, silently losing the anchored
    * analysis of a real audible event.
+   *
+   * ADAAAA-7723: the scan is over EVERY pending trigger, not just the oldest
+   * queued one. The audio tap runs ahead of the (lagging) video frame clock, so
+   * a trigger whose onset is still in the future used to sit at the head of the
+   * FIFO and block every due trigger behind it for as long as the frame clock
+   * took to catch up — those blocked triggers then expired with no anchored
+   * window and no decide (measured 1 of 4 accepted triggers anchored). Returning
+   * the EARLIEST due onset keeps the oldest evidence from expiring first.
    */
   peekDue(currentTs: number): AudioTriggerRecord | null {
     if (!Number.isFinite(currentTs)) return null;
     this.expire(currentTs);
-    const head = this.pending[0];
-    if (head && head.onsetTs + this.leadS <= currentTs) return head;
-    return null;
+    let best: AudioTriggerRecord | null = null;
+    for (const t of this.pending) {
+      const age = currentTs - t.onsetTs;
+      // The window must already cover the onset (lead), and must still be able
+      // to claim the 1-5 s contract latency.
+      if (age < this.leadS - 1e-9) continue;
+      if (age > this.maxAnchorLatencyS + 1e-9) continue;
+      if (!best || t.onsetTs < best.onsetTs) best = t;
+    }
+    return best;
   }
 
-  /** Consume the trigger {@link peekDue} returned (the fire is happening). */
-  consume(): AudioTriggerRecord | null {
-    const head = this.pending.shift();
+  /** Consume one trigger: the one {@link peekDue} returned (the fire is
+   *  happening), or the oldest queued record when called with no argument. */
+  consume(trigger?: AudioTriggerRecord | null): AudioTriggerRecord | null {
+    let head: AudioTriggerRecord | null = null;
+    if (trigger) {
+      const i = this.pending.indexOf(trigger);
+      if (i >= 0) head = this.pending.splice(i, 1)[0] ?? null;
+    } else {
+      head = this.pending.shift() ?? null;
+    }
     if (head) this.counters.fired++;
-    return head ?? null;
+    return head;
   }
 
   /**
@@ -282,7 +320,19 @@ export class TriggerWindowScheduler {
   due(currentTs: number): AudioTriggerRecord | null {
     const head = this.peekDue(currentTs);
     if (!head) return null;
-    return this.consume();
+    return this.consume(head);
+  }
+
+  /** End-of-share accounting (ADAAAA-7723): a trigger still pending when the
+   *  share ends can never anchor a window (the tail fire observes the newest
+   *  frame, and its frames leave the retained window with the rail). Drop them
+   *  as EXPIRED so the ledger reconciles instead of leaving them silently
+   *  pending. Returns how many were dropped. */
+  expirePending(): number {
+    const n = this.pending.length;
+    this.pending = [];
+    this.counters.expired += n;
+    return n;
   }
 
   /** Drop pending triggers whose onset falls inside a window that has already
@@ -312,6 +362,20 @@ export class TriggerWindowScheduler {
   }
 
   stats(): TriggerSchedulerStats {
-    return { ...this.counters };
+    return { ...this.counters, pending: this.pending.length };
+  }
+
+  /** ADAAAA-7723 reconciliation: every ACCEPTED trigger is accounted for as
+   *  `fired` (anchored a decide window), `covered` (a decided window included
+   *  its onset), `expired` (its frames left the retained window) or `pending`
+   *  (still awaiting a tick). `invalid` records never entered the ledger and
+   *  `coalesced` ones were folded into an accepted neighbour. A share where this
+   *  does not balance dropped a trigger silently, which is the defect this
+   *  ledger exists to make visible. */
+  reconciled(): { ok: boolean; unaccounted: number } {
+    const s = this.stats();
+    const pending = s.pending ?? this.pending.length;
+    const unaccounted = s.accepted - (s.fired + s.covered + s.expired + pending);
+    return { ok: unaccounted === 0, unaccounted };
   }
 }

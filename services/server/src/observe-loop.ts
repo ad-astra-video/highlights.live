@@ -20,10 +20,20 @@ import {
   STAGE_B_FAMILY,
   isStageBTrigger,
   triggerFamily,
+  AUDIO_TRIGGER_MAX_STALE_S,
   type AudioTriggerRecord,
   type TriggerSchedulerStats,
 } from "./audio-trigger";
 import type { StageAOutcomeLedger } from "./stage-a-metrics";
+
+/** ADAAAA-7723: nearest-rank percentile over an already-sorted sample list.
+ *  Shared by the observer's per-family latency stats and the media rail's
+ *  per-share evidence line, so both report the same p50/p95 for the same
+ *  samples (a share that reconciles must not disagree with itself). */
+export function percentile(sorted: number[], p: number): number {
+  if (!sorted.length) return 0;
+  return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
+}
 
 /** Decide invocation cadence in content seconds. CEO-locked (ADAAAA-7000). */
 export const OBSERVE_CADENCE_S = 3;
@@ -320,7 +330,11 @@ export class LiveObserver {
   /** Cadence ticks suppressed by the Tier-2 signal gate (ADAAAA-7145). */
   private gatedSkips = 0;
   /** ADAAAA-7658: fired audio-noise triggers waiting for an anchored window. */
-  private readonly triggers = new TriggerWindowScheduler();
+  private readonly triggers: TriggerWindowScheduler;
+  /** ADAAAA-7723: onset -> anchored window latency samples (ms), PER trigger
+   *  family, so AC-2 is measurable for the Stage-A roar and the Stage-B whistle
+   *  separately instead of as one pooled number. */
+  private readonly anchoredLatencyByFamily = new Map<string, number[]>();
   /** Decide budget (one token per `cadenceS`, capacity 1). Every fire — cadence
    *  or trigger-anchored — spends a token, so trigger windows can never add
    *  decide invocations beyond the blind-cadence baseline (AC3). An anchored
@@ -383,6 +397,12 @@ export class LiveObserver {
     this.triggerMinBudget = opts.triggerMinBudget ?? 0.4;
     this.stageA = opts.stageA ?? null;
     this.stageB = opts.stageB ?? null;
+    // ADAAAA-7723: the stale horizon is the FRAME RETENTION horizon, not the
+    // bare 8 s default. A trigger whose onset is still inside the retained
+    // window can be judged by that window (`coverThrough`), so expiring it
+    // first would report a miss for evidence gemma actually saw. Only a trigger
+    // older than the retained frames is genuinely unanchorable.
+    this.triggers = new TriggerWindowScheduler({ maxStaleS: Math.max(AUDIO_TRIGGER_MAX_STALE_S, this.windowS) });
   }
 
   /** Record a frame + its perceive-derived seed context (no re-inference). */
@@ -416,6 +436,10 @@ export class LiveObserver {
   async flush(lagMs?: number): Promise<void> {
     const last = this.frames[this.frames.length - 1];
     if (last) await this.fire(last.ts, true, lagMs);
+    // ADAAAA-7723: the tail fire deliberately observes the NEWEST frame and is
+    // never anchored, so a trigger still pending now can never anchor a window.
+    // Account for it as expired instead of leaving it silently pending.
+    this.triggers.expirePending();
   }
 
   /**
@@ -528,10 +552,11 @@ export class LiveObserver {
         return;
       }
     }
-    if (anchored) this.triggers.consume();
-    const prevFire = this.lastFireTs;
-    this.lastFireTs = nowTs;
-    this.budgetTokens -= 1;
+    // ADAAAA-7723: assemble the window BEFORE consuming the trigger or spending
+    // the budget token. A tick that cannot assemble a window has nothing to
+    // decide, so it must leave the trigger pending for the next affordable tick
+    // — the previous order consumed first and `return`ed on an empty window,
+    // counting the trigger `fired` while issuing no decide at all.
     const win = assembleLiveWindow(this.frames, nowTs, { windowS: this.windowS, maxFrames: this.maxFrames, fps: this.fps });
     if (win.frames.length === 0) return;
     const lo = nowTs - this.windowS;
@@ -548,16 +573,33 @@ export class LiveObserver {
     // ADAAAA-7145: Tier-2 signal gate (recall-safe, same rule as ObserveDecider).
     // A trigger-anchored window is never gate-skipped: an audio trigger IS a
     // signal, so gating it off would defeat the trigger.
+    //
+    // ADAAAA-7723: a skipped window judges NOTHING, so it must not cover the
+    // pending triggers inside it — they stay pending and are anchored (or
+    // covered) by a window that actually reaches gemma.
     if (this.signalGate && !force && !anchored && !windowHasSignal(payload.seeds, inWindow, this.signalGateOpts)) {
       this.gatedSkips++;
       this.lastFireTs = nowTs;
       return;
     }
+    if (anchored) this.triggers.consume(dueTrigger);
+    const prevFire = this.lastFireTs;
+    this.lastFireTs = nowTs;
+    this.budgetTokens -= 1;
     const cadenceMs = prevFire === null ? 0 : (nowTs - prevFire) * 1000;
     if (anchored) this.anchoredFires++;
     else this.cadenceFires++;
     // ADAAAA-7707: the whistle share numerator — windows a whistle anchored.
     if (anchored && dueTrigger && isStageBTrigger(dueTrigger.thresholdId)) this.whistleAnchoredFires++;
+    // ADAAAA-7723 AC-2: measure the anchored window's onset->window latency in
+    // the trigger's OWN family (a pooled number hides the whistle path).
+    if (anchored && dueTrigger) {
+      const family = triggerFamily(dueTrigger.thresholdId);
+      const latMs = Math.max(0, Math.round((nowTs - dueTrigger.onsetTs) * 1000));
+      const samples = this.anchoredLatencyByFamily.get(family);
+      if (samples) samples.push(latMs);
+      else this.anchoredLatencyByFamily.set(family, [latMs]);
+    }
     // Triggers already inside the window just analyzed are covered by it.
     this.triggers.coverThrough(lo, nowTs);
     let e2eMs = 0;
@@ -684,6 +726,34 @@ export class LiveObserver {
    *  covered / expired / fired). */
   triggerStats(): TriggerSchedulerStats {
     return this.triggers.stats();
+  }
+  /** ADAAAA-7723 AC-1: the reconciliation invariant — every accepted trigger is
+   *  accounted for (fired / covered / expired / pending). */
+  triggerReconciliation(): { ok: boolean; unaccounted: number } {
+    return this.triggers.reconciled();
+  }
+  /** ADAAAA-7723 AC-2: onset -> anchored window latency, measured PER trigger
+   *  family (Stage-A roar vs Stage-B whistle). Families with no anchored window
+   *  are reported with `samples: 0` so a missing path is visible, not implied
+   *  healthy by an empty array. */
+  anchoredLatencyByFamilyStats(): { family: string; samples: number; p50Ms: number; p95Ms: number; maxMs: number }[] {
+    return [...this.anchoredLatencyByFamily.entries()]
+      .map(([family, raw]) => {
+        const sorted = [...raw].sort((a, b) => a - b);
+        return {
+          family,
+          samples: sorted.length,
+          p50Ms: percentile(sorted, 50),
+          p95Ms: percentile(sorted, 95),
+          maxMs: sorted.length ? sorted[sorted.length - 1] : 0,
+        };
+      })
+      .sort((a, b) => a.family.localeCompare(b.family));
+  }
+  /** ADAAAA-7723 AC-2: every anchored latency sample (ms), pooled across
+   *  families, for the per-share p50/p95 evidence line. */
+  anchoredLatencySamples(): number[] {
+    return [...this.anchoredLatencyByFamily.values()].flat();
   }
   /** ADAAAA-7676: cadence windows DROPPED because their content was beyond the
    *  lag budget — the job-visible AC2 counter (`observeMetrics

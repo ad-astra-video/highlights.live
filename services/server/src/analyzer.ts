@@ -25,7 +25,7 @@ import {
   OBSERVE_WINDOW_S,
 } from "./observe-loop";
 import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
-import type { AudioTriggerRecord } from "./audio-trigger";
+import type { AudioTriggerRecord, TriggerSchedulerStats } from "./audio-trigger";
 import { isStageBTrigger, triggerFamily, type WhistleFireBlock } from "./audio-trigger";
 import { isGoalRefutingReason } from "./highlight-postable";
 
@@ -1270,6 +1270,16 @@ export interface LiveObserveMetricsSnapshot {
    *  identity/family), so a whistle decide is identifiable post-run instead of
    *  only inside the in-flight `ObserveDecidePayload.trigger`. */
   whistleWindows?: { centerTs: number; thresholdId: string; family: string }[];
+  /** ADAAAA-7723 AC-1: the trigger LEDGER. Every trigger the scheduler accepted
+   *  is accounted for — `accepted === fired + covered + expired + pending` —
+   *  so a share can no longer report a healthy `triggers` count while silently
+   *  dropping the anchored analysis of an audible event. */
+  triggerWindows?: TriggerSchedulerStats;
+  /** ADAAAA-7723 AC-1: whether that ledger balances (`unaccounted === 0`). */
+  triggerReconciled?: boolean;
+  /** ADAAAA-7723 AC-2: onset -> anchored window latency measured PER family
+   *  (Stage-A roar, Stage-B whistle) instead of as one pooled number. */
+  triggerLatencyByFamily?: { family: string; samples: number; p50Ms: number; p95Ms: number; maxMs: number }[];
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
@@ -1365,6 +1375,13 @@ export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSn
     // identifiable on a FINISHED job record.
     allDecides: decideCalls,
     whistleWindows: obs.whistleWindows(),
+    // ADAAAA-7723: the trigger ledger + per-family anchored latency. Both are
+    // persisted on the job so a FINISHED share can be reconciled afterwards
+    // (accepted == fired + covered + expired + pending) instead of only read
+    // from a live log line.
+    triggerWindows: obs.triggerStats(),
+    triggerReconciled: obs.triggerReconciliation().ok,
+    triggerLatencyByFamily: obs.anchoredLatencyByFamilyStats(),
   };
 }
 
