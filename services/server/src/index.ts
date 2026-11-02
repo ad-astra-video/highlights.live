@@ -14,6 +14,7 @@ import { runRejectSweep } from "./lifecycle";
 import { runDatasetPurgeSweep, scheduleDatasetsPurgeForOwner } from "./dataset-lifecycle";
 import { filePerceiveSessionLedger, releaseOrphanedPerceiveSessions } from "./perceive-ledger";
 import { outcomeForStrandedJob } from "./job-failure";
+import { reconcileStaleMediaSessions } from "./media-session-reconcile";
 import Stripe from "stripe";
 
 /** Schedule the rejected-clip TTL sweep (runs at least once per `interval`,
@@ -115,6 +116,25 @@ async function main() {
     }
   } catch (e: any) {
     console.error("[boot] stranded-job sweep failed:", String(e?.message || e));
+  }
+  // ADAAAA-7764: repair the `media_sessions` liveness signal after the sweep.
+  // Rows written BEFORE the terminal-transition hook (Store.patchJob ->
+  // closeMediaSession) can still read `active` on a job that is already terminal
+  // — the box carried 13 such rows on failed jobs, which made the deploy gate
+  // ([ADAAAA-7750]) read 13 phantom live shares. Runs AFTER the stranded sweep
+  // so the jobs it just reaped are already terminal; bounded, logged, and it
+  // only settles `status: active` -> `closed` (rows are kept, so the
+  // `media_sessions.node_id` -> `job.costUsd` attribution join is untouched).
+  try {
+    const rec = await reconcileStaleMediaSessions({ db, getJob: (id) => store.getJob(id) });
+    if (rec.closed > 0) {
+      console.log(
+        `[boot] closed ${rec.closed}/${rec.scanned} stale active media_sessions row(s) ` +
+          `(terminal or missing owning job); live rows kept=${rec.live}`
+      );
+    }
+  } catch (e: any) {
+    console.error("[boot] media-session reconcile failed:", String(e?.message || e));
   }
   const mailer = makeMailer(cfg);
   if (mailer) console.log(`mailer: email-sender @ ${cfg.emailSenderUrl}`);
