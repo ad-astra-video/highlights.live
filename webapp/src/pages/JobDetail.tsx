@@ -1063,15 +1063,21 @@ export function DecideAuditRow({ audit: a }: { audit: DecideAuditRecord }) {
  * of it on the same job id.
  */
 export function CustomerAnalysisSection({ sections, capture }: { sections: FrameSection[]; capture?: LiveCapture }) {
+  // A job whose windows were decided but none confirmed still needs the cause
+  // ABOVE the list — the board's share rendered 133 analysed windows and zero
+  // highlights, which reads as "windows processed but nothing found" only if it
+  // is said out loud.
+  const noticeAbove = capture?.state === "capturing" || capture?.state === "no_highlights";
   return (
     <>
       <h3 className="text-2xl font-black">Analysis</h3>
+      {noticeAbove && <CaptureNotice capture={capture} />}
       {sections.length === 0 ? (
         <div className="mt-3" data-analysis-empty>
           {/* ADAAAA-7750: the empty list gets a cause. A healthy share inside the
               first-window budget, a dead capture surface and a run whose windows
               were all judged "not a highlight" must never read the same. */}
-          <CaptureNotice capture={capture} />
+          {!noticeAbove && <CaptureNotice capture={capture} />}
           <div className="text-mut">No analysis windows yet.</div>
         </div>
       ) : (
