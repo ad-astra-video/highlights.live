@@ -391,6 +391,13 @@ export interface Db {
   getMediaSession(jobId: string): Promise<MediaSession | undefined>;
   setMediaSession(ms: MediaSession): Promise<void>;
   clearMediaSession(jobId: string): Promise<void>;
+  /** Settle an `active` session row to `closed` (ADAAAA-7764). The row is KEPT
+   * (not deleted): `session_id` / `node_id` are the durable record of which node
+   * carried the stream and feed the `media_sessions.node_id` -> `job.costUsd`
+   * attribution join. Only `status` + `updated_at` change. Returns true when a
+   * row actually transitioned, so a caller can count/log without a second read.
+   * Idempotent: a row that is already `closed` (or absent) is a no-op. */
+  closeMediaSession(jobId: string): Promise<boolean>;
   /** Every tracked media session (one row per job). Feeds the per-node cost
    * attribution readout (ADAAAA-6869 Phase 4). */
   listMediaSessions(): Promise<MediaSession[]>;
@@ -697,6 +704,13 @@ export class SqliteDb implements Db {
 
   async clearMediaSession(jobId: string): Promise<void> {
     this.db.prepare("DELETE FROM media_sessions WHERE job_id = ?").run(jobId);
+  }
+
+  async closeMediaSession(jobId: string): Promise<boolean> {
+    const r = this.db
+      .prepare("UPDATE media_sessions SET status = 'closed', updated_at = ? WHERE job_id = ? AND status = 'active'")
+      .run(new Date().toISOString(), jobId);
+    return Number(r.changes ?? 0) > 0;
   }
 
   async listMediaSessions(): Promise<MediaSession[]> {
@@ -1426,6 +1440,14 @@ export class PgDb implements Db {
 
   async clearMediaSession(jobId: string): Promise<void> {
     await this.pool.query("DELETE FROM media_sessions WHERE job_id = $1", [jobId]);
+  }
+
+  async closeMediaSession(jobId: string): Promise<boolean> {
+    const r = await this.pool.query(
+      "UPDATE media_sessions SET status = 'closed', updated_at = $1 WHERE job_id = $2 AND status = 'active'",
+      [new Date().toISOString(), jobId]
+    );
+    return Number(r.rowCount ?? 0) > 0;
   }
 
   async listMediaSessions(): Promise<MediaSession[]> {

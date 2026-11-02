@@ -611,7 +611,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // and forget the DB record so a fresh session is provisioned next time.
       if (bj.mediaSessionId && cfg.mediaServerUrl) {
         await fetch(`${cfg.mediaServerUrl}/sessions/${bj.mediaSessionId}/close`, { method: "POST" }).catch(() => {});
-        await db.clearMediaSession(jobId).catch(() => {});
+        // ADAAAA-7764: SETTLE the row instead of deleting it. The session is
+        // over, so it must stop reading as a live share, but the row is the only
+        // record of which node carried the stream (`session_id`/`node_id`) and
+        // feeds the `media_sessions.node_id` -> `job.costUsd` attribution join.
+        // A closed row still forces a fresh provision next time (reuse requires
+        // `active`), which is all `clearMediaSession` bought us here.
+        await db.closeMediaSession(jobId).catch(() => {});
       }
       const recPath = await waitForRecording(jobId, 4000);
       const { mkdir } = await import("node:fs/promises");

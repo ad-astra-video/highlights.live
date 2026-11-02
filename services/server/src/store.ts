@@ -199,7 +199,25 @@ export class Store {
     const next = JobSchema.parse({ ...j, ...patch });
     this.jobs.set(id, next);
     if (this.db) await this.db.saveJob(next);
+    await this.settleMediaSession(next);
     return next;
+  }
+
+  /** ADAAAA-7764: settle the job's `media_sessions` row when the job reaches a
+   * terminal status. Every terminal transition — done, failed (pipeline error or
+   * media-node loss), cancelled/stop, and the boot sweep (which reaps through
+   * `patchJob`) — is written by `patchJob`/`patchJobProgress`, so hooking here is
+   * the one place that cannot be missed by a new exit path. The row is CLOSED,
+   * never deleted, so `media_sessions.node_id` keeps feeding the per-node
+   * `job.costUsd` attribution join while no longer reading as a live share.
+   * Best-effort bookkeeping: a failed settle must never fail the job write. */
+  private async settleMediaSession(job: Job): Promise<void> {
+    if (!this.db || !Store.isTerminalStatus(job.status)) return;
+    try {
+      await this.db.closeMediaSession(job.id);
+    } catch {
+      /* bookkeeping only — the job transition already persisted */
+    }
   }
 
   async addHighlight(rec: HighlightRecord): Promise<{ record: HighlightRecord; created: boolean }> {
@@ -326,6 +344,7 @@ export class Store {
     const parsed = JobSchema.parse(next);
     this.jobs.set(id, parsed);
     if (this.db) await this.db.saveJob(parsed);
+    await this.settleMediaSession(parsed);
     return parsed;
   }
 
