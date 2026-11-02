@@ -40,14 +40,25 @@ const hasVp8Webm = await (async () => {
   }
 })();
 
+const hasVp9Webm = await (async () => {
+  if (!hasFfmpeg) return false;
+  try {
+    const { stdout } = await exec(FFMPEG, ["-hide_banner", "-encoders"]);
+    return /libvpx-vp9/.test(stdout) && /libopus/.test(stdout);
+  } catch {
+    return false;
+  }
+})();
+
 /** A tiny VP8+opus webm — the exact container/codec pair a browser MediaRecorder
  * produces when `video/mp4;codecs=avc1` is unsupported. */
-async function makeWebmSource(withAudio = true): Promise<{ dir: string; file: string }> {
+async function makeWebmSource(videoCodec: "libvpx" | "libvpx-vp9" = "libvpx"): Promise<{ dir: string; file: string }> {
   const dir = await mkdtemp(path.join(tmpdir(), "hl-webm-"));
   const file = path.join(dir, "capture.webm");
+  const withAudio = true;
   const args = ["-y", "-f", "lavfi", "-i", "testsrc=duration=4:size=320x180:rate=10"];
   if (withAudio) args.push("-f", "lavfi", "-i", "sine=frequency=440:duration=4");
-  args.push("-c:v", "libvpx", "-b:v", "200k");
+  args.push("-c:v", videoCodec, "-b:v", "200k");
   if (withAudio) args.push("-c:a", "libopus", "-shortest");
   args.push(file);
   await exec(FFMPEG, args);
@@ -105,6 +116,29 @@ describe("cutClip container/codec handling (ADAAAA-7724)", () => {
       expect(fmt!.container).toContain("mp4");
       expect(fmt!.videoCodec).toBe("h264");
       expect(fmt!.audioCodec).toBe("aac");
+    } finally {
+      await rm(src.dir, { recursive: true, force: true });
+      await rm(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!hasFfmpeg)("webm (VP9+opus, MediaRecorder's preferred fallback) -> non-empty mp4 clip", async () => {
+    if (!hasVp9Webm) return;
+    const src = await makeWebmSource("libvpx-vp9");
+    const outDir = await mkdtemp(path.join(tmpdir(), "hl-clip-"));
+    const out = path.join(outDir, "clip.mp4");
+    try {
+      const fmt = await probeMediaFormat(FFMPEG, src.file);
+      expect(fmt!.videoCodec).toBe("vp9");
+      const cut = await cutClip(FFMPEG, src.file, out, 1, 2);
+      // VP9+opus must NOT be copied into mp4 (not universally playable) — the
+      // app prefers `video/webm;codecs=vp9`, so this is the common fallback.
+      expect(cut.mode).toBe("reencode");
+      expect(cut.bytes).toBeGreaterThan(0);
+      const clipFmt = await probeMediaFormat(FFMPEG, out);
+      expect(clipFmt!.container).toContain("mp4");
+      expect(clipFmt!.videoCodec).toBe("h264");
+      expect(clipFmt!.audioCodec).toBe("aac");
     } finally {
       await rm(src.dir, { recursive: true, force: true });
       await rm(outDir, { recursive: true, force: true });
