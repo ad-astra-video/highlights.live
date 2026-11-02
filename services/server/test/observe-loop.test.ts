@@ -482,14 +482,14 @@ describe("LiveObserver (ADAAAA-7008: rolling-past cadence observer)", () => {
 
 describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
   /** Drive a 30 s content timeline at 5 fps through one observer. */
-  async function drive(skipEvery: number | undefined, trigger?: AudioTriggerRecord) {
+  async function drive(keepRatio: number | undefined, trigger?: AudioTriggerRecord) {
     const fired: ObserveDecidePayload[] = [];
     const obs = new LiveObserver({
       cadenceS: 3,
       windowS: 10,
       maxFrames: 30,
       fps: 2,
-      decideSkipEvery: skipEvery,
+      decideKeepRatio: keepRatio,
       onDecide: async (p) => {
         fired.push(p);
         return true;
@@ -505,16 +505,17 @@ describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
     return { obs, fired };
   }
 
-  it("drops every Nth decide opportunity on a fixed stride (2 of 3 decided)", async () => {
-    const { obs, fired } = await drive(3);
-    // 30 s at a 3 s cadence = 10 opportunities (ts 0,3,...,27); every third is
-    // dropped, so 7 windows decide and 3 are counted as throttle skips.
+  it("keeps a deterministic fraction of decide opportunities (5 of 8)", async () => {
+    const { obs, fired } = await drive(0.625);
+    // 30 s at a 3 s cadence = 10 opportunities (ts 0,3,...,27). The credit starts
+    // at 1 (first window decides) and accrues 0.625 per opportunity, so 7 of the
+    // 10 decide and 3 are counted as throttle skips.
     expect(obs.decideCalls()).toBe(7);
     expect(obs.throttleSkipCount()).toBe(3);
     expect(fired.map((p) => p.centerTs)).toEqual([0, 3, 9, 12, 18, 21, 27]);
   });
 
-  it("is byte-identical when the stride is unset or 1 (cap off)", async () => {
+  it("is byte-identical when the ratio is unset or 1 (cap off)", async () => {
     const off = await drive(undefined);
     const one = await drive(1);
     expect(off.obs.decideCalls()).toBe(10);
@@ -535,7 +536,7 @@ describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
       baselineEnergy: 0.2,
       thresholdId: "stageA/roar",
     };
-    const { obs, fired } = await drive(3, trigger);
+    const { obs, fired } = await drive(0.625, trigger);
     expect(obs.triggerStats().fired).toBe(1);
     expect(obs.triggerStats().expired).toBe(0);
     expect(obs.throttleSkipCount()).toBeGreaterThanOrEqual(1);

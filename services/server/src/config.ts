@@ -284,13 +284,15 @@ export interface ServerConfig {
   /** ADAAAA-7799 (lever C): the decide-rate CAP. Spend is a pure function of
    * decided windows ($/h/stream = `decideCalls * 12 * DECIDE_FEE`), so at the
    * measured $0.0033 per decide the funded $2.75 ceiling is ~69 decides per
-   * 300 s per stream (104 cadence windows). This drops every Nth decide
-   * OPPORTUNITY on a fixed stride instead of deciding every cadence tick: 3 =
-   * two of every three windows decided (~69 of 104) and the dropped windows are
-   * counted as `observeMetrics.throttleSkippedWindows`. It does NOT change the
-   * cadence, the window span or the audio noise-change trigger. Unset/1 = off
-   * (byte-identical). `LIVE_DECIDE_SKIP_EVERY`. */
-  liveDecideSkipEvery?: number;
+   * 300 s per stream. This keeps only a FRACTION of the decide opportunities
+   * instead of deciding every cadence tick: at 2 streams with the levers-B trims
+   * the pass sees ~108 opportunities per 300 s per stream (104 cadence windows
+   * plus trigger-anchored windows), so 5 of every 8 kept (0.625) is ~67 decides
+   * = $2.67/h. The dropped windows are counted as
+   * `observeMetrics.throttleSkippedWindows`. It does NOT change the cadence, the
+   * window span or the audio noise-change trigger. Unset/1 = off
+   * (byte-identical). `LIVE_DECIDE_KEEP_RATIO`. */
+  liveDecideKeepRatio?: number;
   /** ADAAAA-7007/7011: enable the VOD decide-observer architecture on the
    * detail-first pass (observeLoop + decideWindowN both set in analyzeJob).
    * When on, decide is driven on the ~3 s cadence with a ~10 s overlapping
@@ -617,8 +619,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     liveDecideAdmission: env.LIVE_DECIDE_ADMISSION === "1",
     // ADAAAA-7799 (lever C): decide-rate cap. Only parsed when set, so an unset
     // env keeps the unbounded pass; an empty/garbage value normalises to off in
-    // LiveObserver (anything < 2).
-    liveDecideSkipEvery: env.LIVE_DECIDE_SKIP_EVERY !== undefined ? Number(env.LIVE_DECIDE_SKIP_EVERY) : undefined,
+    // LiveObserver (anything outside 0 < r < 1).
+    liveDecideKeepRatio: env.LIVE_DECIDE_KEEP_RATIO !== undefined ? Number(env.LIVE_DECIDE_KEEP_RATIO) : undefined,
     // ADAAAA-7007/7011: wire the VOD decide-observer into the detail-first VOD
     // job path. Opt in with OBSERVE_LOOP=1 (default off; the candidate-gated VOD
     // baseline stays the behavior until the observer pass is validated).

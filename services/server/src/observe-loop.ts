@@ -464,21 +464,22 @@ export class LiveObserver {
   private lastBackpressureSkipTs: number | null = null;
   /** ADAAAA-7799 (lever C): decide-rate CAP. Spend is a pure function of decided
    *  windows (`decideCalls * 12 * 0.0033` $/h/stream), so the funded ceiling is
-   *  held by DROPPING decide opportunities on a fixed stride instead of deciding
-   *  every cadence tick: `null` = off (byte-identical), N >= 2 = every Nth
-   *  opportunity is dropped (N = 3 => 2 of every 3 windows decided). The pattern
-   *  is deterministic and the drops are counted, so the gap between the cadence
-   *  and the decide count is auditable rather than random. The window span and
-   *  the audio noise-change trigger are NOT touched: a trigger that comes due on
-   *  a dropped window stays PENDING (never consumed) and anchors the next kept
-   *  window. */
-  private readonly decideSkipEvery: number | null;
+   *  held by KEEPING only a fraction of the decide opportunities instead of
+   *  deciding every cadence tick. `1` = off (byte-identical); `0 < r < 1` keeps
+   *  a fractional credit per opportunity and decides when the credit crosses 1,
+   *  so the realized rate is `r` of the opportunities (r = 0.625 keeps 5 of every
+   *  8 windows — a deterministic repeating pattern) and the drops are counted.
+   *  The window span and the audio noise-change trigger are NOT touched: a
+   *  trigger that comes due on a dropped window stays PENDING (never consumed)
+   *  and anchors the next kept window. */
+  private readonly decideKeepRatio: number;
   /** ADAAAA-7799: decide opportunities dropped by the rate cap. */
   private throttleSkips = 0;
-  /** ADAAAA-7799: 1-based index of the decide opportunity under consideration.
-   *  Opportunities are counted per WINDOW (a dropped window advances the
-   *  cadence, so a frame-by-frame retry never inflates this). */
+  /** ADAAAA-7799: decide opportunities seen (kept + dropped). */
   private decideOpportunities = 0;
+  /** ADAAAA-7799: fractional decide credit; starts at 1 so the first window of a
+   *  stream always decides. */
+  private decideCredit = 1;
   /** ADAAAA-7771: serialized accept chain + the first decide/accept failure.
    *  A failure is rethrown by `flush()`, matching the serial pass (which threw
    *  out of the frame loop). */
@@ -522,12 +523,11 @@ export class LiveObserver {
     depthBudget?: () => number;
     /** Minimum budget needed to fire early on a trigger (default 0.4). */
     triggerMinBudget?: number;
-    /** ADAAAA-7799 (lever C): decide-rate cap. Drop every Nth decide
-     *  opportunity on a fixed stride (N >= 2), so the decided-window rate — and
-     *  therefore spend — is bounded deterministically. `undefined`/1/<2 = off,
-     *  byte-identical to the unbounded pass. Wired from
-     *  `LIVE_DECIDE_SKIP_EVERY`. */
-    decideSkipEvery?: number;
+    /** ADAAAA-7799 (lever C): decide-rate cap. Fraction of decide opportunities
+     *  that may decide (0 < r < 1), so the decided-window rate — and therefore
+     *  spend — is bounded deterministically. `undefined`/1 = off, byte-identical
+     *  to the unbounded pass. Wired from `LIVE_DECIDE_KEEP_RATIO`. */
+    decideKeepRatio?: number;
     /** ADAAAA-7758: admission predicate evaluated before this tick spends a
      *  decide. `false` skips the tick (no decide, no latency sample, no budget
      *  token, pending triggers stay pending) and counts an admission skip — the
@@ -553,10 +553,10 @@ export class LiveObserver {
     this.maxInFlight = Math.max(1, Math.floor(opts.maxInFlight ?? 1));
     this.depthBudget = opts.depthBudget ?? null;
     this.triggerMinBudget = opts.triggerMinBudget ?? 0.4;
-    // ADAAAA-7799: normalise the stride. Anything below 2 (unset, 1, 0, NaN)
-    // leaves the pass unbounded, so an unset env is byte-identical.
-    const skipEvery = Math.floor(opts.decideSkipEvery ?? 1);
-    this.decideSkipEvery = Number.isFinite(skipEvery) && skipEvery >= 2 ? skipEvery : null;
+    // ADAAAA-7799: normalise the keep ratio. Unset/1/<=0/NaN leaves the pass
+    // unbounded, so an unset env is byte-identical.
+    const keepRatio = Number(opts.decideKeepRatio ?? 1);
+    this.decideKeepRatio = Number.isFinite(keepRatio) && keepRatio > 0 && keepRatio < 1 ? keepRatio : 1;
     this.stageA = opts.stageA ?? null;
     this.stageB = opts.stageB ?? null;
     // ADAAAA-7723: the stale horizon is the FRAME RETENTION horizon, not the
@@ -961,20 +961,25 @@ export class LiveObserver {
       }
       return;
     }
-    // ADAAAA-7799 (lever C): decide-rate CAP. Every Nth opportunity that would
-    // otherwise decide now is DROPPED: the cadence advances past the window
-    // (`lastFireTs` moves, so it is not retried frame by frame), no budget token
-    // is spent, and a due audio trigger is NOT consumed — it stays pending and
-    // anchors the next kept window (the trigger contract and the window span are
-    // untouched; only the decide slot rate is capped). A FORCE fire (the
+    // ADAAAA-7799 (lever C): decide-rate CAP. An opportunity that would
+    // otherwise decide now is DROPPED when the fractional credit has not yet
+    // crossed 1: the cadence advances past the window (`lastFireTs` moves, so it
+    // is not retried frame by frame), no budget token is spent, and a due audio
+    // trigger is NOT consumed — it stays pending and anchors the next kept
+    // window (the trigger contract and the window span are untouched; only the
+    // decide slot rate is capped). The pattern is deterministic (credit accrues
+    // `r` per opportunity, so at 0.625 exactly 5 of every 8 windows decide, and
+    // at 2/3 two of every three), and every drop is counted. A FORCE fire (the
     // end-of-stream tail) always decides: dropping it would lose the tail window.
-    if (this.decideSkipEvery !== null && !force) {
+    if (this.decideKeepRatio < 1 && !force) {
       this.decideOpportunities++;
-      if (this.decideOpportunities % this.decideSkipEvery === 0) {
+      this.decideCredit += this.decideKeepRatio;
+      if (this.decideCredit < 1 - 1e-9) {
         this.throttleSkips++;
         this.lastFireTs = nowTs;
         return;
       }
+      this.decideCredit -= 1;
     }
     if (anchored) this.triggers.consume(dueTrigger);
     const prevFire = this.lastFireTs;

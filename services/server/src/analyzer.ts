@@ -1134,11 +1134,11 @@ export interface AnalyzerConfig {
    * queueing every stream behind a 2-wide gate. Wired from `DECIDE_CONCURRENCY`.
    */
   liveDecideAdmission?: number;
-  /** ADAAAA-7799 (lever C): decide-rate cap. Drop every Nth decide opportunity
-   *  on a fixed stride (N >= 2) so the decided-window rate and the derived spend
-   *  are bounded; 3 = two of every three windows (~69 of 104 per 300 s).
-   *  `undefined`/1 = off. Wired from `LIVE_DECIDE_SKIP_EVERY`. */
-  liveDecideSkipEvery?: number;
+  /** ADAAAA-7799 (lever C): decide-rate cap. Keep only a fraction (0 < r < 1)
+   *  of the decide opportunities so the decided-window rate and the derived spend
+   *  are bounded; 0.625 = 5 of every 8 windows (~67 of ~108 per 300 s at 2
+   *  streams). `undefined`/1 = off. Wired from `LIVE_DECIDE_KEEP_RATIO`. */
+  liveDecideKeepRatio?: number;
   /**
    * ADAAAA-7774: content fps the LIVE observe pass CONSUMES frames at (the
    * ingest-to-analysis stride). Live ingest runs at ~5 fps while the decide
@@ -4053,9 +4053,9 @@ export async function analyzeJob(
           // the 30 s budget. Default off until the CEO approves queue wording.
           canDecide: () => liveDecideAdmission.admit(cfg.jobId),
           // ADAAAA-7799 (lever C): hold the funded spend ceiling by capping the
-          // decide rate (fixed stride over decide opportunities). Undefined
+          // decide rate (fraction of decide opportunities kept). Undefined
           // leaves the pass unbounded.
-          decideSkipEvery: cfg.liveDecideSkipEvery,
+          decideKeepRatio: cfg.liveDecideKeepRatio,
           // ADAAAA-7771: pipelined depth. With K > 1 the expensive decide half
           // runs K-wide while acceptance stays serial in CONTENT order — the
           // serial loop could never hold the 3 s cadence when one decide costs
