@@ -19,6 +19,7 @@ const T0 = Date.parse("2026-11-02T04:00:00.000Z");
 function liveJob(over: Partial<LiveProgressInput["job"]> = {}): LiveProgressInput["job"] {
   return {
     status: "active",
+    source: "rtmp",
     startedAt: new Date(T0).toISOString(),
     createdAt: new Date(T0).toISOString(),
     summaryLog: [
@@ -99,6 +100,11 @@ describe("deriveLiveProgress (ADAAAA-7741 AC1)", () => {
     // lagSec === liveEdgeTs - processedThroughTs is preserved; the UI renders
     // nothing for `unknown` rather than presenting this as a live lag reading.
     expect(p.lagSec).toBe(20);
+  });
+
+  it("returns unknown for an in-flight VOD job — there is no live edge to measure", () => {
+    const p = deriveLiveProgress({ job: liveJob({ source: "file" }), nowMs: T0 + 60_000 });
+    expect(p.state).toBe("unknown");
   });
 });
 
