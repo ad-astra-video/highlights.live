@@ -202,6 +202,43 @@ def test_tennis_stays_unmeasured_until_a_rights_cleared_manifest_is_committed():
         assert "not_captured" in fh.read()
 
 
+def test_esports_stays_unmeasured_until_a_rights_cleared_manifest_is_committed():
+    """ADAAAA-7768: esports registration is tied to a real, rights-cleared manifest.
+
+    Stage 1 of the esports pass DID find a rights-cleared clip (CC0 onFOSS
+    2023-09-23 tournament livestream), but frame review shows it is an
+    observer-mode 426x240 derivative with no legible numeric scoreboard or kill
+    feed, so it carries no pixel-readable event clock and cannot produce the
+    issue's >= 15 verified kill/objective events + >= 10 non-event windows.
+    `evals/esports_val/VERDICT.md` therefore records `not_captured`.
+
+    Registering `valorant` (or any esports key) without that manifest would
+    invent evidence the gate is missing, and overloading `valorant` with a
+    SuperTuxKart/Hypersomnia roster would score the closed vocabulary against
+    classes that do not describe the video. So the canned esports profile stays
+    unmeasured and the strict KeyError is retained; once a real manifest is
+    committed the registration assertions in the basketball test are the model.
+    """
+    manifests = [
+        os.path.join(_REPO_ROOT, "evals", "esports_val", "label-manifest.json"),
+        os.path.join(_REPO_ROOT, "evals", "valorant_val", "label-manifest.json"),
+    ]
+    if any(os.path.exists(m) for m in manifests):
+        pytest.skip("an esports manifest is committed; the registration tests own that state")
+    with pytest.raises(KeyError):
+        load_game_profile("valorant")
+    prof = profile_for("valorant")
+    assert prof.key == "valorant"
+    assert prof.eval_set is None
+    assert prof.measured is False
+    assert prof.zone_model.is_no_zone
+    # the canned FPS roster is untouched by this pass
+    assert prof.vocabulary == ("player", "agent", "weapon", "head")
+    verdict = os.path.join(_REPO_ROOT, "evals", "esports_val", "VERDICT.md")
+    with open(verdict, encoding="utf-8") as fh:
+        assert "not_captured" in fh.read()
+
+
 def test_basketball_is_registered_and_measured_against_its_own_eval_set():
     """ADAAAA-7765: basketball resolves now, and it carries its own held-out set.
 
