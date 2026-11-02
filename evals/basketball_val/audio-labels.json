@@ -1,0 +1,111 @@
+{
+ "$comment": "ADAAAA-7765 - basketball audio-trigger eval corpus. One class: the crowd-roar/noise burst at a scoring event. Onsets are the frame-verified score-digit change instants (evals/basketball_val/label-manifest.json), in seconds on the committed segment clip. Negatives are the verified non-event windows; window_class separates live-play hard negatives from dead-ball stoppages. The clip is a box-side clip-root artifact (CC BY 3.0, sha256 in the label manifest); it is not committed to the repo.",
+ "frameS": 0.1,
+ "sr": 8000,
+ "matchPre": 3.0,
+ "matchPost": 2.0,
+ "classes": [
+  {
+   "id": "score_roar",
+   "clip": "bb_q1_1100_1950.mp4",
+   "onsets": [
+    69,
+    78,
+    148,
+    157,
+    240,
+    292,
+    385,
+    464,
+    469,
+    495,
+    529,
+    735,
+    769,
+    807
+   ],
+   "labelSource": "evals/basketball_val/label-manifest.json scoring-event windows (frame-verified score digit change)",
+   "negatives": [
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 20,
+     "end": 40,
+     "window_class": "dead_ball"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 90,
+     "end": 110,
+     "window_class": "live_play_no_score"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 190,
+     "end": 210,
+     "window_class": "dead_ball"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 255,
+     "end": 275,
+     "window_class": "live_play_no_score"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 310,
+     "end": 330,
+     "window_class": "dead_ball"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 350,
+     "end": 370,
+     "window_class": "live_play_no_score"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 400,
+     "end": 420,
+     "window_class": "dead_ball"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 440,
+     "end": 460,
+     "window_class": "live_play_no_score"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 475,
+     "end": 495,
+     "window_class": "live_play_no_score"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 560,
+     "end": 580,
+     "window_class": "dead_ball"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 620,
+     "end": 640,
+     "window_class": "dead_ball"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 690,
+     "end": 710,
+     "window_class": "live_play_no_score"
+    },
+    {
+     "clip": "bb_q1_1100_1950.mp4",
+     "start": 745,
+     "end": 765,
+     "window_class": "live_play_no_score"
+    }
+   ],
+   "measured": true
+  }
+ ]
+}

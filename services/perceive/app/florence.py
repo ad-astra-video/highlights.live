@@ -33,7 +33,7 @@ from typing import Optional
 import numpy as np
 
 from .tracking_plan import plan_vocabulary  # noqa: F401  (re-exported for the plan path)
-from .game_profile import GameProfile, SOCCER_PROFILE
+from .game_profile import BASKETBALL_PROFILE, GameProfile, SOCCER_PROFILE
 
 log = logging.getLogger("highlights.perceive.florence")
 
@@ -116,7 +116,7 @@ _GAME_VOCABULARIES: dict[str, list[str]] = {
     "american football": ["football", "player", "referee"],
     "fa cup": list(SOCCER_PROFILE.vocabulary),
     "soccer ball": list(SOCCER_PROFILE.vocabulary),
-    "basketball": ["basketball", "player", "hoop", "referee"],
+    "basketball": list(BASKETBALL_PROFILE.vocabulary),
     "tennis": ["tennis ball", "player", "racket", "net"],
     "valorant": ["player", "agent", "weapon", "head"],
 }
