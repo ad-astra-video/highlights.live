@@ -47,6 +47,7 @@ import {
   type PerFrameSeed,
   type PerFrameSignal,
   type SignalGateOptions,
+  type TriggerFamilyLatency,
 } from "./observe-loop";
 import { LiveRunShared, buildLiveObserveMetrics, seedSignalFromEvidence, type LiveObserveMetricsSnapshot } from "./analyzer";
 import type { StageAOutcomeLedger } from "./stage-a-metrics";
@@ -164,8 +165,10 @@ export interface MediaRailStats {
   triggerWindows: TriggerSchedulerStats;
   /** ADAAAA-7723 AC-1: whether {@link triggerWindows} balances. */
   triggersReconciled: boolean;
-  /** ADAAAA-7723 AC-2: onset -> anchored window latency PER family. */
-  triggerLatencyByFamily: { family: string; samples: number; p50Ms: number; p95Ms: number; maxMs: number }[];
+  /** ADAAAA-7723 AC-2: onset -> judging-window latency PER family, split into
+   *  anchored windows (`samples`/`p50Ms`), covered triggers (`covered*`) and the
+   *  pooled `judged*` total. */
+  triggerLatencyByFamily: TriggerFamilyLatency[];
   /** Decide calls the observer actually issued. */
   decideCalls: number;
   /** Accepted highlights. */
@@ -396,7 +399,14 @@ export class MediaRailObserver {
         `expired=${tw.expired ?? 0} fired=${tw.fired} pending=${tw.pending ?? 0} invalid=${tw.invalid} ` +
         `reconciled=${s.triggersReconciled} ` +
         `triggerLatency p50=${s.anchoredLatencyP50Ms}ms p95=${s.anchoredLatencyP95Ms}ms ` +
-        s.triggerLatencyByFamily.map((f) => `${f.family}(n=${f.samples}) p50=${f.p50Ms}ms p95=${f.p95Ms}ms`).join(" ")
+        s.triggerLatencyByFamily
+          .map(
+            (f) =>
+              `${f.family}(anchored n=${f.samples} p50=${f.p50Ms}ms p95=${f.p95Ms}ms, ` +
+              `covered n=${f.coveredSamples} p50=${f.coveredP50Ms}ms p95=${f.coveredP95Ms}ms, ` +
+              `judged n=${f.judgedSamples} p50=${f.judgedP50Ms}ms p95=${f.judgedP95Ms}ms)`
+          )
+          .join(" ")
     );
   }
 

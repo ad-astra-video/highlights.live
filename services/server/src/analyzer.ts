@@ -26,6 +26,7 @@ import {
 } from "./observe-loop";
 import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
 import type { AudioTriggerRecord, TriggerSchedulerStats } from "./audio-trigger";
+import type { TriggerFamilyLatency } from "./observe-loop";
 import { isStageBTrigger, triggerFamily, type WhistleFireBlock } from "./audio-trigger";
 import { isGoalRefutingReason } from "./highlight-postable";
 
@@ -1277,9 +1278,10 @@ export interface LiveObserveMetricsSnapshot {
   triggerWindows?: TriggerSchedulerStats;
   /** ADAAAA-7723 AC-1: whether that ledger balances (`unaccounted === 0`). */
   triggerReconciled?: boolean;
-  /** ADAAAA-7723 AC-2: onset -> anchored window latency measured PER family
-   *  (Stage-A roar, Stage-B whistle) instead of as one pooled number. */
-  triggerLatencyByFamily?: { family: string; samples: number; p50Ms: number; p95Ms: number; maxMs: number }[];
+  /** ADAAAA-7723 AC-2: onset -> judging-window latency measured PER family
+   *  (Stage-A roar, Stage-B whistle), split into anchored windows, triggers a
+   *  decided window covered, and their pooled `judged` total. */
+  triggerLatencyByFamily?: TriggerFamilyLatency[];
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
