@@ -681,7 +681,10 @@ export class MediaServer {
         // eslint-disable-next-line no-console
         console.log(`[rtc] obs seq=${seq} liveMs=${Math.round((Date.now() / 1000 - ts) * 1000)} decodeMs=${decodeLatencyMs ?? 0}`);
         this.relay(stream, socket, obs);
-        void this.callback(stream, obs, jpeg);
+        // `ts` is the media node's own frame clock (epoch seconds). The control
+        // plane's rail dates every decision off it, so it travels with the
+        // observation instead of trusting whatever the runner echoed back.
+        void this.callback(stream, obs, jpeg, ts);
         return;
       }
       await sleep(250);
@@ -736,7 +739,7 @@ export class MediaServer {
     });
   }
 
-  private async callback(stream: ActiveStream, obs: any, jpeg?: Uint8Array) {
+  private async callback(stream: ActiveStream, obs: any, jpeg?: Uint8Array, frameTs?: number) {
     if (!this.opts.callbackBase || !stream.jobId) return;
     try {
       // ADAAAA-7699: carry the decoded anchor JPEG with the observation. The
@@ -747,13 +750,39 @@ export class MediaServer {
       // means the control plane records the observation as evidence.
       const frameB64 =
         jpeg && jpeg.length > 0 && jpeg.length <= MAX_CALLBACK_FRAME_BYTES ? Buffer.from(jpeg).toString("base64") : undefined;
-      await fetch(`${this.opts.callbackBase}/jobs/${stream.jobId}/observe`, {
+      // ADAAAA-7699 fix: stamp the frame clock the media node actually decoded.
+      // The runner echoes back the `timestamp` it was handed, but a relayed
+      // observation can arrive with a missing/0 timestamp (evidence-only
+      // payloads, older runner builds). The control plane's media rail rebases
+      // its content clock on the FIRST timestamp it sees and drops a frame whose
+      // content time is more than the lag budget behind the wall clock, so a
+      // zero timestamp reads as 1970: every frame is dropped as stale and only
+      // the tail decide ever runs (0 decides on a live share). The media node is
+      // the only party that knows when it decoded this frame, so it stamps it.
+      const relayTs =
+        typeof frameTs === "number" && Number.isFinite(frameTs) && frameTs > 0 ? frameTs : undefined;
+      const body: Record<string, unknown> = { ...obs };
+      if (relayTs !== undefined) body.timestamp = relayTs;
+      if (typeof body.seq !== "number" && Number.isFinite(Number(obs?.seq))) body.seq = Number(obs?.seq);
+      if (frameB64) body.frameB64 = frameB64;
+      const res = await fetch(`${this.opts.callbackBase}/jobs/${stream.jobId}/observe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(frameB64 ? { ...obs, frameB64 } : obs),
+        body: JSON.stringify(body),
       });
-    } catch {
-      /* observe relay is best-effort */
+      // A rejected callback used to be invisible: the rail then reads as "no
+      // observations" while the media node logs a healthy obs line. Surface it
+      // (bounded: only non-2xx, and the route's own message).
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        // eslint-disable-next-line no-console
+        console.log(
+          `[media] observe-callback rejected job=${stream.jobId} seq=${body.seq} status=${res.status} ${detail.slice(0, 120)}`
+        );
+      }
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.log(`[media] observe-callback failed job=${stream.jobId} seq=${obs?.seq}: ${String(e?.message || e).slice(0, 120)}`);
     }
   }
 

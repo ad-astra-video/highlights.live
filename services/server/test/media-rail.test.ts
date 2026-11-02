@@ -109,6 +109,28 @@ describe("MediaRailObserver decide cadence (ADAAAA-7699)", () => {
     expect(rail.stats().frames).toBe(0);
   });
 
+  it("rejects a relayed frame whose timestamp is not an epoch-second clock", async () => {
+    // The deployed defect: a media node that relayed `timestamp: 0` pinned the
+    // rail's content origin at 1970, the lag gate read every frame as decades
+    // stale, and only the finish-tail decide ever ran (0 decides per share).
+    const calls: any[] = [];
+    const rail = new MediaRailObserver({ jobId: "j-clock", onDecide: async (p) => (calls.push(p), false) });
+    for (let i = 0; i < 6; i++) rail.onObservation({ seq: i, timestamp: 0, tracks: [] }, jpeg(i));
+    await rail.finish();
+    expect(calls).toHaveLength(0);
+    expect(rail.stats().frames).toBe(0);
+    expect(rail.stats().clockRejected).toBe(6);
+    // A mis-stamped stream never becomes the content origin either.
+    expect(rail.contentOrigin()).toBeNull();
+    // ...and an honest clock on a fresh rail still decides normally.
+    const honest: any[] = [];
+    const rail2 = new MediaRailObserver({ jobId: "j-clock-ok", onDecide: async (p) => (honest.push(p), false) });
+    for (let i = 0; i < 4; i++) rail2.onObservation({ seq: 100 + i, timestamp: T0 + i, tracks: [] }, jpeg(100 + i));
+    await waitFor(() => rail2.stats().decideCalls > 0);
+    expect(rail2.stats().frames).toBe(4);
+    expect(rail2.stats().clockRejected).toBe(0);
+  });
+
   it("never swallows a due trigger when the decide budget cannot afford the fire", async () => {
     const calls: any[] = [];
     const rail = new MediaRailObserver({ jobId: "j-budget", onDecide: async (p) => (calls.push(p), false) });
