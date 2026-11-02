@@ -164,10 +164,15 @@ def _range_headers(path: str) -> tuple[str | None, str | None]:
 
 
 def decode_window(chunk_path: str, offset_s: float, dur_s: float, width: int, height: int,
-                  fps: float, dest: str) -> int:
+                  fps: float, dest: str, max_frames: int = 0) -> int:
     """Decode `dur_s` of `chunk_path` starting `offset_s` in, at width x height.
 
     One ffmpeg pass per window, rawvideo rgb24 into `dest`. Returns frame count.
+
+    `max_frames` caps the output to the window's planned sample count. Without it
+    the `fps` filter emits a frame at BOTH endpoints (a 21 s window at 1 fps gave
+    22-23 frames, not 21), so a run could overrun the approved frame envelope
+    purely from sampling and stop after paying for the fetch.
     """
     cmd = [
         "ffmpeg", "-v", "error", "-nostdin",
@@ -177,8 +182,10 @@ def decode_window(chunk_path: str, offset_s: float, dur_s: float, width: int, he
         "-vf", f"fps={fps},scale={width}:{height}",
         "-pix_fmt", "rgb24",
         "-f", "rawvideo",
-        dest,
     ]
+    if max_frames:
+        cmd += ["-frames:v", str(max_frames)]
+    cmd += [dest]
     proc = subprocess.run(cmd, capture_output=True)
     if proc.returncode != 0:
         raise SystemExit(f"ffmpeg decode failed: {proc.stderr.decode('utf-8', 'replace')[-800:]}")
@@ -217,8 +224,10 @@ def cmd_fetch(args) -> int:
         chunk = os.path.join(args.fetch_dir, f"{w['id']}.ts")
         got = fetch_range(args.source_url, start, end, chunk)
         frames_path = os.path.join(args.fetch_dir, f"{w['id']}.rgb")
+        want = int(round((w["t_end"] - w["t_start"]) * args.fps))
         n = decode_window(chunk, w["t_start"] - t_fetch, w["t_end"] - w["t_start"],
-                          args.width, args.height, args.fps, frames_path)
+                          args.width, args.height, args.fps, frames_path,
+                          max_frames=want)
         os.remove(chunk)
         index["windows"].append({
             **w,

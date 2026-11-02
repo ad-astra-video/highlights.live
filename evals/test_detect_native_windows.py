@@ -189,6 +189,31 @@ def test_fetch_range_refuses_a_206_for_the_wrong_window(tmp_path):
         srv.shutdown()
 
 
+def test_decode_window_caps_output_at_the_planned_frame_count(tmp_path, monkeypatch):
+    # A 21 s window at 1 fps must yield 21 frames, not the 22-23 the fps filter
+    # emits when it samples both endpoints - otherwise the run overruns the
+    # approved frame envelope from sampling alone.
+    w, h = 4, 2
+    dest = str(tmp_path / "w.rgb")
+    seen = {}
+
+    class _Done:
+        returncode = 0
+        stderr = b""
+
+    def fake_run(cmd, capture_output=False):
+        seen["cmd"] = cmd
+        with open(dest, "wb") as fh:
+            fh.write(b"\x00" * (w * h * 3 * 21))
+        return _Done()
+
+    monkeypatch.setattr(dnw.subprocess, "run", fake_run)
+    n = dnw.decode_window("chunk.ts", 0.0, 21.0, w, h, 1.0, dest, max_frames=21)
+    assert n == 21
+    assert "-frames:v" in seen["cmd"]
+    assert seen["cmd"][seen["cmd"].index("-frames:v") + 1] == "21"
+
+
 # --- stage 2: stubbed detector, no torch, no perceive app -------------------
 
 
