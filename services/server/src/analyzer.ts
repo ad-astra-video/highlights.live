@@ -710,8 +710,12 @@ export interface PipelineClient {
       imageB64?: string;
       reasoningEffort?: string;
       /** Detail-first (ADAAAA-4954): temporal frame SEQUENCE the Gemma runner
-       * reasons across (decideWindowN-length). Absent = single image (live). */
-      frames?: { role: string; base64: string }[];
+       * reasons across (decideWindowN-length). Absent = single image (live).
+       * ADAAAA-7734: `seq` is the frame's global rail position, forwarded so a
+       * decide note's `analysis.frames[]` can name the exact frame file. The
+       * decide service ignores it (ImageRef keeps role/base64); the server
+       * rewrites the refs from the observe payload after the verdict. */
+      frames?: { role: string; base64: string; seq?: number }[];
       /** Surrounding audio clip (mono 16 kHz WAV, base64) at the trigger. */
       audioB64?: string;
       /** The current 60 s window's already-computed facts as bounded text (A2,
@@ -2942,7 +2946,11 @@ export function buildObserveDecideRequest(
   const opts: Parameters<PipelineClient["decide"]>[1] = {
     gameHint: cfg.gameHint,
     reasoningEffort: "none",
-    frames: payload.frames.map((f) => ({ role: "full", base64: f.imageB64 })),
+    frames: payload.frames.map((f) => ({
+      role: "full",
+      base64: f.imageB64,
+      ...(Number.isFinite(f.seq) ? { seq: Math.floor(f.seq as number) } : {}),
+    })),
     ...(windowAudioB64 ? { audioB64: windowAudioB64 } : {}),
     // ADAAAA-7028 Inc 2: audit identity — forward the job + frame-group
     // partition key so the decide service's `_audit` descriptor keys the
@@ -3019,6 +3027,40 @@ export function nextRunningSummary(prior: string | undefined, decision: Decision
 }
 
 /**
+ * ADAAAA-7734: give a decided window's analysis a RESOLVABLE frame evidence list.
+ *
+ * The decide service builds `analysis.frames[]` from the frame dicts it received
+ * and, because its `ImageRef` only carries `role`/`base64`, every ref came back
+ * as `{seq: <window index>, uri: ""}` — a placeholder that resolves to no image.
+ * The media rail persists the very JPEG it decided on, so the server rewrites the
+ * refs to the frames this window ACTUALLY carried, each pointing at the canonical
+ * `/jobs/<jobId>/frames/<seq>` delivery (the same route the job-detail filmstrip
+ * and decide-note thumbnails use).
+ *
+ * Pure and conservative: a payload whose frames carry no global seq (the VOD
+ * detail pass, legacy rows) leaves the analysis untouched — never a guessed seq.
+ */
+export function withWindowFrameRefs(
+  analysis: WindowAnalysis | undefined,
+  frames: { seq?: number }[] | undefined,
+  jobId?: string
+): WindowAnalysis | undefined {
+  if (!analysis) return analysis;
+  const list = frames ?? [];
+  if (list.length === 0) return analysis;
+  const refs: { seq: number; uri: string }[] = [];
+  for (const f of list) {
+    const raw = Number(f?.seq);
+    // One frame without a known global seq means the refs cannot be made
+    // truthful for this window: keep what the decide service returned.
+    if (!Number.isFinite(raw) || raw < 0) return analysis;
+    const seq = Math.floor(raw);
+    refs.push({ seq, uri: jobId ? `/jobs/${jobId}/frames/${seq}` : "" });
+  }
+  return { ...analysis, frames: refs };
+}
+
+/**
  * ADAAAA-7011: shared decide+accept callback for BOTH decide-observer paths
  * (the VOD ObserveDecider and the live LiveObserver). Builds the decide request
  * from an observe window payload, runs the gemma decide (with on-demand
@@ -3066,6 +3108,11 @@ export async function observeOnDecide(
       decision = await client.decide(evidence, opts);
     }
   }
+  // ADAAAA-7734: replace the decide service's placeholder frame refs with the
+  // frames this window actually carried, each resolvable at
+  // /jobs/<jobId>/frames/<seq> (the media rail persists those JPEGs). Absent on
+  // payloads without global seqs (VOD), so that path is byte-identical.
+  decision.analysis = withWindowFrameRefs(decision.analysis, payload.frames, cfg.jobId);
   // ADAAAA-7028 Inc 2: ingest the decide audit descriptor into the durable
   // decide_audit index (best-effort; never a pipeline failure). Gated by
   // `cfg.onDecideAudit` (wired to recordDecideAudit in the server). Captured
@@ -4026,7 +4073,10 @@ export async function analyzeJob(
             }
           : { ts: frame.timestamp, tracks: [], objects: [], ocr: [], signal: undefined };
         observeDecider?.record(frame.timestamp, frame.imageB64, seed);
-        liveObserver?.record(frame.timestamp, frame.imageB64, seed);
+        // ADAAAA-7734: the live rail's frames are on disk at the same position as
+        // `frame.seq` (ffmpeg `frame_%06d.jpg`, position == seq), so stamp it and
+        // the decided window's analysis refs resolve to the exact JPEG.
+        liveObserver?.record(frame.timestamp, frame.imageB64, seed, frame.seq);
         // ADAAAA-7658: hand every fired audio-noise trigger to the live
         // observer so its window is anchored to the onset (one analysis per
         // trigger, coalesced inside the scheduler) instead of only blind

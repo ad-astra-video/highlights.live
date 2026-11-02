@@ -52,6 +52,12 @@ export interface Section {
 export interface FrameInventory {
   frameCount: number;
   sampleFps: number;
+  /** ADAAAA-7734: the actual on-disk frame seqs when the directory is NOT a
+   *  contiguous 0..n-1 series (the media/browser rail names each JPEG by its
+   *  global seq and decimates the oldest past its storage cap). When present this
+   *  list wins over `frameCount`: deleted frames must not be re-derived as tiles,
+   *  and a surviving frame keeps its true seq. */
+  frameSeqs?: number[];
 }
 
 /** Partition per-frame observations into fixed 3 s sections. A frame belongs to
@@ -91,8 +97,19 @@ export function buildSections(
   // dropped. A frame with no row keeps its seq-derived timestamp and an empty
   // track list — the tile renders the servable JPEG instead of "no frames".
   const frameCount = Math.max(0, Math.floor(inventory?.frameCount ?? 0));
-  if (frameCount > 0) {
-    const fps = inventory && Number.isFinite(inventory.sampleFps) && inventory.sampleFps > 0 ? inventory.sampleFps : 1;
+  const fps = inventory && Number.isFinite(inventory.sampleFps) && inventory.sampleFps > 0 ? inventory.sampleFps : 1;
+  // ADAAAA-7734: an explicit on-disk seq list wins over a contiguous count — the
+  // media rail can leave gaps (oldest frames decimated past the storage cap), and
+  // a gap must never be re-derived as a tile that 404s.
+  const inventorySeqs = (inventory?.frameSeqs ?? []).filter((seq) => Number.isFinite(seq) && seq >= 0);
+  if (inventorySeqs.length > 0) {
+    for (const seq of inventorySeqs) {
+      if (seenSeq.has(seq)) continue;
+      const timestamp = seq / fps;
+      const s = getSection(sectionOf(timestamp));
+      s.frames.push({ seq, timestamp, uri: `/jobs/${jobId}/frames/${seq}`, tracks: [] });
+    }
+  } else if (frameCount > 0) {
     for (let seq = 0; seq < frameCount; seq++) {
       if (seenSeq.has(seq)) continue;
       const timestamp = seq / fps;

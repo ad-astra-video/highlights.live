@@ -98,8 +98,11 @@ export function subsampleToCap<T>(ordered: T[], max: number): { items: T[]; capp
 export interface ObserveWindow {
   /** The content moment the window is centered on (the decide "current moment"). */
   centerTs: number;
-  /** Ordered (oldest -> newest) frames the decide call carries. */
-  frames: { ts: number; imageB64: string }[];
+  /** Ordered (oldest -> newest) frames the decide call carries. `seq` is the
+   *  frame's GLOBAL position on the rail when the caller knows it (the media
+   *  rail does, ADAAAA-7734), so a decided window's analysis refs can point at
+   *  the exact frame file that was in it; absent on rails without a global seq. */
+  frames: { ts: number; imageB64: string; seq?: number }[];
   /** True when the max-frames cap forced a subsample. */
   capped: boolean;
   /** Frames present in the source window but dropped by the cap (for the
@@ -119,7 +122,7 @@ export interface ObserveWindow {
  * with no image are ignored. An empty window yields `frames: []`.
  */
 export function assembleObserveWindow(
-  frames: { ts: number; imageB64: string }[],
+  frames: { ts: number; imageB64: string; seq?: number }[],
   centerTs: number,
   opts: { windowS?: number; maxFrames?: number; fps?: number } = {}
 ): ObserveWindow {
@@ -137,10 +140,10 @@ export function assembleObserveWindow(
   const step = fps > 0 ? 1 / fps : Infinity;
   const start = inWindow[0].ts;
   const end = inWindow[inWindow.length - 1].ts;
-  const grid: { ts: number; imageB64: string }[] = [];
+  const grid: { ts: number; imageB64: string; seq?: number }[] = [];
   const seenTs = new Set<number>();
-  const nearest = (t: number): { ts: number; imageB64: string } | undefined => {
-    let best: { ts: number; imageB64: string } | undefined;
+  const nearest = (t: number): { ts: number; imageB64: string; seq?: number } | undefined => {
+    let best: { ts: number; imageB64: string; seq?: number } | undefined;
     let bestDiff = Infinity;
     for (const f of inWindow) {
       const d = Math.abs(f.ts - t);
@@ -223,7 +226,7 @@ export const LIVE_OBSERVE_MAX_FRAMES = 30;
  * so a consumer can tell which moment the window was observed at.
  */
 export function assembleLiveWindow(
-  frames: { ts: number; imageB64: string }[],
+  frames: { ts: number; imageB64: string; seq?: number }[],
   nowTs: number,
   opts: { windowS?: number; maxFrames?: number; fps?: number } = {}
 ): ObserveWindow {
@@ -239,10 +242,10 @@ export function assembleLiveWindow(
   // Resolve to the fps grid across [start, now] (nearest frame per step).
   const step = fps > 0 ? 1 / fps : Infinity;
   const start = inWindow[0].ts;
-  const grid: { ts: number; imageB64: string }[] = [];
+  const grid: { ts: number; imageB64: string; seq?: number }[] = [];
   const seenTs = new Set<number>();
-  const nearest = (t: number): { ts: number; imageB64: string } | undefined => {
-    let best: { ts: number; imageB64: string } | undefined;
+  const nearest = (t: number): { ts: number; imageB64: string; seq?: number } | undefined => {
+    let best: { ts: number; imageB64: string; seq?: number } | undefined;
     let bestDiff = Infinity;
     for (const f of inWindow) {
       const d = Math.abs(f.ts - t);
@@ -328,7 +331,7 @@ export interface LiveObserveLatencySample {
  * cadence tick regardless of whether perceive emitted a candidate.
  */
 export class LiveObserver {
-  private readonly frames: { ts: number; imageB64: string }[] = [];
+  private readonly frames: { ts: number; imageB64: string; seq?: number }[] = [];
   private readonly findings = new Map<number, PerFrameSeed>();
   private lastFireTs: number | null = null;
   private readonly cadenceS: number;
@@ -423,9 +426,11 @@ export class LiveObserver {
     this.triggers = new TriggerWindowScheduler({ maxStaleS: Math.max(AUDIO_TRIGGER_MAX_STALE_S, this.windowS) });
   }
 
-  /** Record a frame + its perceive-derived seed context (no re-inference). */
-  record(ts: number, imageB64: string, seed: PerFrameSeed): void {
-    this.frames.push({ ts, imageB64 });
+  /** Record a frame + its perceive-derived seed context (no re-inference).
+   *  `seq` (optional) is the frame's global rail position; the media rail passes
+   *  it so a decided window can name the exact frame files it saw (ADAAAA-7734). */
+  record(ts: number, imageB64: string, seed: PerFrameSeed, seq?: number): void {
+    this.frames.push(Number.isFinite(seq) ? { ts, imageB64, seq: Math.floor(seq as number) } : { ts, imageB64 });
     this.findings.set(ts, seed);
     const cutoff = ts - Math.max(this.windowS, OBSERVE_WINDOW_S);
     while (this.frames.length && this.frames[0].ts < cutoff) this.frames.shift();
@@ -966,7 +971,10 @@ export function windowHasSignal(
 
 export interface ObserveDecidePayload {
   centerTs: number;
-  frames: { ts: number; imageB64: string }[];
+  /** `seq` (when present) is the frame's global rail position — the media rail
+   *  stamps it so the decided window's `analysis.frames[].uri` can resolve to
+   *  the exact frame file (ADAAAA-7734). */
+  frames: { ts: number; imageB64: string; seq?: number }[];
   /** Perceive-seeded per-frame context, aligned to the window frames. */
   seeds: PerFrameSeed[];
   /** Per-window bias hints / provenance from perceive trigger signals — NOT the
