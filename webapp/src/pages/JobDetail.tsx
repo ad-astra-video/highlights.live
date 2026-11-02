@@ -75,7 +75,13 @@ const REFRESH_EVENTS = ["observation", "candidate", "candidateBlocked", "highlig
  * coalesces the per-frame SSE burst; the floor keeps a long live job at a
  * bounded request rate (~20-25 tiny fetches/min) while still surfacing a window
  * within 2 s of the decide note that produced it. */
-const DELTA_MIN_INTERVAL_MS = 1_500;
+const DELTA_MIN_INTERVAL_MS = 1_000;
+/** ADAAAA-7742: how long the SSE channel may stay silent before the page fires
+ * an incremental refresh on its own. A live run emits an observation per sampled
+ * frame, but that cadence can drop below 1/s when the box is contended — without
+ * this idle trigger a new window would wait for the next event (measured 4 s on
+ * the deployed box), so the page reconciles the delta at most ~1 s late. */
+const DELTA_IDLE_MS = 1_200;
 /** ADAAAA-7742: how long the SSE channel may stay silent before the 5 s
  * reconciling poll falls back to a full composite re-fetch — the recovery path
  * for a missed event or a dropped socket. */
@@ -1222,6 +1228,10 @@ export function JobDetail() {
   // (a note whose trigger trails the newest bucket) widens that further.
   const loadDelta = useCallback(async () => {
     if (deltaInFlightRef.current) return;
+    // Respect the floor even when the call comes from the idle trigger (the
+    // debounced path already waits it out); the queued afterIndex survives so the
+    // next tick still fetches from the right bucket.
+    if (Date.now() - lastDeltaAtRef.current < DELTA_MIN_INTERVAL_MS) return;
     const last = lastSectionIndexRef.current;
     if (last < 0) return; // no baseline yet — the initial full load owns it
     const tail = Math.max(-1, last - 1);
@@ -1333,6 +1343,24 @@ export function JobDetail() {
     });
     return () => poll.stop();
   }, [terminal, id, load]);
+
+  // ADAAAA-7742: idle trigger for the incremental path. The SSE channel is the
+  // fast path, but its event cadence follows the sampled frame rate; when the box
+  // is contended that drops below one event per second and a freshly persisted
+  // window would sit unfetched (measured 4 s). While the channel is believed
+  // live, reconcile the delta on a 1 s silence so a new window still renders
+  // within 2 s. When the channel goes quiet for SSE_QUIET_MS the composite
+  // recovery poll above takes over instead.
+  useEffect(() => {
+    if (terminal || !id) return;
+    const timer = setInterval(() => {
+      if (!aliveRef.current) return;
+      const quietMs = Date.now() - lastEventAtRef.current;
+      if (quietMs < DELTA_IDLE_MS || quietMs > SSE_QUIET_MS) return;
+      loadDelta();
+    }, 500);
+    return () => clearInterval(timer);
+  }, [terminal, id, loadDelta]);
 
   // ADAAAA-7623: detail-on-demand hop from a ladder window narrative into the
   // Analysis window that covers the same instant (same 3 s bucket, so it holds
