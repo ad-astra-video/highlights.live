@@ -621,6 +621,11 @@ services:
       # observeMetrics.throttleSkippedWindows) without touching the cadence, the
       # window span or the audio noise-change trigger. Unset/1 = off.
       - LIVE_DECIDE_KEEP_RATIO=${LIVE_DECIDE_KEEP_RATIO:-}
+      # ADAAAA-7799 addendum: the LIVE-only decide HOP in content seconds. Unset
+      # keeps the 3 s cadence; 5 is the CEO 5 s-hop row (~60 decides / 300 s on
+      # the unchanged ~10 s window). Does not touch VOD, the window span or the
+      # audio noise-change trigger.
+      - LIVE_OBSERVE_CADENCE_S=${LIVE_OBSERVE_CADENCE_S:-}
       # ADAAAA-6973/7051: the live goal-confirm gate. DECIDE_CONFIRM_ENABLED=1
       # arms the Stage-2 confirm goal-leg pass (server `shouldRunConfirm`,
       # decide `_confirm_pass_enabled`) so a candidate is only published when

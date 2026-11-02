@@ -1023,6 +1023,13 @@ export interface AnalyzerConfig {
    * can be tuned without code change.
    */
   observeCadenceS?: number;
+  /** ADAAAA-7799 (lever C addendum): LIVE-only decide HOP in content seconds.
+   *  Unset => the shared observe cadence (`OBSERVE_CADENCE_S` = 3). A 5 s hop on
+   *  the ~10 s rolling window keeps the span and gives ~5 s of overlap and ~60
+   *  decides per 300 s per stream — the CEO 5 s-hop row. It touches neither the
+   *  window span nor the audio noise-change trigger and leaves VOD alone.
+   *  Wired from `LIVE_OBSERVE_CADENCE_S`. */
+  liveObserveCadenceS?: number;
   /**
    * ADAAAA-7007: observe reference window length (content seconds) assembled
    * around the current moment. Default 10 (`OBSERVE_WINDOW_S`). Decides only
@@ -4037,7 +4044,7 @@ export async function analyzeJob(
   const liveObserver =
     cfg.liveObserveLoop && cfg.decideWindowN === undefined
       ? new LiveObserver({
-          cadenceS: cfg.observeCadenceS,
+          cadenceS: cfg.liveObserveCadenceS ?? cfg.observeCadenceS,
           windowS: cfg.observeWindowS,
           maxFrames: cfg.observeMaxFrames ?? LIVE_OBSERVE_MAX_FRAMES,
           fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,

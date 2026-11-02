@@ -219,6 +219,11 @@ export interface ServerConfig {
    * cadence is held. Acceptance still runs in content order. Default 4.
    * `LIVE_OBSERVE_IN_FLIGHT`. */
   liveObserveInFlight: number;
+  /** ADAAAA-7799 (lever C addendum): LIVE-only decide hop in content seconds
+   *  (`LIVE_OBSERVE_CADENCE_S`). Unset keeps the CEO-locked 3 s cadence; 5
+   *  produces the 5 s-hop row (~60 decides / 300 s) without touching the window
+   *  span, the audio trigger or VOD. */
+  liveObserveCadenceS?: number;
   /** ADAAAA-7777 (lever B, trim 1): hard cap on the frames ONE live decide
    * window carries. The live window is `OBSERVE_WINDOW_S` (10 s) resolved on an
    * `OBSERVE_CONTENT_FPS` (2) grid, so the natural window is <= 20 frames and the
@@ -599,6 +604,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // self-corrects instead of queueing unbounded. `LIVE_OBSERVE_IN_FLIGHT=1`
     // restores the old serial behaviour exactly.
     liveObserveInFlight: Number(env.LIVE_OBSERVE_IN_FLIGHT ?? 4),
+    // ADAAAA-7799 (lever C addendum): live-only decide hop. Unset keeps the 3 s
+    // cadence (byte-identical), so this cannot move the shipped rail by itself.
+    liveObserveCadenceS: env.LIVE_OBSERVE_CADENCE_S !== undefined ? Number(env.LIVE_OBSERVE_CADENCE_S) : undefined,
     // ADAAAA-7777 (lever B, trim 1): the live window's frame budget. Defaults to
     // the historic shared cap (30) so an unset env is byte-identical.
     liveObserveMaxFrames: Number(env.LIVE_OBSERVE_MAX_FRAMES ?? LIVE_OBSERVE_MAX_FRAMES),
