@@ -81,6 +81,23 @@ describe("deriveLiveCapture (ADAAAA-7750 AC3)", () => {
     expect(cap.cause).toBe("Connecting this share to the analysis node.");
   });
 
+  it("stops calling a share 'connecting' once the grace window passes with a live session row", () => {
+    // The `media_sessions` row is written at provision and only cleared when the
+    // job ends, so a stale `active` row must not keep a dead share in
+    // "connecting" forever - and must not be reported as a hard interruption
+    // either; the copy names what is actually true.
+    const cap = deriveLiveCapture({
+      job: browserJob({ startedAt: "2026-11-02T05:59:00.000Z" }),
+      observationCount: 0,
+      highlightCount: 0,
+      hasLiveMediaSession: true,
+      nowMs: NOW,
+    });
+    expect(cap.state).toBe("interrupted");
+    expect(cap.cause).toBe("Capture is connected but no frames are arriving from this share.");
+    expect(cap.action).toBe("Stop the share and start it again.");
+  });
+
   it("distinguishes a live share whose windows were all judged not a highlight", () => {
     const cap = deriveLiveCapture({
       job: browserJob({ summaryLog: windows(3) }),

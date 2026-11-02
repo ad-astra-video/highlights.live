@@ -168,20 +168,26 @@ export function deriveLiveCapture(input: LiveCaptureInput): LiveCapture {
   }
 
   if (frames === 0) {
-    if (!hasSession && ageS >= LIVE_CAPTURE_STALE_S) {
+    if (ageS < LIVE_CAPTURE_STALE_S) {
       return {
         ...base,
-        state: "interrupted",
-        cause: "Capture interrupted - no frames are arriving from this share.",
-        action: "Stop the share and start it again.",
+        state: "connecting",
+        firstWindowInS: LIVE_CAPTURE_FIRST_WINDOW_BUDGET_S,
+        cause: "Connecting this share to the analysis node.",
         updatedAt: new Date(nowMs).toISOString(),
       };
     }
+    // Past the grace window with zero frames the capture surface is not
+    // delivering, whether or not the `media_sessions` row still reads `active`
+    // (the row is written at provision and only cleared when the job ends, so it
+    // cannot be trusted as liveness on its own). Name the shape honestly.
     return {
       ...base,
-      state: "connecting",
-      firstWindowInS: LIVE_CAPTURE_FIRST_WINDOW_BUDGET_S,
-      cause: "Connecting this share to the analysis node.",
+      state: "interrupted",
+      cause: hasSession
+        ? "Capture is connected but no frames are arriving from this share."
+        : "Capture interrupted - no frames are arriving from this share.",
+      action: "Stop the share and start it again.",
       updatedAt: new Date(nowMs).toISOString(),
     };
   }
