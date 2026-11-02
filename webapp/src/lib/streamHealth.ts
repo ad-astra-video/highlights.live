@@ -198,6 +198,13 @@ export function foldSample(prev: HealthState, raw: RawSample): HealthState {
 
 type StatsLike = Record<string, any>;
 
+/**
+ * The shapes a stats report arrives in: a real `RTCStatsReport` (maplike — it
+ * yields `[id, stat]` pairs on iteration and exposes `values()`), or the plain
+ * array of stat objects a mock/test hands over.
+ */
+export type RtcStatsSource = Iterable<StatsLike> | { values: () => Iterable<StatsLike> };
+
 export interface RtcSample extends QualitySample {
   atMs: number;
   bytesSent: number | null;
@@ -213,11 +220,46 @@ function num(v: any): number | null {
 }
 
 /**
- * Reduce an RTCPeerConnection.getStats() report (RTCStatsReport is an iterable
- * of {type, ...} entries) to the handful of numbers the strip needs. Pure, so
- * the boundaries are unit-testable without a peer connection.
+ * Flatten any getStats() shape into the stat OBJECTS it carries.
+ *
+ * `RTCPeerConnection.getStats()` returns an `RTCStatsReport`, which is MAPLIKE:
+ * plain iteration yields `[id, statObject]` pairs, so `entry.type` is
+ * `undefined` for every row and every field stays null (ADAAAA-7731 — the
+ * Quality and Bitrate chips read "—" for a whole live share because of exactly
+ * this). Older callers/tests pass a plain array of stat objects, so both shapes
+ * are accepted: prefer `values()` when the report exposes it, and unwrap an
+ * `[id, stat]` pair defensively when it does not.
  */
-export function parseRtcStats(stats: Iterable<StatsLike>, atMs: number): RtcSample {
+function statObjects(stats: RtcStatsSource | null | undefined): StatsLike[] {
+  if (!stats || typeof stats !== "object") return [];
+  let entries: Iterable<unknown> = stats as Iterable<unknown>;
+  const maybeValues = (stats as { values?: unknown }).values;
+  if (typeof maybeValues === "function") {
+    try {
+      entries = (maybeValues as () => Iterable<unknown>).call(stats);
+    } catch {
+      entries = [];
+    }
+  }
+  const out: StatsLike[] = [];
+  for (const entry of entries) {
+    if (Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string") {
+      const stat = entry[1];
+      if (stat && typeof stat === "object") out.push(stat as StatsLike);
+      continue;
+    }
+    if (entry && typeof entry === "object") out.push(entry as StatsLike);
+  }
+  return out;
+}
+
+/**
+ * Reduce an RTCPeerConnection.getStats() report to the handful of numbers the
+ * strip needs. Pure, so the boundaries are unit-testable without a peer
+ * connection. Accepts a real maplike `RTCStatsReport` as well as the plain
+ * array of stat objects a mock hands over.
+ */
+export function parseRtcStats(stats: RtcStatsSource, atMs: number): RtcSample {
   let rttMs: number | null = null;
   let remoteRttMs: number | null = null;
   let lossPct: number | null = null;
@@ -230,7 +272,7 @@ export function parseRtcStats(stats: Iterable<StatsLike>, atMs: number): RtcSamp
   let height: number | null = null;
   let fps: number | null = null;
 
-  for (const entry of stats) {
+  for (const entry of statObjects(stats)) {
     if (!entry || typeof entry !== "object") continue;
     const type = entry.type;
     if (type === "candidate-pair") {

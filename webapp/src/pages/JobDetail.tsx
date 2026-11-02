@@ -52,6 +52,7 @@ import {
 } from "../lib/decideAudit";
 import { jobTitle } from "../lib/vodJobs";
 import { failureReasonLabel } from "../lib/failureReason";
+import { customerWindowRange, customerWindowStatus, customerWindowStatusKey } from "../lib/customerDetail";
 import { startDetailPoll } from "../lib/detailPoll";
 import { frameFetchWindow } from "../lib/frameFetchWindow";
 
@@ -277,6 +278,38 @@ interface AnalysisWindowProps {
   /** Initial collapse state (default expanded). SSR/test hook; the toggle
    *  switches it client-side. */
   defaultOpen?: boolean;
+  /** Operator session? A non-admin window is the customer projection
+   *  (ADAAAA-7737): time range + plain-language status only, no decide
+   *  attribution and no filmstrip. Defaults to the operator surface for direct
+   *  component renders; the page always passes the session role. */
+  admin?: boolean;
+}
+
+/**
+ * Customer projection of one Analysis window (ADAAAA-7737). A finished job's
+ * window is a TIME RANGE plus "Highlight detected" / "Checked — no highlight".
+ * It carries no decide label, no event taxonomy, no score, no outcome code and
+ * no per-frame track counts; the same payload still feeds every admin surface
+ * on the same job id, so this is a render-boundary projection, not a filter.
+ */
+export function CustomerAnalysisWindow({ section }: { section: FrameSection }) {
+  const status = customerWindowStatus(section);
+  const key = customerWindowStatusKey(status);
+  return (
+    <div
+      className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${key === "highlight" ? KIND_TONE.highlight : KIND_TONE.not_highlight}`}
+      data-analysis-window
+      data-section-index={section.index}
+      data-analysis-window-status={key}
+    >
+      <span className="font-mono text-xs text-ink" data-analysis-window-range>
+        {customerWindowRange(section)}
+      </span>
+      <span className="ml-auto rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide" data-analysis-window-status-label>
+        {status}
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -284,9 +317,13 @@ interface AnalysisWindowProps {
  * the summary text plus the color-coded window-type chips (highlight /
  * suppressed / not highlight) so the type stays spot-able at a glance without
  * expanding. Expanded it shows the decide-note banners + frame filmstrip.
+ *
+ * ADAAAA-7737: for a `role=user` session the whole expanded body (decide
+ * banners, per-frame track counts) renders nothing — see CustomerAnalysisWindow.
  */
-export function AnalysisWindow({ section, token, jobId, selectMode, selectedSeqs, onFrameClick, defaultOpen = true }: AnalysisWindowProps) {
+export function AnalysisWindow({ section, token, jobId, selectMode, selectedSeqs, onFrameClick, defaultOpen = true, admin = true }: AnalysisWindowProps) {
   const [open, setOpen] = useState(defaultOpen);
+  if (!admin) return <CustomerAnalysisWindow section={section} />;
   const kinds = sectionKinds(section);
   return (
     <section className="rounded-xl border border-purple/30 bg-black/30" data-analysis-window data-section-index={section.index}>
@@ -387,7 +424,7 @@ export function VideoSummary({
           ) : (
             <ol className="flex flex-col gap-1.5" data-detail-video-summary-log>
               {log.map((e, i) => (
-                <li key={e.seq ?? i} className="text-xs" data-detail-video-summary-entry data-seq={e.seq}>
+                <li key={e.seq ?? i} className="text-xs" data-detail-video-summary-entry>
                   <span className="font-mono text-mut">{summaryEntryTimestamp(e)}</span>
                   <span className="text-slate-ink"> {e.text}</span>
                 </li>
@@ -473,6 +510,12 @@ export interface HighlightCardProps {
   selectable?: boolean;
   selected?: boolean;
   onToggleSelect?: (h: JobDetailHighlight) => void;
+  /** Operator session? The customer card (ADAAAA-7737) is the clip, its time
+   *  range, the posting caption and Download / Copy link — no event taxonomy,
+   *  no score, no trigger, no outcome reason and no review controls. Defaults
+   *  to the operator surface for direct component renders; the page always
+   *  passes the session role. */
+  admin?: boolean;
 }
 
 export function HighlightCard({
@@ -484,6 +527,7 @@ export function HighlightCard({
   selectable = false,
   selected = false,
   onToggleSelect,
+  admin = true,
 }: HighlightCardProps) {
   const pending = pendingStatus !== null;
   const busyAccept = pendingStatus === "accepted";
@@ -501,13 +545,17 @@ export function HighlightCard({
   }
   return (
     <div className="card card-hover overflow-hidden" data-detail-highlight>
-      <VideoClip src={h.clipUri} label={h.eventType} error={h.clipError} />
+      <VideoClip src={h.clipUri} label={admin ? h.eventType : undefined} error={h.clipError} />
       <div className="p-4">
         <div className="flex items-center justify-between gap-2">
           <span className="flex items-center gap-1">
-            <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">
-              {h.eventType || "EVENT"}
-            </span>
+            {/* ADAAAA-7737: the event taxonomy (SPORTING_EVENT / NEAR_MISS / …)
+                and the review status are pipeline internals — admin only. */}
+            {admin && (
+              <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">
+                {h.eventType || "EVENT"}
+              </span>
+            )}
             {/* ADAAAA-7621: overlap dedupe is invisible without this — the
                 winning clip stands in for every overlapping clip folded into
                 it, so the card states how many moments it absorbed. The folded
@@ -538,7 +586,9 @@ export function HighlightCard({
             {h.status}
           </span>
         </div>
-        <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>
+        {/* ADAAAA-7737: the outcome reason is decide-layer copy ("outcome=…",
+            class taxonomy, scores) — admin only. */}
+        {admin && <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>}
         {/* ADAAAA-7248: honest audio state + ASR corroboration on the card. A
             clip cut from an audio-less source (screen/window share) shows an
             explicit label instead of silently implying sound; an ASR
@@ -556,13 +606,17 @@ export function HighlightCard({
             <span className="text-neon">ASR:</span> {h.asrTranscript}
           </div>
         )}
-        <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>
+        {admin && <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>}
         <div className="text-xs text-mut">
           T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
         </div>
-        <div className="mt-1 rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut" data-detail-trigger>
-          Trigger: <span className="font-bold text-ink">{triggerLabel(h.trigger)}</span>
-        </div>
+        {/* ADAAAA-7737: the trigger label names the internal detector and the
+            event class — admin only. */}
+        {admin && (
+          <div className="mt-1 rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut" data-detail-trigger>
+            Trigger: <span className="font-bold text-ink">{triggerLabel(h.trigger)}</span>
+          </div>
+        )}
         {/* ADAAAA-7622: editable posting caption, seeded by the page from the
             summary-log narrative for this clip's window with the event type and
             timestamp prefilled. The edit is what the batch export ships. */}
@@ -654,7 +708,9 @@ export function HighlightCard({
             {busyReject ? "Rejecting…" : "Reject"}
           </button>
         </div>
-        {h.status === "rejected" && (
+        {/* ADAAAA-7737: the recover-from-reject copy is an operator workflow
+            ("Rejected — …") and a customer never reaches the rejected lane. */}
+        {admin && h.status === "rejected" && (
           <div className="mt-2 rounded-lg border border-red/40 bg-red/10 px-2 py-1 text-xs text-red" data-detail-rejected>
             Rejected — the highlight leaves the accepted feed. Accept to restore within the recover window.
           </div>
@@ -678,6 +734,7 @@ export function SecondaryHighlightLane({
   highlights,
   tone = "mut",
   lane,
+  admin = true,
 }: {
   title: string;
   note: string;
@@ -685,6 +742,9 @@ export function SecondaryHighlightLane({
   tone?: "mut" | "yellow";
   /** `data-detail-lane` value so tests/QA can target the lane. */
   lane: "merged" | "notable";
+  /** Operator session? A customer row (ADAAAA-7737) is the time range only —
+   *  no score, no event taxonomy, no outcome code, no reason. */
+  admin?: boolean;
 }) {
   if (highlights.length === 0) return null;
   return (
@@ -701,15 +761,15 @@ export function SecondaryHighlightLane({
             <span className="font-bold text-ink">
               T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
             </span>
-            <span className="ml-2">
+            {admin && <span className="ml-2">
               · score {Math.round(h.score)}
-            </span>
-            {h.eventType && <span className="ml-2">· {h.eventType}</span>}
-            {h.outcome && <span className="ml-2">· outcome {h.outcome}</span>}
-            {lane === "merged" && h.duplicateOf && (
+            </span>}
+            {admin && h.eventType && <span className="ml-2">· {h.eventType}</span>}
+            {admin && h.outcome && <span className="ml-2">· outcome {h.outcome}</span>}
+            {admin && lane === "merged" && h.duplicateOf && (
               <span className="ml-2">· merged into {h.duplicateOf.slice(0, 8)}</span>
             )}
-            {h.reason && <div className="mt-0.5 text-slate-ink">{h.reason}</div>}
+            {admin && h.reason && <div className="mt-0.5 text-slate-ink">{h.reason}</div>}
           </li>
         ))}
       </ul>
@@ -957,6 +1017,30 @@ export function DecideAuditRow({ audit: a }: { audit: DecideAuditRecord }) {
         </div>
       </details>
     </li>
+  );
+}
+
+/**
+ * Customer Analysis section (ADAAAA-7737): a finished job's windows as time
+ * ranges with a plain-language status. No filter chips (their values are the
+ * internal `not_highlight` taxonomy), no search over decide text, no
+ * select/enlarge frame controls, no filmstrip. The admin block below keeps all
+ * of it on the same job id.
+ */
+export function CustomerAnalysisSection({ sections }: { sections: FrameSection[] }) {
+  return (
+    <>
+      <h3 className="text-2xl font-black">Analysis</h3>
+      {sections.length === 0 ? (
+        <div className="mt-3 text-mut" data-analysis-empty>No analysis windows for this job.</div>
+      ) : (
+        <div className="mt-3 flex flex-col gap-2" data-analysis-windows>
+          {sections.map((s) => (
+            <CustomerAnalysisWindow key={s.index} section={s} />
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1358,7 +1442,7 @@ export function JobDetail() {
             {/* ADAAAA-7623: the summary ladder — match rollup + chapters over
                 the stored summary log, above the flat log itself. Absent on
                 legacy jobs (component renders nothing). */}
-            <SummaryLadderView ladder={detail.summaryLadder} onJump={jumpToAnalysisWindow} />
+            <SummaryLadderView ladder={detail.summaryLadder} onJump={admin ? jumpToAnalysisWindow : undefined} />
             {/* ADAAAA-7466: the append-only per-pass summary time log, shown as
                 a collapsible "Video Summary" section (collapsed by default).
                 Replaces the removed running action notes. */}
@@ -1437,6 +1521,7 @@ export function JobDetail() {
                   selectable
                   selected={selectedIds.includes(h.id)}
                   onToggleSelect={toggleSelectHighlight}
+                  admin={admin}
                 />
               ))}
           </div>
@@ -1450,6 +1535,7 @@ export function JobDetail() {
             title="Merged into a highlight"
             note="Overlapping clips folded into the moment above so the same footage is not posted twice."
             highlights={detail.duplicateHighlights ?? []}
+            admin={admin}
           />
           <SecondaryHighlightLane
             lane="notable"
@@ -1457,12 +1543,16 @@ export function JobDetail() {
             note="Non-scoring plays (near miss / big play). They stay off the postable goal list."
             tone="yellow"
             highlights={detail.notableHighlights ?? []}
+            admin={admin}
           />
 
           {/* Rejected presentation (ADAAAA-6953): rejected clips leave the
               accepted feed and appear here so the user can still recover
-              (reject → accept within the window restores the clip). */}
-          {detail.highlights.filter((h) => h.status === "rejected").length > 0 && (
+              (reject → accept within the window restores the clip).
+              ADAAAA-7737: the reject path is an operator workflow — its cards
+              carry the decide outcome code and the "Rejected —" recovery copy,
+              so a customer session never renders the section. */}
+          {admin && detail.highlights.filter((h) => h.status === "rejected").length > 0 && (
             <>
               <h3 className="mt-8 text-2xl font-black" data-detail-rejected-heading>
                 Rejected
@@ -1476,6 +1566,7 @@ export function JobDetail() {
                       highlight={h}
                       onDecision={review}
                       pendingStatus={pendingReview?.id === h.id ? pendingReview.status : null}
+                      admin={admin}
                     />
                   ))}
               </div>
@@ -1487,6 +1578,12 @@ export function JobDetail() {
               only the color-coded type summary), a sticky top bar (filter +
               search + select/enlarge), a type filter, and a text search. */}
           <div className="mt-8" data-analysis-section>
+            {/* ADAAAA-7737: the operator Analysis (filter chips, search,
+                select/enlarge, filmstrip, decide banners) is an admin surface.
+                A customer session gets the time-range + plain-status projection
+                of the same payload; the data itself is never trimmed. */}
+            {admin ? (
+              <>
             {/* ADAAAA-7619: `-top-8` is NOT a typo and must not be "cleaned up"
                 back to `top-0`. The scroll container is Shell's
                 `<main class="flex-1 overflow-y-auto p-8">`, so the scrollport
@@ -1569,9 +1666,14 @@ export function JobDetail() {
                     selectMode={selectMode}
                     selectedSeqs={new Set(multiSeqs)}
                     onFrameClick={onFrameClick}
+                    admin={admin}
                   />
                 ))}
               </div>
+            )}
+              </>
+            ) : (
+              <CustomerAnalysisSection sections={detail.sections} />
             )}
           </div>
 

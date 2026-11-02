@@ -15,6 +15,7 @@ import {
   type HealthState,
   type LinkInput,
   type RtcSample,
+  type RtcStatsSource,
 } from "./streamHealth";
 
 // The strip's sampler (ADAAAA-7730). ONE interval, 2 s, reading
@@ -128,9 +129,11 @@ export function useStreamHealth(sources: StreamHealthSources): ChipView[] {
 }
 
 // getStats() is async on the real peer. Kept as a small named helper so the rest
-// of the tick stays synchronous and the pure reducer does the deciding.
-async function statsOf(peer: RTCPeerConnection): Promise<Iterable<Record<string, any>>> {
-  return peer.getStats() as unknown as Iterable<Record<string, any>>;
+// of the tick stays synchronous and the pure reducer does the deciding. The
+// returned value is the maplike RTCStatsReport itself (NOT an array of stat
+// objects) — `parseRtcStats` unwraps it via `values()` (ADAAAA-7731).
+async function statsOf(peer: RTCPeerConnection): Promise<RtcStatsSource> {
+  return peer.getStats() as unknown as RtcStatsSource;
 }
 
 export { statsOf };

@@ -93,7 +93,7 @@ function ChapterRow({
           )}
           <ol className="flex flex-col gap-1.5" data-detail-ladder-entries>
             {chapter.entries.map((e) => (
-              <li key={e.seq} className="flex items-start gap-2 text-xs" data-detail-ladder-entry data-seq={e.seq}>
+              <li key={e.seq} className="flex items-start gap-2 text-xs" data-detail-ladder-entry>
                 <span className="shrink-0 font-mono text-[11px] text-mut" data-detail-ladder-entry-ts>
                   T+{e.windowTs}s
                 </span>
