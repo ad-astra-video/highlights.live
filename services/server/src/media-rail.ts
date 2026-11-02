@@ -215,6 +215,10 @@ export class MediaRailObserver {
       signalGateOpts: opts.signalGateOpts,
       onDecide: opts.onDecide,
       stageA: opts.stageA,
+      // ADAAAA-7722: give the media rail the Stage-B (whistle) ledger too, so a
+      // whistle-anchored decide on this rail is judged in its OWN family ledger
+      // and `stageAMetrics` stays whistle-free here as well.
+      stageB: this.run.stageBOutcomes,
     });
   }
 

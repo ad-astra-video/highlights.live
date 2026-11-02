@@ -52,6 +52,7 @@ import {
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
 import { completedCounterFields, completedLiveCounterFields, counterFieldsForJob } from "./job-counters";
 import { stageAEvidenceLine, whistleEvidenceLine } from "./stage-a-metrics";
+import { aggregateLiveWatchMinutes, monthKeyUtc } from "./live-watch-minutes";
 import { buildPostableHighlights } from "./highlight-postable";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
@@ -581,6 +582,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             // the decide term is the list-price measure of the calls made, not
             // money charged; the perceive session was already paid by the share.
             perceiveSessionS: railStats.sessionSeconds,
+            // ADAAAA-7722: the measured live watch-minutes for this session — the
+            // media node's own session clock, the same seconds the share is
+            // billed on. Feeds the month-to-date ceiling basis.
+            liveWatchMinutes: Number((railStats.sessionSeconds / 60).toFixed(3)),
             costUsd: Number((cfg.decideFee * railMetrics.decideCalls + (railStats.sessionSeconds / 3600) * PERCEIVE_PER_HOUR_USD).toFixed(4)),
           })
           .catch((e: any) => console.error(`[media-rail:${jobId}] metrics persist failed:`, e?.message || e));
@@ -985,6 +990,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         status: "done",
         perceiveSessionId: outcome.sessionId,
         perceiveSessionS: Number(perceiveSessionS.toFixed(1)),
+        // ADAAAA-7722: measured live watch-minutes for this session (the live
+        // rail's own session clock), so the ADAAAA-7713 envelope ceiling can be
+        // read as a measurement instead of a continuous-attachment assumption.
+        liveWatchMinutes: Number((perceiveSessionS / 60).toFixed(3)),
         costUsd: Number(liveCostUsd.toFixed(4)),
         // ADAAAA-7624/7667: Stage-A status + the live candidate counters.
         ...completedLiveCounterFields(stageA, outcome.observeMetrics, store.highlightsForJob(job.id).length),
@@ -2070,6 +2079,23 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   });
 
   app.get("/admin/spend", { preHandler: adminReadOnlyReq }, async () => ({ spend: await db.listChannelSpend() }));
+
+  // ADAAAA-7722: live watch-minutes — the measured basis for the ADAAAA-7713
+  // spend envelope's monthly ceiling.
+  //
+  // `?month=YYYY-MM` (UTC) defaults to the current month. Every LIVE session
+  // contributes its own persisted `liveWatchMinutes` (written at completion from
+  // the rail's session clock); VOD jobs are excluded because decoding a file is
+  // compute time, not watch time. Sessions in the month with no measurement are
+  // reported as `unmeasuredSessions` instead of being counted as 0.
+  app.get<{ Querystring: { month?: string } }>("/admin/live-watch-minutes", { preHandler: adminReadOnlyReq }, async (req, reply) => {
+    const month = (req.query?.month ?? "").trim() || monthKeyUtc();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+      return reply.code(400).send({ error: "month must be YYYY-MM" });
+    }
+    const jobs = await db.listJobs();
+    return aggregateLiveWatchMinutes(jobs, month);
+  });
 
   // New-job reliability + per-clip Livepeer inference cost readout, folded into
   // per-channel CAC (ADAAAA-6369, plan §3b.4 / §3c). This is the hard-stop gate
