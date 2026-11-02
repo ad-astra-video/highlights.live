@@ -203,6 +203,15 @@ class Sam3Backend(SamBackend):
         # instead of writing it off.
         self._misses: Dict[int, int] = {}
         self._removed_obj_ids: set[int] = set()
+        # ADAAAA-7345: SAM3 is built with hotstart_delay=15 +
+        # masklet_confirmation_enable=True, so a one-frame propagate yields no
+        # masklet at all (7820: zero masks on all 487 frames). Propagate a
+        # window instead and serve the cached per-frame boxes.
+        self.propagate_window = int(
+            os.environ.get("PERCEIVE_SAM_PROPAGATE_WINDOW", "16") or 16
+        )
+        self._box_cache: Dict[int, Dict[int, Optional[BBox]]] = {}
+        self._removed_by_frame: Dict[int, set[int]] = {}
         self.recover_after_misses = 1     # re-prompt on the first missed frame
         self.recover_max_misses = 30      # stop re-prompting after this many misses
         # ADAAAA-7820: slot -> SAM obj_id. Normally obj_id == slot (stable 1:1),
@@ -301,40 +310,8 @@ class Sam3Backend(SamBackend):
         self._obj_ids[slot] = oid
         return oid
 
-    def _propagate_one_frame(self, frame_idx: int,
-                             direction: str = "forward",
-                             max_frames: int = 1,
-                             session_id: Optional[str] = None) -> Dict[int, Optional[BBox]]:
-        """Ask SAM to propagate one frame; return slot -> box or None."""
-        try:
-            gen = self._predictor.handle_stream_request(
-                {
-                    "type": "propagate_in_video",
-                    "session_id": session_id or self._session_id,
-                    # ADAAAA-7305: the SAM3 client reads `start_frame_index` (with
-                    # "index"), NOT `start_frame_idx`. We were sending the wrong
-                    # key, so the start frame dropped to None every call and SAM3
-                    # re-tracked from the EARLIEST annotation frame (frame 0) on
-                    # every propagate -> the per-frame `advance()` never actually
-                    # advanced, the operator-selected `player #N` slot produced no
-                    # mask after its seed, and its track reported accuracy ~0.2 /
-                    # on-screen ~4%. Send the correct key and step exactly one
-                    # frame FORWARD (HybridTracker advances one frame per call).
-                    "start_frame_index": frame_idx,
-                    "max_frame_num_to_track": max_frames,
-                    "propagation_direction": direction,
-                }
-            )
-            result = next(gen, None)
-        except Exception:
-            result = None
-        if not result:
-            return {}
-        out = result.get("outputs") or {}
-        # ADAAAA-7345: SAM3 reports masklets it dropped this frame. Record them
-        # so advance() can re-register a mid-stream target instead of letting
-        # the slot stay dark for the rest of the clip.
-        self._removed_obj_ids = {int(x) for x in (out.get("removed_obj_ids") or [])}
+    def _parse_outputs(self, out: dict) -> Dict[int, Optional[BBox]]:
+        """`obj_id_to_mask` -> slot -> box (or None) for one propagated frame."""
         obj_id_to_mask = out.get("obj_id_to_mask") or {}
         self._last_mask_ids = sorted(int(o) for o in obj_id_to_mask)
         parsed: Dict[int, Optional[BBox]] = {}
@@ -356,6 +333,75 @@ class Sam3Backend(SamBackend):
                 if b is not None:
                     self._last_mask_box[slot] = b
         return parsed
+
+    def _propagate_window(self, frame_idx: int,
+                          direction: str = "forward",
+                          max_frames: Optional[int] = None,
+                          session_id: Optional[str] = None) -> Dict[int, Dict[int, Optional[BBox]]]:
+        """Propagate a WINDOW from `frame_idx`; return frame -> slot -> box|None.
+
+        ADAAAA-7345: the SAM3 video model is built with `hotstart_delay=15`
+        (`model_builder` ~line 1175) and `masklet_confirmation_enable=True`,
+        which withholds a masklet until it is confirmed by a frame
+        `unconfirmed_frame_delay` (=2) frames LATER. Stepping one frame per
+        call (`max_frame_num_to_track=1`, the pre-fix behaviour) never leaves
+        the hotstart window, so the client yields `obj_id_to_mask == {}` on
+        every frame — measured on the box as zero masks on all 487 frames
+        (ADAAAA-7820). Propagating a window and reading the frame we want is
+        the protocol the client actually supports.
+        """
+        window = int(self.propagate_window if max_frames is None else max_frames)
+        window = max(1, window)
+        out_by_frame: Dict[int, Dict[int, Optional[BBox]]] = {}
+        try:
+            gen = self._predictor.handle_stream_request(
+                {
+                    "type": "propagate_in_video",
+                    "session_id": session_id or self._session_id,
+                    # SAM3's client reads `start_frame_index` (with "index"),
+                    # NOT `start_frame_idx`; the wrong key drops the start to
+                    # None and re-tracks from the earliest annotation frame.
+                    "start_frame_index": frame_idx,
+                    "max_frame_num_to_track": window,
+                    "propagation_direction": direction,
+                }
+            )
+            for result in gen or []:
+                if not isinstance(result, dict):
+                    continue
+                fi = int(result.get("frame_index", frame_idx))
+                out = result.get("outputs") or {}
+                # ADAAAA-7345: masklets SAM dropped are reported per frame so a
+                # mid-stream target can be re-registered instead of staying
+                # dark for the rest of the clip.
+                self._removed_by_frame[fi] = {
+                    int(x) for x in (out.get("removed_obj_ids") or [])
+                }
+                out_by_frame[fi] = self._parse_outputs(out)
+        except Exception:
+            return out_by_frame
+        return out_by_frame
+
+    def _boxes_for_frame(self, frame_idx: int) -> Dict[int, Optional[BBox]]:
+        """Boxes for `frame_idx`, propagating a window on a cache miss.
+
+        A window propagate is the unit SAM3 accepts, so its yields are cached:
+        `advance()` is still called once per clip frame and each frame is
+        computed exactly once (the pre-fix path recomputed two frames on
+        every call for no result).
+        """
+        cached = self._box_cache.pop(frame_idx, None)
+        if cached is not None:
+            self._removed_obj_ids = self._removed_by_frame.get(frame_idx, set())
+            return cached
+        # Stale cache (a reset, a re-seed, or a jump in frame index).
+        self._box_cache.clear()
+        out_by_frame = self._propagate_window(frame_idx)
+        if not out_by_frame:
+            return {}
+        self._box_cache.update(out_by_frame)
+        self._removed_obj_ids = self._removed_by_frame.get(frame_idx, set())
+        return self._box_cache.pop(frame_idx, {})
 
     # --- SamBackend contract ------------------------------------------------
     def advance(self, prompts: Dict[int, BBox], frame_index: Optional[int] = None) -> None:
@@ -393,6 +439,10 @@ class Sam3Backend(SamBackend):
             if self._seeded:  # already tracking prompts -> reset then re-add all
                 self._request({"type": "reset_session", "session_id": self._session_id})
                 reset = True
+                # The window cache was computed under the previous prompts;
+                # those frames are stale after a reset.
+                self._box_cache.clear()
+                self._removed_by_frame.clear()
                 for s, _ in list(self._seeded.items()):
                     if s not in changed and s in prompts:
                         # ADAAAA-7305: re-add from the CURRENT prompt, not the
@@ -434,7 +484,13 @@ class Sam3Backend(SamBackend):
                 box = self._last_mask_box.get(s) or prompts[s]
             self._add_prompt(s, box, source="mask", obj_id=oid)
             reanchored.add(s)
-        self._current = self._propagate_one_frame(self._frame_idx)
+        if reanchored:
+            # Cached outputs for this frame and later were computed BEFORE the
+            # re-anchor prompt existed, so they no longer reflect the session
+            # state. Drop them; the window is re-propagated from here.
+            for f in [f for f in self._box_cache if f >= self._frame_idx]:
+                self._box_cache.pop(f, None)
+        self._current = self._boxes_for_frame(self._frame_idx)
         self._frame_idx += 1
         # per-slot miss accounting drives the recovery above
         for s in prompts:

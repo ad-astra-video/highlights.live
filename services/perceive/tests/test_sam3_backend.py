@@ -586,3 +586,89 @@ def test_bounded_reseed_is_off_by_default():
     for ts in (1.0, 2.0, 3.0):
         tr.step_frame(_white(), ts)
     assert calls["n"] == 0 and tr.reseed_calls == 0
+
+
+# --- ADAAAA-7345: windowed propagation -------------------------------------
+class WindowPredictor(FakePredictor):
+    """Predictor that behaves like the real client: ONE propagate call yields a
+    whole WINDOW of frames (hotstart_delay=15 means a 1-frame call yields no
+    masklet at all: measured zero masks on all 487 frames, ADAAAA-7820)."""
+
+    def __init__(self, frames):
+        super().__init__(frames)
+        self.windows = []          # (start, max_frame_num_to_track)
+        self.yields = 0
+
+    def handle_stream_request(self, req):
+        if "start_frame_index" not in req:
+            raise KeyError("propagate request must use `start_frame_index`")
+        start = req["start_frame_index"]
+        maxn = req.get("max_frame_num_to_track") or 1
+        self.windows.append((start, maxn))
+        for k in range(maxn):
+            fi = min(start + k, len(self.frames) - 1)
+            row = self.frames[fi]
+            masks = {oid: _mask(b) for oid, b in row.items() if b is not None}
+            self.yields += 1
+            yield {"frame_index": fi, "outputs": {"obj_id_to_mask": masks}}
+
+
+def test_window_propagate_serves_every_frame_from_one_call():
+    frames = [{0: (0.10 + 0.02 * i, 0.2, 0.30 + 0.02 * i, 0.4)} for i in range(20)]
+    fake = WindowPredictor(frames)
+    backend = Sam3Backend(predictor_factory=lambda: fake, clip_path="x.mp4")
+    backend.propagate_window = 16
+    prompt = (0.10, 0.2, 0.30, 0.4)
+    backend.advance({0: prompt}, frame_index=0)
+    assert backend.get(0)[0] == pytest.approx(0.10, abs=0.06)
+    # the next 15 frames come out of the cache: no second propagate call
+    for f in range(1, 16):
+        backend.advance({0: prompt}, frame_index=f)
+        assert backend.get(0)[0] == pytest.approx(0.10 + 0.02 * f, abs=0.06)
+    assert len(fake.windows) == 1, "cached window frames must not re-propagate"
+    assert fake.windows[0] == (0, 16)
+
+
+def test_window_propagate_reissues_after_cache_exhausted():
+    frames = [{0: (0.10, 0.2, 0.30, 0.4)} for _ in range(40)]
+    fake = WindowPredictor(frames)
+    backend = Sam3Backend(predictor_factory=lambda: fake, clip_path="x.mp4")
+    backend.propagate_window = 8
+    prompt = (0.10, 0.2, 0.30, 0.4)
+    for f in range(9):
+        backend.advance({0: prompt}, frame_index=f)
+    assert [w[0] for w in fake.windows] == [0, 8]
+
+
+def test_reseed_clears_window_cache():
+    frames = [{0: (0.10, 0.2, 0.30, 0.4)} for _ in range(20)]
+    fake = WindowPredictor(frames)
+    backend = Sam3Backend(predictor_factory=lambda: fake, clip_path="x.mp4")
+    backend.propagate_window = 16
+    backend.advance({0: (0.10, 0.2, 0.30, 0.4)}, frame_index=0)
+    assert fake.windows == [(0, 16)]
+    # an EXTERNAL target change resets the session: stale window frames must go
+    backend.advance({0: (0.60, 0.5, 0.80, 0.7)}, frame_index=1)
+    assert fake.resets == 1
+    assert fake.windows[-1] == (1, 16)
+
+
+def test_window_cache_dropped_when_reanchor_fires():
+    # SAM loses the slot -> the re-anchor prompt at the current frame makes the
+    # cached later frames stale, so the window must be re-propagated from here.
+    class Losing(WindowPredictor):
+        def handle_stream_request(self, req):
+            for item in super().handle_stream_request(req):
+                if item["frame_index"] >= 3:
+                    yield {"frame_index": item["frame_index"], "outputs": {"obj_id_to_mask": {}}}
+                else:
+                    yield item
+
+    frames = [{0: (0.10, 0.2, 0.30, 0.4)} for _ in range(30)]
+    fake = Losing(frames)
+    backend = Sam3Backend(predictor_factory=lambda: fake, clip_path="x.mp4")
+    backend.propagate_window = 8
+    prompt = (0.10, 0.2, 0.30, 0.4)
+    for f in range(5):
+        backend.advance({0: prompt}, frame_index=f)
+    assert fake.windows[-1] == (4, 8), "re-anchor must invalidate the cached window"
