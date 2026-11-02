@@ -49,6 +49,29 @@ def _env_flag(name: str, default: str = "0") -> bool:
     return str(os.environ.get(name, default) or "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _autocast():
+    """Run SAM3 requests under the dtype the model was built for.
+
+    ADAAAA-7345: B7 failed at frame 144 with `Input type (c10::BFloat16) and
+    bias type (float) should be the same`, then OOM'd. The repo's own reference
+    script (`scripts/qualitative_test.py`) enters a process-wide
+    `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` before touching
+    the model, while the client's `add_prompt` autocasts only per call — so
+    propagation ran eager in fp32 against bf16 activations. Entering autocast
+    for every request keeps the whole session on one dtype.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            raise RuntimeError("cpu")
+        return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    except Exception:
+        import contextlib
+
+        return contextlib.nullcontext()
+
+
 # --------------------------------------------------------------------------
 # geometry helpers (testable without sam3)
 # --------------------------------------------------------------------------
@@ -287,7 +310,20 @@ class Sam3Backend(SamBackend):
                     if self._predictor is None:
                         self._predictor = Sam3Backend._default_predictor()
                 resp = self._predictor.handle_request(
-                    {"type": "start_session", "resource_path": resource}
+                    {
+                        "type": "start_session",
+                        "resource_path": resource,
+                        # ADAAAA-7345: SAM3 keeps every decoded frame in the
+                        # inference state. A 487-frame clip at 1008 px holds
+                        # ~18 GiB of GPU tensors and B7 died with a CUDA OOM at
+                        # frame 144 with the model and frames both resident.
+                        # Pinning the video to CPU memory keeps a whole-clip
+                        # session inside the 23 GiB card; frames are staged to
+                        # the GPU one window at a time.
+                        "offload_video_to_cpu": _env_flag(
+                            "PERCEIVE_SAM_OFFLOAD_VIDEO", "1"
+                        ),
+                    }
                 )
                 self._session_id = resp.get("session_id")
             self._started = self._session_id is not None
@@ -305,7 +341,8 @@ class Sam3Backend(SamBackend):
         return self._started
 
     def _request(self, req: dict):
-        return self._predictor.handle_request(req)
+        with _autocast():
+            return self._predictor.handle_request(req)
 
     # --- slot <-> obj_id bookkeeping ----------------------------------------
     def _obj_id(self, slot: int) -> int:
@@ -412,18 +449,19 @@ class Sam3Backend(SamBackend):
                     "propagation_direction": direction,
                 }
             )
-            for result in gen or []:
-                if not isinstance(result, dict):
-                    continue
-                fi = int(result.get("frame_index", frame_idx))
-                out = result.get("outputs") or {}
-                # ADAAAA-7345: masklets SAM dropped are reported per frame so a
-                # mid-stream target can be re-registered instead of staying
-                # dark for the rest of the clip.
-                self._removed_by_frame[fi] = {
-                    int(x) for x in (out.get("removed_obj_ids") or [])
-                }
-                out_by_frame[fi] = self._parse_outputs(out)
+            with _autocast():
+                for result in gen or []:
+                    if not isinstance(result, dict):
+                        continue
+                    fi = int(result.get("frame_index", frame_idx))
+                    out = result.get("outputs") or {}
+                    # ADAAAA-7345: masklets SAM dropped are reported per frame so
+                    # a mid-stream target can be re-registered instead of staying
+                    # dark for the rest of the clip.
+                    self._removed_by_frame[fi] = {
+                        int(x) for x in (out.get("removed_obj_ids") or [])
+                    }
+                    out_by_frame[fi] = self._parse_outputs(out)
         except Exception as e:
             # ADAAAA-7345: this swallowed EVERY propagate failure, so a session
             # whose prompts never registered looked exactly like a clip with no
