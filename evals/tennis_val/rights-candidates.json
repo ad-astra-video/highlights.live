@@ -8,7 +8,7 @@
       "display_title": "Girls Tennis: Sharon vs Attleboro",
       "duration_note": "longest mp4 file length from item metadata",
       "duration_s": 6704.56,
-      "licence": "CC BY-NC",
+      "licence": "CC BY-NC-ND",
       "licence_class": "rejected",
       "needs_frame_review": false,
       "screening": "rejected_licence",
@@ -22,7 +22,7 @@
       "display_title": "Girls Tennis: Oliver Ames vs Attleboro",
       "duration_note": "longest mp4 file length from item metadata",
       "duration_s": 5803.46,
-      "licence": "CC BY-NC",
+      "licence": "CC BY-NC-ND",
       "licence_class": "rejected",
       "needs_frame_review": false,
       "screening": "rejected_licence",
@@ -50,7 +50,7 @@
       "display_title": "Boys Tennis: Foxboro vs Attleboro",
       "duration_note": "longest mp4 file length from item metadata",
       "duration_s": 5073.26,
-      "licence": "CC BY-NC",
+      "licence": "CC BY-NC-ND",
       "licence_class": "rejected",
       "needs_frame_review": false,
       "screening": "rejected_licence",
@@ -64,7 +64,7 @@
       "display_title": "MMU Boys Varsity Tennis vs U32 5-15-24",
       "duration_note": "longest mp4 file length from item metadata",
       "duration_s": 4417.73,
-      "licence": "CC BY-NC",
+      "licence": "CC BY-NC-ND",
       "licence_class": "rejected",
       "needs_frame_review": false,
       "screening": "rejected_licence",
@@ -115,6 +115,20 @@
       "title": "File:Daytona Beach Officer Uses Tennis Racket Against Burglary Suspect Trying To Choke a Police Dog.webm",
       "url": "https://upload.wikimedia.org/wikipedia/commons/4/4d/Daytona_Beach_Officer_Uses_Tennis_Racket_Against_Burglary_Suspect_Trying_To_Choke_a_Police_Dog.webm",
       "width": 1920
+    },
+    {
+      "clears_duration_floor": true,
+      "corpus": "internet_archive",
+      "credit": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "display_title": "Belmont Journal / News Now - Tennis Courts in Winn Brook 01/25/21",
+      "duration_note": "00:11:44",
+      "duration_s": 704.0,
+      "licence": "CC0",
+      "licence_class": "acceptable",
+      "needs_frame_review": true,
+      "screening": "qualifying_pending_frame_review",
+      "title": "snafuinfinitynews-now_012521-tennis-winn-brook",
+      "url": "https://archive.org/details/snafuinfinitynews-now_012521-tennis-winn-brook"
     },
     {
       "clears_duration_floor": true,
@@ -373,20 +387,6 @@
     },
     {
       "clears_duration_floor": false,
-      "corpus": "internet_archive",
-      "credit": "https://creativecommons.org/licenses/by-nc/3.0/",
-      "display_title": "MHS Boys Tennis Preview",
-      "duration_note": "00:02:07",
-      "duration_s": 127.0,
-      "licence": "CC BY-NC",
-      "licence_class": "rejected",
-      "needs_frame_review": false,
-      "screening": "rejected_licence",
-      "title": "mhtvmav-MHS_Boys_Tennis_Preview",
-      "url": "https://archive.org/details/mhtvmav-MHS_Boys_Tennis_Preview"
-    },
-    {
-      "clears_duration_floor": false,
       "corpus": "wikimedia_commons",
       "credit": "<a rel=\"nofollow\" class=\"external text\" href=\"https://www.openbeelden.nl/media/73972/Scheveningen__tenniskampioenschap_van_Nederland\">Open Beelden</a>",
       "description": "Tennis championships: in the mixed doubles mrs. Blaisse and mr. Van Swol beat ms. Van de Wal and mr. Hughan. In the women's singles ms. Rollin Couquerque beats ms. Klein.",
@@ -641,13 +641,13 @@
       "width": 768
     }
   ],
-  "candidates_total": 84,
+  "candidates_total": 85,
   "counts": {
-    "commons_titles": 282,
-    "dropped_not_tennis": 276,
-    "metadata_rows_screened": 360,
-    "qualifying_pending_frame_review": 4,
-    "tennis_candidates": 84
+    "commons_titles": 279,
+    "dropped_not_tennis": 272,
+    "metadata_rows_screened": 357,
+    "qualifying_pending_frame_review": 5,
+    "tennis_candidates": 85
   },
   "errors": [],
   "generated_by": "evals/tennis_val/scan_rights_candidates.py",
@@ -696,6 +696,20 @@
       "title": "File:Daytona Beach Officer Uses Tennis Racket Against Burglary Suspect Trying To Choke a Police Dog.webm",
       "url": "https://upload.wikimedia.org/wikipedia/commons/4/4d/Daytona_Beach_Officer_Uses_Tennis_Racket_Against_Burglary_Suspect_Trying_To_Choke_a_Police_Dog.webm",
       "width": 1920
+    },
+    {
+      "clears_duration_floor": true,
+      "corpus": "internet_archive",
+      "credit": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "display_title": "Belmont Journal / News Now - Tennis Courts in Winn Brook 01/25/21",
+      "duration_note": "00:11:44",
+      "duration_s": 704.0,
+      "licence": "CC0",
+      "licence_class": "acceptable",
+      "needs_frame_review": true,
+      "screening": "qualifying_pending_frame_review",
+      "title": "snafuinfinitynews-now_012521-tennis-winn-brook",
+      "url": "https://archive.org/details/snafuinfinitynews-now_012521-tennis-winn-brook"
     },
     {
       "clears_duration_floor": true,
