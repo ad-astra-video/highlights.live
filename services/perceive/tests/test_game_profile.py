@@ -742,3 +742,7 @@ def test_american_football_eval_set_matches_the_committed_labels_and_run():
     assert run["fpRateAtGenerousWindow"] > 5 * run["fpCeiling"]
     # no detection slice was invented for the type
     assert ref["detectionSlice"] is None
+    # the certification is recorded as data and names the issue that gave it, so
+    # a stale "awaiting re-certification" can never outlive the verdict
+    assert ref["qaCertification"] == "pass (ADAAAA-7785, label revision 2)"
+    assert "fpCeilingMet false" in ref["qaVerdict"]

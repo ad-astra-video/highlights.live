@@ -263,3 +263,22 @@ What changed in revision 2 and what did not:
   Owner: Developer.
 - **Do not enable the operator UI for american football** until the motion
   number exists and QA certifies it.
+
+## 10. Certification of label revision 2 (QA [ADAAAA-7785](/ADAAAA/issues/ADAAAA-7785))
+
+Re-certification returned **PASS on 5/5 clauses** (local CPU, no box job, no
+claim of one). What it independently confirmed on head `b9e53ee`:
+
+| clause | verdict |
+|---|---|
+| E09 bracket holds its transition | PASS - decoded 1,190 native 29.97 fps frames; Westford flips 19 -> 25 at pts 7400.7934 and reads 25 continuously to 7429.489; Belmont reads 14 in every frame. `instant 7401` is that flip rounded up, `bracket [7400,7402]` contains it. |
+| only E09 moved | PASS - `git diff b991422 6b2a2d2` on the two label files is exactly two hunks (E09 + the ninth `score_roar` onset); 11 scoring entries and 14 non-event windows unchanged. |
+| harness reproduces byte-identically | PASS - all three tolerance runs `cmp`-identical to the artifacts committed under `run/` (`34c5baac…e904f`, `2ae7ff17…d9df0`, `bb2369bb…64c26e`), not merely numerically equal. |
+| drift guard and honesty | PASS - `pytest tests/test_game_profile.py -q` 27 passed; no fixture/synthetic/soccer number presented as football. |
+| the finding is unchanged | PASS - recall 1.00 at candidate FP 0.9853 is a 9.85x miss of the 0.10 ceiling. |
+
+So the measurement is certified and the type's `qaCertification` reads
+`pass (ADAAAA-7785, label revision 2)` in `game_profile.py`, with
+`qaVerdict: measurement true; fpCeilingMet false`. **Certified measurement is not
+enablement**: american football stays disabled for the operator UI until the
+motion number in section 9 exists and is itself certified.

@@ -598,11 +598,13 @@ _AMERICAN_FOOTBALL_EVAL_REFERENCE: Mapping[str, Any] = {
     # ADAAAA-7784 (Highlights.live Reviewer): label revision 1 FAILED on one
     # clause -- E09's bracket [7405,7420] contained no score transition (the bug
     # flips at 7401) -- and reproduced every other number byte-identically.
-    # Label revision 2 corrects E09 and re-pins the run; re-certification of
-    # revision 2 is the open QA step (see RESULTS.md section 8).
-    "qaCertification": (
-        "fail on label revision 1 (ADAAAA-7784: E09 bracket contained no score "
-        "transition); revision 2 awaiting re-certification"
+    # Label revision 2 corrects E09 and re-pins the run; ADAAAA-7785 certified
+    # revision 2 PASS on 5/5 clauses with the run artifacts cmp-identical to the
+    # committed ones (see RESULTS.md section 10).
+    "qaCertification": "pass (ADAAAA-7785, label revision 2)",
+    "qaVerdict": (
+        "measurement true; fpCeilingMet false - audio alone does not carry the "
+        "type and motion stays not_captured, so american football stays disabled"
     ),
 }
 
