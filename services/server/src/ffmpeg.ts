@@ -148,24 +148,162 @@ export async function extractFrames(
   return files.map((f) => path.join(outDir, f));
 }
 
+/** Container + codecs of a media source, as far as a clip cut needs them. */
+export interface MediaFormat {
+  /** ffprobe `format_name`, e.g. "matroska,webm" or "mov,mp4,m4a,3gp,3g2,mj2". */
+  container: string;
+  videoCodec: string | null;
+  audioCodec: string | null;
+}
+
+/** Probe a source's container + stream codecs. Returns null when the source
+ * cannot be probed (a corrupt/partial file) — callers then degrade to the
+ * historical stream-copy behaviour rather than failing before ffmpeg runs. */
+export async function probeMediaFormat(ffmpegPath: string, source: string): Promise<MediaFormat | null> {
+  const ffprobe = ffmpegPath.replace(/ffmpeg([^/]*)$/, "ffprobe$1") || "ffprobe";
+  try {
+    const { stdout } = await exec(ffprobe, [
+      "-v", "error",
+      "-show_entries", "format=format_name:stream=codec_type,codec_name",
+      "-of", "json",
+      source,
+    ]);
+    const j = JSON.parse(stdout) as {
+      format?: { format_name?: string };
+      streams?: { codec_type?: string; codec_name?: string }[];
+    };
+    const streams = j.streams ?? [];
+    const video = streams.find((s) => s.codec_type === "video");
+    const audio = streams.find((s) => s.codec_type === "audio");
+    return {
+      container: String(j.format?.format_name ?? ""),
+      videoCodec: video?.codec_name ?? null,
+      audioCodec: audio?.codec_name ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Codecs each output container can carry without re-encoding. A pair outside
+ * these sets cannot be stream-copied: ffmpeg opens the output, then errors with
+ * "codec not currently supported in container" and leaves a 0-byte file, which
+ * is exactly the ADAAAA-7724 empty-`clipUri` bug (VP8/VP9+opus webm -> .mp4). */
+const COPY_SAFE: Record<string, { video: string[]; audio: string[] }> = {
+  mp4: {
+    // Keep h264/av1 copyable: the H.264 browser path and AV1 VOD sources cut
+    // today with `-c copy` and must not start paying for a re-encode.
+    video: ["h264", "hevc", "av1", "mpeg4", "vp9"],
+    audio: ["aac", "mp3", "opus", "ac3", "eac3", "alac"],
+  },
+  webm: {
+    video: ["vp8", "vp9", "av1"],
+    audio: ["opus", "vorbis"],
+  },
+};
+
+function containerKind(outPath: string): "mp4" | "webm" | null {
+  const ext = path.extname(outPath).toLowerCase();
+  if (ext === ".mp4" || ext === ".m4v" || ext === ".mov") return "mp4";
+  if (ext === ".webm") return "webm";
+  return null;
+}
+
+/** Whether `-c copy` can legally place `src` inside the container implied by
+ * `outPath`. Unknown containers keep the historical copy behaviour. */
+export function canStreamCopy(src: MediaFormat | null, outPath: string): boolean {
+  const kind = containerKind(outPath);
+  if (!kind || !src) return true;
+  const safe = COPY_SAFE[kind];
+  if (!src.videoCodec || !safe.video.includes(src.videoCodec)) return false;
+  if (src.audioCodec && !safe.audio.includes(src.audioCodec)) return false;
+  return true;
+}
+
+/** Re-encode args for a container ffmpeg cannot stream-copy into. H.264/AAC
+ * into mp4 is the browser-safe target (every <video> plays it); VP9/opus into
+ * webm mirrors what a MediaRecorder client produces. */
+function reencodeArgs(kind: "mp4" | "webm"): string[] {
+  if (kind === "webm") {
+    return [
+      "-map", "0:v:0", "-map", "0:a:0?",
+      "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0",
+      "-c:a", "libopus", "-b:a", "96k",
+    ];
+  }
+  return [
+    "-map", "0:v:0", "-map", "0:a:0?",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "128k",
+    "-movflags", "+faststart",
+  ];
+}
+
+/** Result of a clip cut — the strategy actually used, so callers can log WHY a
+ * webm recording was re-encoded instead of silently swallowing an empty clip. */
+export interface ClipCutResult {
+  mode: "copy" | "reencode";
+  sourceFormat: MediaFormat | null;
+  bytes: number;
+}
+
+/**
+ * Cut `[startS, startS + durationS]` of `source` to `outPath`.
+ *
+ * Stream-copies when the source codecs fit the output container (fast, and the
+ * existing H.264 mp4 path). Otherwise re-encodes: a VP8/VP9+opus webm
+ * recording cannot be copied into an mp4 container, and the copy attempt makes
+ * ffmpeg exit with a 0-byte output (ADAAAA-7724 — every browser highlight then
+ * had an empty clipUri). A failed or empty cut removes the output file so a
+ * 0-byte clip is never left on disk, and the thrown error carries ffmpeg's
+ * stderr so the caller can log the real reason.
+ */
 export async function cutClip(
   ffmpegPath: string,
   source: string,
   outPath: string,
   startS: number,
   durationS: number
-): Promise<void> {
-  const { mkdir } = await import("node:fs/promises");
+): Promise<ClipCutResult> {
+  const { mkdir, rm, stat } = await import("node:fs/promises");
   await mkdir(path.dirname(outPath), { recursive: true });
-  await runFfmpeg(ffmpegPath, [
+  const sourceFormat = await probeMediaFormat(ffmpegPath, source);
+  const kind = containerKind(outPath);
+  const mode: ClipCutResult["mode"] = canStreamCopy(sourceFormat, outPath) ? "copy" : "reencode";
+  const args: string[] = [
     "-y",
     "-ss", String(Math.max(0, startS)),
     "-t", String(durationS),
     "-i", source,
-    "-c", "copy",
-    "-avoid_negative_ts", "make_zero",
-    outPath,
-  ]);
+  ];
+  if (mode === "copy") {
+    args.push("-c", "copy", "-avoid_negative_ts", "make_zero");
+  } else {
+    args.push(...reencodeArgs(kind ?? "mp4"));
+  }
+  args.push(outPath);
+  try {
+    await runFfmpeg(ffmpegPath, args);
+  } catch (e) {
+    // ffmpeg creates the output file before it discovers it cannot mux the
+    // stream, so a failed cut would otherwise leave a 0-byte clip behind.
+    await rm(outPath, { force: true }).catch(() => {});
+    throw e;
+  }
+  let bytes = 0;
+  try {
+    bytes = (await stat(outPath)).size;
+  } catch {
+    bytes = 0;
+  }
+  if (bytes === 0) {
+    await rm(outPath, { force: true }).catch(() => {});
+    const fmt = sourceFormat
+      ? `${sourceFormat.container} ${sourceFormat.videoCodec ?? "?"}/${sourceFormat.audioCodec ?? "none"}`
+      : "unknown source format";
+    throw new Error(`ffmpeg produced a 0-byte clip for ${path.basename(outPath)} (${mode} of ${fmt})`);
+  }
+  return { mode, sourceFormat, bytes };
 }
 
 /** ADAAAA-7285: extract the audio for `[startS, startS + durationS]` of a job
