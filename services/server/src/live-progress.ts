@@ -175,6 +175,20 @@ export function skippedWindowsFromSummaryLog(
 }
 
 /**
+ * Wall clock of the newest summary-log append, if any — the moment the newest
+ * decided window's result reached the feed. A terminal job freezes its live edge
+ * here (see {@link deriveLiveProgress}).
+ */
+function lastSummaryAppendMs(entries: Array<{ ts?: string }> | undefined): number | null {
+  let latest: number | null = null;
+  for (const entry of entries ?? []) {
+    const wall = parseMs(entry?.ts);
+    if (wall !== null && (latest === null || wall > latest)) latest = wall;
+  }
+  return latest;
+}
+
+/**
  * Derive the customer-facing live-progress object from stored data only.
  *
  * - in-flight: liveEdge is wall elapsed since the content-clock anchor; state is
@@ -200,8 +214,13 @@ export function deriveLiveProgress(input: LiveProgressInput): LiveProgress {
   const processedThroughTs = windows.length > 0 ? Math.max(...windows) : 0;
 
   const anchorMs = liveContentAnchorMs(job);
+  // A terminal job has no live edge; freeze it at the moment the last decided
+  // window's result landed (its append wall clock) so the frozen lag is exactly
+  // the completed lag the viewer experienced — never a number inflated by clip
+  // finalization, and never a number that keeps ticking after the run ended.
+  // `finishedAt`/`completedAt` are only a fallback for a job with no entries.
   const edgeWallMs = terminal
-    ? (parseMs(job.finishedAt) ?? parseMs(job.completedAt) ?? nowMs)
+    ? (lastSummaryAppendMs(entries) ?? parseMs(job.finishedAt) ?? parseMs(job.completedAt) ?? nowMs)
     : nowMs;
   const elapsedS = anchorMs !== null ? Math.max(0, (edgeWallMs - anchorMs) / 1000) : 0;
   const observationS = Math.max(0, finiteNumber(input.newestObservationTs) ?? 0);
