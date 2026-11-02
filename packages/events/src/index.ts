@@ -516,6 +516,28 @@ export const ObserveMetricsSnapshotSchema = z.object({
   whistleFires: z.number().int().min(0).optional(),
   whistleDecides: z.number().int().min(0).optional(),
   whistleShare: z.number().min(0).optional(),
+  // ADAAAA-7722: the crowding DENOMINATOR, persisted next to the numerator so
+  // `whistleShare` is computable from TWO explicit counts (`whistleDecides /
+  // allDecides`) instead of only from the `decideCalls` alias. `allDecides`
+  // counts EVERY decide invocation this run made (whistle-anchored + all other
+  // anchoring), so it must equal `decideCalls`; the pair is what makes the
+  // ADAAAA-7713 25% tripwire machine-checkable post-run. Additive optional.
+  allDecides: z.number().int().min(0).optional(),
+  // ADAAAA-7722: the anchored window RECORDS, one entry per whistle-anchored
+  // decide, carrying the trigger identity that scheduled it
+  // (`stageB/whistle/2.4-3.4k/5x/0.3s`). Before this the family existed only
+  // inside the in-flight `ObserveDecidePayload.trigger`, so a whistle decide
+  // could not be identified after the run. Bounded (newest kept) and additive
+  // optional — absent on records written before this field existed.
+  whistleWindows: z
+    .array(
+      z.object({
+        centerTs: z.number(),
+        thresholdId: z.string(),
+        family: z.string(),
+      })
+    )
+    .optional(),
 });
 export type ObserveMetricsSnapshot = z.infer<typeof ObserveMetricsSnapshotSchema>;
 
@@ -662,6 +684,14 @@ export const JobSchema = z.object({
   stageAMetricsStatus: z.enum(["measured", "n/a"]).optional(),
   decideCalls: z.number().int().min(0).optional(),
   perceiveSessionS: z.number().min(0).optional(),
+  // ADAAAA-7722: measured live WATCH-MINUTES for this session — the wall-clock
+  // minutes the live rail was attached and observing (live RTMP/file-sim: the
+  // time from session start to completion; browser/RTC: the media node's
+  // `sessionSeconds`). Before this field the ADAAAA-7713 spend envelope had to
+  // name a continuous-attachment basis (1,440 min/day x 30.44 days) instead of
+  // citing a measurement; `GET /admin/live-watch-minutes` aggregates it into a
+  // month-to-date total. Additive optional — absent on VOD jobs and older rows.
+  liveWatchMinutes: z.number().min(0).optional(),
   costUsd: z.number().min(0).optional(),
   scheduledAt: z.string().optional(),
   completedAt: z.string().optional(),

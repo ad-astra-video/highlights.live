@@ -543,6 +543,35 @@ existed. The wiring that makes the anchor real:
   The hard tripwire is share > 25% (flip `emitted = False`, escalate to the
   ADAAAA-7713 decision record with the window's raw counts); added volume is the
   alert threshold (expected 0.0/min on ordinary play).
+- **The family is READABLE after the run (ADAAAA-7722).** The tripwire needs the
+  whistle decide to be identifiable once the stream is over, so three additive
+  fields carry it:
+  - `observeMetrics.allDecides` — the explicit denominator, equal to
+    `decideCalls` by construction, so `whistleDecides / allDecides` is computable
+    from two persisted counts;
+  - `observeMetrics.whistleWindows[]` — one record per whistle-anchored decide
+    (`{centerTs, thresholdId, family}`), the anchored window labelled with
+    `stageB/whistle/2.4-3.4k/5x/0.3s`;
+  - the durable `decide_audit` row for that window carries
+    `params.triggerFamily` / `params.triggerThresholdId` (stamped server-side;
+    the decide service's descriptor does not know how the window was scheduled).
+  The completion line now prints both counts:
+  `[live:<job>] stageB whistle fires=… decides=… share=…% decideCalls=… allDecides=… withinTripwire=…`.
+- **`stageAMetrics` is whistle-free, proven.** Every rail passes the Stage-B
+  ledger (`stageB`) into its decide observer (live, VOD `ObserveDecider`, media
+  rail), so `judgeWindow` / `judgeTrigger` route a whistle onset into the whistle
+  ledger only. `services/server/test/whistle-envelope.test.ts` asserts that a
+  whistle fire leaves `stageA.snapshot()` **byte-identical** to the same run
+  without it, and that a `stageA/burst/1.3x/0.3s` fire still moves it.
+- **Live watch-minutes (ADAAAA-7722 AC3).** Each completed live session persists
+  `job.liveWatchMinutes` — the rail's own session clock in minutes (live
+  RTMP/file-sim: start→completion; browser/RTC: the media node's
+  `sessionSeconds`). `GET /admin/live-watch-minutes?month=YYYY-MM` (UTC, default
+  current month, admin read-only) returns `{month, liveWatchMinutes, sessions,
+  unmeasuredSessions, perSession[]}` from the persisted records, so the
+  ADAAAA-7713 envelope's monthly ceiling cites a measurement instead of a
+  continuous-attachment assumption. VOD jobs are excluded (decode time is not
+  watch time) and unmeasured sessions are reported, never counted as 0.
 - **Tests:** `services/server/test/whistle-trigger.test.ts` pins the trigger
   build (including measure-only = nothing), the family-aware ledger, the
   one-fire-one-anchored-window rule and the persisted share counters.

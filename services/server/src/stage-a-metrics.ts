@@ -232,17 +232,23 @@ export const WHISTLE_SHARE_TRIPWIRE = 0.25;
 export function whistleEvidenceLine(
   kind: "live" | "vod",
   jobId: string,
-  m: { decideCalls?: number; whistleFires?: number; whistleDecides?: number; whistleShare?: number } | undefined
+  m:
+    | { decideCalls?: number; whistleFires?: number; whistleDecides?: number; whistleShare?: number; allDecides?: number }
+    | undefined
 ): string | null {
   if (!m) return null;
   const decideCalls = Number(m.decideCalls ?? 0);
   if (!(decideCalls > 0)) return null;
   const fires = Number(m.whistleFires ?? 0);
   const decides = Number(m.whistleDecides ?? 0);
-  const share = m.whistleShare ?? decides / decideCalls;
+  // ADAAAA-7722: the denominator the tripwire is computed on. `allDecides` is
+  // persisted explicitly (equal to `decideCalls` by construction), so the line
+  // prints both the numerator and the denominator the share was taken over.
+  const allDecides = Number(m.allDecides ?? decideCalls);
+  const share = m.whistleShare ?? decides / allDecides;
   return (
     `[${kind}:${jobId}] stageB whistle fires=${fires} decides=${decides} ` +
-    `share=${(share * 100).toFixed(1)}% decideCalls=${decideCalls} ` +
+    `share=${(share * 100).toFixed(1)}% decideCalls=${decideCalls} allDecides=${allDecides} ` +
     `withinTripwire=${share <= WHISTLE_SHARE_TRIPWIRE}`
   );
 }

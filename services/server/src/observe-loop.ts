@@ -17,7 +17,9 @@
 
 import {
   TriggerWindowScheduler,
+  STAGE_B_FAMILY,
   isStageBTrigger,
+  triggerFamily,
   type AudioTriggerRecord,
   type TriggerSchedulerStats,
 } from "./audio-trigger";
@@ -268,6 +270,18 @@ export interface LiveObserveLatencySample {
    * (ms) — the number a live viewer experiences (`summaryLog` `windowTs` vs
    * wall `ts`). */
   completedLagMs?: number;
+  /** ADAAAA-7722: the audio trigger this window was ANCHORED on, when the
+   * decide was scheduled by a fired trigger rather than the blind cadence.
+   * Carries the trigger identity (`stageB/whistle/2.4-3.4k/5x/0.3s`) and its
+   * path family (`stageB`), so an anchored window is identifiable as
+   * whistle-bearing AFTER the run instead of only inside the in-flight decide
+   * payload. Absent on cadence windows. */
+  trigger?: {
+    thresholdId: string;
+    family: string;
+    kind: string;
+    onsetTs: number;
+  };
 }
 
 /**
@@ -578,6 +592,18 @@ export class LiveObserver {
         cadenceMs,
         lagMs: lag,
         completedLagMs: lag + e2eMs,
+        // ADAAAA-7722: persist the anchoring trigger's identity on the window
+        // record, so a whistle-anchored decide is readable by family post-run.
+        ...(anchored && dueTrigger
+          ? {
+              trigger: {
+                thresholdId: dueTrigger.thresholdId,
+                family: triggerFamily(dueTrigger.thresholdId),
+                kind: dueTrigger.kind,
+                onsetTs: dueTrigger.onsetTs,
+              },
+            }
+          : {}),
       });
     }
   }
@@ -638,6 +664,21 @@ export class LiveObserver {
    *  numerator (`whistleShare = whistleDecides / decideCalls`). */
   whistleDecideCount(): number {
     return this.whistleAnchoredFires;
+  }
+  /** ADAAAA-7722: the whistle-anchored window RECORDS (content ts + trigger
+   *  identity), so the family is readable after the run from the persisted
+   *  `observeMetrics.whistleWindows` instead of only from the in-flight decide
+   *  payload. Bounded by construction: one entry per whistle-anchored decide,
+   *  and a live run's decide count is cadence-bounded. */
+  whistleWindows(): { centerTs: number; thresholdId: string; family: string }[] {
+    return this.latency
+      .filter((s) => s.trigger && s.trigger.family === STAGE_B_FAMILY)
+      .map((s) => ({ centerTs: s.centerTs, thresholdId: s.trigger!.thresholdId, family: s.trigger!.family }));
+  }
+  /** ADAAAA-7722: decide windows NOT anchored on a whistle trigger — the
+   *  crowding complement (`allDecides = whistleDecides + nonWhistleDecides`). */
+  nonWhistleDecideCount(): number {
+    return Math.max(0, this.latency.length - this.whistleAnchoredFires);
   }
   /** ADAAAA-7658: trigger scheduler bookkeeping (accepted / coalesced /
    *  covered / expired / fired). */
@@ -1051,6 +1092,10 @@ export class ObserveDecider {
    *  window records the verdict for every audio trigger whose onset it covers,
    *  which is the only outcome a trigger has under the observe architecture. */
   private readonly stageA: StageAOutcomeLedger | null;
+  /** ADAAAA-7722: Stage-B (whistle) ledger for the VOD rail. Whistle triggers
+   *  live here, so a whistle window is judged in its OWN family ledger and the
+   *  Stage-A snapshot is byte-identical to a run without it. */
+  private readonly stageB: StageAOutcomeLedger | null;
 
   constructor(opts: {
     cadenceS?: number;
@@ -1062,6 +1107,8 @@ export class ObserveDecider {
     onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
     /** ADAAAA-7694: Stage-A outcome ledger for the VOD rail. */
     stageA?: StageAOutcomeLedger;
+    /** ADAAAA-7722: Stage-B (whistle) outcome ledger for the VOD rail. */
+    stageB?: StageAOutcomeLedger;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? OBSERVE_WINDOW_S;
@@ -1071,6 +1118,7 @@ export class ObserveDecider {
     this.signalGateOpts = opts.signalGateOpts ?? {};
     this.onDecide = opts.onDecide ?? null;
     this.stageA = opts.stageA ?? null;
+    this.stageB = opts.stageB ?? null;
   }
 
   /** Record a frame + its perceive-derived seed context (no re-inference). */
@@ -1133,7 +1181,12 @@ export class ObserveDecider {
     // job persists a MEASURED Stage-A snapshot. A gate-skipped window never
     // reaches here, so its triggers stay pending (unjudged, never a fabricated
     // reject).
-    if (accepted !== undefined) this.stageA?.judgeWindow(lo, hi, accepted);
+    if (accepted !== undefined) {
+      this.stageA?.judgeWindow(lo, hi, accepted);
+      // ADAAAA-7722: whistle triggers are judged in their own ledger — never in
+      // the Stage-A one (which holds only `stageA/*` onsets by construction).
+      this.stageB?.judgeWindow(lo, hi, accepted);
+    }
   }
 
   /** Per-call decide input size (frame count) for the cost report. */

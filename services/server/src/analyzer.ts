@@ -26,7 +26,7 @@ import {
 } from "./observe-loop";
 import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
 import type { AudioTriggerRecord } from "./audio-trigger";
-import { isStageBTrigger, type WhistleFireBlock } from "./audio-trigger";
+import { isStageBTrigger, triggerFamily, type WhistleFireBlock } from "./audio-trigger";
 import { isGoalRefutingReason } from "./highlight-postable";
 
 export interface ReserveResult {
@@ -1261,6 +1261,15 @@ export interface LiveObserveMetricsSnapshot {
    *  is > 0.25 -> flip `WhistleConfig.emitted = False`. Persisted so the share is
    *  measurable on a deployed window without a post-hoc audit. */
   whistleShare?: number;
+  /** ADAAAA-7722: every decide invocation this run made — the explicit share
+   *  DENOMINATOR, persisted next to `whistleDecides` so `whistleShare` is
+   *  computable from two counts and `allDecides === decideCalls` is assertable
+   *  on a finished job record. */
+  allDecides?: number;
+  /** ADAAAA-7722: the whistle-anchored window RECORDS (content ts + trigger
+   *  identity/family), so a whistle decide is identifiable post-run instead of
+   *  only inside the in-flight `ObserveDecidePayload.trigger`. */
+  whistleWindows?: { centerTs: number; thresholdId: string; family: string }[];
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
@@ -1351,6 +1360,11 @@ export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSn
     whistleFires: obs.whistleFireCount(),
     whistleDecides,
     whistleShare: decideCalls === 0 ? 0 : Number((whistleDecides / decideCalls).toFixed(4)),
+    // ADAAAA-7722: explicit crowding denominator + the anchored window records
+    // (family identity), so the share is computable and the whistle decide is
+    // identifiable on a FINISHED job record.
+    allDecides: decideCalls,
+    whistleWindows: obs.whistleWindows(),
   };
 }
 
@@ -2925,6 +2939,30 @@ export function buildObserveDecideRequest(
 }
 
 /**
+ * ADAAAA-7722: stamp the anchoring trigger's FAMILY onto a decide-audit
+ * descriptor before it is persisted. The decide service builds its own
+ * descriptor and cannot know how the server scheduled the window, so a
+ * whistle-anchored decide used to be indistinguishable from a cadence decide in
+ * `decide_audit` (its `params` carried no threshold id). Pure and
+ * non-destructive: returns the descriptor unchanged when it carries no trigger
+ * (a cadence window has no family) or is not an object. Additive keys only —
+ * existing params are preserved.
+ */
+export function attachTriggerFamilyToAudit<T>(audit: T, trigger?: { thresholdId?: string } | null): T {
+  if (!audit || typeof audit !== "object" || !trigger || typeof trigger.thresholdId !== "string") return audit;
+  const desc = audit as any;
+  const params = desc.params && typeof desc.params === "object" ? desc.params : {};
+  return {
+    ...desc,
+    params: {
+      ...params,
+      triggerFamily: triggerFamily(trigger.thresholdId),
+      triggerThresholdId: trigger.thresholdId,
+    },
+  } as T;
+}
+
+/**
  * Run the on-demand perceive recall for an observe payload (ADAAAA-7008 /
  * ADAAAA-7012). When a decide verdict requests more evidence for a moment, the
  * server calls perceive on demand (`recall` callback -> adapter -> perceive
@@ -3018,7 +3056,10 @@ export async function observeOnDecide(
   // across repeated decide invocations for the same group).
   if (cfg.onDecideAudit) {
     try {
-      cfg.onDecideAudit((decision as any).audit);
+      // ADAAAA-7722: name the trigger FAMILY on the durable audit row, so a
+      // whistle-anchored decide is countable after the run (`params
+      // .triggerFamily` / `.triggerThresholdId` in `decide_audit`).
+      cfg.onDecideAudit(attachTriggerFamilyToAudit((decision as any)?.audit, payload.trigger));
     } catch (e: any) {
       console.error(`[decide-audit:${cfg.jobId}] onDecideAudit failed:`, String(e?.message || e));
     }
@@ -3690,6 +3731,9 @@ export async function analyzeJob(
           signalGate: cfg.observeSignalGate,
           signalGateOpts: cfg.observeSignalGateOpts,
           stageA: run.stageAOutcomes,
+          // ADAAAA-7722: the VOD rail judges a whistle-anchored window in the
+          // Stage-B ledger, never the Stage-A one.
+          stageB: run.stageBOutcomes,
           onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
         })
       : null;
