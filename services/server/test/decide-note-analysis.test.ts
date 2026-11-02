@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCandidateNote, type AnalyzerConfig, type CandidateSignal, type ConfirmDecision, type DecisionResult } from "../src/analyzer";
+import { buildCandidateNote, withWindowFrameRefs, type AnalyzerConfig, type CandidateSignal, type ConfirmDecision, type DecisionResult } from "../src/analyzer";
 import type { ConfirmRecord, HighlightTrigger, JobCandidate, WindowAnalysis } from "@highlights/events";
 
 // ADAAAA-7156 Increment B: buildCandidateNote must persist the Stage-1 per-window
@@ -85,5 +85,45 @@ describe("buildCandidateNote (ADAAAA-7156 Increment B)", () => {
   it("no-ops when there is no onDecision hook", () => {
     const empty = { jobId: "j" } as unknown as AnalyzerConfig;
     expect(() => buildCandidateNote(empty, candidate, decision, "accepted", "cid-3", trigger, analysis, confirmRecord)).not.toThrow();
+  });
+});
+
+// ADAAAA-7734: the decide service returns `analysis.frames[]` as index-based
+// placeholder refs with `uri: ""` (its ImageRef only carries role/base64), so a
+// media-rail note pointed at no image at all. The server rewrites those refs from
+// the observe window's frames — each carrying its GLOBAL seq — so every note names
+// the exact JPEGs it was fed and each uri resolves on the frame route.
+describe("withWindowFrameRefs (ADAAAA-7734)", () => {
+  const placeholder: WindowAnalysis = {
+    prompt: "p",
+    dataItems: [],
+    frames: [{ seq: 0, uri: "" }],
+    images: [],
+    audio: { uri: "", sampleRate: 16000, path: "none" },
+    asr: { transcript: "" },
+    response: { evidenceAttested: [] },
+  };
+
+  it("names the window's frames with resolvable uris", () => {
+    const refs = withWindowFrameRefs(placeholder, [{ seq: 4 }, { seq: 7 }, { seq: 8 }], "job-9")!;
+    expect(refs.frames).toEqual([
+      { seq: 4, uri: "/jobs/job-9/frames/4" },
+      { seq: 7, uri: "/jobs/job-9/frames/7" },
+      { seq: 8, uri: "/jobs/job-9/frames/8" },
+    ]);
+    // one ref per frame that was actually in the window
+    expect(refs.frames).toHaveLength(3);
+    // the rest of the capture survives untouched
+    expect(refs.prompt).toBe("p");
+    expect(refs.audio?.path).toBe("none");
+  });
+
+  it("leaves the analysis alone when the rail has no global seq (VOD path)", () => {
+    const untouched = withWindowFrameRefs(placeholder, [{}, {}], "job-9");
+    expect(untouched).toBe(placeholder);
+    expect(untouched!.frames[0].uri).toBe("");
+    // no frames, no analysis: both no-ops
+    expect(withWindowFrameRefs(placeholder, [], "job-9")).toBe(placeholder);
+    expect(withWindowFrameRefs(undefined, [{ seq: 1 }], "job-9")).toBeUndefined();
   });
 });

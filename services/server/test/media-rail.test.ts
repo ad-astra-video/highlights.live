@@ -109,6 +109,30 @@ describe("MediaRailObserver decide cadence (ADAAAA-7699)", () => {
     expect(rail.stats().frames).toBe(0);
   });
 
+  it("hands every accepted frame to the persist hook with a dense seq and content clock", async () => {
+    const frames: any[] = [];
+    const rail = new MediaRailObserver({
+      jobId: "j-persist",
+      onDecide: async () => false,
+      onFrame: (f) => frames.push({ seq: f.seq, timestamp: f.timestamp, bytes: f.frameB64 }),
+    });
+    // The media node's own seq is NOT trusted: it can skip (a dropped POST, a
+    // media-node restart mid-share). The rail allocates 0,1,2.. so the frame
+    // file name never disagrees with the decide window's evidence refs.
+    rail.onObservation({ seq: 4, timestamp: T0, tracks: [] }, jpeg(4));
+    rail.onObservation({ seq: 9, timestamp: T0 + 1, tracks: [] }, jpeg(9));
+    // An observation without pixels is evidence-only (nothing persisted), and a
+    // frame with an implausible clock is rejected before it reaches the hook.
+    rail.onObservation({ seq: 10, timestamp: T0 + 2, tracks: [] }, undefined);
+    rail.onObservation({ seq: 11, timestamp: 0, tracks: [] }, jpeg(11));
+    await waitFor(() => rail.stats().frames === 2);
+
+    expect(frames.map((f) => f.seq)).toEqual([0, 1]);
+    expect(frames.map((f) => f.timestamp)).toEqual([0, 1]);
+    expect(frames[1].bytes).toBe(jpeg(9));
+    expect(rail.frameCount()).toBe(2);
+  });
+
   it("rejects a relayed frame whose timestamp is not an epoch-second clock", async () => {
     // The deployed defect: a media node that relayed `timestamp: 0` pinned the
     // rail's content origin at 1970, the lag gate read every frame as decades

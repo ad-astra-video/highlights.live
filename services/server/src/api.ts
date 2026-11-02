@@ -29,6 +29,7 @@ import {
 import type { SignalGateOptions } from "./observe-loop";
 import { audioTriggerFromCandidate, audioTriggerFromWhistle } from "./audio-trigger";
 import { MediaRailObserver } from "./media-rail";
+import { LiveFrameWriter, parseLiveFrameSeq } from "./live-frames";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
@@ -395,7 +396,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // CLIENT streams sampled frames in via POST /jobs/:id/ingest and a recording
   // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
   // session.
-  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string; mediaIceServers?: any[]; rail?: MediaRailObserver }>();
+  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string; mediaIceServers?: any[]; rail?: MediaRailObserver; frames?: LiveFrameWriter }>();
   // ADAAAA-6561: per live-ingest job, the CURRENT perceive session held by that
   // job plus whether the job has been stopped. The stop path uses this to
   // release the perceive slot SYNCHRONOUSLY (independent of the in-flight GPU
@@ -567,6 +568,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // FAILURE — do not spend a tail decide on a session that is already gone.
       if (bj.rail && outcome.status === "done") {
         await bj.rail.finish().catch((e) => console.error(`[media-rail:${jobId}] finish failed:`, e?.message || e));
+        // ADAAAA-7734: settle every queued frame write before the job is marked
+        // done — a reader polling right after POST /stop must find the frames the
+        // share analysed on disk (the writes are off the observe callback's path).
+        if (bj.frames) await bj.frames.drain().catch(() => {});
         const railStats = bj.rail.stats();
         const railMetrics = bj.rail.observeMetrics();
         await store
@@ -575,6 +580,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             // count, the anchored/cadence split and the latency/lag snapshot.
             decideCalls: railMetrics.decideCalls,
             observeMetrics: railMetrics,
+            // ADAAAA-7734: the share's real analyzed-frame count (the rail's
+            // relayed frames, each persisted to the job frame dir) so
+            // `GET /jobs/:id` progress + the job header read the number instead
+            // of null/0 ("Frames shown 0").
+            framesAnalyzed: railStats.frames,
+            framesTotal: railStats.frames,
+            framesPct: railStats.frames > 0 ? 100 : 0,
             // ADAAAA-7667 semantics: the persisted (deduped) highlight count is
             // the candidate count; `observe` is the path that ran.
             ...completedLiveCounterFields(bj.rail.run.stageA.snapshot(), railMetrics, store.highlightsForJob(jobId).length),
@@ -708,7 +720,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // ADAAAA-6867). Lazily created on the first relayed observation/audio chunk.
   async function ensureMediaRail(
     job: { id: string; ownerId?: string; gameHint?: string; preferLabels?: string[]; cameraId?: string },
-    bj: { rail?: MediaRailObserver; mediaSessionId?: string }
+    bj: { rail?: MediaRailObserver; mediaSessionId?: string; frames?: LiveFrameWriter }
   ): Promise<MediaRailObserver | null> {
     if (bj.rail) return bj.rail;
     // Same rollout switch as the live rail's decide-observer.
@@ -740,6 +752,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // from a truncated file. The highlight record persists at DECISION time so
     // the live feed updates during the share (ADAAAA-5777 behaviour).
     const deferredCut = async () => ({ clipId: "", clipUri: "" });
+    // ADAAAA-7734: persist every frame the media rail analyses. The media node
+    // hands us the decoded JPEG with each observation and we used to throw it
+    // away, so the job page rendered "Frames shown 0" with blank tiles and
+    // `GET /jobs/:id/frames` 404'd. Writes are queued by the writer (never awaited
+    // on the observe callback) and capped per job (LiveFrameWriter), and each
+    // frame's observation row is recorded so `/observations` + the section
+    // builder can place it in a 3 s window.
+    const frames = new LiveFrameWriter({
+      dataDir: cfg.dataDir,
+      jobId: job.id,
+      recordObservation: (jobId, obs) => store.recordObservation(jobId, obs as any),
+    });
+    bj.frames = frames;
     const onEvent = (ev: AnalyzeEvent) => {
       emitJobEvent(job.id, ev);
       if (ev.type === "highlight" && ev.highlight) {
@@ -754,6 +779,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         stageA: shared.stageAOutcomes,
         signalGate: cfg.observeSignalGate,
         signalGateOpts: buildObserveSignalGateOpts(cfg),
+        // ADAAAA-7734: persist the JPEG this rail just decided on (queued write).
+        onFrame: (frame) =>
+          frames.enqueue({
+            seq: frame.seq,
+            timestamp: frame.timestamp,
+            frameB64: frame.frameB64,
+            tracks: (frame.observation.tracks ?? []) as any,
+          }),
         onDecide: async (payload) => {
           // Streaming waiver (ADAAAA-5341): the share is an ACTIVE streaming
           // session, so the per-decide fee is $0 and the gate never 402s
@@ -2841,16 +2874,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const obs = store.observationsForJob(job.id);
     const candidates = store.candidatesForJob(job.id);
 
-    // ADAAAA-7624: per-frame observations are a capped durable window, so a VOD
-    // job longer than the cap loses the rows for its first windows and those
+    // ADAAAA-7624: per-frame observations are a capped durable window, so a job
+    // longer than the cap loses the rows for its first windows and those
     // sections rendered `0 frames` although the JPEGs exist and serve 200. Join
-    // the on-disk frame inventory for VOD `file` jobs (the only source whose
-    // frames live in dataDir/frames/<jobId>) so every frame keeps its section.
-    // Live/browser frames are a rolling capture, not a completed filmstrip.
+    // the on-disk frame inventory so every frame keeps its section:
+    //   - `file` (VOD): a contiguous ffmpeg series in dataDir/frames/<jobId>, so
+    //     `frameCount` derives seq 0..n-1 (timestamp from `sampleFps`).
+    //   - `browser` (screen-share rail, ADAAAA-7734): the rail persists the JPEGs
+    //     it analysed in dataDir/live/<jobId>/frames named by global seq and
+    //     decimates the oldest past the storage cap, so the inventory is the
+    //     ACTUAL seq list — a count would re-derive deleted frames as tiles.
     const inventory =
       job.source === "file"
         ? { frameCount: jobFrameCount(job.id), sampleFps: job.sampleFps ?? cfg.vodDetailFps }
-        : undefined;
+        : job.source === "browser"
+          ? { frameCount: jobFrameCount(job.id), frameSeqs: jobFrameList(job.id).map((f) => f.seq), sampleFps: 1 }
+          : undefined;
 
     const sectionList = buildSections(obs, candidates, job.id, inventory);
     // ADAAAA-7285: point each analysis window that captured audio at a real
@@ -3436,17 +3475,45 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return null;
   }
 
-  /** ADAAAA-7624: count the sampled JPEGs a job wrote to disk (seq 0..n-1), so
+  /** ADAAAA-7734: whether this job's frame files carry their seq in the NAME
+   *  (`frame_<seq>.jpg`) instead of being a contiguous ffmpeg series numbered
+   *  from 000001. The media (screen-share/RTC) rail names frames by the global
+   *  seq and decimates old ones to stay under a storage cap, so the sorted
+   *  POSITION is no longer the seq for those jobs — the routes must parse the
+   *  suffix or tile N would render frame M after decimation. */
+  function jobFrameSeqIsAbsolute(jobId: string): boolean {
+    return store.getJob(jobId)?.source === "browser";
+  }
+
+  /** ADAAAA-7734: every servable frame of a job as `{seq, file}`, ordered by seq.
+   *  Empty when the job has no frame dir (the routes 404 on that). */
+  function jobFrameList(jobId: string): { seq: number; file: string }[] {
+    const dir = jobFrameDir(jobId);
+    if (!dir) return [];
+    let files: string[];
+    try {
+      files = readdirSync(dir).filter((f) => f.endsWith(".jpg")).sort();
+    } catch {
+      return [];
+    }
+    // VOD / live-RTMP dirs: ffmpeg wrote frame_000001.jpg.. contiguously, so the
+    // sorted position IS the seq (unchanged legacy mapping).
+    if (!jobFrameSeqIsAbsolute(jobId)) return files.map((file, seq) => ({ seq, file }));
+    // Browser rail dirs: the file's numeric suffix is the frame's global seq.
+    const out: { seq: number; file: string }[] = [];
+    for (const file of files) {
+      const seq = parseLiveFrameSeq(file);
+      if (seq === null) continue;
+      out.push({ seq, file });
+    }
+    return out.sort((a, b) => a.seq - b.seq);
+  }
+
+  /** ADAAAA-7624: count the sampled JPEGs a job wrote to disk, so
    * `GET /jobs/:id/detail` can partition every frame even when the per-frame
    * observation window was trimmed. Best-effort: 0 when the dir is missing. */
   function jobFrameCount(jobId: string): number {
-    const dir = jobFrameDir(jobId);
-    if (!dir) return 0;
-    try {
-      return readdirSync(dir).filter((f) => f.endsWith(".jpg")).length;
-    } catch {
-      return 0;
-    }
+    return jobFrameList(jobId).length;
   }
 
   app.get<{ Params: { id: string } }>("/jobs/:id/observations", { preHandler: authReq }, async (req: any, reply) => {
@@ -3457,19 +3524,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   app.get<{ Params: { id: string } }>("/jobs/:id/frames", { preHandler: authReq }, async (req: any, reply) => {
     const dir = jobFrameDir(req.params.id);
     if (!dir) return reply.code(404).send({ error: "no frames for job" });
-    const files = readdirSync(dir).filter((f) => f.endsWith(".jpg")).sort();
+    const list = jobFrameList(req.params.id);
     const tsBySeq = new Map(store.observationsForJob(req.params.id).map((o) => [o.seq, o.timestamp]));
     return {
-      frames: files.map((f, i) => ({ seq: i, uri: `/jobs/${req.params.id}/frames/${i}`, timestamp: tsBySeq.get(i) ?? null })),
+      frames: list.map((f) => ({ seq: f.seq, uri: `/jobs/${req.params.id}/frames/${f.seq}`, timestamp: tsBySeq.get(f.seq) ?? null })),
     };
   });
 
   app.get<{ Params: { id: string; seq: string } }>("/jobs/:id/frames/:seq", { preHandler: authReq }, async (req: any, reply) => {
     const dir = jobFrameDir(req.params.id);
     if (!dir) return reply.code(404).send({ error: "no frames for job" });
-    const files = readdirSync(dir).filter((f) => f.endsWith(".jpg")).sort();
     const idx = parseInt(req.params.seq, 10);
-    const f = files[idx];
+    // ADAAAA-7734: a browser-rail job's seq is the file's numeric suffix (it
+    // survives decimation); every other rail keeps the sorted-position mapping.
+    const list = jobFrameList(req.params.id);
+    const f = jobFrameSeqIsAbsolute(req.params.id) ? list.find((e) => e.seq === idx)?.file : list[idx]?.file;
     if (!f) return reply.code(404).send({ error: "no such frame" });
     const abs = path.join(dir, f);
     if (!existsSync(abs)) return reply.code(404).send({ error: "not found" });

@@ -103,6 +103,16 @@ export interface MediaRailObserverOptions {
   /** ADAAAA-7694: Stage-A outcome ledger fed by the audio tap, so every decided
    *  window records the verdict of the triggers whose onset it judged. */
   stageA?: StageAOutcomeLedger;
+  /** ADAAAA-7734: called ONCE per ACCEPTED relayed frame, in order, with the
+   *  frame's dense global seq + content timestamp. The caller persists the JPEG
+   *  and its observation row from here (queued I/O — this callback must stay
+   *  cheap: it runs on the media node's observe path). */
+  onFrame?: (frame: {
+    seq: number;
+    timestamp: number;
+    frameB64: string;
+    observation: MediaRailObservation;
+  }) => void;
 }
 
 /** Build the per-frame seed context handed to the decide window from one
@@ -204,6 +214,8 @@ export class MediaRailObserver {
   private readonly live: LiveObserver;
   private readonly jobId: string;
   private readonly lagBudgetMs: number;
+  /** ADAAAA-7734: per-frame persistence hook (see options). */
+  private readonly onFrame?: MediaRailObserverOptions["onFrame"];
   /** Serial decide chain: LiveObserver state (budget / last-fire) is not
    *  concurrency-safe, and the media node fires one callback per frame. */
   private chain: Promise<void> = Promise.resolve();
@@ -226,6 +238,7 @@ export class MediaRailObserver {
 
   constructor(opts: MediaRailObserverOptions, run?: LiveRunShared) {
     this.jobId = opts.jobId;
+    this.onFrame = opts.onFrame;
     this.lagBudgetMs = Math.max(0, (opts.lagBudgetS ?? LIVE_OBSERVE_LAG_BUDGET_S) * 1000);
     this.run = run ?? new LiveRunShared({ audioRetainS: opts.audioRetainS });
     this.live = new LiveObserver({
@@ -269,6 +282,12 @@ export class MediaRailObserver {
     return this.originTs;
   }
 
+  /** ADAAAA-7734: frames ACCEPTED onto this rail (the number the job reports as
+   *  `framesAnalyzed`, and the count the writer must persist). */
+  frameCount(): number {
+    return this.frames;
+  }
+
   /**
    * One observation relayed from the media node, with the anchor JPEG it held
    * at publish time. Records the frame + seed context, folds candidate /
@@ -296,7 +315,13 @@ export class MediaRailObserver {
       return;
     }
     const ts = this.contentTs(rawTs);
-    const seq = Number.isFinite(Number(obs?.seq)) ? Number(obs?.seq) : this.observations;
+    // ADAAAA-7734: the rail allocates a DENSE global position for every accepted
+    // frame (0,1,2,...) instead of trusting the media node's own seq. The frame
+    // file name, the observation row and the decide note's `analysis.frames[]`
+    // ref all key on this position, so `GET /jobs/<id>/frames/<seq>` can never
+    // render frame M for tile N when the relay skips a seq (a dropped POST, a
+    // mid-share media-node restart, or a rejected clock).
+    const seq = this.frames;
     this.observations++;
     this.frames++;
     this.run.addFrame(seq, ts, frameB64);
@@ -308,7 +333,12 @@ export class MediaRailObserver {
       objects: (obs.objects ?? []).filter((o) => Array.isArray(o.bbox)) as any,
       ocr: obs.ocr ?? [],
     });
-    this.live.record(ts, frameB64, seedFromObservation(ts, obs));
+    // `seq` rides the recorded frame so the decide window can name the frame
+    // files it actually saw (the analysis refs persisted on the decide note).
+    this.live.record(ts, frameB64, seedFromObservation(ts, obs), seq);
+    // ADAAAA-7734: hand the accepted frame to the caller's persistence hook.
+    // Cheap by contract (queued disk I/O) — the observe POST is already answered.
+    this.onFrame?.({ seq, timestamp: ts, frameB64, observation: obs });
 
     const att = attestationFromObservation(obs);
     if (att) this.live.addHint(obs.candidate?.eventType || "SPORTING_EVENT", ts, att);

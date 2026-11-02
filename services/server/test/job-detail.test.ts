@@ -54,6 +54,24 @@ describe("buildSections (ADAAAA-6851 Inc 3)", () => {
     expect(sections[0].frames[0].uri).toBe("/jobs/job-1/frames/0");
   });
 
+  it("joins an explicit on-disk seq list, so decimated frames are not re-derived (ADAAAA-7734)", () => {
+    // The browser/media rail keeps the newest frames and names each by its global
+    // seq, so the retained set has gaps (0,2,4 here). A count-based inventory
+    // would invent seq 1 and 3 (tiles that 404); the seq list must win.
+    const sections = buildSections([obs(4, 4.1)], [], "job-1", { frameCount: 3, frameSeqs: [0, 2, 4], sampleFps: 1 });
+    const seqs = sections.flatMap((s) => s.frames.map((f) => f.seq)).sort((a, b) => a - b);
+    expect(seqs).toEqual([0, 2, 4]);
+    // each surviving frame keeps its true uri (the file with that seq suffix)
+    expect(sections.flatMap((s) => s.frames.map((f) => f.uri)).sort()).toEqual([
+      "/jobs/job-1/frames/0",
+      "/jobs/job-1/frames/2",
+      "/jobs/job-1/frames/4",
+    ]);
+    // seq 4 came from the observation row: it keeps that row's timestamp + tracks
+    const four = sections.flatMap((s) => s.frames).find((f) => f.seq === 4)!;
+    expect(four.timestamp).toBe(4.1);
+  });
+
   it("attaches a decide note to the section containing its trigger timestamp", () => {
     const observations = [obs(0, 0.2), obs(1, 2.9), obs(2, 3.0), obs(3, 8.5)];
     const candidates = [
