@@ -524,6 +524,31 @@ describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
     expect(one.obs.throttleSkipCount()).toBe(0);
   });
 
+  it("5 s hop (LIVE_OBSERVE_CADENCE_S=5): ~60 decides per 300 s, span unchanged", async () => {
+    const fired: number[] = [];
+    const obs = new LiveObserver({
+      cadenceS: 5,
+      windowS: 10,
+      maxFrames: 30,
+      fps: 2,
+      onDecide: async (p) => {
+        fired.push(p.centerTs);
+        // The ~10 s window is untouched by the hop: every payload keeps frames
+        // from the trailing 10 s, so adjacent windows still overlap by ~5 s.
+        expect(p.frames.every((f) => f.ts <= p.centerTs + 1e-9)).toBe(true);
+        return true;
+      },
+    });
+    const fps = 5;
+    for (let i = 0; i < fps * 30; i++) {
+      const ts = i / fps;
+      obs.record(ts, `f${i}`, { ts });
+      await obs.maybeFire(ts);
+    }
+    expect(fired).toEqual([0, 5, 10, 15, 20, 25]);
+    expect(obs.throttleSkipCount()).toBe(0);
+  });
+
   it("keeps a due audio trigger pending across a dropped window and anchors the next kept one", async () => {
     // Onset ts 4 becomes due at ts >= 5 (lead 1 s). Indices land it on a dropped
     // opportunity so the cap alone decides whether the trigger survives.
