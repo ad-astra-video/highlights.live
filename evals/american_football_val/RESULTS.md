@@ -357,8 +357,10 @@ operating point rather than a defect in this harness: `MOTION_MIN_STEP = 0.15`
 is a *per-step* displacement threshold tuned for live steps of ~0.2 s, while
 this measurement steps at 1 fps (the deployed VOD detection cap). Over a 1 s
 step a player running 10 m/s in a 50 m frame moves ~0.2 of frame width, so
-0.15 is tripped by ordinary play. Peak single-step displacement was 0.18-0.70
-in every window, including every negative. Wide-open thresholds are not a
+0.15 is tripped by ordinary play. Peak single-step displacement was
+**0.218-0.6975** in every VOD window, including every negative (the live cap-3
+slice bottoms out slightly lower at 0.1855; the VOD rows are the ones behind the
+numbers in 11.2). Wide-open thresholds are not a
 tuning exercise this issue may take (threshold sweeps are out of scope), so the
 number is reported as measured at the shipped operating point.
 
@@ -400,7 +402,7 @@ no-zone`). Motion is the only trigger left and it is saturated, so:
 - **american football stays disabled for the operator UI.**
 - `measured` for the type remains a statement about the *labelled eval set and
   the audio run*; motion is now measured too but does not pass, and its QA
-  re-certification is the outstanding clause (AC6).
+  re-certification landed PASS at `3aaaab1` (`qaCertificationMotion`, AC6).
 
 One finding is worth carrying to the type's next operator decision: the motion
 rule as deployed at 1 fps is effectively always-on for football, so its cost is
@@ -431,6 +433,13 @@ produced md5 `da5ab15ce08acb81e2c3d2b57d5bb625` again.
 - **Whole-clip motion denominator.** Only needed if the window-scoped FP rate
   had landed near 0.10 — it landed at 0.79, so the revised proposal is not
   warranted for the ship/no-ship call.
-- **QA re-certification of the motion numbers.** Child of this issue assigned to
-  Highlights.live Reviewer; `motionHarness.qaCertification` stays `pending`
-  until that verdict lands.
+- **QA re-certification of the motion numbers — DONE.** Child of this issue
+  assigned to Highlights.live Reviewer ([ADAAAA-7797](/ADAAAA/issues/ADAAAA-7797));
+  verdict **PASS on 7/7 clauses** at head `3aaaab1`. Recorded as
+  `_AMERICAN_FOOTBALL_EVAL_REFERENCE["qaCertificationMotion"]`; certification is
+  not enablement and the ceiling miss stands.
+- **Provenance gap QA flagged (non-blocking).** The committed slice records only
+  `detector: "cuda:0"`; the weights identity
+  (`/runs/Florence-2-base-finetuned-ft6404gpu`) lives in 11.1 and the profile,
+  not in the artifact, so it cannot be re-derived on CPU. A future slice run
+  should write the model path into the slice document.
