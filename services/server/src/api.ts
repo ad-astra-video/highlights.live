@@ -2126,16 +2126,26 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const sessions = await db
       .listMediaSessions()
       .catch(() => [] as Array<{ jobId: string; sessionId: string; status: string; createdAt: string }>);
+    // Only a session whose JOB is genuinely in flight is a live share. The
+    // durable rows are written at provision and cleared on some job-end paths
+    // only, so the box carries stale `active` rows on FAILED jobs (measured
+    // 2026-11-02: 13 such rows) - reading `status: "active"` alone made the gate
+    // block every deploy for the whole wait budget on shares that had already
+    // ended. `store.getJob` is the in-memory owner of an in-flight run.
+    const IN_FLIGHT = new Set(["queued", "active", "extracting", "analyzing", "finalizing"]);
     const liveSessions = sessions
       .filter((s) => s.status === "active")
-      .map((s) => ({
-        jobId: s.jobId,
-        sessionId: s.sessionId,
-        createdAt: s.createdAt,
-        // The job that owns the session, when it is still tracked in memory.
-        status: store.getJob(s.jobId)?.status ?? "unknown",
-        source: store.getJob(s.jobId)?.source ?? "unknown",
-      }));
+      .map((s) => {
+        const job = store.getJob(s.jobId);
+        return {
+          jobId: s.jobId,
+          sessionId: s.sessionId,
+          createdAt: s.createdAt,
+          status: job?.status ?? "unknown",
+          source: job?.source ?? "unknown",
+        };
+      })
+      .filter((s) => IN_FLIGHT.has(s.status));
     return {
       generatedAt: new Date().toISOString(),
       inflight: inflight.map((j) => ({
