@@ -281,6 +281,16 @@ export interface ServerConfig {
    * stream wait, which needs CEO-approved customer wording (ADAAAA-7757), so the
    * shipped default is OFF. `LIVE_DECIDE_ADMISSION=1`. */
   liveDecideAdmission: boolean;
+  /** ADAAAA-7799 (lever C): the decide-rate CAP. Spend is a pure function of
+   * decided windows ($/h/stream = `decideCalls * 12 * DECIDE_FEE`), so at the
+   * measured $0.0033 per decide the funded $2.75 ceiling is ~69 decides per
+   * 300 s per stream (104 cadence windows). This drops every Nth decide
+   * OPPORTUNITY on a fixed stride instead of deciding every cadence tick: 3 =
+   * two of every three windows decided (~69 of 104) and the dropped windows are
+   * counted as `observeMetrics.throttleSkippedWindows`. It does NOT change the
+   * cadence, the window span or the audio noise-change trigger. Unset/1 = off
+   * (byte-identical). `LIVE_DECIDE_SKIP_EVERY`. */
+  liveDecideSkipEvery?: number;
   /** ADAAAA-7007/7011: enable the VOD decide-observer architecture on the
    * detail-first pass (observeLoop + decideWindowN both set in analyzeJob).
    * When on, decide is driven on the ~3 s cadence with a ~10 s overlapping
@@ -605,6 +615,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // queued-stream wording is a CEO decision (ADAAAA-7757), so the shipped
     // behaviour only changes once the flag is enabled on the deployment.
     liveDecideAdmission: env.LIVE_DECIDE_ADMISSION === "1",
+    // ADAAAA-7799 (lever C): decide-rate cap. Only parsed when set, so an unset
+    // env keeps the unbounded pass; an empty/garbage value normalises to off in
+    // LiveObserver (anything < 2).
+    liveDecideSkipEvery: env.LIVE_DECIDE_SKIP_EVERY !== undefined ? Number(env.LIVE_DECIDE_SKIP_EVERY) : undefined,
     // ADAAAA-7007/7011: wire the VOD decide-observer into the detail-first VOD
     // job path. Opt in with OBSERVE_LOOP=1 (default off; the candidate-gated VOD
     // baseline stays the behavior until the observer pass is validated).

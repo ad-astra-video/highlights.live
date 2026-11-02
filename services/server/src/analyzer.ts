@@ -1134,6 +1134,11 @@ export interface AnalyzerConfig {
    * queueing every stream behind a 2-wide gate. Wired from `DECIDE_CONCURRENCY`.
    */
   liveDecideAdmission?: number;
+  /** ADAAAA-7799 (lever C): decide-rate cap. Drop every Nth decide opportunity
+   *  on a fixed stride (N >= 2) so the decided-window rate and the derived spend
+   *  are bounded; 3 = two of every three windows (~69 of 104 per 300 s).
+   *  `undefined`/1 = off. Wired from `LIVE_DECIDE_SKIP_EVERY`. */
+  liveDecideSkipEvery?: number;
   /**
    * ADAAAA-7774: content fps the LIVE observe pass CONSUMES frames at (the
    * ingest-to-analysis stride). Live ingest runs at ~5 fps while the decide
@@ -1380,6 +1385,12 @@ export interface LiveObserveMetricsSnapshot {
    *  against 0.33/s demand); distinct from `skippedStaleWindows` (content was
    *  late) and `admissionSkippedWindows` (another live job held the box slot). */
   backpressureSkippedWindows?: number;
+  /** ADAAAA-7799 (lever C): decide opportunities the rate cap DROPPED on its
+   *  fixed stride. `decideCalls + throttleSkippedWindows + skippedStaleWindows +
+   *  backpressureSkippedWindows + admissionSkippedWindows` accounts for the
+   *  cadence windows, so the throttle gap is auditable instead of inferred from
+   *  a coverage number. Absent when the cap is off (unset env). */
+  throttleSkippedWindows?: number;
   /** ADAAAA-7774: the LIVE perceive stride — the ingest-to-analysis frame rate
    *  the pass consumed at, plus the counts that prove the stride ran:
    *  `perceiveCalls < framesAnalyzed` in a cool region (the cadence skipped
@@ -1530,6 +1541,8 @@ export function buildLiveObserveMetrics(
     // (another live job held the slot).
     maxDecideInFlight: obs.maxInFlightDepth(),
     backpressureSkippedWindows: obs.backpressureSkipCount(),
+    // ADAAAA-7799 (lever C): dropped decide opportunities from the rate cap.
+    throttleSkippedWindows: obs.throttleSkipCount(),
     // ADAAAA-7774: the ingest -> analysis stride evidence (absent when the pass
     // ran no stride — e.g. the media-rail share, perceived in the media node).
     ...(stride ? { perceive: { ...stride } } : {}),
@@ -4039,6 +4052,10 @@ export async function analyzeJob(
           // of interleaving a second decide that would stretch BOTH streams past
           // the 30 s budget. Default off until the CEO approves queue wording.
           canDecide: () => liveDecideAdmission.admit(cfg.jobId),
+          // ADAAAA-7799 (lever C): hold the funded spend ceiling by capping the
+          // decide rate (fixed stride over decide opportunities). Undefined
+          // leaves the pass unbounded.
+          decideSkipEvery: cfg.liveDecideSkipEvery,
           // ADAAAA-7771: pipelined depth. With K > 1 the expensive decide half
           // runs K-wide while acceptance stays serial in CONTENT order — the
           // serial loop could never hold the 3 s cadence when one decide costs

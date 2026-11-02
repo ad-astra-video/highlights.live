@@ -20,6 +20,7 @@ import {
   type ObserveDecidePayload,
   type PerFrameSeed,
 } from "../src/observe-loop";
+import type { AudioTriggerRecord } from "../src/audio-trigger";
 
 /** Build a synthetic VOD frame timeline at a given fps over [0, durationS). */
 function timeline(fps: number, durationS: number, endExclusive = true): { ts: number; imageB64: string }[] {
@@ -475,5 +476,69 @@ describe("LiveObserver (ADAAAA-7008: rolling-past cadence observer)", () => {
     obs.record(3.0, "f2", { ts: 3.0 });
     await obs.maybeFire(3.0);
     expect(calls).toBe(2);
+  });
+});
+
+
+describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
+  /** Drive a 30 s content timeline at 5 fps through one observer. */
+  async function drive(skipEvery: number | undefined, trigger?: AudioTriggerRecord) {
+    const fired: ObserveDecidePayload[] = [];
+    const obs = new LiveObserver({
+      cadenceS: 3,
+      windowS: 10,
+      maxFrames: 30,
+      fps: 2,
+      decideSkipEvery: skipEvery,
+      onDecide: async (p) => {
+        fired.push(p);
+        return true;
+      },
+    });
+    const fps = 5;
+    for (let i = 0; i < fps * 30; i++) {
+      const ts = i / fps;
+      obs.record(ts, `f${i}`, { ts });
+      if (trigger && i === 0) obs.recordTrigger(trigger);
+      await obs.maybeFire(ts);
+    }
+    return { obs, fired };
+  }
+
+  it("drops every Nth decide opportunity on a fixed stride (2 of 3 decided)", async () => {
+    const { obs, fired } = await drive(3);
+    // 30 s at a 3 s cadence = 10 opportunities (ts 0,3,...,27); every third is
+    // dropped, so 7 windows decide and 3 are counted as throttle skips.
+    expect(obs.decideCalls()).toBe(7);
+    expect(obs.throttleSkipCount()).toBe(3);
+    expect(fired.map((p) => p.centerTs)).toEqual([0, 3, 9, 12, 18, 21, 27]);
+  });
+
+  it("is byte-identical when the stride is unset or 1 (cap off)", async () => {
+    const off = await drive(undefined);
+    const one = await drive(1);
+    expect(off.obs.decideCalls()).toBe(10);
+    expect(one.obs.decideCalls()).toBe(10);
+    expect(off.obs.throttleSkipCount()).toBe(0);
+    expect(one.obs.throttleSkipCount()).toBe(0);
+  });
+
+  it("keeps a due audio trigger pending across a dropped window and anchors the next kept one", async () => {
+    // Onset ts 4 becomes due at ts >= 5 (lead 1 s). Indices land it on a dropped
+    // opportunity so the cap alone decides whether the trigger survives.
+    const trigger: AudioTriggerRecord = {
+      kind: "burst",
+      onsetTs: 4,
+      firedAt: 4,
+      onsetLatencyS: 0.2,
+      peakEnergy: 0.9,
+      baselineEnergy: 0.2,
+      thresholdId: "stageA/roar",
+    };
+    const { obs, fired } = await drive(3, trigger);
+    expect(obs.triggerStats().fired).toBe(1);
+    expect(obs.triggerStats().expired).toBe(0);
+    expect(obs.throttleSkipCount()).toBeGreaterThanOrEqual(1);
+    expect(fired.some((p) => p.trigger?.onsetTs === 4)).toBe(true);
   });
 });

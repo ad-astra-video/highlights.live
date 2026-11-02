@@ -95,6 +95,9 @@ export interface MediaRailObserverOptions {
   fps?: number;
   signalGate?: boolean;
   signalGateOpts?: SignalGateOptions;
+  /** ADAAAA-7799 (lever C): decide-rate cap for this rail — drop every Nth
+   *  decide opportunity on a fixed stride (N >= 2). Undefined = off. */
+  decideSkipEvery?: number;
   /** Content-vs-wall lag above which a queued frame is dropped instead of
    *  decided late (ADAAAA-7676 rule, applied to the media rail). Default
    *  LIVE_OBSERVE_LAG_BUDGET_S (30 s). */
@@ -249,6 +252,7 @@ export class MediaRailObserver {
       fps: opts.fps ?? OBSERVE_CONTENT_FPS,
       signalGate: opts.signalGate ?? false,
       signalGateOpts: opts.signalGateOpts,
+      decideSkipEvery: opts.decideSkipEvery,
       onDecide: opts.onDecide,
       stageA: opts.stageA,
       // ADAAAA-7722: give the media rail the Stage-B (whistle) ledger too, so a
