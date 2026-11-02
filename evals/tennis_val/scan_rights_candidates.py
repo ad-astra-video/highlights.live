@@ -239,12 +239,19 @@ def _ia_row(identifier, display_title, licence_url, duration_s, duration_note):
         licence = "CC0"
     elif "publicdomain/mark" in licence_url or "licenses/publicdomain" in licence_url:
         licence = "Public domain"
+    elif "/by-nc-sa/" in licence_url:
+        licence = "CC BY-NC-SA"
+    elif "/by-nc-nd/" in licence_url:
+        # The ND half matters: NoDerivatives also forbids the derived label work.
+        licence = "CC BY-NC-ND"
+    elif "/by-nc/" in licence_url:
+        licence = "CC BY-NC"
+    elif "/by-nd/" in licence_url:
+        licence = "CC BY-ND"
     elif "/by-sa/" in licence_url:
         licence = "CC BY-SA"
     elif "/by/" in licence_url:
         licence = "CC BY"
-    elif "/by-nc" in licence_url:
-        licence = "CC BY-NC"
     else:
         licence = "unknown"
     return {
