@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Square, Play, Share2 } from "lucide-react";
-import { api } from "../lib/api";
+import { api, getToken } from "../lib/api";
+import { readSSE } from "../lib/sse";
 import { captureEndedNotice } from "../lib/captureLoss";
 import { useSettings } from "../lib/settings";
 import { blobToBase64 } from "../lib/blobToBase64";
+import { StreamHealthStrip } from "./StreamHealthStrip";
+import { useStreamHealth } from "../lib/useStreamHealth";
 
 const MAX_RECONNECT = 6; // consecutive media reconnect attempts before falling back to /ingest
 // Transient /jobs/:id/media failures (e.g. HTTP 503 `no capacity available for
@@ -78,6 +81,14 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
   // Live job-status poll (ADAAAA-7700). Holds the interval; cleared on every stop
   // path so an ended share never keeps polling.
   const jobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Stream-health strip sources (ADAAAA-7730). The capture job's own event feed
+  // is the freshness/activity signal; only ARRIVAL times and a clip count are
+  // read from it (frame seq etc. stay admin-only diagnostics — ADAAAA-7727).
+  const eventsAbortRef = useRef<AbortController | null>(null);
+  const obsAtRef = useRef(0); // ms timestamp of the last `observation` frame
+  const clipsRef = useRef(0); // clips found during this share
+  const detectingRef = useRef(false); // a detection ran during this share
+  const sharingRef = useRef(false); // mirror of `sharing` for the sampler loop
 
   /** Build the WebRTC offer -> answer + ICE signaling to the media server.
    *  The media server assigns the pcId on the offer round-trip, so candidates
@@ -313,6 +324,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     stoppingRef.current = true;
     rcRef.current = 0;
     stopJobPoll();
+    abortCaptureEvents();
     if (ivRef.current) clearInterval(ivRef.current);
     ivRef.current = null;
     try {
@@ -336,11 +348,48 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     streamRef.current = null;
     jobIdRef.current = null;
     seqRef.current = 0;
+    sharingRef.current = false;
     setSharing(false);
     // The attributed message replaces the (stale) "capturing live" hint so the
     // operator sees the cause AND the next action.
     setError(message);
     onDone();
+  }
+
+  /**
+   * Subscribe to the capture job's own event feed (ADAAAA-7730). The stream
+   * health strip needs two things the panel cannot get from getStats(): how long
+   * ago the detector last produced an observation, and how many clips this
+   * session has produced. Both are read from events the pipeline already emits on
+   * the existing job-events SSE — no new endpoint, no polling.
+   */
+  function subscribeCaptureEvents(jobId: string) {
+    abortCaptureEvents();
+    obsAtRef.current = Date.now();
+    clipsRef.current = 0;
+    detectingRef.current = false;
+    const ac = new AbortController();
+    eventsAbortRef.current = ac;
+    readSSE(`/jobs/${jobId}/events`, getToken(), (name) => {
+      if (name === "observation") {
+        // Only the ARRIVAL time is used; nothing on the frame is displayed.
+        obsAtRef.current = Date.now();
+        detectingRef.current = true;
+      } else if (name === "candidate") {
+        detectingRef.current = true;
+      } else if (name === "highlight") {
+        clipsRef.current += 1;
+      }
+    }, ac.signal).catch(() => {
+      /* a dropped event feed only costs freshness accuracy; the strip degrades
+         to Poor honestly instead of showing a stale Good */
+    });
+  }
+
+  /** Stop the event feed. Idempotent. */
+  function abortCaptureEvents() {
+    if (eventsAbortRef.current) eventsAbortRef.current.abort();
+    eventsAbortRef.current = null;
   }
 
   /** Poll the job row while sharing; surface a server-side end within JOB_POLL_MS. */
@@ -386,6 +435,9 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       // ADAAAA-7700: watch the job row for a server-side end (media-node restart,
       // analyzer restart) from the moment the job exists.
       startJobPoll(job.job.id);
+      // ADAAAA-7730: freshness/activity for the stream-health strip come from the
+      // job's own event feed (the existing SSE — no extra request).
+      subscribeCaptureEvents(job.job.id);
 
       // Media-server handshake: stream the live video track over WebRTC
       // (browser -> media server -> orchestrator video-in), with transparent
@@ -433,6 +485,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
         }, 1000);
       }
 
+      sharingRef.current = true;
       setSharing(true);
       const track = stream.getVideoTracks()[0];
       track.onended = () => stopInternal(true); // user clicked the browser's stop-share affordance
@@ -448,6 +501,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
       if (ivRef.current) clearInterval(ivRef.current);
       ivRef.current = null;
       stopJobPoll();
+      abortCaptureEvents();
       teardownRtc();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -460,6 +514,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
           /* job finalization is best-effort here */
         }
       }
+      sharingRef.current = false;
       setSharing(false);
     } finally {
       setBusy(false);
@@ -470,6 +525,7 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     stoppingRef.current = true;
     rcRef.current = 0;
     stopJobPoll();
+    abortCaptureEvents();
     if (ivRef.current) clearInterval(ivRef.current);
     ivRef.current = null;
     // Media path: closing the WebRTC/WS (after a short reconnect grace on the
@@ -511,12 +567,24 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
     }
     jobIdRef.current = null;
     seqRef.current = 0;
+    sharingRef.current = false;
     setSharing(false);
   }
 
   async function stop() {
     await stopInternal(true);
   }
+
+  // The 5-chip strip sampler (ADAAAA-7730): one 2 s loop over getStats() plus the
+  // state machine and SSE-derived freshness/activity. Enabled only while a share
+  // is live, so a stopped panel never samples.
+  const healthChips = useStreamHealth({
+    enabled: sharing,
+    getPeer: () => pcRef.current,
+    getLink: () => ({ sharing: sharingRef.current, mode: modeRef.current, reconnectAttempt: rcRef.current }),
+    getObservationAgeMs: () => (obsAtRef.current > 0 ? Date.now() - obsAtRef.current : null),
+    getActivity: () => ({ clips: clipsRef.current, detecting: detectingRef.current }),
+  });
 
   return (
     <div className="mt-6 rounded-2xl border border-neon/40 bg-black/40 p-4">
@@ -544,6 +612,10 @@ export function BrowserCapture({ gameHint, onDone }: { gameHint: string; onDone:
           )}
         </div>
       </div>
+      {/* Stream health (ADAAAA-7726 Inc 2): the customer-facing readout that
+          replaced the operator diagnostics Inc 1 removed. Five plain-language
+          chips, 2 s cadence, no server call. */}
+      {sharing && <StreamHealthStrip chips={healthChips} className="mt-3" />}
       {error && <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{error}</div>}
     </div>
   );

@@ -123,7 +123,11 @@ export function isAdminRole(role?: string | null): boolean {
 
 /** True when the signed-in session is an operator/admin. False while the session
  * is still hydrating (a gate that is briefly closed is safe; one that is
- * briefly open is the bug this increment exists to fix). */
+ * briefly open is the bug this increment exists to fix). Also false when a
+ * surface renders outside <AuthProvider> (an isolated SSR smoke, a child
+ * component test) — there is no session there, so the gate fails closed instead
+ * of throwing and taking the whole render down. */
 export function useIsAdmin(): boolean {
-  return isAdminRole(useAuth().user?.role);
+  const ctx = useContext(Ctx);
+  return isAdminRole(ctx?.user?.role);
 }
