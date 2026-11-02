@@ -72,6 +72,19 @@ def test_at22_arithmetic_is_labelled_as_arithmetic_not_a_measurement():
     assert (vod["kept"], vod["dropped"], vod["droppedShare"]) == (8, 14, 0.6364)
 
 
+def test_stale_slots_are_not_counted_as_kept_detections():
+    # Frame 1 has one detection, frame 2 has none: the track survives
+    # lost_before_evict frames, so occupancy is 1 while NOTHING was carried in
+    # frame 2. Counting occupancy as "kept" would credit a dropped box.
+    doc = rcc.build_doc(_slice({"E01": [[_obj()], []]}), [3])
+    run = doc["caps"]["3"]
+    assert run["detections"] == 1
+    assert run["keptTotal"] == 1
+    assert run["droppedTotal"] == 0
+    assert run["staleSlotsTotal"] == 1
+    assert [f["staleSlots"] for f in run["perFrame"]] == [0, 1]
+
+
 def test_empty_slice_reports_zeros_and_no_densest_frame():
     doc = rcc.build_doc(_slice({"E01": []}), [3])
     assert doc["densestFrameInSlice"] is None

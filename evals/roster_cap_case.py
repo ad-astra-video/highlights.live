@@ -3,18 +3,19 @@
 
 The 3-object live cap and the 8-object VOD cap are NOT a detector property -
 they are a roster capacity on the deployed tracker (`app.tracker.IoUTracker`,
-capacity clamped per mode in `app.tracking_plan`). So the question "what does
-each cap keep and drop on a crowded frame" is answered by stepping the frame's
-real detections through the deployed tracker at each capacity and counting the
-boxes the roster can carry versus the ones it has to drop.
+capacity clamped per mode in `app.tracking_plan`). So "what does each cap keep
+and drop on a crowded frame" is answered by stepping the frame's real detections
+through the deployed tracker at each capacity.
 
-Counting rule (same as `evals/measure_motion_recall.py`, which produced the
-ADAAAA-7788 roster table): at one frame the tracker holds at most `capacity`
-slots, so `kept = len(tracks)` and `dropped = max(0, len(boxes) - kept)`.
+Counting rule: a detection is KEPT when the tracker carries it on a track this
+frame (`Track.last_seen == ts`), and DROPPED otherwise - a box with no free slot
+becomes no identity and the roster cannot surface it. `rosterOccupancy` is
+`len(tracks)`, which can exceed `kept` because a track survives
+`lost_before_evict` unmatched frames; those slots are reported as
+`staleSlots` rather than counted as kept detections (the older table's
+`len(boxes) - len(tracks)` rule silently treats a stale slot as a kept box).
 
-Reported per cap: clip totals, the frames that saturate the roster, and the
-densest frame in the slice with its kept/dropped counts and shares. It never
-invents a detection: an empty slice reports zeros, not a synthetic roster.
+Never invents a detection: an empty slice reports zeros, not a synthetic roster.
 
 Run:  python3 evals/roster_cap_case.py <slice.json> --json out.json
 """
@@ -35,29 +36,40 @@ def cap_run(windows, capacity: int, lost_before_evict: int = 8) -> dict:
     """Step every window through a fresh tracker at one capacity."""
     frames = []
     detections = 0
-    dropped = 0
+    kept_total = 0
+    dropped_total = 0
+    stale_total = 0
     frames_at_cap = 0
     max_kept = 0
+    max_occupancy = 0
     for w in windows:
         tr = IoUTracker(capacity=capacity, lost_before_evict=lost_before_evict)
         for frame in w.get("frames") or []:
             objects = frame.get("objects") or []
             boxes = [tuple(o["bbox"]) for o in objects if len(o.get("bbox") or []) >= 4]
             labels = [str(o.get("label") or "") for o in objects if len(o.get("bbox") or []) >= 4]
-            tracks = tr.step(boxes, ts=float(frame.get("t") or 0.0), labels=labels)
-            kept = len(tracks)
-            d = max(0, len(boxes) - kept)
+            ts = float(frame.get("t") or 0.0)
+            tracks = tr.step(boxes, ts=ts, labels=labels)
+            kept = sum(1 for t in tracks if getattr(t, "last_seen", None) == ts)
+            occupancy = len(tracks)
+            dropped = max(0, len(boxes) - kept)
+            stale = max(0, occupancy - kept)
             detections += len(boxes)
-            dropped += d
+            kept_total += kept
+            dropped_total += dropped
+            stale_total += stale
             max_kept = max(max_kept, kept)
-            if kept >= capacity:
+            max_occupancy = max(max_occupancy, occupancy)
+            if occupancy >= capacity:
                 frames_at_cap += 1
             frames.append({
                 "window": w.get("id"),
                 "t": frame.get("t"),
                 "detections": len(boxes),
                 "kept": kept,
-                "dropped": d,
+                "dropped": dropped,
+                "rosterOccupancy": occupancy,
+                "staleSlots": stale,
             })
     densest = max(frames, key=lambda f: f["detections"], default=None)
     return {
@@ -65,10 +77,12 @@ def cap_run(windows, capacity: int, lost_before_evict: int = 8) -> dict:
         "frames": len(frames),
         "framesAtCap": frames_at_cap,
         "detections": detections,
-        "keptTotal": detections - dropped,
-        "droppedTotal": dropped,
-        "droppedShare": round(dropped / detections, 4) if detections else None,
+        "keptTotal": kept_total,
+        "droppedTotal": dropped_total,
+        "droppedShare": round(dropped_total / detections, 4) if detections else None,
+        "staleSlotsTotal": stale_total,
         "maxKept": max_kept,
+        "maxRosterOccupancy": max_occupancy,
         "densestFrame": densest,
         # The 22-player question can be answered two ways, and they are not the
         # same evidence. If a measured frame carries >= 22 detections, its
@@ -109,9 +123,10 @@ def build_doc(slice_doc: dict, caps: list[int], lost_before_evict: int = 8) -> d
         "has22ObjectFrame": bool(densest and densest["detections"] >= 22),
         "caps": runs,
         "note": (
-            "kept/dropped are the deployed roster's slots at one frame "
-            "(kept = len(tracks), dropped = detections - kept); the tracker is "
-            "app.tracker.IoUTracker at the shipped lost_before_evict."
+            "kept = detections the tracker carried this frame (last_seen == ts); "
+            "dropped = detections - kept; rosterOccupancy = len(tracks), which "
+            "includes slots held by tracks surviving lost_before_evict frames "
+            "and is reported separately as staleSlots."
         ),
     }
 
@@ -141,7 +156,7 @@ def main() -> int:
         share = (d["dropped"] / d["detections"]) if d and d["detections"] else None
         print(f"  cap {cap}: framesAtCap {run['framesAtCap']}/{run['frames']}  "
               f"maxKept {run['maxKept']}  dropped {run['droppedTotal']}"
-              f"/{run['detections']} ({run['droppedShare']})"
+              f"/{run['detections']} ({run['droppedShare']})  staleSlots {run['staleSlotsTotal']}"
               + (f"  densest-frame kept {d['kept']} dropped {d['dropped']}"
                  f" of {d['detections']} ({share:.4f})" if d else ""))
     for cap, run in doc["caps"].items():
