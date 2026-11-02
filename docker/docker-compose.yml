@@ -558,16 +558,18 @@ services:
       # reproduce today's deployed live shape exactly:
       #   LIVE_OBSERVE_CONTENT_FPS 2 => consume/stride to 2 fps (0 = perceive every
       #     ingested frame, the pre-7774 stride-off mode).
-      #   PERCEIVE_CADENCE 1 => adaptive cadence on (0 = off, 1 = on, empty = the
-      #     tri-state auto rule). Shared with the VOD detail-first pass
-      #     (`api.ts` forwards it to both config builders), so this line also
-      #     activates `docker/.env`'s VOD cadence intent.
+      #   PERCEIVE_CADENCE (empty default) => the tri-state auto rule: the LIVE
+      #     pass auto-enables the cadence and the VOD detail-first pass keeps it
+      #     off (its auto rule needs DECIDE_WINDOW_N). Deliberately NOT `:-1`:
+      #     this knob is shared with the VOD pass, so a hard 1 would force the
+      #     VOD cadence on — a VOD behaviour change this ticket does not cover.
+      #     Set 1 / 0 to force it per rail.
       #   PERCEIVE_QUIET_STRIDE 2 => cool-region perceive stride (used only when
       #     the cadence is on; 1 = full pass).
       #   LIVE_PERCEIVE_UTILIZATION 0.6 => fraction of wall clock the live pass
       #     may spend in blocking perceive.
       - LIVE_OBSERVE_CONTENT_FPS=${LIVE_OBSERVE_CONTENT_FPS:-2}
-      - PERCEIVE_CADENCE=${PERCEIVE_CADENCE:-1}
+      - PERCEIVE_CADENCE=${PERCEIVE_CADENCE:-}
       - PERCEIVE_QUIET_STRIDE=${PERCEIVE_QUIET_STRIDE:-2}
       - LIVE_PERCEIVE_UTILIZATION=${LIVE_PERCEIVE_UTILIZATION:-0.6}
       # ADAAAA-7777 (lever B): the three live decide per-call TRIM knobs, each

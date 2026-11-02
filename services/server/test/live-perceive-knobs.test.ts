@@ -88,6 +88,15 @@ describe("live perceive knobs reach the live AnalyzerConfig (ADAAAA-7791)", () =
     expect(analyzer.livePerceiveUtilization).toBeUndefined();
   });
 
+  it("an empty PERCEIVE_CADENCE (what the compose empty default yields) stays undefined", () => {
+    // `PERCEIVE_CADENCE=${PERCEIVE_CADENCE:-}` in compose passes an empty
+    // string, not an absent var, so config.ts must keep the tri-state auto rule
+    // instead of forcing the shared cadence flag on for the VOD pass.
+    const { cfg, analyzer } = liveAnalyzer({ PERCEIVE_CADENCE: "" });
+    expect(cfg.perceiveCadence).toBeUndefined();
+    expect(analyzer.perceiveCadence).toBeUndefined();
+  });
+
   it("an empty ServerConfig yields undefined for all four (no fabricated values)", () => {
     const analyzer = buildLiveAnalyzerConfig({
       cfg: {} as ServerConfig,
@@ -114,7 +123,7 @@ describe("live perceive knobs reach the live AnalyzerConfig (ADAAAA-7791)", () =
     const server = lines.slice(start, end).join("\n");
     for (const decl of [
       "LIVE_OBSERVE_CONTENT_FPS=${LIVE_OBSERVE_CONTENT_FPS:-2}",
-      "PERCEIVE_CADENCE=${PERCEIVE_CADENCE:-1}",
+      "PERCEIVE_CADENCE=${PERCEIVE_CADENCE:-}",
       "PERCEIVE_QUIET_STRIDE=${PERCEIVE_QUIET_STRIDE:-2}",
       "LIVE_PERCEIVE_UTILIZATION=${LIVE_PERCEIVE_UTILIZATION:-0.6}",
     ]) {
