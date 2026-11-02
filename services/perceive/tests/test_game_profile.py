@@ -20,7 +20,7 @@ import sys
 import numpy as np
 import pytest
 
-from app import process_audio, process_frame, stage_a
+from app import handle_control, process_audio, process_frame, stage_a
 from app import florence
 from app.audio_gate import AudioEnergyGate, GateConfig
 from app.game_profile import (
@@ -241,6 +241,28 @@ def test_soccer_profile_is_bound_from_the_game_hint():
     state.game_hint = "some-unknown-game"
     sync_game_profile(state)
     assert state.game_profile.key == "safe-default"
+
+
+def test_configure_binds_an_explicit_profile_and_unknown_never_wins():
+    """Control `configure` binds the registered type; an unknown key is logged
+    and dropped rather than silently substituting soccer."""
+    state = SessionState(session_id="s-cfg")
+    state.game_hint = "NBA"
+    sync_game_profile(state)
+    assert state.game_profile.key == "basketball"
+
+    ack = handle_control(state, {"type": "configure", "gameProfile": "soccer"})
+    assert ack["ok"] is True
+    assert state.game_profile is SOCCER_PROFILE
+    assert state.game_profile_explicit is True
+
+    handle_control(state, {"type": "configure", "gameProfile": "basketball"})
+    assert state.game_profile is SOCCER_PROFILE  # unregistered: ignored
+
+    # an explicit choice is not reverted by a later hint sync
+    state.game_hint = "NBA"
+    assert sync_game_profile(state) is False
+    assert state.game_profile is SOCCER_PROFILE
 
 
 # --- 3. per-type audio thresholds ----------------------------------------

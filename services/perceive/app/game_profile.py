@@ -532,7 +532,7 @@ def profile_for(game_hint: Optional[str] = None, category: Optional[str] = None)
     scope (the eval harnesses load it standalone), and florence itself imports
     this module for the soccer vocabulary.
     """
-    from .florence import SAFE_DEFAULT_VOCABULARY, _GAME_VOCABULARIES, canonical_sport
+    from .florence import _GAME_VOCABULARIES, canonical_sport
 
     key = canonical_sport(game_hint, category)
     if key is not None and key in PROFILES:
@@ -565,6 +565,7 @@ __all__ = [
     "ORACLE_KINDS",
     "LIVE_MAX_TRACKS",
     "VOD_MAX_TRACKS",
+    "BALL_SPEED_WINDOW",
     "ZoneSpec",
     "ZoneModel",
     "AudioThresholds",
