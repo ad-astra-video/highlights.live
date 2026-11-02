@@ -10,15 +10,18 @@ the player_id module and the gated `track-player` control command.
 No real model required (fake detector + OCR).
 """
 import numpy as np
+import pytest
 
 import app as app_mod
 from app import florence
 from app import handle_control
 from app.player_id import (
+    expand_box,
     identify_player_by_number,
     is_player_detection,
     match_player_by_number,
     parse_jersey_numbers,
+    standalone_jersey_numbers,
 )
 from app.sam_tracker import HybridTracker, SamBackend
 from app.session import SessionState
@@ -360,3 +363,89 @@ def test_track_player_handoff_sam_propagates_without_per_frame_player_detect(mon
     assert state.requested_player_number == 9
 
 
+
+
+# --- ADAAAA-7345: jersey-OCR robustness on census clips ---------------------
+
+
+def test_standalone_jersey_numbers_prefers_own_token():
+    assert standalone_jersey_numbers(["9"]) == [9]
+    assert standalone_jersey_numbers(["#9"]) == [9]
+    assert standalone_jersey_numbers(["09"]) == [9]
+    assert standalone_jersey_numbers(["45:30"]) == [45, 30]
+    # watermark / sponsor / agency text: digits embedded inside a word do NOT
+    # count as a jersey read ("R.MARIN18PEACE", "Caters News Agency")
+    assert standalone_jersey_numbers(["R.MARIN18PEACE"]) == []
+    assert standalone_jersey_numbers(["Caters News Agency"]) == []
+    assert standalone_jersey_numbers(None) == []
+
+
+def test_expand_box_pads_and_clamps_to_frame():
+    assert expand_box([0.40, 0.18, 0.46, 0.30]) == pytest.approx((0.35, 0.13, 0.51, 0.35))
+    # never leaves the frame
+    assert expand_box([0.0, 0.0, 1.0, 1.0]) == (0.0, 0.0, 1.0, 1.0)
+    assert expand_box(None) is None
+    assert expand_box([0.1, 0.1]) is None
+
+
+def test_match_rereads_padded_crop_when_the_exact_box_reads_no_number():
+    """Census failure mode: the tight OD box clips the jersey number, so the
+    exact crop OCRs nothing. The padded re-read recovers the number and the
+    seed box stays the tight detection (SAM3 needs that box, not the crop)."""
+    bbox = [0.40, 0.18, 0.46, 0.30]
+    objects = [{"label": "player", "confidence": 0.8, "bbox": bbox}]
+    calls = []
+
+    def read(crop):
+        calls.append(tuple(crop))
+        if _norm_key(crop) == _norm_key(bbox):
+            return []           # number clipped by the tight crop
+        return ["#11"]          # padded crop recovers it
+
+    match = match_player_by_number(objects, 11, read)
+    assert match is not None
+    assert match["ocr_confidence"] == "standalone"
+    assert list(match["bbox"]) == bbox
+    assert match["ocr_bbox"] == list(expand_box(bbox))
+    assert len(calls) == 2
+
+
+def test_padded_crop_is_skipped_when_the_exact_crop_read_a_different_number():
+    """A crop that clearly read another jersey belongs to another player; padding
+    it would drag a neighbour into the OCR and invent a match."""
+    objects = [{"label": "player", "confidence": 0.8, "bbox": [0.40, 0.18, 0.46, 0.30]}]
+    calls = []
+
+    def read(crop):
+        calls.append(tuple(crop))
+        return ["7"] if len(calls) == 1 else ["11"]
+
+    assert match_player_by_number(objects, 11, read) is None
+    assert len(calls) == 1
+
+
+def test_standalone_read_outranks_embedded_read_on_a_higher_confidence_box():
+    objects = [
+        # higher confidence, but the crop caught a watermark word with 18 in it
+        {"label": "player", "confidence": 0.95, "bbox": [0.10, 0.10, 0.16, 0.24]},
+        # lower confidence, clean "#18" jersey read
+        {"label": "player", "confidence": 0.60, "bbox": [0.60, 0.10, 0.66, 0.24]},
+    ]
+    numbers = {
+        _norm_key([0.10, 0.10, 0.16, 0.24]): ["R.MARIN18PEACE"],
+        _norm_key([0.60, 0.10, 0.66, 0.24]): ["#18"],
+    }
+
+    match = match_player_by_number(objects, 18, lambda b: numbers.get(_norm_key(b), []))
+    assert match is not None
+    assert list(match["bbox"]) == [0.60, 0.10, 0.66, 0.24]
+    assert match["ocr_confidence"] == "standalone"
+
+
+def test_embedded_read_is_still_a_fallback_match():
+    """Recall is preserved: if the ONLY read carrying the number is embedded in a
+    longer line, it still matches (marked embedded), as before this change."""
+    objects = [{"label": "player", "confidence": 0.9, "bbox": [0.10, 0.10, 0.16, 0.24]}]
+    match = match_player_by_number(objects, 18, lambda b: ["R.MARIN18PEACE"])
+    assert match is not None
+    assert match["ocr_confidence"] == "embedded"
