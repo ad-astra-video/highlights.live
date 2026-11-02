@@ -1197,6 +1197,40 @@ export function JobDetail() {
     [id, admin]
   );
 
+  // ADAAAA-7741: the customer's processing-lag chip gets its own 5 s refresh,
+  // on the LIGHT job payload (GET /jobs/:id — ~7 KB of job metadata).
+  //
+  // The composite detail fetch rebuilds every frame section and can outlast the
+  // 5 s poll, and a single slow request holds `loadInFlightRef` so every tick
+  // after it is dropped — which left the chip showing one stale lag number for
+  // tens of seconds. This poll only refreshes the projection, so the number (and
+  // the skipped-window count) moves every poll cycle while the job is live. The
+  // composite refresh and the SSE-driven deltas keep feeding it too: the effect
+  // below always keeps the NEWER of the two readings.
+  const [liveProgress, setLiveProgress] = useState<LiveProgress | undefined>();
+  useEffect(() => {
+    const lp = detail?.liveProgress;
+    if (!lp) return;
+    setLiveProgress((cur: LiveProgress | undefined) =>
+      !cur || Date.parse(lp.updatedAt) >= Date.parse(cur.updatedAt) ? lp : cur,
+    );
+  }, [detail]);
+  useEffect(() => {
+    if (terminal || !id) return;
+    const poll = startDetailPoll({
+      shouldContinue: () => aliveRef.current,
+      onTick: () => {
+        api<{ liveProgress?: LiveProgress }>(`/jobs/${id}`)
+          .then((r) => {
+            if (aliveRef.current && r?.liveProgress) setLiveProgress(r.liveProgress);
+          })
+          // Best-effort: a failed light read keeps the last honest reading.
+          .catch(() => {});
+      },
+    });
+    return () => poll.stop();
+  }, [terminal, id]);
+
   // ADAAAA-7742: merge one sections-delta into the open view. New buckets are
   // appended, a re-sent tail bucket replaces its stale copy (so a decide note
   // that landed into it shows), and the small companions the same page renders
@@ -1612,10 +1646,10 @@ export function JobDetail() {
                 {detail.job.status}
               </span>
               {/* ADAAAA-7741: how far behind live the newest decided window is,
-                  driven by the same SSE + 5 s detail refresh. In-flight only —
-                  a terminal job's completion state is the status chip above, so
-                  a frozen lag number is never left on screen (AC6). */}
-              {isJobInFlight(detail.job.status) && <LiveProgressChip progress={detail.liveProgress} />}
+                  refreshed by its own 5 s light job poll (see the poll effect).
+                  In-flight only — a terminal job's completion state is the status
+                  chip above, so a frozen lag number is never left on screen. */}
+              {isJobInFlight(detail.job.status) && <LiveProgressChip progress={liveProgress} />}
               {/* ADAAAA-7700: WHY the job failed, as its own attributed chip. */}
               <FailureReasonChip reason={detail.job.failureReason} />
             </div>
