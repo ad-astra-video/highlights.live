@@ -222,8 +222,41 @@ describe("LiveDecideAdmission in-flight depth sharing (ADAAAA-7771)", () => {
     }
     await observer.flush();
     expect(maxActive).toBeLessThanOrEqual(2);
-    expect(observer.maxInFlightDepth()).toBe(2);
-    expect(observer.backpressureSkipCount()).toBeGreaterThan(0);
+    expect(observer.maxInFlightDepth()).toBeLessThanOrEqual(2);
     expect(observer.currentDepthBudget()).toBe(1);
+  });
+
+  it("(g) LiveObserver: depth budget 1 runs the staged pair INLINE — the serial pass, no pending queue", async () => {
+    const decided: number[] = [];
+    const accepted: number[] = [];
+    let pendingAfterFire = 0;
+    const observer = new LiveObserver({
+      cadenceS: 3,
+      windowS: 10,
+      fps: 2,
+      maxInFlight: 4,
+      depthBudget: () => 1,
+      onDecideStaged: (payload) => ({
+        decide: async () => {
+          decided.push(payload.centerTs);
+          await sleep(5);
+        },
+        accept: async () => {
+          accepted.push(payload.centerTs);
+          return true;
+        },
+      }),
+    });
+    observer.record(0, "f0", seed(0));
+    await observer.maybeFire(0, false, 0);
+    // The decide finished inside maybeFire (serial semantics)...
+    expect(decided).toEqual([0]);
+    expect(accepted).toEqual([0]);
+    expect(observer.decideCalls()).toBe(1);
+    expect(observer.pendingApplyCount()).toBe(0);
+    // ...and nothing is left outstanding for the read path.
+    await observer.flush();
+    pendingAfterFire = observer.pendingApplyCount();
+    expect(pendingAfterFire).toBe(0);
   });
 });

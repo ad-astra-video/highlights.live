@@ -960,7 +960,29 @@ export class LiveObserver {
       // half runs K-wide; the verdict is applied in content order by the drain
       // chain (`accept` -> acceptVideoDecision), so the accept path keeps its
       // serial semantics while the cadence keeps up.
-      this.issueStaged(payload, {
+      //
+      // With a depth budget of 1 (a crowded box sharing a narrow decide
+      // admission) there is nothing to overlap, so the staged pair is run
+      // INLINE — exactly the serial pass the box measured before this change
+      // (a queued-but-refused tick would instead re-sample the live edge and
+      // cost ~6 s of lag at 3 streams, measured).
+      if (this.effectiveDepth() > 1) {
+        this.issueStaged(payload, {
+          centerTs: nowTs,
+          lo,
+          lagMs: lag,
+          cadenceMs,
+          anchored,
+          dueTrigger: anchored ? dueTrigger : null,
+          frameCount: payload.frames.length,
+        });
+        return;
+      }
+      const started = Date.now();
+      const staged = this.onDecideStaged(payload);
+      await staged.decide();
+      const accepted = await staged.accept();
+      this.recordOutcome({
         centerTs: nowTs,
         lo,
         lagMs: lag,
@@ -968,6 +990,8 @@ export class LiveObserver {
         anchored,
         dueTrigger: anchored ? dueTrigger : null,
         frameCount: payload.frames.length,
+        accepted,
+        e2eMs: Date.now() - started,
       });
       return;
     }
