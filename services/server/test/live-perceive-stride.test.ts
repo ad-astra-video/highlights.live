@@ -96,6 +96,21 @@ async function* bufferedFrames(durationMs: number, frameEveryMs = 200) {
   }
 }
 
+/** Deterministic 3 fps feed (the rate the deployed rail actually delivers:
+ *  ~899-900 frames per 300 s): the content clock advances by exactly 1/3 s per
+ *  frame, so `contentSeconds` is known exactly, while arrival rides the wall
+ *  clock like ffmpeg ingest does. */
+async function* threeFpsFrames(contentSeconds: number) {
+  const t0 = Date.now();
+  const n = Math.round(contentSeconds * 3) + 1; // frame 0 sits at content t=0
+  for (let k = 0; k < n; k++) {
+    const ts = Number((k / 3).toFixed(3));
+    const wait = t0 + (k * 1000) / 3 - Date.now();
+    if (wait > 0) await sleep(wait);
+    yield { seq: k, timestamp: ts, imageB64: `f${ts}` };
+  }
+}
+
 const CFG = {
   jobId: "job-live-stride",
   clipBeforeS: 1,
@@ -159,6 +174,49 @@ describe("analyzeJob live perceive stride (ADAAAA-7774)", () => {
     // i.e. the loop kept up with the wall clock — the whole point of the stride.
     expect(m.skippedStaleWindows).toBe(0);
     expect(m.accepted).toBe(0);
+  }, 60000);
+
+  it("(h): a 3 fps ingest still consumes at the analysis fps — credit accumulator, not a 0.5 s floor", async () => {
+    // The deployed rail delivers ~3 fps (899-900 frames per 300 s). A hard
+    // `1 / analysisFps` (0.5 s) floor on the frame spacing alternates
+    // consume/skip/consume on that feed — 0.667 s spacing = 1.5 content fps, i.e.
+    // `framesAnalyzed` ~450 per 300 s on the shipped build. Credit banking makes
+    // the consumed COUNT converge on the analysis fps instead.
+    const contentSeconds = 6;
+    const strided = makeClient(10);
+    const outcome = await analyzeJob(
+      strided.client,
+      threeFpsFrames(contentSeconds) as any, // ~19 frames over 6 content seconds
+      cut as any,
+      { ...CFG, liveObserveContentFps: 2 } as any,
+      undefined
+    );
+    const m = outcome.observeMetrics!;
+    const p = m.perceive!;
+    expect(p.analysisFps).toBe(2);
+    expect(p.framesSeen).toBeGreaterThanOrEqual(contentSeconds * 3);
+    // THE CLAUSE: consumed frames ~= analysis fps x content seconds (+-1).
+    expect(Math.abs(p.framesAnalyzed - 2 * contentSeconds)).toBeLessThanOrEqual(1);
+    expect(p.framesStrided).toBeGreaterThan(0);
+    expect(p.framesSeen).toBe(p.framesAnalyzed + p.framesStrided);
+    // Every ingested frame is accounted for and nothing went stale: the loop
+    // stayed inside the lag budget (droppedFrames 0 on the live row).
+    expect(m.skippedStaleWindows).toBe(0);
+
+    // Stride off (`LIVE_OBSERVE_CONTENT_FPS=0`) still perceives every frame.
+    const un = makeClient(10);
+    const raw = await analyzeJob(
+      un.client,
+      threeFpsFrames(contentSeconds) as any,
+      cut as any,
+      { ...CFG, liveObserveContentFps: 0, perceiveCadence: false } as any,
+      undefined
+    );
+    const u = raw.observeMetrics!.perceive!;
+    expect(u.analysisFps).toBe(0);
+    expect(u.framesStrided).toBe(0);
+    expect(u.framesSeen).toBe(u.perceiveCalls);
+    expect(un.analyzeCalls()).toBe(u.framesSeen);
   }, 60000);
 
   it("(d): the stride cuts perceive work >=2x versus perceiving every ingested frame", async () => {

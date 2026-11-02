@@ -40,6 +40,11 @@ import { isGoalRefutingReason } from "./highlight-postable";
  * frame loop consume at the analysis fps. `LIVE_PERCEIVE_UTILIZATION`. */
 export const LIVE_PERCEIVE_UTILIZATION = 0.6;
 
+/** ADAAAA-7795: the live ingest stride banks credit at the analysis fps and
+ *  spends 1.0 per consumed frame. This caps what can be banked, in frames, so a
+ *  long ingest stall cannot burst-consume a backlog of already-late frames. */
+export const LIVE_STRIDE_CREDIT_CAP = 2;
+
 export interface ReserveResult {
   sessionId: string;
   appUrl: string;
@@ -4170,7 +4175,10 @@ export async function analyzeJob(
     }
     return false;
   };
-  let lastConsumedTs: number | null = null;
+  // ADAAAA-7795: stride credit state (frames). `strideCreditTs` is the content
+  // time the credit was last accrued to.
+  let strideCredit = 1;
+  let strideCreditTs: number | null = null;
   let framesSeen = 0;
   let framesStrided = 0;
   let perceiveSkipped = 0;
@@ -4197,19 +4205,41 @@ export async function analyzeJob(
         }
         lastFrameLagMs = Math.round(lagS * 1000);
       }
-      // ADAAAA-7774: ingest -> analysis stride. A frame whose content time is
-      // closer than one analysis period to the last CONSUMED frame is skipped
-      // entirely: it is not perceived (~0.36 s of blocking work saved), not
+      // ADAAAA-7774 / ADAAAA-7795: ingest -> analysis stride. The consume rate is
+      // pinned to the analysis fps by a CREDIT ACCUMULATOR (Bresenham), not by a
+      // hard floor on the frame spacing. Credit accrues at `liveContentFps` per
+      // content second, one consumed frame debits 1.0, and a frame is consumed
+      // when the credit reaches 1 — so the CONSUMED COUNT converges on the
+      // analysis fps at ANY ingest rate faster than it. The floor this replaces
+      // could not: on the deployed 3 fps ingest (a frame every ~0.333 s) a 0.5 s
+      // floor alternates consume/skip/consume, i.e. 0.667 s spacing = 1.5
+      // content fps, which is exactly the `framesAnalyzed` ~450 / 300 s measured
+      // on the shipped build instead of ~600. A frame the credit refuses is
+      // skipped entirely: not perceived (~0.36 s of blocking work saved), not
       // recorded, and not decide-seeded. The decide window only ever carries
-      // ~`OBSERVE_CONTENT_FPS` frames per content second anyway (assembleLiveWindow
-      // thins to it), so the payload contract is unchanged while the loop stops
-      // falling behind the wall clock — which is what let the lag budget drop
-      // content and swallow 56-86 of ~100 cadence windows per 300 s.
-      if (liveStrideS > 0 && lastConsumedTs !== null && frame.timestamp - lastConsumedTs < liveStrideS - 1e-9) {
-        framesStrided++;
-        continue;
+      // ~`OBSERVE_CONTENT_FPS` frames per content second anyway
+      // (assembleLiveWindow thins to it), so the payload contract is unchanged
+      // while the loop stops falling behind the wall clock — which is what let
+      // the lag budget drop content and swallow 56-86 of ~100 cadence windows
+      // per 300 s.
+      if (liveStrideS > 0) {
+        if (strideCreditTs === null) {
+          // First frame of the stream is always consumed (no credit to bank yet).
+          strideCreditTs = frame.timestamp;
+          strideCredit = 1;
+        } else {
+          const dt = frame.timestamp - strideCreditTs;
+          if (dt > 0) {
+            strideCredit = Math.min(LIVE_STRIDE_CREDIT_CAP, strideCredit + dt * liveContentFps);
+            strideCreditTs = frame.timestamp;
+          }
+        }
+        if (strideCredit < 1 - 1e-9) {
+          framesStrided++;
+          continue;
+        }
+        strideCredit -= 1;
       }
-      lastConsumedTs = frame.timestamp;
       framesAnalyzed++;
       onProgress?.(framesAnalyzed);
       run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
