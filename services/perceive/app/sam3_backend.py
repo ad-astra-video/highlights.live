@@ -22,6 +22,7 @@ handle_stream_request surface.
 """
 from __future__ import annotations
 
+import os
 import threading
 from typing import Dict, List, Optional
 
@@ -33,6 +34,10 @@ from .tracker import BBox
 # Schema ceiling (VOD target, INC-6). Live sessions cap lower; the capacity is
 # threaded through the tracker the backend serves.
 MAX_TRACKS = 8
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    return str(os.environ.get(name, default) or "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 # --------------------------------------------------------------------------
@@ -144,6 +149,9 @@ class Sam3Backend(SamBackend):
     factory always wins and the shared predictor is ignored.
     """
 
+    # HybridTracker passes the CLIP frame index through `advance(..., frame_index=)`.
+    supports_frame_index = True
+
     def __init__(self, predictor_factory=None, clip_path: str | None = None):
         self._explicit_factory = predictor_factory
         self._clip_path = clip_path
@@ -167,6 +175,23 @@ class Sam3Backend(SamBackend):
         self._removed_obj_ids: set[int] = set()
         self.recover_after_misses = 1     # re-prompt on the first missed frame
         self.recover_max_misses = 30      # stop re-prompting after this many misses
+        # ADAAAA-7820: slot -> SAM obj_id. Normally obj_id == slot (stable 1:1),
+        # but a masklet SAM REMOVED is re-registered under a FRESH obj_id: the
+        # removed id stays in SAM's action history and its metadata row is
+        # popped, so re-adding the same id is the path that historically failed
+        # to bring the mid-stream player back.
+        self._obj_ids: Dict[int, int] = {}
+        self._next_obj_id = 100
+        # last TIGHT mask bbox per slot — the mask-derived prompt used on
+        # re-anchor instead of the stale detection/seed box.
+        self._last_mask_box: Dict[int, BBox] = {}
+        self._prompt_source: Dict[int, str] = {}
+        # ADAAAA-7820 instrumentation: per-frame slot timeline, only recorded
+        # when PERCEIVE_SAM_DEBUG is set so the production path is unchanged.
+        self.debug = _env_flag("PERCEIVE_SAM_DEBUG")
+        self.timeline: List[dict] = []
+        self.backfill_frames: List[dict] = []
+        self.backfill_calls = 0
 
     # --- plumbing -----------------------------------------------------------
     @staticmethod
@@ -202,13 +227,34 @@ class Sam3Backend(SamBackend):
     def _request(self, req: dict):
         return self._predictor.handle_request(req)
 
-    def _propagate_one_frame(self, frame_idx: int) -> Dict[int, Optional[BBox]]:
-        """Ask SAM to propagate one frame; return slot(by obj_id) -> box or None."""
+    # --- slot <-> obj_id bookkeeping ----------------------------------------
+    def _obj_id(self, slot: int) -> int:
+        return self._obj_ids.get(slot, slot)
+
+    def _slot_for_obj(self, obj_id: int) -> Optional[int]:
+        for slot, oid in self._obj_ids.items():
+            if oid == obj_id:
+                return slot
+        if obj_id in self._seeded:      # default 1:1 mapping
+            return obj_id
+        return None
+
+    def _fresh_obj_id(self, slot: int) -> int:
+        oid = self._next_obj_id
+        self._next_obj_id += 1
+        self._obj_ids[slot] = oid
+        return oid
+
+    def _propagate_one_frame(self, frame_idx: int,
+                             direction: str = "forward",
+                             max_frames: int = 1,
+                             session_id: Optional[str] = None) -> Dict[int, Optional[BBox]]:
+        """Ask SAM to propagate one frame; return slot -> box or None."""
         try:
             gen = self._predictor.handle_stream_request(
                 {
                     "type": "propagate_in_video",
-                    "session_id": self._session_id,
+                    "session_id": session_id or self._session_id,
                     # ADAAAA-7305: the SAM3 client reads `start_frame_index` (with
                     # "index"), NOT `start_frame_idx`. We were sending the wrong
                     # key, so the start frame dropped to None every call and SAM3
@@ -219,8 +265,8 @@ class Sam3Backend(SamBackend):
                     # on-screen ~4%. Send the correct key and step exactly one
                     # frame FORWARD (HybridTracker advances one frame per call).
                     "start_frame_index": frame_idx,
-                    "max_frame_num_to_track": 1,
-                    "propagation_direction": "forward",
+                    "max_frame_num_to_track": max_frames,
+                    "propagation_direction": direction,
                 }
             )
             result = next(gen, None)
@@ -237,20 +283,32 @@ class Sam3Backend(SamBackend):
         parsed: Dict[int, Optional[BBox]] = {}
         for oid, m in obj_id_to_mask.items():
             oid = int(oid)
+            slot = self._slot_for_obj(oid)
+            if slot is None:
+                continue
             mask = _as_numpy_mask(m)
             if mask is None or not mask.any():
-                parsed[oid] = None
+                parsed[slot] = None
                 continue
             if mask.ndim == 2:
                 h, w = mask.shape
                 if self._hw is None:
                     self._hw = (h, w)
-                parsed[oid] = mask_to_bbox(mask, h, w)
+                b = mask_to_bbox(mask, h, w)
+                parsed[slot] = b
+                if b is not None:
+                    self._last_mask_box[slot] = b
         return parsed
 
     # --- SamBackend contract ------------------------------------------------
-    def advance(self, prompts: Dict[int, BBox]) -> None:
+    def advance(self, prompts: Dict[int, BBox], frame_index: Optional[int] = None) -> None:
         """Propagate exactly one frame for all active slots.
+
+        `frame_index` (ADAAAA-7820) is the CLIP frame index when the caller knows
+        it. Without it the backend falls back to counting its own advances,
+        which drifts whenever SAM is idle for a stretch (no prompts yet) and
+        puts a mid-stream prompt annotation at the wrong frame — SAM then
+        re-tracks from frame 0 and drops the masklet within a few frames.
 
         Distinguishes two reasons a slot's prompt can differ from what we seeded:
           * SAM DRIFT  -> the prompt equals the box we ourselves last returned
@@ -261,14 +319,18 @@ class Sam3Backend(SamBackend):
         Only external changes reseed (SAM 3: reset + re-add)."""
         if not self.ready():
             return
+        if frame_index is not None:
+            self._frame_idx = int(frame_index)
         changed = {
             s: p
             for s, p in prompts.items()
             if self._seeded.get(s) != p and self._last_returned.get(s) != p
         }
+        reset = False
         if changed:
             if self._seeded:  # already tracking prompts -> reset then re-add all
                 self._request({"type": "reset_session", "session_id": self._session_id})
+                reset = True
                 for s, _ in list(self._seeded.items()):
                     if s not in changed and s in prompts:
                         # ADAAAA-7305: re-add from the CURRENT prompt, not the
@@ -277,26 +339,36 @@ class Sam3Backend(SamBackend):
                         # reset back to its frame-0 box when a NEW slot (the
                         # mid-stream `track-player #N` target) joins, throwing
                         # the established track off and losing its box.
-                        self._add_prompt(s, prompts[s])
+                        self._add_prompt(s, prompts[s], source="carry")
             for s, p in changed.items():
-                self._add_prompt(s, p)
+                self._add_prompt(s, p, source="external")
                 self._seeded[s] = p
         for s in list(self._seeded):
             if s not in prompts:  # dropped target
                 self._seeded.pop(s, None)
                 self._misses.pop(s, None)
-        # ADAAAA-7345: re-anchor any slot that came back empty on the previous
-        # frame (SAM dropped the masklet or lost it) at the CURRENT frame, using
-        # the last known box HybridTracker carried forward. This is the
-        # per-object re-detection a mid-stream-seeded player needs: without it a
-        # lost `player #N` obj_id never comes back and the selected track's
-        # accuracy freezes (~0.2 / 3.9% on-screen on the census clip).
+                self._obj_ids.pop(s, None)
+                self._last_mask_box.pop(s, None)
+                self._prompt_source.pop(s, None)
+        # ADAAAA-7345/7820: re-anchor any slot that came back empty on the
+        # previous frame (SAM dropped the masklet or lost it) at the CURRENT
+        # frame. The prompt is derived from the last ACCEPTED MASK's tight
+        # bbox (not the stale OD/seed box) and, when SAM reported the masklet
+        # as removed, the object is re-registered under a FRESH obj_id.
+        reanchored: set[int] = set()
         for s in list(self._seeded):
             if s not in prompts:
                 continue
             misses = self._misses.get(s, 0)
-            if misses >= self.recover_after_misses and misses <= self.recover_max_misses:
-                self._add_prompt(s, prompts[s])
+            if not (misses >= self.recover_after_misses and misses <= self.recover_max_misses):
+                continue
+            oid = self._obj_id(s)
+            removed = oid in self._removed_obj_ids
+            if removed:
+                oid = self._fresh_obj_id(s)
+            box = self._last_mask_box.get(s) or prompts[s]
+            self._add_prompt(s, box, source="mask", obj_id=oid)
+            reanchored.add(s)
         self._current = self._propagate_one_frame(self._frame_idx)
         self._frame_idx += 1
         # per-slot miss accounting drives the recovery above
@@ -308,8 +380,32 @@ class Sam3Backend(SamBackend):
         # remember the boxes WE produced this frame -> drift won't look like a
         # target change on the next advance
         self._last_returned = {s: self._current.get(s) for s in prompts}
+        if self.debug:
+            self._record_frame(prompts, reanchored, reset)
 
-    def _add_prompt(self, obj_id: int, box: BBox) -> None:
+    def _record_frame(self, prompts: Dict[int, BBox], reanchored, reset: bool) -> None:
+        slots = {}
+        for s in prompts:
+            box = self._current.get(s)
+            slots[str(s)] = {
+                "obj_id": self._obj_id(s),
+                "state": "matched" if box is not None else "lost",
+                "reanchor": s in reanchored,
+                "source": self._prompt_source.get(s),
+                "misses": self._misses.get(s, 0),
+                "box": [round(float(v), 4) for v in box] if box else None,
+            }
+        self.timeline.append({
+            "frame": int(self._frame_idx - 1),
+            "reset": bool(reset),
+            "removed_obj_ids": sorted(self._removed_obj_ids),
+            "slots": slots,
+        })
+        if len(self.timeline) > 4000:  # bound memory on very long clips
+            del self.timeline[:1000]
+
+    def _add_prompt(self, slot: int, box: BBox, source: str = "external",
+                    obj_id: Optional[int] = None) -> None:
         # ADAAAA-7305: obj_id-based video tracking uses SAM3's TRACKER prompt
         # path (`add_tracker_new_points`), which requires `points` (+`obj_id`)
         # and FORBIDS a box at the same time. The client's
@@ -326,6 +422,9 @@ class Sam3Backend(SamBackend):
         # objects (the ball) keep the single center point. A predictor that
         # rejects multi-point prompts falls back to the single point so the
         # tracker never dies on a prompt-form change.
+        oid = self._obj_id(slot) if obj_id is None else obj_id
+        self._obj_ids[slot] = oid
+        self._prompt_source[slot] = source
         pts = box_to_points(box)
         if len(pts) > 1:
             try:
@@ -336,7 +435,7 @@ class Sam3Backend(SamBackend):
                         "frame_index": self._frame_idx,
                         "points": pts,
                         "point_labels": np.ones(len(pts), dtype=np.int32),
-                        "obj_id": obj_id,
+                        "obj_id": oid,
                     }
                 )
                 return
@@ -349,9 +448,118 @@ class Sam3Backend(SamBackend):
                 "frame_index": self._frame_idx,
                 "points": box_to_point(box),
                 "point_labels": np.array([1], dtype=np.int32),
-                "obj_id": obj_id,
+                "obj_id": oid,
             }
         )
 
     def get(self, slot: int) -> Optional[BBox]:
         return self._current.get(slot)
+
+    # --- ADAAAA-7820: reverse propagation -----------------------------------
+    def backfill_backward(self, frame_index: int, prompts: Dict[int, BBox]) -> List[dict]:
+        """Propagate the given prompts BACKWARD from `frame_index` to frame 0.
+
+        Runs in a SECOND SAM session on the same clip so the forward session's
+        state is untouched: seed the prompt at `frame_index`, then propagate
+        with `propagation_direction="backward"` for `frame_index + 1` frames.
+        Returns per-frame `{frame, slot, bbox}` for every frame where a mask
+        came back. This is what lets on-screen be measured over the WHOLE clip
+        instead of only the frames after the mid-stream seed.
+        Never raises: a predictor that cannot host a second session returns [].
+        """
+        if not self._clip_path or not prompts:
+            return []
+        sid = None
+        out_frames: List[dict] = []
+        self.backfill_calls += 1
+        try:
+            pred = self._predictor
+            resp = pred.handle_request(
+                {"type": "start_session", "resource_path": self._clip_path}
+            )
+            sid = (resp or {}).get("session_id")
+            if sid is None:
+                return []
+            for slot, box in prompts.items():
+                pts = box_to_points(box)
+                pred.handle_request(
+                    {
+                        "type": "add_prompt",
+                        "session_id": sid,
+                        "frame_index": int(frame_index),
+                        "points": pts,
+                        "point_labels": np.ones(len(pts), dtype=np.int32),
+                        "obj_id": int(slot),
+                    }
+                )
+            gen = pred.handle_stream_request(
+                {
+                    "type": "propagate_in_video",
+                    "session_id": sid,
+                    "start_frame_index": int(frame_index),
+                    "propagation_direction": "backward",
+                    "max_frame_num_to_track": int(frame_index) + 1,
+                }
+            )
+            for res in gen or []:
+                if not res:
+                    continue
+                fi = int(res.get("frame_index", frame_index))
+                outs = res.get("outputs") or {}
+                for oid, m in (outs.get("obj_id_to_mask") or {}).items():
+                    slot = int(oid)
+                    mask = _as_numpy_mask(m)
+                    if mask is None or not mask.any() or mask.ndim != 2:
+                        continue
+                    h, w = mask.shape
+                    b = mask_to_bbox(mask, h, w)
+                    if b is not None:
+                        out_frames.append({"frame": fi, "slot": slot,
+                                           "bbox": [round(float(v), 4) for v in b]})
+        except Exception:
+            return out_frames
+        finally:
+            if sid is not None:
+                try:
+                    self._predictor.handle_request(
+                        {"type": "close_session", "session_id": sid}
+                    )
+                except Exception:
+                    pass
+        self.backfill_frames = out_frames
+        return out_frames
+
+
+def timeline_summary(timeline: List[dict], slot: int) -> dict:
+    """Aggregate a per-frame slot timeline into a compact death/alive summary."""
+    key = str(slot)
+    matched = lost = reanchors = 0
+    first_lost = last_matched = None
+    removed_at: List[int] = []
+    for row in timeline or []:
+        st = (row.get("slots") or {}).get(key)
+        if st is None:
+            continue
+        f = row.get("frame")
+        if st.get("reanchor"):
+            reanchors += 1
+        if st.get("state") == "matched":
+            matched += 1
+            last_matched = f
+        else:
+            lost += 1
+            if first_lost is None:
+                first_lost = f
+        oid = st.get("obj_id")
+        if oid in (row.get("removed_obj_ids") or []):
+            removed_at.append(f)
+    return {
+        "slot": slot,
+        "frames_present": matched + lost,
+        "matched_frames": matched,
+        "lost_frames": lost,
+        "reanchor_prompts": reanchors,
+        "first_lost_frame": first_lost,
+        "last_matched_frame": last_matched,
+        "removed_at_frames": removed_at,
+    }
