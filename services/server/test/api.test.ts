@@ -10,6 +10,9 @@ import { completedCounterFields } from "../src/job-counters";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-test-"));
 const videoPath = path.join(tmp, "test.mp4");
+// ADAAAA-7724: a webm recording (VP8+opus) — what a browser MediaRecorder
+// produces when `video/mp4;codecs=avc1` is unsupported (Firefox / older Chrome).
+const webmPath = path.join(tmp, "test.webm");
 // A valid video genuinely larger than the historical 1 MiB truncation point, so
 // the 413/truncation regression test exercises busboy's fileSize default.
 const bigVideoPath = path.join(tmp, "big-test.mp4");
@@ -18,6 +21,11 @@ beforeAll(() => {
   execFileSync("ffmpeg", [
     "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x180:rate=1",
     "-pix_fmt", "yuv420p", videoPath,
+  ]);
+  execFileSync("ffmpeg", [
+    "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x180:rate=10",
+    "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+    "-c:v", "libvpx", "-b:v", "200k", "-c:a", "libopus", "-shortest", webmPath,
   ]);
   execFileSync("ffmpeg", [
     "-y", "-f", "lavfi", "-i", "testsrc2=duration=2:size=1280x720:rate=30",
@@ -543,6 +551,62 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     // No silent blank highlight card: the miss is surfaced (clipError set) and
     // the clipUri is NOT a dangling empty string pretending a valid clip exists.
     expect(hlList[0].clipError).toBeTruthy();
+    await app.close();
+  });
+
+  it("browser capture: a webm session recording yields a non-empty clip, not an empty clipUri (ADAAAA-7724)", async () => {
+    const { app, cfg } = await buildTestApp();
+    const token = await register(app, "bw@test.dev", "password123");
+
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser", gameHint: "Esports" },
+    });
+    expect(jr.statusCode).toBe(200);
+    const jobId = jr.json().job.id;
+
+    // a highlight exists (detection worked) with a deferred (empty) clipUri
+    const ing = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/ingest`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { seq: 0, timestamp: 0, image: "aGVsbG8=" },
+    });
+    expect(ing.statusCode).toBe(200);
+    expect(ing.json().highlight.clipUri).toBe("");
+
+    // Upload a real VP8+opus webm recording — the container a browser's
+    // MediaRecorder falls back to when it cannot record H.264 into mp4. The
+    // recording route keys the capture file's extension off `mime`, so this is
+    // the same path a Firefox / older-Chrome share takes.
+    const rec = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/recording`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { base64: readFileSync(webmPath).toString("base64"), mime: "video/webm" },
+    });
+    expect(rec.statusCode).toBe(200);
+
+    const st = await app.inject({ method: "POST", url: `/jobs/${jobId}/stop`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(st.statusCode).toBe(200);
+    expect(st.json().job.status).toBe("done");
+
+    const hlList = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
+    expect(hlList.length).toBe(1);
+    // The webm recording is re-encoded into a playable mp4 clip instead of
+    // being stream-copied into an unwritable container (which produced a bare
+    // 0-byte file + empty clipUri).
+    expect(hlList[0].clipUri).toMatch(/^\/clips\/.+\.mp4$/);
+    expect(hlList[0].clipError).toBeUndefined();
+    const clipFile = path.join(cfg.dataDir, "clips", path.basename(hlList[0].clipUri));
+    expect(existsSync(clipFile)).toBe(true);
+    expect(statSync(clipFile).size).toBeGreaterThan(0);
+    // The clip is served by the public /clips/* route: prove it resolves.
+    const served = await app.inject({ method: "GET", url: hlList[0].clipUri });
+    expect(served.statusCode).toBe(200);
+    expect(served.rawPayload.length).toBe(statSync(clipFile).size);
     await app.close();
   });
 

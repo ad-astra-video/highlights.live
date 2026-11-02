@@ -618,12 +618,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           });
           continue;
         }
+        const name = `${jobId}-${Math.round(h.start * 10)}`;
         try {
-          const name = `${jobId}-${Math.round(h.start * 10)}`;
           const out = path.join(outDir, `${name}.mp4`);
           const win = clipWindow(h.start, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
           const dur = Math.max(h.end - h.start, win.end - win.start);
-          await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), dur);
+          // ADAAAA-7724: cutClip picks stream-copy when the recording's codecs fit
+          // the mp4 container and re-encodes when they do not (a VP8/VP9+opus
+          // webm recording cannot be copied into mp4 — ffmpeg exits leaving a
+          // 0-byte file and every highlight got an empty clipUri). The cut also
+          // removes a failed/empty output, so a 0-byte clip never lands on disk.
+          const cut = await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), dur);
+          if (cut.mode === "reencode") {
+            const src = cut.sourceFormat;
+            console.log(
+              `[browser:${jobId}] cut ${path.basename(out)} by re-encoding ` +
+                `(${src?.container || "?"} ${src?.videoCodec || "?"}/${src?.audioCodec || "none"} -> mp4 h264/aac, ${cut.bytes} B)`
+            );
+          }
           // ADAAAA-7248: record whether the source recording carried audio so
           // the card can show an explicit "no audio captured" state (e.g. a
           // screen/window share yields no audio track) instead of implying
@@ -637,11 +649,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           });
         } catch (e: any) {
           missed++;
-          await store.patchHighlight(h.id, { clipError: `Clip cut failed: ${String(e?.message || e)}` });
+          // ADAAAA-7724: surface the actual ffmpeg reason (runFfmpeg embeds the
+          // meaningful stderr lines) instead of only counting a "no clip" and
+          // leaving the operator to guess from a bare 0-byte file.
+          const reason = String(e?.message || e);
+          console.error(`[browser:${jobId}] clip cut failed for highlight ${h.id} (${name}.mp4): ${reason}`);
+          await store.patchHighlight(h.id, { clipError: `Clip cut failed: ${reason}` });
         }
       }
       if (missed > 0) {
-        console.error(`[browser:${jobId}] ${missed} highlight(s) produced no clip (recording=${recPath ? "present" : "missing"})`);
+        console.error(
+          `[browser:${jobId}] ${missed} highlight(s) produced no clip (recording=${recPath ? "present" : "missing"}) — reasons logged above`
+        );
       }
       browserJobs.delete(jobId);
       // ADAAAA-7700: a share that died with the media node is NOT a user stop —
