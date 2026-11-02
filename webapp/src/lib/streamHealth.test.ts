@@ -315,6 +315,111 @@ describe("getStats() reduction", () => {
     expect(bitrateFromCounters({ bytes: 1000, atMs: 5000 }, sample)).toBeNull();
     expect(bitrateFromCounters({ bytes: 9_000_000, atMs: 3000 }, sample)).toBeNull();
   });
+
+  // ADAAAA-7731 / AC-D: the regression that the plain-array fixture above could
+  // never catch. `RTCPeerConnection.getStats()` returns an RTCStatsReport, which
+  // is MAPLIKE: `for…of` yields `[id, statObject]` pairs, so the previous
+  // `for (const entry of stats) entry.type` saw `undefined` on every row, every
+  // field stayed null, and the Quality/Bitrate chips read "—" for a whole live
+  // share. This fixture IS the report shape a browser produces (pairs on
+  // iteration, real stat objects on `values()`), including the non-media rows
+  // QA saw in-page (certificate / local-candidate / peer-connection).
+  const MAPLIKE_ROWS: Array<[string, Record<string, any>]> = [
+    ["ICf0yA", { id: "ICf0yA", type: "certificate", fingerprint: "sha-256" }],
+    ["IL3c0z", { id: "IL3c0z", type: "local-candidate", candidateType: "host" }],
+    ["P3s9n6", { id: "P3s9n6", type: "peer-connection", dataChannelsOpened: 0 }],
+    [
+      "OT01Vp",
+      {
+        id: "OT01Vp",
+        type: "outbound-rtp",
+        kind: "video",
+        bytesSent: 5_000_000,
+        targetBitrate: 3_000_000,
+        frameWidth: 1920,
+        frameHeight: 1080,
+        framesPerSecond: 30,
+      },
+    ],
+    [
+      "CP2m4r",
+      { id: "CP2m4r", type: "candidate-pair", state: "succeeded", nominated: true, currentRoundTripTime: 0.042 },
+    ],
+    [
+      "RI7t1k",
+      { id: "RI7t1k", type: "remote-inbound-rtp", kind: "video", roundTripTime: 0.05, fractionLost: 0.004, jitter: 0.02 },
+    ],
+  ];
+  /** The real report shape: iteration yields pairs, `values()` yields stats. */
+  function maplikeReport(rows: Array<[string, Record<string, any>]> = MAPLIKE_ROWS) {
+    return {
+      *[Symbol.iterator]() {
+        yield* rows;
+      },
+      *values() {
+        for (const [, stat] of rows) yield stat;
+      },
+      get size() {
+        return rows.length;
+      },
+    };
+  }
+
+  it("iterates a MAPLIKE report via values() — Quality is a verdict, Bitrate is a number", () => {
+    const rep = maplikeReport();
+    // The shape is the bug: plain iteration hands back [id, stat] pairs, so a
+    // reducer that reads `entry.type` off the report itself sees nothing.
+    const first = [...rep][0];
+    expect(Array.isArray(first)).toBe(true);
+    expect(typeof first[0]).toBe("string");
+    expect((first[1] as any).type).toBe("certificate");
+
+    const sample = parseRtcStats(rep, 1000);
+    expect(sample.bytesSent).toBe(5_000_000);
+    expect(sample.rttMs).toBeCloseTo(42, 5);
+    expect(sample.lossPct).toBeCloseTo(0.4, 5);
+    expect(sample.jitterMs).toBeCloseTo(20, 5);
+    expect(sample.targetKbps).toBe(3000);
+    expect(sample.width).toBe(1920);
+    expect(sample.height).toBe(1080);
+    expect(sample.fps).toBe(30);
+
+    // Chip 2 and chip 3 both produce a real reading off the real report shape.
+    expect(rateQuality(sample)).toBe("good");
+    const reading = bitrateFromCounters({ bytes: 4_375_000, atMs: 0 }, { ...sample, atMs: 2000 });
+    expect(reading).not.toBeNull();
+    expect(Math.round(reading!.kbps)).toBe(2500);
+    expect(rateBitrate(reading!.kbps, reading!.targetKbps)).toBe("good");
+  });
+
+  it("renders the two chips as words + kbps on a maplike report (never '—')", () => {
+    const first = parseRtcStats(maplikeReport(), 0);
+    const second = parseRtcStats(
+      maplikeReport(MAPLIKE_ROWS.map(([id, s]) => [id, id === "OT01Vp" ? { ...s, bytesSent: 5_625_000 } : s] as [string, Record<string, any>])),
+      2000
+    );
+    const bitrate = bitrateFromCounters({ bytes: first.bytesSent!, atMs: 0 }, second)!;
+    const state = foldSample(initialHealthState(), {
+      link: "good",
+      quality: rateQuality(second),
+      bitrate: rateBitrate(bitrate.kbps, bitrate.targetKbps),
+      freshness: "good",
+    });
+    const chips = healthChips({
+      state,
+      link: { label: "Live", verdict: "good" },
+      bitrate,
+      freshnessMs: 900,
+      activity: { clips: 1, detecting: true },
+    });
+    const quality = chips.find((c) => c.id === "quality")!;
+    const bit = chips.find((c) => c.id === "bitrate")!;
+    expect(quality.value).toBe("Good");
+    expect(bit.value).not.toBe("—");
+    expect(bit.value).toContain("kbps");
+    expect(bit.detail).toContain("1920×1080");
+    expect(bit.detail).toContain("30 fps");
+  });
 });
 
 describe("AC1/AC5 — the strip model is five chips and carries nothing internal", () => {
