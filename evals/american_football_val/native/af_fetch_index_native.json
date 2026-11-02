@@ -1,0 +1,47 @@
+{
+ "source": {
+  "url": "https://archive.org/download/snafuinfinityfootball_092123-vs-westford/football_092123-vs-westford.ts",
+  "bytes": 21812283016,
+  "duration_s": 8391.18,
+  "sha256": null
+ },
+ "fps": 1.0,
+ "width": 1920,
+ "height": 1080,
+ "preRollS": 25.0,
+ "windows": [
+  {
+   "id": "E01",
+   "t_start": 1599.0,
+   "t_end": 1620.0,
+   "fetchedByteStart": 4091502442,
+   "fetchedByteEnd": 4276061955,
+   "fetchedBytes": 184559514,
+   "fetchedSha256": "5dbf246eeaed94d07d250d05f56eddf8267a867a722889f4d94be224be2ddf60",
+   "frames": 21,
+   "framesPath": "E01.rgb"
+  },
+  {
+   "id": "E04",
+   "t_start": 3741.0,
+   "t_end": 3762.0,
+   "fetchedByteStart": 9659480989,
+   "fetchedByteEnd": 9844040502,
+   "fetchedBytes": 184559514,
+   "fetchedSha256": "e1a93adbbe4fa4d15b96ce8eda4838ca810dfde67ea147ea818369a73d9518fd",
+   "frames": 21,
+   "framesPath": "E04.rgb"
+  },
+  {
+   "id": "E06",
+   "t_start": 5395.0,
+   "t_end": 5416.0,
+   "fetchedByteStart": 13958937812,
+   "fetchedByteEnd": 14143497325,
+   "fetchedBytes": 184559514,
+   "fetchedSha256": "07717db99552aa731f1c2fc79752e39f6a3ef73c6ae7c1b20e4f9dcebddbeda8",
+   "frames": 21,
+   "framesPath": "E06.rgb"
+  }
+ ]
+}
