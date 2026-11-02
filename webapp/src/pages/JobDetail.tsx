@@ -13,6 +13,9 @@ import { buildZip, type ZipFile } from "../lib/zip";
 import { asrSummary, asrSummaryLine } from "../lib/windowAsr";
 import {
   fetchJobDetail,
+  fetchSectionsDelta,
+  mergeSections,
+  SECTION_WINDOW_S,
   focusAnalysisWindow,
   isJobInFlight,
   assertFramePartition,
@@ -26,6 +29,7 @@ import {
   type JobDetail,
   type JobDetailHighlight,
   type FrameSection,
+  type SectionsDelta,
   type JobDetailFrame,
   type DecideNote,
   type NoteKind,
@@ -67,6 +71,15 @@ const INLINE_FONT = 12; // CSS px in the enlarged view; inline draws boxes only
 const INLINE_SCALE = 2;
 /** SSE events that mean the detail payload changed and should be re-fetched. */
 const REFRESH_EVENTS = ["observation", "candidate", "candidateBlocked", "highlight", "progress"];
+/** ADAAAA-7742: floor between two incremental section fetches. The debounce
+ * coalesces the per-frame SSE burst; the floor keeps a long live job at a
+ * bounded request rate (~20-25 tiny fetches/min) while still surfacing a window
+ * within 2 s of the decide note that produced it. */
+const DELTA_MIN_INTERVAL_MS = 1_500;
+/** ADAAAA-7742: how long the SSE channel may stay silent before the 5 s
+ * reconciling poll falls back to a full composite re-fetch — the recovery path
+ * for a missed event or a dropped socket. */
+const SSE_QUIET_MS = 10_000;
 
 interface FrameTileProps {
   frame: JobDetailFrame;
@@ -1121,6 +1134,17 @@ export function JobDetail() {
   // request is already in flight. This prevents request stacking + out-of-order
   // detail overwrites and keeps the interval from piling up on a slow backend.
   const loadInFlightRef = useRef(false);
+  // ADAAAA-7742: incremental section streaming. `lastSectionIndexRef` is the
+  // highest 3 s bucket already merged into `detail`, `deltaAfterRef` is the
+  // lowest `afterIndex` a queued event asked for (a decide note attaches to the
+  // bucket that holds its trigger timestamp, which can trail the newest bucket),
+  // and `lastEventAtRef` tells the reconciling poll whether the SSE channel is
+  // still live. `lastDeltaAtRef` enforces the DELTA_MIN_INTERVAL_MS floor.
+  const lastSectionIndexRef = useRef(-1);
+  const deltaAfterRef = useRef<number | null>(null);
+  const deltaInFlightRef = useRef(false);
+  const lastDeltaAtRef = useRef(0);
+  const lastEventAtRef = useRef(0);
   const token = getToken();
 
   // ADAAAA-7045: re-fetch the decide_audit rows so an in-flight job shows them
@@ -1143,6 +1167,9 @@ export function JobDetail() {
         const d = await fetchJobDetail(id);
         if (!aliveRef.current) return;
         setDetail(d);
+        // ADAAAA-7742: record how far the composite payload reaches so the live
+        // delta path knows which bucket to continue after.
+        lastSectionIndexRef.current = d.sections.length ? d.sections[d.sections.length - 1].index : -1;
         setError(null);
         // Refresh the durable decide-audit rows alongside the detail payload.
         // ADAAAA-7727: the audit rows are admin-only, so a customer session
@@ -1164,11 +1191,78 @@ export function JobDetail() {
     [id, admin]
   );
 
-  // Debounced re-fetch on SSE activity: keeps section/trace updates <= ~2s.
-  const scheduleRefresh = useCallback(() => {
-    if (refreshTimer.current) clearTimeout(refreshTimer.current);
-    refreshTimer.current = setTimeout(() => load(false), 300);
-  }, [load]);
+  // ADAAAA-7742: merge one sections-delta into the open view. New buckets are
+  // appended, a re-sent tail bucket replaces its stale copy (so a decide note
+  // that landed into it shows), and the small companions the same page renders
+  // (job status/summary, postable highlights, ladder) are refreshed from the
+  // same response — the accumulated composite payload is never re-sent.
+  const mergeDelta = useCallback((d: SectionsDelta) => {
+    setDetail((prev: JobDetail | null) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        job: d.job ?? prev.job,
+        highlights: d.highlights ?? prev.highlights,
+        notableHighlights: d.notableHighlights ?? prev.notableHighlights,
+        duplicateHighlights: d.duplicateHighlights ?? prev.duplicateHighlights,
+        maxTraces: d.maxTraces ?? prev.maxTraces,
+        summaryLadder: d.summaryLadder ?? prev.summaryLadder,
+        sections: mergeSections(prev.sections, d.sections),
+      };
+    });
+    lastSectionIndexRef.current = Math.max(lastSectionIndexRef.current, d.maxIndex);
+    const status = d.job?.status;
+    if (!status || isJobInFlight(status)) setTerminal(false);
+    else setTerminal(true);
+  }, []);
+
+  // ADAAAA-7742: fetch the windows this page does not hold yet. The newest
+  // known bucket is always re-requested (afterIndex = last - 1) so a decide note
+  // persisted into it is picked up, and an event that named an earlier bucket
+  // (a note whose trigger trails the newest bucket) widens that further.
+  const loadDelta = useCallback(async () => {
+    if (deltaInFlightRef.current) return;
+    const last = lastSectionIndexRef.current;
+    if (last < 0) return; // no baseline yet — the initial full load owns it
+    const tail = Math.max(-1, last - 1);
+    const queued = deltaAfterRef.current;
+    const after = queued === null ? tail : Math.min(tail, queued);
+    deltaAfterRef.current = null;
+    deltaInFlightRef.current = true;
+    lastDeltaAtRef.current = Date.now();
+    try {
+      const d = await fetchSectionsDelta(id, after);
+      if (!aliveRef.current) return;
+      mergeDelta(d);
+      // A window that produced a decided frame group also produced a decide
+      // audit row; refresh the (admin-only) audit list only when something
+      // actually changed.
+      if (admin && d.sections.length) loadAudits();
+    } catch {
+      // A failed delta must never stall the page: fall back to the composite
+      // fetch, which is also the recovery path after a dropped SSE socket.
+      if (aliveRef.current) await load(false);
+    } finally {
+      deltaInFlightRef.current = false;
+    }
+  }, [id, admin, load, mergeDelta, loadAudits]);
+
+  // Debounced + throttled incremental refresh on SSE activity: keeps a window's
+  // section on screen within ~2 s of its decide note landing, at a bounded
+  // request rate instead of one heavy composite fetch per event.
+  const scheduleRefresh = useCallback(
+    (afterIndex?: number) => {
+      if (typeof afterIndex === "number") {
+        deltaAfterRef.current = deltaAfterRef.current === null ? afterIndex : Math.min(deltaAfterRef.current, afterIndex);
+      }
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      const wait = Math.max(300, DELTA_MIN_INTERVAL_MS - (Date.now() - lastDeltaAtRef.current));
+      refreshTimer.current = setTimeout(() => {
+        if (aliveRef.current) loadDelta();
+      }, wait);
+    },
+    [loadDelta]
+  );
 
   useEffect(() => {
     aliveRef.current = true;
@@ -1180,13 +1274,29 @@ export function JobDetail() {
     };
   }, [load]);
 
-  // Live updates (Inc 5): subscribe to /jobs/:id/events, re-fetch detail on any
-  // relevant event, and tear the subscription down once the job is terminal.
+  // Live updates (Inc 5): subscribe to /jobs/:id/events and stream the new
+  // analysis windows in (ADAAAA-7742), then tear the subscription down once the
+  // job is terminal.
   useEffect(() => {
     if (terminal || !id) return;
     const ac = new AbortController();
-    readSSE(`/jobs/${id}/events`, token, (name) => {
-      if (REFRESH_EVENTS.includes(name)) scheduleRefresh();
+    readSSE(`/jobs/${id}/events`, token, (name: string, data: any) => {
+      lastEventAtRef.current = Date.now();
+      if (!REFRESH_EVENTS.includes(name)) return;
+      const ts = typeof data?.timestamp === "number" ? data.timestamp : null;
+      if (name === "observation") {
+        // A frame inside a bucket we already render cannot change the partition,
+        // so only a bucket boundary is worth a request.
+        if (ts === null || ts < 0) return;
+        const idx = Math.floor(ts / SECTION_WINDOW_S);
+        if (idx > lastSectionIndexRef.current) scheduleRefresh(Math.max(-1, idx - 1));
+        return;
+      }
+      // A decide note / highlight attaches to the bucket that holds its trigger
+      // timestamp, which can trail the newest bucket — ask from that bucket so
+      // the note lands as soon as it is persisted.
+      if (ts !== null && ts >= 0) scheduleRefresh(Math.max(-1, Math.floor(ts / SECTION_WINDOW_S) - 1));
+      else scheduleRefresh();
     }, ac.signal).catch(() => {});
     return () => {
       ac.abort();
@@ -1211,7 +1321,15 @@ export function JobDetail() {
       // re-runs (and clears the timer) on `terminal`, so a done/failed job stops
       // polling at the next reconciliation.
       shouldContinue: () => aliveRef.current,
-      onTick: () => load(false),
+      // ADAAAA-7742: the SSE channel now carries the window/section deltas, so
+      // the composite re-fetch is the RECOVERY net — it only runs when the
+      // channel has been silent for SSE_QUIET_MS (a dropped socket or a missed
+      // event). That is what keeps a long live job from re-downloading the whole
+      // accumulated payload every 5 s.
+      onTick: () => {
+        if (Date.now() - lastEventAtRef.current < SSE_QUIET_MS) return;
+        load(false);
+      },
     });
     return () => poll.stop();
   }, [terminal, id, load]);

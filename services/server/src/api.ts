@@ -2973,6 +2973,66 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     );
   });
 
+  // ADAAAA-7742: incremental section stream for an OPEN live job-detail page.
+  // `/jobs/:id/detail` is a composite payload whose `sections` grow with every
+  // 3 s window (each decide note carries its full analysis, prompt included), so
+  // on a long live job every refresh gets heavier and the page can sit one slow
+  // request behind — which reads to a viewer as "nothing is streaming". This
+  // route returns ONLY the sections whose bucket index is greater than
+  // ?afterIndex (bucket index = floor(timestamp / SECTION_WINDOW) — stable and
+  // monotonic), plus the small mutable companions the same page renders (job
+  // status/summary, postable highlights, summary ladder), so the open page can
+  // append the new windows instead of re-sending the accumulated payload. Same
+  // owner-or-admin scoping as `/jobs/:id/detail`. Read path only: no decide or
+  // inference call is added, and window semantics, bucket size and the decide
+  // cadence are unchanged.
+  app.get<{ Params: { id: string }; Querystring: { afterIndex?: string } }>(
+    "/jobs/:id/sections-delta",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const user = req.user;
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "not found" });
+      if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+
+      const raw = (req.query as any).afterIndex;
+      const afterIndex = raw === undefined || raw === "" ? -1 : Number(raw);
+      if (!Number.isInteger(afterIndex) || afterIndex < -1)
+        return reply.code(400).send({ error: "afterIndex must be an integer >= -1" });
+
+      const obs = store.observationsForJob(job.id);
+      const candidates = store.candidatesForJob(job.id);
+      const sectionList = buildSections(obs, candidates, job.id);
+      attachWindowAudioUris(sectionList, job.id);
+      const sections = sectionList.filter((s) => s.index > afterIndex);
+
+      // ADAAAA-7621/7623 companions: the postable highlight list and the summary
+      // ladder are derived from STORED data on every read (zero decide calls) and
+      // are small next to the accumulated sections, so an incremental refresh can
+      // carry them and keep highlights/summary streaming with the windows.
+      const postable = buildPostableHighlights(store.highlightsForJob(job.id));
+      const summaryLadder = buildSummaryLadder({
+        summaryLog: job.summaryLog,
+        highlights: postable.highlights,
+        gameHint: job.gameHint,
+      });
+
+      return {
+        jobId: job.id,
+        afterIndex,
+        maxIndex: sectionList.length ? sectionList[sectionList.length - 1].index : -1,
+        sectionCount: sectionList.length,
+        sections,
+        job,
+        highlights: postable.highlights,
+        notableHighlights: postable.notable,
+        duplicateHighlights: postable.duplicates,
+        maxTraces: maxTracesForSource(job.source),
+        summaryLadder,
+      };
+    }
+  );
+
   // ADAAAA-7028 Inc 2: queryable decide-audit surface. Returns the durable
   // decide_audit rows for a job (one per frame group), optionally narrowed to a
   // single frame group via ?groupKey=. Owner-or-admin scoped. Each row carries
