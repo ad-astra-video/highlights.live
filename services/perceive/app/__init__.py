@@ -91,6 +91,9 @@ HEARTBEAT_EVERY = 30
 # (~13 s of a 15 fps stream). Cost stays bounded to an explicit request.
 PLAYER_RETRY_STRIDE = 5
 PLAYER_RETRY_ATTEMPTS = 40
+# ADAAAA-7820 lever 4: the vocabulary a bounded player re-seed uses for its
+# fresh one-shot detection on the current frame.
+PLAYER_RESEED_VOCAB = "player"
 
 # ADAAAA-7086: re-attempt scoreboard region discovery only every Nth candidate
 # while no scoreboard has been found (bounded region pass; recall preserved).
@@ -673,6 +676,14 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                     for o in (_d.detect(rgb, vocabulary=_v, roi_pass=False) if _d else [])
                     if o.get("bbox")
                 ]
+                # ADAAAA-7820 lever 4: a bounded re-seed needs a FRESH
+                # player-class detection on the current frame, which the roster
+                # vocabulary (ball/goal) cannot provide.
+                state.tracker._player_detect = lambda rgb, _d=_d: [
+                    {**o, "bbox": _norm_bbox(o["bbox"])}
+                    for o in (_d.detect(rgb, vocabulary=[PLAYER_RESEED_VOCAB], roi_pass=False) if _d else [])
+                    if o.get("bbox")
+                ]
             tracks = state.tracker.step_frame(state.last_rgb, timestamp, boxes, labels=labels)
     else:
         tracks = state.tracker.step(boxes, timestamp, labels=labels)
@@ -1008,6 +1019,21 @@ def _seed_player_track(state, matched: dict, requested: int):
     # Mirrors the dedicated ball slot's eviction guard (ADAAAA-7217).
     state.tracker.lock(tr.slot)
     state.requested_player_number = requested
+    # ADAAAA-7820 lever 2 (reverse propagation): a mid-stream seed leaves the
+    # frames BEFORE it untracked. When enabled, propagate the seeded prompt
+    # BACKWARD from the seed frame in a second SAM session so the target's
+    # presence over the whole clip is measurable. Off by default (VOD-only
+    # capability; a live stream cannot go back in time).
+    if os.environ.get("PERCEIVE_SAM_BACKFILL", "0").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            state.tracker.backfill_slot(tr.slot, int(getattr(state.tracker, "frame_index", 0)))
+            log.info(
+                "player backfill session=%s number=%s slot=%s frames=%s",
+                state.session_id, requested, tr.slot,
+                len(getattr(state.tracker, "backfill_frames", []) or []),
+            )
+        except Exception as e:  # noqa: BLE001 - backfill must never break the seed
+            log.warning("player backfill failed session=%s: %s", state.session_id, e)
     return tr, bbox, label
 
 
