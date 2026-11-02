@@ -24,8 +24,12 @@ export interface ServerConfig {
   decideUrl?: string;
   /** ADAAAA-6911: server-side knob for the livepeer-session decide-runner gate
    * (`DECIDE_CONCURRENCY`). Left unset -> the client keeps its default (decide
-   * runner capacity 2); set to 1 to reproduce the capacity-1 serial baseline
-   * for the AC1 on-box measurement. */
+   * runner capacity 2). ADAAAA-7773: docker-compose ships
+   * `DECIDE_CONCURRENCY=${DECIDE_CONCURRENCY:-8}` because the box has 8 real
+   * decide slots (4 per gemma card behind decide-router); the fallback below
+   * stays at the client's own default so a bare `pnpm dev` keeps the client
+   * behaviour it actually has. Set to 1 to reproduce the capacity-1 serial
+   * baseline for an on-box measurement. */
   decideConcurrency?: number;
   /** When set, bypass the orchestrator and call the train runner directly (dev).
    * No train container ships with the local stack today, so this stays unset

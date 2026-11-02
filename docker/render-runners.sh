@@ -1,16 +1,19 @@
 #!/bin/sh
-# ADAAAA-6854 + ADAAAA-6891 (updated ADAAAA-7385): render docker/runners.json
+# ADAAAA-6854 + ADAAAA-6891 (updated ADAAAA-7385, ADAAAA-7773): render
+# docker/runners.json
 # from docker/runners.template.json. Each tunable capacity defaults to the value
-# already carried in the template (decide 4, perceive 4 after ADAAAA-7383 /
-# ADAAAA-7385); an explicit DECIDE_RUNNER_CAPACITY / PERCEIVE_RUNNER_CAPACITY
-# env var overrides it (must be a positive integer). The go-livepeer orchestrator
-# admits N concurrent sessions per runner. Idempotent; run before
-# `docker compose ... up -d` on the deploy box.
+# already carried in the template (decide 8 after ADAAAA-7773, perceive 4 after
+# ADAAAA-7383 / ADAAAA-7385); an explicit DECIDE_RUNNER_CAPACITY /
+# PERCEIVE_RUNNER_CAPACITY env var overrides it (must be a positive integer). The
+# go-livepeer orchestrator admits N concurrent sessions per runner. Idempotent;
+# run before `docker compose ... up -d` on the deploy box.
 #
 #   DECIDE_RUNNER_CAPACITY=6 PERCEIVE_RUNNER_CAPACITY=4 ./render-runners.sh
 #
-# The committed docker/runners.json already ships the defaults (decide 4,
-# perceive 4).
+# The committed docker/runners.json already ships the defaults (decide 8,
+# perceive 4). Decide's 8 is the pair's real capacity: two gemma cards at
+# `--max-num-seqs 4` each, behind `decide-router` (least_conn), so one
+# `highlights-decide` registration fronts 8 slots (ADAAAA-7769 / ADAAAA-7773).
 #
 # Live-path note (ADAAAA-7008): the live path runs a cadence-driven
 # decide-observer; perceive remains the persistent session runner and decide the

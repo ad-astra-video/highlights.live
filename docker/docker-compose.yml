@@ -551,6 +551,18 @@ services:
       # queue is backpressure, counted as backpressureSkippedWindows) and the lag
       # budget remains the outer bound. 1 restores the serial behaviour exactly.
       - LIVE_OBSERVE_IN_FLIGHT=${LIVE_OBSERVE_IN_FLIGHT:-4}
+      # ADAAAA-7773: how many decide app-calls the orchestrated decide CLIENT
+      # admits at once (`LivepeerClient` decideConcurrency). ADAAAA-7771 kept 4
+      # windows in flight per stream but the client gate was still 2 (the compose
+      # default was unset), so depth above 2 only QUEUED: measured at depth 4 with
+      # a 2-wide gate, decide E2E was 24.8-26.6 s at 2 streams and lag p50
+      # 50.8-52.0 s. The box has 8 real decide slots (vLLM --max-num-seqs 4 on
+      # each of gemma + gemma-b, fronted by decide-router), so the admission is 8
+      # = 4 per card. With 8 the ADAAAA-7771 shared budget gives a lone stream its
+      # full depth and gives 2 streams 4 each (= 8 concurrent) instead of 1 each.
+      # Lower it to degrade to the serial pass; the client falls back to its own
+      # default (2) only when this is unset.
+      - DECIDE_CONCURRENCY=${DECIDE_CONCURRENCY:-8}
       # ADAAAA-7758: one live decide slot per box. When on, a second concurrent
       # live job's decide is skipped (counted as observeMetrics
       # .admissionSkippedWindows) instead of interleaving a second decide that

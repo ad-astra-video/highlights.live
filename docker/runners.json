@@ -31,9 +31,9 @@
       "healthy_status_code": 200,
       "app": "highlights-live/decide",
       "version": "0.1.0",
-      "metadata": "{\"model\": \"cyankiwi/gemma-4-12B-it-qat-AWQ-INT4\", \"engine\": \"vllm\", \"quantization\": \"compressed-tensors INT4\", \"maxConcurrency\": 4}",
+      "metadata": "{\"model\": \"cyankiwi/gemma-4-12B-it-qat-AWQ-INT4\", \"engine\": \"vllm\", \"quantization\": \"compressed-tensors INT4\", \"maxConcurrency\": 8}",
       "mode": "single-shot",
-      "capacity": 4,
+      "capacity": 8,
       "proxy": true,
       "gpu": {
         "id": "1",
