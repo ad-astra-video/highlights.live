@@ -236,13 +236,15 @@ describe("PerceiveCadence hot escalation for the live rail (ADAAAA-7774)", () =>
 });
 
 describe("analyzeJob live cost-aware stride (ADAAAA-7774)", () => {
-  it("(g): a slow shared-GPU perceive keeps the pass at the live edge instead of dropping stale frames", async () => {
-    // 0.3 s of blocking perceive against a 5 fps ingest: the fixed 2 fps stride
-    // would still leave the loop ~1.5x slower than realtime and the 2 s budget
-    // would drop content (the measured box behaviour: 614 of 857 frames dropped,
-    // 56 skipped windows). The cost-aware stride steps by the MEASURED cost, so
-    // every consumed frame is at the edge and nothing is dropped.
-    const slow = makeClient(300);
+  it("(g): a GPU-bound perceive is BUDGETED instead of awaited per frame, so the loop keeps the analysis fps and nothing goes stale", async () => {
+    // 0.9 s of blocking perceive against a 5 fps ingest (the box measured 1.9 s
+    // at 1 stream and 4.1 s at 2 with decide depth 4). Awaiting it per consumed
+    // frame would leave the loop 1.8x slower than realtime and the 2 s budget
+    // would drop content (measured: 614 of 857 frames dropped, 56 skipped
+    // windows). The budget spends at most 60 % of the clock in perceive, so the
+    // pass still consumes at the analysis fps and records the frames it cannot
+    // afford with an EMPTY seed.
+    const slow = makeClient(900);
     const outcome = await analyzeJob(
       slow.client,
       bufferedFrames(6000, 200) as any, // ~5 fps ingest
@@ -255,10 +257,12 @@ describe("analyzeJob live cost-aware stride (ADAAAA-7774)", () => {
     // No stale content was dropped and no cadence window was swallowed...
     expect(m.skippedStaleWindows).toBe(0);
     expect(p.framesSeen).toBe(p.framesAnalyzed + p.framesStrided);
-    // ...because the step tracks the measured perceive cost (>= 150 ms with the
-    // cool ratio, i.e. the pass perceives only what it can afford).
-    expect(p.perceiveMeanCostMs).toBeGreaterThanOrEqual(150);
-    expect(p.framesAnalyzed).toBeLessThan(p.framesSeen);
+    // ...because perceive is budgeted: the pass consumed at the analysis fps
+    // (~2 per content second) while only paying for what the 60 % budget allows.
+    expect(p.framesAnalyzed).toBeGreaterThanOrEqual(8);
+    expect(p.perceiveMeanCostMs).toBeGreaterThanOrEqual(700);
+    expect(p.perceiveCalls).toBeLessThan(p.framesAnalyzed);
+    expect(p.perceiveBudgetSkipped ?? 0).toBeGreaterThan(0);
     // It still decides on the cadence (the pass is not starved).
     expect(m.decideCalls).toBeGreaterThanOrEqual(2);
   }, 60000);

@@ -31,6 +31,15 @@ import type { TriggerFamilyLatency } from "./observe-loop";
 import { isStageBTrigger, triggerFamily, type WhistleFireBlock } from "./audio-trigger";
 import { isGoalRefutingReason } from "./highlight-postable";
 
+/** ADAAAA-7774: the fraction of wall clock the LIVE observe pass may spend in
+ * blocking `client.analyze`. Perceive is GPU-bound and shared with the decide
+ * workers (measured on the box: ~1.9 s/call at 1 stream and ~4.1 s/call at 2 at
+ * decide depth 4), so awaiting every consumed frame's perceive ran the cadence
+ * windows late and lost 16-19 windows per 300 s per stream. Budgeting perceive
+ * to 60 % of the clock leaves the rest for the decide/recall path and lets the
+ * frame loop consume at the analysis fps. `LIVE_PERCEIVE_UTILIZATION`. */
+export const LIVE_PERCEIVE_UTILIZATION = 0.6;
+
 export interface ReserveResult {
   sessionId: string;
   appUrl: string;
@@ -1119,6 +1128,15 @@ export interface AnalyzerConfig {
    * `LIVE_OBSERVE_CONTENT_FPS` (server config).
    */
   liveObserveContentFps?: number;
+  /**
+   * ADAAAA-7774: fraction of wall clock the LIVE pass may spend in blocking
+   * perceive (`client.analyze`). Perceive shares the GPU with the decide workers,
+   * so the pass budgets it instead of awaiting one call per consumed frame; the
+   * frames it cannot afford are consumed with an EMPTY seed, which keeps the
+   * decide window's ~2 fps frames and the 3 s cadence on time. Default 0.6
+   * (`LIVE_PERCEIVE_UTILIZATION`).
+   */
+  livePerceiveUtilization?: number;
   /** ADAAAA-7028 Inc 2: persist the decide audit descriptor returned on the
    * decision (`_audit`) so the durable decide_audit index + decision-trail has
    * one row per frame group. Best-effort: a throwing onDecideAudit is caught
@@ -1365,6 +1383,10 @@ export interface LivePerceiveStrideSnapshot {
   perceiveCalls: number;
   /** Consumed frames the cooler cadence did NOT perceive (empty seed). */
   perceiveSkipped: number;
+  /** ADAAAA-7774: consumed frames the GPU BUDGET refused (empty seed) — the
+   *  signal that the box could not perceive at the analysis fps and the pass
+   *  decoupled perceive from the frame loop instead of running late. */
+  perceiveBudgetSkipped?: number;
   /** Perceive invocations inside an armed full-perceive hot window. */
   perceiveHotCalls: number;
   /** Content fps the pass consumed at (0 = stride disabled). */
@@ -4101,10 +4123,42 @@ export async function analyzeJob(
   let perceiveCostS = 0;
   let perceiveCostSumS = 0;
   let perceiveCostCount = 0;
+  // ADAAAA-7774: perceive is GPU-bound on a contended box (measured at 2 streams
+  // + decide depth 4: ~4.1 s per `client.analyze`). Awaiting every consumed
+  // frame's perceive is what made the cadence windows run late, so perceive
+  // demand is BUDGETED: the pass may spend at most `livePerceiveUtilization` of
+  // the wall clock in perceive, i.e. one perceive call per
+  // `cost / utilization` content seconds. A consumed frame the budget refuses is
+  // still recorded and decide-seeded with an EMPTY seed (recall-safe, the VOD
+  // cadence contract), so the frame loop keeps consuming at the analysis fps and
+  // the 3 s decide cadence fires on time even when the GPU cannot perceive that
+  // fast.
+  const livePerceiveUtilization = Math.max(0.05, Math.min(1, Number(cfg.livePerceiveUtilization ?? LIVE_PERCEIVE_UTILIZATION)));
+  let perceiveTokens = 1;
+  let perceiveBudgetTs: number | null = null;
+  /** Spend one perceive from the GPU budget; refilled by content time at
+   *  `utilization / cost` per second (unbounded until the first cost measurement). */
+  const takePerceiveBudget = (ts: number): boolean => {
+    const fps = perceiveCostS > 0 && liveStrideS > 0 ? Math.min(1 / liveStrideS, livePerceiveUtilization / perceiveCostS) : Infinity;
+    if (!Number.isFinite(fps)) return true;
+    if (perceiveBudgetTs === null) {
+      perceiveBudgetTs = ts;
+      return perceiveTokens >= 1;
+    }
+    const dt = ts - perceiveBudgetTs;
+    if (dt > 0) perceiveTokens = Math.min(1, perceiveTokens + dt * fps);
+    if (ts > perceiveBudgetTs) perceiveBudgetTs = ts;
+    if (perceiveTokens >= 1 - 1e-9) {
+      perceiveTokens -= 1;
+      return true;
+    }
+    return false;
+  };
   let lastConsumedTs: number | null = null;
   let framesSeen = 0;
   let framesStrided = 0;
   let perceiveSkipped = 0;
+  let perceiveBudgetSkipped = 0;
   let perceiveHotCalls = 0;
   let perceiveCalls = 0;
   try {
@@ -4135,18 +4189,9 @@ export async function analyzeJob(
       // thins to it), so the payload contract is unchanged while the loop stops
       // falling behind the wall clock — which is what let the lag budget drop
       // content and swallow 56-86 of ~100 cadence windows per 300 s.
-      if (liveStrideS > 0 && lastConsumedTs !== null) {
-        // ADAAAA-7774: cost-aware step (see `perceiveCostS`). In a cool region
-        // only every `quietStride`-th consumed frame pays perceive, so the step
-        // can be that much shorter; the 5 % margin keeps the loop just behind
-        // the edge instead of exactly on it.
-        const quietStrideN = Math.max(1, Math.floor(cfg.perceiveQuietStride ?? 2));
-        const coolRatio = !perceiveCadence || perceiveCadence.tier(frame.timestamp) === "hot" ? 1 : 1 / quietStrideN;
-        const stepS = Math.max(liveStrideS, perceiveCostS * coolRatio * 1.05);
-        if (frame.timestamp - lastConsumedTs < stepS - 1e-9) {
-          framesStrided++;
-          continue;
-        }
+      if (liveStrideS > 0 && lastConsumedTs !== null && frame.timestamp - lastConsumedTs < liveStrideS - 1e-9) {
+        framesStrided++;
+        continue;
       }
       lastConsumedTs = frame.timestamp;
       framesAnalyzed++;
@@ -4197,8 +4242,17 @@ export async function analyzeJob(
       // treats an absent signal as recall-safe — so the decide window keeps full
       // frame coverage and the decide cadence keeps ticking.
       const perceiveTier = perceiveCadence?.tier(frame.timestamp) ?? "cool";
-      const shouldPerceive = perceiveCadence ? perceiveCadence.shouldPerceive(frame.timestamp) : true;
-      if (!shouldPerceive) perceiveSkipped++;
+      const cadenceAllows = perceiveCadence ? perceiveCadence.shouldPerceive(frame.timestamp) : true;
+      // ADAAAA-7774: the GPU budget can refuse a perceive the cadence allowed
+      // (shared GPU: measured 1.9 s at 1 stream, 4.1 s at 2). The frame is still
+      // consumed below with an EMPTY seed, so the decide window keeps its ~2 fps
+      // of frames and the cadence fires on time.
+      const budgetAllows = cadenceAllows ? takePerceiveBudget(frame.timestamp) : false;
+      const shouldPerceive = cadenceAllows && budgetAllows;
+      if (!shouldPerceive) {
+        if (!cadenceAllows) perceiveSkipped++;
+        else perceiveBudgetSkipped++;
+      }
       let stoppedRun = false;
       if (shouldPerceive) {
         perceiveCalls++;
@@ -4432,6 +4486,10 @@ export async function analyzeJob(
           // frames, and each skipped frame was recorded with an EMPTY seed.
           `framesSeen=${framesSeen} framesStrided=${framesStrided} perceiveCalls=${perceiveCalls} ` +
           `perceiveSkipped=${perceiveSkipped} perceiveHot=${perceiveHotCalls} analysisFps=${liveStrideS > 0 ? (1 / liveStrideS).toFixed(1) : "off"} ` +
+          // ADAAAA-7774: the GPU budget. `perceiveBudget` counts consumed frames
+          // the budget refused (empty seed); `perceiveUtil` is the share of the
+          // wall clock the pass is allowed to spend in perceive.
+          `perceiveBudget=${perceiveBudgetSkipped} perceiveUtil=${livePerceiveUtilization} ` +
           // ADAAAA-7774: the measured cost that sets the cost-aware stride — the
           // number that proves the loop is bounded by the shared GPU, not by the
           // ingest, when it exceeds `1 / analysisFps`.
@@ -4470,6 +4528,7 @@ export async function analyzeJob(
             framesStrided,
             perceiveCalls,
             perceiveSkipped,
+            perceiveBudgetSkipped,
             perceiveHotCalls,
             analysisFps: liveStrideS > 0 ? 1 / liveStrideS : 0,
             perceiveMeanCostMs: perceiveCostCount ? Math.round((perceiveCostSumS / perceiveCostCount) * 1000) : 0,

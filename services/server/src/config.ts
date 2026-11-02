@@ -258,6 +258,12 @@ export interface ServerConfig {
    * (`OBSERVE_CONTENT_FPS`); `LIVE_OBSERVE_CONTENT_FPS`. `<= 0` disables the
    * stride (perceive every ingested frame = the pre-7774 behaviour). */
   liveObserveContentFps?: number;
+  /** ADAAAA-7774: fraction of wall clock the LIVE observe pass may spend in
+   * blocking `client.analyze` (perceive shares the GPU with the decide workers).
+   * The frames it cannot afford are consumed with an EMPTY seed, so the decide
+   * window keeps ~2 fps of frames and the cadence keeps firing. Default 0.6;
+   * `LIVE_PERCEIVE_UTILIZATION`. */
+  livePerceiveUtilization?: number;
   /** ADAAAA-7758: live decide ADMISSION control. When on, at most ONE live job
    * holds the box's live decide slot; a second concurrent live job's decide is
    * skipped (counted as `observeMetrics.admissionSkippedWindows`) instead of
@@ -607,6 +613,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // detail-first pass the gap targets). The cool-region stride and the
     // full-perceive hot window after an escalation are separately tunable.
     liveObserveContentFps: env.LIVE_OBSERVE_CONTENT_FPS !== undefined ? Number(env.LIVE_OBSERVE_CONTENT_FPS) : undefined,
+    livePerceiveUtilization: env.LIVE_PERCEIVE_UTILIZATION !== undefined ? Number(env.LIVE_PERCEIVE_UTILIZATION) : undefined,
     perceiveCadence: env.PERCEIVE_CADENCE === "1" ? true : env.PERCEIVE_CADENCE === "0" ? false : undefined,
     perceiveQuietStride: env.PERCEIVE_QUIET_STRIDE !== undefined ? Number(env.PERCEIVE_QUIET_STRIDE) : undefined,
     perceiveHotAfterS: env.PERCEIVE_HOT_AFTER_S !== undefined ? Number(env.PERCEIVE_HOT_AFTER_S) : undefined,
