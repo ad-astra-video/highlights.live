@@ -33,6 +33,11 @@ from .tracking_plan import canonical_trackable_class
 PLAYER_DETECTION_VOCABULARY: tuple[str, ...] = ("player", "goalkeeper")
 
 _DIGIT_RUN = re.compile(r"\d+")
+# A jersey number read as its OWN token (optionally prefixed by '#'): the digits
+# are not glued to letters/digits on either side. A tight player crop usually
+# OCRs exactly like this ("9", "#9", "09"), while a scorebug / watermark /
+# agency banner yields digits embedded inside a word ("R.MARIN18PEACE").
+_STANDALONE_NUMBER = re.compile(r"(?<![0-9A-Za-z])(\d{1,2})(?![0-9A-Za-z])")
 
 # A seeded player box must be a tight, SAM3-trackable SINGLE-player box. On a
 # wide broadcast shot the one-shot full-frame <OD> can also emit a near-full-frame
@@ -43,6 +48,11 @@ _DIGIT_RUN = re.compile(r"\d+")
 # to plausible single-player boxes so an over-large box is never the seed target.
 MAX_PLAYER_SEED_AREA = 0.30   # normalized area cap for a single-player seed box
 MAX_PLAYER_SEED_SIDE = 0.70   # a single normalized side beyond which the box is implausible
+# A tight OD player box clips the jersey number (it sits on the chest/back edge
+# of the crop), which is one reason census clips fail to identify a player at
+# all (ADAAAA-7345: 0778d4c3 / 397294f3 read no number on the exact box). When
+# the exact crop yields no requested number, re-read a slightly padded crop.
+OCR_PAD_MARGIN = 0.05
 
 
 def _bbox_area(bbox) -> float:
@@ -113,6 +123,42 @@ def parse_jersey_numbers(ocr_lines: Optional[List[str]]) -> List[int]:
     return nums
 
 
+def standalone_jersey_numbers(ocr_lines: Optional[List[str]]) -> List[int]:
+    """Numbers read as their own OCR token (see `_STANDALONE_NUMBER`).
+
+    A high-confidence jersey read: the digits stand alone in the line instead of
+    being part of a longer word, which is how watermarks, sponsor boards and
+    agency banners ("Caters News Agency", "R.MARIN18PEACE") OCR. Used to RANK
+    candidates (a standalone read beats an embedded one) while the permissive
+    `parse_jersey_numbers` still preserves recall.
+    """
+    nums: List[int] = []
+    seen: set[int] = set()
+    for line in ocr_lines or []:
+        for m in _STANDALONE_NUMBER.finditer(line or ""):
+            n = int(m.group(1).lstrip("0") or "0")
+            if n not in seen:
+                seen.add(n)
+                nums.append(n)
+    return nums
+
+
+def expand_box(bbox, margin: float = OCR_PAD_MARGIN):
+    """Expand a normalized [x1,y1,x2,y2] box by `margin` per side, clamped to
+    the frame. A tight OD box routinely clips the jersey number (it sits on the
+    chest/back edge of the crop), so a padded re-read recovers reads the exact
+    box misses. Returns None for a malformed box."""
+    if not bbox or len(bbox) != 4:
+        return None
+    x1, y1, x2, y2 = (float(v) for v in bbox)
+    return (
+        max(0.0, x1 - margin),
+        max(0.0, y1 - margin),
+        min(1.0, x2 + margin),
+        min(1.0, y2 + margin),
+    )
+
+
 def is_player_detection(obj: dict) -> bool:
     """True when a detection object belongs to the player trackable class
     (player / goalkeeper / defender / forward ...)."""
@@ -128,14 +174,28 @@ def match_player_by_number(
 
     ``objects``: the ``<OD>`` detections for the anchor frame. ``read_number_fn``
     takes a normalized bbox (tuple) and returns the ``<OCR>`` lines read from
-    that crop. Iterates candidates in confidence order and returns the first
-    detection whose read numbers contain the requested one, augmented with the
-    matched ``number`` and the raw ``ocr`` lines. No match -> None.
+    that crop. Candidates are iterated in confidence order.
 
     Only PLAUSIBLE single-player boxes are considered (ADAAAA-7262): an
     implausibly-large ``<OD>`` detection (whose ``<OCR>`` often reads the jersey
     number off a scorebug) is never a valid seed target because SAM3 cannot
     propagate it.
+
+    OCR robustness (ADAAAA-7345): a read only counts when it is trustworthy.
+    Two passes are used so a watermark/scorebug read cannot outrank a real one:
+
+      1. STRICT — the requested number must appear as its own OCR token ("9",
+         "#9") on either the exact crop or, when that crop reads no match at
+         all, a padded crop (`OCR_PAD_MARGIN`). The jersey number is clipped by
+         a tight OD box often enough that the padded re-read is what recovers
+         the census clips.
+      2. PERMISSIVE — if no strict read matched, fall back to the first
+         candidate with the number embedded in a longer line, preserving the
+         pre-existing recall.
+
+    Returns the matched detection augmented with ``number``, the winning
+    ``ocr`` lines, ``ocr_bbox`` (the crop that matched) and ``ocr_confidence``
+    (``"standalone"`` | ``"embedded"``). No match -> None.
     """
     requested = int(requested_number)
     ranked = sorted(
@@ -147,17 +207,63 @@ def match_player_by_number(
         key=lambda o: float(o.get("confidence", 0.0) or 0.0),
         reverse=True,
     )
+
+    def _read(bbox):
+        try:
+            return list(read_number_fn(tuple(bbox)) or [])
+        except Exception:  # noqa: BLE001 - a bad OCR read never aborts the match
+            return []
+
+    weak: List[dict] = []   # number found, but only embedded in a longer line
     for obj in ranked:
         bbox = obj.get("bbox")
         if not bbox or len(bbox) != 4:
             continue
-        try:
-            lines = list(read_number_fn(tuple(bbox)) or [])
-        except Exception:  # noqa: BLE001 - a bad OCR read never aborts the match
-            lines = []
+        tight = _read(tuple(bbox))
+        if requested in standalone_jersey_numbers(tight):
+            return {
+                **obj,
+                "number": requested,
+                "ocr": tight,
+                "ocr_bbox": list(bbox),
+                "ocr_confidence": "standalone",
+            }
+        tight_nums = parse_jersey_numbers(tight)
+        if requested in tight_nums:
+            weak.append({
+                **obj,
+                "number": requested,
+                "ocr": tight,
+                "ocr_bbox": list(bbox),
+                "ocr_confidence": "embedded",
+            })
+            continue
+        # Only pad when the exact crop read NO number at all: a crop that read a
+        # different number belongs to a different jersey, and padding it would
+        # pull a neighbouring player (or the crowd) into the OCR crop.
+        if tight_nums:
+            continue
+        padded = expand_box(bbox)
+        if padded is None or padded == tuple(float(v) for v in bbox):
+            continue
+        lines = _read(padded)
+        if requested in standalone_jersey_numbers(lines):
+            return {
+                **obj,
+                "number": requested,
+                "ocr": lines,
+                "ocr_bbox": list(padded),
+                "ocr_confidence": "standalone",
+            }
         if requested in parse_jersey_numbers(lines):
-            return {**obj, "number": requested, "ocr": lines}
-    return None
+            weak.append({
+                **obj,
+                "number": requested,
+                "ocr": lines,
+                "ocr_bbox": list(padded),
+                "ocr_confidence": "embedded",
+            })
+    return weak[0] if weak else None
 
 
 def identify_player_by_number(
