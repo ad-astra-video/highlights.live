@@ -733,7 +733,9 @@ def test_american_football_eval_set_matches_the_committed_labels_and_run():
     run = ref["audioHarness"]
     assert run["events"] == 11 and run["candidates"] == 1979
     assert run["recall"] == pytest.approx(1.0)
-    assert run["fpRate"] == pytest.approx(1951 / 1979, abs=1e-4)
+    assert run["fpRate"] == pytest.approx(1950 / 1979, abs=1e-4)
+    assert run["labelRevision"] == 2
+    assert run["recallAtDefaultWindow"] == pytest.approx(10 / 11, abs=1e-4)
     assert run["fpCeiling"] == 0.10 and run["fpCeilingMet"] is False
     # and it misses under a generous label tolerance too, so the verdict is not
     # an artefact of the score-bug update lag

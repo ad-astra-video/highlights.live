@@ -572,31 +572,38 @@ _AMERICAN_FOOTBALL_EVAL_REFERENCE: Mapping[str, Any] = {
         # on ADAAAA-7770), so this pass measured on local CPU over the same clip.
         "host": "local CPU (pure DSP harness; no GPU job needed for this rule)",
         "clip": "af_belmont_vs_westford_092123.mp4 (8391 s, CC0 1.0)",
-        "labelRevision": 1,
+        "labelRevision": 2,
         "thresholdId": "stageA/burst/1.3x/0.3s",
         "matchWindowS": [-6.0, 3.0],
         "events": 11,
         "candidates": 1979,
         "candidatesPerMinute": 14.2,
         "recall": 1.0,
-        "fpRate": 0.9859,
+        "fpRate": 0.9853,
         "p50S": 0.2,
         "p95S": 0.5,
         "negativeWindowFpRate": 1.0,
         "negativeWindowsWithFire": 14,
         "negativeWindowFires": 87,
-        # label-tolerance sensitivity: recall 0.82 at the harness default -3/+2,
+        # label-tolerance sensitivity: recall 0.91 at the harness default -3/+2,
         # 1.00 at -6/+3 and 1.00 at -10/+5, while the candidate FP rate only
         # moves 0.99 -> 0.98. The verdict is not an artefact of label timing.
-        "recallAtDefaultWindow": 0.8182,
-        "fpRateAtDefaultWindow": 0.993,
-        "fpRateAtGenerousWindow": 0.9788,
+        "recallAtDefaultWindow": 0.9091,
+        "fpRateAtDefaultWindow": 0.9919,
+        "fpRateAtGenerousWindow": 0.9778,
         "fpCeiling": 0.10,
         "fpCeilingMet": False,
         "result": "evals/american_football_val/RESULTS.md",
     },
-    # ADAAAA-7767 certified label revision 1 (the QA child's verdict fills this).
-    "qaCertification": None,
+    # ADAAAA-7784 (Highlights.live Reviewer): label revision 1 FAILED on one
+    # clause -- E09's bracket [7405,7420] contained no score transition (the bug
+    # flips at 7401) -- and reproduced every other number byte-identically.
+    # Label revision 2 corrects E09 and re-pins the run; re-certification of
+    # revision 2 is the open QA step (see RESULTS.md section 8).
+    "qaCertification": (
+        "fail on label revision 1 (ADAAAA-7784: E09 bracket contained no score "
+        "transition); revision 2 awaiting re-certification"
+    ),
 }
 
 AMERICAN_FOOTBALL_PROFILE = GameProfile(

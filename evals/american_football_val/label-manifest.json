@@ -232,20 +232,21 @@
    "event_type": "touchdown",
    "score_before": "14-19",
    "score_after": "14-25",
-   "instant_s": 7412,
+   "instant_s": 7401,
    "bracket_s": [
-    7405,
-    7420
+    7400,
+    7402
    ],
-   "confidence_s": 8,
-   "t_start": 7402,
-   "t_end": 7423,
+   "confidence_s": 1,
+   "t_start": 7391,
+   "t_end": 7412,
    "evidence": [
-    "1 fps band frames 7405 (14-19/25 boundary read at 7420) and 7420 (14-25)",
-    "fourth quarter, bug clock 2:16"
+    "1 fps band frames 7400 (14-19) and 7401 (14-25); band reads 14-19 at 7395/7398/7400",
+    "fourth quarter, bug clock 2:16",
+    "re-read 2026-11-02 after QA ADAAAA-7784: the original bracket [7405,7420] / instant 7412 was derived from the play rather than the pixels and contained no transition; corrected to the frame-verified transition at 7401"
    ],
    "ground_truth": "score",
-   "instant": 7412
+   "instant": 7401
   },
   {
    "id": "E10",

@@ -28,6 +28,11 @@ python3 evals/measure_audio_recall.py \
     --profile "american football" --json out/af_audio.json
 ```
 
+The harness resolves each class's `clip` name against `--clip-root`, so the
+archived download `football_092123-vs-westford.mp4` must be present (or
+symlinked) under the manifest's name, `af_belmont_vs_westford_092123.mp4`; a
+plain copy under the archive filename dies on a missing clip.
+
 Pure DSP (ffmpeg decode + numpy gate): no GPU is involved, and the box-side and
 local CPU runs are byte-identical for the same labels (basketball verified that
 on [ADAAAA-7770](/ADAAAA/issues/ADAAAA-7770)). This pass therefore measured on
@@ -36,7 +41,7 @@ use one.
 
 | class | events | candidates | recall | candidate FP rate | onset→fire p50 | p95 | max |
 |---|---|---|---|---|---|---|---|
-| `score_roar` | 11 | **1979** | **1.00 (11/11)** | **0.9859 (1951/1979)** | 0.20 s | 0.50 s | 1.90 s |
+| `score_roar` | 11 | **1979** | **1.00 (11/11)** | **0.9853 (1950/1979)** | 0.20 s | 0.50 s | 1.90 s |
 
 Trigger volume: 1979 candidates / 139.9 min = **14.2 candidates per minute**
 (threshold id `stageA/burst/1.3x/0.3s` — the profile's unchanged default).
@@ -55,7 +60,8 @@ which is the property the FP rate needs. Whether a given window is a huddle, a
 replay or live play was not frame-classified in this pass, so the class names
 say what was actually verified rather than guessing.
 
-Artifact: `out/af_audio.json`, md5 `06ffc8ba5938fad71b646a3fbc61741d`.
+Artifact: `out/af_audio.json`, md5 `34c5baacb62b160c1b9f094de45e904f`
+(label revision 2 — see §8 for the E09 correction and the re-run that re-pinned it).
 
 ### 1a. Label-tolerance sensitivity
 
@@ -65,9 +71,9 @@ against the same 11 verified onsets with a wider match window:
 
 | label tolerance (pre/post) | recall | candidate FP rate |
 |---|---|---|
-| −3 s / +2 s (harness default) | 0.82 (9/11) | 0.993 |
-| −6 s / +3 s (reported above, chosen for the operator lag) | **1.00** | **0.9859** |
-| −10 s / +5 s | 1.00 | 0.9788 |
+| −3 s / +2 s (harness default) | 0.91 (10/11) | 0.9919 |
+| −6 s / +3 s (reported above, chosen for the operator lag) | **1.00** | **0.9853** |
+| −10 s / +5 s | 1.00 | 0.9778 |
 
 Recall is timing-sensitive; **the FP rate is not**. A generous window buys
 recall but leaves the gate firing on essentially everything.
@@ -77,7 +83,7 @@ recall but leaves the gate firing on essentially everything.
 The corpus-wide audio defaults are **not a viable operating point for american
 football**, and the failure is the one the issue predicted:
 
-1. **Candidate FP rate 0.99.** 1951 of 1979 candidates are not within −6 s/+3 s
+1. **Candidate FP rate 0.99.** 1950 of 1979 candidates are not within −6 s/+3 s
    of a verified scoring play. `decide` runs on survivors, so 14 candidates per
    minute means the Gemma decision path would be invoked ~2000 times per game.
 2. **Every non-event window fired (14/14), including all 13 live-play windows.**
@@ -90,7 +96,7 @@ football**, and the failure is the one the issue predicted:
 
 **Stated FP-rate ceiling for american football (justified by this measurement):
 a candidate FP rate of ≤ 0.10, the same ceiling the soccer reference meets.**
-Measured: **0.9859 — missed by ~10x**. The apples-to-apples reference on the
+Measured: **0.9853 — missed by ~10x**. The apples-to-apples reference on the
 same harness is soccer at recall 0.875 / candidate FP 0.0952 at
 `stageA/burst/1.3x/0.3s` ([ADAAAA-7674](/ADAAAA/issues/ADAAAA-7674)). INC-9's
 36.7% is **not** used: QA on [ADAAAA-7755](/ADAAAA/issues/ADAAAA-7755) confirmed
@@ -99,9 +105,9 @@ it is not reproducible from HEAD.
 ## 2. Which trigger carries this type — the finding the CEO needs
 
 **Audio alone does not carry american football.** Measured: recall 1.00 at a
-candidate FP rate of 0.9859 and 14.2 candidates/minute on a rights-cleared full
+candidate FP rate of 0.9853 and 14.2 candidates/minute on a rights-cleared full
 game. That is a ~10x miss of the stated ceiling, and widening the label window
-±10 s moves the FP rate to only 0.9788, so no label-timing artefact explains it.
+±10 s moves the FP rate to only 0.9778, so no label-timing artefact explains it.
 
 **Motion alone: `not_captured`.** The motion trigger
 (`services/perceive/app/stage_a.py::motion_fire`, `MOTION_MIN_STEP = 0.15`
@@ -202,7 +208,45 @@ cd services/perceive && python3 -m pytest tests/test_game_profile.py -q  # 27 pa
 
 Nothing was deployed, no served path changed, and no GPU job was started.
 
-## 8. Remaining work, and who owns it
+## 8. Label revision 2 — the E09 correction (QA [ADAAAA-7784](/ADAAAA/issues/ADAAAA-7784))
+
+QA re-certification returned **FAIL on exactly one clause** and reproduced
+everything else byte-identically: the **E09** scoring bracket contained no score
+transition. E09 was recorded at `instant 7412`, `bracket [7405,7420]`; the score
+bug actually flips `14-19 → 14-25` at **t=7401**, four seconds before that
+bracket opened. The bracket looked derived from the play rather than the pixels.
+
+Re-verified independently for this correction (native 1 fps frames of the
+score-bug band at t=7395/7398/7400/7401/7402/7404/7406/7410/7412/7420/7425):
+Belmont stays 14 throughout; Westford reads **19 at 7395/7398/7400** and **25
+from 7401 onward**, unchanged through 7425. Transition = **7401**, bracket
+`[7400,7402]`, play window `[7391,7412]`.
+
+What changed in revision 2 and what did not:
+
+- `label-manifest.json` E09: `instant 7412 → 7401`, `bracket [7405,7420] →
+  [7400,7402]`, `t_start/t_end 7402/7423 → 7391/7412`, evidence rewritten to the
+  frames actually read; `confidence_s 8 → 1`. No other label touched.
+- `audio-labels.json` `score_roar` onset `7412 → 7401` (onsets follow the
+  manifest by contract; the drift-guard test enforces it).
+- Re-ran the harness on the same clip (`sha256 ad12b10b…6df1aeb`) at all three
+  tolerances. Candidate count is unchanged at **1979**; the fire list is
+  identical, so recall, FP rate and p50/p95 keep their substance:
+
+| tolerance | recall | candidate FP rate |
+|---|---|---|
+| −3 s/+2 s | 0.91 (10/11) | 0.9919 |
+| −6 s/+3 s | **1.00 (11/11)** | **0.9853 (1950/1979)** |
+| −10 s/+5 s | 1.00 (11/11) | 0.9778 |
+
+  p50 0.20 s / p95 0.50 s / max 1.90 s unchanged; all 14 non-event windows still
+  fire (87 fires). New artifact md5
+  `34c5baacb62b160c1b9f094de45e904f` (was `06ffc8ba…`).
+- **The finding does not move**: audio recall 1.00 at candidate FP 0.9853, ~10x
+  the 0.10 ceiling, and motion still `not_captured`. The label fix shifts the FP
+  count by one candidate (1951 → 1950) and nothing else.
+
+## 9. Remaining work, and who owns it
 
 - **Motion/tracker pass (the decisive number).** Bounded box job on
   `livepeer-ai-x99`: florence detections on this clip → track steps →
