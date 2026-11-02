@@ -746,3 +746,82 @@ def test_american_football_eval_set_matches_the_committed_labels_and_run():
     # a stale "awaiting re-certification" can never outlive the verdict
     assert ref["qaCertification"] == "pass (ADAAAA-7785, label revision 2)"
     assert "fpCeilingMet false" in ref["qaVerdict"]
+
+def test_american_football_motion_numbers_match_the_committed_run():
+    """The registered motion row IS the committed artifact's row (drift guard).
+
+    ADAAAA-7788 measured the motion trigger the type declares but had never
+    measured. This guard is what stops the registered numbers drifting from the
+    artifacts they claim to come from, and stops motion being quoted as certified
+    before QA's re-certification verdict exists.
+    """
+    import json
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    af = os.path.normpath(os.path.join(here, "..", "..", "..", "evals", "american_football_val"))
+    man = json.load(open(os.path.join(af, "label-manifest.json")))
+    vod = json.load(open(os.path.join(af, "run", "af_motion_vod.json")))
+    live = json.load(open(os.path.join(af, "run", "af_motion_live.json")))
+    m63 = json.load(open(os.path.join(af, "run", "af_motion_vod_m6_3.json")))
+    slc = json.load(open(os.path.join(af, "run", "af_detect_slice.json")))
+
+    prof = load_game_profile("american football")
+    ref = prof.eval_set.reference
+    motion = ref["motionHarness"]
+
+    # the slice covers every manifest window at 1 fps, and nothing wider
+    assert vod["trigger"] == TRIGGER_MOTION
+    planned = sum(int(round(w["t_end"] - w["t_start"])) for w in man["windows"])
+    assert vod["frames"] == motion["frames"] == planned == 569
+    assert slc["frames"] == 569
+    assert {w["id"] for w in slc["windows"]} == set(vod["windows"])
+    assert set(vod["windows"]) == {w["id"] for w in man["windows"]}
+    # the slice is the deployed detector on the pinned clip, not a fixture backend
+    assert slc["detector"] == "cuda:0"
+    assert slc["clip"]["sha256"] == man["video"]["sha256"]
+    assert motion["fps"] == vod["fps"] == 1.0
+    assert motion["windows"] == len(man["windows"]) == 25
+
+    # the profile row is the -6/+3 artifact's row (audio's headline tolerance), so
+    # the two triggers are quoted at the same setting
+    assert m63["matchWindow"] == {"pre": 6.0, "post": 3.0}
+    assert vod["matchWindow"] == {"pre": 3.0, "post": 2.0}
+    assert motion["candidates"] == m63["main"]["candidates"] == 435
+    assert m63["main"]["recalled"] == 11
+    assert motion["recall"] == pytest.approx(m63["main"]["recall"]) == pytest.approx(1.0)
+    assert motion["fpRate"] == pytest.approx(m63["main"]["fp_rate"], abs=1e-4)
+    assert vod["main"]["recall"] == pytest.approx(motion["recallAtDefaultWindow"], abs=1e-4)
+    assert vod["main"]["fp_rate"] == pytest.approx(motion["fpRateAtDefaultWindow"], abs=1e-4)
+
+    # the ceiling is missed by both declared triggers, by an order of magnitude
+    assert motion["fpCeiling"] == 0.10 and motion["fpCeilingMet"] is False
+    assert motion["fpRate"] > 7 * motion["fpCeiling"]
+    assert ref["audioHarness"]["fpRate"] > 9 * motion["fpCeiling"]
+    # and the trigger is always-on, not selective: every negative window fires
+    assert vod["negatives"]["fp_windows"] == vod["negatives"]["windows"] == 14
+    assert motion["negativeWindowsWithFire"] == 14
+    assert vod["negatives"]["candidates"] == 256
+    assert motion["framesWithFire"] / motion["frames"] > 0.75
+
+    # the candidate denominator is the window sample, never audio's whole clip
+    assert vod["candidateSpace"]["sampledSeconds"] == 569.0
+    assert vod["candidateSpace"]["stratifiedSample"] == pytest.approx(
+        569.0 / man["video"]["duration_s"], abs=1e-4
+    )
+    assert motion["candidates"] != ref["audioHarness"]["candidates"]
+
+    # cap behaviour is measured at both roster capacities; the 22-player case is
+    # NOT claimed and no soccer/pilot track number is borrowed for this type
+    caps = ref["trackingCaps"]
+    assert vod["capacity"] == caps["vod"]["capacity"] == 8
+    assert live["capacity"] == caps["live"]["capacity"] == 3
+    assert vod["roster"]["unkeptDetections"] == caps["vod"]["unkeptDetections"] == 0
+    assert live["roster"]["unkeptDetections"] == caps["live"]["unkeptDetections"] > 0
+    assert live["roster"]["framesAtCap"] == caps["live"]["framesAtCap"]
+    assert caps["objectsPerFrameMax"] == vod["roster"]["objectsPerFrameMax"] == 6
+    assert caps["twentyTwoPlayerCase"].startswith("not_captured")
+    assert caps["idPersistence"].startswith("not_captured")
+    assert caps["iou"].startswith("not_captured")
+
+    # AC6: motion is measured here but not certified until QA's verdict lands
+    assert "pending" in ref["qaCertificationMotion"]

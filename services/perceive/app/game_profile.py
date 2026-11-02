@@ -601,10 +601,73 @@ _AMERICAN_FOOTBALL_EVAL_REFERENCE: Mapping[str, Any] = {
     # Label revision 2 corrects E09 and re-pins the run; ADAAAA-7785 certified
     # revision 2 PASS on 5/5 clauses with the run artifacts cmp-identical to the
     # committed ones (see RESULTS.md section 10).
+    # ADAAAA-7788: the motion trigger measured on this type's own detection slice
+    # (evals/american_football_val/run/af_detect_slice.json), produced by the
+    # bounded box job the CEO approved (569 frames = the 25 manifest windows at
+    # 1 fps, 3.5 GPU-min of the approved 35 on livepeer-ai-x99, deployed perceive
+    # image perceive-7707 + the fine-tuned florence the type is served with).
+    # Scores use the audio harness's own accounting so the two rows are
+    # comparable at the same label tolerance. The DENOMINATORS are NOT
+    # interchangeable: audio's 1979 candidates are the whole 8391 s clip, motion's
+    # 435 are the 6.78% window sample, and the artifact records that share.
+    "motionHarness": {
+        "harness": "evals/measure_motion_recall.py (slice: evals/detect_slice_from_windows.py)",
+        "host": "livepeer-ai-x99 GPU 0, image adastravideo/highlights-live:perceive-7707",
+        "detector": "/runs/Florence-2-base-finetuned-ft6404gpu",
+        "commit": "0c45064",
+        "labelRevision": 2,
+        "fps": 1.0,
+        "windows": 25,
+        "frames": 569,
+        "latencyMsPerFrame": 364.0,
+        "gpuMinutes": 3.5,
+        "motionMinStep": 0.15,
+        "matchWindowS": [6.0, 3.0],
+        "candidates": 435,
+        "candidateDenominator": "fires inside the manifest windows (6.78% of the clip), NOT the audio rule's whole-clip 1979",
+        "recall": 1.0,
+        "fpRate": 0.7931,
+        "p50S": -6.0,
+        "p95S": 3.0,
+        # every non-event window fires, and the rule is on for 435/569 frames
+        # (76.4%), so a "hit" is not evidence the scoring play caused the fire
+        "negativeWindowsWithFire": 14,
+        "negativeWindowFpRate": 1.0,
+        "framesWithFire": 435,
+        "recallAtDefaultWindow": 0.9091,
+        "fpRateAtDefaultWindow": 0.8644,
+        "recallAtGenerousWindow": 1.0,
+        "fpRateAtGenerousWindow": 0.7195,
+        "fpCeiling": 0.10,
+        "fpCeilingMet": False,
+        "artifact": "evals/american_football_val/run/af_motion_vod.json",
+        "result": "evals/american_football_val/RESULTS.md",
+    },
+    # ADAAAA-7788: roster caps on the same slice. The 22-player case this roster
+    # exists for is NOT exercised - the deployed detector returns at most 6
+    # boxes/frame on this clip at 854x480 - so the live cap is measured against a
+    # 6-object ceiling only and ID persistence/IoU need a ground-truth track
+    # manifest that american football does not have yet. Never quote a soccer
+    # track number for this type.
+    "trackingCaps": {
+        "vod": {"capacity": 8, "framesAtCap": 129, "frames": 569,
+                "unkeptDetections": 0, "detections": 1071},
+        "live": {"capacity": 3, "framesAtCap": 440, "frames": 569,
+                 "unkeptDetections": 30, "detections": 1071},
+        "objectsPerFrameMax": 6,
+        "twentyTwoPlayerCase": "not_captured - detector tops out at 6 boxes/frame at 854x480",
+        "idPersistence": "not_captured - needs a GT track manifest",
+        "iou": "not_captured - same blocker",
+    },
     "qaCertification": "pass (ADAAAA-7785, label revision 2)",
+    # AC6 of ADAAAA-7788: motion is measured here but is NOT certified yet, so it
+    # must not be quoted as `measured` by QA or by the operator-UI gate until the
+    # re-certification verdict lands and this key is updated with it.
+    "qaCertificationMotion": "pending (QA re-certification child of ADAAAA-7788)",
     "qaVerdict": (
-        "measurement true; fpCeilingMet false - audio alone does not carry the "
-        "type and motion stays not_captured, so american football stays disabled"
+        "measurement true; fpCeilingMet false - audio 0.9853 and motion 0.7931 "
+        "both miss the 0.10 candidate-FP ceiling, so no trigger carries the type "
+        "and american football stays disabled"
     ),
 }
 
