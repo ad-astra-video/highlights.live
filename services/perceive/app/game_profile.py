@@ -503,7 +503,10 @@ _BASKETBALL_EVAL_REFERENCE: Mapping[str, Any] = {
         "fpCeilingMet": False,
         "result": "evals/basketball_val/RESULTS.md",
     },
-    "qaCertification": "pending",
+    # ADAAAA-7772 certified label revision 2 (PASS: measurement true, FP ceiling
+    # still missed). The certification covers the measurement, not enablement.
+    "qaCertification": "pass (ADAAAA-7772, label revision 2)",
+    "qaVerdict": "measurement true; fpCeilingMet false - basketball stays disabled",
 }
 
 BASKETBALL_PROFILE = GameProfile(

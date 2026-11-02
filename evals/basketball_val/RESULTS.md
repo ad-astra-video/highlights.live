@@ -62,7 +62,9 @@ re-derivation of the score timeline shows the error is larger and systematic:
   20-20, 22-20). The per-second assignment is unambiguous across all 850 frames
   (no flicker: 16 runs, 15 transitions).
 - revision 1 placed each event instant at the **end** of the score state it
-  named, so instants were 7-69 s late, and the final transition (20-20 → 22-20 at
+  named, so instants were 4-205 s late (lateness tracks the length of the state
+  each one named: min 4 s at `17-13 -> 17-14`, max 205 s at
+  `19-15 -> 20-15`), and the final transition (20-20 → 22-20 at
   clip t=808 s) was missing entirely: revision 1 had 14 events, the pixels have
   **15**.
 - the non-event window `score` strings were stale for the same reason and are now
@@ -83,6 +85,11 @@ the same 15 verified onsets with a wider pre-window:
 | −5 s / +2 s | 0.53 | 0.85 |
 | −6 s / +2 s | 0.67 | 0.81 |
 | −10 s / +2 s | 0.87 | 0.76 |
+
+Reproduce a row with `--match-pre` (e.g. `--match-pre 5`): the flag now
+overrides the manifest's `matchPre` and states the override on stderr
+(ADAAAA-7772 — before that fix the manifest key shadowed the flag, so every
+row came back as the −3 s baseline and the sweep looked unsupported).
 
 So a generous label tolerance can recover most of the recall — the crowd noise
 does precede the overlay update by a few seconds — but the candidate FP rate
@@ -181,3 +188,20 @@ Blocker: no live trace to pair the VOD trace against.
 
 One clip only. The clip span, not the whole 104-min match, is catalogued; that is
 the coverage claimed here.
+
+## QA certification
+
+- Label revision 1: certified on ADAAAA-7770 (PASS, with two label-hygiene notes).
+- Label revision 2: certified on ADAAAA-7772 (**PASS — measurement true, ceiling
+  still missed**). QA re-derived the instants with an independent 30 fps glyph
+  sweep (15/15 satisfy `t-1 < change <= t`), reproduced the harness result
+  byte-for-byte, and reproduced the whole sensitivity table. `qaCertification` in
+  `services/perceive/app/game_profile.py` now records that verdict.
+- QA's two documentation items are fixed in this revision of the file: the
+  revision-1 lateness range is stated as 4-205 s (it was written as 7-69 s), and
+  `--match-pre` now overrides the manifest's `matchPre` (it was silently inert,
+  which is what made the sensitivity table look unsupported to a reviewer).
+- A PASS certifies the measurement, not the type. Candidate FP rate 0.93 against
+  the ≤ 0.10 ceiling means basketball stays disabled; enablement is a gated
+  follow-on with its own costed issue.
+

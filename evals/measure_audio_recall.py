@@ -245,6 +245,29 @@ def measure_negatives(mod, args, manifest, cls, sr, frame_s, gate_name, override
     }
 
 
+DEFAULT_MATCH_PRE_S = 3.0
+DEFAULT_MATCH_POST_S = 2.0
+
+
+def resolve_match_windows(match_pre, match_post, manifest):
+    """Resolve the onset scoring windows: explicit CLI value > manifest > default.
+
+    ADAAAA-7772: the manifest's ``matchPre``/``matchPost`` used to win
+    unconditionally (``manifest.get("matchPre", args.match_pre)``), so passing
+    ``--match-pre`` while the manifest carried the key was silently inert. A
+    reviewer re-scoring label-tolerance sensitivity that way got the baseline
+    back for every tolerance and would read the sweep as unsupported. An explicit
+    flag now overrides the manifest; a manifest value still wins over the default.
+    """
+    pre = DEFAULT_MATCH_PRE_S if match_pre is None else match_pre
+    post = DEFAULT_MATCH_POST_S if match_post is None else match_post
+    if match_pre is None:
+        pre = manifest.get("matchPre", pre)
+    if match_post is None:
+        post = manifest.get("matchPost", post)
+    return pre, post
+
+
 def per_class(args):
     """Score every class in the manifest; return the table rows.
 
@@ -257,8 +280,15 @@ def per_class(args):
     manifest = json.load(open(args.labels))
     mod = load_gate()
     frame_s = manifest.get("frameS", args.frame_s)
-    pre = manifest.get("matchPre", args.match_pre)
-    post = manifest.get("matchPost", args.match_post)
+    # ADAAAA-7772: an explicit --match-pre/--match-post must not be shadowed by the
+    # manifest; the override is stated on stderr so a transcript shows what scored.
+    pre, post = resolve_match_windows(args.match_pre, args.match_post, manifest)
+    if args.match_pre is not None and "matchPre" in manifest and manifest["matchPre"] != pre:
+        print(f"note: --match-pre {pre} overrides the manifest's matchPre "
+              f"{manifest['matchPre']}", file=sys.stderr)
+    if args.match_post is not None and "matchPost" in manifest and manifest["matchPost"] != post:
+        print(f"note: --match-post {post} overrides the manifest's matchPost "
+              f"{manifest['matchPost']}", file=sys.stderr)
     rows = []
     for cls in manifest["classes"]:
         row = {"id": cls["id"], "clip": cls.get("clip"), "measured": bool(cls.get("measured"))}
@@ -384,8 +414,13 @@ def main():
                     help="only score these class ids (repeatable; default: all)")
     ap.add_argument("--frame-s", type=float, default=0.1)
     ap.add_argument("--sr", type=int, default=8000)
-    ap.add_argument("--match-pre", type=float, default=3.0)
-    ap.add_argument("--match-post", type=float, default=2.0)
+    ap.add_argument("--match-pre", type=float, default=None,
+                    help="pre-window (s) around a labelled onset; default 3.0, or the "
+                         "manifest's matchPre when the manifest carries one. An "
+                         "explicit value overrides the manifest (ADAAAA-7772)")
+    ap.add_argument("--match-post", type=float, default=None,
+                    help="post-window (s) after a labelled onset; default 2.0, or the "
+                         "manifest's matchPost when the manifest carries one")
     ap.add_argument("--compare-lookback", type=float, default=None,
                     help="also score the class at this lookback_s to show the tuning delta")
     ap.add_argument("--gate-opt", dest="gate_opts", action="append", default=[],
@@ -458,6 +493,8 @@ def main():
     goals = [float(x) for x in a.goals.split(",") if x.strip() != ""]
     mod = load_gate()
     gate_cls, GateConfig = mod.AudioEnergyGate, mod.GateConfig
+    # before/after mode has no manifest to inherit a window from.
+    match_pre, match_post = resolve_match_windows(a.match_pre, a.match_post, {})
 
     profile = load_profile(a.profile)
     old = GateConfig(frame_s=a.frame_s, burst_ratio=3.0, burst_min_frames=10,
@@ -468,7 +505,7 @@ def main():
 
     def show(label, cfg):
         fires, lats, kinds = run_gate_stream(a.clip, a.sr, a.frame_s, gate_cls(cfg))
-        m = measure_fires(fires, lats, kinds, goals, a.match_pre, a.match_post)
+        m = measure_fires(fires, lats, kinds, goals, match_pre, match_post)
         print(f"{label}: candidates={m['candidates']} goals={m['events']} "
               f"recalled={m['recalled']} recall={m['recall']:.2f} "
               f"fp={m['fp']} fp_rate={m['fp_rate']:.2f} p50={m['p50']:.2f}s p95={m['p95']:.2f}s "

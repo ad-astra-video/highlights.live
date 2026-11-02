@@ -49,14 +49,15 @@ ffmpeg -ss <t> -i bb_q1_1100_1950.mp4 -frames:v 1 \
    Q2, period flag `1.Ç` until clip ≈660 s, `2.Ç` after), so no cut/replay breaks
    the digit timeline.
 6. **Revision 2 (after ADAAAA-7770).** The first catalogue placed each instant at
-   the *last* frame of the state it named (7-69 s late) and missed the final
-   transition. Revision 2 derives the states by template-matching the 1 fps digit
-   band for the whole clip against 16 pixel-read states (unambiguous: 16 runs, 15
-   transitions, no flicker), takes the instant as the first frame showing the new
-   digits, and re-derives the non-event window `score` strings from the state
-   intervals. Reproduce the sweep with the `digits.png` crop above at 1 s steps
-   and compare each crop against the state at clip t=5/40/74/110/153/200/260/330/
-   420/467/476/510/600/750/790/830 s (the state representatives).
+   the *last* frame of the state it named (4-205 s late, lateness tracking the
+   length of each named state) and missed the final transition. Revision 2 derives
+   the states by template-matching the 1 fps digit band for the whole clip against
+   16 pixel-read states (unambiguous: 16 runs, 15 transitions, no flicker), takes
+   the instant as the first frame showing the new digits, and re-derives the
+   non-event window `score` strings from the state intervals. Reproduce the sweep
+   with the `digits.png` crop above at 1 s steps and compare each crop against the
+   state at clip t=5/40/74/110/153/200/260/330/420/467/476/510/600/750/790/830 s
+   (the state representatives).
 
 
 ## What is deliberately absent
