@@ -32,7 +32,14 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "services", "perceive"))
 
-from app.tracker import IoUTracker, LIVE_MAX_TRACKS, VOD_MAX_TRACKS  # noqa: E402
+from app.tracker import IoUTracker  # noqa: E402
+from app.game_profile import load_game_profile  # noqa: E402
+
+# ADAAAA-7754: the harness takes the type's GAME PROFILE instead of hard-coded
+# soccer caps. The roster's capacities are the charter 3 live / 8 VOD (the
+# schema ceiling stays 8) and are clamped by the profile itself.
+PROFILE_KEY = "soccer"
+PROFILE = load_game_profile(PROFILE_KEY)
 
 ACCEPT_ID_PERSIST = 0.95
 ACCEPT_IOU = 0.50
@@ -54,7 +61,7 @@ def _iou(a, b):
 
 def run_clip(clip, drop_pct):
     mode = clip["mode"]
-    cap = VOD_MAX_TRACKS if mode == "vod" else LIVE_MAX_TRACKS
+    cap = PROFILE.tracking_roster.capacity(mode)
     reach_cap = clip.get("reachCap", True)
     tr = IoUTracker(capacity=cap, lost_before_evict=8)
     # label -> {frame: iou per matched trackId} over the run
@@ -121,8 +128,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("manifest", nargs="?", default=os.path.join(HERE, "track_label_manifest.json"))
     ap.add_argument("--drop", type=int, default=0, help="per-frame detection dropout % (0-99)")
+    ap.add_argument("--profile", default=PROFILE_KEY,
+                    help="game profile whose trackingRoster caps the run (ADAAAA-7754)")
     args = ap.parse_args()
 
+    global PROFILE
+    PROFILE = load_game_profile(args.profile)
     manifest = json.load(open(args.manifest))
     print(f"tracking-accuracy run  sport={manifest['sport']} "
           f"clips={len(manifest['clips'])} drop={args.drop}%")
