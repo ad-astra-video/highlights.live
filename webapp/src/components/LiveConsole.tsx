@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Radio, Send } from "lucide-react";
 import { getToken, api } from "../lib/api";
 import { readSSE } from "../lib/sse";
+import { useIsAdmin } from "../lib/auth";
 import { MediaNodeStrip } from "./MediaNodeStrip";
 
 interface FeedItem {
@@ -14,6 +15,10 @@ interface FeedItem {
 // for a running job over the /jobs/:id/events SSE endpoint and lets the operator
 // send preference/control intents to /jobs/:id/control.
 export function LiveConsole({ jobId, onHighlight }: { jobId: string; onHighlight?: (h: any) => void }) {
+  // ADAAAA-7727: the console stays a customer surface, but its raw pipeline
+  // detail (frame seq, live track count, the media-node capacity/spend strip) is
+  // operator diagnostics — those render only for an admin session.
+  const admin = useIsAdmin();
   const [items, setItems] = useState<FeedItem[]>([]);
   const [tracks, setTracks] = useState<number>(0);
   const [connected, setConnected] = useState(false);
@@ -33,9 +38,10 @@ export function LiveConsole({ jobId, onHighlight }: { jobId: string; onHighlight
       if (name === "ready") setConnected(true);
       else if (name === "observation") {
         setTracks(data.observation?.tracks?.length ?? 0);
-        push("observation", `seq ${data.seq} — ${data.observation?.tracks?.length ?? 0} track(s)`);
+        // ADAAAA-7727: frame seq + track count are frame/track debug — admin only.
+        if (admin) push("observation", `seq ${data.seq} — ${data.observation?.tracks?.length ?? 0} track(s)`);
       } else if (name === "candidate") {
-        push("candidate", `⚡ candidate @T+${Math.round(data.timestamp)}s (${data.candidate?.eventType || "event"})`);
+        push("candidate", admin ? `⚡ candidate @T+${Math.round(data.timestamp)}s (${data.candidate?.eventType || "event"})` : `⚡ moment @T+${Math.round(data.timestamp)}s`);
       } else if (name === "highlight") {
         push("highlight", `🎬 highlight clipped: ${data.highlight?.eventType || "event"} score ${Math.round(data.highlight?.score ?? 0)}`);
         // Live feed surface (ADAAAA-5777): a highlight was just accepted and
@@ -50,7 +56,7 @@ export function LiveConsole({ jobId, onHighlight }: { jobId: string; onHighlight
       cancelled = true;
       ac.abort();
     };
-  }, [jobId]);
+  }, [jobId, admin]);
 
   useEffect(() => {
     feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight });
@@ -77,11 +83,12 @@ export function LiveConsole({ jobId, onHighlight }: { jobId: string; onHighlight
           Live console
           <span className="normal-case text-mut">— {connected ? "streaming" : "connecting…"}</span>
         </span>
-        <span className="text-xs text-mut">{tracks} track(s) now</span>
+        <span className="text-xs text-mut">{admin ? `${tracks} track(s) now` : connected ? "live" : ""}</span>
       </div>
 
-      {/* Media-node capacity/health + per-node Livepeer spend (ADAAAA-6869). */}
-      <MediaNodeStrip className="mb-3" />
+      {/* Media-node capacity/health + per-node Livepeer spend (ADAAAA-6869).
+          ADAAAA-7727: media-server + spend internals — admin only. */}
+      {admin && <MediaNodeStrip className="mb-3" />}
 
       <div
         ref={feedRef}

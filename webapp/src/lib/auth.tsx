@@ -109,3 +109,21 @@ export function useAuth(): AuthCtx {
   if (!ctx) throw new Error("useAuth outside <AuthProvider>");
   return ctx;
 }
+
+// --- Role gate (ADAAAA-7727) -------------------------------------------------
+// `role` has always ridden the session (services/server/src/auth.ts seeds
+// `admin` for the operator and `user` for a customer) but no UI consumed it, so
+// internal pipeline / media-server / cost diagnostics rendered for everyone.
+// `isAdminRole` is the single predicate used by every customer surface and by
+// the /app/admin route guard. Exact match: `admin_readonly` is a server-side
+// measurement token, not a dashboard role, so it is not admin here.
+export function isAdminRole(role?: string | null): boolean {
+  return role === "admin";
+}
+
+/** True when the signed-in session is an operator/admin. False while the session
+ * is still hydrating (a gate that is briefly closed is safe; one that is
+ * briefly open is the bug this increment exists to fix). */
+export function useIsAdmin(): boolean {
+  return isAdminRole(useAuth().user?.role);
+}

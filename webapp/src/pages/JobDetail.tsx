@@ -4,6 +4,8 @@ import { ArrowLeft, Play, Check, X, Loader2, ChevronDown, ChevronRight, VolumeX,
 import { api, getToken } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { VideoClip } from "../components/VideoClip";
+import { JobDetailMetrics } from "../components/JobMetrics";
+import { useIsAdmin } from "../lib/auth";
 import { WindowAnalysisPanel } from "../components/WindowAnalysis";
 import { SummaryLadderView } from "../components/SummaryLadder";
 import { batchManifest, clipFileName, clipUrl, copyText, saveBlob, seedCaption, type BatchItem } from "../lib/highlightPost";
@@ -29,9 +31,6 @@ import {
   type NoteKind,
   type SummaryLogEntry,
   summaryEntryTimestamp,
-  candidateCountLabel,
-  stageACountLabel,
-  decideCallsCount,
 } from "../lib/jobDetail";
 import {
   drawFrameWithBoxes,
@@ -973,6 +972,9 @@ export function DecideAuditRow({ audit: a }: { audit: DecideAuditRecord }) {
 export function JobDetail() {
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  // ADAAAA-7727: internal pipeline readouts (decide/candidates/Stage-A/cost)
+  // render only for an admin session.
+  const admin = useIsAdmin();
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [terminal, setTerminal] = useState(false);
@@ -1024,7 +1026,9 @@ export function JobDetail() {
         setDetail(d);
         setError(null);
         // Refresh the durable decide-audit rows alongside the detail payload.
-        loadAudits();
+        // ADAAAA-7727: the audit rows are admin-only, so a customer session
+        // never fetches them.
+        if (admin) loadAudits();
         if (!isJobInFlight(d.job?.status)) setTerminal(true);
         else setTerminal(false);
       } catch (e: any) {
@@ -1038,7 +1042,7 @@ export function JobDetail() {
         if (aliveRef.current && initial) setLoading(false);
       }
     },
-    [id]
+    [id, admin]
   );
 
   // Debounced re-fetch on SSE activity: keeps section/trace updates <= ~2s.
@@ -1346,47 +1350,10 @@ export function JobDetail() {
               <FailureReasonChip reason={detail.job.failureReason} />
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-mut">Source</div>
-                <div>{sourceLabel(detail.job.source)}</div>
-              </div>
-              {detail.job.gameHint && (
-                <div>
-                  <div className="text-xs uppercase tracking-wide text-mut">Game</div>
-                  <div>{detail.job.gameHint}</div>
-                </div>
-              )}
-              <div>
-                <div className="text-xs uppercase tracking-wide text-mut">Frames</div>
-                <div>{detail.job.framesAnalyzed ?? frameCount}</div>
-              </div>
-              <div data-detail-decide-calls>
-                <div className="text-xs uppercase tracking-wide text-mut">Decide calls</div>
-                <div>{decideCallsCount(detail.job)}</div>
-              </div>
-              {/* ADAAAA-7624: candidates are counted by the path that actually
-                  ran (the observe cadence decide pass), and the audio Stage-A
-                  counters read `n/a` when that gate judged nothing — never a
-                  fabricated `0`. */}
-              <div data-detail-candidates>
-                <div className="text-xs uppercase tracking-wide text-mut">Candidates</div>
-                <div>{candidateCountLabel(detail.job)}</div>
-              </div>
-              <div data-detail-stage-a>
-                <div className="text-xs uppercase tracking-wide text-mut">Audio Stage-A</div>
-                <div>{stageACountLabel(detail.job)}</div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-mut">Cost</div>
-                <div>${(detail.job.costUsd ?? 0).toFixed(2)}</div>
-              </div>
-              <div data-detail-partition>
-                <div className="text-xs uppercase tracking-wide text-mut">Frames shown</div>
-                <div className={partition && !partition.ok ? "font-bold text-red" : ""}>
-                  {frameCount}
-                  {partition && !partition.ok && <span className="ml-1 text-red">· overlap!</span>}
-                </div>
-              </div>
+              {/* ADAAAA-7727: Source/Game/Frames are customer-facing; the
+                  decide/candidates/Stage-A/cost/partition readouts inside the
+                  component are internal diagnostics — admin only. */}
+              <JobDetailMetrics job={detail.job} frameCount={frameCount} partition={partition} admin={admin} />
             </div>
             {/* ADAAAA-7623: the summary ladder — match rollup + chapters over
                 the stored summary log, above the flat log itself. Absent on
@@ -1612,23 +1579,28 @@ export function JobDetail() {
               durable decide_audit rows for this job (one per frame group). The
               Inc 2 UI originally added this to the dead `components/JobDetail`
               panel which the router never renders; move it onto this routed
-              surface so it actually shows. */}
-          <div className="mt-8" data-decide-audit-section>
-            <div className="mb-2 flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-mut">
-              <span className="h-3 w-3 rounded-full bg-mut/40" />
-              Decide LLM audit
-              <span className="rounded-full bg-ink/15 px-2 py-0.5 text-xs font-bold text-ink" data-decide-audit-count>{audits.length}</span>
+              surface so it actually shows.
+              ADAAAA-7727: raw decide prompts / media hashes / verdicts are
+              pipeline internals — admin only, and a customer session never
+              fetches them (loadAudits is admin-gated too). */}
+          {admin && (
+            <div className="mt-8" data-decide-audit-section>
+              <div className="mb-2 flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-mut">
+                <span className="h-3 w-3 rounded-full bg-mut/40" />
+                Decide LLM audit
+                <span className="rounded-full bg-ink/15 px-2 py-0.5 text-xs font-bold text-ink" data-decide-audit-count>{audits.length}</span>
+              </div>
+              {audits.length === 0 ? (
+                <div className="text-sm text-mut" data-decide-audit-empty>No decide LLM audit recorded for this job.</div>
+              ) : (
+                <ul className="flex flex-col gap-2" data-decide-audit-list>
+                  {audits.map((a) => (
+                    <DecideAuditRow key={a.id} audit={a} />
+                  ))}
+                </ul>
+              )}
             </div>
-            {audits.length === 0 ? (
-              <div className="text-sm text-mut" data-decide-audit-empty>No decide LLM audit recorded for this job.</div>
-            ) : (
-              <ul className="flex flex-col gap-2" data-decide-audit-list>
-                {audits.map((a) => (
-                  <DecideAuditRow key={a.id} audit={a} />
-                ))}
-              </ul>
-            )}
-          </div>
+          )}
         </>
       )}
 

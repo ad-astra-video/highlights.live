@@ -1,18 +1,23 @@
 import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
-import { Zap, LayoutDashboard, CreditCard, Settings as SettingsIcon, LogOut, BrainCircuit } from "lucide-react";
-import { useAuth } from "../lib/auth";
+import { Zap, LayoutDashboard, CreditCard, Settings as SettingsIcon, LogOut, BrainCircuit, ShieldAlert } from "lucide-react";
+import { isAdminRole, useAuth } from "../lib/auth";
 import { DevBanner } from "./DevBanner";
 
-const nav = [
+const nav: { to: string; label: string; icon: any; end?: boolean; adminOnly?: boolean }[] = [
   { to: "/app", label: "Highlights", icon: LayoutDashboard, end: true },
   { to: "/app/train", label: "Fine Tune", icon: BrainCircuit },
   { to: "/app/billing", label: "Billing", icon: CreditCard },
   { to: "/app/settings", label: "Settings", icon: SettingsIcon },
+  // ADAAAA-7727: operator-only entry. Hidden from the nav for a customer — the
+  // route itself is guarded too (AdminRoute -> redirect to /app).
+  { to: "/app/admin", label: "Admin", icon: ShieldAlert, adminOnly: true },
 ];
 
 export function Shell() {
   const { user, billing, logout } = useAuth();
   const navTo = useNavigate();
+  const admin = isAdminRole(user?.role);
+  const visibleNav = nav.filter((n) => !n.adminOnly || admin);
 
   const planLabel = billing?.tier === "pro" && billing.status === "active" ? "PRO" : "STARTER";
 
@@ -24,7 +29,7 @@ export function Shell() {
         </Link>
 
         <nav className="flex flex-col gap-2">
-          {nav.map((n) => (
+          {visibleNav.map((n) => (
             <NavLink
               key={n.to}
               to={n.to}

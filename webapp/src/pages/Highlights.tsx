@@ -4,8 +4,7 @@ import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Trash2 } from "lu
 import { api, getToken, type Highlight, type Job, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { isOverLimit, oversizedHelp } from "../lib/vodUpload";
-import { decideCallsCount } from "../lib/jobDetail";
-import { useAuth } from "../lib/auth";
+import { useAuth, useIsAdmin } from "../lib/auth";
 import {
   useProcessingJobs,
   isInFlight,
@@ -18,6 +17,7 @@ import {
 } from "../lib/vodJobs";
 import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
+import { JobTileMetrics } from "../components/JobMetrics";
 import { BrowserCapture } from "../components/BrowserCapture";
 import { MediaNodeStrip } from "../components/MediaNodeStrip";
 
@@ -54,6 +54,10 @@ const GAME_DEFAULTS: Record<string, string> = {
 
 export function Highlights() {
   const { billing, refreshBilling } = useAuth();
+  // ADAAAA-7727: one role gate for the whole customer page — the frame debugger,
+  // the media-node readout and the per-job spend/decide counters are internal
+  // diagnostics and render only for an admin session.
+  const admin = useIsAdmin();
   // Increment 3 T2/6906: the VOD job grid opens the shared JobDetailPanel via
   // openDetail (setDetailJob) instead of the /app/jobs/:id full-page route, so
   // the I3-B live Decision trail is observable on the actual user path.
@@ -432,8 +436,10 @@ export function Highlights() {
             <BrowserCapture gameHint={gameHint} onDone={() => refreshHighlights().catch(() => {})} />
             {/* A browser-capture job holds the same capacity-1 media node, so it
                 gets the same capacity/health + spend strip as the RTMP console
-                (ADAAAA-7655 gap 3: this path used to have no readout at all). */}
-            <MediaNodeStrip className="mt-4" />
+                (ADAAAA-7655 gap 3: this path used to have no readout at all).
+                ADAAAA-7727: that readout is media-server + spend internals, so
+                it renders for an admin session only. */}
+            {admin && <MediaNodeStrip className="mt-4" />}
           </>
         ) : (
           <>
@@ -509,7 +515,10 @@ export function Highlights() {
         </div>
       )}
 
-      {debugJob && <FrameDebugger jobId={debugJob} />}
+      {/* ADAAAA-7727: the raw frame/track debugger (frame seq, track slot/kind,
+          lostFrames, tracking accuracy) is an operator tool — it moved off the
+          customer dashboard and now lives on /app/admin. */}
+      {admin && debugJob && <FrameDebugger jobId={debugJob} />}
 
       {confirmDeleteJob && (
         <DeleteJobDialog job={confirmDeleteJob} onCancel={() => setConfirmDeleteJob(null)} onConfirm={confirmDelete} />
@@ -560,6 +569,8 @@ function JobTile({ job, acceptedCount, rejectedCount, onOpen, onDelete }: {
   onDelete: (job: Job) => void;
 }) {
   const inFlight = isInFlight(job.status);
+  // ADAAAA-7727: role gate for the spend/decide counters on this tile.
+  const admin = useIsAdmin();
   const span = jobSpanLabel(job);
   const title = jobTitle(job, acceptedCount);
   return (
@@ -613,14 +624,9 @@ function JobTile({ job, acceptedCount, rejectedCount, onOpen, onDelete }: {
           </div>
         </div>
       ) : (
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-mut" data-job-tile-metrics>
-          <span>{job.framesAnalyzed ?? 0} frames</span>
-          <span>${(job.costUsd ?? 0).toFixed(2)}</span>
-          <span>{decideCallsCount(job)} decide</span>
-          <span data-job-tile-accepted>{acceptedCount} accepted</span>
-          {rejectedCount > 0 && <span className="text-mut" data-job-tile-rejected>{rejectedCount} rejected</span>}
-          {span && <span data-job-span>{span}</span>}
-        </div>
+        // ADAAAA-7727: the metric line keeps the customer counters (frames,
+        // accepted/rejected, span) and adds cost/decide only for an admin.
+        <JobTileMetrics job={job} acceptedCount={acceptedCount} rejectedCount={rejectedCount} span={span} admin={admin} />
       )}
 
       <div className="mt-3 flex items-center justify-between">
