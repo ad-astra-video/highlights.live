@@ -9,6 +9,7 @@ import { EntitlementsService } from "./entitlements";
 import { buildApp } from "./api";
 import { makeAdapter } from "./livepeer-adapter";
 import { makeMailer } from "./mailer";
+import { liveDecideAdmission } from "./live-decide-admission";
 import { runRejectSweep } from "./lifecycle";
 import { runDatasetPurgeSweep, scheduleDatasetsPurgeForOwner } from "./dataset-lifecycle";
 import { filePerceiveSessionLedger, releaseOrphanedPerceiveSessions } from "./perceive-ledger";
@@ -70,6 +71,11 @@ function scheduleDatasetPurgeSweep(
 
 async function main() {
   const cfg = loadConfig();
+  // ADAAAA-7758: wire the live decide admission switch before any rail starts.
+  liveDecideAdmission.configure(cfg.liveDecideAdmission);
+  if (cfg.liveDecideAdmission) {
+    console.log("[live-admission] one live decide slot per box (ADAAAA-7758)");
+  }
   await mkdir(cfg.dataDir, { recursive: true });
   // Prod: Postgres when DATABASE_URL is set; dev: SQLite at databasePath.
   const db = await openDb(cfg);

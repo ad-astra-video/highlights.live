@@ -209,6 +209,14 @@ export interface ServerConfig {
    * Default 30 (the cadence + decide-E2E budget); `<= 0` disables the drop.
    * `LIVE_OBSERVE_LAG_BUDGET_S`. */
   liveObserveLagBudgetS: number;
+  /** ADAAAA-7758: live decide ADMISSION control. When on, at most ONE live job
+   * holds the box's live decide slot; a second concurrent live job's decide is
+   * skipped (counted as `observeMetrics.admissionSkippedWindows`) instead of
+   * interleaving a second decide that stretches BOTH streams past the 30 s
+   * budget and drops ~85% of every stream's windows. Refusal makes the extra
+   * stream wait, which needs CEO-approved customer wording (ADAAAA-7757), so the
+   * shipped default is OFF. `LIVE_DECIDE_ADMISSION=1`. */
+  liveDecideAdmission: boolean;
   /** ADAAAA-7007/7011: enable the VOD decide-observer architecture on the
    * detail-first pass (observeLoop + decideWindowN both set in analyzeJob).
    * When on, decide is driven on the ~3 s cadence with a ~10 s overlapping
@@ -507,6 +515,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // content clock falls further behind wall time than this budget, stale
     // frames/windows are dropped (counted on the job) instead of decided late.
     liveObserveLagBudgetS: Number(env.LIVE_OBSERVE_LAG_BUDGET_S ?? LIVE_OBSERVE_LAG_BUDGET_S),
+    // ADAAAA-7758: one live decide slot per box (opt-in). Off by default: the
+    // queued-stream wording is a CEO decision (ADAAAA-7757), so the shipped
+    // behaviour only changes once the flag is enabled on the deployment.
+    liveDecideAdmission: env.LIVE_DECIDE_ADMISSION === "1",
     // ADAAAA-7007/7011: wire the VOD decide-observer into the detail-first VOD
     // job path. Opt in with OBSERVE_LOOP=1 (default off; the candidate-gated VOD
     // baseline stays the behavior until the observer pass is validated).

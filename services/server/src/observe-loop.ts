@@ -379,6 +379,13 @@ export class LiveObserver {
    * job-visible counter (AC2): windows that were NOT decided late. */
   private staleFrames = 0;
   private skippedStaleWindows = 0;
+  /** ADAAAA-7758: windows this job may not decide because ANOTHER live job holds
+   * the box's single live decide slot (admission control). Counted separately
+   * from stale drops so a queued stream is never mistaken for a lagging one. */
+  private admissionSkips = 0;
+  /** ADAAAA-7758: admission predicate (undefined = no arbitration, the shipped
+   * default). False means "no decide slot right now". */
+  private readonly canDecide: ((centerTs: number) => boolean) | null;
   /** ADAAAA-7676: worst (and mean) wall-clock lag observed on a dropped frame. */
   private maxLagMs = 0;
   private lagSumMs = 0;
@@ -401,6 +408,12 @@ export class LiveObserver {
     onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
     /** Minimum budget needed to fire early on a trigger (default 0.4). */
     triggerMinBudget?: number;
+    /** ADAAAA-7758: admission predicate evaluated before this tick spends a
+     *  decide. `false` skips the tick (no decide, no latency sample, no budget
+     *  token, pending triggers stay pending) and counts an admission skip — the
+     *  mechanism that stops a second concurrent live job from starving the
+     *  first. Absent (default) = no arbitration. */
+    canDecide?: (centerTs: number) => boolean;
     /** ADAAAA-7694: Stage-A outcome ledger, so each decided window records the
      *  verdict of the audio triggers whose onset it judged. */
     stageA?: StageAOutcomeLedger;
@@ -415,6 +428,7 @@ export class LiveObserver {
     this.signalGate = opts.signalGate ?? false;
     this.signalGateOpts = opts.signalGateOpts ?? {};
     this.onDecide = opts.onDecide ?? null;
+    this.canDecide = opts.canDecide ?? null;
     this.triggerMinBudget = opts.triggerMinBudget ?? 0.4;
     this.stageA = opts.stageA ?? null;
     this.stageB = opts.stageB ?? null;
@@ -537,6 +551,11 @@ export class LiveObserver {
     return queued;
   }
 
+  /** ADAAAA-7758: windows skipped because another live job held the decide
+   *  slot (admission control). Never counted as a stale/lag skip. */
+  admissionSkipCount(): number {
+    return this.admissionSkips;
+  }
   /** Refill the decide budget by elapsed content time (capacity 1 token). */
   private refillBudget(nowTs: number): void {
     if (this.lastBudgetTs === null) {
@@ -603,6 +622,17 @@ export class LiveObserver {
     if (this.signalGate && !force && !anchored && !windowHasSignal(payload.seeds, inWindow, this.signalGateOpts)) {
       this.gatedSkips++;
       this.lastFireTs = nowTs;
+      return;
+    }
+    // ADAAAA-7758: admission control. When another live job holds the box's
+    // single live decide slot this tick is SKIPPED — no decide call, no latency
+    // sample (a refused decide must never look like a fast one and shrink the
+    // lag reserve), no budget token spent, and any anchored trigger stays
+    // pending for the tick that actually gets the slot. `lastFireTs` is NOT
+    // advanced: nothing was decided, so the cadence stays due and the very next
+    // frame can take the slot the moment it frees up.
+    if (this.canDecide && !this.canDecide(nowTs)) {
+      this.admissionSkips++;
       return;
     }
     if (anchored) this.triggers.consume(dueTrigger);
