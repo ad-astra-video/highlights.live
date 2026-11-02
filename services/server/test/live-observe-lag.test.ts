@@ -69,6 +69,11 @@ describe("LiveObserver stale-window drop (ADAAAA-7676)", () => {
     // Metrics carry the AC2 counter + the measured lag.
     const m = buildLiveObserveMetrics(observer);
     expect(m.skippedStaleWindows).toBe(2);
+    // ADAAAA-7808: the ship row quotes `droppedFrames` from the record, and a
+    // stale-only run must report every supply skip as stale.
+    expect(m.droppedFrames).toBe(observer.staleFrameCount());
+    expect(m.supplySkippedWindows).toBe(2);
+    expect(m.throttleSkippedWindows).toBe(0);
     expect(m.maxLagMs).toBe(18000);
     expect(m.meanLagMs).toBeCloseTo(16500, 0);
     expect(m.maxCompletedLagMs).toBeGreaterThanOrEqual(900);

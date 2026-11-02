@@ -515,6 +515,13 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // ADAAAA-7799: decide opportunities the rate cap DROPPED (LIVE_DECIDE_KEEP_RATIO
   // keeps only a fraction of them). Additive optional: absent when the cap is off.
   throttleSkippedWindows: z.number().int().min(0).optional(),
+  // ADAAAA-7808: stale FRAMES the lag budget dropped (`droppedFrames` on the
+  // `[live-lag] summary` line) and the SUPPLY skip total (stale + backpressure +
+  // admission). `supplySkippedWindows` never includes `throttleSkippedWindows`:
+  // the throttle is a funded rate decision, the supply total is the rail's own
+  // shortfall. Additive optional.
+  droppedFrames: z.number().int().min(0).optional(),
+  supplySkippedWindows: z.number().int().min(0).optional(),
   // ADAAAA-7774: the LIVE perceive stride (ingest -> analysis fps). The live
   // ingest delivers ~5 fps while the decide window only carries ~2 fps of
   // content, so the pass now CONSUMES frames at the analysis fps and runs the
