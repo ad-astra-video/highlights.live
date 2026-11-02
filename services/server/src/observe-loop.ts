@@ -315,6 +315,57 @@ export interface LiveObserveLatencySample {
   };
 }
 
+/** ADAAAA-7771: one decide the observer kicked off but has not applied yet.
+ *
+ *  A live stream's decide costs several cadence periods (~5-8 s wall for 3 s of
+ *  content), so a pass that AWAITS each decide can never hold the 3 s cadence:
+ *  it falls behind, the lag budget drops most windows as stale, and coverage
+ *  collapses to `cadence / decideWall` no matter how much decide capacity the
+ *  box has. Keeping K windows in flight fixes coverage without touching the
+ *  cadence, the window, the payload or the accept gate.
+ *
+ *  The two phases are separate because ACCEPTANCE must stay ordered:
+ *  - `decide()` is the expensive, side-effect-light half (gemma + on-demand
+ *    recall + audit). It may run K-wide.
+ *  - `accept()` routes the verdict through the SAME accept gate
+ *    (`acceptVideoDecision`: clip cut, burst suppression, highlight record,
+ *    billing) and is always called in CONTENT order, one at a time, so the
+ *    serial semantics of the accept path are preserved.
+ */
+export interface StagedObserveDecide {
+  /** Run the expensive decide work. Rejects only on a decide failure. */
+  decide: () => Promise<void>;
+  /** Apply the verdict. Called strictly in content order, never concurrently.
+   *  Returns whether the moment was accepted. */
+  accept: () => Promise<boolean>;
+}
+
+/** ADAAAA-7771: an issued-but-unapplied window in the observer's in-flight
+ *  queue. Entries are appended in content order and settled from the head, so
+ *  the accept gate sees windows in the order their content occurred even when
+ *  a later decide finishes first. */
+interface PendingObserveDecide {
+  centerTs: number;
+  /** Window start used by the Stage-A/B ledgers (`nowTs - windowS`). */
+  lo: number;
+  lagMs: number;
+  cadenceMs: number;
+  anchored: boolean;
+  /** The audio trigger this window was anchored on (judged in its family). */
+  dueTrigger?: AudioTriggerRecord | null;
+  /** Frames the decide payload carried (per-call size report). */
+  frameCount: number;
+  /** Wall clock the decide was issued (E2E is measured from here to settle). */
+  startedMs: number;
+  /** True once `decide()` resolved or rejected. */
+  done: boolean;
+  /** Set when `decide()` rejected; the pass rethrows it at flush. */
+  error?: unknown;
+  /** Resolves once `decide()` finished (never rejects). */
+  settled: Promise<void>;
+  staged: StagedObserveDecide;
+}
+
 /**
  * Streaming live decide-observer (ADAAAA-7008).
  *
@@ -389,8 +440,35 @@ export class LiveObserver {
    *  otherwise inflate the counter). */
   private lastAdmissionSkipTs: number | null = null;
   /** ADAAAA-7758: admission predicate (undefined = no arbitration, the shipped
-   * default). False means "no decide slot right now". */
+   *  default). False means "no decide slot right now". */
   private readonly canDecide: ((centerTs: number) => boolean) | null;
+  /** ADAAAA-7771: how many windows may have their decide work outstanding at
+   *  once (1 = the serial pass). */
+  private readonly maxInFlight: number;
+  /** ADAAAA-7771: two-phase decide fork. Present only when depth > 1; absent
+   *  keeps the serial `onDecide` path byte-identical. */
+  private readonly onDecideStaged: ((payload: ObserveDecidePayload) => StagedObserveDecide) | null;
+  /** ADAAAA-7771: issued-but-unapplied decides, in content order. */
+  private pending: PendingObserveDecide[] = [];
+  /** ADAAAA-7771: decides whose `decide()` is still running. */
+  private inFlight = 0;
+  /** ADAAAA-7771: deepest in-flight queue observed (proves the depth was used). */
+  private maxInFlightObserved = 0;
+  /** ADAAAA-7771: cadence windows NOT issued because all K slots were busy.
+   *  Counted once per window (like an admission skip), not once per retried
+   *  frame. Distinct from a stale skip: the box had no free slot, the content
+   *  was not late. */
+  private backpressureSkips = 0;
+  private lastBackpressureSkipTs: number | null = null;
+  /** ADAAAA-7771: serialized accept chain + the first decide/accept failure.
+   *  A failure is rethrown by `flush()`, matching the serial pass (which threw
+   *  out of the frame loop). */
+  private applyChain: Promise<void> = Promise.resolve();
+  private applyError: unknown = null;
+  /** ADAAAA-7771: the last window ISSUED (content ts + lag), for the
+   *  `[live-lag]` evidence line. Separate from `latency`, which lands in
+   *  content order at settle time. */
+  private lastFired: { centerTs: number; lagMs: number } | null = null;
   /** ADAAAA-7676: worst (and mean) wall-clock lag observed on a dropped frame. */
   private maxLagMs = 0;
   private lagSumMs = 0;
@@ -411,6 +489,13 @@ export class LiveObserver {
     signalGate?: boolean;
     signalGateOpts?: SignalGateOptions;
     onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
+    /** ADAAAA-7771: two-phase decide fork, enabling up to `maxInFlight` windows
+     *  whose decide work is outstanding at once. Acceptance is still applied in
+     *  CONTENT order, one at a time, so `acceptVideoDecision` keeps its serial
+     *  semantics. Absent = the serial `onDecide` path. */
+    onDecideStaged?: (payload: ObserveDecidePayload) => StagedObserveDecide;
+    /** ADAAAA-7771: bounded in-flight decide depth (default 1 = serial). */
+    maxInFlight?: number;
     /** Minimum budget needed to fire early on a trigger (default 0.4). */
     triggerMinBudget?: number;
     /** ADAAAA-7758: admission predicate evaluated before this tick spends a
@@ -434,6 +519,8 @@ export class LiveObserver {
     this.signalGateOpts = opts.signalGateOpts ?? {};
     this.onDecide = opts.onDecide ?? null;
     this.canDecide = opts.canDecide ?? null;
+    this.onDecideStaged = opts.onDecideStaged ?? null;
+    this.maxInFlight = Math.max(1, Math.floor(opts.maxInFlight ?? 1));
     this.triggerMinBudget = opts.triggerMinBudget ?? 0.4;
     this.stageA = opts.stageA ?? null;
     this.stageB = opts.stageB ?? null;
@@ -476,12 +563,154 @@ export class LiveObserver {
 
   /** Force one final observation at end-of-stream. */
   async flush(lagMs?: number): Promise<void> {
+    // ADAAAA-7771: settle everything outstanding BEFORE the tail fire so the
+    // tail gets a free in-flight slot, and drain again afterwards so the accept
+    // gate (and the reported metrics) sees every window the pass decided.
+    await this.drainAll();
     const last = this.frames[this.frames.length - 1];
     if (last) await this.fire(last.ts, true, lagMs);
+    await this.drainAll();
     // ADAAAA-7723: the tail fire deliberately observes the NEWEST frame and is
     // never anchored, so a trigger still pending now can never anchor a window.
     // Account for it as expired instead of leaving it silently pending.
     this.triggers.expirePending();
+    // A decide/accept failure on the pipelined path is rethrown here — the
+    // serial path threw out of `fire()` mid-loop, so the run still fails.
+    if (this.applyError) {
+      const err = this.applyError;
+      this.applyError = null;
+      throw err;
+    }
+  }
+
+  // --- ADAAAA-7771: in-flight decide plumbing ------------------------------
+  //
+  // Windows are ISSUED in content order and APPLIED from the head of the queue,
+  // so acceptance stays ordered even when a later decide lands first. The queue
+  // is bounded by `maxInFlight`; a full queue is backpressure (the cadence stays
+  // due and the next frame retries), never an unbounded backlog.
+
+  /** Queue one staged decide and start its expensive half. */
+  private issueStaged(
+    payload: ObserveDecidePayload,
+    entry: Omit<PendingObserveDecide, "startedMs" | "done" | "staged" | "settled">
+  ): void {
+    const staged = this.onDecideStaged!(payload);
+    const pending: PendingObserveDecide = {
+      ...entry,
+      startedMs: Date.now(),
+      done: false,
+      settled: Promise.resolve(),
+      staged,
+    };
+    this.pending.push(pending);
+    this.inFlight++;
+    if (this.inFlight > this.maxInFlightObserved) this.maxInFlightObserved = this.inFlight;
+    pending.settled = staged
+      .decide()
+      .then(
+        () => {
+          pending.done = true;
+        },
+        (err) => {
+          pending.done = true;
+          pending.error = err;
+        }
+      )
+      .finally(() => {
+        this.inFlight = Math.max(0, this.inFlight - 1);
+        this.scheduleDrain();
+      });
+  }
+
+  private scheduleDrain(): void {
+    this.applyChain = this.applyChain
+      .then(() => this.drainReady())
+      .catch((err) => {
+        if (!this.applyError) this.applyError = err;
+      });
+  }
+
+  /** Apply every ready entry from the head, in content order, one at a time. */
+  private async drainReady(): Promise<void> {
+    while (this.pending.length && this.pending[0].done) {
+      const head = this.pending[0];
+      if (head.error) {
+        // A failed decide aborts the pass (the serial path threw here too).
+        // Later windows are NOT applied: accepting them would publish
+        // highlights past a decision the pass never made.
+        this.applyError = head.error;
+        this.pending.shift();
+        return;
+      }
+      this.pending.shift();
+      await this.applyEntry(head);
+    }
+  }
+
+  private async applyEntry(entry: PendingObserveDecide): Promise<void> {
+    const e2eMs = Date.now() - entry.startedMs;
+    const accepted = await entry.staged.accept();
+    this.recordOutcome({ ...entry, accepted, e2eMs });
+  }
+
+  /** Await every outstanding decide and apply it in content order. */
+  private async drainAll(): Promise<void> {
+    for (;;) {
+      await this.applyChain;
+      if (this.applyError || this.pending.length === 0) break;
+      // Nothing more is READY yet: wait for the head alone (content order).
+      await this.pending[0].settled;
+    }
+    // Anything queued behind a failed head is discarded, never applied.
+    if (this.applyError) this.pending = [];
+  }
+
+  /** Write one window's verdict into the accept counters, the Stage-A/B ledgers
+   *  and the latency samples. Runs strictly in content order. */
+  private recordOutcome(r: {
+    centerTs: number;
+    lo: number;
+    lagMs: number;
+    cadenceMs: number;
+    anchored: boolean;
+    dueTrigger?: AudioTriggerRecord | null;
+    frameCount: number;
+    accepted: boolean;
+    e2eMs: number;
+  }): void {
+    if (r.accepted) this.accepts++;
+    const dueTrigger = r.dueTrigger ?? null;
+    // ADAAAA-7694: this decided window IS the judgement of every Stage-A
+    // trigger whose onset it covers.
+    if (this.stageA || this.stageB) {
+      if (r.anchored && dueTrigger) {
+        if (isStageBTrigger(dueTrigger.thresholdId)) this.stageB?.judgeTrigger(dueTrigger, r.accepted);
+        else this.stageA?.judgeTrigger(dueTrigger, r.accepted);
+      }
+      this.stageA?.judgeWindow(r.lo, r.centerTs, r.accepted);
+      this.stageB?.judgeWindow(r.lo, r.centerTs, r.accepted);
+    }
+    this.latency.push({
+      centerTs: r.centerTs,
+      frameCount: r.frameCount,
+      e2eMs: r.e2eMs,
+      cadenceMs: r.cadenceMs,
+      lagMs: r.lagMs,
+      completedLagMs: r.lagMs + r.e2eMs,
+      // ADAAAA-7722: persist the anchoring trigger's identity on the window
+      // record, so a whistle-anchored decide is readable by family post-run.
+      ...(r.anchored && dueTrigger
+        ? {
+            trigger: {
+              thresholdId: dueTrigger.thresholdId,
+              family: triggerFamily(dueTrigger.thresholdId),
+              kind: dueTrigger.kind,
+              onsetTs: dueTrigger.onsetTs,
+            },
+          }
+        : {}),
+    });
   }
 
   /**
@@ -561,6 +790,28 @@ export class LiveObserver {
   admissionSkipCount(): number {
     return this.admissionSkips;
   }
+  /** ADAAAA-7771: decide calls outstanding right now (0 when idle). */
+  inFlightDepth(): number {
+    return this.inFlight;
+  }
+  /** ADAAAA-7771: deepest in-flight queue observed — proves the pipelined depth
+   *  was actually used on the run (1 = serial, K = pipelined). */
+  maxInFlightDepth(): number {
+    return this.maxInFlightObserved;
+  }
+  /** ADAAAA-7771: windows not issued because the in-flight queue was full. */
+  backpressureSkipCount(): number {
+    return this.backpressureSkips;
+  }
+  /** ADAAAA-7771: the last window ISSUED (content ts + measured lag), for the
+   *  `[live-lag]` evidence line. Independent of the settle ordering. */
+  lastFiredWindow(): { centerTs: number; lagMs: number } | null {
+    return this.lastFired ? { ...this.lastFired } : null;
+  }
+  /** ADAAAA-7771: windows issued but not yet applied (drained by `flush`). */
+  pendingApplyCount(): number {
+    return this.pending.length;
+  }
   /** Refill the decide budget by elapsed content time (capacity 1 token). */
   private refillBudget(nowTs: number): void {
     if (this.lastBudgetTs === null) {
@@ -598,6 +849,21 @@ export class LiveObserver {
       } else if (!cadenceDue || this.budgetTokens < 1 - EPS) {
         return;
       }
+    }
+    // ADAAAA-7771: bounded in-flight depth. When all K decide slots are busy
+    // this tick is NOT decided and the cadence stays due, so the very next
+    // frame retries as soon as a slot frees. Backpressure is bounded by K (never
+    // an unbounded backlog) and the lag budget still drops content that falls
+    // behind, so a depth that breaches the budget self-corrects. Counted once
+    // per cadence window (not once per retried frame) and kept distinct from a
+    // stale skip: the content was not late, the box had no free slot. A FORCE
+    // fire (the end-of-stream tail) bypasses this — `flush()` drains first.
+    if (this.onDecideStaged && !force && this.inFlight >= this.maxInFlight) {
+      if (this.lastBackpressureSkipTs === null || nowTs - this.lastBackpressureSkipTs >= this.cadenceS - 1e-9) {
+        this.backpressureSkips++;
+        this.lastBackpressureSkipTs = nowTs;
+      }
+      return;
     }
     // ADAAAA-7723: assemble the window BEFORE consuming the trigger or spending
     // the budget token. A tick that cannot assemble a window has nothing to
@@ -669,50 +935,40 @@ export class LiveObserver {
     }
     // Triggers already inside the window just analyzed are covered by it.
     this.triggers.coverThrough(lo, nowTs);
-    let e2eMs = 0;
+    const lag = lagMs ?? 0;
+    this.lastFired = { centerTs: nowTs, lagMs: lag };
+    if (this.onDecideStaged && this.maxInFlight > 1) {
+      // ADAAAA-7771: issue the decide and return immediately. The expensive
+      // half runs K-wide; the verdict is applied in content order by the drain
+      // chain (`accept` -> acceptVideoDecision), so the accept path keeps its
+      // serial semantics while the cadence keeps up.
+      this.issueStaged(payload, {
+        centerTs: nowTs,
+        lo,
+        lagMs: lag,
+        cadenceMs,
+        anchored,
+        dueTrigger: anchored ? dueTrigger : null,
+        frameCount: payload.frames.length,
+      });
+      return;
+    }
     if (this.onDecide) {
       const started = Date.now();
       const accepted = await this.onDecide(payload);
-      e2eMs = Date.now() - started;
-      if (accepted) this.accepts++;
-      // ADAAAA-7694: this decided window IS the judgement of every Stage-A
-      // trigger whose onset it covers. Record the outcome (accepted/rejected +
-      // the gate's onset latency) so the job persists a MEASURED FP-rate
-      // snapshot instead of the all-zero `n/a` one. The anchored trigger is
-      // judged explicitly too: if the stream lagged far enough that its onset
-      // fell outside this trailing span it would otherwise stay pending.
-      if (this.stageA || this.stageB) {
-        // ADAAAA-7707: a trigger is judged by its FAMILY's ledger. A whistle
-        // verdict must never land in `stageA` (the published Stage-A fidelity),
-        // and `judgeWindow` on the stage-A ledger must not swallow a stage-B
-        // trigger that a cadence window happened to cover.
-        if (anchored && dueTrigger) {
-          if (isStageBTrigger(dueTrigger.thresholdId)) this.stageB?.judgeTrigger(dueTrigger, accepted);
-          else this.stageA?.judgeTrigger(dueTrigger, accepted);
-        }
-        this.stageA?.judgeWindow(lo, nowTs, accepted);
-        this.stageB?.judgeWindow(lo, nowTs, accepted);
-      }
-      const lag = lagMs ?? 0;
-      this.latency.push({
+      // ADAAAA-7694/7707: the verdict is written into the counters, the
+      // Stage-A/B ledgers and the latency samples by `recordOutcome`, which the
+      // pipelined path calls in content order at settle time.
+      this.recordOutcome({
         centerTs: nowTs,
-        frameCount: payload.frames.length,
-        e2eMs,
-        cadenceMs,
+        lo,
         lagMs: lag,
-        completedLagMs: lag + e2eMs,
-        // ADAAAA-7722: persist the anchoring trigger's identity on the window
-        // record, so a whistle-anchored decide is readable by family post-run.
-        ...(anchored && dueTrigger
-          ? {
-              trigger: {
-                thresholdId: dueTrigger.thresholdId,
-                family: triggerFamily(dueTrigger.thresholdId),
-                kind: dueTrigger.kind,
-                onsetTs: dueTrigger.onsetTs,
-              },
-            }
-          : {}),
+        cadenceMs,
+        anchored,
+        dueTrigger: anchored ? dueTrigger : null,
+        frameCount: payload.frames.length,
+        accepted,
+        e2eMs: Date.now() - started,
       });
     }
   }

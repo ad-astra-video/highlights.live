@@ -1078,6 +1078,18 @@ export interface AnalyzerConfig {
    * `LIVE_OBSERVE_LAG_BUDGET_S` (server config).
    */
   liveObserveLagBudgetS?: number;
+  /**
+   * ADAAAA-7771: how many LIVE observe decide windows may be IN FLIGHT per
+   * stream (1 = the serial pass, which can only decide one window per decide
+   * wall time). At the measured 5-9 s decide wall a serial stream lands ~25-33 %
+   * of its 3 s cadence windows; a depth of 2-4 pipelines the decide work so the
+   * stream keeps cadence (and therefore inside the lag budget) without changing
+   * the cadence, the window, the decision payload or the accept gate. Bounded by
+   * construction: a full in-flight queue is backpressure (the cadence stays due
+   * and the next frame retries), and the lag budget still drops stale content.
+   * Wired from `LIVE_OBSERVE_IN_FLIGHT` (server config, default 4).
+   */
+  liveObserveInFlight?: number;
   /** ADAAAA-7028 Inc 2: persist the decide audit descriptor returned on the
    * decision (`_audit`) so the durable decide_audit index + decision-trail has
    * one row per frame group. Best-effort: a throwing onDecideAudit is caught
@@ -1293,6 +1305,16 @@ export interface LiveObserveMetricsSnapshot {
    *  (Stage-A roar, Stage-B whistle), split into anchored windows, triggers a
    *  decided window covered, and their pooled `judged` total. */
   triggerLatencyByFamily?: TriggerFamilyLatency[];
+  /** ADAAAA-7771: deepest in-flight decide queue observed on the pass (1 = the
+   *  serial loop, K = pipelined). Proves the configured depth was actually used
+   *  — a depth that never exceeds 1 means the cadence, not the queue, was the
+   *  limiter. */
+  maxDecideInFlight?: number;
+  /** ADAAAA-7771: cadence windows NOT decided because all K in-flight decide
+   *  slots were busy. Zero on a healthy pipelined run (capacity 1.6 decides/s
+   *  against 0.33/s demand); distinct from `skippedStaleWindows` (content was
+   *  late) and `admissionSkippedWindows` (another live job held the box slot). */
+  backpressureSkippedWindows?: number;
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
@@ -1398,6 +1420,13 @@ export function buildLiveObserveMetrics(obs: LiveObserver): LiveObserveMetricsSn
     triggerWindows: obs.triggerStats(),
     triggerReconciled: obs.triggerReconciliation().ok,
     triggerLatencyByFamily: obs.anchoredLatencyByFamilyStats(),
+    // ADAAAA-7771: pipelining proof. `maxDecideInFlight` > 1 on a finished job
+    // means the pass really ran several windows at once (the serial pass reads
+    // 1); `backpressureSkippedWindows` counts windows the depth itself refused —
+    // keeping them distinct from stale drops (late content) and admission skips
+    // (another live job held the slot).
+    maxDecideInFlight: obs.maxInFlightDepth(),
+    backpressureSkippedWindows: obs.backpressureSkipCount(),
   };
 }
 
@@ -3071,25 +3100,27 @@ export function withWindowFrameRefs(
 }
 
 /**
- * ADAAAA-7011: shared decide+accept callback for BOTH decide-observer paths
- * (the VOD ObserveDecider and the live LiveObserver). Builds the decide request
- * from an observe window payload, runs the gemma decide (with on-demand
- * perceive recall when the verdict asks for more evidence), then routes the
- * verdict through the same `acceptVideoDecision` path used by the
- * candidate-gated live/VOD paths (clip cut + highlight record + SSE highlight +
- * decision-time billing). Returns whether the moment was accepted (for the
- * observer's cost/accept report). Keeping it identical across both paths means
- * the observer verdict contract never diverges from the candidate-gated one.
+ * ADAAAA-7011 / ADAAAA-7771: the DECIDE half of the shared decide+accept
+ * callback. Builds the decide request from an observe window payload, runs the
+ * gemma decide (with on-demand perceive recall when the verdict asks for more
+ * evidence), finalizes the decision's frame refs and records the decide audit.
+ *
+ * ADAAAA-7771: split out from {@link observeAcceptOnly} so the live observer can
+ * keep several windows' decide work in flight. This half touches no acceptance
+ * state (no highlight list, no burst suppression, no SSE), so running it
+ * concurrently is safe; the accept half is always applied in content order.
+ *
+ * Returns the decision, or `null` when the decide was skipped because its
+ * TicketParams expired (a recoverable non-event: nothing accepted, nothing
+ * billed beyond the skipped call).
  */
-export async function observeOnDecide(
+export async function observeDecideOnly(
   client: PipelineClient,
   run: LiveRunShared,
-  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
   cfg: AnalyzerConfig,
-  onEvent: ((ev: AnalyzeEvent) => void) | undefined,
   sessionId: string,
   payload: ObserveDecidePayload
-): Promise<boolean> {
+): Promise<DecisionResult | null> {
   let { evidence, opts } = buildObserveDecideRequest(cfg, run, payload);
   let decision: DecisionResult;
   try {
@@ -3097,7 +3128,7 @@ export async function observeOnDecide(
   } catch (e) {
     if (isTicketParamsExpired(e)) {
       console.error(`[observe] decide @${payload.centerTs} skipped (TicketParams expired)`);
-      return false;
+      return null;
     }
     throw e;
   }
@@ -3142,6 +3173,30 @@ export async function observeOnDecide(
       console.error(`[decide-audit:${cfg.jobId}] onDecideAudit failed:`, String(e?.message || e));
     }
   }
+  return decision;
+}
+
+/**
+ * ADAAAA-7771: the ACCEPT half of the shared decide+accept callback. Persists
+ * the running summary, builds the candidate from the window, and routes the
+ * verdict through the same `acceptVideoDecision` path used by the
+ * candidate-gated live/VOD paths (clip cut + highlight record + SSE highlight +
+ * decision-time billing). Returns whether the moment was accepted.
+ *
+ * Ordering: `acceptVideoDecision` has serial semantics (burst suppression keys
+ * off previously accepted goals; highlights are appended in order; the running
+ * summary is a read-modify-write), so the live observer calls this strictly in
+ * CONTENT order even when decides complete out of order.
+ */
+export async function observeAcceptOnly(
+  client: PipelineClient,
+  run: LiveRunShared,
+  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cfg: AnalyzerConfig,
+  onEvent: ((ev: AnalyzeEvent) => void) | undefined,
+  payload: ObserveDecidePayload,
+  decision: DecisionResult
+): Promise<boolean> {
   // ADAAAA-7111 (Increment D): persist the running video summary (story-so-far)
   // the decide brain updated for this window, so the job-detail endpoint + web
   // UI surface it growing across cadence ticks. Only writes when the summary
@@ -3187,6 +3242,26 @@ export async function observeOnDecide(
   const goalEventTs = observeGoalEventTs(payload, candidate, cfg.clipAfterS);
   await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, decision, frameSignals, goalEventTs);
   return isAcceptedHighlight(decision, cfg.preferLabels);
+}
+
+/**
+ * ADAAAA-7011: shared decide+accept callback for BOTH decide-observer paths
+ * (the VOD ObserveDecider and the live LiveObserver). Composes
+ * {@link observeDecideOnly} + {@link observeAcceptOnly}, so the observer verdict
+ * contract never diverges from the candidate-gated one.
+ */
+export async function observeOnDecide(
+  client: PipelineClient,
+  run: LiveRunShared,
+  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cfg: AnalyzerConfig,
+  onEvent: ((ev: AnalyzeEvent) => void) | undefined,
+  sessionId: string,
+  payload: ObserveDecidePayload
+): Promise<boolean> {
+  const decision = await observeDecideOnly(client, run, cfg, sessionId, payload);
+  if (!decision) return false;
+  return observeAcceptOnly(client, run, cut, cfg, onEvent, payload, decision);
 }
 
 // ---------------------------------------------------------------------------
@@ -3822,6 +3897,8 @@ export async function analyzeJob(
   // payload) and candidate triggers are folded into biasHints (provenance) —
   // they never gate decide, so trigger-FP gating no longer limits recall. The
   // accept path is shared via observeOnDecide -> acceptVideoDecision.
+  const liveInvoke = cfg.liveObserveInFlight;
+  const liveInFlight = Math.max(1, Math.floor(liveInvoke ?? 1));
   const liveObserver =
     cfg.liveObserveLoop && cfg.decideWindowN === undefined
       ? new LiveObserver({
@@ -3840,7 +3917,27 @@ export async function analyzeJob(
           // of interleaving a second decide that would stretch BOTH streams past
           // the 30 s budget. Default off until the CEO approves queue wording.
           canDecide: () => liveDecideAdmission.admit(cfg.jobId),
-          onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
+          // ADAAAA-7771: pipelined depth. With K > 1 the expensive decide half
+          // runs K-wide while acceptance stays serial in CONTENT order — the
+          // serial loop could never hold the 3 s cadence when one decide costs
+          // several cadence periods (measured: 33 % coverage at one stream).
+          ...(liveInFlight > 1
+            ? {
+                maxInFlight: liveInFlight,
+                onDecideStaged: (payload: ObserveDecidePayload) => {
+                  let verdict: Awaited<ReturnType<typeof observeDecideOnly>> = null;
+                  return {
+                    decide: async () => {
+                      verdict = await observeDecideOnly(client, run, cfg, sessionId, payload);
+                    },
+                    accept: async () => {
+                      if (!verdict) return false;
+                      return observeAcceptOnly(client, run, cut, cfg, onEvent, payload, verdict);
+                    },
+                  };
+                },
+              }
+            : { onDecide: (payload: ObserveDecidePayload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload) }),
         })
       : null;
   let framesAnalyzed = 0;
@@ -4111,12 +4208,22 @@ export async function analyzeJob(
           // moment, its wall lag, the decide E2E and the resulting lag, so a
           // deployed run can be measured from `docker logs highlights-server`
           // (the job's `summaryLog` gives the same windowTs-vs-wall pair).
-          const sample = liveObserver.lastSample();
-          if (lagMeasured && sample && sample.centerTs === frame.timestamp) {
+          const fired = liveObserver.lastFiredWindow();
+          if (lagMeasured && fired && fired.centerTs === frame.timestamp) {
+            // ADAAAA-7771: the window is ISSUED here and settles later (content
+            // order), so the E2E/completed fields show the settled sample when
+            // one exists and "pending" otherwise. `inFlight` is the pipelining
+            // proof: 1 = serial, up to K = the decide work is actually
+            // overlapping.
+            const settled = (() => {
+              const s = liveObserver.lastSample();
+              return s && s.centerTs === fired.centerTs ? s : null;
+            })();
             console.log(
-              `[live-lag:${cfg.jobId}] decide @${sample.centerTs.toFixed(2)}s lag=${((sample.lagMs ?? 0) / 1000).toFixed(1)}s ` +
-                `e2e=${Math.round(sample.e2eMs)}ms completed=${((sample.completedLagMs ?? sample.e2eMs) / 1000).toFixed(1)}s ` +
-                `staleSkips=${liveObserver.skippedStaleWindowCount()} budget=${lagBudgetS}s`
+              `[live-lag:${cfg.jobId}] decide @${fired.centerTs.toFixed(2)}s lag=${(fired.lagMs / 1000).toFixed(1)}s ` +
+                `e2e=${settled ? `${Math.round(settled.e2eMs)}ms` : "pending"} ` +
+                `completed=${settled ? `${((settled.completedLagMs ?? settled.e2eMs) / 1000).toFixed(1)}s` : "pending"} ` +
+                `inFlight=${liveObserver.inFlightDepth()} staleSkips=${liveObserver.skippedStaleWindowCount()} budget=${lagBudgetS}s`
             );
           }
         }

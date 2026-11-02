@@ -543,6 +543,14 @@ services:
       # unbounded 5.7x lag was a window labelled T+42s decided at wall +242s.
       # 30 s = the cadence + decide-E2E budget; 0 disables the drop.
       - LIVE_OBSERVE_LAG_BUDGET_S=${LIVE_OBSERVE_LAG_BUDGET_S:-30}
+      # ADAAAA-7771: how many decide windows a LIVE stream keeps IN FLIGHT. The
+      # serial pass (1) awaits each decide, so it can only land
+      # cadence/decideWall of its windows (~33 % at one stream, measured) and the
+      # lag budget drops the rest as stale. 2-4 pipelines the decide work while
+      # acceptance stays serial in content order; the queue is bounded (a full
+      # queue is backpressure, counted as backpressureSkippedWindows) and the lag
+      # budget remains the outer bound. 1 restores the serial behaviour exactly.
+      - LIVE_OBSERVE_IN_FLIGHT=${LIVE_OBSERVE_IN_FLIGHT:-4}
       # ADAAAA-7758: one live decide slot per box. When on, a second concurrent
       # live job's decide is skipped (counted as observeMetrics
       # .admissionSkippedWindows) instead of interleaving a second decide that

@@ -209,6 +209,12 @@ export interface ServerConfig {
    * Default 30 (the cadence + decide-E2E budget); `<= 0` disables the drop.
    * `LIVE_OBSERVE_LAG_BUDGET_S`. */
   liveObserveLagBudgetS: number;
+  /** ADAAAA-7771: how many LIVE observe decide windows may be in flight per
+   * stream. 1 = the serial pass (one decide at a time, capped at
+   * `cadence / decideWall` coverage); 2-4 pipelines the decide work so the 3 s
+   * cadence is held. Acceptance still runs in content order. Default 4.
+   * `LIVE_OBSERVE_IN_FLIGHT`. */
+  liveObserveInFlight: number;
   /** ADAAAA-7758: live decide ADMISSION control. When on, at most ONE live job
    * holds the box's live decide slot; a second concurrent live job's decide is
    * skipped (counted as `observeMetrics.admissionSkippedWindows`) instead of
@@ -515,6 +521,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // content clock falls further behind wall time than this budget, stale
     // frames/windows are dropped (counted on the job) instead of decided late.
     liveObserveLagBudgetS: Number(env.LIVE_OBSERVE_LAG_BUDGET_S ?? LIVE_OBSERVE_LAG_BUDGET_S),
+    // ADAAAA-7771: pipeline the live decide pass. K windows in flight per stream
+    // (1 = serial). Default 4: at the measured ~5 s decide wall per card and
+    // ~0.8 decides/s per card at 4 concurrent, depth 4 holds the 3 s cadence for
+    // 1-2 streams on the 8 in-flight slots the decide pair serves. The lag
+    // budget stays the outer backpressure, so a depth that breaches it
+    // self-corrects instead of queueing unbounded. `LIVE_OBSERVE_IN_FLIGHT=1`
+    // restores the old serial behaviour exactly.
+    liveObserveInFlight: Number(env.LIVE_OBSERVE_IN_FLIGHT ?? 4),
     // ADAAAA-7758: one live decide slot per box (opt-in). Off by default: the
     // queued-stream wording is a CEO decision (ADAAAA-7757), so the shipped
     // behaviour only changes once the flag is enabled on the deployment.
