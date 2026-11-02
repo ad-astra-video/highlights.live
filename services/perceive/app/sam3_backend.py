@@ -91,6 +91,25 @@ def box_to_points(box: BBox, min_area: float = MULTI_POINT_MIN_AREA) -> "np.ndar
     return pts
 
 
+def _load_frame_images(frames_dir: str, limit: int | None = None) -> list:
+    """Load a decoded-frame directory as PIL images (SAM3 decoder-free input).
+
+    SAM3's `load_resource_as_video_frames` accepts a list of PIL images and
+    indexes it exactly like a decoded video, so this is what lets a SAM session
+    run in an image that ships neither cv2 nor torchcodec.
+    """
+    import glob
+    from PIL import Image
+
+    files: list[str] = []
+    for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+        files.extend(glob.glob(os.path.join(frames_dir, ext)))
+    files = sorted(files)
+    if limit is not None:
+        files = files[:limit]
+    return [Image.open(fp).convert("RGB") for fp in files]
+
+
 def _as_numpy_mask(m) -> Optional["np.ndarray"]:
     try:
         if hasattr(m, "cpu"):
@@ -152,9 +171,20 @@ class Sam3Backend(SamBackend):
     # HybridTracker passes the CLIP frame index through `advance(..., frame_index=)`.
     supports_frame_index = True
 
-    def __init__(self, predictor_factory=None, clip_path: str | None = None):
+    def __init__(self, predictor_factory=None, clip_path: str | None = None,
+                 frames: list | None = None):
         self._explicit_factory = predictor_factory
         self._clip_path = clip_path
+        # ADAAAA-7820: SAM3 opens a session from a video file via cv2/torchcodec,
+        # NEITHER of which exists in the perceive image, so `start_session` on a
+        # .mp4 raised and was silently swallowed -> SAM never advanced and every
+        # "SAM3" track was really Florence->IoU. SAM3's loader ALSO accepts a
+        # LIST OF PIL IMAGES, which needs no decoder: pass `frames` (or set
+        # PERCEIVE_SAM_FRAMES_DIR to a decoded-frame directory) to open the
+        # session that way.
+        self._frames = frames
+        self._frames_dir = os.environ.get("PERCEIVE_SAM_FRAMES_DIR") or None
+        self.start_error: Optional[str] = None
         self._predictor = None
         self._session_id: Optional[str] = None
         self._hw: Optional[tuple[int, int]] = None          # (H, W) of masks
@@ -204,9 +234,25 @@ class Sam3Backend(SamBackend):
             self._start()
         return self._started and self._session_id is not None
 
+    def _session_resource(self):
+        """What to hand `start_session`: a PIL frame list when we have one.
+
+        SAM3 decodes a video path with cv2/torchcodec, which the perceive image
+        does not ship. A list of PIL images is the decoder-free equivalent and
+        indexes identically (frame i == list index i).
+        """
+        if self._frames is not None:
+            return self._frames
+        if self._frames_dir:
+            limit = int(os.environ.get("PERCEIVE_SAM_FRAMES_LIMIT", "0") or 0) or None
+            self._frames = _load_frame_images(self._frames_dir, limit=limit)
+            return self._frames
+        return self._clip_path
+
     def _start(self) -> bool:
         try:
-            if self._clip_path:
+            resource = self._session_resource()
+            if resource is not None:
                 # Prefer the preloaded shared predictor (reuse the boot build);
                 # an explicit factory (tests) always wins over the shared one.
                 if self._explicit_factory is not None:
@@ -216,11 +262,20 @@ class Sam3Backend(SamBackend):
                     if self._predictor is None:
                         self._predictor = Sam3Backend._default_predictor()
                 resp = self._predictor.handle_request(
-                    {"type": "start_session", "resource_path": self._clip_path}
+                    {"type": "start_session", "resource_path": resource}
                 )
                 self._session_id = resp.get("session_id")
             self._started = self._session_id is not None
-        except Exception:
+        except Exception as e:
+            # ADAAAA-7820: this used to be swallowed, which hid a completely
+            # disabled SAM backend behind a plausible-looking Florence track.
+            self.start_error = repr(e)
+            import logging
+            logging.getLogger(__name__).warning(
+                "sam3 start_session failed resource=%s: %s",
+                "frames[%d]" % len(self._frames or []) if self._frames else self._clip_path,
+                e,
+            )
             self._predictor, self._session_id, self._started = None, None, False
         return self._started
 
@@ -321,6 +376,11 @@ class Sam3Backend(SamBackend):
             return
         if frame_index is not None:
             self._frame_idx = int(frame_index)
+        # ADAAAA-7820 measurement knob: restore the PRE-7820 re-anchor path
+        # (same obj_id, prompt comes from the caller's carried box) so the
+        # baseline can be measured on the SAME build as the fixes. Off by
+        # default -> new behaviour.
+        legacy_recover = _env_flag("PERCEIVE_SAM_RECOVER_LEGACY")
         changed = {
             s: p
             for s, p in prompts.items()
@@ -364,9 +424,12 @@ class Sam3Backend(SamBackend):
                 continue
             oid = self._obj_id(s)
             removed = oid in self._removed_obj_ids
-            if removed:
-                oid = self._fresh_obj_id(s)
-            box = self._last_mask_box.get(s) or prompts[s]
+            if legacy_recover:
+                box = prompts[s]
+            else:
+                if removed:
+                    oid = self._fresh_obj_id(s)
+                box = self._last_mask_box.get(s) or prompts[s]
             self._add_prompt(s, box, source="mask", obj_id=oid)
             reanchored.add(s)
         self._current = self._propagate_one_frame(self._frame_idx)
