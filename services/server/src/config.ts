@@ -515,6 +515,25 @@ export interface ServerConfig {
   vodReserveRetryTotalMs: number;
 }
 
+/**
+ * ADAAAA-7808: a positive finite env number, or `undefined` meaning "unset".
+ *
+ * docker-compose maps the optional live knobs as `${X:-}`, so a var that is
+ * absent from `docker/.env` still reaches the container as an EMPTY string and
+ * `Number("")` is 0 — a value that silently changes behaviour instead of
+ * keeping the default. Measured on the shipped rail: an empty
+ * `LIVE_OBSERVE_CADENCE_S` collapsed the decide cadence to zero and fired on
+ * every consumed frame (601 opportunities / 110 decides per 300 s instead of
+ * 101 / 68, ~6x the funded rate). Treat empty/zero/NaN/negative as unset.
+ */
+function positiveNumberOrUndefined(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === "") return undefined;
+  const n = Number(trimmed);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 function parseGoalLineCalibrations(raw: string | undefined): Record<string, GoalLineCalibration> | undefined {
   if (!raw) return undefined;
   try {
@@ -606,7 +625,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     liveObserveInFlight: Number(env.LIVE_OBSERVE_IN_FLIGHT ?? 4),
     // ADAAAA-7799 (lever C addendum): live-only decide hop. Unset keeps the 3 s
     // cadence (byte-identical), so this cannot move the shipped rail by itself.
-    liveObserveCadenceS: env.LIVE_OBSERVE_CADENCE_S !== undefined ? Number(env.LIVE_OBSERVE_CADENCE_S) : undefined,
+    // ADAAAA-7808: compose passes an EMPTY string for the unset case, so parse
+    // through the "empty means unset" guard — `Number("")` is 0, which pinned the
+    // cadence to zero and fired on every consumed frame.
+    liveObserveCadenceS: positiveNumberOrUndefined(env.LIVE_OBSERVE_CADENCE_S),
     // ADAAAA-7777 (lever B, trim 1): the live window's frame budget. Defaults to
     // the historic shared cap (30) so an unset env is byte-identical.
     liveObserveMaxFrames: Number(env.LIVE_OBSERVE_MAX_FRAMES ?? LIVE_OBSERVE_MAX_FRAMES),
