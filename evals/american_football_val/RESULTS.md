@@ -427,9 +427,10 @@ produced md5 `da5ab15ce08acb81e2c3d2b57d5bb625` again.
 
 ### 11.7 Remaining work (named blockers, owners)
 
-- **GT track slice for ID persistence and IoU (AC4).** Needs a per-frame
-  identity-labelled manifest at native resolution (1280x720) over a bounded
-  window; owner: Developer, separate costed job.
+- **GT track slice for ID persistence and IoU (AC4).** **Cancelled by decision**
+  in 11.8: ~1,130 identity-continuous boxes (6-9 h of annotation) cannot change a
+  ship decision that already misses the FP ceiling by 7.9-9.9x. No football
+  ID-persistence/IoU number is quoted anywhere.
 - **Whole-clip motion denominator.** Only needed if the window-scoped FP rate
   had landed near 0.10 — it landed at 0.79, so the revised proposal is not
   warranted for the ship/no-ship call.
@@ -438,8 +439,112 @@ produced md5 `da5ab15ce08acb81e2c3d2b57d5bb625` again.
   verdict **PASS on 7/7 clauses** at head `3aaaab1`. Recorded as
   `_AMERICAN_FOOTBALL_EVAL_REFERENCE["qaCertificationMotion"]`; certification is
   not enablement and the ceiling miss stands.
-- **Provenance gap QA flagged (non-blocking).** The committed slice records only
-  `detector: "cuda:0"`; the weights identity
-  (`/runs/Florence-2-base-finetuned-ft6404gpu`) lives in 11.1 and the profile,
-  not in the artifact, so it cannot be re-derived on CPU. A future slice run
-  should write the model path into the slice document.
+- **Provenance gap QA flagged (non-blocking) — FIXED in the producer.** The
+  480p slice still records only `detector: "cuda:0"` (it is certified and not
+  re-edited). The producer now writes the resolved weights identity, and the
+  native slice carries it: `envValue`, `sourceKind`, and a per-file sha256 of
+  `model.safetensors` / `adapter_model.safetensors` (11.8), checkable on CPU with
+  `sha256sum`. Covered by `evals/test_detect_native_windows.py` and
+  `evals/test_detect_slice_from_windows.py`.
+
+### 11.8 Native-resolution window: the 22-player case, answered (ADAAAA-7801)
+
+[ADAAAA-7801](/ADAAAA/issues/ADAAAA-7801) closed the two `not_captured` limbs of
+11.4. The slice here is a **native** decode of the rights-cleared original, not
+the 854x480 derivative 11.1 used.
+
+**What was measured, and what it cost.** Three windows chosen for dense formation
+(`E01` 1599-1620 s, `E04` 3741-3762 s, `E06` 5395-5416 s) at 1 fps = **63 frames**,
+decoded at **1920x1080** straight out of the 21.8 GB MPEG-TS by HTTP byte range
+(`bytes=a-b`, 184,559,514 bytes per window, sha256 recorded per window in
+`af_fetch_index_native.json`); no whole-file download. The detector ran on **CPU**
+inside the deployed `highlights-perceive` image (torch there reports
+`torch.cuda.is_available() == False`), with the deployed weights and the deployed
+closed vocabulary `['football', 'player', 'referee']`: **$0.00 of GPU spend**,
+132.6 s wall clock, 2,104 ms/frame. Frame envelope 63 and a 5-minute wall-clock
+hard stop both held; nothing was widened from the approved proposal.
+
+**Detection ceiling at native resolution: still 6 boxes/frame.**
+
+| window | frames | objects/frame max | mean | count distribution |
+|---|---|---|---|---|
+| E01 | 21 | **6** | 3.00 | 1x3, 2x7, 3x8, 4x2, 5x1, 6x1 |
+| E04 | 21 | **5** | 2.81 | 2x6, 3x11, 4x2, 5x2 |
+| E06 | 21 | **4** | 2.38 | 1x1, 2x9, 3x8, 4x1 |
+| clip | 63 | **6** | 2.73 | 1x3, 2x24, 3x27, 4x6, 5x2, 6x1 |
+
+**No frame in 63 native frames reached 8 concurrent objects, let alone 22.** So
+the 22-player case is not an encode/downscale artifact: the deployed detector
+normalises every frame to 768x768, so the 854x480 decode and the 1920x1080 decode
+reach the **same** ceiling (6 here, 6 in 11.4). The ceiling is the detector at its
+operating point, not the resolution of the source.
+
+That reading is checked against the picture rather than assumed: on the densest
+frame (`E01` t=1611 s, 6 boxes) **14 people are visible on the field** (6 white
+jerseys, 5 maroon, 3 referees — counted on
+`native/af_densest_frame_E01_t1611.jpg`). The detector is boxing 6 of ~14
+visible people; it is the binding constraint, and buying more resolution would
+not have produced a 22-box frame.
+
+**Cap answer at the deployed tracker.** The 3/8 caps are roster slots on the
+deployed `app.tracker.IoUTracker`, stepped at the slice cadence with
+`lost_before_evict=8`. A detection counts as kept only when a track carries it in
+that frame; slots held by tracks that outlive their detections are reported apart
+as `staleSlots` (the 11.4 rule `boxes - len(tracks)` treats a stale slot as a
+kept box, which understates the drop).
+
+| frame | detections | cap 3 keeps / drops | cap 8 keeps / drops |
+|---|---|---|---|
+| `E01` t=1611 s (densest) | 6 | **1 / 5** (83.3% dropped, 2 slots stale) | **4 / 2** (33.3% dropped, 4 slots stale) |
+| 63-frame clip total | 172 | **71 / 101** (58.7% dropped) | **129 / 43** (25.0% dropped) |
+
+Frames at cap: cap 3 on 57/63, cap 8 on 39/63 — the roster saturates well before
+the detector runs out of boxes, because a 3-slot roster loses slots to tracks
+that persist across single-frame detection gaps.
+
+**At exactly 22 concurrent objects** the roster arithmetic is: live cap 3 keeps
+**3** and drops **19** (86.4%); VOD cap 8 keeps **8** and drops **14** (63.6%).
+This is labelled arithmetic in `af_cap_case_native.json` (`at22Objects.basis`),
+not a measured frame — no frame with 22 detections exists in the slice, and the
+table above is the measured evidence for how the caps behave at the ceiling the
+detector actually reaches.
+
+Cadence caveat: this slice steps at 1 fps (the VOD cadence), so `lost_before_evict=8`
+covers 8 s of staleness. The live cap-3 roster runs on a ~3 fps feed, where the
+same setting covers ~2.7 s; the live drop share here is therefore a
+conservative (worse) figure than the live operating point, not a live result.
+
+**Provenance, now in the artifact (AC4).** The slice carries a `detectorModel`
+block resolved at run time instead of a device label:
+`source=/runs/Florence-2-base-finetuned-ft6404gpu`, `sourceKind=local_dir`,
+`envValue` verbatim, and per-file sha256 —
+`model.safetensors` 926,356,836 bytes `a81367b46f38ff640b333fc0a445d75bd48f1f7312a959738f5dd6de3e39ac46`,
+`adapter_model.safetensors` 7,002,232 bytes `901ea15935cbe8d84d056f0f7c416372e11932627be2881f58d0733657a10bb6`.
+A reviewer can `sha256sum` those two files on any CPU host and match the artifact,
+which is exactly what `detector: "cuda:0"` on the 11.1 slice could not support.
+The producer (`evals/detect_native_windows.py`) also had to compute the identity
+itself: the serving image's `FlorenceDetector` predates `weights_identity()`, so
+the env-resolved path is hashed directly and the run degrades to
+identity-without-hashes rather than losing the slice.
+
+**ID persistence and IoU (AC3): cancelled by decision, not measured.** The limb
+needs per-frame identity-continuous labels over 63 frames x ~18 objects = about
+**1,130 boxes** (2-3 h for one 21-frame window, 6-9 h for all three), and american
+football stays disabled — both triggers miss the 0.10 candidate-FP ceiling by
+7.9-9.9x (11.5) — so no tracking number obtained this way can change the ship
+decision. Recording the cancellation is the AC3 alternative the issue allows; no
+football ID-persistence or IoU number is quoted, and no soccer/pilot/basketball
+track number is presented as a football result.
+
+**Artifacts** (`evals/american_football_val/native/`, md5 as fetched from the box):
+
+| artifact | md5 | what it is |
+|---|---|---|
+| `af_detect_slice_native.json` | `0dc0fa5cafca48be7eaf8a42760f70ae` | 63-frame native slice, schema identical to the 480p producer, with `detectorModel` |
+| `af_cap_case_native.json` | `76e87cc8f77f4ff8b06991c6ce793e47` | per-frame cap case + clip totals for caps 3 and 8 |
+| `af_fetch_index_native.json` | `6d9d7de3e3ca43b5432b0fd2441d3efd` | byte ranges + per-window sha256 of the fetched source bytes |
+| `af_densest_frame_E01_t1611.jpg` | — | the densest frame, 640 px, for the 14-people visual check |
+
+Re-scoring the committed slice is free: `evals/roster_cap_case.py
+native/af_detect_slice_native.json --caps 3,8` reproduces the cap table with no
+GPU, no decode and no network.

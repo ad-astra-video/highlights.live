@@ -1,0 +1,1248 @@
+{
+ "slice": {
+  "profile": "american football",
+  "fps": 1.0,
+  "frames": 63,
+  "windows": [
+   "E01",
+   "E04",
+   "E06"
+  ],
+  "detector": "cpu",
+  "detectorModel": {
+   "modelName": "/runs/Florence-2-base-finetuned-ft6404gpu",
+   "modelPath": "/runs/Florence-2-base-finetuned-ft6404gpu",
+   "source": "/runs/Florence-2-base-finetuned-ft6404gpu",
+   "sourceKind": "local_dir",
+   "envVar": "FLORENCE_MODEL",
+   "envValue": "/runs/Florence-2-base-finetuned-ft6404gpu",
+   "deviceLabel": "cpu",
+   "hubCommit": null,
+   "weights": [
+    {
+     "file": "adapter_model.safetensors",
+     "bytes": 7002232,
+     "sha256": "901ea15935cbe8d84d056f0f7c416372e11932627be2881f58d0733657a10bb6"
+    },
+    {
+     "file": "model.safetensors",
+     "bytes": 926356836,
+     "sha256": "a81367b46f38ff640b333fc0a445d75bd48f1f7312a959738f5dd6de3e39ac46"
+    }
+   ]
+  },
+  "source": {
+   "url": "https://archive.org/download/snafuinfinityfootball_092123-vs-westford/football_092123-vs-westford.ts",
+   "bytes": 21812283016,
+   "duration_s": 8391.18,
+   "fetch": "archive.org HTTP Range (bytes=a-b); proportional offset + pre-roll",
+   "width": 1920,
+   "height": 1080,
+   "preRollS": 25.0,
+   "sha256": null
+  }
+ },
+ "densestFrameInSlice": {
+  "window": "E01",
+  "t": 1611.0,
+  "detections": 6
+ },
+ "has22ObjectFrame": false,
+ "caps": {
+  "3": {
+   "cap": 3,
+   "frames": 63,
+   "framesAtCap": 57,
+   "detections": 172,
+   "keptTotal": 71,
+   "droppedTotal": 101,
+   "droppedShare": 0.5872,
+   "staleSlotsTotal": 110,
+   "maxKept": 3,
+   "maxRosterOccupancy": 3,
+   "densestFrame": {
+    "window": "E01",
+    "t": 1611.0,
+    "detections": 6,
+    "kept": 1,
+    "dropped": 5,
+    "rosterOccupancy": 3,
+    "staleSlots": 2
+   },
+   "at22Objects": {
+    "detections": 22,
+    "kept": 3,
+    "dropped": 19,
+    "droppedShare": 0.8636,
+    "basis": "roster arithmetic at N=22 (cap slots), not a measured frame"
+   },
+   "perFrame": [
+    {
+     "window": "E01",
+     "t": 1599.0,
+     "detections": 1,
+     "kept": 1,
+     "dropped": 0,
+     "rosterOccupancy": 1,
+     "staleSlots": 0
+    },
+    {
+     "window": "E01",
+     "t": 1600.0,
+     "detections": 1,
+     "kept": 1,
+     "dropped": 0,
+     "rosterOccupancy": 1,
+     "staleSlots": 0
+    },
+    {
+     "window": "E01",
+     "t": 1601.0,
+     "detections": 3,
+     "kept": 2,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 1
+    },
+    {
+     "window": "E01",
+     "t": 1602.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E01",
+     "t": 1603.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E01",
+     "t": 1604.0,
+     "detections": 3,
+     "kept": 0,
+     "dropped": 3,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E01",
+     "t": 1605.0,
+     "detections": 5,
+     "kept": 1,
+     "dropped": 4,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E01",
+     "t": 1606.0,
+     "detections": 4,
+     "kept": 2,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 1
+    },
+    {
+     "window": "E01",
+     "t": 1607.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E01",
+     "t": 1608.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E01",
+     "t": 1609.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E01",
+     "t": 1610.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 3,
+     "staleSlots": 1
+    },
+    {
+     "window": "E01",
+     "t": 1611.0,
+     "detections": 6,
+     "kept": 1,
+     "dropped": 5,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E01",
+     "t": 1612.0,
+     "detections": 2,
+     "kept": 0,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E01",
+     "t": 1613.0,
+     "detections": 4,
+     "kept": 0,
+     "dropped": 4,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E01",
+     "t": 1614.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E01",
+     "t": 1615.0,
+     "detections": 4,
+     "kept": 0,
+     "dropped": 4,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E01",
+     "t": 1616.0,
+     "detections": 2,
+     "kept": 0,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E01",
+     "t": 1617.0,
+     "detections": 3,
+     "kept": 0,
+     "dropped": 3,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E01",
+     "t": 1618.0,
+     "detections": 3,
+     "kept": 0,
+     "dropped": 3,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E01",
+     "t": 1619.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3741.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 3,
+     "staleSlots": 0
+    },
+    {
+     "window": "E04",
+     "t": 3742.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 3,
+     "staleSlots": 0
+    },
+    {
+     "window": "E04",
+     "t": 3743.0,
+     "detections": 5,
+     "kept": 2,
+     "dropped": 3,
+     "rosterOccupancy": 3,
+     "staleSlots": 1
+    },
+    {
+     "window": "E04",
+     "t": 3744.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3745.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3746.0,
+     "detections": 3,
+     "kept": 2,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 1
+    },
+    {
+     "window": "E04",
+     "t": 3747.0,
+     "detections": 3,
+     "kept": 2,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 1
+    },
+    {
+     "window": "E04",
+     "t": 3748.0,
+     "detections": 4,
+     "kept": 3,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 0
+    },
+    {
+     "window": "E04",
+     "t": 3749.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3750.0,
+     "detections": 2,
+     "kept": 0,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E04",
+     "t": 3751.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3752.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3753.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3754.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3755.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3756.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 3,
+     "staleSlots": 1
+    },
+    {
+     "window": "E04",
+     "t": 3757.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3758.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3759.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3760.0,
+     "detections": 4,
+     "kept": 1,
+     "dropped": 3,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E04",
+     "t": 3761.0,
+     "detections": 3,
+     "kept": 0,
+     "dropped": 3,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E06",
+     "t": 5395.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 2,
+     "staleSlots": 0
+    },
+    {
+     "window": "E06",
+     "t": 5396.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 2,
+     "staleSlots": 0
+    },
+    {
+     "window": "E06",
+     "t": 5397.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 2,
+     "staleSlots": 0
+    },
+    {
+     "window": "E06",
+     "t": 5398.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 2,
+     "staleSlots": 0
+    },
+    {
+     "window": "E06",
+     "t": 5399.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 3,
+     "staleSlots": 1
+    },
+    {
+     "window": "E06",
+     "t": 5400.0,
+     "detections": 1,
+     "kept": 1,
+     "dropped": 0,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5401.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5402.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5403.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5404.0,
+     "detections": 3,
+     "kept": 0,
+     "dropped": 3,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E06",
+     "t": 5405.0,
+     "detections": 3,
+     "kept": 2,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 1
+    },
+    {
+     "window": "E06",
+     "t": 5406.0,
+     "detections": 2,
+     "kept": 0,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E06",
+     "t": 5407.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5408.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5409.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5410.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5411.0,
+     "detections": 4,
+     "kept": 2,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 1
+    },
+    {
+     "window": "E06",
+     "t": 5412.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5413.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5414.0,
+     "detections": 2,
+     "kept": 0,
+     "dropped": 2,
+     "rosterOccupancy": 3,
+     "staleSlots": 3
+    },
+    {
+     "window": "E06",
+     "t": 5415.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    }
+   ]
+  },
+  "8": {
+   "cap": 8,
+   "frames": 63,
+   "framesAtCap": 39,
+   "detections": 172,
+   "keptTotal": 129,
+   "droppedTotal": 43,
+   "droppedShare": 0.25,
+   "staleSlotsTotal": 286,
+   "maxKept": 5,
+   "maxRosterOccupancy": 8,
+   "densestFrame": {
+    "window": "E01",
+    "t": 1611.0,
+    "detections": 6,
+    "kept": 4,
+    "dropped": 2,
+    "rosterOccupancy": 8,
+    "staleSlots": 4
+   },
+   "at22Objects": {
+    "detections": 22,
+    "kept": 8,
+    "dropped": 14,
+    "droppedShare": 0.6364,
+    "basis": "roster arithmetic at N=22 (cap slots), not a measured frame"
+   },
+   "perFrame": [
+    {
+     "window": "E01",
+     "t": 1599.0,
+     "detections": 1,
+     "kept": 1,
+     "dropped": 0,
+     "rosterOccupancy": 1,
+     "staleSlots": 0
+    },
+    {
+     "window": "E01",
+     "t": 1600.0,
+     "detections": 1,
+     "kept": 1,
+     "dropped": 0,
+     "rosterOccupancy": 1,
+     "staleSlots": 0
+    },
+    {
+     "window": "E01",
+     "t": 1601.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 4,
+     "staleSlots": 1
+    },
+    {
+     "window": "E01",
+     "t": 1602.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 5,
+     "staleSlots": 3
+    },
+    {
+     "window": "E01",
+     "t": 1603.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 6,
+     "staleSlots": 3
+    },
+    {
+     "window": "E01",
+     "t": 1604.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 5
+    },
+    {
+     "window": "E01",
+     "t": 1605.0,
+     "detections": 5,
+     "kept": 2,
+     "dropped": 3,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E01",
+     "t": 1606.0,
+     "detections": 4,
+     "kept": 2,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E01",
+     "t": 1607.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 7
+    },
+    {
+     "window": "E01",
+     "t": 1608.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 7
+    },
+    {
+     "window": "E01",
+     "t": 1609.0,
+     "detections": 3,
+     "kept": 2,
+     "dropped": 1,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E01",
+     "t": 1610.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 7,
+     "staleSlots": 5
+    },
+    {
+     "window": "E01",
+     "t": 1611.0,
+     "detections": 6,
+     "kept": 4,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 4
+    },
+    {
+     "window": "E01",
+     "t": 1612.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E01",
+     "t": 1613.0,
+     "detections": 4,
+     "kept": 2,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E01",
+     "t": 1614.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 5
+    },
+    {
+     "window": "E01",
+     "t": 1615.0,
+     "detections": 4,
+     "kept": 3,
+     "dropped": 1,
+     "rosterOccupancy": 8,
+     "staleSlots": 5
+    },
+    {
+     "window": "E01",
+     "t": 1616.0,
+     "detections": 2,
+     "kept": 0,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 8
+    },
+    {
+     "window": "E01",
+     "t": 1617.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 7
+    },
+    {
+     "window": "E01",
+     "t": 1618.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 7
+    },
+    {
+     "window": "E01",
+     "t": 1619.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 7
+    },
+    {
+     "window": "E04",
+     "t": 3741.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 3,
+     "staleSlots": 0
+    },
+    {
+     "window": "E04",
+     "t": 3742.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 3,
+     "staleSlots": 0
+    },
+    {
+     "window": "E04",
+     "t": 3743.0,
+     "detections": 5,
+     "kept": 5,
+     "dropped": 0,
+     "rosterOccupancy": 6,
+     "staleSlots": 1
+    },
+    {
+     "window": "E04",
+     "t": 3744.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 6,
+     "staleSlots": 4
+    },
+    {
+     "window": "E04",
+     "t": 3745.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 6,
+     "staleSlots": 4
+    },
+    {
+     "window": "E04",
+     "t": 3746.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 7,
+     "staleSlots": 4
+    },
+    {
+     "window": "E04",
+     "t": 3747.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 5
+    },
+    {
+     "window": "E04",
+     "t": 3748.0,
+     "detections": 4,
+     "kept": 4,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 4
+    },
+    {
+     "window": "E04",
+     "t": 3749.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 8,
+     "staleSlots": 7
+    },
+    {
+     "window": "E04",
+     "t": 3750.0,
+     "detections": 2,
+     "kept": 0,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 8
+    },
+    {
+     "window": "E04",
+     "t": 3751.0,
+     "detections": 3,
+     "kept": 1,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 7
+    },
+    {
+     "window": "E04",
+     "t": 3752.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 5
+    },
+    {
+     "window": "E04",
+     "t": 3753.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 7,
+     "staleSlots": 5
+    },
+    {
+     "window": "E04",
+     "t": 3754.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 7,
+     "staleSlots": 4
+    },
+    {
+     "window": "E04",
+     "t": 3755.0,
+     "detections": 3,
+     "kept": 2,
+     "dropped": 1,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E04",
+     "t": 3756.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E04",
+     "t": 3757.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 7,
+     "staleSlots": 5
+    },
+    {
+     "window": "E04",
+     "t": 3758.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 5
+    },
+    {
+     "window": "E04",
+     "t": 3759.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E04",
+     "t": 3760.0,
+     "detections": 4,
+     "kept": 2,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E04",
+     "t": 3761.0,
+     "detections": 3,
+     "kept": 0,
+     "dropped": 3,
+     "rosterOccupancy": 8,
+     "staleSlots": 8
+    },
+    {
+     "window": "E06",
+     "t": 5395.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 2,
+     "staleSlots": 0
+    },
+    {
+     "window": "E06",
+     "t": 5396.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 2,
+     "staleSlots": 0
+    },
+    {
+     "window": "E06",
+     "t": 5397.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 2,
+     "staleSlots": 0
+    },
+    {
+     "window": "E06",
+     "t": 5398.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 2,
+     "staleSlots": 0
+    },
+    {
+     "window": "E06",
+     "t": 5399.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 3,
+     "staleSlots": 1
+    },
+    {
+     "window": "E06",
+     "t": 5400.0,
+     "detections": 1,
+     "kept": 1,
+     "dropped": 0,
+     "rosterOccupancy": 3,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5401.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 4,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5402.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 4,
+     "staleSlots": 2
+    },
+    {
+     "window": "E06",
+     "t": 5403.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 5,
+     "staleSlots": 3
+    },
+    {
+     "window": "E06",
+     "t": 5404.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 5
+    },
+    {
+     "window": "E06",
+     "t": 5405.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 5
+    },
+    {
+     "window": "E06",
+     "t": 5406.0,
+     "detections": 2,
+     "kept": 0,
+     "dropped": 2,
+     "rosterOccupancy": 8,
+     "staleSlots": 8
+    },
+    {
+     "window": "E06",
+     "t": 5407.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 8,
+     "staleSlots": 7
+    },
+    {
+     "window": "E06",
+     "t": 5408.0,
+     "detections": 3,
+     "kept": 2,
+     "dropped": 1,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E06",
+     "t": 5409.0,
+     "detections": 3,
+     "kept": 2,
+     "dropped": 1,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E06",
+     "t": 5410.0,
+     "detections": 3,
+     "kept": 3,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 5
+    },
+    {
+     "window": "E06",
+     "t": 5411.0,
+     "detections": 4,
+     "kept": 3,
+     "dropped": 1,
+     "rosterOccupancy": 8,
+     "staleSlots": 5
+    },
+    {
+     "window": "E06",
+     "t": 5412.0,
+     "detections": 3,
+     "kept": 2,
+     "dropped": 1,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E06",
+     "t": 5413.0,
+     "detections": 3,
+     "kept": 2,
+     "dropped": 1,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    },
+    {
+     "window": "E06",
+     "t": 5414.0,
+     "detections": 2,
+     "kept": 1,
+     "dropped": 1,
+     "rosterOccupancy": 8,
+     "staleSlots": 7
+    },
+    {
+     "window": "E06",
+     "t": 5415.0,
+     "detections": 2,
+     "kept": 2,
+     "dropped": 0,
+     "rosterOccupancy": 8,
+     "staleSlots": 6
+    }
+   ]
+  }
+ },
+ "note": "kept = detections the tracker carried this frame (last_seen == ts); dropped = detections - kept; rosterOccupancy = len(tracks), which includes slots held by tracks surviving lost_before_evict frames and is reported separately as staleSlots."
+}
