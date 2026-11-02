@@ -203,10 +203,11 @@ class Sam3Backend(SamBackend):
         # instead of writing it off.
         self._misses: Dict[int, int] = {}
         self._removed_obj_ids: set[int] = set()
-        # ADAAAA-7345: SAM3 is built with hotstart_delay=15 +
-        # masklet_confirmation_enable=True, so a one-frame propagate yields no
-        # masklet at all (7820: zero masks on all 487 frames). Propagate a
-        # window instead and serve the cached per-frame boxes.
+        # ADAAAA-7345: SAM3 is built with hotstart_delay=15, so its propagate
+        # stream buffers results and is meant to be consumed as a window; a
+        # one-frame step recomputes two frames per advance and never builds a
+        # real clip memory. Propagate a window and serve the cached per-frame
+        # boxes so each clip frame is computed exactly once.
         self.propagate_window = int(
             os.environ.get("PERCEIVE_SAM_PROPAGATE_WINDOW", "16") or 16
         )
@@ -311,10 +312,44 @@ class Sam3Backend(SamBackend):
         return oid
 
     def _parse_outputs(self, out: dict) -> Dict[int, Optional[BBox]]:
-        """`obj_id_to_mask` -> slot -> box (or None) for one propagated frame."""
+        """One propagated frame's masks -> slot -> box (or None).
+
+        ADAAAA-7345 ROOT CAUSE: the client does NOT yield `obj_id_to_mask`.
+        `Sam3VideoInference._postprocess_output` returns exactly
+        `out_obj_ids`, `out_probs`, `out_boxes_xywh`, `out_binary_masks`,
+        `frame_stats` — the per-object mask dict stays internal (it is only
+        used to fill `inference_state["cached_frame_outputs"]`). The backend
+        read `out["obj_id_to_mask"]`, so every frame parsed as "no objects"
+        and the whole workstream measured zero masks. Parse the parallel
+        arrays the client actually returns; keep the dict form as a
+        compatibility path for fakes/older clients.
+        """
+        parsed: Dict[int, Optional[BBox]] = {}
+        ids = out.get("out_obj_ids")
+        masks = out.get("out_binary_masks")
+        if ids is not None and masks is not None:
+            id_list = [int(o) for o in list(ids)]
+            self._last_mask_ids = sorted(id_list)
+            mask_list = list(masks)
+            for i, oid in enumerate(id_list):
+                m = mask_list[i] if i < len(mask_list) else None
+                slot = self._slot_for_obj(oid)
+                if slot is None:
+                    continue
+                mask = _as_numpy_mask(m)
+                if mask is None or not mask.any() or mask.ndim != 2:
+                    parsed[slot] = None
+                    continue
+                h, w = mask.shape
+                if self._hw is None:
+                    self._hw = (h, w)
+                b = mask_to_bbox(mask, h, w)
+                parsed[slot] = b
+                if b is not None:
+                    self._last_mask_box[slot] = b
+            return parsed
         obj_id_to_mask = out.get("obj_id_to_mask") or {}
         self._last_mask_ids = sorted(int(o) for o in obj_id_to_mask)
-        parsed: Dict[int, Optional[BBox]] = {}
         for oid, m in obj_id_to_mask.items():
             oid = int(oid)
             slot = self._slot_for_obj(oid)
@@ -341,14 +376,11 @@ class Sam3Backend(SamBackend):
         """Propagate a WINDOW from `frame_idx`; return frame -> slot -> box|None.
 
         ADAAAA-7345: the SAM3 video model is built with `hotstart_delay=15`
-        (`model_builder` ~line 1175) and `masklet_confirmation_enable=True`,
-        which withholds a masklet until it is confirmed by a frame
-        `unconfirmed_frame_delay` (=2) frames LATER. Stepping one frame per
-        call (`max_frame_num_to_track=1`, the pre-fix behaviour) never leaves
-        the hotstart window, so the client yields `obj_id_to_mask == {}` on
-        every frame — measured on the box as zero masks on all 487 frames
-        (ADAAAA-7820). Propagating a window and reading the frame we want is
-        the protocol the client actually supports.
+        (`model_builder` ~line 1175), so its propagate stream buffers results
+        and expects the caller to consume a window; stepping one frame per call
+        recomputes frames 2x and never builds real clip memory. The separate
+        "zero masks" defect was NOT here: it was reading `obj_id_to_mask`,
+        which the client never yields (see `_parse_outputs`).
         """
         window = int(self.propagate_window if max_frames is None else max_frames)
         window = max(1, window)
