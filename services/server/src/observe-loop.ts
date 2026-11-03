@@ -1029,28 +1029,14 @@ export class LiveObserver {
       // chain (`accept` -> acceptVideoDecision), so the accept path keeps its
       // serial semantics while the cadence keeps up.
       //
-      // With a depth budget of 1 (a crowded box sharing a narrow decide
-      // admission) there is nothing to overlap, so the staged pair is run
-      // INLINE — exactly the serial pass the box measured before this change
-      // (a queued-but-refused tick would instead re-sample the live edge and
-      // cost ~6 s of lag at 3 streams, measured).
-      if (this.effectiveDepth() > 1) {
-        this.issueStaged(payload, {
-          centerTs: nowTs,
-          lo,
-          lagMs: lag,
-          cadenceMs,
-          anchored,
-          dueTrigger: anchored ? dueTrigger : null,
-          frameCount: payload.frames.length,
-        });
-        return;
-      }
-      const started = Date.now();
-      const staged = this.onDecideStaged(payload);
-      await staged.decide();
-      const accepted = await staged.accept();
-      this.recordOutcome({
+      // ADAAAA-7878: at a depth budget of 1 (the crowded-box fallback) the pair
+      // is ALSO issued and not awaited. The backpressure gate above already
+      // refuses a tick while that one decide is in flight, so at most one decide
+      // is outstanding — but the ingest loop keeps consuming frames instead of
+      // stalling on gemma for the whole E2E (which is what the serial pass did).
+      // A depth-1 inline await is exactly the stall this task removes; the
+      // flag-off path keeps it by using `onDecide` instead of the staged fork.
+      this.issueStaged(payload, {
         centerTs: nowTs,
         lo,
         lagMs: lag,
@@ -1058,8 +1044,6 @@ export class LiveObserver {
         anchored,
         dueTrigger: anchored ? dueTrigger : null,
         frameCount: payload.frames.length,
-        accepted,
-        e2eMs: Date.now() - started,
       });
       return;
     }
@@ -1580,6 +1564,110 @@ export function applyOnDemandRecall(
   return { ...payload, seeds: payload.frames.map((f) => byTs.get(f.ts) ?? { ts: f.ts }) };
 }
 
+/** ADAAAA-7878: an issued-but-unapplied VOD window. Entries are appended in
+ *  content order and applied from the head, so acceptance stays ordered even
+ *  when a later decide lands first. */
+interface PendingVodDecide {
+  /** Content time the window was observed at (evidence line + payload centre). */
+  centerTs: number;
+  /** Evidence span start/end for the Stage-A/B ledgers. */
+  lo: number;
+  hi: number;
+  /** Frames the decide payload carried (per-call size report). */
+  frameCount: number;
+  /** Wall clock the decide was issued (E2E is measured from here to settle). */
+  startedMs: number;
+  /** True once `decide()` resolved or rejected. */
+  done: boolean;
+  /** Set when `decide()` rejected; the pass rethrows it at flush. */
+  error?: unknown;
+  /** Resolves once `decide()` finished (never rejects). */
+  settled: Promise<void>;
+  staged: StagedObserveDecide;
+}
+
+/** ADAAAA-7878: one decided window's ingest continuity. Measured by
+ *  {@link IngestGapTracker}: how many `client.analyze` calls started while the
+ *  decide was in flight, and the largest gap between consecutive starts. */
+export interface IngestGapSample {
+  centerTs: number;
+  decideE2eMs: number;
+  framesConsumedDuringDecide: number;
+  maxIngestGapMs: number;
+  p95IngestGapMs: number;
+}
+
+/**
+ * ADAAAA-7878: prove that the frame-CONSUME loop keeps running while a decide
+ * is in flight.
+ *
+ * The loop stamps the start of every `client.analyze` call ({@link noteAnalyze});
+ * when a decided window settles, {@link recordWindow} reports the analyze calls
+ * that started inside the decide span and the largest gap between consecutive
+ * starts. Pre-fix (decide awaited inside the loop) the span holds ZERO analyze
+ * calls and its single gap equals the decide E2E, so the same `[ingest-gap]`
+ * line is the before/after evidence for both runs.
+ */
+export class IngestGapTracker {
+  private readonly starts: number[] = [];
+  private readonly jobId: string;
+  private readonly framePeriodMs: number;
+  private readonly log: (line: string) => void;
+  /** Every window measured on this pass (kept for the job record / tests). */
+  readonly samples: IngestGapSample[] = [];
+
+  constructor(opts: { jobId: string; framePeriodMs?: number; log?: (line: string) => void }) {
+    this.jobId = opts.jobId;
+    this.framePeriodMs = opts.framePeriodMs && opts.framePeriodMs > 0 ? opts.framePeriodMs : 0;
+    this.log = opts.log ?? ((line) => console.log(line));
+  }
+
+  /** Stamp the START of one `client.analyze` call — the ingest pulse. */
+  noteAnalyze(ms = Date.now()): void {
+    this.starts.push(ms);
+    if (this.starts.length > 4096) this.starts.splice(0, this.starts.length - 4096);
+  }
+
+  /** Close one decided window and print its ingest-continuity evidence line. */
+  recordWindow(w: { centerTs: number; startedMs: number; endedMs: number }): IngestGapSample {
+    const e2eMs = Math.max(0, Math.round(w.endedMs - w.startedMs));
+    let prev: number | undefined;
+    const span: number[] = [];
+    for (const t of this.starts) {
+      // Strict at both ends: an analyze stamped at the settle millisecond resumed
+      // AFTER the verdict, so counting it would overstate the overlap.
+      if (t <= w.startedMs) prev = t;
+      else if (t < w.endedMs) span.push(t);
+    }
+    const gaps: number[] = [];
+    let last = prev;
+    for (const t of span) {
+      if (last !== undefined) gaps.push(t - last);
+      last = t;
+    }
+    // No analyze STARTED inside the span: the loop was stalled for the whole
+    // decide, which IS the pre-fix signature (one gap == the decide E2E).
+    if (span.length === 0) gaps.push(w.endedMs - (prev ?? w.startedMs));
+    const sorted = [...gaps].sort((a, b) => a - b);
+    const p95 = sorted.length ? sorted[Math.max(0, Math.ceil(0.95 * sorted.length) - 1)] : 0;
+    const sample: IngestGapSample = {
+      centerTs: w.centerTs,
+      decideE2eMs: e2eMs,
+      framesConsumedDuringDecide: span.length,
+      maxIngestGapMs: Math.round(sorted.length ? sorted[sorted.length - 1] : 0),
+      p95IngestGapMs: Math.round(p95),
+    };
+    this.samples.push(sample);
+    const period = this.framePeriodMs ? ` framePeriodMs=${Math.round(this.framePeriodMs)}` : "";
+    this.log(
+      `[ingest-gap:${this.jobId}] decide @${w.centerTs.toFixed(2)}s decideE2eMs=${sample.decideE2eMs} ` +
+        `framesConsumedDuringDecide=${sample.framesConsumedDuringDecide} maxIngestGapMs=${sample.maxIngestGapMs} ` +
+        `p95IngestGapMs=${sample.p95IngestGapMs}${period}`
+    );
+    return sample;
+  }
+}
+
 /**
  * In-loop observe decider for the VOD detail-first pass. Unlike
  * {@link runObserveLoop} (which owns the frame iteration), this class is driven
@@ -1622,6 +1710,34 @@ export class ObserveDecider {
    *  live here, so a whistle window is judged in its OWN family ledger and the
    *  Stage-A snapshot is byte-identical to a run without it. */
   private readonly stageB: StageAOutcomeLedger | null;
+  /** ADAAAA-7878: two-phase decide fork. Present by default so the frame-consume
+   *  loop ISSUES a window and returns while gemma judges it; absent keeps the
+   *  serial `onDecide` path (the flag-off behaviour, byte-identical to pre-7878). */
+  private readonly onDecideStaged: ((payload: ObserveDecidePayload) => StagedObserveDecide) | null;
+  /** ADAAAA-7878: how many decide calls may run at once. Default 1 — the decide
+   *  CONCURRENCY is deliberately unchanged (that lever is ADAAAA-7773/7771
+   *  territory); what changes is only that the ingest loop no longer waits. */
+  private readonly maxInFlight: number;
+  /** ADAAAA-7878: hard bound on queued-but-unapplied windows. The queue grows
+   *  whenever decide is slower than the cadence — normal for a batch VOD pass —
+   *  so the cap makes the backlog explicitly BOUNDED, and a refused window is
+   *  counted (`queueFullSkips`) instead of silently piling up. Pending payloads
+   *  share their frame strings with the window buffer, so the bound costs
+   *  references, not image copies. */
+  private readonly maxPending: number;
+  /** ADAAAA-7878: issued-but-unapplied windows, in content order. */
+  private pending: PendingVodDecide[] = [];
+  /** ADAAAA-7878: decides whose `decide()` is still running. */
+  private inFlight = 0;
+  /** ADAAAA-7878: deepest in-flight depth observed (proves the depth was used). */
+  private maxInFlightSeen = 0;
+  /** ADAAAA-7878: cadence windows NOT issued because the pending queue was full.
+   *  Distinct from a gate skip: the content had a signal and was due, the pass had
+   *  no bounded queue room for it. */
+  private queueFullSkips = 0;
+  /** ADAAAA-7878: serialized accept chain + the first decide/accept failure. */
+  private applyChain: Promise<void> = Promise.resolve();
+  private applyError: unknown = null;
 
   constructor(opts: {
     cadenceS?: number;
@@ -1631,6 +1747,16 @@ export class ObserveDecider {
     signalGate?: boolean;
     signalGateOpts?: SignalGateOptions;
     onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
+    /** ADAAAA-7878: two-phase decide fork — the frame loop issues a window and
+     *  returns while gemma judges it, and the verdict is applied in CONTENT
+     *  order (`acceptVideoDecision` keeps its serial semantics). Absent = the
+     *  serial `onDecide` path. */
+    onDecideStaged?: (payload: ObserveDecidePayload) => StagedObserveDecide;
+    /** ADAAAA-7878: concurrent decide depth (default 1 = the decide rate is
+     *  unchanged; only the ingest stall is removed). */
+    maxInFlight?: number;
+    /** ADAAAA-7878: bounded pending-window queue (default 512). */
+    maxPending?: number;
     /** ADAAAA-7694: Stage-A outcome ledger for the VOD rail. */
     stageA?: StageAOutcomeLedger;
     /** ADAAAA-7722: Stage-B (whistle) outcome ledger for the VOD rail. */
@@ -1643,6 +1769,9 @@ export class ObserveDecider {
     this.signalGate = opts.signalGate ?? false;
     this.signalGateOpts = opts.signalGateOpts ?? {};
     this.onDecide = opts.onDecide ?? null;
+    this.onDecideStaged = opts.onDecideStaged ?? null;
+    this.maxInFlight = Math.max(1, Math.floor(opts.maxInFlight ?? 1));
+    this.maxPending = Math.max(1, Math.floor(opts.maxPending ?? 512));
     this.stageA = opts.stageA ?? null;
     this.stageB = opts.stageB ?? null;
   }
@@ -1673,9 +1802,22 @@ export class ObserveDecider {
     if (this.biasHints.length > 30) this.biasHints.shift();
   }
 
-  /** Wait for a pending decide to settle before proceeding. */
+  /** Wait for outstanding decides to settle, then fire the end-of-stream tail
+   *  and settle that too, before returning. */
   async flush(): Promise<void> {
+    // ADAAAA-7878: settle everything outstanding BEFORE the tail fire so the tail
+    // gets a free in-flight slot, then drain again afterwards so the accept gate
+    // (and the reported metrics) sees every window the pass decided.
+    await this.drainAll();
     await this.fire(this.frames[this.frames.length - 1]?.ts ?? 0, true);
+    await this.drainAll();
+    // A decide/accept failure on the pipelined path is rethrown here — the serial
+    // path threw out of `fire()` mid-loop, so the run still fails the same way.
+    if (this.applyError) {
+      const err = this.applyError;
+      this.applyError = null;
+      throw err;
+    }
   }
 
   /**
@@ -1706,6 +1848,19 @@ export class ObserveDecider {
       this.gatedSkips++;
       return;
     }
+    if (this.onDecideStaged) {
+      if (this.pending.length >= this.maxPending) {
+        // Bounded backlog: this window is NOT decided (counted, never an
+        // unbounded queue) and the ingest loop is never blocked on the queue.
+        // It is NOT counted as a decide call — nothing was billed.
+        this.queueFullSkips++;
+        return;
+      }
+      this.reportTicks.push(payload.frames.length);
+      if (payload.capped) this.subsampledCalls++;
+      this.issueStaged(payload, { centerTs: currentTs, lo, hi, frameCount: payload.frames.length });
+      return;
+    }
     this.reportTicks.push(payload.frames.length);
     if (payload.capped) this.subsampledCalls++;
     const accepted = this.onDecide ? await this.onDecide(payload) : undefined;
@@ -1721,6 +1876,107 @@ export class ObserveDecider {
       // the Stage-A one (which holds only `stageA/*` onsets by construction).
       this.stageB?.judgeWindow(lo, hi, accepted);
     }
+  }
+
+  // --- ADAAAA-7878: off-loop decide plumbing --------------------------------
+  //
+  // Windows are ISSUED in content order by the frame loop and APPLIED from the
+  // head of the queue, so acceptance stays ordered even when a later decide
+  // lands first. `maxInFlight` bounds the decide work (default 1: the decide
+  // rate and concurrency are unchanged) and `maxPending` bounds the backlog
+  // (a refusal is counted, never an unbounded queue).
+
+  /** Queue one staged decide and start its expensive half. */
+  private issueStaged(
+    payload: ObserveDecidePayload,
+    span: { centerTs: number; lo: number; hi: number; frameCount: number }
+  ): void {
+    const staged = this.onDecideStaged!(payload);
+    const pending: PendingVodDecide = {
+      ...span,
+      startedMs: Date.now(),
+      done: false,
+      settled: Promise.resolve(),
+      staged,
+    };
+    this.pending.push(pending);
+    this.inFlight++;
+    if (this.inFlight > this.maxInFlightSeen) this.maxInFlightSeen = this.inFlight;
+    pending.settled = staged
+      .decide()
+      .then(
+        () => {
+          pending.done = true;
+        },
+        (err) => {
+          pending.done = true;
+          pending.error = err;
+        }
+      )
+      .finally(() => {
+        this.inFlight = Math.max(0, this.inFlight - 1);
+        this.scheduleDrain();
+      });
+  }
+
+  private scheduleDrain(): void {
+    this.applyChain = this.applyChain
+      .then(() => this.drainReady())
+      .catch((err) => {
+        if (!this.applyError) this.applyError = err;
+      });
+  }
+
+  /** Apply every ready entry from the head, in content order, one at a time. */
+  private async drainReady(): Promise<void> {
+    while (this.pending.length && this.pending[0].done) {
+      const head = this.pending[0];
+      if (head.error) {
+        // A failed decide aborts the pass (the serial path threw here too).
+        // Later windows are NOT applied: accepting them would publish highlights
+        // past a decision the pass never made.
+        this.applyError = head.error;
+        this.pending.shift();
+        return;
+      }
+      this.pending.shift();
+      const accepted = await head.staged.accept();
+      if (accepted) this.accepts++;
+      // ADAAAA-7694/7722: the decided window judges every Stage-A/B trigger whose
+      // onset falls in its evidence span — in CONTENT order, so the ledger is
+      // identical to the serial pass.
+      this.stageA?.judgeWindow(head.lo, head.hi, accepted);
+      this.stageB?.judgeWindow(head.lo, head.hi, accepted);
+    }
+  }
+
+  /** Await every outstanding decide and apply it in content order. */
+  private async drainAll(): Promise<void> {
+    for (;;) {
+      await this.applyChain;
+      if (this.applyError || this.pending.length === 0) break;
+      // Nothing more is READY yet: wait for the head alone (content order).
+      await this.pending[0].settled;
+    }
+    // Anything queued behind a failed head is discarded, never applied.
+    if (this.applyError) this.pending = [];
+  }
+
+  /** ADAAAA-7878: windows issued but not yet applied (drained by `flush`). */
+  pendingApplyCount(): number {
+    return this.pending.length;
+  }
+  /** ADAAAA-7878: decides whose `decide()` is still running. */
+  decideInFlightDepth(): number {
+    return this.inFlight;
+  }
+  /** ADAAAA-7878: deepest decide depth observed (0 = the serial path ran). */
+  maxDecideInFlight(): number {
+    return this.maxInFlightSeen;
+  }
+  /** ADAAAA-7878: windows dropped because the bounded queue was full. */
+  queueFullSkipCount(): number {
+    return this.queueFullSkips;
   }
 
   /** Per-call decide input size (frame count) for the cost report. */

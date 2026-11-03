@@ -11,6 +11,7 @@ import { clipWindow } from "./config";
 import {
   ObserveDecider,
   LiveObserver,
+  IngestGapTracker,
   applyOnDemandRecall,
   GOAL_OUTCOMES,
   type ObserveDecidePayload,
@@ -1453,6 +1454,37 @@ export interface AnalyzerConfig {
    * `OBSERVE_SIGNAL_GATE` (server config).
    */
   observeSignalGate?: boolean;
+  /**
+   * ADAAAA-7878: issue every observe decide OFF the frame-consume loop on both
+   * rails, so ingest keeps feeding perceive while gemma judges a window.
+   *
+   * VOD: the window payload is queued and its decide runs at `maxInFlight` depth
+   * (default 1 — the decide rate/concurrency is unchanged) while the loop keeps
+   * calling `client.analyze`. LIVE: the depth-1 (crowded-box) fallback also
+   * issues-and-does-not-await instead of deciding inline; depth > 1 is the
+   * unchanged ADAAAA-7771 staged pass.
+   *
+   * Acceptance is still applied strictly in CONTENT order (the accept chain), so
+   * burst suppression, highlight order and the running summary are unchanged.
+   * Default ON; `false` reproduces the pre-7878 serial pass byte-for-byte, so a
+   * measured regression can be reverted without a code revert.
+   * `OBSERVE_DECIDE_OFFLOOP` (server config).
+   */
+  observeDecideOffLoop?: boolean;
+  /**
+   * ADAAAA-7878: VOD decide depth for the off-loop pass (default 1 = one decide
+   * in flight, exactly the pre-fix decide rate). Raising it changes the decide
+   * CONCURRENCY, which is ADAAAA-7773/7771 territory — ship a change only with a
+   * measured pair. `OBSERVE_DECIDE_IN_FLIGHT` (server config).
+   */
+  observeDecideInFlight?: number;
+  /**
+   * ADAAAA-7878: hard bound on the VOD off-loop pending-window queue (default
+   * 512). A full queue drops the window and counts it (`queueFullSkipCount`), so
+   * the backlog is bounded and ingest is never blocked by it.
+   * `OBSERVE_DECIDE_QUEUE_MAX` (server config).
+   */
+  observeDecideQueueMax?: number;
   /**
    * ADAAAA-7147: tuning for the Tier-2 signal gate's calibration-free
    * ball-velocity discriminator. `ballMinSpeedMps` is the image-space
@@ -4582,6 +4614,25 @@ export async function analyzeJob(
   // signals inside the window are folded in as per-window bias hints
   // (provenance metadata). The decision path is shared via
   // observeOnDecide -> acceptVideoDecision.
+  // ADAAAA-7878: prove the frame-consume loop keeps running while a decide is in
+  // flight. Active on BOTH rails and on BOTH sides of `observeDecideOffLoop`, so
+  // the flag-off (serial) run prints the same `[ingest-gap]` line — and its
+  // pre-fix signature (0 frames consumed during the decide, one gap = the decide
+  // E2E) is the "before" number of the measured pair.
+  const observeDecideOffLoop = cfg.observeDecideOffLoop !== false;
+  const ingestGaps = new IngestGapTracker({
+    jobId: cfg.jobId ?? "job",
+    framePeriodMs: 1000 / Math.max(0.001, cfg.sampleFps ?? cfg.analysisFps ?? 2),
+  });
+  /** ADAAAA-7878: measure one decide call's span for the `[ingest-gap]` line. */
+  const measuredDecide = async <T>(centerTs: number, fn: () => Promise<T>): Promise<T> => {
+    const startedMs = Date.now();
+    try {
+      return await fn();
+    } finally {
+      ingestGaps.recordWindow({ centerTs, startedMs, endedMs: Date.now() });
+    }
+  };
   const observeDecider =
     cfg.observeLoop && cfg.decideWindowN !== undefined
       ? new ObserveDecider({
@@ -4595,7 +4646,34 @@ export async function analyzeJob(
           // ADAAAA-7722: the VOD rail judges a whistle-anchored window in the
           // Stage-B ledger, never the Stage-A one.
           stageB: run.stageBOutcomes,
-          onDecide: (payload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload),
+          // ADAAAA-7878: ISSUE the decide off the frame-consume loop (default), so
+          // ingest keeps feeding perceive while gemma judges a window; the verdict
+          // is applied in content order by the accept chain. Decide count and
+          // decide concurrency are unchanged (depth 1 by default). Flag off keeps
+          // the pre-7878 serial `onDecide` pass byte-identical.
+          ...(observeDecideOffLoop
+            ? {
+                maxInFlight: Math.max(1, Math.floor(cfg.observeDecideInFlight ?? 1)),
+                maxPending: Math.max(1, Math.floor(cfg.observeDecideQueueMax ?? 512)),
+                onDecideStaged: (payload: ObserveDecidePayload) => {
+                  let verdict: Awaited<ReturnType<typeof observeDecideOnly>> = null;
+                  return {
+                    decide: async () => {
+                      await measuredDecide(payload.centerTs, async () => {
+                        verdict = await observeDecideOnly(client, run, cfg, sessionId, payload);
+                      });
+                    },
+                    accept: async () => {
+                      if (!verdict) return false;
+                      return observeAcceptOnly(client, run, cut, cfg, onEvent, payload, verdict);
+                    },
+                  };
+                },
+              }
+            : {
+                onDecide: (payload: ObserveDecidePayload) =>
+                  measuredDecide(payload.centerTs, () => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload)),
+              }),
         })
       : null;
   // ADAAAA-7011: LIVE decide-observer. When enabled on the live/default pass
@@ -4646,15 +4724,25 @@ export async function analyzeJob(
           // runs K-wide while acceptance stays serial in CONTENT order — the
           // serial loop could never hold the 3 s cadence when one decide costs
           // several cadence periods (measured: 33 % coverage at one stream).
-          ...(liveInFlight > 1
+          //
+          // ADAAAA-7878: the depth-1 fallback (crowded box) now ALSO issues and
+          // does not await, so ingest never stalls on gemma; one decide is in
+          // flight at a time (the backpressure gate refuses the tick). Flag off
+          // keeps the pre-7878 shape exactly: staged at depth > 1, inline serial
+          // `onDecide` at depth 1.
+          ...(observeDecideOffLoop || liveInFlight > 1
             ? {
                 maxInFlight: liveInFlight,
-                depthBudget: () => liveDecideAdmission.depthFor(cfg.jobId, liveInFlight, liveDecideAdmissionBudget),
+                ...(liveInFlight > 1
+                  ? { depthBudget: () => liveDecideAdmission.depthFor(cfg.jobId, liveInFlight, liveDecideAdmissionBudget) }
+                  : {}),
                 onDecideStaged: (payload: ObserveDecidePayload) => {
                   let verdict: Awaited<ReturnType<typeof observeDecideOnly>> = null;
                   return {
                     decide: async () => {
-                      verdict = await observeDecideOnly(client, run, cfg, sessionId, payload);
+                      await measuredDecide(payload.centerTs, async () => {
+                        verdict = await observeDecideOnly(client, run, cfg, sessionId, payload);
+                      });
                     },
                     accept: async () => {
                       if (!verdict) return false;
@@ -4663,7 +4751,10 @@ export async function analyzeJob(
                   };
                 },
               }
-            : { onDecide: (payload: ObserveDecidePayload) => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload) }),
+            : {
+                onDecide: (payload: ObserveDecidePayload) =>
+                  measuredDecide(payload.centerTs, () => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload)),
+              }),
         })
       : null;
   let framesAnalyzed = 0;
@@ -4909,6 +5000,9 @@ export async function analyzeJob(
         for (;;) {
           try {
             const tPerceive = Date.now();
+            // ADAAAA-7878: stamp the ingest pulse — the `[ingest-gap]` line counts
+            // the analyze calls that START while a decide is in flight.
+            ingestGaps.noteAnalyze(tPerceive);
             res = await client.analyze(sessionId, frame, vocab);
             // ADAAAA-7774: the stride that keeps the loop at the live edge is
             // driven by this measurement (shared-GPU perceive is the real rate

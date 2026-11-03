@@ -305,7 +305,11 @@ describe("analyzeJob pipelined live pass (ADAAAA-7771)", () => {
       serial.client,
       bufferedFrames(8000) as any,
       async (ts) => ({ clipId: `c${ts}`, clipUri: `/clips/c${ts}.mp4` }),
-      { ...CFG, liveObserveInFlight: 1, liveObserveLagBudgetS: 3 } as any,
+      // ADAAAA-7878: the serial CONTROL leg must stay on the pre-7878 in-loop
+      // decide (otherwise depth 1 also issues-and-returns and this comparison no
+      // longer measures the serial stall). The shipped off-loop depth-1 pass is
+      // pinned in observe-decide-offloop.test.ts.
+      { ...CFG, liveObserveInFlight: 1, liveObserveLagBudgetS: 3, observeDecideOffLoop: false } as any,
       undefined
     );
 

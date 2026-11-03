@@ -200,6 +200,12 @@ const BASE_CFG = {
   // every frame must reach the cadence for the window/cadence expectations to
   // hold. The stride is pinned in live-perceive-stride.test.ts.
   liveObserveContentFps: 1000,
+  // ADAAAA-7878: this suite pins the ADAAAA-7676 SERIAL lag-budget semantics
+  // (a decide awaited in the loop, so the content clock drifts past the budget
+  // and windows are dropped as stale). The off-loop live pass is the shipped
+  // default and is pinned in observe-decide-offloop.test.ts, so hold this
+  // fixture on the flag-off (pre-7878) path it was written for.
+  observeDecideOffLoop: false,
 } as const;
 
 /** Cadence windows the 60-frame / 0.04 s-content-per-frame rail spans. */
