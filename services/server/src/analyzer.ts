@@ -551,6 +551,145 @@ export function localizeHighlightInstantVod(
   }
   return { ts: triggerTs, signal: "trigger", anchorReason: "peak_audio_far_rejected", evidenceTs: triggerTs, deltaSec: 0 };
 }
+
+// ---------------------------------------------------------------------------
+// ADAAAA-7865: one score transition must yield one SCORING highlight.
+//
+// Job dee44c2f has exactly one score change in 300 s of footage (`POR 0-0 ESP`
+// at 153.6 s -> `POR 1-0 ESP` at 159.0 s), yet the deployed VOD observe path
+// accepted FOUR GOAL highlights for it (anchors 153.6, 159, 183.1, 190.6). The
+// 183/190 windows are post-goal celebration: no score change inside the clip and
+// no legible scorebug at the anchor. Each of them was still "corroborated" by
+// the Stage-2 pass because `ballInNet` + `ballTrajectoryCrossedLine` are TRUE in
+// a replay of the goal-net shot that follows the goal — i.e. the frame
+// attestation was earned by celebrating the goal, not by scoring it.
+//
+// A burst window cannot express this: the duplicates are 24-37 s apart, beyond
+// the ADAAAA-6610 30 s window (and any widening of it would swallow genuinely
+// distinct goals). The unit that must stay unique is the EVENT, not a duration,
+// so the rule is keyed on the already-accepted GOAL's delivered clip:
+//
+//   * a GOAL accept whose anchor sits inside an accepted GOAL's delivered clip
+//     is the same event re-read across overlapping windows -> accepted;
+//   * a GOAL accept that carries INDEPENDENT transition evidence (a measured
+//     legible scoreboard delta, a goal-calling audio read, or the deep dive's
+//     own score-change read of THIS window) opens a NEW event -> accepted;
+//   * otherwise, when an accepted GOAL event is within `GOAL_DUPLICATE_REACH_S`,
+//     the accept is DOWNGRADED to a non-scoring celebration highlight (still
+//     delivered — a celebration window is a legitimate moment — but never a
+//     second scoring event for the same transition).
+//
+// The reach bound keeps recall honest: a goal far from every accepted event is
+// a new goal even with no measured evidence, so the rule cannot eat a second
+// goal just because this footage's scoreboard is unreadable at 3 fps.
+// ---------------------------------------------------------------------------
+
+/** ADAAAA-7865: how far (seconds) a GOAL accept may sit from an accepted GOAL
+ * event's anchor and still be treated as a celebration re-read of it. Chosen
+ * from the observed footage (post-goal celebrations run 15-40 s past the goal)
+ * and kept well inside the range where two DISTINCT goals would need
+ * independent evidence to be distinguished anyway. */
+export const GOAL_DUPLICATE_REACH_S = 60;
+
+/** ADAAAA-7865: one accepted GOAL event in a run: the instant the delivered
+ * clip is anchored on plus the clip window it covers. A later GOAL accept whose
+ * anchor falls inside [start, end] is the same event. */
+export interface AcceptedGoalEvent {
+  /** The accepted highlight's id (audit trail for the downgraded sibling). */
+  highlightId: string;
+  /** `localizedTs` of the accepted highlight: the instant its clip covers. */
+  anchorTs: number;
+  /** Delivered clip window start (seconds from stream start). */
+  start: number;
+  /** Delivered clip window end. */
+  end: number;
+}
+
+/** ADAAAA-7865: the evidence a GOAL accept must carry to open a NEW scoring
+ * event when it is not covered by an already-accepted goal's clip. Each signal
+ * is one that only a transition can produce, never a celebration:
+ *
+ * - `corroborationSource: "scoreboard"` — a measured, legible, time-tied
+ *   scoreboard delta credited the accept (ADAAAA-7844 semantics).
+ * - `corroborationSource: "audio_text"` — this window's own audio carried a
+ *   goal CALL. Retrospective stat narration ("his 82nd goal ... 151st
+ *   appearance") is excluded from that set by `audio_calls_goal`.
+ * - a legible measured delta folded into this window's candidate hint.
+ * - the Stage-2 deep dive's own `evidence.scoreboardChanged === true` read of
+ *   THIS window: a score tick visible inside the window's frames. This is NOT
+ *   used as corroboration (ADAAAA-7510 forbids that); it is used only to tell a
+ *   transition window from a celebration window, where a model scoreboard read
+ *   is the cheapest discriminator the pass already paid for.
+ */
+export function goalHasIndependentTransitionEvidence(input: {
+  corroborationSource?: "audio_text" | "scoreboard" | "frame_attestation" | null;
+  scoreboardDeltaLegible?: boolean;
+  confirmEvidenceScoreboardChanged?: boolean | null;
+}): boolean {
+  if (input.corroborationSource === "scoreboard") return true;
+  if (input.corroborationSource === "audio_text") return true;
+  if (input.scoreboardDeltaLegible === true) return true;
+  return input.confirmEvidenceScoreboardChanged === true;
+}
+
+/** ADAAAA-7865: the already-accepted GOAL event this GOAL accept re-reads, or
+ * `undefined` when the accept is a NEW scoring event (first goal, a window of an
+ * accepted goal's own clip, or a window carrying independent transition
+ * evidence). Pure — the caller owns the accepted-event ledger. */
+export function findRepeatGoalEvent(
+  accepted: readonly AcceptedGoalEvent[],
+  input: {
+    /** Where the delivered clip would be anchored (localizedTs). */
+    anchorTs: number;
+    /** The delivered clip window the accept would cover. A clip that OVERLAPS
+     * an accepted goal's clip is the same footage — the same event re-read. */
+    start: number;
+    end: number;
+    /** Only GOAL-class accepts are deduped; other event types pass through. */
+    isGoal: boolean;
+    corroborationSource?: "audio_text" | "scoreboard" | "frame_attestation" | null;
+    scoreboardDeltaLegible?: boolean;
+    confirmEvidenceScoreboardChanged?: boolean | null;
+    /** Override for tests; defaults to {@link GOAL_DUPLICATE_REACH_S}. */
+    reachS?: number;
+  }
+): AcceptedGoalEvent | undefined {
+  if (!input.isGoal) return undefined;
+  if (goalHasIndependentTransitionEvidence(input)) return undefined;
+  const anchor = input.anchorTs;
+  if (!Number.isFinite(anchor)) return undefined;
+  const reach = input.reachS ?? GOAL_DUPLICATE_REACH_S;
+  let nearest: AcceptedGoalEvent | undefined;
+  let nearestDiff = Infinity;
+  for (const ev of accepted) {
+    // The event's own footage: an overlapping clip window is the same goal
+    // re-read across neighbouring windows, never a second scoring event.
+    const overlaps = input.start < ev.end && ev.start < input.end;
+    if (overlaps) return undefined;
+    const diff = Math.abs(anchor - ev.anchorTs);
+    if (diff <= reach && diff < nearestDiff) {
+      nearestDiff = diff;
+      nearest = ev;
+    }
+  }
+  return nearest;
+}
+
+/** ADAAAA-7865: downgrade a repeat GOAL accept to a non-scoring celebration
+ * highlight. The clip is still cut and delivered (celebration windows stay
+ * accepted — they are real moments), but its outcome leaves the scoring lane, so
+ * it can never be posted as a second GOAL for one score transition. The original
+ * decision's evidence fields stay on the record for audit. */
+export function downgradeRepeatGoalCelebration(d: DecisionResult, repeat: AcceptedGoalEvent): DecisionResult {
+  const note = `celebration of an already-delivered goal (anchor ${repeat.anchorTs.toFixed(1)}s, highlight ${repeat.highlightId}): no independent score-transition evidence in this window`;
+  return {
+    ...d,
+    outcome: "big_play",
+    eventType: "BIG_PLAY",
+    reason: d.reason ? `${d.reason} | ${note}` : note,
+  };
+}
+
 export interface DecisionResult {
   isHighlight: boolean;
   score: number;
@@ -2171,6 +2310,11 @@ export class LiveRunShared {
    * burst suppression). Used to drop a GOAL accepted within `goalBurstWindowS`
    * of a prior one. */
   private lastGoalHighlightTs: number | null = null;
+  /** ADAAAA-7865: ACCEPTED scoring GOAL events in this run, in accept order
+   * (anchor + delivered clip). A later GOAL accept whose anchor falls inside one
+   * of these clips is the same goal re-read and is delivered as a celebration,
+   * not as a second scoring event. Bounded — a run cannot grow it unboundedly. */
+  private acceptedGoalEvents: AcceptedGoalEvent[] = [];
 
   constructor(opts: { decideWindowN?: number; goalBurstWindowS?: number; audioRetainS?: number } = {}) {
     this.windowN = opts.decideWindowN ?? DECIDE_FRAME_WINDOW;
@@ -2269,6 +2413,30 @@ export class LiveRunShared {
     }
     this.lastGoalHighlightTs = ts;
     return false;
+  }
+  /** ADAAAA-7865: does this GOAL accept re-read an already-accepted GOAL event?
+   * Returns the covered event (so the caller can name it on the downgraded
+   * record) or `undefined` for a NEW scoring event. Pure w.r.t. the ledger —
+   * recording happens in {@link noteAcceptedGoalEvent} only for scoring
+   * accepts, so a downgraded celebration never becomes an event itself. */
+  repeatGoalEvent(input: {
+    anchorTs: number;
+    start: number;
+    end: number;
+    isGoal: boolean;
+    corroborationSource?: "audio_text" | "scoreboard" | "frame_attestation" | null;
+    scoreboardDeltaLegible?: boolean;
+    confirmEvidenceScoreboardChanged?: boolean | null;
+  }): AcceptedGoalEvent | undefined {
+    return findRepeatGoalEvent(this.acceptedGoalEvents, input);
+  }
+  /** ADAAAA-7865: remember a delivered scoring GOAL's event coverage so a later
+   * window that re-reads the same goal is recognised. Bounded to the most recent
+   * events (a celebration re-read never follows its goal by hours). */
+  noteAcceptedGoalEvent(ev: AcceptedGoalEvent): void {
+    if (!Number.isFinite(ev.anchorTs)) return;
+    this.acceptedGoalEvents.push(ev);
+    if (this.acceptedGoalEvents.length > 128) this.acceptedGoalEvents.shift();
   }
   /** Drop frames (and stale candidates) outside the 60 s window and enforce the
    * hard size cap. Oldest entries are removed first. */
@@ -3203,7 +3371,6 @@ export async function acceptVideoDecision(
     });
     return;
   }
-  buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger, stageAnalysis, confirm?.analysis);
   // ADAAAA-7232: center the delivered clip on the localized highlight instant,
   // so the moment lands in the middle third and the window always meets >=15 s.
   // ADAAAA-7253 (ACC-3): prefer the frame-based localization (per-frame signal
@@ -3215,6 +3382,29 @@ export async function acceptVideoDecision(
   // evidence.
   const loc = localizeHighlightInstantVod(candidate.timestamp, frameSignals, run.audioEnergyTaps(), cfg.clipAfterS);
   const win = clipWindow(loc.ts, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15);
+  // ADAAAA-7865: one score transition, one SCORING highlight. A GOAL accept that
+  // re-reads an already-delivered goal's event (its anchor sits inside that
+  // goal's clip, or it is within the duplicate reach of it) and carries no
+  // independent transition evidence is delivered as a CELEBRATION: the clip is
+  // still cut (celebration windows stay accepted), but its outcome leaves the
+  // scoring lane so the board never shows a second GOAL for the same transition.
+  const isGoalAccept = /^(GOAL|GOL)$/i.test(highlightEventType(decision, candidate.eventType) || "");
+  const repeatGoal = isGoalAccept
+    ? run.repeatGoalEvent({
+        anchorTs: loc.ts,
+        start: win.start,
+        end: win.end,
+        isGoal: true,
+        corroborationSource: confirm?.corroborationSource ?? null,
+        scoreboardDeltaLegible: scoreboardDeltaLegible(candidate.scoreBoardDelta),
+        confirmEvidenceScoreboardChanged:
+          (confirm?.evidence as Record<string, boolean | null> | undefined)?.scoreboardChanged ?? null,
+      })
+    : undefined;
+  if (repeatGoal) decision = downgradeRepeatGoalCelebration(decision, repeatGoal);
+  // ADAAAA-6851 note: persisted AFTER the ADAAAA-7865 downgrade so the
+  // decision-time note carries the outcome the board actually receives.
+  buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger, stageAnalysis, confirm?.analysis);
   const { clipId, clipUri } = await cut(loc.ts);
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -3229,6 +3419,12 @@ export async function acceptVideoDecision(
     localizeAnchorReason: loc.anchorReason,
     localizeEvidenceTs: loc.evidenceTs,
     localizeAnchorDeltaSec: loc.deltaSec,
+    // ADAAAA-7865: set on a repeat GOAL accept that was delivered as a
+    // celebration instead of a second scoring event. Names the goal event it
+    // duplicates so the board can audit the downgrade from the record alone.
+    dedupeReason: repeatGoal
+      ? `goal_celebration_duplicate:${repeatGoal.highlightId}`
+      : undefined,
     // ADAAAA-7247 (ACC-7): record the per-company clip-window setting that
     // produced this clip plus the delivered window length so the delivered clip
     // window is auditable (Acc-3). Values come from the resolved (webui > env)
@@ -3271,6 +3467,12 @@ export async function acceptVideoDecision(
     createdAt: new Date().toISOString(),
   };
   run.highlights.push(rec);
+  // ADAAAA-7865: record the delivered SCORING goal's event coverage. Only a
+  // scoring accept becomes an event — a downgraded celebration must never make a
+  // following celebration look like a first re-read of a real goal.
+  if (rec.outcome === "scoring_play") {
+    run.noteAcceptedGoalEvent({ highlightId: rec.id, anchorTs: loc.ts, start: win.start, end: win.end });
+  }
   onEvent?.({ seq: emit.seq, timestamp: emit.timestamp, type: "highlight", highlight: rec });
 }
 
