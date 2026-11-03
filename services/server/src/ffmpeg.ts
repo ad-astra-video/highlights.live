@@ -52,12 +52,23 @@ function meaningfulFfmpegError(stderr: string): string {
   return msg.length > 500 ? msg.slice(0, 500) + "…" : msg;
 }
 
-async function runFfmpeg(ffmpegPath: string, args: string[], signal?: AbortSignal): Promise<void> {
+async function runFfmpeg(
+  ffmpegPath: string,
+  args: string[],
+  signal?: AbortSignal,
+  opts?: { timeout?: number }
+): Promise<void> {
   try {
     // ADAAAA-6625: an optional AbortSignal lets a cancelled VOD job kill the
     // ffmpeg child instead of letting it decode the rest of the file. execFile
     // reaps the child on abort and rejects with an AbortError.
-    await exec(ffmpegPath, args, signal ? { signal } : undefined);
+    //
+    // ADAAAA-7847: `opts.timeout` bounds the one-shot jersey-identify anchor
+    // sample so a wedged decode can never hold an operator's request open.
+    const execOpts: { signal?: AbortSignal; timeout?: number } = {};
+    if (signal) execOpts.signal = signal;
+    if (opts?.timeout) execOpts.timeout = opts.timeout;
+    await exec(ffmpegPath, args, Object.keys(execOpts).length ? execOpts : undefined);
   } catch (e: any) {
     // A cancelled extraction is not an ffmpeg failure — surface it as such so
     // callers (the VOD stop path) can distinguish stop from a real decode error.
@@ -93,6 +104,214 @@ export async function probeHasAudio(ffmpegPath: string, source: string): Promise
     return null;
   }
 }
+
+/** Probe a video stream's pixel size. Used by the jersey-identify anchor sample
+ * (ADAAAA-7847) so the anchor scale is clamped to the source: a request must
+ * never ask the decoder to upscale, because an upscaled jersey adds no detail
+ * and only inflates the OCR pass. Returns null when the source cannot be
+ * probed, in which case the caller uses the configured scale as-is. */
+export async function probeVideoSize(
+  ffmpegPath: string,
+  source: string
+): Promise<{ width: number; height: number } | null> {
+  const ffprobe = ffmpegPath.replace(/ffmpeg([^/]*)$/, "ffprobe$1") || "ffprobe";
+  try {
+    const { stdout } = await exec(ffprobe, [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=width,height",
+      "-of", "csv=p=0",
+      source,
+    ]);
+    const [w, h] = stdout.trim().split(",").map((v) => parseInt(v, 10));
+    return Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? { width: w, height: h } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Clamp a `W:H` (or `WxH`) frame scale to a source size so the anchor sample
+ * never upscales (ADAAAA-7847). Returns ffmpeg's aspect-preserving
+ * `min(W,iw):-2` form when the target is wider than the source, so the height
+ * follows the source aspect instead of being forced to the target's.
+ *
+ * Pure + exported for unit tests. */
+export function clampScaleToSource(
+  scale: string,
+  source: { width: number; height: number } | null
+): string {
+  const m = /^(\d+)\s*[:x]\s*(\d+)$/.exec(String(scale ?? "").trim());
+  if (!m) return scale;
+  const tw = parseInt(m[1], 10);
+  const th = parseInt(m[2], 10);
+  if (!source || source.width <= 0) return `${tw}:${th}`;
+  if (tw > source.width || th > source.height) {
+    // ffmpeg filter syntax: the comma inside min() must be escaped.
+    return `min(${tw}\\,iw):-2`;
+  }
+  return `${tw}:${th}`;
+}
+
+/** Bounds for the jersey-identify anchor sample (ADAAAA-7847). Enforced where
+ * the ffmpeg args are built, so no caller (env misconfiguration included) can
+ * turn one operator request into a second streaming pass. */
+export const ANCHOR_FRAME_MAX = 12;
+export const ANCHOR_SPAN_MIN_S = 0.2;
+export const ANCHOR_SPAN_MAX_S = 5;
+/** How many bytes of a growing live recording are copied to read its tail. At a
+ * typical 1.5-6 Mbit/s 720p recording this covers several seconds of content,
+ * which is what `-sseof` needs behind it to land on the operator's moment. */
+export const ANCHOR_TAIL_COPY_BYTES = 4 * 1024 * 1024;
+
+/** Args for the ONE-SHOT jersey-identify anchor sample (ADAAAA-7847).
+ *
+ * One decode per request, from a `spanS`-long window that ENDS at the request
+ * moment: `atSec` set means a VOD pass at a known position, absent means the
+ * live edge (the tail of the recording passed in as `source`). `-frames:v count`
+ * bounds it hard, so a request can never turn into a second streaming pass.
+ * Exported for unit tests. */
+export function buildAnchorFrameArgs(opts: {
+  source: string;
+  outDir: string;
+  scale: string;
+  count: number;
+  fps?: number;
+  spanS?: number;
+  /** Anchor time in seconds (VOD). Omitted = the live edge of `source`. */
+  atSec?: number;
+  /** Seek AFTER `-i` (decode-and-discard) instead of at the demuxer. Needed for
+   * a tail copy of a live recording: an input seek lands after the copy's last
+   * keyframe and decodes zero frames, while an output-side seek starts at the
+   * copy's first keyframe and drops to the target. */
+  seekAfterInput?: boolean;
+  /** Suppress decoder chatter (a tail copy legitimately starts mid-packet and
+   * logs "non-existing PPS" errors before it resyncs on the next keyframe). */
+  quiet?: boolean;
+}): string[] {
+  const count = Math.max(1, Math.min(ANCHOR_FRAME_MAX, Math.round(opts.count || 1)));
+  const spanRaw = opts.spanS ?? 1.5;
+  const span = Math.max(ANCHOR_SPAN_MIN_S, Math.min(ANCHOR_SPAN_MAX_S, Number.isFinite(spanRaw) ? spanRaw : 1.5));
+  const fps = opts.fps ?? Math.max(1, count / span);
+  const args: string[] = ["-y", "-hide_banner", "-loglevel", opts.quiet ? "quiet" : "error"];
+  const hasAt = opts.atSec != null && Number.isFinite(opts.atSec);
+  if (hasAt && opts.seekAfterInput) {
+    // Output-side seek on a STATIC file (the tail copy): decode from its first
+    // keyframe, drop until the target.
+    args.push("-i", opts.source, "-ss", String(Math.max(0, (opts.atSec as number) - span)));
+  } else if (hasAt) {
+    // Fast demuxer seek to the START of the window, then decode `span` seconds.
+    args.push("-ss", String(Math.max(0, (opts.atSec as number) - span)));
+    args.push("-i", opts.source, "-t", String(span));
+  } else {
+    // Live edge: `-sseof` seeks relative to the CURRENT end of `source`.
+    args.push("-sseof", `-${span}`, "-i", opts.source);
+  }
+  args.push(
+    "-an",
+    "-vf", `fps=${fps.toFixed(3)},scale=${opts.scale}`,
+    "-q:v", "3",
+    "-frames:v", String(count),
+    path.join(opts.outDir, "anchor_%02d.jpg")
+  );
+  return args;
+}
+
+/**
+ * Copy the last `maxBytes` of `src` to `dest` (ADAAAA-7847).
+ *
+ * Needed because the live ingest recording is GROWING while the request runs:
+ * `-sseof`/`-ss` against it measure against a moving, non-zero `start_time`
+ * timeline and decode ZERO frames (measured on a synthetic live MPEG-TS). A
+ * bounded tail copy is a complete short file, so `-sseof` works on it.
+ * Returns the byte count copied, or null when the source cannot be read.
+ */
+export async function copyTailBytes(src: string, dest: string, maxBytes: number): Promise<number | null> {
+  const { stat, open, writeFile } = await import("node:fs/promises");
+  try {
+    const st = await stat(src);
+    if (!st.size) return null;
+    const start = Math.max(0, st.size - Math.max(1, maxBytes));
+    const want = st.size - start;
+    const fh = await open(src, "r");
+    let bytesRead = 0;
+    try {
+      const buf = Buffer.alloc(want);
+      bytesRead = (await fh.read(buf, 0, want, start)).bytesRead;
+      if (!bytesRead) return null;
+      await writeFile(dest, buf.subarray(0, bytesRead));
+    } finally {
+      await fh.close();
+    }
+    return bytesRead;
+  } catch {
+    return null;
+  }
+}
+
+/** Sample the jersey-identify anchor frames for one request (ADAAAA-7847).
+ *
+ * Returns the frame files NEWEST-FIRST (the window is decoded oldest -> newest,
+ * so the list is reversed before it is returned): the caller identifies against
+ * them in that order so a match on the freshest frame wins and the seeded bbox
+ * is as close to the operator's moment as the decode allows. A source that
+ * cannot be decoded yields an empty list — the request then falls back to the
+ * rail-scale anchor exactly as before this change.
+ *
+ * Live edge (`atSec` omitted): the extraction runs against a bounded COPY of
+ * the recording's tail, because a growing MPEG-TS decodes zero frames from
+ * `-sseof`/absolute seeks. When that copy yields nothing (a source that is not
+ * decodable at all) the plain form on the original is tried once, which is what
+ * a completed/static recording needs.
+ */
+export async function extractAnchorFrames(opts: {
+  ffmpegPath: string;
+  source: string;
+  scale: string;
+  count: number;
+  spanS?: number;
+  atSec?: number;
+  outDir: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /** Tail-copy size for the live edge; defaults to ANCHOR_TAIL_COPY_BYTES. */
+  tailCopyBytes?: number;
+}): Promise<string[]> {
+  const { mkdir, rm } = await import("node:fs/promises");
+  await rm(opts.outDir, { recursive: true, force: true });
+  await mkdir(opts.outDir, { recursive: true });
+  const jpegs = async () =>
+    (await readdir(opts.outDir)).filter((f) => f.endsWith(".jpg")).sort().map((f) => path.join(opts.outDir, f)).reverse();
+  const run = (args: string[]) =>
+    runFfmpeg(opts.ffmpegPath, args, opts.signal, opts.timeoutMs ? { timeout: opts.timeoutMs } : undefined);
+
+  const isLiveEdge = opts.atSec == null || !Number.isFinite(opts.atSec);
+  if (isLiveEdge) {
+    // A GROWING MPEG-TS recording decodes ZERO frames from `-sseof`/absolute
+    // seeks (measured on a synthetic live MPEG-TS: both forms output nothing).
+    // Read a bounded COPY of its tail instead — a static short file — then seek
+    // the COPY from the output side, which only needs its first keyframe.
+    const tail = path.join(opts.outDir, "tail.ts");
+    const copied = await copyTailBytes(opts.source, tail, opts.tailCopyBytes ?? ANCHOR_TAIL_COPY_BYTES);
+    if (copied) {
+      const copiedSec = await probeDuration(opts.ffmpegPath, tail);
+      if (copiedSec != null) {
+        try {
+          const frames = await (async () => {
+            await run(buildAnchorFrameArgs({ ...opts, source: tail, atSec: copiedSec, seekAfterInput: true, quiet: true }));
+            return jpegs();
+          })();
+          if (frames.length) return frames;
+        } catch {
+          /* fall through to the plain form on the original */
+        }
+      }
+    }
+  }
+  // VOD position, or a completed/static recording (where `-sseof` is exact).
+  await run(buildAnchorFrameArgs(opts));
+  return jpegs();
+}
+
 
 /** Build ffmpeg args for a frame extraction. Pure + exported so the sliding
  * window positioning can be unit-tested without invoking ffmpeg. `-ss` before

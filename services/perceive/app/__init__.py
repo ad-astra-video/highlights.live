@@ -1343,6 +1343,33 @@ def _try_pending_player(state, detector) -> None:
     )
 
 
+def _decode_request_anchor_frames(msg: dict) -> list:
+    """Decode the request-supplied anchor frames (ADAAAA-7847).
+
+    A `track-player` request carries its own higher-resolution anchor sample:
+    the server decodes up to a handful of frames above the rail scale at request
+    time (a broadcast jersey is not legible at 320:180 or 640:360), newest
+    first. Returns the decoded RGB arrays in that order. A frame that will not
+    decode is dropped — never fatal, the request still has the rail frame.
+    """
+    raw = msg.get("anchorImages")
+    if raw is None:
+        raw = msg.get("anchorImage")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not raw:
+        return []
+    frames = []
+    for item in raw[:12]:  # hard bound: one request can never fan out
+        if not isinstance(item, str) or not item:
+            continue
+        try:
+            frames.append(_decode_rgb(item))
+        except Exception as e:  # noqa: BLE001 - a bad anchor is not a failed request
+            log.warning("anchor frame decode failed: %s", e)
+    return frames
+
+
 def handle_control(state, msg: dict) -> dict:
     """Apply a ControlMessage (shared schema, plan §3.4) and return an ack
     object. Shared by the WebSocket control channel and (future) trickle control."""
@@ -1440,7 +1467,13 @@ def handle_control(state, msg: dict) -> dict:
         number = msg.get("number", msg.get("playerNumber"))
         if number is None:
             return {"type": "ack", "ok": False, "cmd": ctype, "error": "number required (jersey number)"}
-        if state.last_rgb is None:
+        # ADAAAA-7847: the request may carry its own higher-resolution anchor
+        # sample (the server decodes it once, at request time). Jersey OCR needs
+        # the number large and sharp, and the rail frame's scale is below what a
+        # broadcast jersey needs, so these are tried FIRST, newest first; the
+        # rail frame stays as the last resort and for the retry window.
+        anchors = _decode_request_anchor_frames(msg)
+        if state.last_rgb is None and not anchors:
             return {"type": "ack", "ok": False, "cmd": ctype, "error": "no frame sampled yet (anchor frame required)"}
         try:
             requested = int(number)
@@ -1449,7 +1482,15 @@ def handle_control(state, msg: dict) -> dict:
         detector = get_detector(state.lora_ref or None)
         if state.last_rgb is not None:
             _try_pending_player(state, detector)
-        matched = identify_player_by_number(state.last_rgb, requested, detector)
+        matched = None
+        used_anchor = 0
+        for frame in anchors:
+            used_anchor += 1
+            matched = identify_player_by_number(frame, requested, detector)
+            if matched is not None:
+                break
+        if matched is None and state.last_rgb is not None:
+            matched = identify_player_by_number(state.last_rgb, requested, detector)
         if matched is None:
             # ADAAAA-7345 / ADAAAA-7824: keep the operator's request alive
             # instead of failing it on a graphic/watermark anchor frame — retry
@@ -1459,6 +1500,10 @@ def handle_control(state, msg: dict) -> dict:
             state.pending_player_number = requested
             state.pending_player_frames_left = PLAYER_RETRY_WINDOW_FRAMES
             state.pending_player_stride = 0
+            log.info(
+                "player identify miss session=%s number=%s anchor_frames=%d scale=%s",
+                state.session_id, requested, used_anchor, msg.get("anchorScale"),
+            )
             return {
                 "type": "ack",
                 "ok": False,
@@ -1468,9 +1513,16 @@ def handle_control(state, msg: dict) -> dict:
                 "retryWindowFrames": PLAYER_RETRY_WINDOW_FRAMES,
                 "retryStride": max(1, PLAYER_RETRY_STRIDE),
                 "retryAttempts": PLAYER_RETRY_ATTEMPTS,
+                "anchorFrames": used_anchor,
+                "anchorScale": msg.get("anchorScale"),
                 "error": f"no player with number {requested} identified on the anchor frame",
             }
         tr, bbox, label = _seed_player_track(state, matched, requested)
+        log.info(
+            "player identified session=%s number=%s slot=%s anchor_frame=%s scale=%s",
+            state.session_id, requested, tr.slot, used_anchor if used_anchor else "rail",
+            msg.get("anchorScale"),
+        )
         return {
             "type": "ack",
             "ok": True,
@@ -1479,6 +1531,8 @@ def handle_control(state, msg: dict) -> dict:
             "slot": tr.slot,
             "trackId": tr.track_id,
             "selected": True,
+            "anchorFrames": used_anchor,
+            "anchorScale": msg.get("anchorScale"),
             "bbox": list(bbox),
         }
     if ctype == "evict":

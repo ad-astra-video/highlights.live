@@ -157,6 +157,31 @@ export interface ServerConfig {
    * `frameScale`, default 640:360 — higher-res than live 320:180).
    * `VOD_FRAME_SCALE`. */
   vodFrameScale: string;
+  /** ADAAAA-7847: frame scale for the ONE-SHOT jersey-identify anchor frame a
+   * `track-player` / `track-player-by-number` request samples at REQUEST time.
+   * Jersey OCR needs the number large and sharp, and neither rail scale is
+   * enough (measured: jersey `11` reads at 1280x720 on 14/311 census frames,
+   * 13/14 of those at 960x540, and 0/311 at the 640:360 VOD rail scale and
+   * 0/311 at the 320:180 live rail scale). This scale does NOT touch the
+   * streaming rail, the observation cadence, or the per-frame detection path —
+   * the anchor is decoded once per request. Clamped to the source resolution so
+   * it never upscales. `PLAYER_ANCHOR_FRAME_SCALE`. */
+  playerAnchorFrameScale: string;
+  /** ADAAAA-7847: how many high-resolution anchor frames one jersey request
+   * samples (default 8) from the `playerAnchorSpanS` window ending at request
+   * time. A single frame lands on a legible jersey only ~4.5% of the time on
+   * the measured clip (14/311 frames, in four sub-second windows), so the
+   * request samples a short newest-first burst and stops at the first
+   * identification. Bounded by `ANCHOR_FRAME_MAX` (12).
+   * `PLAYER_ANCHOR_FRAMES`. */
+  playerAnchorFrames: number;
+  /** ADAAAA-7847: length (seconds) of the anchor window ending at request time
+   * that the burst is sampled across. Default 1 s at the default 8 frames = 8
+   * samples/s, dense enough to land inside the measured 0.2-0.5 s legible
+   * windows while staying within ~a second of the operator's moment (so the
+   * seeded bbox is not stale). Bounded by `ANCHOR_SPAN_MIN_S`/`_MAX_S`.
+   * `PLAYER_ANCHOR_SPAN_S`. */
+  playerAnchorSpanS: number;
   /** Max VOD jobs a worker drains concurrently (ADAAAA-6873). Each running job
    * holds one perceive session, so this gates GPU concurrency. `VOD_WORKER_CONCURRENCY`. */
   vodWorkerConcurrency: number;
@@ -588,6 +613,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodSampleMaxFps: Number(env.VOD_SAMPLE_MAX_FPS ?? 8),
     vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 3),
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
+    // ADAAAA-7847: the jersey-identify anchor frame is sampled at REQUEST time
+    // and is deliberately NOT the rail scale. Jersey OCR needs the number large
+    // and sharp: measured on clip `397294f3` (native 1280x720) the number is
+    // legible on 14/311 frames at 1280x720, 13/14 of those also at 960:540, and
+    // 0/311 at 640:360 (VOD rail) or 320:180 (live rail). Default 1280:720 (the
+    // source resolution of a broadcast 720p stream); clamped to the actual
+    // source size, so it never upscales a smaller stream. One decode per
+    // request — the streaming rail, cadence, and per-frame path are untouched.
+    playerAnchorFrameScale: env.PLAYER_ANCHOR_FRAME_SCALE ?? "1280:720",
+    playerAnchorFrames: Number(env.PLAYER_ANCHOR_FRAMES ?? 8),
+    playerAnchorSpanS: Number(env.PLAYER_ANCHOR_SPAN_S ?? 1),
     vodWorkerConcurrency: Number(env.VOD_WORKER_CONCURRENCY ?? 1),
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
     vodAudioRetainS: Number(env.VOD_AUDIO_RETAIN_S ?? 1800),
