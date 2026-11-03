@@ -786,10 +786,76 @@ function sourceLabel(source: string | undefined): string {
 }
 
 /**
+ * ADAAAA-7893: the owner-facing review controls. `POST /highlights/:id/review`
+ * is ownership scoped on the server ("the owner (or an admin) may review a
+ * clip"), so these buttons must render for EVERY session that can review the
+ * clip — they are primary actions, not operator internals, and they sit outside
+ * `Pipeline detail`.
+ *
+ * The current review state is communicated by the buttons themselves: the one
+ * matching `highlight.status` is disabled and `aria-pressed`, the other stays
+ * enabled. ADAAAA-7880 removed the status BADGE; it never asked for the
+ * controls to go.
+ *
+ * Kept hook-free on purpose: the node test env renders this suite through
+ * `renderToString` (no jsdom), so a test can call this component directly and
+ * invoke the real `onClick` handler it returns.
+ */
+export function HighlightReviewActions({
+  highlight: h,
+  onDecision,
+  pendingStatus = null,
+}: {
+  highlight: JobDetailHighlight;
+  onDecision: (h: JobDetailHighlight, status: "accepted" | "rejected") => void;
+  pendingStatus?: "accepted" | "rejected" | null;
+}) {
+  const pending = pendingStatus !== null;
+  const busyAccept = pendingStatus === "accepted";
+  const busyReject = pendingStatus === "rejected";
+  return (
+    <>
+      <div className="mt-2 flex flex-wrap gap-2" data-detail-review>
+        <button
+          type="button"
+          className="btn-neon min-w-0 flex-1 px-2 py-1 text-xs"
+          disabled={h.status === "accepted" || pending}
+          aria-pressed={h.status === "accepted"}
+          onClick={() => onDecision(h, "accepted")}
+          data-detail-accept
+        >
+          {busyAccept ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Check className="mr-1 inline h-4 w-4" />}
+          {busyAccept ? "Accepting…" : "Accept"}
+        </button>
+        <button
+          type="button"
+          className="btn-neon btn-pink min-w-0 flex-1 px-2 py-1 text-xs"
+          disabled={h.status === "rejected" || pending}
+          aria-pressed={h.status === "rejected"}
+          onClick={() => onDecision(h, "rejected")}
+          data-detail-reject
+        >
+          {busyReject ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <X className="mr-1 inline h-4 w-4" />}
+          {busyReject ? "Rejecting…" : "Reject"}
+        </button>
+      </div>
+      {/* One small inline note, visible to every session. Recovery guidance,
+          not a badge — it never prints a bare `accepted` / `rejected` label. */}
+      {h.status === "rejected" && (
+        <div className="mt-1 text-xs text-red" data-detail-rejected>
+          Rejected — hidden from the public feed. Accept restores it within the recover window.
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
  * One identified/accepted highlight on the per-job detail surface. Renders the
  * clip player (VideoClip) so the highlight shows its video, plus the metadata
- * and Accept/Reject review controls. Extracted from the JobDetail card so the
- * highlight card (and its clip-player mount) is independently testable.
+ * and the owner-facing Accept/Reject review controls (HighlightReviewActions).
+ * Extracted from the JobDetail card so the highlight card (and its clip-player
+ * mount) is independently testable.
  * ADAAAA-6948: the per-job card previously imported VideoClip but never rendered
  * it, so identified highlights showed no video.
  */
@@ -811,10 +877,10 @@ export interface HighlightCardProps {
   selected?: boolean;
   onToggleSelect?: (h: JobDetailHighlight) => void;
   /** Operator session? The customer card (ADAAAA-7737) is the clip, its time
-   *  range, the posting caption and Download / Copy link — no event taxonomy,
-   *  no score, no trigger, no outcome reason and no review controls. Defaults
-   *  to the operator surface for direct component renders; the page always
-   *  passes the session role. */
+   *  range, the posting caption, Download / Copy link and the owner-facing
+   *  Accept/Reject review controls (ADAAAA-7893) — no event taxonomy, no score,
+   *  no trigger and no outcome reason. Defaults to the operator surface for
+   *  direct component renders; the page always passes the session role. */
   admin?: boolean;
 }
 
@@ -830,9 +896,6 @@ export function HighlightCard({
   admin = true,
   summaryLog,
 }: HighlightCardProps) {
-  const pending = pendingStatus !== null;
-  const busyAccept = pendingStatus === "accepted";
-  const busyReject = pendingStatus === "rejected";
   // ADAAAA-7622: one click must yield either a file or a clipboard URL, with
   // no DevTools in the happy path. `download` on a same-origin anchor saves
   // the clip; the copy button reports its own state so a blocked clipboard is
@@ -978,6 +1041,16 @@ export function HighlightCard({
             )}
           </button>
         </div>
+        {/* ADAAAA-7893: Accept / Reject are the OWNER's review controls, not
+            operator internals — `POST /highlights/:id/review` is ownership
+            scoped, so every session that can review this clip must see them.
+            They sit in the primary action area (the row beneath Download /
+            Copy link), above the transcript, and stay outside the operator
+            disclosure. The clip's review state is carried by the buttons
+            themselves (the matching one is disabled + aria-pressed) rather
+            than by a status badge (ADAAAA-7880 removed the badge, not the
+            controls). */}
+        <HighlightReviewActions highlight={h} onDecision={onDecision} pendingStatus={pendingStatus} />
         {/* ADAAAA-7881: the transcript is low-emphasis and rendered ONCE, verbatim
             behind a disclosure (the stored value is never truncated). */}
         {h.asrTranscript && (
@@ -986,9 +1059,10 @@ export function HighlightCard({
             <p className="mt-1 whitespace-pre-wrap break-words text-slate-ink">{h.asrTranscript}</p>
           </details>
         )}
-        {/* ADAAAA-7881: operator pipeline internals — event type, score, trigger,
-            outcome reason and the review controls — live in ONE collapsed
-            disclosure so the customer-facing hierarchy stays intact. */}
+        {/* ADAAAA-7881: operator pipeline internals — event type, score, trigger
+            and outcome reason — live in ONE collapsed disclosure so the
+            customer-facing hierarchy stays intact. ADAAAA-7893: the review
+            controls are NOT internals and no longer live here. */}
         {admin && (
           <details className="mt-3 rounded-lg border border-purple/30 bg-black/30 px-2 py-1" data-detail-pipeline>
             <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-wide text-mut">
@@ -1003,31 +1077,6 @@ export function HighlightCard({
                 Trigger: <span className="font-bold text-ink">{triggerLabel(h.trigger)}</span>
               </div>
               <div className="text-sm text-slate-ink">{h.reason || "No reason"}</div>
-              {h.status === "rejected" && (
-                <div className="rounded-lg border border-red/40 bg-red/10 px-2 py-1 text-xs text-red" data-detail-rejected>
-                  Rejected — the highlight leaves the accepted feed. Accept to restore within the recover window.
-                </div>
-              )}
-              <div className="mt-1 flex gap-2">
-                <button
-                  className="btn-neon flex-1"
-                  disabled={h.status === "accepted" || pending}
-                  onClick={() => onDecision(h, "accepted")}
-                  data-detail-accept
-                >
-                  {busyAccept ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Check className="mr-1 inline h-4 w-4" />}
-                  {busyAccept ? "Accepting…" : "Accept"}
-                </button>
-                <button
-                  className="btn-neon btn-pink flex-1"
-                  disabled={h.status === "rejected" || pending}
-                  onClick={() => onDecision(h, "rejected")}
-                  data-detail-reject
-                >
-                  {busyReject ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <X className="mr-1 inline h-4 w-4" />}
-                  {busyReject ? "Rejecting…" : "Reject"}
-                </button>
-              </div>
             </div>
           </details>
         )}

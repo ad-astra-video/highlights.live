@@ -33,7 +33,13 @@ const FORBIDDEN = [
   "near_miss",
   "not_highlight",
   "outcome=",
-  "rejected —",
+  // ADAAAA-7893: the owner-facing rejected clip note ("Rejected — hidden from
+  // the public feed…") is intentionally customer-visible, so the guard targets
+  // the pipeline banner shapes instead of the bare words. ADAAAA-7737's intent
+  // — no raw status enum in a decide banner — is preserved.
+  "· rejected",
+  "· accepted",
+  "rejected — outcome=",
   "accuracy",
   "lostFrames",
   "slot",
