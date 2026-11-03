@@ -1106,6 +1106,16 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         _verdict = profile.corroborate(timestamp, state.scoreboard_tracker)
         if _verdict.corroborated:
             obs["scoreBoardChanged"] = True
+            # ADAAAA-7844: carry the MEASURED delta (both parsed sides, sample
+            # counts, transition instant) alongside the boolean so the server can
+            # forward it to the confirm pass and the corroboration label can be
+            # tied to a legible, time-tied measurement instead of a bare flag.
+            try:
+                _delta = state.scoreboard_tracker.delta(timestamp)
+            except Exception:  # noqa: BLE001 - evidence is best-effort, never fatal
+                _delta = None
+            if _delta is not None:
+                obs["scoreboardDelta"] = _delta.to_dict()
     # ADAAAA-7008 / ADAAAA-7012: cache this frame's derived context (the "data
     # seeder" contract) so the on-demand `/app/evidence` recall endpoint can serve
     # it WITHOUT re-running the detector. Compact seed (tracks / objects / ocr) —

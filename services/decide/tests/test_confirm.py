@@ -24,6 +24,16 @@ from app.confirm import (
 )
 from fastapi.testclient import TestClient
 
+
+def _delta(pre=(0, 0), post=(1, 0), pre_samples=3, post_samples=2,
+           pre_ts=100.0, delta_ts=103.0, post_ts=103.0):
+    """A legible, time-tied MEASURED scoreboard delta (ADAAAA-7844 wire shape)."""
+    return {
+        "pre": list(pre), "post": list(post),
+        "preTs": pre_ts, "postTs": post_ts, "deltaTs": delta_ts,
+        "preSamples": pre_samples, "postSamples": post_samples,
+    }
+
 client = TestClient(app)
 
 
@@ -263,7 +273,8 @@ def test_run_pass_confirms_goal_and_disagrees(monkeypatch):
     # ADAAAA-7162: an independent corroboration signal (scoreboard change) is
     # required to accept a confirmed_goal. Provide it so the goal is kept.
     resp = run_confirmation_pass(
-        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": True}
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}],
+         "scoreBoardChanged": True, "scoreBoardDelta": _delta()}
     )
     assert resp["enabled"] is True
     assert resp["goalConfirmed"] == "confirmed_goal"
@@ -448,8 +459,14 @@ def test_audio_calls_goal_detects_goal_call():
 
 def test_goal_corroborated_requires_independent_signal():
     from app import confirm as cf
-    # scoreboard change OR goal-calling audio is sufficient.
-    assert cf.goal_corroborated(scoreboard_changed=True, transcript="") is True
+    # scoreboard change OR goal-calling audio is sufficient. ADAAAA-7844: the
+    # scoreboard branch requires a LEGIBLE, time-tied measured delta, not a flag.
+    assert cf.goal_corroborated(
+        scoreboard_changed=True, transcript="", scoreboard_delta=_delta()
+    ) is True
+    assert cf.goal_corroborated(
+        scoreboard_changed=True, transcript="", scoreboard_delta=None
+    ) is False
     assert cf.goal_corroborated(scoreboard_changed=False, transcript="GOOOAL") is True
     # neither is present -> NOT corroborated (the fabrication case).
     assert cf.goal_corroborated(scoreboard_changed=False, transcript="crowd roars") is False
@@ -472,7 +489,9 @@ def test_goal_corroborated_not_credited_for_model_frame_read():
     # Ball-in-net alone is never independent corroboration (ADAAAA-7162 guard).
     assert cf.goal_corroborated(scoreboard_changed=False, transcript="") is False
     # A MEASURED delta still corroborates (no recall regression on true goals).
-    assert cf.goal_corroborated(scoreboard_changed=True, transcript="") is True
+    assert cf.goal_corroborated(
+        scoreboard_changed=True, transcript="", scoreboard_delta=_delta()
+    ) is True
 
 
 def test_run_pass_downgrades_goal_on_model_frame_read_only(monkeypatch):
@@ -553,7 +572,9 @@ def test_goal_corroborated_credits_two_signal_attestation():
         scoreboard_changed=False, transcript="", two_signal_attested=False
     ) is False
     # the measured scoreboard delta and goal-calling audio still corroborate.
-    assert cf.goal_corroborated(scoreboard_changed=True, transcript="") is True
+    assert cf.goal_corroborated(
+        scoreboard_changed=True, transcript="", scoreboard_delta=_delta()
+    ) is True
     assert cf.goal_corroborated(scoreboard_changed=False, transcript="GOOOAL") is True
 
 
@@ -667,7 +688,8 @@ def test_run_pass_measured_scoreboard_takes_precedence_over_two_signal(monkeypat
     )
     monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
     resp = run_confirmation_pass(
-        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": True}
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}],
+         "scoreBoardChanged": True, "scoreBoardDelta": _delta()}
     )
     assert resp["corroborated"] is True
     assert resp["corroborationSource"] == "scoreboard"
@@ -898,7 +920,9 @@ def test_run_pass_confirms_penalty_conversion_in_shootout(monkeypatch):
     )
     assert resp["goalConfirmed"] == "confirmed_goal"
     assert resp["corroborated"] is True
-    assert resp["corroborationSource"] == "scoreboard"
+    # ADAAAA-7844: a shootout/tally read is the MODEL's frame read, not a
+    # measured scoreboard delta, so it is never labelled "scoreboard".
+    assert resp["corroborationSource"] == "frame_attestation"
     assert resp["decision"]["outcome"] == "scoring_play"
     assert resp["decision"]["isHighlight"] is True
 
@@ -1038,7 +1062,8 @@ def test_run_pass_accepts_real_goal_on_measured_score_delta(monkeypatch):
     )
     monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
     resp = run_confirmation_pass(
-        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}], "scoreBoardChanged": True}
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}],
+         "scoreBoardChanged": True, "scoreBoardDelta": _delta()}
     )
     assert resp["corroborated"] is True
     assert resp["corroborationSource"] == "scoreboard"
@@ -1108,12 +1133,14 @@ def test_goal_corroborated_window_scoreboard_cannot_override_no_goal_read():
     from app import confirm as cf
     # window-level measured delta alone -> NOT corroborated
     assert cf.goal_corroborated(
-        scoreboard_changed=True, transcript="", stage1_contradicts=True
+        scoreboard_changed=True, transcript="", stage1_contradicts=True,
+        scoreboard_delta=_delta(),
     ) is False
     # narrated shootout / tally inside a no-goal window -> NOT corroborated
     assert cf.goal_corroborated(
         scoreboard_changed=True, transcript="", penalty_shootout=True,
         goal_confirmed="confirmed_goal", stage1_contradicts=True,
+        scoreboard_delta=_delta(),
     ) is False
     assert cf.goal_corroborated(
         scoreboard_changed=False, transcript="", penalty_tally_changed=True,
@@ -1122,14 +1149,16 @@ def test_goal_corroborated_window_scoreboard_cannot_override_no_goal_read():
     # instant-anchored evidence DOES override the primary read (recall path)
     assert cf.goal_corroborated(
         scoreboard_changed=True, transcript="", two_signal_attested=True,
-        stage1_contradicts=True,
+        stage1_contradicts=True, scoreboard_delta=_delta(),
     ) is True
     assert cf.goal_corroborated(
         scoreboard_changed=True, transcript="GOOOAL! it's in the net",
         stage1_contradicts=True,
     ) is True
     # and the guard never fires when the window's own read agrees (no recall loss)
-    assert cf.goal_corroborated(scoreboard_changed=True, transcript="") is True
+    assert cf.goal_corroborated(
+        scoreboard_changed=True, transcript="", scoreboard_delta=_delta()
+    ) is True
 
 
 def test_run_pass_rejects_scoreboard_only_rescue_of_a_non_goal(monkeypatch):
@@ -1181,9 +1210,163 @@ def test_run_pass_still_accepts_when_window_read_agrees(monkeypatch):
     monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
     resp = run_confirmation_pass(
         {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}],
-         "scoreBoardChanged": True}
+         "scoreBoardChanged": True, "scoreBoardDelta": _delta()}
     )
     assert resp["corroborated"] is True
     assert resp["corroborationSource"] == "scoreboard"
     assert resp["decision"]["outcome"] == "scoring_play"
     assert resp["decision"]["isHighlight"] is True
+
+
+# --- ADAAAA-7844: legible, time-tied measured scoreboard delta ----------------
+# The defect: job dee44c2f (VOD, Soccer) accepted highlight 0d3604d0
+# (t 116.1-131.1) with `corroborated: true` / `corroborationSource: "scoreboard"`
+# while the window's own Stage-1 criteria (g39) read `scoreboardChanged: false`
+# and the clip's own frames showed POR 0-0 ESP at 3:01 and 3:09. The label came
+# from the penalty-shootout branch (a MODEL frame read) while the measured OCR
+# flag was false, and the label was emitted even when nothing was credited.
+
+
+def test_scoreboard_delta_legible_requires_both_sides_and_samples():
+    from app import confirm as cf
+    assert cf.scoreboard_delta_legible(_delta()) is True
+    # A bare flag / missing delta is not a measurement.
+    assert cf.scoreboard_delta_legible(None) is False
+    assert cf.scoreboard_delta_legible({}) is False
+    # Same score on both sides is not a delta.
+    assert cf.scoreboard_delta_legible(_delta(pre=(0, 0), post=(0, 0))) is False
+    # A single OCR sample on either side is a flip, not a measured delta.
+    assert cf.scoreboard_delta_legible(_delta(post_samples=1)) is False
+    assert cf.scoreboard_delta_legible(_delta(pre_samples=1)) is False
+    # Unparsed / absurd reads are never a score.
+    assert cf.scoreboard_delta_legible(_delta(pre=("x", 0))) is False
+    assert cf.scoreboard_delta_legible(_delta(post=(1, 400))) is False
+    # The transition instant must sit between the two concrete reads.
+    assert cf.scoreboard_delta_legible(_delta(pre_ts=100.0, delta_ts=90.0)) is False
+
+
+def test_window_ocr_flip_contradicted_by_window_frames_cannot_corroborate_goal():
+    """AC2 (ADAAAA-7844): a window-level OCR flip that the window's OWN frame
+    attestation contradicts cannot corroborate a GOAL.
+
+    Mirrors job dee44c2f window ts 117: a legible-looking scoreboard delta is in
+    the window, but the window's Stage-1 criteria (and the deep dive) read
+    ``scoreboardChanged: false`` and the frames show no goal conversion (a
+    single ball-in-net signal only). The delta must not be the anchor.
+    """
+    from app import confirm as cf
+    # The delta alone, with the window's frames saying "no score change": no.
+    assert cf.goal_corroborated(
+        scoreboard_changed=True,
+        transcript="",
+        scoreboard_delta=_delta(),
+        frame_attestation_contradicts=True,
+        ball_in_net=True,  # single-signal frame read (not two-signal)
+        goal_confirmed="confirmed_goal",
+    ) is False
+    # Control: the SAME measured delta corroborates when the window's own frames
+    # do not refute it (no recall regression for a genuinely measured tick).
+    assert cf.goal_corroborated(
+        scoreboard_changed=True,
+        transcript="",
+        scoreboard_delta=_delta(),
+        frame_attestation_contradicts=False,
+    ) is True
+
+
+def test_run_pass_window_ocr_flip_contradicted_by_stage1_criteria_is_not_goal(monkeypatch):
+    """AC2 end-to-end: a measured-looking delta in the confirm request whose
+    Stage-1 criteria explicitly read ``scoreboardChanged: false`` cannot rescue a
+    single-signal goal read — the GOAL is downgraded to near_miss and NO
+    corroboration source is labelled."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {
+        "outcome": "scoring_play", "isHighlight": True, "score": 95, "eventType": "GOAL",
+        "reason": "The ball enters the net and the commentator confirms the goal.",
+        # The window's own frame attestation: no score change observed.
+        "verdict": {"criteria": {
+            "ballInNet": True, "ballCrossedLineBetweenPosts": False,
+            "scoreboardChanged": False, "crowdErupted": True,
+        }},
+    }
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "penalty kick, ball enters the net", '
+        '"evidence": {"ballInNet": true, "ballTrajectoryCrossedLine": null, '
+        '"scoreboardChanged": false}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}],
+         "scoreBoardChanged": True, "scoreBoardDelta": _delta()}
+    )
+    assert resp["corroborated"] is False
+    assert resp["corroborationSource"] is None
+    assert resp["scoreboardDelta"] is None
+    assert resp["decision"]["outcome"] == "near_miss"
+    assert resp["decision"]["isHighlight"] is False
+
+
+def test_scoreboard_label_never_emitted_without_a_legible_delta(monkeypatch):
+    """AC3: ``corroborationSource == "scoreboard"`` only for a legible measured
+    delta. A bare flag that credits nothing yields null; when goal-calling audio
+    or the two-signal frame read actually credits the goal, those are labelled."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 90,
+              "eventType": "GOAL", "reason": "s1"}
+    # A bare boolean, no legible delta, no audio, single-signal frame read ->
+    # nothing credited and NOTHING labelled.
+    canned_bare = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, "reason": "ball in net", '
+        '"evidence": {"ballInNet": true, "ballTrajectoryCrossedLine": null}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned_bare)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}],
+         "scoreBoardChanged": True}
+    )
+    assert resp["corroborated"] is False
+    assert resp["corroborationSource"] is None  # never label an unmeasured source
+
+    # The two-signal frame read legitimately credits -> frame_attestation.
+    canned_two = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, "reason": "crossed the line", '
+        '"evidence": {"ballInNet": true, "ballTrajectoryCrossedLine": true}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned_two)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}],
+         "scoreBoardChanged": True}
+    )
+    assert resp["corroborated"] is True
+    assert resp["corroborationSource"] == "frame_attestation"
+    assert resp["scoreboardDelta"] is None
+
+
+def test_run_pass_shootout_read_never_labelled_scoreboard(monkeypatch):
+    """AC3: a penalty-shootout / tally reading is the MODEL's frame read, not a
+    measured scoreboard delta. It keeps the recall credit it earns (ADAAAA-7402)
+    but is reported as ``frame_attestation``, never ``scoreboard`` — this is the
+    job dee44c2f mislabel."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
+    stage1 = {"outcome": "scoring_play", "isHighlight": True, "score": 95,
+              "eventType": "GOAL", "reason": "s1",
+              "verdict": {"criteria": {"scoreboardChanged": False}}}
+    canned = (
+        '{"goalConfirmed": "confirmed_goal", "confidence": 0.9, '
+        '"reason": "Cristiano Ronaldo takes a penalty kick and the ball clearly enters the net", '
+        '"evidence": {"ballInNet": true, "penaltyShootout": true, "penaltyTallyChanged": true, '
+        '"scoreboardChanged": false}}'
+    )
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: canned)
+    resp = run_confirmation_pass(
+        {"stage1": stage1, "eventType": "GOAL", "frames": [{"base64": "x"}],
+         "scoreBoardChanged": False}
+    )
+    assert resp["corroborated"] is True          # recall credit preserved
+    assert resp["corroborationSource"] == "frame_attestation"
+    assert resp["corroborationSource"] != "scoreboard"
+    assert resp["scoreboardDelta"] is None

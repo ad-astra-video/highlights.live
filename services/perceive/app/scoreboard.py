@@ -371,6 +371,52 @@ def score_changed(prev: Optional[Tuple[int, int]], curr: Optional[Tuple[int, int
     return prev != curr
 
 
+# ADAAAA-7844: a measured scoreboard delta must be LEGIBLE on both sides and
+# CONSISTENT across OCR samples, not a single-frame flip. A one-frame OCR
+# misread (a stat line / sponsor graphic / clock read as "N - M") produced a
+# paired spurious delta (0-0 -> X-Y on the misread frame, X-Y -> 0-0 on the
+# next), and the server folded each of those single-frame "changes" into the
+# window as a measured scoreboard attestation. Requiring at least this many
+# concrete readings on EACH side of the transition means a transient misread
+# can never corroborate a goal: the post side has to stay stable, and the pre
+# side has to have been read more than once before the flip.
+SCOREBOARD_MIN_CONSISTENT_SAMPLES = 2
+
+
+@dataclass(frozen=True)
+class ScoreboardDelta:
+    """A legible, time-tied scoreboard transition measured from OCR readings.
+
+    ``pre`` / ``post`` are the two parsed ``(home, away)`` scores; ``pre_ts`` /
+    ``post_ts`` are the timestamps of the concrete reads that bracket the
+    transition (``post_ts`` is the first frame showing the new score, i.e. the
+    delta instant). ``pre_samples`` / ``post_samples`` are the contiguous
+    concrete reads supporting each side inside the tracker window.
+
+    ``to_dict`` is the wire shape the server folds into a window bias hint and
+    forwards to the decide ``/confirm`` pass, so the corroboration label can be
+    tied to a MEASURED delta instead of a bare boolean (ADAAAA-7844).
+    """
+
+    pre: Tuple[int, int]
+    post: Tuple[int, int]
+    pre_ts: float
+    post_ts: float
+    pre_samples: int
+    post_samples: int
+
+    def to_dict(self) -> dict:
+        return {
+            "pre": [int(self.pre[0]), int(self.pre[1])],
+            "post": [int(self.post[0]), int(self.post[1])],
+            "preTs": round(float(self.pre_ts), 3),
+            "postTs": round(float(self.post_ts), 3),
+            "deltaTs": round(float(self.post_ts), 3),
+            "preSamples": int(self.pre_samples),
+            "postSamples": int(self.post_samples),
+        }
+
+
 class ScoreboardTracker:
     """Per-session rolling history of scoreboard readings.
 
@@ -390,30 +436,78 @@ class ScoreboardTracker:
         self._readings.append((timestamp, score))
 
     def changed(self, timestamp: float) -> bool:
-        """True when the newest score reading differs from the immediately-prior
-        reading — i.e. the score actually *transitioned* at this frame
-        (ADAAAA-7543). Requires at least two concrete readings.
+        """True when a LEGIBLE, time-tied score transition is measured at this
+        frame (ADAAAA-7543, tightened by ADAAAA-7844).
 
-        Historical (ADAAAA-6360) behaviour compared the newest reading against
-        the EARLIEST surviving reading within ``window_seconds``. Because
-        perceive records a reading on every frame the scoreboard is visible,
-        that earliest-vs-newest comparison re-reports ``True`` for up to a full
-        ``window_seconds`` after any real goal — even on frames far from the
-        goal. In a frequent-goal compilation (kids_soccer.mp4) that stale delta
-        lands inside near-every 16-frame window, so the server's
-        ``foldWindowAttestation`` attested a non-goal window (t=570 line-up,
-        t=750 free-kick) from a score change that happened tens of seconds
-        earlier, and the window-level "Scoreboard score change" attestation
-        accepted a non-goal as a scoring goal. Comparing the two most recent
-        readings time-correlates the delta to the frame where the score actually
-        changed and stops the re-fire, so a non-goal window is no longer attested
-        by a stale delta."""
+        Historic (ADAAAA-6360) behaviour compared the newest reading against the
+        EARLIEST surviving reading within ``window_seconds``; that re-reported a
+        stale delta for up to a full window. ADAAAA-7543 changed it to compare
+        the two most recent readings, which time-correlates the delta to the
+        frame where the score actually changed. ADAAAA-7844 adds the legibility
+        bar: the transition only counts when both sides are parsed, differ, and
+        are each supported by at least ``min_samples`` contiguous OCR readings
+        inside the window (see :meth:`delta`). A single-frame OCR misread can no
+        longer fire ``scoreBoardChanged``.
+        """
+        return self.delta(timestamp) is not None
+
+    def delta(
+        self, timestamp: float, min_samples: int = SCOREBOARD_MIN_CONSISTENT_SAMPLES
+    ) -> Optional[ScoreboardDelta]:
+        """The most recent legible, time-tied score transition, or ``None``.
+
+        A transition is the boundary between two CONSECUTIVE concrete readings
+        that differ. It is credited only when the reading immediately before it
+        and the one at it are both parsed, and each side is backed by at least
+        ``min_samples`` contiguous readings (the post side proves the new score
+        is stable, the pre side proves the old score was not a transient
+        misread). Returns the parsed pre/post strings plus the sample counts and
+        timestamps so the caller can report and persist a MEASURED delta rather
+        than a boolean.
+        """
         cutoff = timestamp - self.window_seconds
         while self._readings and self._readings[0][0] < cutoff:
             self._readings.popleft()
-        if len(self._readings) < 2:
-            return False
-        return score_changed(self._readings[-2][1], self._readings[-1][1])
+        readings = list(self._readings)
+        if len(readings) < 2:
+            return None
+        idx: Optional[int] = None
+        for i in range(len(readings) - 1, 0, -1):
+            if score_changed(readings[i - 1][1], readings[i][1]):
+                idx = i
+                break
+        if idx is None:
+            return None
+        pre_score = readings[idx - 1][1]
+        post_score = readings[idx][1]
+        post_samples = 0
+        for j in range(len(readings) - 1, idx - 1, -1):
+            if readings[j][1] != post_score:
+                break
+            post_samples += 1
+        pre_samples = 0
+        for j in range(idx - 1, -1, -1):
+            if readings[j][1] != pre_score:
+                break
+            pre_samples += 1
+        need = max(1, int(min_samples))
+        if pre_samples < need or post_samples < need:
+            return None
+        # ADAAAA-7844: fire ONCE per transition — only on the frame whose read
+        # completes the post-side consistency (the need-th consecutive read of
+        # the new score). A later frame that keeps reading the same score is not
+        # a fresh measurement, so the stale-delta re-fire ADAAAA-7543 closed
+        # cannot come back through the legibility bar.
+        if post_samples != need:
+            return None
+        return ScoreboardDelta(
+            pre=pre_score,
+            post=post_score,
+            pre_ts=readings[idx - 1][0],
+            post_ts=readings[idx][0],
+            pre_samples=pre_samples,
+            post_samples=post_samples,
+        )
 
     def clear(self) -> None:
         self._readings.clear()

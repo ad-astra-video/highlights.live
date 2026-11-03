@@ -169,6 +169,15 @@ def _stage1_goal():
     }
 
 
+def _scoreboard_delta():
+    """A legible, time-tied MEASURED delta (ADAAAA-7844 wire shape)."""
+    return {
+        "pre": [0, 0], "post": [1, 0],
+        "preTs": 100.0, "postTs": 103.0, "deltaTs": 103.0,
+        "preSamples": 3, "postSamples": 2,
+    }
+
+
 def _confirm_with(monkeypatch, *, reply, transcript, scoreboard_changed=False, audio=True):
     monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
     monkeypatch.setenv("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1")
@@ -182,6 +191,8 @@ def _confirm_with(monkeypatch, *, reply, transcript, scoreboard_changed=False, a
         req["audioB64"] = "AAA"
     if scoreboard_changed:
         req["scoreBoardChanged"] = True
+        # ADAAAA-7844: a measured scoreboard anchor must carry the parsed delta.
+        req["scoreBoardDelta"] = _scoreboard_delta()
     return run_confirmation_pass(req)
 
 
@@ -226,7 +237,10 @@ def test_shootout_tally_credit_is_unchanged_by_a_stat_transcript(monkeypatch):
         monkeypatch, reply=canned, transcript=_STAT_WINDOWS[3][1]
     )
     assert resp["corroborated"] is True
-    assert resp["corroborationSource"] == "scoreboard"
+    # ADAAAA-7844: the PENALTIS tally is the MODEL's scoreboard read, not a
+    # measured OCR delta, so it is reported as a frame attestation — never
+    # "scoreboard".
+    assert resp["corroborationSource"] == "frame_attestation"
     assert resp["decision"]["isHighlight"] is True
 
 
