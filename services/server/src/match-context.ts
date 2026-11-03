@@ -104,6 +104,14 @@ export interface MatchContextResolverDeps {
   client: MatchContextClient;
   /** Perceive session id the evidence lives on (the pass's live session). */
   sessionId: string;
+  /** ADAAAA-7861: the pass may RE-RESERVE a fresh perceive session mid-run
+   * (SessionLostError recovery in `analyzeJob` -> `slotRef.onReserve`). A
+   * resolver pinned to the first session then posts every later re-check at a
+   * dead session, the orchestrator app-call 404s, `postMatchContext` answers
+   * null and the fold is dropped SILENTLY — measured on the first deployed VOD
+   * job: 3 checkpoints queued, 1 contract landed. Prefer this getter so the
+   * re-check always reads the CURRENT session. */
+  getSessionId?: () => string;
   hints: { title?: string; gameHint?: string; filename?: string };
   /** Job store write-through (patchJob parses through JobSchema). */
   getJob: (id: string) => Job | undefined;
@@ -295,22 +303,36 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
     const job = deps.getJob(deps.jobId);
     const previous = job?.matchContext as MatchContext | undefined;
     const asr = await probe();
+    // ADAAAA-7861: read the session lazily, and retry once on a null contract
+    // (a re-reserved session 404s the first app-call; the second lands on the
+    // live session). Before this, a null result returned with no log at all,
+    // which is how 2 of 3 checkpoints disappeared without a trace.
+    const currentSession = () => (deps.getSessionId ? deps.getSessionId() : deps.sessionId);
+    const body = {
+      gameHint: deps.hints.gameHint || job?.gameHint || undefined,
+      title: deps.hints.title || job?.title || undefined,
+      filename: deps.hints.filename,
+      transcript: asr.text || undefined,
+      previous,
+      progressPct,
+    };
     let result: { matchContext: Record<string, unknown>; evidenceStatus?: Record<string, unknown> } | null = null;
-    try {
-      result = await deps.client.postMatchContext(deps.sessionId, {
-        gameHint: deps.hints.gameHint || job?.gameHint || undefined,
-        title: deps.hints.title || job?.title || undefined,
-        filename: deps.hints.filename,
-        transcript: asr.text || undefined,
-        previous,
-        progressPct,
-      });
-    } catch (e: any) {
-      log(`[match-context:${deps.jobId}] resolve at ${progressPct}% failed: ${String(e?.message || e)}`);
-      return;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        result = await deps.client.postMatchContext(currentSession(), body);
+        if (result?.matchContext) break;
+      } catch (e: any) {
+        log(`[match-context:${deps.jobId}] resolve at ${progressPct}% failed: ${String(e?.message || e)}`);
+      }
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 250));
     }
     const ctx = result?.matchContext as MatchContext | undefined;
-    if (!ctx) return;
+    if (!ctx) {
+      log(
+        `[match-context:${deps.jobId}] no contract at ${progressPct}% (session ${currentSession()}) — keeping the stored context`
+      );
+      return;
+    }
     try {
       // JobSchema.parse in store.patchJob is the validator: a malformed context
       // is rejected there and the job keeps no matchContext (never a bad record).
@@ -329,6 +351,13 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
   const start = (checkpoint: number) => {
     if (fired.has(checkpoint)) return;
     fired.add(checkpoint);
+    // ADAAAA-7861: one line per checkpoint so a dropped re-check is visible in
+    // the job log (before this, only a successful persist ever logged).
+    log(
+      `[match-context:${deps.jobId}] re-check queued at ${checkpoint}% (session ${
+        deps.getSessionId ? deps.getSessionId() : deps.sessionId
+      })`
+    );
     queue.push(checkpoint);
     pump();
   };
