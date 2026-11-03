@@ -7,12 +7,19 @@ existing ``parse_ocr_score`` behaviour is unchanged on the same lines (AC7).
 """
 from __future__ import annotations
 
+import random
+
 from app.match_context import (
     FLIP_MARGIN,
     RESOLVER_VERSION,
     SINGLE_SOURCE_CAP,
     SPORT_UNKNOWN,
+    TEAM_LEXICON,
     USABLE_CONFIDENCE,
+    KitCluster,
+    _KIT_COLOR_NAMES,
+    _KIT_PRIORS,
+    _SOCCER_KIT_PRIORS,
     apply_monotonic_guard,
     associate_kits,
     build_match_context,
@@ -503,15 +510,19 @@ def test_resolve_match_context_suppresses_unattributed_candidates():
 
 
 def test_resolve_match_context_reports_unattributed_kit_colours():
+    # Only a red cluster is observed, so the away side's white shirt has no
+    # cluster to link to: the curated prior misses (ADAAAA-7866) and the resolver
+    # keeps reporting the unattributed side instead of guessing a colour.
     out = resolve_match_context(
         game_hint="soccer",
         ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
         hints={"title": "Portugal vs Spain"},
-        kit_samples=kit_samples([RED, WHITE], frames=3),
+        kit_samples=kit_samples([RED], frames=3),
         scorebug_swatches=[{"side": "home", "rgb": RED, "color": "red"}],
     )
     assert out["matchContext"]["teams"][0]["kitColors"][0]["primary"] == "red"
     assert out["evidenceStatus"]["kitColorsUnattributed"] == ["away"]
+    assert out["evidenceStatus"]["kitPriorMiss"] == ["away"]
 
 
 def test_resolve_match_context_no_evidence_is_unknown_not_fabricated():
@@ -572,3 +583,289 @@ def test_build_match_context_contract_shape():
     assert set(ctx["teams"][0]) == {"name", "side", "kitColors", "confidence", "evidence"}
     assert ctx["teams"][0]["kitColors"] == [{"primary": "red", "secondary": "green"}]
     assert ctx["inferredAt"].endswith("Z")
+
+
+# Kit-colour prior, third side-attribution channel (ADAAAA-7866) ----------
+
+# The stored evidence of job dee44c2f both measured channels left unanswered
+# (ADAAAA-7859 artifact): clusters ["white", "red"], only the home scorebug
+# swatch is stable (red, 91 % modal share), zero commentary kit phrases.
+_PALETTE_RGB = {
+    "red": RED,
+    "white": WHITE,
+    "navy": NAVY,
+    "black": [18.0, 18.0, 18.0],
+    "green": [30.0, 110.0, 40.0],
+    "yellow": [230.0, 220.0, 40.0],
+    "maroon": [110.0, 24.0, 30.0],
+    "sky blue": [120.0, 190.0, 230.0],
+}
+_PRIOR_TEAMS = [
+    {"name": "Portugal", "side": "home"},
+    {"name": "Spain", "side": "away"},
+]
+
+
+def _mk_clusters(colors):
+    """Clusters with palette RGB support (no sampling, no GPU)."""
+    return [
+        KitCluster(
+            primary=c,
+            secondary=None,
+            rgb=list(_PALETTE_RGB.get(c, [0.0, 0.0, 0.0])),
+            frames=4,
+            count=40 - 2 * i,
+        )
+        for i, c in enumerate(colors)
+    ]
+
+
+def test_kit_prior_completes_ac3_on_the_cited_job_stored_evidence():
+    # AC-P1: replay of dee44c2f from its own stored evidence — swatch decides
+    # home, the prior links the observed white cluster to away. The RGB of the
+    # white cluster is inert here (no swatch reads it); the published colour is
+    # the CLUSTER's stored name, never a value the prior supplies.
+    clusters = [
+        KitCluster(primary="white", secondary=None, rgb=[236.0, 236.0, 232.0], frames=112, count=140),
+        KitCluster(primary="red", secondary="orange", rgb=[138.9, 27.2, 34.4], frames=112, count=112),
+    ]
+    status: dict = {}
+    kits, ambiguous = associate_kits(
+        _PRIOR_TEAMS,
+        clusters,
+        scorebug_swatches=[{"side": "home", "rgb": [138.9, 27.2, 34.4], "color": "red"}],
+        commentary=None,
+        kit_prior=_SOCCER_KIT_PRIORS,
+        status=status,
+    )
+    assert kits["home"] == [{"primary": "red", "secondary": "orange"}]
+    assert kits["away"] == [{"primary": "white"}]
+    assert ambiguous is False
+    assert status["kitPriorUsed"] == ["away"]
+    assert status["kitPriorMiss"] == []
+    assert status["kitPriorConflict"] == []
+
+    # The table alone (no measured channel) also separates this job's clusters.
+    solo, solo_ambiguous = associate_kits(_PRIOR_TEAMS, clusters, kit_prior=_SOCCER_KIT_PRIORS, status={})
+    assert solo["home"][0]["primary"] == "red"
+    assert solo["away"][0]["primary"] == "white"
+    assert solo_ambiguous is False
+
+
+def test_resolve_match_context_prior_fills_the_unattributed_side():
+    # AC-P1/AC-P8 through the shipped resolver path: status carries the three
+    # prior fields beside kitColorsUnattributed.
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
+        transcript="Portugal and Spain trade chances in a tense first half.",
+        hints={"title": "Portugal vs Spain"},
+        kit_samples=kit_samples([RED, WHITE], frames=3),
+        scorebug_swatches=[{"side": "home", "rgb": RED, "color": "red"}],
+    )
+    ctx = out["matchContext"]
+    by_side = {t["side"]: t for t in ctx["teams"]}
+    assert by_side["home"]["kitColors"][0]["primary"] == "red"
+    assert by_side["away"]["kitColors"][0]["primary"] == "white"
+    assert ctx["ambiguous"] is False
+    status = out["evidenceStatus"]
+    assert status["kitPriorUsed"] == ["away"]
+    assert status["kitPriorMiss"] == []
+    assert status["kitPriorConflict"] == []
+    assert status["kitColorsUnattributed"] == []
+
+
+def test_kit_prior_never_matches_on_the_secondary_trim():
+    # R1: Spain's navy trim is not Spain's shirt. Matching it would hand Spain a
+    # navy away shirt that belongs to the other side.
+    clusters = _mk_clusters(["red", "navy"])
+    priors = {"Portugal": ("red", "green"), "Spain": ("white", "navy")}
+    status: dict = {}
+    kits, ambiguous = associate_kits(_PRIOR_TEAMS, clusters, kit_prior=priors, status=status)
+    assert kits == {}
+    assert status["kitPriorMiss"] == ["away"]
+    assert ambiguous is False
+
+
+def test_kit_prior_never_invents_a_colour():
+    # AC-P2: 1 200 randomised cluster/prior sets — every published colour is a
+    # colour an observed cluster carries, no cluster is shared by two sides, and
+    # a miss publishes nothing.
+    rng = random.Random(7866)
+    vocab = sorted(_KIT_COLOR_NAMES)
+    names = ["Portugal", "Spain", "Real Madrid", "Liverpool"]
+    priors = {
+        "Portugal": ("red", "green"),
+        "Spain": ("white", "navy"),
+        "Real Madrid": ("white", "gold"),
+    }
+    checked = 0
+    for _ in range(1200):
+        colors = [rng.choice(vocab) for _ in range(rng.randint(0, 3))]
+        clusters = _mk_clusters(colors)
+        teams = [
+            {"name": rng.choice(names), "side": "home"},
+            {"name": rng.choice(names), "side": "away"},
+        ]
+        status: dict = {}
+        kits, _ambiguous = associate_kits(teams, clusters, kit_prior=priors, status=status)
+        observed = {c.primary for c in clusters}
+        published = {kit[0]["primary"] for kit in kits.values()}
+        assert published <= observed
+        assert len(kits) <= len(clusters)
+        # every published side is a side the prior actually decided
+        assert set(kits) == set(status["kitPriorUsed"])
+        # a miss (or a conflict) voids the pass: nothing published at all
+        if status["kitPriorMiss"] or status["kitPriorConflict"]:
+            assert kits == {}
+        checked += 1
+    assert checked == 1200
+
+
+def test_kit_prior_only_adds_never_overrides_a_measured_channel():
+    # AC-P3: differential sweep, prior disabled vs enabled.
+    rng = random.Random(7859)
+    vocab = sorted(_KIT_COLOR_NAMES)
+    diffs = 0
+    for _ in range(1200):
+        colors = [rng.choice(vocab) for _ in range(rng.randint(1, 2))]
+        clusters = _mk_clusters(colors)
+        teams = [
+            {"name": rng.choice(["Portugal", "Spain", "Real Madrid"]), "side": "home"},
+            {"name": rng.choice(["Portugal", "Spain", "Liverpool"]), "side": "away"},
+        ]
+        swatches = []
+        if rng.random() < 0.4:
+            side = rng.choice(["home", "away"])
+            idx = rng.randrange(len(clusters))
+            swatches.append({"side": side, "rgb": list(clusters[idx].rgb), "color": clusters[idx].primary})
+        off, off_ambiguous = associate_kits(teams, clusters, scorebug_swatches=swatches)
+        status: dict = {}
+        on, on_ambiguous = associate_kits(teams, clusters, scorebug_swatches=swatches, kit_prior=_SOCCER_KIT_PRIORS, status=status)
+        for side, kit in off.items():
+            assert on[side] == kit
+        # disabling the prior reproduces the shipped behaviour exactly
+        assert off_ambiguous is on_ambiguous or on_ambiguous is True
+        if set(on) != set(off):
+            diffs += 1
+    assert diffs > 0  # the channel does add attributions where the record was empty
+
+
+def test_kit_prior_does_not_redecide_a_swatch_attributed_side():
+    # AC-P4, ordering case 1: stable scorebug swatch wins, the prior only plants
+    # the side the swatch did not decide.
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE], frames=3))
+    status: dict = {}
+    kits, _ambiguous = associate_kits(
+        _PRIOR_TEAMS,
+        clusters,
+        scorebug_swatches=[{"side": "home", "rgb": RED, "color": "red"}],
+        kit_prior=_SOCCER_KIT_PRIORS,
+        status=status,
+    )
+    assert kits["home"] == [{"primary": "red"}]
+    assert kits["away"] == [{"primary": "white"}]
+    assert status["kitPriorUsed"] == ["away"]
+
+
+def test_kit_prior_does_not_redecide_a_commentary_attributed_side():
+    # AC-P4, ordering case 2: the commentary phrase wins; the prior fills home.
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE], frames=3))
+    mentions = scan_commentary("Spain are wearing white today.", "soccer")
+    status: dict = {}
+    kits, _ambiguous = associate_kits(
+        _PRIOR_TEAMS,
+        clusters,
+        commentary=mentions,
+        kit_prior=_SOCCER_KIT_PRIORS,
+        status=status,
+    )
+    assert kits["away"] == [{"primary": "white"}]
+    assert kits["home"] == [{"primary": "red"}]
+    assert status["kitPriorUsed"] == ["home"]
+
+
+def test_kit_prior_two_priors_on_one_cluster_is_a_conflict_not_a_guess():
+    # AC-P5a: separation failed -> nothing published, ambiguous true, both sides
+    # named. `ambiguous` keeps its shipped meaning (separation flag).
+    clusters = _mk_clusters(["red"])
+    priors = {"Portugal": ("red", None), "Liverpool": ("red", None)}
+    status: dict = {}
+    kits, ambiguous = associate_kits(
+        [{"name": "Portugal", "side": "home"}, {"name": "Liverpool", "side": "away"}],
+        clusters,
+        kit_prior=priors,
+        status=status,
+    )
+    assert kits == {}
+    assert ambiguous is True
+    assert status["kitPriorConflict"] == ["home", "away"]
+    assert status["kitPriorMiss"] == []
+
+
+def test_kit_prior_miss_names_every_unresolved_side():
+    # AC-P5b: a miss publishes nothing for the unresolved sides and reports EVERY
+    # side without a usable hit (not just the first). A miss is not ambiguity.
+    clusters = _mk_clusters(["black"])
+    status: dict = {}
+    kits, ambiguous = associate_kits(_PRIOR_TEAMS, clusters, kit_prior=_SOCCER_KIT_PRIORS, status=status)
+    assert kits == {}
+    assert ambiguous is False
+    assert status["kitPriorMiss"] == ["home", "away"]
+    assert status["kitPriorConflict"] == []
+
+
+def test_kit_prior_miss_leaves_kitColorsUnattributed_untouched():
+    # AC-P5c through the resolver: a miss keeps the existing unattributed report
+    # and does not flip `ambiguous`.
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
+        hints={"title": "Portugal vs Spain"},
+        kit_samples=kit_samples([[24.0, 24.0, 26.0]], frames=3),
+    )
+    status = out["evidenceStatus"]
+    assert out["matchContext"]["ambiguous"] is False
+    assert status["kitPriorMiss"] == ["home", "away"]
+    assert status["kitColorsUnattributed"] == ["home", "away"]
+    assert all(t["kitColors"] == [] for t in out["matchContext"]["teams"])
+
+
+def test_kit_prior_table_integrity():
+    # AC-P6: canonical keys, name_color vocabulary, <= 2 colours per team.
+    canonical = {row["name"] for row in TEAM_LEXICON["soccer"]}
+    assert set(_SOCCER_KIT_PRIORS) <= canonical
+    for entry in _SOCCER_KIT_PRIORS.values():
+        assert isinstance(entry, tuple) and len(entry) == 2
+        colours = [c for c in entry if c]
+        assert len(colours) <= 2
+        assert all(c in _KIT_COLOR_NAMES for c in colours)
+    for sport, table in _KIT_PRIORS.items():
+        assert sport in TEAM_LEXICON
+        assert set(table) <= {row["name"] for row in TEAM_LEXICON[sport]}
+
+
+def test_kit_prior_missing_entry_never_raises():
+    # AC-P6: an unlisted team (a corpus club the table does not seed) is a miss,
+    # not an exception and not a guess.
+    clusters = _mk_clusters(["red"])
+    status: dict = {}
+    kits, ambiguous = associate_kits(
+        [{"name": "Real Madrid", "side": "home"}],
+        clusters,
+        kit_prior=_SOCCER_KIT_PRIORS,
+        status=status,
+    )
+    assert kits == {}
+    assert ambiguous is False
+    assert status["kitPriorMiss"] == ["home"]
+
+
+def test_kit_prior_disabled_leaves_status_untouched():
+    # The channel is opt-in per sport: without a table no prior field is written.
+    clusters = _mk_clusters(["red", "white"])
+    status = {"scorebugSwatches": 0}
+    kits, ambiguous = associate_kits(_PRIOR_TEAMS, clusters, kit_prior=None, status=status)
+    assert kits == {}
+    assert ambiguous is False
+    assert status == {"scorebugSwatches": 0}

@@ -17,6 +17,7 @@ import {
   createVodMatchContextResolver,
   extractCommentaryWav,
   matchContextEnabled,
+  toMatchContextEvidence,
   transcribeCommentary,
   type MatchContext,
 } from "../src/match-context";
@@ -276,5 +277,121 @@ describe("createVodMatchContextResolver", () => {
     r.onProgress(0);
     await r.finish();
     expect(store.patches).toHaveLength(0);
+  });
+
+  // ADAAAA-7868 (AC-P8): the resolver's `evidenceStatus` is persisted ON the
+  // job record beside `matchContext`, so an operator can read WHY a side has no
+  // kit colour from GET /jobs/:id instead of a server log. It is a copy of what
+  // the resolver returned (E4) and it never takes matchContext down (E3).
+  it("persists the evidence status in the SAME patchJob as matchContext (E1/E4)", async () => {
+    const store = fakeStore();
+    const evidenceStatus = {
+      scorebugOcrFrames: 1,
+      commentaryChars: 2122,
+      kitSamples: 252,
+      kitSampleFrames: 224,
+      kitSampleTracks: 17,
+      scorebugSwatches: 134,
+      sources: ["scorebug_ocr", "asr", "metadata"],
+      kitClusterColors: ["white", "red"],
+      kitColorsUnattributed: [],
+      kitPriorUsed: ["away"],
+      kitPriorMiss: [],
+      kitPriorConflict: [],
+      sessionId: "sess-1",
+      sessionEvidence: true,
+      sport: "soccer",
+    };
+    const client = {
+      postMatchContext: async () => ({ matchContext: sampleContext(0), evidenceStatus }),
+    };
+    const r = createVodMatchContextResolver(baseDeps(store, client));
+    r.begin();
+    r.onProgress(0);
+    await r.finish();
+    // One write, not two: the context and its evidence land together.
+    expect(store.patches).toHaveLength(1);
+    expect(store.patches[0].matchContext).toBeTruthy();
+    expect(store.patches[0].matchContextEvidence).toEqual(evidenceStatus);
+    // Copy only — nothing was recomputed on the server side.
+    expect(store.getJob("job1").matchContextEvidence).toEqual(evidenceStatus);
+  });
+
+  it("writes no evidence field when the resolver returns no status (E2)", async () => {
+    for (const evidenceStatus of [undefined, {}]) {
+      const store = fakeStore();
+      const client = {
+        postMatchContext: async () => ({ matchContext: sampleContext(0), evidenceStatus }),
+      };
+      const r = createVodMatchContextResolver(baseDeps(store, client));
+      r.begin();
+      r.onProgress(0);
+      await r.finish();
+      expect(store.patches).toHaveLength(1);
+      expect(store.patches[0]).toHaveProperty("matchContext");
+      expect(store.patches[0]).not.toHaveProperty("matchContextEvidence");
+      expect(store.getJob("job1").matchContextEvidence).toBeUndefined();
+    }
+  });
+
+  it("still persists matchContext when the store rejects the evidence field (E3)", async () => {
+    const store = fakeStore();
+    const writes: any[] = [];
+    const inner = store.patchJob;
+    const patchJob = async (id: string, patch: any) => {
+      writes.push(patch);
+      // Stand-in for `JobSchema.parse` in store.patchJob: a marker that fails
+      // validation rejects the WHOLE patch, which must never cost the context.
+      if ("matchContextEvidence" in patch) throw new Error("JobSchema: invalid matchContextEvidence");
+      return inner(id, patch);
+    };
+    const client = {
+      postMatchContext: async () => ({
+        matchContext: sampleContext(0),
+        evidenceStatus: { kitPriorUsed: ["away"] },
+      }),
+    };
+    const r = createVodMatchContextResolver({ ...baseDeps(store, client), patchJob });
+    r.begin();
+    r.onProgress(0);
+    await r.finish();
+    expect(writes).toHaveLength(2);
+    expect(writes[0]).toHaveProperty("matchContextEvidence");
+    expect(writes[1]).not.toHaveProperty("matchContextEvidence");
+    expect(store.getJob("job1").matchContext.teams[0].name).toBe("Portugal");
+    expect(store.getJob("job1").matchContextEvidence).toBeUndefined();
+  });
+});
+
+describe("toMatchContextEvidence (ADAAAA-7868)", () => {
+  it("returns no value for an absent or empty status", () => {
+    expect(toMatchContextEvidence(undefined).value).toBeUndefined();
+    expect(toMatchContextEvidence(null).value).toBeUndefined();
+    expect(toMatchContextEvidence({}).value).toBeUndefined();
+  });
+
+  it("validates a real status and keeps unknown evidence keys (faithful copy)", () => {
+    const out = toMatchContextEvidence({
+      scorebugOcrFrames: 1,
+      kitClusterColors: ["white", "red"],
+      kitColorsUnattributed: ["away"],
+      kitPriorUsed: ["away"],
+      kitPriorMiss: [],
+      kitPriorConflict: [],
+      kitSampleFrames: 224,
+      someFutureChannel: { note: "kept" },
+    });
+    expect(out.error).toBeUndefined();
+    expect(out.value?.kitClusterColors).toEqual(["white", "red"]);
+    expect(out.value?.kitColorsUnattributed).toEqual(["away"]);
+    // A resolver key the contract does not declare yet still reaches the record.
+    expect((out.value as any).someFutureChannel).toEqual({ note: "kept" });
+  });
+
+  it("reports a validation failure instead of throwing (E3)", () => {
+    const out = toMatchContextEvidence({ scorebugOcrFrames: "many", sources: "scorebug_ocr" });
+    expect(out.value).toBeUndefined();
+    expect(out.error).toContain("scorebugOcrFrames");
+    expect(out.error).toContain("sources");
   });
 });

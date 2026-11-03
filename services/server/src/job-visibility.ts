@@ -71,6 +71,14 @@ export const INTERNAL_JOB_KEYS = [
   "triggerWindows",
   "triggerReconciled",
   "triggerLatencyByFamily",
+  // ADAAAA-7868 landed the match-context evidence status (scorebug OCR frame
+  // counts, kit sample/cluster counts, per-source capture status, the perceive
+  // session id that produced them). Same class of internal pipeline diagnostic
+  // as the trigger ledger above: it is an OPERATOR explainability surface, not
+  // customer-facing, so it is filtered here rather than left as a new bleed
+  // path. `matchContext` itself stays visible — the inferred teams/colours are
+  // the customer's explainability view; only the evidence accounting is internal.
+  "matchContextEvidence",
 ] as const;
 
 export type InternalJobKey = (typeof INTERNAL_JOB_KEYS)[number];

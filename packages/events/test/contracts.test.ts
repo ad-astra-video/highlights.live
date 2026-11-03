@@ -17,6 +17,7 @@ import {
   WindowAnalysisSchema,
   ConfirmRecordSchema,
   StageAMetricsSnapshotSchema,
+  MatchContextEvidenceSchema,
   MAX_TRACKS,
   LIVE_MAX_TRACKS,
 } from "../src/index";
@@ -374,6 +375,69 @@ describe("Job + StageAMetricsSnapshot (INC-2 / ADAAAA-4325 slice 5: FP-rate metr
         ).toThrow();
       }
     });
+  });
+});
+
+describe("Job.matchContextEvidence (ADAAAA-7868 / AC-P8)", () => {
+  const EVIDENCE = {
+    scorebugOcrFrames: 1,
+    commentaryChars: 2122,
+    kitSamples: 252,
+    kitSampleFrames: 224,
+    kitSampleTracks: 17,
+    scorebugSwatches: 134,
+    sources: ["scorebug_ocr", "asr", "metadata"],
+    kitClusterColors: ["white", "red"],
+    kitColorsUnattributed: ["away"],
+    kitPriorUsed: [],
+    kitPriorMiss: ["away"],
+    kitPriorConflict: [],
+    sessionId: "sess-7859",
+    sessionEvidence: true,
+    sport: "soccer",
+  };
+
+  it("accepts the resolver's evidence status beside matchContext and keeps it", () => {
+    const j = JobSchema.parse({
+      id: "job-evidence",
+      source: "file",
+      status: "done",
+      createdAt: "2026-11-03T15:00:00Z",
+      matchContext: {
+        sport: "soccer",
+        teams: [{ name: "Portugal", side: "home", kitColors: [{ primary: "red" }], confidence: 0.9 }],
+        inferredAt: "2026-11-03T15:00:00Z",
+        resolverVersion: 1,
+        ambiguous: false,
+      },
+      matchContextEvidence: EVIDENCE,
+    });
+    expect(j.matchContextEvidence?.kitClusterColors).toEqual(["white", "red"]);
+    expect(j.matchContextEvidence?.kitColorsUnattributed).toEqual(["away"]);
+    expect(j.matchContextEvidence?.kitPriorMiss).toEqual(["away"]);
+    expect(j.matchContextEvidence?.kitSampleFrames).toBe(224);
+  });
+
+  it("is optional: a record written before the field parses untouched (E2)", () => {
+    const j = JobSchema.parse({ id: "job-legacy", source: "file", status: "done", createdAt: "2026-11-01T00:00:00Z" });
+    expect(j.matchContextEvidence).toBeUndefined();
+  });
+
+  it("carries an unrecognised evidence key through instead of stripping it", () => {
+    // A new resolver channel must stay inspectable without a contract change.
+    const parsed = MatchContextEvidenceSchema.parse({ kitClusterColors: ["red"], someFutureChannel: { note: 1 } });
+    expect((parsed as Record<string, unknown>).someFutureChannel).toEqual({ note: 1 });
+  });
+
+  it("rejects a wrong-typed evidence key", () => {
+    expect(() => MatchContextEvidenceSchema.parse({ scorebugOcrFrames: "many" })).toThrow();
+    expect(() => MatchContextEvidenceSchema.parse({ sources: "scorebug_ocr" })).toThrow();
+    expect(() => JobSchema.parse({
+      id: "job-bad",
+      source: "file",
+      createdAt: "2026-11-03T15:00:00Z",
+      matchContextEvidence: { kitSamples: -1 },
+    })).toThrow();
   });
 });
 

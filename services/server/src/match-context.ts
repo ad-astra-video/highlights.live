@@ -24,7 +24,11 @@
 // confidence can rise as evidence accumulates while the monotonic guard keeps an
 // attributed team's name frozen (AC4).
 import { spawn } from "node:child_process";
-import type { Job } from "@highlights/events";
+import {
+  MatchContextEvidenceSchema,
+  type Job,
+  type MatchContextEvidence,
+} from "@highlights/events";
 
 /** One team attribution as persisted on the job record (plan §3 Stage 5). */
 export interface MatchContextTeam {
@@ -51,16 +55,14 @@ export interface MatchContext {
   }[];
 }
 
-export interface MatchContextEvidenceStatus {
-  scorebugOcrFrames?: number;
-  commentaryChars?: number;
-  kitSamples?: number;
-  scorebugSwatches?: number;
-  sources?: string[];
-  sessionId?: string | null;
-  sessionEvidence?: boolean;
-  sport?: string;
-}
+/**
+ * The resolver's `evidenceStatus`, as persisted on the job record
+ * (`matchContextEvidence`, ADAAAA-7868). The shape is OWNED by the contract
+ * package — `MatchContextEvidenceSchema` in `packages/events` — so the server
+ * and the stored record cannot drift apart; this alias keeps the historical
+ * server-side name.
+ */
+export type MatchContextEvidenceStatus = MatchContextEvidence;
 
 export interface MatchContextResolveResult {
   matchContext: MatchContext;
@@ -252,6 +254,31 @@ export function matchContextEnabled(env: NodeJS.ProcessEnv = process.env): boole
 }
 
 /**
+ * Validate + copy a resolver `evidenceStatus` for persistence (ADAAAA-7868).
+ *
+ * Returns `{ value: undefined }` — and the caller writes no field — when the
+ * pass produced no status at all (E2) or when the status fails validation.
+ * A validation failure is reported through `error` so the resolver can log WHY
+ * the markers were dropped while still persisting `matchContext` (E3); it is
+ * never thrown, because the primary contract must survive a marker problem.
+ *
+ * Pure and IO-free: the same schema (`MatchContextEvidenceSchema` in
+ * `packages/events`) validates the write here and on `JobSchema.parse`, so the
+ * pre-check can never disagree with the store.
+ */
+export function toMatchContextEvidence(
+  status: Record<string, unknown> | undefined | null
+): { value?: MatchContextEvidence; error?: string } {
+  if (!status || typeof status !== "object") return {};
+  if (Object.keys(status).length === 0) return {};
+  const parsed = MatchContextEvidenceSchema.safeParse(status);
+  if (!parsed.success) {
+    return { error: parsed.error.issues.map((i: { path: (string | number)[]; message: string }) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ") };
+  }
+  return { value: parsed.data as MatchContextEvidence };
+}
+
+/**
  * Build the once-per-job VOD match-context resolver.
  *
  * Wiring (in `runVodJob`): `begin()` right after the perceive session is
@@ -333,10 +360,28 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
       );
       return;
     }
+    // ADAAAA-7868 (AC-P8): persist the resolver's evidence status BESIDE the
+    // context in the SAME patchJob, so a stored job explains its own kit
+    // attribution (which clusters were seen, which sides stayed unattributed,
+    // what the curated prior did) without a server-log read. It is a copy of
+    // what the resolver already returned — nothing is recomputed here (E4), and
+    // a pass that returned no status writes no field at all (E2).
+    const evidence = toMatchContextEvidence(result?.evidenceStatus);
+    if (evidence.error) {
+      log(
+        `[match-context:${deps.jobId}] evidence status rejected at ${progressPct}% (${evidence.error}) — ` +
+          `persisting matchContext only`
+      );
+    }
     try {
       // JobSchema.parse in store.patchJob is the validator: a malformed context
       // is rejected there and the job keeps no matchContext (never a bad record).
-      await deps.patchJob(deps.jobId, { matchContext: ctx });
+      await deps.patchJob(
+        deps.jobId,
+        evidence.value
+          ? { matchContext: ctx, matchContextEvidence: evidence.value }
+          : { matchContext: ctx }
+      );
       const status = result?.evidenceStatus;
       log(
         `[match-context:${deps.jobId}] persisted at ${progressPct}%: ` +
@@ -344,7 +389,22 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
           ` ambiguous=${ctx.ambiguous} sources=${((status?.sources as string[] | undefined) ?? []).join(",")}`
       );
     } catch (e: any) {
-      log(`[match-context:${deps.jobId}] persist failed: ${String(e?.message || e)}`);
+      // E3 failure isolation: the evidence field must never take the primary
+      // matchContext contract down. Retry ONCE with the context alone — the
+      // evidence is an explainability marker, not the record's purpose.
+      if (!evidence.value) {
+        log(`[match-context:${deps.jobId}] persist failed: ${String(e?.message || e)}`);
+        return;
+      }
+      log(
+        `[match-context:${deps.jobId}] combined persist rejected (${String(e?.message || e)}) — ` +
+          `retrying with matchContext only`
+      );
+      try {
+        await deps.patchJob(deps.jobId, { matchContext: ctx });
+      } catch (e2: any) {
+        log(`[match-context:${deps.jobId}] persist failed: ${String(e2?.message || e2)}`);
+      }
     }
   };
 
