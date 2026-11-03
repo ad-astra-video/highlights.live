@@ -31,6 +31,22 @@ COPY sam3 /srv/sam3
 RUN pip install --no-cache-dir -e /srv/sam3 \
  && pip install --no-cache-dir pycocotools
 
+# ADAAAA-7828: SAM3 compiles its Triton CUDA kernels on the FIRST forward pass
+# (`RuntimeError: Failed to find C compiler`), so the C compiler is a RUNTIME
+# dependency of the shipped image, not just a build one. The torch runtime base
+# image ships none. Kept BELOW the pip layers so the pip cache survives.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential \
+ && rm -rf /var/lib/apt/lists/*
+
+# ADAAAA-7828: fail the BUILD, not the silent RUN, when a SAM3 runtime
+# dependency is missing. Before this guard the image shipped without cv2 and
+# without a C compiler, so `start_session(<clip>)` raised ImportError and every
+# "SAM3" number was really Florence->IoU. Sam3Backend.start_error is the
+# runtime signal; this is the build-time one.
+RUN python3 -c "import cv2; print('sam3 runtime ok: cv2', cv2.__version__)" \
+ && gcc --version | head -1
+
 # gated weight cache lives outside the image (mounted at runtime)
 ENV HF_HOME=/models/hf-cache
 
