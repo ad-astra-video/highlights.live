@@ -12,7 +12,7 @@ function mkClient(over: Partial<PipelineClient> = {}): { client: PipelineClient;
       return { planVersion: 1, category: "soccer", intent: "", source: "planner", maxTracks: req.mode === "vod" ? 8 : 3, targets: [{ label: "player", role: "player" }] } as any;
     },
     postAudio: async () => ({ candidate: null, series: [] }),
-    controlForward: async () => {},
+    controlForward: async () => null,
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     stopPerceive: async () => {},
     confirm: async () => ({ enabled: false, goalConfirmed: null, confidence: 0, reason: "", evidence: {}, stage1Disagreed: false, decision: { isHighlight: false, score: 0, eventType: "KILL" } }),

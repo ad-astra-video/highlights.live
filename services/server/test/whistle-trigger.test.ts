@@ -129,7 +129,7 @@ describe("family-aware ledger (ADAAAA-7707 AC3)", () => {
           reason: "test",
         }) as any,
       postAudio: async () => ({ candidate: null, series: [] }),
-      controlForward: async () => {},
+      controlForward: async () => null,
       train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
       stopPerceive: async () => {},
       confirm: async () =>
