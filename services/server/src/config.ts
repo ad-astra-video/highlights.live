@@ -71,11 +71,14 @@ export interface ServerConfig {
    * so its persistent session SAM-tracker opens THAT clip (tracking across the
    * whole stream), rather than a server-side path perceive can't read. */
   perceiveClipRoot: string;
-  /** Hard cap (bytes) for a single browser VOD upload. Default 2 GB
-   * (`VOD_MAX_UPLOAD_BYTES`, default `2147483648`). The server rejects any
+  /** Hard cap (bytes) for a single browser VOD upload. Default 4 GB
+   * (`VOD_MAX_UPLOAD_BYTES`, default `4294967296`). The server rejects any
    * multipart upload larger than this with 413 before any compute is queued;
-   * the webapp mirrors it as a client-side pre-check. Keep at 2 GB — raising
-   * it increases billed Livepeer GPU time per job (see ADAAAA-2983). */
+   * the webapp mirrors it as a client-side pre-check. Raised from 2 GB to 4 GB
+   * by explicit CEO request (ADAAAA-7835), superseding the "keep at 2 GB" note
+   * from ADAAAA-2983. Raising it increases the billed Livepeer GPU time a
+   * single job can consume (cost scales with video duration), so price the
+   * ceiling before raising it again. */
   vodMaxUploadBytes: number;
   /** Chunk size (bytes) for the resumable VOD upload rail. The deployed app is
    * reached through a Cloudflare proxy/tunnel whose free plan caps each proxied
@@ -566,8 +569,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // unit coercion — a value like "2048" means 2048 bytes, never 2 GB). The cap,
     // the multipart fileSize margin, the upload byte counter and the client pre-check
     // all compare in bytes; only human-facing messages render units (api.formatBytes).
-    // See the vodMaxUploadBytes prop comment for the default (2147483648 = 2 GB).
-    vodMaxUploadBytes: Number(env.VOD_MAX_UPLOAD_BYTES ?? 2147483648),
+    // See the vodMaxUploadBytes prop comment for the default (4294967296 = 4 GB).
+    vodMaxUploadBytes: Number(env.VOD_MAX_UPLOAD_BYTES ?? 4294967296),
     vodChunkBytes: Number(env.VOD_CHUNK_BYTES ?? 64 * 1024 * 1024),
     ffmpegPath: env.FFMPEG_PATH ?? "ffmpeg",
     gameHintDefault: env.GAME_HINT ?? "unspecified",

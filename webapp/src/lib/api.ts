@@ -3,10 +3,10 @@ import { chunkRanges, VOD_SINGLE_SHOT_MAX } from "./vodUpload";
 
 const TOKEN_KEY = "hl_token";
 
-// Client-side mirror of the server's VOD_MAX_UPLOAD_BYTES (default 2 GB). The
+// Client-side mirror of the server's VOD_MAX_UPLOAD_BYTES (default 4 GB). The
 // dashboard refreshes this from GET /config so a server-side override stays in
 // sync; this constant is the pre-flight fallback used before that resolves.
-export const VOD_MAX_UPLOAD_BYTES = 2147483648; // 2 GB
+export const VOD_MAX_UPLOAD_BYTES = 4294967296; // 4 GB
 
 export function getToken(): string | null {
   return typeof localStorage !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null;
