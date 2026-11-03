@@ -494,6 +494,33 @@ export class OrchestratorAdapter implements PipelineClient {
     if (status < 200 || status >= 300) return null;
     return (data ?? null) as ControlAck | null;
   }
+  async postMatchContext(
+    sessionId: string,
+    payload: Record<string, unknown>
+  ): Promise<{ matchContext: Record<string, unknown>; evidenceStatus?: Record<string, unknown> } | null> {
+    // ADAAAA-7855: proxy the match-context fold through the same orchestrator
+    // session as /analyze, so perceive answers from the evidence IT already
+    // computed (ROI-gated scorebug OCR lines, torso kit samples, scoreboard
+    // swatches) plus the server's bounded ASR transcript + metadata hints. No
+    // GPU call on this path. Best-effort: a 404 (re-reserved session) / 5xx /
+    // transport error returns null and the job simply keeps no matchContext.
+    try {
+      const { status, data } = await this.client.appCall<any>(sessionId, "match-context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (status >= 200 && status < 300 && data?.matchContext) {
+        return {
+          matchContext: data.matchContext as Record<string, unknown>,
+          evidenceStatus: (data.evidenceStatus ?? undefined) as Record<string, unknown> | undefined,
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
   async recallPerceive(
     sessionId: string,
     req: { centerTs?: number; windowS?: number; startTs?: number; endTs?: number }
@@ -933,6 +960,29 @@ export class DirectAdapter implements PipelineClient {
     if (r.status >= 500) throw new Error(`controlForward failed: HTTP ${r.status}`);
     if (r.status < 200 || r.status >= 300) return null;
     return ((await r.json().catch(() => null)) ?? null) as ControlAck | null;
+  }
+  async postMatchContext(
+    _sessionId: string,
+    payload: Record<string, unknown>
+  ): Promise<{ matchContext: Record<string, unknown>; evidenceStatus?: Record<string, unknown> } | null> {
+    // ADAAAA-7855: direct/dev path posts the match-context fold straight to
+    // perceive `/app/match-context` with the fake session id (see the
+    // orchestrator path for the contract). Best-effort: any failure => null.
+    try {
+      const r = await fetch(`${this.cfg.perceiveUrl}/app/match-context`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Session-Id": this.fakeSession },
+        body: JSON.stringify(payload),
+      });
+      if (r.status < 200 || r.status >= 300) return null;
+      const body = (await r.json().catch(() => null)) as
+        | { matchContext?: Record<string, unknown>; evidenceStatus?: Record<string, unknown> }
+        | null;
+      if (!body?.matchContext) return null;
+      return { matchContext: body.matchContext, evidenceStatus: body.evidenceStatus };
+    } catch {
+      return null;
+    }
   }
   async recallPerceive(
     sessionId: string,

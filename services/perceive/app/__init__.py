@@ -55,6 +55,11 @@ from .scoreboard import (
     fallback_score_eligible,
     parse_ocr_score,
 )
+from .match_context import (
+    sample_scorebug_swatches,
+    sample_track_colors,
+    resolve_match_context,
+)
 from .scoreboard_vision import (
     ScoreboardVerdict,
     enabled as scoreboard_vision_enabled,
@@ -117,6 +122,19 @@ PLAYER_RETRY_ATTEMPTS = PLAYER_RETRY_WINDOW_FRAMES // max(1, PLAYER_RETRY_STRIDE
 # ADAAAA-7086: re-attempt scoreboard region discovery only every Nth candidate
 # while no scoreboard has been found (bounded region pass; recall preserved).
 _SCOREBOARD_DETECT_BACKOFF = 5
+
+# ADAAAA-7855 match-context evidence caps. Kit sampling is CPU-only and adds no
+# model call, but it must stay bounded so a long stream cannot grow session
+# memory: at most 480 torso samples (~1 per player track on every 3rd frame for
+# the first few minutes) and 60 scoreboard swatches. `PERCEIVE_MATCH_CONTEXT=0`
+# turns the whole evidence pass off (config-only rollback; the resolver endpoint
+# then answers with unknown teams, AC6).
+_MATCH_CONTEXT_MAX_KIT_SAMPLES = 480
+_MATCH_CONTEXT_MAX_SWATCHES = 60
+
+
+def _match_context_enabled() -> bool:
+    return os.environ.get("PERCEIVE_MATCH_CONTEXT", "1").lower() not in ("0", "false", "off")
 
 
 
@@ -296,6 +314,37 @@ class EvidenceRequest(BaseModel):
     windowS: float | None = None
     startTs: float | None = None
     endTs: float | None = None
+
+
+class MatchContextRequest(BaseModel):
+    """Match-context resolver input (ADAAAA-7855).
+
+    The SERVER owns the bounded ASR probe and the metadata hints, the perceive
+    session owns the evidence it already computed (ROI-gated scorebug OCR lines
+    per anchor frame, torso kit samples, scoreboard swatches). This request
+    carries the server-side half; the endpoint folds both through
+    ``match_context.resolve_match_context`` and returns the persisted contract
+    plus its recompute trail.
+
+    ``ocrFrames`` / ``kitSamples`` / ``scorebugSwatches`` are explicit overrides
+    for offline replay and tests: when omitted the session's own accumulated
+    evidence is used, so a normal call is one POST with the transcript and
+    nothing else. ``previous`` is the context already stored on the job, which
+    the monotonic guard merges against (a re-check may raise confidence but may
+    not flip an attributed team — AC4). ``progressPct`` lands in the trail so the
+    job record shows WHEN each recompute happened.
+    """
+
+    sportHint: str | None = None
+    gameHint: str | None = None
+    title: str | None = None
+    filename: str | None = None
+    transcript: str | None = None
+    previous: dict | None = None
+    progressPct: float = 0.0
+    ocrFrames: list[dict] | None = None
+    kitSamples: list[dict] | None = None
+    scorebugSwatches: list[dict] | None = None
 
 
 def _read_session_id(
@@ -1098,6 +1147,16 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                     score = alt
                     obs["ocr"] = full_ocr
         state.scoreboard_tracker.record(timestamp, score)
+        # ADAAAA-7855: sample the home/away kit swatches off the SAME ROI crop
+        # the OCR pass just read (CPU only, no GPU). These are the Stage-3
+        # "scorebug layout" association source for the match-context resolver;
+        # bounded so a long stream never grows them.
+        if _match_context_enabled() and roi is not None and len(state.scorebug_swatches) < _MATCH_CONTEXT_MAX_SWATCHES:
+            try:
+                for sw in sample_scorebug_swatches(state.last_rgb, roi, timestamp):
+                    state.scorebug_swatches.append(sw)
+            except Exception as e:  # noqa: BLE001 - evidence only, never fatal
+                log.debug("match-context scorebug swatch skipped frame %s: %s", seq, e)
         # ADAAAA-7754: secondary confirmation now goes through the type's named
         # corroboration-oracle seam. Soccer is the reference implementation
         # (scoreboard OCR -> the same `ScoreboardTracker.changed` reading as
@@ -1111,6 +1170,22 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     # it WITHOUT re-running the detector. Compact seed (tracks / objects / ocr) —
     # the decide `seeds` vocabulary; captured AFTER the scoreboard OCR pass so
     # `ocr` is final. Bounded to RECENT_FRAMES so a long stream never grows it.
+    # ADAAAA-7855: GPU-free kit-colour samples from the tracked player crops.
+    # One sample per player track on every 3rd frame (bounded count + tracks),
+    # averaging the torso band and skipping pitch/background pixels. This is the
+    # evidence the match-context resolver clusters into two kit colours; it adds
+    # no GPU work and no extra model call, so the VOD wall-clock delta stays
+    # inside the plan's +3% budget (AC7).
+    if _match_context_enabled() and len(state.kit_samples) < _MATCH_CONTEXT_MAX_KIT_SAMPLES:
+        state.kit_sample_frames += 1
+        if state.kit_sample_frames % 3 == 1:
+            try:
+                for sample in sample_track_colors(state.last_rgb, obs.get("tracks") or [], max_tracks=4):
+                    sample["ts"] = timestamp
+                    sample["frameSeq"] = seq
+                    state.kit_samples.append(sample)
+            except Exception as e:  # noqa: BLE001 - evidence only, never fatal
+                log.debug("match-context kit sample skipped frame %s: %s", seq, e)
     state.frame_seeds[timestamp] = {
         "ts": timestamp,
         "tracks": obs["tracks"],
@@ -1763,6 +1838,62 @@ def create_app() -> FastAPI:
         seeds.sort(key=lambda s: float(s.get("ts", 0)))
         return {"centerTs": req.centerTs, "seeds": seeds}
 
+
+    @router.post("/match-context")
+    async def match_context(
+        req: MatchContextRequest,
+        livepeer_session_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ):
+        """Resolve + fold the job's match context (ADAAAA-7855, Stage 0-5).
+
+        GPU-free: the scorebug OCR lines were already read on the anchor-frame
+        pass, the kit samples are a few pixels per tracked box, and the
+        transcript arrives from the server's one bounded CPU ASR probe. Returns
+        ``{matchContext, evidenceStatus}`` — unknown teams with zero confidence
+        when there is no evidence, never a fabricated name (AC6). A missing /
+        unknown session with no explicit evidence degrades the same way instead
+        of erroring, so a resolve call is never fatal to a VOD job.
+        """
+        sid = _read_session_id(livepeer_session_id, x_session_id)
+        state = registry.get(sid) if sid else None
+        session_hint = getattr(state, "game_hint", "") if state is not None else ""
+        ocr_frames = req.ocrFrames
+        if ocr_frames is None and state is not None:
+            ocr_frames = [
+                {"ts": seed.get("ts"), "lines": seed.get("ocr") or []}
+                for seed in list(state.frame_seeds.values())[-_MATCH_CONTEXT_MAX_SWATCHES * 2 :]
+            ]
+        if req.kitSamples is not None:
+            kit_samples = req.kitSamples
+        else:
+            kit_samples = list(getattr(state, "kit_samples", []) or [])
+        if req.scorebugSwatches is not None:
+            swatches = req.scorebugSwatches
+        else:
+            swatches = list(getattr(state, "scorebug_swatches", []) or [])
+        hints = {
+            "title": req.title,
+            "gameHint": req.gameHint or session_hint,
+            "filename": req.filename,
+        }
+        out = resolve_match_context(
+            sport_hint=req.sportHint,
+            game_hint=req.gameHint or session_hint,
+            ocr_frames=ocr_frames,
+            transcript=req.transcript,
+            hints=hints,
+            kit_samples=kit_samples[: _MATCH_CONTEXT_MAX_KIT_SAMPLES * 2],
+            scorebug_swatches=swatches[: _MATCH_CONTEXT_MAX_SWATCHES],
+            previous=req.previous,
+            progress_pct=req.progressPct,
+        )
+        status = out.get("evidenceStatus") or {}
+        status["sessionId"] = sid
+        status["sessionEvidence"] = state is not None
+        status["sport"] = (out.get("matchContext") or {}).get("sport")
+        out["evidenceStatus"] = status
+        return out
 
     @router.get("/session/stats")
     async def stats(

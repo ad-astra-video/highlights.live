@@ -498,6 +498,16 @@ services:
       # a max-size job stages ~4 GiB, times VOD_WORKER_CONCURRENCY.
       - VOD_MAX_UPLOAD_BYTES=${VOD_MAX_UPLOAD_BYTES:-4294967296}
       - FFMPEG_PATH=ffmpeg
+      # ADAAAA-7855: the match-context resolver's ONE bounded commentary probe
+      # per VOD job calls the same cheap CPU ASR service the decide path uses
+      # (no Livepeer GPU). Unset/unreachable => the ASR source is not_captured
+      # and the resolver runs on scorebug OCR + metadata only, never a guess.
+      - ASR_URL=${ASR_URL:-http://asr:8082}
+      # `MATCH_CONTEXT=0` is the config-only rollback for the whole resolver.
+      # The probe is bounded to a flat first-90s prefix (env-tunable) so its
+      # cost is per job, not proportional to runtime.
+      - MATCH_CONTEXT=${MATCH_CONTEXT:-1}
+      - MATCH_CONTEXT_ASR_SECONDS=${MATCH_CONTEXT_ASR_SECONDS:-90}
       - NODE_TLS_REJECT_UNAUTHORIZED=0
       - JWT_SECRET=dev-secret
       - ADMIN_EMAIL=admin@highlights.local
