@@ -77,12 +77,13 @@ Env:
 | `JWT_SECRET` | prod | `dev-insecure-secret-change-me` (dev/test only) | **Required in production.** With `NODE_ENV=production` the server refuses to boot (non-zero exit) when it is unset or a documented default (`dev-secret`, `dev-insecure-secret-change-me`, …), because a session signed with a public literal is forgeable from the repo alone (ADAAAA-7901). Generate with `openssl rand -hex 32`. Rotating it invalidates all existing sessions (users re-login). |
 | `EXPORT_TOKEN_SECRET` | no | HKDF-SHA256(`JWT_SECRET`, `clip-export`) | Secret for the per-clip export URL tokens (`/clips/<file>.mp4?x=…`, ADAAAA-7896). When unset it is derived from `JWT_SECRET`, so an export token can never become a session. If set it must differ from `JWT_SECRET` (≥16 chars in production); the server refuses to boot otherwise. |
 | `ADMIN_EMAIL` | no | `admin@highlights.local` | Seeded at startup. |
-| `ADMIN_PASSWORD` | no | `admin` | Seeded admin login (dev). Set a real one in prod. |
+| `ADMIN_PASSWORD` | prod | `admin` (dev/test only) | **Required in production.** With `NODE_ENV=production` the server refuses to boot (non-zero exit) when it is unset or the documented dev default `admin`, because that literal lives in the repo (ADAAAA-7904). Generate with `openssl rand -base64 32` and set it in `docker/.env` (untracked). A changed value rewrites the seeded admin's stored hash on the next boot, so the previous password stops working. |
 | `RESET_TOKEN_TTL_SEC` | no | `3600` | Password-reset token lifetime (seconds). |
 | `AUTH_RATE_LIMIT` | no | `30` | Max auth requests per IP per window. |
 | `AUTH_RATE_LIMIT_WINDOW_SEC` | no | `60` | Rate-limit window (seconds). |
 
-The dev admin is `admin@highlights.local` / `admin`. Change both via env.
+A dev/test boot with `ADMIN_PASSWORD` unset falls back to `admin` (dev only — a
+production boot refuses that fallback). Set a real one for any deployment.
 
 ---
 
@@ -251,7 +252,7 @@ PORT=3000
 JWT_SECRET=$(openssl rand -hex 32)   # ADAAAA-7901: required — no default, the server refuses to boot in production without it
 # EXPORT_TOKEN_SECRET=...            # optional: dedicated export-token secret (default: HKDF-derived from JWT_SECRET)
 ADMIN_EMAIL=admin@highlights.local
-ADMIN_PASSWORD=admin
+ADMIN_PASSWORD=$(openssl rand -base64 32)   # ADAAAA-7904: required — no default, the server refuses to boot in production without it
 FREE_HIGHLIGHTS=3          # free farming cap (0 = block free allowance entirely)
 DATABASE_PATH=/data/highlights.db
 ORCHESTRATOR_URL=https://orchestrator:8935
