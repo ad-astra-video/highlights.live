@@ -36,6 +36,7 @@ import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractAudioWindow, extractBurstFrames, extractFrames, probeHasAudio } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
+import { anchorSourceCandidates, samplePlayerAnchor, vodAnchorAtSec } from "./player-anchor";
 import {
   buildDatasetZip,
   readPersistedImage,
@@ -3847,6 +3848,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
     return null;
   };
+  const playerAnchorSource = (job: { id: string; source: string; sourceUrl?: string }): string | null => {
+    // ADAAAA-7847: where the jersey-identify anchor sample is decoded from.
+    // `anchorSourceCandidates` refuses the ingest URL on live rails (a second
+    // rtmp pull just to read one frame); first existing non-empty file wins.
+    for (const c of anchorSourceCandidates(job, cfg.dataDir)) {
+      if (existsSync(c) && statSync(c).size > 0) return c;
+    }
+    return null;
+  };
+
   app.get<{ Params: { id: string }; Querystring: { start?: string; end?: string } }>(
     "/jobs/:id/windows/audio",
     async (req: any, reply) => {
@@ -3957,7 +3968,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       });
       // Control messages (find-and-track intent) mirror the perceive schema: a
       // flat object with `type` plus its args spread at top level.
-      const fwd = { type, ...args };
+      const fwd: { type: string } & Record<string, any> = { type, ...args };
       const playerType = PLAYER_CONTROL_TYPES.includes(type);
       if (playerType) {
         // Fail loudly rather than acking ok:true for a request that reaches no
@@ -3981,6 +3992,43 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             job: jobForRole(store.getJob(job.id), req.user.role),
           };
         }
+        // ADAAAA-7847: give this ONE request its own anchor frame, sampled above
+        // the rail scale. The streaming rail (320:180 live / 640:360 VOD) cannot
+        // resolve a broadcast jersey; this decode happens at REQUEST time, once,
+        // and ride-along frames are the only new work — the observation cadence
+        // and the per-frame detection path are untouched. A source we cannot
+        // read is not a failure: the request is forwarded without an anchor and
+        // perceive falls back to the rail frame (pre-7847 behaviour).
+        const anchor = await samplePlayerAnchor({
+          ffmpegPath: cfg.ffmpegPath,
+          source: playerAnchorSource(job as any),
+          scale: cfg.playerAnchorFrameScale,
+          count: cfg.playerAnchorFrames,
+          spanS: cfg.playerAnchorSpanS,
+          atSec: vodAnchorAtSec(store.getJob(job.id) as any, cfg.vodDetailFps),
+          outDir: path.join(cfg.dataDir, "anchor", `${job.id}-${randomUUID().slice(0, 8)}`),
+        }).catch((e: any) => {
+          console.error(`[control:${job.id}] anchor sample failed:`, e?.message || e);
+          return null;
+        });
+        if (anchor?.frames.length) {
+          // Newest-first: perceive identifies the freshest legible frame, so the
+          // seeded bbox is as close to the operator's moment as the decode allows.
+          fwd.anchorImages = anchor.frames;
+          fwd.anchorScale = anchor.scale;
+          fwd.anchorOrigin = anchor.origin;
+        }
+        const anchorInfo = anchor
+          ? {
+              frames: anchor.frames.length,
+              scale: anchor.scale,
+              requestedScale: anchor.requestedScale,
+              sourceSize: anchor.sourceSize,
+              origin: anchor.origin,
+              atSec: anchor.atSec,
+              ms: anchor.ms,
+            }
+          : null;
         try {
           const ack = await adapter.controlForward(sid, fwd);
           if (!ack) {
@@ -3991,6 +4039,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               ok: false,
               error: "perceive returned no ack for this control (the session may have been re-reserved) — try again",
               control,
+              anchor: anchorInfo,
               ack: null,
               job: jobForRole(store.getJob(job.id), req.user.role),
             };
@@ -3998,6 +4047,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           return {
             ok: ack.ok !== false,
             control,
+            anchor: anchorInfo,
             ack,
             job: jobForRole(store.getJob(job.id), req.user.role),
           };

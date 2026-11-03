@@ -368,6 +368,77 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     await app.close();
   });
 
+  it("attaches a request-time anchor sample above the rail scale (ADAAAA-7847)", async () => {
+    const calls: any[] = [];
+    const adapter: any = fakePipeline();
+    adapter.controlForward = async (sid: string, c: any) => {
+      calls.push([sid, c]);
+      return { type: "ack", ok: true, cmd: "track-player", number: 11, slot: 1, trackId: "t1", selected: true, bbox: [0.3, 0.3, 0.5, 0.6] };
+    };
+    const { app } = await buildTestApp({}, { adapter });
+    const token = await register(app, "anchor7847@test.dev", "password123");
+    const job = await app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token}` }, payload: { videoPath } });
+    const jobId = job.json().job.id;
+    await waitForJob(app, jobId, token);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/control`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { type: "track-player", args: { number: 11 } },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(true);
+    // the diagnostics are surfaced so the operator/board can see which frame the
+    // identify pass actually read
+    expect(body.anchor).toBeTruthy();
+    expect(body.anchor.frames).toBeGreaterThan(0);
+    // the 320x180 fixture is SMALLER than the 1280:720 default, so the anchor
+    // scale is clamped instead of upscaled
+    expect(body.anchor.requestedScale).toBe("1280:720");
+    expect(body.anchor.scale).toBe("min(1280\\,iw):-2");
+    expect(body.anchor.sourceSize).toEqual({ width: 320, height: 180 });
+    expect(body.anchor.origin).toBe("vod-source");
+    // ...and the frames actually rode along on the forward to perceive
+    expect(calls).toHaveLength(1);
+    expect(Array.isArray(calls[0][1].anchorImages)).toBe(true);
+    expect(calls[0][1].anchorImages).toHaveLength(body.anchor.frames);
+    expect(calls[0][1].anchorImages[0]).toMatch(/^data:image\/jpeg;base64,/);
+    expect(calls[0][1].anchorScale).toBe("min(1280\\,iw):-2");
+    // the decide/observation path is untouched: the anchor is request-scoped
+    expect(calls[0][1].type).toBe("track-player");
+    expect(calls[0][1].number).toBe(11);
+    await app.close();
+  });
+
+  it("never attaches an anchor sample to a non-player control (ADAAAA-7847)", async () => {
+    const calls: any[] = [];
+    const adapter: any = fakePipeline();
+    adapter.controlForward = async (_sid: string, c: any) => {
+      calls.push(c);
+      return { type: "ack", ok: true, cmd: c.type, slot: 1 };
+    };
+    const { app } = await buildTestApp({}, { adapter });
+    const token = await register(app, "anchor7847b@test.dev", "password123");
+    const job = await app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token}` }, payload: { videoPath } });
+    const jobId = job.json().job.id;
+    await waitForJob(app, jobId, token);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/control`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { type: "track", args: { bbox: [0.1, 0.2, 0.3, 0.4], label: "player" } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().anchor).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].anchorImages).toBeUndefined();
+    await app.close();
+  });
+
   it("fails loudly when a player request has no live perceive session (ADAAAA-7833)", async () => {
     const adapter: any = fakePipeline();
     adapter.controlForward = async () => {
