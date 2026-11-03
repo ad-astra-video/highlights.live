@@ -66,9 +66,18 @@ def test_tracker_delta_across_window():
     # Same score later -> no delta.
     tr.record(30.0, (1, 0))
     assert tr.changed(40.0) is False
-    # Score goes 2-0 within the window -> delta.
+    # Score goes 2-0 within the window -> a delta, but ADAAAA-7844 requires the
+    # new reading to be CONFIRMED by a second OCR sample before it counts.
     tr.record(45.0, (2, 0))
+    assert tr.changed(45.0) is False
+    tr.record(48.0, (2, 0))
     assert tr.changed(50.0) is True
+    delta = tr.delta(50.0)
+    assert delta is not None
+    assert delta.pre == (1, 0) and delta.post == (2, 0)
+    assert delta.pre_samples >= 2 and delta.post_samples >= 2
+    assert delta.pre_ts == 30.0 and delta.post_ts == 45.0
+    assert delta.to_dict()["deltaTs"] == 45.0
 
 
 def test_tracker_prunes_stale_window():
@@ -100,10 +109,13 @@ def test_tracker_delta_does_not_refire_after_transition():
     tr = ScoreboardTracker(window_seconds=60.0)
     tr.record(10.0, (1, 0))
     tr.record(40.0, (1, 0))
-    # Transition at t=45: 1-0 -> 2-0. This is the only frame that should report
-    # a delta.
+    # Transition at t=45: 1-0 -> 2-0. The first frame showing the new score is
+    # not credited on its own (ADAAAA-7844: a single-frame OCR flip is not a
+    # measured delta); the second consecutive read of the new score confirms it.
     tr.record(45.0, (2, 0))
-    assert tr.changed(45.0) is True
+    assert tr.changed(45.0) is False
+    tr.record(46.0, (2, 0))
+    assert tr.changed(46.0) is True
     # The score stays 2-0 for the rest of the window (and beyond). No delta.
     tr.record(50.0, (2, 0))
     assert tr.changed(50.0) is False
@@ -113,9 +125,67 @@ def test_tracker_delta_does_not_refire_after_transition():
     # not yet been pruned at t=70): still no re-fire.
     tr.record(68.0, (2, 0))
     assert tr.changed(68.0) is False
-    # A genuine LATER transition still fires.
+    # A genuine LATER transition still fires (once confirmed by a second read).
     tr.record(90.0, (3, 0))
-    assert tr.changed(90.0) is True
+    assert tr.changed(90.0) is False
+    tr.record(92.0, (3, 0))
+    assert tr.changed(92.0) is True
+
+
+# --- ADAAAA-7844: a measured delta must be legible and consistent ------------
+
+
+def test_single_frame_ocr_flip_is_not_a_measured_delta():
+    """A ONE-FRAME OCR misread cannot fire scoreBoardChanged.
+
+    ADAAAA-7844 (job dee44c2f, window ts 117): a window carried
+    ``corroborationSource: "scoreboard"`` while its own frames showed POR 0-0.
+    A single misread frame yields a paired spurious flip (0-0 -> X-Y, then
+    X-Y -> 0-0 on the next frame); neither side is ever confirmed by a second
+    OCR sample, so no measured delta may be reported.
+    """
+    tr = ScoreboardTracker(window_seconds=60.0)
+    for ts in (10.0, 11.0, 12.0):
+        tr.record(ts, (0, 0))
+    # One frame OCRs a stat line as "1 - 0"; the very next frame reads 0-0.
+    tr.record(13.0, (1, 0))
+    assert tr.changed(13.0) is False  # post side has 1 sample only
+    tr.record(14.0, (0, 0))
+    assert tr.changed(14.0) is False  # back to the baseline: flip never confirmed
+    assert tr.delta(15.0) is None
+
+
+def test_delta_is_time_tied_and_reports_parsed_sides():
+    """The reported delta carries both parsed scores, the sample counts and the
+    transition instant, so the corroboration label is evidence-backed."""
+    tr = ScoreboardTracker(window_seconds=60.0)
+    for ts in (100.0, 100.33, 100.66):
+        tr.record(ts, (0, 0))
+    tr.record(103.0, (1, 0))
+    assert tr.changed(103.0) is False
+    tr.record(103.33, (1, 0))
+    delta = tr.delta(103.4)
+    assert delta is not None
+    payload = delta.to_dict()
+    assert payload["pre"] == [0, 0]
+    assert payload["post"] == [1, 0]
+    assert payload["preSamples"] == 3
+    assert payload["postSamples"] == 2
+    assert payload["preTs"] == 100.66
+    assert payload["postTs"] == 103.0
+    assert payload["deltaTs"] == 103.0
+    assert payload["preTs"] <= payload["deltaTs"] <= payload["postTs"]
+
+
+def test_delta_requires_two_reads_on_the_old_side():
+    """A transition with a single pre read is not credited (the baseline itself
+    could be the misread)."""
+    tr = ScoreboardTracker(window_seconds=60.0)
+    tr.record(10.0, (2, 1))
+    tr.record(12.0, (2, 2))
+    tr.record(14.0, (2, 2))
+    assert tr.changed(15.0) is False
+    assert tr.delta(15.0) is None
 
 
 # --- ADAAAA-7081: scoreboard ROI scoping -------------------------------------
@@ -323,7 +393,9 @@ def test_scoreboard_roi_autodetects_bottom_right_and_recall_delta():
 
     tr = ScoreboardTracker(window_seconds=60.0)
     tr.record(10.0, parse_ocr_score(["2 - 1"], roi=roi))
+    tr.record(20.0, parse_ocr_score(["2 - 1"], roi=roi))
     tr.record(30.0, parse_ocr_score(["3 - 1"], roi=roi))
+    tr.record(32.0, parse_ocr_score(["3 - 1"], roi=roi))
     assert tr.changed(40.0) is True  # genuine delta on a genuine scoreboard
 
 
@@ -474,7 +546,7 @@ def test_fallback_score_still_forges_delta_when_box_on_roi():
     # change across the window still fires a delta — recall is preserved.
     roi = ScoreboardRoi(0.0, 0.0, 0.4, 0.25)
     tr = ScoreboardTracker(window_seconds=60.0)
-    for ts, llm_score in [(10.0, "3 - 1"), (30.0, "3 - 2")]:
+    for ts, llm_score in [(10.0, "3 - 1"), (20.0, "3 - 1"), (30.0, "3 - 2"), (32.0, "3 - 2")]:
         real_box = [0.02, 0.03, 0.30, 0.20]  # inside the ROI
         ocr_lines = [llm_score] if fallback_score_eligible(real_box, roi) else []
         score = parse_ocr_score(ocr_lines, roi=roi)
