@@ -747,6 +747,52 @@ export const MatchContextSchema = z.object({
 });
 export type MatchContext = z.infer<typeof MatchContextSchema>;
 
+// ADAAAA-7868 (AC-P8): the resolver's `evidenceStatus`, persisted beside
+// `matchContext` so an operator can read WHY a team has (or has not) a kit
+// colour straight off `GET /jobs/:id` instead of a server log line. It is a
+// plain COPY of what `POST /app/match-context` already returned — zero new GPU,
+// model or sampling work (E4). Every key is optional because the resolver emits
+// only the ones it could produce on that pass, and a pass with no status writes
+// no field at all (E2). Additive optional: older records parse untouched, no
+// contract version bump, no migration.
+//
+// `.passthrough()` is deliberate. The declared keys are still validated (a
+// wrong type is rejected), but an evidence key this contract does not know yet
+// (e.g. a new kit-attribution channel) survives onto the record instead of
+// being silently stripped by zod — the field's whole purpose is faithfulness to
+// what the resolver reported.
+export const MatchContextEvidenceSchema = z
+  .object({
+    /** Anchor frames whose scorebug lines were read (Stage 0/1). */
+    scorebugOcrFrames: z.number().int().min(0).optional(),
+    /** Commentary characters the bounded ASR probe returned (Stage 2). */
+    commentaryChars: z.number().int().min(0).optional(),
+    kitSamples: z.number().int().min(0).optional(),
+    /** Distinct frames / tracks that contributed a torso kit sample. */
+    kitSampleFrames: z.number().int().min(0).optional(),
+    kitSampleTracks: z.number().int().min(0).optional(),
+    scorebugSwatches: z.number().int().min(0).optional(),
+    /** Per source: present (`asr`) or `asr:not_captured` (AC6 degradation). */
+    sources: z.array(z.string()).optional(),
+    /** Candidates folded below the usable threshold (never attributed). */
+    suppressedCandidates: z.array(z.string()).optional(),
+    /** Kit clusters the resolver actually observed (colour names). */
+    kitClusterColors: z.array(z.string()).optional(),
+    /** Sides with a team but no linking evidence for a kit colour. */
+    kitColorsUnattributed: z.array(z.string()).optional(),
+    /** Sides the curated kit-colour prior attributed (ADAAAA-7866). */
+    kitPriorUsed: z.array(z.string()).optional(),
+    /** Sides with no usable prior hit — the pass publishes nothing. */
+    kitPriorMiss: z.array(z.string()).optional(),
+    /** Sides whose priors landed on ONE cluster — separation failed. */
+    kitPriorConflict: z.array(z.string()).optional(),
+    sessionId: z.string().nullable().optional(),
+    sessionEvidence: z.boolean().optional(),
+    sport: z.string().optional(),
+  })
+  .passthrough();
+export type MatchContextEvidence = z.infer<typeof MatchContextEvidenceSchema>;
+
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -772,6 +818,12 @@ export const JobSchema = z.object({
   // resolver still writes an `ambiguous: true` context rather than a guess),
   // and whenever the resolver is switched off.
   matchContext: MatchContextSchema.optional(),
+  // ADAAAA-7868 (AC-P8): WHY the resolver attributed (or did not attribute) a
+  // kit colour on this job — a copy of the resolver's `evidenceStatus`, written
+  // in the SAME `patchJob` as `matchContext` so a record never carries one
+  // without the other. Additive optional — absent on records that predate it and
+  // on any pass where the resolver returned no status.
+  matchContextEvidence: MatchContextEvidenceSchema.optional(),
   // `file-sim` = loop a local file at real-time rate as a synthetic live source
   // (LiveIngest kind `file-sim`); used by QA/dev to run the live pipeline
   // deterministically without an RTMP encoder or a display (ADAAAA-5777).
