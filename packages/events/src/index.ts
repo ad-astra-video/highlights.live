@@ -883,6 +883,24 @@ export const HighlightRecordSchema = z.object({
   // coarse trigger.
   localizedTs: z.number().min(0).optional(),
   localizeSignal: z.enum(["peak_frame", "peak_audio", "trigger"]).optional(),
+  // ADAAAA-7845 (AC2): WHY the delivered clip sits where it does, plus the
+  // accepting evidence instant and |localizedTs - evidenceTs|. Peak audio is a
+  // secondary cue: an energy peak further than ~2 s from the evidence instant
+  // only moves the clip when it reads as a crowd/react burst (and is then capped
+  // to that tolerance edge); a far narration peak is recorded as rejected and
+  // the evidence instant anchors the clip. Additive optional — legacy rows carry
+  // none.
+  localizeAnchorReason: z
+    .enum([
+      "frame_attestation",
+      "peak_audio_reaction",
+      "peak_audio_far_burst_capped",
+      "peak_audio_far_rejected",
+      "trigger_evidence",
+    ])
+    .optional(),
+  localizeEvidenceTs: z.number().min(0).optional(),
+  localizeAnchorDeltaSec: z.number().min(0).optional(),
   // ADAAAA-7247 (ACC-7): the per-company clip-window setting that produced this
   // clip — configured pre-roll (clipWindowBeforeS) and post-roll
   // (clipWindowAfterS) seconds, plus the delivered window length
