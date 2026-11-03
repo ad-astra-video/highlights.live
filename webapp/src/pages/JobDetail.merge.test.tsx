@@ -32,16 +32,18 @@ function hl(over: Partial<JobDetailHighlight> = {}): JobDetailHighlight {
   };
 }
 
-describe("merged moment count is rendered on the winning card (ADAAAA-7621)", () => {
-  it("shows the merged-clip count when the moment absorbed overlapping clips", () => {
+describe("the card no longer states a merged count (ADAAAA-7881)", () => {
+  it("renders no merged badge on a moment that absorbed overlapping clips", () => {
     const html = text(renderToString(
       React.createElement(HighlightCard, {
         highlight: hl({ duplicateCount: 2, mergedIds: ["a", "b"] }),
         onDecision: () => {},
       })
     ));
-    expect(html).toContain('data-detail-duplicate-count="2"');
-    expect(html).toContain("2 merged");
+    // ADAAAA-7881: the count moved to the Analysis window list's connector.
+    expect(html).not.toContain("data-detail-duplicate-count");
+    expect(html).not.toContain("2 merged");
+    expect(html).not.toContain("merged");
   });
 
   it("renders no merged badge on a single-clip moment", () => {

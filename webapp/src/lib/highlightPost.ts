@@ -60,19 +60,167 @@ export function captionNarrative(
 }
 
 /**
- * Seed caption for a highlight: the event type and the clip timestamp are
- * always prefilled so a bare "Download" still yields a labelled clip, and the
- * window narrative is appended when the job carries one. The user edits this
- * in the card; the edited value is what the batch export ships.
+ * Human-readable label for a pipeline event type (ADAAAA-7881).
+ *
+ * A caption / post title is customer copy, so the raw enum (`SPORTING_EVENT`,
+ * `GOAL`, …) must never reach it. Known types map to plain words; an unknown
+ * type degrades to its title-cased words rather than leaking the enum.
  */
-export function seedCaption(
+const EVENT_LABELS: Record<string, string> = {
+  GOAL: "goal",
+  SPORTING_EVENT: "sporting moment",
+  NEAR_MISS: "near miss",
+  BIG_PLAY: "big play",
+  HIGHLIGHT: "highlight",
+};
+
+export function humanEventLabel(eventType?: string): string {
+  const raw = (eventType ?? "").trim();
+  if (!raw) return "highlight";
+  const known = EVENT_LABELS[raw.toUpperCase()];
+  if (known) return known;
+  return raw
+    .replace(/[_-]+/g, " ")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/** A SCREAMING_SNAKE pipeline enum (`SPORTING_EVENT`, `NOT_HIGHLIGHT`, …). */
+const SCREAMING_TOKEN = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g;
+
+/**
+ * Rewrite an observe-log line into customer copy: drop the internal codes
+ * (`T+69s`, `outcome=near_miss`, SCREAMING_SNAKE enums, the `·` separator and
+ * any leading event-code prefix) and leave the prose. Deterministic and pure —
+ * no model call, no network, no randomness.
+ */
+function scrubInternal(text: string): string {
+  const out = text
+    .replace(/\bT\+\s*\d+(?:\.\d+)?\s*s\b/gi, " ")
+    .replace(/\boutcome\s*=\s*[A-Za-z0-9_-]+/gi, " ")
+    .replace(SCREAMING_TOKEN, (m) => humanEventLabel(m))
+    .replace(/[·•]/g, ", ");
+  return out
+    // A bare leading event enum ("GOAL — …") is an internal code, not copy.
+    .replace(/^\s*[A-Z][A-Z0-9]{1,}\b\s*[,;:—–-]*\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[,;:—–\-\s]+|[,;:—–\-\s]+$/g, "");
+}
+
+/** The leading clause of a narrative: cut at an em/en dash or a semicolon. */
+function leadingClause(text: string): string {
+  const t = text.trim();
+  if (!t) return "";
+  const cut = t.search(/\s+[—–]\s+|;\s*/);
+  const body = cut > 0 ? t.slice(0, cut) : t;
+  return body.replace(/[\s,;:—–-]+$/, "").trim();
+}
+
+/** Trim to a word boundary no longer than `max`; never returns a cut word. */
+function trimToWords(text: string, max: number): string {
+  const t = text.trim();
+  if (t.length <= max) return t;
+  const cut = t.lastIndexOf(" ", max);
+  return cut > 0 ? t.slice(0, cut).trim() : "";
+}
+
+/** Capitalise the first letter and end in sentence punctuation. */
+function sentenceCase(text: string): string {
+  const t = text.trim();
+  if (!t) return "";
+  const up = t.charAt(0).toUpperCase() + t.slice(1);
+  return /[.!?]$/.test(up) ? up : `${up}.`;
+}
+
+/** Caption length ceiling (a post caption, not an observe-log line). */
+export const MAX_CAPTION_CHARS = 180;
+
+/**
+ * Suggested caption for a highlight (ADAAAA-7881) — one social-ready sentence
+ * built from the same summary-log window narrative the card used to dump
+ * verbatim behind a `GOAL · T+69s —` prefix.
+ *
+ * Deterministic and pure: no network, no model call, no `Math.random`. The user
+ * edits this in the card; the edited value is what the batch export ships.
+ */
+export function suggestCaption(
   h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType">,
   log?: SummaryLogEntry[]
 ): string {
-  const instant = Math.round(highlightInstant(h));
-  const head = `${(h.eventType || "Highlight").trim()} · T+${instant}s`;
-  const narrative = captionNarrative(h, log);
-  return narrative ? `${head} — ${narrative}` : head;
+  const narrative = scrubInternal(captionNarrative(h, log));
+  const fallback = `A ${humanEventLabel(h.eventType)} was captured in this clip`;
+  if (!narrative) return sentenceCase(fallback);
+  // One sentence: a multi-sentence narrative keeps its first sentence only.
+  const firstSentence = narrative.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? narrative;
+  let body = firstSentence;
+  if (body.length > MAX_CAPTION_CHARS - 1) body = leadingClause(body);
+  body = trimToWords(body, MAX_CAPTION_CHARS - 1).replace(/[\s,;:—–-]+$/, "");
+  return sentenceCase(body) || sentenceCase(fallback);
+}
+
+/** Longest post title the card will suggest. */
+const MAX_TITLE_CHARS = 60;
+
+/** A title line: trimmed at a word boundary, no trailing punctuation. */
+function titleLine(text: string): string {
+  const body = trimToWords(text.trim(), MAX_TITLE_CHARS).replace(/[\s,;:.!?—–-]+$/, "");
+  return body;
+}
+
+/**
+ * One-line post titles for a highlight (ADAAAA-7881), extractive and pure.
+ *
+ * (a) the narrative's leading clause, (b) the human event label joined to that
+ * clause when the join still fits, (c) the decide `reason`'s leading clause when
+ * it differs. Empties/duplicates are dropped and the list is capped at 3, so the
+ * card always offers 2–3 distinct one-line titles and never a cut word.
+ */
+export function postTitles(
+  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType">,
+  log?: SummaryLogEntry[]
+): string[] {
+  const narrative = scrubInternal(captionNarrative(h, log));
+  const lead = titleLine(leadingClause(narrative));
+  const label = humanEventLabel(h.eventType);
+  const labelTitle = label.charAt(0).toUpperCase() + label.slice(1);
+  const reasonLead = titleLine(leadingClause(scrubInternal(h.reason ?? "")));
+
+  const out: string[] = [];
+  const push = (value: string) => {
+    const title = titleLine(value);
+    if (title.length >= 1 && title.length <= MAX_TITLE_CHARS && !out.includes(title)) out.push(title);
+  };
+  push(sentenceCaseLead(lead));
+  if (lead) push(`${labelTitle}: ${lead}`);
+  if (reasonLead && reasonLead !== lead) push(sentenceCaseLead(reasonLead));
+  push(labelTitle);
+  push(`${labelTitle} moment`);
+  return out.slice(0, 3).map((t) => t.charAt(0).toUpperCase() + t.slice(1));
+}
+
+/** Title casing helper that never appends punctuation (titles carry none). */
+function sentenceCaseLead(text: string): string {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+}
+
+/**
+ * The caption a `Use as caption` click applies (ADAAAA-7881): the title as-is
+ * when it already ends in sentence punctuation, else the title plus a period so
+ * the caption stays a sentence.
+ */
+export function captionFromTitle(title: string): string {
+  const t = title.trim();
+  if (!t) return "";
+  return /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
+/** `T+359s – T+372s`, the card's dominant moment identifier. */
+export function momentRangeLabel(start: number, end: number): string {
+  return `T+${Math.round(start)}s – T+${Math.round(end)}s`;
 }
 
 /** Filename-safe slug for a clip label. */
