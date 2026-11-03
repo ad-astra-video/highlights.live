@@ -2151,6 +2151,15 @@ def resolve_match_context(
     # to Spain" is inspectable instead of invisible.
     if clusters:
         status["kitColorsUnattributed"] = [s for s in ("home", "away") if s not in kits and any(c.side == s for c in candidates)]
+        # ADAAAA-7889 (AC2, PO scope split on ADAAAA-7890): the side list above is
+        # empty whenever no team reached a side, even though colours WERE
+        # observed — the record then says "[] unattributed" about a job whose
+        # clusters are plainly visible, which reads as "nothing seen". Name the
+        # clusters no side owns so the kit channel is inspectable on its own.
+        attributed = {str(k.get("primary")) for side_kits in kits.values() for k in side_kits if k.get("primary")}
+        leftover = sorted({c.primary for c in clusters} - attributed)
+        if leftover:
+            status["kitClustersUnattributed"] = leftover
     ambiguous = bool(kit_ambiguous)
     if len([c for c in candidates if c.side in ("home", "away")]) > 2:
         ambiguous = True

@@ -780,6 +780,10 @@ export const MatchContextEvidenceSchema = z
     kitClusterColors: z.array(z.string()).optional(),
     /** Sides with a team but no linking evidence for a kit colour. */
     kitColorsUnattributed: z.array(z.string()).optional(),
+    /** ADAAAA-7889: observed kit cluster colours that NO side owns — the kit
+     * channel's own inspectability when no team resolved (the side list above is
+     * empty in that case even though colours were seen). */
+    kitClustersUnattributed: z.array(z.string()).optional(),
     /** Sides the curated kit-colour prior attributed (ADAAAA-7866). */
     kitPriorUsed: z.array(z.string()).optional(),
     /** Sides with no usable prior hit — the pass publishes nothing. */
