@@ -61,6 +61,15 @@ export const INTERNAL_JOB_KEYS = [
   "observeMetrics",
   "vodObserveMetrics",
   "confirmMetrics",
+  // ADAAAA-7889 (AC2, PO scope split on ADAAAA-7890): `matchContextEvidence` is
+  // deliberately NOT an internal key any more. AC2 says an `unknown` match-context
+  // result must be diagnosable from `GET /jobs/:id` alone, and the graded route is
+  // the owning user's — filtering the whole object left it `null` there, so the
+  // per-channel breakdown AC2 requires was invisible on the very route it names.
+  // The object is now PROJECTED for a non-admin by `publicMatchContextEvidence`:
+  // the explanation (per-channel outcomes, the fold, the kit clusters, the reason)
+  // stays, and the one genuine transport handle inside it (`sessionId`, the live
+  // perceive session id) is dropped, which is what the ADAAAA-7727 rule protects.
   "perceiveSessionId",
   "mediaSessionId",
   "mediaOrigin",
@@ -71,19 +80,32 @@ export const INTERNAL_JOB_KEYS = [
   "triggerWindows",
   "triggerReconciled",
   "triggerLatencyByFamily",
-  // ADAAAA-7868 landed the match-context evidence status (scorebug OCR frame
-  // counts, kit sample/cluster counts, per-source capture status, the perceive
-  // session id that produced them). Same class of internal pipeline diagnostic
-  // as the trigger ledger above: it is an OPERATOR explainability surface, not
-  // customer-facing, so it is filtered here rather than left as a new bleed
-  // path. `matchContext` itself stays visible — the inferred teams/colours are
-  // the customer's explainability view; only the evidence accounting is internal.
-  "matchContextEvidence",
 ] as const;
 
 export type InternalJobKey = (typeof INTERNAL_JOB_KEYS)[number];
 
 type AnyRecord = Record<string, any>;
+
+/** The one genuinely internal sub-field of the match-context evidence: the live
+ * perceive session id that produced it. The rest of the object is explanation
+ * (which OCR lines were read, what commentary named, the fold) — the AC2
+ * diagnosis surface. */
+const INTERNAL_EVIDENCE_KEYS = ["sessionId"] as const;
+
+/**
+ * Project `matchContextEvidence` for a non-admin caller (ADAAAA-7889 AC2).
+ *
+ * Returns a shallow copy with the transport-handle keys removed, or `undefined`
+ * when the record carries no evidence. Admin callers never reach this (every
+ * projection short-circuits on `isAdminRole`), so the operator surface keeps the
+ * stored object untouched.
+ */
+export function publicMatchContextEvidence<T>(evidence: T): T | undefined {
+  if (!evidence || typeof evidence !== "object") return undefined;
+  const copy: AnyRecord = { ...(evidence as AnyRecord) };
+  for (const key of INTERNAL_EVIDENCE_KEYS) delete copy[key];
+  return copy as T;
+}
 
 /**
  * Project a job record for one caller's role. Admins get the record untouched
@@ -95,6 +117,13 @@ export function jobForRole<T>(job: T, role?: string | null): T {
   if (!job || isAdminRole(role)) return job;
   const copy: AnyRecord = { ...(job as AnyRecord) };
   for (const key of INTERNAL_JOB_KEYS) delete copy[key];
+  // ADAAAA-7889 (AC2): the evidence explanation survives for the owning user;
+  // only its perceive-session handle is stripped (see INTERNAL_EVIDENCE_KEYS).
+  if ("matchContextEvidence" in copy) {
+    const projected = publicMatchContextEvidence(copy.matchContextEvidence);
+    if (projected === undefined) delete copy.matchContextEvidence;
+    else copy.matchContextEvidence = projected;
+  }
   return copy as T;
 }
 

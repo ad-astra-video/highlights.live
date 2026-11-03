@@ -1132,3 +1132,32 @@ def test_fold_would_pair_complete_a_stray_single_side_candidate():
     stray = [TeamText("Finland", "unknown", "finish", "Clinical finish", True)]
     by_name = {c.name: c.side for c in fold_confidence(scorebug, [], stray)}
     assert by_name == {"Portugal": "home", "Finland": "away"}
+
+
+def test_kit_clusters_reported_when_no_team_resolved():
+    # ADAAAA-7889 (AC2 / PO scope split on ADAAAA-7890): a job with observed
+    # clusters but no team candidate used to report `kitColorsUnattributed: []`,
+    # which reads as "no colours seen". The observed clusters must be named.
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 0.0, "lines": ["ETIHAD"]}],
+        hints={"title": "Clinical finish and celebration"},
+        kit_samples=kit_samples([RED, WHITE], frames=3),
+    )
+    status = out["evidenceStatus"]
+    assert {t["name"] for t in out["matchContext"]["teams"]} == {"unknown"}
+    assert status["kitColorsUnattributed"] == []
+    assert set(status["kitClustersUnattributed"]) == {"red", "white"}
+
+
+def test_kit_clusters_omitted_when_every_cluster_is_attributed():
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 12.0, "lines": ["POR 1 - 0 ESP"]}],
+        transcript="Spain in the white shirts are pressing; Portugal break quickly.",
+        hints={"title": "Portugal vs Spain"},
+        kit_samples=kit_samples([RED, WHITE], frames=3),
+        scorebug_swatches=[{"side": "home", "rgb": RED}, {"side": "away", "rgb": WHITE}],
+    )
+    assert out["matchContext"]["ambiguous"] is False
+    assert "kitClustersUnattributed" not in out["evidenceStatus"]
