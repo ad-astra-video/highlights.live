@@ -552,3 +552,17 @@ def test_fallback_score_still_forges_delta_when_box_on_roi():
         score = parse_ocr_score(ocr_lines, roi=roi)
         tr.record(ts, score)
     assert tr.changed(40.0) is True
+
+
+def test_stale_transition_confirmed_too_late_is_not_a_fresh_delta():
+    """ADAAAA-7844: the read that CONFIRMS the new score must be close to the
+    transition instant. A second post read arriving 30 s later proves the score is
+    stable; it does not mean the score just changed at that frame."""
+    tr = ScoreboardTracker(window_seconds=60.0)
+    tr.record(10.0, (1, 0))
+    tr.record(12.0, (1, 0))
+    tr.record(15.0, (2, 0))            # transition instant
+    assert tr.changed(15.0) is False   # one post sample
+    tr.record(45.0, (2, 0))            # confirmation 30 s later -> stale
+    assert tr.changed(45.0) is False
+    assert tr.delta(45.0) is None

@@ -382,6 +382,12 @@ def score_changed(prev: Optional[Tuple[int, int]], curr: Optional[Tuple[int, int
 # side has to have been read more than once before the flip.
 SCOREBOARD_MIN_CONSISTENT_SAMPLES = 2
 
+# ADAAAA-7844: the confirming read must be close to the transition instant. A
+# transition whose post side only gets its second read tens of seconds later is
+# a STALE delta relative to the frame that would attest the window (the class
+# ADAAAA-7543 closed); it is reported as no measurement rather than a fresh one.
+SCOREBOARD_MAX_CONFIRM_GAP_S = 10.0
+
 
 @dataclass(frozen=True)
 class ScoreboardDelta:
@@ -499,6 +505,11 @@ class ScoreboardTracker:
         # a fresh measurement, so the stale-delta re-fire ADAAAA-7543 closed
         # cannot come back through the legibility bar.
         if post_samples != need:
+            return None
+        # The confirming read must be time-tied to the transition (a second read
+        # arriving 30 s later proves the score is stable, not that it just
+        # changed at this frame).
+        if (float(timestamp) - float(readings[idx][0])) > SCOREBOARD_MAX_CONFIRM_GAP_S:
             return None
         return ScoreboardDelta(
             pre=pre_score,
