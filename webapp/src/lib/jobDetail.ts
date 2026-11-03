@@ -685,6 +685,81 @@ export function sectionLabel(s: FrameSection): string {
 }
 
 /**
+ * One posted moment that absorbed overlapping clips, mapped onto the Analysis
+ * window list (ADAAAA-7881).
+ *
+ * ADAAAA-7621's overlap dedupe folds several clips into one moment and the wire
+ * payload reports them twice — `duplicateCount` / `mergedIds` on the winner and
+ * a `duplicateHighlights` row per folded-away clip carrying `duplicateOf`. The
+ * card used to say "N merged" instead of showing WHERE the footage came from, so
+ * the Analysis list now draws the folded windows as one connected group.
+ */
+export interface MergedMomentGroup {
+  /** The moment (winning highlight) that owns the footage. */
+  momentId: string;
+  /** Clips in the moment, the winner included. */
+  clipCount: number;
+  /** Group label, e.g. `One moment · 2 clips`. */
+  label: string;
+  /** Accessible group name, e.g. `Windows T+341s–T+375s are one highlight`. */
+  ariaLabel: string;
+  /** `FrameSection.index` values of the windows that carry the moment's footage. */
+  memberIndexes: number[];
+}
+
+/** Overlap test for a clip window `[start, end]` against a section `[startS, endS]`. */
+function windowCarriesClip(section: FrameSection, clip: Pick<JobDetailHighlight, "start" | "end">): boolean {
+  return section.startS < clip.end && clip.start < section.endS;
+}
+
+/**
+ * Derive the merged-moment groups the Analysis window list renders (ADAAAA-7881).
+ *
+ * Client-side and pure: for each postable highlight that absorbed clips
+ * (`duplicateCount > 0`), take its folded clips from `duplicateHighlights`
+ * (`duplicateOf` === the moment id) and map the moment + each folded clip onto
+ * every window whose `[startS, endS]` overlaps the clip's `[start, end]`. The
+ * moment's own window is included, so a chain (`a` overlaps `b` overlaps `c`)
+ * reads as one connected group. A job with no `duplicateHighlights` (legacy
+ * payloads) yields no groups and renders exactly as before.
+ */
+export function mergedMomentGroups(
+  highlights: JobDetailHighlight[] | undefined,
+  duplicates: JobDetailHighlight[] | undefined,
+  sections: FrameSection[] | undefined
+): MergedMomentGroup[] {
+  const moments = highlights ?? [];
+  const folded = duplicates ?? [];
+  const windows = sections ?? [];
+  if (folded.length === 0 || windows.length === 0) return [];
+  const groups: MergedMomentGroup[] = [];
+  for (const moment of moments) {
+    if ((moment.duplicateCount ?? 0) <= 0) continue;
+    const clips = [moment, ...folded.filter((d) => d.duplicateOf === moment.id)];
+    if (clips.length < 2) continue;
+    const memberIndexes = windows.filter((s) => clips.some((c) => windowCarriesClip(s, c))).map((s) => s.index);
+    if (memberIndexes.length === 0) continue;
+    const startS = Math.min(...clips.map((c) => c.start));
+    const endS = Math.max(...clips.map((c) => c.end));
+    groups.push({
+      momentId: moment.id,
+      clipCount: clips.length,
+      label: `One moment · ${clips.length} clips`,
+      ariaLabel: `Windows T+${Math.round(startS)}s–T+${Math.round(endS)}s are one highlight`,
+      memberIndexes,
+    });
+  }
+  return groups;
+}
+
+/** `FrameSection.index` → the merged group that window belongs to. */
+export function mergedGroupsByWindow(groups: MergedMomentGroup[]): Map<number, MergedMomentGroup> {
+  const map = new Map<number, MergedMomentGroup>();
+  for (const group of groups) for (const index of group.memberIndexes) map.set(index, group);
+  return map;
+}
+
+/**
  * Decide-call count for a job header/tile (ADAAAA-7664).
  *
  * The two paths record the count in different places: the VOD pass writes the

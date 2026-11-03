@@ -48,18 +48,37 @@ describe("highlight posting actions (ADAAAA-7622)", () => {
     expect(html).toContain('data-copy-state="idle"');
   });
 
-  it("renders the editable caption seeded with the event type and timestamp", () => {
+  it("renders the suggested caption with no internal prefix (ADAAAA-7881)", () => {
     const html = renderToString(
       React.createElement(HighlightCard, {
         highlight: hl({ localizedTs: 69 }),
         onDecision: () => {},
-        caption: "GOAL · T+69s — Argentina scores",
         onCaptionChange: () => {},
+        summaryLog: [{ seq: 1, ts: "2026-10-18T00:00:00Z", windowTs: 68, text: "Argentina scores from close range." }],
       })
     );
     expect(html).toContain("data-detail-caption");
-    expect(html).toContain("Caption");
-    expect(html).toContain("GOAL · T+69s — Argentina scores");
+    expect(html).toContain("Suggested caption");
+    expect(html).toContain("Argentina scores from close range.");
+    // The old seed line (`GOAL · T+69s — …`) must never reach the caption box.
+    expect(html).not.toContain("GOAL · T+");
+  });
+
+  it("renders 2-3 one-line post titles with a `Use as caption` affordance (ADAAAA-7881)", () => {
+    const html = renderToString(
+      React.createElement(HighlightCard, {
+        highlight: hl({ localizedTs: 69, reason: "The striker finishes from close range." }),
+        onDecision: () => {},
+        onCaptionChange: () => {},
+        summaryLog: [{ seq: 1, ts: "2026-10-18T00:00:00Z", windowTs: 68, text: "Argentina breaks the deadlock." }],
+      })
+    );
+    expect(html).toContain("data-detail-titles");
+    const titles = html.match(/data-detail-title="/g) ?? [];
+    expect(titles.length).toBeGreaterThanOrEqual(2);
+    expect(titles.length).toBeLessThanOrEqual(3);
+    expect(html).toContain('aria-label="Use &quot;Argentina breaks the deadlock&quot; as caption"');
+    expect(html).toContain("Use as caption");
   });
 
   it("offers the batch checkbox only on selectable (postable) cards", () => {

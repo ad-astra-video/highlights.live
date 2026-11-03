@@ -8,7 +8,7 @@ import { JobDetailMetrics } from "../components/JobMetrics";
 import { useIsAdmin } from "../lib/auth";
 import { WindowAnalysisPanel } from "../components/WindowAnalysis";
 import { SummaryLadderView } from "../components/SummaryLadder";
-import { batchManifest, clipFileName, clipUrl, copyText, saveBlob, seedCaption, type BatchItem } from "../lib/highlightPost";
+import { batchManifest, captionFromTitle, clipFileName, clipUrl, copyText, momentRangeLabel, postTitles, saveBlob, suggestCaption, type BatchItem } from "../lib/highlightPost";
 import { buildZip, type ZipFile } from "../lib/zip";
 import { asrSummary, asrSummaryLine } from "../lib/windowAsr";
 import {
@@ -20,6 +20,8 @@ import {
   focusAnalysisWindow,
   isJobInFlight,
   assertFramePartition,
+  mergedGroupsByWindow,
+  mergedMomentGroups,
   triggerLabel,
   authFetchFrame,
   sectionKinds,
@@ -39,6 +41,7 @@ import {
   type LiveProgress,
   type LiveCapture,
   summaryEntryTimestamp,
+  type MergedMomentGroup,
 } from "../lib/jobDetail";
 import { createWindowInspectStore } from "../lib/windowInspect";
 import { LiveProgressChip } from "../components/LiveProgressChip";
@@ -320,6 +323,97 @@ interface AnalysisWindowProps {
    *  attribution and no filmstrip. Defaults to the operator surface for direct
    *  component renders; the page always passes the session role. */
   admin?: boolean;
+}
+
+/**
+ * ADAAAA-7881: one posted moment as a connected block in the Analysis window
+ * list. The windows the dedupe folded into the same moment render inside one
+ * left-rail group with a `One moment · N clips` label and an accessible name
+ * (`Windows T+341s–T+375s are one highlight`), replacing the card's removed
+ * "N merged" badge.
+ */
+export function MergedMomentGroupBlock({
+  group,
+  children,
+}: {
+  group: MergedMomentGroup;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="flex min-w-0 flex-col gap-2 rounded-lg border-l-4 border-yellow/50 pl-2"
+      data-merged-moment-group={group.momentId}
+      data-merged-moment-clips={group.clipCount}
+      role="group"
+      aria-label={group.ariaLabel}
+    >
+      <div className="text-[11px] font-bold uppercase tracking-wide text-yellow" data-merged-moment-label>
+        {group.label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * ADAAAA-7881: the Analysis window list, aware of merged moments. Consecutive
+ * member windows render inside one `MergedMomentGroupBlock` (so the rail joins
+ * them); a member whose siblings are not adjacent keeps the rail in the list
+ * gutter without overlapping the unrelated rows between them. A job with no
+ * duplicates (`groups` empty) renders exactly as before.
+ */
+export function AnalysisWindowList({
+  sections,
+  groups,
+  renderWindow,
+}: {
+  sections: FrameSection[];
+  groups?: MergedMomentGroup[];
+  renderWindow: (section: FrameSection) => React.ReactNode;
+}) {
+  const byIndex = mergedGroupsByWindow(groups ?? []);
+  const blocks: React.ReactNode[] = [];
+  let i = 0;
+  while (i < sections.length) {
+    const section = sections[i];
+    const group = byIndex.get(section.index);
+    if (!group) {
+      blocks.push(<div key={section.index}>{renderWindow(section)}</div>);
+      i += 1;
+      continue;
+    }
+    // Start the group block only at the group's first member window; a member
+    // whose first sibling was filtered out still gets the rail, just no label.
+    const startsGroup = group.memberIndexes[0] === section.index;
+    const run: FrameSection[] = [section];
+    let j = i + 1;
+    while (j < sections.length && byIndex.get(sections[j].index) === group) {
+      run.push(sections[j]);
+      j += 1;
+    }
+    const rows = run.map((member) => (
+      <div key={member.index} className="min-w-0" data-merged-moment-window={group.momentId}>
+        {renderWindow(member)}
+      </div>
+    ));
+    blocks.push(
+      startsGroup ? (
+        <MergedMomentGroupBlock key={`group-${group.momentId}`} group={group}>
+          {rows}
+        </MergedMomentGroupBlock>
+      ) : (
+        <div
+          key={`rail-${group.momentId}-${section.index}`}
+          className="flex min-w-0 flex-col gap-2 border-l-4 border-yellow/50 pl-2"
+          data-merged-moment-window={group.momentId}
+        >
+          {rows}
+        </div>
+      )
+    );
+    i = j;
+  }
+  return <>{blocks}</>;
 }
 
 /**
@@ -709,6 +803,9 @@ export interface HighlightCardProps {
    * card; the page owns the value so the batch export ships the edit. */
   caption?: string;
   onCaptionChange?: (h: JobDetailHighlight, value: string) => void;
+  /** ADAAAA-7881: the job's summary log, used to derive the suggested caption
+   *  and the one-line post titles for this clip's window. */
+  summaryLog?: SummaryLogEntry[];
   /** ADAAAA-7622: cards in the accepted (postable) feed can join a batch. */
   selectable?: boolean;
   selected?: boolean;
@@ -731,6 +828,7 @@ export function HighlightCard({
   selected = false,
   onToggleSelect,
   admin = true,
+  summaryLog,
 }: HighlightCardProps) {
   const pending = pendingStatus !== null;
   const busyAccept = pendingStatus === "accepted";
@@ -740,41 +838,55 @@ export function HighlightCard({
   // the clip; the copy button reports its own state so a blocked clipboard is
   // visible instead of silently doing nothing.
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
+  // ADAAAA-7881: per-title copy feedback (`Use as caption` has its own path).
+  const [titleCopy, setTitleCopy] = useState<{ title: string; ok: boolean } | null>(null);
+  // ADAAAA-7881: the page owns the caption (the batch export ships the edit),
+  // but a card rendered without one (the rejected lane, component tests) still
+  // shows and edits the deterministic suggestion instead of an empty box.
+  const [localCaption, setLocalCaption] = useState<string | null>(null);
   const url = clipUrl(h.clipUri);
+  const titles = postTitles(h, summaryLog);
+  const shownCaption = localCaption ?? (caption || suggestCaption(h, summaryLog));
+  const durationS = Math.max(0, Math.round(h.end - h.start));
+  function setCaption(value: string) {
+    setLocalCaption(value);
+    onCaptionChange?.(h, value);
+  }
   async function copyLink() {
     const ok = await copyText(url);
     setCopied(ok ? "copied" : "failed");
     setTimeout(() => setCopied("idle"), 1800);
   }
+  async function copyTitle(title: string) {
+    const ok = await copyText(title);
+    setTitleCopy({ title, ok });
+    setTimeout(() => setTitleCopy(null), 1800);
+  }
   return (
-    <div className="card card-hover overflow-hidden" data-detail-highlight>
+    <div className="card card-hover min-w-0 overflow-hidden" data-detail-highlight>
       <VideoClip src={h.clipUri} label={admin ? h.eventType : undefined} error={h.clipError} />
-      <div className="p-4">
-        <div className="flex items-center justify-between gap-2">
-          <span className="flex items-center gap-1">
-            {/* ADAAAA-7737: the event taxonomy (SPORTING_EVENT / NEAR_MISS / …)
-                and the review status are pipeline internals — admin only. */}
-            {admin && (
-              <span className="rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">
-                {h.eventType || "EVENT"}
-              </span>
-            )}
-            {/* ADAAAA-7621: overlap dedupe is invisible without this — the
-                winning clip stands in for every overlapping clip folded into
-                it, so the card states how many moments it absorbed. The folded
-                clips themselves are listed once, below the gallery. */}
-            {(h.duplicateCount ?? 0) > 0 && (
-              <span
-                className="rounded-full border border-yellow/50 bg-yellow/10 px-2 py-0.5 text-xs font-bold text-yellow"
-                data-detail-duplicate-count={h.duplicateCount}
-                title={`${h.duplicateCount} overlapping clip(s) merged into this moment`}
-              >
-                {h.duplicateCount} merged
-              </span>
-            )}
+      {/* ADAAAA-7881: the audio state describes the CLIP, so it sits with the
+          clip — once, quiet, and never duplicated below the metadata. */}
+      {h.hasAudio === false && (
+        <div className="flex items-center gap-1 px-4 pt-2 text-xs text-mut" data-detail-no-audio>
+          <VolumeX className="h-3 w-3" aria-hidden /> No audio captured — this clip has no audio track.
+        </div>
+      )}
+      <div className="min-w-0 p-4">
+        {/* ADAAAA-7881: the moment is the card's dominant identifier; the raw
+            pipeline enum and the review status are gone from every role. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-sm font-bold text-ink" data-detail-moment-range>
+            {momentRangeLabel(h.start, h.end)}
+          </span>
+          <span
+            className="rounded-full border border-mut/40 bg-mut/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-mut"
+            data-detail-duration
+          >
+            {durationS}s
           </span>
           {selectable && onToggleSelect && (
-            <label className="flex cursor-pointer items-center gap-1 text-xs text-mut" data-detail-select-label>
+            <label className="ml-auto flex cursor-pointer items-center gap-1 text-xs text-mut" data-detail-select-label>
               <input
                 type="checkbox"
                 className="h-4 w-4 accent-neon"
@@ -785,60 +897,56 @@ export function HighlightCard({
               Batch
             </label>
           )}
-          <span className={`text-xs font-bold ${h.status === "rejected" ? "text-red" : "text-ink"}`} data-detail-status>
-            {h.status}
-          </span>
         </div>
-        {/* ADAAAA-7737: the outcome reason is decide-layer copy ("outcome=…",
-            class taxonomy, scores) — admin only. */}
-        {admin && <div className="mt-2 text-sm text-slate-ink">{h.reason || "No reason"}</div>}
-        {/* ADAAAA-7248: honest audio state + ASR corroboration on the card. A
-            clip cut from an audio-less source (screen/window share) shows an
-            explicit label instead of silently implying sound; an ASR
-            transcript (when computed) is rendered for textual corroboration. */}
-        {h.hasAudio === false && (
-          <div
-            className="mt-2 inline-flex items-center gap-1 rounded-full border border-mut/40 bg-mut/10 px-2 py-0.5 text-xs font-bold text-mut"
-            data-detail-no-audio
-          >
-            No audio captured
-          </div>
-        )}
-        {h.asrTranscript && (
-          <div className="mt-2 rounded-lg border border-neon/30 bg-mut/10 px-2 py-1 text-xs text-ink" data-detail-asr>
-            <span className="text-neon">ASR:</span> {h.asrTranscript}
-          </div>
-        )}
-        {admin && <div className="mt-2 text-2xl font-black text-neon">{Math.round(h.score)}</div>}
-        <div className="text-xs text-mut">
-          T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
-        </div>
-        {/* ADAAAA-7737: the trigger label names the internal detector and the
-            event class — admin only. */}
-        {admin && (
-          <div className="mt-1 rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut" data-detail-trigger>
-            Trigger: <span className="font-bold text-ink">{triggerLabel(h.trigger)}</span>
-          </div>
-        )}
-        {/* ADAAAA-7622: editable posting caption, seeded by the page from the
-            summary-log narrative for this clip's window with the event type and
-            timestamp prefilled. The edit is what the batch export ships. */}
+        {/* ADAAAA-7881: suggested caption — one social-ready sentence, seeded
+            deterministically from the summary-log window and editable here. */}
         <label className="mt-3 block">
-          <span className="text-xs uppercase tracking-wide text-mut">Caption</span>
+          <span className="text-xs uppercase tracking-wide text-mut">Suggested caption</span>
           <textarea
             className="mt-1 w-full resize-y rounded-lg border border-neon/30 bg-dusk px-2 py-1 text-xs text-ink"
             rows={3}
-            value={caption}
-            onChange={(e) => onCaptionChange?.(h, e.target.value)}
+            value={shownCaption}
+            onChange={(e) => setCaption(e.target.value)}
             data-detail-caption
           />
         </label>
+        {/* ADAAAA-7881: one-line post titles. Each chip copies its own text; the
+            secondary affordance applies it as the caption. */}
+        {titles.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5" data-detail-titles>
+            {titles.map((title) => (
+              <span
+                key={title}
+                className="flex max-w-full min-w-0 items-center gap-1 rounded-full border border-neon/40 bg-neon/10 px-2 py-0.5"
+              >
+                <button
+                  type="button"
+                  onClick={() => copyTitle(title)}
+                  title={titleCopy?.title === title ? (titleCopy.ok ? "Copied" : "Copy failed") : "Copy title"}
+                  className="min-w-0 truncate text-left text-xs text-ink"
+                  data-detail-title
+                >
+                  {titleCopy?.title === title && titleCopy.ok ? "Copied" : title}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCaption(captionFromTitle(title))}
+                  aria-label={`Use "${title}" as caption`}
+                  className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-neon"
+                  data-detail-title-use-caption
+                >
+                  Use as caption
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         {/* ADAAAA-7622: Download + Copy link. The clip URL is public, so the
             copied link plays in a fresh private window with no login. */}
-        <div className="mt-2 flex gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           {h.clipUri ? (
             <a
-              className="btn-neon flex-1 px-2 py-1 text-center text-xs"
+              className="btn-neon min-w-0 flex-1 px-2 py-1 text-center text-xs"
               href={url}
               download={clipFileName(h)}
               data-detail-download
@@ -846,12 +954,12 @@ export function HighlightCard({
               <Download className="mr-1 inline h-3.5 w-3.5" aria-hidden /> Download
             </a>
           ) : (
-            <button className="btn-neon flex-1 px-2 py-1 text-xs" disabled data-detail-download>
+            <button className="btn-neon min-w-0 flex-1 px-2 py-1 text-xs" disabled data-detail-download>
               <Download className="mr-1 inline h-3.5 w-3.5" aria-hidden /> Download
             </button>
           )}
           <button
-            className="btn-neon flex-1 px-2 py-1 text-xs"
+            className="btn-neon min-w-0 flex-1 px-2 py-1 text-xs"
             onClick={copyLink}
             disabled={!h.clipUri}
             data-detail-copy-link
@@ -870,53 +978,58 @@ export function HighlightCard({
             )}
           </button>
         </div>
-        {/* ADAAAA-7248: surface audio state explicitly — a silent clip (e.g. a
-            screen/window share, or an audio-less upload) reads as "no audio
-            captured" rather than silently implying sound; when an ASR transcript
-            is available for corroboration it is shown too. */}
-        {h.hasAudio === false && (
-          <div
-            className="mt-1 rounded-lg border border-yellow/40 bg-yellow/10 px-2 py-1 text-xs text-yellow"
-            data-detail-no-audio
-          >
-            <VolumeX className="mr-1 inline h-3 w-3" aria-hidden /> No audio captured — the source had
-            no audio track (e.g. a screen/window share). Sound is unavailable for this clip.
-          </div>
-        )}
+        {/* ADAAAA-7881: the transcript is low-emphasis and rendered ONCE, verbatim
+            behind a disclosure (the stored value is never truncated). */}
         {h.asrTranscript && (
-          <div
-            className="mt-1 rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut"
-            data-detail-asr
-          >
-            ASR transcript: <span className="text-slate-ink">{h.asrTranscript}</span>
-          </div>
+          <details className="mt-3 rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut" data-detail-asr>
+            <summary className="cursor-pointer text-xs text-mut">Transcript</summary>
+            <p className="mt-1 whitespace-pre-wrap break-words text-slate-ink">{h.asrTranscript}</p>
+          </details>
         )}
-        <div className="mt-3 flex gap-2">
-          <button
-            className="btn-neon flex-1"
-            disabled={h.status === "accepted" || pending}
-            onClick={() => onDecision(h, "accepted")}
-            data-detail-accept
-          >
-            {busyAccept ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Check className="mr-1 inline h-4 w-4" />}
-            {busyAccept ? "Accepting…" : "Accept"}
-          </button>
-          <button
-            className="btn-neon btn-pink flex-1"
-            disabled={h.status === "rejected" || pending}
-            onClick={() => onDecision(h, "rejected")}
-            data-detail-reject
-          >
-            {busyReject ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <X className="mr-1 inline h-4 w-4" />}
-            {busyReject ? "Rejecting…" : "Reject"}
-          </button>
-        </div>
-        {/* ADAAAA-7737: the recover-from-reject copy is an operator workflow
-            ("Rejected — …") and a customer never reaches the rejected lane. */}
-        {admin && h.status === "rejected" && (
-          <div className="mt-2 rounded-lg border border-red/40 bg-red/10 px-2 py-1 text-xs text-red" data-detail-rejected>
-            Rejected — the highlight leaves the accepted feed. Accept to restore within the recover window.
-          </div>
+        {/* ADAAAA-7881: operator pipeline internals — event type, score, trigger,
+            outcome reason and the review controls — live in ONE collapsed
+            disclosure so the customer-facing hierarchy stays intact. */}
+        {admin && (
+          <details className="mt-3 rounded-lg border border-purple/30 bg-black/30 px-2 py-1" data-detail-pipeline>
+            <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-wide text-mut">
+              Pipeline detail
+            </summary>
+            <div className="mt-2 flex flex-col gap-1 text-xs">
+              <span className="w-fit rounded-full border border-pink/50 px-2 py-0.5 text-xs font-bold text-pink">
+                {h.eventType || "EVENT"}
+              </span>
+              <div className="text-2xl font-black text-neon">{Math.round(h.score)}</div>
+              <div className="rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut" data-detail-trigger>
+                Trigger: <span className="font-bold text-ink">{triggerLabel(h.trigger)}</span>
+              </div>
+              <div className="text-sm text-slate-ink">{h.reason || "No reason"}</div>
+              {h.status === "rejected" && (
+                <div className="rounded-lg border border-red/40 bg-red/10 px-2 py-1 text-xs text-red" data-detail-rejected>
+                  Rejected — the highlight leaves the accepted feed. Accept to restore within the recover window.
+                </div>
+              )}
+              <div className="mt-1 flex gap-2">
+                <button
+                  className="btn-neon flex-1"
+                  disabled={h.status === "accepted" || pending}
+                  onClick={() => onDecision(h, "accepted")}
+                  data-detail-accept
+                >
+                  {busyAccept ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Check className="mr-1 inline h-4 w-4" />}
+                  {busyAccept ? "Accepting…" : "Accept"}
+                </button>
+                <button
+                  className="btn-neon btn-pink flex-1"
+                  disabled={h.status === "rejected" || pending}
+                  onClick={() => onDecision(h, "rejected")}
+                  data-detail-reject
+                >
+                  {busyReject ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <X className="mr-1 inline h-4 w-4" />}
+                  {busyReject ? "Rejecting…" : "Reject"}
+                </button>
+              </div>
+            </div>
+          </details>
         )}
       </div>
     </div>
@@ -1245,6 +1358,7 @@ export function CustomerAnalysisSection({
   jobId = "",
   token = null,
   onFrameClick,
+  mergedGroups,
 }: {
   sections: FrameSection[];
   capture?: LiveCapture;
@@ -1255,6 +1369,8 @@ export function CustomerAnalysisSection({
   jobId?: string;
   token?: string | null;
   onFrameClick?: (seq: number) => void;
+  /** ADAAAA-7881: merged-moment groups, so the folded windows join visibly. */
+  mergedGroups?: MergedMomentGroup[];
 }) {
   // A job whose windows were decided but none confirmed still needs the cause
   // ABOVE the list — the board's share rendered 133 analysed windows and zero
@@ -1280,21 +1396,24 @@ export function CustomerAnalysisSection({
         </div>
       ) : (
         <div className="mt-3 flex flex-col gap-2" data-analysis-windows>
-          {sections.map((s) =>
-            inspect ? (
-              <CustomerInspectWindow
-                key={s.index}
-                section={s}
-                jobId={jobId}
-                token={token}
-                inspection={inspections[s.index]}
-                onInspect={onInspect ?? (() => {})}
-                onFrameClick={onFrameClick}
-              />
-            ) : (
-              <CustomerAnalysisWindow key={s.index} section={s} />
-            )
-          )}
+          <AnalysisWindowList
+            sections={sections}
+            groups={mergedGroups}
+            renderWindow={(s) =>
+              inspect ? (
+                <CustomerInspectWindow
+                  section={s}
+                  jobId={jobId}
+                  token={token}
+                  inspection={inspections[s.index]}
+                  onInspect={onInspect ?? (() => {})}
+                  onFrameClick={onFrameClick}
+                />
+              ) : (
+                <CustomerAnalysisWindow section={s} />
+              )
+            }
+          />
         </div>
       )}
     </>
@@ -1675,8 +1794,14 @@ export function JobDetail() {
     [postableHighlights, selectedIds]
   );
   const captionOf = useCallback(
-    (h: JobDetailHighlight) => captions[h.id] ?? seedCaption(h, detail?.job.summaryLog),
+    (h: JobDetailHighlight) => captions[h.id] ?? suggestCaption(h, detail?.job.summaryLog),
     [captions, detail]
+  );
+  // ADAAAA-7881: merged-moment groups for the Analysis window list — derived
+  // client-side from the payload this page already holds (no extra request).
+  const mergedGroups = useMemo(
+    () => mergedMomentGroups(detail?.highlights, detail?.duplicateHighlights, detail?.sections),
+    [detail]
   );
   const title = useMemo(() => (detail ? jobTitle(detail.job, acceptedCount) : ""), [detail, acceptedCount]);
   // ADAAAA-7759: the stated-failure banner for a persistent failed lag read.
@@ -2047,6 +2172,7 @@ export function JobDetail() {
                   pendingStatus={pendingReview?.id === h.id ? pendingReview.status : null}
                   caption={captionOf(h)}
                   onCaptionChange={setHighlightCaption}
+                  summaryLog={detail.job.summaryLog}
                   selectable
                   selected={selectedIds.includes(h.id)}
                   onToggleSelect={toggleSelectHighlight}
@@ -2095,6 +2221,7 @@ export function JobDetail() {
                       highlight={h}
                       onDecision={review}
                       pendingStatus={pendingReview?.id === h.id ? pendingReview.status : null}
+                      summaryLog={detail.job.summaryLog}
                       admin={admin}
                     />
                   ))}
@@ -2190,22 +2317,25 @@ export function JobDetail() {
               <div className="mt-3 text-mut" data-analysis-empty>No Analysis windows match.</div>
             ) : (
               <div className="mt-3 flex flex-col gap-3" data-analysis-windows>
-                {inspect ? (
-                  visibleSections.map((s) => (
-                    <AnalysisWindow
-                      key={s.index}
-                      section={s}
-                      token={token}
-                      jobId={id}
-                      selectMode={selectMode}
-                      selectedSeqs={new Set(multiSeqs)}
-                      onFrameClick={onFrameClick}
-                      admin={admin}
-                    />
-                  ))
-                ) : (
-                  visibleSections.map((s) => <CustomerAnalysisWindow key={s.index} section={s} />)
-                )}
+                <AnalysisWindowList
+                  sections={visibleSections}
+                  groups={mergedGroups}
+                  renderWindow={(s) =>
+                    inspect ? (
+                      <AnalysisWindow
+                        section={s}
+                        token={token}
+                        jobId={id}
+                        selectMode={selectMode}
+                        selectedSeqs={new Set(multiSeqs)}
+                        onFrameClick={onFrameClick}
+                        admin={admin}
+                      />
+                    ) : (
+                      <CustomerAnalysisWindow section={s} />
+                    )
+                  }
+                />
               </div>
             )}
               </>
@@ -2220,6 +2350,7 @@ export function JobDetail() {
                 jobId={id}
                 token={token}
                 onFrameClick={openSingle}
+                mergedGroups={mergedGroups}
               />
             )}
           </div>
