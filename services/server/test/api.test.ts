@@ -974,7 +974,7 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
     const { app } = await buildTestApp();
     const res = await app.inject({ method: "GET", url: "/config" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().vodMaxUploadBytes).toBe(2147483648);
+    expect(res.json().vodMaxUploadBytes).toBe(4294967296);
     await app.close();
   });
 
