@@ -178,6 +178,32 @@ const FORWARD_CONTROL_TYPES = ["track", "find-track", "seed", "lock", "evict", "
  * `track-player-by-number` is the long-form alias perceive accepts. */
 const PLAYER_CONTROL_TYPES = ["track-player", "track-player-by-number"];
 
+/**
+ * Resolve the perceive session an operator control intent must reach
+ * (ADAAAA-7833).
+ *
+ * Three rails hold a live session and only one of them is the persisted job
+ * field: the browser-capture rail keeps it on `browserJobs`, and BOTH the live
+ * ingest and the in-flight VOD worker keep the CURRENT session (re-reserves
+ * included) in `livePerceiveSlots`. `job.perceiveSessionId` is only written when
+ * the pass completes. Resolving the persisted field alone is why a mid-stream
+ * request used to reach nothing: the session existed, the lookup just did not
+ * see it.
+ */
+export function resolveControlSessionId(args: {
+  jobId: string;
+  browserSessions: Map<string, { sessionId?: string }>;
+  liveSlots: Map<string, { current?: { sessionId: string } }>;
+  job?: { perceiveSessionId?: string } | null;
+}): string | undefined {
+  return (
+    args.browserSessions.get(args.jobId)?.sessionId ||
+    args.liveSlots.get(args.jobId)?.current?.sessionId ||
+    args.job?.perceiveSessionId ||
+    undefined
+  );
+}
+
 /** Perceive persistent-session list price per hour (docker/runners.json
  * perceives `$0.01/hr`). Used for the recorded per-video `costUsd` list cost on
  * VOD jobs (ADAAAA-4954 spec §4.1). Flat hour unit, so session billing is
@@ -352,17 +378,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const app = Fastify({ logger: false });
   app.register(cors, { origin: true });
   // Multipart parsing for browser VOD uploads (POST /jobs/upload). Files are
-  // streamed (never buffered in memory). The configured cap (VOD_MAX_UPLOAD_BYTES)
-  // is enforced authoritatively by the route's own byte counter, which aborts an
-  // over-limit upload with 413 before reaching compute. We MUST set busboy's
-  // `limits.fileSize` ABOVE the cap: @fastify/multipart otherwise defaults it to
-  // fastify.initialConfig.bodyLimit (1 MiB = 1,048,576), which silently truncates
-  // every upload to exactly 1,048,576 bytes and makes the cap counter unreachable
-  // (ADAAAA-3041).
+  // streamed (never buffered in memory). The 2 GB cap is enforced authoritatively
+  // by the route's own byte counter, which aborts an over-limit upload with 413
+  // before reaching compute. We MUST set busboy's `limits.fileSize` ABOVE the cap:
+  // @fastify/multipart otherwise defaults it to fastify.initialConfig.bodyLimit
+  // (1 MiB = 1,048,576), which silently truncates every upload to exactly
+  // 1,048,576 bytes and makes the 2 GB counter unreachable (ADAAAA-3041).
   // fileSize must be > cap (not == cap): when busboy's own limit trips first it
   // rejects inside `req.file()` with an unhandled FST_REQ_FILE_TOO_LARGE (500),
   // stealing the route counter's clean 413. A +1 MiB margin keeps busboy from
-  // ever firing for a file the cap counter has already accepted, so the counter
+  // ever firing for a file the 2 GB counter has already accepted, so the counter
   // alone decides 413 at the cap.
   app.register(multipart, {
     limits: { files: 1, fields: 10, fileSize: cfg.vodMaxUploadBytes + 1024 * 1024 },
@@ -3856,9 +3881,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const args = req.body?.args ?? {};
       const control = { type, args, at: new Date().toISOString() };
       // Resolve the active perceive session for this job: the browser-capture
-      // rail keeps it on the job record, and a VOD/live job persists it on the
-      // job once the session is reserved.
-      const sid = browserJobs.get(job.id)?.sessionId || job.perceiveSessionId;
+      // rail keeps it on the job record, a live/direct pass keeps its CURRENT
+      // session in livePerceiveSlots, and a finished pass persists it on the job
+      // (ADAAAA-7833: the persisted field alone is empty mid-stream, which is
+      // exactly when an operator sends a control intent).
+      const sid = resolveControlSessionId({
+        jobId: job.id,
+        browserSessions: browserJobs,
+        liveSlots: livePerceiveSlots,
+        job,
+      });
       // Control messages (find-and-track intent) mirror the perceive schema: a
       // flat object with `type` plus its args spread at top level.
       const fwd = { type, ...args };
