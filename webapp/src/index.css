@@ -159,3 +159,130 @@ body {
 .glow-text {
   text-shadow: 0 0 18px rgba(0, 212, 255, 0.6);
 }
+
+/* ADAAAA-7910 — highlight card action row.
+   One row, three equal slots (Download / Copy Link / verdict). At rest each
+   slot is icon-only: its label is clipped to zero width and transparent, so
+   the card stays quiet and the geometry stays identical between states. The
+   slot under the pointer (or keyboard focus) takes the extra width
+   (1.6fr / 0.7fr / 0.7fr) and reveals its label; row width comes from the grid
+   being 100 % wide, and the slots are a fixed 44 px tall, so neither the row
+   width nor the card height moves between states. */
+[data-detail-actions] {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.5rem;
+  width: 100%;
+  transition: grid-template-columns 0.15s ease;
+}
+[data-detail-actions]:has(> [data-detail-action]:nth-child(1):is(:hover, :focus-visible)) {
+  grid-template-columns: 1.6fr 0.7fr 0.7fr;
+}
+[data-detail-actions]:has(> [data-detail-action]:nth-child(2):is(:hover, :focus-visible)) {
+  grid-template-columns: 0.7fr 1.6fr 0.7fr;
+}
+[data-detail-actions]:has(> [data-detail-action]:nth-child(3):is(:hover, :focus-visible)) {
+  grid-template-columns: 0.7fr 0.7fr 1.6fr;
+}
+
+.detail-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 0.5rem;
+  background: transparent;
+  border: 2px solid var(--color-neon);
+  border-radius: 12px;
+  color: var(--color-neon);
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  transition:
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.detail-action:hover {
+  background: rgba(0, 212, 255, 0.18);
+  box-shadow: 0 0 16px rgba(0, 212, 255, 0.55);
+}
+.detail-action-pink {
+  border-color: var(--color-pink);
+  color: var(--color-pink);
+}
+.detail-action-pink:hover {
+  background: rgba(255, 16, 240, 0.18);
+  box-shadow: 0 0 16px rgba(255, 16, 240, 0.55);
+}
+.detail-action-green {
+  border-color: var(--color-green);
+  color: var(--color-green);
+}
+.detail-action-green:hover {
+  background: rgba(57, 255, 20, 0.18);
+  box-shadow: 0 0 16px rgba(57, 255, 20, 0.55);
+}
+.detail-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.detail-action:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+.detail-action-label {
+  display: block;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition:
+    max-width: 0.15s ease,
+    opacity 0.15s ease;
+}
+[data-detail-action]:is(:hover, :focus-visible) .detail-action-label {
+  max-width: 9rem;
+  opacity: 1;
+}
+
+/* Touch has no hover, and a narrow card has no room to grow a slot: show all
+   three labels at rest, keep the slots equal. Stacking icon over label is what
+   makes the label FIT at 360 px — a row of icon + text clipped "Download" and
+   "Copy Link" (measured clientWidth 45 vs scrollWidth 64). */
+@media (max-width: 640px), (pointer: coarse) {
+  [data-detail-actions],
+  [data-detail-actions]:has(> [data-detail-action]:is(:hover, :focus-visible)) {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+  .detail-action {
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0 0.25rem;
+    font-size: 0.65rem;
+  }
+  .detail-action > svg {
+    width: 0.85rem;
+    height: 0.85rem;
+  }
+  .detail-action-label {
+    max-width: 100%;
+    opacity: 1;
+  }
+}
+
+/* Motion is decoration here: the label must still appear, it just appears
+   immediately. */
+@media (prefers-reduced-motion: reduce) {
+  [data-detail-actions],
+  .detail-action,
+  .detail-action-label {
+    transition-duration: 0s;
+  }
+}

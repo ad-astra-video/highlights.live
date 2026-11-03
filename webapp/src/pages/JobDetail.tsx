@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Play, Check, X, Loader2, ChevronDown, ChevronRight, VolumeX, Search, Download, Link2 } from "lucide-react";
+import { ArrowLeft, Play, Check, X, Undo2, Loader2, ChevronDown, ChevronRight, VolumeX, Search, Download, Link2 } from "lucide-react";
 import { api, getToken } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { VideoClip } from "../components/VideoClip";
@@ -786,28 +786,53 @@ function sourceLabel(source: string | undefined): string {
 }
 
 /**
- * ADAAAA-7893: the owner-facing review controls. `POST /highlights/:id/review`
- * is ownership scoped on the server ("the owner (or an admin) may review a
- * clip"), so these buttons must render for EVERY session that can review the
- * clip — they are primary actions, not operator internals, and they sit outside
- * `Pipeline detail`.
+ * ADAAAA-7910 (increment 2): the card's ONE action row — three equal slots,
+ * icon-only at rest, the hovered/focused slot grows and reveals its label.
+ * Layout and motion live in `index.css` under `[data-detail-actions]`, so the
+ * geometry is measurable and the reduced-motion / coarse-pointer branches are
+ * one media query each.
  *
- * The current review state is communicated by the buttons themselves: the one
- * matching `highlight.status` is disabled and `aria-pressed`, the other stays
- * enabled. ADAAAA-7880 removed the status BADGE; it never asked for the
- * controls to go.
+ * Slot 3 is stateful because removing Accept must not delete the restore path
+ * the server supports (`POST /highlights/:id/review {status:"accepted"}`):
+ *   accepted -> Reject (X, pink)      rejected -> Undo reject (Undo2, green)
+ *   pending  -> Approve (Check, green)  [only reachable with auto-publish off]
  *
  * Kept hook-free on purpose: the node test env renders this suite through
  * `renderToString` (no jsdom), so a test can call this component directly and
  * invoke the real `onClick` handler it returns.
  */
-export function HighlightReviewActions({
+export function verdictAction(status: string): {
+  marker: "data-detail-reject" | "data-detail-restore" | "data-detail-approve";
+  label: "Reject" | "Undo reject" | "Approve";
+  next: "accepted" | "rejected";
+  tone: "pink" | "green";
+} {
+  if (status === "rejected") {
+    return { marker: "data-detail-restore", label: "Undo reject", next: "accepted", tone: "green" };
+  }
+  // ADAAAA-7910: a non-auto-publish box stores `pending` (services/server
+  // config.autoPublishHighlights), so those cards get an explicit Approve slot
+  // instead of being stranded with no accept control.
+  if (status === "pending") {
+    return { marker: "data-detail-approve", label: "Approve", next: "accepted", tone: "green" };
+  }
+  return { marker: "data-detail-reject", label: "Reject", next: "rejected", tone: "pink" };
+}
+
+export function HighlightActionRow({
   highlight: h,
+  downloadUrl,
+  copied = "idle",
+  onCopy,
   onDecision,
   pendingStatus = null,
   exportLocked = false,
 }: {
   highlight: JobDetailHighlight;
+  /** ADAAAA-7896: the server-minted export URL (not the public clip URI). */
+  downloadUrl: string;
+  copied?: "idle" | "copied" | "failed";
+  onCopy: () => void;
   onDecision: (h: JobDetailHighlight, status: "accepted" | "rejected") => void;
   pendingStatus?: "accepted" | "rejected" | null;
   /** ADAAAA-7896: the clip already left the app (downloaded / link copied), so
@@ -815,58 +840,107 @@ export function HighlightReviewActions({
    * `clip_exported`); this only makes the lock visible before the click. */
   exportLocked?: boolean;
 }) {
-  const pending = pendingStatus !== null;
-  const busyAccept = pendingStatus === "accepted";
-  const busyReject = pendingStatus === "rejected";
+  const verdict = verdictAction(h.status);
+  const busyVerdict = pendingStatus === verdict.next;
+  const copyLabel = copied === "copied" ? "Copied" : copied === "failed" ? "Copy failed" : "Copy Link";
+  const copyTitle = exportLocked
+    ? undefined
+    : copied === "copied"
+      ? "Copied"
+      : copied === "failed"
+        ? "Copy failed"
+        : undefined;
   return (
-    <>
-      <div className="mt-2 flex flex-wrap gap-2" data-detail-review>
+    <div className="mt-3" data-detail-actions>
+      {/* 1 — Download. The clip URL is public, so the saved file needs no login. */}
+      {h.clipUri ? (
+        <a
+          className="detail-action"
+          href={downloadUrl}
+          download={clipFileName(h)}
+          aria-label="Download"
+          data-detail-download
+          data-detail-action
+        >
+          <Download className="h-4 w-4 shrink-0" aria-hidden />
+          <span className="detail-action-label" data-detail-label>
+            Download
+          </span>
+        </a>
+      ) : (
         <button
           type="button"
-          className="btn-neon min-w-0 flex-1 px-2 py-1 text-xs"
-          disabled={h.status === "accepted" || pending}
-          aria-pressed={h.status === "accepted"}
-          onClick={() => onDecision(h, "accepted")}
-          data-detail-accept
+          className="detail-action"
+          disabled
+          aria-label="Download"
+          data-detail-download
+          data-detail-action
         >
-          {busyAccept ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Check className="mr-1 inline h-4 w-4" />}
-          {busyAccept ? "Accepting…" : "Accept"}
+          <Download className="h-4 w-4 shrink-0" aria-hidden />
+          <span className="detail-action-label" data-detail-label>
+            Download
+          </span>
         </button>
-        <button
-          type="button"
-          className="btn-neon btn-pink min-w-0 flex-1 px-2 py-1 text-xs"
-          disabled={h.status === "rejected" || pending || exportLocked}
-          aria-pressed={h.status === "rejected"}
-          title={exportLocked ? "This clip was already downloaded or its link copied, so it can no longer be rejected" : undefined}
-          onClick={() => onDecision(h, "rejected")}
-          data-detail-reject
-          data-export-locked={exportLocked ? "true" : undefined}
-        >
-          {busyReject ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <X className="mr-1 inline h-4 w-4" />}
-          {busyReject ? "Rejecting…" : "Reject"}
-        </button>
-      </div>
-      {/* ADAAAA-7896: why Reject is unavailable — the clip already left the app. */}
-      {exportLocked && h.status !== "rejected" && (
-        <div className="mt-1 text-xs text-mut" data-detail-export-locked>
-          Downloaded — this clip can no longer be rejected.
-        </div>
       )}
-      {/* One small inline note, visible to every session. Recovery guidance,
-          not a badge — it never prints a bare `accepted` / `rejected` label. */}
-      {h.status === "rejected" && (
-        <div className="mt-1 text-xs text-red" data-detail-rejected>
-          Rejected — hidden from the public feed. Accept restores it within the recover window.
-        </div>
-      )}
-    </>
+      {/* 2 — Copy Link. Copies the export URL; success flips to Copied (~2 s). */}
+      <button
+        type="button"
+        className="detail-action"
+        onClick={onCopy}
+        disabled={!h.clipUri}
+        aria-label={copyLabel}
+        title={copyTitle}
+        data-detail-copy-link
+        data-detail-action
+        data-copy-state={copied}
+      >
+        {copied === "copied" ? (
+          <Check className="h-4 w-4 shrink-0" aria-hidden />
+        ) : (
+          <Link2 className="h-4 w-4 shrink-0" aria-hidden />
+        )}
+        <span className="detail-action-label" data-detail-label>
+          {copyLabel}
+        </span>
+      </button>
+      {/* 3 — the non-default verdict: Reject / Undo reject / Approve. */}
+      <button
+        type="button"
+        className={`detail-action${verdict.tone === "pink" ? " detail-action-pink" : " detail-action-green"}`}
+        disabled={busyVerdict || (verdict.next === "rejected" && exportLocked)}
+        aria-label={verdict.label}
+        title={
+          verdict.next === "rejected" && exportLocked
+            ? "This clip was already downloaded or its link copied, so it can no longer be rejected"
+            : undefined
+        }
+        onClick={() => onDecision(h, verdict.next)}
+        data-detail-action
+        {...{ [verdict.marker]: true }}
+        data-export-locked={verdict.next === "rejected" && exportLocked ? "true" : undefined}
+      >
+        {busyVerdict ? (
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+        ) : verdict.marker === "data-detail-reject" ? (
+          <X className="h-4 w-4 shrink-0" aria-hidden />
+        ) : verdict.marker === "data-detail-restore" ? (
+          <Undo2 className="h-4 w-4 shrink-0" aria-hidden />
+        ) : (
+          <Check className="h-4 w-4 shrink-0" aria-hidden />
+        )}
+        <span className="detail-action-label" data-detail-label>
+          {verdict.label}
+        </span>
+      </button>
+    </div>
   );
 }
 
 /**
  * One identified/accepted highlight on the per-job detail surface. Renders the
  * clip player (VideoClip) so the highlight shows its video, plus the metadata
- * and the owner-facing Accept/Reject review controls (HighlightReviewActions).
+ * and the single action row (HighlightActionRow: Download / Copy Link /
+ * verdict — ADAAAA-7910).
  * Extracted from the JobDetail card so the highlight card (and its clip-player
  * mount) is independently testable.
  * ADAAAA-6948: the per-job card previously imported VideoClip but never rendered
@@ -1023,60 +1097,36 @@ export function HighlightCard({
             ))}
           </div>
         )}
-        {/* ADAAAA-7622: Download + Copy link. The clip URL is public, so the
-            copied link plays in a fresh private window with no login. */}
-        <div className="mt-3 flex flex-wrap gap-2">
-          {h.clipUri ? (
-            <a
-              className="btn-neon min-w-0 flex-1 px-2 py-1 text-center text-xs"
-              href={url}
-              download={clipFileName(h)}
-              data-detail-download
-            >
-              <Download className="mr-1 inline h-3.5 w-3.5" aria-hidden /> Download
-            </a>
-          ) : (
-            <button className="btn-neon min-w-0 flex-1 px-2 py-1 text-xs" disabled data-detail-download>
-              <Download className="mr-1 inline h-3.5 w-3.5" aria-hidden /> Download
-            </button>
-          )}
-          <button
-            className="btn-neon min-w-0 flex-1 px-2 py-1 text-xs"
-            onClick={copyLink}
-            disabled={!h.clipUri}
-            data-detail-copy-link
-            data-copy-state={copied}
-          >
-            {copied === "copied" ? (
-              <>
-                <Check className="mr-1 inline h-3.5 w-3.5" aria-hidden /> Copied
-              </>
-            ) : copied === "failed" ? (
-              "Copy failed"
-            ) : (
-              <>
-                <Link2 className="mr-1 inline h-3.5 w-3.5" aria-hidden /> Copy link
-              </>
-            )}
-          </button>
-        </div>
-        {/* ADAAAA-7893: Accept / Reject are the OWNER's review controls, not
-            operator internals — `POST /highlights/:id/review` is ownership
-            scoped, so every session that can review this clip must see them.
-            They sit in the primary action area (the row beneath Download /
-            Copy link), above the transcript, and stay outside the operator
-            disclosure. The clip's review state is carried by the buttons
-            themselves (the matching one is disabled + aria-pressed) rather
-            than by a status badge (ADAAAA-7880 removed the badge, not the
-            controls). */}
-        <HighlightReviewActions
+        {/* ADAAAA-7910: ONE action row — Download / Copy Link / verdict, three
+            equal slots, icon-only at rest; hover or keyboard focus grows the
+            slot and reveals its label (coarse pointer / ≤ 640 px shows all
+            three labels, because hover does not exist on touch). Accept is
+            gone: `accepted` is the server default, and the restore path lives
+            in slot 3 (Undo reject / Approve), outside `Pipeline detail`. */}
+        <HighlightActionRow
           highlight={h}
+          downloadUrl={url}
+          copied={copied}
+          onCopy={copyLink}
           onDecision={onDecision}
           pendingStatus={pendingStatus}
           // ADAAAA-7896: an owner loses Reject once the clip was exported; an
           // operator keeps it (they download clips to inspect them).
           exportLocked={!!h.exportedAt && !admin}
         />
+        {/* ADAAAA-7896: why Reject is unavailable — the clip already left the app. */}
+        {!!h.exportedAt && !admin && h.status !== "rejected" && (
+          <div className="mt-1 text-xs text-mut" data-detail-export-locked>
+            Downloaded — this clip can no longer be rejected.
+          </div>
+        )}
+        {/* One small inline note, visible to every session. Recovery guidance,
+            not a badge — it never prints a bare `accepted` / `rejected` label. */}
+        {h.status === "rejected" && (
+          <div className="mt-1 text-xs text-red" data-detail-rejected>
+            Rejected — hidden from the public feed. Undo reject restores it within the recover window.
+          </div>
+        )}
         {/* ADAAAA-7881: the transcript is low-emphasis and rendered ONCE, verbatim
             behind a disclosure (the stored value is never truncated). */}
         {h.asrTranscript && (
