@@ -811,11 +811,24 @@ GENERIC_NAME_MIN_FRAMES = 3
 GENERIC_NAME_MIN_SHARE = 0.60
 GENERIC_NAME_MAX_TOKENS = 3
 GENERIC_NAME_MIN_CHARS = 4
-# Competition / broadcast filler that sits on or beside a scorebug. Dropped
-# BEFORE the nearest-score token run is taken, which is what keeps
-# "TÜRKİYE BASKETBOL LİGİ DENIZLI BASKET 11 - 8 SAMSUNSPOR" from producing the
+# The same one-edit fuzzy tolerance the closed lexicon already uses for OCR/ASR
+# slips (`_levenshtein_le`): a printed club name read two ways ("Samsungspor" /
+# "Samsunspor") is ONE name, not two half-majorities. Deliberately 1, so two
+# genuinely different clubs are never merged. This groups votes; it does not
+# touch any confidence threshold (`USABLE_CONFIDENCE` / `SINGLE_SOURCE_CAP`).
+GENERIC_NAME_CLUSTER_EDITS = 1
+# Competition / broadcast filler that sits on or beside a scorebug. A fragment
+# whose folded form is in this set is BRANDING: it ends the nearest-score token
+# run instead of joining a name, which is what keeps
+# "TÜRKİYE BASKETBOL LİGİ DENIZLI BASKET 11 8 SAMSUNSPOR" from producing the
 # name "DENIZLI BASKET LİGİ". Deliberately does NOT contain "basket": that word
 # is part of a real club name ("Denizli Basket").
+#
+# ADAAAA-7909: the sport words listed here are banner words, but they are also
+# the printed SUFFIX of many club plates ("Denizli Basketball" is what the model
+# reads off the Denizli plate), so a fragment that folds to one of
+# `_GENERIC_SPORT_SUFFIXES` stays allowable as a name token. Branding printed as
+# a caps block ("BASKETBOL") is dropped by the caps-run rule below anyway.
 _GENERIC_NAME_STOPWORDS = frozenset(
     {
         "ligi",
@@ -859,6 +872,34 @@ _GENERIC_NAME_STOPWORDS = frozenset(
         "versus",
     }
 )
+# Printed sport words that can legitimately END a club name, folded to the form
+# the vote counts ("Denizli Basketball" and "Denizli Basket" are one name).
+_GENERIC_SPORT_SUFFIXES = {
+    "basketball": "basket",
+    "basketbol": "basket",
+    "basketbal": "basket",
+}
+# Glued runs the model emits as ONE "word" that must be split back into their
+# printed parts before a name can be read: "MBDentizi" -> "MB" + "Dentizi",
+# "GDenizi" -> "G" + "Denizi", "TURBOYEMBDentizi" -> branding + "Dentizi".
+_GENERIC_GLUE_SPLIT_RE = re.compile(
+    r"(?<=[a-zà-ÿ])(?=[A-ZÀ-Þ])"  # lower|Upper      (Dentizi|Basket)
+    r"|(?<=[A-ZÀ-Þ.])(?=[A-ZÀ-Þ][a-zà-ÿ])"  # CAPS/.|Capitalised (MB|Dentizi, G|Denizi)
+)
+# A glued OCR run is ONE "word" longer than the lexicon's 24-character token cap
+# ("TURKIYEBASKETBOLMBDentizi" is 25), so the generic channel tokenises with its
+# own bound — the lexicon's cap silently cut the club name to "Dentiz".
+_GENERIC_TOKEN_RE = re.compile(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’.·\-]{0,39}")
+# ADAAAA-7909: the score on a broadcast scorebug is separated by a GRAPHIC
+# divider, not a printed glyph, so `<OCR>` returns the digits glued straight to
+# the club text: "Denizli Basket13 8Samsunspor", "MB11 8Samsunspor1.G". The
+# lexicon pass needs the printed "N - M"; this channel splits the side segments
+# on the score DIGIT RUN pair instead, which is what the graphic prints.
+_GENERIC_SCORE_DIGITS_RE = re.compile(r"(?<!\d)(?P<a>\d{1,3})\s*[-–—:.]?\s*(?P<b>\d{1,3})(?!\d)")
+_GENERIC_LETTER_RE = re.compile(r"[A-Za-zÀ-ÿ]")
+# Each side of the score needs at least this many printed letters before the
+# split counts as a score line at all (a clock "1.Ç" or a bare score yields none).
+_GENERIC_SIDE_MIN_LETTERS = 2
 
 
 def _fold(text: str) -> str:
@@ -866,33 +907,156 @@ def _fold(text: str) -> str:
     return " ".join(_norm(text).split())
 
 
-def _generic_name_tokens(text: str) -> list[str]:
-    """Tokens of one side segment that could be part of a printed club name."""
+def _generic_fragments(token: str) -> list[str]:
+    """Split one glued OCR token into the printed fragments worth keeping.
+
+    Returns ``[]`` for a token that is pure branding, a league/broadcaster code
+    or too short — which is what ENDS the nearest-score run (see
+    :func:`_generic_side_run`), so branding can never extend a name.
+    """
     out: list[str] = []
-    for tok in _tokens(text or ""):
-        core = _norm(tok)
-        if len(core) < GENERIC_NAME_MIN_CHARS:
+    for part in _GENERIC_GLUE_SPLIT_RE.split(token or ""):
+        part = part.strip(".,;:!?()[]\"'")
+        core = _fold(part)
+        if not core:
+            continue
+        if core in _GENERIC_SPORT_SUFFIXES:
+            out.append(part)
             continue
         if core in _GENERIC_NAME_STOPWORDS:
             continue
-        out.append(tok.strip(".,;:!?()[]\"'"))
+        # A CAPS run of 3+ characters is a league / broadcaster / team code
+        # printed as a block ("MB", "TBF", "TOC"), never part of a club name.
+        if part.isupper() and len(part) >= 3:
+            continue
+        if len(core) < GENERIC_NAME_MIN_CHARS:
+            continue
+        out.append(part)
     return out
 
 
-def _generic_side_name(segment: str, side: str) -> Optional[str]:
+def _generic_tokens(segment: str, start: int = 0) -> list[tuple[int, str]]:
+    """``(offset, token)`` pairs of one side segment, from ``start`` onward."""
+    return [(m.start(), m.group(0)) for m in _GENERIC_TOKEN_RE.finditer(segment or "") if m.start() >= start]
+
+
+def _generic_side_run(
+    segment: str,
+    side: str,
+    start: int = 0,
+) -> tuple[Optional[str], Optional[int]]:
     """The printed name nearest the score digits on one side of a score line.
 
     Broadcast order is ``HOME 11 - 8 AWAY``: the home name ENDS at the score
-    digits (read backwards, then restore print order) and the away name STARTS
-    at them. Capped at ``GENERIC_NAME_MAX_TOKENS`` so a branding column further
-    out on the graphic cannot join the name.
+    digits (read backwards, then restored to print order) and the away name
+    STARTS at them. The run stops at the first token that carries no printable
+    fragment (branding / code / bracket), which is what bounds it.
+
+    Returns ``(name, consumed_offset)``. ``consumed_offset`` is the character
+    offset just past the last token the run consumed, so the caller can look for
+    a second name run that the model printed in the other order.
     """
-    toks = _generic_name_tokens(segment)
-    if not toks:
-        return None
-    picked = toks[-GENERIC_NAME_MAX_TOKENS:] if side == "home" else toks[:GENERIC_NAME_MAX_TOKENS]
-    name = " ".join(picked).strip()
-    return name or None
+    toks = _generic_tokens(segment, start)
+    if side == "home":
+        toks = list(reversed(toks))
+    picked: list[str] = []
+    consumed: Optional[int] = None
+    for off, tok in toks:
+        # ADAAAA-7909: a token glued onto a period marker ("1.6Denizi") begins a
+        # new print run — the away name never starts right after a dot or digit.
+        # Stop here so that remainder can be read as the out-of-order home name
+        # instead of polluting the away name ("Samsunspor1.GDenizi"). A run
+        # STARTED after such a boundary (``picked`` empty) accepts its first
+        # token, which is what lets that remainder be read at all.
+        if side == "away" and picked and off > start and (segment[off - 1] in ".,:;" or segment[off - 1].isdigit()):
+            break
+        frags = _generic_fragments(tok)
+        if not frags:
+            break
+        for frag in frags:
+            key = _fold(frag)
+            # A fragment repeated inside an already-collected one ("Bask" inside
+            # "Basket") is one printed word, not a second one.
+            if any(key in _fold(p) or _fold(p) in key for p in picked):
+                continue
+            picked.append(frag)
+        consumed = off + len(tok)
+        if len(picked) >= GENERIC_NAME_MAX_TOKENS:
+            break
+    picked = picked[:GENERIC_NAME_MAX_TOKENS]
+    if side == "home":
+        picked = list(reversed(picked))
+    if not picked:
+        return None, consumed
+    # A run made only of sport words is the banner ("BASKETBALL"), not a club.
+    if all(_fold(p) in _GENERIC_SPORT_SUFFIXES for p in picked):
+        return None, consumed
+    return (" ".join(picked).strip() or None), consumed
+
+
+def _generic_score_splits(text: str) -> list[tuple[str, str]]:
+    """``(left, right)`` segment pairs around the printed score digit run.
+
+    Accepts the glued shape the scorebug actually produces ("13 8", "13.8",
+    "138") as well as a printed "13 - 8". A line must carry printed letters on at
+    least one side, so a bare score ("13.8") or a clock ("1.Ç") yields nothing.
+    """
+    out: list[tuple[str, str]] = []
+    for m in _GENERIC_SCORE_DIGITS_RE.finditer(text or ""):
+        left, right = text[: m.start()], text[m.end() :]
+        # One printed side is enough to accept the split (a scorebug whose away
+        # half is cropped away still reports `away:no-text` instead of pretending
+        # the frame had no score line); the per-side run then declines on its own.
+        if len(_GENERIC_LETTER_RE.findall(left + right)) >= _GENERIC_SIDE_MIN_LETTERS:
+            out.append((left, right))
+    return out
+
+
+def generic_scorebug_sides(text: str) -> tuple[Optional[str], Optional[str]]:
+    """``(home, away)`` names printed on ONE scorebug OCR line (no voting).
+
+    Used by the caller to decide whether a frame's crop read produced any team
+    text at all (ADAAAA-7909: a discovered-but-garbage ROI must not suppress the
+    whole-frame read), and by the frame vote below.
+
+    The home name comes from the left of the score. When the model printed the
+    clubs in the other order the left side is branding only and the home name
+    follows the away name in the same line; that second run is read as the home
+    name so a swapped read still names both sides instead of dropping one.
+    """
+    for left, right in _generic_score_splits(text):
+        home, _ = _generic_side_run(left, "home")
+        away, consumed = _generic_side_run(right, "away")
+        if home is None and away is not None and consumed is not None:
+            extra, _ = _generic_side_run(right, "away", start=consumed)
+            if extra is not None and _fold(extra) != _fold(away):
+                home = extra
+        if home is not None or away is not None:
+            return home, away
+    return None, None
+
+
+def _generic_name_key(name: str) -> str:
+    """Fold a printed name into the form the frame vote counts.
+
+    A printed sport word at the end ("Basketball") is the same club suffix as
+    "Basket", so it folds to it — otherwise one plate read two ways would split
+    its own majority.
+    """
+    toks = str(name or "").split()
+    if toks:
+        tail = _fold(toks[-1])
+        if tail in _GENERIC_SPORT_SUFFIXES:
+            toks[-1] = _GENERIC_SPORT_SUFFIXES[tail]
+    return _fold(" ".join(toks))
+
+
+def _generic_vote_group(key: str, known: Sequence[str]) -> Optional[str]:
+    """The existing vote group ``key`` belongs to, within one edit (OCR slips)."""
+    for other in known:
+        if _levenshtein_le(key, other, GENERIC_NAME_CLUSTER_EDITS):
+            return other
+    return None
 
 
 def parse_generic_scorebug_names(
@@ -903,79 +1067,115 @@ def parse_generic_scorebug_names(
 
     Returns ``(teams, status)`` where ``teams`` is either a complete home/away
     pair of :class:`TeamText` (``generic=True``) or ``[]``. ``status`` is the
-    inspectable account of the channel (``scoreFrames``, the per-frame vote, the
-    accepted names and why a side was rejected) so an ``unknown`` job says what
-    the gate saw instead of just reporting nothing.
+    inspectable account of the channel (``scoreFrames``, the per-side vote, the
+    accepted names with the printed variants that voted for each, and why a side
+    was rejected) so an ``unknown`` job says what the gate saw instead of just
+    reporting nothing.
 
     Pure and GPU-free: it reads the OCR lines the caller already has.
     """
     status: dict[str, Any] = {"scoreFrames": 0, "rejected": []}
     if not ocr_frames or sport == SPORT_UNKNOWN:
         return [], status
-    counts: dict[str, dict[str, int]] = {"home": {}, "away": {}}
-    printed: dict[str, dict[str, str]] = {"home": {}, "away": {}}
+    # side -> vote group -> {printed form: frames}
+    votes: dict[str, dict[str, dict[str, int]]] = {"home": {}, "away": {}}
     snippets: dict[str, dict[str, str]] = {"home": {}, "away": {}}
     score_frames = 0
     for frame in ocr_frames:
         lines = frame.get("lines") or frame.get("ocr") or []
         if not lines:
             continue
-        frame_seen: dict[str, dict[str, tuple[str, str]]] = {"home": {}, "away": {}}
+        seen: dict[str, dict[str, str]] = {"home": {}, "away": {}}
+        frame_scored = False
         for line in lines:
             text = str(line or "").strip()
             if not text:
                 continue
-            m = _SCORE_SHAPE_RE.search(text)
-            if not m:
+            splits = _generic_score_splits(text)
+            if not splits:
                 continue
-            score_frames += 1
-            for side, segment in (("home", text[: m.start()]), ("away", text[m.end() :])):
+            frame_scored = True
+            home, away = generic_scorebug_sides(text)
+            for side, name, segment in (
+                ("home", home, splits[0][0]),
+                ("away", away, splits[0][1]),
+            ):
+                if not name:
+                    continue
                 # A side the lexicon already names is never re-read here.
                 if _resolve_side_tokens(segment, sport):
                     continue
-                name = _generic_side_name(segment, side)
-                if name:
-                    # One vote per frame per name: a line printed twice on the
-                    # same frame is not extra corroboration.
-                    frame_seen[side].setdefault(_fold(name), (name, text))
+                key = _generic_name_key(name)
+                group = _generic_vote_group(key, list(votes[side]))
+                if group is None:
+                    votes[side][key] = {}
+                    group = key
+                # One vote per frame per group: a line printed twice on the same
+                # frame is not extra corroboration.
+                seen[side].setdefault(group, name)
+                snippets[side].setdefault(group, text[:200])
+        if frame_scored:
+            score_frames += 1
         for side in ("home", "away"):
-            for key, (name, snippet) in frame_seen[side].items():
-                counts[side][key] = counts[side].get(key, 0) + 1
-                printed[side].setdefault(key, name)
-                snippets[side].setdefault(key, snippet[:200])
+            for group, name in seen[side].items():
+                printed = votes[side][group]
+                printed[name] = printed.get(name, 0) + 1
     status["scoreFrames"] = score_frames
     if not score_frames:
         status["rejected"].append("no-score-line")
         return [], status
     picks: dict[str, tuple[str, str, int]] = {}
     for side in ("home", "away"):
-        if not counts[side]:
+        if not votes[side]:
             status["rejected"].append(f"{side}:no-text")
             continue
-        key = max(counts[side], key=lambda k: counts[side][k])
-        n = counts[side][key]
+        group = max(votes[side], key=lambda k: sum(votes[side][k].values()))
+        printed = votes[side][group]
+        n = sum(printed.values())
         share = n / score_frames
         if n < GENERIC_NAME_MIN_FRAMES or share < GENERIC_NAME_MIN_SHARE:
             status["rejected"].append(f"{side}:unstable({n}/{score_frames})")
             continue
-        picks[side] = (printed[side][key], snippets[side][key], n)
+        # Publish the spelling the model printed most often inside the group.
+        name = max(printed, key=lambda k: printed[k])
+        picks[side] = (name, snippets[side].get(group, ""), n)
+        status.setdefault("names", {})[side] = {
+            "name": name,
+            "frames": n,
+            "share": round(share, 3),
+            "variants": dict(sorted(printed.items())),
+        }
     if len(picks) < 2:
         return [], status
-    if _fold(picks["home"][0]) == _fold(picks["away"][0]):
+    if _generic_name_key(picks["home"][0]) == _generic_name_key(picks["away"][0]):
         status["rejected"].append("both-sides-same-name")
+        status.pop("names", None)
         return [], status
-    status["names"] = {
-        side: {
-            "name": picks[side][0],
-            "frames": picks[side][2],
-            "share": round(picks[side][2] / score_frames, 3),
-        }
-        for side in ("home", "away")
-    }
     return [
         TeamText(picks["home"][0], "home", picks["home"][0], picks["home"][1], generic=True),
         TeamText(picks["away"][0], "away", picks["away"][0], picks["away"][1], generic=True),
     ], status
+
+
+def scorebug_lines_have_team_text(ocr_lines: Optional[Sequence[str]], sport: str) -> bool:
+    """True when these OCR lines carry a real team name (lexicon OR printed club).
+
+    The ADAAAA-7190 whole-frame fallback used to fire only when the ROI crop read
+    no SCORE, so a crop that parsed a score out of the crowd clock while reading
+    no club text ("1515K") suppressed the whole-frame read that could see them.
+    This predicate is the missing "did the crop read any team text" test; it is
+    pure CPU (regex only) and adds no GPU work by itself.
+    """
+    for line in ocr_lines or []:
+        text = str(line or "").strip()
+        if not text:
+            continue
+        if any(resolve_token(tok, sport, allow_fuzzy=False) is not None for tok in _tokens(text)):
+            return True
+        home, away = generic_scorebug_sides(text)
+        if home or away:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------

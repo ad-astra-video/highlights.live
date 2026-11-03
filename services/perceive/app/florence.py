@@ -470,6 +470,72 @@ def _materialize_original_model(model_id: str, dest: Path) -> Path:
     return dest
 
 
+# --- scoreboard <OCR> crop preparation (ADAAAA-7909) -------------------------
+# The ROI crop around a bottom-centre scorebug is an extremely wide strip: on the
+# bounded basketball VOD clip the discovered region is ~640x66 in a 640x360
+# frame (9.7:1). Florence-2's ``<OCR>`` processor resizes whatever it is handed
+# to a FIXED 768x768 canvas, so a strip that wide is squashed and the glyph
+# aspect is destroyed — measured inside the running perceive model, the native
+# crop read "1515K" / "13.8" (the league banner + the score digits) and never the
+# club plate that sits on the same graphic.
+#
+# Measured on 11 labelled anchor frames of that clip (same model, same frame):
+#   * pre-upscaling alone is a NO-OP — 1x / 2x / 3x / 4x returned byte-identical
+#     lines, because the processor normalises the scale anyway;
+#   * padding the strip out to a sane aspect with its own median colour is what
+#     recovers the text: "Denizil Basket 13 8 Samsunspor" instead of "13.8";
+#   * a 2x LANCZOS upscale ON TOP of the padded canvas sharpens the club plate
+#     further (11/11 anchor frames then read both clubs).
+# Both steps are CPU-only (numpy/PIL) and do not add an inference: ``<OCR>`` runs
+# once per crop exactly as before, so no per-frame GPU cost is added.
+OCR_CROP_MAX_ASPECT = 4.0 / 3.0
+OCR_CROP_UPSCALE = 2.0
+# A crop whose long side is already this large gains nothing from another 2x
+# (the processor downsamples it regardless) and only costs memory.
+OCR_CROP_UPSCALE_MAX_SIDE = 960
+
+
+def prepare_ocr_crop(crop: "np.ndarray") -> "np.ndarray":
+    """Pad a wide ``<OCR>`` crop to a sane aspect and upscale it (ADAAAA-7909).
+
+    Returns the crop unchanged when its aspect is already sane and it is large
+    enough, so every scoreboard region that already reads does exactly what it
+    did before. Padding uses the crop's own median grey (never a black bar on a
+    dark broadcast graphic) and keeps the strip centred, which preserves the
+    printed glyph aspect through the processor's fixed-square resize.
+    """
+    if crop is None or getattr(crop, "ndim", 0) != 3 or crop.shape[0] < 1 or crop.shape[1] < 1:
+        return crop
+    h, w = crop.shape[:2]
+    out = crop
+    padded = False
+    aspect = float(w) / float(h)
+    if aspect > OCR_CROP_MAX_ASPECT:
+        target_h = int(round(w / OCR_CROP_MAX_ASPECT))
+        # Bound the work for an absurdly thin strip: padding to 4:3 would make the
+        # graphic a sliver of the canvas, so cap the pad at 8x the strip height.
+        target_h = min(target_h, max(h * 8, 8))
+        if target_h > h:
+            fill = int(np.median(out))
+            canvas = np.full((target_h, w, out.shape[2]), fill, dtype=out.dtype)
+            top = (target_h - h) // 2
+            canvas[top : top + h] = out
+            out = canvas
+            padded = True
+    # The upscale is part of the wide-strip recovery only: a scoreboard region
+    # whose aspect is already sane takes the exact shipped input, so no other
+    # broadcast's crop is resampled by this change.
+    if padded and OCR_CROP_UPSCALE > 1.0 and max(out.shape[0], out.shape[1]) <= OCR_CROP_UPSCALE_MAX_SIDE:
+        from PIL import Image as _Image
+
+        nh = int(round(out.shape[0] * OCR_CROP_UPSCALE))
+        nw = int(round(out.shape[1] * OCR_CROP_UPSCALE))
+        out = np.asarray(
+            _Image.fromarray(out.astype(np.uint8)).resize((nw, nh), _Image.Resampling.LANCZOS)
+        )
+    return out
+
+
 class FlorenceDetector:
     """Thin wrapper over microsoft/Florence-2 (HF transformers) for <OD>."""
 
@@ -762,6 +828,9 @@ class FlorenceDetector:
             px0, py0, px1, py1 = px_box
             crop = image[py0:py1, px0:px1]
             if crop.shape[0] >= 8 and crop.shape[1] >= 8:
+                # ADAAAA-7909: pad + upscale the wide scoreboard strip so the
+                # fixed-square <OCR> canvas does not squash the printed glyphs.
+                crop = prepare_ocr_crop(crop)
                 pil = Image.fromarray(crop.astype(np.uint8)).convert("RGB")
             else:
                 pil = Image.fromarray(image.astype(np.uint8)).convert("RGB")
