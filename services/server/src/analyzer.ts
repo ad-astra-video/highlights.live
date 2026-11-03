@@ -324,21 +324,135 @@ export function localizeHighlightInstantFrame(
   }
   return { ts: triggerTs, signal: "trigger" };
 }
+/** ADAAAA-7845: how far (s) a post-trigger peak-audio instant may sit from the
+ * accepting evidence instant before peak audio stops being the anchor on its
+ * own. Peak audio is a SECONDARY cue: a far tap is commentary/narration energy,
+ * not the moment the evidence accepted. Measured on job dee44c2f: the accepted
+ * GOAL at trigger 117.0 anchored on a tap 6.1 s later that was a stat monologue,
+ * and the delivered clip missed the goal entirely. */
+export const PEAK_AUDIO_ANCHOR_TOLERANCE_S = 2;
+/** ADAAAA-7845: a burst must clear this peak-to-baseline RMS ratio. Narration
+ * holds a steadier level; a crowd/react swell stands well above the window's own
+ * median. Measured on the dee44c2f tap fixture: the narration windows read
+ * 1.66-1.75, a genuine crowd swell reads >= 2.3. */
+export const AUDIO_BURST_MIN_PEAK_TO_BASELINE = 2.0;
+/** ADAAAA-7845: and a burst must be SHORT — at most this share of the lookahead
+ * window may sit at >= half the peak energy. Continuous narration keeps
+ * 0.64-1.0 of an 8 s window elevated; react bursts hold <= ~0.35. */
+export const AUDIO_BURST_MAX_SUSTAINED_FRACTION = 0.35;
+/** ADAAAA-7845: an audio-energy peak assessed as reaction vs narration. */
+export interface AudioBurstAssessment {
+  /** Timestamp of the highest-RMS tap in the post-trigger lookahead window. */
+  peakTs: number;
+  peakRms: number;
+  /** Median RMS of the taps in that window (the window's own baseline). */
+  baselineRms: number;
+  /** peakRms / baselineRms — how far the peak stands above the window baseline. */
+  peakToBaseline: number;
+  /** Share of window taps at >= half the peak energy (high = continuous). */
+  sustainedFraction: number;
+  /** True only when the energy is a short reaction burst, not narration. */
+  isBurst: boolean;
+}
+/** ADAAAA-7845: assess whether the post-trigger audio energy is a crowd/react
+ * BURST rather than continuous narration, using only the already-buffered taps
+ * (no new inference, no GPU call). Pure + deterministic. Returns undefined when
+ * no tap falls in the lookahead window. */
+export function assessAudioBurst(
+  taps: { ts: number; rms: number }[] | undefined,
+  triggerTs: number,
+  maxLookaheadS: number,
+  opts?: { minPeakToBaseline?: number; maxSustainedFraction?: number }
+): AudioBurstAssessment | undefined {
+  if (!taps?.length) return undefined;
+  const upper = triggerTs + maxLookaheadS;
+  const win = taps.filter((t) => t.ts > triggerTs && t.ts <= upper);
+  if (!win.length) return undefined;
+  let peak = win[0];
+  for (const t of win) if (t.rms > peak.rms) peak = t;
+  const sorted = win.map((t) => t.rms).sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const baseline = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  const minRatio = opts?.minPeakToBaseline ?? AUDIO_BURST_MIN_PEAK_TO_BASELINE;
+  const maxSustained = opts?.maxSustainedFraction ?? AUDIO_BURST_MAX_SUSTAINED_FRACTION;
+  const ratio = peak.rms / Math.max(baseline, 0.005);
+  const sustained = win.filter((t) => t.rms >= 0.5 * peak.rms).length / win.length;
+  return {
+    peakTs: peak.ts,
+    peakRms: peak.rms,
+    baselineRms: baseline,
+    peakToBaseline: ratio,
+    sustainedFraction: sustained,
+    isBurst: ratio >= minRatio && sustained <= maxSustained,
+  };
+}
+/** ADAAAA-7845: why the delivered clip sits where it does. Persisted on the
+ * highlight so placement is auditable (AC2). */
+export type LocalizeAnchorReason =
+  | "frame_attestation"
+  | "peak_audio_reaction"
+  | "peak_audio_far_burst_capped"
+  | "peak_audio_far_rejected"
+  | "trigger_evidence";
+/** ADAAAA-7845: the localization result plus the audit trail the highlight
+ * record persists: the accepting evidence instant and how far the anchor is from
+ * it. */
+export interface VodLocalization {
+  ts: number;
+  signal: "peak_frame" | "peak_audio" | "trigger";
+  anchorReason: LocalizeAnchorReason;
+  /** The accepting evidence instant: the frame-attestation ts on the frame
+   * path, else the Stage-A trigger timestamp. */
+  evidenceTs: number;
+  /** |ts - evidenceTs|. */
+  deltaSec: number;
+}
 /** ADAAAA-7253 (ACC-3): VOD highlight-instant localization with a frame-based
  * path. Prefers frame-based localization when the pass carries a post-trigger
  * per-frame signal (records `peak_frame`); otherwise falls back to the
- * deterministic peak-audio tap (records `peak_audio`), then the trigger
- * (records `trigger`). Pure — no inference, no new GPU/decide calls (Acc-3 /
- * Acc-6). */
+ * deterministic peak-audio tap, then the trigger.
+ *
+ * ADAAAA-7845: peak audio is only the ANCHOR when it agrees with the accepting
+ * evidence instant (within `anchorToleranceS`, default 2 s). A peak further away
+ * is a secondary cue: it moves the clip only when the energy reads as a
+ * crowd/react burst (short + well above the window baseline); such a burst is
+ * capped to the tolerance edge so the anchor never drifts more than ~2 s off the
+ * evidence. Otherwise the evidence instant wins and the far peak is recorded as
+ * rejected. Pure — no inference, no new GPU/decide calls (Acc-3 / Acc-6). */
 export function localizeHighlightInstantVod(
   triggerTs: number,
   frames: LocalizeFrameInput[] | undefined,
   taps: { ts: number; rms: number }[] | undefined,
-  maxLookaheadS: number
-): { ts: number; signal: "peak_frame" | "peak_audio" | "trigger" } {
+  maxLookaheadS: number,
+  opts?: { anchorToleranceS?: number; burst?: { minPeakToBaseline?: number; maxSustainedFraction?: number } }
+): VodLocalization {
+  const tol = opts?.anchorToleranceS ?? PEAK_AUDIO_ANCHOR_TOLERANCE_S;
   const frame = localizeHighlightInstantFrame(frames ?? [], triggerTs, maxLookaheadS);
-  if (frame.signal === "peak_frame") return frame;
-  return localizeHighlightInstant(triggerTs, taps, maxLookaheadS);
+  if (frame.signal === "peak_frame") {
+    // The attested frame IS the accepting evidence instant, so the degree of
+    // freedom here is zero by construction.
+    return { ts: frame.ts, signal: "peak_frame", anchorReason: "frame_attestation", evidenceTs: frame.ts, deltaSec: 0 };
+  }
+  const audio = localizeHighlightInstant(triggerTs, taps, maxLookaheadS);
+  if (audio.signal === "trigger") {
+    return { ts: triggerTs, signal: "trigger", anchorReason: "trigger_evidence", evidenceTs: triggerTs, deltaSec: 0 };
+  }
+  const delta = audio.ts - triggerTs;
+  if (delta <= tol) {
+    return { ts: audio.ts, signal: "peak_audio", anchorReason: "peak_audio_reaction", evidenceTs: triggerTs, deltaSec: delta };
+  }
+  const burst = assessAudioBurst(taps, triggerTs, maxLookaheadS, opts?.burst);
+  if (burst?.isBurst) {
+    const capped = triggerTs + tol;
+    return {
+      ts: capped,
+      signal: "peak_audio",
+      anchorReason: "peak_audio_far_burst_capped",
+      evidenceTs: triggerTs,
+      deltaSec: capped - triggerTs,
+    };
+  }
+  return { ts: triggerTs, signal: "trigger", anchorReason: "peak_audio_far_rejected", evidenceTs: triggerTs, deltaSec: 0 };
 }
 export interface DecisionResult {
   isHighlight: boolean;
@@ -2905,6 +3019,10 @@ export async function acceptVideoDecision(
   // ADAAAA-7253 (ACC-3): prefer the frame-based localization (per-frame signal
   // peak) when the pass carries post-trigger per-frame signals, falling back to
   // the deterministic peak-audio post-trigger tap, then the trigger.
+  // ADAAAA-7845: peak audio only anchors the clip when it agrees with the
+  // accepting evidence instant (or reads as a crowd/react burst, capped to the
+  // tolerance edge) — a far narration peak no longer drags the clip off the
+  // evidence.
   const loc = localizeHighlightInstantVod(candidate.timestamp, frameSignals, run.audioEnergyTaps(), cfg.clipAfterS);
   const win = clipWindow(loc.ts, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15);
   const { clipId, clipUri } = await cut(loc.ts);
@@ -2915,6 +3033,12 @@ export async function acceptVideoDecision(
     // center is queryable (Acc-3). Additive optional — legacy rows carry none.
     localizedTs: loc.ts,
     localizeSignal: loc.signal,
+    // ADAAAA-7845 (AC2): persist WHY the clip sits there and how far the anchor
+    // is from the accepting evidence instant, so placement is auditable from the
+    // record alone (no tap buffer needed).
+    localizeAnchorReason: loc.anchorReason,
+    localizeEvidenceTs: loc.evidenceTs,
+    localizeAnchorDeltaSec: loc.deltaSec,
     // ADAAAA-7247 (ACC-7): record the per-company clip-window setting that
     // produced this clip plus the delivered window length so the delivered clip
     // window is auditable (Acc-3). Values come from the resolved (webui > env)

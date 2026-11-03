@@ -1,12 +1,17 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { clipWindow, validateClipWindow, CLIP_WINDOW_MAX_SIDE_S } from "../src/config";
 import {
   localizeHighlightInstant,
   localizeHighlightInstantFrame,
   localizeHighlightInstantVod,
+  assessAudioBurst,
   frameLocalizationScore,
   acceptVideoDecision,
   LiveRunShared,
+  AUDIO_BURST_MIN_PEAK_TO_BASELINE,
+  PEAK_AUDIO_ANCHOR_TOLERANCE_S,
   type LocalizeFrameInput,
   type AnalyzerConfig,
 } from "../src/analyzer";
@@ -203,17 +208,129 @@ describe("localizeHighlightInstantVod (ADAAAA-7253 / ACC-3)", () => {
 
   it("prefers the frame-based peak over peak-audio when a frame signal is present", () => {
     const loc = localizeHighlightInstantVod(9.5, frames, taps, 8);
-    expect(loc).toEqual({ ts: 10.5, signal: "peak_frame" });
+    expect(loc).toMatchObject({
+      ts: 10.5,
+      signal: "peak_frame",
+      anchorReason: "frame_attestation",
+      evidenceTs: 10.5,
+      deltaSec: 0,
+    });
   });
 
-  it("falls back to peak-audio when no frame signal qualifies", () => {
+  it("falls back to peak-audio when no frame signal qualifies and the peak agrees with the evidence", () => {
     const loc = localizeHighlightInstantVod(9.5, [], taps, 8);
-    expect(loc).toEqual({ ts: 10.5, signal: "peak_audio" });
+    expect(loc).toMatchObject({
+      ts: 10.5,
+      signal: "peak_audio",
+      anchorReason: "peak_audio_reaction",
+      evidenceTs: 9.5,
+      deltaSec: 1,
+    });
   });
 
   it("falls back to the trigger when neither frame nor audio signal is present", () => {
     const loc = localizeHighlightInstantVod(9.5, undefined, undefined, 8);
-    expect(loc).toEqual({ ts: 9.5, signal: "trigger" });
+    expect(loc).toMatchObject({
+      ts: 9.5,
+      signal: "trigger",
+      anchorReason: "trigger_evidence",
+      evidenceTs: 9.5,
+      deltaSec: 0,
+    });
+  });
+});
+
+describe("localizeHighlightInstantVod — evidence anchoring (ADAAAA-7845)", () => {
+  /** 100 ms taps for an 8 s lookahead. `shape` fills the window; the peak tap is
+   * overwritten afterwards so the caller controls ratio + sustained fraction. */
+  const buildTaps = (trigger: number, shape: number[], peak?: { at: number; rms: number }) => {
+    const taps = shape.map((rms, i) => ({ ts: +(trigger + 0.1 * (i + 1)).toFixed(1), rms }));
+    if (peak) {
+      const idx = Math.round(peak.at * 10) - 1;
+      taps[idx] = { ts: +(trigger + peak.at).toFixed(1), rms: peak.rms };
+    }
+    return taps;
+  };
+  // Continuous narration: a steady ~0.08 bed with a modest 0.13 swell 6.1 s in.
+  // This is the dee44c2f shape (ratio 1.66, sustained 0.637).
+  const narrationTaps = (trigger: number) => buildTaps(trigger, Array(80).fill(0.08), { at: 6.1, rms: 0.13 });
+  // A crowd/react burst: a quiet bed with one short loud swell 3.4 s in
+  // (ratio ~5, sustained ~0.06).
+  const reactBurstTaps = (trigger: number) => {
+    const shape = Array(80).fill(0.03);
+    for (const i of [33, 34, 35, 36]) shape[i] = 0.11;
+    return buildTaps(trigger, shape, { at: 3.4, rms: 0.16 });
+  };
+
+  it("anchors on the accepting evidence instant when a far peak is continuous narration (AC1)", () => {
+    const loc = localizeHighlightInstantVod(117, [], narrationTaps(117), 8);
+    expect(loc).toMatchObject({
+      ts: 117,
+      signal: "trigger",
+      anchorReason: "peak_audio_far_rejected",
+      evidenceTs: 117,
+      deltaSec: 0,
+    });
+    // The far peak (123.1) is still reported in the assessment, so the reject is
+    // auditable rather than silent.
+    const burst = assessAudioBurst(narrationTaps(117), 117, 8);
+    expect(burst?.peakTs).toBe(123.1);
+    expect(burst?.isBurst).toBe(false);
+  });
+
+  it("caps a far crowd/react burst to the +/-2 s tolerance edge (no >2 s drift)", () => {
+    const loc = localizeHighlightInstantVod(162, [], reactBurstTaps(162), 8);
+    expect(loc).toMatchObject({
+      ts: 164,
+      signal: "peak_audio",
+      anchorReason: "peak_audio_far_burst_capped",
+      evidenceTs: 162,
+      deltaSec: 2,
+    });
+    expect(Math.abs(loc.ts - loc.evidenceTs)).toBeLessThanOrEqual(PEAK_AUDIO_ANCHOR_TOLERANCE_S);
+  });
+
+  it("assessAudioBurst separates a narration bed from a short react swell", () => {
+    const narration = assessAudioBurst(narrationTaps(100), 100, 8)!;
+    const burst = assessAudioBurst(reactBurstTaps(100), 100, 8)!;
+    expect(narration.isBurst).toBe(false);
+    expect(narration.sustainedFraction).toBeGreaterThan(0.6);
+    expect(burst.isBurst).toBe(true);
+    expect(burst.peakToBaseline).toBeGreaterThan(AUDIO_BURST_MIN_PEAK_TO_BASELINE);
+    expect(burst.sustainedFraction).toBeLessThan(0.2);
+    expect(assessAudioBurst(undefined, 100, 8)).toBeUndefined();
+    expect(assessAudioBurst([{ ts: 99, rms: 0.9 }], 100, 8)).toBeUndefined();
+  });
+
+  it("replays job dee44c2f's own tap windows: every accepted highlight anchors within 2 s (AC1/AC3)", () => {
+    // Taps reconstructed from the job's own source with the same ffmpeg decode +
+    // 100 ms chunking the VOD audio tap uses (vod-audio.ts / chunkPcmBytes). The
+    // reconstruction is validated by reproducing ALL FIVE production
+    // localizedTs values (123.1 / 153.6 / 165.6 / 183.1 / 190.6).
+    const fixture = JSON.parse(
+      readFileSync(join(__dirname, "fixtures", "vod-7845-audio-taps.json"), "utf8")
+    ) as { windows: Record<string, { ts: number; rms: number }[]> };
+    const production: Record<string, number> = { "117": 123.1, "153": 153.6, "162": 165.6, "180": 183.1, "189": 190.6 };
+    const expected: Record<string, { ts: number; signal: string; anchorReason: string }> = {
+      "117": { ts: 117, signal: "trigger", anchorReason: "peak_audio_far_rejected" },
+      "153": { ts: 153.6, signal: "peak_audio", anchorReason: "peak_audio_reaction" },
+      "162": { ts: 162, signal: "trigger", anchorReason: "peak_audio_far_rejected" },
+      "180": { ts: 180, signal: "trigger", anchorReason: "peak_audio_far_rejected" },
+      "189": { ts: 190.6, signal: "peak_audio", anchorReason: "peak_audio_reaction" },
+    };
+    for (const [triggerKey, taps] of Object.entries(fixture.windows)) {
+      const trigger = Number(triggerKey);
+      // Reproduction check: the un-guarded peak-audio picker still lands on the
+      // value production persisted, so these taps are the job's own taps.
+      expect(localizeHighlightInstant(trigger, taps, 8).ts).toBe(production[triggerKey]);
+      const loc = localizeHighlightInstantVod(trigger, [], taps, 8);
+      expect({ ts: loc.ts, signal: loc.signal, anchorReason: loc.anchorReason }).toEqual(expected[triggerKey]);
+      expect(Math.abs(loc.ts - loc.evidenceTs)).toBeLessThanOrEqual(2);
+      // +/-7/+8 s padding and the 15 s length are unchanged.
+      const win = clipWindow(loc.ts, 7, 8, 15);
+      expect(win.end - win.start).toBe(15);
+      expect(loc.ts - win.start).toBe(7);
+    }
   });
 });
 
@@ -292,5 +409,59 @@ describe("acceptVideoDecision frame-localized record (ADAAAA-7253 / ACC-3)", () 
     const rec = run.highlights[0];
     expect(rec.localizeSignal).toBe("trigger");
     expect(rec.localizedTs).toBe(42.0);
+  });
+
+  it("persists the anchor reason, evidence instant and delta, with no decide/confirm call (AC2/AC4)", async () => {
+    const run = new LiveRunShared({ goalBurstWindowS: 30 });
+    let cutTs: number | undefined;
+    const cut = async (ts: number) => {
+      cutTs = ts;
+      return { clipId: "clip-1", clipUri: "uri-1" };
+    };
+    const client = {
+      decide: () => {
+        throw new Error("decide should NOT be called during localization");
+      },
+      confirm: () => {
+        throw new Error("confirm should NOT be called when confirmEnabled=false");
+      },
+    } as any;
+    // 100 ms taps decoded by rmsNormalized: a steady narration bed with a far
+    // 0.13 swell +6.1 s after the trigger (the dee44c2f shape).
+    const pcm = (amp: number) => {
+      const b = Buffer.alloc(1600 * 2);
+      for (let i = 0; i < 1600; i++) b.writeInt16LE(Math.round(amp * 32768), i * 2);
+      return b.toString("base64");
+    };
+    const bed = pcm(0.08);
+    const swell = pcm(0.13);
+    for (let i = 1; i <= 80; i++) {
+      const ts = +(117 + 0.1 * i).toFixed(1);
+      run.addAudioChunk(ts, ts === 123.1 ? swell : bed);
+    }
+
+    await acceptVideoDecision(
+      client,
+      run,
+      cut,
+      seedCfg,
+      undefined,
+      { seq: 1, timestamp: 117 },
+      { eventType: "GOAL", timestamp: 117 },
+      { isHighlight: true, outcome: "scoring_play", score: 88 }
+    );
+
+    expect(run.highlights).toHaveLength(1);
+    const rec = run.highlights[0];
+    expect(cutTs).toBe(117);
+    expect(rec.localizedTs).toBe(117);
+    expect(rec.localizeSignal).toBe("trigger");
+    expect(rec.localizeAnchorReason).toBe("peak_audio_far_rejected");
+    expect(rec.localizeEvidenceTs).toBe(117);
+    expect(rec.localizeAnchorDeltaSec).toBe(0);
+    // Clip padding unchanged: 7 s before, 8 s after, 15 s total.
+    expect(rec.start).toBe(110);
+    expect(rec.end).toBe(125);
+    expect(rec.clipWindowSec).toBe(15);
   });
 });
