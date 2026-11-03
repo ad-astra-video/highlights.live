@@ -1723,6 +1723,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           jobId,
           videoPath,
           sessionId: initial.sessionId,
+          // ADAAAA-7861: follow the LIVE session — `analyzeJob` re-reserves on a
+          // SessionLostError and the re-check must not post at the dead one.
+          getSessionId: () => slot.current.sessionId,
           hints: {
             title: store.getJob(jobId)?.title,
             gameHint: anaCfg.gameHint,
