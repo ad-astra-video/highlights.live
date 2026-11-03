@@ -451,7 +451,8 @@ def test_embedded_read_is_still_a_fallback_match():
     assert match["ocr_confidence"] == "embedded"
 
 
-# --- ADAAAA-7345: anchor-frame retry ---------------------------------------
+
+# --- ADAAAA-7345 / ADAAAA-7824: anchor-frame retry -------------------------
 
 def _retry_state(det, monkeypatch, session_id="s-pn-retry"):
     monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: det)
@@ -461,55 +462,155 @@ def _retry_state(det, monkeypatch, session_id="s-pn-retry"):
     return state
 
 
-def _banner_numbers():
-    # A broadcast graphic frame: the only <OD> hit is a full-width banner that is
-    # not a plausible single-player seed box, and its OCR reads no jersey.
-    return {}
+_PLAYER = {"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}
+
+
+class _FrameScriptedDetector(_FakeDetector):
+    """OCR reads a jersey only on the frames listed in ``readable_frames``.
+
+    Models a census clip like `397294f3`: on the anchor frame (and every other
+    frame) the only gate-plausible detection is a broadcast graphic whose OCR
+    reads letters ("COURTESY ... VISION"), so identification legitimately fails
+    and the request has to retry until the one readable frame arrives.
+    """
+
+    def __init__(self, detections, numbers=None):
+        super().__init__(detections, numbers)
+        self.frame = 0
+        self.readable_frames = set()
+
+    def ocr(self, frame, roi=None):
+        if self.frame in self.readable_frames:
+            return super().ocr(frame, roi)
+        self.ocr_calls.append(None)
+        return ["COURTESY", "VISION"]
+
+
+def _graphic_detector():
+    det = _FrameScriptedDetector([_PLAYER], numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["9"]})
+    return det
+
+
+def test_retry_budget_is_a_frame_window_not_stride_times_attempts():
+    """The budget the ack publishes is the window in FRAMES (ADAAAA-7824).
+
+    Pre-change the ack reported `PLAYER_RETRY_STRIDE * PLAYER_RETRY_ATTEMPTS`,
+    which silently shrank the usable window 200 -> 40 frames as soon as the
+    stride dropped to 1 (the value needed to see every sampled frame).
+    """
+    assert app_mod.PLAYER_RETRY_WINDOW_FRAMES == 200
+    assert app_mod.PLAYER_RETRY_STRIDE == 1
+    assert app_mod.PLAYER_RETRY_ATTEMPTS * app_mod.PLAYER_RETRY_STRIDE == (
+        app_mod.PLAYER_RETRY_WINDOW_FRAMES
+    )
 
 
 def test_no_match_keeps_the_request_alive_as_a_retry(monkeypatch):
-    det = _FakeDetector(
-        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
-        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["7"]},
-    )
+    det = _graphic_detector()
     state = _retry_state(det, monkeypatch)
     ack = handle_control(state, {"type": "track-player", "number": 9})
     assert ack["ok"] is False
     assert ack["retrying"] is True
-    assert ack["retryWindowFrames"] == app_mod.PLAYER_RETRY_STRIDE * app_mod.PLAYER_RETRY_ATTEMPTS
+    assert ack["retryWindowFrames"] == app_mod.PLAYER_RETRY_WINDOW_FRAMES
+    assert ack["retryStride"] == 1
+    assert ack["retryAttempts"] == app_mod.PLAYER_RETRY_ATTEMPTS
     assert state.pending_player_number == 9
-    assert state.pending_player_attempts_left == app_mod.PLAYER_RETRY_ATTEMPTS
+    assert state.pending_player_frames_left == app_mod.PLAYER_RETRY_WINDOW_FRAMES
     # Nothing is seeded or claimed until a frame actually identifies the player.
     assert state.requested_player_number is None
     assert len(state.tracker.tracks) == 0
 
 
-def test_retry_is_stride_limited(monkeypatch):
-    det = _FakeDetector(
-        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
-        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["7"]},
-    )
+def test_retry_attempts_every_sampled_frame(monkeypatch):
+    """Stride 1: one identification attempt per sampled frame (ADAAAA-7824)."""
+    det = _graphic_detector()
     state = _retry_state(det, monkeypatch)
     handle_control(state, {"type": "track-player", "number": 9})
     before = len(det.detect_calls)
-    for _ in range(app_mod.PLAYER_RETRY_STRIDE - 1):
+    for _ in range(5):
         app_mod._try_pending_player(state, det)
-    assert len(det.detect_calls) == before, "no inference before the stride elapses"
-    app_mod._try_pending_player(state, det)
-    assert len(det.detect_calls) == before + 1, "one attempt when the stride elapses"
+    assert len(det.detect_calls) == before + 5
+    assert state.pending_player_frames_left == app_mod.PLAYER_RETRY_WINDOW_FRAMES - 5
+
+
+def test_retry_finds_a_match_on_a_frame_a_stride_grid_would_skip(monkeypatch):
+    """The 397294f3 shape: 78-frame clip, request at frame 30, jersey readable
+    on frame 49 only.
+
+    A stride-5 grid attempts frames 35, 40, 45, 50, ... so frame 49 was never
+    attempted and the clip ended with the request still pending. Every sampled
+    frame inside the window must be attempted.
+    """
+    det = _graphic_detector()
+    det.readable_frames = {49}
+    state = _retry_state(det, monkeypatch)
+    det.frame = 30
+    ack = handle_control(state, {"type": "track-player", "number": 9})
+    assert ack["retrying"] is True
+
+    seeded_at = None
+    for f in range(31, 79):  # the clip ends at frame 78
+        det.frame = f
+        app_mod._try_pending_player(state, det)
+        if state.requested_player_number == 9:
+            seeded_at = f
+            break
+    assert seeded_at == 49, f"seeded on frame {seeded_at}, expected the readable frame 49"
+    assert state.pending_player_number is None
+    selected = [t for t in state.tracker.tracks if t.selected]
+    assert len(selected) == 1
+    assert selected[0].label == "player #9"
+    assert list(selected[0].bbox) == [0.2, 0.2, 0.4, 0.5]
+
+
+def test_retry_window_expires_in_frames_and_stops_inference(monkeypatch):
+    """The window still expires: bounded GPU, one attempt per frame, then silence."""
+    det = _graphic_detector()
+    state = _retry_state(det, monkeypatch)
+    handle_control(state, {"type": "track-player", "number": 9})
+    anchor_calls = len(det.detect_calls)
+    window = app_mod.PLAYER_RETRY_WINDOW_FRAMES
+    for f in range(1, window + 6):
+        det.frame = f
+        app_mod._try_pending_player(state, det)
+    # exactly one attempt per sampled frame inside the window, then nothing
+    assert len(det.detect_calls) - anchor_calls == window
+    assert state.pending_player_number is None
+    assert state.requested_player_number is None
+    assert len(state.tracker.tracks) == 0
+
+
+def test_retry_window_stays_in_frames_when_the_stride_widens(monkeypatch):
+    """A wider stride thins the attempts; it must NOT shrink the window.
+
+    Pre-change the window WAS `stride * attempts`, so the frame budget every
+    caller could rely on changed whenever the stride changed.
+    """
+    monkeypatch.setattr(app_mod, "PLAYER_RETRY_STRIDE", 5)
+    det = _graphic_detector()
+    state = _retry_state(det, monkeypatch)
+    handle_control(state, {"type": "track-player", "number": 9})
+    anchor_calls = len(det.detect_calls)
+    window = app_mod.PLAYER_RETRY_WINDOW_FRAMES
+    for f in range(1, window + 1):
+        det.frame = f
+        app_mod._try_pending_player(state, det)
+    assert len(det.detect_calls) - anchor_calls == window // 5
+    # still pending through the last frame of the window, not expired at 40
+    assert state.pending_player_frames_left == 0
+    assert state.pending_player_number == 9
+    assert len(state.tracker.tracks) == 0
 
 
 def test_retry_seeds_the_selected_slot_once_a_live_frame_identifies(monkeypatch):
-    det = _FakeDetector(
-        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
-        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["7"]},
-    )
+    det = _graphic_detector()
     state = _retry_state(det, monkeypatch)
+    det.frame = 0
     handle_control(state, {"type": "track-player", "number": 9})  # graphic anchor frame
-    # The graphic clears: the same box now reads the requested jersey.
-    det.numbers[_px_key([0.2, 0.2, 0.4, 0.5])] = ["9"]
-    for _ in range(app_mod.PLAYER_RETRY_STRIDE):
-        app_mod._try_pending_player(state, det)
+    # The graphic clears: the frame now reads the requested jersey.
+    det.frame = 1
+    det.readable_frames = {1}
+    app_mod._try_pending_player(state, det)
     assert state.pending_player_number is None
     assert state.requested_player_number == 9
     selected = [t for t in state.tracker.tracks if t.selected]
@@ -517,27 +618,9 @@ def test_retry_seeds_the_selected_slot_once_a_live_frame_identifies(monkeypatch)
     assert selected[0].label == "player #9"
 
 
-def test_retry_window_expires_and_clears_the_request(monkeypatch):
-    det = _FakeDetector(
-        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
-        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["7"]},
-    )
-    state = _retry_state(det, monkeypatch)
-    handle_control(state, {"type": "track-player", "number": 9})
-    for _ in range(app_mod.PLAYER_RETRY_STRIDE * (app_mod.PLAYER_RETRY_ATTEMPTS + 2)):
-        app_mod._try_pending_player(state, det)
-    assert state.pending_player_number is None
-    assert state.requested_player_number is None
-    assert len(state.tracker.tracks) == 0
-    # exactly PLAYER_RETRY_ATTEMPTS inference attempts, then silence
-    assert len(det.detect_calls) - 1 == app_mod.PLAYER_RETRY_ATTEMPTS
-
-
 def test_retry_is_inert_without_a_pending_request(monkeypatch):
-    det = _FakeDetector(
-        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
-        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["9"]},
-    )
+    det = _graphic_detector()
+    det.readable_frames = {0}
     state = _retry_state(det, monkeypatch)
     app_mod._try_pending_player(state, det)
     assert det.detect_calls == []
@@ -545,7 +628,7 @@ def test_retry_is_inert_without_a_pending_request(monkeypatch):
 
 
 def test_retry_survives_a_detector_exception_and_keeps_retrying(monkeypatch):
-    class _FlakyDetector(_FakeDetector):
+    class _FlakyDetector(_FrameScriptedDetector):
         fail = True
 
         def detect(self, rgb, vocabulary=None, roi_pass=True):
@@ -553,16 +636,49 @@ def test_retry_survives_a_detector_exception_and_keeps_retrying(monkeypatch):
                 raise RuntimeError("gpu hiccup")
             return super().detect(rgb, vocabulary=vocabulary, roi_pass=roi_pass)
 
-    det = _FlakyDetector(
-        [{"label": "player", "confidence": 0.9, "bbox": [0.2, 0.2, 0.4, 0.5]}],
-        numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["9"]},
-    )
+    det = _FlakyDetector([_PLAYER], numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["9"]})
     state = _retry_state(det, monkeypatch)
     state.pending_player_number = 9
-    state.pending_player_attempts_left = 2
+    state.pending_player_frames_left = 2
     app_mod._try_pending_player(state, det)  # raises internally, must not propagate
     assert state.pending_player_number == 9
     det.fail = False
-    for _ in range(app_mod.PLAYER_RETRY_STRIDE):
-        app_mod._try_pending_player(state, det)
+    det.readable_frames = {0}
+    app_mod._try_pending_player(state, det)
     assert state.requested_player_number == 9
+
+
+def test_process_frame_seeds_the_player_on_the_readable_frame(monkeypatch):
+    """End-to-end wiring: the retry runs inside the per-frame path.
+
+    Drives the census shape through `process_frame` itself (not the retry helper):
+    `track-player #9` is requested on the graphic anchor frame 30, the jersey is
+    readable ONLY on frame 49, and the selected `player #9` track must surface on
+    that frame's observation. Pre-change this reported no seed at all.
+    """
+    from app import process_frame as run_frame
+
+    det = _FrameScriptedDetector([_PLAYER], numbers={_px_key([0.2, 0.2, 0.4, 0.5]): ["9"]})
+    det.readable_frames = {49}
+    monkeypatch.setattr(app_mod, "get_detector", lambda lora_ref=None: det)
+    monkeypatch.setattr(florence, "get_detector", lambda lora_ref=None: det)
+
+    state = SessionState(session_id="s-pn-e2e")
+    state.game_hint = "soccer"
+    state.tracker = IoUTracker(capacity=8)
+    state.last_rgb = np.zeros((64, 64, 3), np.uint8)
+
+    first_selected = None
+    for f in range(79):
+        det.frame = f
+        obs, _ = run_frame(state, f, float(f), "")
+        sel = [
+            t for t in obs.get("tracks", [])
+            if t.get("selected") and str(t.get("label", "")) == "player #9"
+        ]
+        if sel and first_selected is None:
+            first_selected = f
+        if f == 30:
+            ack = handle_control(state, {"type": "track-player", "number": 9})
+            assert ack["retrying"] is True
+    assert first_selected == 49, f"selected player surfaced on frame {first_selected}"
