@@ -448,9 +448,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // --- ADAAAA-7896: export marking helpers --------------------------------
   // The playback URL is public and must never write export state; the export
   // URL carries a per-highlight token minted here, per requesting user.
+  // ADAAAA-7901: the token is signed with the DEDICATED export secret
+  // (`cfg.exportTokenSecret`, HKDF-derived from the session secret unless
+  // `EXPORT_TOKEN_SECRET` sets one) — never `cfg.jwtSecret`, so an export token
+  // is not a sibling of a session credential.
   function exportUriForHighlight(h: HighlightRecord, userId: string): string {
     if (!h.clipUri) return "";
-    return exportUriFor(h.clipUri, mintExportToken(cfg.jwtSecret, h.id, userId));
+    return exportUriFor(h.clipUri, mintExportToken(cfg.exportTokenSecret, h.id, userId));
   }
 
   /** R7: exactly ONE `clip_exported` usage row per first mark, `extra` carries
@@ -4585,7 +4589,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   );
 
   // Public feed — accepted clips only, no auth (public beta finish line).
-  app.get("/feed", async () => ({ highlights: store.acceptedHighlights() }));
+  //
+  // ADAAAA-7901 (data exposure): the feed used to serialize the raw
+  // `HighlightRecord`, so every accepted clip published its `ownerId` (659 of
+  // 758 rows were the admin account) — handing an attacker the exact user id a
+  // forged session needs, alongside the export token minted for that user.
+  // The public projection drops account identities (`ownerId`, `exportedBy`);
+  // clip ids are enough for a public feed. Owner-scoped surfaces (`/highlights`,
+  // `/jobs/:id/detail`) keep `ownerId` for the authenticated caller.
+  function publicFeedHighlight(h: HighlightRecord): Omit<HighlightRecord, "ownerId" | "exportedBy"> {
+    const { ownerId: _ownerId, exportedBy: _exportedBy, ...rest } = h;
+    return rest;
+  }
+
+  app.get("/feed", async () => ({ highlights: store.acceptedHighlights().map(publicFeedHighlight) }));
 
   app.get("/clips/*", async (req: any, reply) => {
     const fileParts = (req.params as any)["*"];
@@ -4598,7 +4615,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // can never mark a clip it was not minted for.
     const token = typeof req.query?.x === "string" ? req.query.x : "";
     if (token) {
-      const payload = verifyExportToken(cfg.jwtSecret, token);
+      const payload = verifyExportToken(cfg.exportTokenSecret, token);
       const hl = store.highlightByClipFile(fileParts);
       if (!payload || !hl || hl.id !== payload.h) {
         return reply.code(403).send({ error: "invalid export token" });

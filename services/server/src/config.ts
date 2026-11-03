@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { GoalLineCalibration } from "./analyzer";
 import { parsePerceiveCalibration, type PerceiveCalibrationMap } from "./perceive-calibration";
+import { resolveExportTokenSecret } from "./export-token";
 import { LIVE_OBSERVE_LAG_BUDGET_S, LIVE_OBSERVE_MAX_FRAMES } from "./observe-loop";
 
 export interface ServerConfig {
@@ -410,6 +411,13 @@ export interface ServerConfig {
   perceiveCalibration?: PerceiveCalibrationMap;
   /** Auth + billing */
   jwtSecret: string;
+  /** ADAAAA-7901: the secret that signs export tokens. NEVER equals
+   * `jwtSecret`: an export token is a public, per-clip credential embedded in a
+   * URL, so signing it with the session secret let anyone holding the same
+   * literal forge a signed-in session. Comes from `EXPORT_TOKEN_SECRET` when
+   * set, else HKDF-SHA256(`jwtSecret`, "clip-export") — see
+   * `export-token.ts#deriveExportTokenSecret`. */
+  exportTokenSecret: string;
   /** Max password-reset token lifetime (seconds) before it expires. */
   resetTokenTtlSec: number;
   /** Max auth-endpoint requests (login/register/forgot/reset) per IP per
@@ -605,10 +613,66 @@ function parseGoalLineCalibrations(raw: string | undefined): Record<string, Goal
   }
 }
 
+/**
+ * ADAAAA-7901: every secret this repo has ever shipped as a default. A
+ * deployment that boots with one of these signs sessions (and service
+ * credentials) with a literal that is in the public repo, so an admin session
+ * can be minted offline from `git clone`, and `GET /feed` even hands out the
+ * admin user id.
+ *
+ * `dev-secret` is the `docker/docker-compose.yml` default the deployed box ran
+ * on; `dev-insecure-secret-change-me` is the `config.ts` code default.
+ */
+export const INSECURE_JWT_SECRETS: readonly string[] = [
+  "dev-insecure-secret-change-me",
+  "dev-secret",
+  "changeme",
+  "secret",
+];
+
+/** The code-level fallback for local dev/tests (`NODE_ENV` not production). */
+export const DEFAULT_JWT_SECRET = INSECURE_JWT_SECRETS[0];
+
+/**
+ * Resolve the session secret and enforce the production gate (ADAAAA-7901).
+ *
+ * In production (`NODE_ENV=production`, which `docker/Dockerfile.server`
+ * always sets) an unset `JWT_SECRET` — or any documented default — is a hard
+ * boot failure: throw before the listener starts so the process exits non-zero
+ * and the orchestrator shows a crash loop instead of silently signing with a
+ * public literal. Dev/test keep the old fallback so `pnpm dev` and the suite
+ * work unconfigured.
+ */
+export function resolveJwtSecret(raw: string | undefined, nodeEnv: string): string {
+  const value = (raw ?? "").trim();
+  const production = nodeEnv === "production";
+  if (production) {
+    if (!value) {
+      throw new Error(
+        "JWT_SECRET is required when NODE_ENV=production: refusing to boot with the insecure development default (ADAAAA-7901). Set a real random secret, e.g. `openssl rand -hex 32`, in the deployment env (docker/.env for the compose stack)."
+      );
+    }
+    if (INSECURE_JWT_SECRETS.includes(value)) {
+      throw new Error(
+        `JWT_SECRET is set to a documented insecure default ("${value}") while NODE_ENV=production: refusing to boot, because a session signed with that literal is forgeable by anyone with the repo (ADAAAA-7901). Set a real random secret, e.g. \`openssl rand -hex 32\`.`
+      );
+    }
+  }
+  return value || DEFAULT_JWT_SECRET;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+  const nodeEnv = env.NODE_ENV ?? "development";
+  // ADAAAA-7901: both secrets are resolved before the object literal so a
+  // production boot with an insecure/missing JWT_SECRET throws here — the
+  // process exits non-zero at startup instead of signing with `dev-secret`.
+  const jwtSecret = resolveJwtSecret(env.JWT_SECRET, nodeEnv);
+  const exportTokenSecret = resolveExportTokenSecret(env.EXPORT_TOKEN_SECRET, jwtSecret, {
+    requireStrong: nodeEnv === "production",
+  });
   return {
     port: Number(env.PORT ?? 3000),
-    nodeEnv: env.NODE_ENV ?? "development",
+    nodeEnv,
     orchestratorUrl: env.ORCHESTRATOR_URL ?? "http://127.0.0.1:8935",
     perceiveUrl: env.PERCEIVE_URL,
     perceiveRunnerUrl: env.PERCEIVE_RUNNER_URL,
@@ -783,7 +847,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // deployment via LIVE_SAMPLE_BASE_FPS.
     liveSampleBaseFps: Number(env.LIVE_SAMPLE_BASE_FPS ?? 3),
     liveSampleHeadroom: Number(env.LIVE_SAMPLE_HEADROOM ?? 0.9),
-    jwtSecret: env.JWT_SECRET ?? "dev-insecure-secret-change-me",
+    // ADAAAA-7901: the session secret is validated in production (unset or a
+    // documented default throws at boot) and the export secret is derived from
+    // it (or taken from EXPORT_TOKEN_SECRET), so an export token can never be
+    // promoted to a session.
+    jwtSecret,
+    exportTokenSecret,
     resetTokenTtlSec: Number(env.RESET_TOKEN_TTL_SEC ?? 3600),
     authRateLimit: Number(env.AUTH_RATE_LIMIT ?? 30),
     authRateLimitWindowSec: Number(env.AUTH_RATE_LIMIT_WINDOW_SEC ?? 60),
