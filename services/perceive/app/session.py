@@ -157,8 +157,10 @@ class SessionState:
     ball_speeds: Deque[float] = field(default_factory=lambda: deque(maxlen=BALL_SPEED_WINDOW))
     # ADAAAA-7345: anchor retry state for a `track-player` request whose anchor
     # frame carried no plausible player (graphic/watermark/replay overlay).
+    # ADAAAA-7824: the budget is a FRAME window (frames sampled while the
+    # request is pending), so a stride change cannot shrink it.
     pending_player_number: Optional[int] = None
-    pending_player_attempts_left: int = 0
+    pending_player_frames_left: int = 0
     pending_player_stride: int = 0
 
 
