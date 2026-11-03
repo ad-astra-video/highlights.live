@@ -67,6 +67,57 @@ describe("observe goal-attestation forwarding (ADAAAA-7021 adverse-finding fix)"
   });
 });
 
+describe("window scoreboard delta folding (ADAAAA-7844)", () => {
+  const delta = {
+    pre: [0, 0] as [number, number],
+    post: [1, 0] as [number, number],
+    preTs: 100,
+    postTs: 103,
+    deltaTs: 103,
+    preSamples: 3,
+    postSamples: 2,
+  };
+  const cfg = { gameHint: "soccer" } as Parameters<typeof buildObserveDecideRequest>[0];
+
+  it("carries a legible measured delta alongside the boolean", () => {
+    const att = foldWindowAttestation([
+      { eventType: "GOAL", ts: 9.5, scoreBoardChanged: true, scoreBoardDelta: delta },
+    ]);
+    expect(att.scoreBoardChanged).toBe(true);
+    expect(att.scoreBoardDelta).toEqual(delta);
+  });
+
+  it("keeps the FIRST legible delta in the window", () => {
+    const later = { ...delta, pre: [1, 0] as [number, number], post: [2, 0] as [number, number], deltaTs: 108 };
+    const att = foldWindowAttestation([
+      { eventType: "GOAL", ts: 9.0, scoreBoardChanged: true, scoreBoardDelta: delta },
+      { eventType: "GOAL", ts: 9.5, scoreBoardChanged: true, scoreBoardDelta: later },
+    ]);
+    expect(att.scoreBoardDelta).toEqual(delta);
+  });
+
+  it("drops an illegible delta (single OCR sample) but keeps the boolean", () => {
+    const att = foldWindowAttestation([
+      { eventType: "GOAL", ts: 9.5, scoreBoardChanged: true, scoreBoardDelta: { ...delta, postSamples: 1 } },
+    ]);
+    // The bare flag still attests (legacy provenance) but carries no measured
+    // delta, so the decide pass refuses to label it "scoreboard".
+    expect(att.scoreBoardChanged).toBe(true);
+    expect(att.scoreBoardDelta).toBeUndefined();
+  });
+
+  it("forwards the attestation boolean into the stage-1 decide evidence", () => {
+    const { evidence } = buildObserveDecideRequest(
+      cfg,
+      new LiveRunShared(),
+      payload([{ eventType: "GOAL", ts: 9.5, scoreBoardChanged: true, scoreBoardDelta: delta }])
+    );
+    // Stage-1 evidence keeps the boolean; the structured delta rides the window
+    // attestation into the confirm request (see foldWindowAttestation above).
+    expect(evidence.scoreBoardChanged).toBe(true);
+  });
+});
+
 describe("observeEmitSeq (ADAAAA-7007 seq schema fix)", () => {
   it("derives a monotonic non-negative frame seq from centerTs at the window fps", () => {
     expect(observeEmitSeq(15, 2)).toBe(30);

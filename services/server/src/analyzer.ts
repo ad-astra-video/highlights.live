@@ -181,6 +181,43 @@ export function buildReactionEvidence(
     ballPossessionId: candidate.ballPossession?.possessingPlayerId ?? "",
   };
 }
+/** ADAAAA-7844: a MEASURED, legible scoreboard delta carried alongside the
+ * `scoreBoardChanged` boolean. Perceive only emits it when both sides parsed and
+ * each side is supported by at least two contiguous OCR readings inside the
+ * tracker window (so a single-frame misread cannot become a "score change").
+ * `deltaTs` is the transition instant (the first frame showing the new score),
+ * which is what time-ties the delta to the analysed window. */
+export interface ScoreboardDeltaEvidence {
+  /** Parsed (home, away) score before the transition. */
+  pre: [number, number];
+  /** Parsed (home, away) score at/after the transition. */
+  post: [number, number];
+  /** Timestamp of the last concrete reading of `pre`. */
+  preTs: number;
+  /** Timestamp of the first concrete reading of `post` (== `deltaTs`). */
+  postTs: number;
+  /** Transition instant (first frame reading the new score). */
+  deltaTs: number;
+  /** Contiguous concrete OCR readings supporting `pre`. */
+  preSamples: number;
+  /** Contiguous concrete OCR readings supporting `post`. */
+  postSamples: number;
+}
+
+/** Mirrors `scoreboard_delta_legible` in services/decide/app/confirm.py: a delta
+ * is credited only when both sides are parsed and consistent. Pure — used to
+ * decide whether a window's attestation may carry the delta at all. */
+export function scoreboardDeltaLegible(delta: ScoreboardDeltaEvidence | undefined | null): boolean {
+  if (!delta) return false;
+  const pair = (v: unknown): v is [number, number] =>
+    Array.isArray(v) &&
+    v.length === 2 &&
+    v.every((n) => typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= 99);
+  if (!pair(delta.pre) || !pair(delta.post)) return false;
+  if (delta.pre[0] === delta.post[0] && delta.pre[1] === delta.post[1]) return false;
+  if (!(delta.preSamples >= 2) || !(delta.postSamples >= 2)) return false;
+  return delta.preTs <= delta.deltaTs && delta.deltaTs <= delta.postTs;
+}
 /**
  * The candidate signal shape a trigger is derived from (ADAAAA-6798 Inc 2).
  * Mirrors the candidate object produced by perceive / the video + audio legs so
@@ -196,6 +233,9 @@ export interface CandidateSignal {
   goalCrossed?: boolean;
   ballOutcome?: string;
   scoreBoardChanged?: boolean;
+  /** ADAAAA-7844: the measured delta backing `scoreBoardChanged`, when one was
+   * measured legibly inside the window. */
+  scoreBoardDelta?: ScoreboardDeltaEvidence;
 }
 
 /**
@@ -609,6 +649,10 @@ export interface ConfirmDecision {
    * highlight record for human corroboration. "" / absent where no audio
    * context / ASR was not computed. */
   transcript?: string;
+  /** ADAAAA-7844: the MEASURED, legible scoreboard delta the corroboration was
+   * credited/labelled from (parsed pre/post + sample counts + transition
+   * instant). Absent when no legible delta was measured. */
+  scoreboardDelta?: ScoreboardDeltaEvidence;
   /** The reconciled HighlightDecision-shaped dict to adopt in place of the
    * Stage-1 verdict. On passthrough it is the (unchanged) Stage-1 verdict. */
   decision: DecisionResult;
@@ -646,6 +690,11 @@ export interface ConfirmRequest {
   ballOutcome?: string;
   goalCrossed?: boolean;
   scoreBoardChanged?: boolean;
+  /** ADAAAA-7844: the measured, legible scoreboard delta behind
+   * `scoreBoardChanged`. The decide pass credits a scoreboard corroboration only
+   * when this is present and legible (both sides parsed, >= 2 OCR samples each,
+   * time-tied), so a bare boolean can never be labelled "scoreboard". */
+  scoreBoardDelta?: ScoreboardDeltaEvidence;
 }
 /** One audio chunk fed to the Stage-A noise-change gate (INC-2 / ADAAAA-4325).
  * Owned by the server's ffmpeg audio tap: short (default ~100 ms) mono int16
@@ -3191,13 +3240,21 @@ export const DECIDE_MAX_DETECTION_BBOX = 4;
  * near-miss / absent). Returns `{}` when nothing attests — the correct
  * "no attestation, provenance-only" case. Pure + deterministic (ADAAAA-7021). */
 export function foldWindowAttestation(
-  hints: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean }[] | ReadonlyArray<ObserveBiasHint>
-): { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean } {
-  const out: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean } = {};
+  hints: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean; scoreBoardDelta?: ScoreboardDeltaEvidence }[] | ReadonlyArray<ObserveBiasHint>
+): { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean; scoreBoardDelta?: ScoreboardDeltaEvidence } {
+  const out: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean; scoreBoardDelta?: ScoreboardDeltaEvidence } = {};
   for (const h of hints) {
     if (h.goalCrossed === true) out.goalCrossed = true;
     if (typeof h.ballOutcome === "string" && /^goal$/i.test(h.ballOutcome.trim())) out.ballOutcome = h.ballOutcome;
     if (h.scoreBoardChanged === true) out.scoreBoardChanged = true;
+    // ADAAAA-7844: keep the FIRST legible measured delta in the window (the
+    // hints are already time-filtered to the window, so it is time-tied by
+    // construction). A bare boolean with no legible delta still attests (the
+    // Boolean stays true) but carries no delta, so the decide pass refuses to
+    // label it "scoreboard".
+    if (!out.scoreBoardDelta && scoreboardDeltaLegible((h as any).scoreBoardDelta)) {
+      out.scoreBoardDelta = (h as any).scoreBoardDelta;
+    }
   }
   return out;
 }
@@ -3571,6 +3628,9 @@ export async function observeAcceptOnly(
     goalCrossed: windowAttestation.goalCrossed,
     ballOutcome: windowAttestation.ballOutcome,
     scoreBoardChanged: windowAttestation.scoreBoardChanged,
+    // ADAAAA-7844: carry the measured delta (if any) so the confirm request can
+    // be credited/labelled on a legible, time-tied measurement.
+    scoreBoardDelta: windowAttestation.scoreBoardDelta,
   };
   // ADAAAA-7253 (ACC-3): carry the window's per-frame localization inputs
   // (ts + perceive-derived goal/ball signal + max detection confidence) into
@@ -3892,6 +3952,7 @@ export async function confirmReconcile(
     ballOutcome?: string;
     goalCrossed?: boolean;
     scoreBoardChanged?: boolean;
+    scoreBoardDelta?: ScoreboardDeltaEvidence;
   },
   /** ADAAAA-7365: the goal EVENT's stable content timestamp (goal trigger /
    * localized instant). For the VOD observe path this is the goal's own content
@@ -3953,6 +4014,7 @@ export async function confirmReconcile(
       ballOutcome: candidate.ballOutcome,
       goalCrossed: candidate.goalCrossed,
       scoreBoardChanged: candidate.scoreBoardChanged,
+      scoreBoardDelta: candidate.scoreBoardDelta,
     } as ConfirmRequest, { jobId: cfg.jobId });
     const confirmElapsedMs = Date.now() - confirmStartedAt;
     shared.recordConfirm({ stage1Disagreed: confirm.stage1Disagreed === true });
@@ -4043,6 +4105,9 @@ export function confirmAuditDescriptor(
       goalConfirmed: confirm?.goalConfirmed ?? null,
       corroborated: confirm?.corroborated ?? false,
       corroborationSource: confirm?.corroborationSource ?? null,
+      // ADAAAA-7844: persist the measured delta behind a "scoreboard" label so
+      // the corroboration is queryable/replayable after the fact.
+      scoreboardDelta: confirm?.scoreboardDelta ?? null,
       stage1Disagreed: confirm?.stage1Disagreed ?? false,
     },
     params: { stage1Disagreed: confirm?.stage1Disagreed ?? false },
@@ -4615,6 +4680,11 @@ export async function analyzeJob(
             goalCrossed: _o.goalCrossed ?? _ev?.goalCrossed,
             ballOutcome: _o.ballOutcome ?? _ev?.ballOutcome,
             scoreBoardChanged: _o.scoreBoardChanged ?? _ev?.scoreBoardChanged,
+            // ADAAAA-7844: the measured delta the flag is backed by (absent when
+            // perceive did not measure a legible one). Wire name on the
+            // observation is `scoreboardDelta`; the hint/attestation field is
+            // `scoreBoardDelta`.
+            scoreBoardDelta: _o.scoreboardDelta ?? (_ev as any)?.scoreboardDelta,
           };
           const _attested =
             _att.scoreBoardChanged === true ||

@@ -49,7 +49,14 @@ import {
   type SignalGateOptions,
   type TriggerFamilyLatency,
 } from "./observe-loop";
-import { LiveRunShared, buildLiveObserveMetrics, seedSignalFromEvidence, type LiveObserveMetricsSnapshot } from "./analyzer";
+import {
+  LiveRunShared,
+  buildLiveObserveMetrics,
+  seedSignalFromEvidence,
+  scoreboardDeltaLegible,
+  type LiveObserveMetricsSnapshot,
+  type ScoreboardDeltaEvidence,
+} from "./analyzer";
 import type { StageAOutcomeLedger } from "./stage-a-metrics";
 import { liveDecideAdmission } from "./live-decide-admission";
 import {
@@ -140,12 +147,22 @@ export function seedFromObservation(ts: number, obs: MediaRailObservation): PerF
  *  of an independent corroboration record (ADAAAA-7190). */
 export function attestationFromObservation(
   obs: MediaRailObservation
-): { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean } | null {
+): {
+  goalCrossed?: boolean;
+  ballOutcome?: string;
+  scoreBoardChanged?: boolean;
+  scoreBoardDelta?: ScoreboardDeltaEvidence;
+} | null {
   const ev = obs.evidence;
+  // ADAAAA-7844: carry the measured, legible scoreboard delta (wire name
+  // `scoreboardDelta` on the observation) so the window attestation can be
+  // credited and labelled on a real measurement rather than a bare flag.
+  const measuredDelta = (obs as any).scoreboardDelta ?? (ev as any)?.scoreboardDelta;
   const att = {
     goalCrossed: obs.goalCrossed ?? ev?.goalCrossed,
     ballOutcome: obs.ballOutcome ?? ev?.ballOutcome,
     scoreBoardChanged: obs.scoreBoardChanged ?? ev?.scoreBoardChanged,
+    scoreBoardDelta: scoreboardDeltaLegible(measuredDelta) ? measuredDelta : undefined,
   };
   const attested =
     att.scoreBoardChanged === true ||
@@ -357,6 +374,7 @@ export class MediaRailObserver {
         goalCrossed: obs.candidate.goalCrossed,
         ballOutcome: obs.candidate.ballOutcome,
         scoreBoardChanged: obs.candidate.scoreBoardChanged,
+        scoreBoardDelta: att?.scoreBoardDelta,
       });
     }
     // ADAAAA-7658: audio triggers recorded by the /audio rail become anchored

@@ -40,7 +40,7 @@ import logging
 import os
 import re
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -332,6 +332,64 @@ def confirm_requires_corroboration() -> bool:
     return os.environ.get("DECIDE_CONFIRM_REQUIRE_CORROBORATION", "1") == "1"
 
 
+# ADAAAA-7844: a measured scoreboard delta is only credited when BOTH sides are
+# legible (parsed) and each side is backed by at least this many OCR samples.
+SCOREBOARD_MIN_CONSISTENT_SAMPLES = 2
+
+
+def _score_pair(value) -> Optional[Tuple[int, int]]:
+    """Coerce a ``[home, away]`` payload to an int pair, or ``None``."""
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    out = []
+    for v in value:
+        if isinstance(v, bool) or not isinstance(v, int):
+            return None
+        if v < 0 or v > 99:
+            return None
+        out.append(int(v))
+    return (out[0], out[1])
+
+
+def scoreboard_delta_legible(delta) -> bool:
+    """Whether a measured scoreboard delta is LEGIBLE and TIME-TIED.
+
+    ADAAAA-7844: a window can only be corroborated by a scoreboard change that
+    was actually measured — both sides parsed into two integers, the sides
+    differ, each side is supported by at least ``SCOREBOARD_MIN_CONSISTENT_SAMPLES``
+    contiguous OCR readings inside the window, and the transition instant sits
+    between the two reads. A bare boolean, a single OCR sample, or an
+    unparseable/absurd read is NOT a measurement and never corroborates.
+    Never raises.
+    """
+    if not isinstance(delta, dict):
+        return False
+    pre = _score_pair(delta.get("pre"))
+    post = _score_pair(delta.get("post"))
+    if pre is None or post is None or pre == post:
+        return False
+    try:
+        pre_samples = int(delta.get("preSamples") or 0)
+        post_samples = int(delta.get("postSamples") or 0)
+    except (TypeError, ValueError):
+        return False
+    pre_ts_raw = delta.get("preTs")
+    post_ts_raw = delta.get("postTs")
+    if pre_ts_raw is None or post_ts_raw is None:
+        return False
+    try:
+        pre_ts = float(pre_ts_raw)
+        post_ts = float(post_ts_raw)
+        delta_ts = float(delta.get("deltaTs", post_ts_raw))
+    except (TypeError, ValueError):
+        return False
+    if pre_samples < SCOREBOARD_MIN_CONSISTENT_SAMPLES:
+        return False
+    if post_samples < SCOREBOARD_MIN_CONSISTENT_SAMPLES:
+        return False
+    return pre_ts <= delta_ts <= post_ts
+
+
 def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
                       frame_scoreboard_changed: bool = False,
                       penalty_shootout: bool = False,
@@ -340,7 +398,9 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
                       ball_in_net_refuted: bool = False,
                       goal_confirmed: str = "",
                       two_signal_attested: bool = False,
-                      stage1_contradicts: bool = False) -> bool:
+                      stage1_contradicts: bool = False,
+                      scoreboard_delta: dict | None = None,
+                      frame_attestation_contradicts: bool = False) -> bool:
     """True when at least one INDEPENDENT corroboration signal is present.
 
     The independent anchors are: a MEASURED scoreboard change, goal-calling audio
@@ -384,7 +444,14 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
     MISSED (ball NOT in the net) is still rejected even if it (incorrectly)
     carries a ``confirmed_goal`` verdict, so AC3 / ADAAAA-7162 hold. Outside a
     shootout a ``confirmed_goal`` is NOT auto-corroborated (the fabrication
-    guard stays intact)."""
+    guard stays intact).
+
+    ADAAAA-7844: shootout crediting does NOT make the corroboration a scoreboard
+    MEASUREMENT (ADAAAA-7844): a main scoreboard delta is the only thing that may be labelled
+    ``scoreboard``, and every window-level delta must be legible/consistent
+    (``scoreboard_delta``) and not contradicted by the window's own frame read
+    (``frame_attestation_contradicts``: the deep dive's ``evidence.scoreboardChanged
+    == false`` or the Stage-1 criteria's ``scoreboardChanged == false``)."""
 
     # ADAAAA-7543 (follow-up fix): a WINDOW-LEVEL scoreboard delta is not a
     # time-tied read of the analysed instant. kids_soccer.mp4 is a
@@ -409,6 +476,18 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
         if goal_confirmed == "confirmed_goal" and not ball_in_net_refuted:
             return True
         return bool(penalty_tally_changed) or bool(ball_in_net)
+    # ADAAAA-7844: the scoreboard anchor must be a LEGIBLE, time-tied MEASURED
+    # delta — both sides parsed, >= 2 consistent OCR samples per side — and it
+    # must not be contradicted by the window's OWN frame read (the deep dive's
+    # `evidence.scoreboardChanged == false` or the Stage-1 criteria's
+    # `scoreboardChanged == false`). A bare boolean, a single-frame OCR flip, or
+    # a delta the window's own frames refute cannot corroborate a GOAL. This also
+    # makes the "scoreboard" label evidence-backed: only this branch may carry it.
+    measured_scoreboard = (
+        bool(scoreboard_changed)
+        and scoreboard_delta_legible(scoreboard_delta)
+        and not bool(frame_attestation_contradicts)
+    )
     # ADAAAA-7510: scoreboard corroboration requires the deterministic MEASURED
     # pre->post numeric score delta (the perceive-OCR `scoreBoardChanged` flag,
     # score_changed semantics: both sides parsed + differ). A model read
@@ -422,7 +501,7 @@ def goal_corroborated(*, scoreboard_changed: bool, transcript: str | None,
     # refuted) is credited — a single-signal read is not, so the ADAAAA-7162
     # fabrication guard still holds for saves / near-misses / dribbles.
     return (
-        bool(scoreboard_changed)
+        measured_scoreboard
         or audio_calls_goal(transcript)
         or bool(two_signal_attested)
     )
@@ -479,6 +558,11 @@ class ConfirmRequest(BaseModel):
     ballOutcome: Optional[str] = None
     goalCrossed: Optional[bool] = None
     scoreBoardChanged: bool = False
+    # ADAAAA-7844: the MEASURED, legible scoreboard delta behind
+    # `scoreBoardChanged` ({pre, post, preTs, postTs, deltaTs, preSamples,
+    # postSamples}). Absent on a bare boolean; the pass then refuses to credit a
+    # scoreboard corroboration or label one "scoreboard".
+    scoreBoardDelta: Optional[dict] = None
     reasoningEffort: str = Field(default="none")
 
 
@@ -534,6 +618,11 @@ class ConfirmDecision(BaseModel):
     # when no independent corroboration signal was present.
     corroborationSource: Optional[str] = None
     corroborationRequired: bool = False
+    # ADAAAA-7844: the MEASURED, legible scoreboard delta the corroboration was
+    # credited/labelled from (parsed pre/post + sample counts + transition
+    # instant). null when no legible delta was measured, so a "scoreboard"
+    # corroboration is always traceable to a real reading.
+    scoreboardDelta: Optional[dict] = None
     # ADAAAA-7251 (ACC-3): the ASR transcript computed for this highlight's
     # audio context (Path 2, fallible) and fed to the confirm prompt. Returned
     # to the server top-level so it can be persisted on the highlight record
@@ -686,6 +775,7 @@ def build_confirm_prompt(
     ball_outcome: Optional[str],
     goal_crossed: Optional[bool],
     scoreboard_changed: bool,
+    scoreboard_delta: Optional[dict] = None,
 ) -> str:
     """Build the confirmation-pass prompt.
 
@@ -721,8 +811,18 @@ def build_confirm_prompt(
         )
     else:
         meta.append("independent corroboration (INPUT ONLY, never a gate): not available")
-    if scoreboard_changed:
-        meta.append("independent corroboration: scoreboard score change observed")
+    # ADAAAA-7844: render the MEASURED delta (parsed pre -> post + read counts)
+    # rather than a bare yes/no, so the model reasons over what was actually
+    # read. A boolean without a legible delta is reported as NOT observed: an
+    # unmeasured flip must never be presented as corroboration.
+    if scoreboard_changed and scoreboard_delta_legible(scoreboard_delta):
+        pre = _score_pair((scoreboard_delta or {}).get("pre"))
+        post = _score_pair((scoreboard_delta or {}).get("post"))
+        meta.append(
+            "independent corroboration: scoreboard score change MEASURED "
+            f"({pre[0]}-{pre[1]} -> {post[0]}-{post[1]}; "
+            f"{int((scoreboard_delta or {}).get('postSamples') or 0)} OCR reads on the new score)"
+        )
     else:
         meta.append("independent corroboration: no scoreboard score change observed")
     if optical_flow:
@@ -1063,6 +1163,7 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         ball_outcome=req.get("ballOutcome"),
         goal_crossed=req.get("goalCrossed"),
         scoreboard_changed=bool(req.get("scoreBoardChanged")),
+        scoreboard_delta=req.get("scoreBoardDelta"),
     )
     u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
     raw = _call_gemma(
@@ -1126,6 +1227,24 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
             ball_crossed=stage1_criteria.get("ballCrossedLineBetweenPosts"),
         )
     )
+    # ADAAAA-7844: the window's OWN frame attestation is the independent read of
+    # the analysed instant. When it EXPLICITLY says the score did not change
+    # (the deep dive's evidence.scoreboardChanged == false, or the Stage-1
+    # criteria's scoreboardChanged == false), a window-level OCR delta cannot be
+    # the anchor and cannot be labelled "scoreboard" — this is the clause that
+    # closes the job dee44c2f window-ts-117 class (a "scoreboard" corroboration
+    # whose own frames, and whose Stage-1 criteria, said the score was unchanged).
+    deep_dive_says_no_score_change = ev.get("scoreboardChanged") is False
+    stage1_says_no_score_change = stage1_criteria.get("scoreboardChanged") is False
+    frame_attestation_contradicts = (
+        deep_dive_says_no_score_change or stage1_says_no_score_change
+    )
+    scoreboard_delta = req.get("scoreBoardDelta")
+    measured_scoreboard = (
+        bool(req.get("scoreBoardChanged"))
+        and scoreboard_delta_legible(scoreboard_delta)
+        and not frame_attestation_contradicts
+    )
     confirmed = goal_corroborated(
         scoreboard_changed=bool(req.get("scoreBoardChanged")),
         transcript=transcript,
@@ -1141,26 +1260,40 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         # occurred, a window-level scoreboard delta cannot be the only anchor
         # that accepts the window (only instant-anchored evidence can).
         stage1_contradicts=stage1_says_no_goal(stage1),
+        # ADAAAA-7844: credit a scoreboard delta only when it was MEASURED
+        # legibly and the window's own frames do not refute it.
+        scoreboard_delta=scoreboard_delta,
+        frame_attestation_contradicts=frame_attestation_contradicts,
     )
     decision = reconcile_confirmed_goal(
         goal, stage1, comment=comment,
         corroborated=confirmed,
         require_corroboration=confirm_requires_corroboration(),
     )
-    # ADAAAA-7185: WHICH independent corroboration signal fired, persisted so the
-    # evidence for an accepted GOAL is queryable after the fact. Scoreboard
-    # change (incl. the shootout tally, which sits on the scoreboard) takes
-    # precedence over goal-calling audio text, which takes precedence over the
-    # two-signal frame attestation (the weakest of the three, ADAAAA-7543).
-    # Null when none. ADAAAA-7510: only a MEASURED scoreboard delta is credited
-    # (a model read / narration is not).
+    # ADAAAA-7185 / ADAAAA-7844: WHICH independent corroboration signal actually
+    # CREDITED the goal, persisted so the evidence for an accepted GOAL is
+    # queryable after the fact. Precedence stays measured scoreboard > goal call >
+    # frame attestation (ADAAAA-7543), but each label is now evidence-backed:
+    #
+    # - "scoreboard" ONLY when the percept-OCR delta was MEASURED legibly (both
+    #   sides parsed, >= 2 consistent OCR samples per side, time-tied) and the
+    #   window's own frames did not refute it. A shootout/tally read is the
+    #   MODEL's frame read, not a measurement, so it can never carry this label
+    #   (ADAAAA-7844: job dee44c2f window ts 117 was labelled "scoreboard" purely
+    #   from the model's penalty-shootout evidence with scoreBoardChanged false).
+    # - "audio_text" when goal-calling commentary text credited it.
+    # - "frame_attestation" when the deep dive's OWN frame read credited it (the
+    #   two-signal regulation attestation, or a shootout/ball-in-net conversion).
+    # - None when corroboration did not actually fire: never label a source that
+    #   was not measured and did not credit anything.
     corroboration_source = None
-    if penalty_shootout or penalty_tally_changed or bool(req.get("scoreBoardChanged")):
-        corroboration_source = "scoreboard"
-    elif audio_calls_goal(transcript):
-        corroboration_source = "audio_text"
-    elif two_signal_attested:
-        corroboration_source = "frame_attestation"
+    if confirmed:
+        if measured_scoreboard:
+            corroboration_source = "scoreboard"
+        elif audio_calls_goal(transcript):
+            corroboration_source = "audio_text"
+        elif two_signal_attested or penalty_shootout or penalty_tally_changed:
+            corroboration_source = "frame_attestation"
 
     resp = {
         "enabled": True,
@@ -1173,6 +1306,9 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         "corroborated": confirmed,
         "corroborationSource": corroboration_source,
         "corroborationRequired": confirm_requires_corroboration(),
+        # ADAAAA-7844: the measured delta the "scoreboard" label rests on (null
+        # when no legible delta was measured).
+        "scoreboardDelta": scoreboard_delta if measured_scoreboard else None,
         # ADAAAA-7251 (ACC-3): surface the ASR transcript to the server so it can
         # be persisted on the highlight record for human corroboration.
         "transcript": transcript,
