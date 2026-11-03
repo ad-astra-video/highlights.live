@@ -661,12 +661,57 @@ export function resolveJwtSecret(raw: string | undefined, nodeEnv: string): stri
   return value || DEFAULT_JWT_SECRET;
 }
 
+/** The code-level fallback for the seeded admin password (dev/test only). It is
+ * a literal in the public repo, so a production boot that would seed it refuses
+ * to start (ADAAAA-7904). */
+export const DEFAULT_ADMIN_PASSWORD = "admin";
+
+/**
+ * Every admin password this repo has shipped as a documented default
+ * (ADAAAA-7904). `docs/INTEGRATIONS.md` published `admin` as the dev admin
+ * login, and `docker/docker-compose.yml` shipped it as the compose literal, so
+ * the deployed box handed out an admin session to anyone who could read the
+ * repo. Keep this list in step with the docs.
+ */
+export const INSECURE_ADMIN_PASSWORDS: readonly string[] = ["admin"];
+
+/**
+ * Resolve the seeded admin password and enforce the production gate
+ * (ADAAAA-7904) — same shape as `resolveJwtSecret`.
+ *
+ * In production (`NODE_ENV=production`, which `docker/Dockerfile.server` always
+ * sets) an unset `ADMIN_PASSWORD` — or the documented default — is a hard boot
+ * failure: throw before the listener starts so a deployment that forgot the
+ * `docker/.env` entry fails closed instead of quietly re-seeding the published
+ * credential. Dev/test keep the `admin` fallback so `pnpm dev` and the suite
+ * boot unconfigured.
+ */
+export function resolveAdminPassword(raw: string | undefined, nodeEnv: string): string {
+  const value = (raw ?? "").trim();
+  if (nodeEnv === "production") {
+    if (!value) {
+      throw new Error(
+        "ADMIN_PASSWORD is required when NODE_ENV=production: refusing to boot and seed the published development admin password (ADAAAA-7904). Set a random password, e.g. `openssl rand -base64 32`, in the deployment env (docker/.env for the compose stack)."
+      );
+    }
+    if (INSECURE_ADMIN_PASSWORDS.includes(value)) {
+      throw new Error(
+        `ADMIN_PASSWORD is set to a documented default ("${value}") while NODE_ENV=production: refusing to boot, because that literal is published in the repo and anyone can sign in as admin with it (ADAAAA-7904). Set a random password, e.g. \`openssl rand -base64 32\`.`
+      );
+    }
+  }
+  return value || DEFAULT_ADMIN_PASSWORD;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const nodeEnv = env.NODE_ENV ?? "development";
   // ADAAAA-7901: both secrets are resolved before the object literal so a
   // production boot with an insecure/missing JWT_SECRET throws here — the
   // process exits non-zero at startup instead of signing with `dev-secret`.
   const jwtSecret = resolveJwtSecret(env.JWT_SECRET, nodeEnv);
+  // ADAAAA-7904: same gate for the seeded admin credential — production throws
+  // on unset/default instead of seeding `admin` from the repo.
+  const adminPassword = resolveAdminPassword(env.ADMIN_PASSWORD, nodeEnv);
   const exportTokenSecret = resolveExportTokenSecret(env.EXPORT_TOKEN_SECRET, jwtSecret, {
     requireStrong: nodeEnv === "production",
   });
@@ -857,7 +902,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     authRateLimit: Number(env.AUTH_RATE_LIMIT ?? 30),
     authRateLimitWindowSec: Number(env.AUTH_RATE_LIMIT_WINDOW_SEC ?? 60),
     adminEmail: env.ADMIN_EMAIL ?? "admin@highlights.local",
-    adminPassword: env.ADMIN_PASSWORD ?? "admin",
+    // ADAAAA-7904: resolved above — production refuses the published default.
+    adminPassword,
     webappDist: env.WEBAPP_DIST || "",
     trainArtifactRoot: env.TRAIN_ARTIFACT_ROOT || path.join(env.DATA_DIR ?? "data", "train-artifacts"),
     // Increment A (the annotation loop) publishes curated train/val manifests

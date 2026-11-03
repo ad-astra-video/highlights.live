@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig, DEFAULT_JWT_SECRET, INSECURE_JWT_SECRETS } from "../src/config";
+import { DEFAULT_ADMIN_PASSWORD, INSECURE_ADMIN_PASSWORDS, resolveAdminPassword } from "../src/config";
 import {
   deriveExportTokenSecret,
   mintExportToken,
@@ -29,6 +30,8 @@ import type { TestApp } from "./helpers";
 // Pure API/config level: no perceive/analyzer/decide/Livepeer path is touched.
 
 const STRONG_SECRET = "b7d1f4e9a2c3b5d7e9f1a3c5b7d9e1f3a5c7b9d1e3f5a7c9b1d3e5f7a9c1b3d5";
+/** A production-valid admin password (ADAAAA-7904 made it required in prod). */
+const STRONG_ADMIN_PW = "rotated-box-admin-pw-1";
 
 function b64(input: Buffer | string): string {
   return Buffer.from(input).toString("base64url");
@@ -66,12 +69,47 @@ describe("ADAAAA-7901 S1: production boot refuses an insecure session secret", (
   });
 
   it("boots in production with a real secret and keeps dev/test on the fallback", () => {
-    const prod = loadConfig({ NODE_ENV: "production", JWT_SECRET: STRONG_SECRET });
+    const prod = loadConfig({ NODE_ENV: "production", JWT_SECRET: STRONG_SECRET, ADMIN_PASSWORD: STRONG_ADMIN_PW });
     expect(prod.jwtSecret).toBe(STRONG_SECRET);
     // Dev (NODE_ENV unset -> development) keeps the local `pnpm dev` behaviour.
     const dev = loadConfig({});
     expect(dev.jwtSecret).toBe(DEFAULT_JWT_SECRET);
     expect(dev.nodeEnv).toBe("development");
+  });
+});
+
+describe("ADAAAA-7904 S6: production boot refuses the published admin password", () => {
+  it("throws when ADMIN_PASSWORD is unset in production", () => {
+    expect(() => loadConfig({ NODE_ENV: "production", JWT_SECRET: STRONG_SECRET })).toThrow(
+      /ADMIN_PASSWORD is required/
+    );
+  });
+
+  it("throws when ADMIN_PASSWORD is empty/blank in production", () => {
+    expect(() =>
+      loadConfig({ NODE_ENV: "production", JWT_SECRET: STRONG_SECRET, ADMIN_PASSWORD: "   " })
+    ).toThrow(/ADMIN_PASSWORD is required/);
+  });
+
+  it.each(INSECURE_ADMIN_PASSWORDS)("throws when ADMIN_PASSWORD is the documented default %s", (pw) => {
+    expect(() =>
+      loadConfig({ NODE_ENV: "production", JWT_SECRET: STRONG_SECRET, ADMIN_PASSWORD: pw })
+    ).toThrow(/documented default/);
+  });
+
+  it("boots in production with a real admin password and keeps dev on the fallback", () => {
+    const prod = loadConfig({
+      NODE_ENV: "production",
+      JWT_SECRET: STRONG_SECRET,
+      ADMIN_PASSWORD: STRONG_ADMIN_PW,
+    });
+    expect(prod.adminPassword).toBe(STRONG_ADMIN_PW);
+    // Dev (NODE_ENV unset -> development) keeps `pnpm dev` booting unconfigured.
+    const dev = loadConfig({});
+    expect(dev.adminPassword).toBe(DEFAULT_ADMIN_PASSWORD);
+    expect(DEFAULT_ADMIN_PASSWORD).toBe("admin");
+    expect(resolveAdminPassword(undefined, "development")).toBe("admin");
+    expect(resolveAdminPassword("", "test")).toBe("admin");
   });
 });
 
@@ -85,7 +123,7 @@ describe("ADAAAA-7901 S2: the export secret is dedicated, never the session secr
   });
 
   it("uses the derivation when EXPORT_TOKEN_SECRET is unset", () => {
-    const cfg = loadConfig({ NODE_ENV: "production", JWT_SECRET: STRONG_SECRET });
+    const cfg = loadConfig({ NODE_ENV: "production", JWT_SECRET: STRONG_SECRET, ADMIN_PASSWORD: STRONG_ADMIN_PW });
     expect(cfg.exportTokenSecret).toBe(deriveExportTokenSecret(STRONG_SECRET));
     expect(cfg.exportTokenSecret).not.toBe(cfg.jwtSecret);
   });
@@ -94,6 +132,7 @@ describe("ADAAAA-7901 S2: the export secret is dedicated, never the session secr
     const cfg = loadConfig({
       NODE_ENV: "production",
       JWT_SECRET: STRONG_SECRET,
+      ADMIN_PASSWORD: STRONG_ADMIN_PW,
       EXPORT_TOKEN_SECRET: "f".repeat(40),
     });
     expect(cfg.exportTokenSecret).toBe("f".repeat(40));
@@ -101,7 +140,7 @@ describe("ADAAAA-7901 S2: the export secret is dedicated, never the session secr
 
   it("refuses EXPORT_TOKEN_SECRET equal to JWT_SECRET (any environment)", () => {
     expect(() =>
-      loadConfig({ NODE_ENV: "production", JWT_SECRET: STRONG_SECRET, EXPORT_TOKEN_SECRET: STRONG_SECRET })
+      loadConfig({ NODE_ENV: "production", JWT_SECRET: STRONG_SECRET, ADMIN_PASSWORD: STRONG_ADMIN_PW, EXPORT_TOKEN_SECRET: STRONG_SECRET })
     ).toThrow(/must differ from JWT_SECRET/);
     expect(() => loadConfig({ JWT_SECRET: "test-secret", EXPORT_TOKEN_SECRET: "test-secret" })).toThrow(
       /must differ from JWT_SECRET/
@@ -110,7 +149,7 @@ describe("ADAAAA-7901 S2: the export secret is dedicated, never the session secr
 
   it("refuses a too-short explicit export secret in production", () => {
     expect(() =>
-      loadConfig({ NODE_ENV: "production", JWT_SECRET: STRONG_SECRET, EXPORT_TOKEN_SECRET: "short" })
+      loadConfig({ NODE_ENV: "production", JWT_SECRET: STRONG_SECRET, ADMIN_PASSWORD: STRONG_ADMIN_PW, EXPORT_TOKEN_SECRET: "short" })
     ).toThrow(/too short/);
   });
 });

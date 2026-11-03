@@ -1,4 +1,8 @@
 import { describe, it, expect } from "vitest";
+import bcrypt from "bcryptjs";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { buildTestApp } from "./helpers";
 import { AuthService } from "../src/auth";
 
@@ -30,6 +34,36 @@ describe("auth", () => {
     expect(admin.statusCode).toBe(200);
     expect(admin.json().user.role).toBe("admin");
     await app.close();
+  });
+
+  // ADAAAA-7904: a changed ADMIN_PASSWORD + restart must ROTATE the stored
+  // hash. The old code returned early when the row existed, so the published
+  // `admin` credential survived every deploy. Same SQLite file across the two
+  // boots = the restart.
+  it("rotates the seeded admin hash when ADMIN_PASSWORD changes, and leaves it alone when it does not", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hl-admin-rotate-"));
+    const DATABASE_PATH = path.join(dir, "hl.db");
+
+    const first = await buildTestApp({ DATABASE_PATH, ADMIN_PASSWORD: "first-admin-pass-1" });
+    const seeded = (await first.db.getUserByEmail(first.cfg.adminEmail))!;
+    expect(bcrypt.compareSync("first-admin-pass-1", seeded.passwordHash)).toBe(true);
+    await first.app.close();
+
+    const second = await buildTestApp({ DATABASE_PATH, ADMIN_PASSWORD: "second-admin-pass-2" });
+    const rotated = (await second.db.getUserByEmail(second.cfg.adminEmail))!;
+    expect(rotated.passwordHash).not.toBe(seeded.passwordHash);
+    expect(bcrypt.compareSync("second-admin-pass-2", rotated.passwordHash)).toBe(true);
+    const old = await second.app.inject({ method: "POST", url: "/auth/login", payload: { email: second.cfg.adminEmail, password: "first-admin-pass-1" } });
+    expect(old.statusCode).toBe(401);
+    const fresh = await second.app.inject({ method: "POST", url: "/auth/login", payload: { email: second.cfg.adminEmail, password: "second-admin-pass-2" } });
+    expect(fresh.statusCode).toBe(200);
+    expect(fresh.json().user.role).toBe("admin");
+    await second.app.close();
+
+    // A restart with the SAME env value is a no-op (no hash churn per boot).
+    const third = await buildTestApp({ DATABASE_PATH, ADMIN_PASSWORD: "second-admin-pass-2" });
+    expect((await third.db.getUserByEmail(third.cfg.adminEmail))!.passwordHash).toBe(rotated.passwordHash);
+    await third.app.close();
   });
 
   it("password reset: forgot -> email with reset link -> new password logs in, old fails", async () => {

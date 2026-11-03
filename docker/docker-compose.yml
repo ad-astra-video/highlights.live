@@ -524,8 +524,17 @@ services:
       # used as (or forged from) a session. If set, it must differ from
       # JWT_SECRET (the server refuses to boot otherwise).
       - EXPORT_TOKEN_SECRET=${EXPORT_TOKEN_SECRET:-}
-      - ADMIN_EMAIL=admin@highlights.local
-      - ADMIN_PASSWORD=admin
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@highlights.local}
+      # ADAAAA-7904: NO admin password default here. Dockerfile.server sets
+      # NODE_ENV=production and the server refuses to boot (non-zero exit) when
+      # ADMIN_PASSWORD is unset or is a documented default, so a missing
+      # docker/.env entry fails closed instead of re-seeding the `admin` login
+      # that this file used to publish. On boot the seeded admin's stored hash
+      # is rewritten when it no longer matches this value, so rotating it here
+      # (or in docker/.env) + restarting actually retires the old password.
+      # Generate one with `openssl rand -base64 32` and keep it in docker/.env
+      # (untracked). Never commit the value.
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - FREE_HIGHLIGHTS=3
       - DECIDE_FEE=${DECIDE_FEE:-0.01}
       - FREE_DECIDES=${FREE_DECIDES:-5}

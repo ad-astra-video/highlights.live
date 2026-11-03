@@ -33,18 +33,34 @@ export class AuthService {
     return bcrypt.hashSync(pw, 10);
   }
 
-  /** Upsert the seeded admin account so the dev/prod admin always exists. */
+  /**
+   * Seed the admin account, and keep its stored credential in step with the env.
+   *
+   * Create path: no account yet -> create it with the env password. Rotation
+   * path (ADAAAA-7904): the account exists but the env password no longer
+   * matches `users.password_hash` -> replace the hash. Before this the row was
+   * never updated (`if (existing) return;`), so changing `ADMIN_PASSWORD` and
+   * restarting left the OLD credential working forever — that is why the
+   * published `admin` default could not be rotated by a deploy. Env is now the
+   * single source of truth; the log line names the event and never the secret.
+   */
   async bootstrapAdmin(): Promise<void> {
     const existing = await this.db.getUserByEmail(this.cfg.adminEmail);
-    if (existing) return;
-    await this.db.createUser({
-      id: createHash("sha1").update(this.cfg.adminEmail).digest("hex").slice(0, 16),
-      email: this.cfg.adminEmail,
-      passwordHash: AuthService.hash(this.cfg.adminPassword),
-      role: "admin",
-      stripeCustomerId: null,
-      betaActivatedAt: new Date().toISOString(), // admins are always activated
-    });
+    if (!existing) {
+      await this.db.createUser({
+        id: createHash("sha1").update(this.cfg.adminEmail).digest("hex").slice(0, 16),
+        email: this.cfg.adminEmail,
+        passwordHash: AuthService.hash(this.cfg.adminPassword),
+        role: "admin",
+        stripeCustomerId: null,
+        betaActivatedAt: new Date().toISOString(), // admins are always activated
+      });
+      return;
+    }
+    if (!bcrypt.compareSync(this.cfg.adminPassword, existing.passwordHash)) {
+      await this.db.updatePassword(existing.id, AuthService.hash(this.cfg.adminPassword));
+      console.log(`[bootstrap] admin password rotated from env (${this.cfg.adminEmail})`);
+    }
   }
 
   /**
