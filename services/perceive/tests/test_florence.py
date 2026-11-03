@@ -6,6 +6,7 @@ import pytest
 
 from app import florence
 from app.florence import FlorenceDetector
+from app.scoreboard import ScoreboardRoi
 
 
 def test_goal_reclass_removed_by_default():
@@ -721,3 +722,64 @@ def test_roi_should_run_flag_gates_detect(monkeypatch):
     image = np.zeros((1080, 1920, 3), dtype=np.uint8)
     out = det._run_roi_pass(image, _SOCCER, [])
     assert any(o.get("label") == "soccer ball" for o in out)
+
+
+# --- <OCR> crop preparation (ADAAAA-7909) -----------------------------------
+def _crop(h, w, fill=90):
+    return np.dstack([np.full((h, w), fill, dtype=np.uint8)] * 3)
+
+
+def test_prepare_ocr_crop_pads_a_very_wide_strip_to_a_sane_aspect():
+    # The measured basketball scoreboard ROI is a ~640x66 strip (9.7:1). Feeding
+    # it raw made the fixed-square <OCR> canvas squash the glyphs ("1515K").
+    out = florence.prepare_ocr_crop(_crop(66, 640))
+    h, w = out.shape[:2]
+    assert abs((w / h) - florence.OCR_CROP_MAX_ASPECT) < 0.05
+    assert w == 1280 and h == 960  # padded to 4:3, then the 2x upscale
+    # The strip itself is still inside the canvas (centred, not cropped).
+    assert out.shape[2] == 3
+
+
+def test_prepare_ocr_crop_leaves_an_already_sane_crop_alone():
+    # A scoreboard region whose aspect is already sane is returned byte-identical
+    # (no pad, no resample), so no other broadcast's crop changes.
+    crop = _crop(300, 400)
+    out = florence.prepare_ocr_crop(crop)
+    assert out.shape[:2] == (300, 400)
+
+
+def test_prepare_ocr_crop_skips_the_upscale_for_an_already_large_crop():
+    # 1920 wide > OCR_CROP_UPSCALE_MAX_SIDE: pad the aspect, never double the
+    # memory footprint for an input the processor downsamples anyway.
+    out = florence.prepare_ocr_crop(_crop(200, 1920))
+    assert out.shape[1] == 1920
+    assert out.shape[0] == 1440
+
+
+def test_prepare_ocr_crop_bounds_the_pad_on_an_absurd_strip():
+    # A 640x8 sliver must not be padded to a 480-tall canvas where the graphic is
+    # 2% of the image; the pad is capped at 8x the strip height.
+    out = florence.prepare_ocr_crop(_crop(8, 640))
+    assert out.shape[0] <= 64 * 2 + 1  # 8x pad, then the 2x upscale
+
+
+def test_prepare_ocr_crop_is_used_by_ocr():
+    # The <OCR> path must feed the prepared crop, not the raw ROI pixels.
+    calls = {}
+
+    def fake_processor(images=None, text=None, return_tensors=None):
+        calls["size"] = images.size
+        raise RuntimeError("stop after the crop is photographed")
+
+    class _Det(FlorenceDetector):
+        def load(self):
+            self._processor = fake_processor
+
+    det = _Det()
+    frame = _crop(360, 640)
+    try:
+        det.ocr(frame, roi=ScoreboardRoi(0.0, 0.8167, 1.0, 1.0))
+    except RuntimeError:
+        pass
+    # 640x66 crop -> padded to 4:3 (480 tall) -> 2x upscaled to 1280x960.
+    assert calls["size"] == (1280, 960)

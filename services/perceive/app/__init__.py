@@ -56,9 +56,12 @@ from .scoreboard import (
     parse_ocr_score,
 )
 from .match_context import (
+    SPORT_UNKNOWN,
     sample_scorebug_swatches,
     sample_track_colors,
     resolve_match_context,
+    scorebug_lines_have_team_text,
+    sport_key,
 )
 from .scoreboard_vision import (
     ScoreboardVerdict,
@@ -131,6 +134,11 @@ _SCOREBOARD_DETECT_BACKOFF = 5
 # then answers with unknown teams, AC6).
 _MATCH_CONTEXT_MAX_KIT_SAMPLES = 480
 _MATCH_CONTEXT_MAX_SWATCHES = 60
+# ADAAAA-7909: budget for the extra whole-frame `<OCR>` reads that recover the
+# scorebug's club text when the ROI crop read only garbage ("1515K"). Bounded per
+# session so a broadcast whose scorebug never prints a readable name cannot pay
+# a second OCR inference on every anchor frame for the whole stream.
+_MATCH_CONTEXT_TEAM_FALLBACK_MAX = 40
 
 
 def _match_context_enabled() -> bool:
@@ -1136,7 +1144,29 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # relaxation: only on frames where the visibility gate already deemed a
         # scoreboard visible, and `parse_ocr_score` still requires a clean
         # two-integer "N - M" line (a branding / non-score read never qualifies).
-        if score is None and visible:
+        #
+        # ADAAAA-7909: the fallback was ALSO gated only on the score, so a crop
+        # that parsed a score out of the graphic while reading no club text
+        # ("1515K", "13.8" — the league banner + digits only) suppressed the
+        # whole-frame read that can see the club plate. Measured on the bounded
+        # basketball job: crop lines 30/30 garbage with 0 team lines while the
+        # same frames fed whole read "MB Denizli Basket 13 8 Samsunspor". The
+        # fallback now also fires when the crop produced no TEAM text, and the
+        # whole-frame lines are kept for the match-context channel in that case
+        # even when no score parses from them (team text can never forge a score:
+        # `parse_ocr_score` still owns that decision). Bounded per session by
+        # `_MATCH_CONTEXT_TEAM_FALLBACK_MAX`, and only when the match-context
+        # evidence pass is enabled, so the extra read is charged only where the
+        # names are actually used.
+        _ocr_sport = sport_key(getattr(state, "game_hint", "") or "")
+        _need_team_text = (
+            visible
+            and _match_context_enabled()
+            and _ocr_sport != SPORT_UNKNOWN
+            and getattr(state, "team_fallback_reads", 0) < _MATCH_CONTEXT_TEAM_FALLBACK_MAX
+            and not scorebug_lines_have_team_text(ocr_lines, _ocr_sport)
+        )
+        if visible and (score is None or _need_team_text):
             try:
                 full_ocr = detector.ocr(state.last_rgb) or []
                 alt = parse_ocr_score(full_ocr)  # whole-frame, no ROI filter
@@ -1145,7 +1175,16 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             else:
                 if alt is not None:
                     score = alt
+                if alt is not None or (
+                    _need_team_text and scorebug_lines_have_team_text(full_ocr, _ocr_sport)
+                ):
                     obs["ocr"] = full_ocr
+                    if _need_team_text:
+                        state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
+                        log.info(
+                            "scorebug team-text whole-frame fallback session=%s seq=%s lines=%d",
+                            state.session_id, seq, len(full_ocr),
+                        )
         state.scoreboard_tracker.record(timestamp, score)
         # ADAAAA-7855: sample the home/away kit swatches off the SAME ROI crop
         # the OCR pass just read (CPU only, no GPU). These are the Stage-3

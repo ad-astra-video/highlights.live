@@ -21,11 +21,14 @@ from app.match_context import (
     _KIT_COLOR_NAMES,
     _KIT_PRIORS,
     _SOCCER_KIT_PRIORS,
+    _generic_name_key,
+    _levenshtein_le,
     apply_monotonic_guard,
     associate_kits,
     build_match_context,
     cluster_kit_colors,
     fold_confidence,
+    generic_scorebug_sides,
     is_plausible_player_box,
     name_color,
     parse_metadata_hints,
@@ -35,6 +38,7 @@ from app.match_context import (
     resolve_token,
     sample_track_colors,
     scan_commentary,
+    scorebug_lines_have_team_text,
     sport_key,
 )
 from app.scoreboard import ScoreboardRoi, parse_ocr_score
@@ -187,8 +191,15 @@ def test_generic_names_resolve_a_non_lexicon_basketball_scorebug():
         ("Samsunspor", "away", True),
     ]
     assert status["scoreFrames"] == 30
-    assert status["names"]["home"] == {"name": "Denizli Basket", "frames": 30, "share": 1.0}
-    assert status["names"]["away"] == {"name": "Samsunspor", "frames": 30, "share": 1.0}
+    # ADAAAA-7909: the per-side record also names the printed variants that voted
+    # for the published spelling, so an OCR-noise rejection is inspectable.
+    assert status["names"]["home"]["name"] == "Denizli Basket"
+    assert status["names"]["home"]["frames"] == 30
+    assert status["names"]["home"]["share"] == 1.0
+    assert status["names"]["home"]["variants"] == {"Denizli Basket": 30}
+    assert status["names"]["away"]["name"] == "Samsunspor"
+    assert status["names"]["away"]["frames"] == 30
+    assert status["names"]["away"]["share"] == 1.0
 
 
 def test_generic_names_ignore_branding_and_period_tokens():
@@ -1278,3 +1289,135 @@ def test_kit_clusters_omitted_when_every_cluster_is_attributed():
     )
     assert out["matchContext"]["ambiguous"] is False
     assert "kitClustersUnattributed" not in out["evidenceStatus"]
+
+
+# Glued-OCR team parse + whole-frame fallback gate (ADAAAA-7909) ---------------
+#
+# Every line below is a VERBATIM read from the running perceive model on the 11
+# labelled anchor frames of the bounded basketball clip (`bb_q1_1100_1190_90s`,
+# attachment `65a5054e` on ADAAAA-7898), so these tests pin the shapes the real
+# broadcast produces rather than a cleaned-up guess.
+
+# Native ROI crop: the league banner and the score digits only, no club text.
+BB_CROP_GARBAGE = ["1515K", "1515K15K", "15K", "13.8", "138"]
+# Upstream print, glued the way the model returns it (no separator glyph).
+BB_GLUED = "TURKIYEBASKETBOLMBDentizi Basket11 8Samsungpor 1.6"
+# The 11 anchor frames as read from the same crop PADDED to a 4:3 canvas and 2x
+# upscaled (exactly what `florence.prepare_ocr_crop` now feeds `<OCR>`).
+BB_ANCHOR_READS = [
+    "TURKIYEBASKETBOLLIGITURKITOCDenizi Basketball11 8Samsunspor1.C",
+    "TURKIYEBASKETBOLTURKIVEMB11 8Samsunspor1.6Denizi Basketball",
+    "TORKIYE.BASKETBOLIGITURYTE.MBDenizi Basketball13 8Samsunspor1.C",
+    "TORKIYEBASKETBOLTURKEYMB13 8Samsunspor1.GDenizi Basket",
+    "TURKEYMBBASKETOCDenizil Basketball13 8Samsunspor1.C",
+    "TURKEYEMBBASKETOCDenizil Basketball13 8Samsunspor1.C",
+    "TURNYEMBBASKETOCDenizi Basketball13 8Samsunspor1.C",
+    "TURKEYTBASKETBOCDenizi Basketball13 8Samsunspor1.C",
+    "TURNITEMBBASKETOCDenizil Basketball13 8Samsunspor1.C",
+    "TURKEYTBASKETBOCDenizi Basketball14 8Samsunspor1.C",
+    "TURKIYEBASKETBOTURKIYEMB15 18Samsungpor 1.6Denizi Basketball",
+]
+
+
+def test_generic_names_split_on_the_score_digit_run_without_a_dash():
+    # The score separator on this graphic is a drawn divider, so `N - M` never
+    # appears and the shipped channel reported `no-score-line` on every frame.
+    teams, status = parse_generic_scorebug_names(bb_frames(30, line=BB_GLUED), "basketball")
+    assert [(t.name, t.side, t.generic) for t in teams] == [
+        ("Dentizi Basket", "home", True),
+        ("Samsungpor", "away", True),
+    ]
+    assert status["scoreFrames"] == 30
+
+
+def test_generic_names_strip_a_glued_competition_prefix():
+    # "BASKETBOLDenizli" -> "Denizli": the league token is glued to the club plate
+    # and must not ride into the published name. The glued run is longer than the
+    # lexicon's 24-character token cap, which used to cut it to "Dentiz".
+    assert generic_scorebug_sides("BASKETBOLDenizli Basket13 8Samsunspor") == ("Denizli Basket", "Samsunspor")
+    assert generic_scorebug_sides(
+        "TURKIYEBASKETBOLLIGITURKEYMBDenizli Basket13 8Samsunspor1.C"
+    ) == ("Denizli Basket", "Samsunspor")
+    assert generic_scorebug_sides(BB_GLUED) == ("Dentizi Basket", "Samsungpor")
+
+
+def test_generic_names_read_the_home_plate_printed_after_the_away_one():
+    # Measured OCR reordering: the model sometimes prints the away club first and
+    # the home plate after the period marker. The left side is branding only, so
+    # the second run is the home name — dropping it loses a whole anchor frame.
+    assert generic_scorebug_sides("TURYYEMB13 8Samsunspor1.GDenizi Basket") == ("Denizi Basket", "Samsunspor")
+    assert generic_scorebug_sides(
+        "TURKIVELIGI KETBOLTURKEYMB13 8Samsunspor1.GDenizli Basket"
+    ) == ("Denizli Basket", "Samsunspor")
+
+
+def test_generic_names_fold_ocr_spellings_into_one_vote():
+    # The binding test on this clip is the AWAY name: the model returns
+    # "Samsungpor" / "Samsungspor" / "Samsunspor" interchangeably. One printed
+    # club read three ways is ONE name, not three sub-threshold minorities.
+    spellings = ["Samsungpor", "Samsungspor", "Samsunspor"]
+    frames = [
+        {"lines": ["TURKIYEBASKETBOLMBDentizi Basket13 8%s1.C" % spellings[i % 3]]} for i in range(30)
+    ]
+    teams, status = parse_generic_scorebug_names(frames, "basketball")
+    assert [(t.name, t.side) for t in teams] == [("Dentizi Basket", "home"), ("Samsungpor", "away")]
+    assert status["names"]["away"]["frames"] == 30
+    assert set(status["names"]["away"]["variants"]) == {"Samsungpor", "Samsungspor", "Samsunspor"}
+    # No confidence gate moved: the published pair still sits at the scorebug
+    # source weight, capped by SINGLE_SOURCE_CAP.
+    out = resolve_match_context(sport_hint="basketball", ocr_frames=frames)
+    assert all(t["confidence"] <= SINGLE_SOURCE_CAP for t in out["matchContext"]["teams"])
+    assert out["matchContext"]["ambiguous"] is False
+
+
+def test_generic_names_still_reject_two_genuinely_different_clubs():
+    # The one-edit vote tolerance must NOT merge different clubs: an even split
+    # between two real names leaves no majority (parent AC6).
+    frames = [
+        {"lines": ["Denizli Basket13 8%s1.C" % ("Samsunspor" if i % 2 else "Bursaspor")]} for i in range(30)
+    ]
+    teams, status = parse_generic_scorebug_names(frames, "basketball")
+    assert teams == []
+    assert any("unstable" in r for r in status["rejected"])
+
+
+def test_generic_names_do_not_publish_from_a_banner_only_read():
+    # The banner-only read names one club but no home plate: the all-or-nothing
+    # pair gate keeps the job `unknown` instead of publishing half a match.
+    teams, status = parse_generic_scorebug_names(
+        bb_frames(30, line="TURKIYEBASKETBOLIGI KETBOTURKIYEMB15 8Samsungpor1.C"), "basketball"
+    )
+    assert teams == []
+    assert status["rejected"] == ["home:no-text"]
+
+
+def test_scorebug_team_text_predicate_gates_the_whole_frame_fallback():
+    # The measured crop read: digits and banner fragments only — exactly the case
+    # that used to suppress the whole-frame read (the ADAAAA-7190 fallback was
+    # gated on the SCORE, which the crop did produce).
+    assert scorebug_lines_have_team_text(BB_CROP_GARBAGE, "basketball") is False
+    assert scorebug_lines_have_team_text(["POR 1 - 0 ESP"], "soccer") is True
+    assert scorebug_lines_have_team_text([BB_GLUED], "basketball") is True
+    assert scorebug_lines_have_team_text(BB_ANCHOR_READS, "basketball") is True
+    assert scorebug_lines_have_team_text([], "basketball") is False
+
+
+def test_resolver_publishes_both_clubs_from_the_11_measured_anchor_frames():
+    # End to end over the real read set: home plate on 10 of 11 frames (the 11th
+    # has it after the away club), away on 11 of 11 — the channel publishes a
+    # sided pair, and the away name is the measured bound (~1 edit of
+    # "Samsunspor", never the "Samsungpor" misread alone).
+    frames = [{"ts": float(i), "lines": [BB_ANCHOR_READS[i]]} for i in range(len(BB_ANCHOR_READS))]
+    out = resolve_match_context(sport_hint="basketball", ocr_frames=frames)
+    ctx, status = out["matchContext"], out["evidenceStatus"]
+    assert [(t["side"]) for t in ctx["teams"]] == ["home", "away"]
+    home, away = ctx["teams"][0]["name"], ctx["teams"][1]["name"]
+    # Published spellings are one OCR edit of the labelled clubs: "Denizi
+    # Basketball" (fold -> "denizi basket", 1 edit of "denizli basket") and
+    # "Samsunspor" (or the "Samsungpor" misread, also 1 edit).
+    assert _levenshtein_le(_generic_name_key(home), "denizli basket", 1)
+    assert _levenshtein_le(_generic_name_key(away), "samsunspor", 1)
+    assert ctx["ambiguous"] is False
+    assert status["genericNameCandidates"]["scoreFrames"] == 11
+    assert status["genericNameCandidates"]["names"]["home"]["frames"] == 11
+    assert status["genericNameCandidates"]["names"]["away"]["frames"] == 11
