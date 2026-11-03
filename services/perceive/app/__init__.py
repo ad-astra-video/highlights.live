@@ -97,11 +97,22 @@ HEARTBEAT_EVERY = 30
 # screen: the only detection on the anchor frame of clip 01e9e5ca was a
 # full-width banner reading "Vinctory"), so a single-shot identification failed
 # the operator's request outright even though the very next second of the clip
-# identifies the player cleanly. Retry on a stride for a bounded window instead:
-# every PLAYER_RETRY_STRIDE-th sampled frame, up to PLAYER_RETRY_ATTEMPTS tries
-# (~13 s of a 15 fps stream). Cost stays bounded to an explicit request.
-PLAYER_RETRY_STRIDE = 5
-PLAYER_RETRY_ATTEMPTS = 40
+# identifies the player cleanly. Retry inside a bounded window instead.
+#
+# ADAAAA-7824: the window is expressed in FRAMES and the retry attempts every
+# sampled frame in it. The old budget was `PLAYER_RETRY_STRIDE * PLAYER_RETRY_ATTEMPTS`
+# with a stride-5 grid, so attempts landed on frames 35, 40, 45, 50, ... and the
+# ONLY frame of the 78-frame census clip 397294f3 that reads jersey "11"
+# (frame 49) was never attempted -- the request expired at clip end with
+# `player_seed_frame: null`. Stating the budget in frames means changing the
+# stride can no longer silently shrink the window (stride 5 at 40 attempts used
+# to cover 200 frames; stride 1 at 40 attempts covered only 40).
+PLAYER_RETRY_WINDOW_FRAMES = 200
+# Attempt on every sampled frame inside the window (a stride > 1 only thins the
+# attempts; the window stays PLAYER_RETRY_WINDOW_FRAMES frames either way).
+PLAYER_RETRY_STRIDE = 1
+# Derived attempt budget — kept for reporting/tests; the window is the budget.
+PLAYER_RETRY_ATTEMPTS = PLAYER_RETRY_WINDOW_FRAMES // max(1, PLAYER_RETRY_STRIDE)
 
 # ADAAAA-7086: re-attempt scoreboard region discovery only every Nth candidate
 # while no scoreboard has been found (bounded region pass; recall preserved).
@@ -1291,24 +1302,31 @@ def _seed_player_track(state, matched: dict, requested: int):
 def _try_pending_player(state, detector) -> None:
     """Retry a failed player-by-number identification on this frame (ADAAAA-7345).
 
-    Only runs while a request is pending. Attempts every ``PLAYER_RETRY_STRIDE``
-    sampled frames, at most ``PLAYER_RETRY_ATTEMPTS`` times, then gives up and
-    clears the request (an operator whose player never appears gets no track,
-    exactly as before this change — just without burning GPU every frame).
+    Only runs while a request is pending. Consumes one frame of the bounded
+    ``PLAYER_RETRY_WINDOW_FRAMES`` window per sampled frame and attempts the
+    identification on every frame the stride selects (stride 1 by default, i.e.
+    every sampled frame), then gives up and clears the request (an operator
+    whose player never appears gets no track, exactly as before this change —
+    just without burning GPU past the window).
+
+    ADAAAA-7824: the window is counted in FRAMES, not attempts, so a stride
+    change cannot shrink it, and stride 1 means a frame that reads the jersey
+    only once in the clip is still attempted.
     """
     number = getattr(state, "pending_player_number", None)
     if number is None or detector is None:
         return
-    left = int(getattr(state, "pending_player_attempts_left", 0) or 0)
+    left = int(getattr(state, "pending_player_frames_left", 0) or 0)
     if left <= 0:
         state.pending_player_number = None
         log.info("player retry expired session=%s number=%s", state.session_id, number)
         return
-    state.pending_player_stride = int(getattr(state, "pending_player_stride", 0) or 0) + 1
-    if state.pending_player_stride < max(1, PLAYER_RETRY_STRIDE):
+    state.pending_player_frames_left = left - 1
+    stride = int(getattr(state, "pending_player_stride", 0) or 0) + 1
+    if stride < max(1, PLAYER_RETRY_STRIDE):
+        state.pending_player_stride = stride
         return
     state.pending_player_stride = 0
-    state.pending_player_attempts_left = left - 1
     try:
         matched = identify_player_by_number(state.last_rgb, int(number), detector)
     except Exception as e:  # noqa: BLE001 - a retry must never break the frame path
@@ -1318,7 +1336,7 @@ def _try_pending_player(state, detector) -> None:
         return
     _seed_player_track(state, matched, int(number))
     state.pending_player_number = None
-    state.pending_player_attempts_left = 0
+    state.pending_player_frames_left = 0
     log.info(
         "player retry identified session=%s number=%s conf=%s bbox=%s",
         state.session_id, number, matched.get("ocr_confidence"), matched.get("ocr_bbox"),
@@ -1433,12 +1451,13 @@ def handle_control(state, msg: dict) -> dict:
             _try_pending_player(state, detector)
         matched = identify_player_by_number(state.last_rgb, requested, detector)
         if matched is None:
-            # ADAAAA-7345: keep the operator's request alive instead of failing
-            # it on a graphic/watermark anchor frame — retry on a stride for a
-            # bounded window (see PLAYER_RETRY_*). A successful retry seeds the
-            # same selected slot this handler would have seeded.
+            # ADAAAA-7345 / ADAAAA-7824: keep the operator's request alive
+            # instead of failing it on a graphic/watermark anchor frame — retry
+            # on every sampled frame inside a bounded FRAME window (see
+            # PLAYER_RETRY_*). A successful retry seeds the same selected slot
+            # this handler would have seeded.
             state.pending_player_number = requested
-            state.pending_player_attempts_left = PLAYER_RETRY_ATTEMPTS
+            state.pending_player_frames_left = PLAYER_RETRY_WINDOW_FRAMES
             state.pending_player_stride = 0
             return {
                 "type": "ack",
@@ -1446,7 +1465,9 @@ def handle_control(state, msg: dict) -> dict:
                 "cmd": ctype,
                 "number": requested,
                 "retrying": True,
-                "retryWindowFrames": PLAYER_RETRY_STRIDE * PLAYER_RETRY_ATTEMPTS,
+                "retryWindowFrames": PLAYER_RETRY_WINDOW_FRAMES,
+                "retryStride": max(1, PLAYER_RETRY_STRIDE),
+                "retryAttempts": PLAYER_RETRY_ATTEMPTS,
                 "error": f"no player with number {requested} identified on the anchor frame",
             }
         tr, bbox, label = _seed_player_track(state, matched, requested)
