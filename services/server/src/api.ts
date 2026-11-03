@@ -50,7 +50,7 @@ import {
   type JobCandidate,
   type JobDecision,
 } from "@highlights/events";
-import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource } from "./job-detail";
+import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource, stripWindowInspection } from "./job-detail";
 import { completedCounterFields, completedLiveCounterFields, counterFieldsForJob } from "./job-counters";
 import { stageAEvidenceLine, whistleEvidenceLine } from "./stage-a-metrics";
 import { aggregateLiveWatchMinutes, monthKeyUtc } from "./live-watch-minutes";
@@ -252,6 +252,18 @@ function formatUploadLimit(bytes: number): string {
   const mb = bytes / 1024 / 1024;
   if (Number.isInteger(mb)) return `${mb} MB`;
   return `${Math.round(mb)} MB`;
+}
+
+/** ADAAAA-7838: does this read request opt into per-window LLM inspection?
+ *
+ * `?inspect=1` makes `/jobs/:id/detail` and `/jobs/:id/sections-delta` carry the
+ * per-window `analysis`/`confirm` payload. It is NOT an authorization mechanism:
+ * both routes run the unchanged owner-or-admin gate BEFORE this flag matters, so
+ * a non-owner still gets 403 with or without it. Only the literal `1` opts in —
+ * absent/other values mean "no internals on the wire".
+ */
+function wantsWindowInspection(req: any): boolean {
+  return String((req.query as any)?.inspect ?? "") === "1";
 }
 
 /** Lightweight projection of a persisted dataset for list/summary responses:
@@ -3019,14 +3031,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           ? { frameCount: jobFrameCount(job.id), frameSeqs: jobFrameList(job.id).map((f) => f.seq), sampleFps: 1 }
           : undefined;
 
-    const sectionList = buildSections(obs, candidates, job.id, inventory);
+    let sectionList = buildSections(obs, candidates, job.id, inventory);
     // ADAAAA-7285: point each analysis window that captured audio at a real
     // per-window audio resource (re-extracted on demand from the source), so
     // the analysis-window player has something to play. Silent windows (audio
     // path === "none") are left with no URI — the UI shows "No audio captured".
     attachWindowAudioUris(sectionList, job.id);
-    const traces = buildTraces(obs);
+    // ADAAAA-7838: the per-window LLM capture is the bulk of this payload on a
+    // long job. It is only sent when the caller asked for it (`?inspect=1`);
+    // without the flag every decide note ships without `analysis`/`confirm` and
+    // the owner page fetches ONE window at a time from
+    // `/jobs/:id/sections/:index/inspect`. The gate above is the only
+    // authorization — the flag never widens the audience.
+    if (!wantsWindowInspection(req)) sectionList = stripWindowInspection(sectionList);
 
+    const traces = buildTraces(obs);
     // ADAAAA-7621: `highlights` is the POSTABLE list, not the raw persisted
     // rows. Rejected clips, non-scoring outcomes and self-contradicting verdicts
     // are excluded, and overlapping clip windows collapse into one moment
@@ -3114,7 +3133,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const candidates = store.candidatesForJob(job.id);
       const sectionList = buildSections(obs, candidates, job.id);
       attachWindowAudioUris(sectionList, job.id);
-      const sections = sectionList.filter((s) => s.index > afterIndex);
+      // ADAAAA-7838: same payload gating as `/jobs/:id/detail` — a delta poll
+      // only carries the per-window internals while the page asked for them.
+      const tail = sectionList.filter((s) => s.index > afterIndex);
+      const sections = wantsWindowInspection(req) ? tail : stripWindowInspection(tail);
 
       // ADAAAA-7621/7623 companions: the postable highlight list and the summary
       // ladder are derived from STORED data on every read (zero decide calls) and
@@ -3139,6 +3161,48 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         duplicateHighlights: postable.duplicates,
         maxTraces: maxTracesForSource(job.source),
         summaryLadder,
+      };
+    }
+  );
+
+  // ADAAAA-7838: lazy, single-window inspection read for the owner-facing
+  // "See detail" surface. The composite detail and the delta stream carry the
+  // per-window `analysis`/`confirm` internals only when the page asked for them
+  // (`?inspect=1`); the page then asks for ONE window at a time here, so a job
+  // with 100 windows never has to send 100 captured prompts to render one.
+  //
+  // Same `authReq` + the IDENTICAL owner-or-admin gate as `/jobs/:id/detail`
+  // (the flag on those routes never widens the audience, and this route has no
+  // flag at all). Read-only: it rebuilds the sections from stored rows exactly
+  // like the composite read — no decide call, no inference, no GPU, no
+  // stored-data mutation. 404 for a bucket the job does not have.
+  app.get<{ Params: { id: string; index: string } }>(
+    "/jobs/:id/sections/:index/inspect",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const user = req.user;
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "not found" });
+      if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+
+      const index = Number(req.params.index);
+      if (!Number.isInteger(index) || index < 0)
+        return reply.code(400).send({ error: "index must be an integer >= 0" });
+
+      const obs = store.observationsForJob(job.id);
+      const candidates = store.candidatesForJob(job.id);
+      const sectionList = buildSections(obs, candidates, job.id);
+      attachWindowAudioUris(sectionList, job.id);
+      const section = sectionList.find((s) => s.index === index);
+      if (!section) return reply.code(404).send({ error: "section not found" });
+
+      return {
+        jobId: job.id,
+        index: section.index,
+        startS: section.startS,
+        endS: section.endS,
+        // FULL per-window capture for this bucket only (analysis + confirm).
+        decideNotes: section.decideNotes,
       };
     }
   );

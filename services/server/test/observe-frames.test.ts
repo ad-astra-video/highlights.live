@@ -135,7 +135,11 @@ describe("media rail frame persistence (ADAAAA-7734)", () => {
     expect(rows[2].timestamp).toBeCloseTo(2, 3);
 
     // --- AC-2: every analysed frame is partitioned into a section ---
-    const detail = await app.inject({ method: "GET", url: `/jobs/${jobId}/detail`, headers: { authorization: `Bearer ${token}` } });
+    // ADAAAA-7838: the per-window capture (analysis/confirm) rides the payload
+    // ONLY when the caller asks for it (`?inspect=1`), so this AC keeps its
+    // original analysis assertions on the inspect-enabled read and the gate
+    // itself is asserted below.
+    const detail = await app.inject({ method: "GET", url: `/jobs/${jobId}/detail?inspect=1`, headers: { authorization: `Bearer ${token}` } });
     expect(detail.statusCode).toBe(200);
     const body = detail.json();
     const sectionFrames = (body.sections as any[]).flatMap((s) => s.frames);
@@ -150,6 +154,14 @@ describe("media rail frame persistence (ADAAAA-7734)", () => {
     expect(notes.length).toBeGreaterThanOrEqual(1);
     const tail = notes[notes.length - 1];
     expect(tail.analysis).toBeTruthy();
+    // ADAAAA-7838: without the flag the SAME windows ship no per-window capture
+    // at all (frames/timestamps/status stay as-is).
+    const gated = await app.inject({ method: "GET", url: `/jobs/${jobId}/detail`, headers: { authorization: `Bearer ${token}` } });
+    expect(gated.statusCode).toBe(200);
+    const gatedNotes = (gated.json().sections as any[]).flatMap((s) => s.decideNotes);
+    expect(gatedNotes.length).toBe(notes.length);
+    expect(gatedNotes.every((n: any) => !("analysis" in n) && !("confirm" in n))).toBe(true);
+    expect((gated.json().sections as any[]).flatMap((s) => s.frames.map((f: any) => f.seq)).sort()).toEqual([0, 1, 2]);
     const refs = tail.analysis.frames as any[];
     // no placeholder left behind: one ref per frame in the window, each named
     expect(refs.map((r) => r.seq)).toEqual([0, 1, 2]);

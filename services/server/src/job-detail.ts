@@ -214,6 +214,31 @@ export function attachWindowAudioUris(
   return sections;
 }
 
+/**
+ * ADAAAA-7838: strip the per-window LLM inspection payload from a section list.
+ *
+ * `GET /jobs/:id/detail` and `GET /jobs/:id/sections-delta` attach the per-window
+ * capture (`analysis`: prompt / dataItems / media refs / response / audioSeries)
+ * plus its Stage-2 `confirm` record to every decide note. On a long job that is
+ * the bulk of the response, and the customer page renders it only when the owner
+ * opts in (`?inspect=1`) — and then one window at a time through the lazy
+ * `/jobs/:id/sections/:index/inspect` route. This returns a FRESH section list
+ * with `analysis` and `confirm` omitted from every decide note: frames,
+ * timestamps, note kind/status/reason, highlights, ladder, capture and maxTraces
+ * are untouched, and the stored JobCandidate is never mutated.
+ */
+export function stripWindowInspection(sections: Section[]): Section[] {
+  return sections.map((s) => ({
+    ...s,
+    decideNotes: s.decideNotes.map((n) => {
+      const out: Section["decideNotes"][number] = { ...n };
+      delete out.analysis;
+      delete out.confirm;
+      return out;
+    }),
+  }));
+}
+
 /** Decide window defaults, mirrored here (the read path has no live AnalyzerConfig
  * at hand). Keep in sync with analyzer.ts DEFAULT_PRE_WINDOW_S / POST_WINDOW_S. */
 export const DEFAULT_WINDOW_PRE_S = 2;

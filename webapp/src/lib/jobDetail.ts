@@ -426,9 +426,15 @@ export function summaryEntryTimestamp(e: SummaryLogEntry): string {
   return e.ts;
 }
 
-/** Fetch the composite job-detail payload for one job. */
-export async function fetchJobDetail(id: string): Promise<JobDetail> {
-  return api<JobDetail>(`/jobs/${id}/detail`);
+/** Fetch the composite job-detail payload for one job.
+ *
+ * ADAAAA-7838: `opts.inspect` adds `?inspect=1`, which is the ONLY way the
+ * payload carries the per-window LLM capture (`analysis` / `confirm`). Without
+ * it the response is measurably smaller and each decide note ships without its
+ * internals; the page turns it on only while the owner asked for `See detail`.
+ */
+export async function fetchJobDetail(id: string, opts: { inspect?: boolean } = {}): Promise<JobDetail> {
+  return api<JobDetail>(`/jobs/${id}/detail${opts.inspect ? "?inspect=1" : ""}`);
 }
 
 /**
@@ -469,10 +475,39 @@ export interface SectionsDelta {
  * Fetch only the sections an open live detail page does not already hold.
  * `afterIndex = -1` returns the whole section list (used when the page has no
  * baseline yet); any other value returns buckets strictly greater than it.
+ *
+ * ADAAAA-7838: `opts.inspect` adds `&inspect=1` so an open live page keeps
+ * streaming per-window internals only while `See detail` is on — turning the
+ * toggle off makes the NEXT poll omit the flag (and the internals with it).
  */
-export async function fetchSectionsDelta(id: string, afterIndex: number): Promise<SectionsDelta> {
+export async function fetchSectionsDelta(
+  id: string,
+  afterIndex: number,
+  opts: { inspect?: boolean } = {}
+): Promise<SectionsDelta> {
   const after = Number.isInteger(afterIndex) && afterIndex >= 0 ? afterIndex : -1;
-  return api<SectionsDelta>(`/jobs/${id}/sections-delta?afterIndex=${after}`);
+  return api<SectionsDelta>(`/jobs/${id}/sections-delta?afterIndex=${after}${opts.inspect ? "&inspect=1" : ""}`);
+}
+
+/**
+ * ADAAAA-7838: one window's inspection detail — its decide notes WITH the full
+ * per-window capture (`analysis` prompt/dataItems/media/response/audioSeries and
+ * the Stage-2 `confirm` record), keyed by the 3 s bucket index. This is the lazy
+ * read behind the per-row `Inspect` button: one request per window the owner
+ * opens, instead of the whole accumulated payload.
+ */
+export interface SectionInspect {
+  jobId: string;
+  /** The 3 s bucket index this window covers (the client key). */
+  index: number;
+  startS: number;
+  endS: number;
+  decideNotes: DecideNote[];
+}
+
+/** Fetch the inspection detail for exactly one Analysis window (bucket index). */
+export async function fetchSectionInspect(id: string, index: number): Promise<SectionInspect> {
+  return api<SectionInspect>(`/jobs/${id}/sections/${index}/inspect`);
 }
 
 /**

@@ -13,6 +13,7 @@ import { buildZip, type ZipFile } from "../lib/zip";
 import { asrSummary, asrSummaryLine } from "../lib/windowAsr";
 import {
   fetchJobDetail,
+  fetchSectionInspect,
   fetchSectionsDelta,
   mergeSections,
   SECTION_WINDOW_S,
@@ -29,6 +30,7 @@ import {
   type JobDetail,
   type JobDetailHighlight,
   type FrameSection,
+  type SectionInspect,
   type SectionsDelta,
   type JobDetailFrame,
   type DecideNote,
@@ -38,6 +40,7 @@ import {
   type LiveCapture,
   summaryEntryTimestamp,
 } from "../lib/jobDetail";
+import { createWindowInspectStore } from "../lib/windowInspect";
 import { LiveProgressChip } from "../components/LiveProgressChip";
 import { CaptureNotice } from "../components/CaptureNotice";
 import {
@@ -185,9 +188,14 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
 
 /** One expandable decide-note banner: the one-line summary plus an "Inspect
  *  window" toggle that opens the per-window LLM inspection panel (ADAAAA-7157
- *  Increment C). Read-only over the job-detail API data. */
-function DecideNoteBanner({ note, jobId }: { note: DecideNote; jobId: string }) {
-  const [open, setOpen] = useState(false);
+ *  Increment C). Read-only over the job-detail API data.
+ *
+ *  ADAAAA-7838: `defaultOpen` lets the owner-facing lazy window body render the
+ *  captured prompt/response straight away — the owner already opted into detail
+ *  by clicking `Inspect` on the row, so one click there must not need a second
+ *  click on the banner. The admin surface keeps the collapsed default. */
+function DecideNoteBanner({ note, jobId, defaultOpen = false }: { note: DecideNote; jobId: string; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   // ADAAAA-7672: surface the window's ASR transcript on the COLLAPSED banner.
   // The transcript already rendered inside the expanded inspection panel, but a
   // collapsed window — the state the board scans a job in — showed no ASR text at
@@ -338,6 +346,166 @@ export function CustomerAnalysisWindow({ section }: { section: FrameSection }) {
         {status}
       </span>
     </div>
+  );
+}
+
+/**
+ * ADAAAA-7838: per-window lazy inspection state for the owner-facing surface.
+ * `loaded` carries the window's captured detail (fetched once, cached for the
+ * session); a row that was never clicked has no entry at all.
+ */
+export interface WindowInspectState {
+  status: "loading" | "loaded" | "error";
+  data?: SectionInspect;
+  error?: string;
+}
+
+/**
+ * ADAAAA-7838: the `See detail` toggle, floated right in the Analysis heading
+ * row. Default OFF — the owner opts into window internals; a non-owner session
+ * never reaches this component (the API gates it with 403).
+ */
+export function SeeDetailToggle({
+  on,
+  onToggle,
+  disabled = false,
+}: {
+  on: boolean;
+  onToggle?: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={disabled || !onToggle}
+      aria-pressed={on}
+      data-see-detail-toggle
+      data-active={on ? "true" : undefined}
+      className={`rounded border px-2 py-1 text-[11px] font-bold uppercase tracking-wide ${
+        on
+          ? "border-neon/60 bg-neon/10 text-neon"
+          : "border-mut/40 text-mut hover:border-neon hover:text-neon"
+      } disabled:cursor-not-allowed disabled:opacity-40`}
+    >
+      See detail
+    </button>
+  );
+}
+
+/**
+ * ADAAAA-7838: one Analysis window as a COLLAPSED SECTION on the owner-facing
+ * surface (`See detail` ON). The header keeps today's row (time range + plain
+ * status) and adds a chevron plus an `Inspect` button next to the timestamp; the
+ * body is fetched ONLY when that row's `Inspect` is clicked, then shows the
+ * decide banner, the captured prompt/response inspection, the frame filmstrip
+ * and the audio-energy graph for that window alone.
+ */
+export function CustomerInspectWindow({
+  section,
+  jobId,
+  token = null,
+  inspection,
+  onInspect,
+  onFrameClick,
+}: {
+  section: FrameSection;
+  jobId: string;
+  token?: string | null;
+  inspection?: WindowInspectState;
+  onInspect: (index: number) => void;
+  onFrameClick?: (seq: number) => void;
+}) {
+  // Collapsed by default; a row whose window is already loaded/being opened by
+  // the `Inspect` click renders open (that click sets this same state).
+  const [open, setOpen] = useState(Boolean(inspection?.data));
+  const status = customerWindowStatus(section);
+  const key = customerWindowStatusKey(status);
+  const notes = inspection?.data ? dedupeDecideNotes(inspection.data.decideNotes) : [];
+  const loading = inspection?.status === "loading";
+  return (
+    <section
+      className={`rounded-lg border ${key === "highlight" ? "border-green/40 bg-green/10" : "border-mut/30 bg-mut/10"}`}
+      data-analysis-window
+      data-section-index={section.index}
+      data-analysis-window-status={key}
+      data-inspect-window
+    >
+      <div className="flex items-center gap-2 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex min-w-0 items-center gap-2 text-left"
+          data-analysis-window-toggle
+        >
+          <span className="shrink-0 text-mut">{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</span>
+          <span className="font-mono text-xs text-ink" data-analysis-window-range>
+            {customerWindowRange(section)}
+          </span>
+        </button>
+        {/* ADAAAA-7838: the per-window lazy read — one request for THIS bucket,
+            only when the owner clicks it. */}
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(true);
+            onInspect(section.index);
+          }}
+          data-inspect-window-button
+          data-section-index={section.index}
+          className="shrink-0 rounded border border-neon/60 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-neon hover:bg-neon/10"
+        >
+          {loading ? "Loading…" : "Inspect"}
+        </button>
+        <span className="ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide" data-analysis-window-status-label>
+          {status}
+        </span>
+      </div>
+      {open && (
+        <div className="border-t border-mut/20 p-3" data-inspect-window-body>
+          {inspection?.status === "error" ? (
+            <div className="text-xs text-red" data-inspect-window-error>
+              {inspection.error || "Could not load this window."}
+            </div>
+          ) : loading ? (
+            <div className="text-xs text-mut" data-inspect-window-loading>
+              Loading window detail…
+            </div>
+          ) : !inspection?.data ? (
+            <div className="text-xs text-mut" data-inspect-window-idle>
+              Click Inspect to load this window&apos;s captured detail.
+            </div>
+          ) : (
+            <>
+              {notes.length > 0 && (
+                <div className="mb-2 flex flex-col gap-1">
+                  {notes.map((n, i) => (
+                    <DecideNoteBanner key={n.timestamp + "-" + i} note={n} jobId={jobId} defaultOpen />
+                  ))}
+                </div>
+              )}
+              <div className="flex flex-wrap gap-1.5" data-inspect-window-frames>
+                {section.frames.length === 0 ? (
+                  <div className="text-xs text-mut">No frames in this section.</div>
+                ) : (
+                  dedupeFrames(section.frames).map((f) => (
+                    <FrameTile
+                      key={f.seq}
+                      frame={f}
+                      token={token}
+                      selectMode={false}
+                      selected={false}
+                      onFrameClick={onFrameClick ?? (() => {})}
+                    />
+                  ))
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -1061,8 +1229,33 @@ export function DecideAuditRow({ audit: a }: { audit: DecideAuditRecord }) {
  * internal `not_highlight` taxonomy), no search over decide text, no
  * select/enlarge frame controls, no filmstrip. The admin block below keeps all
  * of it on the same job id.
+ *
+ * ADAAAA-7838: the header row carries the owner's `See detail` toggle (default
+ * OFF, floated right of the `Analysis` heading). OFF renders today's rows
+ * untouched; ON turns each row into a collapsed section whose body is fetched
+ * per window through the `Inspect` button (`inspections` is the page's cache).
  */
-export function CustomerAnalysisSection({ sections, capture }: { sections: FrameSection[]; capture?: LiveCapture }) {
+export function CustomerAnalysisSection({
+  sections,
+  capture,
+  inspect = false,
+  onToggleInspect,
+  inspections = {},
+  onInspect,
+  jobId = "",
+  token = null,
+  onFrameClick,
+}: {
+  sections: FrameSection[];
+  capture?: LiveCapture;
+  inspect?: boolean;
+  onToggleInspect?: () => void;
+  inspections?: Record<number, WindowInspectState>;
+  onInspect?: (index: number) => void;
+  jobId?: string;
+  token?: string | null;
+  onFrameClick?: (seq: number) => void;
+}) {
   // A job whose windows were decided but none confirmed still needs the cause
   // ABOVE the list — the board's share rendered 133 analysed windows and zero
   // highlights, which reads as "windows processed but nothing found" only if it
@@ -1070,7 +1263,12 @@ export function CustomerAnalysisSection({ sections, capture }: { sections: Frame
   const noticeAbove = capture?.state === "capturing" || capture?.state === "no_highlights";
   return (
     <>
-      <h3 className="text-2xl font-black">Analysis</h3>
+      <div className="flex flex-wrap items-center gap-2" data-analysis-header>
+        <h3 className="text-2xl font-black">Analysis</h3>
+        <span className="ml-auto">
+          <SeeDetailToggle on={inspect} onToggle={onToggleInspect} />
+        </span>
+      </div>
       {noticeAbove && <CaptureNotice capture={capture} />}
       {sections.length === 0 ? (
         <div className="mt-3" data-analysis-empty>
@@ -1082,9 +1280,21 @@ export function CustomerAnalysisSection({ sections, capture }: { sections: Frame
         </div>
       ) : (
         <div className="mt-3 flex flex-col gap-2" data-analysis-windows>
-          {sections.map((s) => (
-            <CustomerAnalysisWindow key={s.index} section={s} />
-          ))}
+          {sections.map((s) =>
+            inspect ? (
+              <CustomerInspectWindow
+                key={s.index}
+                section={s}
+                jobId={jobId}
+                token={token}
+                inspection={inspections[s.index]}
+                onInspect={onInspect ?? (() => {})}
+                onFrameClick={onFrameClick}
+              />
+            ) : (
+              <CustomerAnalysisWindow key={s.index} section={s} />
+            )
+          )}
         </div>
       )}
     </>
@@ -1110,6 +1320,18 @@ export function JobDetail() {
   const [error, setError] = useState<string | null>(null);
   const [terminal, setTerminal] = useState(false);
   const [loading, setLoading] = useState(true);
+  // ADAAAA-7838: owner-facing window inspection. OFF (the customer default) is
+  // the shipped surface: rows are time range + plain status, and the page's own
+  // asks carry NO `inspect=1`, so the payload ships no per-window internals. ON
+  // adds `?inspect=1` to the detail fetch + the delta poll and turns each row
+  // into a collapsed section that loads exactly ONE window on its `Inspect`
+  // click. Admin keeps today's full panel, so the toggle defaults ON there.
+  // `windowInspectRef` is the session cache (one request per window, cleared
+  // when the toggle goes off so a re-toggle cannot balloon memory).
+  const [inspect, setInspectState] = useState<boolean>(admin);
+  const inspectTouchedRef = useRef(false);
+  const [inspections, setInspections] = useState<Record<number, WindowInspectState>>({});
+  const windowInspectRef = useRef(createWindowInspectStore(id, fetchSectionInspect));
   // Which review action is in-flight for which highlight id (per-control loading).
   const [pendingReview, setPendingReview] = useState<{ id: string; status: "accepted" | "rejected" } | null>(null);
   // ADAAAA-7622: posting workflow. Captions are page-owned so an inline edit
@@ -1146,6 +1368,20 @@ export function JobDetail() {
   const lastEventAtRef = useRef(0);
   const token = getToken();
 
+  // ADAAAA-7838: an admin session keeps today's full Analysis panel, so the
+  // `See detail` toggle defaults ON for admin — but only until the admin
+  // touches it themselves (their choice wins from then on).
+  useEffect(() => {
+    if (!inspectTouchedRef.current) setInspectState(admin);
+  }, [admin]);
+
+  // ADAAAA-7838: the per-window cache is per job. A different job id gets a
+  // fresh store and no stale inspected windows.
+  useEffect(() => {
+    windowInspectRef.current = createWindowInspectStore(id, fetchSectionInspect);
+    setInspections({});
+  }, [id]);
+
   // ADAAAA-7045: re-fetch the decide_audit rows so an in-flight job shows them
   // grow as each frame group is decided, and a just-completed job shows all of
   // them on the next refresh. Best-effort (leaves the section empty on failure).
@@ -1163,7 +1399,7 @@ export function JobDetail() {
       if (loadInFlightRef.current) return;
       loadInFlightRef.current = true;
       try {
-        const d = await fetchJobDetail(id);
+        const d = await fetchJobDetail(id, { inspect });
         if (!aliveRef.current) return;
         setDetail(d);
         // ADAAAA-7742: record how far the composite payload reaches so the live
@@ -1187,7 +1423,7 @@ export function JobDetail() {
         if (aliveRef.current && initial) setLoading(false);
       }
     },
-    [id, admin]
+    [id, admin, inspect]
   );
 
   // ADAAAA-7741: the customer's processing-lag chip gets its own 5 s refresh,
@@ -1286,7 +1522,7 @@ export function JobDetail() {
     deltaInFlightRef.current = true;
     lastDeltaAtRef.current = Date.now();
     try {
-      const d = await fetchSectionsDelta(id, after);
+      const d = await fetchSectionsDelta(id, after, { inspect });
       if (!aliveRef.current) return;
       mergeDelta(d);
       // A window that produced a decided frame group also produced a decide
@@ -1300,7 +1536,7 @@ export function JobDetail() {
     } finally {
       deltaInFlightRef.current = false;
     }
-  }, [id, admin, load, mergeDelta, loadAudits]);
+  }, [id, admin, inspect, load, mergeDelta, loadAudits]);
 
   // Debounced + throttled incremental refresh on SSE activity: keeps a window's
   // section on screen within ~2 s of its decide note landing, at a bounded
@@ -1469,6 +1705,45 @@ export function JobDetail() {
     setAnalysisFilter((cur) => (cur.includes(kind) ? cur.filter((k) => k !== kind) : [...cur, kind]));
   }
 
+  // ADAAAA-7838: `See detail` toggle. Flipping it changes the page's OWN reads
+  // (`load` and `loadDelta` depend on `inspect`), so turning it on starts
+  // requesting `?inspect=1` and turning it off makes the next poll omit it.
+  // OFF also parks the per-window cache: the session never keeps inspected
+  // windows around after the owner closed the door.
+  function toggleInspect() {
+    inspectTouchedRef.current = true;
+    setInspectState((cur) => {
+      const next = !cur;
+      if (!next) {
+        windowInspectRef.current.clear();
+        setInspections({});
+      }
+      return next;
+    });
+  }
+
+  // ADAAAA-7838: load exactly ONE window's inspection detail (the row's
+  // `Inspect` button). The store serves a cached window without a request and
+  // joins an in-flight one, so a double click can never stack requests.
+  const inspectWindow = useCallback(
+    async (index: number) => {
+      if (inspections[index]?.status === "loaded") return;
+      setInspections((m) => ({ ...m, [index]: { status: "loading" } }));
+      try {
+        const data = await windowInspectRef.current.load(index);
+        if (!aliveRef.current) return;
+        setInspections((m) => ({ ...m, [index]: { status: "loaded", data } }));
+      } catch (e: any) {
+        if (!aliveRef.current) return;
+        setInspections((m) => ({
+          ...m,
+          [index]: { status: "error", error: String(e?.message || e) },
+        }));
+      }
+    },
+    [inspections]
+  );
+
   function openSingle(seq: number) {
     setGallery([seq]);
     setGalIndex(0);
@@ -1531,7 +1806,7 @@ export function JobDetail() {
       // pre-review snapshot — this is what makes the reject/accept state change
       // stick and never appear to "do nothing".
       try {
-        const fresh = await fetchJobDetail(id);
+        const fresh = await fetchJobDetail(id, { inspect });
         if (aliveRef.current) {
           setDetail(fresh);
           setError(null);
@@ -1846,6 +2121,10 @@ export function JobDetail() {
                   {frameCount} frame(s) · {visibleSections.length} window(s) shown
                 </span>
                 <div className="ml-auto flex flex-wrap items-center gap-2">
+                  {/* ADAAAA-7838: the same owner-facing toggle on the admin
+                      surface; admin defaults ON so the full panel is unchanged,
+                      and OFF falls back to the plain time-range/status rows. */}
+                  <SeeDetailToggle on={inspect} onToggle={toggleInspect} />
                   {/* Filter by window type */}
                   <div className="flex items-center gap-1" data-analysis-filter>
                     {NOTE_KINDS.map((k) => {
@@ -1904,23 +2183,37 @@ export function JobDetail() {
               <div className="mt-3 text-mut" data-analysis-empty>No Analysis windows match.</div>
             ) : (
               <div className="mt-3 flex flex-col gap-3" data-analysis-windows>
-                {visibleSections.map((s) => (
-                  <AnalysisWindow
-                    key={s.index}
-                    section={s}
-                    token={token}
-                    jobId={id}
-                    selectMode={selectMode}
-                    selectedSeqs={new Set(multiSeqs)}
-                    onFrameClick={onFrameClick}
-                    admin={admin}
-                  />
-                ))}
+                {inspect ? (
+                  visibleSections.map((s) => (
+                    <AnalysisWindow
+                      key={s.index}
+                      section={s}
+                      token={token}
+                      jobId={id}
+                      selectMode={selectMode}
+                      selectedSeqs={new Set(multiSeqs)}
+                      onFrameClick={onFrameClick}
+                      admin={admin}
+                    />
+                  ))
+                ) : (
+                  visibleSections.map((s) => <CustomerAnalysisWindow key={s.index} section={s} />)
+                )}
               </div>
             )}
               </>
             ) : (
-              <CustomerAnalysisSection sections={detail.sections} capture={detail.capture} />
+              <CustomerAnalysisSection
+                sections={detail.sections}
+                capture={detail.capture}
+                inspect={inspect}
+                onToggleInspect={toggleInspect}
+                inspections={inspections}
+                onInspect={inspectWindow}
+                jobId={id}
+                token={token}
+                onFrameClick={openSingle}
+              />
             )}
           </div>
 
