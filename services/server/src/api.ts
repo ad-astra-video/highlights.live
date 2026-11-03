@@ -17,6 +17,7 @@ import {
   LIVE_AUDIO_RETAIN_S,
   LiveRunShared,
   decideGroupKey,
+  toDecideMatchContext,
   highlightIdempotencyKey,
   highlightDedupKey,
   observeOnDecide,
@@ -802,6 +803,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // live rail: promptText / frameCount / timings / replays).
       onDecideAudit: persistDecideAudit,
       getRunningSummary: () => store.getJob(job.id)?.runningSummary ?? "",
+      // ADAAAA-7856: the live rail reads the SAME persisted context the VOD pass
+      // reads — one storage read per window, never a resolver/GPU call.
+      getMatchContext: () => store.getJob(job.id)?.matchContext,
       onRunningSummary: (summary, meta) =>
         appendSummaryEntry(store, job.id, summary, meta).catch((e: any) =>
           console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))
@@ -998,6 +1002,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // (story-so-far) across cadence observe ticks — read it to carry into
         // the decide request, persist the updated one for the job-detail UI.
         getRunningSummary: () => store.getJob(job.id)?.runningSummary ?? "",
+        // ADAAAA-7856: live window inspections name the stored teams too.
+        getMatchContext: () => store.getJob(job.id)?.matchContext,
         onRunningSummary: (summary, meta) =>
           appendSummaryEntry(store, job.id, summary, meta).catch((e: any) =>
             console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))
@@ -1408,6 +1414,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // (story-so-far) across cadence observe ticks — read it to carry into the
       // decide request, persist the updated one for the job-detail UI.
       getRunningSummary: () => store.getJob(jobId)?.runningSummary ?? "",
+      // ADAAAA-7856 (Stage 6, VOD first): forward the job's persisted
+      // `matchContext` on EVERY window inspection so captions name the real
+      // teams. Read from storage (one resolver pass per job, ADAAAA-7855) — no
+      // extra GPU call per window; absent/unusable => today's prompt (AC6).
+      getMatchContext: () => store.getJob(jobId)?.matchContext,
       onRunningSummary: (summary, meta) =>
         appendSummaryEntry(store, jobId, summary, meta).catch((e: any) =>
           console.error(`[running-summary:${jobId}] persist failed:`, String(e?.message || e))
@@ -3521,6 +3532,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               // durable decide_audit index by (sessionId, groupKey).
               jobId: job.id,
               groupKey: decideGroupKey(timestamp),
+              // ADAAAA-7856: the browser-capture direct decide path reads the
+              // same persisted match context as the analyzer paths (one storage
+              // read, no extra inference). Absent => unchanged request.
+              matchContext: toDecideMatchContext(store.getJob(job.id)?.matchContext),
             }
           );
           await billing.onDecideCompleted(duser, dsub, { streaming: true });
@@ -4426,11 +4441,12 @@ export interface LiveAnalyzerConfigDeps {
   onDecision?: AnalyzerConfig["onDecision"];
   onDecideAudit?: AnalyzerConfig["onDecideAudit"];
   getRunningSummary?: AnalyzerConfig["getRunningSummary"];
+  getMatchContext?: AnalyzerConfig["getMatchContext"];
   onRunningSummary?: AnalyzerConfig["onRunningSummary"];
 }
 
 export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerConfig {
-  const { cfg, job, clipWindow: cw, onDecision, onDecideAudit, getRunningSummary, onRunningSummary } = deps;
+  const { cfg, job, clipWindow: cw, onDecision, onDecideAudit, getRunningSummary, getMatchContext, onRunningSummary } = deps;
   return {
     jobId: job.id,
     clipBeforeS: cw.clipBeforeS,
@@ -4510,6 +4526,8 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // (story-so-far) across cadence observe ticks — read it to carry into
     // the decide request, persist the updated one for the job-detail UI.
     getRunningSummary,
+    // ADAAAA-7856: pass the persisted match-context reader straight through.
+    getMatchContext,
     onRunningSummary,
     // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
     // evidence). Live uses the default analysis_fps / windows.
