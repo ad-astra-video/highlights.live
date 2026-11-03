@@ -25,6 +25,9 @@ import {
   type TriggerSchedulerStats,
 } from "./audio-trigger";
 import type { StageAOutcomeLedger } from "./stage-a-metrics";
+// ADAAAA-7844: provenance type for the measured scoreboard delta carried on a
+// window bias hint (defined next to the confirm/attestation types in analyzer).
+import type { ScoreboardDeltaEvidence } from "./analyzer";
 
 /** ADAAAA-7723: nearest-rank percentile over an already-sorted sample list.
  *  Shared by the observer's per-family latency stats and the media rail's
@@ -588,7 +591,11 @@ export class LiveObserver {
    * fires a decide candidate only; the observer still runs decide on the
    * cadence regardless of whether a trigger fired (recall not limited by
    * trigger-FP gating). */
-  addHint(eventType: string, ts: number, attest?: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean }): void {
+  addHint(
+    eventType: string,
+    ts: number,
+    attest?: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean; scoreBoardDelta?: ScoreboardDeltaEvidence }
+  ): void {
     this.biasHints.push({ eventType, ts, ...(attest ?? {}) });
     if (this.biasHints.length > 30) this.biasHints.shift();
   }
@@ -1426,6 +1433,11 @@ export interface ObserveBiasHint {
   goalCrossed?: boolean;
   ballOutcome?: string;
   scoreBoardChanged?: boolean;
+  /** ADAAAA-7844: the measured, legible scoreboard delta behind
+   * `scoreBoardChanged` (both sides parsed, >= 2 OCR samples each, time-tied).
+   * Absent when perceive did not measure one — the decide pass then refuses to
+   * label the corroboration "scoreboard". */
+  scoreBoardDelta?: ScoreboardDeltaEvidence;
 }
 
 /**
@@ -1652,7 +1664,11 @@ export class ObserveDecider {
    * candidate's goal-attestation signals (goalCrossed / ballOutcome /
    * scoreBoardChanged) so the decide goal-attestation gate can attest a
    * `scoring_play` instead of rejecting it (ADAAAA-7021 adverse finding). */
-  addHint(eventType: string, ts: number, attest?: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean }): void {
+  addHint(
+    eventType: string,
+    ts: number,
+    attest?: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean; scoreBoardDelta?: ScoreboardDeltaEvidence }
+  ): void {
     this.biasHints.push({ eventType, ts, ...(attest ?? {}) });
     if (this.biasHints.length > 30) this.biasHints.shift();
   }

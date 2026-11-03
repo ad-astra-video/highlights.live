@@ -1,0 +1,87 @@
+{
+  "fixture": "tests/fixtures/job_detail_ac6bf37f_slim.json",
+  "manifest": "label-manifest.json",
+  "builds": {
+    "guarded": {
+      "job_id": "ac6bf37f-6a03-4d14-a307-de5b9e200405",
+      "before": {
+        "accepted": 23,
+        "true_positive_cards": 18,
+        "precision": 0.7826,
+        "contradicted_scoreboard_goal_cards": 2,
+        "contradicted_cards": [
+          {
+            "t": 708.0,
+            "window": [
+              701.0,
+              716.0
+            ],
+            "source": "scoreboard",
+            "frames_scoreboardChanged": false,
+            "frames_two_signal": true,
+            "contradicted_scoreboard": true,
+            "frames_say_changed": false,
+            "new_source": "frame_attestation",
+            "dropped": false,
+            "true_positive": true
+          },
+          {
+            "t": 762.0,
+            "window": [
+              755.0,
+              770.0
+            ],
+            "source": "scoreboard",
+            "frames_scoreboardChanged": false,
+            "frames_two_signal": true,
+            "contradicted_scoreboard": true,
+            "frames_say_changed": false,
+            "new_source": "frame_attestation",
+            "dropped": false,
+            "true_positive": true
+          }
+        ]
+      },
+      "after": {
+        "accepted": 23,
+        "true_positive_cards": 18,
+        "precision": 0.7826,
+        "contradicted_scoreboard_goal_cards": 0,
+        "dropped_cards": [],
+        "relabelled_cards": [
+          {
+            "t": 708.0,
+            "window": [
+              701.0,
+              716.0
+            ],
+            "source": "scoreboard",
+            "frames_scoreboardChanged": false,
+            "frames_two_signal": true,
+            "contradicted_scoreboard": true,
+            "frames_say_changed": false,
+            "new_source": "frame_attestation",
+            "dropped": false,
+            "true_positive": true
+          },
+          {
+            "t": 762.0,
+            "window": [
+              755.0,
+              770.0
+            ],
+            "source": "scoreboard",
+            "frames_scoreboardChanged": false,
+            "frames_two_signal": true,
+            "contradicted_scoreboard": true,
+            "frames_say_changed": false,
+            "new_source": "frame_attestation",
+            "dropped": false,
+            "true_positive": true
+          }
+        ]
+      }
+    }
+  },
+  "rule": "ADAAAA-7844: corroborationSource == 'scoreboard' requires a legible, time-tied measured delta (both sides parsed, >=2 OCR samples per side) that the window's own frame attestation does not contradict; otherwise the card falls back to the evidence that credited it, or loses corroboration (downgraded to near_miss)."
+}
