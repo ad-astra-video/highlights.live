@@ -1486,6 +1486,22 @@ export interface AnalyzerConfig {
    */
   observeDecideQueueMax?: number;
   /**
+   * ADAAAA-7906 (VOD resume): content timestamp (seconds) of the last FULLY
+   * decided window from a previous attempt. The observe-decider seeds its
+   * cadence clock here, so it never fires a window whose centre is <= the
+   * cursor; the frame iterator is separately started at
+   * `cursorTs - warmupFrames/fps` so only the bounded warm-up is re-perceived.
+   */
+  resumeFromTs?: number;
+  /** ADAAAA-7906: warm-up frames re-perceived before the cursor (the AC3
+   * budget headroom: `warmupS * sampleFps`). Evidence only — the iterator owns
+   * the actual skip. */
+  warmupFrames?: number;
+  /** ADAAAA-7906: fires with each APPLIED decide window's centre timestamp so
+   * the caller persists the resume cursor (every Nth window + phase boundary).
+   * Must be cheap; the worker's checkpoint write is throttled by the caller. */
+  onDecidedWindow?: (centerTs: number) => void;
+  /**
    * ADAAAA-7147: tuning for the Tier-2 signal gate's calibration-free
    * ball-velocity discriminator. `ballMinSpeedMps` is the image-space
    * `speedMps` at/above which a frame is a "meaningful ball"; `suppressQuiet`
@@ -4646,6 +4662,10 @@ export async function analyzeJob(
           // ADAAAA-7722: the VOD rail judges a whistle-anchored window in the
           // Stage-B ledger, never the Stage-A one.
           stageB: run.stageBOutcomes,
+          // ADAAAA-7906 (VOD resume): start the cadence clock at the persisted
+          // cursor and report every applied window so the caller persists it.
+          ...(cfg.resumeFromTs !== undefined ? { startTs: cfg.resumeFromTs } : {}),
+          ...(cfg.onDecidedWindow ? { onApplied: cfg.onDecidedWindow } : {}),
           // ADAAAA-7878: ISSUE the decide off the frame-consume loop (default), so
           // ingest keeps feeding perceive while gemma judges a window; the verdict
           // is applied in content order by the accept chain. Decide count and

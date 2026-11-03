@@ -1710,6 +1710,8 @@ export class ObserveDecider {
    *  live here, so a whistle window is judged in its OWN family ledger and the
    *  Stage-A snapshot is byte-identical to a run without it. */
   private readonly stageB: StageAOutcomeLedger | null;
+  /** ADAAAA-7906 (VOD resume): window-applied hook (cursor advance). */
+  private readonly onApplied: ((centerTs: number) => void) | null;
   /** ADAAAA-7878: two-phase decide fork. Present by default so the frame-consume
    *  loop ISSUES a window and returns while gemma judges it; absent keeps the
    *  serial `onDecide` path (the flag-off behaviour, byte-identical to pre-7878). */
@@ -1761,6 +1763,16 @@ export class ObserveDecider {
     stageA?: StageAOutcomeLedger;
     /** ADAAAA-7722: Stage-B (whistle) outcome ledger for the VOD rail. */
     stageB?: StageAOutcomeLedger;
+    /** ADAAAA-7906 (VOD resume): content timestamp (seconds) to START the
+     *  cadence clock at. A resumed pass seeds this with the persisted cursor, so
+     *  the observer never fires a window whose centre is <= the cursor (the
+     *  first fire lands one cadence after it). Absent = fire on the first frame. */
+    startTs?: number;
+    /** ADAAAA-7906 (VOD resume): fires with the centre timestamp of every window
+     *  whose verdict was APPLIED, in content order. The caller advances the
+     *  persisted cursor from this (never from an issued-but-unapplied window).
+     *  Must not throw — the accept chain treats a throwing hook as a failure. */
+    onApplied?: (centerTs: number) => void;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? OBSERVE_WINDOW_S;
@@ -1774,6 +1786,12 @@ export class ObserveDecider {
     this.maxPending = Math.max(1, Math.floor(opts.maxPending ?? 512));
     this.stageA = opts.stageA ?? null;
     this.stageB = opts.stageB ?? null;
+    this.onApplied = opts.onApplied ?? null;
+    // ADAAAA-7906: a resumed pass seeds the cadence clock at the persisted
+    // cursor, so the first decide window's centre is strictly after it.
+    if (typeof opts.startTs === "number" && Number.isFinite(opts.startTs)) {
+      this.lastFireTs = opts.startTs;
+    }
   }
 
   /** Record a frame + its perceive-derived seed context (no re-inference).
@@ -1875,6 +1893,15 @@ export class ObserveDecider {
       // ADAAAA-7722: whistle triggers are judged in their own ledger — never in
       // the Stage-A one (which holds only `stageA/*` onsets by construction).
       this.stageB?.judgeWindow(lo, hi, accepted);
+      // ADAAAA-7906 (VOD resume): the serial path applied this window's verdict
+      // inline, so its centre is a legal resume cursor.
+      if (this.onApplied) {
+        try {
+          this.onApplied(currentTs);
+        } catch {
+          /* evidence only */
+        }
+      }
     }
   }
 
@@ -1947,6 +1974,17 @@ export class ObserveDecider {
       // identical to the serial pass.
       this.stageA?.judgeWindow(head.lo, head.hi, accepted);
       this.stageB?.judgeWindow(head.lo, head.hi, accepted);
+      // ADAAAA-7906 (VOD resume): this window's verdict has been APPLIED, so its
+      // centre is a legal resume cursor. A failed/aborted head never reaches
+      // here (the branch above returns), so the cursor can never name a window
+      // the pass did not judge.
+      if (this.onApplied) {
+        try {
+          this.onApplied(head.centerTs);
+        } catch {
+          /* evidence only — a cursor write must never break the accept chain */
+        }
+      }
     }
   }
 

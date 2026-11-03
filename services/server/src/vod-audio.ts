@@ -20,11 +20,19 @@ export interface VodAudioChunk {
  * so the wire contract is identical to the deployed live pass. */
 export async function* extractVodAudioChunks(
   ffmpegPath: string,
-  source: string
+  source: string,
+  /**
+   * ADAAAA-7906 (VOD resume): content timestamp (seconds) to SEEK to, so the
+   * Stage-A audio tap restarts at the analysis cursor instead of re-decoding
+   * audio the previous attempt already tapped. `-ss` before `-i` is a fast
+   * input seek; the tap stays best-effort.
+   */
+  startTs = 0
 ): AsyncGenerator<VodAudioChunk> {
-  const proc = spawn(ffmpegPath, [
+  const args = [
     "-hide_banner",
     "-loglevel", "error",
+    ...(startTs > 0 ? ["-ss", String(Number(startTs.toFixed(3)))] : []),
     "-i", source,
     "-map", "0:a:0?",
     "-ac", "1",
@@ -32,7 +40,8 @@ export async function* extractVodAudioChunks(
     "-c:a", "pcm_s16le",
     "-f", "s16le",
     "-",
-  ]);
+  ];
+  const proc = spawn(ffmpegPath, args);
   proc.stderr.on("data", () => {
     /* swallow — audio tap is best-effort; errors never abort the video pass */
   });

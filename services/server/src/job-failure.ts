@@ -67,3 +67,81 @@ export function outcomeForStrandedJob(source: Job["source"], hadMediaSession: bo
   }
   return { status: "failed", failureReason: "server-restart", error: SERVER_RESTART_MESSAGE };
 }
+
+// ---------------------------------------------------------------------------
+// ADAAAA-7906 (VOD resume, Increment 2): failure classification + retry policy.
+//
+// `classifyVodFailure(e)` is the SINGLE mapping from a thrown VOD pipeline error
+// to `{ reason, resumable }` implementing plan §2.3. It is pure so the table is
+// unit-testable without a GPU. Every caller of `markJobFailed` must reach a row
+// of this table — a path left unclassified falls through to
+// `pipeline-error`/non-resumable and silently disables the retry for that
+// incident class, so add the row here when a new failure path appears.
+//
+// Resumable classes (auto-retry, status `queued` + stage `retry-scheduled`):
+//   decide-unavailable      decide call failed (5xx/timeout/fallback exhausted)
+//   perceive-session-lost   perceive re-reserve exhausted / runner recreated
+//   capacity-exhausted      no capacity for runner after the bounded backoff
+//   server-restart          crash/restart mid-pass (Increment 4 wires the boot path)
+// Non-resumable (terminal `failed` immediately):
+//   pipeline-error          ffmpeg decode / missing or corrupt source / schema
+//   user-stop               operator stop (markJobCancelled owns that transition)
+// ---------------------------------------------------------------------------
+
+export interface VodFailureClassification {
+  reason: JobFailureReason;
+  resumable: boolean;
+}
+
+/** Error names/markers that mean "the perceive session was lost, not the job". */
+function errorName(e: unknown): string {
+  return e && typeof e === "object" && "name" in e ? String((e as { name?: unknown }).name ?? "") : "";
+}
+
+/** Messages matching these are a broken INPUT, never a transient failure: a
+ * retry would fail the same way and burn the budget. */
+const NON_RESUMABLE_INPUT =
+  /ffmpeg|invalid data|moov atom|corrupt|unsupported codec|decode error|no such file|ENOENT|schema|validation|zod/i;
+
+const CAPACITY = /no capacity available for runner/i;
+const DECIDE = /decide/i;
+const DECIDE_TRANSIENT = /HTTP 5\d\d|HTTP 429|timed? ?out|timeout|ECONNREFUSED|ECONNRESET|EPIPE|socket hang up|fallback/i;
+const RESTART = /server restart|restarted|restart mid-pass|process exit/i;
+
+/**
+ * Map a thrown VOD pipeline error to its `failureReason` and whether a resume
+ * may retry it.
+ */
+export function classifyVodFailure(e: unknown): VodFailureClassification {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  const name = errorName(e);
+  const statusCode = (e as { statusCode?: number; status?: number } | undefined)?.statusCode ?? (e as any)?.status;
+  // Operator stop: never resurrected, never retried.
+  if (name === "VodCancelledError" || /cancelled|canceled|user stop/i.test(msg)) {
+    return { reason: "user-stop", resumable: false };
+  }
+  // Perceive session/runner loss after the bounded re-reserve (SessionLostError)
+  // or a deploy-recreate interruption — both are transient and retriable.
+  if (name === "SessionLostError" || name === "DeployRecreateInterruptedError") {
+    return { reason: "perceive-session-lost", resumable: true };
+  }
+  // Capacity-1 perceive runner still saturated after `reservePerceiveWithBackoff`.
+  if (CAPACITY.test(msg) || statusCode === 503) {
+    return { reason: "capacity-exhausted", resumable: true };
+  }
+  // Decide service unavailable (5xx/timeout/fallback exhausted).
+  if (DECIDE.test(msg) && DECIDE_TRANSIENT.test(msg)) {
+    return { reason: "decide-unavailable", resumable: true };
+  }
+  // Control plane restarted mid-pass (boot recovery, Increment 4).
+  if (RESTART.test(msg)) {
+    return { reason: "server-restart", resumable: true };
+  }
+  // Broken input / decode / schema: terminal, no retry.
+  if (NON_RESUMABLE_INPUT.test(msg)) {
+    return { reason: "pipeline-error", resumable: false };
+  }
+  // Unknown: the historical attribution, and NOT resumable. Retrying an
+  // unexplained failure risks a loop that masks a real defect.
+  return { reason: "pipeline-error", resumable: false };
+}

@@ -883,6 +883,95 @@ export const MatchContextEvidenceSchema = z
   .passthrough();
 export type MatchContextEvidence = z.infer<typeof MatchContextEvidenceSchema>;
 
+// ---------------------------------------------------------------------------
+// ADAAAA-7906 (VOD resume, Increments 1+2): the per-job resume checkpoint.
+// Additive OPTIONAL block on the Job contract (`job.resume`); no contract
+// version bump. Written through the SAME `store.patchJob` as the progress
+// watermark, so a record never carries one without the other.
+//
+// `cursorTs` is the content timestamp (seconds) of the last FULLY decided
+// window — derived from frame order / sampleFps, so it is reproducible across
+// attempts and does not depend on wall-clock timing. It is forward-only.
+// ---------------------------------------------------------------------------
+
+/** The phase a resume would restart from. `phase` is the last phase STARTED. */
+export const ResumePhaseSchema = z.enum(["extract", "analyze", "finalize"]);
+export type ResumePhase = z.infer<typeof ResumePhaseSchema>;
+
+/** Proof that frame extraction completed for a given source identity. A resume
+ * skips extraction entirely only when this is present, the frame directory is
+ * still non-empty, and `sourceBytes` + `sourceMtimeMs` still match the file. */
+export const ResumeExtractionSchema = z.object({
+  complete: z.literal(true),
+  frameCount: z.number().int().min(0),
+  fps: z.number().positive(),
+  scale: z.string(),
+  sourceBytes: z.number().int().min(0),
+  sourceMtimeMs: z.number().min(0),
+  completedAt: z.string(),
+});
+export type ResumeExtraction = z.infer<typeof ResumeExtractionSchema>;
+
+/** The analysis cursor: how far content-order analysis got. */
+export const ResumeAnalyzeSchema = z.object({
+  /** Content seconds of the last fully decided (applied) window. Forward-only. */
+  cursorTs: z.number().min(0),
+  framesAnalyzed: z.number().int().min(0).optional(),
+  decideWindows: z.number().int().min(0).optional(),
+  highlightsFound: z.number().int().min(0).optional(),
+  lastWindowAt: z.string().optional(),
+});
+export type ResumeAnalyze = z.infer<typeof ResumeAnalyzeSchema>;
+
+/** Cost accumulators carried across attempts (consumed by Increment 4's
+ * accounting; persisted here so the checkpoint is one record). */
+export const ResumeAccumulatorsSchema = z.object({
+  decideCalls: z.number().int().min(0).default(0),
+  perceiveSessionS: z.number().min(0).default(0),
+  costUsd: z.number().min(0).default(0),
+  stageAMetrics: StageAMetricsSnapshotSchema.optional(),
+  confirmMetrics: ConfirmMetricsSnapshotSchema.optional(),
+  vodObserveMetrics: VodObserveMetricsSnapshotSchema.optional(),
+});
+export type ResumeAccumulators = z.infer<typeof ResumeAccumulatorsSchema>;
+
+/** One attempt at the job, in claim order. */
+export const ResumeAttemptSchema = z.object({
+  attempt: z.number().int().min(1),
+  startedAt: z.string(),
+  endedAt: z.string().optional(),
+  failedAtPhase: ResumePhaseSchema.optional(),
+  failureReason: z
+    .enum(["media-session-lost", "server-restart", "user-stop", "pipeline-error", "decide-unavailable", "perceive-session-lost", "capacity-exhausted"])
+    .optional(),
+  error: z.string().optional(),
+  usdSpent: z.number().min(0).optional(),
+});
+export type ResumeAttempt = z.infer<typeof ResumeAttemptSchema>;
+
+export const ResumeCheckpointSchema = z.object({
+  version: z.literal(1).default(1),
+  phase: ResumePhaseSchema,
+  extraction: ResumeExtractionSchema.optional(),
+  analyze: ResumeAnalyzeSchema.optional(),
+  accumulators: ResumeAccumulatorsSchema.optional(),
+  attempts: z.array(ResumeAttemptSchema).default([]),
+  totalAttempts: z.number().int().min(0).default(0),
+  lastError: z
+    .object({
+      reason: z.string(),
+      message: z.string().optional(),
+      at: z.string(),
+    })
+    .optional(),
+  /** Auto-retry schedule. Present only while a retry is armed (status `queued`). */
+  nextAttemptAt: z.string().optional(),
+  resumedAt: z.string().optional(),
+  /** What the user sees: "resumed from T+mm:ss". */
+  resumedFromTs: z.number().min(0).optional(),
+});
+export type ResumeCheckpoint = z.infer<typeof ResumeCheckpointSchema>;
+
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -941,10 +1030,26 @@ export const JobSchema = z.object({
   //                       job could not be resumed
   //   user-stop           the operator stopped it (explicit /stop, session close)
   //   pipeline-error      the analyze/decide pipeline threw
+  //   decide-unavailable  the GPU decide service failed (5xx/timeout/fallback)  (ADAAAA-7906)
+  //   perceive-session-lost  the perceive session was lost after re-reserves    (ADAAAA-7906)
+  //   capacity-exhausted  the perceive runner stayed at no-capacity after backoff (ADAAAA-7906)
   // Additive optional — absent on rows written before this field existed.
   failureReason: z
-    .enum(["media-session-lost", "server-restart", "user-stop", "pipeline-error"])
+    .enum([
+      "media-session-lost",
+      "server-restart",
+      "user-stop",
+      "pipeline-error",
+      "decide-unavailable",
+      "perceive-session-lost",
+      "capacity-exhausted",
+    ])
     .optional(),
+  // ADAAAA-7906 (VOD resume Increments 1+2): the durable resume checkpoint.
+  // Additive optional; absent on rows that predate the feature and on the first
+  // pass until the first checkpoint write. Written through `store.patchJob` in
+  // the SAME call as the progress watermark (see `saveResumeCheckpoint`).
+  resume: ResumeCheckpointSchema.optional(),
   perceiveSessionId: z.string().optional(),
   // Per-job VOD sampling override (ADAAAA-5059). When present, overrides the
   // `vodSampleFpsDefault` config for this job; still bounded by runner
