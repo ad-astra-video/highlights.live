@@ -91,24 +91,157 @@ CONFIRM_VALUES: tuple[str, ...] = ("confirmed_goal", "near_miss", "not_goal")
 # Goal-calling audio/commentary phrasing (lower-cased). Conservative: only
 # unambiguous goal calls. "goal" alone is excluded (a replay / general
 # narration can say "the goal" without a goal having just been scored).
-_GOAL_CALL_PATTERNS: tuple[str, ...] = (
-    "goooal", "gooal", "goall ", "it's in", "its in", "it is in",
-    "its in the net", "in the net", "goal!", "goal for", "that's a goal",
-    "thats a goal", "what a goal", "scores!", "scored", "find the net",
-    "back of the net", "top corner", "net bulging", "a goal at",
+#
+# ADAAAA-7843 (this defect): the detector used to be ONE flat tuple matched as a
+# bare substring, so retrospective stat commentary corroborated a goal:
+#   - "Cristiano Ronaldo has scored seven penalties for Portugal, but he scored
+#     only three goals in his previous 13 World Cup Finals"  -> True ("scored")
+#   - "It's his 82nd goal for Portugal on his 151st appearance." -> True
+#     ("goal for")
+# while the REAL call, "It's 1-0 Portugal", matched nothing -> False.
+# The detector is now three deterministic layers (no model/GPU cost):
+#   1. STRONG calls — exclamatory, unambiguous, always a goal call;
+#   2. WEAK phrased calls — genuinely ambiguous ("scored", "goal for", "in the
+#      net"), credited only when the text is NOT retrospective-stat framing;
+#   3. SCORE-TRANSITION calls — a literal N-M score next to a team/entity name
+#      ("It's 1-0 Portugal"), which is the call the old tuple missed.
+# Retrospective framing adds no corroboration on its own: it describes a
+# player's record, not a live goal (requirement 1 of ADAAAA-7843).
+_STRONG_GOAL_CALL_PATTERNS: tuple[str, ...] = (
+    "goooal", "gooal", "what a goal", "net bulging", "scores!",
 )
+
+_WEAK_GOAL_CALL_PATTERNS: tuple[str, ...] = (
+    "goall ", "it's in", "its in", "it is in", "it's in the net", "in the net",
+    "goal!", "goal for", "that's a goal", "thats a goal", "scored",
+    "find the net", "back of the net", "top corner", "a goal at",
+)
+
+# Kept as the union so a reader (or an older caller) still sees the complete
+# phrasing set the detector recognizes. Prefer the two tiered tuples above:
+# matching the union directly loses the retrospective-stat exclusion.
+_GOAL_CALL_PATTERNS: tuple[str, ...] = (
+    _STRONG_GOAL_CALL_PATTERNS + _WEAK_GOAL_CALL_PATTERNS
+)
+
+# ADAAAA-7843 (requirement 1): retrospective-stat framing. These phrases
+# describe a player's/team's record ("has scored seven penalties for Portugal",
+# "his previous 13 World Cup Finals", "82nd goal", "151st appearance") — a
+# statline read-out, never a live goal call. A WEAK phrasing match inside such
+# text is dropped; a STRONG call or a score transition still wins.
+_RETROSPECTIVE_STAT_RES: tuple[re.Pattern, ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        # Perfect tense without an exclamation is a record, not a call. An
+        # explicit "has scored!" stays a call (live commentary).
+        r"\b(?:has|have|had)\s+scored\b(?!\s*!)",
+        r"\bprevious\b",
+        r"\brecords?\b",
+        r"\bappearances?\b",
+        # "his 82nd goal", "151st appearance", "3rd goal for Portugal".
+        r"\b\d{1,3}(?:st|nd|rd|th)\b",
+        # "scored seven penalties for Portugal" / "penalties for Portugal".
+        r"\bpenalt(?:y|ies)\s+for\b",
+        # Spelled-out career totals: "only three goals in his ...".
+        r"\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+        r"\s+goals?\s+in\b",
+    )
+)
+
+# ADAAAA-7843 (requirement 2): a score-transition call. A literal N-M score
+# (N != M, so a 0-0 / 1-1 scoreboard read is not a transition) counts when it
+# sits next to an entity name ("It's 1-0 Portugal", "1-0 to Portugal") or is
+# anchored by an explicit transition cue ("it's 1-0", "now 2-1", "make it 2-1").
+#
+# Both sides are restricted to a SINGLE digit: a football/regulation scoreline
+# is 0-9 per side, and this is what keeps a stat line ("13 - 2 in shot
+# attempts", a 2-digit tally) from reading as a score transition. Erring
+# toward a miss is correct here — a missed scoreline still has the two-signal
+# frame attestation and the measured scoreboard as corroboration, while a false
+# credit admits a non-goal.
+_SCORE_LINE_RE = re.compile(r"\b(\d)\s*[-–—]\s*(\d)\b")
+# Word-boundary cues so "the score" does not match inside "the scoreboard".
+_SCORE_CUE_RE = re.compile(
+    r"(?:\bit'?s\b|\bit is\b|\bthat'?s\b|\bthat is\b|\bmake[s]? it\b"
+    r"|\bscore is\b|\bthe score\b|\blead[s]?\b|\bahead\b|\bnow\b"
+    r"|\bwe have\b|\bthey have\b)"
+)
+_SCORE_STOPWORDS = frozenset({
+    "for", "in", "at", "and", "on", "to", "of", "the", "a", "an", "with",
+    "from", "as", "but", "so", "if", "is", "was", "are", "were", "be", "has",
+    "have", "had", "it", "this", "that", "there", "then", "his", "her",
+    "their", "its", "by", "up", "down", "out", "off", "over", "into", "after",
+    "before", "when", "while", "no", "not", "only", "all", "nil", "goal",
+    "goals", "scored", "score", "scores", "defeat", "win", "loss", "draw",
+})
+# A proper-noun-ish token: a real word, not a stopword or a bare number.
+_TEAMISH_RE = re.compile(r"^[a-z][a-z'.\-]{2,}$")
+
+
+def retrospective_stat_framing(text: str | None) -> bool:
+    """Whether the commentary text is retrospective stat framing (ADAAAA-7843).
+
+    True for a statline / record read-out ("has scored seven penalties for
+    Portugal", "his previous 13 World Cup Finals", "his 82nd goal for Portugal
+    on his 151st appearance") — text about a CAREER, not about a goal that has
+    just been scored. Used to drop a WEAK phrasing match; never raises.
+    """
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return any(p.search(t) for p in _RETROSPECTIVE_STAT_RES)
+
+
+def _teamish(word: str) -> bool:
+    w = word.strip(".,;:!?()[]\"'")
+    return bool(w) and _TEAMISH_RE.match(w) is not None and w not in _SCORE_STOPWORDS
+
+
+def score_transition_calls_goal(text: str | None) -> bool:
+    """Whether the text calls a goal by stating a literal score transition.
+
+    ADAAAA-7843 (requirement 2): "It's 1-0 Portugal" is the canonical live goal
+    call and the old substring tuple missed it entirely. A match needs a literal
+    ``N-M`` with two DIFFERENT numbers (so a 0-0 / 1-1 scoreboard read is not a
+    transition) plus either an entity name in the following few words or an
+    explicit transition cue just before it. Conservative by construction: a bare
+    number pair with neither anchor ("13 - 2" style stats, a timecode) never
+    fires. Never raises.
+    """
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    for m in _SCORE_LINE_RE.finditer(t):
+        home, away = m.group(1), m.group(2)
+        if home == away:
+            continue  # a 0-0 / 2-2 readout is a score, not a transition
+        before = t[max(0, m.start() - 24):m.start()]
+        after_words = re.findall(r"[a-z0-9'.\-]+", t[m.end():m.end() + 40])[:3]
+        if any(_teamish(w) for w in after_words):
+            return True
+        if _SCORE_CUE_RE.search(before):
+            return True
+    return False
 
 
 def audio_calls_goal(transcript: str | None) -> bool:
     """Whether the (fallible) ASR commentary text calls a goal.
 
-    Conservative substring/heuristic match over the lower-cased transcript.
-    Used as ONE independent corroboration signal on the confirm pass. Never
-    raises; empty/None input is False (no text is never corroboration)."""
+    Deterministic three-layer match over the lower-cased transcript
+    (ADAAAA-7843): a STRONG exclamatory call, a score-transition call
+    ("It's 1-0 Portugal"), or a WEAK phrased call that is NOT retrospective-stat
+    framing. Used as ONE independent corroboration signal on the confirm pass.
+    Never raises; empty/None input is False (no text is never corroboration)."""
     t = (transcript or "").strip().lower()
     if not t:
         return False
-    return any(p in t for p in _GOAL_CALL_PATTERNS)
+    if any(p in t for p in _STRONG_GOAL_CALL_PATTERNS):
+        return True
+    if score_transition_calls_goal(t):
+        return True
+    if not any(p in t for p in _WEAK_GOAL_CALL_PATTERNS):
+        return False
+    return not retrospective_stat_framing(t)
 
 
 # ADAAAA-7402 (AC1): a regulation goal whose scoreboard change the deep-dive
