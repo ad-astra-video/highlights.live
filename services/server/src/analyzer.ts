@@ -2835,6 +2835,42 @@ export class TrackingPlanController {
   }
 }
 
+/** Compact `path: message` rendering of a zod failure (ADAAAA-7848), for a log
+ * line that names the exact field so a future contract drift is actionable. */
+function describeZodIssues(err: unknown): string {
+  const issues = (err as { issues?: unknown }).issues;
+  if (!Array.isArray(issues)) return String((err as { message?: unknown })?.message ?? err);
+  const rendered = issues.slice(0, 6).map((i: any) => {
+    const path = Array.isArray(i?.path) && i.path.length ? i.path.join(".") : "<root>";
+    return `${path}: ${i?.message ?? i?.code ?? "invalid"}`;
+  });
+  if (issues.length > rendered.length) rendered.push(`(+${issues.length - rendered.length} more)`);
+  return rendered.join("; ");
+}
+
+/** Last-resort projection of a confirm record so its payload still reaches the
+ * board (ADAAAA-7848): a `dataItems` value that is not a scalar (string /
+ * number / boolean) or a bounded scalar series is rendered as compact text
+ * instead of failing the whole block. Nothing else is touched — a genuinely
+ * malformed record still fails the retry and is logged. */
+function salvageConfirmRecord(confirm: ConfirmRecord): ConfirmRecord {
+  const request: any = (confirm as any)?.request;
+  if (!request || !Array.isArray(request.dataItems)) return confirm;
+  const dataItems = request.dataItems.map((item: any) => {
+    const value = item?.value;
+    if (value === null || value === undefined) return item;
+    const scalar = typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+    const series = Array.isArray(value) && value.every(
+      (v) => typeof v === "string" || typeof v === "number" || typeof v === "boolean"
+    );
+    if (scalar || series) return item;
+    let text: string;
+    try { text = JSON.stringify(value); } catch { text = String(value); }
+    return { ...item, value: text };
+  });
+  return { ...confirm, request: { ...request, dataItems } } as ConfirmRecord;
+}
+
 /** Build + emit a persisted decide note for one evaluation (ADAAAA-6851 Inc 2).
  * `status` captures why the trigger did/didn't become a highlight record
  * (accepted / suppressed / rejected). Called at the SAME decision point that
@@ -2861,13 +2897,33 @@ export function buildCandidateNote(
   // dropped from persistence. Observability is best-effort: a bad block is
   // skipped (window still shows as decided, without analysis) rather than
   // silently losing the note.
+  //
+  // ADAAAA-7848: a rejected block used to be swallowed (`catch {}`), which made
+  // the loss invisible — job dee44c2f persisted 103/103 window analyses and 0/103
+  // confirm records with no trace anywhere. Every rejection is now logged with
+  // the job id + the zod issues, and the confirm record gets ONE salvage retry
+  // with non-conforming `dataItems` values coerced to text, so a single drifting
+  // context field degrades the record instead of deleting the model's evidence.
   let okAnalysis = analysis;
   let okConfirm = confirm;
   if (analysis !== undefined) {
-    try { okAnalysis = WindowAnalysisSchema.parse(analysis); } catch { okAnalysis = undefined; }
+    try { okAnalysis = WindowAnalysisSchema.parse(analysis); }
+    catch (e) {
+      console.error(`[decide-note:${cfg.jobId}] window analysis rejected: ${describeZodIssues(e)}`);
+      okAnalysis = undefined;
+    }
   }
   if (confirm !== undefined) {
-    try { okConfirm = ConfirmRecordSchema.parse(confirm); } catch { okConfirm = undefined; }
+    try { okConfirm = ConfirmRecordSchema.parse(confirm); }
+    catch (e) {
+      console.error(`[decide-note:${cfg.jobId}] confirm record rejected: ${describeZodIssues(e)}`);
+      try {
+        okConfirm = ConfirmRecordSchema.parse(salvageConfirmRecord(confirm));
+      } catch (e2) {
+        console.error(`[decide-note:${cfg.jobId}] confirm record unsalvageable: ${describeZodIssues(e2)}`);
+        okConfirm = undefined;
+      }
+    }
   }
   try {
     cfg.onDecision({
