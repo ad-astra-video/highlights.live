@@ -48,7 +48,7 @@ function makeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
       log.push("stop");
     },
     postAudio: async () => ({ candidate: null, series: [] }),
-    controlForward: async () => {},
+    controlForward: async () => null,
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     confirm: async () => {
       log.push("confirm");

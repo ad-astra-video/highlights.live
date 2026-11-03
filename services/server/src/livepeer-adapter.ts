@@ -36,6 +36,7 @@ import type {
   AudioChunk,
   ConfirmDecision,
   ConfirmRequest,
+  ControlAck,
   DecisionResult,
   GoalLineCalibration,
   GroupDecodeRequest,
@@ -476,17 +477,22 @@ export class OrchestratorAdapter implements PipelineClient {
       whistle: (data?.whistle ?? null) as AudioPostResult["whistle"],
     };
   }
-  async controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<void> {
+  async controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<ControlAck | null> {
     // INC-6 / ADAAAA-4330: proxy a find-and-track / operator control intent
     // through the same orchestrator session as /analyze so the perceive runner
     // marks the slot selected and follows it. Best-effort like postAudio: a 404
     // means the video leg already re-reserved a fresh session — drop, never fatal.
-    const { status } = await this.client.appCall<any>(sessionId, "control", {
+    // ADAAAA-7833: the ack body is returned so `track-player` can surface its
+    // identification outcome (`ok:false` + `retrying`) to the operator instead
+    // of acking a silent no-op.
+    const { status, data } = await this.client.appCall<any>(sessionId, "control", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(control),
     });
     if (status >= 500) throw new Error(`controlForward failed: HTTP ${status}`);
+    if (status < 200 || status >= 300) return null;
+    return (data ?? null) as ControlAck | null;
   }
   async recallPerceive(
     sessionId: string,
@@ -915,15 +921,18 @@ export class DirectAdapter implements PipelineClient {
       whistle: body?.whistle ?? null,
     };
   }
-  async controlForward(_sessionId: string, control: { type: string; [k: string]: any }): Promise<void> {
+  async controlForward(_sessionId: string, control: { type: string; [k: string]: any }): Promise<ControlAck | null> {
     // INC-6 / ADAAAA-4330: direct dev path posts the find-and-track control
     // intent straight to perceive /app/control with the fake session id.
+    // ADAAAA-7833: return the ack body (see the orchestrator path above).
     const r = await fetch(`${this.cfg.perceiveUrl}/app/control`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Session-Id": this.fakeSession },
       body: JSON.stringify(control),
     });
     if (r.status >= 500) throw new Error(`controlForward failed: HTTP ${r.status}`);
+    if (r.status < 200 || r.status >= 300) return null;
+    return ((await r.json().catch(() => null)) ?? null) as ControlAck | null;
   }
   async recallPerceive(
     sessionId: string,

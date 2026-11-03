@@ -593,6 +593,22 @@ export interface TrackingPlanResult {
   [k: string]: unknown;
 }
 
+/** Perceive's `/app/control` ack (ADAAAA-7833). `track-player` answers with
+ * `{type:"ack", ok:true, cmd, number, slot, trackId, selected, bbox}` on a
+ * successful identification, or `{type:"ack", ok:false, cmd, number, retrying:true,
+ * retryWindowFrames, retryStride, retryAttempts, error}` when the jersey was not
+ * legible on the anchor frame and the bounded per-frame retry window is open.
+ * Plain failures carry `ok:false` + `error` only. Indexable so the server can
+ * forward the body verbatim without a lossy projection. */
+export interface ControlAck {
+  type?: string;
+  ok?: boolean;
+  cmd?: string;
+  error?: string;
+  retrying?: boolean;
+  [k: string]: any;
+}
+
 export interface PlanRequest {
   intent: string;
   category: string;
@@ -673,10 +689,15 @@ export interface PipelineClient {
    * Deliver an operator/find-and-track control intent (INC-6 / ADAAAA-4330) to
    * the perceive session over HTTP: `track`/`seed`/`lock`/`evict`, plus the
    * pre-existing configure/ping. The UI surfaces object selection (bbox) as a
-   * `track` intent; perceive marks the slot selected and follows it. Best-effort:
-   * a 404 (fresh session after re-reserve) is dropped, never fatal.
+   * `track` intent; perceive marks the slot selected and follows it.
+   *
+   * Returns perceive's `/app/control` ack body so a caller that needs the
+   * outcome (`track-player`, ADAAAA-7833 — a jersey that is not legible on the
+   * anchor frame is an `ok:false` ack plus a bounded retry window) can surface
+   * it. `null` when the runner answered non-2xx (a 404 on a re-reserved session)
+   * or the body was unparseable; best-effort callers ignore the value.
    */
-  controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<void>;
+  controlForward(sessionId: string, control: { type: string; [k: string]: any }): Promise<ControlAck | null>;
   /**
    * On-demand perceive recall (ADAAAA-7008 / ADAAAA-7012). When a decide verdict
    * requests more evidence for a moment, the server asks perceive for the
