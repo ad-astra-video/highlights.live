@@ -358,6 +358,23 @@ export interface ServerConfig {
    * goal recall after the perceive goal-line/homography channels are enabled.
    * `OBSERVE_SIGNAL_GATE`. */
   observeSignalGate: boolean;
+  /** ADAAAA-7878: issue every observe decide OFF the frame-consume loop (both
+   * rails) so ingest keeps feeding perceive while gemma judges a window. VOD
+   * queues the window payload and decides at `observeDecideInFlight` depth while
+   * the frame loop keeps calling `client.analyze`; the live depth-1 fallback also
+   * issues-and-does-not-await. Acceptance stays in content order. Default ON
+   * (`OBSERVE_DECIDE_OFFLOOP` unset/1); `0` reproduces the pre-7878 serial pass
+   * byte-for-byte, so a measured regression can be reverted without a code
+   * revert. */
+  observeDecideOffLoop: boolean;
+  /** ADAAAA-7878: VOD off-loop decide depth (default 1). Raising it changes the
+   * decide CONCURRENCY — ADAAAA-7773/7771 territory; ship only with a measured
+   * pair. `OBSERVE_DECIDE_IN_FLIGHT`. */
+  observeDecideInFlight: number;
+  /** ADAAAA-7878: hard bound on the VOD off-loop pending-window queue (default
+   * 512). A full queue drops the window and counts it; ingest is never blocked
+   * by it. `OBSERVE_DECIDE_QUEUE_MAX`. */
+  observeDecideQueueMax: number;
   /** ADAAAA-7147: image-space `speedMps` at/above which a frame is a
    * "meaningful ball" escalation signal for the Tier-2 gate on an
    * uncalibrated box (no goal-line/homography/scoreboard channel).
@@ -716,6 +733,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // baseline stays the behavior until the observer pass is validated).
     observeLoop: env.OBSERVE_LOOP === "1",
     observeSignalGate: env.OBSERVE_SIGNAL_GATE === "1",
+    // ADAAAA-7878: issue observe decides OFF the frame-consume loop. Default ON
+    // (the whole point of the change); an explicit `0`/`false`/`off` reproduces
+    // today's serial in-loop decide so a measured regression can be reverted
+    // without a code revert.
+    observeDecideOffLoop: !["0", "false", "off"].includes(String(env.OBSERVE_DECIDE_OFFLOOP ?? "1").trim().toLowerCase()),
+    // ADAAAA-7878: VOD off-loop decide depth (default 1 = the pre-fix decide
+    // rate/concurrency; the ingest loop is what gets unblocked).
+    observeDecideInFlight: Math.max(1, Math.floor(positiveNumberOrUndefined(env.OBSERVE_DECIDE_IN_FLIGHT) ?? 1)),
+    // ADAAAA-7878: bounded pending-window queue for the off-loop VOD pass.
+    observeDecideQueueMax: Math.max(1, Math.floor(positiveNumberOrUndefined(env.OBSERVE_DECIDE_QUEUE_MAX) ?? 512)),
     // ADAAAA-7147: when the Tier-2 signal gate is on, use the calibration-free
     // ball-velocity signal as the escalation discriminator on an uncalibrated
     // box (no goal-line/homography/scoreboard channel) so the gate actually

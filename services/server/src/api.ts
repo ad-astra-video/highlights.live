@@ -1402,6 +1402,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // (config-gated). When on, decide runs on the ~3 s cadence regardless of
       // whether perceive emitted a candidate.
       observeLoop: cfg.observeLoop,
+      // ADAAAA-7878: issue the VOD observe decide OFF the frame-consume loop so
+      // ingest keeps feeding perceive while gemma judges a window (flag-off
+      // reproduces the pre-7878 serial pass). Depth stays 1 by default: the
+      // decide CONCURRENCY is deliberately unchanged.
+      observeDecideOffLoop: cfg.observeDecideOffLoop,
+      observeDecideInFlight: cfg.observeDecideInFlight,
+      observeDecideQueueMax: cfg.observeDecideQueueMax,
       // ADAAAA-7145: gate the VOD decide-observer's billable decide calls on a
       // real highlight signal (recall-safe). Wired so box QA can enable it once
       // the perceive goal-line/homography channels are configured.
@@ -4610,6 +4617,11 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // (config-gated). When on, decide runs on the ~3 s cadence regardless
     // of whether perceive emitted a candidate.
     liveObserveLoop: cfg.liveObserveLoop,
+    // ADAAAA-7878: issue the live observe decide OFF the frame-consume loop
+    // (default ON). At the depth-1 crowded-box fallback this is the difference
+    // between stalling ingest for a whole gemma E2E and keeping it flowing;
+    // `0` reproduces the pre-7878 serial decide.
+    observeDecideOffLoop: cfg.observeDecideOffLoop,
     // ADAAAA-7676: bound the live observe lag against the wall clock — see
     // AnalyzerConfig.liveObserveLagBudgetS. Default 30 s (`LIVE_OBSERVE_LAG_BUDGET_S`).
     liveObserveLagBudgetS: cfg.liveObserveLagBudgetS,
