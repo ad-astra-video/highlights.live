@@ -238,7 +238,11 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     const hl = feed.json().highlights;
     expect(hl.length).toBe(1);
     expect(hl[0].status).toBe("accepted");
-    expect(hl[0].ownerId).toBeTruthy();
+    // ADAAAA-7901: the public feed no longer publishes account identities
+    // (ownerId/exportedBy) — the clip id is the public handle. The owner-scoped
+    // `/highlights` route still carries ownerId for the authenticated caller.
+    expect(hl[0].ownerId).toBeUndefined();
+    expect(hl[0].id).toBeTruthy();
     await app.close();
   });
 

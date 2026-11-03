@@ -509,7 +509,21 @@ services:
       - MATCH_CONTEXT=${MATCH_CONTEXT:-1}
       - MATCH_CONTEXT_ASR_SECONDS=${MATCH_CONTEXT_ASR_SECONDS:-90}
       - NODE_TLS_REJECT_UNAUTHORIZED=0
-      - JWT_SECRET=dev-secret
+      # ADAAAA-7901: NO secret default here. Dockerfile.server sets
+      # NODE_ENV=production, and the server refuses to boot (non-zero exit) when
+      # JWT_SECRET is unset or equal to a documented default — a session signed
+      # with a literal that lives in this repo is forgeable by anyone who can
+      # clone it, and the box ran on the old `dev-secret` default until now.
+      # Set a real random secret in docker/.env (compose reads it from the
+      # compose file's directory):
+      #   JWT_SECRET=$(openssl rand -hex 32)
+      # Rotating it invalidates every existing session (users re-login).
+      - JWT_SECRET=${JWT_SECRET:-}
+      # ADAAAA-7901: optional DEDICATED export-token secret. Unset => the server
+      # HKDF-derives one from JWT_SECRET, so export tokens still can never be
+      # used as (or forged from) a session. If set, it must differ from
+      # JWT_SECRET (the server refuses to boot otherwise).
+      - EXPORT_TOKEN_SECRET=${EXPORT_TOKEN_SECRET:-}
       - ADMIN_EMAIL=admin@highlights.local
       - ADMIN_PASSWORD=admin
       - FREE_HIGHLIGHTS=3

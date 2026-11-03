@@ -74,7 +74,8 @@ Env:
 
 | Var | Required | Default | Notes |
 |---|---|---|---|
-| `JWT_SECRET` | prod | `dev-insecure-secret-change-me` | **Must change in prod.** |
+| `JWT_SECRET` | prod | `dev-insecure-secret-change-me` (dev/test only) | **Required in production.** With `NODE_ENV=production` the server refuses to boot (non-zero exit) when it is unset or a documented default (`dev-secret`, `dev-insecure-secret-change-me`, …), because a session signed with a public literal is forgeable from the repo alone (ADAAAA-7901). Generate with `openssl rand -hex 32`. Rotating it invalidates all existing sessions (users re-login). |
+| `EXPORT_TOKEN_SECRET` | no | HKDF-SHA256(`JWT_SECRET`, `clip-export`) | Secret for the per-clip export URL tokens (`/clips/<file>.mp4?x=…`, ADAAAA-7896). When unset it is derived from `JWT_SECRET`, so an export token can never become a session. If set it must differ from `JWT_SECRET` (≥16 chars in production); the server refuses to boot otherwise. |
 | `ADMIN_EMAIL` | no | `admin@highlights.local` | Seeded at startup. |
 | `ADMIN_PASSWORD` | no | `admin` | Seeded admin login (dev). Set a real one in prod. |
 | `RESET_TOKEN_TTL_SEC` | no | `3600` | Password-reset token lifetime (seconds). |
@@ -247,7 +248,8 @@ bash docker/e2e.sh          # registers a user, runs a job through the orchestra
 Server env for the compose stack:
 ```
 PORT=3000
-JWT_SECRET=dev-secret
+JWT_SECRET=$(openssl rand -hex 32)   # ADAAAA-7901: required — no default, the server refuses to boot in production without it
+# EXPORT_TOKEN_SECRET=...            # optional: dedicated export-token secret (default: HKDF-derived from JWT_SECRET)
 ADMIN_EMAIL=admin@highlights.local
 ADMIN_PASSWORD=admin
 FREE_HIGHLIGHTS=3          # free farming cap (0 = block free allowance entirely)
