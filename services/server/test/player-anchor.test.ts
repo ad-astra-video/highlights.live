@@ -128,10 +128,19 @@ describe("anchor source (ADAAAA-7847)", () => {
       .toEqual(["/data/uploads/j1/a.mp4"]);
   });
 
-  it("samples the live recording, never the ingest URL, on a live rail", () => {
+  it("samples the live recording, never the ingest URL, on an rtmp rail", () => {
     const cands = anchorSourceCandidates({ id: "j2", source: "rtmp", sourceUrl: "rtmp://edge/live/abc" }, dataDir);
     expect(cands[0]).toBe("/data/live/j2/session.ts");
     expect(cands.some((c) => c.startsWith("rtmp://"))).toBe(false);
+  });
+
+  it("prefers a LOCAL ingest file over its lossy re-encode (file-sim rail)", () => {
+    const cands = anchorSourceCandidates(
+      { id: "j5", source: "file-sim", sourceUrl: "/data/clips/clip.mp4" },
+      dataDir
+    );
+    expect(cands[0]).toBe("/data/clips/clip.mp4");
+    expect(cands).toContain("/data/live/j5/session.ts");
   });
 
   it("falls back to the assembled browser capture", () => {
