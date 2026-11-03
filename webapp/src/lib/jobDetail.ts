@@ -279,6 +279,18 @@ export interface JobDetailHighlight {
   duplicateOf?: string;
   duplicateCount?: number;
   mergedIds?: string[];
+  // ADAAAA-7896: export state stamp — set the first time the clip left the app.
+  // The owner-facing Reject control is locked when it is present; an operator
+  // (admin) keeps Reject and the transition records `rejectedAfterExport`.
+  exportedAt?: string;
+  exportedVia?: "download" | "copy_link" | "batch_zip" | "copy_urls";
+  rejectedAfterExport?: boolean;
+  // ADAAAA-7896: the server-minted EXPORT URL (clip path + per-highlight token).
+  // The download anchor, the copy payload and the batch fetches use it so the
+  // server can mark the clip as exported; `clipUri` stays the public playback
+  // URL and never marks anything. Absent on servers that predate it (fall back
+  // to `clipUri`).
+  exportUri?: string;
 }
 
 export interface JobDetail {

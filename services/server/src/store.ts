@@ -245,7 +245,11 @@ export class Store {
     return this.highlights.get(id);
   }
 
-  async reviewHighlight(id: string, status: "accepted" | "rejected"): Promise<HighlightRecord> {
+  async reviewHighlight(
+    id: string,
+    status: "accepted" | "rejected",
+    opts: { rejectedAfterExport?: boolean } = {}
+  ): Promise<HighlightRecord> {
     const h = this.highlights.get(id);
     if (!h) throw new Error(`no highlight ${id}`);
     const now = new Date().toISOString();
@@ -253,7 +257,16 @@ export class Store {
     // (reject -> accept) clears it so the clip is never a TTL purge candidate.
     const rejectedAt =
       status === "rejected" ? (h.status === "rejected" ? h.rejectedAt : now) : undefined;
-    const next = HighlightRecordSchema.parse({ ...h, status, rejectedAt });
+    const next = HighlightRecordSchema.parse({
+      ...h,
+      status,
+      rejectedAt,
+      // ADAAAA-7896: the operator exemption is stamped onto the record so an
+      // admin reject of an already-exported clip stays auditable. Only a
+      // reject transition can set it; a later accept keeps the historical flag
+      // (the export itself is permanent) unless the record never had one.
+      ...(opts.rejectedAfterExport ? { rejectedAfterExport: true } : {}),
+    });
     this.highlights.set(id, next);
     if (this.db) await this.db.saveHighlight(next);
     return next;
@@ -350,6 +363,43 @@ export class Store {
 
   allHighlights(): HighlightRecord[] {
     return [...this.highlights.values()];
+  }
+
+  /** ADAAAA-7896: the highlight whose clip file is `file` (a basename such as
+   * `abc.mp4`). `clipUri` is a web path (`/clips/<file>.mp4`), so the export
+   * route resolves the token's highlight by the requested filename. A file with
+   * no matching highlight returns undefined (404, no marking). */
+  highlightByClipFile(file: string): HighlightRecord | undefined {
+    const want = file.replace(/^\/+/, "").split("/").pop() ?? file;
+    for (const h of this.highlights.values()) {
+      if (!h.clipUri) continue;
+      const base = h.clipUri.split("?")[0].replace(/^\/+/, "").split("/").pop();
+      if (base === want) return h;
+    }
+    return undefined;
+  }
+
+  /** ADAAAA-7896: stamp a highlight as exported. FIRST WRITE WINS — an already
+   * stamped record is returned untouched (`marked: false`) and nothing is
+   * persisted, so exactly one row write and one audit event happen per clip per
+   * lifetime however many times the clip is exported. */
+  async markHighlightExported(
+    id: string,
+    via: NonNullable<HighlightRecord["exportedVia"]>,
+    byId?: string
+  ): Promise<{ record: HighlightRecord; marked: boolean }> {
+    const h = this.highlights.get(id);
+    if (!h) throw new Error(`no highlight ${id}`);
+    if (h.exportedAt) return { record: h, marked: false };
+    const next = HighlightRecordSchema.parse({
+      ...h,
+      exportedAt: new Date().toISOString(),
+      exportedVia: via,
+      exportedBy: byId,
+    });
+    this.highlights.set(id, next);
+    if (this.db) await this.db.saveHighlight(next);
+    return { record: next, marked: true };
   }
 
   acceptedHighlights(): HighlightRecord[] {

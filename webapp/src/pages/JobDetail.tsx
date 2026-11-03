@@ -8,7 +8,7 @@ import { JobDetailMetrics } from "../components/JobMetrics";
 import { useIsAdmin } from "../lib/auth";
 import { WindowAnalysisPanel } from "../components/WindowAnalysis";
 import { SummaryLadderView } from "../components/SummaryLadder";
-import { batchManifest, captionFromTitle, clipFileName, clipUrl, copyText, momentRangeLabel, postTitles, saveBlob, suggestCaption, type BatchItem } from "../lib/highlightPost";
+import { batchManifest, captionFromTitle, clipFileName, copyExportLink, copyText, exportUrl, markExportIntent, markExportIntentBatch, momentRangeLabel, postTitles, saveBlob, suggestCaption, type BatchItem } from "../lib/highlightPost";
 import { buildZip, type ZipFile } from "../lib/zip";
 import { asrSummary, asrSummaryLine } from "../lib/windowAsr";
 import {
@@ -805,10 +805,15 @@ export function HighlightReviewActions({
   highlight: h,
   onDecision,
   pendingStatus = null,
+  exportLocked = false,
 }: {
   highlight: JobDetailHighlight;
   onDecision: (h: JobDetailHighlight, status: "accepted" | "rejected") => void;
   pendingStatus?: "accepted" | "rejected" | null;
+  /** ADAAAA-7896: the clip already left the app (downloaded / link copied), so
+   * an owner can no longer reject it. The SERVER is authoritative (409
+   * `clip_exported`); this only makes the lock visible before the click. */
+  exportLocked?: boolean;
 }) {
   const pending = pendingStatus !== null;
   const busyAccept = pendingStatus === "accepted";
@@ -830,15 +835,23 @@ export function HighlightReviewActions({
         <button
           type="button"
           className="btn-neon btn-pink min-w-0 flex-1 px-2 py-1 text-xs"
-          disabled={h.status === "rejected" || pending}
+          disabled={h.status === "rejected" || pending || exportLocked}
           aria-pressed={h.status === "rejected"}
+          title={exportLocked ? "This clip was already downloaded or its link copied, so it can no longer be rejected" : undefined}
           onClick={() => onDecision(h, "rejected")}
           data-detail-reject
+          data-export-locked={exportLocked ? "true" : undefined}
         >
           {busyReject ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <X className="mr-1 inline h-4 w-4" />}
           {busyReject ? "Rejecting…" : "Reject"}
         </button>
       </div>
+      {/* ADAAAA-7896: why Reject is unavailable — the clip already left the app. */}
+      {exportLocked && h.status !== "rejected" && (
+        <div className="mt-1 text-xs text-mut" data-detail-export-locked>
+          Downloaded — this clip can no longer be rejected.
+        </div>
+      )}
       {/* One small inline note, visible to every session. Recovery guidance,
           not a badge — it never prints a bare `accepted` / `rejected` label. */}
       {h.status === "rejected" && (
@@ -907,7 +920,9 @@ export function HighlightCard({
   // but a card rendered without one (the rejected lane, component tests) still
   // shows and edits the deterministic suggestion instead of an empty box.
   const [localCaption, setLocalCaption] = useState<string | null>(null);
-  const url = clipUrl(h.clipUri);
+  // ADAAAA-7896: download/copy use the server-minted export URL so the fetch
+  // marks the clip; playback (VideoClip) keeps the public `clipUri`.
+  const url = exportUrl(h);
   const titles = postTitles(h, summaryLog);
   const shownCaption = localCaption ?? (caption || suggestCaption(h, summaryLog));
   const durationS = Math.max(0, Math.round(h.end - h.start));
@@ -916,7 +931,11 @@ export function HighlightCard({
     onCaptionChange?.(h, value);
   }
   async function copyLink() {
-    const ok = await copyText(url);
+    // ADAAAA-7896: the copied text is the EXPORT url (two URL classes), and the
+    // clip is marked exported only when the clipboard write actually succeeded.
+    const ok = await copyExportLink(h, {
+      mark: (id) => markExportIntent((p, body) => api(p, { body }), id, "copy_link"),
+    });
     setCopied(ok ? "copied" : "failed");
     setTimeout(() => setCopied("idle"), 1800);
   }
@@ -1050,7 +1069,14 @@ export function HighlightCard({
             themselves (the matching one is disabled + aria-pressed) rather
             than by a status badge (ADAAAA-7880 removed the badge, not the
             controls). */}
-        <HighlightReviewActions highlight={h} onDecision={onDecision} pendingStatus={pendingStatus} />
+        <HighlightReviewActions
+          highlight={h}
+          onDecision={onDecision}
+          pendingStatus={pendingStatus}
+          // ADAAAA-7896: an owner loses Reject once the clip was exported; an
+          // operator keeps it (they download clips to inspect them).
+          exportLocked={!!h.exportedAt && !admin}
+        />
         {/* ADAAAA-7881: the transcript is low-emphasis and rendered ONCE, verbatim
             behind a disclosure (the stored value is never truncated). */}
         {h.asrTranscript && (
@@ -2024,8 +2050,21 @@ export function JobDetail() {
     setBatchState({ kind: "working", message: `Preparing ${selectedHighlights.length} clip(s)…` });
     const files: ZipFile[] = [];
     const items: BatchItem[] = [];
+    // ADAAAA-7896: ONE bounded intent call marks the whole selection as
+    // `batch_zip` before any fetch, so every archived clip is stamped even
+    // though the individual fetches carry no per-clip via. Best-effort: a
+    // failed intent must not cost the user their archive.
+    try {
+      await markExportIntentBatch(
+        (p, body) => api(p, { body }),
+        selectedHighlights.map((h) => h.id),
+        "batch_zip"
+      );
+    } catch {
+      /* the zip still ships; the fetch path re-attempts the same marking */
+    }
     for (const h of selectedHighlights) {
-      const url = clipUrl(h.clipUri);
+      const url = exportUrl(h);
       const caption = captionOf(h);
       let failure: string | undefined;
       if (!h.clipUri) {
@@ -2060,8 +2099,22 @@ export function JobDetail() {
   /** Copy the batch manifest (captions + public URLs) to the clipboard. */
   async function copyBatchManifest() {
     if (selectedHighlights.length === 0) return;
-    const items: BatchItem[] = selectedHighlights.map((h) => ({ caption: captionOf(h), url: clipUrl(h.clipUri) }));
+    // ADAAAA-7896: the manifest carries the EXPORT URLs, and one bounded batch
+    // intent marks all of them `copy_urls` — but only once the clipboard write
+    // actually succeeded (a failed copy shares nothing).
+    const items: BatchItem[] = selectedHighlights.map((h) => ({ caption: captionOf(h), url: exportUrl(h) }));
     const ok = await copyText(batchManifest(items));
+    if (ok) {
+      try {
+        await markExportIntentBatch(
+          (p, body) => api(p, { body }),
+          selectedHighlights.map((h) => h.id),
+          "copy_urls"
+        );
+      } catch {
+        /* the copy succeeded; marking is audited but not user-visible */
+      }
+    }
     setBatchState({
       kind: ok ? "done" : "error",
       message: ok

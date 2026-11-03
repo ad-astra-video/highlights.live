@@ -21,10 +21,82 @@ export function clipUrl(clipUri: string, origin?: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
 }
 
+// --- ADAAAA-7896: export URLs + mark-on-copy ------------------------------
+// The playback URL (`clipUri`) is public and never marks anything — it is the
+// `<video>` src, so a page view must not count as "left the app". The server
+// mints a DISTINCT export URL (`exportUri`, clip path + a per-highlight token)
+// and the download anchor / copy payload / batch fetches use it, so the server
+// can stamp the highlight the first time its clip is actually exported.
+
 /**
- * The instant a highlight is "about": the clip is centered on `localizedTs`
- * when the localization pass recorded one, else its window start.
+ * The URL a download / copy / batch fetch must use: the server-minted export
+ * URL when the projection carries one, else the plain clip URL (older servers /
+ * records with no clip). The webapp never mints a token itself.
  */
+export function exportUrl(
+  h: Pick<JobDetailHighlight, "exportUri" | "clipUri">,
+  origin?: string
+): string {
+  return clipUrl(h.exportUri || h.clipUri, origin);
+}
+
+export type ExportVia = "download" | "copy_link" | "batch_zip" | "copy_urls";
+
+/**
+ * The single-highlight export-intent call (R3): marks ONE clip with `via`.
+ * `post` is injected so this path is testable without a network (the component
+ * passes `api`).
+ */
+export function markExportIntent(
+  post: (path: string, body: unknown) => Promise<unknown>,
+  id: string,
+  via: ExportVia
+): Promise<unknown> {
+  return post(`/highlights/${id}/export-intent`, { via });
+}
+
+/** The bounded batch export-intent call (R3): marks up to 50 clips in ONE
+ * request (`copy_urls` for "Copy URLs", `batch_zip` for the zip export). */
+export const EXPORT_INTENT_MAX_IDS = 50;
+
+export function markExportIntentBatch(
+  post: (path: string, body: unknown) => Promise<unknown>,
+  ids: string[],
+  via: ExportVia
+): Promise<unknown> | null {
+  const bounded = ids.slice(0, EXPORT_INTENT_MAX_IDS);
+  if (bounded.length === 0) return null;
+  return post("/highlights/export-intent", { ids: bounded, via });
+}
+
+/**
+ * Copy a highlight's export link and mark it as exported on clipboard SUCCESS
+ * only (R3): a failed copy shares nothing, so it must not lock the clip. The
+ * intent POST is best-effort — the copy already succeeded, so a failed mark
+ * must never turn a working "Copied" into "Copy failed".
+ *
+ * Takes its dependencies so the flow is testable without a DOM or network.
+ */
+export async function copyExportLink(
+  h: { id: string; exportUri?: string; clipUri: string },
+  deps: {
+    copy?: (text: string) => Promise<boolean>;
+    mark: (id: string) => Promise<unknown>;
+  }
+): Promise<boolean> {
+  const url = exportUrl(h);
+  if (!url) return false;
+  const ok = await (deps.copy ?? copyText)(url);
+  if (ok) {
+    try {
+      await deps.mark(h.id);
+    } catch {
+      /* the clipboard write is the user-visible result; marking is audited */
+    }
+  }
+  return ok;
+}
+
 export function highlightInstant(h: Pick<JobDetailHighlight, "localizedTs" | "start">): number {
   return typeof h.localizedTs === "number" ? h.localizedTs : h.start;
 }

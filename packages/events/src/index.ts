@@ -1110,6 +1110,24 @@ export const HighlightRecordSchema = z.object({
   // `rejected` clips with a `rejectedAt` aged >= rejectTtlMs are ever purge
   // candidates — accepted/published/pending/queued clips are never touched.
   rejectedAt: z.string().optional(),
+  // ADAAAA-7896: export state — set the FIRST time this highlight's clip leaves
+  // the app (an export-URL fetch, or a copy/batch intent call). First write
+  // wins: later exports never overwrite the earliest stamp, so exactly one row
+  // write happens per clip per lifetime. Additive optional — legacy rows carry
+  // none, and there is no schema version bump.
+  exportedAt: z.string().optional(),
+  exportedVia: z.enum(["download", "copy_link", "batch_zip", "copy_urls"]).optional(),
+  /** The user who was served the export URL / fired the intent. */
+  exportedBy: z.string().optional(),
+  // ADAAAA-7896: an OPERATOR (role=admin) rejected a clip that was already
+  // exported — the reject exemption is recorded beside the export stamp so the
+  // override is auditable from the record alone. Never set on an owner reject
+  // (that path is refused with 409 `clip_exported`).
+  rejectedAfterExport: z.boolean().optional(),
+  // ADAAAA-7896: PROJECTION-ONLY export URL (clip path + per-highlight token).
+  // Minted per caller by GET /jobs/:id/detail and never persisted by the store,
+  // so the webapp never has to mint a token itself.
+  exportUri: z.string().optional(),
   createdAt: z.string(),
 });
 export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
