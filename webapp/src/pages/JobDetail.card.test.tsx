@@ -1,7 +1,7 @@
 import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import React from "react";
-import { HighlightCard } from "./JobDetail";
+import { HighlightCard, HighlightReviewActions } from "./JobDetail";
 import type { JobDetailHighlight } from "../lib/jobDetail";
 
 // ADAAAA-7881: the identified highlight card is customer copy. These tests pin
@@ -10,6 +10,12 @@ import type { JobDetailHighlight } from "../lib/jobDetail";
 // badge standing in for a real indication — plus the new hierarchy: moment
 // header, suggested caption, one-line post titles, actions, and the operator's
 // pipeline internals behind ONE collapsed disclosure.
+//
+// ADAAAA-7893: ADAAAA-7881 had parked the Accept/Reject CONTROLS inside that
+// operator-only disclosure, so a non-admin session rendered no review path at
+// all even though `POST /highlights/:id/review` is ownership scoped. The badge
+// stays gone (ADAAAA-7880); the controls are primary actions again, visible to
+// every session. The tests below are the inverted ones.
 
 const TRANSCRIPT = "so the keeper claims it and the whistle goes";
 
@@ -104,11 +110,19 @@ describe("AC2 — no internal badge, no raw status enum (ADAAAA-7881)", () => {
     });
   }
 
-  it("the customer card carries no pipeline internals at all", () => {
+  it("the customer card HAS the review controls and no pipeline internals (ADAAAA-7893)", () => {
     const html = renderToString(
-      React.createElement(HighlightCard, { highlight: hl(), onDecision: () => {}, admin: false })
+      React.createElement(HighlightCard, {
+        highlight: hl({ asrTranscript: TRANSCRIPT }),
+        onDecision: () => {},
+        admin: false,
+      })
     );
-    for (const token of ["SPORTING_EVENT", "outcome=", "Trigger:", "data-detail-accept", "data-detail-reject"]) {
+    // Inverted from ADAAAA-7881: the owner may review the clip, so the controls
+    // must be reachable without operator chrome.
+    expect(count(html, "data-detail-accept")).toBe(1);
+    expect(count(html, "data-detail-reject")).toBe(1);
+    for (const token of ["SPORTING_EVENT", "outcome=scoring_play", "Trigger:", "data-detail-pipeline", "Pipeline detail"]) {
       expect(html, `customer card must not contain ${token}`).not.toContain(token);
     }
   });
@@ -122,24 +136,36 @@ describe("AC2 — no internal badge, no raw status enum (ADAAAA-7881)", () => {
     // Collapsed by default: the <details> carries no `open` attribute.
     expect(html).toMatch(/<details[^>]*data-detail-pipeline[^>]*>/);
     expect(html).not.toMatch(/<details[^>]*data-detail-pipeline[^>]*\sopen/);
-    // Every internal renders AFTER the disclosure opens.
+    // Every internal renders AFTER the disclosure opens — and the review
+    // controls do NOT (ADAAAA-7893: they are primary actions, not internals).
     const at = html.indexOf("data-detail-pipeline");
-    for (const token of ["SPORTING_EVENT", "outcome=scoring_play", "Trigger:", "data-detail-accept"]) {
+    for (const token of ["SPORTING_EVENT", "outcome=scoring_play", "Trigger:"]) {
       expect(html.indexOf(token), `${token} should sit inside Pipeline detail`).toBeGreaterThan(at);
     }
+    expect(html.indexOf("data-detail-accept")).toBeLessThan(at);
+    expect(html.indexOf("data-detail-reject")).toBeLessThan(at);
   });
 
-  it("keeps the reject banner inside the disclosure for a rejected operator card", () => {
-    const html = renderToString(
-      React.createElement(HighlightCard, {
-        highlight: hl({ status: "rejected", duplicateCount: 1 }),
-        onDecision: () => {},
-        admin: true,
-      })
-    );
-    expect(html).toContain("data-detail-rejected");
-    expect(html.indexOf("data-detail-rejected")).toBeGreaterThan(html.indexOf("data-detail-pipeline"));
-    expect(html).toContain("Rejected — the highlight leaves the accepted feed.");
+  it("a rejected card carries ONE inline recovery note, visible to every session (ADAAAA-7893)", () => {
+    for (const admin of [true, false]) {
+      const html = renderToString(
+        React.createElement(HighlightCard, {
+          highlight: hl({ status: "rejected" }),
+          onDecision: () => {},
+          admin,
+        })
+      );
+      expect(count(html, "data-detail-rejected")).toBe(1);
+      expect(html).toContain("Rejected — hidden from the public feed. Accept restores it within the recover window.");
+      // Recovery guidance, not a badge: no bare status label anywhere.
+      expect(html).not.toContain(">rejected<");
+      expect(html).not.toContain(">accepted<");
+      // It belongs to the action area, so it precedes the operator disclosure
+      // (and the transcript) rather than hiding inside it.
+      const note = html.indexOf("data-detail-rejected");
+      if (admin) expect(note).toBeLessThan(html.indexOf("data-detail-pipeline"));
+      if (html.includes("data-detail-asr")) expect(note).toBeLessThan(html.indexOf("data-detail-asr"));
+    }
   });
 });
 
@@ -169,5 +195,145 @@ describe("card hierarchy (ADAAAA-7881)", () => {
     expect(html).toContain("data-detail-copy-link");
     expect(html).toContain("data-detail-select-highlight");
     expect(html).toContain("Batch");
+  });
+});
+
+/** The suite runs in the node env (no jsdom), so `renderToString` gives markup
+ *  only. To exercise a real click handler we render the hook-free
+ *  HighlightReviewActions component and walk the element tree it returns. */
+function buttonsOf(node: React.ReactNode, out: React.ReactElement<any>[] = []): React.ReactElement<any>[] {
+  if (Array.isArray(node)) {
+    for (const child of node) buttonsOf(child as React.ReactNode, out);
+    return out;
+  }
+  if (!node || typeof node !== "object") return out;
+  const el = node as React.ReactElement<any>;
+  if (el.type === "button") out.push(el);
+  if (el.props) buttonsOf(el.props.children, out);
+  return out;
+}
+
+function reviewButtons(
+  highlight: JobDetailHighlight,
+  onDecision: (h: JobDetailHighlight, status: "accepted" | "rejected") => void
+) {
+  const tree = HighlightReviewActions({ highlight, onDecision });
+  const buttons = buttonsOf(tree);
+  return {
+    accept: buttons.find((b) => "data-detail-accept" in b.props)!,
+    reject: buttons.find((b) => "data-detail-reject" in b.props)!,
+  };
+}
+
+describe("ADAAAA-7893 — Accept/Reject are owner-facing primary actions", () => {
+  const CUSTOMER = { onDecision: () => {}, admin: false } as const;
+
+  it("AC1: the non-admin card carries exactly one accept and one reject, both BEFORE the transcript", () => {
+    const html = renderToString(
+      React.createElement(HighlightCard, { highlight: hl({ asrTranscript: TRANSCRIPT }), ...CUSTOMER })
+    );
+    expect(count(html, "data-detail-accept")).toBe(1);
+    expect(count(html, "data-detail-reject")).toBe(1);
+    const accept = html.indexOf("data-detail-accept");
+    const reject = html.indexOf("data-detail-reject");
+    const asr = html.indexOf("data-detail-asr");
+    expect(asr).toBeGreaterThan(-1);
+    expect(accept).toBeGreaterThan(-1);
+    expect(reject).toBeGreaterThan(-1);
+    expect(accept, "accept must precede the transcript (primary actions, not a disclosure)").toBeLessThan(asr);
+    expect(reject, "reject must precede the transcript (primary actions, not a disclosure)").toBeLessThan(asr);
+  });
+
+  it("AC2: the non-admin card carries zero pipeline internals and zero status badge", () => {
+    const html = renderToString(
+      React.createElement(HighlightCard, { highlight: hl({ asrTranscript: TRANSCRIPT }), ...CUSTOMER })
+    );
+    const counts = {
+      "data-detail-pipeline": count(html, "data-detail-pipeline"),
+      "Pipeline detail": count(html, "Pipeline detail"),
+      SPORTING_EVENT: count(html, "SPORTING_EVENT"),
+      "outcome=": count(html, "outcome="),
+      "Trigger:": count(html, "Trigger:"),
+      "data-detail-status": count(html, "data-detail-status"),
+      ">accepted<": count(html, ">accepted<"),
+      ">rejected<": count(html, ">rejected<"),
+    };
+    expect(counts).toEqual({
+      "data-detail-pipeline": 0,
+      "Pipeline detail": 0,
+      SPORTING_EVENT: 0,
+      "outcome=": 0,
+      "Trigger:": 0,
+      "data-detail-status": 0,
+      ">accepted<": 0,
+      ">rejected<": 0,
+    });
+  });
+
+  it("AC3: the admin card keeps exactly one collapsed disclosure AFTER the controls", () => {
+    const html = renderToString(
+      React.createElement(HighlightCard, { highlight: hl(), onDecision: () => {}, admin: true })
+    );
+    expect(count(html, "data-detail-pipeline")).toBe(1);
+    expect(html).toMatch(/<details[^>]*data-detail-pipeline[^>]*>/);
+    expect(html).not.toMatch(/<details[^>]*data-detail-pipeline[^>]*\sopen/);
+    expect(html.indexOf("data-detail-accept")).toBeLessThan(html.indexOf("data-detail-pipeline"));
+    expect(html.indexOf("data-detail-reject")).toBeLessThan(html.indexOf("data-detail-pipeline"));
+    for (const token of ["SPORTING_EVENT", "Trigger:", "outcome=scoring_play"]) {
+      expect(html.indexOf(token)).toBeGreaterThan(html.indexOf("data-detail-pipeline"));
+    }
+    // Score is the disclosure's 2xl numeral.
+    expect(html).toContain("text-2xl font-black text-neon");
+  });
+
+  it("AC4: an accept/reject click calls onDecision for a non-admin session", () => {
+    const target = hl();
+    const calls: Array<[string, string]> = [];
+    const onDecision = (h: JobDetailHighlight, status: "accepted" | "rejected") => calls.push([h.id, status]);
+    // The non-admin card renders these same controls (AC1); the handler is
+    // invoked on the element the card returns.
+    const { accept, reject } = reviewButtons(target, onDecision);
+    accept.props.onClick();
+    reject.props.onClick();
+    expect(calls).toEqual([
+      ["h1", "accepted"],
+      ["h1", "rejected"],
+    ]);
+  });
+
+  it("AC4: each control is disabled when the card status already equals that decision", () => {
+    const onDecision = () => {};
+    const accepted = reviewButtons(hl({ status: "accepted" }), onDecision);
+    expect(accepted.accept.props.disabled).toBe(true);
+    expect(accepted.accept.props["aria-pressed"]).toBe(true);
+    expect(accepted.reject.props.disabled).toBe(false);
+    expect(accepted.reject.props["aria-pressed"]).toBe(false);
+
+    const rejected = reviewButtons(hl({ status: "rejected" }), onDecision);
+    expect(rejected.reject.props.disabled).toBe(true);
+    expect(rejected.reject.props["aria-pressed"]).toBe(true);
+    expect(rejected.accept.props.disabled).toBe(false);
+    expect(rejected.accept.props["aria-pressed"]).toBe(false);
+
+    // Both stay enabled on a status neither decision matches.
+    const neutral = reviewButtons(hl({ status: "suppressed" }), onDecision);
+    expect(neutral.accept.props.disabled).toBe(false);
+    expect(neutral.reject.props.disabled).toBe(false);
+  });
+
+  it("AC4: the same disabled/aria state is what the rendered card emits", () => {
+    const html = renderToString(
+      React.createElement(HighlightCard, {
+        highlight: hl({ status: "rejected" }),
+        onDecision: () => {},
+        admin: false,
+      })
+    );
+    const accept = html.slice(html.indexOf("<button"), html.indexOf("data-detail-accept"));
+    const reject = html.slice(html.indexOf("<button", html.indexOf("data-detail-accept")), html.indexOf("data-detail-reject"));
+    expect(accept).not.toContain("disabled");
+    expect(accept).toContain('aria-pressed="false"');
+    expect(reject).toContain("disabled");
+    expect(reject).toContain('aria-pressed="true"');
   });
 });
