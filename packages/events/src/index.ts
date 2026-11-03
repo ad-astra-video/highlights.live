@@ -1045,6 +1045,14 @@ export const HighlightRecordSchema = z.object({
   duplicateOf: z.string().optional(),
   duplicateCount: z.number().int().min(0).optional(),
   mergedIds: z.array(z.string()).optional(),
+  // ADAAAA-7865: why a delivered highlight was DOWNGRADED out of the scoring
+  // lane. Set on a repeat GOAL accept that re-read an already-delivered goal
+  // event (post-goal celebration frames attested by ball-in-net) and carried no
+  // independent score-transition evidence: the clip is still delivered as a
+  // celebration (`outcome: "big_play"`), and this field names the goal highlight
+  // it duplicates so the downgrade is auditable from the record alone. Additive
+  // optional — absent on every scoring highlight and on legacy rows.
+  dedupeReason: z.string().optional(),
   // When the clip entered `rejected` (soft-delete undo grace start). Set on
   // reject, cleared on reject->accept (cancels pending TTL purge). Only
   // `rejected` clips with a `rejectedAt` aged >= rejectTtlMs are ever purge
