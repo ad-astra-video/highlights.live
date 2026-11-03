@@ -29,6 +29,7 @@ from app.match_context import (
     is_plausible_player_box,
     name_color,
     parse_metadata_hints,
+    parse_generic_scorebug_names,
     parse_ocr_teams,
     resolve_match_context,
     resolve_token,
@@ -160,6 +161,122 @@ def test_parse_ocr_score_behaviour_is_unchanged_on_team_lines():
     lines = ["POR 1 - 0 ESP"]
     assert parse_ocr_score(lines) == (1, 0)
     assert [t.name for t in parse_ocr_teams(lines, "soccer")] == ["Portugal", "Spain"]
+
+
+# Sport-generic scorebug names (ADAAAA-7898) -------------------------------
+
+# The real basketball clip prints "Denizli Basket 11 - 8 Samsunspor" with the
+# league branding above it and the period marker after it. Neither club is in the
+# NBA-only lexicon, so the closed-lexicon pass yields nothing.
+BB_LINE = "Denizli Basket 11 - 8 Samsunspor"
+BB_LINES = ["TÜRKİYE BASKETBOL LİGİ", BB_LINE, "1.Ç"]
+
+
+def bb_frames(n=30, line=BB_LINE, extra=None):
+    return [{"ts": float(i), "lines": [line] + list(extra or [])} for i in range(n)]
+
+
+def test_generic_names_resolve_a_non_lexicon_basketball_scorebug():
+    # The shipped defect: a clean OCR read of two non-NBA clubs produced no
+    # candidate at all (`parse_ocr_teams` -> []).
+    assert parse_ocr_teams([BB_LINE], "basketball") == []
+
+    teams, status = parse_generic_scorebug_names(bb_frames(30), "basketball")
+    assert [(t.name, t.side, t.generic) for t in teams] == [
+        ("Denizli Basket", "home", True),
+        ("Samsunspor", "away", True),
+    ]
+    assert status["scoreFrames"] == 30
+    assert status["names"]["home"] == {"name": "Denizli Basket", "frames": 30, "share": 1.0}
+    assert status["names"]["away"] == {"name": "Samsunspor", "frames": 30, "share": 1.0}
+
+
+def test_generic_names_ignore_branding_and_period_tokens():
+    # The league banner and the quarter marker share the graphic; neither may
+    # join a name or become one.
+    teams, _ = parse_generic_scorebug_names(bb_frames(30, extra=["TÜRKİYE BASKETBOL LİGİ", "1.Ç"]), "basketball")
+    assert [t.name for t in teams] == ["Denizli Basket", "Samsunspor"]
+    banner, _ = parse_generic_scorebug_names(bb_frames(30, line="TÜRKİYE BASKETBOL LİGİ 11 - 8 1.Ç"), "basketball")
+    assert banner == []
+
+
+def test_generic_names_need_frames_not_a_single_read():
+    # Parent AC6: an over-eager wrong club is worse than `unknown`. One or two
+    # frames of a score-shaped line is not corroboration.
+    for n in (1, 2):
+        teams, status = parse_generic_scorebug_names(bb_frames(n), "basketball")
+        assert teams == []
+        assert any("unstable" in r for r in status["rejected"])
+
+
+def test_generic_names_need_both_sides():
+    # A cropped / partially-read scorebug must not publish a half pair.
+    teams, status = parse_generic_scorebug_names(bb_frames(30, line="12 - 8 Samsunspor"), "basketball")
+    assert teams == []
+    assert status["rejected"] == ["home:no-text"]
+    teams, status = parse_generic_scorebug_names(bb_frames(30, line="Denizli Basket 12 - 8"), "basketball")
+    assert teams == []
+
+
+def test_generic_names_are_voided_when_the_text_is_unstable():
+    # No single printed string holds the frame majority: an OCR/adboard drift is
+    # not a scorebug name plate (share < GENERIC_NAME_MIN_SHARE).
+    names = ["Denizli Basket", "Merkezefendi", "Belediye Spor"]
+    frames = [
+        {"lines": [f"{names[i % 3]} 11 - 8 Samsunspor" if i % 2 else f"{names[i % 3]} 11 - 8 Bursa"]}
+        for i in range(30)
+    ]
+    teams, status = parse_generic_scorebug_names(frames, "basketball")
+    assert teams == []
+    assert any("unstable" in r for r in status["rejected"])
+
+
+def test_generic_names_take_the_frame_majority_when_one_read_dominates():
+    # A minority of misreads is normal OCR noise as long as one printed form
+    # holds the majority: 24/30 reads of the same plate, 6 garbage frames.
+    frames = bb_frames(30)
+    for i in range(6):
+        frames[i]["lines"] = [f"Garbled{i} 11 - 8 Nonsense"]
+    teams, _ = parse_generic_scorebug_names(frames, "basketball")
+    assert [t.name for t in teams] == ["Denizli Basket", "Samsunspor"]
+
+
+def test_generic_names_do_not_apply_when_the_lexicon_named_a_side():
+    # The channel only runs where the closed lexicon resolved NOTHING, so the
+    # Portugal v Spain class keeps its exact shipped behaviour.
+    frames = [{"ts": 1.0, "lines": ["POR 0 - 0 ESP"]} for _ in range(30)]
+    out = resolve_match_context(sport_hint="soccer", ocr_frames=frames)
+    ctx = out["matchContext"]
+    assert [(t["name"], t["side"]) for t in ctx["teams"]] == [("Portugal", "home"), ("Spain", "away")]
+    assert "genericNameCandidates" not in out["evidenceStatus"]
+
+    # Mixed: one canonical side + generic text on the other stays strict (the
+    # free side is not filled from an unlexiconed read).
+    mixed = [{"ts": 1.0, "lines": ["POR 0 - 0 Samsunspor"]} for _ in range(30)]
+    out = resolve_match_context(sport_hint="soccer", ocr_frames=mixed)
+    names = [(t["name"], t["side"]) for t in out["matchContext"]["teams"]]
+    assert ("Samsunspor", "away") not in names
+    assert "genericNameCandidates" not in out["evidenceStatus"]
+
+
+def test_resolver_publishes_generic_basketball_names_with_sides():
+    out = resolve_match_context(sport_hint="basketball", ocr_frames=bb_frames(30, extra=BB_LINES[0:1] + ["1.Ç"]))
+    ctx = out["matchContext"]
+    assert ctx["sport"] == "basketball"
+    assert [(t["name"], t["side"]) for t in ctx["teams"]] == [("Denizli Basket", "home"), ("Samsunspor", "away")]
+    assert ctx["ambiguous"] is False
+    # No threshold was lowered: a single (scorebug) source stays capped.
+    assert all(t["confidence"] <= SINGLE_SOURCE_CAP for t in ctx["teams"])
+    assert ctx["teams"][0]["evidence"][0]["source"] == "scorebug_ocr"
+    assert out["evidenceStatus"]["genericNameCandidates"]["scoreFrames"] == 30
+
+
+def test_resolver_keeps_unknown_when_generic_gate_fails():
+    out = resolve_match_context(sport_hint="basketball", ocr_frames=bb_frames(2))
+    ctx = out["matchContext"]
+    assert [t["name"] for t in ctx["teams"]] == ["unknown", "unknown"]
+    assert ctx["ambiguous"] is True
+    assert out["evidenceStatus"]["genericNameCandidates"]["rejected"]
 
 
 # Lexicon normalisation ---------------------------------------------------
