@@ -17,6 +17,7 @@ import {
   LIVE_AUDIO_RETAIN_S,
   LiveRunShared,
   decideGroupKey,
+  toDecideMatchContext,
   highlightIdempotencyKey,
   highlightDedupKey,
   observeOnDecide,
@@ -71,6 +72,7 @@ import {
 } from "./dataset-lifecycle";
 import { LiveIngest, type LiveKind } from "./live";
 import { extractVodAudioChunks } from "./vod-audio";
+import { createVodMatchContextResolver, matchContextEnabled, type MatchContextResolver } from "./match-context";
 import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./db";
 import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribeFunnel, recordSignupFunnel } from "./funnel";
 import { reportMonitoring, RELIABILITY_FLOOR } from "./monitoring";
@@ -821,6 +823,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // live rail: promptText / frameCount / timings / replays).
       onDecideAudit: persistDecideAudit,
       getRunningSummary: () => store.getJob(job.id)?.runningSummary ?? "",
+      // ADAAAA-7856: the live rail reads the SAME persisted context the VOD pass
+      // reads — one storage read per window, never a resolver/GPU call.
+      getMatchContext: () => store.getJob(job.id)?.matchContext,
       onRunningSummary: (summary, meta) =>
         appendSummaryEntry(store, job.id, summary, meta).catch((e: any) =>
           console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))
@@ -1017,6 +1022,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // (story-so-far) across cadence observe ticks — read it to carry into
         // the decide request, persist the updated one for the job-detail UI.
         getRunningSummary: () => store.getJob(job.id)?.runningSummary ?? "",
+        // ADAAAA-7856: live window inspections name the stored teams too.
+        getMatchContext: () => store.getJob(job.id)?.matchContext,
         onRunningSummary: (summary, meta) =>
           appendSummaryEntry(store, job.id, summary, meta).catch((e: any) =>
             console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))
@@ -1427,6 +1434,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // (story-so-far) across cadence observe ticks — read it to carry into the
       // decide request, persist the updated one for the job-detail UI.
       getRunningSummary: () => store.getJob(jobId)?.runningSummary ?? "",
+      // ADAAAA-7856 (Stage 6, VOD first): forward the job's persisted
+      // `matchContext` on EVERY window inspection so captions name the real
+      // teams. Read from storage (one resolver pass per job, ADAAAA-7855) — no
+      // extra GPU call per window; absent/unusable => today's prompt (AC6).
+      getMatchContext: () => store.getJob(jobId)?.matchContext,
       onRunningSummary: (summary, meta) =>
         appendSummaryEntry(store, jobId, summary, meta).catch((e: any) =>
           console.error(`[running-summary:${jobId}] persist failed:`, String(e?.message || e))
@@ -1657,6 +1669,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     framesTotal = totalFrames;
     let processedFrames = 0;
     let lastProgressEmit = 0;
+    // ADAAAA-7855: declared before the frame iterator (which fires the bounded
+    // match-context re-checks) and assigned once the perceive session is
+    // reserved. Null when MATCH_CONTEXT=0.
+    const matchCtxRef: { current: MatchContextResolver | null } = { current: null };
     const baseIter = buildAnalyzeFrames(frameDir, sampleFps)();
     const iter = (async function* () {
       for await (const f of baseIter) {
@@ -1665,6 +1681,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           lastProgressEmit = Date.now();
           const pct = Math.round(20 + 69 * Math.min(1, processedFrames / totalFrames));
           emitJobProgress(jobId, pct, `analyzing (frame ${processedFrames}/${totalFrames})`);
+          // ADAAAA-7855: fire the bounded match-context re-checks on the REAL
+          // frame progress (job-level pct starts at 20 for this phase, so the
+          // resolver checkpoints would never line up on that scale).
+          try {
+            matchCtxRef.current?.onProgress(totalFrames > 0 ? (processedFrames / totalFrames) * 100 : 0);
+          } catch {
+            /* evidence only — never break the frame loop */
+          }
         }
         yield f;
       }
@@ -1687,6 +1711,35 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const slot = { current: initial, stopped: false };
     livePerceiveSlots.set(job.id, slot);
     const shared = new LiveRunShared({ decideWindowN: cfg.vodDecideWindowN, audioRetainS: cfg.vodAudioRetainS });
+    // ADAAAA-7855: the once-per-job match-context resolver (who is playing,
+    // which colour each team wears). Its ONE bounded CPU transcription probe
+    // starts now, in parallel with the frame loop, so the wall-clock delta stays
+    // inside the plan's +3% budget; the fold itself adds no GPU call. Re-checks
+    // are bounded to job start / >=25% / >=50% and every write is best-effort —
+    // a resolver failure leaves the job without `matchContext` (pre-feature
+    // behaviour) and never fails the job (AC6).
+    matchCtxRef.current = matchContextEnabled()
+      ? createVodMatchContextResolver({
+          jobId,
+          videoPath,
+          sessionId: initial.sessionId,
+          hints: {
+            title: store.getJob(jobId)?.title,
+            gameHint: anaCfg.gameHint,
+            filename: path.basename(videoPath),
+          },
+          cfg: {
+            ffmpegPath: cfg.ffmpegPath,
+            asrUrl: cfg.asrUrl,
+            asrSeconds: cfg.matchContextAsrSeconds,
+            asrMaxBytes: cfg.matchContextAsrMaxBytes,
+          },
+          client: adapter,
+          getJob: (id) => store.getJob(id),
+          patchJob: (id, patch) => store.patchJob(id, patch),
+        })
+      : null;
+    matchCtxRef.current?.begin();
     // Drive the Stage-A audio tap from the VOD file's audio track in parallel
     // with the video pass. Best-effort: no audio track or a dropped chunk never
     // aborts the video look. When the gate fires, route the candidate through
@@ -1797,6 +1850,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       costUsd,
       decideFeeUsd: cfg.decideFee,
     });
+    // ADAAAA-7855: drain the bounded resolver passes BEFORE leaving `analyzing`
+    // so the persisted record carries the final matchContext (and its recompute
+    // trail) for the completed job. Never starts a new pass here — the perceive
+    // session may already be closed.
+    if (matchCtxRef.current) {
+      try {
+        await matchCtxRef.current.finish();
+      } catch (e: any) {
+        console.error(`[match-context:${jobId}] finish failed:`, String(e?.message || e));
+      }
+    }
     // Durable finalizing transition (ADAAAA-6873 state machine) before done.
     await store.patchJob(jobId, { status: "finalizing", stage: "finalizing" });
     const doneFramesPct = framesTotal > 0 ? Math.min(100, Math.round((outcome.framesAnalyzed / framesTotal) * 100)) : 0;
@@ -3525,6 +3589,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               // durable decide_audit index by (sessionId, groupKey).
               jobId: job.id,
               groupKey: decideGroupKey(timestamp),
+              // ADAAAA-7856: the browser-capture direct decide path reads the
+              // same persisted match context as the analyzer paths (one storage
+              // read, no extra inference). Absent => unchanged request.
+              matchContext: toDecideMatchContext(store.getJob(job.id)?.matchContext),
             }
           );
           await billing.onDecideCompleted(duser, dsub, { streaming: true });
@@ -4497,11 +4565,12 @@ export interface LiveAnalyzerConfigDeps {
   onDecision?: AnalyzerConfig["onDecision"];
   onDecideAudit?: AnalyzerConfig["onDecideAudit"];
   getRunningSummary?: AnalyzerConfig["getRunningSummary"];
+  getMatchContext?: AnalyzerConfig["getMatchContext"];
   onRunningSummary?: AnalyzerConfig["onRunningSummary"];
 }
 
 export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerConfig {
-  const { cfg, job, clipWindow: cw, onDecision, onDecideAudit, getRunningSummary, onRunningSummary } = deps;
+  const { cfg, job, clipWindow: cw, onDecision, onDecideAudit, getRunningSummary, getMatchContext, onRunningSummary } = deps;
   return {
     jobId: job.id,
     clipBeforeS: cw.clipBeforeS,
@@ -4581,6 +4650,8 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // (story-so-far) across cadence observe ticks — read it to carry into
     // the decide request, persist the updated one for the job-detail UI.
     getRunningSummary,
+    // ADAAAA-7856: pass the persisted match-context reader straight through.
+    getMatchContext,
     onRunningSummary,
     // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
     // evidence). Live uses the default analysis_fps / windows.
