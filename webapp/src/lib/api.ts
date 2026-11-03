@@ -455,6 +455,15 @@ export interface Job {
   framesAnalyzed?: number;
   candidatesTriggered?: number;
   decideCalls?: number;
+  // ADAAAA-7854: the server-derived clip counts every job payload carries.
+  // `postableHighlights` is the canonical USER-FACING clip count (deduped postable
+  // moments); `mergedHighlights` is how many overlapping duplicates were folded
+  // into a moment and therefore are not counted; `rawHighlights` is the persisted
+  // audit row total. Read-time projection — never persisted, never re-derived on
+  // the client (the tile/detail header render these values as-is).
+  rawHighlights?: number;
+  postableHighlights?: number;
+  mergedHighlights?: number;
   // ADAAAA-7664: a LIVE job records its decide invocations in the observe
   // snapshot rather than the job-level `decideCalls`; the tile falls back to it.
   observeMetrics?: { decideCalls?: number };

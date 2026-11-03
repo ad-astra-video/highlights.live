@@ -1656,7 +1656,14 @@ export function JobDetail() {
   // server partition on every render so a bug can never show a frame twice.
   const partition = useMemo(() => (detail ? assertFramePartition(detail.sections) : null), [detail]);
   const frameCount = useMemo(() => (detail ? detail.sections.reduce((n, s) => n + s.frames.length, 0) : 0), [detail]);
-  const acceptedCount = useMemo(() => (detail ? detail.highlights.filter((h) => h.status !== "rejected").length : 0), [detail]);
+  // ADAAAA-7854: the accepted count comes from the server-derived dedupe
+  // (`job.postableHighlights` on the composite detail payload), the SAME value
+  // the Highlights-page tile reads from GET /jobs. `detail.highlights` is already
+  // the postable list, so the fallback cannot inflate the count either.
+  const acceptedCount = useMemo(
+    () => (detail ? (detail.job.postableHighlights ?? detail.highlights.length) : 0),
+    [detail]
+  );
   // ADAAAA-7622: the postable list is the accepted feed (rejected clips are
   // excluded server-side semantics too) — batch export only ever covers this.
   const postableHighlights = useMemo(

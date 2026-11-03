@@ -90,3 +90,49 @@ describe("customer surfaces render no internal diagnostics", () => {
     expect(html).toContain("Decide calls");
   });
 });
+
+// ADAAAA-7854: the tile's accepted read is the deduped postable moment count the
+// server derives (17 for d61e52f6, never its 24 raw rows), with the merged-away
+// duplicates as a secondary read; the admin-only Candidates counter states its raw
+// row basis so it can't be mistaken for the customer-facing clip total.
+describe("clip counts on the tile (ADAAAA-7854)", () => {
+  it("renders the deduped accepted count with a secondary merged read", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(JobTileMetrics, {
+        job: JOB as any,
+        acceptedCount: 17,
+        mergedCount: 4,
+        rejectedCount: 1,
+        span: null,
+        admin: false,
+      })
+    );
+    expect(html).toContain("17 accepted");
+    expect(html).toContain("4 merged");
+    expect(html).toContain("data-job-tile-merged");
+    expect(html).not.toContain("24 accepted");
+  });
+
+  it("omits the merged read when nothing was merged", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(JobTileMetrics, {
+        job: JOB as any,
+        acceptedCount: 3,
+        mergedCount: 0,
+        rejectedCount: 0,
+        span: null,
+        admin: false,
+      })
+    );
+    expect(html).toContain("3 accepted");
+    expect(html).not.toContain("merged");
+    expect(html).not.toContain("data-job-tile-merged");
+  });
+
+  it("states the raw-row basis on the admin Candidates header only", () => {
+    expect(header(true)).toContain("Candidates (raw rows)");
+    const customer = header(false);
+    expect(customer).not.toContain("Candidates");
+    expect(customer).not.toContain("raw rows");
+  });
+});

@@ -67,6 +67,14 @@ export function candidateCountForJob(
  *   carries `highlightsFound: 0`, so this is the common path.
  * - The path is `observe` whenever the observer ran, even when it accepted
  *   nothing (a measured 0 from the path that ran, never "no path ran").
+ *
+ * ADAAAA-7854 (count basis): this is a PERSISTED-ROW counter — `persistedHighlights`
+ * is `store.highlightsForJob(job.id).length`, so it includes overlapping duplicates
+ * and any gate-dropped rows. It is therefore NOT the customer-facing clip count;
+ * the canonical user-facing count is the deduped postable moment count
+ * (`postableCountFields` in `highlight-postable.ts`). This counter renders only on
+ * the admin job-detail header, and that header labels it "Candidates (raw rows)" so
+ * it can never be read as the clip total. Do not surface it to customers.
  */
 export function liveCandidateCountForJob(
   observeAccepted: number | undefined,

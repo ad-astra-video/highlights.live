@@ -331,6 +331,13 @@ export interface JobDetail {
     stageAMetrics?: StageAMetricsSnapshot;
     stageAMetricsStatus?: "measured" | "n/a";
     decideCalls?: number;
+    // ADAAAA-7854: server-derived clip counts. `postableHighlights` is the
+    // canonical user-facing clip count (deduped postable moments) and always
+    // equals `highlights.length` on this payload; `mergedHighlights` counts the
+    // overlapping duplicates folded away; `rawHighlights` is the audit row total.
+    rawHighlights?: number;
+    postableHighlights?: number;
+    mergedHighlights?: number;
     // ADAAAA-7664: a LIVE job records its decide invocations in the observe
     // snapshot (`observeMetrics.decideCalls`) rather than the job-level
     // `decideCalls` field, which only the VOD path wrote. The header must fall

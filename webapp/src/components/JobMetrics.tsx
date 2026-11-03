@@ -27,12 +27,17 @@ export function JobTileMetrics({
   job,
   acceptedCount,
   rejectedCount,
+  mergedCount = 0,
   span,
   admin,
 }: {
   job: MetricJob;
   acceptedCount: number;
   rejectedCount: number;
+  /** ADAAAA-7854: overlapping duplicate clips folded into an accepted moment.
+   * They are persisted rows but NOT a separate clip the customer sees, so they
+   * render as a secondary read next to the deduped accepted count. */
+  mergedCount?: number;
   span: string | null;
   admin: boolean;
 }) {
@@ -42,7 +47,15 @@ export function JobTileMetrics({
       {/* Internal spend/pipeline counters — admin only. */}
       {admin && <span data-job-tile-cost>${(job.costUsd ?? 0).toFixed(2)}</span>}
       {admin && <span data-job-tile-decide-calls>{decideCallsCount(job)} decide</span>}
+      {/* ADAAAA-7854: the accepted read is the DEDUPED postable moment count the
+          server derives (`job.postableHighlights`), never a client count of raw
+          rows — merged duplicates do not count as clips the customer can watch. */}
       <span data-job-tile-accepted>{acceptedCount} accepted</span>
+      {mergedCount > 0 && (
+        <span className="text-mut" data-job-tile-merged>
+          {mergedCount} merged
+        </span>
+      )}
       {rejectedCount > 0 && (
         <span className="text-mut" data-job-tile-rejected>
           {rejectedCount} rejected
@@ -91,10 +104,15 @@ export function JobDetailMetrics({
       )}
       {/* ADAAAA-7624: candidates are counted by the path that actually ran (the
           observe cadence decide pass), and the audio Stage-A counters read `n/a`
-          when that gate judged nothing — never a fabricated `0`. */}
+          when that gate judged nothing — never a fabricated `0`.
+          ADAAAA-7854: this counter's basis is PERSISTED ROWS (it includes
+          overlapping duplicates), while the customer-facing clip count is the
+          deduped postable moments. The label states the raw basis so an operator
+          cannot read it as the clip total; the row is admin-only, so no
+          customer-facing surface shows a merged-inclusive count. */}
       {admin && (
         <div data-detail-candidates>
-          <div className="text-xs uppercase tracking-wide text-mut">Candidates</div>
+          <div className="text-xs uppercase tracking-wide text-mut">Candidates (raw rows)</div>
           <div>{candidateCountLabel(job)}</div>
         </div>
       )}

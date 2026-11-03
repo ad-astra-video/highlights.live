@@ -505,7 +505,15 @@ export function Highlights() {
               <JobTile
                 key={job.id}
                 job={job}
-                acceptedCount={highlights.filter((h) => h.jobId === job.id && h.status !== "rejected").length}
+                // ADAAAA-7854: the tile's accepted count is the SERVER-derived
+                // deduped postable moment count (`job.postableHighlights` on the
+                // GET /jobs row). It used to be counted client-side off the raw
+                // GET /highlights rows, which counted a merged-away duplicate as
+                // its own clip (job d61e52f6 read 24 instead of its deduped 17).
+                // The client must never re-derive the dedupe: same projection as
+                // GET /jobs/:id/detail, so the two surfaces always agree.
+                acceptedCount={job.postableHighlights ?? 0}
+                mergedCount={job.mergedHighlights ?? 0}
                 rejectedCount={highlights.filter((h) => h.jobId === job.id && h.status === "rejected").length}
                 onOpen={() => openDetail(job)}
                 onDelete={setConfirmDeleteJob}
@@ -561,10 +569,12 @@ function statusChipClass(status: string): string {
  * Clicking the tile opens the full-screen detail at /app/jobs/:id. A Delete
  * control sits in the corner (ADAAAA-6838) without navigating.
  */
-function JobTile({ job, acceptedCount, rejectedCount, onOpen, onDelete }: {
+function JobTile({ job, acceptedCount, rejectedCount, mergedCount, onOpen, onDelete }: {
   job: Job;
   acceptedCount: number;
   rejectedCount: number;
+  /** ADAAAA-7854: overlapping duplicates folded into an accepted moment. */
+  mergedCount: number;
   onOpen: () => void;
   onDelete: (job: Job) => void;
 }) {
@@ -626,7 +636,7 @@ function JobTile({ job, acceptedCount, rejectedCount, onOpen, onDelete }: {
       ) : (
         // ADAAAA-7727: the metric line keeps the customer counters (frames,
         // accepted/rejected, span) and adds cost/decide only for an admin.
-        <JobTileMetrics job={job} acceptedCount={acceptedCount} rejectedCount={rejectedCount} span={span} admin={admin} />
+        <JobTileMetrics job={job} acceptedCount={acceptedCount} rejectedCount={rejectedCount} mergedCount={mergedCount} span={span} admin={admin} />
       )}
 
       <div className="mt-3 flex items-center justify-between">
