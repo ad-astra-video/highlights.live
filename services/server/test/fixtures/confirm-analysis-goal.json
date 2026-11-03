@@ -1,0 +1,187 @@
+{
+  "request": {
+    "prompt": "You are a sports highlight CONFIRMATION judge ...",
+    "dataItems": [
+      {
+        "type": "candidate",
+        "label": "Candidate event type",
+        "value": "GOAL"
+      },
+      {
+        "type": "confirm",
+        "label": "Stage-1 verdict outcome",
+        "value": "scoring_play"
+      },
+      {
+        "type": "confirm",
+        "label": "Stage-1 isHighlight",
+        "value": true
+      },
+      {
+        "type": "confirm",
+        "label": "Stage-1 reason",
+        "value": "striker shoots from the edge of the box, keeper dives late"
+      },
+      {
+        "type": "frames",
+        "label": "Dense frame window (~10-15 fps)",
+        "value": 12
+      },
+      {
+        "type": "frames",
+        "label": "Precise keyframes (pre / event / post)",
+        "value": 3
+      },
+      {
+        "type": "corroboration",
+        "label": "Independent corroboration (INPUT ONLY, never a gate)",
+        "value": "ballOutcome=goal, goalCrossed=True"
+      },
+      {
+        "type": "corroboration",
+        "label": "Scoreboard change",
+        "value": "none observed"
+      },
+      {
+        "type": "motion",
+        "label": "Motion / optical-flow magnitude",
+        "value": 1.47
+      },
+      {
+        "type": "motion",
+        "label": "Optical-flow magnitude curve",
+        "value": [
+          0.1,
+          0.42,
+          0.91,
+          0.63,
+          0.22
+        ]
+      },
+      {
+        "type": "audio_level",
+        "label": "Audio-energy envelope",
+        "value": [
+          0.18,
+          0.51,
+          0.93,
+          0.77,
+          0.34
+        ]
+      },
+      {
+        "type": "asr",
+        "label": "Audio commentary transcript (ASR, fallible)",
+        "value": "GOOOAL! what a finish"
+      },
+      {
+        "type": "trajectory",
+        "label": "Object / ball trajectory track",
+        "value": "- ball (track ball-1) path: t=0.0s (0.49,0.51), t=0.1s (0.62,0.58), t=0.2s (0.78,0.71)"
+      },
+      {
+        "type": "trajectory",
+        "label": "Object / ball trajectory track",
+        "value": "- player (track player-3) path: t=0.0s (0.33,0.44), t=0.1s (0.36,0.46)"
+      }
+    ],
+    "frames": [
+      {
+        "seq": 0,
+        "uri": ""
+      },
+      {
+        "seq": 1,
+        "uri": ""
+      },
+      {
+        "seq": 2,
+        "uri": ""
+      },
+      {
+        "seq": 3,
+        "uri": ""
+      },
+      {
+        "seq": 4,
+        "uri": ""
+      },
+      {
+        "seq": 5,
+        "uri": ""
+      },
+      {
+        "seq": 6,
+        "uri": ""
+      },
+      {
+        "seq": 7,
+        "uri": ""
+      },
+      {
+        "seq": 8,
+        "uri": ""
+      },
+      {
+        "seq": 9,
+        "uri": ""
+      },
+      {
+        "seq": 10,
+        "uri": ""
+      },
+      {
+        "seq": 11,
+        "uri": ""
+      }
+    ],
+    "keyframes": [
+      {
+        "seq": 0,
+        "uri": ""
+      },
+      {
+        "seq": 1,
+        "uri": ""
+      },
+      {
+        "seq": 2,
+        "uri": ""
+      }
+    ],
+    "trajectories": [
+      "- ball (track ball-1) path: t=0.0s (0.49,0.51), t=0.1s (0.62,0.58), t=0.2s (0.78,0.71)",
+      "- player (track player-3) path: t=0.0s (0.33,0.44), t=0.1s (0.36,0.46)"
+    ],
+    "opticalFlowMagnitude": 1.47,
+    "audioLevels": [
+      0.18,
+      0.51,
+      0.93,
+      0.77,
+      0.34
+    ],
+    "transcript": "GOOOAL! what a finish",
+    "stage1": {
+      "isHighlight": true,
+      "score": 86,
+      "eventType": "GOAL",
+      "outcome": "scoring_play",
+      "reason": "striker shoots from the edge of the box, keeper dives late"
+    }
+  },
+  "decision": {
+    "enabled": true,
+    "goalConfirmed": "confirmed_goal",
+    "confidence": 0.88,
+    "reason": "ball crosses the goal line inside the far post; net ripples; no rebound",
+    "evidence": {
+      "ballInNet": true,
+      "scoreboardChanged": false,
+      "penaltyShootout": false,
+      "penaltyTallyChanged": null
+    },
+    "stage1Disagreed": false,
+    "outcome": "scoring_play"
+  }
+}

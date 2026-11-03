@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildCandidateNote, withWindowFrameRefs, type AnalyzerConfig, type CandidateSignal, type ConfirmDecision, type DecisionResult } from "../src/analyzer";
+import { ConfirmRecordSchema, JobCandidateSchema } from "@highlights/events";
 import type { ConfirmRecord, HighlightTrigger, JobCandidate, WindowAnalysis } from "@highlights/events";
 
 // ADAAAA-7156 Increment B: buildCandidateNote must persist the Stage-1 per-window
@@ -85,6 +88,100 @@ describe("buildCandidateNote (ADAAAA-7156 Increment B)", () => {
   it("no-ops when there is no onDecision hook", () => {
     const empty = { jobId: "j" } as unknown as AnalyzerConfig;
     expect(() => buildCandidateNote(empty, candidate, decision, "accepted", "cid-3", trigger, analysis, confirmRecord)).not.toThrow();
+  });
+});
+
+// ADAAAA-7848: the Stage-2 confirm record never reached persistence — job
+// dee44c2f stored 103/103 window analyses and 0/103 confirm blocks. The decide
+// `/confirm` producer emits its optical-flow / audio-envelope curves as number
+// ARRAYS inside `request.dataItems`, and the shared contract's scalar-only value
+// union rejected the whole record inside a silent `catch {}`.
+//
+// `confirm-analysis-goal.json` is the VERBATIM output of
+// `services/decide/app/confirm.py::_confirm_analysis` (12 dense frames, 3
+// keyframes, 2 trajectory tracks, both curves, ASR transcript, reconciled
+// decision), so this is a producer->consumer contract test, not a hand-shaped
+// fixture that could drift with the schema.
+const decideConfirmAnalysis = JSON.parse(
+  readFileSync(join(__dirname, "fixtures", "confirm-analysis-goal.json"), "utf8")
+) as ConfirmRecord;
+
+describe("Stage-2 confirm record contract (ADAAAA-7848)", () => {
+  it("accepts the real decide _confirm_analysis shape, curve series included", () => {
+    const parsed = ConfirmRecordSchema.parse(decideConfirmAnalysis);
+    const curve = parsed.request.dataItems.find((i) => i.label === "Optical-flow magnitude curve");
+    const envelope = parsed.request.dataItems.find((i) => i.label === "Audio-energy envelope");
+    // The two series items that used to fail the union and drop the record.
+    expect(curve?.value).toEqual([0.1, 0.42, 0.91, 0.63, 0.22]);
+    expect(envelope?.value).toEqual([0.18, 0.51, 0.93, 0.77, 0.34]);
+    expect(parsed.request.frames).toHaveLength(12);
+    expect(parsed.request.trajectories).toHaveLength(2);
+  });
+
+  it("persists the confirm block onto the emitted candidate note", () => {
+    const collected: JobCandidate[] = [];
+    buildCandidateNote(
+      cfg((c) => collected.push(c)),
+      candidate,
+      decision,
+      "accepted",
+      "cid-5",
+      trigger,
+      analysis,
+      decideConfirmAnalysis
+    );
+
+    expect(collected).toHaveLength(1);
+    // Parse exactly what recordJobCandidate parses: the real persistence boundary.
+    const persisted = JobCandidateSchema.parse(collected[0]);
+    expect(persisted.confirm).toBeDefined();
+    expect(persisted.confirm?.request.prompt).toContain("CONFIRMATION judge");
+    expect(persisted.confirm?.request.dataItems).toHaveLength(14);
+    // The model's measured inputs are queryable off the note.
+    expect(persisted.confirm?.decision.evidence).toMatchObject({
+      ballInNet: true,
+      scoreboardChanged: false,
+      penaltyShootout: false,
+    });
+    expect(persisted.confirm?.decision.goalConfirmed).toBe("confirmed_goal");
+    expect(persisted.confirm?.decision.confidence).toBe(0.88);
+    expect(persisted.confirm?.decision.outcome).toBe("scoring_play");
+    expect(persisted.confirm?.decision.stage1Disagreed).toBe(false);
+  });
+
+  it("tolerates a null outcome / confidence on the decision block", () => {
+    const rec = JSON.parse(JSON.stringify(decideConfirmAnalysis)) as ConfirmRecord;
+    (rec.decision as { outcome?: unknown }).outcome = null;
+    (rec.decision as { confidence?: unknown }).confidence = null;
+    const parsed = ConfirmRecordSchema.parse(rec);
+    expect(parsed.decision.outcome).toBeNull();
+    // The note still persists with the confirm block attached.
+    const collected: JobCandidate[] = [];
+    buildCandidateNote(cfg((c) => collected.push(c)), candidate, decision, "accepted", "cid-7", trigger, analysis, rec);
+    expect(JobCandidateSchema.parse(collected[0]).confirm?.decision.confidence).toBeNull();
+  });
+
+  it("logs the rejection (job id + field path) and salvages a drifting dataItem value", () => {
+    const rec = JSON.parse(JSON.stringify(decideConfirmAnalysis)) as any;
+    // Simulate producer drift the contract does not model: a structured object
+    // where a scalar/series was expected.
+    rec.request.dataItems[9].value = { series: [0.1, 0.9], unit: "px/s" };
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.map(String).join(" "));
+    });
+    const collected: JobCandidate[] = [];
+    buildCandidateNote(cfg((c) => collected.push(c)), candidate, decision, "accepted", "cid-6", trigger, analysis, rec);
+    spy.mockRestore();
+
+    const logged = errors.join("\n");
+    // Visible, actionable drift: the job id and the exact offending field.
+    expect(logged).toContain("[decide-note:j] confirm record rejected");
+    expect(logged).toContain("request.dataItems.9.value");
+    // And the record still reaches persistence with its evidence intact.
+    const persisted = JobCandidateSchema.parse(collected[0]);
+    expect(persisted.confirm?.decision.evidence).toMatchObject({ ballInNet: true });
+    expect(String(persisted.confirm?.request.dataItems[9].value)).toContain("px/s");
   });
 });
 

@@ -991,13 +991,27 @@ export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
 export const AnalysisDataItemSchema = z.object({
   /** Category of the item: candidate | game | tracking | ocr | scoreboard |
    * goal_line | reaction | audio_level | detections | asr | frames | images |
-   * audio | summary. */
+   * audio | summary | confirm | corroboration | motion | trajectory. */
   type: z.string(),
   /** Human label for the UI (e.g. "Track count", "Goal-line ground-truth"). */
   label: z.string(),
-  /** The value fed for this item (string / number / boolean; null when absent). */
-  value: z.union([z.string(), z.number(), z.boolean()]).nullable().optional(),
-});
+  /** The value fed for this item: a scalar, a bounded scalar SERIES, or null.
+   * ADAAAA-7848: the Stage-2 confirm pass carries its flow-magnitude /
+   * audio-envelope curves as number arrays ("Optical-flow magnitude curve",
+   * "Audio-energy envelope"), so a scalar-only union rejected the WHOLE
+   * ConfirmRecord and the deep-dive evidence was never persisted. Series are
+   * part of the real producer shape, not drift — model them here. */
+  value: z
+    .union([
+      z.string(),
+      z.number(),
+      z.boolean(),
+      z.array(z.union([z.string(), z.number(), z.boolean()])),
+    ])
+    .nullable()
+    .optional(),
+  // Additive extras (e.g. a unit / count) never drop the item or the block.
+}).passthrough();
 export type AnalysisDataItem = z.infer<typeof AnalysisDataItemSchema>;
 
 /** A lazy media ref (image bytes stay out-of-band via the existing frame delivery). */
@@ -1090,16 +1104,35 @@ export const ConfirmRecordSchema = z.object({
     transcript: z.string().optional(),
     stage1: z.unknown().optional(),
   }),
-  /** The ConfirmDecision: goalConfirmed / confidence / evidence / stage1Disagreed / reason. */
+  /** The ConfirmDecision: goalConfirmed / confidence / evidence / stage1Disagreed /
+   * reason, plus the reconciled HighlightDecision fields the decide pass carries.
+   * ADAAAA-7848: the decide `_confirm_analysis` decision block is derived from the
+   * full confirm response (`decision.get("decision")`), so it also carries
+   * eventType / score / isHighlight / nearMiss and the corroboration fields, and
+   * any one of them being unmodelled used to drop the whole record. Extras are
+   * modelled where they are load-bearing and passed through otherwise. */
   decision: z.object({
     enabled: z.boolean().optional(),
     goalConfirmed: z.enum(["confirmed_goal", "near_miss", "not_goal"]).nullable().optional(),
-    confidence: z.number().min(0).max(1).optional(),
+    confidence: z.number().min(0).max(1).nullable().optional(),
     reason: z.string().optional(),
     evidence: z.unknown().optional(),
     stage1Disagreed: z.boolean().optional(),
-    outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
-  }).default({}),
+    // Absent/null whenever the reconciled decision has no outcome (legacy verdict
+    // or a passthrough that never reconciled) — null must not fail the parse.
+    outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).nullable().optional(),
+    // ADAAAA-7848: the reconciled HighlightDecision fields the deep dive adopts.
+    eventType: z.string().optional(),
+    score: z.number().min(0).max(100).nullable().optional(),
+    isHighlight: z.boolean().optional(),
+    nearMiss: z.boolean().optional(),
+    // ADAAAA-7162/7185/7402: independent corroboration + which signal supplied it
+    // (scoreboard | audio_text | frame_attestation). Free-form: a new source
+    // token must never drop the record.
+    corroborated: z.boolean().optional(),
+    corroborationSource: z.string().nullable().optional(),
+    transcript: z.string().optional(),
+  }).passthrough().default({}),
 });
 export type ConfirmRecord = z.infer<typeof ConfirmRecordSchema>;
 
