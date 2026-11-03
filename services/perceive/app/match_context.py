@@ -81,6 +81,32 @@ KIT_MIN_FRAMES = 2
 # Bound the persisted recompute trail so a long job cannot grow the record.
 MAX_TRAIL = 12
 
+# --- tracked-box plausibility (kit sampling) --------------------------------
+# The tracking pass emits BOTH real player boxes and SAM3 seeds that propagate
+# onto whatever is near the seed: a 0.997-wide advertising band, a boot, a leg, a
+# strip of grass. Measured on the cited Portugal vs Spain job
+# (dee44c2f-d962-400d-ad62-6cf9dc53fd91): 1114 of 1287 player-labelled track boxes
+# were implausible, and sampling them put "black" (the ad board) and a grass
+# "grey" on the cluster set — junk colours that a swatch or a commentary phrase
+# could then have attributed to a team. These bounds mirror the single-player
+# seed contract in `player_id.is_plausible_player_seed_box` (same 0.30 area /
+# 0.70 side caps) plus the one extra shape fact a broadcast crop always has: a
+# standing player is TALLER than wide.
+MAX_KIT_BOX_AREA = 0.30
+MAX_KIT_BOX_SIDE = 0.70
+
+# --- scorebug swatch stability ---------------------------------------------
+# A swatch is a per-side colour reading off the scoreboard ROI. On a broadcast
+# where the ROI sits over advertising boards, the side half behind the graphic
+# reads the AD BOARD, not the kit: measured on the cited job, 79 of 147 probed
+# frames produced a home/away pair, home was "red" in 91% of them but the away
+# half read blue / sky blue / orange / red / maroon / pink across frames (the
+# LED boards behind the bug). Trusting one frame there attributes the wrong
+# colour. So once a side has REPEATED readings its modal colour must hold
+# ``MIN_SWATCH_SHARE`` of them (and repeat at least twice); an unstable half
+# yields nothing instead of a wrong kit.
+MIN_SWATCH_SHARE = 0.60
+
 # ---------------------------------------------------------------------------
 # Sport resolution
 # ---------------------------------------------------------------------------
@@ -960,6 +986,28 @@ def _is_skin_tone(rgb: Sequence[float]) -> bool:
     return 8.0 <= h <= 45.0 and 0.16 <= s <= 0.62 and 0.40 <= v <= 0.94
 
 
+def is_plausible_player_box(box: Optional[Sequence[float]]) -> bool:
+    """True when a tracked box can be a single player's torso crop.
+
+    A normalized ``[x0, y0, x1, y1]`` that is a plausible standing player: a
+    bounded area (``MAX_KIT_BOX_AREA``), no side wider than
+    ``MAX_KIT_BOX_SIDE`` (a broadcast frame is not a near-full-width band), and
+    taller than wide. Junk SAM3 seeds — an advertising band spanning 0.997 of
+    the frame, a boot, a leg, a grass strip — fail at least one bound and are
+    never sampled, so they cannot define a kit colour.
+    """
+    if not box or len(box) != 4:
+        return False
+    try:
+        x0, y0, x1, y1 = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return False
+    w, h = x1 - x0, y1 - y0
+    if w <= 0 or h <= 0:
+        return False
+    return (w * h) <= MAX_KIT_BOX_AREA and w <= MAX_KIT_BOX_SIDE and h <= MAX_KIT_BOX_SIDE and h > w
+
+
 def sample_track_colors(
     frame_rgb: Any,
     tracks: Iterable[Mapping[str, Any]],
@@ -971,9 +1019,12 @@ def sample_track_colors(
     ``frame_rgb`` is an HxWx3 numpy array (or a nested list); ``tracks`` are the
     perception pass's own track dicts with a normalized ``box``
     ``[x0, y0, x1, y1]`` and a ``label``/``trackId``. Only player-like tracks
-    contribute; the torso band (default 22-58% of the box height) is averaged
-    after discarding pitch/background pixels, which is why this is a colour
-    *sample* rather than a segmentation.
+    contribute, and only when the box is a plausible single player
+    (:func:`is_plausible_player_box`) — a SAM3 seed that propagated onto an
+    advertising band, a boot or a strip of grass is skipped instead of being
+    sampled as a "kit". The torso band (default 22-58% of the box height) is
+    averaged after discarding pitch/background pixels, which is why this is a
+    colour *sample* rather than a segmentation.
 
     Returns ``[{trackId, label, ts?, side, rgb:[r,g,b]}]``. An empty list is a
     valid result (no players tracked, unusable frame) — the caller folds that
@@ -1005,6 +1056,11 @@ def sample_track_colors(
             x0, x1 = x0 / w_px, x1 / w_px
             y0, y1 = y0 / h_px, y1 / h_px
         if not (0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0):
+            continue
+        if not is_plausible_player_box((x0, y0, x1, y1)):
+            # A SAM3 seed that propagated onto an ad board / boot / grass band.
+            # Sampling it would let a junk colour become a "kit" (see
+            # MAX_KIT_BOX_AREA); an unusable frame is the honest answer.
             continue
         px0, px1 = int(x0 * w_px), max(int(x0 * w_px) + 1, int(x1 * w_px))
         # Inner torso box: 15-85% of the width, 25-60% of the height. The middle
@@ -1133,6 +1189,45 @@ def sample_scorebug_swatches(frame_rgb: Any, roi: Any, ts: Optional[float] = Non
     return out
 
 
+def stable_swatch_by_side(swatches: Optional[Sequence[Mapping[str, Any]]]) -> dict[str, dict[str, Any]]:
+    """Per-side swatch colour that REPEATS across frames, or nothing.
+
+    ``sample_scorebug_swatches`` reads one dominant colour per ROI half per
+    frame. When the scoreboard sits over advertising boards those halves read the
+    boards, and consecutive frames disagree — measured on the cited job, the away
+    half read blue, sky blue, orange, red, maroon and pink. A colour is therefore
+    trusted only when it is the side's modal reading over at least
+    ``MIN_SWATCH_FRAMES`` frames and holds at least ``MIN_SWATCH_SHARE`` of that
+    side's readings. An unstable side is dropped: no kit colour beats a wrong one.
+    """
+    counts: dict[str, dict[str, int]] = {}
+    rgbs: dict[tuple[str, str], list[list[float]]] = {}
+    for sw in swatches or []:
+        if not isinstance(sw, Mapping):
+            continue
+        side = str(sw.get("side") or "")
+        rgb = sw.get("rgb")
+        if side not in ("home", "away") or not rgb or len(rgb) != 3:
+            continue
+        # The sample carries its colour name; derive it when a caller only has
+        # the RGB (same naming function, so the two paths cannot disagree).
+        colour = str(sw.get("color") or name_color(rgb))
+        counts.setdefault(side, {})
+        counts[side][colour] = counts[side].get(colour, 0) + 1
+        rgbs.setdefault((side, colour), []).append([float(v) for v in rgb])
+    out: dict[str, dict[str, Any]] = {}
+    for side, tally in counts.items():
+        total = sum(tally.values())
+        colour, n = max(tally.items(), key=lambda kv: (kv[1], kv[0]))
+        # One reading has nothing to disagree with; repeated readings must agree.
+        if total > 1 and (n < 2 or n / total < MIN_SWATCH_SHARE):
+            continue
+        rows = rgbs.get((side, colour)) or []
+        mean = [round(sum(r[i] for r in rows) / len(rows), 1) for i in range(3)] if rows else None
+        out[side] = {"side": side, "color": colour, "rgb": mean}
+    return out
+
+
 def _dist(a: Sequence[float], b: Sequence[float]) -> float:
     return math.sqrt(sum((float(a[i]) - float(b[i])) ** 2 for i in range(3)))
 
@@ -1241,9 +1336,16 @@ def cluster_kit_colors(
         counts: dict[str, int] = {}
         for n in names:
             counts[n] = counts.get(n, 0) + 1
-        primary = max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
-        if len(centers) == 1:
-            primary = name_color(centers[0])
+        # Primary is the CLUSTER CENTROID's name, not the majority of per-crop
+        # names. Measured on the cited job: distant player crops read skin /
+        # ad-board shades, so the majority name was "orange" (94) over "red" (46)
+        # while the cluster centroid [83, 51, 47] is plainly red — the majority
+        # vote put a WRONG colour on Portugal. A muddy centroid that no sample
+        # supports (mixed trim) falls back to the loudest sample name so a
+        # two-tone cluster still names a real colour.
+        primary = name_color(centers[k])
+        if counts and primary not in counts:
+            primary = max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
         secondary: Optional[str] = None
         for name, c in sorted(counts.items(), key=lambda kv: -kv[1]):
             if name != primary and c >= max(3, int(0.30 * len(group))):
@@ -1364,9 +1466,12 @@ def associate_kits(
 
     ``scorebug_swatches`` are ``{side, rgb}`` samples of the scoreboard ROI half
     that belongs to that side (the perception pass samples them from the same
-    ROI crop it OCRs, so this is free evidence). The player cluster nearest to
-    that swatch in RGB space is the side's kit — this is the "scorebug layout"
-    association. When the swatch is missing/unusable the commentary phrase
+    ROI crop it OCRs, so this is free evidence). A side's swatch is only used
+    when it is STABLE across frames (:func:`stable_swatch_by_side`) — a single
+    frame over an advertising board reads the board, not the kit. The player
+    cluster nearest to that swatch in RGB space is the side's kit — this is the
+    "scorebug layout" association. When the swatch is missing/unusable the
+    commentary phrase
     ("Spain in the white shirts") decides. When neither exists the team keeps
     ``kitColors: []`` instead of a guessed colour, unless a curated ``kit_prior``
     can link an already-observed cluster to it (ADAAAA-7866): the third channel
@@ -1398,12 +1503,14 @@ def associate_kits(
     used: set[int] = set()
     colors = [c.primary for c in clusters]
     same_color = len(set(colors)) == 1 and len(clusters) > 1
-    swatch_by_side = {str(s.get("side")): s for s in (scorebug_swatches or []) if s.get("rgb")}
+    # A swatch must REPEAT before it can link a colour to a side (see
+    # `stable_swatch_by_side`): one frame over an advertising board reads the
+    # board, not the kit, and would attribute a wrong colour.
+    swatch_by_side = stable_swatch_by_side(scorebug_swatches)
     # Swatch channel is only informative when both sides' swatches name different
     # colours (see sample_scorebug_swatches): identical swatches are a shared
     # graphic (flags/banner), not team kit colours.
-    swatch_colors = {str(s.get("side")): s.get("color") for s in (scorebug_swatches or []) if s.get("color")}
-    if len(swatch_colors) >= 2 and len(set(swatch_colors.values())) == 1:
+    if len(swatch_by_side) >= 2 and len({s["color"] for s in swatch_by_side.values()}) == 1:
         swatch_by_side = {}
 
     unresolved: list[dict[str, str]] = []
@@ -1840,6 +1947,18 @@ def resolve_match_context(
         status["suppressedCandidates"] = suppressed
 
     clusters = cluster_kit_colors(list(kit_samples or []))
+    # Inspectability (ADAAAA-7859): name WHAT the colour pass saw. A job where
+    # colours were observed but no side channel links them now reports the
+    # clusters and the frame count that carried them, instead of only a low
+    # number. `kitSampleFrames` counts distinct sampled frames so one noisy crop
+    # cannot look like corroboration.
+    if kit_samples:
+        status["kitSampleFrames"] = len(
+            {(s.get("frameSeq"), s.get("ts")) for s in kit_samples if s.get("rgb") is not None}
+        )
+        status["kitSampleTracks"] = len({str(s.get("trackId")) for s in kit_samples if s.get("trackId") is not None})
+    if clusters:
+        status["kitClusterColors"] = [c.primary for c in clusters]
     kits, kit_ambiguous = associate_kits(
         [{"name": c.name, "side": c.side} for c in candidates],
         clusters,

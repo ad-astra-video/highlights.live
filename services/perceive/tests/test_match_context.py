@@ -25,6 +25,7 @@ from app.match_context import (
     build_match_context,
     cluster_kit_colors,
     fold_confidence,
+    is_plausible_player_box,
     name_color,
     parse_metadata_hints,
     parse_ocr_teams,
@@ -261,6 +262,20 @@ def test_cluster_kit_colors_filters_pitch_green():
     assert {c.primary for c in clusters} == {"red"}
 
 
+def test_cluster_kit_colors_names_the_centroid_not_the_noisiest_crop():
+    # Measured on the cited job: distant crops inside one kit cluster read
+    # "orange" (skin/warm shading) 94 times against "red" 46, so a majority vote
+    # named the cluster WRONG. The centroid of the same shirts is red.
+    samples = []
+    for i, rgb in enumerate(
+        [[83.0, 60.0, 47.0]] * 4 + [[83.0, 40.0, 47.0]] * 2 + [[236.0, 236.0, 232.0]] * 3
+    ):
+        samples.append({"rgb": rgb, "ts": 10.0 + i, "trackId": f"t{i}", "frameSeq": i})
+    clusters = cluster_kit_colors(samples)
+    assert "red" in {c.primary for c in clusters}
+    assert "orange" not in {c.primary for c in clusters}
+
+
 def test_cluster_kit_colors_reports_secondary_trim():
     samples = kit_samples([RED, WHITE], frames=3)
     clusters = cluster_kit_colors(samples)
@@ -286,6 +301,51 @@ def test_sample_track_colors_averages_torso_and_skips_non_players():
     assert len(samples) == 1
     assert samples[0]["trackId"] == 1
     assert name_color(samples[0]["rgb"]) == "red"
+
+
+def test_is_plausible_player_box_rejects_junk_sam3_seeds():
+    # A standing player box: taller than wide, modest area.
+    assert is_plausible_player_box((0.40, 0.30, 0.46, 0.55)) is True
+    # Measured junk seed on the cited Portugal vs Spain job: a 0.997-wide
+    # advertising band across the top of the frame.
+    assert is_plausible_player_box((0.0, 0.0, 0.997, 0.242)) is False
+    # A near-full-frame "player" crop (close-up / banner) is not a torso.
+    assert is_plausible_player_box((0.02, 0.02, 0.98, 0.98)) is False
+    # A boot / leg crop: wider than tall.
+    assert is_plausible_player_box((0.50, 0.80, 0.62, 0.83)) is False
+    # Degenerate boxes never qualify.
+    assert is_plausible_player_box(None) is False
+    assert is_plausible_player_box([0.1, 0.1]) is False
+    assert is_plausible_player_box((0.4, 0.4, 0.4, 0.6)) is False
+
+
+def test_sample_track_colors_never_samples_a_junk_seed():
+    # Frame is entirely jersey-red; the ONLY track is the measured ad-board band.
+    # Before ADAAAA-7859 the sampler read that band and made "red" a kit colour
+    # from a non-player crop; now the frame yields no sample at all.
+    frame = [[RED[:] for _ in range(12)] for _ in range(12)]
+    tracks = [{"trackId": "band", "label": "player", "box": [0.0, 0.0, 0.997, 0.242], "ts": 3.0}]
+    assert sample_track_colors(frame, tracks) == []
+
+
+def test_sample_track_colors_skips_the_band_and_keeps_the_player():
+    # 40x40 frame: pitch green everywhere, a WHITE advertising band across the
+    # top (the measured junk seed), and a RED-shirted player box below it. Only
+    # the player contributes, so white never enters the kit evidence.
+    frame = [[GREEN_PITCH[:] for _ in range(40)] for _ in range(40)]
+    for y in range(0, 10):
+        for x in range(40):
+            frame[y][x] = WHITE[:]
+    for y in range(8, 29):
+        for x in range(14, 27):
+            frame[y][x] = RED[:]
+    tracks = [
+        {"trackId": "band", "label": "player", "box": [0.0, 0.0, 0.997, 0.242], "ts": 3.0},
+        {"trackId": "p1", "label": "player", "box": [0.35, 0.20, 0.65, 0.70], "ts": 3.0},
+    ]
+    samples = sample_track_colors(frame, tracks)
+    assert [s["trackId"] for s in samples] == ["p1"]
+    assert samples[0]["color"] == "red"
 
 
 def test_associate_kits_prefers_scorebug_swatch_then_commentary():
@@ -314,6 +374,47 @@ def test_associate_kits_same_colour_away_kits_are_ambiguous():
         scorebug_swatches=[{"side": "home", "rgb": RED}, {"side": "away", "rgb": WHITE}],
     )
     assert ambiguous is True
+
+
+def test_associate_kits_drops_an_unstable_swatch_instead_of_a_wrong_colour():
+    # Measured on the cited Portugal vs Spain job: a swatch half repeatedly reads
+    # the LED advertising boards behind the bug. Pre-fix the LAST reading won, so
+    # one unstable frame could paint a team with an ad-board colour. Here the home
+    # half splits 2x red / 2x white (50 % modal share) while the away half stably
+    # reads white: the unstable home side must yield NOTHING, and the stable away
+    # side must still link, instead of the home side stealing the white kit.
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE], frames=3))
+    teams = [{"name": "Portugal", "side": "home"}, {"name": "Spain", "side": "away"}]
+    swatches = [
+        {"side": "home", "rgb": RED, "color": "red"},
+        {"side": "home", "rgb": RED, "color": "red"},
+        {"side": "home", "rgb": WHITE, "color": "white"},
+        {"side": "home", "rgb": WHITE, "color": "white"},
+    ] + [{"side": "away", "rgb": WHITE, "color": "white"} for _ in range(3)]
+    kits, _ = associate_kits(teams, clusters, scorebug_swatches=swatches)
+    # RED at the pre-fix parent: `kits["home"][0]["primary"] == "white"` — the
+    # unstable half's last reading painted Portugal with Spain's kit.
+    assert "home" not in kits
+    assert kits["away"][0]["primary"] == "white"
+
+
+def test_stable_swatch_by_side_needs_agreement_once_a_side_repeats():
+    from app.match_context import stable_swatch_by_side
+
+    # A single reading is used as-is (nothing to disagree with).
+    assert stable_swatch_by_side([{"side": "home", "rgb": RED}])["home"]["color"] == "red"
+    # Two agreeing readings are stable; two disagreeing ones are not.
+    assert set(stable_swatch_by_side([{"side": "home", "rgb": RED}] * 2)) == {"home"}
+    assert stable_swatch_by_side([{"side": "home", "rgb": RED}, {"side": "home", "rgb": WHITE}]) == {}
+    # 60 % share: 3 of 5 holds; a modal colour under 60 % does not.
+    three = [{"side": "away", "rgb": NAVY}] * 3 + [{"side": "away", "rgb": WHITE}] * 2
+    assert stable_swatch_by_side(three)["away"]["color"] == "navy"
+    split = (
+        [{"side": "away", "rgb": NAVY}] * 2
+        + [{"side": "away", "rgb": WHITE}] * 2
+        + [{"side": "away", "rgb": [200.0, 110.0, 40.0]}] * 1
+    )
+    assert stable_swatch_by_side(split) == {}
 
 
 def test_associate_kits_never_assigns_one_cluster_to_both_sides():
@@ -523,6 +624,30 @@ def test_resolve_match_context_reports_unattributed_kit_colours():
     assert out["matchContext"]["teams"][0]["kitColors"][0]["primary"] == "red"
     assert out["evidenceStatus"]["kitColorsUnattributed"] == ["away"]
     assert out["evidenceStatus"]["kitPriorMiss"] == ["away"]
+
+
+def test_resolve_match_context_reports_observed_clusters_without_a_side_channel():
+    # The ADAAAA-7859 evidence shape: two kit colours OBSERVED, no MEASURED side
+    # channel (no swatch, no kit phrase) to link either to a team. The record must
+    # keep both teams' kitColors empty and report what was seen instead of guessing.
+    #
+    # The teams are France / Italy on purpose: the curated prior table
+    # (ADAAAA-7866) IS a third side channel, and it only carries Portugal and
+    # Spain. Using two teams the table cannot resolve keeps this guard about the
+    # evidenceStatus report rather than about the prior.
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 5.0, "lines": ["FRA 1 - 0 ITA"]}],
+        hints={"title": "France vs Italy"},
+        kit_samples=kit_samples([RED, WHITE], frames=3),
+    )
+    status = out["evidenceStatus"]
+    assert set(status["kitClusterColors"]) == {"red", "white"}
+    assert status["kitSampleFrames"] == 3
+    assert status["kitSampleTracks"] == 2
+    assert status["kitColorsUnattributed"] == ["home", "away"]
+    assert status["kitPriorMiss"] == ["home", "away"]
+    assert all(t["kitColors"] == [] for t in out["matchContext"]["teams"])
 
 
 def test_resolve_match_context_no_evidence_is_unknown_not_fabricated():
