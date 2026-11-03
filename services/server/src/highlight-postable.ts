@@ -153,9 +153,30 @@ export function buildPostableHighlights(list: HighlightRecord[]): PostableHighli
     candidates.push(h);
   }
 
+  const collapsed = collapseOverlappingWindows(candidates);
+  counts.merged = collapsed.merged;
+  counts.postable = collapsed.moments.length;
+  return { highlights: collapsed.moments, notable, duplicates: collapsed.duplicates, counts };
+}
+
+/** The result of collapsing overlapping clip windows into moments. */
+export interface CollapsedMoments {
+  /** One entry per distinct moment, time-ordered. */
+  moments: PostableHighlight[];
+  /** Merged-away duplicates, each carrying `duplicateOf`. */
+  duplicates: PostableHighlight[];
+  /** How many rows were absorbed into another row's moment. */
+  merged: number;
+}
+
+/**
+ * Collapse OVERLAP CHAINS (a overlaps b, b overlaps c => one moment) over a set
+ * of already-gated candidate rows, so the result can never carry a transitive
+ * overlap. Shared by the postable list (display) and the quota basis
+ * ({@link quotaMomentCount}) so both agree on what one moment is.
+ */
+export function collapseOverlappingWindows(candidates: HighlightRecord[]): CollapsedMoments {
   // Highest quality first, so the strongest clip of a cluster owns the window.
-  // Merge OVERLAP CHAINS (a overlaps b, b overlaps c => one moment), so the
-  // postable list can never carry a transitive overlap.
   const ordered = [...candidates].sort((a, b) => qualityRank(b) - qualityRank(a) || a.start - b.start);
   const moments: PostableHighlight[] = [];
   const duplicates: PostableHighlight[] = [];
@@ -172,6 +193,7 @@ export function buildPostableHighlights(list: HighlightRecord[]): PostableHighli
     for (const c of hit) clusters.splice(clusters.indexOf(c), 1);
     clusters.push(merged);
   }
+  let mergedCount = 0;
   for (const cluster of clusters) {
     if (cluster.length === 1) {
       moments.push({ ...cluster[0] });
@@ -185,13 +207,124 @@ export function buildPostableHighlights(list: HighlightRecord[]): PostableHighli
       mergedIds: losers.map((h) => h.id),
     });
     for (const l of losers) duplicates.push({ ...l, duplicateOf: winner.id });
-    counts.merged += losers.length;
+    mergedCount += losers.length;
   }
 
   // Time order for the postable list (and its duplicate lane) so the board reads
   // left-to-right; the ranking above only decides which clip owns a moment.
   moments.sort((a, b) => a.start - b.start);
   duplicates.sort((a, b) => a.start - b.start);
-  counts.postable = moments.length;
-  return { highlights: moments, notable, duplicates, counts };
+  return { moments, duplicates, merged: mergedCount };
+}
+
+// ---------------------------------------------------------------------------
+// Count projection (ADAAAA-7854)
+// ---------------------------------------------------------------------------
+//
+// The canonical user-facing "total clips" for a job is the DEDUPED POSTABLE
+// moment count — `buildPostableHighlights(...).highlights.length`. The persisted
+// `highlights` rows are the raw audit total (they include rejected, contradicting
+// and merged-away duplicates), so a surface that counts rows inflates the number
+// a customer sees. Every payload that carries a per-job clip count therefore
+// takes it from {@link postableCountFields}, never from `store.highlightsForJob()
+// .length`. The rows are never deleted or rewritten: merged-ness stays derived
+// here at read time from `start` / `end` / `score` / `corroborated` / `outcome`.
+
+/** Read-time clip counts for one job. `rawHighlights` is the audit row total;
+ * `postableHighlights` is the canonical user-facing count. */
+export interface PostableHighlightCounts {
+  /** Persisted rows in the audit trail, merged-away duplicates included. */
+  rawHighlights: number;
+  /** Canonical user-facing clip count: deduped postable moments. */
+  postableHighlights: number;
+  /** Duplicate rows absorbed into a postable moment (excluded from the count). */
+  mergedHighlights: number;
+  /** Rows dropped by the gate, reported so admin surfaces can explain the gap. */
+  rejectedHighlights: number;
+  notScoringHighlights: number;
+  contradictingHighlights: number;
+}
+
+/**
+ * The count projection every job payload carries. It is a projection of ONE
+ * `buildPostableHighlights` pass, so the list, the counts and the merged read can
+ * never disagree with each other or with `GET /jobs/:id/detail`.
+ */
+export function postableCountFields(list: HighlightRecord[]): PostableHighlightCounts {
+  return countsFromPostable(buildPostableHighlights(list));
+}
+
+/** The same projection when the caller already ran `buildPostableHighlights` for
+ * the list it is about to return (`/jobs/:id/detail`), so the count and the list
+ * come from ONE pass and cannot disagree. */
+export function countsFromPostable(out: PostableHighlights): PostableHighlightCounts {
+  const { counts } = out;
+  return {
+    rawHighlights: counts.total,
+    postableHighlights: counts.postable,
+    mergedHighlights: counts.merged,
+    rejectedHighlights: counts.rejected,
+    notScoringHighlights: counts.notScoring,
+    contradictingHighlights: counts.contradicting,
+  };
+}
+
+/**
+ * Deduped vs raw clip totals across every persisted row (admin analytics,
+ * ADAAAA-7854 AC4). Dedupe is PER JOB: two different jobs must never collapse
+ * into one moment just because their windows happen to overlap in content time.
+ */
+export function dedupedClipTotals(records: Iterable<HighlightRecord>): { raw: number; postable: number } {
+  const byJob = new Map<string, HighlightRecord[]>();
+  let raw = 0;
+  for (const h of records) {
+    raw += 1;
+    const key = h.jobId ?? "";
+    const list = byJob.get(key);
+    if (list) list.push(h);
+    else byJob.set(key, [h]);
+  }
+  let postable = 0;
+  for (const list of byJob.values()) postable += buildPostableHighlights(list).counts.postable;
+  return { raw, postable };
+}
+
+/**
+ * The quota moment count for a job (ADAAAA-7854 AC6): overlapping clip rows
+ * collapse into ONE moment, so a merged-away duplicate never charges the customer
+ * twice for the same footage, while the surviving moment still debits exactly once.
+ *
+ * Deliberately VERDICT-INDEPENDENT: it filters only `status: "rejected"` (a human
+ * said no, and the review route releases that slot). The precision gate that
+ * decides what may be POSTED is a display decision — it does not change what was
+ * generated, and every live/VOD/browser path persisted such a clip before this
+ * change, so gating the quota on it would silently stop debiting real clips (an
+ * esports `KILL` highlight has a non-goal `outcome` but is still the customer's
+ * clip). The only rows this function excludes that the old per-row debit charged
+ * are the overlapping duplicates — exactly the defect AC6 names.
+ */
+export function quotaMomentCount(list: HighlightRecord[]): number {
+  return collapseOverlappingWindows(list.filter((h) => h.status !== "rejected")).moments.length;
+}
+
+/** Slot arithmetic for one insert: 1 debit for a new moment, 1 refund when an
+ * insert bridges two moments into one (the absorbed moment's slot is released),
+ * nothing when the row merged into an existing moment or took no slot at all. */
+export function clipQuotaDelta(beforeMoments: number, afterMoments: number): { debit: number; refund: number } {
+  const delta = afterMoments - beforeMoments;
+  if (delta > 0) return { debit: Math.min(delta, 1), refund: 0 };
+  if (delta < 0) return { debit: 0, refund: Math.min(-delta, 1) };
+  return { debit: 0, refund: 0 };
+}
+
+/**
+ * The quota decision for a highlight insert, order-independent: the winner of an
+ * overlap cluster may land before OR after its duplicate, and the debit follows
+ * the MOMENT count either way (so `slotsDebited === moments` always holds).
+ */
+export function quotaDeltaForInsert(
+  before: HighlightRecord[],
+  after: HighlightRecord[]
+): { debit: number; refund: number } {
+  return clipQuotaDelta(quotaMomentCount(before), quotaMomentCount(after));
 }

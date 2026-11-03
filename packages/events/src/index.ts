@@ -770,6 +770,18 @@ export const JobSchema = z.object({
   framesTotal: z.number().int().min(0).optional(),
   framesPct: z.number().min(0).max(100).optional(),
   highlightsFound: z.number().int().min(0).default(0),
+  // ADAAAA-7854: the canonical user-facing clip count for this job, and the raw
+  // audit row count it is derived from. `postableHighlights` is the DEDUPED
+  // postable moment count (`buildPostableHighlights(...).highlights.length`);
+  // `mergedHighlights` is how many overlapping clip rows were absorbed into a
+  // moment and therefore do NOT count; `rawHighlights` is the persisted row total
+  // (includes rejected / contradicting / merged-away rows). These are a READ-TIME
+  // projection — the routes recompute them from the stored rows on every read and
+  // never persist them, so `highlightsFound` (a raw, monotonic progress counter)
+  // and the stored record stay untouched. Additive optional: absent on older rows.
+  rawHighlights: z.number().int().min(0).optional(),
+  postableHighlights: z.number().int().min(0).optional(),
+  mergedHighlights: z.number().int().min(0).optional(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   attempts: z.number().int().min(0).optional(),

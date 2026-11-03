@@ -3,108 +3,32 @@ import { HighlightRecordSchema, type HighlightRecord } from "@highlights/events"
 import { isAcceptedHighlight, type DecisionResult } from "../src/analyzer";
 import {
   buildPostableHighlights,
+  clipQuotaDelta,
+  dedupedClipTotals,
   hasContradictingVerdict,
   isGoalRefutingReason,
   isPostableHighlight,
+  postableCountFields,
+  quotaDeltaForInsert,
+  quotaMomentCount,
   windowsOverlap,
 } from "../src/highlight-postable";
+import { D61_JOB, d61Highlight, d61Highlights } from "./fixtures/d61-highlights";
 
 // ADAAAA-7621: precision gate (scoring_play only) + rejected exclusion +
 // overlap dedupe for the postable highlight list. Regression source: the
 // ADAAAA-7620 review of VOD job d61e52f6 (24 GOAL-typed clips, 1 rejected,
 // 2 self-contradicting accepts, 6 overlapping windows => 18 unique moments).
 
-const JOB = "d61e52f6-7569-4757-bffc-f56d03e10b6a";
+// ADAAAA-7854: the 24 measured rows of d61e52f6 now live in one shared fixture so
+// the postable-gate tests and the clip-count tests assert against the same data.
+const JOB = D61_JOB;
 
+/** One persisted d61 row (defaults: accepted scoring_play, end = start + 15). */
 function hl(over: Partial<HighlightRecord> & { start: number }): HighlightRecord {
-  const { start, ...rest } = over;
-  return HighlightRecordSchema.parse({
-    id: `hl-${start}`,
-    jobId: JOB,
-    clipUri: `/clips/hl-${start}.mp4`,
-    start,
-    end: start + 15,
-    eventType: "GOAL",
-    score: 100,
-    reason: "The ball clearly enters the net after a strike by the player in the blue jersey.",
-    outcome: "scoring_play",
-    status: "accepted",
-    createdAt: "2026-10-31T14:30:00.000Z",
-    ...rest,
-  });
+  return d61Highlight(over);
 }
 
-/**
- * The 24 persisted highlight windows of job d61e52f6, as measured on the
- * deployed box (start/end/score/status/verdict). The two score-60 entries carry
- * the real refuting verdict text; the rest are clean accepts.
- */
-const D61_WINDOWS: {
-  start: number;
-  end: number;
-  score: number;
-  status: "accepted" | "rejected" | "pending";
-  goalConfirmed?: "confirmed_goal" | "near_miss" | "not_goal";
-  reason?: string;
-  corroborated?: boolean;
-  corroborationSource?: "audio_text" | "scoreboard";
-}[] = [
-  { start: 31.3, end: 46.3, score: 100, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 69.5, end: 84.5, score: 100, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 115.6, end: 130.6, score: 100, status: "accepted" },
-  {
-    start: 141.2,
-    end: 156.2,
-    score: 60,
-    status: "accepted",
-    goalConfirmed: "confirmed_goal",
-    reason:
-      "The ball is seen moving towards the goal but does not enter the net; it appears to be a shot that misses or is saved.; outcome=near_miss is not a scoring highlight; confirmation pass: goal confirmed (deep frame dive)",
-  },
-  { start: 171.1, end: 186.1, score: 100, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 245.6, end: 260.6, score: 100, status: "rejected" },
-  { start: 273.9, end: 288.9, score: 100, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 341.8, end: 356.8, score: 95, status: "accepted" },
-  { start: 351.8, end: 366.8, score: 95, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 359.2, end: 374.2, score: 100, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 394.7, end: 409.7, score: 95, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 410.3, end: 425.3, score: 100, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 457.7, end: 472.7, score: 85, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 565.8, end: 580.8, score: 100, status: "accepted" },
-  { start: 579.4, end: 594.4, score: 100, status: "accepted", goalConfirmed: "confirmed_goal", corroborated: true, corroborationSource: "scoreboard" },
-  { start: 601.1, end: 616.1, score: 85, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 629.6, end: 644.6, score: 100, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 660.2, end: 675.2, score: 100, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 678.2, end: 693.2, score: 100, status: "accepted", goalConfirmed: "confirmed_goal" },
-  {
-    start: 688.6,
-    end: 703.6,
-    score: 60,
-    status: "accepted",
-    goalConfirmed: "confirmed_goal",
-    reason:
-      "The ball is clearly seen being kicked and moving towards the goal, but it does not enter the net; it appears to be a shot that misses or is saved.; outcome=near_miss is not a scoring highlight",
-  },
-  { start: 701.0, end: 716.0, score: 100, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 717.3, end: 732.3, score: 100, status: "accepted", goalConfirmed: "confirmed_goal" },
-  { start: 755.0, end: 770.0, score: 95, status: "accepted", goalConfirmed: "confirmed_goal", corroborated: true },
-  { start: 765.1, end: 780.1, score: 95, status: "accepted", goalConfirmed: "confirmed_goal", corroborated: true },
-];
-
-function d61Highlights(): HighlightRecord[] {
-  return D61_WINDOWS.map((w) =>
-    hl({
-      start: w.start,
-      end: w.end,
-      score: w.score,
-      status: w.status,
-      goalConfirmed: w.goalConfirmed,
-      reason: w.reason,
-      corroborated: w.corroborated,
-      corroborationSource: w.corroborationSource,
-    })
-  );
-}
 
 describe("isAcceptedHighlight (ADAAAA-7621 precision gate)", () => {
   // The literal acceptance fixture: a GOAL-typed candidate whose verdict is
@@ -310,5 +234,58 @@ describe("d61e52f6 regression (ADAAAA-7620 review)", () => {
   it("no postable clip carries a self-contradicting reason", () => {
     expect(out.highlights.filter((h) => hasContradictingVerdict(h))).toEqual([]);
     expect(out.highlights.every((h) => h.outcome === "scoring_play")).toBe(true);
+  });
+});
+
+// ADAAAA-7854: the clip COUNT projection. User-facing totals must be the deduped
+// postable moment count; raw rows stay the audit total. These assertions are the
+// numbers the Highlights tile, the job payload and admin analytics ship.
+describe("clip counts (ADAAAA-7854)", () => {
+  it("projects d61e52f6 as 24 raw rows / 17 postable moments / 4 merged", () => {
+    const counts = postableCountFields(d61Highlights());
+    expect(counts).toEqual({
+      rawHighlights: 24,
+      postableHighlights: 17,
+      mergedHighlights: 4,
+      rejectedHighlights: 1,
+      notScoringHighlights: 0,
+      contradictingHighlights: 2,
+    });
+    // The count is a projection of the same pass that builds the list.
+    const out = buildPostableHighlights(d61Highlights());
+    expect(counts.postableHighlights).toBe(out.highlights.length);
+    expect(counts.mergedHighlights).toBe(out.duplicates.length);
+    // Raw - postable = merged + rejected + contradicting: nothing vanishes.
+    expect(counts.rawHighlights - counts.postableHighlights).toBe(
+      counts.mergedHighlights + counts.rejectedHighlights + counts.notScoringHighlights + counts.contradictingHighlights
+    );
+  });
+
+  it("dedupes per job: identical windows on two different jobs are two moments", () => {
+    const list = [...d61Highlights("job-a"), ...d61Highlights("job-b")];
+    const totals = dedupedClipTotals(list);
+    expect(totals).toEqual({ raw: 48, postable: 34 });
+  });
+
+  it("orders the quota debit by MOMENTS, not by rows", () => {
+    // A new moment debits one slot; nothing new merged away debits nothing.
+    expect(clipQuotaDelta(0, 1)).toEqual({ debit: 1, refund: 0 });
+    expect(clipQuotaDelta(1, 1)).toEqual({ debit: 0, refund: 0 });
+    // Bridging two moments into one releases the absorbed slot.
+    expect(clipQuotaDelta(2, 1)).toEqual({ debit: 0, refund: 1 });
+
+    // The insert-level helper makes the arrival order irrelevant: a clip that
+    // overlaps an existing one never debits, whichever of the two lands first.
+    const dupRows = [hl({ start: 100, end: 115, score: 90 }), hl({ start: 104, end: 119, score: 95 })];
+    expect(quotaDeltaForInsert([], [dupRows[0]])).toEqual({ debit: 1, refund: 0 });
+    expect(quotaDeltaForInsert([dupRows[0]], dupRows)).toEqual({ debit: 0, refund: 0 });
+    expect(quotaDeltaForInsert([dupRows[1]], dupRows)).toEqual({ debit: 0, refund: 0 });
+    // Two adjacent (non-overlapping) clips are two moments: 2 slots.
+    expect(quotaDeltaForInsert([hl({ start: 100, end: 115 })], [hl({ start: 100, end: 115 }), hl({ start: 200, end: 215 })])).toEqual({
+      debit: 1,
+      refund: 0,
+    });
+    // The d61 job's 24 rows hold 17 quota moments (same collapse as the list).
+    expect(quotaMomentCount(d61Highlights())).toBe(17);
   });
 });

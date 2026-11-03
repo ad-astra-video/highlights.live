@@ -55,7 +55,7 @@ import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource, 
 import { completedCounterFields, completedLiveCounterFields, counterFieldsForJob } from "./job-counters";
 import { stageAEvidenceLine, whistleEvidenceLine } from "./stage-a-metrics";
 import { aggregateLiveWatchMinutes, monthKeyUtc } from "./live-watch-minutes";
-import { buildPostableHighlights } from "./highlight-postable";
+import { buildPostableHighlights, countsFromPostable, postableCountFields, quotaDeltaForInsert } from "./highlight-postable";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { buildVodMeter, formatVodMeterLine } from "./vod-meter";
@@ -323,6 +323,12 @@ export async function persistLiveHighlight(
   sub: Subscription,
   highlight: HighlightRecord
 ): Promise<HighlightRecord> {
+  // ADAAAA-7854: the quota is debited per POSTABLE MOMENT, not per persisted row.
+  // Snapshot the job's rows BEFORE the insert so the decision below is
+  // order-independent: a duplicate that arrives first debits the moment, and the
+  // stronger clip that later wins the overlap then debits nothing (see
+  // `quotaDeltaForInsert`). Read-time only — no decide/perceive call is added.
+  const rowsBefore = deps.store.highlightsForJob(highlight.jobId);
   const { record, created } = await deps.store.addHighlight({
     ...highlight,
     ownerId: user.id,
@@ -333,9 +339,22 @@ export async function persistLiveHighlight(
   // returns `created: false` and must NOT re-bill, re-debit quota, or double
   // count the highlight.
   if (created) {
-    await deps.billing.onHighlightCreated(user, sub);
-    // A clip generated successfully debits the quota once.
-    await deps.entitlements.onClipGenerated(user);
+    // ADAAAA-7854: the row is always persisted (the DB keeps every clip row), but
+    // only a clip that becomes a NEW moment charges the customer: a merged-away
+    // duplicate leaves the moment count unchanged, and a row that bridges two
+    // moments into one refunds the slot the absorbed moment held. Billing rides
+    // the same decision so the usage ledger and the clip quota cannot disagree.
+    const quota = quotaDeltaForInsert(rowsBefore, deps.store.highlightsForJob(record.jobId));
+    if (quota.debit > 0) {
+      await deps.billing.onHighlightCreated(user, sub);
+      // A clip generated successfully debits the quota once.
+      await deps.entitlements.onClipGenerated(user);
+    }
+    if (quota.refund > 0) {
+      // Same release path a human rejection uses: the absorbed moment's slot is
+      // returned because two moments just collapsed into one.
+      await deps.entitlements.onClipRejected(user);
+    }
     // Funnel stage 3: generate (a highlight was produced). Idempotent per user.
     await recordGenerateFunnel(deps.db, user.id);
     // ADAAAA-6874 (Phase 2): surface the live highlight count on the job the
@@ -2178,7 +2197,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       generatedAt: new Date().toISOString(),
       goal: { payingUsersTarget: goal },
       signups: { usersTotal: a.usersTotal, usersActivated: a.usersActivated, waitlistTotal: a.waitlistTotal, waitlistInvited: a.waitlistInvited },
-      clips: { clipsTotal: a.clipsTotal, clipsUsed: a.clipsUsed, usageEvents: a.usageEvents },
+      // ADAAAA-7854: `clipsTotal` is the RAW persisted `highlights` row count —
+      // the audit total, which includes rejected rows and merged-away duplicate
+      // clips, so it is NOT the count a customer sees. `clipsPostable` is the
+      // deduped user-facing total (postable moments, deduped per job). The basis
+      // strings are machine-readable labels so a future admin surface cannot
+      // render `clipsTotal` as if it were the customer-facing clip count.
+      clips: {
+        clipsTotal: a.clipsTotal,
+        clipsTotalBasis: "raw_rows_includes_merged",
+        clipsPostable: a.clipsPostable,
+        clipsPostableBasis: "deduped_postable_moments",
+        clipsUsed: a.clipsUsed,
+        usageEvents: a.usageEvents,
+      },
       conversion: {
         payingProActive: payingPro,
         payingAnyActive: payingAnyActive,
@@ -2942,10 +2974,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // ADAAAA-7624: records written before the counter fix carry no
     // `candidatePath`; project the honest counters so the board tiles read the
     // count the job actually produced instead of a legacy 0.
+    // ADAAAA-7854: every job row also carries the READ-TIME clip counts
+    // (`postableHighlights` = deduped postable moments, `mergedHighlights` =
+    // duplicates excluded, `rawHighlights` = audit rows). The Highlights page
+    // tile reads these directly, so the customer-facing count is never derived
+    // client-side from the raw `GET /highlights` rows (which include merged
+    // duplicates and would inflate the tile).
     // ADAAAA-7727: a non-admin caller never sees the cost/decide/perceive
     // diagnostics on a job (they are internal pipeline + spend data).
     return {
-      jobs: jobsForRole(store.listJobsForOwner(ownerId, limit).map((j) => ({ ...j, ...counterFieldsForJob(j) })), user.role),
+      jobs: jobsForRole(
+        store
+          .listJobsForOwner(ownerId, limit)
+          .map((j) => ({ ...j, ...counterFieldsForJob(j), ...postableCountFields(store.highlightsForJob(j.id)) })),
+        user.role
+      ),
     };
   });
 
@@ -2977,7 +3020,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           : newestObservationTs(store.observationsForJob(job.id)),
     });
     return {
-      job: jobForRole({ ...job, ...counterFieldsForJob(job) }, user.role),
+      // ADAAAA-7854: `postableHighlights` / `mergedHighlights` / `rawHighlights`
+      // are the read-time clip counts (same projection as the job list and
+      // `/jobs/:id/detail`). `highlights` below stays the raw audit rows so the
+      // counts never have to be re-derived from a list.
+      job: jobForRole(
+        { ...job, ...counterFieldsForJob(job), ...postableCountFields(store.highlightsForJob(job.id)) },
+        user.role
+      ),
       highlights: store.highlightsForJob(job.id),
       progress,
       liveProgress,
@@ -3071,7 +3121,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       JobDetailSchema.parse({
         // ADAAAA-7624: derive the honest counters for records written before the
         // completion-time fix (read-time, no stored-data mutation).
-        job: { ...job, ...counterFieldsForJob(job) },
+        // ADAAAA-7854: the same payload carries the clip counts from the ONE
+        // `buildPostableHighlights` pass above, so `job.postableHighlights`
+        // always equals `highlights.length` here.
+        job: { ...job, ...counterFieldsForJob(job), ...countsFromPostable(postable) },
         highlights: postable.highlights,
         notableHighlights: postable.notable,
         duplicateHighlights: postable.duplicates,
@@ -3156,7 +3209,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         maxIndex: sectionList.length ? sectionList[sectionList.length - 1].index : -1,
         sectionCount: sectionList.length,
         sections,
-        job,
+        // ADAAAA-7854: same clip counts as the composite read, from the same
+        // single postable pass, so an open detail page's counter never drifts
+        // when it appends windows.
+        job: { ...job, ...countsFromPostable(postable) },
         highlights: postable.highlights,
         notableHighlights: postable.notable,
         duplicateHighlights: postable.duplicates,
@@ -3497,15 +3553,25 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               status: cfg.autoPublishHighlights ? "accepted" : "pending",
               createdAt: new Date().toISOString(),
             };
+            // ADAAAA-7854: quota rides the MOMENT, not the row. Snapshot the job's
+            // rows before the insert so an overlapping duplicate (or a row that
+            // bridges two moments) never charges the same footage twice — the
+            // moment it merged into already holds the slot. The row is still
+            // persisted.
+            const rowsBefore = store.highlightsForJob(job.id);
             const added = await store.addHighlight(highlight);
             if (added.created) {
               // A browser-capture highlight generated successfully debits the
               // quota once (like VOD/live). Board-capture jobs must also count
               // toward the monthly clip quota. Guarded on first insert so an
               // idempotent retry never double-debits.
-              await entitlements.onClipGenerated(duser);
-              // Funnel stage 3: generate (a highlight was produced).
-              await recordGenerateFunnel(db, duser.id);
+              const quota = quotaDeltaForInsert(rowsBefore, store.highlightsForJob(job.id));
+              if (quota.debit > 0) {
+                await entitlements.onClipGenerated(duser);
+                // Funnel stage 3: generate (a highlight was produced).
+                await recordGenerateFunnel(db, duser.id);
+              }
+              if (quota.refund > 0) await entitlements.onClipRejected(duser);
               const j = store.getJob(job.id);
               if (j) await store.patchJob(job.id, { highlightsFound: (j.highlightsFound ?? 0) + 1 });
             }

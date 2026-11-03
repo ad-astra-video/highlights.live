@@ -11,6 +11,7 @@ import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import type { Dataset, Job, HighlightRecord, JobCandidate } from "@highlights/events";
 import type { StoredObservation } from "./store";
+import { dedupedClipTotals } from "./highlight-postable";
 
 // `node:sqlite` is experimental and not in Vite/vitest's builtin external
 // list, so load it via createRequire at runtime instead of a static ESM import
@@ -20,6 +21,24 @@ const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { Pool } from "pg";
 import type { Pool as PoolType } from "pg";
+
+/**
+ * Parse persisted highlight `record` JSON for an analytics read (ADAAAA-7854).
+ * A row that fails to parse is skipped from the DEDUPED total instead of throwing
+ * the whole admin read; the raw `COUNT(*)` still includes it, so the audit total
+ * stays exact.
+ */
+function parseHighlightRecords(raw: unknown[]): HighlightRecord[] {
+  const out: HighlightRecord[] = [];
+  for (const row of raw) {
+    try {
+      out.push(typeof row === "string" ? (JSON.parse(row) as HighlightRecord) : (row as HighlightRecord));
+    } catch {
+      /* corrupt row: kept in clipsTotal, excluded from clipsPostable */
+    }
+  }
+  return out;
+}
 
 export interface User {
   id: string;
@@ -223,7 +242,16 @@ export interface AnalyticsSnapshot {
   usersActivated: number;
   waitlistTotal: number;
   waitlistInvited: number;
+  /** RAW persisted `highlights` rows — the audit total. Includes rejected,
+   * contradicting and merged-away duplicate clips, so it is NOT the count a
+   * customer sees (ADAAAA-7854). Admin surfaces must label it raw. */
   clipsTotal: number;
+  /** ADAAAA-7854: the DEDUPED user-facing clip total — postable moments across
+   * every job, deduped per job exactly like `buildPostableHighlights`. This is
+   * what `clipsTotal` read as before but never was: `clipsTotal - clipsPostable`
+   * is the merged-away / gate-dropped row count. Derived read-time from the stored
+   * rows; nothing is deleted, backfilled or migrated. */
+  clipsPostable: number;
   clipsUsed: number;
   usageEvents: number;
   subscriptions: { tier: string; status: string; count: number }[];
@@ -1064,6 +1092,11 @@ export class SqliteDb implements Db {
     const waitlistTotal = n("SELECT COUNT(*) AS n FROM waitlist");
     const waitlistInvited = n("SELECT COUNT(*) AS n FROM waitlist WHERE status = 'invited'");
     const clipsTotal = n("SELECT COUNT(*) AS n FROM highlights");
+    // ADAAAA-7854: the deduped user-facing total. Read the persisted records and
+    // dedupe PER JOB with the same pure function the read routes use, so admin
+    // analytics and the customer tile can never disagree. Read-only.
+    const highlightRows = this.db.prepare("SELECT record FROM highlights").all() as { record: string }[];
+    const clipsPostable = dedupedClipTotals(parseHighlightRecords(highlightRows.map((r) => r.record))).postable;
     const clipsUsed = n("SELECT COUNT(*) AS n FROM usage_events WHERE event_type = 'highlight'");
     const usageEvents = n("SELECT COUNT(*) AS n FROM usage_events");
     const rows = this.db
@@ -1075,6 +1108,7 @@ export class SqliteDb implements Db {
       waitlistTotal,
       waitlistInvited,
       clipsTotal,
+      clipsPostable,
       clipsUsed,
       usageEvents,
       subscriptions: rows.map((r) => ({ tier: String(r.tier), status: String(r.status), count: Number(r.count) })),
@@ -1797,12 +1831,18 @@ export class PgDb implements Db {
     const r = await this.pool.query(
       "SELECT tier, status, COUNT(*)::int AS count FROM subscriptions GROUP BY tier, status"
     );
+    // ADAAAA-7854: deduped user-facing total from the persisted rows, PER JOB,
+    // with the same pure function the read routes use. `clipsTotal` above stays
+    // the raw row count (audit total, merged + gate-dropped rows included).
+    const hl = await this.pool.query("SELECT record FROM highlights");
+    const clipsPostable = dedupedClipTotals(parseHighlightRecords(hl.rows.map((row: any) => row.record))).postable;
     return {
       usersTotal,
       usersActivated,
       waitlistTotal,
       waitlistInvited,
       clipsTotal,
+      clipsPostable,
       clipsUsed,
       usageEvents,
       subscriptions: r.rows.map((row: any) => ({
