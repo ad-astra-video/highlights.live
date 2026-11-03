@@ -48,6 +48,7 @@ function fakeClient(over: Partial<PipelineClient> = {}): { client: PipelineClien
     // but required on the PipelineClient interface.
     controlForward: async () => {
       log.push("control");
+      return null;
     },
     // ADAAAA-5262 fine-tune trigger: not exercised in these unit tests, but
     // required on the PipelineClient interface.
