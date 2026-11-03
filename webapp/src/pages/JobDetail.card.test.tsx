@@ -1,7 +1,7 @@
 import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import React from "react";
-import { HighlightCard, HighlightReviewActions } from "./JobDetail";
+import { HighlightCard, HighlightActionRow } from "./JobDetail";
 import type { JobDetailHighlight } from "../lib/jobDetail";
 
 // ADAAAA-7881: the identified highlight card is customer copy. These tests pin
@@ -11,11 +11,16 @@ import type { JobDetailHighlight } from "../lib/jobDetail";
 // header, suggested caption, one-line post titles, actions, and the operator's
 // pipeline internals behind ONE collapsed disclosure.
 //
-// ADAAAA-7893: ADAAAA-7881 had parked the Accept/Reject CONTROLS inside that
+// ADAAAA-7893: ADAAAA-7881 had parked the review CONTROLS inside that
 // operator-only disclosure, so a non-admin session rendered no review path at
 // all even though `POST /highlights/:id/review` is ownership scoped. The badge
 // stays gone (ADAAAA-7880); the controls are primary actions again, visible to
-// every session. The tests below are the inverted ones.
+// every session.
+//
+// ADAAAA-7910: the two action rows merged into ONE (`data-detail-actions`) with
+// three equal slots — Download / Copy Link / verdict. Accept is removed
+// (`accepted` is the server default); slot 3 carries Reject, Undo reject or
+// Approve so the restore path never disappears.
 
 const TRANSCRIPT = "so the keeper claims it and the whistle goes";
 
@@ -118,9 +123,10 @@ describe("AC2 — no internal badge, no raw status enum (ADAAAA-7881)", () => {
         admin: false,
       })
     );
-    // Inverted from ADAAAA-7881: the owner may review the clip, so the controls
-    // must be reachable without operator chrome.
-    expect(count(html, "data-detail-accept")).toBe(1);
+    // ADAAAA-7910: Accept is gone; the verdict slot is still there for the
+    // owner, without operator chrome.
+    expect(count(html, "data-detail-actions")).toBe(1);
+    expect(count(html, "data-detail-accept")).toBe(0);
     expect(count(html, "data-detail-reject")).toBe(1);
     for (const token of ["SPORTING_EVENT", "outcome=scoring_play", "Trigger:", "data-detail-pipeline", "Pipeline detail"]) {
       expect(html, `customer card must not contain ${token}`).not.toContain(token);
@@ -142,11 +148,11 @@ describe("AC2 — no internal badge, no raw status enum (ADAAAA-7881)", () => {
     for (const token of ["SPORTING_EVENT", "outcome=scoring_play", "Trigger:"]) {
       expect(html.indexOf(token), `${token} should sit inside Pipeline detail`).toBeGreaterThan(at);
     }
-    expect(html.indexOf("data-detail-accept")).toBeLessThan(at);
+    expect(html.indexOf("data-detail-actions")).toBeLessThan(at);
     expect(html.indexOf("data-detail-reject")).toBeLessThan(at);
   });
 
-  it("a rejected card carries ONE inline recovery note, visible to every session (ADAAAA-7893)", () => {
+  it("a rejected card carries ONE inline recovery note, visible to every session (ADAAAA-7910)", () => {
     for (const admin of [true, false]) {
       const html = renderToString(
         React.createElement(HighlightCard, {
@@ -156,7 +162,10 @@ describe("AC2 — no internal badge, no raw status enum (ADAAAA-7881)", () => {
         })
       );
       expect(count(html, "data-detail-rejected")).toBe(1);
-      expect(html).toContain("Rejected — hidden from the public feed. Accept restores it within the recover window.");
+      // The note names the control that is actually on the card.
+      expect(html).toContain(
+        "Rejected — hidden from the public feed. Undo reject restores it within the recover window."
+      );
       // Recovery guidance, not a badge: no bare status label anywhere.
       expect(html).not.toContain(">rejected<");
       expect(html).not.toContain(">accepted<");
@@ -200,140 +209,131 @@ describe("card hierarchy (ADAAAA-7881)", () => {
 
 /** The suite runs in the node env (no jsdom), so `renderToString` gives markup
  *  only. To exercise a real click handler we render the hook-free
- *  HighlightReviewActions component and walk the element tree it returns. */
-function buttonsOf(node: React.ReactNode, out: React.ReactElement<any>[] = []): React.ReactElement<any>[] {
+ *  HighlightActionRow and walk the element tree it returns. */
+function controlsOf(node: React.ReactNode, out: React.ReactElement<any>[] = []): React.ReactElement<any>[] {
   if (Array.isArray(node)) {
-    for (const child of node) buttonsOf(child as React.ReactNode, out);
+    for (const child of node) controlsOf(child as React.ReactNode, out);
     return out;
   }
   if (!node || typeof node !== "object") return out;
   const el = node as React.ReactElement<any>;
-  if (el.type === "button") out.push(el);
-  if (el.props) buttonsOf(el.props.children, out);
+  if (el.type === "button" || el.type === "a") out.push(el);
+  if (el.props) controlsOf(el.props.children, out);
   return out;
 }
 
-function reviewButtons(
+function actionRow(
   highlight: JobDetailHighlight,
-  onDecision: (h: JobDetailHighlight, status: "accepted" | "rejected") => void
+  onDecision: (h: JobDetailHighlight, status: "accepted" | "rejected") => void,
+  extra: { pendingStatus?: "accepted" | "rejected" | null; exportLocked?: boolean } = {}
 ) {
-  const tree = HighlightReviewActions({ highlight, onDecision });
-  const buttons = buttonsOf(tree);
+  const controls = controlsOf(
+    HighlightActionRow({
+      highlight,
+      downloadUrl: "/clips/h1.mp4?export=1",
+      onCopy: () => {},
+      onDecision,
+      ...extra,
+    })
+  );
   return {
-    accept: buttons.find((b) => "data-detail-accept" in b.props)!,
-    reject: buttons.find((b) => "data-detail-reject" in b.props)!,
+    download: controls.find((c) => "data-detail-download" in c.props)!,
+    copy: controls.find((c) => "data-detail-copy-link" in c.props)!,
+    verdict: controls.find(
+      (c) => "data-detail-reject" in c.props || "data-detail-restore" in c.props || "data-detail-approve" in c.props
+    )!,
   };
 }
 
-describe("ADAAAA-7893 — Accept/Reject are owner-facing primary actions", () => {
-  const CUSTOMER = { onDecision: () => {}, admin: false } as const;
-
-  it("AC1: the non-admin card carries exactly one accept and one reject, both BEFORE the transcript", () => {
-    const html = renderToString(
-      React.createElement(HighlightCard, { highlight: hl({ asrTranscript: TRANSCRIPT }), ...CUSTOMER })
-    );
-    expect(count(html, "data-detail-accept")).toBe(1);
-    expect(count(html, "data-detail-reject")).toBe(1);
-    const accept = html.indexOf("data-detail-accept");
-    const reject = html.indexOf("data-detail-reject");
-    const asr = html.indexOf("data-detail-asr");
-    expect(asr).toBeGreaterThan(-1);
-    expect(accept).toBeGreaterThan(-1);
-    expect(reject).toBeGreaterThan(-1);
-    expect(accept, "accept must precede the transcript (primary actions, not a disclosure)").toBeLessThan(asr);
-    expect(reject, "reject must precede the transcript (primary actions, not a disclosure)").toBeLessThan(asr);
-  });
-
-  it("AC2: the non-admin card carries zero pipeline internals and zero status badge", () => {
-    const html = renderToString(
-      React.createElement(HighlightCard, { highlight: hl({ asrTranscript: TRANSCRIPT }), ...CUSTOMER })
-    );
-    const counts = {
-      "data-detail-pipeline": count(html, "data-detail-pipeline"),
-      "Pipeline detail": count(html, "Pipeline detail"),
-      SPORTING_EVENT: count(html, "SPORTING_EVENT"),
-      "outcome=": count(html, "outcome="),
-      "Trigger:": count(html, "Trigger:"),
-      "data-detail-status": count(html, "data-detail-status"),
-      ">accepted<": count(html, ">accepted<"),
-      ">rejected<": count(html, ">rejected<"),
-    };
-    expect(counts).toEqual({
-      "data-detail-pipeline": 0,
-      "Pipeline detail": 0,
-      SPORTING_EVENT: 0,
-      "outcome=": 0,
-      "Trigger:": 0,
-      "data-detail-status": 0,
-      ">accepted<": 0,
-      ">rejected<": 0,
+describe("ADAAAA-7910 — one action row, three slots, Accept gone", () => {
+  for (const admin of [true, false]) {
+    it(`admin=${admin}: exactly one row with three slots, zero Accept controls`, () => {
+      const html = renderToString(
+        React.createElement(HighlightCard, {
+          highlight: hl({ asrTranscript: TRANSCRIPT }),
+          onDecision: () => {},
+          admin,
+        })
+      );
+      expect(count(html, "data-detail-actions")).toBe(1);
+      expect(count(html, 'data-detail-action="')).toBe(3);
+      expect(count(html, "data-detail-accept")).toBe(0);
+      expect(count(html, "data-detail-review")).toBe(0);
+      // Order inside the row: Download -> Copy Link -> verdict.
+      const row = html.slice(html.indexOf("data-detail-actions"), html.indexOf("data-detail-asr"));
+      const order = ["data-detail-download", "data-detail-copy-link", "data-detail-reject"].map((m) =>
+        row.indexOf(m)
+      );
+      expect(order.every((i) => i > -1)).toBe(true);
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+      // Above the transcript: primary actions, not a disclosure.
+      expect(html.indexOf("data-detail-actions")).toBeLessThan(html.indexOf("data-detail-asr"));
     });
+  }
+
+  it("the verdict slot carries the review decision with the exact label strings", () => {
+    const accepted = actionRow(hl({ status: "accepted" }), () => {});
+    expect(accepted.verdict.props["data-detail-reject"]).toBe(true);
+    expect(accepted.verdict.props["aria-label"]).toBe("Reject");
+
+    const rejected = actionRow(hl({ status: "rejected" }), () => {});
+    expect(rejected.verdict.props["data-detail-restore"]).toBe(true);
+    expect(rejected.verdict.props["aria-label"]).toBe("Undo reject");
+
+    const pending = actionRow(hl({ status: "pending" }), () => {});
+    expect(pending.verdict.props["data-detail-approve"]).toBe(true);
+    expect(pending.verdict.props["aria-label"]).toBe("Approve");
   });
 
-  it("AC3: the admin card keeps exactly one collapsed disclosure AFTER the controls", () => {
-    const html = renderToString(
-      React.createElement(HighlightCard, { highlight: hl(), onDecision: () => {}, admin: true })
-    );
-    expect(count(html, "data-detail-pipeline")).toBe(1);
-    expect(html).toMatch(/<details[^>]*data-detail-pipeline[^>]*>/);
-    expect(html).not.toMatch(/<details[^>]*data-detail-pipeline[^>]*\sopen/);
-    expect(html.indexOf("data-detail-accept")).toBeLessThan(html.indexOf("data-detail-pipeline"));
-    expect(html.indexOf("data-detail-reject")).toBeLessThan(html.indexOf("data-detail-pipeline"));
-    for (const token of ["SPORTING_EVENT", "Trigger:", "outcome=scoring_play"]) {
-      expect(html.indexOf(token)).toBeGreaterThan(html.indexOf("data-detail-pipeline"));
-    }
-    // Score is the disclosure's 2xl numeral.
-    expect(html).toContain("text-2xl font-black text-neon");
-  });
-
-  it("AC4: an accept/reject click calls onDecision for a non-admin session", () => {
+  it("a verdict click calls onDecision with the state it moves the clip to", () => {
     const target = hl();
     const calls: Array<[string, string]> = [];
     const onDecision = (h: JobDetailHighlight, status: "accepted" | "rejected") => calls.push([h.id, status]);
-    // The non-admin card renders these same controls (AC1); the handler is
-    // invoked on the element the card returns.
-    const { accept, reject } = reviewButtons(target, onDecision);
-    accept.props.onClick();
-    reject.props.onClick();
+    actionRow(target, onDecision).verdict.props.onClick();
+    actionRow(hl({ status: "rejected" }), onDecision).verdict.props.onClick();
+    actionRow(hl({ status: "pending" }), onDecision).verdict.props.onClick();
     expect(calls).toEqual([
-      ["h1", "accepted"],
       ["h1", "rejected"],
+      ["h1", "accepted"],
+      ["h1", "accepted"],
     ]);
   });
 
-  it("AC4: each control is disabled when the card status already equals that decision", () => {
-    const onDecision = () => {};
-    const accepted = reviewButtons(hl({ status: "accepted" }), onDecision);
-    expect(accepted.accept.props.disabled).toBe(true);
-    expect(accepted.accept.props["aria-pressed"]).toBe(true);
-    expect(accepted.reject.props.disabled).toBe(false);
-    expect(accepted.reject.props["aria-pressed"]).toBe(false);
-
-    const rejected = reviewButtons(hl({ status: "rejected" }), onDecision);
-    expect(rejected.reject.props.disabled).toBe(true);
-    expect(rejected.reject.props["aria-pressed"]).toBe(true);
-    expect(rejected.accept.props.disabled).toBe(false);
-    expect(rejected.accept.props["aria-pressed"]).toBe(false);
-
-    // Both stay enabled on a status neither decision matches.
-    const neutral = reviewButtons(hl({ status: "suppressed" }), onDecision);
-    expect(neutral.accept.props.disabled).toBe(false);
-    expect(neutral.reject.props.disabled).toBe(false);
+  it("disables the verdict slot only while its own request is in flight", () => {
+    expect(actionRow(hl(), () => {}).verdict.props.disabled).toBe(false);
+    // Reject in flight: the reject slot shows the spinner and blocks a double
+    // submit. Restore/approve slots are unaffected because their target differs.
+    expect(actionRow(hl(), () => {}, { pendingStatus: "rejected" }).verdict.props.disabled).toBe(true);
+    expect(actionRow(hl({ status: "rejected" }), () => {}, { pendingStatus: "rejected" }).verdict.props.disabled).toBe(
+      false
+    );
   });
 
-  it("AC4: the same disabled/aria state is what the rendered card emits", () => {
+  it("locks Reject for an owner once the clip was exported (ADAAAA-7896 preserved)", () => {
+    expect(actionRow(hl({ exportedAt: "2026-11-01T10:00:00Z" }), () => {}, { exportLocked: true }).verdict.props.disabled).toBe(true);
+    // An already-rejected clip keeps its restore path even when exported.
+    expect(
+      actionRow(hl({ status: "rejected", exportedAt: "2026-11-01T10:00:00Z" }), () => {}, { exportLocked: true })
+        .verdict.props.disabled
+    ).toBe(false);
+  });
+
+  it("the Download slot is an anchor with the export URL and the copy slot exposes its state", () => {
+    const row = actionRow(hl(), () => {});
+    expect(row.download.type).toBe("a");
+    expect(row.download.props.href).toBe("/clips/h1.mp4?export=1");
+    expect(row.download.props["aria-label"]).toBe("Download");
+    expect(row.copy.props["aria-label"]).toBe("Copy Link");
+    expect(row.copy.props["data-copy-state"]).toBe("idle");
+  });
+
+  it("every slot carries a stable accessible name and a clipped label element", () => {
     const html = renderToString(
-      React.createElement(HighlightCard, {
-        highlight: hl({ status: "rejected" }),
-        onDecision: () => {},
-        admin: false,
-      })
+      React.createElement(HighlightCard, { highlight: hl(), onDecision: () => {}, admin: false })
     );
-    const accept = html.slice(html.indexOf("<button"), html.indexOf("data-detail-accept"));
-    const reject = html.slice(html.indexOf("<button", html.indexOf("data-detail-accept")), html.indexOf("data-detail-reject"));
-    expect(accept).not.toContain("disabled");
-    expect(accept).toContain('aria-pressed="false"');
-    expect(reject).toContain("disabled");
-    expect(reject).toContain('aria-pressed="true"');
+    for (const label of ['aria-label="Download"', 'aria-label="Copy Link"', 'aria-label="Reject"']) {
+      expect(html).toContain(label);
+    }
+    expect(count(html, "data-detail-label")).toBe(3);
   });
 });

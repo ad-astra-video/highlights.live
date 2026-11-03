@@ -58,44 +58,51 @@ describe("per-job highlight card mounts the clip player (ADAAAA-6948)", () => {
     expect(html).toContain("clip processing");
   });
 
-  it("keeps Accept disabled once a highlight is accepted and Reject disabled once rejected", () => {
-    const html = renderToString(
+  it("keeps the verdict slot stateful: Reject on accepted, Undo reject on rejected (ADAAAA-7910)", () => {
+    const accepted = renderToString(
+      React.createElement(HighlightCard, { highlight: hl({ status: "accepted" }), onDecision: () => {} })
+    );
+    expect(accepted).toContain("data-detail-reject");
+    expect(accepted).not.toContain("data-detail-restore");
+
+    const rejected = renderToString(
       React.createElement(HighlightCard, { highlight: hl({ status: "rejected" }), onDecision: () => {} })
     );
-    // Reject button disabled when status === "rejected"
-    expect(html).toContain("data-detail-reject");
-    expect(html).toContain("disabled");
+    // A rejected clip gets the restore path, not a disabled Reject.
+    expect(rejected).toContain("data-detail-restore");
+    expect(rejected).toContain("Undo reject");
+    expect(rejected).not.toContain("data-detail-accept");
+    expect(rejected).not.toMatch(/data-detail-restore[^>]*disabled|disabled[^>]*data-detail-restore/);
   });
 
   it("shows a per-control loading state while a review request is in-flight (ADAAAA-6953)", () => {
-    // pendingStatus="rejected" -> reject control shows a spinner + "Rejecting…"
-    // and BOTH controls are disabled so a user sees the review is in progress
-    // and cannot double-submit.
+    // pendingStatus="accepted" on a pending card -> the Approve slot shows a
+    // spinner and is disabled so a user sees the review is in progress and
+    // cannot double-submit.
     const html = renderToString(
       React.createElement(HighlightCard, {
         highlight: hl({ status: "pending" }),
         onDecision: () => {},
-        pendingStatus: "rejected",
+        pendingStatus: "accepted",
       })
     );
-    expect(html).toContain("Rejecting…");
+    expect(html).toContain("data-detail-approve");
     expect(html).toContain("animate-spin");
-    // Both controls disabled while pending.
-    expect((html.match(/disabled/g) || []).length).toBeGreaterThanOrEqual(2);
+    expect(html).toMatch(/data-detail-approve[^>]*disabled|disabled[^>]*data-detail-approve/);
   });
 
   it("renders the rejected presentation / recover hint for a rejected highlight (ADAAAA-6953)", () => {
     // A rejected clip leaves the accepted feed: the card carries an explicit
     // rejected notice and a data-detail-rejected marker so the Rejected section
-    // is identifiable, while Accept stays enabled for recovery.
+    // is identifiable, while the undo-reject path stays reachable for recovery.
     const html = renderToString(
       React.createElement(HighlightCard, { highlight: hl({ status: "rejected" }), onDecision: () => {} })
     );
     expect(html).toContain("data-detail-rejected");
     expect(html).toContain("Rejected");
-    // Accepted feed semantics: rejected clips are excluded from acceptedCount,
-    // so the restore (Accept) button must remain enabled (not a silent no-op).
-    expect(html).toContain("Accept");
+    // Recovery lives in slot 3 now; Accept itself is gone (ADAAAA-7910).
+    expect(html).toContain("data-detail-restore");
+    expect(html).not.toContain("data-detail-accept");
   });
 });
 

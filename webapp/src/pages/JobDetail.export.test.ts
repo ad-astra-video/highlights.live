@@ -90,7 +90,7 @@ describe("export-aware posting (ADAAAA-7896)", () => {
     expect(html).not.toContain(`href="${PUBLIC_URI}"`);
     // Hooks + copy affordance preserved.
     expect(html).toContain("data-detail-copy-link");
-    expect(html).toContain("Copy link");
+    expect(html).toContain("Copy Link");
   });
 
   it("falls back to the playback URL when the server sends no exportUri", () => {
