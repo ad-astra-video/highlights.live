@@ -38,6 +38,7 @@ from .gemma import (  # noqa: F401
     is_near_miss_ball_outcome,
     reconcile_outcome_with_ball_signal,
 )
+from .match_context_prompt import render_match_context_block, sanitize_match_context
 
 
 class ReactionEvidence(BaseModel):
@@ -184,11 +185,44 @@ class TrackingPlanResponse(BaseModel):
     reason: str = ""
 
 
+class MatchContextTeam(BaseModel):
+    """ADAAAA-7856: one side of the inferred match context.
+
+    Additive and advisory: the resolver (ADAAAA-7855) persists this on the job
+    and the server forwards the stored value on every window inspection. No
+    numeric/string constraints here — a malformed context must NEVER 422 a
+    decide request (constraint 4 of the spec); unusable fields are clipped by
+    ``match_context_prompt.sanitize_match_context`` at render time instead.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    name: str = ""
+    side: str = "unknown"  # home | away | unknown
+    kitColors: list = Field(default_factory=list)
+    confidence: float = 0.0
+
+
+class MatchContext(BaseModel):
+    """ADAAAA-7856: the persisted per-job match context (sport + teams)."""
+
+    model_config = ConfigDict(extra="ignore")
+    sport: str = ""
+    teams: list[MatchContextTeam] = Field(default_factory=list)
+    ambiguous: bool = False
+
+
 class HighlightRequest(BaseModel):
     sessionId: str
     eventType: str
     timestamp: float
     gameHint: str = ""
+    # ADAAAA-7856: inferred teams + kit colours, read from the job's persisted
+    # `matchContext` and rendered into the MATCH CONTEXT prompt block. Absent on
+    # older/live/resolver-less jobs == today's prompt byte-for-byte (AC6).
+    # `Any` on purpose: a shaped-but-wrong payload (teams as a string, a team
+    # object missing a name, an out-of-range confidence) must degrade to "no
+    # context", never to a 422 that drops the window.
+    matchContext: Any = None
     evidence: Evidence = Field(default_factory=Evidence)
     # JPEGs passed as base64 (full frame + track crops) so the Gemma vision
     # projector can actually see the moment (plan §3.7). Rule mode ignores them.
@@ -412,6 +446,10 @@ class TitleRequest(BaseModel):
     eventTypes: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
     highlightCount: int = 0
+    # ADAAAA-7856 (Stage 7 reuse): the job's persisted match context, so the
+    # one title call names the real teams instead of inventing one. Absent ==
+    # byte-identical title prompt to today.
+    matchContext: Any = None
 
 
 class TitleResponse(BaseModel):
@@ -553,6 +591,10 @@ async def _handle_group(req: "HighlightRequest") -> dict:
             audio_sample_rate=req.audioSampleRate,
             reasoning_effort=req.reasoningEffort,
             url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
+            # ADAAAA-7856: the same stored match context every single-candidate
+            # window carries, so a grouped live rail review also names the real
+            # teams (absent == unchanged prompt, no extra inference).
+            match_context=req.matchContext,
         )
         verdicts = [
             _postprocess_gemma_verdict(v, c.evidence.model_dump(), c.eventType, req.preferLabels)
@@ -618,6 +660,9 @@ def create_app() -> FastAPI:
                 },
                 story_so_far=req.storySoFar or "",
                 compact=req.compact,
+                # ADAAAA-7856: render the job's inferred teams + kit colours into
+                # the window prompt (absent == byte-identical prompt to today).
+                match_context=req.matchContext,
             )
             # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
             # goal-line ground-truth signal. A non-"goal" ballOutcome forces
@@ -846,6 +891,7 @@ def create_app() -> FastAPI:
                 highlight_count=req.highlightCount,
                 url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
                 timeout_s=float(os.environ.get("TITLE_TIMEOUT_S", "5")),
+                match_context=req.matchContext,
             )
             if t:
                 return TitleResponse(title=t)

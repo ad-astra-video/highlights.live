@@ -37,6 +37,7 @@ import type {
   ConfirmDecision,
   ConfirmRequest,
   ControlAck,
+  DecideMatchContext,
   DecisionResult,
   GoalLineCalibration,
   GroupDecodeRequest,
@@ -576,6 +577,10 @@ export class OrchestratorAdapter implements PipelineClient {
        * live pass is decode-bound, so output tokens per call IS its throughput
        * ceiling; absent/false sends the full long-form contract. */
       compact?: boolean;
+      /** ADAAAA-7856: the job's persisted match context (teams + kit colours),
+       * read from storage by the analyzer. Absent => no MATCH CONTEXT prompt
+       * block and a byte-identical payload to the pre-feature request. */
+      matchContext?: DecideMatchContext;
     }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -604,6 +609,10 @@ export class OrchestratorAdapter implements PipelineClient {
       // earlier attempt wired only the plain HTTP client and the live decide kept
       // sending max_tokens 1200 / ~1340-char verdicts.
       compact: opts?.compact === true,
+      // ADAAAA-7856: forward the job's inferred teams + kit colours so the live
+      // window prompt names the real teams. Spread so an absent context leaves
+      // the payload byte-identical (no null key).
+      ...(opts?.matchContext ? { matchContext: opts.matchContext } : {}),
     };
     // The decide runner is a fixed-price single-shot live runner; the first
     // unpaid call 402s with a payment challenge. On-chain (signer + payer
@@ -673,6 +682,10 @@ export class OrchestratorAdapter implements PipelineClient {
       frames: req.frames ?? [],
       audioB64: req.audioB64 ?? "",
       audioSampleRate: 16_000,
+      // ADAAAA-7856: the same stored match context the single-window path
+      // forwards, so a grouped live review names the real teams too. Spread so
+      // an absent context leaves the payload byte-identical (no null key).
+      ...(req.matchContext ? { matchContext: req.matchContext } : {}),
     };
     const run = async (paymentHeaders?: Record<string, string>) => {
       const { status, data } = await this.client.decide("highlight", payload, {
@@ -1038,6 +1051,9 @@ export class DirectAdapter implements PipelineClient {
       /** ADAAAA-7781: request the COMPACT verdict contract (short prose, no
        * evidenceAttested, 400-token cap). Live rail only; absent = full contract. */
       compact?: boolean;
+      /** ADAAAA-7856: the job's persisted match context, forwarded so the decide
+       * prompt names the real teams. Absent = byte-identical request to today. */
+      matchContext?: DecideMatchContext;
     }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
@@ -1059,6 +1075,10 @@ export class DirectAdapter implements PipelineClient {
         // ADAAAA-7781: compact verdict contract (live rail). false/absent sends
         // the byte-identical full-contract request.
         compact: opts?.compact === true,
+        // ADAAAA-7856: the job's stored match context (teams + kit colours).
+        // Spread so an absent context adds NO key — the request stays
+        // byte-identical to the pre-feature payload (AC6).
+        ...(opts?.matchContext ? { matchContext: opts.matchContext } : {}),
         evidence,
         images: opts?.imageB64 ? [{ role: "full", base64: opts.imageB64 }] : [],
         frames: opts?.frames ?? [],
