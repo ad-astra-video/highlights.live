@@ -6,8 +6,10 @@
 // - E1 a seeded record returns the evidence beside `matchContext` from GET /jobs/:id
 // - E2 a legacy record (no field) parses and omits it cleanly
 // - E3 a rejected evidence field cannot take `matchContext` down
-// - the ADAAAA-7727 rule: the evidence accounting is an operator surface, so a
-//   non-admin caller keeps `matchContext` but not the diagnostics.
+// - ADAAAA-7889 (AC2): the evidence explanation must be visible on the OWNING
+//   user's GET /jobs/:id (that is the graded route for "an unknown result is
+//   diagnosable from the record"), with only the perceive session handle
+//   stripped (ADAAAA-7727 rule).
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { JobSchema } from "@highlights/events";
 import { buildTestApp, type TestApp } from "./helpers";
@@ -54,6 +56,19 @@ const EVIDENCE = {
   sessionId: "sess-7859",
   sessionEvidence: true,
   sport: "soccer",
+  // ADAAAA-7889 (AC2): the per-channel breakdown that makes an `unknown`
+  // diagnosable from GET /jobs/:id alone.
+  channelOutcomes: {
+    scorebug_ocr: { frames: 1, lines: 1, teamLines: 1, teams: [{ name: "Portugal", side: "home" }], rawLines: ["POR 1 - 0 ESP"] },
+    asr: { chars: 2122, mentions: [{ name: "Spain", snippet: "Spain in white", start: 0, end: 15, kitColor: "white" }] },
+    metadata: { candidates: [{ name: "Portugal", side: "home", field: "title", fuzzy: false }] },
+    fold: {
+      usableConfidence: 0.6,
+      singleSourceCap: 0.55,
+      home: { name: "Portugal", confidence: 0.9, sources: ["metadata", "scorebug_ocr"] },
+      away: null,
+    },
+  },
 };
 
 describe("match-context evidence on the stored job record (ADAAAA-7868)", () => {
@@ -166,7 +181,7 @@ describe("match-context evidence on the stored job record (ADAAAA-7868)", () => 
     expect(after.matchContextEvidence).toBeUndefined();
   });
 
-  it("filters the evidence for a non-admin while keeping matchContext (ADAAAA-7727 rule)", async () => {
+  it("exposes the evidence explanation to a non-admin but drops its session handle (ADAAAA-7889 AC2)", async () => {
     const res = await t.app.inject({
       method: "GET",
       url: `/jobs/${seededId}`,
@@ -176,7 +191,13 @@ describe("match-context evidence on the stored job record (ADAAAA-7868)", () => 
     const job = res.json().job;
     // The customer's explainability view (teams + colours) stays …
     expect(job.matchContext.teams[1].side).toBe("away");
-    // … the internal evidence accounting does not leak.
-    expect(job).not.toHaveProperty("matchContextEvidence");
+    // … and so does the per-channel breakdown AC2 requires on this route.
+    expect(job.matchContextEvidence).toBeTruthy();
+    expect(job.matchContextEvidence.channelOutcomes.scorebug_ocr.rawLines).toEqual(["POR 1 - 0 ESP"]);
+    expect(job.matchContextEvidence.channelOutcomes.asr.mentions[0].snippet).toBe("Spain in white");
+    expect(job.matchContextEvidence.channelOutcomes.fold.usableConfidence).toBe(0.6);
+    // … while the live perceive session handle does not leak (ADAAAA-7727 rule).
+    expect(job.matchContextEvidence).not.toHaveProperty("sessionId");
+    expect(job.matchContextEvidence.kitPriorUsed).toEqual(["away"]);
   });
 });
