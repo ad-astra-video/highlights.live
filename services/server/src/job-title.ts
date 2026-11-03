@@ -23,7 +23,7 @@ export function fallbackJobTitle(job: Pick<Job, "gameHint" | "source">, highligh
  * back. Never throws. */
 export async function requestJobTitle(
   cfg: Pick<ServerConfig, "decideUrl">,
-  job: Pick<Job, "id" | "gameHint">,
+  job: Pick<Job, "id" | "gameHint" | "matchContext">,
   highlights: HighlightRecord[],
   fetchImpl: typeof fetch = fetch,
 ): Promise<string | null> {
@@ -40,6 +40,10 @@ export async function requestJobTitle(
         eventTypes,
         reasons,
         highlightCount: accepted.length,
+        // ADAAAA-7856 (Stage 7 reuse): the one title call inherits the job's
+        // inferred teams so a chapter/title never invents a nationality. Omitted
+        // entirely when the job has no context => byte-identical title request.
+        ...(job.matchContext ? { matchContext: job.matchContext } : {}),
       }),
       signal: AbortSignal.timeout(TITLE_TIMEOUT_MS),
     });

@@ -281,6 +281,63 @@ export function deriveHighlightTrigger(c: CandidateSignal): HighlightTrigger {
 export function decideGroupKey(timestamp: number): string {
   return `g${Math.floor(timestamp / 3)}`;
 }
+
+/** ADAAAA-7856: the wire shape of the match context forwarded on a decide call.
+ * Mirrors the additive `matchContext` field on the decide service's
+ * `HighlightRequest` — the persisted job record minus the resolver audit
+ * (`trail`, `evidence`, `inferredAt`), which the prompt does not use. */
+export interface DecideMatchContext {
+  sport: string;
+  teams: { name: string; side: string; kitColors: { primary: string; secondary?: string }[]; confidence: number }[];
+  ambiguous: boolean;
+}
+
+/** ADAAAA-7856: normalise the job's stored `matchContext` to the decide wire
+ * shape, or `undefined` when it carries nothing usable.
+ *
+ * Read from persistence — NEVER recomputed here, so this change adds zero GPU
+ * work per window (the resolver ran once per job, ADAAAA-7855). Unknown fields
+ * are dropped and malformed entries are skipped: a bad stored context degrades
+ * to "no context" (today's prompt), it never breaks the send path or 422s the
+ * decide request. Pure, so it is cheap on the per-window hot path.
+ */
+export function toDecideMatchContext(raw: unknown): DecideMatchContext | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const src = raw as Record<string, any>;
+  const text = (v: unknown, max: number): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  const teams: DecideMatchContext["teams"] = [];
+  const seenSides = new Set<string>();
+  for (const item of Array.isArray(src.teams) ? src.teams : []) {
+    if (!item || typeof item !== "object") continue;
+    const name = text(item.name, 60);
+    // "unknown" is the resolver's explicit "could not attribute" marker; it is
+    // never forwarded as a team name (that would invite a fabricated claim).
+    if (!name || name.toLowerCase() === "unknown") continue;
+    const sideRaw = text(item.side, 10).toLowerCase();
+    const side = sideRaw === "home" || sideRaw === "away" ? sideRaw : "unknown";
+    if (seenSides.has(side)) continue;
+    seenSides.add(side);
+    const kitColors: { primary: string; secondary?: string }[] = [];
+    for (const c of Array.isArray(item.kitColors) ? item.kitColors : []) {
+      if (!c || typeof c !== "object") continue;
+      const primary = text(c.primary, 24);
+      if (!primary) continue;
+      const secondary = text(c.secondary, 24);
+      kitColors.push(secondary ? { primary, secondary } : { primary });
+      if (kitColors.length >= 2) break;
+    }
+    const n = Number(item.confidence);
+    const confidence = Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
+    teams.push({ name, side, kitColors, confidence });
+    if (teams.length >= 2) break;
+  }
+  if (!teams.length) return undefined;
+  return {
+    sport: text(src.sport, 40).toLowerCase(),
+    teams,
+    ambiguous: src.ambiguous === true,
+  };
+}
 /** ADAAAA-7232: deterministic highlight-instant localization from the defined
  * per-frame/per-tap signal. Prefers the highest-RMS audio tap strictly AFTER
  * the trigger within `maxLookaheadS` (peak-audio post-trigger, Acc-2/Acc-3);
@@ -825,6 +882,9 @@ export interface GroupDecodeRequest {
   frames?: { role: string; base64: string }[];
   /** Surrounding audio clip (mono 16 kHz WAV, base64) for the group. */
   audioB64?: string;
+  /** ADAAAA-7856: the job's stored match context, forwarded so the merged group
+   * review names the real teams too. Absent => unchanged group request. */
+  matchContext?: DecideMatchContext;
   candidates: GroupCandidate[];
 }
 
@@ -875,6 +935,19 @@ export interface PipelineClient {
     sessionId: string,
     req: { centerTs?: number; windowS?: number; startTs?: number; endTs?: number }
   ): Promise<{ centerTs?: number; seeds: PerFrameSeed[] }>;
+  /**
+   * ADAAAA-7855: resolve + persist the job's match context (who is playing,
+   * which colour each team wears). Called at most THREE times per VOD job (job
+   * start, >=25%, >=50%) with the server-side half of the evidence (bounded ASR
+   * transcript + metadata hints + the previously stored context for the
+   * monotonic guard). Perceive folds it against evidence it already computed,
+   * so this adds NO GPU call. Optional so a FAKE/older client simply never
+   * resolves — the job then has no `matchContext`, i.e. pre-feature behaviour.
+   */
+  postMatchContext?(
+    sessionId: string,
+    payload: Record<string, unknown>
+  ): Promise<{ matchContext: Record<string, unknown>; evidenceStatus?: Record<string, unknown> } | null>;
   /**
    * Decide whether a candidate is a highlight. `imageB64` is the candidate
    * frame so the Gemma 12B QAT decide runner sees the actual moment (vision),
@@ -935,6 +1008,11 @@ export interface PipelineClient {
        * pass is decode-bound, so output tokens per call IS its throughput
        * ceiling. Absent/false = the full long-form contract. */
       compact?: boolean;
+      /** ADAAAA-7856: the job's persisted match context (teams + kit colours).
+       * Read from storage via `AnalyzerConfig.getMatchContext` — never recomputed
+       * per window. Absent = no MATCH CONTEXT prompt block (byte-identical
+       * request/prompt to the pre-feature path). */
+      matchContext?: DecideMatchContext;
     }
   ): Promise<DecisionResult>;
   /**
@@ -1360,6 +1438,13 @@ export interface AnalyzerConfig {
    * (story-so-far) so the next cadence decide request can carry it forward.
    * Absent => no prior summary (the decide runs without one). */
   getRunningSummary?: () => string;
+  /** ADAAAA-7856: read the job's persisted `matchContext` (teams + kit colours,
+   * resolved once per job by ADAAAA-7855) so every window inspection names the
+   * real teams instead of inventing them. Mirrors `getRunningSummary`: a
+   * persisted read, never a recompute — this must add NO GPU work per window.
+   * Absent (or a context with nothing usable) => the decide request carries no
+   * matchContext and the prompt is byte-identical to today (AC6). */
+  getMatchContext?: () => unknown;
   /** ADAAAA-7111 (Increment D): persist the updated running video summary after
    * a cadence decide, so the job-detail endpoint + web UI surface it growing.
    * Best-effort: a throwing callback is caught + logged, never a pipeline
@@ -3310,6 +3395,10 @@ export function buildObserveDecideRequest(
   // the live/file-sim tap (audio captured in real time) worked. Slice the
   // retained timeline around `center` (a head/tail margin brackets the whole
   // window; silent / no-tap windows yield "" and stay text-only, no regression).
+  // ADAAAA-7856: the job's persisted match context, normalised once for this
+  // window. `toDecideMatchContext` is pure and reads the value the injector
+  // already loaded, so it never triggers a resolver/GPU pass per window.
+  const matchCtx = toDecideMatchContext(cfg.getMatchContext?.());
   const frameTs = payload.frames.map((f) => f.ts).filter((t) => Number.isFinite(t));
   const preS = frameTs.length ? Math.max(center - Math.min(...frameTs), 0) + AUDIO_WINDOW_MARGIN_S : AUDIO_DEFAULT_WINDOW_S;
   const postS = frameTs.length ? Math.max(Math.max(...frameTs) - center, 0) + AUDIO_WINDOW_MARGIN_S : AUDIO_DEFAULT_WINDOW_S;
@@ -3401,6 +3490,11 @@ export function buildObserveDecideRequest(
     // ADAAAA-7111 (Increment D): carry the job's running video summary
     // (story-so-far) so the decide brain EXTENDS it (monotonic growth).
     storySoFar: cfg.getRunningSummary?.() ?? "",
+    // ADAAAA-7856 (Stage 6): the job's inferred teams + kit colours, read from
+    // persistence (one resolver pass per job — zero extra GPU per window). An
+    // absent/unusable context omits the key entirely, so the request and the
+    // rendered prompt stay byte-identical to today (AC6).
+    ...(matchCtx ? { matchContext: matchCtx } : {}),
     // ADAAAA-7781: compact verdict contract on the live rail (decode-bound
     // throughput). `false` — the default — sends the byte-identical request.
     compact: cfg.liveDecideCompact === true,

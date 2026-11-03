@@ -44,6 +44,11 @@ import time
 from typing import Optional
 
 from .decider import decide
+from .match_context_prompt import (
+    match_context_rule,
+    render_match_context_block,
+    sanitize_match_context,
+)
 
 log = logging.getLogger("highlights.decide.gemma")
 
@@ -1144,6 +1149,7 @@ def build_prompt(
     transcript: str = "",
     story_so_far: str = "",
     compact: bool = False,
+    match_context: object = None,
 ) -> str:
     ev = event_type.upper()
     meta = [
@@ -1199,6 +1205,23 @@ def build_prompt(
     if ssf:
         meta.append("STORY SO FAR (your running summary of the video so far — you MUST extend/compress it, keep it chronological and forward-only, never delete events already captured, only tighten wording):")
         meta.append("  " + ssf[:MAX_RUNNING_SUMMARY_CHARS])
+    # ADAAAA-7856 (Stage 6): the job's inferred teams + kit colours, resolved
+    # ONCE per job from persisted evidence (no extra GPU call here) and rendered
+    # as one compact block. An absent/unusable context renders "" and changes
+    # nothing — the prompt stays byte-identical to the pre-feature text (AC6).
+    mc_ctx = sanitize_match_context(match_context)
+    mc_block = render_match_context_block(mc_ctx)
+    if mc_block:
+        meta.append(mc_block)
+    contract = _OUTPUT_CONTRACT_COMPACT if compact else _OUTPUT_CONTRACT_FULL
+    if mc_block and mc_ctx is not None:
+        # ADAAAA-7856 (Stage 6): the anti-fabrication rule ALSO governs the
+        # runningSummary narrative — that field is where "the German defender"
+        # was invented, so it carries the same rule as the verdict fields.
+        contract = contract + (
+            "\nMATCH CONTEXT RULE (also governs runningSummary and every free-text "
+            "field): " + match_context_rule(mc_ctx.get("sport"))
+        )
     return (
         "You are a sports/esports highlight judge. You are shown a temporal "
         "SEQUENCE of frames (extracted at 1 FPS from the moment of a detected "
@@ -1309,7 +1332,7 @@ def build_prompt(
         "`score` in a lower band (e.g. <60) for near_miss, and set `nearMiss`/the "
         "flag so downstream assembly can label it distinctly.\n"
         "Context:\n- " + "\n- ".join(meta) + "\n\n"
-        + (_OUTPUT_CONTRACT_COMPACT if compact else _OUTPUT_CONTRACT_FULL)
+        + contract
     )
 
 
@@ -1346,6 +1369,7 @@ def _build_data_items(
     has_audio: bool = False,
     transcript: str = "",
     story_so_far: str = "",
+    match_context: object = None,
 ) -> list:
     """Ordered, structured view of the context items fed to the model for a
     single-candidate window. Mirrors `build_prompt`'s rendered lines so the UI
@@ -1387,6 +1411,12 @@ def _build_data_items(
     ssf = (story_so_far or "").strip()
     if ssf:
         add("summary", "STORY SO FAR", ssf[:MAX_RUNNING_SUMMARY_CHARS])
+    # ADAAAA-7856: the same MATCH CONTEXT block the prompt carries, as its own
+    # inspectable item (the window's `analysis.dataItems` in the UI). Absent
+    # context adds no item, so nothing changes for resolver-less jobs.
+    mc_block = render_match_context_block(match_context)
+    if mc_block:
+        add("match_context", "Match context (inferred teams, authoritative for naming)", mc_block)
     return items
 
 
@@ -1467,6 +1497,7 @@ def _window_analysis(
     frames: list | None = None,
     images: list | None = None,
     response: dict | None = None,
+    match_context: object = None,
 ) -> dict:
     """Assemble the opaque `analysis` block for a decided window."""
     evidence = evidence or {}
@@ -1474,6 +1505,7 @@ def _window_analysis(
         data_items = _build_data_items(
             event_type, evidence, game_hint, n_frames, n_images,
             send_audio or bool(transcript), transcript, story_so_far,
+            match_context,
         )
     return {
         "prompt": prompt,
@@ -1505,6 +1537,7 @@ def ask(
     audit_ctx: dict | None = None,
     story_so_far: str = "",
     compact: bool = False,
+    match_context: object = None,
 ) -> dict | None:
     """Call the gemma multimodal completion (vLLM OpenAI-compat server). Returns
     a parsed/validated HighlightDecision dict, or None on any transport/parse
@@ -1561,6 +1594,7 @@ def ask(
         transcript=transcript,
         story_so_far=story_so_far,
         compact=compact,
+        match_context=match_context,
     )
     content.append({"type": "text", "text": prompt})
     # 3) audio AFTER the text (modality-order rule) — only when the raw-send gate
@@ -1658,6 +1692,7 @@ def ask(
             frames=frames,
             images=images,
             response=_response_block(result),
+            match_context=match_context,
         )
     return result
 
@@ -1676,6 +1711,7 @@ def decide_with_gemma(
     audit_ctx: dict | None = None,
     story_so_far: str = "",
     compact: bool = False,
+    match_context: object = None,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision.
@@ -1716,6 +1752,7 @@ def decide_with_gemma(
         audit_ctx=audit_ctx,
         story_so_far=story_so_far,
         compact=compact,
+        match_context=match_context,
     )
     if g is not None:
         result = g
@@ -1791,6 +1828,7 @@ def decide_with_gemma(
             frames=frames,
             images=images,
             response=_response_block(result),
+            match_context=match_context,
         )
         # rule fallback: no model call, so no audio channel reached the model
         if isinstance(result["analysis"].get("audio"), dict):
@@ -1850,6 +1888,7 @@ def title_with_gemma(
     highlight_count: int = 0,
     url: str | None = None,
     timeout_s: float = 5.0,
+    match_context: object = None,
 ) -> str | None:
     """Generate a short, human-readable job title with a TEXT-ONLY Gemma call
     (ADAAAA-6798 Inc 1). Takes a compact summary (gameHint + the job's
@@ -1866,6 +1905,10 @@ def title_with_gemma(
 
     event_types = [str(x) for x in (event_types or [])]
     reasons = [str(x) for x in (reasons or [])]
+    # ADAAAA-7856 (Stage 7): the title call names the REAL teams too, so a
+    # chapter/title never invents a nationality. Absent context adds nothing
+    # (the title prompt stays byte-identical to today).
+    mc_block = render_match_context_block(match_context)
     prompt = (
         "You write a short title for a sports/gaming highlight reel. "
         "Return ONLY one short human-readable title (<= 12 words, no quotes, "
@@ -1874,7 +1917,8 @@ def title_with_gemma(
         f"Highlight event types: {', '.join(event_types) or 'none'}\n"
         f"Accepted highlight count: {highlight_count}\n"
         f"Highlight reasons: {'; '.join(r for r in reasons[:6]) or 'none'}\n"
-        "Title:"
+        + (mc_block + "\n" if mc_block else "")
+        + "Title:"
     )
     payload = {
         "messages": [{"role": "user", "content": prompt}],
@@ -1962,6 +2006,7 @@ def build_group_prompt(
     n_frames: int = 1,
     has_audio: bool = False,
     transcript: str = "",
+    match_context: object = None,
 ) -> str:
     """The group-mode decide prompt. Lists every candidate (index, eventType,
     timestamp, evidence summary) and asks for a JSON ARRAY of verdicts, one per
@@ -1987,6 +2032,12 @@ def build_group_prompt(
     extra = ""
     if transcript:
         extra += "\naudio commentary transcript (ASR):\n  " + transcript[:500]
+    # ADAAAA-7856: same MATCH CONTEXT block + rule as the single-candidate prompt
+    # (absent == identical group prompt, no extra inference).
+    mc_ctx = sanitize_match_context(match_context)
+    mc_block = render_match_context_block(mc_ctx)
+    if mc_block:
+        extra += "\n" + mc_block
     return (
         "You are a sports/esports highlight judge. You are shown a temporal "
         "SEQUENCE of frames (extracted at 1 FPS) spanning a single 3-second "
@@ -2025,6 +2076,7 @@ def ask_group(
     reasoning_effort: str = "none",
     timeout_s: float = 180.0,
     transcript: str = "",
+    match_context: object = None,
 ) -> list | None:
     """Call the gemma multimodal completion ONCE for the whole frame group and
     return the parsed per-candidate verdict list (or None on any failure). Same
@@ -2050,6 +2102,7 @@ def ask_group(
         n_frames=len(frames),
         has_audio=bool(send_audio or transcript),
         transcript=transcript,
+        match_context=match_context,
     )
     content.append({"type": "text", "text": group_prompt})
     if send_audio:
@@ -2117,6 +2170,7 @@ def decide_group_with_gemma(
     reasoning_effort: str = "none",
     url: str | None = None,
     score_board_changed: bool = False,
+    match_context: object = None,
 ) -> list[dict]:
     """Group mode: ONE gemma review of the whole 3 s frame group returns a
     verdict per candidate (same order as ``candidates``). Candidates are dicts
@@ -2151,6 +2205,7 @@ def decide_group_with_gemma(
         audio_sample_rate,
         reasoning_effort=reasoning_effort,
         transcript=transcript,
+        match_context=match_context,
     )
     if g is not None and len(g) == n:
         results = g
@@ -2174,6 +2229,7 @@ def decide_group_with_gemma(
                 reasoning_effort=reasoning_effort,
                 url=u,
                 score_board_changed=bool(ev.get("scoreBoardChanged", False)),
+                match_context=match_context,
             )
             results.append(v)
     return results

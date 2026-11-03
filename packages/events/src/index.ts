@@ -686,6 +686,67 @@ export const VodMeterSchema = z.object({
 });
 export type VodMeter = z.infer<typeof VodMeterSchema>;
 
+// ADAAAA-7855: the once-per-job match context (who is playing, which colour
+// each team wears, and how confident the resolver was). Additive optional, the
+// same precedent as `runningSummary` / `summaryLog`: absent on every older row,
+// no contract version bump. `services/perceive/app/match_context.py` builds it
+// and `services/server/src/match-context.ts` persists it; the sibling prompt
+// injection issue (ADAAAA-7856) reads it into the decide prompt, and
+// `GET /jobs/:id` surfaces it beside `runningSummary` so the board can inspect
+// what the model was told.
+export const MatchContextTeamSchema = z.object({
+  name: z.string(),
+  side: z.enum(["home", "away", "unknown"]),
+  kitColors: z
+    .array(
+      z.object({
+        primary: z.string(),
+        secondary: z.string().optional(),
+      })
+    )
+    .default([]),
+  confidence: z.number().min(0).max(1),
+  evidence: z
+    .array(
+      z.object({
+        source: z.string(),
+        snippet: z.string(),
+      })
+    )
+    .default([]),
+});
+export type MatchContextTeam = z.infer<typeof MatchContextTeamSchema>;
+
+export const MatchContextSchema = z.object({
+  sport: z.string(),
+  teams: z.array(MatchContextTeamSchema),
+  inferredAt: z.string(),
+  resolverVersion: z.number().int().min(0),
+  ambiguous: z.boolean(),
+  // AC4 audit surface: one bounded entry per resolver pass (job start, >=25%,
+  // >=50%) showing the names/confidences at that point and what the monotonic
+  // guard did ("kept Portugal at home" / "flipped ..."). Bounded in the writer.
+  trail: z
+    .array(
+      z.object({
+        at: z.string(),
+        progressPct: z.number(),
+        names: z
+          .array(
+            z.object({
+              side: z.string().optional(),
+              name: z.string().optional(),
+              confidence: z.number().optional(),
+            })
+          )
+          .default([]),
+        action: z.array(z.string()).default([]),
+      })
+    )
+    .default([]),
+});
+export type MatchContext = z.infer<typeof MatchContextSchema>;
+
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -705,6 +766,12 @@ export const JobSchema = z.object({
   // dropped, or reordered. Distinct from `runningSummary` (the bounded rolling
   // in-model story-so-far). Additive optional — absent on jobs that predate it.
   summaryLog: z.array(SummaryLogEntrySchema).optional(),
+  // ADAAAA-7855: inferred teams + kit colours, resolved once per VOD job and
+  // re-checked at bounded progress points. Additive optional — absent on jobs
+  // that predate the resolver, on jobs whose evidence was unusable (the
+  // resolver still writes an `ambiguous: true` context rather than a guess),
+  // and whenever the resolver is switched off.
+  matchContext: MatchContextSchema.optional(),
   // `file-sim` = loop a local file at real-time rate as a synthetic live source
   // (LiveIngest kind `file-sim`); used by QA/dev to run the live pipeline
   // deterministically without an RTMP encoder or a display (ADAAAA-5777).
