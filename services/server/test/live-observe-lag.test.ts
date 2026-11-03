@@ -157,7 +157,7 @@ function makeClient(decideMs: number | number[]) {
       reason: "test",
     }),
     postAudio: async () => ({ candidate: null, series: [] }),
-    controlForward: async () => {},
+    controlForward: async () => null,
     train: async () => ({ run: "x", checkpoint: "/runs/x/model.safetensors" }),
     stopPerceive: async () => {},
     confirm: async () => ({

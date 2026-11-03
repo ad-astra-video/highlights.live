@@ -165,6 +165,19 @@ export async function resolveSampleFps(
   return Math.min(maxFps, Math.max(baseFps, sampleFps));
 }
 
+/** Perceive control types the server forwards to a session (INC-6 find-and-track
+ * plus calibration configure). Best-effort: the console acks the recorded intent
+ * and a dropped forward is logged, never surfaced.
+ *
+ * ADAAAA-7833: `track-player` / `track-player-by-number` are deliberately NOT in
+ * this set — they are awaited and their perceive ack is returned to the caller,
+ * because an identification failure must be visible to the operator. */
+const FORWARD_CONTROL_TYPES = ["track", "find-track", "seed", "lock", "evict", "configure"];
+
+/** Player-by-jersey control types (ADAAAA-7218 capability, wired by ADAAAA-7833).
+ * `track-player-by-number` is the long-form alias perceive accepts. */
+const PLAYER_CONTROL_TYPES = ["track-player", "track-player-by-number"];
+
 /** Perceive persistent-session list price per hour (docker/runners.json
  * perceives `$0.01/hr`). Used for the recorded per-video `costUsd` list cost on
  * VOD jobs (ADAAAA-4954 spec §4.1). Flat hour unit, so session billing is
@@ -3816,13 +3829,23 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   });
 
   // Operator control intent for a live-console session, including the INC-6
-  // on-demand find-and-track intent (track/seed/evict/lock). The `track` /
+  // on-demand find-and-track intent (track/seed/evict/lock) and the
+  // player-by-jersey intent (track-player, ADAAAA-7833). The `track` /
   // `find-track` intent carries the user-selected object bbox and is forwarded
   // to the perceive session over HTTP so the runner actually follows it
   // (Florence find -> SAM track -> selected-track accuracy surfaced in the UI).
-  // Async + best-effort: we ack immediately with the recorded intent and always
-  // return the current job; a dropped forward (session re-reserved/404) never
-  // fails the request.
+  //
+  // Best-effort for the tracking controls: we ack immediately with the recorded
+  // intent and always return the current job; a dropped forward
+  // (session re-reserved/404) never fails the request.
+  //
+  // `track-player` / `track-player-by-number` are the exception (ADAAAA-7833):
+  // an identification failure is a legitimate, common outcome (jersey not
+  // legible on the anchor frame), so the perceive ack is AWAITED and returned
+  // verbatim — `ok:false` + `error` (+ `retrying`/`retryWindowFrames` while the
+  // bounded retry window is open). Without this the UI would show ok:true for a
+  // request that forwarded nothing, which is exactly the silent no-op the
+  // capability was invisible behind.
   app.post<{ Params: { id: string }; Body: { type?: string; args?: any } }>(
     "/jobs/:id/control",
     { preHandler: authReq },
@@ -3831,6 +3854,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       if (!job) return reply.code(404).send({ error: "no job" });
       const type = req.body?.type || "none";
       const args = req.body?.args ?? {};
+      const control = { type, args, at: new Date().toISOString() };
       // Resolve the active perceive session for this job: the browser-capture
       // rail keeps it on the job record, and a VOD/live job persists it on the
       // job once the session is reserved.
@@ -3838,14 +3862,71 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // Control messages (find-and-track intent) mirror the perceive schema: a
       // flat object with `type` plus its args spread at top level.
       const fwd = { type, ...args };
-      if (sid && ["track", "find-track", "seed", "lock", "evict", "configure"].includes(type)) {
+      const playerType = PLAYER_CONTROL_TYPES.includes(type);
+      if (playerType) {
+        // Fail loudly rather than acking ok:true for a request that reaches no
+        // perceive session — the operator would otherwise believe the player is
+        // being tracked when nothing is running.
+        if (!sid) {
+          return {
+            ok: false,
+            error: "no live perceive session for this job yet — start the stream first",
+            control,
+            ack: null,
+            job: jobForRole(store.getJob(job.id), req.user.role),
+          };
+        }
+        if (typeof adapter.controlForward !== "function") {
+          return {
+            ok: false,
+            error: "this runner cannot forward control intents",
+            control,
+            ack: null,
+            job: jobForRole(store.getJob(job.id), req.user.role),
+          };
+        }
+        try {
+          const ack = await adapter.controlForward(sid, fwd);
+          if (!ack) {
+            // A non-2xx from the runner (typically a 404 after the video leg
+            // re-reserved a fresh session) is still a real failure to identify:
+            // report it instead of implying the request was accepted.
+            return {
+              ok: false,
+              error: "perceive returned no ack for this control (the session may have been re-reserved) — try again",
+              control,
+              ack: null,
+              job: jobForRole(store.getJob(job.id), req.user.role),
+            };
+          }
+          return {
+            ok: ack.ok !== false,
+            control,
+            ack,
+            job: jobForRole(store.getJob(job.id), req.user.role),
+          };
+        } catch (e: any) {
+          // Transport / 5xx: report it as a failed identification request, not a
+          // dropped best-effort forward. `retrying:false` distinguishes it from
+          // the perceive-side "no legible jersey yet" ack.
+          console.error(`[control:${job.id}] forward ${type} failed:`, e?.message || e);
+          return {
+            ok: false,
+            error: `perceive control forward failed: ${String(e?.message || e)}`,
+            control,
+            ack: null,
+            job: jobForRole(store.getJob(job.id), req.user.role),
+          };
+        }
+      }
+      if (sid && FORWARD_CONTROL_TYPES.includes(type)) {
         adapter.controlForward(sid, fwd).catch((e: any) => {
           // Best-effort: never surface a dropped find-and-track to the user as a
           // failure; the console ack reflects the recorded intent.
           console.error(`[control:${job.id}] forward ${type} failed:`, e?.message || e);
         });
       }
-      return { ok: true, control: { type, args, at: new Date().toISOString() }, job: jobForRole(store.getJob(job.id), req.user.role) };
+      return { ok: true, control, job: jobForRole(store.getJob(job.id), req.user.role) };
     }
   );
 

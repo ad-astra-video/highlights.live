@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildTestApp, waitForJob } from "./helpers";
+import { buildTestApp, fakePipeline, waitForJob } from "./helpers";
 import { HighlightRecordSchema } from "@highlights/events";
 import { completedCounterFields } from "../src/job-counters";
 
@@ -294,6 +294,132 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
       payload: { type: "lock", args: { trackId: "a" } },
     });
     expect(anon.statusCode).toBe(401);
+    await app.close();
+  });
+
+  // ADAAAA-7833: the player-by-jersey intent is the ONE control whose outcome
+  // the operator must see. The server forwards it, AWAITS perceive's ack and
+  // returns it verbatim — a jersey that is not legible on the anchor frame is a
+  // real `ok:false` + `retrying`, never a silent `ok:true` no-op.
+  it("forwards track-player to perceive and returns its ack (ADAAAA-7833)", async () => {
+    const calls: any[] = [];
+    const adapter: any = fakePipeline();
+    adapter.controlForward = async (sid: string, c: any) => {
+      calls.push([sid, c]);
+      return { type: "ack", ok: true, cmd: "track-player", number: 9, slot: 2, trackId: "t2", selected: true, bbox: [0.1, 0.2, 0.3, 0.5] };
+    };
+    const { app } = await buildTestApp({}, { adapter });
+    const token = await register(app, "tp@test.dev", "password123");
+    const job = await app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token}` }, payload: { videoPath } });
+    const jobId = job.json().job.id;
+    await waitForJob(app, jobId, token);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/control`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { type: "track-player", args: { number: 9 } },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(true);
+    expect(body.control.type).toBe("track-player");
+    // the ack is surfaced, not swallowed
+    expect(body.ack).toMatchObject({ ok: true, cmd: "track-player", number: 9, slot: 2 });
+    // and it actually reached perceive, with the args flattened onto the control
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({ type: "track-player", number: 9 });
+    expect(calls[0][0]).toBeTruthy(); // a real session id
+    await app.close();
+  });
+
+  it("surfaces an identification failure + retry window instead of ok:true (ADAAAA-7833)", async () => {
+    const adapter: any = fakePipeline();
+    adapter.controlForward = async (_sid: string, c: any) => ({
+      type: "ack",
+      ok: false,
+      cmd: c.type,
+      number: 2,
+      retrying: true,
+      retryWindowFrames: 200,
+      retryStride: 1,
+      retryAttempts: 200,
+      error: "no player with number 2 identified on the anchor frame",
+    });
+    const { app } = await buildTestApp({}, { adapter });
+    const token = await register(app, "tp2@test.dev", "password123");
+    const job = await app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token}` }, payload: { videoPath } });
+    const jobId = job.json().job.id;
+    await waitForJob(app, jobId, token);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/control`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { type: "track-player-by-number", args: { number: 2 } },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(false);
+    expect(body.ack.ok).toBe(false);
+    expect(body.ack.retrying).toBe(true);
+    expect(body.ack.retryWindowFrames).toBe(200);
+    expect(body.ack.error).toContain("no player with number 2");
+    await app.close();
+  });
+
+  it("fails loudly when a player request has no live perceive session (ADAAAA-7833)", async () => {
+    const adapter: any = fakePipeline();
+    adapter.controlForward = async () => {
+      throw new Error("controlForward must not be called without a session");
+    };
+    const { app } = await buildTestApp({}, { adapter });
+    const token = await register(app, "tp3@test.dev", "password123");
+    // A browser-capture job holds no perceive session until the client reserves one.
+    const job = await app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token}` }, payload: { source: "browser", gameHint: "x" } });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/jobs/${job.json().job.id}/control`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { type: "track-player", args: { number: 9 } },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain("no live perceive session");
+    expect(body.ack).toBeNull();
+    await app.close();
+  });
+
+  it("keeps the other tracking controls fire-and-forget (ADAAAA-7833 regression guard)", async () => {
+    const calls: any[] = [];
+    const adapter: any = fakePipeline();
+    adapter.controlForward = async (_sid: string, c: any) => {
+      calls.push(c);
+      return { type: "ack", ok: true, cmd: c.type, slot: 1 };
+    };
+    const { app } = await buildTestApp({}, { adapter });
+    const token = await register(app, "tp4@test.dev", "password123");
+    const job = await app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token}` }, payload: { videoPath } });
+    const jobId = job.json().job.id;
+    await waitForJob(app, jobId, token);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/control`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { type: "track", args: { bbox: [0.1, 0.2, 0.3, 0.4], label: "player" } },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    // Same ack shape as before this change: no `ack` field, ok:true immediately.
+    expect(body.ok).toBe(true);
+    expect(body.ack).toBeUndefined();
+    // the forward still goes out (best-effort, after the ack)
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ type: "track", bbox: [0.1, 0.2, 0.3, 0.4] });
     await app.close();
   });
 

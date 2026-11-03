@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { loadConfig } from "../src/config";
 import { parsePerceiveCalibration, resolvePerceiveCalibration } from "../src/perceive-calibration";
 import { configurePerceiveCalibration, analyzeJob } from "../src/analyzer";
-import type { PipelineClient, ReserveResult } from "../src/analyzer";
+import type { ControlAck, PipelineClient, ReserveResult } from "../src/analyzer";
 
 // A synthetic calibration fixture. This is a TEST fixture only — production
 // calibration is never synthesized; it comes from explicit per-camera config
@@ -97,7 +97,7 @@ describe("resolvePerceiveCalibration (ADAAAA-7152 Gap 2)", () => {
 describe("configurePerceiveCalibration forward (ADAAAA-7152 Gap 2)", () => {
   it("sends a `configure` control with homography + goalLine when calibration is present", async () => {
     const calls: any[] = [];
-    const client = { controlForward: async (_sid: string, c: any) => { calls.push(c); } } as unknown as PipelineClient;
+    const client = { controlForward: async (_sid: string, c: any) => { calls.push(c); return null; } } as unknown as PipelineClient;
     await configurePerceiveCalibration(client, "sess-1", { homography: FIXTURE_HOMOG, goalLine: FIXTURE_GOAL_LINE });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({ type: "configure", homography: FIXTURE_HOMOG, goalLine: FIXTURE_GOAL_LINE });
@@ -105,7 +105,7 @@ describe("configurePerceiveCalibration forward (ADAAAA-7152 Gap 2)", () => {
 
   it("is a strict no-op (no forward) when no calibration is configured", async () => {
     const calls: any[] = [];
-    const client = { controlForward: async (_sid: string, c: any) => { calls.push(c); } } as unknown as PipelineClient;
+    const client = { controlForward: async (_sid: string, c: any) => { calls.push(c); return null; } } as unknown as PipelineClient;
     await configurePerceiveCalibration(client, "sess-1", undefined);
     expect(calls).toHaveLength(0);
   });
@@ -120,7 +120,7 @@ describe("configurePerceiveCalibration forward (ADAAAA-7152 Gap 2)", () => {
 
   it("only carries the parts of the calibration that are present", async () => {
     const calls: any[] = [];
-    const client = { controlForward: async (_sid: string, c: any) => { calls.push(c); } } as unknown as PipelineClient;
+    const client = { controlForward: async (_sid: string, c: any) => { calls.push(c); return null; } } as unknown as PipelineClient;
     await configurePerceiveCalibration(client, "sess-1", { goalLine: FIXTURE_GOAL_LINE });
     expect(calls[0]).toEqual({ type: "configure", goalLine: FIXTURE_GOAL_LINE });
   });
@@ -134,8 +134,9 @@ function buildFakePipeline(record: any[]): PipelineClient {
     async reservePerceive(): Promise<ReserveResult> {
       return { sessionId: "sess-fake", appUrl: "", controlUrl: "" };
     },
-    async controlForward(sessionId: string, control: any): Promise<void> {
+    async controlForward(sessionId: string, control: any): Promise<ControlAck | null> {
       controlCalls.push({ sessionId, control });
+      return null;
     },
     async analyze() {
       return { observation: { tracks: [], seq: 0, timestamp: 0 } };

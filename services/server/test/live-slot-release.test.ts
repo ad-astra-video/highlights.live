@@ -170,7 +170,7 @@ describe("perceive slot released promptly on job-stop (ADAAAA-6561)", () => {
       plan: async () => ({ planVersion: 1, category: "soccer", intent: "", source: "x", maxTracks: 3, targets: [], reason: "t" }),
       train: async () => ({ run: "x", checkpoint: "/x" }),
       postAudio: async () => ({ candidate: null, series: [] }),
-      controlForward: async () => {},
+      controlForward: async () => null,
       stopPerceive: async () => {
         log.push("stop");
       },
