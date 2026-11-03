@@ -25,7 +25,11 @@ Design (parent plan ``ADAAAA-7849`` §3, Stages 0-5):
   per tracking box, no GPU). ``cluster_kit_colors`` folds the samples into two
   colour clusters that need >= ``KIT_MIN_FRAMES`` agreeing frames.
   Side -> team association is scorebug-swatch-first (``associate_kits``:
-  the scoreboard ROI halves carry the side's kit swatch), ASR phrase second.
+  the scoreboard ROI halves carry the side's kit swatch), ASR phrase second,
+  and a curated per-team kit-colour prior last (``_SOCCER_KIT_PRIORS``, the
+  additive channel of ADAAAA-7866). The prior is only an attribution KEY: a
+  published colour is always the observed cluster's own colour, and it never
+  overrides a measured channel.
   Away kits in the same colour report ``ambiguous: true`` rather than a wrong
   colour.
 - **Stage 4 — confidence fold + monotonic guard**: source weights are
@@ -884,6 +888,45 @@ def name_color(rgb: Sequence[float]) -> str:
     return "grey"
 
 
+# Colour families for the curated kit prior (ADAAAA-7866): a prior primary may
+# match an observed cluster by exact name first, then by family. The families
+# absorb the naming drift a broadcast crop produces (a dark red shirt reading
+# "maroon", an azzurri shirt reading "sky blue"), while keeping genuinely
+# different shirts apart — a family is never a licence to pick an unrelated
+# colour.
+_KIT_COLOR_FAMILIES: dict[str, str] = {
+    "red": "warm-red",
+    "maroon": "warm-red",
+    "orange": "yellow-orange",
+    "gold": "yellow-orange",
+    "yellow": "yellow-orange",
+    "green": "green",
+    "teal": "green",
+    "cyan": "blue",
+    "sky blue": "blue",
+    "blue": "blue",
+    "navy": "blue",
+    "purple": "purple-pink",
+    "pink": "purple-pink",
+    "white": "neutral-light",
+    "silver": "neutral-light",
+    "grey": "neutral-dark",
+    "gray": "neutral-dark",
+    "black": "neutral-dark",
+    "brown": "neutral-dark",
+}
+# The colour vocabulary a prior entry may use: every name ``name_color`` can
+# return (the buckets plus the neutral value/saturation names). An entry outside
+# this set could never match an observed cluster, so it is a table bug rather
+# than a runtime case (AC-P6).
+_KIT_COLOR_NAMES = frozenset(_KIT_COLOR_FAMILIES)
+
+
+def _color_family(color: str) -> str:
+    """Family name for one colour, or ``"unknown"`` for a token outside the map."""
+    return _KIT_COLOR_FAMILIES.get(_norm(color), "unknown")
+
+
 def _is_pitch_or_background(rgb: Sequence[float]) -> bool:
     """True for grass / pitch / sky pixels that are not a jersey.
 
@@ -1218,13 +1261,106 @@ def cluster_kit_colors(
     return clusters
 
 
+# ---------------------------------------------------------------------------
+# Stage 3b — curated kit-colour prior (ADAAAA-7866, option 1 of ADAAAA-7864)
+# ---------------------------------------------------------------------------
+# A per-team canonical PRIMARY kit colour, used ONLY as an attribution key: it
+# decides which already-observed cluster belongs to which team, never what that
+# cluster's colour is. Keyed by CANONICAL lexicon name (every resolver path
+# funnels through ``resolve_token``, so the names reaching ``associate_kits``
+# are already canonical).
+#
+# A separate dict on purpose: ``_SOCCER_TEAMS`` stays untouched (80 rows), and a
+# unit test can assert every key is a real canonical name and every colour is in
+# the ``name_color`` vocabulary. Seed entries are MEASURED only — a second-hand
+# entry is a wrong colour on the record, which is the one failure the plan's
+# AC3 forbids. A further entry needs a cited source on its line.
+_SOCCER_KIT_PRIORS: dict[str, tuple[str, Optional[str]]] = {
+    # ADAAAA-7859 anchor frames on job dee44c2f: Portugal's red shirt is
+    # visible in 10/10 frames; Spain's white shirt in 7/10 (and one close-up).
+    "Portugal": ("red", None),
+    "Spain": ("white", None),
+}
+
+# Sport -> prior table. Sports without a curated table keep the channel OFF, so
+# their evidenceStatus never carries kitPriorMiss noise.
+_KIT_PRIORS: dict[str, dict[str, tuple[str, Optional[str]]]] = {
+    "soccer": _SOCCER_KIT_PRIORS,
+}
+
+
+def _prior_match_rank(primary: str, cluster: KitCluster) -> Optional[int]:
+    """0 = prior primary equals the cluster's name, 2 = same family, None = no.
+
+    The prior SECONDARY is deliberately NOT a matching key: trim/shorts colour is
+    not the shirt colour, and matching it lets a team grab the opponent's primary
+    (measured failure mode in simulation: Spain's "navy" trim against a navy away
+    shirt on the other side — guardrail R1 of the ratified decision).
+    """
+    if _norm(cluster.primary) == _norm(primary):
+        return 0
+    family = _color_family(primary)
+    if family != "unknown" and family == _color_family(cluster.primary):
+        return 2
+    return None
+
+
+def _resolve_kit_prior(
+    unresolved: Sequence[Mapping[str, Any]],
+    clusters: Sequence[KitCluster],
+    used: set[int],
+    kit_prior: Mapping[str, tuple[str, Optional[str]]],
+) -> tuple[list[tuple[str, int]], list[str], list[str]]:
+    """Resolve the still-unattributed sides from the curated prior.
+
+    All-or-nothing over the unresolved set (guardrail R3): the prior publishes
+    only when EVERY unresolved side resolves to a DISTINCT unused cluster. Any
+    miss, and any two sides landing on the same cluster, voids the pass — a
+    single-sided guess assumes the matching cluster belongs to that side, and an
+    away-kit swap breaks exactly that assumption.
+
+    Returns ``(picks, miss, conflict)`` where ``picks`` is empty whenever the
+    pass is voided. ``miss`` names every side without a usable hit (not just the
+    first), ``conflict`` names every side in a shared-cluster collision.
+    """
+    picks: list[tuple[str, int]] = []
+    miss: list[str] = []
+    for team in unresolved:
+        side = str(team.get("side") or "unknown")
+        prior = kit_prior.get(str(team.get("name") or ""))
+        primary = prior[0] if prior else None
+        ranked: list[tuple[int, int, int]] = []
+        if primary:
+            for i, c in enumerate(clusters):
+                if i in used:
+                    continue
+                rank = _prior_match_rank(primary, c)
+                if rank is None:
+                    continue
+                # Exact name first, then the biggest measured cluster.
+                ranked.append((rank, -c.count, i))
+        if not ranked:
+            miss.append(side)
+            continue
+        picks.append((side, sorted(ranked)[0][2]))
+    shared: dict[int, list[str]] = {}
+    for side, idx in picks:
+        shared.setdefault(idx, []).append(side)
+    conflict = [side for sides in shared.values() if len(sides) > 1 for side in sides]
+    if miss or conflict:
+        return [], miss, conflict
+    return picks, miss, conflict
+
+
 def associate_kits(
     teams: Sequence[Mapping[str, Any]],
     clusters: Sequence[KitCluster],
     scorebug_swatches: Optional[Sequence[Mapping[str, Any]]] = None,
     commentary: Optional[Sequence[CommentaryMention]] = None,
+    kit_prior: Optional[Mapping[str, tuple[str, Optional[str]]]] = None,
+    status: Optional[dict[str, Any]] = None,
 ) -> tuple[dict[str, list[dict[str, str]]], bool]:
-    """Attach kit colours to teams: scorebug swatch first, ASR phrase second.
+    """Attach kit colours to teams: scorebug swatch, ASR phrase, curated prior.
 
     ``scorebug_swatches`` are ``{side, rgb}`` samples of the scoreboard ROI half
     that belongs to that side (the perception pass samples them from the same
@@ -1232,15 +1368,32 @@ def associate_kits(
     that swatch in RGB space is the side's kit — this is the "scorebug layout"
     association. When the swatch is missing/unusable the commentary phrase
     ("Spain in the white shirts") decides. When neither exists the team keeps
-    ``kitColors: []`` instead of a guessed colour.
+    ``kitColors: []`` instead of a guessed colour, unless a curated ``kit_prior``
+    can link an already-observed cluster to it (ADAAAA-7866): the third channel
+    runs LAST, only on sides neither measured channel decided, and it publishes
+    the cluster's own colour — never a colour of its own.
+
+    ``status`` is an optional out-dict that receives ``kitPriorUsed``,
+    ``kitPriorMiss`` and ``kitPriorConflict`` (side strings) so the caller can
+    surface the channel in ``evidenceStatus``. It is only touched when
+    ``kit_prior`` is given.
 
     Returns ``(per_side_kit, ambiguous)`` where ``per_side_kit`` maps
     ``"home"/"away"`` -> ``[{primary, secondary}]``. ``ambiguous`` is True when
     the two clusters name the same colour and the assignment therefore cannot
-    distinguish the teams (away-kit collision — plan §7).
+    distinguish the teams (away-kit collision — plan §7), or when two priors land
+    on ONE cluster. A prior MISS is not ambiguity: it is reported through
+    ``kitPriorMiss`` so ``ambiguous`` keeps its shipped meaning.
     """
     by_side: dict[str, list[dict[str, str]]] = {}
+    prior_used: list[str] = []
+    prior_miss: list[str] = []
+    prior_conflict: list[str] = []
     if not clusters:
+        if kit_prior is not None and status is not None:
+            status["kitPriorUsed"] = prior_used
+            status["kitPriorMiss"] = prior_miss
+            status["kitPriorConflict"] = prior_conflict
         return by_side, False
     used: set[int] = set()
     colors = [c.primary for c in clusters]
@@ -1253,6 +1406,7 @@ def associate_kits(
     if len(swatch_colors) >= 2 and len(set(swatch_colors.values())) == 1:
         swatch_by_side = {}
 
+    unresolved: list[dict[str, str]] = []
     for team in teams:
         side = str(team.get("side") or "unknown")
         name = str(team.get("name") or "")
@@ -1278,6 +1432,7 @@ def associate_kits(
         if chosen is not None and chosen in used:
             chosen = None
         if chosen is None:
+            unresolved.append({"side": side, "name": name})
             continue
         c = clusters[chosen]
         used.add(chosen)
@@ -1285,13 +1440,29 @@ def associate_kits(
         if c.secondary:
             kit[0]["secondary"] = c.secondary
         by_side[side] = kit
+    # Third channel (ADAAAA-7866): a curated prior only has to decide the sides
+    # no measured channel could, and it is all-or-nothing over that set.
+    if kit_prior is not None and unresolved:
+        picks, prior_miss, prior_conflict = _resolve_kit_prior(unresolved, clusters, used, kit_prior)
+        for side, idx in picks:
+            c = clusters[idx]
+            used.add(idx)
+            kit = [{"primary": c.primary}]
+            if c.secondary:
+                kit[0]["secondary"] = c.secondary
+            by_side[side] = kit
+            prior_used.append(side)
+    if kit_prior is not None and status is not None:
+        status["kitPriorUsed"] = prior_used
+        status["kitPriorMiss"] = prior_miss
+        status["kitPriorConflict"] = prior_conflict
     # No positional fallback: a colour is attached to a team only when an
-    # evidence channel links them (swatch or commentary phrase). Measured on the
-    # cited job, assigning the leftover cluster to the other side put a junk
-    # "yellow" cluster (from non-player crops) on Spain. Unattributed colours are
-    # reported by the caller through `ambiguous`/evidenceStatus instead of a
-    # silent guess.
-    return by_side, bool(same_color)
+    # evidence channel links them (swatch, commentary phrase, or the curated
+    # prior). Measured on the cited job, assigning the leftover cluster to the
+    # other side put a junk "yellow" cluster (from non-player crops) on Spain.
+    # Unattributed colours are reported by the caller through
+    # `ambiguous`/evidenceStatus instead of a silent guess.
+    return by_side, bool(same_color or prior_conflict)
 
 
 # ---------------------------------------------------------------------------
@@ -1674,6 +1845,11 @@ def resolve_match_context(
         clusters,
         scorebug_swatches=scorebug_swatches,
         commentary=commentary,
+        # Third channel (ADAAAA-7866): a curated per-team primary-colour prior
+        # links an already-observed cluster to a side neither measured channel
+        # could decide. Off for sports without a curated table.
+        kit_prior=_KIT_PRIORS.get(sport),
+        status=status,
     )
     # A team whose kit colour has no linking evidence keeps kitColors: [] and is
     # reported here, so "the resolver saw two colours but could not attribute one

@@ -57,6 +57,12 @@ export interface MatchContextEvidenceStatus {
   kitSamples?: number;
   scorebugSwatches?: number;
   sources?: string[];
+  /** Sides the curated kit-colour prior attributed (ADAAAA-7866). */
+  kitPriorUsed?: string[];
+  /** Sides with no usable prior hit — the pass publishes nothing (not ambiguous). */
+  kitPriorMiss?: string[];
+  /** Sides whose priors landed on ONE cluster — separation failed. */
+  kitPriorConflict?: string[];
   sessionId?: string | null;
   sessionEvidence?: boolean;
   sport?: string;
