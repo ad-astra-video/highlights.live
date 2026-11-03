@@ -549,6 +549,27 @@ def test_monotonic_guard_does_not_paint_the_kept_team_with_the_rival_kit():
     assert home["kitColors"] == []
 
 
+def test_monotonic_guard_drops_a_stored_colour_the_new_pass_did_not_observe():
+    # Measured on e397b7e7: the record stored home `black`/away `orange` from the
+    # pre-fix sampler. A re-check that now observes `red`/`green` must DROP the
+    # stored away colour instead of carrying it forward — otherwise a wrong colour
+    # survives every later re-check forever. A stored colour the pass DOES observe
+    # is still preserved (a thinner re-check must not erase measured evidence).
+    previous = _ctx([("away", "Spain", 0.95, ["scorebug_ocr", "asr", "metadata"])])
+    previous["teams"][0]["kitColors"] = [{"primary": "orange", "secondary": "black"}]
+    cands = fold_confidence(
+        parse_ocr_teams(["POR 1 - 0 ESP"], "soccer"), [], parse_metadata_hints({"title": "Portugal vs Spain"}, "soccer")
+    )
+    merged = apply_monotonic_guard(previous, cands, observed_clusters=["red", "green"], progress_pct=50.0)
+    away = next(t for t in merged["teams"] if t["side"] == "away")
+    assert away["kitColors"] == []
+    # The same stored colour observed again survives the re-check.
+    previous["teams"][0]["kitColors"] = [{"primary": "white"}]
+    merged2 = apply_monotonic_guard(previous, cands, observed_clusters=["red", "white"], progress_pct=50.0)
+    away2 = next(t for t in merged2["teams"] if t["side"] == "away")
+    assert away2["kitColors"] == [{"primary": "white"}]
+
+
 def test_monotonic_guard_raises_confidence_without_changing_the_name():
     previous = _ctx([("home", "Portugal", 0.65, ["scorebug_ocr", "metadata"])])
     scorebug = parse_ocr_teams(["POR 1 - 0 ESP"], "soccer")

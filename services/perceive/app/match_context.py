@@ -1731,6 +1731,7 @@ def apply_monotonic_guard(
     ambiguous: bool = False,
     progress_pct: float = 0.0,
     now: Optional[datetime] = None,
+    observed_clusters: Optional[Sequence[str]] = None,
 ) -> dict[str, Any]:
     """Merge a re-check into the stored context without name flip-flop.
 
@@ -1777,9 +1778,19 @@ def apply_monotonic_guard(
             "confidence": cand.confidence,
             "evidence": cand.evidence(),
         }
-        # Preserve colours already attributed to the same side/team.
+        # Preserve colours already attributed to the same side/team — but only
+        # while this pass's OWN observation does not contradict them. A stored
+        # colour survives a thinner re-check (no clusters observed at all); it is
+        # dropped when the pass observed clusters and none of them is the stored
+        # colour, because that reading was produced by a different (or broken)
+        # sampler and carrying it forward keeps a WRONG colour on the record
+        # forever (measured on e397b7e7: a pre-fix `orange` away kit survived
+        # every re-check after the sampler started naming `red`/`green`).
         if prev and prev.get("name") == cand.name and prev.get("kitColors") and not item["kitColors"]:
-            item["kitColors"] = prev["kitColors"]
+            observed = {str(c) for c in (observed_clusters or [])}
+            stored = {str(k.get("primary")) for k in prev["kitColors"] if k.get("primary")}
+            if not observed or (stored & observed):
+                item["kitColors"] = prev["kitColors"]
         out_teams.append(item)
     # Teams from the previous context that this re-check did not reproduce keep
     # their identity (a later, thinner evidence pass must not erase an
@@ -2010,6 +2021,7 @@ def resolve_match_context(
         ambiguous=ambiguous,
         progress_pct=progress_pct,
         now=now,
+        observed_clusters=[c.primary for c in clusters],
     )
     # Guard output already carries the previous sport when merging; a first pass
     # stamps the resolved one.
