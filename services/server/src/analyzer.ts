@@ -827,6 +827,19 @@ export interface PipelineClient {
     req: { centerTs?: number; windowS?: number; startTs?: number; endTs?: number }
   ): Promise<{ centerTs?: number; seeds: PerFrameSeed[] }>;
   /**
+   * ADAAAA-7855: resolve + persist the job's match context (who is playing,
+   * which colour each team wears). Called at most THREE times per VOD job (job
+   * start, >=25%, >=50%) with the server-side half of the evidence (bounded ASR
+   * transcript + metadata hints + the previously stored context for the
+   * monotonic guard). Perceive folds it against evidence it already computed,
+   * so this adds NO GPU call. Optional so a FAKE/older client simply never
+   * resolves — the job then has no `matchContext`, i.e. pre-feature behaviour.
+   */
+  postMatchContext?(
+    sessionId: string,
+    payload: Record<string, unknown>
+  ): Promise<{ matchContext: Record<string, unknown>; evidenceStatus?: Record<string, unknown> } | null>;
+  /**
    * Decide whether a candidate is a highlight. `imageB64` is the candidate
    * frame so the Gemma 12B QAT decide runner sees the actual moment (vision),
    * not just scalar evidence. Adapt the call site to forward it.

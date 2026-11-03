@@ -125,6 +125,17 @@ class SessionState:
     # candidate can report whether the displayed score changed across the
     # candidate window. Bounded per-session state, never grows on long streams.
     scoreboard_tracker: ScoreboardTracker = field(default_factory=ScoreboardTracker)
+    # ADAAAA-7855: GPU-free match-context evidence accumulated over the pass.
+    # `kit_samples` are torso colour samples from the tracked player crops
+    # (`match_context.sample_track_colors`), bounded so a long stream cannot grow
+    # them; `scorebug_swatches` are the home/away kit swatches read off the same
+    # scoreboard ROI crop the OCR pass uses. Both feed `/app/match-context` and
+    # cost no extra GPU work (a few pixels per tracked box, CPU only).
+    kit_samples: List[dict] = field(default_factory=list)
+    scorebug_swatches: List[dict] = field(default_factory=list)
+    # Frame counter for the kit-sample cadence so sampling is deterministic and
+    # bounded instead of every frame.
+    kit_sample_frames: int = 0
     # ADAAAA-7084 (design follow-up to 7081): the vision LLM's per-candidate
     # "scoreboard visible?" verdict + localization for the most recent candidate
     # anchor frame. Ephemeral per-frame state (overwritten every candidate); a

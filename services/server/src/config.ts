@@ -22,6 +22,22 @@ export interface ServerConfig {
    * previous behaviour). */
   perceiveRunnerUrl?: string;
   decideUrl?: string;
+  /** ADAAAA-7855: cheap CPU ASR base URL (POST {asrUrl}/transcribe) used by the
+   * match-context resolver's ONE bounded commentary probe per VOD job. It is the
+   * same service the decide path already uses (`ASR_URL`, `http://asr:8082` on
+   * the hl network). Unset => the ASR source is `not_captured` and the resolver
+   * runs on scorebug OCR + metadata only (never a fabricated team). */
+  asrUrl?: string;
+  /** ADAAAA-7855: enable the once-per-VOD-job match-context resolver.
+   * `MATCH_CONTEXT=0` is the config-only rollback: no transcript probe, no
+   * perceive resolve call, no `matchContext` write (pre-feature behaviour). */
+  matchContext: boolean;
+  /** Commentary probe length in seconds (MATCH_CONTEXT_ASR_SECONDS, default 90).
+   * Bounded on purpose: the probe is flat per job, never proportional to
+   * runtime. */
+  matchContextAsrSeconds: number;
+  /** Hard cap on the decoded prefix bytes (MATCH_CONTEXT_ASR_MAX_BYTES). */
+  matchContextAsrMaxBytes: number;
   /** ADAAAA-6911: server-side knob for the livepeer-session decide-runner gate
    * (`DECIDE_CONCURRENCY`). Left unset -> the client keeps its default (decide
    * runner capacity 2). ADAAAA-7773: docker-compose ships
@@ -555,6 +571,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     perceiveUrl: env.PERCEIVE_URL,
     perceiveRunnerUrl: env.PERCEIVE_RUNNER_URL,
     decideUrl: env.DECIDE_URL,
+    asrUrl: env.ASR_URL,
+    matchContext: String(env.MATCH_CONTEXT ?? "1").trim().toLowerCase() !== "0" &&
+      !["false", "off"].includes(String(env.MATCH_CONTEXT ?? "1").trim().toLowerCase()),
+    matchContextAsrSeconds: Number(env.MATCH_CONTEXT_ASR_SECONDS ?? 90),
+    matchContextAsrMaxBytes: Number(env.MATCH_CONTEXT_ASR_MAX_BYTES ?? 8 * 1024 * 1024),
     decideConcurrency: env.DECIDE_CONCURRENCY ? Number(env.DECIDE_CONCURRENCY) : undefined,
     trainUrl: env.TRAIN_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
