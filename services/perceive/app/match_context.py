@@ -895,7 +895,9 @@ _GENERIC_TOKEN_RE = re.compile(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’.·\-]{0,39}")
 # the club text: "Denizli Basket13 8Samsunspor", "MB11 8Samsunspor1.G". The
 # lexicon pass needs the printed "N - M"; this channel splits the side segments
 # on the score DIGIT RUN pair instead, which is what the graphic prints.
-_GENERIC_SCORE_DIGITS_RE = re.compile(r"(?<!\d)(?P<a>\d{1,3})\s*[-–—:.]?\s*(?P<b>\d{1,3})(?!\d)")
+_GENERIC_SCORE_DIGITS_RE = re.compile(
+    r"(?<!\d)(?P<a>\d{1,3})(?!\d)\s*[-–—:.]?\s*(?P<b>\d{1,3})(?!\d)"
+)
 _GENERIC_LETTER_RE = re.compile(r"[A-Za-zÀ-ÿ]")
 # Each side of the score needs at least this many printed letters before the
 # split counts as a score line at all (a clock "1.Ç" or a bare score yields none).
@@ -1023,7 +1025,14 @@ def generic_scorebug_sides(text: str) -> tuple[Optional[str], Optional[str]]:
     clubs in the other order the left side is branding only and the home name
     follows the away name in the same line; that second run is read as the home
     name so a swapped read still names both sides instead of dropping one.
+
+    EVERY digit-run split in the line is considered, not just the first: a
+    whole-frame read carries ad-board text before the graphic ("…15MIND…13 8
+    Samsunspor"), and a junk digit pair in that text must not hide the real
+    score. The split that names both sides wins; otherwise the first split that
+    names one side is reported (the pair gate decides what is publishable).
     """
+    best: tuple[Optional[str], Optional[str]] = (None, None)
     for left, right in _generic_score_splits(text):
         home, _ = _generic_side_run(left, "home")
         away, consumed = _generic_side_run(right, "away")
@@ -1031,9 +1040,11 @@ def generic_scorebug_sides(text: str) -> tuple[Optional[str], Optional[str]]:
             extra, _ = _generic_side_run(right, "away", start=consumed)
             if extra is not None and _fold(extra) != _fold(away):
                 home = extra
-        if home is not None or away is not None:
+        if home is not None and away is not None:
             return home, away
-    return None, None
+        if best == (None, None) and (home is not None or away is not None):
+            best = (home, away)
+    return best
 
 
 def _generic_name_key(name: str) -> str:

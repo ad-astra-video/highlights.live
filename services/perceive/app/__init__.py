@@ -139,6 +139,12 @@ _MATCH_CONTEXT_MAX_SWATCHES = 60
 # session so a broadcast whose scorebug never prints a readable name cannot pay
 # a second OCR inference on every anchor frame for the whole stream.
 _MATCH_CONTEXT_TEAM_FALLBACK_MAX = 40
+# ADAAAA-7909: the documented scoreboard fallback prior is a TOP band
+# (`ScoreboardRoi.from_env()` -> 0,0,1,0.25). A bottom-centre bug on an indoor
+# basketball broadcast sits in the lower fifth, so the ROI-repair retry crops
+# here (measured: 640x72 on a 640x360 frame, the same band the 11 labelled anchor
+# frames read both clubs from).
+_SCOREBOARD_BOTTOM_CENTRE_PRIOR = (0.0, 0.80, 1.0, 1.0)
 
 
 def _match_context_enabled() -> bool:
@@ -1166,6 +1172,42 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
             and getattr(state, "team_fallback_reads", 0) < _MATCH_CONTEXT_TEAM_FALLBACK_MAX
             and not scorebug_lines_have_team_text(ocr_lines, _ocr_sport)
         )
+        # ADAAAA-7909 ROI repair: the documented fallback prior is a TOP band
+        # (`ScoreboardRoi.from_env()` -> 0,0,1,0.25), but a bottom-centre scorebug
+        # on an indoor basketball broadcast sits in the lower fifth of the frame.
+        # Measured on the bounded basketball clip: the top-band crop read only the
+        # LED ad boards ("05ASTEKISTEK…", 30/30 lines, 0 team lines) while the same
+        # frames cropped to the bottom band read both clubs on 11/11 labelled
+        # anchor frames. Discovery can also miss (its `<DENSE_REGION_CAPTION>` pass
+        # is flaky), so a wrong-but-discovered region must not be the only sliver
+        # the name channel ever sees. Retry `<OCR>` once on the bottom-centre
+        # prior; when it reads team text the region is adopted for the session so
+        # the retry is paid once, not on every anchor frame.
+        if _need_team_text:
+            bottom = ScoreboardRoi(*_SCOREBOARD_BOTTOM_CENTRE_PRIOR)
+            try:
+                bottom_lines = detector.ocr(state.last_rgb, roi=bottom) or []
+                bottom_score = parse_ocr_score(bottom_lines, roi=bottom)
+            except Exception as e:  # noqa: BLE001 - evidence only, never fatal
+                log.warning("scorebug bottom-centre ROI repair skipped frame %s: %s", seq, e)
+            else:
+                if score is None and bottom_score is not None:
+                    score = bottom_score
+                if scorebug_lines_have_team_text(bottom_lines, _ocr_sport):
+                    ocr_lines = bottom_lines
+                    obs["ocr"] = bottom_lines
+                    _need_team_text = False
+                    state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
+                    # Adopt the repaired region when no vision verdict pinned it:
+                    # it is the region that actually carries the graphic.
+                    if verdict is None:
+                        roi = bottom
+                        state.scoreboard_roi = bottom
+                        state.scoreboard_visible = True
+                    log.info(
+                        "scorebug bottom-centre ROI repair session=%s seq=%s lines=%d adopted=%s",
+                        state.session_id, seq, len(bottom_lines), verdict is None,
+                    )
         if visible and (score is None or _need_team_text):
             try:
                 full_ocr = detector.ocr(state.last_rgb) or []
