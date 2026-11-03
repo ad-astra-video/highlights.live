@@ -662,6 +662,12 @@ class TeamText:
     # "filename"). Only ``parse_metadata_hints`` sets it; it is what makes the
     # AC2 diagnosis ("metadata candidate Liverpool from the title") readable.
     field: Optional[str] = None
+    # ADAAAA-7898: True when the name came from the sport-generic scorebug
+    # channel (a printed token run the closed club lexicon does not cover), not
+    # from a lexicon hit. The fold still books it at the scorebug source weight —
+    # the flag exists so the record can say WHERE the name came from. Kept LAST so
+    # the shipped positional construction sites keep their argument order.
+    generic: bool = False
 
 
 def _tokens(text: str) -> list[str]:
@@ -763,6 +769,213 @@ def parse_ocr_teams(
     # Deterministic order: home first, then away, then unknown.
     order = {"home": 0, "away": 1, "unknown": 2}
     return sorted(claimed.values(), key=lambda t: (order[t.side], t.name))
+
+
+# ---------------------------------------------------------------------------
+# Stage 1b — sport-generic scorebug names (ADAAAA-7898)
+# ---------------------------------------------------------------------------
+# Every sport in TEAM_LEXICON resolves against a closed club list, and basketball
+# resolves against the NBA set only — so a clean OCR read of a non-NBA club buys
+# nothing. Measured inside the running perceive image on the CC BY 3.0 basketball
+# clip: ``resolve_token('SAMSUNSPOR','basketball')`` -> None,
+# ``resolve_token('LAKERS','basketball')`` -> Los Angeles Lakers, and
+# ``parse_ocr_teams(['DENIZLI BASKET 11 - 8 SAMSUNSPOR'],'basketball')`` -> [],
+# while those same frames plainly print "Denizli Basket 11 - 8 Samsunspor" and
+# the decide summaries name both clubs. The names reach the caption layer and the
+# resolver discarded them.
+#
+# This channel reads the two segments either side of the score digits and takes
+# the printed token run nearest the score as the name. Lexicon membership is
+# replaced by positional + stability requirements, because an over-eager wrong
+# club is worse than ``unknown`` (parent AC6, plan §7):
+#
+#   * it runs ONLY when the lexicon pass resolved NO side at all for this job, so
+#     every job whose scorebug the lexicon already names keeps its exact shipped
+#     behaviour (the Portugal v Spain class included);
+#   * a name must print on >= ``GENERIC_NAME_MIN_FRAMES`` distinct frames AND on
+#     >= ``GENERIC_NAME_MIN_SHARE`` of the frames that carried a score line — the
+#     corroboration that replaces lexicon membership;
+#   * the pair is all-or-nothing: BOTH sides must clear the gate, so a stray
+#     advertising-board or branding line can never complete a half pair, and a
+#     scorebug whose away half is cropped away stays `unknown` instead of naming
+#     one side.
+#
+# Tokens are bounded to the 3 nearest the score digits, competition/broadcast
+# filler is dropped and a token must be >= 4 characters, so branding
+# ("TÜRKİYE BASKETBOL LİGİ"), clock/period text ("1.Ç") and single-letter noise
+# cannot ride into a name. Confidence is NOT inflated and no threshold is
+# lowered: a generic name enters the fold at the same ``scorebug_ocr`` source
+# weight as a lexicon hit, so it stays capped at ``SINGLE_SOURCE_CAP`` (below
+# ``USABLE_CONFIDENCE``) and a later re-check may revise it.
+GENERIC_NAME_MIN_FRAMES = 3
+GENERIC_NAME_MIN_SHARE = 0.60
+GENERIC_NAME_MAX_TOKENS = 3
+GENERIC_NAME_MIN_CHARS = 4
+# Competition / broadcast filler that sits on or beside a scorebug. Dropped
+# BEFORE the nearest-score token run is taken, which is what keeps
+# "TÜRKİYE BASKETBOL LİGİ DENIZLI BASKET 11 - 8 SAMSUNSPOR" from producing the
+# name "DENIZLI BASKET LİGİ". Deliberately does NOT contain "basket": that word
+# is part of a real club name ("Denizli Basket").
+_GENERIC_NAME_STOPWORDS = frozenset(
+    {
+        "ligi",
+        "lig",
+        "league",
+        "leagues",
+        "cup",
+        "trophy",
+        "basketbol",
+        "basketball",
+        "football",
+        "futbol",
+        "fútbol",
+        "soccer",
+        "nba",
+        "euroleague",
+        "ncaa",
+        "nfl",
+        "nhl",
+        "mlb",
+        "live",
+        "final",
+        "kanal",
+        "channel",
+        "tv",
+        "hd",
+        "uhd",
+        "quarter",
+        "period",
+        "half",
+        "overtime",
+        "türkiye",
+        "turkiye",
+        "turkey",
+        "match",
+        "game",
+        "teams",
+        "team",
+        "score",
+        "vs",
+        "versus",
+    }
+)
+
+
+def _fold(text: str) -> str:
+    """Case/punctuation-insensitive form used to compare printed names."""
+    return " ".join(_norm(text).split())
+
+
+def _generic_name_tokens(text: str) -> list[str]:
+    """Tokens of one side segment that could be part of a printed club name."""
+    out: list[str] = []
+    for tok in _tokens(text or ""):
+        core = _norm(tok)
+        if len(core) < GENERIC_NAME_MIN_CHARS:
+            continue
+        if core in _GENERIC_NAME_STOPWORDS:
+            continue
+        out.append(tok.strip(".,;:!?()[]\"'"))
+    return out
+
+
+def _generic_side_name(segment: str, side: str) -> Optional[str]:
+    """The printed name nearest the score digits on one side of a score line.
+
+    Broadcast order is ``HOME 11 - 8 AWAY``: the home name ENDS at the score
+    digits (read backwards, then restore print order) and the away name STARTS
+    at them. Capped at ``GENERIC_NAME_MAX_TOKENS`` so a branding column further
+    out on the graphic cannot join the name.
+    """
+    toks = _generic_name_tokens(segment)
+    if not toks:
+        return None
+    picked = toks[-GENERIC_NAME_MAX_TOKENS:] if side == "home" else toks[:GENERIC_NAME_MAX_TOKENS]
+    name = " ".join(picked).strip()
+    return name or None
+
+
+def parse_generic_scorebug_names(
+    ocr_frames: Optional[Sequence[Mapping[str, Any]]],
+    sport: str,
+) -> tuple[list[TeamText], dict[str, Any]]:
+    """Names printed on a scorebug that the closed club lexicon does not cover.
+
+    Returns ``(teams, status)`` where ``teams`` is either a complete home/away
+    pair of :class:`TeamText` (``generic=True``) or ``[]``. ``status`` is the
+    inspectable account of the channel (``scoreFrames``, the per-frame vote, the
+    accepted names and why a side was rejected) so an ``unknown`` job says what
+    the gate saw instead of just reporting nothing.
+
+    Pure and GPU-free: it reads the OCR lines the caller already has.
+    """
+    status: dict[str, Any] = {"scoreFrames": 0, "rejected": []}
+    if not ocr_frames or sport == SPORT_UNKNOWN:
+        return [], status
+    counts: dict[str, dict[str, int]] = {"home": {}, "away": {}}
+    printed: dict[str, dict[str, str]] = {"home": {}, "away": {}}
+    snippets: dict[str, dict[str, str]] = {"home": {}, "away": {}}
+    score_frames = 0
+    for frame in ocr_frames:
+        lines = frame.get("lines") or frame.get("ocr") or []
+        if not lines:
+            continue
+        frame_seen: dict[str, dict[str, tuple[str, str]]] = {"home": {}, "away": {}}
+        for line in lines:
+            text = str(line or "").strip()
+            if not text:
+                continue
+            m = _SCORE_SHAPE_RE.search(text)
+            if not m:
+                continue
+            score_frames += 1
+            for side, segment in (("home", text[: m.start()]), ("away", text[m.end() :])):
+                # A side the lexicon already names is never re-read here.
+                if _resolve_side_tokens(segment, sport):
+                    continue
+                name = _generic_side_name(segment, side)
+                if name:
+                    # One vote per frame per name: a line printed twice on the
+                    # same frame is not extra corroboration.
+                    frame_seen[side].setdefault(_fold(name), (name, text))
+        for side in ("home", "away"):
+            for key, (name, snippet) in frame_seen[side].items():
+                counts[side][key] = counts[side].get(key, 0) + 1
+                printed[side].setdefault(key, name)
+                snippets[side].setdefault(key, snippet[:200])
+    status["scoreFrames"] = score_frames
+    if not score_frames:
+        status["rejected"].append("no-score-line")
+        return [], status
+    picks: dict[str, tuple[str, str, int]] = {}
+    for side in ("home", "away"):
+        if not counts[side]:
+            status["rejected"].append(f"{side}:no-text")
+            continue
+        key = max(counts[side], key=lambda k: counts[side][k])
+        n = counts[side][key]
+        share = n / score_frames
+        if n < GENERIC_NAME_MIN_FRAMES or share < GENERIC_NAME_MIN_SHARE:
+            status["rejected"].append(f"{side}:unstable({n}/{score_frames})")
+            continue
+        picks[side] = (printed[side][key], snippets[side][key], n)
+    if len(picks) < 2:
+        return [], status
+    if _fold(picks["home"][0]) == _fold(picks["away"][0]):
+        status["rejected"].append("both-sides-same-name")
+        return [], status
+    status["names"] = {
+        side: {
+            "name": picks[side][0],
+            "frames": picks[side][2],
+            "share": round(picks[side][2] / score_frames, 3),
+        }
+        for side in ("home", "away")
+    }
+    return [
+        TeamText(picks["home"][0], "home", picks["home"][0], picks["home"][1], generic=True),
+        TeamText(picks["away"][0], "away", picks["away"][0], picks["away"][1], generic=True),
+    ], status
 
 
 # ---------------------------------------------------------------------------
@@ -2036,6 +2249,16 @@ def resolve_match_context(
                     team_samples.append(text[:200])
             if len(raw_samples) < MAX_STATUS_OCR_LINES:
                 raw_samples.append(text[:200])
+    # Stage 1b (ADAAAA-7898): a sport-generic name channel for scorebugs whose
+    # clubs the closed lexicon does not cover. Gated on the lexicon having
+    # resolved NO side at all this job, so every scorebug the lexicon already
+    # names keeps its exact shipped behaviour (the Portugal v Spain class).
+    lexicon_sides = {t.side for t in scorebug if t.side in ("home", "away")}
+    if not lexicon_sides:
+        generic_names, generic_status = parse_generic_scorebug_names(ocr_frames, sport)
+        status["genericNameCandidates"] = generic_status
+        if generic_names:
+            scorebug.extend(generic_names)
     commentary = scan_commentary(transcript, sport)
     metadata = parse_metadata_hints(hints, sport)
     for name, present in (
