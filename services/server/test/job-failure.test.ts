@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   MEDIA_SESSION_LOST_MESSAGE,
   SERVER_RESTART_MESSAGE,
+  classifyVodFailure,
   outcomeForMediaCloseReason,
   outcomeForStrandedJob,
 } from "../src/job-failure";
@@ -65,5 +66,73 @@ describe("outcomeForStrandedJob (ADAAAA-7700 boot sweep)", () => {
     expect(o.status).toBe("failed");
     if (o.status !== "failed") return;
     expect(o.failureReason).toBe("server-restart");
+  });
+});
+
+// ADAAAA-7906 (VOD resume, Increment 2): the failure classification table.
+//
+// `classifyVodFailure` is the SINGLE mapping from a thrown VOD pipeline error to
+// `{ reason, resumable }`. A path left unclassified falls through to
+// pipeline-error/non-resumable and silently disables the automatic retry for
+// that incident class, so every row of plan §2.3 is pinned here.
+describe("classifyVodFailure (ADAAAA-7906)", () => {
+  const sessionLost = () => Object.assign(new Error("perceive session/runner lost (404)"), { name: "SessionLostError" });
+
+  it("classifies a decide 5xx/timeout as decide-unavailable and resumable", () => {
+    for (const msg of [
+      "decide failed: HTTP 503",
+      "decide failed: HTTP 500",
+      "decide group failed: HTTP 502",
+      "decide timed out after 30000ms",
+    ]) {
+      expect(classifyVodFailure(new Error(msg))).toEqual({ reason: "decide-unavailable", resumable: true });
+    }
+  });
+
+  it("classifies an exhausted perceive re-reserve / runner recreate as perceive-session-lost and resumable", () => {
+    expect(classifyVodFailure(sessionLost())).toEqual({ reason: "perceive-session-lost", resumable: true });
+    const recreate = Object.assign(new Error("analyze interrupted (deploy-recreate)"), { name: "DeployRecreateInterruptedError" });
+    expect(classifyVodFailure(recreate)).toEqual({ reason: "perceive-session-lost", resumable: true });
+  });
+
+  it("classifies capacity exhaustion (503 no capacity) as capacity-exhausted and resumable", () => {
+    expect(classifyVodFailure(new Error("no capacity available for runner"))).toEqual({
+      reason: "capacity-exhausted",
+      resumable: true,
+    });
+    expect(classifyVodFailure(Object.assign(new Error("reserve failed"), { statusCode: 503 }))).toEqual({
+      reason: "capacity-exhausted",
+      resumable: true,
+    });
+  });
+
+  it("classifies a control-plane restart as server-restart and resumable", () => {
+    expect(classifyVodFailure(new Error("server restart mid-pass"))).toEqual({
+      reason: "server-restart",
+      resumable: true,
+    });
+  });
+
+  it("classifies a corrupt/missing source or ffmpeg decode error as pipeline-error, NOT resumable", () => {
+    for (const msg of [
+      "ffmpeg exited with code 1: Invalid data found when processing input",
+      "moov atom not found",
+      "ENOENT: no such file or directory, open '/data/x.mp4'",
+      "unsupported codec",
+      "schema validation failed",
+    ]) {
+      expect(classifyVodFailure(new Error(msg))).toEqual({ reason: "pipeline-error", resumable: false });
+    }
+  });
+
+  it("never retries an operator stop or an unexplained error", () => {
+    expect(classifyVodFailure(Object.assign(new Error("job cancelled"), { name: "VodCancelledError" }))).toEqual({
+      reason: "user-stop",
+      resumable: false,
+    });
+    expect(classifyVodFailure(new Error("something nobody has seen before"))).toEqual({
+      reason: "pipeline-error",
+      resumable: false,
+    });
   });
 });

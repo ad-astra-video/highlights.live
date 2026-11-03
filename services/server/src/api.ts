@@ -66,7 +66,19 @@ import { deriveLiveProgress, newestObservationTs } from "./live-progress";
 import { deriveLiveCapture } from "./live-capture";
 import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
-import { outcomeForMediaCloseReason, outcomeForStrandedJob, type JobFailureReason, type JobOutcome } from "./job-failure";
+import { outcomeForMediaCloseReason, outcomeForStrandedJob, classifyVodFailure, type JobFailureReason, type JobOutcome } from "./job-failure";
+import {
+  extractionReusable,
+  failedAttemptCount,
+  mergeResumeCheckpoint,
+  resumeRetryDelayMs,
+  resumeRetryDue,
+  resumeStartTs,
+  resumeWarmupFrames,
+  resumeWarmupS,
+  shouldArmResumeRetry,
+  type ResumeCheckpointPatch,
+} from "./vod-resume";
 import {
   datasetAccessActive,
   scheduleDatasetsPurgeForOwner,
@@ -512,6 +524,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // row stayed non-terminal until a container restart).
   const vodStops = new Set<string>();
   const vodStopControllers = new Map<string, AbortController>();
+  /** ADAAAA-7906 (VOD resume): the newest APPLIED decide-window centre for each
+   * running job, kept in memory so the failure path records the cursor even when
+   * the last checkpoint write has not landed yet (the writer is fire-and-forget
+   * and throttled to every Nth window). Cleared when the pass exits. */
+  const vodResumeCursors = new Map<string, number>();
   function isVodStopped(jobId: string): boolean {
     return vodStops.has(jobId);
   }
@@ -1281,6 +1298,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const raw = e instanceof Error ? e.message : String(e);
     return raw.trim().slice(0, JOB_ERROR_MAX_CHARS);
   }
+  /**
+   * Fail a VOD job with attribution and — ADAAAA-7906 (VOD resume, Increment 2)
+   * — arm an automatic resume retry when the failure is classified resumable
+   * and the retry budget remains.
+   *
+   * Every caller lands on a row of `classifyVodFailure` (job-failure.ts):
+   *   resumable  -> status `queued`, stage `retry-scheduled`,
+   *                 `resume.nextAttemptAt` set. NOT terminal; the drain loop
+   *                 picks the job up again when due (a persisted timer re-kicks
+   *                 the drain, and the drain filter honours nextAttemptAt).
+   *   permanent  -> terminal `failed` with the classified `failureReason`.
+   *
+   * The checkpoint is retained on both paths so an exhausted-budget job can
+   * still be resumed manually (Increment 3) and the attempt trail is readable
+   * from GET /jobs/:id.
+   */
   async function markJobFailed(jobId: string, e: unknown): Promise<void> {
     try {
       // ADAAAA-6625: `cancelled` is terminal and operator-visible. The stop
@@ -1288,10 +1321,74 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // fail session-lost; that late error must never rewrite a stopped job as
       // `failed` (or resurrect it from `done`).
       if (isVodStopped(jobId) || store.getJob(jobId)?.status === "cancelled") return;
-      // ADAAAA-7700: a thrown pipeline error is attributable too — never leave a
-      // bare `failed` that reads the same as "the pipeline never ran".
-      await store.patchJob(jobId, { status: "failed", error: jobErrorMessage(e), failureReason: "pipeline-error" });
-      await recordJobLifecycle(jobId, "failed", `failureReason=pipeline-error error=${jobErrorMessage(e)}`);
+      const cur = store.getJob(jobId);
+      // ADAAAA-7700/7906: a thrown pipeline error is attributable too — never
+      // leave a bare `failed` that reads the same as "the pipeline never ran".
+      const cls = classifyVodFailure(e);
+      const now = new Date().toISOString();
+      const message = jobErrorMessage(e);
+      // `resume.phase` is the last phase STARTED (written at every boundary), so
+      // the failed attempt is attributed to the phase that was actually running.
+      const phase = cur?.resume?.phase ?? "extract";
+      // Close the OPEN attempt entry the claim appended with the attribution.
+      const attempts = [...(cur?.resume?.attempts ?? [])];
+      const openIdx = attempts.map((a) => !a.endedAt).lastIndexOf(true);
+      if (openIdx >= 0) {
+        attempts[openIdx] = {
+          ...attempts[openIdx],
+          endedAt: now,
+          failedAtPhase: phase,
+          failureReason: cls.reason,
+          error: message,
+        };
+      }
+      const retriesUsed = failedAttemptCount(cur?.resume);
+      const retryPatch: ResumeCheckpointPatch = {
+        phase,
+        attempts,
+        totalAttempts: cur?.attempts ?? cur?.resume?.totalAttempts ?? 0,
+        lastError: { reason: cls.reason, message, at: now },
+        // The in-memory cursor is authoritative for the attempt that just died:
+        // a throttled checkpoint write may not have landed the newest window.
+        analyze: { cursorTs: Math.max(vodResumeCursors.get(jobId) ?? 0, cur?.resume?.analyze?.cursorTs ?? 0) },
+      };
+      if (cls.resumable && shouldArmResumeRetry(true, cur?.resume, cfg.vodResumeMaxAttempts)) {
+        const delayMs = resumeRetryDelayMs(retriesUsed, cfg.vodResumeBackoffMs);
+        const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
+        const resume = mergeResumeCheckpoint(cur?.resume, { ...retryPatch, nextAttemptAt });
+        await store.patchJob(jobId, {
+          status: "queued",
+          stage: "retry-scheduled",
+          progressLabel: `retry scheduled (${cls.reason} in ${Math.round(delayMs / 1000)}s)`,
+          error: message,
+          resume,
+        });
+        await recordJobLifecycle(
+          jobId,
+          "retry-scheduled",
+          `failureReason=${cls.reason} nextAttemptAt=${nextAttemptAt} retry=${retriesUsed + 1}/${cfg.vodResumeMaxAttempts} error=${message}`
+        );
+        console.log(
+          `[vod-resume] job=${jobId} attempt=${cur?.attempts ?? 1} phase=${phase} armed-retry-in=${Math.round(delayMs / 1000)}s reason=${cls.reason} cursorTs=${resume.analyze?.cursorTs ?? 0}`
+        );
+        scheduleResumeDrain(delayMs);
+        return;
+      }
+      const resume = mergeResumeCheckpoint(cur?.resume, retryPatch);
+      await store.patchJob(jobId, {
+        status: "failed",
+        stage: "failed",
+        progressLabel: "failed",
+        failureReason: cls.reason,
+        error: message,
+        finishedAt: now,
+        resume,
+      });
+      await recordJobLifecycle(
+        jobId,
+        "failed",
+        `failureReason=${cls.reason} resumable=${cls.resumable} retriesUsed=${retriesUsed}/${cfg.vodResumeMaxAttempts} error=${message}`
+      );
     } catch {
       /* ignore — job record gone */
     }
@@ -1334,6 +1431,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         stage: "cancelled",
         progressLabel,
         finishedAt: cur.finishedAt ?? new Date().toISOString(),
+        // ADAAAA-7906: an operator stop WINS over an armed resume retry — clear
+        // the schedule so the drain filter never reclaims a cancelled row.
+        resume: cur.resume ? mergeResumeCheckpoint(cur.resume, { nextAttemptAt: null }) : undefined,
       });
       // Wake any open LiveConsole/SSE consumer on the terminal transition.
       emitJobEvent(jobId, {
@@ -1389,14 +1489,87 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // persist the extracting transition so status + progress survive a
     // refresh/restart. `attempts` increments on every re-claim so a restart
     // resumes exactly once and the idempotent onEvent never re-debits quota.
+    //
+    // ADAAAA-7906 (VOD resume, Increment 1): read the checkpoint at claim.
+    // The cursor is the content timestamp of the last FULLY decided window; the
+    // warm-up is the full decide window (24/3 = 8 s), capped at the observe
+    // window. Frames before `frameStartTs` are never loaded/perceived, and the
+    // observe-decider's cadence clock starts at the cursor, so no window whose
+    // centre is <= the cursor is ever re-issued (the decide bill is protected).
     const prior = store.getJob(jobId);
+    const attemptNo = (prior?.attempts ?? 0) + 1;
+    const checkpoint = prior?.resume;
+    const { readdir, stat } = await import("node:fs/promises");
+    const frameDir = path.join(cfg.dataDir, "frames", jobId);
+    const sampleFps = cfg.vodDetailFps;
+    const cursorTs = checkpoint?.analyze?.cursorTs ?? 0;
+    const warmupS = resumeWarmupS(cfg.vodDecideWindowN, sampleFps);
+    const frameStartTs = resumeStartTs(cursorTs, warmupS);
+    const warmupFrames = resumeWarmupFrames(warmupS, sampleFps);
+    let frameDirUsable = false;
+    try {
+      frameDirUsable = (await readdir(frameDir)).some((f) => f.startsWith("frame_"));
+    } catch {
+      frameDirUsable = false;
+    }
+    let sourceIdentity: { bytes: number; mtimeMs: number } | null = null;
+    try {
+      const st = await stat(videoPath);
+      sourceIdentity = { bytes: st.size, mtimeMs: st.mtimeMs };
+    } catch {
+      sourceIdentity = null;
+    }
+    // Mandatory, not an optimisation: `extractFrames` starts with `rm -rf`, so
+    // re-extracting destroys the frames the previous attempt paid to produce.
+    const reuseExtraction = extractionReusable(checkpoint, { frameDirUsable, source: sourceIdentity });
+    const attemptStartedAt = new Date().toISOString();
+    // Claim + first checkpoint in ONE `patchJob`, so the record never carries a
+    // cursor without its progress watermark (and vice versa).
     await store.patchJob(jobId, {
       status: "extracting",
       stage: "extracting",
-      startedAt: new Date().toISOString(),
-      attempts: (prior?.attempts ?? 0) + 1,
+      startedAt: attemptStartedAt,
+      attempts: attemptNo,
+      resume: mergeResumeCheckpoint(checkpoint, {
+        phase: "extract",
+        attempts: [...(checkpoint?.attempts ?? []), { attempt: attemptNo, startedAt: attemptStartedAt }],
+        totalAttempts: attemptNo,
+        nextAttemptAt: null,
+        ...(cursorTs > 0 ? { resumedAt: attemptStartedAt, resumedFromTs: cursorTs } : {}),
+      }),
     });
-    emitJobProgress(jobId, 0, "extracting frames");
+    emitJobProgress(jobId, 0, reuseExtraction ? "resuming (frames preserved)" : "extracting frames");
+    // ADAAAA-7906: mutable cursor state for THIS attempt. `cursorTs` only ever
+    // moves to the centre of a window whose verdict was APPLIED (the
+    // observe-decider's onApplied hook), never to an issued-but-dropped window.
+    const resumeState = { cursorTs, decidedWindows: 0 };
+    // Serialize checkpoint writes so two overlapping writes can never merge
+    // against the same stale base and drop a cursor advance.
+    let checkpointChain: Promise<unknown> = Promise.resolve();
+    const writeResumeCheckpoint = (patch: ResumeCheckpointPatch): Promise<unknown> => {
+      checkpointChain = checkpointChain
+        .then(() => store.saveResumeCheckpoint(jobId, patch))
+        .catch((e: any) => console.error(`[vod-resume:${jobId}] checkpoint persist failed:`, String(e?.message || e)));
+      return checkpointChain;
+    };
+    const onDecidedWindow = (centerTs: number): void => {
+      resumeState.decidedWindows++;
+      if (centerTs > resumeState.cursorTs) resumeState.cursorTs = centerTs;
+      vodResumeCursors.set(jobId, resumeState.cursorTs);
+      // Persist every Nth decided window (~30 s of content at the default 10).
+      if (resumeState.decidedWindows % cfg.vodResumeCheckpointWindows !== 0) return;
+      void writeResumeCheckpoint({
+        phase: "analyze",
+        analyze: {
+          cursorTs: resumeState.cursorTs,
+          decideWindows: resumeState.decidedWindows,
+          lastWindowAt: new Date().toISOString(),
+        },
+        accumulators: {
+          decideCalls: (checkpoint?.accumulators?.decideCalls ?? 0) + resumeState.decidedWindows,
+        },
+      });
+    };
     const anaCfg: AnalyzerConfig = {
       jobId,
       clipBeforeS: cw.clipBeforeS,
@@ -1433,6 +1606,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       observeDecideOffLoop: cfg.observeDecideOffLoop,
       observeDecideInFlight: cfg.observeDecideInFlight,
       observeDecideQueueMax: cfg.observeDecideQueueMax,
+      // ADAAAA-7906 (VOD resume): the observe-decider's cadence clock starts at
+      // the persisted cursor (no window whose centre is <= cursor is issued) and
+      // every APPLIED window reports its centre so the cursor advances.
+      ...(cursorTs > 0 ? { resumeFromTs: cursorTs, warmupFrames } : {}),
+      onDecidedWindow,
       // ADAAAA-7145: gate the VOD decide-observer's billable decide calls on a
       // real highlight signal (recall-safe). Wired so box QA can enable it once
       // the perceive goal-line/homography channels are configured.
@@ -1643,13 +1821,55 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const onProgress: (framesAnalyzed: number) => void = (n) => {
       persistProgress(n).catch((e) => console.error(`[vod:${jobId}] progress`, String(e?.message || e)));
     };
-    const frameDir = path.join(cfg.dataDir, "frames", jobId);
-    const sampleFps = cfg.vodDetailFps;
-    emitJobProgress(jobId, 5, "extracting frames");
-    await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps, cfg.vodFrameScale, undefined, stopCtl.signal);
+    emitJobProgress(jobId, 5, reuseExtraction ? "resuming (frames preserved)" : "extracting frames");
+    if (reuseExtraction) {
+      // ADAAAA-7906 (AC2): extraction is SKIPPED — `extractFrames` is not
+      // invoked and the pre-existing frame directory is left untouched.
+      console.log(
+        `[vod-resume] job=${jobId} attempt=${attemptNo} phase=extract skipped=extraction frames=${checkpoint?.extraction?.frameCount ?? 0} cursorTs=${cursorTs} warmupFrames=${warmupFrames}`
+      );
+    } else {
+      // Preserve the directory only when it belongs to the SAME source and just
+      // lacks the completion marker (e.g. a crash mid-extraction); a different
+      // source (bytes/mtime changed) must be fully re-extracted.
+      const preserveDir =
+        !!checkpoint &&
+        frameDirUsable &&
+        !!sourceIdentity &&
+        checkpoint.extraction?.sourceBytes === sourceIdentity.bytes &&
+        Math.abs((checkpoint.extraction?.sourceMtimeMs ?? -1) - sourceIdentity.mtimeMs) < 1;
+      await extractFrames(cfg.ffmpegPath, videoPath, frameDir, sampleFps, cfg.vodFrameScale, undefined, stopCtl.signal, {
+        mode: preserveDir ? "resume" : "fresh",
+      });
+    }
     // ADAAAA-6625: a stop during extraction aborts the decode; unwind here
     // instead of analyzing a frame set the operator just cancelled.
     if (isVodStopped(jobId)) throw new VodCancelledError(jobId);
+    // ADAAAA-7906 (VOD resume): phase boundary — persist the extraction
+    // completion marker (skip predicate for the next attempt) and advance the
+    // checkpoint phase to `analyze` in the same write as the cursor.
+    {
+      const frameCount = (await readdir(frameDir).catch(() => [] as string[])).filter((f) =>
+        f.startsWith("frame_")
+      ).length;
+      await writeResumeCheckpoint({
+        phase: "analyze",
+        extraction: {
+          complete: true,
+          frameCount,
+          fps: sampleFps,
+          scale: cfg.vodFrameScale,
+          sourceBytes: reuseExtraction ? checkpoint?.extraction?.sourceBytes ?? 0 : sourceIdentity?.bytes ?? 0,
+          sourceMtimeMs: reuseExtraction ? checkpoint?.extraction?.sourceMtimeMs ?? 0 : sourceIdentity?.mtimeMs ?? 0,
+          // A reused extraction keeps its ORIGINAL completedAt — the marker must
+          // not claim the frames were re-extracted on the resumed attempt.
+          completedAt: reuseExtraction
+            ? checkpoint?.extraction?.completedAt ?? new Date().toISOString()
+            : new Date().toISOString(),
+        },
+        analyze: { cursorTs },
+      });
+    }
     // I7 / ADAAAA-6361: re-sample a higher-FPS burst of frames around each
     // trigger so the ball-goal-crossing instant is present in the decide window
     // (the detail-first pass samples at `sampleFps`, which can skip it). Bounded:
@@ -1688,7 +1908,6 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // drives a throttled `analyzing (frame i/N)` progress (ADAAAA-6760). We
     // count the pre-extracted frames for N, and emit ~every 25 frames / 500 ms
     // so the SSE overlay + polling stay within ~1s without spamming the store.
-    const { readdir } = await import("node:fs/promises");
     let totalFrames = 0;
     try {
       totalFrames = (await readdir(frameDir)).filter((f) => f.startsWith("frame_")).length;
@@ -1698,7 +1917,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // Durable framesTotal (ADAAAA-6873): the pre-extracted frame count, used by
     // the monotonic progress snapshot to derive framesPct.
     framesTotal = totalFrames;
-    let processedFrames = 0;
+    // ADAAAA-7906 (VOD resume): frames at or before `frameStartTs` are skipped
+    // entirely — never read, never perceived, and (because the observe-decider
+    // starts at the cursor) their windows are never re-issued. `frameStartTs`
+    // re-perceives only the bounded warm-up, so the resumed pass pays for
+    // `warmupFrames + remaining` perceive calls, not the whole frame set (AC3).
+    // The counter starts at the skipped count so the persisted framesAnalyzed
+    // watermark keeps moving forward instead of regressing to 0 (ADAAAA-6873).
+    const skippedFrames = frameStartTs > 0 ? Math.min(totalFrames, Math.ceil(frameStartTs * sampleFps)) : 0;
+    let processedFrames = skippedFrames;
     let lastProgressEmit = 0;
     // ADAAAA-7855: declared before the frame iterator (which fires the bounded
     // match-context re-checks) and assigned once the perceive session is
@@ -1707,6 +1934,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const baseIter = buildAnalyzeFrames(frameDir, sampleFps)();
     const iter = (async function* () {
       for await (const f of baseIter) {
+        if (frameStartTs > 0 && f.timestamp < frameStartTs - 1e-9) continue;
         processedFrames++;
         if (totalFrames > 0 && (processedFrames % 25 === 0 || Date.now() - lastProgressEmit >= 500)) {
           lastProgressEmit = Date.now();
@@ -1781,7 +2009,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // itself never decides and bills no GPU.
     const audioLoop = (async () => {
       try {
-        for await (const chunk of extractVodAudioChunks(cfg.ffmpegPath, videoPath)) {
+        // ADAAAA-7906 (VOD resume): seek the tap to the first frame the resumed
+        // pass re-perceives, so the Stage-A audio rail lines up with the video
+        // window instead of re-tapping content already judged.
+        for await (const chunk of extractVodAudioChunks(cfg.ffmpegPath, videoPath, frameStartTs)) {
           // ADAAAA-6625: stop feeding /audio (and stop paying for it) the
           // moment the operator cancels. Breaking the generator reaps ffmpeg.
           if (isVodStopped(jobId)) break;
@@ -1896,8 +2127,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       }
     }
     // Durable finalizing transition (ADAAAA-6873 state machine) before done.
-    await store.patchJob(jobId, { status: "finalizing", stage: "finalizing" });
-    const doneFramesPct = framesTotal > 0 ? Math.min(100, Math.round((outcome.framesAnalyzed / framesTotal) * 100)) : 0;
+    // ADAAAA-7906: phase boundary — the record says `finalize` from here on, so
+    // a failure during finalization is attributed to the right phase.
+    await store.patchJob(jobId, {
+      status: "finalizing",
+      stage: "finalizing",
+      resume: mergeResumeCheckpoint(store.getJob(jobId)?.resume, { phase: "finalize" }),
+    });
     // ADAAAA-7624: the user-facing candidate count is the number of distinct
     // candidates this job actually produced (the persisted highlights), not the
     // observer's per-window `accepted` tally — overlapping decide windows
@@ -1905,6 +2141,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // d61e52f6). Deriving it here keeps a new record identical to what the
     // read-time projection reports for a pre-fix record.
     const producedCandidates = store.highlightsForJob(jobId).length;
+    // ADAAAA-7906 (VOD resume): settle any in-flight checkpoint write, then
+    // close the attempt on the record — phase `finalize`, the attempt's endedAt,
+    // the final cursor and the cross-attempt decide accumulator, with any armed
+    // retry cleared (a completed pass is terminal `done`).
+    await checkpointChain.catch(() => {});
+    const doneAt = new Date().toISOString();
+    const doneAttempts = [...(store.getJob(jobId)?.resume?.attempts ?? [])];
+    const doneOpenIdx = doneAttempts.map((a) => !a.endedAt).lastIndexOf(true);
+    if (doneOpenIdx >= 0) doneAttempts[doneOpenIdx] = { ...doneAttempts[doneOpenIdx], endedAt: doneAt };
+    const framesAnalyzedTotal = skippedFrames + outcome.framesAnalyzed;
     await store.patchJob(jobId, {
       status: "done",
       stage: "done",
@@ -1920,9 +2166,29 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       sampleFps,
       frameScale: cfg.vodFrameScale,
       decideWindowN: cfg.vodDecideWindowN,
-      framesAnalyzed: outcome.framesAnalyzed,
+      framesAnalyzed: framesAnalyzedTotal,
       framesTotal,
-      framesPct: doneFramesPct,
+      framesPct: framesTotal > 0 ? Math.min(100, Math.round((framesAnalyzedTotal / framesTotal) * 100)) : 0,
+      // ADAAAA-7906: close the checkpoint on completion (attempt trail, final
+      // cursor, accumulators across attempts, no armed retry).
+      resume: mergeResumeCheckpoint(store.getJob(jobId)?.resume, {
+        phase: "finalize",
+        attempts: doneAttempts,
+        totalAttempts: attemptNo,
+        nextAttemptAt: null,
+        analyze: {
+          cursorTs: Math.max(resumeState.cursorTs, cursorTs),
+          decideWindows: (store.getJob(jobId)?.resume?.analyze?.decideWindows ?? 0),
+          highlightsFound: producedCandidates,
+          lastWindowAt: doneAt,
+        },
+        accumulators: {
+          decideCalls: (checkpoint?.accumulators?.decideCalls ?? 0) + decideCalls,
+          perceiveSessionS: (checkpoint?.accumulators?.perceiveSessionS ?? 0) + perceiveSessionS,
+          costUsd: (checkpoint?.accumulators?.costUsd ?? 0) + costUsd,
+        },
+        lastError: store.getJob(jobId)?.resume?.lastError,
+      }),
       // ADAAAA-7118: completed record surfaces the ABSOLUTE persisted highlight
       // count from the store (source of truth), matching what addHighlight wrote.
       highlightsFound: store.highlightsForJob(jobId).length,
@@ -1981,6 +2247,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const vodProcessing = new Set<string>(); // jobIds currently running
   const vodDraining = { running: false };
 
+  /** ADAAAA-7906 (VOD resume): wake the durable drain when an armed retry comes
+   * due. Unref'd so a pending retry never holds the process open. */
+  function scheduleResumeDrain(delayMs: number): void {
+    const t = setTimeout(() => {
+      drainVodQueue().catch(() => {});
+    }, Math.max(0, delayMs) + 50);
+    (t as any).unref?.();
+  }
+
   function enqueueVodJob(jobId: string, videoPath: string): void {
     vodJobPaths.set(jobId, videoPath);
     // Fire-and-forget: kick the drain loop if it isn't already running.
@@ -1994,9 +2269,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // Claim up to `vodWorkerConcurrency` queued jobs and run each off the
       // request path. When a claimed job finishes its finally re-kicks the
       // drain, so a newly-queued or remaining job is never left stranded.
+      // ADAAAA-7906: an armed resume retry stays `queued` with a
+      // `resume.nextAttemptAt`, so the filter only claims it once it is due —
+      // otherwise the worker would immediately re-run the attempt the backoff
+      // was meant to space out.
       const queued = store
         .allJobs()
-        .filter((j) => j.status === "queued" && !vodProcessing.has(j.id) && !isVodStopped(j.id))
+        .filter(
+          (j) =>
+            j.status === "queued" &&
+            !vodProcessing.has(j.id) &&
+            !isVodStopped(j.id) &&
+            resumeRetryDue(j.resume?.nextAttemptAt)
+        )
         .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
       for (const job of queued.slice(0, cfg.vodWorkerConcurrency)) {
         const videoPath = vodJobPaths.get(job.id) ?? job.sourceUrl;
@@ -2042,6 +2327,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       }
     } finally {
       vodStopControllers.delete(jobId);
+      vodResumeCursors.delete(jobId); // ADAAAA-7906: persisted checkpoint owns the cursor from here
     }
   }
 

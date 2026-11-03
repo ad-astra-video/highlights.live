@@ -9,6 +9,7 @@ import {
   type TrackObservation,
 } from "@highlights/events";
 import type { Db, DatasetRecord } from "./db";
+import { mergeResumeCheckpoint, type ResumeCheckpointPatch } from "./vod-resume";
 
 export interface StoredObservation {
   seq: number;
@@ -201,6 +202,27 @@ export class Store {
     if (this.db) await this.db.saveJob(next);
     await this.settleMediaSession(next);
     return next;
+  }
+
+  /**
+   * ADAAAA-7906 (VOD resume Increment 1): merge + persist the job's resume
+   * checkpoint.
+   *
+   * This exists so the checkpoint is written through the SAME `patchJob` the
+   * progress watermark uses — a job record therefore never carries one without
+   * the other, and every durable column (status/stage/progress) is written in
+   * the same row update as the cursor.
+   *
+   * Merge rules live in `mergeResumeCheckpoint` (`vod-resume.ts`):
+   * `analyze.cursorTs` is FORWARD-ONLY, nested blocks merge field by field, and
+   * `null` clears an optional scalar (e.g. `nextAttemptAt` after a claim).
+   * Returns the updated job; throws when the job is gone.
+   */
+  async saveResumeCheckpoint(jobId: string, patch: ResumeCheckpointPatch): Promise<Job> {
+    const cur = this.jobs.get(jobId);
+    if (!cur) throw new Error(`no job ${jobId}`);
+    const resume = mergeResumeCheckpoint(cur.resume, patch);
+    return this.patchJob(jobId, { resume });
   }
 
   /** ADAAAA-7764: settle the job's `media_sessions` row when the job reaches a

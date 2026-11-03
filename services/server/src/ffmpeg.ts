@@ -357,10 +357,19 @@ export async function extractFrames(
   scale = "320:180",
   window?: FrameWindow,
   /** Optional cancel signal (ADAAAA-6625): a stopped VOD job kills the decode. */
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /**
+   * ADAAAA-7906 (VOD resume): `mode: "resume"` PRESERVES an existing frame
+   * directory instead of wiping it. A resume must not `rm -rf` the frames the
+   * previous attempt paid to produce; the caller decides reusable-vs-fresh via
+   * `extractionReusable(...)` and passes `"fresh"` whenever it re-extracts.
+   */
+  opts: { mode?: "fresh" | "resume" } = {}
 ): Promise<string[]> {
   const { mkdir, rm } = await import("node:fs/promises");
-  await rm(outDir, { recursive: true, force: true });
+  if (opts.mode !== "resume") {
+    await rm(outDir, { recursive: true, force: true });
+  }
   await mkdir(outDir, { recursive: true });
   await runFfmpeg(ffmpegPath, buildExtractArgs({ source, outDir, fps, scale, window }), signal);
   const files = (await readdir(outDir)).filter((f) => f.endsWith(".jpg")).sort();

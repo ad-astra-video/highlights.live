@@ -202,6 +202,18 @@ export interface ServerConfig {
   /** Max VOD jobs a worker drains concurrently (ADAAAA-6873). Each running job
    * holds one perceive session, so this gates GPU concurrency. `VOD_WORKER_CONCURRENCY`. */
   vodWorkerConcurrency: number;
+  /** ADAAAA-7906 (VOD resume): auto-retry budget for classified-transient
+   * failures — the number of RETRIES (default 2, so up to 3 claims). A job that
+   * exhausts it lands terminal `failed` with the classified reason.
+   * `VOD_RESUME_MAX_ATTEMPTS`. */
+  vodResumeMaxAttempts: number;
+  /** ADAAAA-7906: retry backoff BASE in ms (default 30 s, exponential on the
+   * retry number, capped at 10 min). `VOD_RESUME_BACKOFF_MS`. */
+  vodResumeBackoffMs: number;
+  /** ADAAAA-7906: persist the resume checkpoint every N decided windows
+   * (default 10 ≈ 30 s of content at the 3 s observe cadence).
+   * `VOD_RESUME_CHECKPOINT_WINDOWS`. */
+  vodResumeCheckpointWindows: number;
   /** Detail-first VOD decide temporal window length (spec knob
    * `decideWindowN`, default 24 > live 16). Frames forwarded to decide()'s
    * `frames[]` so Gemma reasons across a longer SEQUENCE per trigger.
@@ -772,6 +784,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     playerAnchorFrames: Number(env.PLAYER_ANCHOR_FRAMES ?? 8),
     playerAnchorSpanS: Number(env.PLAYER_ANCHOR_SPAN_S ?? 1),
     vodWorkerConcurrency: Number(env.VOD_WORKER_CONCURRENCY ?? 1),
+    // ADAAAA-7906 (VOD resume): auto-retry budget + backoff + checkpoint cadence.
+    vodResumeMaxAttempts: Number(env.VOD_RESUME_MAX_ATTEMPTS ?? 2),
+    vodResumeBackoffMs: Number(env.VOD_RESUME_BACKOFF_MS ?? 30_000),
+    vodResumeCheckpointWindows: Math.max(1, Number(env.VOD_RESUME_CHECKPOINT_WINDOWS ?? 10)),
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
     vodAudioRetainS: Number(env.VOD_AUDIO_RETAIN_S ?? 1800),
     // I7 / ADAAAA-6361: higher-FPS re-sample around a trigger (VOD detail-first).

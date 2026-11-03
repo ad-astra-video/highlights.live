@@ -491,6 +491,16 @@ services:
       # holds one perceive session) so the box serves up to 4 concurrent
       # perceive streams/sessions. `VOD_WORKER_CONCURRENCY`.
       - VOD_WORKER_CONCURRENCY=${VOD_WORKER_CONCURRENCY:-4}
+      # ADAAAA-7906 (VOD resume): auto-retry budget for classified-transient
+      # failures. `VOD_RESUME_MAX_ATTEMPTS` is the number of RETRIES (default 2,
+      # so up to 3 claims); a job that exhausts it lands terminal `failed` with
+      # the classified failureReason and keeps its checkpoint. Backoff is
+      # `VOD_RESUME_BACKOFF_MS` (base 30 s, doubling, capped at 10 min) and the
+      # checkpoint is persisted every `VOD_RESUME_CHECKPOINT_WINDOWS` decided
+      # windows (default 10 ≈ 30 s of content at the 3 s observe cadence).
+      - VOD_RESUME_MAX_ATTEMPTS=${VOD_RESUME_MAX_ATTEMPTS:-2}
+      - VOD_RESUME_BACKOFF_MS=${VOD_RESUME_BACKOFF_MS:-30000}
+      - VOD_RESUME_CHECKPOINT_WINDOWS=${VOD_RESUME_CHECKPOINT_WINDOWS:-10}
       # ADAAAA-7835: the browser VOD upload cap (bytes). Default 4 GB. Deployed
       # value is this env line, so a `docker compose up -d server` applies a
       # change without a rebuild; the code default equals it so dev and any
