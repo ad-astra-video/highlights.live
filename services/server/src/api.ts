@@ -54,6 +54,7 @@ import {
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource, stripWindowInspection } from "./job-detail";
 import { completedCounterFields, completedLiveCounterFields, counterFieldsForJob } from "./job-counters";
+import { exportUriFor, mintExportToken, verifyExportToken } from "./export-token";
 import { stageAEvidenceLine, whistleEvidenceLine } from "./stage-a-metrics";
 import { aggregateLiveWatchMinutes, monthKeyUtc } from "./live-watch-minutes";
 import { buildPostableHighlights, countsFromPostable, postableCountFields, quotaDeltaForInsert } from "./highlight-postable";
@@ -443,6 +444,25 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const adminReq = adminRequired(auth);
   const adminReadOnlyReq = adminReadonlyRequired(auth);
   const train = createTrainService(db, adapter, cfg);
+
+  // --- ADAAAA-7896: export marking helpers --------------------------------
+  // The playback URL is public and must never write export state; the export
+  // URL carries a per-highlight token minted here, per requesting user.
+  function exportUriForHighlight(h: HighlightRecord, userId: string): string {
+    if (!h.clipUri) return "";
+    return exportUriFor(h.clipUri, mintExportToken(cfg.jwtSecret, h.id, userId));
+  }
+
+  /** R7: exactly ONE `clip_exported` usage row per first mark, `extra` carries
+   * the highlight id + the via. Best-effort: the stamp is the reject guard, so a
+   * failed audit row must never fail the export. */
+  async function recordExportAudit(h: HighlightRecord, via: string, userId: string): Promise<void> {
+    try {
+      await db.recordUsage(h.ownerId || userId, "clip_exported", JSON.stringify({ highlightId: h.id, via }));
+    } catch (e: any) {
+      console.error(`[export] usage row failed for ${h.id}:`, String(e?.message || e));
+    }
+  }
 
   // ADAAAA-7247 (ACC-7): resolve the per-company clip window that WINS at
   // assembly. Reads the webui-configured, DB-persisted value first; falls back
@@ -3178,6 +3198,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // merged-away clips, which move to `duplicateHighlights`). The full audit
     // trail of every decide evaluation is unaffected — it rides `sections`.
     const postable = buildPostableHighlights(store.highlightsForJob(job.id));
+    // ADAAAA-7896 R1: the export URL is minted HERE, per caller — the webapp
+    // never mints a token itself. Playback stays `clipUri` (public, no state).
+    const postableHighlights = postable.highlights.map((h) => ({
+      ...h,
+      exportUri: exportUriForHighlight(h, user.id),
+    }));
 
     // ADAAAA-7623: the summary ladder (match summary -> chapters -> window
     // narratives) derived from STORED data only. Zero decide calls / GPU
@@ -3199,7 +3225,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // `buildPostableHighlights` pass above, so `job.postableHighlights`
         // always equals `highlights.length` here.
         job: { ...job, ...counterFieldsForJob(job), ...countsFromPostable(postable) },
-        highlights: postable.highlights,
+        highlights: postableHighlights,
         notableHighlights: postable.notable,
         duplicateHighlights: postable.duplicates,
         traces,
@@ -3271,6 +3297,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // are small next to the accumulated sections, so an incremental refresh can
       // carry them and keep highlights/summary streaming with the windows.
       const postable = buildPostableHighlights(store.highlightsForJob(job.id));
+      // ADAAAA-7896: the delta stream carries the same per-caller export URLs as
+      // the composite read, so an open detail page never loses the export path
+      // when it appends windows.
+      const postableHighlights = postable.highlights.map((h) => ({
+        ...h,
+        exportUri: exportUriForHighlight(h, user.id),
+      }));
       const summaryLadder = buildSummaryLadder({
         summaryLog: job.summaryLog,
         highlights: postable.highlights,
@@ -3287,7 +3320,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // single postable pass, so an open detail page's counter never drifts
         // when it appends windows.
         job: { ...job, ...countsFromPostable(postable) },
-        highlights: postable.highlights,
+        highlights: postableHighlights,
         notableHighlights: postable.notable,
         duplicateHighlights: postable.duplicates,
         maxTraces: maxTracesForSource(job.source),
@@ -4449,7 +4482,30 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         }
         const status: "accepted" | "rejected" = req.body?.status === "rejected" ? "rejected" : "accepted";
         const prev = cur.status;
-        const next = await store.reviewHighlight(cur.id, status);
+        const isAdmin = user.role === "admin";
+        // ADAAAA-7896 R4: a clip that already left the app cannot be rejected by
+        // its owner — a download/copy-link would otherwise still release the
+        // entitlement slot the generation debited. Server-authoritative: the UI
+        // is never the only guard. Status stays unchanged, nothing is debited,
+        // `rejectedAt` stays unset.
+        if (status === "rejected" && cur.exportedAt && !isAdmin) {
+          return reply.code(409).send({
+            error: "clip_exported",
+            exportedAt: cur.exportedAt,
+            exportedVia: cur.exportedVia ?? null,
+            message:
+              "This clip was already downloaded (or its link was copied), so it can no longer be rejected.",
+          });
+        }
+        // ADAAAA-7896 R6: the entitlement ledger follows the highlight OWNER,
+        // not the actor. An operator rejecting a customer clip must release the
+        // CUSTOMER's slot (the admin's own ledger stays untouched).
+        const ownerId = cur.ownerId || user.id;
+        // ADAAAA-7896 R5: the operator exemption is recorded beside the export
+        // stamp so an admin reject of an exported clip stays auditable.
+        const next = await store.reviewHighlight(cur.id, status, {
+          rejectedAfterExport: status === "rejected" && !!cur.exportedAt && isAdmin,
+        });
         // Quota accounting — only accepted clips consume the clip-count limit,
         // and the change must be idempotent (no off-by accounting on replay):
         //  - reject releases the slot the generation debited (skip if already
@@ -4458,14 +4514,73 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         //    first accept or a re-accept of an accepted/pending clip is a
         //    no-op — the slot was already debited at generation).
         if (status === "rejected" && prev !== "rejected") {
-          await entitlements.onClipRejected(user);
+          await entitlements.onClipRejected({ id: ownerId });
         } else if (status === "accepted" && prev === "rejected") {
-          await entitlements.onClipAccepted(user);
+          await entitlements.onClipAccepted({ id: ownerId });
         }
         return next;
       } catch (e: any) {
         return reply.code(404).send({ error: String(e?.message || e) });
       }
+    }
+  );
+
+  // ADAAAA-7896 R3: mark-on-copy. Fired by the card ONLY when the clipboard
+  // write succeeded (a failed copy shares nothing). The copied text is the
+  // export URL, so a third-party open marks the same state through the URL
+  // path. A batch intent marks a bounded set in ONE call.
+  app.post<{ Params: { id: string }; Body: { via?: string } }>(
+    "/highlights/:id/export-intent",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const user = req.user as { id: string; role: string };
+      const cur = store.getHighlight(req.params.id);
+      if (!cur) return reply.code(404).send({ error: "no highlight" });
+      if (user.role !== "admin" && cur.ownerId !== user.id) {
+        return reply.code(403).send({ error: "not your highlight" });
+      }
+      // `download` is set by the export URL itself, never by an intent call.
+      const via = String(req.body?.via ?? "copy_link");
+      if (via !== "copy_link" && via !== "batch_zip") {
+        return reply.code(422).send({ error: "invalid export via", allowed: ["copy_link", "batch_zip"] });
+      }
+      const { record, marked } = await store.markHighlightExported(cur.id, via, user.id);
+      if (marked) await recordExportAudit(record, via, user.id);
+      return record;
+    }
+  );
+
+  app.post<{ Body: { ids?: unknown; via?: string } }>(
+    "/highlights/export-intent",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const user = req.user as { id: string; role: string };
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids : null;
+      if (!ids || ids.length === 0) {
+        return reply.code(422).send({ error: "ids must be a non-empty array" });
+      }
+      if (ids.length > 50) {
+        return reply.code(422).send({ error: "at most 50 ids per export-intent call" });
+      }
+      const via = String(req.body?.via ?? "copy_urls");
+      if (via !== "copy_urls" && via !== "batch_zip") {
+        return reply.code(422).send({ error: "invalid export via", allowed: ["copy_urls", "batch_zip"] });
+      }
+      const marked: HighlightRecord[] = [];
+      const skipped: string[] = [];
+      for (const raw of ids) {
+        const id = String(raw);
+        const cur = store.getHighlight(id);
+        // Never mark a clip the caller does not own (admin may mark any).
+        if (!cur || (user.role !== "admin" && cur.ownerId !== user.id)) {
+          skipped.push(id);
+          continue;
+        }
+        const { record, marked: isNew } = await store.markHighlightExported(cur.id, via, user.id);
+        if (isNew) await recordExportAudit(record, via, user.id);
+        marked.push(record);
+      }
+      return { marked: marked.map((h) => h.id), skipped, highlights: marked };
     }
   );
 
@@ -4475,8 +4590,26 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   app.get("/clips/*", async (req: any, reply) => {
     const fileParts = (req.params as any)["*"];
     const f = path.join(cfg.dataDir, "clips", fileParts);
+    // ADAAAA-7896 R1: two URL classes share this route. The plain playback URL
+    // (`/clips/<file>.mp4`, the `<video>` src) is public and NEVER writes export
+    // state. The distinct export URL (`...?x=<token>`) verifies a per-highlight
+    // HMAC, marks the highlight (first fetch wins) and then serves the same
+    // bytes. A token minted for clip A on clip B's file is refused, so a token
+    // can never mark a clip it was not minted for.
+    const token = typeof req.query?.x === "string" ? req.query.x : "";
+    if (token) {
+      const payload = verifyExportToken(cfg.jwtSecret, token);
+      const hl = store.highlightByClipFile(fileParts);
+      if (!payload || !hl || hl.id !== payload.h) {
+        return reply.code(403).send({ error: "invalid export token" });
+      }
+      if (!existsSync(f)) return reply.code(404).send({ error: "not found" });
+      const { record, marked } = await store.markHighlightExported(hl.id, "download", payload.u);
+      if (marked) await recordExportAudit(record, "download", payload.u);
+    }
     try {
       const { createReadStream } = await import("node:fs");
+      if (!existsSync(f)) return reply.code(404).send({ error: "not found" });
       return reply.type("video/mp4").send(createReadStream(f));
     } catch {
       return reply.code(404).send({ error: "not found" });
