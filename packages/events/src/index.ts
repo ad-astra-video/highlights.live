@@ -789,6 +789,92 @@ export const MatchContextEvidenceSchema = z
     sessionId: z.string().nullable().optional(),
     sessionEvidence: z.boolean().optional(),
     sport: z.string().optional(),
+    /** ADAAAA-7889 (AC2): per-channel outcome detail, so an `unknown` job is
+     * diagnosable from `GET /jobs/:id` alone. The flat counters above stay (they
+     * are the shipped contract); this block adds WHAT each channel saw — the raw
+     * scorebug OCR line, the commentary mention with its span, the metadata
+     * candidate and its field, and the folded confidence per side. */
+    channelOutcomes: z
+      .object({
+        scorebug_ocr: z
+          .object({
+            frames: z.number().int().min(0).optional(),
+            /** Non-empty OCR lines read across those frames. */
+            lines: z.number().int().min(0).optional(),
+            /** Lines where a team token resolved (0 = no team text in the crop). */
+            teamLines: z.number().int().min(0).optional(),
+            teams: z.array(z.object({ name: z.string(), side: z.string().optional() }).passthrough()).optional(),
+            /** Raw OCR text: team-bearing lines when any, else what was read. */
+            rawLines: z.array(z.string()).optional(),
+          })
+          .passthrough()
+          .optional(),
+        asr: z
+          .object({
+            chars: z.number().int().min(0).optional(),
+            mentions: z
+              .array(
+                z
+                  .object({
+                    name: z.string(),
+                    snippet: z.string().optional(),
+                    start: z.number().int().nullable().optional(),
+                    end: z.number().int().nullable().optional(),
+                    kitColor: z.string().nullable().optional(),
+                  })
+                  .passthrough()
+              )
+              .optional(),
+          })
+          .passthrough()
+          .optional(),
+        metadata: z
+          .object({
+            candidates: z
+              .array(
+                z
+                  .object({
+                    name: z.string(),
+                    side: z.string().optional(),
+                    /** Which hint produced it: title / gameHint / filename / hint. */
+                    field: z.string().nullable().optional(),
+                    fuzzy: z.boolean().optional(),
+                  })
+                  .passthrough()
+              )
+              .optional(),
+          })
+          .passthrough()
+          .optional(),
+        fold: z
+          .object({
+            usableConfidence: z.number().optional(),
+            singleSourceCap: z.number().optional(),
+            home: z
+              .object({
+                name: z.string(),
+                confidence: z.number(),
+                sources: z.array(z.string()).optional(),
+              })
+              .nullable()
+              .optional(),
+            away: z
+              .object({
+                name: z.string(),
+                confidence: z.number(),
+                sources: z.array(z.string()).optional(),
+              })
+              .nullable()
+              .optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
+    /** ADAAAA-7889 (AC2): one-line reason the pass published no team (absent
+     * when teams resolve). Names each channel's outcome plus the fold result. */
+    unknownReason: z.string().optional(),
   })
   .passthrough();
 export type MatchContextEvidence = z.infer<typeof MatchContextEvidenceSchema>;

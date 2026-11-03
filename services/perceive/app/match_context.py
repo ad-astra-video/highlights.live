@@ -80,6 +80,13 @@ FLIP_MIN_SOURCES = 2
 KIT_MIN_FRAMES = 2
 # Bound the persisted recompute trail so a long job cannot grow the record.
 MAX_TRAIL = 12
+# Bounds on the AC2 per-channel diagnosis (ADAAAA-7889). A stored job must be
+# able to explain an `unknown` from `GET /jobs/:id` alone, without a box shell,
+# so the evidence status carries what each channel actually SAW — bounded so a
+# long stream can never grow the record.
+MAX_STATUS_OCR_LINES = 5
+MAX_STATUS_TEAMS = 8
+MAX_STATUS_MENTIONS = 12
 
 # --- tracked-box plausibility (kit sampling) --------------------------------
 # The tracking pass emits BOTH real player boxes and SAM3 seeds that propagate
@@ -651,6 +658,10 @@ class TeamText:
     raw: str
     snippet: str
     fuzzy: bool = False
+    # Which metadata field produced the mention ("title" / "gameHint" /
+    # "filename"). Only ``parse_metadata_hints`` sets it; it is what makes the
+    # AC2 diagnosis ("metadata candidate Liverpool from the title") readable.
+    field: Optional[str] = None
 
 
 def _tokens(text: str) -> list[str]:
@@ -795,6 +806,11 @@ class CommentaryMention:
     name: str
     snippet: str
     kit_color: Optional[str] = None
+    # Character span of the clause that produced the mention, inside the
+    # transcript the resolver was handed (ADAAAA-7889 AC2). A stored job can
+    # then point at the exact commentary text instead of only naming the team.
+    start: Optional[int] = None
+    end: Optional[int] = None
 
 
 def scan_commentary(transcript: Optional[str], sport: str) -> list[CommentaryMention]:
@@ -812,10 +828,22 @@ def scan_commentary(transcript: Optional[str], sport: str) -> list[CommentaryMen
         return []
     out: list[CommentaryMention] = []
     seen: set[str] = set()
-    for clause in _SENTENCE_SPLIT_RE.split(text):
-        clause = clause.strip()
+    # Clause + its offset in the transcript, so every mention can report the
+    # span it came from (ADAAAA-7889 AC2: an unknown must be diagnosable from
+    # the record alone). `_SENTENCE_SPLIT_RE.split` drops the separators, so the
+    # offsets are rebuilt from the separator matches instead of from lengths.
+    clauses: list[tuple[str, int]] = []
+    last = 0
+    for sep in _SENTENCE_SPLIT_RE.finditer(text):
+        clauses.append((text[last : sep.start()], last))
+        last = sep.end()
+    clauses.append((text[last:], last))
+    for raw_clause, base in clauses:
+        clause = raw_clause.strip()
         if not clause:
             continue
+        start = base + (len(raw_clause) - len(raw_clause.lstrip()))
+        end = start + len(clause)
         mentions: list[str] = []
         for tok in _tokens(clause):
             hit = resolve_token(tok, sport, allow_fuzzy=True)
@@ -835,7 +863,15 @@ def scan_commentary(transcript: Optional[str], sport: str) -> list[CommentaryMen
             if key in seen:
                 continue
             seen.add(key)
-            out.append(CommentaryMention(name=name, snippet=clause[:180], kit_color=color))
+            out.append(
+                CommentaryMention(
+                    name=name,
+                    snippet=clause[:180],
+                    kit_color=color,
+                    start=start,
+                    end=end,
+                )
+            )
     return out
 
 
@@ -1591,8 +1627,13 @@ def parse_metadata_hints(hints: Optional[Mapping[str, Any]], sport: str) -> list
         return []
     out: list[TeamText] = []
     seen: set[str] = set()
-    fields = [hints.get("title"), hints.get("gameHint"), hints.get("filename"), hints.get("hint")]
-    for value in fields:
+    fields = (
+        ("title", hints.get("title")),
+        ("gameHint", hints.get("gameHint")),
+        ("filename", hints.get("filename")),
+        ("hint", hints.get("hint")),
+    )
+    for field, value in fields:
         # Source filenames carry separators ("Portugal_vs_Spain_2018_goal1.mp4");
         # normalize them to spaces so the "<A> vs <B>" shape matches. Metadata is
         # a candidate source only (weight 0.15), so this can corroborate but never
@@ -1604,15 +1645,23 @@ def parse_metadata_hints(hints: Optional[Mapping[str, Any]], sport: str) -> list
         if len(parts) == 2:
             for side, chunk in (("home", parts[0]), ("away", parts[1])):
                 for tok in _tokens(chunk):
-                    hit = resolve_token(tok, sport)
+                    # EXACT tokens only (ADAAAA-7889). Metadata is typed text, not
+                    # a noisy OCR/ASR read, so a fuzzy hit there has no error class
+                    # to justify it — and it produced a real false positive: the
+                    # auto-generated title "Clinical finish and celebration" is one
+                    # edit from the demonym "Finnish", so every such job carried a
+                    # Finland candidate. That candidate could pair-complete onto a
+                    # free side and publish a WRONG team, which the plan's §7 ranks
+                    # worse than `unknown`.
+                    hit = resolve_token(tok, sport, allow_fuzzy=False)
                     if hit is not None and hit[0].name not in seen:
                         seen.add(hit[0].name)
-                        out.append(TeamText(hit[0].name, side, tok, text[:180], hit[1]))
+                        out.append(TeamText(hit[0].name, side, tok, text[:180], hit[1], field))
         for tok in _tokens(text):
-            hit = resolve_token(tok, sport)
+            hit = resolve_token(tok, sport, allow_fuzzy=False)
             if hit is not None and hit[0].name not in seen:
                 seen.add(hit[0].name)
-                out.append(TeamText(hit[0].name, "unknown", tok, text[:180], hit[1]))
+                out.append(TeamText(hit[0].name, "unknown", tok, text[:180], hit[1], field))
     return out
 
 
@@ -1875,6 +1924,42 @@ def build_match_context(
     }
 
 
+def _unknown_reason(
+    outcomes: Mapping[str, Any],
+    commentary: Sequence[CommentaryMention],
+    metadata: Sequence[TeamText],
+    candidates: Sequence[Candidate],
+) -> str:
+    """One-line, per-channel diagnosis of a pass that published no team (AC2).
+
+    The record used to say `unknown` with zero confidence and stop there, which
+    is indistinguishable between "the clip has no score graphic", "OCR read the
+    ad boards", "commentary named three teams but none could be sided" and "the
+    fold rejected a single-source name at the confidence cap". This string names
+    which of those happened, using only values the status already carries, so
+    `GET /jobs/:id` answers it without a box shell (ADAAAA-7889).
+    """
+    ocr = outcomes.get("scorebug_ocr") or {}
+    parts = [
+        "scorebug_ocr: {frames} frames, {lines} OCR lines, {team} with team text".format(
+            frames=ocr.get("frames", 0), lines=ocr.get("lines", 0), team=ocr.get("teamLines", 0)
+        )
+    ]
+    asr_names = sorted({m.name for m in commentary})
+    parts.append(f"asr: {len(commentary)} mentions" + (f" ({', '.join(asr_names)})" if asr_names else ""))
+    meta_names = [f"{m.name}:{m.side}" for m in metadata]
+    parts.append(f"metadata: {len(metadata)} candidates" + (f" ({', '.join(meta_names)})" if meta_names else ""))
+    if candidates:
+        best = max(candidates, key=lambda c: c.confidence)
+        parts.append(
+            f"fold: best {best.name}@{best.confidence} from {','.join(sorted(best.sources))}"
+            f" at side {best.side}, usable {USABLE_CONFIDENCE}"
+        )
+    else:
+        parts.append(f"fold: no candidate reached a side, usable {USABLE_CONFIDENCE}")
+    return "; ".join(parts)
+
+
 def resolve_match_context(
     *,
     sport_hint: Optional[str] = None,
@@ -1909,6 +1994,9 @@ def resolve_match_context(
     if sport == SPORT_UNKNOWN:
         status["sport"] = "unknown"
         status["sources"] = []
+        status["unknownReason"] = (
+            f"sport not mapped to a lexicon: gameHint/sportHint {str(sport_hint or game_hint or '')!r}"
+        )
         ctx = build_match_context(
             SPORT_UNKNOWN,
             [
@@ -1922,12 +2010,32 @@ def resolve_match_context(
         return {"matchContext": ctx, "evidenceStatus": status}
 
     scorebug: list[TeamText] = []
+    # AC2 (ADAAAA-7889): count what the scorebug channel actually READ, not just
+    # how many frames had lines. `lines` vs `teamLines` is the number that
+    # explains an `unknown` — a broadcast without a score graphic yields lines
+    # (advertising boards) and zero team text, which used to look identical to a
+    # scorebug whose team names were simply unreadable.
+    ocr_line_count = 0
+    ocr_team_line_count = 0
+    raw_samples: list[str] = []
+    team_samples: list[str] = []
     for frame in ocr_frames or []:
         lines = frame.get("lines") or frame.get("ocr") or []
         if not lines:
             continue
         status["scorebugOcrFrames"] += 1
         scorebug.extend(parse_ocr_teams(lines, sport))
+        for line in lines:
+            text = str(line or "").strip()
+            if not text:
+                continue
+            ocr_line_count += 1
+            if any(resolve_token(tok, sport, allow_fuzzy=False) is not None for tok in _tokens(text)):
+                ocr_team_line_count += 1
+                if len(team_samples) < MAX_STATUS_OCR_LINES:
+                    team_samples.append(text[:200])
+            if len(raw_samples) < MAX_STATUS_OCR_LINES:
+                raw_samples.append(text[:200])
     commentary = scan_commentary(transcript, sport)
     metadata = parse_metadata_hints(hints, sport)
     for name, present in (
@@ -1938,6 +2046,63 @@ def resolve_match_context(
         status["sources"].append(name if present else f"{name}:not_captured")
 
     candidates = fold_confidence(scorebug, commentary, metadata)
+    # Per-side folded confidence BEFORE any suppression, so the record shows the
+    # strongest claim each side could have had even when the pass publishes
+    # nothing (AC2). A `null` side means no candidate ever reached that side.
+    folded_sides: dict[str, Optional[dict[str, Any]]] = {}
+    for side in ("home", "away"):
+        best = None
+        for cand in candidates:
+            if cand.side != side:
+                continue
+            if best is None or cand.confidence > best.confidence:
+                best = cand
+        folded_sides[side] = (
+            None
+            if best is None
+            else {
+                "name": best.name,
+                "confidence": best.confidence,
+                "sources": sorted(best.sources),
+            }
+        )
+    status["channelOutcomes"] = {
+        "scorebug_ocr": {
+            "frames": status["scorebugOcrFrames"],
+            "lines": ocr_line_count,
+            "teamLines": ocr_team_line_count,
+            "teams": [{"name": t.name, "side": t.side} for t in scorebug[:MAX_STATUS_TEAMS]],
+            # The raw OCR text, so an operator reads the line that produced (or
+            # failed to produce) a team instead of guessing from a count.
+            "rawLines": (team_samples or raw_samples)[:MAX_STATUS_OCR_LINES],
+        },
+        "asr": {
+            "chars": len(transcript or ""),
+            "mentions": [
+                {
+                    "name": m.name,
+                    "snippet": m.snippet,
+                    "start": m.start,
+                    "end": m.end,
+                    "kitColor": m.kit_color,
+                }
+                for m in commentary[:MAX_STATUS_MENTIONS]
+            ],
+        },
+        "metadata": {
+            "candidates": [
+                {"name": m.name, "side": m.side, "field": m.field, "fuzzy": m.fuzzy}
+                for m in metadata[:MAX_STATUS_TEAMS]
+            ],
+        },
+        "fold": {
+            "usableConfidence": USABLE_CONFIDENCE,
+            "singleSourceCap": SINGLE_SOURCE_CAP,
+            "home": folded_sides["home"],
+            "away": folded_sides["away"],
+        },
+    }
+    unknown_reason = _unknown_reason(status["channelOutcomes"], commentary, metadata, candidates)
     # Only an ATTRIBUTED team belongs on the job record: a single-source mention
     # with no side is a candidate, not an attribution (plan §3: "single-source
     # attributions stay capped below the usable threshold"). Measured on the cited
@@ -1991,7 +2156,9 @@ def resolve_match_context(
         ambiguous = True
     if not candidates:
         # No evidence at all: keep the contract honest (AC6) — unknown teams,
-        # zero confidence, never a fabricated name.
+        # zero confidence, never a fabricated name. AC2: the reason names which
+        # channel had nothing so the record explains itself.
+        status["unknownReason"] = unknown_reason
         ctx = build_match_context(
             sport,
             [

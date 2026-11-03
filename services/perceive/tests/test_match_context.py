@@ -17,6 +17,7 @@ from app.match_context import (
     TEAM_LEXICON,
     USABLE_CONFIDENCE,
     KitCluster,
+    TeamText,
     _KIT_COLOR_NAMES,
     _KIT_PRIORS,
     _SOCCER_KIT_PRIORS,
@@ -1015,3 +1016,119 @@ def test_kit_prior_disabled_leaves_status_untouched():
     assert kits == {}
     assert ambiguous is False
     assert status == {"scorebugSwatches": 0}
+
+
+# AC2 per-channel evidence (ADAAAA-7889) ----------------------------------
+#
+# The cited fresh job (a50a803e on /data/real_goal_3080.mp4) folded to
+# `unknown` and the stored record could not say why: it reported 30 OCR frames
+# and 3 suppressed candidates, but not that those 30 frames held ZERO team text
+# (the crop read advertising boards), not the commentary snippets, and not the
+# per-side folded confidence. These tests pin the diagnosis surface.
+
+_MAN_CITY_OCR = [
+    {"ts": 0.0, "lines": ["ETIHAD", "Fly to 100+ destinations."]},
+    {"ts": 5.0, "lines": ["QNET TOGETHER WE RISE"]},
+]
+_MAN_CITY_TRANSCRIPT = (
+    "The ball is played forward for Manchester City. Liverpool press high. "
+    "Real Madrid come into the comparison."
+)
+
+
+def test_evidence_status_names_every_channel_on_an_unknown_job():
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=_MAN_CITY_OCR,
+        transcript=_MAN_CITY_TRANSCRIPT,
+        hints={"title": "Clinical finish and celebration", "filename": "real_goal_3080.mp4"},
+        progress_pct=0.0,
+    )
+    ctx = out["matchContext"]
+    status = out["evidenceStatus"]
+    # Still honest: no invented team, no invented side.
+    assert [(t["name"], t["confidence"]) for t in ctx["teams"]] == [("unknown", 0.0), ("unknown", 0.0)]
+    assert ctx["ambiguous"] is True
+
+    ocr = status["channelOutcomes"]["scorebug_ocr"]
+    assert ocr["frames"] == 2
+    assert ocr["lines"] == 3
+    assert ocr["teamLines"] == 0, "ad-board text carries no team token"
+    assert ocr["teams"] == []
+    assert ocr["rawLines"][0] == "ETIHAD", "the raw OCR line must be inspectable"
+
+    asr = status["channelOutcomes"]["asr"]
+    assert asr["chars"] == len(_MAN_CITY_TRANSCRIPT)
+    names = [m["name"] for m in asr["mentions"]]
+    assert names == ["Manchester City", "Liverpool", "Real Madrid"]
+    for mention in asr["mentions"]:
+        assert mention["snippet"]
+        assert isinstance(mention["start"], int) and isinstance(mention["end"], int)
+        assert (_MAN_CITY_TRANSCRIPT[mention["start"] : mention["end"]]).strip() == mention["snippet"]
+
+    meta = status["channelOutcomes"]["metadata"]
+    # No Finland: "finish" is one edit from the demonym "Finnish". ("Real Madrid"
+    # from the filename token "real" is a pre-existing lexicon alias, reported
+    # with its field so its weight is inspectable.)
+    meta_names = [c["name"] for c in meta["candidates"]]
+    assert "Finland" not in meta_names
+    assert all(c["field"] in ("title", "filename", "gameHint") for c in meta["candidates"])
+
+    fold = status["channelOutcomes"]["fold"]
+    assert fold["usableConfidence"] == USABLE_CONFIDENCE
+    assert fold["home"] is None and fold["away"] is None
+    assert "3 mentions" in status["unknownReason"]
+    assert "2 frames" in status["unknownReason"] and "3 OCR lines" in status["unknownReason"]
+    assert "usable 0.6" in status["unknownReason"]
+
+
+def test_evidence_status_names_the_scorebug_line_that_did_resolve():
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 12.0, "lines": ["POR 1 - 1 ESP25:13FIFA.com/soccer"]}],
+        transcript="Portugal break quickly.",
+        hints={"title": "Portugal vs Spain"},
+        progress_pct=0.0,
+    )
+    teams = {t["side"]: t["name"] for t in out["matchContext"]["teams"]}
+    assert teams == {"home": "Portugal", "away": "Spain"}
+    ocr = out["evidenceStatus"]["channelOutcomes"]["scorebug_ocr"]
+    assert ocr["lines"] == 1 and ocr["teamLines"] == 1
+    assert ocr["rawLines"] == ["POR 1 - 1 ESP25:13FIFA.com/soccer"]
+    assert {"name": "Portugal", "side": "home"} in ocr["teams"]
+    assert "unknownReason" not in out["evidenceStatus"]
+
+
+def test_metadata_hint_never_fuzzy_matches_an_english_word():
+    # Measured false positive (ADAAAA-7889): the auto-generated title
+    # "Clinical finish and celebration" fuzzy-resolved to Finland through the
+    # demonym "finnish". Metadata is typed text, so it resolves EXACT tokens only.
+    assert parse_metadata_hints({"title": "Clinical finish and celebration"}, "soccer") == []
+    assert parse_metadata_hints({"title": "A clinical finish and a final whistle"}, "soccer") == []
+    # ...while exact names in any field still resolve, with the field recorded.
+    exact = parse_metadata_hints({"title": "Haaland scores against Liverpool"}, "soccer")
+    assert [(t.name, t.side, t.field) for t in exact] == [("Liverpool", "away", "title")]
+
+
+def test_metadata_cannot_pair_complete_onto_a_wrong_finland_team():
+    # The wrong-team path the FP could reach: one concrete scorebug side plus a
+    # fuzzy metadata candidate for the free side. The exact-only metadata rule
+    # means "finish" never creates the candidate, so the pass cannot publish it.
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 1.0, "lines": ["POR 0 - 0"]}],
+        hints={"title": "Clinical finish and celebration"},
+    )
+    assert [(t["name"], t["side"]) for t in out["matchContext"]["teams"]] == [("Portugal", "home")]
+    assert "Finland" not in (out["evidenceStatus"].get("suppressedCandidates") or [])
+    assert "Finland" not in [c["name"] for c in out["evidenceStatus"]["channelOutcomes"]["metadata"]["candidates"]]
+
+
+def test_fold_would_pair_complete_a_stray_single_side_candidate():
+    # Guard demonstration (not a resolver call): pair completion hands a stranded
+    # `unknown`-side candidate the free side, so a stray fuzzy name WOULD be
+    # published as a team. This is why metadata resolves exact tokens only.
+    scorebug = parse_ocr_teams(["POR 0 - 0"], "soccer")
+    stray = [TeamText("Finland", "unknown", "finish", "Clinical finish", True)]
+    by_name = {c.name: c.side for c in fold_confidence(scorebug, [], stray)}
+    assert by_name == {"Portugal": "home", "Finland": "away"}
