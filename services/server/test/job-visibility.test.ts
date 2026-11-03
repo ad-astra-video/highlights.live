@@ -265,3 +265,39 @@ describe("job responses are role-filtered end to end", () => {
     expect(asAdmin.statusCode).toBe(200);
   });
 });
+
+describe("match-context evidence projection (ADAAAA-7889 AC2)", () => {
+  it("keeps the explanation and drops the perceive session handle for a user", () => {
+    const evidence = {
+      scorebugOcrFrames: 30,
+      sources: ["scorebug_ocr", "asr", "metadata"],
+      sessionId: "130806c6",
+      sessionEvidence: true,
+      channelOutcomes: {
+        scorebug_ocr: { frames: 30, lines: 30, teamLines: 0, rawLines: ["ETIHAD"] },
+        asr: { chars: 967, mentions: [{ name: "Liverpool", snippet: "Liverpool press", start: 10, end: 24 }] },
+      },
+      unknownReason: "scorebug_ocr: 30 frames, 30 OCR lines, 0 with team text",
+    };
+    const visible = jobForRole({ id: "j-evidence", status: "done", matchContextEvidence: evidence }, "user");
+    const ev = (visible as any).matchContextEvidence;
+    expect(ev).toBeTruthy();
+    expect(ev.channelOutcomes.scorebug_ocr.rawLines).toEqual(["ETIHAD"]);
+    expect(ev.channelOutcomes.asr.mentions[0].snippet).toBe("Liverpool press");
+    expect(ev.unknownReason).toContain("0 with team text");
+    expect(ev).not.toHaveProperty("sessionId");
+    // The stored record is never mutated by the projection.
+    expect((evidence as any).sessionId).toBe("130806c6");
+  });
+
+  it("keeps the record untouched for an admin", () => {
+    const evidence = { sessionId: "130806c6", sources: ["asr"] };
+    const job = { id: "j-admin-evidence", matchContextEvidence: evidence };
+    expect(jobForRole(job, "admin").matchContextEvidence).toBe(evidence);
+  });
+
+  it("drops the field when a record carries no evidence object", () => {
+    const visible = jobForRole({ id: "j-none" } as any, "user");
+    expect(visible).not.toHaveProperty("matchContextEvidence");
+  });
+});
