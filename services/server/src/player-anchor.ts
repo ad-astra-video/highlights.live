@@ -46,8 +46,10 @@ export interface PlayerAnchorSample {
   sourceSize: { width: number; height: number } | null;
   /** Anchor window end (seconds into a VOD source); null = the live edge. */
   atSec: number | null;
-  /** Where the sample came from, for the operator-visible diagnostics. */
-  origin: "vod-source" | "live-recording";
+  /** Which file the sample was decoded from, for the operator-visible
+   * diagnostics: the VOD source, the local file behind a live rail (cleaner than
+   * its re-encode), or the live session recording (rtmp/browser rails). */
+  origin: "vod-source" | "ingest-source" | "live-recording";
   /** Wall-clock cost of the sample (decode + read), milliseconds. */
   ms: number;
 }
@@ -67,19 +69,28 @@ export const PLAYER_ANCHOR_DECODE_TIMEOUT_MS = 8000;
  * order (ADAAAA-7847). Pure: the caller checks for an existing, non-empty file.
  *
  * * A VOD (`file`) job samples the uploaded/local source file.
- * * Every live/browser rail samples the FULL-RESOLUTION session recording
- *   (`data/live/<jobId>/session.ts`, or the assembled browser capture) — never
- *   `job.sourceUrl`, which for an rtmp job is the ingest URL: re-opening it to
- *   read one frame would start a SECOND pull of the stream.
+ * * A live rail whose ingest source is a LOCAL FILE (the `file-sim` rail, and a
+ *   screen-share recording) samples that file FIRST: the session recording is a
+ *   lossy x264 re-encode, and measured on clip `397294f3` the re-encode alone
+ *   takes jersey 11 from 14/311 legible frames at 1280x720 down to 0 legible
+ *   frames — the anchor has to come from the cleanest source available.
+ * * Any other live rail (rtmp/webrtc: `sourceUrl` is a URL, not a path) samples
+ *   the FULL-RESOLUTION session recording (`data/live/<jobId>/session.ts`) or
+ *   the assembled browser capture. A URL is never a candidate: re-opening an
+ *   rtmp ingest to read one frame would pull the stream a second time.
  */
 export function anchorSourceCandidates(
   job: { id: string; source?: string; sourceUrl?: string } | null | undefined,
   dataDir: string
 ): string[] {
   if (!job) return [];
-  if (job.source === "file") return job.sourceUrl ? [job.sourceUrl] : [];
+  const isLocalFile = !!job.sourceUrl && !/^[a-z][a-z0-9+.-]*:\/\//i.test(job.sourceUrl);
+  if (job.source === "file") return isLocalFile ? [job.sourceUrl as string] : [];
   const root = path.join(dataDir, "live", job.id);
-  return [path.join(root, "session.ts"), path.join(root, "capture.webm"), path.join(root, "capture.mp4")];
+  const recorded = [path.join(root, "session.ts"), path.join(root, "capture.webm"), path.join(root, "capture.mp4")];
+  // A local ingest file is cleaner than its re-encode; a remote URL is not a
+  // candidate at all (see above).
+  return isLocalFile ? [job.sourceUrl as string, ...recorded] : recorded;
 }
 
 /** How many frames the configured burst samples, bounded. Pure. */
@@ -133,6 +144,8 @@ export async function samplePlayerAnchor(opts: {
   spanS: number;
   /** VOD anchor time (seconds); null/undefined = live edge. */
   atSec?: number | null;
+  /** Which file `source` is (defaults to "live-recording" for a live edge). */
+  origin?: "vod-source" | "ingest-source" | "live-recording";
   /** Scratch dir for the decoded frames (removed after the read). */
   outDir: string;
   /** Max decode time; defaults to PLAYER_ANCHOR_DECODE_TIMEOUT_MS. */
@@ -144,7 +157,8 @@ export async function samplePlayerAnchor(opts: {
   const frames = anchorFrameCount(opts.count);
   const span = anchorSpanSeconds(opts.spanS);
   const atSec = opts.atSec != null && Number.isFinite(opts.atSec) ? Math.max(0, opts.atSec) : null;
-  const origin: PlayerAnchorSample["origin"] = atSec == null ? "live-recording" : "vod-source";
+  const origin: PlayerAnchorSample["origin"] =
+    opts.origin ?? (atSec == null ? "live-recording" : "vod-source");
   const sourceSize = await probeVideoSize(opts.ffmpegPath, opts.source);
   const scale = clampScaleToSource(opts.scale || "1280:720", sourceSize);
   let files: string[];

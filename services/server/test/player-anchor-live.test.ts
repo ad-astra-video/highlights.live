@@ -23,7 +23,7 @@ describe("live-rail jersey anchor sample (ADAAAA-7847)", () => {
   });
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-  it("forwards an anchor sampled from the live recording, not the ingest URL", async () => {
+  it("forwards a request-time anchor for a live job (local ingest file preferred over the re-encode)", async () => {
     const calls: any[] = [];
     const adapter: any = fakePipeline();
     adapter.controlForward = async (_sid: string, c: any) => {
@@ -74,8 +74,9 @@ describe("live-rail jersey anchor sample (ADAAAA-7847)", () => {
 
     expect(body.ok).toBe(true);
     expect(body.anchor).toBeTruthy();
-    // Live edge: no VOD seek time, and the recording is the origin.
-    expect(body.anchor.origin).toBe("live-recording");
+    // Live edge: no VOD seek time; a LOCAL file-sim source is cleaner than the
+    // recording, so the anchor is decoded from the ingest file.
+    expect(body.anchor.origin).toBe("ingest-source");
     expect(body.anchor.atSec).toBeNull();
     expect(body.anchor.frames).toBeGreaterThan(0);
     // 320x180 fixture -> the default 1280:720 anchor scale is clamped, not upscaled.
@@ -85,7 +86,7 @@ describe("live-rail jersey anchor sample (ADAAAA-7847)", () => {
     // ingest path (the recording is what was decoded).
     expect(calls).toHaveLength(1);
     expect(calls[0].anchorImages.length).toBe(body.anchor.frames);
-    expect(calls[0].anchorOrigin).toBe("live-recording");
+    expect(calls[0].anchorOrigin).toBe("ingest-source");
 
     await app.inject({
       method: "POST",

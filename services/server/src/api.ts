@@ -3914,12 +3914,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
     return null;
   };
-  const playerAnchorSource = (job: { id: string; source: string; sourceUrl?: string }): string | null => {
+  const playerAnchorSource = (
+    job: { id: string; source: string; sourceUrl?: string }
+  ): { path: string; origin: "vod-source" | "ingest-source" | "live-recording" } | null => {
     // ADAAAA-7847: where the jersey-identify anchor sample is decoded from.
     // `anchorSourceCandidates` refuses the ingest URL on live rails (a second
-    // rtmp pull just to read one frame); first existing non-empty file wins.
+    // rtmp pull just to read one frame) and prefers a local ingest file over its
+    // lossy re-encode; first existing non-empty file wins.
     for (const c of anchorSourceCandidates(job, cfg.dataDir)) {
-      if (existsSync(c) && statSync(c).size > 0) return c;
+      if (!(existsSync(c) && statSync(c).size > 0)) continue;
+      const origin: "vod-source" | "ingest-source" | "live-recording" =
+        job.source === "file" ? "vod-source" : c === job.sourceUrl ? "ingest-source" : "live-recording";
+      return { path: c, origin };
     }
     return null;
   };
@@ -4065,9 +4071,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // and the per-frame detection path are untouched. A source we cannot
         // read is not a failure: the request is forwarded without an anchor and
         // perceive falls back to the rail frame (pre-7847 behaviour).
+        const anchorSource = playerAnchorSource(job as any);
         const anchor = await samplePlayerAnchor({
           ffmpegPath: cfg.ffmpegPath,
-          source: playerAnchorSource(job as any),
+          source: anchorSource?.path ?? null,
+          origin: anchorSource?.origin,
           scale: cfg.playerAnchorFrameScale,
           count: cfg.playerAnchorFrames,
           spanS: cfg.playerAnchorSpanS,
