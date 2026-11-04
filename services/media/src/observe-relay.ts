@@ -20,6 +20,11 @@
 //   - gives each frame the control plane's own lag budget (`LIVE_OBSERVE_LAG_BUDGET_S`,
 //     default 30 s) to produce its observation, so a slow runner DELAYS delivery
 //     instead of cancelling it;
+//   - reads every seq with a HARD per-tick bound. go-livepeer holds a subscribe
+//     request OPEN for a seq it cannot produce, so an unbounded read wedges the
+//     loop on the first frame the runner fast-forwarded past (measured: seq 13
+//     waited 295 s on a 300 s share, ADAAAA-8004). The loop instead probes the
+//     queue TAIL and abandons every seq before it in one tick;
 //   - holds at most half that budget in flight and REFUSES new frames beyond it
 //     (counted, never published), so a runner that cannot keep up keeps the rail
 //     live — the node stops publishing frames whose observation would land past
@@ -49,8 +54,12 @@ export interface ObservationFrame {
 }
 
 export interface ObservationRelayOptions {
-  /** Read the observation the runner published for `seq` (null when not yet). */
-  read: (seq: number) => Promise<any | null>;
+  /** Read the observation the runner published for `seq` (null when not yet).
+   *  `timeoutMs` MUST bound the read: go-livepeer holds a subscribe request
+   *  OPEN for a seq it cannot produce, so an unbounded read wedges the relay on
+   *  the first frame the runner fast-forwarded past (measured: seq 13 waited
+   *  295 s on a 300 s share, ADAAAA-8004). */
+  read: (seq: number, timeoutMs: number) => Promise<any | null>;
   /** Deliver one observation with the frame it belongs to. */
   emit: (obs: any, frame: ObservationFrame) => void;
   /** How long (ms) a published frame may take to produce its observation before
@@ -104,6 +113,9 @@ export class ObservationRelay {
   private readonly log: (line: string) => void;
   /** FIFO of published-but-undelivered frames (publish order). */
   private queue: Array<{ frame: ObservationFrame; publishedAt: number }> = [];
+  /** Observations found by a tail probe, keyed by seq, so the head can deliver
+   *  them when the queue advances past a hole without a second read. Bounded. */
+  private probeCache = new Map<number, any>();
   /** Slots reserved for frames whose publish is still in progress. */
   private reserved = 0;
   private running = false;
@@ -206,34 +218,60 @@ export class ObservationRelay {
     });
   }
 
-  /** The delivery loop: strictly publish order, one GET per tick. */
+  /** The delivery loop: strictly publish order, one BOUNDED GET per tick. */
   private async loop(): Promise<void> {
     try {
       while (!this.closed && this.queue.length > 0) {
         const head = this.queue[0];
         const deadline = head.publishedAt + this.deadlineMs;
         let obs: any = null;
-        let skipped = false;
+        let advanced = false;
         while (!this.closed) {
-          obs = await this.opts.read(head.frame.seq).catch(() => null);
+          obs = this.probeCache.get(head.frame.seq) ?? null;
+          if (obs) {
+            this.probeCache.delete(head.frame.seq);
+            break;
+          }
+          // Bounded read: a seq the runner never published makes the broker hold
+          // the subscribe open forever, so every read gives up after one poll
+          // tick and the loop stays able to detect a hole / hit the deadline.
+          obs = await this.opts.read(head.frame.seq, this.pollMs).catch(() => null);
           if (obs) break;
           // Fast-forward detection: the runner consumes video-in in seq order, but
-          // go-livepeer's live edge SKIPS a gap rather than replaying it, so the
-          // frame after the head can already carry an observation while the head
-          // never will. Waiting the full deadline on such a hole would cost 30 s
-          // per gap (and stall every frame behind it), so abandon the head as soon
-          // as a LATER published frame proves the runner moved past it.
-          const next = this.queue[1];
-          if (next && next.frame.seq > head.frame.seq) {
-            const ahead = await this.opts.read(next.frame.seq).catch(() => null);
-            if (ahead) {
-              skipped = true;
+          // go-livepeer's live edge SKIPS a gap rather than replaying it, so a
+          // LATER published frame can already carry an observation while the head
+          // never will. Probe the QUEUE TAIL (not just the next frame) so a jump
+          // of N seqs collapses in one tick instead of costing a deadline each.
+          const tip = this.queue[this.queue.length - 1];
+          if (this.queue.length > 1 && tip.frame.seq > head.frame.seq) {
+            const tipObs =
+              this.probeCache.get(tip.frame.seq) ??
+              (await this.opts.read(tip.frame.seq, this.pollMs).catch(() => null));
+            if (tipObs) {
+              this.probeCache.set(tip.frame.seq, tipObs);
+              if (this.probeCache.size > 256) this.probeCache.clear();
+              // Everything queued BEFORE the tip's seq will never be published:
+              // count each as skipped (never silent) and abandon them in one tick.
+              while (this.queue.length > 1 && this.queue[0].frame.seq < tip.frame.seq) {
+                const gone = this.queue.shift()!;
+                this.counters.skipped++;
+                this.skipLogs++;
+                if (this.skipLogs === 1 || this.skipLogs % 10 === 0) {
+                  this.log(
+                    `[rtc] obs-skipped seq=${gone.frame.seq} skipped=${this.counters.skipped} ` +
+                      `(runner fast-forwarded)`,
+                  );
+                }
+              }
+              advanced = true;
               break;
             }
           }
           if (this.now() >= deadline) break;
           await this.sleep(this.pollMs);
         }
+        // A skip pruned the queue already — re-read the new head next round.
+        if (advanced) continue;
         this.queue.shift();
         if (obs) {
           const lagMs = Math.max(0, this.now() - head.publishedAt);
@@ -243,15 +281,6 @@ export class ObservationRelay {
             this.opts.emit(obs, head.frame);
           } catch (e: any) {
             this.log(`[media] observe-relay emit err seq=${head.frame.seq}: ${String(e?.message || e).slice(0, 120)}`);
-          }
-          continue;
-        }
-        if (skipped) {
-          // The runner fast-forwarded past this seq: no observation will ever exist.
-          this.counters.skipped++;
-          this.skipLogs++;
-          if (this.skipLogs === 1 || this.skipLogs % 10 === 0) {
-            this.log(`[rtc] obs-skipped seq=${head.frame.seq} skipped=${this.counters.skipped} (runner fast-forwarded)`);
           }
           continue;
         }
