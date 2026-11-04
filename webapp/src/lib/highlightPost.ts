@@ -152,11 +152,15 @@ export function captionNarrative(
  * ADAAAA-7948 (Inc 3): the grounding context a seeded caption carries.
  *
  * The verdict is the window's STORED outcome, read off the highlight row (the
- * same value the server gates its summary text on). A summary-log narrative has
- * already crossed the server gate, so it is not name-checked twice; a raw decide
- * `reason` has no corroboration on this surface, so a caller-supplied
- * `promptText` is used when available and otherwise the reason's names are
- * treated as unsourced (replaced by roles).
+ * same value the server gates its summary text on).
+ *
+ * ADAAAA-7957 (Inc 5): the certification that matters is the SERVER's — a
+ * summary-log narrative is verified against this window's `prompt_text` before it
+ * is persisted (the seam passes `""`, never `null`, when the decide analysis is
+ * absent, so the name gate always runs and fails closed). That is why this
+ * surface may pass `null` for log text ("certified upstream") while a raw decide
+ * `reason` — which has no certification — passes `""` and has every unsourced
+ * proper name replaced by a role.
  */
 export function captionGroundingFor(
   h: Pick<JobDetailHighlight, "outcome" | "eventType" | "localizedTs" | "start" | "reason" | "corroborated">,

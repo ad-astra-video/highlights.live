@@ -436,3 +436,41 @@ describe("seeded caption + card titles consume corroboration (ADAAAA-7958 §3.4)
     for (const t of postTitles(h, log)) expect(t).not.toMatch(GOAL_CLAIM);
   });
 });
+
+// ADAAAA-7957 (Inc 5, contract v3 §3.1-§3.3 + §3.5): the seeded caption seam is
+// the OTHER user surface, and it must not leak what the summary seam rewrites.
+// These pin the measured v2 failures (job 9fecca77, grade on ADAAAA-7950) on
+// every caption option the card offers, not just the first.
+describe("seeded caption options carry the v3 gate (ADAAAA-7957)", () => {
+  const CLAIM = /\b(?:scores?|scored|go+al|goals?|gol|net|taps? it in|converts?)\b/i;
+  const quietLog = (text: string): SummaryLogEntry[] => [entry(1, 68, text)];
+
+  it("no caption option claims a goal on a not_highlight window", () => {
+    const log = quietLog("No. 10 strikes the ball into the net — players celebrate.");
+    const h = hl({ localizedTs: 69, outcome: "not_highlight" });
+    const caption = suggestCaption(h, log);
+    expect(caption).not.toMatch(CLAIM);
+    expect(caption).not.toMatch(/[—–]/);
+    for (const title of postTitles(h, log)) expect(title, title).not.toMatch(CLAIM);
+  });
+
+  it("gates a name on a RAW decide reason (no upstream certification)", () => {
+    // The log path passes `null` = "the server certified this against the
+    // window's prompt"; a raw reason has no such certification and fails closed.
+    const h = hl({ localizedTs: 69, reason: "Manuel Ordoñez moves in the center circle.", outcome: "not_highlight" });
+    const caption = suggestCaption(h);
+    expect(caption).not.toMatch(/Manuel|Ordoñez/);
+    for (const title of postTitles(h)) expect(title, title).not.toMatch(/Manuel|Ordoñez/);
+  });
+
+  it("never offers a scorebug OCR clause as a colour beat", () => {
+    const log = quietLog("Player strikes ball into net — GOL graphic appears");
+    const h = hl({ localizedTs: 69, outcome: "not_highlight" });
+    expect(suggestCaption(h, log)).not.toMatch(/GOL|graphic|net/i);
+  });
+
+  it("a raw decide reason on the card is name-gated (no upstream certification)", () => {
+    const h = hl({ localizedTs: 40, reason: "David Saez shoots from the edge", outcome: "not_highlight" });
+    expect(suggestCaption(h)).not.toMatch(/David|Saez/i);
+  });
+});

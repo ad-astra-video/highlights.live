@@ -4,7 +4,8 @@
 //       as `opts.storySoFar` so the decide brain EXTENDS it;
 //   (b) `nextRunningSummary` decides when to persist (only on change, bounded).
 import { describe, it, expect } from "vitest";
-import { buildObserveDecideRequest, nextRunningSummary, type DecisionResult } from "../src/analyzer";
+import { buildObserveDecideRequest, captionGroundingForDecision, nextRunningSummary, type DecisionResult } from "../src/analyzer";
+import { groundCaption } from "@highlights/events";
 import { assembleObserveWindow, buildObservePayload, type ObserveDecidePayload } from "../src/observe-loop";
 
 function basePayload(): ObserveDecidePayload {
@@ -47,5 +48,35 @@ describe("nextRunningSummary (ADAAAA-7111)", () => {
     const dec: DecisionResult = { isHighlight: false, score: 0 };
     expect(nextRunningSummary(undefined, dec)).toBeNull();
     expect(nextRunningSummary("story", { isHighlight: false, score: 0, runningSummary: "" })).toBeNull();
+  });
+});
+
+// ADAAAA-7957 (Inc 5, contract v3 §3.2): the summary seam's grounding context is
+// the NAME gate's only evidence source on the live rail. The v2 build passed
+// `promptText: null` whenever the decide analysis was absent, which the gate
+// reads as "already certified upstream" — so the gate never ran and two invented
+// names reached a caption (level 9fecca77, g37/g56). An absent prompt is `""`
+// (no evidence => fail closed), never `null`.
+describe("captionGroundingForDecision (ADAAAA-7957)", () => {
+  it("carries the window's own prompt when the decide analysis captured one", () => {
+    const ctx = captionGroundingForDecision({
+      outcome: "not_highlight",
+      eventType: "SPORTING_EVENT",
+      analysis: { prompt: "Match context: RMA 1-1 BAR | ASR: (empty)" } as any,
+    });
+    expect(ctx.promptText).toBe("Match context: RMA 1-1 BAR | ASR: (empty)");
+    expect(ctx.verdict).toBe("not_highlight");
+  });
+
+  it("fails closed with an EMPTY prompt (not null) when the analysis is absent", () => {
+    const ctx = captionGroundingForDecision({ outcome: "not_highlight", eventType: "AUDIO_BURST" });
+    expect(ctx.promptText).toBe("");
+    expect(ctx.promptText).not.toBeNull();
+  });
+
+  it("a name on an analysis-less window is replaced by a role end to end", () => {
+    const ctx = captionGroundingForDecision({ outcome: "not_highlight" });
+    const out = groundCaption("Manuel Ordoñez moves in the center circle.", ctx);
+    expect(out).not.toMatch(/Manuel|Ordoñez/);
   });
 });
