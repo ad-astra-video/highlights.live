@@ -1249,7 +1249,10 @@ export function cardTitlesFor(line: string, label?: string): string[] {
  *      an object and got none;
  *   2. it is a prefix of a stored sentence (normalized), i.e. the stored text
  *      continues after it;
- *   3. it ends inside a clause (no terminal punctuation while stored continues).
+ *   3. it ends inside a clause (no terminal punctuation while stored continues);
+ *   4. it has no verb at all while a stored source has one (any word count —
+ *      `A player in the midfield.` for `… dribbles in the midfield.`), or it is
+ *      a two-word caption with no verb (`The side.`).
  *
  * The fallback order is fixed: the WHOLE first sentence of the stored raw line
  * (re-gated on the same terms), that sentence reduced only by deleting interior
@@ -1278,7 +1281,8 @@ export type ServedShapeViolation =
   | "object-missing"
   | "prefix-cut"
   | "open-clause"
-  | "fragment";
+  | "fragment"
+  | "verbless";
 
 /** Comparison form: case, punctuation and whitespace are not content. */
 function normalizeServed(text: string): string {
@@ -1324,6 +1328,13 @@ export function servedShapeViolations(
   if (bodyLast && SERVED_OBJECT_VERB.test(bodyLast)) out.push("object-missing");
   // A two-word caption with no verb is a dropped predicate (`The side.`).
   if (words.length <= 2 && !VERBISH.test(text)) out.push("fragment");
+  // ADAAAA-8015: a served line with NO verb at all has lost its predicate at any
+  // length, not just at two words — `A player in the midfield.` (5) shipped where
+  // the stored sentence said `… dribbles …`, and `A player for the ball in center
+  // circle.` (8) shipped where it said `… contests for the ball …`. It is a defect
+  // only when a stored source CARRIES a verb: a line the model itself wrote without
+  // one (`No goals in the second half.`) is its own honest text and still stands.
+  if (!VERBISH.test(text) && sources.some((s) => VERBISH.test(s ?? ""))) out.push("verbless");
   const normalized = normalizeServed(text);
   const terminal = hasTerminalPunctuation(text);
   // A subordinate clause left without a verb (`… while players`) is a cut clause,
@@ -1437,6 +1448,11 @@ const SERVED_REDUCTIONS: Array<[RegExp, string]> = [
   [/\bgoal\s+area\b/gi, "box"],
   // the contract's compressed place form ("in the center" -> "in center")
   [/\bin\s+the\s+(center|centre)\b/gi, "in $1"],
+  // ADAAAA-8022: the painted `center circle` compresses to the same `center`
+  // zone, one token shorter — the step that lets a quiet row keep a transitive
+  // verb's object (`A player contests for the ball in center.`) instead of
+  // deleting the object phrase to fit the 8-word budget.
+  [/\bin\s+(?:the\s+)?(center|centre)\s+circle\b/gi, "in $1"],
   // a trailing place modifier ("of the pitch", "of the field")
   [/\s+\bof\s+the\s+(?:pitch|field|ground|box|area)\b(?=\s*[.,;]|$)/gi, ""],
 ];
