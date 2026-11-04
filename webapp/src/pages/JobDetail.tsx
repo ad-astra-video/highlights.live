@@ -13,6 +13,9 @@ import { buildZip, type ZipFile } from "../lib/zip";
 import { asrSummary, asrSummaryLine } from "../lib/windowAsr";
 import {
   fetchJobDetail,
+  fetchJobHighlights,
+  applyReviewToRawRows,
+  rejectedStripRows,
   fetchSectionInspect,
   fetchSectionsDelta,
   mergeSections,
@@ -1122,10 +1125,11 @@ export function HighlightCard({
           </div>
         )}
         {/* One small inline note, visible to every session. Recovery guidance,
-            not a badge — it never prints a bare `accepted` / `rejected` label. */}
+            not a badge — it never prints a bare `accepted` / `rejected` label
+            (ADAAAA-7915: a customer session renders this too). */}
         {h.status === "rejected" && (
           <div className="mt-1 text-xs text-red" data-detail-rejected>
-            Rejected — hidden from the public feed. Undo reject restores it within the recover window.
+            Undo reject restores this clip within its recover window.
           </div>
         )}
         {/* ADAAAA-7881: the transcript is low-emphasis and rendered ONCE, verbatim
@@ -1579,6 +1583,13 @@ export function JobDetail() {
   const windowInspectRef = useRef(createWindowInspectStore(id, fetchSectionInspect));
   // Which review action is in-flight for which highlight id (per-control loading).
   const [pendingReview, setPendingReview] = useState<{ id: string; status: "accepted" | "rejected" } | null>(null);
+  // ADAAAA-7915 (increment 3): the RAW audit rows of this job (GET /jobs/:id,
+  // owner-or-admin scoped). `detail.highlights` is the POSTABLE projection and
+  // drops every rejected row, so a rejected clip had no surface to render on and
+  // "Undo reject" was unreachable. `rawHighlights` is the source of the hidden
+  // clip strip below the accepted grid; it is a read-only fetch, survives a
+  // reload (the initial load re-reads it) and carries no operator internals.
+  const [rawHighlights, setRawHighlights] = useState<JobDetailHighlight[]>([]);
   // ADAAAA-7622: posting workflow. Captions are page-owned so an inline edit
   // survives the 5 s detail poll (which replaces `detail`) and is what the
   // batch export ships; the batch selection covers the accepted feed only, so
@@ -1639,6 +1650,20 @@ export function JobDetail() {
     }
   }, [id]);
 
+  // ADAAAA-7915 (increment 3): re-read the RAW rows so a rejected clip — which
+  // the postable detail payload never carries — is still on the page. This is
+  // the reload-durable half of the restore path: a freshly loaded page calls it,
+  // and the 5 s reconciling poll keeps it honest. Best-effort: a failed read
+  // keeps the last known rows instead of blanking the strip.
+  const loadRawHighlights = useCallback(async () => {
+    try {
+      const rows = await fetchJobHighlights(id);
+      if (aliveRef.current) setRawHighlights(rows);
+    } catch {
+      /* best-effort: keep the rows already rendered */
+    }
+  }, [id]);
+
   const load = useCallback(
     async (initial = false) => {
       if (loadInFlightRef.current) return;
@@ -1647,6 +1672,9 @@ export function JobDetail() {
         const d = await fetchJobDetail(id, { inspect });
         if (!aliveRef.current) return;
         setDetail(d);
+        // ADAAAA-7915: the hidden clip strip reads the raw audit rows, not the
+        // postable projection, so a rejected clip survives a reload.
+        loadRawHighlights();
         // ADAAAA-7742: record how far the composite payload reaches so the live
         // delta path knows which bucket to continue after.
         lastSectionIndexRef.current = d.sections.length ? d.sections[d.sections.length - 1].index : -1;
@@ -1668,7 +1696,7 @@ export function JobDetail() {
         if (aliveRef.current && initial) setLoading(false);
       }
     },
-    [id, admin, inspect]
+    [id, admin, inspect, loadRawHighlights]
   );
 
   // ADAAAA-7741: the customer's processing-lag chip gets its own 5 s refresh,
@@ -1940,6 +1968,13 @@ export function JobDetail() {
     () => (detail ? detail.highlights.filter((h) => h.status !== "rejected") : []),
     [detail]
   );
+  // ADAAAA-7915 (increment 3): the clips the viewer rejected. `detail.highlights`
+  // can never hold one (the postable projection drops them), so the strip reads
+  // the raw audit rows and excludes anything the accepted feed already shows.
+  const hiddenHighlights = useMemo(
+    () => rejectedStripRows(rawHighlights, detail?.highlights),
+    [rawHighlights, detail]
+  );
   const selectedHighlights = useMemo(
     () => postableHighlights.filter((h) => selectedIds.includes(h.id)),
     [postableHighlights, selectedIds]
@@ -2084,6 +2119,10 @@ export function JobDetail() {
             }
           : d
       );
+      // ADAAAA-7915: the raw-row cache moves on the same tick, so the hidden
+      // clip strip lists the clip within 1 s of the reject (and drops it on
+      // undo) even before the authoritative re-read below lands.
+      setRawHighlights((rows) => applyReviewToRawRows(rows, h, status));
       // Re-fetch the authoritative payload so the server-persisted status wins
       // over any concurrent SSE-triggered refresh that could have read a stale
       // pre-review snapshot — this is what makes the reject/accept state change
@@ -2097,6 +2136,9 @@ export function JobDetail() {
       } catch {
         /* keep the optimistic local update; the next refresh reconciles */
       }
+      // ADAAAA-7915: reconcile the raw rows too — the strip must stop listing a
+      // restored clip (and a rejected clip must appear) from server truth.
+      loadRawHighlights();
     } catch (e: any) {
       // Surface validation/API failures explicitly — no silent no-op.
       setError(e?.message || String(e));
@@ -2385,32 +2427,37 @@ export function JobDetail() {
             admin={admin}
           />
 
-          {/* Rejected presentation (ADAAAA-6953): rejected clips leave the
-              accepted feed and appear here so the user can still recover
-              (reject → accept within the window restores the clip).
-              ADAAAA-7737: the reject path is an operator workflow — its cards
-              carry the decide outcome code and the "Rejected —" recovery copy,
-              so a customer session never renders the section. */}
-          {admin && detail.highlights.filter((h) => h.status === "rejected").length > 0 && (
-            <>
-              <h3 className="mt-8 text-2xl font-black" data-detail-rejected-heading>
-                Rejected
+          {/* ADAAAA-7915 (increment 3): the clips this viewer rejected stay on
+              the page here, so slot 3 can undo the reject. `detail.highlights`
+              is the POSTABLE projection and never carries a rejected row; these
+              come from the raw audit rows on GET /jobs/:id, so the strip is
+              reload-durable. Copy is plain customer prose — no decide outcome
+              code, no score, no reason, no bare status token — and the section
+              renders for both roles (a customer must be able to undo a
+              misclick; an operator keeps the Pipeline detail inside each card). */}
+          {hiddenHighlights.length > 0 && (
+            <section className="mt-6" data-detail-hidden-strip>
+              <h3 className="text-sm font-bold text-mut" data-detail-hidden-heading>
+                Hidden from the public feed
               </h3>
-              <div className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                {detail.highlights
-                  .filter((h) => h.status === "rejected")
-                  .map((h) => (
-                    <HighlightCard
-                      key={h.id}
-                      highlight={h}
-                      onDecision={review}
-                      pendingStatus={pendingReview?.id === h.id ? pendingReview.status : null}
-                      summaryLog={detail.job.summaryLog}
-                      admin={admin}
-                    />
-                  ))}
+              <div className="mt-1 text-xs text-mut">
+                Undo reject puts a clip back in the feed within its recover window.
               </div>
-            </>
+              <div className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3" data-detail-hidden-grid>
+                {hiddenHighlights.map((h) => (
+                  <HighlightCard
+                    key={h.id}
+                    highlight={h}
+                    onDecision={review}
+                    pendingStatus={pendingReview?.id === h.id ? pendingReview.status : null}
+                    caption={captionOf(h)}
+                    onCaptionChange={setHighlightCaption}
+                    summaryLog={detail.job.summaryLog}
+                    admin={admin}
+                  />
+                ))}
+              </div>
+            </section>
           )}
 
           {/* Analysis timeline (ADAAAA-7274): the Frames detail section is
