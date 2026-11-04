@@ -574,6 +574,144 @@ export function localizeHighlightInstantVod(
 }
 
 // ---------------------------------------------------------------------------
+// ADAAAA-7996: LIVE localization + scoring-lane attestation gate.
+//
+// Measured on live job 44aaeaf6 (file-sim of kids300_7935.mp4, GT goals at 100 s
+// and 159 s, LIVE_OBSERVE_CONFIRM=0 posture):
+//
+// - every accept was dated at its TRAILING window's CENTRE (112.1 / 118.8 / 120.0
+//   against a 100 s goal, +12.1 s worst), because `candidate.timestamp` is the
+//   window's `nowTs` and the old localization only looked FORWARD from it. The
+//   evidence (the scoreboard transition the window accepted on) sits at the
+//   window's START, so the delivery was systematically later than the moment.
+// - one lull window (@289.5 s, score steady 2-2, no score change in the window,
+//   no goal-line attestation) shipped `scoring_play` off the model's read alone
+//   ("The 'GOL' graphic appears") — a postable false GOAL. The Stage-2 confirm
+//   dive is the only corroboration gate and it is OFF on the live rail
+//   (LIVE_DECIDE_CONFIRM=0), so nothing else ever asked for a measured signal.
+//
+// Both rules read the SAME measured attestation (`scoreBoardChanged` /
+// `goalCrossed` / `ballOutcome=goal` from the window's own seeds + hints, or a
+// corroborated confirm), so a window that anchors the clip on its transition is
+// exactly a window allowed to claim the goal.
+// ---------------------------------------------------------------------------
+
+/** ADAAAA-7996: a frame's measured goal-attestation channel (0 = none). Unlike
+ * {@link frameLocalizationScore} this carries NO detection-confidence term, so a
+ * window of confidently-tracked objects can never anchor a delivery or attest a
+ * goal on its own. */
+export function frameAttestationChannel(f: LocalizeFrameInput): number {
+  const sig = f.signal;
+  if (!sig) return 0;
+  if (sig.ballInNet === true) return 100;
+  if (sig.goalCrossed === true) return 80;
+  if (sig.ballOutcome !== undefined && GOAL_OUTCOMES.has(sig.ballOutcome)) return 70;
+  if (sig.scoreBoardChanged === true) return 60;
+  return 0;
+}
+
+/** ADAAAA-7996: the EARLIEST frame in `[lo, hi]` that carries a measured goal
+ * attestation, or undefined. The first attested frame is the earliest content
+ * instant this window can prove the transition happened — the live window is
+ * trailing, so that instants sits at its start, not at its centre. */
+export function firstAttestedFrameTs(
+  frames: LocalizeFrameInput[] | undefined,
+  lo: number,
+  hi: number
+): number | undefined {
+  let best: number | undefined;
+  for (const f of frames ?? []) {
+    if (!Number.isFinite(f?.ts)) continue;
+    if (f.ts < lo || f.ts > hi) continue;
+    if (frameAttestationChannel(f) <= 0) continue;
+    if (best === undefined || f.ts < best) best = f.ts;
+  }
+  return best;
+}
+
+/**
+ * ADAAAA-7996: live highlight-instant localization over the JUDGED window.
+ *
+ * Order of evidence, strongest first:
+ *   1. the window's own legible scoreboard delta — `deltaTs` IS the transition
+ *      instant (first frame reading the new score), clamped into the window;
+ *   2. the earliest frame in the window carrying any measured goal attestation;
+ *   3. the pre-existing trigger / peak-audio path
+ *      ({@link localizeHighlightInstantVod}), unchanged.
+ *
+ * Pure: reads already-computed seeds + taps, no inference, no GPU call.
+ */
+export function localizeLiveWindowInstant(
+  triggerTs: number,
+  frames: LocalizeFrameInput[] | undefined,
+  taps: { ts: number; rms: number }[] | undefined,
+  maxLookaheadS: number,
+  window: { lo: number; hi: number },
+  scoreDelta?: ScoreboardDeltaEvidence,
+  opts?: { anchorToleranceS?: number; burst?: { minPeakToBaseline?: number; maxSustainedFraction?: number } }
+): VodLocalization {
+  const lo = Number.isFinite(window.lo) ? window.lo : triggerTs;
+  const hi = Number.isFinite(window.hi) ? window.hi : triggerTs;
+  if (scoreboardDeltaLegible(scoreDelta)) {
+    const ts = Math.min(Math.max((scoreDelta as ScoreboardDeltaEvidence).deltaTs, lo), hi);
+    return { ts, signal: "peak_frame", anchorReason: "frame_attestation", evidenceTs: ts, deltaSec: 0 };
+  }
+  const attested = firstAttestedFrameTs(frames, lo, hi);
+  if (attested !== undefined) {
+    return { ts: attested, signal: "peak_frame", anchorReason: "frame_attestation", evidenceTs: attested, deltaSec: 0 };
+  }
+  return localizeHighlightInstantVod(triggerTs, frames, taps, maxLookaheadS, opts);
+}
+
+/**
+ * ADAAAA-7996: does this live GOAL accept carry at least one MEASURED
+ * attestation? Every field is a measurement, never model prose:
+ *
+ * - `scoreBoardChanged` — the perceive score tracker read a score transition in
+ *   this window (the same signal that anchors the delivered clip);
+ * - `goalCrossed` / `ballOutcome=goal` — the goal-line / net attestation;
+ * - `corroborated` / `goalConfirmed=confirmed_goal` — the Stage-2 dive
+ *   independently corroborated it (when the confirm pass runs).
+ *
+ * A model-only read is NOT evidence (ADAAAA-7938 already refuses it as a
+ * transition signal for dedupe; the live scoring lane now refuses it too).
+ */
+export function liveGoalHasMeasuredEvidence(input: {
+  scoreBoardChanged?: boolean;
+  goalCrossed?: boolean;
+  ballOutcome?: string;
+  corroborated?: boolean;
+  goalConfirmed?: string | null;
+}): boolean {
+  if (input.scoreBoardChanged === true) return true;
+  if (input.goalCrossed === true) return true;
+  if (typeof input.ballOutcome === "string" && /^goal$/i.test(input.ballOutcome.trim())) return true;
+  if (input.corroborated === true) return true;
+  if ((input.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal") return true;
+  return false;
+}
+
+/** ADAAAA-7996: the note a downgraded live GOAL accept carries. */
+export const LIVE_UNATTESTED_GOAL_NOTE =
+  "live scoring lane: no measured attestation in this window (no scoreboard change, no goal-line / net signal, no corroborated confirm) — delivered as a celebration, not a GOAL";
+
+/**
+ * ADAAAA-7996: downgrade a live GOAL accept with no measured attestation to a
+ * non-scoring celebration. Same shape as the ADAAAA-7865 repeat-goal downgrade:
+ * the clip is still cut and delivered (a legitimate moment stays on the board),
+ * but its outcome leaves the scoring lane, so it can never be postable as a
+ * GOAL (`isPostableHighlight` requires `scoring_play`).
+ */
+export function downgradeUnattestedLiveGoal(d: DecisionResult): DecisionResult {
+  return {
+    ...d,
+    outcome: "big_play",
+    eventType: "BIG_PLAY",
+    reason: d.reason ? `${d.reason} | ${LIVE_UNATTESTED_GOAL_NOTE}` : LIVE_UNATTESTED_GOAL_NOTE,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // ADAAAA-7865: one score transition must yield one SCORING highlight.
 //
 // Job dee44c2f has exactly one score change in 300 s of footage (`POR 0-0 ESP`
@@ -3561,7 +3699,14 @@ export async function acceptVideoDecision(
     /** ADAAAA-7962: the ONE grounding context for this window's user-readable
      * fields, computed where the accepted highlight's corroboration is known. */
     grounding?: CaptionGroundingContext;
-  }
+  },
+  /** ADAAAA-7996: the JUDGED content window `[lo, hi]` this accept was decided
+   * over (live rail only). When present, localization may anchor the delivered
+   * instant anywhere INSIDE that window (the trailing live window starts ~10 s
+   * before its centre, which is where the accepted evidence actually sits),
+   * instead of only forward from the window centre. Absent = VOD behaviour,
+   * byte-identical. */
+  liveWindow?: { lo: number; hi: number }
 ): Promise<void> {
   // ADAAAA-7255: attach the bounded (t, energy, baseline) audio-gate inspection
   // series (sliced to the decide window around the trigger) to the per-window
@@ -3632,7 +3777,21 @@ export async function acceptVideoDecision(
   // accepting evidence instant (or reads as a crowd/react burst, capped to the
   // tolerance edge) — a far narration peak no longer drags the clip off the
   // evidence.
-  const loc = localizeHighlightInstantVod(candidate.timestamp, frameSignals, run.audioEnergyTaps(), cfg.clipAfterS);
+  // ADAAAA-7996: on the live rail the judged window is TRAILING (`[now-10, now]`)
+  // and its centre is the newest frame, so a forward-only scan could never reach
+  // the transition the window accepted on. Localize over the whole window: the
+  // measured scoreboard transition instant first, then the earliest attested
+  // frame, then the pre-existing path.
+  const loc = liveWindow
+    ? localizeLiveWindowInstant(
+        candidate.timestamp,
+        frameSignals,
+        run.audioEnergyTaps(),
+        cfg.clipAfterS,
+        liveWindow,
+        candidate.scoreBoardDelta
+      )
+    : localizeHighlightInstantVod(candidate.timestamp, frameSignals, run.audioEnergyTaps(), cfg.clipAfterS);
   const win = clipWindow(loc.ts, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15);
   // ADAAAA-7865: one score transition, one SCORING highlight. A GOAL accept that
   // re-reads an already-delivered goal's event (its anchor sits inside that
@@ -3640,7 +3799,34 @@ export async function acceptVideoDecision(
   // independent transition evidence is delivered as a CELEBRATION: the clip is
   // still cut (celebration windows stay accepted), but its outcome leaves the
   // scoring lane so the board never shows a second GOAL for the same transition.
-  const isGoalAccept = /^(GOAL|GOL)$/i.test(highlightEventType(decision, candidate.eventType) || "");
+  let isGoalAccept = /^(GOAL|GOL)$/i.test(highlightEventType(decision, candidate.eventType) || "");
+  // ADAAAA-7996: the LIVE scoring lane requires a MEASURED attestation. The
+  // Stage-2 confirm dive is the only corroboration gate and the live rail runs it
+  // OFF (LIVE_DECIDE_CONFIRM=0 in the measured posture), so a window whose whole
+  // evidence is the model's read shipped `scoring_play` — job 44aaeaf6 stored a
+  // postable false GOAL at 289.5 s in score-steady lull footage ("The 'GOL'
+  // graphic appears"; no score change, no goal-line signal). Downgrade here (the
+  // same seam and shape as the 7865 repeat-goal downgrade): the clip is still cut
+  // and delivered as a celebration, but it can never be postable as a GOAL.
+  if (
+    isGoalAccept &&
+    cfg.liveObserveLoop &&
+    cfg.decideWindowN === undefined &&
+    !liveGoalHasMeasuredEvidence({
+      scoreBoardChanged: candidate.scoreBoardChanged,
+      goalCrossed: candidate.goalCrossed,
+      ballOutcome: candidate.ballOutcome,
+      corroborated: confirm?.corroborated === true,
+      goalConfirmed: confirm?.goalConfirmed ?? null,
+    })
+  ) {
+    console.error(
+      `[live-goal-gate:${cfg.jobId}] downgraded unattested GOAL accept @${candidate.timestamp}s ` +
+        `(trigger ${trigger.kind}) to a celebration: no measured attestation in the window`
+    );
+    decision = downgradeUnattestedLiveGoal(decision);
+    isGoalAccept = false;
+  }
   const repeatGoal = isGoalAccept
     ? run.repeatGoalEvent({
         anchorTs: loc.ts,
@@ -4487,9 +4673,16 @@ export async function observeAcceptOnly(
   // stored `big_play` row (level 2c025e97, seq 17/19), so the summary is written
   // with the verdict the board will actually read.
   const sink: { final?: DecisionResult; grounding?: CaptionGroundingContext } = {};
+  // ADAAAA-7996: the judged content window this accept was decided over. On the
+  // live rail it is the TRAILING `[centerTs - windowS, centerTs]` span; the
+  // delivery instant is localized inside it instead of at its centre.
+  const liveWindow =
+    cfg.liveObserveLoop && cfg.decideWindowN === undefined
+      ? { lo: payload.centerTs - (cfg.observeWindowS ?? OBSERVE_WINDOW_S), hi: payload.centerTs }
+      : undefined;
   let acceptError: unknown = null;
   try {
-    await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, stage1, frameSignals, goalEventTs, sink);
+    await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, stage1, frameSignals, goalEventTs, sink, liveWindow);
   } catch (e) {
     acceptError = e;
   }
