@@ -17,6 +17,8 @@ import app.confirm as cf
 from app import app as decide_app
 from app.confirm import run_confirmation_pass
 from app.gemma import (
+    STATIC_PREAMBLE,
+    SYSTEM_PROMPT,
     build_group_prompt,
     build_prompt,
     decide_group_with_gemma,
@@ -104,10 +106,18 @@ def test_decide_analysis_prompt_matches_build_prompt():
         "GOAL", _evidence(), "soccer", n_frames=2, has_audio=False,
         transcript="", story_so_far="first half summary",
     )
-    # the exact prompt was also what went over the wire
-    sent = mock.requests[0]["messages"][-1]["content"]
-    sent_text = next(c["text"] for c in sent if c.get("type") == "text")
-    assert an["prompt"] == sent_text
+    # the exact prompt also went over the wire. ADAAAA-7993 splits it across
+    # turns (system = SYSTEM_PROMPT + static block, user text = Context block),
+    # so the flat v1 text is the system tail plus the user text part.
+    msgs = mock.requests[0]["messages"]
+    assert [m["role"] for m in msgs] == ["system", "user"]
+    user_text = next(c["text"] for c in msgs[-1]["content"] if c.get("type") == "text")
+    body = msgs[0]["content"]
+    assert body.startswith(SYSTEM_PROMPT)
+    static = body[len(SYSTEM_PROMPT):]
+    assert static.startswith(STATIC_PREAMBLE)
+    contract = static[len(STATIC_PREAMBLE):]
+    assert an["prompt"] == STATIC_PREAMBLE + user_text + contract
 
 
 def test_decide_analysis_data_items_cover_candidate_metadata():
