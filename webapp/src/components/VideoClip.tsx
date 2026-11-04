@@ -46,6 +46,41 @@ interface VideoClipProps {
    *  recording or a cut failure); render a failure state instead of an empty
    *  player so the card is never silently blank (ADAAAA-6522). */
   error?: string;
+  /** ADAAAA-8032: epoch ms when this clip was expected (the highlight's
+   *  `createdAt`). While `src` is empty the wait state then NAMES its progress
+   *  ("cutting clip… 12s") instead of showing an indefinite placeholder — the
+   *  share's clip is cut mid-session, so a card must never sit on a bare
+   *  "clip processing…" for the whole share. */
+  waitingSinceMs?: number;
+}
+
+/**
+ * The bounded wait state for a highlight whose clip is being cut. `waitingSinceMs`
+ * missing (a legacy row) keeps the old placeholder; with it, the elapsed seconds
+ * are always shown and the copy changes once the wait stops looking normal.
+ */
+function ClipWaitState({ waitingSinceMs }: { waitingSinceMs?: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  const waiting = Number.isFinite(waitingSinceMs);
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [waiting]);
+  const secs = waiting ? Math.max(0, Math.floor((now - (waitingSinceMs as number)) / 1000)) : null;
+  if (secs === null) {
+    return <div className="absolute inset-0 grid place-items-center text-xs text-mut">clip processing…</div>;
+  }
+  return (
+    <div className="absolute inset-0 grid place-items-center px-3 text-center">
+      <div>
+        <div className="text-xs text-mut">{secs < 30 ? `cutting clip… ${secs}s` : `still cutting… ${secs}s`}</div>
+        {secs >= 30 ? (
+          <div className="mt-1 text-xs text-mut">clip finishes when the share stops</div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -58,7 +93,7 @@ interface VideoClipProps {
  *   - accessible label via aria-label
  * Feed this the same clipUri used everywhere; playback config stays in one spot.
  */
-export function VideoClip({ src, label, poster, lazy = true, aspectClass = "aspect-video", error }: VideoClipProps) {
+export function VideoClip({ src, label, poster, lazy = true, aspectClass = "aspect-video", error, waitingSinceMs }: VideoClipProps) {
   const [ref, inView] = useInView<HTMLDivElement>("240px");
   const mounted = !lazy || inView;
   return (
@@ -71,9 +106,10 @@ export function VideoClip({ src, label, poster, lazy = true, aspectClass = "aspe
           </div>
         </div>
       ) : !src ? (
-        // A highlight with no clip yet (still being cut) — never render a blank
-        // player for it either.
-        <div className="absolute inset-0 grid place-items-center text-xs text-mut">clip processing…</div>
+        // A highlight with no clip yet: the share's clip is cut as soon as its
+        // window is flushed, so the card names its progress instead of showing
+        // an indefinite placeholder (ADAAAA-8032).
+        <ClipWaitState waitingSinceMs={waitingSinceMs} />
       ) : mounted ? (
         <video
           src={src}
