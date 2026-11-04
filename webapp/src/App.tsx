@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./lib/auth";
+import { LiveCaptureProvider } from "./lib/liveCapture";
 import { Shell } from "./components/Shell";
 import { Landing } from "./pages/Landing";
 import { AuthPage } from "./pages/AuthPage";
@@ -24,8 +25,11 @@ function Protected({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  // ADAAAA-7976: the capture session is mounted ABOVE <Routes> so navigating
+  // `/app` -> `/app/jobs/:id` on live start never unmounts the share.
   return (
-    <Routes>
+    <LiveCaptureProvider>
+      <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/auth" element={<AuthPage />} />
       <Route path="/reset" element={<ResetPage />} />
@@ -63,6 +67,7 @@ export default function App() {
         <Route path="dataset" element={<Navigate to="/app/train/dataset" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      </Routes>
+    </LiveCaptureProvider>
   );
 }
