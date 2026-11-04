@@ -424,6 +424,9 @@ const QUIET_TRIMS: [RegExp, string][] = [
   // "penalty area" -> "box": the same place in the vocabulary the contract
   // already uses, one token shorter. Never applied to "goal area".
   [/\bpenalty\s+area\b/gi, "box"],
+  // ADAAAA-7956 (level 3, job 8c045146): "in the center circle" -> "in center
+  // circle" — the contract's own compressed place form, one token shorter.
+  [/\bin\s+the\s+(center|centre)\s+circle\b/gi, "in $1 circle"],
   // ADAAAA-7957: the actor's colour robe is the last honest detail to lose when
   // the place is what makes the line a beat ("Player in blue takes the goal
   // kick in midfield" -> "Player takes the goal kick in midfield").
