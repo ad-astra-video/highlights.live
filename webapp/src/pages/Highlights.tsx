@@ -20,6 +20,7 @@ import { FrameDebugger } from "../components/FrameDebugger";
 import { JobTileMetrics } from "../components/JobMetrics";
 import { BrowserCapture } from "../components/BrowserCapture";
 import { MediaNodeStrip } from "../components/MediaNodeStrip";
+import { ResumeTrail } from "../components/ResumeTrail";
 
 const SOURCES = [
   { id: "file", label: "Upload / file", icon: Upload },
@@ -631,6 +632,12 @@ function JobTile({ job, acceptedCount, rejectedCount, mergedCount, onOpen, onDel
           <div className="mt-1 flex justify-between text-xs text-mut">
             <span>{job.progressLabel || job.status}</span>
             <span>{Math.round(jobProgressPct(job))}%</span>
+          </div>
+          {/* ADAAAA-7907 (AC8): a resumed pass says where it picked up and which
+              attempt is running, on the progress row itself — otherwise a retry
+              is indistinguishable from a slow first pass. */}
+          <div className="mt-1" data-job-resume-trail>
+            <ResumeTrail resume={job.resume} />
           </div>
         </div>
       ) : (

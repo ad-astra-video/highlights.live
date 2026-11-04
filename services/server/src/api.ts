@@ -49,8 +49,10 @@ import {
   type Dataset,
   type DetectionTrainingSample,
   type HighlightRecord,
+  type Job,
   type JobCandidate,
   type JobDecision,
+  type ResumeCheckpoint,
 } from "@highlights/events";
 import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource, stripWindowInspection } from "./job-detail";
 import { completedCounterFields, completedLiveCounterFields, counterFieldsForJob } from "./job-counters";
@@ -68,15 +70,20 @@ import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
 import { outcomeForMediaCloseReason, outcomeForStrandedJob, classifyVodFailure, type JobFailureReason, type JobOutcome } from "./job-failure";
 import {
+  accumulateAttemptTotals,
+  closeOpenAttempt,
   extractionReusable,
   failedAttemptCount,
+  formatResumeAttemptLine,
   mergeResumeCheckpoint,
+  nextAttemptNumber,
   resumeRetryDelayMs,
   resumeRetryDue,
   resumeStartTs,
   resumeWarmupFrames,
   resumeWarmupS,
   shouldArmResumeRetry,
+  type ResumeAttemptEvidence,
   type ResumeCheckpointPatch,
 } from "./vod-resume";
 import {
@@ -529,6 +536,35 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
    * the last checkpoint write has not landed yet (the writer is fire-and-forget
    * and throttled to every Nth window). Cleared when the pass exits. */
   const vodResumeCursors = new Map<string, number>();
+  /** ADAAAA-7907 (VOD resume Inc 4): per-attempt accounting for the attempt that
+   * is running now. The checkpoint's cross-attempt `accumulators` only covers
+   * attempts that already ENDED, so the failure path (and the resume log line)
+   * need this attempt's deltas while it is still in flight:
+   *
+   *   decideCalls   applied decide windows judged so far
+   *   perceiveCalls frames sent to perceive so far
+   *   runStartedMs  claim time (attempt wall clock)
+   *   analyzeStartedMs  reserve time (perceive billing window)
+   *
+   * One record per claim, overwritten by the next attempt, removed when the
+   * worker exits. */
+  interface VodAttemptStats {
+    attempt: number;
+    phase: "extract" | "analyze" | "finalize";
+    resumedFromTs: number;
+    skippedFrames: number;
+    warmupFrames: number;
+    decideCalls: number;
+    perceiveCalls: number;
+    runStartedMs: number;
+    analyzeStartedMs: number | null;
+    /** Cross-attempt totals as READ AT CLAIM (i.e. attempts that already ended).
+     * The final accumulator write is always this base + this attempt's full
+     * deltas, so the throttled mid-attempt checkpoint writes (which also touch
+     * `accumulators.decideCalls`) can never be double-counted. */
+    accumBase?: ResumeCheckpoint["accumulators"];
+  }
+  const vodAttemptStats = new Map<string, VodAttemptStats>();
   function isVodStopped(jobId: string): boolean {
     return vodStops.has(jobId);
   }
@@ -1343,10 +1379,32 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         };
       }
       const retriesUsed = failedAttemptCount(cur?.resume);
-      const retryPatch: ResumeCheckpointPatch = {
+      // ADAAAA-7907 (AC9): fold THIS attempt's spend into the cross-attempt
+      // accumulators before the row settles. The base is the accumulator block
+      // read at CLAIM (`stats.accumBase`), never the live record — the throttled
+      // mid-attempt checkpoint write also touches `accumulators.decideCalls`, so
+      // merging onto the live value would double-count the windows already
+      // persisted. `vodMeter.wallClockS/decideCalls/costUsd` on a resumed job
+      // therefore cover both attempts instead of only the last one.
+      const stats = vodAttemptStats.get(jobId);
+      const failedPerceiveS = stats?.analyzeStartedMs
+        ? Math.max(0, (Date.now() - stats.analyzeStartedMs) / 1000)
+        : 0;
+      const failedWallClockS = stats ? Math.max(0, (Date.now() - stats.runStartedMs) / 1000) : 0;
+      const failedDecideCalls = stats?.decideCalls ?? 0;
+      const failedCostUsd =
+        cfg.decideFee * failedDecideCalls + (failedPerceiveS / 3600) * PERCEIVE_PER_HOUR_USD;
+      const totals = accumulateAttemptTotals(stats?.accumBase, {
+        decideCalls: failedDecideCalls,
+        perceiveSessionS: failedPerceiveS,
+        costUsd: failedCostUsd,
+        wallClockS: failedWallClockS,
+      });
+      const attemptPatch: ResumeCheckpointPatch = {
         phase,
         attempts,
         totalAttempts: cur?.attempts ?? cur?.resume?.totalAttempts ?? 0,
+        accumulators: totals,
         lastError: { reason: cls.reason, message, at: now },
         // The in-memory cursor is authoritative for the attempt that just died:
         // a throttled checkpoint write may not have landed the newest window.
@@ -1355,7 +1413,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       if (cls.resumable && shouldArmResumeRetry(true, cur?.resume, cfg.vodResumeMaxAttempts)) {
         const delayMs = resumeRetryDelayMs(retriesUsed, cfg.vodResumeBackoffMs);
         const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
-        const resume = mergeResumeCheckpoint(cur?.resume, { ...retryPatch, nextAttemptAt });
+        const resume = mergeResumeCheckpoint(cur?.resume, { ...attemptPatch, nextAttemptAt });
         await store.patchJob(jobId, {
           status: "queued",
           stage: "retry-scheduled",
@@ -1368,13 +1426,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           "retry-scheduled",
           `failureReason=${cls.reason} nextAttemptAt=${nextAttemptAt} retry=${retriesUsed + 1}/${cfg.vodResumeMaxAttempts} error=${message}`
         );
-        console.log(
-          `[vod-resume] job=${jobId} attempt=${cur?.attempts ?? 1} phase=${phase} armed-retry-in=${Math.round(delayMs / 1000)}s reason=${cls.reason} cursorTs=${resume.analyze?.cursorTs ?? 0}`
-        );
+        // The per-attempt `[vod-resume]` line is emitted ONCE by processVodJob
+        // when the attempt exits (AC10), so no line is logged here.
         scheduleResumeDrain(delayMs);
         return;
       }
-      const resume = mergeResumeCheckpoint(cur?.resume, retryPatch);
+      const resume = mergeResumeCheckpoint(cur?.resume, attemptPatch);
       await store.patchJob(jobId, {
         status: "failed",
         stage: "failed",
@@ -1523,6 +1580,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // re-extracting destroys the frames the previous attempt paid to produce.
     const reuseExtraction = extractionReusable(checkpoint, { frameDirUsable, source: sourceIdentity });
     const attemptStartedAt = new Date().toISOString();
+    // ADAAAA-7907 (VOD resume Inc 4): this attempt's accounting record. It is the
+    // single source for the per-attempt `[vod-resume]` line (AC10) and for the
+    // deltas the failure path folds into the cross-attempt accumulators (AC9).
+    const attemptStats: VodAttemptStats = {
+      attempt: attemptNo,
+      phase: "extract",
+      resumedFromTs: cursorTs,
+      skippedFrames: 0,
+      warmupFrames,
+      decideCalls: 0,
+      perceiveCalls: 0,
+      runStartedMs,
+      analyzeStartedMs: null,
+      accumBase: checkpoint?.accumulators,
+    };
+    vodAttemptStats.set(jobId, attemptStats);
     // Claim + first checkpoint in ONE `patchJob`, so the record never carries a
     // cursor without its progress watermark (and vice versa).
     await store.patchJob(jobId, {
@@ -1534,6 +1607,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         phase: "extract",
         attempts: [...(checkpoint?.attempts ?? []), { attempt: attemptNo, startedAt: attemptStartedAt }],
         totalAttempts: attemptNo,
+        // ADAAAA-7907: total claims the retry policy allows (1 + retries), so
+        // the operator surface can render "attempt 2 of 3".
+        maxAttempts: cfg.vodResumeMaxAttempts + 1,
         nextAttemptAt: null,
         ...(cursorTs > 0 ? { resumedAt: attemptStartedAt, resumedFromTs: cursorTs } : {}),
       }),
@@ -1554,6 +1630,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     };
     const onDecidedWindow = (centerTs: number): void => {
       resumeState.decidedWindows++;
+      attemptStats.decideCalls = resumeState.decidedWindows;
       if (centerTs > resumeState.cursorTs) resumeState.cursorTs = centerTs;
       vodResumeCursors.set(jobId, resumeState.cursorTs);
       // Persist every Nth decided window (~30 s of content at the default 10).
@@ -1819,15 +1896,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       baseHook(ev);
     };
     const onProgress: (framesAnalyzed: number) => void = (n) => {
+      // ADAAAA-7907: this attempt's perceive count for the `[vod-resume]` line
+      // and for the failure-path accumulator delta.
+      attemptStats.perceiveCalls = Math.max(attemptStats.perceiveCalls, n);
       persistProgress(n).catch((e) => console.error(`[vod:${jobId}] progress`, String(e?.message || e)));
     };
     emitJobProgress(jobId, 5, reuseExtraction ? "resuming (frames preserved)" : "extracting frames");
     if (reuseExtraction) {
       // ADAAAA-7906 (AC2): extraction is SKIPPED — `extractFrames` is not
       // invoked and the pre-existing frame directory is left untouched.
-      console.log(
-        `[vod-resume] job=${jobId} attempt=${attemptNo} phase=extract skipped=extraction frames=${checkpoint?.extraction?.frameCount ?? 0} cursorTs=${cursorTs} warmupFrames=${warmupFrames}`
-      );
+      // The evidence for this attempt is the ONE `[vod-resume]` line emitted
+      // when the attempt exits (AC10), so nothing is logged here.
     } else {
       // Preserve the directory only when it belongs to the SAME source and just
       // lacks the completion marker (e.g. a crash mid-extraction); a different
@@ -1925,6 +2004,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // The counter starts at the skipped count so the persisted framesAnalyzed
     // watermark keeps moving forward instead of regressing to 0 (ADAAAA-6873).
     const skippedFrames = frameStartTs > 0 ? Math.min(totalFrames, Math.ceil(frameStartTs * sampleFps)) : 0;
+    attemptStats.skippedFrames = skippedFrames;
     let processedFrames = skippedFrames;
     let lastProgressEmit = 0;
     // ADAAAA-7855: declared before the frame iterator (which fires the bounded
@@ -2057,6 +2137,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-6625: a stop between extraction and the first frame must not
       // resurrect the terminal `cancelled` row as `analyzing`.
       if (isVodStopped(jobId)) throw new VodCancelledError(jobId);
+      // ADAAAA-7907: phase boundary — this is where the attempt's perceive
+      // billing window opens, and where a failure is attributed from here on.
+      attemptStats.phase = "analyze";
+      attemptStats.analyzeStartedMs = Date.now();
       await store.patchJob(jobId, { status: "analyzing", stage: "analyzing", framesTotal });
       outcome = await analyzeJob(adapter, iter, cut, anaCfg, onEvent, initial, shared, {
         onReserve: (res) => {
@@ -2102,6 +2186,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // count (decideCalls == candidatesTriggered) otherwise.
     const decideCalls = outcome.vodObserveMetrics?.decideCalls ?? candidatesTriggered;
     const costUsd = cfg.decideFee * decideCalls + (perceiveSessionS / 3600) * PERCEIVE_PER_HOUR_USD;
+    // ADAAAA-7907 (AC9): the completed record reports the job's spend ACROSS
+    // ATTEMPTS, not just this one. The base is the accumulator block read at
+    // claim (`attemptStats.accumBase` = every attempt that already ended, incl.
+    // the failed one) plus this attempt's deltas. Job-level fields and the meter
+    // both read the totals, so `vodMeter.wallClockS/decideCalls/costUsd` on a
+    // resumed job cover both attempts.
+    const totals = accumulateAttemptTotals(attemptStats.accumBase, {
+      decideCalls,
+      perceiveSessionS,
+      costUsd,
+      wallClockS: (Date.now() - runStartedMs) / 1000,
+    });
+    // The attempt's own counts for the `[vod-resume]` evidence line (AC10).
+    attemptStats.decideCalls = decideCalls;
+    attemptStats.perceiveCalls = outcome.perceiveCalls ?? outcome.framesAnalyzed;
     // Source runtime (D-I2.2 / ADAAAA-6838): probe the media duration so the
     // completed result card can show it. Best-effort (ms; null on probe failure).
     const durationS = await probeDuration(cfg.ffmpegPath, videoPath).catch(() => null);
@@ -2109,10 +2208,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // source duration, plus the $/video-hour pulled from the recorded spend so
     // the VOD price row is read off a job record instead of re-modelled.
     const vodMeter = buildVodMeter({
-      wallClockS: (Date.now() - runStartedMs) / 1000,
-      decideCalls,
+      wallClockS: totals.wallClockS,
+      decideCalls: totals.decideCalls,
       sourceDurationS: durationS,
-      costUsd,
+      costUsd: totals.costUsd,
       decideFeeUsd: cfg.decideFee,
     });
     // ADAAAA-7855: drain the bounded resolver passes BEFORE leaving `analyzing`
@@ -2134,6 +2233,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       stage: "finalizing",
       resume: mergeResumeCheckpoint(store.getJob(jobId)?.resume, { phase: "finalize" }),
     });
+    attemptStats.phase = "finalize";
     // ADAAAA-7624: the user-facing candidate count is the number of distinct
     // candidates this job actually produced (the persisted highlights), not the
     // observer's per-window `accepted` tally — overlapping decide windows
@@ -2182,19 +2282,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           highlightsFound: producedCandidates,
           lastWindowAt: doneAt,
         },
-        accumulators: {
-          decideCalls: (checkpoint?.accumulators?.decideCalls ?? 0) + decideCalls,
-          perceiveSessionS: (checkpoint?.accumulators?.perceiveSessionS ?? 0) + perceiveSessionS,
-          costUsd: (checkpoint?.accumulators?.costUsd ?? 0) + costUsd,
-        },
+        // ADAAAA-7907: the cross-attempt totals (this attempt's deltas applied
+        // to the accumulator block read at claim), so a resumed job's record
+        // carries both attempts and its wall clock.
+        accumulators: totals,
         lastError: store.getJob(jobId)?.resume?.lastError,
       }),
       // ADAAAA-7118: completed record surfaces the ABSOLUTE persisted highlight
       // count from the store (source of truth), matching what addHighlight wrote.
       highlightsFound: store.highlightsForJob(jobId).length,
-      decideCalls,
-      perceiveSessionS: Number(perceiveSessionS.toFixed(1)),
-      costUsd: Number(costUsd.toFixed(4)),
+      // ADAAAA-7907 (AC9): the job-level spend fields are the JOB totals too —
+      // `decideCalls` and `costUsd` on a resumed job cover both attempts. The
+      // attempt's own counts stay in `resume.attempts` / the `[vod-resume]` line.
+      decideCalls: totals.decideCalls,
+      perceiveSessionS: totals.perceiveSessionS,
+      costUsd: totals.costUsd,
       // ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot so
       // the acceptance criteria (<=30-frame cap exercised, per-call decide size,
       // -67% cost measure) are readable per job from the completed record.
@@ -2260,6 +2362,85 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     vodJobPaths.set(jobId, videoPath);
     // Fire-and-forget: kick the drain loop if it isn't already running.
     drainVodQueue().catch((e) => console.error(`[vod:${jobId}] drain`, e));
+  }
+
+  /**
+   * ADAAAA-7907 (VOD resume, Increments 3+4): THE resume entry point.
+   *
+   * Both `POST /jobs/:id/resume` (Increment 3) and `recoverStaleVodJobs`
+   * (Increment 4, boot recovery) arm a resume HERE, so a manual resume and a
+   * restart-resume take one identical path:
+   *
+   *   - the persisted checkpoint is KEPT (cursor, extraction marker, attempt
+   *     trail) — nothing is reset, so the pass resumes from the last decided
+   *     window instead of re-extracting / re-perceiving the whole video;
+   *   - any OPEN attempt entry (the one an interrupted claim appended) is closed
+   *     with the phase it was running and `server-restart`, so the attempt trail
+   *     stays readable;
+   *   - the row returns to `queued` / `resume-queued` with `resume.nextAttemptAt`
+   *     CLEARED, and `resume.totalAttempts` reserves the next claim's number
+   *     (AC9: totalAttempts == number of claims);
+   *   - the durable worker is re-armed (`enqueueVodJob`). NO compute runs inline:
+   *     the caller gets its 202 the moment the row is armed.
+   *
+   * A row already `queued` is reported as `alreadyQueued` and left untouched, so
+   * a second manual resume (or a boot sweep over a queued job) is idempotent and
+   * can never double-increment the attempt counter.
+   */
+  async function armVodResume(
+    jobId: string,
+    reason: "manual" | "boot-recovery"
+  ): Promise<{ job?: Job; alreadyQueued: boolean }> {
+    const job = store.getJob(jobId);
+    if (!job) return { alreadyQueued: false };
+    // A row already queued is reported as-is (idempotent).
+    if (job.status === "queued") return { job, alreadyQueued: true };
+    // `done`/`cancelled` are NOT resumable: a cancelled row is an operator stop
+    // and must never be resurrected (the route answers 409 before this point).
+    // A `failed` row IS the manual-resume case, so it is armed here.
+    if (job.status === "done" || job.status === "cancelled") return { job, alreadyQueued: false };
+    const now = new Date().toISOString();
+    const checkpoint = job.resume;
+    const phase = checkpoint?.phase ?? "analyze";
+    // Close the interrupted attempt (no-op when every entry is already closed).
+    const attempts = closeOpenAttempt(checkpoint?.attempts, {
+      now,
+      phase,
+      reason: "server-restart",
+      ...(reason === "boot-recovery" ? { error: "server restart interrupted this attempt" } : {}),
+    });
+    const nextAttempt = nextAttemptNumber(checkpoint);
+    const resumedFromTs = checkpoint?.analyze?.cursorTs ?? 0;
+    const armed = await store.patchJob(jobId, {
+      status: "queued",
+      stage: "resume-queued",
+      progressLabel:
+        reason === "boot-recovery"
+          ? `resuming after restart from T+${Math.round(resumedFromTs)}s`
+          : "resume queued",
+      resume: mergeResumeCheckpoint(checkpoint, {
+        phase,
+        attempts,
+        totalAttempts: nextAttempt,
+        maxAttempts: cfg.vodResumeMaxAttempts + 1,
+        // Cleared: the worker's drain filter claims the row as soon as the loop
+        // runs (an armed retry would keep it parked behind a backoff).
+        nextAttemptAt: null,
+        resumedAt: now,
+        resumedFromTs,
+      }),
+    });
+    await recordJobLifecycle(
+      jobId,
+      reason === "boot-recovery" ? "boot-resume" : "resume-queued",
+      `attempt=${nextAttempt} phase=${phase} resumedFromTs=${resumedFromTs} cursorTs=${resumedFromTs} via=${reason}`
+    );
+    // Re-arm the durable worker. `sourceUrl` is the path every VOD row carries;
+    // `vodJobPaths` may not survive a restart.
+    const videoPath = job.sourceUrl ?? vodJobPaths.get(jobId);
+    if (videoPath) enqueueVodJob(jobId, videoPath);
+    else console.error(`[vod:${jobId}] resume armed with no source path — the drain cannot claim it`);
+    return { job: armed, alreadyQueued: false };
   }
 
   async function drainVodQueue(): Promise<void> {
@@ -2328,13 +2509,43 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     } finally {
       vodStopControllers.delete(jobId);
       vodResumeCursors.delete(jobId); // ADAAAA-7906: persisted checkpoint owns the cursor from here
+      // ADAAAA-7907 (AC10): EXACTLY ONE `[vod-resume]` line per attempt, emitted
+      // when the attempt exits — success, failure or stop. Everything the line
+      // reports (cursor, skipped/warm-up frames, decide and perceive counts) is
+      // only complete at that point; the mid-pass log lines this replaced fired
+      // on some paths and not others, so a grep could not count attempts.
+      const attempt = vodAttemptStats.get(jobId);
+      if (attempt) {
+        const evidence: ResumeAttemptEvidence = {
+          attempt: attempt.attempt,
+          phase: attempt.phase,
+          resumedFromTs: attempt.resumedFromTs,
+          skippedFrames: attempt.skippedFrames,
+          warmupFrames: attempt.warmupFrames,
+          decideCalls: attempt.decideCalls,
+          perceiveCalls: attempt.perceiveCalls,
+        };
+        console.log(formatResumeAttemptLine(evidence));
+      }
+      vodAttemptStats.delete(jobId);
     }
   }
 
   /** Re-claim non-terminal jobs left over from a prior process (a restart or a
-   * crash mid-pipeline): queue them again so the worker resumes them exactly
-   * once. Highlights already persisted are skipped by the idempotent onEvent,
-   * so no duplicate clip and no double quota debit. */
+   * crash mid-pipeline).
+   *
+   * ADAAAA-7907 (VOD resume, Increment 4): this used to requeue blindly
+   * (`status: queued`, stage `queued`), which threw away the attempt's phase and
+   * relied on the pass starting over. It now goes through the SAME resume entry
+   * point as `POST /jobs/:id/resume`: the persisted checkpoint is kept, the
+   * interrupted attempt is closed as `server-restart`, and the pass resumes from
+   * the cursor — so a restart after a partial pass does not re-extract or
+   * re-perceive the whole video. Highlights already persisted are still skipped
+   * by the idempotent onEvent, so no duplicate clip and no double quota debit.
+   *
+   * A row left `queued` with an armed retry keeps it: the drain filter only
+   * claims it once `nextAttemptAt` is due, and a persisted timer re-kicks the
+   * drain at that moment (the in-memory timer died with the process). */
   async function recoverStaleVodJobs(): Promise<void> {
     for (const job of store.allJobs()) {
       if (
@@ -2346,10 +2557,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         const videoPath = job.sourceUrl;
         if (!videoPath) continue;
         if (!vodJobPaths.has(job.id)) vodJobPaths.set(job.id, videoPath);
-        // Re-queue a stuck non-terminal job (extracting/analyzing/finalizing).
-        if (job.status !== "queued") {
-          await store.patchJob(job.id, { status: "queued", stage: "queued" }).catch(() => {});
+        if (job.status === "queued") {
+          // A queued retry scheduled before the restart has no live timer any
+          // more; re-arm it so the backoff still elapses and the job resumes.
+          const next = job.resume?.nextAttemptAt;
+          const delay = next ? Date.parse(next) - Date.now() : 0;
+          if (Number.isFinite(delay) && delay > 0) scheduleResumeDrain(delay);
+          continue;
         }
+        await armVodResume(job.id, "boot-recovery").catch((e: any) =>
+          console.error(`[vod:${job.id}] boot resume failed:`, String(e?.message || e))
+        );
       }
     }
     await drainVodQueue();
@@ -3725,6 +3943,57 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     await store.deleteJob(job.id);
 
     return { deleted: job.id };
+  });
+
+  // ADAAAA-7907 (VOD resume, Increment 3): the manual resume route.
+  //
+  // Auth: the owning user or an admin (same gate as /stop and /jobs/:id). VOD
+  // `file` jobs only — a live/browser share cannot be replayed from a cursor.
+  //
+  // Contract (AC7):
+  //   202  the row was armed: status `queued`, stage `resume-queued`,
+  //        `resume.nextAttemptAt` unset, `resume.totalAttempts` incremented.
+  //   200  `{ alreadyQueued: true }` when a retry is already armed / the row is
+  //        already queued (idempotent: never a second increment).
+  //   403  another user's job.
+  //   409  `done` / `cancelled` (nothing to resume), an in-flight pass, a
+  //        non-VOD source, or no checkpoint to resume from.
+  //
+  // It NEVER runs compute inline: it only re-arms the durable worker, so the
+  // caller gets its 202 immediately and the pass resumes from the checkpoint.
+  app.post<{ Params: { id: string } }>("/jobs/:id/resume", { preHandler: authReq }, async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    if (job.ownerId !== req.user.id && req.user.role !== "admin")
+      return reply.code(403).send({ error: "forbidden" });
+    if (job.source !== "file")
+      return reply.code(409).send({ error: "only VOD file jobs can be resumed", code: "not-resumable" });
+    if (job.status === "done" || job.status === "cancelled")
+      return reply
+        .code(409)
+        .send({ error: `job is ${job.status}; nothing to resume`, code: "terminal" });
+    if (job.status === "extracting" || job.status === "analyzing" || job.status === "finalizing")
+      return reply.code(409).send({ error: "job is already running", code: "in-flight" });
+    if (job.status === "queued")
+      return reply.send({ alreadyQueued: true, job: jobForRole(store.getJob(job.id), req.user.role) });
+    if (job.status !== "failed")
+      return reply.code(409).send({ error: `job is ${job.status}; nothing to resume`, code: "not-resumable" });
+    if (!job.resume)
+      return reply
+        .code(409)
+        .send({ error: "job has no resume checkpoint", code: "no-checkpoint" });
+    if (!job.sourceUrl)
+      return reply.code(409).send({ error: "job has no source to resume from", code: "no-source" });
+
+    const { job: armed, alreadyQueued } = await armVodResume(job.id, "manual");
+    if (alreadyQueued || !armed)
+      return reply.send({ alreadyQueued: true, job: jobForRole(store.getJob(job.id), req.user.role) });
+    return reply.code(202).send({
+      job: jobForRole(armed, req.user.role),
+      // What the webapp renders: "resumed from T+12:30, attempt 2 of 3".
+      resumedFromTs: armed.resume?.resumedFromTs ?? 0,
+      attempt: armed.resume?.totalAttempts ?? 0,
+    });
   });
 
   app.post<{ Params: { id: string } }>("/jobs/:id/stop", { preHandler: authReq }, async (req: any, reply) => {

@@ -47,6 +47,17 @@ const INTERNAL_FIELDS = {
     subsampledCalls: 3,
     framesPerCall: [24, 24, 18],
   },
+  // ADAAAA-7907: the per-job cost meter (ADAAAA-7821) is the same class of
+  // spend diagnostic — filtered for a non-admin like costUsd/decideCalls.
+  vodMeter: {
+    wallClockS: 41.2,
+    decideCalls: 7,
+    sourceDurationS: 24,
+    costUsd: 0.0187,
+    decideFeeUsd: 0.0012,
+    perVideoHourCostUsd: 2.8,
+    rtf: 1.72,
+  },
 };
 
 describe("job-visibility projection", () => {
@@ -111,6 +122,44 @@ describe("job-visibility projection", () => {
     expect(visible).not.toHaveProperty("costUsd");
     expect(visible.job).not.toHaveProperty("costUsd");
     expect(visible.seq).toBe(3); // frame/stream identity is not spend data
+  });
+
+  // ADAAAA-7907 (AC8/AC9): the resume checkpoint's OPERABILITY half must reach
+  // the owning user (that is what renders "resumed from T+12:30, attempt 2 of
+  // 3"), while its SPEND half stays behind the ADAAAA-7727 gate.
+  it("keeps the resume point and attempt trail for a non-admin but drops the accumulators", () => {
+    const resume = {
+      version: 1,
+      phase: "analyze",
+      analyze: { cursorTs: 750 },
+      accumulators: { decideCalls: 42, perceiveSessionS: 900, costUsd: 1.23, wallClockS: 1200 },
+      attempts: [
+        { attempt: 1, startedAt: "t0", endedAt: "t1", failedAtPhase: "analyze", failureReason: "decide-unavailable", usdSpent: 0.4 },
+        { attempt: 2, startedAt: "t2" },
+      ],
+      totalAttempts: 2,
+      maxAttempts: 3,
+      resumedFromTs: 750,
+      nextAttemptAt: "2030-01-01T00:00:00.000Z",
+    };
+    const job = { id: "r1", source: "file", status: "queued", resume };
+    const visible: any = jobForRole(job, "user");
+    // Operability survives — the page needs the point, the attempt number and
+    // the per-attempt attribution.
+    expect(visible.resume.resumedFromTs).toBe(750);
+    expect(visible.resume.totalAttempts).toBe(2);
+    expect(visible.resume.maxAttempts).toBe(3);
+    expect(visible.resume.phase).toBe("analyze");
+    expect(visible.resume.attempts[0].failureReason).toBe("decide-unavailable");
+    expect(visible.resume.nextAttemptAt).toBe("2030-01-01T00:00:00.000Z");
+    // Spend does not.
+    expect(visible.resume).not.toHaveProperty("accumulators");
+    expect(visible.resume.attempts[0]).not.toHaveProperty("usdSpent");
+    // The stored record is untouched.
+    expect(resume.accumulators.costUsd).toBe(1.23);
+    expect(resume.attempts[0].usdSpent).toBe(0.4);
+    // Admin keeps the whole block (same identity).
+    expect((jobForRole(job, "admin") as any).resume).toBe(resume);
   });
 
   it("keeps the deliberate liveProgress exception while dropping every internal diagnostic (ADAAAA-7741)", () => {

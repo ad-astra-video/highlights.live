@@ -9,6 +9,7 @@
 // webapp stays self-contained and compiles against any backend state. They are
 // additive-only, so no contract version bump.
 import { api, type HighlightTrigger } from "./api";
+import type { ResumeView } from "./resume";
 
 export type BBox = [number, number, number, number]; // [x1,y1,x2,y2] normalized 0..1
 
@@ -320,7 +321,20 @@ export interface JobDetail {
     // ADAAAA-7700: machine-readable failure attribution (see packages/events).
     // A share that died with the media node is `media-session-lost`, NOT a user
     // stop — the detail header renders it as its own chip.
-    failureReason?: "media-session-lost" | "server-restart" | "user-stop" | "pipeline-error";
+    failureReason?:
+      | "media-session-lost"
+      | "server-restart"
+      | "user-stop"
+      | "pipeline-error"
+      // ADAAAA-7906: the resume-classified VOD failures.
+      | "decide-unavailable"
+      | "perceive-session-lost"
+      | "capacity-exhausted";
+    // ADAAAA-7907 (VOD resume): the durable checkpoint, projected for the caller
+    // (a non-admin gets it without the spend accumulators). The header renders
+    // "resumed from T+12:30 · attempt 2 of 3" from it, and the FAILED state
+    // offers Resume only when it is present.
+    resume?: ResumeView;
     // Short human-readable job title (ADAAAA-6798 Inc 1); absent on legacy jobs
     // where the UI falls back to `<gameHint/source> · <n> highlights · <date>`.
     title?: string;
