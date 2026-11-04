@@ -739,12 +739,15 @@ export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): st
   // R18: a forwarded model colour clause is never customer copy.
   if (captionColour(out)) out = tidy(dropColourClause(out));
   const beat = colourBeatFromSignal(ctx?.colourSignal);
+  // A lead that already ended a sentence does not keep its period before the
+  // appended beat ("No. 10 carries ball in center circle. — noise lifts").
+  const withBeat = (lead: string) => tidy(`${lead.replace(/[.!?;:,]+$/, "")} — ${beat}`);
   if (!isQuietVerdict(ctx?.verdict)) {
-    out = beat ? tidy(`${out} — ${beat}`) : out;
+    out = beat ? withBeat(out) : out;
     return out === text ? text : tidy(out);
   }
   const lead = trimQuietLine(captionLead(out), ctx?.place);
-  out = beat ? tidy(`${lead} — ${beat}`) : lead;
+  out = beat ? withBeat(lead) : lead;
   if (/[—–]/.test(out) && !beat) out = out.replace(/\s*[—–]\s*/g, ", ");
   return out === text ? text : tidy(out);
 }
