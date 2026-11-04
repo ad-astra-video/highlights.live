@@ -1456,6 +1456,28 @@ export const HighlightRecordSchema = z.object({
   // it duplicates so the downgrade is auditable from the record alone. Additive
   // optional — absent on every scoring highlight and on legacy rows.
   dedupeReason: z.string().optional(),
+  /** ADAAAA-8006: the deferred scoreboard read that re-attested a demoted LIVE
+   * goal. A live goal-shaped accept whose score transition only became legible
+   * AFTER its judged window closed is delivered as a `big_play` celebration (the
+   * ADAAAA-7996 gate), then upgraded back into the scoring lane when a later
+   * window's scoreboard read measures the transition inside a bounded lookahead.
+   * Records the measurement (transition instant, the read instant, the judged
+   * window it was attributed to, pre -> post score) so the re-emit is auditable
+   * from the row alone. Additive optional — absent on every row the gate did not
+   * have to demote. */
+  deferredAttestation: z
+    .object({
+      /** First legible read of the new score (the transition instant). */
+      deltaTs: z.number(),
+      /** Content timestamp of the window whose read resolved it. */
+      readAt: z.number(),
+      /** The judged window the transition was attributed to. */
+      windowLo: z.number(),
+      windowHi: z.number(),
+      pre: z.tuple([z.number(), z.number()]),
+      post: z.tuple([z.number(), z.number()]),
+    })
+    .optional(),
   // When the clip entered `rejected` (soft-delete undo grace start). Set on
   // reject, cleared on reject->accept (cancels pending TTL purge). Only
   // `rejected` clips with a `rejectedAt` aged >= rejectTtlMs are ever purge
