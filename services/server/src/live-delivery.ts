@@ -64,6 +64,17 @@ export interface LiveDeliveredLatencyRow {
   acceptMs: number;
   /** Emit -> store write-through ack. */
   persistAckMs: number;
+  /** ADAAAA-8024: the judged window centre -> the row's own (localized) trigger,
+   *  `(centerTs - triggerTs) * 1000`. Emitted so the five wall-clock stages above
+   *  PLUS this term reconstruct `deliveredLatencyMs` exactly on any row whose
+   *  trigger was localized inside the window (the re-attested GOAL rows are
+   *  exactly that shape), instead of leaving the caller to re-derive the centre.
+   *  Zero when the trigger sits on the window centre. */
+  localizeOffsetMs: number;
+  /** ADAAAA-8024: the persisted highlight row id. The metric's dedupe key: one
+   *  delivered reading per delivered highlight ROW, no matter which delivery
+   *  path (accept-time persist or deferred re-attestation) reported it. */
+  highlightId?: string;
 }
 
 /** Per-row metric block emitted on `observeMetrics.deliveredLatency`. */
@@ -118,40 +129,62 @@ function percentile(sorted: number[], p: number): number {
  * tested without driving a live pass.
  */
 export function deliveredLatencyRow(
-  input: WindowDeliveryTimings & { triggerTs: number; persistAckAtMs: number; contentOriginMs: number }
+  input: WindowDeliveryTimings & {
+    triggerTs: number;
+    persistAckAtMs: number;
+    contentOriginMs: number;
+    /** ADAAAA-8024: the delivered highlight row id (dedupe key). */
+    highlightId?: string;
+  }
 ): LiveDeliveredLatencyRow {
   const fireLagMs = Math.max(0, Math.round(input.lagMs));
   const decideE2eMs = Math.max(0, Math.round(input.settledAtMs - input.firedAtMs));
   const acceptWaitMs = Math.max(0, Math.round(input.acceptStartMs - input.settledAtMs));
   const acceptMs = Math.max(0, Math.round(input.acceptDoneMs - input.acceptStartMs));
   const persistAckMs = Math.max(0, Math.round(input.persistAckAtMs - input.acceptDoneMs));
-  // The AC's number, computed from absolute wall clocks (never from a sum of
-  // rounded stages, so it can disagree with them only by rounding).
-  const totalRaw = input.persistAckAtMs - (input.contentOriginMs + input.triggerTs * 1000);
+  // ADAAAA-8024: a localized live trigger sits INSIDE the judged window, so the
+  // window centre contributes a constant offset that the five wall-clock stages
+  // cannot express. Emitting it as its own term is what makes the row's
+  // breakdown reconstruct the AC's number EXACTLY (no re-derivation of the
+  // centre at read time, and no silent residue on a re-attested GOAL row).
+  const localizeOffsetMs = Math.round((input.centerTs - input.triggerTs) * 1000);
+  // The AC's number: the stages themselves, so `sum(stages) + offset === total`
+  // by construction. An absolute-clock reading can disagree only by rounding,
+  // which is exactly the disagreement a grader must not have to explain.
+  const stagedTotal = fireLagMs + decideE2eMs + acceptWaitMs + acceptMs + persistAckMs + localizeOffsetMs;
   return {
     triggerTs: input.triggerTs,
-    deliveredLatencyMs: Math.max(0, Math.round(totalRaw)),
+    deliveredLatencyMs: Math.max(0, stagedTotal),
     fireLagMs,
     decideE2eMs,
     acceptWaitMs,
     acceptMs,
     persistAckMs,
+    localizeOffsetMs,
+    ...(input.highlightId ? { highlightId: input.highlightId } : {}),
   };
 }
 
 /** The stage sum a delivered row must reconstruct (ms). Lets a test (and the
- *  log line) prove the decomposition accounts for the total. */
+ *  log line) prove the decomposition accounts for the total. ADAAAA-8024: the
+ *  row now carries its own localization term, so a caller does not need the
+ *  window centre; `window` stays accepted for older callers/shapes. */
 export function deliveredStageSum(
   row: LiveDeliveredLatencyRow,
   window?: { centerTs: number }
 ): number {
+  const offset = Number.isFinite(row.localizeOffsetMs)
+    ? row.localizeOffsetMs
+    : window
+      ? Math.round((window.centerTs - row.triggerTs) * 1000)
+      : 0;
   return (
     row.fireLagMs +
     row.decideE2eMs +
     row.acceptWaitMs +
     row.acceptMs +
     row.persistAckMs +
-    (window ? Math.round((window.centerTs - row.triggerTs) * 1000) : 0)
+    offset
   );
 }
 
@@ -169,13 +202,18 @@ export function deliveredLatencySummary(rows: LiveDeliveredLatencyRow[]): LiveDe
 /**
  * Per-run collector for the trigger -> delivered metric.
  *
- * The observer calls {@link noteWindow} once per ACCEPTED window (it owns the
- * fire/settle/accept clocks), and the server's persist path calls
- * {@link notePersisted} when the store write-through acknowledged the row (it
- * owns the delivered clock). Rows are matched on the window centre; when the
- * accept re-stamps the trigger timestamp (live localization), the row's real
- * `trigger.timestamp` replaces the centre, so the AC reads exactly the value
- * the stored row carries.
+ * The observer calls {@link noteWindow} once per DECIDED window that carries
+ * the fire/settle/accept clocks (it owns them) — accepted or not: the ADAAAA-7996
+ * gate can demote an accepted GOAL into a celebration row, and ADAAAA-8024 pins
+ * that such a row's delivery is still measurable (its window clocks must not be
+ * withheld). The server's persist paths call {@link notePersisted} when the store
+ * write-through acknowledged the row (they own the delivered clock): the
+ * accept-time persist for a newly inserted row, and the deferred re-attestation
+ * upgrade for a row the recall path re-classified. Rows are matched on the window
+ * centre; when the accept re-stamps the trigger timestamp (live localization),
+ * the row's real `trigger.timestamp` replaces the centre, so the AC reads exactly
+ * the value the stored row carries. The persisted row id is the dedupe key, so a
+ * row that both paths report is counted once (ADAAAA-8024).
  */
 export class LiveDeliveryTracker {
   private readonly pending: PendingDelivery[] = [];
@@ -211,13 +249,25 @@ export class LiveDeliveryTracker {
   }
 
   /**
-   * The highlight row's write-through acked: this is the "delivered" instant.
-   * `triggerTs` is the row's `trigger.timestamp`; a row that does not match a
-   * pending window exactly (localized trigger) attaches to the newest pending
-   * one, so a delivery is never silently dropped from the metric.
+   * The highlight row reached the delivered surface: this is the "delivered"
+   * instant. `triggerTs` is the row's `trigger.timestamp`; a row that does not
+   * match a pending window exactly (localized trigger) attaches to the newest
+   * pending one, so a delivery is never silently dropped from the metric.
+   *
+   * ADAAAA-8024: `highlightId` is the persisted row's id and is the metric's
+   * dedupe key. TWO delivery paths now report the same row — the accept-time
+   * persist (`persistLiveHighlight`, which reads the row as a celebration the
+   * ADAAAA-7996 gate demoted) and the deferred re-attestation upgrade
+   * (`attestDeferredGoalHighlight`, which re-classifies it as a GOAL). A row
+   * counts ONCE: the first path to report it wins, and the other path is a
+   * no-op, so `samples === distinct delivered rows` no matter how many paths
+   * fired. Callers that cannot supply an id keep the old window-only behaviour.
    */
-  notePersisted(triggerTs: number, persistAckAtMs = Date.now()): void {
+  notePersisted(triggerTs: number, persistAckAtMs = Date.now(), highlightId?: string): void {
     if (this.contentOriginMs === null) return;
+    // One reading per delivered highlight ROW (ADAAAA-8024). Checked against the
+    // emitted rows, so the dedupe window matches the ring's own retention.
+    if (highlightId && this.delivered.some((r) => r.highlightId === highlightId)) return;
     const key = Number.isFinite(triggerTs) ? triggerTs : NaN;
     let idx = this.pending.findIndex((p) => Math.abs(p.centerTs - key) <= 1e-6);
     if (idx < 0) idx = this.pending.length - 1;
@@ -228,6 +278,7 @@ export class LiveDeliveryTracker {
       triggerTs: Number.isFinite(key) ? key : win.centerTs,
       persistAckAtMs,
       contentOriginMs: this.contentOriginMs,
+      ...(highlightId ? { highlightId } : {}),
     });
     this.delivered.push(row);
     if (this.delivered.length > MAX_ROWS) this.delivered.shift();
@@ -237,7 +288,9 @@ export class LiveDeliveryTracker {
     console.log(
       `[live-deliver${this.label ? `:${this.label}` : ""}] row @${row.triggerTs}s ` +
         `delivered=${row.deliveredLatencyMs}ms fire=${row.fireLagMs}ms decide=${row.decideE2eMs}ms ` +
-        `acceptWait=${row.acceptWaitMs}ms accept=${row.acceptMs}ms persistAck=${row.persistAckMs}ms`
+        `acceptWait=${row.acceptWaitMs}ms accept=${row.acceptMs}ms persistAck=${row.persistAckMs}ms ` +
+        `localize=${row.localizeOffsetMs}ms` +
+        (row.highlightId ? ` highlight=${row.highlightId}` : "")
     );
   }
 

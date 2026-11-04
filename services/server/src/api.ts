@@ -121,6 +121,7 @@ import { composeInviteEmail } from "./invites";
 import { createTrainService, TrainValidationError } from "./train";
 import { inspectCuratedManifests, loadCuratedManifest } from "./train-curated";
 import { prepareArtifactDownload } from "./train-artifacts";
+import type { LiveDeliveryTracker } from "./live-delivery";
 
 /** Human-readable size for the oversized-file message, e.g. "2 GB". Byte-exact:
  * 1024-based units, so it always renders the configured cap truthfully. Mirrors
@@ -381,8 +382,10 @@ export async function persistLiveHighlight(
   /** ADAAAA-8005 (gate 3): called when the row is READABLE on the delivered
    *  surface — i.e. the store write-through (memory, then DB) resolved. This is
    *  the pinned "delivered" instant the trigger->delivered AC measures, so it is
-   *  reported from HERE (one definition) rather than re-derived per caller. */
-  onDelivered?: (triggerTs: number, deliveredAtMs: number) => void
+   *  reported from HERE (one definition) rather than re-derived per caller.
+   *  ADAAAA-8024: the third argument is the persisted row's id — the metric's
+   *  dedupe key, so the re-attestation path cannot double-count this row. */
+  onDelivered?: (triggerTs: number, deliveredAtMs: number, highlightId: string) => void
 ): Promise<HighlightRecord> {
   // ADAAAA-7854: the quota is debited per POSTABLE MOMENT, not per persisted row.
   // Snapshot the job's rows BEFORE the insert so the decision below is
@@ -406,7 +409,7 @@ export async function persistLiveHighlight(
       ? (writable) => {
           // A legacy row without a trigger timestamp falls through as NaN; the
           // tracker then attaches it to the newest pending window.
-          onDelivered(writable.trigger?.timestamp ?? NaN, Date.now());
+          onDelivered(writable.trigger?.timestamp ?? NaN, Date.now(), writable.id);
         }
       : undefined
   );
@@ -468,7 +471,15 @@ export async function persistLiveHighlight(
  * with no gated reason cannot be made postable, so it stays a celebration). */
 export async function attestDeferredGoalHighlight(
   deps: LiveHighlightPersistence,
-  upgrade: DeferredGoalAttestationUpgrade
+  upgrade: DeferredGoalAttestationUpgrade,
+  /** ADAAAA-8024 (gate 3): the delivered-surface ack for the re-attested row.
+   *  The upgrade is a DELIVERY of a scoring-lane row on the surface gate 3
+   *  grades, so it must feed `observeMetrics.deliveredLatency` exactly like the
+   *  accept-time persist does — the metric's window clocks were registered for
+   *  this window even though the ADAAAA-7996 gate had demoted it (accepted=false).
+   *  Reported only when the write-through RESOLVED (the row is readable then),
+   *  and carries the row id so the accept path and this path count the row once. */
+  onDelivered?: (triggerTs: number, deliveredAtMs: number, highlightId: string) => void
 ): Promise<HighlightRecord | null> {
   const rec = deps.store.getHighlight(upgrade.highlightId);
   if (!rec) return null;
@@ -479,7 +490,7 @@ export async function attestDeferredGoalHighlight(
     );
     return null;
   }
-  return deps.store.attestDeferredGoal(rec.id, {
+  const attested = await deps.store.attestDeferredGoal(rec.id, {
     outcome: "scoring_play",
     eventType: "GOAL",
     reason: upgrade.reason,
@@ -498,6 +509,15 @@ export async function attestDeferredGoalHighlight(
       post: upgrade.delta.post,
     },
   });
+  // ADAAAA-8024: the re-attested row is now readable on the delivered (scoring)
+  // surface — this is its delivered instant for gate 3. Same trigger value the
+  // stored row carries (`trigger.timestamp`), same dedupe key (`row.id`).
+  try {
+    onDelivered?.(attested.trigger?.timestamp ?? upgrade.anchorTs, Date.now(), attested.id);
+  } catch (e: any) {
+    console.error(`[live-goal-gate-upgrade:${upgrade.jobId}] delivered-ack hook failed:`, String(e?.message || e));
+  }
+  return attested;
 }
 
 /** Remove a deleted job's on-disk artifacts (ADAAAA-6838). Best-effort: every
@@ -1033,7 +1053,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         ),
       // ADAAAA-8006: re-attest a demoted LIVE goal when a later scoreboard read
       // measures the transition just past its judged window (~0 added GPU).
-      onDeferredGoalAttested: deferredGoalAttestationHook(job.id),
+      onDeferredGoalAttested: deferredGoalAttestationHook(job.id, () => shared.delivery),
     });
     // Clips are cut from the browser recording at share end (finishBrowserJob
     // cuts every highlight that has no clipUri yet): the recording is still
@@ -1064,7 +1084,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           user,
           sub,
           ev.highlight,
-          (triggerTs, atMs) => shared.delivery.notePersisted(triggerTs, atMs)
+          (triggerTs, atMs, highlightId) => shared.delivery.notePersisted(triggerTs, atMs, highlightId)
         ).catch((e) =>
           console.error(`[media-rail:${job.id}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
         );
@@ -1168,10 +1188,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
    * `highlightAttested` so an open live surface refreshes the card (a distinct
    * event name, so the share overlay's clips counter does not count one clip
    * twice). Fire-and-forget, like `persistLiveHighlight`: a failed upgrade logs
-   * and can never stall the live frame loop. */
-  function deferredGoalAttestationHook(jobId: string) {
+   * and can never stall the live frame loop.
+   *
+   * ADAAAA-8024 (gate 3): the upgrade is also a DELIVERY — it makes a
+   * scoring-lane row readable on the surface gate 3 grades — so it reports that
+   * row to the run's `LiveDeliveryTracker` with the same dedupe key the
+   * accept-time persist uses. `delivery` is a THUNK because the live rail builds
+   * this hook while `shared` is still being constructed; it is only invoked once
+   * a decide window has been applied, far after the tracker exists. */
+  function deferredGoalAttestationHook(jobId: string, delivery?: () => LiveDeliveryTracker | null | undefined) {
     return (upgrade: DeferredGoalAttestationUpgrade) => {
-      attestDeferredGoalHighlight({ store, cfg, billing, entitlements, db }, upgrade)
+      attestDeferredGoalHighlight(
+        { store, cfg, billing, entitlements, db },
+        upgrade,
+        (triggerTs, atMs, highlightId) => delivery?.()?.notePersisted(triggerTs, atMs, highlightId)
+      )
         .then((rec) => {
           if (rec) emitJobEvent(jobId, { seq: 0, timestamp: upgrade.anchorTs, type: "highlightAttested", highlight: rec });
         })
@@ -1297,7 +1328,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           ),
         // ADAAAA-8006: re-attest a demoted LIVE goal when a later scoreboard read
         // measures the transition just past its judged window (~0 added GPU).
-        onDeferredGoalAttested: deferredGoalAttestationHook(job.id),
+        onDeferredGoalAttested: deferredGoalAttestationHook(job.id, () => shared.delivery),
       });
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
@@ -1316,7 +1347,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             user,
             sub,
             ev.highlight,
-            (triggerTs, atMs) => shared.delivery.notePersisted(triggerTs, atMs)
+            (triggerTs, atMs, highlightId) => shared.delivery.notePersisted(triggerTs, atMs, highlightId)
           ).catch((e) =>
             console.error(`[live:${job.id}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
           );
