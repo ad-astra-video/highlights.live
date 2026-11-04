@@ -187,3 +187,16 @@ describe("human labels", () => {
     expect(humanEventLabel(undefined)).toBe("highlight");
   });
 });
+
+describe("legitimate non-goal phrasings survive (ADAAAA-7948 follow-up)", () => {
+  it("keeps 'shot on goal' and 'towards goal' on a non-goal verdict", () => {
+    const line = "The winger takes a shot on goal, saved at the near post.";
+    expect(gateGoalClaims(line, { verdict: "near_miss" })).toBe(line);
+  });
+
+  it("still rewrites a real goal claim in the same sentence", () => {
+    const out = gateGoalClaims("The No. 9 has a shot on goal and then scores.", { verdict: "near_miss" });
+    expect(out).not.toMatch(/\bscores\b/i);
+    expect(out).toContain("shot on goal");
+  });
+});

@@ -148,13 +148,15 @@ const GOAL_REWRITES: [RegExp, string][] = [
   [/\blevel\s+it\b/gi, "goes wide"],
   [/\bburied\s+it\b/gi, "shot it"],
   [/\bGOAL\s*!/g, "Shot!"],
-  // `goal` only as an isolated event word — never `goal kick` / `goal line`.
-  [/\bGOAL\b/g, "Shot"],
-  [/\bgoal\b(?!\s*(?:kick|line|area|mouth|frame|post|net))/gi, "shot"],
+  // `goal` only as an isolated event word — never `goal kick` / `goal line`,
+  // and never the legitimate non-goal phrasings `shot on goal` / `towards goal`.
+  [/(?<!\bon )(?<!\btoward )(?<!\btowards )\bGOAL\b/g, "Shot"],
+  [/(?<!\bon )(?<!\btoward )(?<!\btowards )\bgoal\b(?!\s*(?:kick|line|area|mouth|frame|post|net))/gi, "shot"],
 ];
 
 /** Goal words that survive a rewrite table miss; their clause is dropped. */
-const RESIDUAL_GOAL = /\b(?:scores?|scored|scoring|goal!?|goals|net ripples|levels it)\b/i;
+const RESIDUAL_GOAL =
+  /\b(?:scores?|scored|scoring|goals|net ripples|levels it)\b|(?<!\bon )(?<!\btoward )(?<!\btowards )\bgoal\b/i;
 
 /** Clause separators a caption uses: em/en dash, semicolon, or a comma-space. */
 const CLAUSE_SPLIT = /\s+[—–]\s+|;\s+|,\s+/;
