@@ -29,8 +29,10 @@ import {
   dataItemValueText,
   frameUriFor,
   goalConfirmedLabel,
+  parseAudioLevelCurve,
   type AnalysisDataItem,
   type AnalysisMediaRef,
+  type AudioLevelCurve,
   type AudioSeriesPoint,
   type ConfirmRecord,
   type WindowAnalysis,
@@ -108,16 +110,370 @@ function DataItemRow({ item }: { item: AnalysisDataItem }) {
   );
 }
 
-/** The structured `dataItems` list. */
-function DataItemList({ items }: { items: AnalysisDataItem[] }) {
+/** One point drawn on the audio-level graph: the stream time (seconds, or the
+ *  sample index for a prompt-curve-only window), the level, and — when the
+ *  window carries the gate series — the rolling baseline. */
+interface LevelPoint {
+  t: number;
+  value: number;
+  baseline?: number;
+}
+
+const GRAPH_W = 320;
+const GRAPH_H = 96;
+
+/** The drawn series for a window: the bounded gate series when captured (it
+ *  carries stream time + baseline), else the sample curve parsed out of the
+ *  `audio_level` prompt line. */
+function levelPoints(series?: AudioSeriesPoint[], curve?: AudioLevelCurve | null): LevelPoint[] {
+  if (series && series.length >= 2) {
+    return series
+      .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.energy))
+      .map((p) => ({
+        t: p.t,
+        value: p.energy,
+        baseline: Number.isFinite(p.baseline) ? p.baseline : undefined,
+      }));
+  }
+  if (curve) return curve.values.map((v, i) => ({ t: i, value: v }));
+  return [];
+}
+
+/** ADAAAA-7932: the sound-levels graph for the `audio_level` field.
+ *
+ *  Y axis is RELATIVE to the window's own levels (min..max of what was drawn,
+ *  padded), not a fixed 0..1, so a quiet window's shape is still readable.
+ *  Mean and peak levels are drawn as labelled reference lines. Hovering inside
+ *  the plot draws a white cross hair (vertical + horizontal) and prints the
+ *  actual sample time/index and level at that position. Read-only; theme tokens
+ *  only. */
+function AudioLevelGraph({
+  points,
+  mean,
+  peak,
+  triggerTs,
+  timeAxis,
+}: {
+  points: LevelPoint[];
+  mean: number;
+  peak: number;
+  triggerTs?: number;
+  timeAxis: boolean;
+}) {
+  const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
+  if (points.length < 2) return null;
+
+  let tMin = Infinity;
+  let tMax = -Infinity;
+  let vLo = Infinity;
+  let vHi = -Infinity;
+  for (const p of points) {
+    tMin = Math.min(tMin, p.t);
+    tMax = Math.max(tMax, p.t);
+    vLo = Math.min(vLo, p.value);
+    vHi = Math.max(vHi, p.value);
+    if (p.baseline !== undefined) {
+      vLo = Math.min(vLo, p.baseline);
+      vHi = Math.max(vHi, p.baseline);
+    }
+  }
+  const tSpan = Math.max(1e-6, tMax - tMin);
+  // Window-relative Y axis: pad the observed range instead of assuming 0..1.
+  const pad = Math.max(1e-3, (vHi - vLo) * 0.08);
+  const yLo = Math.max(0, vLo - pad);
+  const yHi = Math.min(1, vHi + pad);
+  const ySpan = Math.max(1e-6, yHi - yLo);
+
+  const X = (t: number) => ((t - tMin) / tSpan) * GRAPH_W;
+  const Y = (v: number) => GRAPH_H - ((Math.min(yHi, Math.max(yLo, v)) - yLo) / ySpan) * GRAPH_H;
+  const valuePts = points.map((p) => `${X(p.t).toFixed(1)},${Y(p.value).toFixed(1)}`).join(" ");
+  const hasBaseline = points.some((p) => p.baseline !== undefined);
+  const baselinePts = hasBaseline
+    ? points.map((p) => `${X(p.t).toFixed(1)},${Y(p.baseline ?? p.value).toFixed(1)}`).join(" ")
+    : "";
+  const inWindow = triggerTs !== undefined && triggerTs >= tMin && triggerTs <= tMax;
+  const triggerX = inWindow ? X(triggerTs as number) : null;
+  // Mean / peak are clamped to the padded axis so a level outside the drawn
+  // range (a server-declared peak over unparsed samples) still shows as a line.
+  const meanY = Y(mean);
+  const peakY = Y(peak);
+
+  function onMove(e: React.MouseEvent<SVGSVGElement>) {
+    const r = e.currentTarget.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return;
+    const x = Math.min(GRAPH_W, Math.max(0, ((e.clientX - r.left) / r.width) * GRAPH_W));
+    const y = Math.min(GRAPH_H, Math.max(0, ((e.clientY - r.top) / r.height) * GRAPH_H));
+    setHover({ x, y });
+  }
+
+  // Nearest drawn point to the cursor's x — the value the readout reports.
+  const nearest = hover
+    ? points.reduce((best, p) => (Math.abs(X(p.t) - hover.x) < Math.abs(X(best.t) - hover.x) ? p : best), points[0])
+    : null;
+  const xText = (t: number) => (timeAxis ? `T+${t.toFixed(1)}s` : `#${Math.round(t)}`);
+
+  return (
+    <div className="mt-1 rounded-md border border-mut/20 bg-black/30 p-2" data-audio-level-graph data-audio-series-graph>
+      <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-wide text-mut">
+        <span className="font-bold">Sound levels</span>
+        <span className="flex items-center gap-1 normal-case">
+          <svg width="14" height="6" className="stroke-neon" viewBox="0 0 14 6" aria-hidden>
+            <line x1="0" y1="3" x2="14" y2="3" strokeWidth="2" />
+          </svg>
+          level
+        </span>
+        {hasBaseline && (
+          <span className="flex items-center gap-1 normal-case">
+            <svg width="14" height="6" className="stroke-purple" viewBox="0 0 14 6" aria-hidden>
+              <line x1="0" y1="3" x2="14" y2="3" strokeWidth="2" />
+            </svg>
+            baseline
+          </span>
+        )}
+        <span className="flex items-center gap-1 normal-case">
+          <svg width="14" height="6" className="stroke-yellow" viewBox="0 0 14 6" aria-hidden>
+            <line x1="0" y1="3" x2="14" y2="3" strokeWidth="1" strokeDasharray="3 2" />
+          </svg>
+          peak
+        </span>
+        <span className="flex items-center gap-1 normal-case">
+          <svg width="14" height="6" className="stroke-pink" viewBox="0 0 14 6" aria-hidden>
+            <line x1="0" y1="3" x2="14" y2="3" strokeWidth="1" strokeDasharray="3 2" />
+          </svg>
+          mean
+        </span>
+        {hover && nearest && (
+          <span className="ml-auto font-mono text-[10px] normal-case text-ink" data-audio-level-readout>
+            {xText(nearest.t)} · {nearest.value.toFixed(2)}
+          </span>
+        )}
+      </div>
+      <svg
+        viewBox={`0 0 ${GRAPH_W} ${GRAPH_H}`}
+        className="h-24 w-full cursor-crosshair"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Sound levels over the window, with mean and peak reference lines"
+        onMouseMove={onMove}
+        onMouseLeave={() => setHover(null)}
+        data-audio-level-plot
+      >
+        {/* Window-relative Y axis ticks: top, middle, bottom of the drawn range */}
+        {[yHi, yLo + ySpan / 2, yLo].map((v, i) => (
+          <text
+            key={i}
+            x={2}
+            y={16 + i * ((GRAPH_H - 18) / 2)}
+            fontSize={8}
+            className="fill-mut"
+            data-audio-level-axis
+          >
+            {v.toFixed(2)}
+          </text>
+        ))}
+        {/* Mean + peak reference lines (labelled, dashed) */}
+        <line
+          x1="0"
+          y1={meanY}
+          x2={GRAPH_W}
+          y2={meanY}
+          className="stroke-pink"
+          strokeWidth="1"
+          strokeDasharray="4 3"
+          vectorEffect="non-scaling-stroke"
+          data-audio-level-mean
+          data-audio-level-mean-value={mean.toFixed(2)}
+        >
+          <title>{`mean ${mean.toFixed(2)}`}</title>
+        </line>
+        <line
+          x1="0"
+          y1={peakY}
+          x2={GRAPH_W}
+          y2={peakY}
+          className="stroke-yellow"
+          strokeWidth="1"
+          strokeDasharray="4 3"
+          vectorEffect="non-scaling-stroke"
+          data-audio-level-peak
+          data-audio-level-peak-value={peak.toFixed(2)}
+        >
+          <title>{`peak ${peak.toFixed(2)}`}</title>
+        </line>
+        {hasBaseline && (
+          <polyline
+            points={baselinePts}
+            fill="none"
+            className="stroke-purple"
+            strokeWidth="1.5"
+            vectorEffect="non-scaling-stroke"
+            data-audio-series-baseline
+          />
+        )}
+        <polyline
+          points={valuePts}
+          fill="none"
+          className="stroke-neon"
+          strokeWidth="2"
+          vectorEffect="non-scaling-stroke"
+          data-audio-series-energy
+        />
+        {triggerX !== null && (
+          <line
+            x1={triggerX}
+            y1="0"
+            x2={triggerX}
+            y2={GRAPH_H}
+            className="stroke-yellow"
+            strokeWidth="2"
+            strokeDasharray="3 2"
+            vectorEffect="non-scaling-stroke"
+            data-audio-trigger
+            data-trigger-ts={triggerTs}
+          />
+        )}
+        {/* Hover: white cross hair (vertical at the nearest sample, horizontal at
+            the cursor) + the sample dot, so the actual values are readable. */}
+        {hover && nearest && (
+          <g data-audio-level-crosshair data-crosshair-value={nearest.value.toFixed(2)} data-crosshair-index={nearest.t}>
+            <line
+              x1={hover.x}
+              y1="0"
+              x2={hover.x}
+              y2={GRAPH_H}
+              className="stroke-ink"
+              strokeWidth="1"
+              vectorEffect="non-scaling-stroke"
+              data-audio-crosshair-v
+            />
+            <line
+              x1="0"
+              y1={hover.y}
+              x2={GRAPH_W}
+              y2={hover.y}
+              className="stroke-ink"
+              strokeWidth="1"
+              strokeDasharray="2 2"
+              vectorEffect="non-scaling-stroke"
+              data-audio-crosshair-h
+            />
+            <circle cx={X(nearest.t)} cy={Y(nearest.value)} r="2.5" className="fill-ink" />
+          </g>
+        )}
+      </svg>
+      <div className="mt-1 flex justify-between font-mono text-[10px] text-mut">
+        <span data-audio-x-start>{timeAxis ? `${tMin.toFixed(1)}s` : `#0`}</span>
+        <span className="text-mut/80" data-audio-level-keyline>
+          peak <span className="text-yellow">{peak.toFixed(2)}</span> · mean{" "}
+          <span className="text-pink">{mean.toFixed(2)}</span>
+        </span>
+        {inWindow && triggerX !== null && (
+          <span className="text-yellow" data-audio-trigger-label>
+            trigger @ T+{triggerTs?.toFixed(1)}s
+          </span>
+        )}
+        <span data-audio-x-end>{timeAxis ? `${tMax.toFixed(1)}s` : `#${Math.round(tMax)}`}</span>
+      </div>
+    </div>
+  );
+}
+
+/** ADAAAA-7932: the `audio_level` context item, rendered as a graph by default
+ *  with the raw text the model was sent behind a Graph / Raw toggle. Falls back
+ *  to the plain text row when the value holds no usable series. */
+export function AudioLevelField({
+  item,
+  series,
+  triggerTs,
+  defaultView = "graph",
+}: {
+  item: AnalysisDataItem;
+  series?: AudioSeriesPoint[];
+  triggerTs?: number;
+  defaultView?: "graph" | "raw";
+}) {
+  const [view, setView] = useState<"graph" | "raw">(defaultView);
+  const curve = parseAudioLevelCurve(item.value);
+  const points = levelPoints(series, curve);
+  const raw = dataItemValueText(item.value);
+  if (points.length < 2) return <DataItemRow item={item} />;
+  const timeAxis = !!series && series.length >= 2;
+  const values = points.map((p) => p.value);
+  const drawnMean = values.reduce((a, b) => a + b, 0) / values.length;
+  const mean = curve && curve.declared ? curve.mean : drawnMean;
+  const peak = curve && curve.declared ? curve.peak : Math.max(...values);
+
+  return (
+    <li className="border-t border-mut/15 py-1" data-data-item={item.type} data-audio-level-field data-audio-level-view={view}>
+      <div className="flex items-baseline gap-2 text-xs">
+        <span className="w-24 shrink-0 truncate font-mono text-mut" title={item.type}>
+          {item.type}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-slate-ink" title={item.label}>
+          {item.label}
+        </span>
+        <span className="shrink-0 flex items-center gap-1" role="group" aria-label="audio level view">
+          <button
+            type="button"
+            onClick={() => setView("graph")}
+            aria-pressed={view === "graph"}
+            className={`rounded-full border px-2 py-0.5 font-mono text-[10px] ${
+              view === "graph" ? "border-neon/50 bg-neon/10 text-neon" : "border-mut/30 text-mut"
+            }`}
+            data-audio-level-toggle="graph"
+          >
+            Graph
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("raw")}
+            aria-pressed={view === "raw"}
+            className={`rounded-full border px-2 py-0.5 font-mono text-[10px] ${
+              view === "raw" ? "border-neon/50 bg-neon/10 text-neon" : "border-mut/30 text-mut"
+            }`}
+            data-audio-level-toggle="raw"
+          >
+            Raw
+          </button>
+        </span>
+      </div>
+      {view === "raw" ? (
+        <pre
+          className="mt-1 overflow-x-auto whitespace-pre-wrap rounded border border-mut/20 bg-black/40 p-2 font-mono text-[11px] leading-relaxed text-ink"
+          data-audio-level-raw
+        >
+          {raw}
+        </pre>
+      ) : (
+        <AudioLevelGraph points={points} mean={mean} peak={peak} triggerTs={triggerTs} timeAxis={timeAxis} />
+      )}
+    </li>
+  );
+}
+
+/** The structured `dataItems` list. The `audio_level` item is the sound-levels
+ *  visual (ADAAAA-7932); every other item stays a one-line text row. */
+function DataItemList({
+  items,
+  series,
+  triggerTs,
+}: {
+  items: AnalysisDataItem[];
+  series?: AudioSeriesPoint[];
+  triggerTs?: number;
+}) {
   if (items.length === 0) {
     return <div className="text-xs text-mut">No structured context items captured.</div>;
   }
   return (
     <ul className="mt-1" data-analysis-dataitems>
-      {items.map((it, i) => (
-        <DataItemRow key={i} item={it} />
-      ))}
+      {items.map((it, i) =>
+        it.type === "audio_level" ? (
+          <AudioLevelField key={i} item={it} series={series} triggerTs={triggerTs} />
+        ) : (
+          <DataItemRow key={i} item={it} />
+        )
+      )}
     </ul>
   );
 }
@@ -361,95 +717,19 @@ export function ConfirmSubPanel({ confirm, jobId, defaultOpen = false }: { confi
   );
 }
 
-/** ADAAAA-7255: the energy-vs-baseline graph for a per-window analysis.
- * Time-aligned over the window's ``t`` (seconds), with the gate's per-chunk
- * ``energy`` (0..1) and rolling ambient ``baseline`` (0..1) overlaid as two
- * lines, and the candidate trigger onset marked with a vertical line where one
- * fired. Read-only; uses only theme tokens. Renders nothing when no points. */
-function AudioEnergyGraph({ points, triggerTs }: { points: AudioSeriesPoint[]; triggerTs?: number }) {
-  if (points.length === 0) return null;
-  const W = 320;
-  const H = 90;
-  let xMin = Infinity;
-  let xMax = -Infinity;
-  for (const p of points) {
-    xMin = Math.min(xMin, p.t);
-    xMax = Math.max(xMax, p.t);
-  }
-  const xSpan = Math.max(1e-6, xMax - xMin);
-  const X = (t: number) => ((t - xMin) / xSpan) * W;
-  const Y = (v: number) => H - Math.max(0, Math.min(1, v)) * H;
-  const energyPts = points.map((p) => `${X(p.t).toFixed(1)},${Y(p.energy).toFixed(1)}`).join(" ");
-  const baselinePts = points.map((p) => `${X(p.t).toFixed(1)},${Y(p.baseline).toFixed(1)}`).join(" ");
-  const inWindow = triggerTs !== undefined && triggerTs >= xMin && triggerTs <= xMax;
-  const triggerX = inWindow ? X(triggerTs as number) : null;
+/** ADAAAA-7255 / ADAAAA-7932: the window's gate series when the panel has no
+ *  `audio_level` context item to host it (older captures). Rendered just under
+ *  the context items — the graph now lives at the `audio_level` field, so this
+ *  only keeps a series-bearing window from losing its plot. */
+function AudioSeriesBlock({ series, triggerTs }: { series: AudioSeriesPoint[]; triggerTs?: number }) {
+  const points = levelPoints(series, null);
+  if (points.length < 2) return null;
+  const values = points.map((p) => p.value);
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const peak = Math.max(...values);
   return (
-    <div className="mt-2 rounded-md border border-mut/20 bg-black/30 p-3" data-audio-series-graph>
-      <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-wide text-mut">
-        <span className="font-bold">Audio energy vs baseline</span>
-        <span className="flex items-center gap-1 normal-case">
-          <svg width="14" height="6" className="stroke-neon" viewBox="0 0 14 6" aria-hidden>
-            <line x1="0" y1="3" x2="14" y2="3" strokeWidth="2" />
-          </svg>
-          energy
-        </span>
-        <span className="flex items-center gap-1 normal-case">
-          <svg width="14" height="6" className="stroke-purple" viewBox="0 0 14 6" aria-hidden>
-            <line x1="0" y1="3" x2="14" y2="3" strokeWidth="2" />
-          </svg>
-          baseline
-        </span>
-      </div>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        className="h-24 w-full"
-        preserveAspectRatio="none"
-        role="img"
-        aria-label="Audio energy vs baseline over the window"
-      >
-        {/* 0 / 1 reference lines */}
-        <line x1="0" y1={H} x2={W} y2={H} className="stroke-mut/40" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-        <line x1="0" y1="0" x2={W} y2="0" className="stroke-mut/40" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-        <polyline
-          points={baselinePts}
-          fill="none"
-          className="stroke-purple"
-          strokeWidth="1.5"
-          vectorEffect="non-scaling-stroke"
-          data-audio-series-baseline
-        />
-        <polyline
-          points={energyPts}
-          fill="none"
-          className="stroke-neon"
-          strokeWidth="2"
-          vectorEffect="non-scaling-stroke"
-          data-audio-series-energy
-        />
-        {triggerX !== null && (
-          <line
-            x1={triggerX}
-            y1="0"
-            x2={triggerX}
-            y2={H}
-            className="stroke-yellow"
-            strokeWidth="2"
-            strokeDasharray="3 2"
-            vectorEffect="non-scaling-stroke"
-            data-audio-trigger
-            data-trigger-ts={triggerTs}
-          />
-        )}
-      </svg>
-      <div className="mt-1 flex justify-between font-mono text-[10px] text-mut">
-        <span data-audio-x-start>{xMin.toFixed(1)}s</span>
-        {inWindow && triggerX !== null && (
-          <span className="text-yellow" data-audio-trigger-label>
-            trigger @ T+{triggerTs?.toFixed(1)}s
-          </span>
-        )}
-        <span data-audio-x-end>{xMax.toFixed(1)}s</span>
-      </div>
+    <div data-audio-level-fallback>
+      <AudioLevelGraph points={points} mean={mean} peak={peak} triggerTs={triggerTs} timeAxis />
     </div>
   );
 }
@@ -498,7 +778,10 @@ export function WindowAnalysisPanel({ analysis, confirm, jobId, triggerTs }: Win
           <Boxes className="h-3.5 w-3.5" />
           Context items <span className="font-mono text-mut/70">({analysis.dataItems.length})</span>
         </div>
-        <DataItemList items={analysis.dataItems} />
+        <DataItemList items={analysis.dataItems} series={analysis.audioSeries} triggerTs={triggerTs} />
+        {!analysis.dataItems.some((it) => it.type === "audio_level") && analysis.audioSeries && (
+          <AudioSeriesBlock series={analysis.audioSeries} triggerTs={triggerTs} />
+        )}
       </div>
 
       {/* Frame / image references */}
@@ -507,12 +790,6 @@ export function WindowAnalysisPanel({ analysis, confirm, jobId, triggerTs }: Win
 
       {/* Audio / ASR block */}
       <AudioAsrBlock a={analysis} />
-
-      {/* ADAAAA-7255: audio energy-vs-baseline graph (time-aligned to the window,
-          trigger onset marked when one fired) */}
-      {analysis.audioSeries && analysis.audioSeries.length > 0 && (
-        <AudioEnergyGraph points={analysis.audioSeries} triggerTs={triggerTs} />
-      )}
 
       {/* Full LLM response */}
       <div>
