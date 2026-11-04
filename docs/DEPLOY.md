@@ -182,6 +182,46 @@ curl -s -X POST https://highlights-server.dpn.gg/waitlist \
 # 200  {"ok":true,"registered":true,...}
 ```
 
+## Reviewer read path to the box (ADAAAA-7920)
+
+QA/reviewer runs must be able to grade deployed clauses on the live box
+(`GET /jobs/:id`, a server-log excerpt, a frame listing) without a human in the
+loop. The supported path is the reviewer's **bound Komodo credentials**
+(`env.KOMODO_API_KEY` / `env.KOMODO_API_SECRET` on the Highlights.live
+Reviewer; secret names `deploy/komodo_api_key` / `deploy/komodo_api_secret` —
+values are never stored in issues, comments, or this doc), used to run a
+read-only script on `livepeer-ai-x99`:
+
+1. **Job record (AC-C1).** Job routes need a real DB user session, not the
+   `admin_readonly` token (which 401s on every `/jobs/:id*` read). The script
+   logs in on the box with the server's `ADMIN_EMAIL`/`ADMIN_PASSWORD` (read
+   from `docker exec highlights-server printenv` into `chmod 600` temp files,
+   never printed), then `GET http://localhost:3000/jobs/<id>` with that bearer.
+   The response wraps the record as `{job, highlights, progress,
+   liveProgress}`; per-clip cost rides on `job.vodMeter` where present.
+2. **Log excerpt (AC-C2).** `docker logs highlights-server | grep -F <job-id>`.
+   Beware the recreate window: a container recreated after the job's terminal
+   time no longer carries its lines (`docker inspect -f
+   '{{.State.StartedAt}}'` first); rotated `*-json.log*` files are deleted with
+   the old container.
+3. **DB facts.** `jobs` is `id, record, owner_id, status, created_at`; `record`
+   is text JSON — select with `record::jsonb->>'<key>'`. The stored attempt
+   field is `record->>'attempts'` (there is no `resume.totalAttempts`); the
+   failure reason is `record->>'failureReason'` plus the fuller
+   `record->>'error'`. Box role is `highlights`:
+   `docker exec highlights-postgres psql -U highlights -d highlights -tAc ...`
+
+The path is read-only **by instruction, not by permission model**: the bound
+pair is the write-capable admin pair (the board declined a dedicated
+read-only service user, ADAAAA-7675), so a reviewer run must treat it as
+read/log-only — `docker ps|logs|inspect`, `psql` SELECTs, `curl` of read
+routes — and never `docker compose up|restart`, config/`.env` writes, `git
+push`, or migrations. Deploy and restart stay with the Developer / CEO.
+
+Verified 2026-11-04 (ADAAAA-7920): `GET /jobs/6fef87c6-a564-499e-8336-18d79dd6b293`
+-> 200 via this path, 37 server-log lines for the same id, image digests and a
+`status=failed && source=file` enumeration captured.
+
 ## Verified deploy (ADAAAA-2505)
 
 - Pushed commit on origin/master: `e7db4cd` (`b3a0afe..e7db4cd master -> master`),
