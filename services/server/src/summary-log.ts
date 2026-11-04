@@ -14,7 +14,16 @@
 // Kept in its own module (like job-title.ts) so the append logic can be
 // unit-tested without driving the full VOD/live pipeline.
 import type { SummaryLogEntry } from "@highlights/events";
-import { groundSummaryText, captionLineKey, type CaptionGroundingContext } from "@highlights/events";
+import {
+  groundSummaryText,
+  captionLineKey,
+  captionColour,
+  dedupeStoredLines,
+  dropColourClause,
+  isQuietVerdict,
+  MAX_LINE_OCCURRENCES,
+  type CaptionGroundingContext,
+} from "@highlights/events";
 import type { Store } from "./store";
 
 /**
@@ -91,6 +100,13 @@ export function unduplicatedSummaryLines(
   return kept.join("\n");
 }
 
+/**
+ * ADAAAA-7962 (contract v4 §3.5): the share of QUIET delivered rows that may
+ * carry a colour beat. The cap is enforced at the WRITE seam from the stored log
+ * itself, so a quiet-heavy job cannot drift over the bar as the story grows.
+ */
+export const MAX_QUIET_COLOUR_SHARE = 0.4;
+
 /** Optional window metadata threaded from the observe tick into the log. */
 export interface SummaryAppendMeta {
   /** Video timestamp (seconds) of the observe window this entry summarizes. */
@@ -154,24 +170,51 @@ export function appendSummaryEntry(
   // it is model input for the next window, not customer copy. VOD passes no
   // `grounding`, so its items stay byte-identical (AC8).
   const rawText = delta || summary;
-  const text = meta?.grounding ? groundSummaryText(rawText, meta.grounding) : rawText;
+  const grounding = meta?.grounding;
+  let text = grounding ? groundSummaryText(rawText, grounding) : rawText;
   // ADAAAA-7956 (contract v3 rule 2): on the fast rail a line the job has
   // already emitted is not appended again — the story log cannot accumulate
   // duplicates (it reads as a story, not a loop). The bounded `runningSummary`
   // still advances (it is model input for the next window), and when every line
   // of the pass is a repeat the log simply gains no row. VOD supplies no
   // `grounding`, so its entries stay byte-identical (AC8).
-  const deduped = meta?.grounding ? unduplicatedSummaryLines(text, log) : text;
+  // ADAAAA-7962 (contract v4 §3.7): dedupe at the SAME seam, capped at the
+  // contract's max (2 identical delivered lines per job) — not "drop every
+  // repeat". The stored set is then exactly the set the page renders, so the
+  // API cannot ship a row the page would never show (v3 stored 27, page 26).
+  const deduped = grounding
+    ? dedupeStoredLines(text, log.map((e) => e.text), MAX_LINE_OCCURRENCES)
+    : text;
   if (!deduped) {
     return store.patchJob(jobId, { runningSummary: summary }).then(() => log);
+  }
+  // ADAAAA-7962 (contract v4 §3.5): quiet rows may carry colour on at most 40%
+  // of quiet rows. The budget is computed from the STORED log, so it holds for
+  // the delivered set without a second build at read time.
+  const verdict = grounding ? ((grounding.verdict ?? null) as SummaryLogEntry["verdict"]) : undefined;
+  let delivered = deduped;
+  if (grounding && isQuietVerdict(verdict) && captionColour(delivered)) {
+    const quiet = log.filter((e) => isQuietVerdict((e as { verdict?: string | null }).verdict));
+    const quietColour = quiet.filter((e) => captionColour(e.text ?? "")).length;
+    if (quietColour + 1 > Math.ceil(MAX_QUIET_COLOUR_SHARE * (quiet.length + 1))) {
+      delivered = dedupeStoredLines(
+        dropColourClause(delivered),
+        log.map((e) => e.text),
+        MAX_LINE_OCCURRENCES
+      ) || deduped;
+    }
   }
   const entry: SummaryLogEntry = {
     seq,
     ts: new Date().toISOString(),
     ...(windowTs != null ? { windowTs } : {}),
+    ...(verdict ? { verdict } : {}),
     // The per-window content the model added this pass; fall back to the whole
     // bounded summary so a pass is never silently dropped from the log.
-    text: deduped,
+    text: delivered,
+    // ADAAAA-7962 (contract v4 §3.1): exactly one AUDIT-ONLY raw field per row,
+    // set only when the gate changed what is delivered. Never a narrative.
+    ...(grounding && delivered !== rawText && rawText.trim() ? { text_raw: rawText } : {}),
   };
   const nextLog = [...log, entry];
   return store.patchJob(jobId, { runningSummary: summary, summaryLog: nextLog }).then(() => nextLog);

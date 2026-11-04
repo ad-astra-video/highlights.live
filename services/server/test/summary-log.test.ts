@@ -259,20 +259,21 @@ describe("appendSummaryEntry caption grounding (ADAAAA-7948)", () => {
 describe("appendSummaryEntry duplicate lines (ADAAAA-7956 rule 2)", () => {
   const GROUNDING = { verdict: "not_highlight", promptText: "Match context: RMA 1-1 BAR" };
 
-  it("does not append a byte-identical line twice", async () => {
+  // ADAAAA-7962 (contract v4 §3.7) raises the write-seam cap from "never twice"
+  // to "at most twice per job", the SAME rule the page applies — so the stored
+  // set is the page set instead of the page silently hiding a stored row.
+  it("keeps a line at most twice and drops the third occurrence", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
-    await appendSummaryEntry(s, job.id, "Player in blue moves ball in center circle.", {
-      windowTs: 0,
-      grounding: GROUNDING,
-    });
-    await appendSummaryEntry(s, job.id, "Player in blue moves ball in center circle.", {
-      windowTs: 3,
-      grounding: GROUNDING,
-    });
-    // Second pass is a repeat => no row; seq stays at 1.
-    expect(s.getJob(job.id)!.summaryLog).toHaveLength(1);
-    expect(s.getJob(job.id)!.summaryLog!.map((e) => e.seq)).toEqual([1]);
+    for (const windowTs of [0, 3, 6]) {
+      await appendSummaryEntry(s, job.id, "Player in blue moves ball in center circle.", {
+        windowTs,
+        grounding: GROUNDING,
+      });
+    }
+    const log = s.getJob(job.id)!.summaryLog!;
+    expect(log).toHaveLength(2);
+    expect(log.map((e) => e.seq)).toEqual([1, 2]);
   });
 
   it("treats a trailing full stop / case / spacing difference as the same line", async () => {
@@ -286,7 +287,13 @@ describe("appendSummaryEntry duplicate lines (ADAAAA-7956 rule 2)", () => {
       windowTs: 3,
       grounding: GROUNDING,
     });
-    expect(s.getJob(job.id)!.summaryLog).toHaveLength(1);
+    // v4 §3.7: the cap is 2 identical lines, so the cosmetic repeat is kept once
+    // and the NEXT identical line is the one that is dropped.
+    await appendSummaryEntry(s, job.id, "Player in blue moves ball in center circle.", {
+      windowTs: 6,
+      grounding: GROUNDING,
+    });
+    expect(s.getJob(job.id)!.summaryLog).toHaveLength(2);
   });
 
   it("still advances the bounded running summary on a skipped duplicate", async () => {
@@ -368,5 +375,92 @@ describe("summary de-dup helpers (ADAAAA-7956)", () => {
     );
     expect(unduplicatedSummaryLines("Player in blue dribbles.", log)).toBe("");
     expect(unduplicatedSummaryLines("Brand new line.", undefined)).toBe("Brand new line.");
+  });
+});
+
+// ADAAAA-7962 (contract v4 §3.1/§3.5/§3.7): the WRITE seam is the only gate.
+// Graded on the delivered set (level dcaa93c5, ADAAAA-7959): the stored
+// `summaryLog` carried 27 rows / 10 goal claims / 9 colour clauses while the page
+// showed 26 rows / 0 claims / 0 colour. These tests pin the seam that closes it.
+describe("write-seam parity (ADAAAA-7962, contract v4)", () => {
+  const PROMPT = "Match context: RMA 1-1 BAR";
+
+  it("stores NO goal claim on an uncorroborated goal window (R13, AC4b)", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "No. 10 strikes the ball into the net — goal", {
+      windowTs: 117,
+      grounding: { verdict: "scoring_play", promptText: PROMPT, corroborated: false },
+    });
+    const text = s.getJob(job.id)!.summaryLog![0].text;
+    expect(text.toLowerCase()).not.toContain("net");
+    expect(text.toLowerCase()).not.toContain("goal");
+  });
+
+  it("keeps the claim on a CORROBORATED goal (no v3 regression)", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    const line = "No. 10 strikes the ball into the net — goal";
+    await appendSummaryEntry(s, job.id, line, {
+      windowTs: 117,
+      grounding: { verdict: "scoring_play", promptText: PROMPT, corroborated: true },
+    });
+    expect(s.getJob(job.id)!.summaryLog![0].text).toBe(line);
+  });
+
+  it("records the model's ungated line in exactly one audit-only field", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    const raw = "Saez strikes the ball into the net — crowd erupts. GOAL 22:15";
+    await appendSummaryEntry(s, job.id, raw, {
+      windowTs: 177,
+      grounding: { verdict: "not_highlight", promptText: "saez" },
+    });
+    const entry = s.getJob(job.id)!.summaryLog![0];
+    expect(entry.text_raw).toBe(raw);
+    expect(entry.text).not.toBe(raw);
+    expect(entry.text.toLowerCase()).not.toContain("net");
+    expect(entry.verdict).toBe("not_highlight");
+  });
+
+  it("does not write a text_raw field when the gate changed nothing", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "Player in blue dribbles in midfield.", {
+      windowTs: 9,
+      grounding: { verdict: "not_highlight", promptText: PROMPT },
+    });
+    const entry = s.getJob(job.id)!.summaryLog![0];
+    expect(entry.text_raw).toBeUndefined();
+    expect(entry.text).toBe("Player in blue dribbles in midfield.");
+  });
+
+  it("keeps colour on a quiet row only while the quiet colour share stays <= 40%", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    const grounding = { verdict: "not_highlight" as const, promptText: PROMPT, colourEvidence: true };
+    // Eight quiet rows with a grounded colour beat: the budget allows the first
+    // ceil(0.4 * n) of them, so a quiet-heavy job loses the clause on later rows
+    // instead of breaking the 40% rule silently.
+    const lines = Array.from({ length: 8 }, (_v, i) => `Player ${i} moves ball in center circle. — crowd erupts`);
+    for (const [i, line] of lines.entries()) {
+      await appendSummaryEntry(s, job.id, line, { windowTs: i * 3, grounding });
+    }
+    const log = s.getJob(job.id)!.summaryLog!;
+    const withColour = log.filter((e) => (e.text ?? "").includes("crowd erupts")).length;
+    expect(log).toHaveLength(8);
+    expect(withColour).toBeGreaterThan(0);
+    expect(withColour).toBeLessThanOrEqual(Math.ceil(0.4 * log.length));
+  });
+
+  it("drops a colour beat with no measured evidence on the row's window", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "No. 6 shoots — crowd energy rises", {
+      windowTs: 159,
+      grounding: { verdict: "not_highlight", promptText: PROMPT, colourEvidence: false },
+    });
+    const text = s.getJob(job.id)!.summaryLog![0].text;
+    expect(text).not.toContain("crowd energy rises");
   });
 });

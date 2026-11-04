@@ -668,6 +668,20 @@ export const SummaryLogEntrySchema = z.object({
   // rejected — the writer sanitises those away.
   windowTs: z.number().finite().optional(),
   text: z.string(),
+  /**
+   * ADAAAA-7962 (contract v4 §3.1): the window's STORED verdict, carried on the
+   * entry so write-seam dedupe/colour budgeting can tell a quiet row from a
+   * loud one WITHOUT re-deriving it at read time (no second build). Additive
+   * optional: rows written before this field existed carry none.
+   */
+  verdict: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).nullable().optional(),
+  /**
+   * AUDIT-ONLY (contract v4 §3.1). The model's UNGATED text for this row, kept
+   * only when the gate changed it, so a grader can compare the model's line to
+   * the delivered line. It is never customer copy: no API route and no UI may
+   * serve `text_raw` as a narrative, and the delivered text is `text`.
+   */
+  text_raw: z.string().optional(),
 });
 export type SummaryLogEntry = z.infer<typeof SummaryLogEntrySchema>;
 
@@ -1307,6 +1321,13 @@ export const HighlightRecordSchema = z.object({
   eventType: z.string().optional(),
   score: z.number().min(0).max(100),
   reason: z.string().optional(),
+  /**
+   * AUDIT-ONLY (ADAAAA-7962, contract v4 §3.1). The model's UNGATED decide
+   * `reason` for this highlight, kept only when the write-seam gate changed the
+   * delivered `reason`. Never customer copy: no route or UI may serve
+   * `reason_raw` as a narrative.
+   */
+  reason_raw: z.string().optional(),
   // Set when a highlight's clip could NOT be cut from the source recording at
   // finalize (missing/incomplete recording, or a cut failure). The UI renders a
   // failure card instead of a silent empty player when clipUri is "" but
