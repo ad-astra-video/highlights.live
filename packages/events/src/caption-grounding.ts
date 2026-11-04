@@ -110,6 +110,7 @@ export function stripInternalTokens(text: string): string {
   let out = input;
   out = out.replace(BRACKET_TOKEN, " ");
   out = out.replace(PAREN_VERDICT, " ");
+  out = out.replace(INTERNAL_REASON_TAIL, "");
   out = out.replace(KEY_VALUE_TOKEN, " ");
   out = out.replace(CLOCK_TOKEN, " ");
   out = out.replace(SCREAMING_TOKEN, (m) => humanEventLabel(m));
@@ -172,14 +173,47 @@ function dropGoalClauses(text: string): string {
   return (kept.length > 0 ? kept : [parts[0].replace(RESIDUAL_GOAL, "shot")]).join(" — ");
 }
 
+/**
+ * Internal decision-reason tails that are appended to a decide `reason` for
+ * audit ("| celebration of an already-delivered goal (anchor 120.0s, highlight
+ * …): no independent score-transition evidence…"). They are never copy, and
+ * rewriting their words produces nonsense ("shoots-transition"), so the whole
+ * tail is removed before any other rule looks at the line.
+ */
+const INTERNAL_REASON_TAIL =
+  /\s*\|\s*(?:celebration of an already-delivered|no independent|dedupe|suppressed|burst|downgraded|anchor\s)[^|]*/gi;
+/** A hyphenated technical compound is a term, not a claim (`score-transition`). */
+const HYPHEN_COMPOUND = /(?:^|\s)(\S*\b(?:score|goal)s?-\S+)/gi;
+
+/** A net-crossing claim ("the ball enters the net"). A NEGATED form
+ * ("the ball does not enter the net") states the opposite and is left alone. */
+const NET_CLAIM = /\b(?:the\s+)?ball\s+(?:clearly\s+)?(?:enters?|is\s+in|goes?\s+into|is\s+into)\s+the\s+net\b/gi;
+
+/** Rewrite an un-negated net-crossing claim to a neutral non-goal beat. */
+function rewriteNetClaims(text: string): string {
+  return text.replace(NET_CLAIM, (m, offset: number) => {
+    const before = text.slice(Math.max(0, offset - 24), offset);
+    if (/\b(?:not|never|n't|without|no)\s*$/i.test(before)) return m; // negated
+    return matchCase("the ball stays out", m);
+  });
+}
+
 /** Rewrite goal claims to shot/wide beats when the verdict is not a goal. */
 export function gateGoalClaims(text: string, ctx?: CaptionGroundingContext): string {
   if (goalAllowed(ctx)) return text;
-  let out = text;
+  // Mask hyphenated technical compounds (`score-transition`) so a word inside a
+  // term is never rewritten into nonsense; restored at the end.
+  const masked: string[] = [];
+  let out = text.replace(HYPHEN_COMPOUND, (m) => {
+    masked.push(m);
+    return `\u0001${masked.length - 1}\u0001`;
+  });
   for (const [re, replacement] of GOAL_REWRITES) {
     out = out.replace(re, (m) => matchCase(replacement, m));
   }
+  out = rewriteNetClaims(out);
   if (RESIDUAL_GOAL.test(out)) out = dropGoalClauses(out);
+  out = out.replace(/\u0001(\d+)\u0001/g, (_m, i: string) => masked[Number(i)] ?? "");
   return out === text ? text : tidy(out);
 }
 
@@ -326,6 +360,10 @@ export function groundNames(text: string, promptText: string): string {
     if (meaningful.every((t) => NAME_STOPWORDS.has(stripDiacritics(t)))) continue;
     // Corroborated by the window's prompt => the name is grounded, keep it.
     if (promptHas(prompt, name) || meaningful.some((t) => promptHas(prompt, t))) continue;
+    // A bare ALL-CAPS token is an abbreviation/enum, not a person or club name
+    // ("the 'GOL' graphic"), and a quoted token is a label being talked about.
+    if (tokens.length === 1 && /^[A-Z0-9.'’]+$/.test(name)) continue;
+    if (/['"‘“]$/.test(out.slice(0, run.start))) continue;
     out = `${out.slice(0, run.start)}${matchCase(roleFor(out, tokens), name)}${out.slice(run.end)}`;
   }
   if (out === text) return text;
