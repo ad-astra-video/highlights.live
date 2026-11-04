@@ -265,6 +265,27 @@ describe("WindowAnalysisPanel (ADAAAA-7157)", () => {
     expect(html).not.toContain("0.10,0.55,0.90");
   });
 
+  it("draws the mean/peak lines from the plotted series, not the prompt-declared stats (ADAAAA-7937 AC3)", () => {
+    // The prompt line declares `peak=`/`mean=` over the full pre-downsample
+    // evidence; the graph plots the downsampled curve. The reference lines must
+    // describe what is drawn, or the peak line sits off the axis peak.
+    const html = renderToString(
+      React.createElement(AudioLevelField, {
+        item: {
+          type: "audio_level",
+          label: "Audio-energy level curve",
+          value: "audio energy level curve (6 samples, peak=0.90, mean=0.46): [0.10,0.55,0.60,0.30,0.22,0.68]",
+        },
+      })
+    );
+    // Drawn peak 0.68; drawn mean 2.45/6 = 0.4083 -> 0.41.
+    expect(html).toContain('data-audio-level-peak-value="0.68"');
+    expect(html).toContain('data-audio-level-mean-value="0.41"');
+    expect(html).toContain(">0.68<"); // the axis peak IS the peak line
+    expect(html).not.toContain('data-audio-level-peak-value="0.90"');
+    expect(html).not.toContain('data-audio-level-mean-value="0.46"');
+  });
+
   it("keeps the raw sent text behind the Raw toggle (ADAAAA-7932)", () => {
     const raw = "audio energy level curve (6 samples, peak=0.90, mean=0.46): [0.10,0.55,0.90,0.30,0.22,0.68]";
     const html = renderToString(

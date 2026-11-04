@@ -194,8 +194,8 @@ function AudioLevelGraph({
     : "";
   const inWindow = triggerTs !== undefined && triggerTs >= tMin && triggerTs <= tMax;
   const triggerX = inWindow ? X(triggerTs as number) : null;
-  // Mean / peak are clamped to the padded axis so a level outside the drawn
-  // range (a server-declared peak over unparsed samples) still shows as a line.
+  // Mean / peak describe the drawn levels, so they sit inside the axis band; Y
+  // clamps defensively for a caller-supplied level outside it.
   const meanY = Y(mean);
   const peakY = Y(peak);
 
@@ -430,9 +430,12 @@ export function AudioLevelField({
   if (points.length < 2) return <DataItemRow item={item} />;
   const timeAxis = !!series && series.length >= 2;
   const values = points.map((p) => p.value);
-  const drawnMean = values.reduce((a, b) => a + b, 0) / values.length;
-  const mean = curve && curve.declared ? curve.mean : drawnMean;
-  const peak = curve && curve.declared ? curve.peak : Math.max(...values);
+  // AC3: the reference lines describe the DRAWN series, not the prompt-declared
+  // stats. The raw line's `peak=`/`mean=` are computed over the whole
+  // pre-downsample evidence, so using them draws the peak line one 2-dp step
+  // below the axis peak the graph actually plots (ADAAAA-7951 QA note).
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const peak = Math.max(...values);
 
   return (
     <li className="border-t border-mut/15 py-1" data-data-item={item.type} data-audio-level-field data-audio-level-view={view}>
