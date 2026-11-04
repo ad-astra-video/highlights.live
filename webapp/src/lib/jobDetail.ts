@@ -984,6 +984,87 @@ export function dataItemValueText(value: unknown): string {
   return String(value);
 }
 
+/** A parsed audio-energy level curve for one analysis data item (ADAAAA-7932). */
+export interface AudioLevelCurve {
+  /** The sample values in order (0..1 energy, rounded by the decide layer). */
+  values: number[];
+  /** Peak level: the server-declared one when the text header carries it, else
+   *  the max of `values`. */
+  peak: number;
+  /** Mean level: the server-declared one when the header carries it, else the
+   *  arithmetic mean of `values`. */
+  mean: number;
+  /** True when peak/mean were read from the header (server-computed) rather
+   *  than recomputed from the samples that survived parsing. */
+  declared: boolean;
+}
+
+const NUMBER_RE = /-?\d+(?:\.\d+)?/g;
+
+function numbersIn(text: string): number[] {
+  const found = text.match(NUMBER_RE);
+  if (!found) return [];
+  return found
+    .map((s) => Number(s))
+    .filter((v) => Number.isFinite(v));
+}
+
+/**
+ * Parse the `audio_level` analysis data item into a numeric level curve so the
+ * panel can draw it as a graph instead of dumping the raw prompt text
+ * (ADAAAA-7932).
+ *
+ * The decide layer sends this item in two shapes:
+ *  • Stage-1 (`services/decide/app/gemma.py`): the text line
+ *    `audio energy level curve (48 samples, peak=0.82, mean=0.33): [0.12,0.14,…]`
+ *  • Stage-2 confirm (`services/decide/app/confirm.py`): a rounded number array.
+ *
+ * Returns null when the value carries no usable series (fewer than 2 samples),
+ * so the row degrades to the raw text rather than an axis-less blank plot.
+ */
+export function parseAudioLevelCurve(value: unknown): AudioLevelCurve | null {
+  let values: number[] = [];
+  let peak: number | undefined;
+  let mean: number | undefined;
+
+  if (Array.isArray(value)) {
+    values = value.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  } else if (typeof value === "number") {
+    values = [value];
+  } else if (typeof value === "string") {
+    // Prefer the bracketed series (the part actually sent to the model) so the
+    // header's sample count / peak / mean digits never leak into the samples.
+    const open = value.lastIndexOf("[");
+    const close = value.indexOf("]", open === -1 ? 0 : open);
+    const seriesText = open !== -1 && close > open ? value.slice(open + 1, close) : "";
+    values = numbersIn(seriesText);
+    if (values.length === 0) values = numbersIn(value);
+
+    const head = open === -1 ? value : value.slice(0, open);
+    const peakM = /peak\s*=\s*(-?\d+(?:\.\d+)?)/i.exec(head);
+    const meanM = /mean\s*=\s*(-?\d+(?:\.\d+)?)/i.exec(head);
+    if (peakM) peak = Number(peakM[1]);
+    if (meanM) mean = Number(meanM[1]);
+  } else if (value && typeof value === "object") {
+    // Tolerate a structured {"values":[…]}/{"levels":[…]} payload.
+    const obj = value as Record<string, unknown>;
+    const arr = Array.isArray(obj.values) ? obj.values : Array.isArray(obj.levels) ? obj.levels : null;
+    if (arr) values = arr.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    if (typeof obj.peak === "number") peak = obj.peak;
+    if (typeof obj.mean === "number") mean = obj.mean;
+  }
+
+  if (values.length < 2) return null;
+  const declaredPeak = peak !== undefined && Number.isFinite(peak) ? peak : undefined;
+  const declaredMean = mean !== undefined && Number.isFinite(mean) ? mean : undefined;
+  return {
+    values,
+    peak: declaredPeak ?? Math.max(...values),
+    mean: declaredMean ?? values.reduce((a, b) => a + b, 0) / values.length,
+    declared: declaredPeak !== undefined && declaredMean !== undefined,
+  };
+}
+
 /**
  * Stable label for a verdict tri-state (confirmed_goal / near_miss / not_goal)
  * used by the Stage-2 confirm pass. Null/absent → "not decided".
