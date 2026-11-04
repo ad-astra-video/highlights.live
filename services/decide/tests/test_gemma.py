@@ -1030,7 +1030,7 @@ def test_compact_contract_keeps_fields_the_server_consumes():
     # the long-form-only field is dropped (nothing on the server reads it)
     assert "evidenceAttested" not in p
     # prose is capped instead of free-form
-    assert "max 20 words" in p and "max 220 chars" in p
+    assert "max 20 words" in p and "HARD MAX 140" in p
 
 
 def test_compact_and_full_prompts_share_the_context_prefix():
@@ -1041,7 +1041,7 @@ def test_compact_and_full_prompts_share_the_context_prefix():
     assert full.split(head)[0] == compact.split(head)[0]
     # the full contract is untouched (VOD byte-identical)
     assert "evidenceAttested" in full and "~1800 chars max" in full
-    assert "max 220 chars" not in full
+    assert "HARD MAX 140" not in full and "max 220 chars" not in full
 
 
 def test_compact_caps_the_completion_and_sends_the_compact_prompt():
@@ -1112,6 +1112,6 @@ def test_highlight_route_forwards_compact(monkeypatch):
     assert sent["max_tokens"] == 400
     text = [c["text"] for c in sent["messages"][-1]["content"] if c.get("type") == "text"][0]
     assert "evidenceAttested" not in text
-    assert "max 220 chars" in text
+    assert "HARD MAX 140" in text
     # the compact verdict still comes back in the full response shape
     assert r.json()["outcome"] == "not_highlight"
