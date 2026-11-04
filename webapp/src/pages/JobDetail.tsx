@@ -52,6 +52,8 @@ import { createWindowInspectStore } from "../lib/windowInspect";
 import { LiveProgressChip } from "../components/LiveProgressChip";
 import { ResumeAction, ResumeTrail, type ResumeActionState } from "../components/ResumeTrail";
 import { CaptureNotice } from "../components/CaptureNotice";
+import { LiveStage } from "../components/LiveStage";
+import { isLiveStageSource } from "../lib/liveStage";
 import {
   LIVE_READ_HEALTH_FRESH,
   liveProgressFailureNotice,
@@ -2310,6 +2312,15 @@ export function JobDetail() {
         <div className="text-mut">Nothing to show.</div>
       ) : (
         <>
+          {/* ADAAAA-7976: the live stage is the FIRST block of the detail
+              content — the playing capture video (or a truthful no-preview
+              note for external ingest), status + elapsed + the lag readout,
+              and Stop & finalize. It precedes `data-detail-ladder`
+              (SummaryLadderView) in document order. VOD (`file`) jobs never
+              render it. */}
+          {isLiveStageSource(detail.job.source) && (
+            <LiveStage job={detail.job} liveProgress={liveProgress} staleSec={lightHealth.staleSec} />
+          )}
           {/* Header: job metadata */}
           <div className="card card-accent p-5">
             <div className="flex flex-wrap items-center gap-3" data-detail-title>

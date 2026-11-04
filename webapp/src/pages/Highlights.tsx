@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Square, Trash2 } from "lucide-react";
+import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Trash2 } from "lucide-react";
 import { api, getToken, type Highlight, type Job, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { isOverLimit, oversizedHelp } from "../lib/vodUpload";
@@ -15,7 +15,6 @@ import {
   sourceLabel,
   jobTitle,
 } from "../lib/vodJobs";
-import { LiveConsole } from "../components/LiveConsole";
 import { FrameDebugger } from "../components/FrameDebugger";
 import { JobTileMetrics } from "../components/JobMetrics";
 import { BrowserCapture } from "../components/BrowserCapture";
@@ -84,9 +83,6 @@ export function Highlights() {
   const [useUrl, setUseUrl] = useState(false);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [vodMax, setVodMax] = useState<number>(VOD_MAX_UPLOAD_BYTES);
-  // live ingest state
-  const [liveJob, setLiveJob] = useState<string | null>(null);
-  const [liveStatus, setLiveStatus] = useState<string | null>(null);
   // VOD feed surface (ADAAAA-6352): the running VOD job id we subscribe to over
   // SSE so each highlight accepted at decision time streams onto the highlights
   // grid as it is found, not only at job end. Set only for a VOD job that is
@@ -119,26 +115,9 @@ export function Highlights() {
       .catch(() => {});
   }, []);
 
-  // Poll a running live job until it finishes.
-  useEffect(() => {
-    if (!liveJob) return;
-    const iv = setInterval(async () => {
-      try {
-        const r = await api<any>(`/jobs/${liveJob}`);
-        setLiveStatus(r.job?.status || "active");
-        if (r.job?.status === "done" || r.job?.status === "failed" || r.job?.status === "cancelled") {
-          clearInterval(iv);
-          setDebugJob(liveJob);
-          setLiveJob(null);
-          setLiveStatus(null);
-          refreshHighlights().catch(() => {});
-        }
-      } catch {
-        /* transient */
-      }
-    }, 1500);
-    return () => clearInterval(iv);
-  }, [liveJob]);
+  // ADAAAA-7976: a live start navigates to `/app/jobs/:id`, where the detail
+  // page's SSE + 5 s poll stream the analysis. There is no inline live panel on
+  // `/app` any more, so no live-job poll belongs here.
 
   // VOD feed surface streaming (ADAAAA-6352): while a VOD job is processing,
   // subscribe to /jobs/:id/events so each highlight the server accepts at
@@ -243,9 +222,11 @@ export function Highlights() {
         },
       });
       if (isLive) {
-        setLiveJob(r.job.id);
-        setLiveStatus(r.status || "ingesting");
+        // ADAAAA-7976: a live start lands on `/app/jobs/:id` with the id from
+        // the 202. That page streams the analysis and owns Stop & finalize.
+        // One POST /jobs per start: navigation never re-submits this request.
         setDebugJob(null);
+        navigate(`/app/jobs/${r.job.id}`);
       } else {
         setJob(r.job);
         setDebugJob(r.job.id);
@@ -272,15 +253,6 @@ export function Highlights() {
     } finally {
       setBusy(false);
       if (!isLive) refreshHighlights().catch(() => {});
-    }
-  }
-
-  async function stopLive() {
-    if (!liveJob) return;
-    try {
-      await api(`/jobs/${liveJob}/stop`, { body: {} });
-    } catch (e: any) {
-      setError(e.message);
     }
   }
 
@@ -434,7 +406,7 @@ export function Highlights() {
 
         {source === "screenshare" ? (
           <>
-            <BrowserCapture gameHint={gameHint} onDone={() => refreshHighlights().catch(() => {})} />
+            <BrowserCapture gameHint={gameHint} />
             {/* A browser-capture job holds the same capacity-1 media node, so it
                 gets the same capacity/health + spend strip as the RTMP console
                 (ADAAAA-7655 gap 3: this path used to have no readout at all).
@@ -444,41 +416,24 @@ export function Highlights() {
           </>
         ) : (
           <>
-            {liveJob && (
-              <div className="mt-6 flex flex-wrap items-center gap-3">
-                <div className="text-sm">
-                  Live ingesting — status <span className="font-mono uppercase text-yellow">{liveStatus || "…"}</span>
-                </div>
-                <button className="btn-neon btn-pink" onClick={stopLive} disabled={!liveJob}>
-                  <Square className="mr-2 inline h-4 w-4" /> Stop detection
-                </button>
+            <button
+              className="btn-neon mt-6"
+              onClick={run}
+              disabled={busy || (source === "file" && !useUrl && !!file && isOverLimit(file.size, vodMax))}
+            >
+              {busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <Zap className="mr-2 inline h-4 w-4" />}
+              {busy
+                ? source === "file" && file && !useUrl
+                  ? "Uploading…"
+                  : "Starting…"
+                : isLive
+                ? "Start live detection"
+                : "Run detection"}
+            </button>
+            {uploadPct != null && (
+              <div className="mt-3 text-sm text-mut" data-testid="upload-progress">
+                Uploading… {Math.round(uploadPct * 100)}%
               </div>
-            )}
-            {liveJob && liveStatus !== "done" && liveStatus !== "failed" && (
-              <LiveConsole jobId={liveJob} onHighlight={() => refreshHighlights().catch(() => {})} />
-            )}
-            {!liveJob && (
-              <>
-                <button
-                  className="btn-neon mt-6"
-                  onClick={run}
-                  disabled={busy || (source === "file" && !useUrl && !!file && isOverLimit(file.size, vodMax))}
-                >
-                  {busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <Zap className="mr-2 inline h-4 w-4" />}
-                  {busy
-                    ? source === "file" && file && !useUrl
-                      ? "Uploading…"
-                      : "Starting…"
-                    : isLive
-                    ? "Start live detection"
-                    : "Run detection"}
-                </button>
-                {uploadPct != null && (
-                  <div className="mt-3 text-sm text-mut" data-testid="upload-progress">
-                    Uploading… {Math.round(uploadPct * 100)}%
-                  </div>
-                )}
-              </>
             )}
           </>
         )}
