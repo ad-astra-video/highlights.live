@@ -276,3 +276,56 @@ describe("ObservationRelay (ADAAAA-7990 delivery)", () => {
     relay.close();
   });
 });
+
+// ADAAAA-8004: the reader has the same stale-index failure as the runner.
+// go-livepeer's live edge keeps a short segment window, so `GET events-out/{seq}`
+// answers 404 forever once the reader is more than that window behind: measured
+// on session `3c6c8920` (build b0ff88b, 395 decoded frames, runner keeping up at
+// 3 fps) the relay read `idx=262` against `next=332` and delivered 9
+// observations. The push path tails the live edge instead and pairs each
+// observation with the frame it carries.
+describe("ObservationRelay push path (ADAAAA-8004 edge retention)", () => {
+  /** A live edge that hands out `script` in order, then nothing. */
+  function edgeScript(obs: any[]) {
+    const queue = [...obs];
+    return async () => queue.shift() ?? null;
+  }
+
+  it("tails the live edge, pairs by obs.seq and counts the frames the runner skipped", async () => {
+    const delivered: number[] = [];
+    const relay = new ObservationRelay({
+      read: async () => null, // index reads are never used on the push path
+      readHead: edgeScript([{ seq: 3, tracks: [] }]),
+      emit: (_o, f) => delivered.push(f.seq),
+      deadlineMs: 30_000,
+      pollIntervalMs: 5,
+      maxQueued: 10,
+    });
+    for (let seq = 1; seq <= 4; seq++) relay.commit(frame(seq));
+    await relay.flush(300);
+    // 1 and 2 were fast-forwarded past by the runner (counted, not expired);
+    // 3 was delivered and 4 stayed queued waiting for its own observation.
+    expect(delivered).toEqual([3]);
+    expect(relay.stats()).toMatchObject({ published: 4, delivered: 1, skipped: 2, expired: 0 });
+    relay.close();
+  });
+
+  it("never delivers the same live-edge observation twice", async () => {
+    const delivered: number[] = [];
+    const relay = new ObservationRelay({
+      read: async () => null,
+      // A live edge that re-serves the same seq before moving on (hub semantics).
+      readHead: edgeScript([{ seq: 2 }, { seq: 2 }, { seq: 5 }]),
+      emit: (_o, f) => delivered.push(f.seq),
+      deadlineMs: 30_000,
+      pollIntervalMs: 5,
+      maxQueued: 10,
+    });
+    relay.commit(frame(2));
+    relay.commit(frame(5));
+    await relay.flush(300);
+    expect(delivered).toEqual([2, 5]);
+    expect(relay.stats().skipped).toBe(0);
+    relay.close();
+  });
+});
