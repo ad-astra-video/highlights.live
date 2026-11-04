@@ -170,13 +170,26 @@ describe("v5 §3.2 (R19) — place is injected from stored window state", () => 
 });
 
 describe("v5 §3.1 (R18) — the two contradicted beats can no longer ship", () => {
-  it("`crowd erupts` at T+12 is replaced by the measured level beat", () => {
-    const out = groundCaption("No. 3 drives into the box and shoots — crowd erupts", {
+  it("`crowd erupts` at T+12 is replaced by the measured level beat on a LOUD window", () => {
+    // ADAAAA-7995 (AC4): the quiet window carries no colour at all, so the channel
+    // this case pins is the LOUD one — a scoring window keeps the derived beat.
+    const loud = groundCaption("No. 3 drives into the box and shoots — crowd erupts", {
+      verdict: "scoring_play",
+      promptText: "",
+      place: "in the box",
+      colourSignal: SIGNAL,
+    });
+    expect(loud).not.toContain("crowd erupts");
+    expect(captionColour(loud)).toBe("noise lifts, then settles");
+    // ...and a quiet window with the same firing signal carries NO colour and
+    // stays inside the 8-word bar (the defect measured on five fresh jobs).
+    const quiet = groundCaption("No. 3 drives into the box and shoots — crowd erupts", {
       ...QUIET(),
       colourSignal: SIGNAL,
     });
-    expect(out).not.toContain("crowd erupts");
-    expect(captionColour(out)).toBe("noise lifts, then settles");
+    expect(quiet).not.toContain("crowd erupts");
+    expect(captionColour(quiet)).toBe("");
+    expect(wordCount(quiet)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
   });
 
   it("`players celebrate in penalty area` at T+309 is dropped outright", () => {

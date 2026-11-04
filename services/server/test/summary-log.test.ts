@@ -265,7 +265,9 @@ describe("appendSummaryEntry duplicate lines (ADAAAA-7956 rule 2)", () => {
   // ADAAAA-7962 (contract v4 §3.7) raises the write-seam cap from "never twice"
   // to "at most twice per job", the SAME rule the page applies — so the stored
   // set is the page set instead of the page silently hiding a stored row.
-  it("keeps a line at most twice and drops the third occurrence", async () => {
+  // ADAAAA-7995: the write seam stores ONE row per beat. The v4 cap of 2 shipped
+  // repeated stored sentences (6,7,6,5,2 byte-equal pairs on five fresh jobs).
+  it("keeps a line ONCE and drops every later occurrence", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
     for (const windowTs of [0, 3, 6]) {
@@ -275,8 +277,8 @@ describe("appendSummaryEntry duplicate lines (ADAAAA-7956 rule 2)", () => {
       });
     }
     const log = s.getJob(job.id)!.summaryLog!;
-    expect(log).toHaveLength(2);
-    expect(log.map((e) => e.seq)).toEqual([1, 2]);
+    expect(log).toHaveLength(1);
+    expect(log.map((e) => e.seq)).toEqual([1]);
   });
 
   it("treats a trailing full stop / case / spacing difference as the same line", async () => {
@@ -290,13 +292,13 @@ describe("appendSummaryEntry duplicate lines (ADAAAA-7956 rule 2)", () => {
       windowTs: 3,
       grounding: GROUNDING,
     });
-    // v4 §3.7: the cap is 2 identical lines, so the cosmetic repeat is kept once
-    // and the NEXT identical line is the one that is dropped.
+    // ADAAAA-7995: one row per beat, so the cosmetic repeat is dropped and the
+    // third identical line is dropped too.
     await appendSummaryEntry(s, job.id, "Player in blue moves ball in center circle.", {
       windowTs: 6,
       grounding: GROUNDING,
     });
-    expect(s.getJob(job.id)!.summaryLog).toHaveLength(2);
+    expect(s.getJob(job.id)!.summaryLog).toHaveLength(1);
   });
 
   it("still advances the bounded running summary on a skipped duplicate", async () => {
@@ -444,7 +446,7 @@ describe("write-seam parity (ADAAAA-7962, contract v4)", () => {
     expect(entry.text).toBe("Player in blue dribbles in midfield.");
   });
 
-  it("keeps derived colour on a quiet row only while the quiet colour share stays <= 40%", async () => {
+  it("never stores a colour beat on a quiet row (ADAAAA-7995 AC4)", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
     // ADAAAA-7965 (contract v5 §3.1, R18): the beat is DERIVED from the measured
@@ -465,13 +467,19 @@ describe("write-seam parity (ADAAAA-7962, contract v4)", () => {
     const log = s.getJob(job.id)!.summaryLog!;
     const withColour = log.filter((e) => (e.text ?? "").includes("noise lifts, then settles"));
     expect(log).toHaveLength(8);
-    expect(withColour.length).toBeGreaterThan(0);
-    expect(withColour.length).toBeLessThanOrEqual(Math.ceil(0.4 * log.length));
-    // Every coloured row stores the signal reference it was derived from.
-    for (const e of withColour) {
-      expect(e.colour?.signal).toBe("audio_noise");
-      expect(typeof e.colour?.frameTs).toBe("number");
-    }
+    // A quiet window carries NO colour: the v5 40% share shipped `— noise spikes
+    // over the play` on 3 rows per job and pushed them to 12-13 words (bar <= 8).
+    expect(withColour).toHaveLength(0);
+    for (const e of log) expect(e.colour).toBeUndefined();
+    // The measured-beat STORAGE path is unchanged on a LOUD row.
+    await appendSummaryEntry(s, job.id, "No. 4 strikes the ball wide", {
+      windowTs: 24,
+      grounding: { ...grounding, verdict: "near_miss" },
+    });
+    const loud = s.getJob(job.id)!.summaryLog!.at(-1)!;
+    expect(loud.text).toContain("noise lifts, then settles");
+    expect(loud.colour?.signal).toBe("audio_noise");
+    expect(typeof loud.colour?.frameTs).toBe("number");
   });
 
   it("drops a colour beat with no measured signal on the row's window", async () => {

@@ -344,11 +344,13 @@ describe("emission dedupe on the ladder (ADAAAA-7958 §3.6 / AC3b)", () => {
     ladderLog(4, 15, "Player in blue jersey dribbles in center field"),
   ];
 
-  it("keeps an identical window line at most twice and drops later occurrences", () => {
+  it("keeps an identical window line ONCE and drops later occurrences (ADAAAA-7995 AC1)", () => {
+    // The v4 cap of 2 rendered byte-equal pairs on the served page; the display set
+    // is one row per beat now, whatever the stored log carries.
     const l = buildSummaryLadder({ summaryLog: repeated as any, highlights: [], fastRail: true });
     const emitted = l.chapters.flatMap((c) => c.entries.map((e) => e.text));
     const repeats = emitted.filter((t) => /center circle/i.test(t));
-    expect(repeats.length).toBe(2);
+    expect(repeats.length).toBe(1);
     expect(emitted).toContain("Player in blue jersey dribbles in center field");
   });
 

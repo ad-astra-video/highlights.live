@@ -1,0 +1,948 @@
+{
+ "source": "ADAAAA-7980 ad7980_rows.csv (142 served rows, 5 fresh jobs, build 334fe57)",
+ "jobs": {
+  "47d8e506": [
+   {
+    "seq": 1,
+    "windowTs": 0.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in center field"
+   },
+   {
+    "seq": 2,
+    "windowTs": 3.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue kit dribbles in box \u2014 noise spikes over the play",
+    "text_raw": "Player in blue and yellow kit dribbles in penalty area"
+   },
+   {
+    "seq": 3,
+    "windowTs": 9.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in center field"
+   },
+   {
+    "seq": 4,
+    "windowTs": 12.0,
+    "verdict": "scoring_play",
+    "text": "No. 3 drives into the box and shoots",
+    "text_raw": "No. 3 drives into the box and scores \u2014 celebration erupts"
+   },
+   {
+    "seq": 5,
+    "windowTs": 18.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in center field \u2014 noise spikes over the play",
+    "text_raw": "Player in blue jersey dribbles in center field"
+   },
+   {
+    "seq": 6,
+    "windowTs": 21.0,
+    "verdict": "not_highlight",
+    "text": "No. 3 drives in midfield",
+    "text_raw": "No. 3 drives into the box and scores \u2014 celebration erupts"
+   },
+   {
+    "seq": 7,
+    "windowTs": 63.0,
+    "verdict": "not_highlight",
+    "text": "Players stand in the penalty area."
+   },
+   {
+    "seq": 8,
+    "windowTs": 66.0,
+    "verdict": "not_highlight",
+    "text": "No. 3 drives in midfield",
+    "text_raw": "No. 3 drives into the box and scores \u2014 celebration erupts"
+   },
+   {
+    "seq": 9,
+    "windowTs": 72.0,
+    "verdict": "not_highlight",
+    "text": "The No. 9 stands in the center circle.",
+    "text_raw": "Lamine Yamal stands in the center circle."
+   },
+   {
+    "seq": 10,
+    "windowTs": 75.0,
+    "verdict": "not_highlight",
+    "text": "The No. 9 carries ball in center circle.",
+    "text_raw": "Lamine Yamal carries ball in center circle."
+   },
+   {
+    "seq": 11,
+    "windowTs": 84.0,
+    "verdict": "not_highlight",
+    "text": "Player in penalty area."
+   },
+   {
+    "seq": 12,
+    "windowTs": 93.0,
+    "verdict": "big_play",
+    "text": "No. 6 strikes the ball wide in midfield",
+    "text_raw": "No. 6 strikes the ball into the net \u2014 crowd energy rises"
+   },
+   {
+    "seq": 13,
+    "windowTs": 108.0,
+    "verdict": "big_play",
+    "text": "The No. 9 celebrates",
+    "text_raw": "Manuel Ordo\u00f1ez celebrates \u2014 team erupts"
+   },
+   {
+    "seq": 14,
+    "windowTs": 111.0,
+    "verdict": "big_play",
+    "text": "The No. 9 celebrates",
+    "text_raw": "Manuel Ordo\u00f1ez celebrates \u2014 teammates join in the box"
+   },
+   {
+    "seq": 15,
+    "windowTs": 117.0,
+    "verdict": "scoring_play",
+    "text": "No. 11 strikes the ball wide on the right",
+    "text_raw": "No. 11 strikes the ball into the net \u2014 scoreboard updates to 2-1"
+   },
+   {
+    "seq": 16,
+    "windowTs": 120.0,
+    "verdict": "scoring_play",
+    "text": "No. 11 strikes the ball wide on the right",
+    "text_raw": "No. 11 strikes the ball into the net \u2014 teammates celebrate in the box"
+   },
+   {
+    "seq": 17,
+    "windowTs": 144.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue kit runs in box.",
+    "text_raw": "Player in blue and red kit runs in penalty area."
+   },
+   {
+    "seq": 18,
+    "windowTs": 147.0,
+    "verdict": "big_play",
+    "text": "No. 11 strikes the ball wide in midfield",
+    "text_raw": "No. 11 strikes the ball into the net \u2014 teammates celebrate in the box"
+   },
+   {
+    "seq": 19,
+    "windowTs": 168.0,
+    "verdict": "scoring_play",
+    "text": "The striker shoots in midfield",
+    "text_raw": "David Saez scores \u2014 crowd erupts"
+   },
+   {
+    "seq": 20,
+    "windowTs": 171.0,
+    "verdict": "not_highlight",
+    "text": "Player in purple jersey dribbles in penalty area"
+   },
+   {
+    "seq": 21,
+    "windowTs": 177.0,
+    "verdict": "scoring_play",
+    "text": "No. 7 drives into the box and shoots",
+    "text_raw": "No. 7 drives into the box and scores \u2014 crowd erupts"
+   },
+   {
+    "seq": 22,
+    "windowTs": 180.0,
+    "verdict": "scoring_play",
+    "text": "No. 8 shoots wide in midfield",
+    "text_raw": "No. 8 shoots into the net \u2014 keeper beaten"
+   },
+   {
+    "seq": 23,
+    "windowTs": 213.0,
+    "verdict": "scoring_play",
+    "text": "No. 8 shoots wide in midfield",
+    "text_raw": "No. 8 shoots into the net \u2014 players celebrate"
+   },
+   {
+    "seq": 24,
+    "windowTs": 225.0,
+    "verdict": "scoring_play",
+    "text": "No. 8 shoots wide in midfield \u2014 noise lifts, then settles",
+    "text_raw": "No. 8 shoots into the net \u2014 goal celebration"
+   },
+   {
+    "seq": 25,
+    "windowTs": 249.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue controls ball in center field",
+    "text_raw": "Player in blue kit controls ball in center field"
+   },
+   {
+    "seq": 26,
+    "windowTs": 294.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue kit dribbles in midfield.",
+    "text_raw": "Player in blue and purple kit dribbles in midfield."
+   },
+   {
+    "seq": 27,
+    "windowTs": 297.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue controls ball in center circle.",
+    "text_raw": "Player in blue kit controls ball in center circle."
+   },
+   {
+    "seq": 28,
+    "windowTs": 303.0,
+    "verdict": "scoring_play",
+    "text": "Player in blue kit shoots on the left \u2014 noise spikes over the play",
+    "text_raw": "Player in blue kit scores goal \u2014 crowd energy rises"
+   },
+   {
+    "seq": 29,
+    "windowTs": 327.0,
+    "verdict": "not_highlight",
+    "text": "No. 10 moves ball in penalty area."
+   },
+   {
+    "seq": 30,
+    "windowTs": 330.0,
+    "verdict": "not_highlight",
+    "text": "No. 10 moves ball in center circle."
+   },
+   {
+    "seq": 31,
+    "windowTs": 336.0,
+    "verdict": "not_highlight",
+    "text": "No. 10 moves ball in penalty area."
+   },
+   {
+    "seq": 32,
+    "windowTs": 339.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue moves ball in center circle."
+   },
+   {
+    "seq": 33,
+    "windowTs": 381.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue kit dribbles in center circle \u2014 noise spikes over the play",
+    "text_raw": "Player in blue kit dribbles in center circle."
+   },
+   {
+    "seq": 34,
+    "windowTs": 382.7,
+    "verdict": "not_highlight",
+    "text": "Player in blue kit dribbles in center area."
+   }
+  ],
+  "6fe19ac5": [
+   {
+    "seq": 1,
+    "windowTs": 0.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in center field"
+   },
+   {
+    "seq": 2,
+    "windowTs": 25.3,
+    "verdict": "not_highlight",
+    "text": "Player in white jersey moves toward center field."
+   },
+   {
+    "seq": 3,
+    "windowTs": 33.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in center field"
+   },
+   {
+    "seq": 4,
+    "windowTs": 46.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey moves in center field.",
+    "text_raw": "Player in blue and red jersey moves with ball in center field."
+   },
+   {
+    "seq": 5,
+    "windowTs": 49.0,
+    "verdict": "not_highlight",
+    "text": "Player in white jersey moves toward center field \u2014 noise spikes over the play",
+    "text_raw": "Player in white jersey moves toward center field."
+   },
+   {
+    "seq": 6,
+    "windowTs": 64.0,
+    "verdict": "not_highlight",
+    "text": "Referee stands near players in the center circle."
+   },
+   {
+    "seq": 7,
+    "windowTs": 67.0,
+    "verdict": "not_highlight",
+    "text": "Referee stands in center circle."
+   },
+   {
+    "seq": 8,
+    "windowTs": 73.0,
+    "verdict": "not_highlight",
+    "text": "Referee stands in center circle."
+   },
+   {
+    "seq": 9,
+    "windowTs": 85.0,
+    "verdict": "not_highlight",
+    "text": "Players move in the center circle."
+   },
+   {
+    "seq": 10,
+    "windowTs": 91.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue dribbles ball in center circle."
+   },
+   {
+    "seq": 11,
+    "windowTs": 94.0,
+    "verdict": "not_highlight",
+    "text": "Player in white kit dribbles in center circle."
+   },
+   {
+    "seq": 12,
+    "windowTs": 103.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue dribbles ball in center circle."
+   },
+   {
+    "seq": 13,
+    "windowTs": 109.0,
+    "verdict": "not_highlight",
+    "text": "The No. 9 stands in the center circle.",
+    "text_raw": "Manuel Ordo\u00f1ez stands in the center circle."
+   },
+   {
+    "seq": 14,
+    "windowTs": 112.0,
+    "verdict": "not_highlight",
+    "text": "The striker shoots from the penalty area.",
+    "text_raw": "Manuel Ordo\u00f1ez shoots from the penalty area."
+   },
+   {
+    "seq": 15,
+    "windowTs": 118.0,
+    "verdict": "not_highlight",
+    "text": "Player in white enters the penalty area."
+   },
+   {
+    "seq": 16,
+    "windowTs": 127.0,
+    "verdict": "not_highlight",
+    "text": "The striker kit player shoots from penalty area.",
+    "text_raw": "White kit player shoots from penalty area."
+   },
+   {
+    "seq": 17,
+    "windowTs": 130.0,
+    "verdict": "scoring_play",
+    "text": "Ordo\u00f1ez strikes the ball wide in midfield",
+    "text_raw": "Ordo\u00f1ez strikes the ball into the net \u2014 crowd energy rises"
+   },
+   {
+    "seq": 18,
+    "windowTs": 178.0,
+    "verdict": "big_play",
+    "text": "No. 7 strikes the ball wide on the left",
+    "text_raw": "No. 7 strikes the ball into the net \u2014 player falls in celebration."
+   },
+   {
+    "seq": 19,
+    "windowTs": 187.0,
+    "verdict": "big_play",
+    "text": "noise spikes over the play",
+    "text_raw": "The ball enters the net \u2014 keeper beaten."
+   },
+   {
+    "seq": 20,
+    "windowTs": 190.0,
+    "verdict": "big_play",
+    "text": "No. 7 strikes the ball wide on the left",
+    "text_raw": "No. 7 strikes the ball into the net \u2014 player falls in celebration."
+   },
+   {
+    "seq": 21,
+    "windowTs": 196.0,
+    "verdict": "scoring_play",
+    "text": "The striker player shoots on the left",
+    "text_raw": "White player scores goal \u2014 crowd reacts"
+   },
+   {
+    "seq": 22,
+    "windowTs": 199.0,
+    "verdict": "not_highlight",
+    "text": "Player in white moves ball in center circle."
+   },
+   {
+    "seq": 23,
+    "windowTs": 254.3,
+    "verdict": "not_highlight",
+    "text": "Player in blue moves toward the goal area."
+   },
+   {
+    "seq": 24,
+    "windowTs": 260.3,
+    "verdict": "not_highlight",
+    "text": "Player in white moves ball in center circle \u2014 noise spikes over the play",
+    "text_raw": "Player in white moves ball in center circle."
+   },
+   {
+    "seq": 25,
+    "windowTs": 263.3,
+    "verdict": "not_highlight",
+    "text": "The side player moves ball in center circle.",
+    "text_raw": "Real Madrid player moves ball in center circle."
+   },
+   {
+    "seq": 26,
+    "windowTs": 282.3,
+    "verdict": "not_highlight",
+    "text": "Player in white kit moves ball in box.",
+    "text_raw": "Player in white kit moves ball in penalty area."
+   },
+   {
+    "seq": 27,
+    "windowTs": 288.3,
+    "verdict": "scoring_play",
+    "text": "White kit player shoots in penalty area",
+    "text_raw": "White kit player scores in penalty area \u2014 crowd energy rises"
+   },
+   {
+    "seq": 28,
+    "windowTs": 291.3,
+    "verdict": "near_miss",
+    "text": "Defender blocks shot in penalty area."
+   },
+   {
+    "seq": 29,
+    "windowTs": 297.3,
+    "verdict": "not_highlight",
+    "text": "Player falls in penalty area",
+    "text_raw": "Player falls in penalty area \u2014 celebration follows"
+   },
+   {
+    "seq": 30,
+    "windowTs": 300.3,
+    "verdict": "not_highlight",
+    "text": "Defender blocks shot in penalty area."
+   },
+   {
+    "seq": 31,
+    "windowTs": 321.3,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey moves toward goal area."
+   },
+   {
+    "seq": 32,
+    "windowTs": 324.3,
+    "verdict": "not_highlight",
+    "text": "Player in white jersey falls in the box.",
+    "text_raw": "Player in white jersey falls in the penalty area."
+   },
+   {
+    "seq": 33,
+    "windowTs": 330.3,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey moves toward goal area."
+   },
+   {
+    "seq": 34,
+    "windowTs": 333.3,
+    "verdict": "not_highlight",
+    "text": "Player in white jersey falls in the box.",
+    "text_raw": "Player in white jersey falls in the penalty area."
+   },
+   {
+    "seq": 35,
+    "windowTs": 342.3,
+    "verdict": "big_play",
+    "text": "Player in blue shoots on the right \u2014 noise spikes over the play",
+    "text_raw": "Player in blue scores goal \u2014 celebration in penalty area"
+   },
+   {
+    "seq": 36,
+    "windowTs": 348.3,
+    "verdict": "not_highlight",
+    "text": "Player in white jersey falls in the box \u2014 noise spikes over the play",
+    "text_raw": "Player in white jersey falls in the penalty area."
+   }
+  ],
+  "f3cf8f59": [
+   {
+    "seq": 1,
+    "windowTs": 0.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in center field"
+   },
+   {
+    "seq": 2,
+    "windowTs": 9.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in penalty area."
+   },
+   {
+    "seq": 3,
+    "windowTs": 12.0,
+    "verdict": "scoring_play",
+    "text": "Player in blue jersey shoots near the touchline",
+    "text_raw": "Player in blue jersey scores goal \u2014 celebration in penalty area"
+   },
+   {
+    "seq": 4,
+    "windowTs": 18.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in center field \u2014 noise spikes over the play",
+    "text_raw": "Player in blue jersey dribbles in center field"
+   },
+   {
+    "seq": 5,
+    "windowTs": 28.7,
+    "verdict": "not_highlight",
+    "text": "No. 10 moves into the penalty area."
+   },
+   {
+    "seq": 6,
+    "windowTs": 31.7,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in center field"
+   },
+   {
+    "seq": 7,
+    "windowTs": 40.7,
+    "verdict": "big_play",
+    "text": "Player in blue jersey shoots in midfield",
+    "text_raw": "Player in blue jersey scores goal \u2014 crowd energy rises"
+   },
+   {
+    "seq": 8,
+    "windowTs": 49.7,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey shoots in midfield",
+    "text_raw": "Player in blue jersey scores goal \u2014 crowd energy rises"
+   },
+   {
+    "seq": 9,
+    "windowTs": 55.7,
+    "verdict": "not_highlight",
+    "text": "Player in white dribbles in center field"
+   },
+   {
+    "seq": 10,
+    "windowTs": 64.7,
+    "verdict": "not_highlight",
+    "text": "Referee stands near players in penalty area."
+   },
+   {
+    "seq": 11,
+    "windowTs": 67.7,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey shoots on the left",
+    "text_raw": "Player in blue jersey scores goal \u2014 crowd energy rises"
+   },
+   {
+    "seq": 12,
+    "windowTs": 76.7,
+    "verdict": "scoring_play",
+    "text": "The striker shoots on the left",
+    "text_raw": "Lamine Yamal scores \u2014 crowd energy rises"
+   },
+   {
+    "seq": 13,
+    "windowTs": 82.7,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey shoots on the left",
+    "text_raw": "Player in blue jersey scores goal \u2014 crowd energy rises"
+   },
+   {
+    "seq": 14,
+    "windowTs": 91.7,
+    "verdict": "scoring_play",
+    "text": "Lamine Yamal shoots on the left",
+    "text_raw": "Lamine Yamal scores \u2014 crowd energy rises"
+   },
+   {
+    "seq": 15,
+    "windowTs": 94.7,
+    "verdict": "scoring_play",
+    "text": "Yamal strikes the ball wide in midfield",
+    "text_raw": "Yamal strikes the ball into the net \u2014 crowd energy rises"
+   },
+   {
+    "seq": 16,
+    "windowTs": 100.7,
+    "verdict": "not_highlight",
+    "text": "Yamal controls ball in center circle."
+   },
+   {
+    "seq": 17,
+    "windowTs": 109.7,
+    "verdict": "big_play",
+    "text": "Yamal shoots in midfield",
+    "text_raw": "Yamal scores \u2014 celebration in the box"
+   },
+   {
+    "seq": 18,
+    "windowTs": 112.7,
+    "verdict": "not_highlight",
+    "text": "Yamal controls ball in center circle."
+   },
+   {
+    "seq": 19,
+    "windowTs": 118.7,
+    "verdict": "big_play",
+    "text": "Yamal shoots in midfield",
+    "text_raw": "Yamal scores a goal \u2014 crowd erupts"
+   },
+   {
+    "seq": 20,
+    "windowTs": 145.7,
+    "verdict": "not_highlight",
+    "text": "Yamal stands in the penalty area."
+   },
+   {
+    "seq": 21,
+    "windowTs": 148.7,
+    "verdict": "not_highlight",
+    "text": "Player in blue moves ball in center circle."
+   },
+   {
+    "seq": 22,
+    "windowTs": 163.7,
+    "verdict": "scoring_play",
+    "text": "The striker shoots in midfield",
+    "text_raw": "David Saez scores \u2014 crowd erupts"
+   },
+   {
+    "seq": 23,
+    "windowTs": 166.7,
+    "verdict": "not_highlight",
+    "text": "Player in blue moves ball in center circle."
+   },
+   {
+    "seq": 24,
+    "windowTs": 172.7,
+    "verdict": "scoring_play",
+    "text": "David Saez shoots in midfield",
+    "text_raw": "David Saez scores \u2014 crowd erupts"
+   },
+   {
+    "seq": 25,
+    "windowTs": 175.7,
+    "verdict": "scoring_play",
+    "text": "Saez strikes the ball wide in midfield",
+    "text_raw": "Saez strikes the ball into the net \u2014 crowd erupts"
+   },
+   {
+    "seq": 26,
+    "windowTs": 181.7,
+    "verdict": "scoring_play",
+    "text": "No. 9 shoots in midfield",
+    "text_raw": "No. 9 scores \u2014 purple jersey strikes the net"
+   },
+   {
+    "seq": 27,
+    "windowTs": 190.7,
+    "verdict": "not_highlight",
+    "text": "Player in white moves in center circle."
+   },
+   {
+    "seq": 28,
+    "windowTs": 193.7,
+    "verdict": "not_highlight",
+    "text": "Purple jersey player moves in center field."
+   },
+   {
+    "seq": 29,
+    "windowTs": 199.7,
+    "verdict": "not_highlight",
+    "text": "Players move in center circle."
+   },
+   {
+    "seq": 30,
+    "windowTs": 202.7,
+    "verdict": "not_highlight",
+    "text": "Player in white moves ball in center circle \u2014 noise lifts, then settles",
+    "text_raw": "Player in white moves ball in center circle."
+   },
+   {
+    "seq": 31,
+    "windowTs": 208.7,
+    "verdict": "not_highlight",
+    "text": "Player in purple jersey dribbles in center circle \u2014 noise spikes over the play",
+    "text_raw": "Player in purple jersey dribbles in center circle."
+   },
+   {
+    "seq": 32,
+    "windowTs": 211.7,
+    "verdict": "not_highlight",
+    "text": "Player in purple controls ball in center circle.",
+    "text_raw": "Player in purple jersey controls ball in center circle."
+   },
+   {
+    "seq": 33,
+    "windowTs": 217.7,
+    "verdict": "not_highlight",
+    "text": "Player in white moves ball in center circle."
+   },
+   {
+    "seq": 34,
+    "windowTs": 220.7,
+    "verdict": "not_highlight",
+    "text": "Player in white moves ball in center area."
+   },
+   {
+    "seq": 35,
+    "windowTs": 264.7,
+    "verdict": "not_highlight",
+    "text": "Player in white dribbles in center area."
+   }
+  ],
+  "f705c0ee": [
+   {
+    "seq": 1,
+    "windowTs": 0.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in center field"
+   },
+   {
+    "seq": 2,
+    "windowTs": 12.0,
+    "verdict": "scoring_play",
+    "text": "Player in blue jersey shoots near the touchline",
+    "text_raw": "Player in blue jersey scores goal \u2014 celebration in penalty area"
+   },
+   {
+    "seq": 3,
+    "windowTs": 18.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in center field \u2014 noise spikes over the play",
+    "text_raw": "Player in blue jersey dribbles in center field"
+   },
+   {
+    "seq": 4,
+    "windowTs": 27.0,
+    "verdict": "not_highlight",
+    "text": "Player in white jersey dribbles in center field"
+   },
+   {
+    "seq": 5,
+    "windowTs": 30.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue jersey dribbles in center field"
+   },
+   {
+    "seq": 6,
+    "windowTs": 36.0,
+    "verdict": "not_highlight",
+    "text": "Player in white jersey dribbles in center field"
+   },
+   {
+    "seq": 7,
+    "windowTs": 54.0,
+    "verdict": "not_highlight",
+    "text": "Player in white jersey moves in center field",
+    "text_raw": "Player in white jersey moves with ball in center field"
+   },
+   {
+    "seq": 8,
+    "windowTs": 57.0,
+    "verdict": "not_highlight",
+    "text": "Player in white moves toward center field."
+   },
+   {
+    "seq": 9,
+    "windowTs": 63.0,
+    "verdict": "not_highlight",
+    "text": "Player in white jersey moves in center field",
+    "text_raw": "Player in white jersey moves with ball in center field"
+   },
+   {
+    "seq": 10,
+    "windowTs": 99.0,
+    "verdict": "not_highlight",
+    "text": "Player in white dribbles in center circle."
+   },
+   {
+    "seq": 11,
+    "windowTs": 108.0,
+    "verdict": "not_highlight",
+    "text": "The No. 9 moves into the penalty area.",
+    "text_raw": "Manuel Ordo\u00f1ez moves into the penalty area."
+   },
+   {
+    "seq": 12,
+    "windowTs": 111.0,
+    "verdict": "not_highlight",
+    "text": "The No. 9 celebrates in the penalty area.",
+    "text_raw": "Manuel Ordo\u00f1ez celebrates in the penalty area."
+   },
+   {
+    "seq": 13,
+    "windowTs": 117.0,
+    "verdict": "not_highlight",
+    "text": "Player in white dribbles in center area."
+   },
+   {
+    "seq": 14,
+    "windowTs": 120.0,
+    "verdict": "scoring_play",
+    "text": "No. 11 strikes the ball wide on the right",
+    "text_raw": "No. 11 strikes the ball into the net \u2014 players celebrate."
+   },
+   {
+    "seq": 15,
+    "windowTs": 147.0,
+    "verdict": "not_highlight",
+    "text": "Players move in the penalty area."
+   },
+   {
+    "seq": 16,
+    "windowTs": 153.0,
+    "verdict": "big_play",
+    "text": "No. 11 strikes the ball wide in midfield",
+    "text_raw": "No. 11 strikes the ball into the net \u2014 players celebrate."
+   },
+   {
+    "seq": 17,
+    "windowTs": 159.0,
+    "verdict": "big_play",
+    "text": "No. 6 strikes the ball wide in midfield",
+    "text_raw": "No. 6 strikes the ball into the net \u2014 crowd erupts"
+   },
+   {
+    "seq": 18,
+    "windowTs": 162.0,
+    "verdict": "big_play",
+    "text": "The striker shoots in midfield",
+    "text_raw": "David Saez scores \u2014 crowd erupts as score becomes 2-2."
+   },
+   {
+    "seq": 19,
+    "windowTs": 168.0,
+    "verdict": "scoring_play",
+    "text": "The striker strikes the ball wide in midfield",
+    "text_raw": "David Saez strikes the ball into the net \u2014 Score 2-2"
+   },
+   {
+    "seq": 20,
+    "windowTs": 171.0,
+    "verdict": "scoring_play",
+    "text": "David Saez shoots in midfield",
+    "text_raw": "David Saez scores \u2014 crowd erupts as score becomes 2-2."
+   },
+   {
+    "seq": 21,
+    "windowTs": 180.0,
+    "verdict": "scoring_play",
+    "text": "Saez strikes the ball wide in midfield",
+    "text_raw": "Saez strikes the ball into the net \u2014 crowd erupts"
+   },
+   {
+    "seq": 22,
+    "windowTs": 198.0,
+    "verdict": "not_highlight",
+    "text": "Players move in the penalty area."
+   },
+   {
+    "seq": 23,
+    "windowTs": 204.0,
+    "verdict": "not_highlight",
+    "text": "Players move in the center circle \u2014 noise lifts, then settles",
+    "text_raw": "Players move in the center circle."
+   },
+   {
+    "seq": 24,
+    "windowTs": 249.0,
+    "verdict": "not_highlight",
+    "text": "Player in blue kit dribbles in center circle."
+   },
+   {
+    "seq": 25,
+    "windowTs": 252.0,
+    "verdict": "not_highlight",
+    "text": "Players move in the center circle."
+   },
+   {
+    "seq": 26,
+    "windowTs": 270.0,
+    "verdict": "not_highlight",
+    "text": "The side player carries ball in center circle.",
+    "text_raw": "Real Madrid player carries ball in center circle."
+   },
+   {
+    "seq": 27,
+    "windowTs": 276.0,
+    "verdict": "not_highlight",
+    "text": "Player in white kit dribbles in center circle."
+   },
+   {
+    "seq": 28,
+    "windowTs": 288.0,
+    "verdict": "scoring_play",
+    "text": "Player in white kit shoots on the left",
+    "text_raw": "Player in white kit scores a goal \u2014 crowd erupts"
+   },
+   {
+    "seq": 29,
+    "windowTs": 294.0,
+    "verdict": "not_highlight",
+    "text": "Player in white kit dribbles in center circle."
+   },
+   {
+    "seq": 30,
+    "windowTs": 299.0,
+    "verdict": "not_highlight",
+    "text": "Player stands near fallen opponent in center circle.",
+    "text_raw": "Player in blue kit stands near fallen opponent in center circle."
+   }
+  ],
+  "b9275e33": [
+   {
+    "seq": 1,
+    "windowTs": 0.0,
+    "verdict": "not_highlight",
+    "text": "Player in white moves ball in center circle"
+   },
+   {
+    "seq": 2,
+    "windowTs": 12.3,
+    "verdict": "scoring_play",
+    "text": "Player in white shoots in midfield",
+    "text_raw": "Player in white scores \u2014 crowd erupts"
+   },
+   {
+    "seq": 3,
+    "windowTs": 24.6,
+    "verdict": "not_highlight",
+    "text": "Player in white moves ball in center circle."
+   },
+   {
+    "seq": 4,
+    "windowTs": 28.4,
+    "verdict": "scoring_play",
+    "text": "Player in white shoots on the left",
+    "text_raw": "Player in white scores \u2014 crowd erupts"
+   },
+   {
+    "seq": 5,
+    "windowTs": 31.5,
+    "verdict": "not_highlight",
+    "text": "Player in white moves in penalty area."
+   },
+   {
+    "seq": 6,
+    "windowTs": 34.6,
+    "verdict": "not_highlight",
+    "text": "Player in white shoots on the left",
+    "text_raw": "Player in white scores \u2014 crowd erupts"
+   },
+   {
+    "seq": 7,
+    "windowTs": 38.2,
+    "verdict": "not_highlight",
+    "text": "Player in white moves in penalty area."
+   }
+  ]
+ }
+}
