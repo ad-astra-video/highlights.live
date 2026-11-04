@@ -164,6 +164,8 @@ def test_compact_prompt_asks_for_one_play_by_play_line():
     assert "name the player/jersey when the frames read one" in p
     assert "else the role (the winger, the keeper, the No. 9)" in p
     assert "lead with the event, not the scene" in p
+    assert "open on an ACTION VERB" in p
+    assert "never \"are positioned\" or \"maintain position\"" in p
 
 
 def test_compact_prompt_carries_colour_and_quiet_budgets():
@@ -176,7 +178,9 @@ def test_compact_prompt_carries_colour_and_quiet_budgets():
     assert "never a second description of the same play" in p
     assert "about 1 line in 3, fresh not chatty" in p
     # quiet window: one blunt line, <= 8 words; clock only on datable events.
-    assert "QUIET WINDOW (nothing above threshold): one blunt line, max 8 words" in p
+    assert "QUIET WINDOW (nothing above threshold): ONE blunt line, max 8 words" in p
+    assert "no colour beat, no scene-setting" in p
+    assert "count the words and cut anything over 8" in p
     assert "CLOCK: only on datable events ('GOAL 72s'), not every line" in p
 
 
@@ -218,11 +222,11 @@ def test_compact_json_field_set_is_unchanged():
 
 
 def test_compact_prompt_delta_is_bounded():
-    # ADAAAA-7935 measured on this evidence dict: 8569 -> 9753 chars
-    # (+1184 chars, ~+296 prompt tokens of prefill; output tokens are the cost
+    # ADAAAA-7935 measured on this evidence dict: 8569 -> 9999 chars
+    # (+1430 chars, ~+357 prompt tokens of prefill; output tokens are the cost
     # driver on the decode-bound live rail, and the caption budget drops).
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 9800
+    assert len(_compact_prompt()) <= 10050
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the
