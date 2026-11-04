@@ -996,3 +996,84 @@ describe("RTC ingest samples at the FUNDED live baseline, not 1 fps (ADAAAA-7990
   });
 });
 
+
+// ADAAAA-7990 (delivery follow-up): the node used to poll `events-out/{seq}` ten
+// times at 250 ms and then DISCARD the frame. On a 3 fps share the serial perceive
+// runner falls ~0.5 s behind per frame, so from seq ~5 every observation was
+// thrown away — job `8cb6e0a5` delivered 4 observations in 40 s (0.10 obs/s) and
+// job `750b6cd0` delivered 2 in 300 s while the decoder ran at 2.84 fps. These
+// tests pin the end-to-end relay: a lagging runner DELAYS delivery, never cancels
+// it, and the session's close log carries the delivery ledger.
+describe("observation delivery on a lagging runner (ADAAAA-7990)", () => {
+  /** A runner that steps frames SERIALLY at `stepMs` per frame — the shape of
+   *  the perceive media loop (`_media_loop` awaits `on_frame` per seq). */
+  class SerialOrch extends FakeOrch {
+    stepMs = 480;
+    publishWindows = new Map<number, number>();
+    async publishFrame(p: ProvisionedSession, seq: number, jpeg: Uint8Array, ts: number) {
+      this.publishes.push({ seq, jpeg: Buffer.from(jpeg), ts });
+      this.publishWindows.set(seq, Date.now());
+      return 200;
+    }
+    async readObservation(_p: ProvisionedSession, seq: number) {
+      const first = this.publishWindows.get(1);
+      if (first === undefined) return null;
+      // seq's observation lands after the runner has stepped seq-1 frames.
+      if (Date.now() - first < seq * this.stepMs) return null;
+      return { type: "observation", seq, tracks: [] };
+    }
+  }
+
+  it("delivers every published frame's observation even when the runner lags past the old 2.5 s poll", async () => {
+    const g = new SerialOrch("sess-lag");
+    const ms = new MediaServer({ orchBase: "http://orch", reconnectGraceMs: 60 }, g as any);
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    const logged: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((...a: any[]) => {
+      logged.push(a.map(String).join(" "));
+    });
+    try {
+      await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-lag" } });
+      const ws = await wsConnect(`${sBase.replace("http", "ws")}/stream/sess-lag`);
+      const seen: number[] = [];
+      ws.on("message", (data: any) => {
+        const m = JSON.parse(String(data));
+        if (m?.type === "observation") seen.push(m.observation.seq);
+      });
+      const jpegB64 = Buffer.from("jpeg").toString("base64");
+      // 10 frames at ~50 ms (the decoder's 3 fps cadence is 333 ms; a tighter
+      // cadence only makes the backlog grow faster).
+      for (let seq = 1; seq <= 10; seq++) {
+        ws.send(JSON.stringify({ seq, image: jpegB64, timestamp: seq / 3 }));
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const until = Date.now() + 8_000;
+      while (seen.length < 10 && Date.now() < until) await new Promise((r) => setTimeout(r, 40));
+
+      // All ten frames published, all ten observations relayed, in order.
+      expect(g.publishes.map((p) => p.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(seen).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      // seq 8's observation lands ~3.8 s after the first publish: well past the
+      // old 2.5 s inline poll budget, which is exactly the frame the old path lost.
+      expect(logged.some((l) => l.includes("[rtc] obs seq=8"))).toBe(true);
+
+      // The close log carries the ledger AC1 reads (delivered vs published).
+      ws.close();
+      const closeUntil = Date.now() + 2_000;
+      while (!logged.some((l) => l.includes("[rtc] observe session=sess-lag")) && Date.now() < closeUntil) {
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      const summary = logged.find((l) => l.includes("[rtc] observe session=sess-lag"));
+      expect(summary).toBeTruthy();
+      expect(summary).toContain("published=10");
+      expect(summary).toContain("delivered=10");
+      expect(summary).toContain("expired=0");
+      expect(summary).toContain("refused=0");
+    } finally {
+      logSpy.mockRestore();
+      await srv.close();
+    }
+  });
+});
