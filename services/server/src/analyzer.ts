@@ -5624,11 +5624,26 @@ function downgradeUncorroborated(stage1: DecisionResult): DecisionResult {
 export interface AnalyzeEvent {
   seq: number;
   timestamp: number;
-  type: "observation" | "candidate" | "highlight" | "candidateBlocked" | "lifecycle" | "highlightAttested";
+  type:
+    | "observation"
+    | "candidate"
+    | "highlight"
+    | "candidateBlocked"
+    | "lifecycle"
+    | "highlightAttested"
+    // ADAAAA-8032: a browser (screen-share) highlight's clip landed. Emitted
+    // the moment the live cut patches `clipUri` (and by the stop path), so an
+    // open grid / job-detail view repaints the card without a page reload.
+    | "clip";
   observation?: { tracks: TrackObservation[] };
   candidate?: { eventType: string; timestamp: number };
   highlight?: HighlightRecord;
   reason?: string;
+  /** ADAAAA-8032 `clip` events: which highlight's clip landed and where it is
+   *  playable. `clipError` is set instead when the cut itself failed. */
+  highlightId?: string;
+  clipUri?: string;
+  clipError?: string;
   /** ADAAAA-7700 `lifecycle` events: a terminal/attributable job transition
    *  pushed to the live console (e.g. the media node restarted under a share). */
   status?: "done" | "failed" | "cancelled";

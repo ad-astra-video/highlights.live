@@ -63,7 +63,13 @@ export function Highlights() {
   // the I3-B live Decision trail is observable on the actual user path.
   // Async-VOD processing-jobs queue (ADAAAA-6760): fetched + polled + SSE-streamed
   // by the hook; the new "Processing jobs" section below renders its rows.
-  const { jobs: processingJobs, refresh: refreshProcessingJobs, removeJob } = useProcessingJobs();
+  const { jobs: processingJobs, refresh: refreshProcessingJobs, removeJob } = useProcessingJobs({
+    // ADAAAA-8032: while a share is live, its highlight and clip events refresh
+    // the feed, so a tab sitting on this grid shows a playable clip mid-share.
+    onEvent: (_jobId, name) => {
+      if (name === "highlight" || name === "highlightAttested" || name === "clip") refreshHighlights().catch(() => {});
+    },
+  });
   const [source, setSource] = useState("file");
   const [videoPath, setVideoPath] = useState("/data/test_vod.mp4");
   const [gameHint, setGameHint] = useState("Esports");
@@ -135,7 +141,10 @@ export function Highlights() {
     readSSE(`/jobs/${vodJobId}/events`, getToken(), (name) => {
       // ADAAAA-8006: a demoted GOAL re-attested by a later scoreboard read is
       // re-published under this name, so the list refreshes to its GOAL state.
-      if ((name === "highlight" || name === "highlightAttested") && !cancelled) refreshHighlights().catch(() => {});
+      // ADAAAA-8032: `clip` means a highlight's clip just landed (mid-share),
+      // so a grid open in another tab picks it up without a reload.
+      if ((name === "highlight" || name === "highlightAttested" || name === "clip") && !cancelled)
+        refreshHighlights().catch(() => {});
     }, ac.signal).catch(() => {});
     const iv = setInterval(async () => {
       try {

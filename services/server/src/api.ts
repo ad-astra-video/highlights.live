@@ -640,7 +640,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // CLIENT streams sampled frames in via POST /jobs/:id/ingest and a recording
   // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
   // session.
-  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string; mediaIceServers?: any[]; rail?: MediaRailObserver; frames?: LiveFrameWriter }>();
+  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string; mediaIceServers?: any[]; rail?: MediaRailObserver; frames?: LiveFrameWriter; contentTs?: number }>();
   // ADAAAA-6561: per live-ingest job, the CURRENT perceive session held by that
   // job plus whether the job has been stopped. The stop path uses this to
   // release the perceive slot SYNCHRONOUSLY (independent of the in-flight GPU
@@ -815,6 +815,209 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));
   }
+  // -------------------------------------------------------------------------
+  // ADAAAA-8032: LIVE clip cuts for the browser (screen-share) rail.
+  //
+  // The rail used to persist every highlight with `clipUri: ""` and cut EVERY
+  // clip inside `finishBrowserJob` (the stop path), so every card on an open
+  // grid read "clip processing…" for the whole share. The recording is written
+  // DURING the share (`POST /jobs/:id/recording` appends each ~1 s chunk), so a
+  // highlight whose window is already flushed can be cut mid-session with the
+  // exact same ffmpeg call the stop path uses. The cut is scheduled the moment
+  // the highlight is persisted, waits until the content clock passes the
+  // window end (the chunk carrying those bytes has landed by then), then runs
+  // serialised per job (one ffmpeg at a time). The stop path stays the
+  // fallback and is unchanged: a highlight with no live clip (cut failure, a
+  // window at the very end of the share, no recording yet) is still cut there.
+  const LIVE_CLIP_FLUSH_SEC = 1.5; // wait this far past the window end
+  const LIVE_CLIP_MAX_WAIT_MS = 45_000; // give up; the stop path cuts it
+  const LIVE_CLIP_RETRY_MS = 1_200;
+  // `${jobId}:${highlightId}` — one live cut attempt per highlight.
+  const liveClipScheduled = new Set<string>();
+  // Per-job serial chain: cuts for one share never run concurrently (one
+  // ffmpeg at a time keeps the CPU cost bounded and the outputs race-free).
+  const liveClipChains = new Map<string, Promise<void>>();
+
+  /** The content window the delivered clip must cover, derived ONCE so the live
+   * cut and the stop cut cannot disagree (ADAAAA-8032 AC4: cutting early must
+   * not change the delivered window for the same highlight). Mirrors the stop
+   * path's `clipWindow(h.start, …)` + `max(h.end - h.start, …)` exactly. */
+  function browserClipSpan(
+    h: { start: number; end: number },
+    cw: { clipBeforeS: number; clipAfterS: number; clipWindowMinSec: number }
+  ): { start: number; dur: number } {
+    const win = clipWindow(h.start, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
+    return { start: Math.max(0, h.start), dur: Math.max(h.end - h.start, win.end - win.start) };
+  }
+
+  /** Cut ONE browser highlight from `recPath` (the share's recording as it
+   * exists right now). Shared by the live scheduler and the stop path so both
+   * produce the same file name, window and audio probe. Throws on an ffmpeg
+   * failure or an incomplete (truncated) window so the caller can decide. */
+  async function cutBrowserHighlightClip(
+    jobId: string,
+    h: { start: number; end: number },
+    recPath: string,
+    cw: { clipBeforeS: number; clipAfterS: number; clipWindowMinSec: number }
+  ): Promise<{ name: string; uri: string; hasAudio: boolean | null; bytes: number; mode: string; ms: number }> {
+    const outDir = path.join(cfg.dataDir, "clips");
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(outDir, { recursive: true });
+    const name = `${jobId}-${Math.round(h.start * 10)}`;
+    const out = path.join(outDir, `${name}.mp4`);
+    const { start, dur } = browserClipSpan(h, cw);
+    // The recording's own length: a clip can never be longer than the footage
+    // that exists, so the completeness check below is bounded by it (a short
+    // 2 s test/share recording is legitimately shorter than the 15 s window).
+    const srcDur = await probeDuration(cfg.ffmpegPath, recPath);
+    const t0 = Date.now();
+    // ADAAAA-7724: cutClip picks stream-copy when the recording's codecs fit the
+    // mp4 container and re-encodes when they do not (a VP8/VP9+opus webm
+    // recording cannot be copied into mp4). It also removes a failed/empty
+    // output, so a 0-byte clip never lands on disk.
+    const cut = await cutClip(cfg.ffmpegPath, recPath, out, start, dur);
+    // AC4: a cut from a still-growing recording must never deliver a silently
+    // truncated window — verify the clip covers what the recording could give
+    // before it can be published as playable. Skipped when the source duration
+    // is unprobeable (a streamable webm mid-write).
+    const got = await probeDuration(cfg.ffmpegPath, out);
+    const expected = srcDur != null ? Math.min(dur, Math.max(0, srcDur - start)) : null;
+    const ms = Date.now() - t0;
+    if (got != null && expected != null && expected > 0.5 && got + 1.5 < expected) {
+      await rm(out, { force: true }).catch(() => {});
+      throw new Error(
+        `clip covers ${got.toFixed(1)}s of the ${expected.toFixed(1)}s available window (recording not flushed yet)`
+      );
+    }
+    // ADAAAA-7248: record whether the source recording carried audio so the card
+    // can show an explicit "no audio captured" state. `-c copy` preserves the
+    // source's audio, so a `false` here means the source itself had none. A
+    // probe failure leaves it unknown (null) rather than mislabeling.
+    const hasAudio = await probeHasAudio(cfg.ffmpegPath, recPath);
+    if (cut.mode === "reencode") {
+      const src = cut.sourceFormat;
+      console.log(
+        `[browser:${jobId}] cut ${name}.mp4 by re-encoding ` +
+          `(${src?.container || "?"} ${src?.videoCodec || "?"}/${src?.audioCodec || "none"} -> mp4 h264/aac, ${cut.bytes} B)`
+      );
+    }
+    return { name, uri: `/clips/${name}.mp4`, hasAudio, bytes: cut.bytes, mode: cut.mode, ms };
+  }
+
+  /** Track the newest content instant the share has produced, so the live cut
+   * knows how much of the recording has been flushed. Updated by the media rail
+   * (every analysed frame) and by the legacy `/ingest` frame path. */
+  function noteBrowserContentTs(jobId: string, ts: number) {
+    if (!Number.isFinite(ts) || ts < 0) return;
+    const bj = browserJobs.get(jobId);
+    if (!bj) return;
+    if (!Number.isFinite(bj.contentTs) || ts > (bj.contentTs ?? 0)) bj.contentTs = ts;
+  }
+
+  /** Wait until the recording on disk covers `contentEndS` of the share
+   * timeline. The rail's newest analysed frame timestamp is the best available
+   * estimate of what has been appended (chunks land ~1/s), so poll it; a hard
+   * timeout and a finalizing/stopped job both bail (the stop path then owns the
+   * tail, after waiting for the client's final chunk). */
+  async function waitForRecordingFlush(jobId: string, contentEndS: number): Promise<"flushed" | "ended" | "timeout"> {
+    const deadline = Date.now() + LIVE_CLIP_MAX_WAIT_MS;
+    for (;;) {
+      const job = store.getJob(jobId);
+      // Ended, finalizing, or torn down: stop path cuts this one.
+      if (!job || job.status !== "active" || !browserJobs.has(jobId) || browserFinalizing.has(jobId)) return "ended";
+      const bj = browserJobs.get(jobId)!;
+      if ((bj.contentTs ?? -1) >= contentEndS + LIVE_CLIP_FLUSH_SEC) return "flushed";
+      if (Date.now() >= deadline) return "timeout";
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+
+  /** ADAAAA-8032: cut this highlight's clip NOW-ish (when its window is
+   * flushed), patch `clipUri` on the row and re-publish it over the job's SSE
+   * channel so an open grid/job-detail repaints without a reload. Fire-and-
+   * forget: the stop path re-cuts anything this leaves empty. */
+  function scheduleLiveClipCut(jobId: string, highlightId: string): void {
+    const job = store.getJob(jobId);
+    if (!job || job.source !== "browser" || job.status !== "active" || !browserJobs.has(jobId)) return;
+    const h = store.getHighlight(highlightId);
+    if (!h || h.clipUri) return;
+    const key = `${jobId}:${highlightId}`;
+    if (liveClipScheduled.has(key)) return;
+    liveClipScheduled.add(key);
+    const task = (async () => {
+      // Resolve the window from the persisted row (the same numbers the stop
+      // path reads), then wait for the bytes.
+      const cw = await resolveClipWindow();
+      const { start, dur } = browserClipSpan(h, cw);
+      const flush = await waitForRecordingFlush(jobId, start + dur);
+      // Re-read: the stop path may have cut it while we waited.
+      const cur = store.getHighlight(highlightId);
+      if (!cur || cur.clipUri) return;
+      const recPath = browserRecordingPath(jobId);
+      if (!existsSync(recPath) || statSync(recPath).size === 0) return; // stop path handles a missing recording
+      if (flush !== "flushed") {
+        console.log(
+          `[browser:${jobId}] live cut for ${highlightId} left to the stop path (${flush === "ended" ? "share ended" : `window not flushed within ${LIVE_CLIP_MAX_WAIT_MS / 1000}s`})`
+        );
+        return;
+      }
+      let lastErr: any = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const rec = await cutBrowserHighlightClip(jobId, cur as any, recPath, cw);
+          await store.patchHighlight(highlightId, {
+            clipUri: rec.uri,
+            ...(rec.hasAudio != null ? { hasAudio: rec.hasAudio } : {}),
+            clipError: undefined as any,
+          } as any);
+          // AC6 cost evidence: the measured CPU seconds + bytes per live cut.
+          console.log(
+            `[browser:${jobId}] live clip ${rec.name}.mp4 ready mid-share ` +
+              `(${rec.mode}, ${rec.bytes} B, ${rec.ms} ms ffmpeg)`
+          );
+          emitJobEvent(jobId, {
+            seq: -1,
+            timestamp: -1,
+            type: "clip",
+            highlightId,
+            clipUri: rec.uri,
+          });
+          return;
+        } catch (e: any) {
+          lastErr = e;
+          // A partial tail cluster from a still-appending file is transient:
+          // one short retry, then leave the highlight for the stop path.
+          await new Promise((r) => setTimeout(r, LIVE_CLIP_RETRY_MS * (attempt + 1)));
+          const still = store.getHighlight(highlightId);
+          if (!still || still.clipUri) return;
+          if (!browserJobs.has(jobId) || browserFinalizing.has(jobId)) return;
+        }
+      }
+      console.error(
+        `[browser:${jobId}] live clip cut failed for highlight ${highlightId}; stop path will retry: ${String(
+          lastErr?.message || lastErr
+        )}`
+      );
+    })().catch((e: any) => console.error(`[browser:${jobId}] live clip schedule failed:`, String(e?.message || e)));
+
+    const prev = liveClipChains.get(jobId) ?? Promise.resolve();
+    const chained = prev
+      .then(() => task)
+      .catch(() => {})
+      .finally(() => {
+        liveClipScheduled.delete(key);
+        if (liveClipChains.get(jobId) === chained) liveClipChains.delete(jobId);
+      });
+    liveClipChains.set(jobId, chained);
+  }
+
+  /** Await the job's in-flight/scheduled live cuts before the stop path cuts
+   * what is left, so two ffmpeg runs can never write the same clip file. */
+  async function drainLiveClipCuts(jobId: string, timeoutMs: number): Promise<void> {
+    const chain = liveClipChains.get(jobId);
+    if (!chain) return;
+    await Promise.race([chain, new Promise<void>((r) => setTimeout(r, timeoutMs))]).catch(() => {});
+  }
   // The client flushes its final MediaRecorder chunk before POST /stop, but a
   // chunk can still land a few hundred ms behind (base64 encode + retry over a
   // flaky link). Wait a bounded window for the recording to materialize before
@@ -913,15 +1116,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         await db.closeMediaSession(jobId).catch(() => {});
       }
       const recPath = await waitForRecording(jobId, 4000);
-      const { mkdir } = await import("node:fs/promises");
-      const outDir = path.join(cfg.dataDir, "clips");
-      await mkdir(outDir, { recursive: true });
+      // ADAAAA-8032: let any live cut already running finish first, so the stop
+      // path never cuts (and writes) the same clip file concurrently. Live cuts
+      // bail as soon as the job starts finalizing, so this drains the one
+      // in-flight ffmpeg at worst.
+      await drainLiveClipCuts(jobId, 30_000);
       // ADAAAA-7247 (ACC-7): use the webui-configured (DB-persisted) per-company
       // clip window for the final browser clip cuts.
       const cw = await resolveClipWindow();
-      // Cut a clip for every highlight that doesn't already have one. If the
-      // recording is missing or a cut fails, surface the miss on the highlight
-      // (clipError) instead of silently leaving an empty clipUri -> blank card.
+      // Cut a clip for every highlight that doesn't already have one (most were
+      // already cut mid-share by `scheduleLiveClipCut`). If the recording is
+      // missing or a cut fails, surface the miss on the highlight (clipError)
+      // instead of silently leaving an empty clipUri -> blank card.
       let missed = 0;
       for (const h of store.highlightsForJob(jobId)) {
         if (h.clipUri) continue;
@@ -932,43 +1138,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           });
           continue;
         }
-        const name = `${jobId}-${Math.round(h.start * 10)}`;
         try {
-          const out = path.join(outDir, `${name}.mp4`);
-          const win = clipWindow(h.start, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
-          const dur = Math.max(h.end - h.start, win.end - win.start);
-          // ADAAAA-7724: cutClip picks stream-copy when the recording's codecs fit
-          // the mp4 container and re-encodes when they do not (a VP8/VP9+opus
-          // webm recording cannot be copied into mp4 — ffmpeg exits leaving a
-          // 0-byte file and every highlight got an empty clipUri). The cut also
-          // removes a failed/empty output, so a 0-byte clip never lands on disk.
-          const cut = await cutClip(cfg.ffmpegPath, recPath, out, Math.max(0, h.start), dur);
-          if (cut.mode === "reencode") {
-            const src = cut.sourceFormat;
-            console.log(
-              `[browser:${jobId}] cut ${path.basename(out)} by re-encoding ` +
-                `(${src?.container || "?"} ${src?.videoCodec || "?"}/${src?.audioCodec || "none"} -> mp4 h264/aac, ${cut.bytes} B)`
-            );
-          }
-          // ADAAAA-7248: record whether the source recording carried audio so
-          // the card can show an explicit "no audio captured" state (e.g. a
-          // screen/window share yields no audio track) instead of implying
-          // sound. `-c copy` preserves the source's audio, so a `false` here
-          // means the source itself had no audio stream. A probe failure leaves
-          // it unset (unknown) rather than mislabeling.
-          const hasAudio = await probeHasAudio(cfg.ffmpegPath, recPath);
+          const rec = await cutBrowserHighlightClip(jobId, h, recPath, cw);
           await store.patchHighlight(h.id, {
-            clipUri: `/clips/${name}.mp4`,
-            ...(hasAudio != null ? { hasAudio } : {}),
+            clipUri: rec.uri,
+            ...(rec.hasAudio != null ? { hasAudio: rec.hasAudio } : {}),
           });
+          // ADAAAA-8032: same `clip` event the live cut emits, so a surface that
+          // subscribed late refreshes the card instead of polling for it.
+          emitJobEvent(jobId, { seq: -1, timestamp: -1, type: "clip", highlightId: h.id, clipUri: rec.uri });
         } catch (e: any) {
           missed++;
           // ADAAAA-7724: surface the actual ffmpeg reason (runFfmpeg embeds the
           // meaningful stderr lines) instead of only counting a "no clip" and
           // leaving the operator to guess from a bare 0-byte file.
           const reason = String(e?.message || e);
-          console.error(`[browser:${jobId}] clip cut failed for highlight ${h.id} (${name}.mp4): ${reason}`);
+          console.error(`[browser:${jobId}] clip cut failed for highlight ${h.id}: ${reason}`);
           await store.patchHighlight(h.id, { clipError: `Clip cut failed: ${reason}` });
+          emitJobEvent(jobId, { seq: -1, timestamp: -1, type: "clip", highlightId: h.id, clipError: reason });
         }
       }
       if (missed > 0) {
@@ -1076,6 +1263,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     bj.frames = frames;
     const onEvent = (ev: AnalyzeEvent) => {
       emitJobEvent(job.id, ev);
+      // ADAAAA-8032: track the share's newest content instant so the live clip
+      // cut knows how much of the recording has already been flushed to disk.
+      if (ev.type === "observation") noteBrowserContentTs(job.id, ev.timestamp);
       if (ev.type === "highlight" && ev.highlight) {
         // ADAAAA-8005 (gate 3): the delivered ack feeds the media rail's
         // per-row trigger->delivered metric (observeMetrics.deliveredLatency).
@@ -1085,9 +1275,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           sub,
           ev.highlight,
           (triggerTs, atMs, highlightId) => shared.delivery.notePersisted(triggerTs, atMs, highlightId)
-        ).catch((e) =>
-          console.error(`[media-rail:${job.id}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
-        );
+        )
+          // ADAAAA-8032: once the row exists, cut its clip as soon as the
+          // window has been flushed to the recording — mid-share, not at stop.
+          .then((rec) => scheduleLiveClipCut(job.id, rec.id))
+          .catch((e) =>
+            console.error(`[media-rail:${job.id}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
+          );
       }
     };
     // ADAAAA-7990: the decide window resolves frames onto the SAME cadence the
@@ -1104,13 +1298,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         signalGate: cfg.observeSignalGate,
         signalGateOpts: buildObserveSignalGateOpts(cfg),
         // ADAAAA-7734: persist the JPEG this rail just decided on (queued write).
-        onFrame: (frame) =>
+        onFrame: (frame) => {
+          // ADAAAA-8032: the media node's frame cadence is the content clock the
+          // live clip cut waits on (the recording is appended in step with it).
+          noteBrowserContentTs(job.id, frame.timestamp);
           frames.enqueue({
             seq: frame.seq,
             timestamp: frame.timestamp,
             frameB64: frame.frameB64,
             tracks: (frame.observation.tracks ?? []) as any,
-          }),
+          });
+        },
         onDecide: async (payload) => {
           // Streaming waiver (ADAAAA-5341): the share is an ACTIVE streaming
           // session, so the per-decide fee is $0 and the gate never 402s
@@ -4667,6 +4865,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         );
         bj.evidence.step(res.observation);
         emitJobEvent(req.params.id, { seq, timestamp, type: "observation", observation: res.observation });
+        // ADAAAA-8032: every ingested frame advances the recording's content
+        // clock — the live clip cut waits on it before cutting (a frame with no
+        // candidate still means more footage has been appended to disk).
+        noteBrowserContentTs(req.params.id, timestamp);
         let highlight: any = null;
         if (res.candidate) {
           emitJobEvent(req.params.id, { seq, timestamp, type: "candidate", candidate: res.candidate });
@@ -4739,6 +4941,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             // persisted.
             const rowsBefore = store.highlightsForJob(job.id);
             const added = await store.addHighlight(highlight);
+            // ADAAAA-8032: the clip is scheduled the moment the row exists, so
+            // this rail too serves a playable clip mid-share.
+            scheduleLiveClipCut(job.id, added.record.id);
             if (added.created) {
               // A browser-capture highlight generated successfully debits the
               // quota once (like VOD/live). Board-capture jobs must also count
@@ -4878,6 +5083,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const timestamp = typeof obs.timestamp === "number" ? obs.timestamp : 0;
       bj.evidence.step(obs as any);
       emitJobEvent(req.params.id, { seq, timestamp, type: "observation", observation: obs as any });
+      // ADAAAA-8032: the media rail's frame cadence is the share's content clock
+      // — the live clip cut waits for it to pass a highlight's window end before
+      // cutting from the (still growing) recording.
+      noteBrowserContentTs(req.params.id, timestamp);
       // Media (RTC) rail decide wiring: schedule a cadence/anchored decide on
       // the frame the media node just handed us. Returns immediately — decides
       // run on the rail's serial chain so this callback never blocks frames.
