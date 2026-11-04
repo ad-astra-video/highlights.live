@@ -519,10 +519,16 @@ export interface Db {
   jobCandidatesForJob(jobId: string): Promise<JobCandidate[]>;
   /** Every decide note across all jobs (hydrates the Store on boot). */
   listJobCandidates(): Promise<JobCandidate[]>;
-  /** Upsert one decide audit record (row id = `${job identity}::${groupKey}`). */
+  /** Upsert one decide audit record (row id = `${job identity}::${groupKey}`,
+   * plus a `:callN` slot for a 2nd+ billed decide of the same group). */
   saveDecideAudit(a: DecideAuditRecord): Promise<void>;
-  /** The audit record for one frame group (queryable by group key). */
+  /** The audit record for one frame group (queryable by group key). Resolves the
+   * group's CANONICAL row (its first billed call), never the `:callN` extras. */
   decideAuditForGroup(sessionId: string, groupKey: string): Promise<DecideAuditRecord | undefined>;
+  /** ADAAAA-8018: how many billed decide CALLS already have a row for this frame
+   * group (the canonical row plus every `:callN` extra), so the ingest path can
+   * give the next call its own labelled row instead of overwriting the group's. */
+  decideAuditCallsForGroup(sessionId: string, groupKey: string): Promise<number>;
   /** Every decide audit row attributable to ONE job (ADAAAA-7626 read path). */
   decideAuditsForJob(jobId: string): Promise<DecideAuditRecord[]>;
   /** Every decide audit record (hydrates the decision-trail / frame debugger). */
@@ -1043,6 +1049,15 @@ export class SqliteDb implements Db {
       .prepare("SELECT * FROM decide_audit WHERE session_id = ? AND group_key = ?")
       .get(sessionId, groupKey) as any;
     return r ? hydrateDecideAudit(r) : undefined;
+  }
+
+  /** ADAAAA-8018: billed decide calls already recorded for this frame group —
+   * the canonical `group_key` row plus every `${group_key}:callN` extra row. */
+  async decideAuditCallsForGroup(sessionId: string, groupKey: string): Promise<number> {
+    const r = this.db
+      .prepare("SELECT count(*) AS n FROM decide_audit WHERE session_id = ? AND (group_key = ? OR group_key LIKE ?)")
+      .get(sessionId, groupKey, `${groupKey}:call%`) as { n: number } | undefined;
+    return Number(r?.n ?? 0);
   }
 
   /** ADAAAA-7626: job-scoped read path (was: list everything, filter in memory). */
@@ -1852,6 +1867,16 @@ export class PgDb implements Db {
       [sessionId, groupKey]
     );
     return r.rows.length ? hydrateDecideAudit(r.rows[0]) : undefined;
+  }
+
+  /** ADAAAA-8018: billed decide calls already recorded for this frame group —
+   * the canonical `group_key` row plus every `${group_key}:callN` extra row. */
+  async decideAuditCallsForGroup(sessionId: string, groupKey: string): Promise<number> {
+    const r = await this.pool.query(
+      "SELECT count(*) AS n FROM decide_audit WHERE session_id = $1 AND (group_key = $2 OR group_key LIKE $2 || ':call%')",
+      [sessionId, groupKey]
+    );
+    return Number(r.rows[0]?.n ?? 0);
   }
 
   /** ADAAAA-7626: job-scoped read path (was: list everything, filter in memory). */
