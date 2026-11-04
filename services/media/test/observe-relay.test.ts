@@ -136,15 +136,20 @@ describe("ObservationRelay (ADAAAA-7990 delivery)", () => {
     relay.close();
   });
 
-  it("refuses to publish past the in-flight window (bounded lag, no unbounded queue)", async () => {
-    // maxInFlight floor is 4; nothing is ever delivered, so the window fills and
-    // further frames are refused rather than published and queued forever.
+  it("bounds the backlog by abandoning the oldest frame, never by skipping a publish", async () => {
+    // Dense publishing is a contract: go-livepeer's video-in trickle is ordered,
+    // so a seq the node does not publish leaves a HOLE the runner's serial
+    // subscriber blocks on forever (session 0251b715: idx 4/5 never posted, 3
+    // observations in 300 s). The queue cap abandons the oldest undelivered
+    // frames instead, counted and logged.
+    const logs: string[] = [];
     const relay = new ObservationRelay({
-      read: async () => null,
+      read: async () => null, // the runner produces nothing at all
       emit: () => {},
       deadlineMs: 60_000,
       pollIntervalMs: 50,
-      maxInFlight: 4,
+      maxQueued: 4,
+      log: (l) => logs.push(l),
     });
     const accepted: boolean[] = [];
     for (let seq = 1; seq <= 7; seq++) {
@@ -152,29 +157,29 @@ describe("ObservationRelay (ADAAAA-7990 delivery)", () => {
       accepted.push(ok);
       if (ok) relay.commit(frame(seq));
     }
-    expect(accepted).toEqual([true, true, true, true, false, false, false]);
+    expect(accepted).toEqual([true, true, true, true, true, true, true]);
     const s = relay.stats();
-    expect(s.published).toBe(4);
-    expect(s.refused).toBe(3);
-    expect(s.inFlight).toBe(4); // bounded by the window, not by the stream length
+    expect(s.published).toBe(7); // every decoded frame reached video-in
+    expect(s.refused).toBe(0); // ... and none was skipped at the publish site
+    expect(s.inFlight).toBeLessThanOrEqual(4);
+    expect(s.expired).toBe(3);
+    expect(logs.some((l) => l.includes("obs-dropped seq="))).toBe(true);
     relay.close();
   });
 
-  it("keeps a SMALL in-flight window by default (paces the publisher to the runner)", async () => {
-    // A window sized from the lag budget (45 frames at 30 s x 3 fps) published 58
-    // frames into the runner on session `376fae8f` and stalled its trickle
-    // subscriber on an aged-out seq — the whole run then delivered 12. The window
-    // is a few frames so the segment never leaves go-livepeer's live buffer.
+  it("keeps a bounded backlog by default (half the lag budget)", async () => {
+    // 45 queued frames at a 30 s deadline / 3 fps: memory is bounded even when the
+    // runner produces nothing, and every excess frame is counted as expired.
     const relay = new ObservationRelay({ read: async () => null, emit: () => {}, deadlineMs: 30_000, pollIntervalMs: 50 });
-    let accepted = 0;
-    for (let seq = 1; seq <= 10; seq++) {
-      if (relay.reserve()) {
-        accepted++;
-        relay.commit(frame(seq));
-      }
+    for (let seq = 1; seq <= 60; seq++) {
+      expect(relay.reserve()).toBe(true);
+      relay.commit(frame(seq));
     }
-    expect(accepted).toBe(4);
-    expect(relay.stats()).toMatchObject({ published: 4, refused: 6, inFlight: 4 });
+    const s = relay.stats();
+    expect(s.published).toBe(60);
+    expect(s.refused).toBe(0);
+    expect(s.inFlight).toBeLessThanOrEqual(45);
+    expect(s.expired).toBe(60 - s.inFlight);
     relay.close();
   });
 
@@ -216,18 +221,14 @@ describe("ObservationRelay (ADAAAA-7990 delivery)", () => {
     relay.close();
   });
 
-  it("abort() returns a reserved slot when the publish itself fails", () => {
-    const relay = new ObservationRelay({ read: async () => null, emit: () => {}, maxInFlight: 4, deadlineMs: 60_000 });
+  it("admits every frame so the published seq stream stays dense", () => {
+    const relay = new ObservationRelay({ read: async () => null, emit: () => {}, maxQueued: 4, deadlineMs: 60_000 });
+    for (let i = 0; i < 20; i++) expect(relay.reserve()).toBe(true);
+    relay.abort(); // abort() stays a no-op on the reservation count
     expect(relay.reserve()).toBe(true);
-    expect(relay.reserve()).toBe(true);
-    relay.abort();
-    // 1 in-flight slot left: three more reservations fit before the window fills.
-    expect(relay.reserve()).toBe(true);
-    expect(relay.reserve()).toBe(true);
-    expect(relay.reserve()).toBe(true);
-    expect(relay.reserve()).toBe(false);
-    expect(relay.stats().refused).toBe(1);
     relay.close();
+    expect(relay.reserve()).toBe(false); // a closed session admits nothing
+    expect(relay.stats().refused).toBe(0);
   });
 
   it("expires a frame whose read hangs when no later frame answers", async () => {
