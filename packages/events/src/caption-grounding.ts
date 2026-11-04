@@ -266,6 +266,12 @@ const QUIET_TRIMS: [RegExp, string][] = [
     "",
   ],
   [/\s+\b(?:kit|jersey|shirt|strip)\b/gi, ""],
+  // "The No. 9 controls the ball in the penalty area." -> "No. 9 ..." (the
+  // article before a jersey number is pure filler on a caption line).
+  [/\bThe\s+(?=No\.?\s*\d+\b)/gi, ""],
+  // "penalty area" -> "box": the same place in the vocabulary the contract
+  // already uses, one token shorter. Never applied to "goal area".
+  [/\bpenalty\s+area\b/gi, "box"],
 ];
 
 /** Blunt a quiet line down to the 8-word budget (byte-identical when it fits). */

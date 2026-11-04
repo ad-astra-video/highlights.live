@@ -341,6 +341,15 @@ describe("rule 1b: a quiet line is blunt — 8 words (AC5, measured 72.9% on v2.
     expect(out).toBe("Player in white moves in center circle.");
   });
 
+  it("trims the 10-word 'The No. 9 controls the ball' shape measured on level 2", () => {
+    // Job c571fad6 shipped this line on a not_highlight window; it was the one
+    // quiet row over the budget. "The " before a jersey number is filler and
+    // "penalty area" is the contract's own "box".
+    const out = trimQuietLine("The No. 9 controls the ball in the penalty area.");
+    expect(wordCountOf(out)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+    expect(out).toBe("No. 9 controls the ball in the box.");
+  });
+
   it("is byte-identical when the line already fits the budget", () => {
     const line = "Player in blue dribbles in center circle.";
     expect(trimQuietLine(line)).toBe(line);
