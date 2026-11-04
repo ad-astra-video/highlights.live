@@ -779,10 +779,16 @@ export class LiveObserver {
     delivery?: WindowDeliveryTimings;
   }): void {
     if (r.accepted) this.accepts++;
-    // ADAAAA-8005: one delivered-row candidate per ACCEPTED window. The row is
+    // ADAAAA-8005: one delivered-row candidate per DECIDED window. The row is
     // completed (and the AC number produced) when the server's persist path
     // acks the write-through via `noteHighlightDelivered`.
-    if (r.accepted && r.delivery && this.delivery) this.delivery.noteWindow(r.delivery);
+    // ADAAAA-8024: registration is NOT gated on `accepted`. The ADAAAA-7996 goal
+    // gate demotes an accepted GOAL into a celebration (accepted=false) and the
+    // row still ships; when the re-attestation path re-classifies that row, its
+    // fire/settle/accept clocks must already be here or the delivery cannot be
+    // measured (that is exactly the @108.8 s row that `samples` lost). A window
+    // alone emits nothing: the sample still requires a persist ack for a row.
+    if (r.delivery && this.delivery) this.delivery.noteWindow(r.delivery);
     const dueTrigger = r.dueTrigger ?? null;
     // ADAAAA-7694: this decided window IS the judgement of every Stage-A
     // trigger whose onset it covers.
@@ -1174,11 +1180,15 @@ export class LiveObserver {
    * ADAAAA-8005 (gate 3): the highlight row reached the delivered surface — the
    * store write-through ACKED (memory + DB write resolved). Completes the
    * pending row for the window whose trigger timestamp this is and emits the
-   * `[live-deliver]` evidence line. Called by the server's persist path; a
+   * `[live-deliver]` evidence line. Called by the server's persist paths; a
    * no-op when this observer has no delivery tracker (VOD / tests).
+   *
+   * ADAAAA-8024: `highlightId` is the persisted row's id. The accept-time persist
+   * and the deferred re-attestation upgrade both report the same row, so the
+   * tracker dedupes on it and a re-attested GOAL counts exactly once.
    */
-  noteHighlightDelivered(triggerTs: number, persistAckAtMs: number = Date.now()): void {
-    this.delivery?.notePersisted(triggerTs, persistAckAtMs);
+  noteHighlightDelivered(triggerTs: number, persistAckAtMs: number = Date.now(), highlightId?: string): void {
+    this.delivery?.notePersisted(triggerTs, persistAckAtMs, highlightId);
   }
 
   /** ADAAAA-8005: the per-row trigger -> delivered metric block, or undefined
