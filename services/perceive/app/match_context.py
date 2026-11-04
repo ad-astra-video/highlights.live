@@ -101,6 +101,19 @@ MAX_STATUS_MENTIONS = 12
 # standing player is TALLER than wide.
 MAX_KIT_BOX_AREA = 0.30
 MAX_KIT_BOX_SIDE = 0.70
+# --- pitch anchor (kit sampling, ADAAAA-7981) -------------------------------
+# A kit crop is a player STANDING ON THE PITCH, so the strip just below the
+# tracked box must be grass. A box that plausibly looks like a standing player
+# but sits on crowd seats / an advertising band / the bench is the other junk
+# class SAM3 seeds produce, and its torso colours are NOT a kit. Measured on job
+# fe0e3efc (Portugal vs Spain 90 s): 103 of 146 plausible player crops failed
+# this test, and the ones that passed produced the "orange" cluster that was
+# published as BOTH sides' kit on a pitch with no orange shirt on it.
+KIT_PITCH_ANCHOR_DROP = 0.06
+MIN_KIT_PITCH_ANCHOR_SHARE = 0.20
+# Bound the number of raw tracks examined per frame (the pitch-anchor test is a
+# pixel sample, so it runs per candidate). Real broadcasts surface < 12 boxes.
+MAX_KIT_TRACK_SCAN = 12
 
 # --- scorebug swatch stability ---------------------------------------------
 # A swatch is a per-side colour reading off the scoreboard ROI. On a broadcast
@@ -1936,27 +1949,66 @@ def is_plausible_player_box(box: Optional[Sequence[float]]) -> bool:
     return (w * h) <= MAX_KIT_BOX_AREA and w <= MAX_KIT_BOX_SIDE and h <= MAX_KIT_BOX_SIDE and h > w
 
 
-def sample_track_colors(
+def _is_pitch_green(rgb: Sequence[float]) -> bool:
+    """True for broadcast grass (the saturated mid-green band only).
+
+    Narrower than :func:`_is_pitch_or_background`, which also swallows bright
+    sky/LED white: the pitch-anchor test must not pass a crop because the sky
+    behind it is bright.
+    """
+    h, s, v = rgb_to_hsv(rgb)
+    return s > 0.35 and 75.0 <= h <= 165.0 and 0.18 <= v <= 0.62
+
+
+def _pitch_anchor_share(frame_rgb: Any, box: Sequence[float]) -> float:
+    """Share of grass pixels in the strip just below one normalized player box.
+
+    A player wearing a kit stands on the pitch, so the strip under the tracked
+    box is grass. A plausible-looking box that sits on crowd seats, an
+    advertising band or the bench has no grass under it, and its colours are
+    background, not a kit (see ``MIN_KIT_PITCH_ANCHOR_SHARE``). Returns 0.0 when
+    the strip falls outside the frame (a box whose feet are off-screen has no
+    verifiable ground plane, so it is not anchored).
+    """
+    try:
+        h_px = len(frame_rgb)
+        w_px = len(frame_rgb[0]) if h_px else 0
+        x0, y0, x1, y1 = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return 0.0
+    if h_px < 4 or w_px < 4:
+        return 0.0
+    ya = int(max(0.0, min(1.0, y1)) * h_px)
+    yb = int(max(0.0, min(1.0, y1 + KIT_PITCH_ANCHOR_DROP)) * h_px)
+    xa = int(max(0.0, min(1.0, x0)) * w_px)
+    xb = int(max(0.0, min(1.0, x1)) * w_px)
+    if yb - ya < 1 or xb - xa < 1:
+        return 0.0
+    total = 0
+    green = 0
+    for yy in range(ya, min(yb, h_px)):
+        row = frame_rgb[yy]
+        for xx in range(xa, min(xb, w_px), 2):
+            total += 1
+            if _is_pitch_green(row[xx]):
+                green += 1
+    return green / max(1, total)
+
+
+def _qualifying_kit_tracks(
     frame_rgb: Any,
     tracks: Iterable[Mapping[str, Any]],
-    max_tracks: int = 6,
-    torso_y: tuple[float, float] = (0.28, 0.52),
-) -> list[dict[str, Any]]:
-    """Sample the torso colour of tracked player crops (CPU, no GPU).
+    max_tracks: int,
+) -> list[tuple[Mapping[str, Any], tuple[float, float, float, float]]]:
+    """The player crops a kit colour may be sampled from, capped AFTER filtering.
 
-    ``frame_rgb`` is an HxWx3 numpy array (or a nested list); ``tracks`` are the
-    perception pass's own track dicts with a normalized ``box``
-    ``[x0, y0, x1, y1]`` and a ``label``/``trackId``. Only player-like tracks
-    contribute, and only when the box is a plausible single player
-    (:func:`is_plausible_player_box`) — a SAM3 seed that propagated onto an
-    advertising band, a boot or a strip of grass is skipped instead of being
-    sampled as a "kit". The torso band (default 22-58% of the box height) is
-    averaged after discarding pitch/background pixels, which is why this is a
-    colour *sample* rather than a segmentation.
-
-    Returns ``[{trackId, label, ts?, side, rgb:[r,g,b]}]``. An empty list is a
-    valid result (no players tracked, unusable frame) — the caller folds that
-    into ``ambiguous`` rather than fabricating a colour.
+    Filter first, cap second (ADAAAA-7981). ``list(tracks)[:max_tracks]`` capped
+    the RAW track list before the label / box / plausibility tests, so on a frame
+    whose first slots held a ball, an advertising band and a boot the real player
+    tracks were never examined — measured on job fe0e3efc: 271 observed frames
+    produced 4 kit samples, and the few samples that survived came from junk
+    crops. A qualifying crop must be a player-like label, a plausible single
+    player box, AND anchored on grass (:func:`_pitch_anchor_share`).
     """
     if frame_rgb is None:
         return []
@@ -1967,8 +2019,14 @@ def sample_track_colors(
         return []
     if h_px < 8 or w_px < 8:
         return []
-    out: list[dict[str, Any]] = []
-    for track in list(tracks)[: max(1, max_tracks)]:
+    out: list[tuple[Mapping[str, Any], tuple[float, float, float, float]]] = []
+    scanned = 0
+    for track in tracks or []:
+        if scanned >= MAX_KIT_TRACK_SCAN or len(out) >= max(1, max_tracks):
+            break
+        if not isinstance(track, Mapping):
+            continue
+        scanned += 1
         label = str(track.get("label") or track.get("kind") or "").lower()
         if label and not any(k in label for k in ("player", "goalkeeper", "skater", "batter", "athlete", "person")):
             continue
@@ -1986,10 +2044,52 @@ def sample_track_colors(
         if not (0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0):
             continue
         if not is_plausible_player_box((x0, y0, x1, y1)):
-            # A SAM3 seed that propagated onto an ad board / boot / grass band.
-            # Sampling it would let a junk colour become a "kit" (see
-            # MAX_KIT_BOX_AREA); an unusable frame is the honest answer.
             continue
+        if _pitch_anchor_share(frame_rgb, (x0, y0, x1, y1)) < MIN_KIT_PITCH_ANCHOR_SHARE:
+            # Crowd / ad-board / bench crop: a kit colour sampled here is
+            # background, which is how "orange" reached both sides on fe0e3efc.
+            continue
+        out.append((track, (x0, y0, x1, y1)))
+    return out
+
+
+def sample_track_colors(
+    frame_rgb: Any,
+    tracks: Iterable[Mapping[str, Any]],
+    max_tracks: int = 6,
+    torso_y: tuple[float, float] = (0.28, 0.52),
+) -> list[dict[str, Any]]:
+    """Sample the torso colour of tracked player crops (CPU, no GPU).
+
+    ``frame_rgb`` is an HxWx3 numpy array (or a nested list); ``tracks`` are the
+    perception pass's own track dicts with a normalized ``box``
+    ``[x0, y0, x1, y1]`` and a ``label``/``trackId``. Only player-like tracks
+    contribute, and only when the box is a plausible single player
+    (:func:`is_plausible_player_box`) — a SAM3 seed that propagated onto an
+    advertising band, a boot or a strip of grass is skipped instead of being
+    sampled as a "kit". Filtering happens BEFORE the ``max_tracks`` cap, and a
+    crop must also be anchored on grass (:func:`_pitch_anchor_share`): a
+    plausible-looking box sitting on the crowd or an LED board is background, not
+    a kit (ADAAAA-7981). The torso band (default 22-58% of the box height) is
+    averaged after discarding pitch/background pixels, which is why this is a
+    colour *sample* rather than a segmentation.
+
+    Returns ``[{trackId, label, ts?, side, rgb:[r,g,b]}]``. An empty list is a
+    valid result (no players tracked, unusable frame) — the caller folds that
+    into ``ambiguous`` rather than fabricating a colour.
+    """
+    if frame_rgb is None:
+        return []
+    try:
+        h_px = len(frame_rgb)
+        w_px = len(frame_rgb[0]) if h_px else 0
+    except TypeError:
+        return []
+    if h_px < 8 or w_px < 8:
+        return []
+    out: list[dict[str, Any]] = []
+    for track, (x0, y0, x1, y1) in _qualifying_kit_tracks(frame_rgb, tracks, max_tracks):
+        label = str(track.get("label") or track.get("kind") or "").lower()
         px0, px1 = int(x0 * w_px), max(int(x0 * w_px) + 1, int(x1 * w_px))
         # Inner torso box: 15-85% of the width, 25-60% of the height. The middle
         # of a tracking box is the shirt; the edges catch the pitch, an arm or a
@@ -2449,9 +2549,20 @@ def associate_kits(
         sw = swatch_by_side.get(side)
         if sw is not None:
             rgb = [float(v) for v in sw["rgb"]]
-            ranked = sorted(range(len(clusters)), key=lambda i: _dist(rgb, clusters[i].rgb))
-            if ranked and _dist(rgb, clusters[ranked[0]].rgb) <= 120.0:
-                chosen = ranked[0]
+            # Name first, distance second (ADAAAA-7981). A score-bug swatch that
+            # NAMES a colour belongs to the cluster that names the same colour:
+            # nearest-RGB alone handed a bright red home swatch to a muddy
+            # "orange" cluster (the junk crowd cluster's centroid sits closer to
+            # a saturated red than the dark red kit centroid does), which is how
+            # fe0e3efc published "orange" for Portugal while the bug said red.
+            swatch_name = _norm(sw.get("color") or name_color(rgb))
+            named = [i for i, c in enumerate(clusters) if _norm(c.primary) == swatch_name and i not in used]
+            if named:
+                chosen = max(named, key=lambda i: (clusters[i].count, -i))
+            else:
+                ranked = sorted(range(len(clusters)), key=lambda i: _dist(rgb, clusters[i].rgb))
+                if ranked and _dist(rgb, clusters[ranked[0]].rgb) <= 120.0:
+                    chosen = ranked[0]
         if chosen is None and commentary:
             for mention in commentary:
                 if mention.kit_color and mention.name == name:
@@ -2719,18 +2830,19 @@ def apply_monotonic_guard(
             "confidence": cand.confidence,
             "evidence": cand.evidence(),
         }
-        # Preserve colours already attributed to the same side/team — but only
-        # while this pass's OWN observation does not contradict them. A stored
-        # colour survives a thinner re-check (no clusters observed at all); it is
-        # dropped when the pass observed clusters and none of them is the stored
-        # colour, because that reading was produced by a different (or broken)
-        # sampler and carrying it forward keeps a WRONG colour on the record
-        # forever (measured on e397b7e7: a pre-fix `orange` away kit survived
-        # every re-check after the sampler started naming `red`/`green`).
+        # Preserve colours already attributed to the same side/team — but ONLY
+        # when this pass observed NO clusters at all, i.e. when it has nothing to
+        # say about kit colour (a resumed tail, a stretch with no player crops).
+        # ADAAAA-7981: the previous rule also carried the stored colour forward
+        # whenever the stored name appeared ANYWHERE in the observed cluster set,
+        # which republished a colour for a side this pass could not attribute one
+        # to. Measured on fe0e3efc: the pass ran `associate_kits` and reported
+        # `kitColorsUnattributed: ["away"]` while the persisted record still said
+        # away = "orange" — and home had taken the SAME "orange" cluster, so the
+        # record published one colour for both named sides on a pitch with no
+        # orange shirt. An honest miss beats a wrong colour.
         if prev and prev.get("name") == cand.name and prev.get("kitColors") and not item["kitColors"]:
-            observed = {str(c) for c in (observed_clusters or [])}
-            stored = {str(k.get("primary")) for k in prev["kitColors"] if k.get("primary")}
-            if not observed or (stored & observed):
+            if not (observed_clusters or []):
                 item["kitColors"] = prev["kitColors"]
         out_teams.append(item)
     # Teams from the previous context that this re-check did not reproduce keep
@@ -2742,9 +2854,30 @@ def apply_monotonic_guard(
         if any(t.get("side") == side for t in out_teams):
             continue
         if float(prev.get("confidence") or 0.0) >= USABLE_CONFIDENCE:
-            out_teams.append(dict(prev))
+            kept = dict(prev)
+            # ADAAAA-7981: a colour carried with the identity is the same
+            # wrong-colour hole as above — when THIS pass observed clusters but
+            # attributed none to this side, the stored colour is unverifiable
+            # now, so publish the side with no kit colour.
+            if (observed_clusters or []) and kept.get("kitColors"):
+                kept["kitColors"] = []
+                actions.append(f"dropped carried {side} kit colour (no attributed cluster this pass)")
+            out_teams.append(kept)
     order = {"home": 0, "away": 1, "unknown": 2}
     out_teams.sort(key=lambda t: (order.get(str(t.get("side")), 3), str(t.get("name"))))
+    # AC-A2 (ADAAAA-7981): one kit colour can never describe BOTH named sides. The
+    # resolver cannot say which side owns it, and publishing the same primary for
+    # home and away is a guaranteed-wrong colour for at least one of them (the
+    # measured fe0e3efc record did exactly that: "orange" for Portugal AND Spain).
+    # Drop both colours and report the match as ambiguous: an honest miss.
+    published = {str(t.get("side")): t for t in out_teams if t.get("side") in ("home", "away")}
+    home_kits = [k.get("primary") for k in (published.get("home", {}).get("kitColors") or []) if k.get("primary")]
+    away_kits = [k.get("primary") for k in (published.get("away", {}).get("kitColors") or []) if k.get("primary")]
+    if home_kits and away_kits and _norm(home_kits[0]) == _norm(away_kits[0]):
+        for team in (published["home"], published["away"]):
+            team["kitColors"] = []
+        actions.append(f"dropped identical kit colour {home_kits[0]} for both sides")
+        ambiguous = True
     trail.append(
         {
             "at": at,
@@ -3049,19 +3182,9 @@ def resolve_match_context(
         status=status,
     )
     # A team whose kit colour has no linking evidence keeps kitColors: [] and is
-    # reported here, so "the resolver saw two colours but could not attribute one
-    # to Spain" is inspectable instead of invisible.
-    if clusters:
-        status["kitColorsUnattributed"] = [s for s in ("home", "away") if s not in kits and any(c.side == s for c in candidates)]
-        # ADAAAA-7889 (AC2, PO scope split on ADAAAA-7890): the side list above is
-        # empty whenever no team reached a side, even though colours WERE
-        # observed — the record then says "[] unattributed" about a job whose
-        # clusters are plainly visible, which reads as "nothing seen". Name the
-        # clusters no side owns so the kit channel is inspectable on its own.
-        attributed = {str(k.get("primary")) for side_kits in kits.values() for k in side_kits if k.get("primary")}
-        leftover = sorted({c.primary for c in clusters} - attributed)
-        if leftover:
-            status["kitClustersUnattributed"] = leftover
+    # reported in `evidenceStatus` (below, AFTER every guard) so "the resolver saw
+    # two colours but could not attribute one to Spain" is inspectable instead of
+    # invisible.
     ambiguous = bool(kit_ambiguous)
     if len([c for c in candidates if c.side in ("home", "away")]) > 2:
         ambiguous = True
@@ -3090,6 +3213,12 @@ def resolve_match_context(
             }
         )
         ctx["trail"] = ctx["trail"][-MAX_TRAIL:]
+        # ADAAAA-7981 / AC-A3: the marker exists whenever colours were observed —
+        # with no team on a side, no side can own one, so the list is empty (the
+        # shipped shape) and the observed clusters are named for inspection.
+        if clusters:
+            status["kitColorsUnattributed"] = []
+            status["kitClustersUnattributed"] = sorted({c.primary for c in clusters})
         return {"matchContext": ctx, "evidenceStatus": status}
 
     merged = apply_monotonic_guard(
@@ -3104,6 +3233,27 @@ def resolve_match_context(
     # Guard output already carries the previous sport when merging; a first pass
     # stamps the resolved one.
     merged["sport"] = sport
+    # ADAAAA-7981 / AC-A3: report the unattributed sides and the observed-but-
+    # unowned clusters from the PUBLISHED teams (after every guard, including the
+    # identical-colour collapse), so the marker can never disagree with the record
+    # it explains. ADAAAA-7889 (AC2) keeps the cluster list: a job whose teams
+    # never reached a side still names the colours that were observed.
+    published = {str(t.get("side")): t for t in merged["teams"] if t.get("side") in ("home", "away")}
+    if clusters:
+        # Always present when colours were observed (the shipped shape: an empty
+        # list means "colours seen, every side they could belong to got one").
+        status["kitColorsUnattributed"] = [
+            s for s in ("home", "away") if s in published and not (published[s].get("kitColors") or [])
+        ]
+        attributed = {
+            _norm(k.get("primary"))
+            for team in published.values()
+            for k in (team.get("kitColors") or [])
+            if k.get("primary")
+        }
+        leftover = sorted({c.primary for c in clusters if _norm(c.primary) not in attributed})
+        if leftover:
+            status["kitClustersUnattributed"] = leftover
     ctx = build_match_context(
         merged["sport"],
         merged["teams"],

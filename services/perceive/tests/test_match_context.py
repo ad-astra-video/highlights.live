@@ -682,12 +682,18 @@ def test_monotonic_guard_does_not_paint_the_kept_team_with_the_rival_kit():
     assert home["kitColors"] == []
 
 
-def test_monotonic_guard_drops_a_stored_colour_the_new_pass_did_not_observe():
+def test_monotonic_guard_drops_a_stored_colour_the_new_pass_did_not_attribute():
     # Measured on e397b7e7: the record stored home `black`/away `orange` from the
     # pre-fix sampler. A re-check that now observes `red`/`green` must DROP the
     # stored away colour instead of carrying it forward — otherwise a wrong colour
-    # survives every later re-check forever. A stored colour the pass DOES observe
-    # is still preserved (a thinner re-check must not erase measured evidence).
+    # survives every later re-check forever.
+    #
+    # ADAAAA-7981 tightened the second half of this rule: a stored colour is ALSO
+    # dropped when the pass observed clusters but attributed none to that side.
+    # The old "the stored colour appears somewhere in the observed set" carry was
+    # the measured fe0e3efc hole — it republished "orange" for an away side the
+    # pass itself reported as `kitColorsUnattributed`, and home had taken the same
+    # cluster, so the record published ONE colour for BOTH named sides.
     previous = _ctx([("away", "Spain", 0.95, ["scorebug_ocr", "asr", "metadata"])])
     previous["teams"][0]["kitColors"] = [{"primary": "orange", "secondary": "black"}]
     cands = fold_confidence(
@@ -696,11 +702,17 @@ def test_monotonic_guard_drops_a_stored_colour_the_new_pass_did_not_observe():
     merged = apply_monotonic_guard(previous, cands, observed_clusters=["red", "green"], progress_pct=50.0)
     away = next(t for t in merged["teams"] if t["side"] == "away")
     assert away["kitColors"] == []
-    # The same stored colour observed again survives the re-check.
+    # A stored colour the pass DID observe is no longer carried on its own: an
+    # observation somewhere in the frame set is not an attribution to THIS side.
     previous["teams"][0]["kitColors"] = [{"primary": "white"}]
     merged2 = apply_monotonic_guard(previous, cands, observed_clusters=["red", "white"], progress_pct=50.0)
     away2 = next(t for t in merged2["teams"] if t["side"] == "away")
-    assert away2["kitColors"] == [{"primary": "white"}]
+    assert away2["kitColors"] == []
+    # With NO cluster observed the pass has nothing to say, so the stored colour
+    # still survives a thinner re-check (the resume-tail case).
+    merged3 = apply_monotonic_guard(previous, cands, observed_clusters=[], progress_pct=50.0)
+    away3 = next(t for t in merged3["teams"] if t["side"] == "away")
+    assert away3["kitColors"] == [{"primary": "white"}]
 
 
 def test_monotonic_guard_raises_confidence_without_changing_the_name():
@@ -1609,3 +1621,126 @@ def test_printed_name_pair_is_the_selector_seam_for_every_sport():
     assert printed_name_pair([BB_BUG], "baseball") == ("Watertown", "Wayland")
     assert printed_name_pair([ES_HUD], "team_esports") == ("PSG", "V3")
     assert printed_name_pair(["CHAMPIONS2014"], "ice_hockey") is None
+
+
+# --- ADAAAA-7981: kit colour is sampled from player crops only -----------
+
+ORANGE_JUNK = [210.0, 140.0, 60.0]
+
+
+def _field_frame(w=40, h=40, torso=RED, box=(0.55, 0.2, 0.65, 0.55)):
+    """Grass everywhere with one shirt-coloured player box painted in."""
+    frame = [[GREEN_PITCH[:] for _ in range(w)] for _ in range(h)]
+    x0, y0, x1, y1 = box
+    for y in range(int(y0 * h), int(y1 * h)):
+        for x in range(int(x0 * w), int(x1 * w)):
+            frame[y][x] = torso[:]
+    return frame
+
+
+def test_sample_track_colors_filters_before_it_caps_the_track_list():
+    # Measured on fe0e3efc: the frame's first slots are a ball, the ad-board band,
+    # a boot and a close-up, so `list(tracks)[:4]` never examined the real player.
+    # 271 observed frames produced 4 kit samples. Filter first, cap second.
+    frame = _field_frame()
+    tracks = [
+        {"trackId": "ball", "label": "soccer ball", "box": [0.02, 0.90, 0.05, 0.93]},
+        {"trackId": "band", "label": "player", "box": [0.0, 0.0, 0.997, 0.24]},
+        {"trackId": "boot", "label": "player", "box": [0.10, 0.80, 0.20, 0.83]},
+        {"trackId": "closeup", "label": "player", "box": [0.02, 0.02, 0.98, 0.98]},
+        {"trackId": "p", "label": "player", "box": [0.55, 0.2, 0.65, 0.55]},
+    ]
+    samples = sample_track_colors(frame, tracks, max_tracks=4)
+    assert [s["trackId"] for s in samples] == ["p"]
+    assert name_color(samples[0]["rgb"]) == "red"
+
+
+def test_sample_track_colors_rejects_a_plausible_box_that_is_not_on_the_pitch():
+    # A crowd / LED-board crop: plausible standing-player geometry, no grass under
+    # it. Sampling it is how a background "orange" became a kit colour.
+    frame = [[[28.0, 30.0, 38.0] for _ in range(40)] for _ in range(40)]
+    tracks = [{"trackId": "crowd", "label": "player", "box": [0.30, 0.20, 0.40, 0.60]}]
+    assert sample_track_colors(frame, tracks) == []
+    # The same box on grass DOES sample: the anchor test is about the ground
+    # plane under the crop, not about the box shape.
+    on_pitch = sample_track_colors(_field_frame(box=(0.30, 0.20, 0.40, 0.60)), tracks)
+    assert [s["trackId"] for s in on_pitch] == ["crowd"]
+
+
+def test_associate_kits_links_a_swatch_by_its_COLOUR_NAME_not_nearest_rgb():
+    # A bright red home swatch sits nearer the muddy "orange" crowd centroid than
+    # the dark red kit centroid, so nearest-RGB alone published "orange" for
+    # Portugal on fe0e3efc. The swatch that NAMES red belongs to the red cluster.
+    clusters = [
+        KitCluster(primary="orange", secondary=None, rgb=[206.0, 150.0, 72.0], frames=4, count=4),
+        KitCluster(primary="red", secondary=None, rgb=[96.0, 52.0, 56.0], frames=40, count=40),
+    ]
+    kits, ambiguous = associate_kits(
+        [{"name": "Portugal", "side": "home"}, {"name": "Spain", "side": "away"}],
+        clusters,
+        scorebug_swatches=[{"side": "home", "rgb": [196.0, 52.0, 40.0], "color": "red"}],
+    )
+    assert kits["home"] == [{"primary": "red"}]
+    assert "away" not in kits
+    assert ambiguous is False
+
+
+def test_monotonic_guard_never_republishes_a_colour_it_did_not_attribute():
+    # The served fe0e3efc shape: the pass observed clusters ["orange","red"], the
+    # away side had no attributed cluster, yet the persisted record carried
+    # "orange" for it (and home had the SAME "orange"). After the fix the away
+    # side publishes no colour at all.
+    previous = _ctx([("home", "Portugal", 0.95, ["scorebug_ocr", "asr", "metadata"]),
+                     ("away", "Spain", 0.65, ["scorebug_ocr", "metadata"])])
+    for team in previous["teams"]:
+        team["kitColors"] = [{"primary": "orange"}]
+    cands = fold_confidence(
+        parse_ocr_teams(["POR 0 - 0 ESP"], "soccer"), [], parse_metadata_hints({"title": "Portugal vs Spain"}, "soccer")
+    )
+    merged = apply_monotonic_guard(
+        previous, cands, kits={"home": [{"primary": "red"}]}, observed_clusters=["orange", "red"], progress_pct=50.0
+    )
+    home = next(t for t in merged["teams"] if t["side"] == "home")
+    away = next(t for t in merged["teams"] if t["side"] == "away")
+    assert home["kitColors"] == [{"primary": "red"}]
+    assert away["kitColors"] == []
+
+
+def test_identical_primary_is_dropped_for_both_sides_and_reported_ambiguous():
+    # AC-A2: one kit colour can never describe both named sides. Even when both
+    # channels hand the guard the same colour, the record publishes neither and
+    # says the match is ambiguous.
+    previous = None
+    cands = fold_confidence(
+        parse_ocr_teams(["POR 0 - 0 ESP"], "soccer"), [], parse_metadata_hints({"title": "Portugal vs Spain"}, "soccer")
+    )
+    merged = apply_monotonic_guard(
+        previous,
+        cands,
+        kits={"home": [{"primary": "orange"}], "away": [{"primary": "orange"}]},
+        observed_clusters=["orange"],
+        progress_pct=0.0,
+    )
+    assert merged["ambiguous"] is True
+    assert all(t["kitColors"] == [] for t in merged["teams"] if t["side"] in ("home", "away"))
+    assert any("identical kit colour" in a for a in merged["trail"][-1]["action"])
+
+
+def test_resolve_reports_the_unattributed_side_and_the_observed_clusters():
+    # AC-A3 end to end on the fe0e3efc pattern: two colours observed, the red one
+    # attributable to Portugal by the scorebug swatch, the away side honestly
+    # unattributed WITH the observed-but-unowned cluster named.
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 40.0, "lines": ["POR 0 - 0 ESP"]}],
+        hints={"title": "Portugal vs Spain"},
+        kit_samples=kit_samples([RED, ORANGE_JUNK], frames=3),
+        scorebug_swatches=[{"side": "home", "rgb": RED, "color": "red"}],
+    )
+    ctx, status = out["matchContext"], out["evidenceStatus"]
+    by_side = {t["side"]: t for t in ctx["teams"]}
+    assert by_side["home"]["kitColors"] == [{"primary": "red"}]
+    assert by_side["away"]["kitColors"] == []
+    assert status["kitColorsUnattributed"] == ["away"]
+    assert status["kitClustersUnattributed"] == ["orange"]
+    assert ctx["ambiguous"] is False
