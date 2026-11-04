@@ -49,6 +49,8 @@ from typing import Awaitable, Callable, Optional
 
 import httpx
 
+from .perf import now as _perf_now, recorder as _perf_recorder
+
 SUB_LIVE_EDGE = "-1"
 
 HDR_SESSION_ID = "Livepeer-Session-Id"
@@ -346,6 +348,10 @@ class TrickleSession:
             raise TrickleError("media loop requires opened endpoints")
         video_in = endpoints.video_in
         while not self._closed:
+            # ADAAAA-8004: time the idle wait for the next video-in segment
+            # (including the live-edge fast-forward probe) separately from the
+            # work a frame costs, so AC3's step decomposition is measured.
+            _t_fetch = _perf_now()
             out = await self.rail.subscribe_next(video_in, want)
             # go-livepeer answers a live-edge subscribe with 200 + an EMPTY
             # streaming body (fast-forward to live); only a non-empty body is a
@@ -390,6 +396,8 @@ class TrickleSession:
                 out = head
             seq, payload, ts = out
             want = seq + 1
+            _perf_recorder().add("fetch_wait", _perf_now() - _t_fetch)
+            _t_step = _perf_now()
             image_b64 = base64.b64encode(payload).decode()
             timestamp = ts if ts is not None else 0.0
             try:
@@ -400,13 +408,18 @@ class TrickleSession:
                 continue
             self._frames_processed += 1
             if obs:
-                await self.rail.publish(
-                    self.rail.endpoints.events_out,
-                    seq,
-                    json.dumps(obs).encode(),
-                    content_type="application/json",
-                    timestamp=timestamp,
-                )
+                _t_pub = _perf_now()
+                try:
+                    await self.rail.publish(
+                        self.rail.endpoints.events_out,
+                        seq,
+                        json.dumps(obs).encode(),
+                        content_type="application/json",
+                        timestamp=timestamp,
+                    )
+                finally:
+                    _perf_recorder().add("publish", _perf_now() - _t_pub)
+                _perf_recorder().add("step", _perf_now() - _t_step)
 
     async def _control_loop(self) -> None:
         want = 1
