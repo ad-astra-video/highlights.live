@@ -109,11 +109,14 @@ describe("ADAAAA-7865 dedup fires on the accept path (ADAAAA-7938 Spec B)", () =
     expect(hl[1].dedupeReason).toBeUndefined();
   });
 
-  it("keeps a later GOAL accept whose confirm read a score change in-window", async () => {
+  it("downgrades even when the confirm pass CLAIMS a score change (model prose is not evidence)", async () => {
+    // The fe0e3efc / 4a0a149d shape: the deep dive sees the new score DISPLAYED
+    // on the bug in a celebration window and answers scoreboardChanged=true.
+    // That must not open a second scoring event (ADAAAA-7938 guardrail).
     const hl = await accept(60, {}, confirmDecision({ evidence: { scoreboardChanged: true } }));
     expect(hl.length).toBe(2);
-    expect(hl[1].outcome).toBe("scoring_play");
-    expect(hl[1].dedupeReason).toBeUndefined();
+    expect(hl[1].outcome).toBe("big_play");
+    expect(hl[1].dedupeReason).toBe(`goal_celebration_duplicate:${hl[0].id}`);
   });
 
   it("keeps a goal-call-corroborated accept as a second scoring play", async () => {
