@@ -159,13 +159,19 @@ export function captionNarrative(
  * treated as unsourced (replaced by roles).
  */
 export function captionGroundingFor(
-  h: Pick<JobDetailHighlight, "outcome" | "eventType" | "localizedTs" | "start" | "reason">,
+  h: Pick<JobDetailHighlight, "outcome" | "eventType" | "localizedTs" | "start" | "reason" | "corroborated">,
   opts: { fromLog: boolean; promptText?: string | null } 
 ): CaptionGroundingContext {
   return {
     verdict: h.outcome ?? null,
     eventType: h.eventType ?? null,
     promptText: opts.promptText ?? (opts.fromLog ? null : ""),
+    // ADAAAA-7958 (contract v3 §3.4): carry the stored corroboration flag into
+    // the gate, so a goal the page counts but never corroborates cannot be
+    // seeded as a caption or titled "Goal: …" — the card, the ladder banner and
+    // the story log then agree. Absent/undefined means no evidence either way
+    // (legacy rows, a job whose confirm pass never ran): the verdict rule decides.
+    corroborated: typeof h.corroborated === "boolean" ? h.corroborated : null,
   };
 }
 
@@ -237,7 +243,7 @@ export const MAX_CAPTION_CHARS = 180;
  * edits this in the card; the edited value is what the batch export ships.
  */
 export function suggestCaption(
-  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType" | "outcome">,
+  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType" | "outcome" | "corroborated">,
   log?: SummaryLogEntry[],
   ctx?: CaptionGroundingContext
 ): string {
@@ -278,7 +284,7 @@ function titleLine(text: string): string {
  * card always offers 2–3 distinct one-line titles and never a cut word.
  */
 export function postTitles(
-  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType" | "outcome">,
+  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType" | "outcome" | "corroborated">,
   log?: SummaryLogEntry[],
   ctx?: CaptionGroundingContext
 ): string[] {

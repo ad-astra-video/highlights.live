@@ -14,7 +14,7 @@
 // Kept in its own module (like job-title.ts) so the append logic can be
 // unit-tested without driving the full VOD/live pipeline.
 import type { SummaryLogEntry } from "@highlights/events";
-import { groundSummaryText, type CaptionGroundingContext } from "@highlights/events";
+import { groundSummaryText, captionLineKey, type CaptionGroundingContext } from "@highlights/events";
 import type { Store } from "./store";
 
 /**
@@ -56,11 +56,10 @@ export function nextSummarySeq(log: SummaryLogEntry[] | undefined): number {
  * used only for comparison; the emitted text is never rewritten here.
  */
 export function summaryLineKey(text: string): string {
-  return (text ?? "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .replace(/[.!?;,:\s]+$/, "")
-    .toLowerCase();
+  // ADAAAA-7958: the key now lives in the shared caption gate, so the append
+  // seam and the surface seam (chapter leads, Video Summary items) can never
+  // disagree about what "the same line" is.
+  return captionLineKey(text);
 }
 
 /**

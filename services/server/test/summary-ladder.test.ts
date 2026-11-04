@@ -268,3 +268,94 @@ describe("summary ladder edge cases (ADAAAA-7623)", () => {
     expect(out.matchSummary.charCount).toBe(out.matchSummary.text.length);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ADAAAA-7958 (contract v3 §3.4 + §3.6): the SURFACE pass on the ladder.
+// QA measured (job 9fecca77) a Lull chapter titled with a goal claim
+// ("Lull · 5:03–5:06: Player in blue jersey shoots into the net — crowd reacts")
+// while the banner said those goals were "counted, never asserted as scored".
+// ---------------------------------------------------------------------------
+const GOAL_CLAIM = /\b(?:goal|goals|scores?|scored|scoring|in the net|into the net)\b/i;
+
+function ladderLog(seq: number, windowTs: number, text: string) {
+  return { seq, ts: "2026-11-04T00:00:00Z", windowTs, text };
+}
+
+describe("corroboration propagation on the ladder (ADAAAA-7958 §3.4)", () => {
+  const log = [
+    ladderLog(1, 0, "Crowd roars as the ball is in the net"),
+    ladderLog(2, 5, "Players line up for the anthem"),
+  ];
+  const uncorroborated = [
+    { id: "h1", jobId: "j", clipUri: "/c.mp4", start: 0, end: 8, eventType: "GOAL", status: "accepted", corroborated: false, score: 90 },
+  ] as any;
+
+  it("never titles or leads a Lull chapter with a scoring claim", () => {
+    const l = buildSummaryLadder({ summaryLog: log as any, highlights: uncorroborated, gameHint: "Soccer", fastRail: true });
+    const lull = l.chapters.find((c) => c.kind === "lull");
+    expect(lull).toBeTruthy();
+    expect(lull!.title).not.toMatch(GOAL_CLAIM);
+    // The rollup still COUNTS the goal ("1 accepted goal (0 corroborated)." — the
+    // banner's wording); only the narrative beat may not assert it as scored.
+    const lead = lull!.summary.replace(/ \d+ accepted goals? \(\d+ corroborated\)\.$/, "");
+    expect(lead).not.toMatch(GOAL_CLAIM);
+    // The banner and the page agree: the goal is still COUNTED, just not asserted.
+    expect(l.matchSummary.goalCount).toBe(1);
+    expect(l.matchSummary.verifiedGoalCount).toBe(0);
+    expect(l.matchSummary.text).not.toMatch(/in the net|into the net/i);
+  });
+
+  it("keeps a corroborated goal's chapter lead byte-identical", () => {
+    const corroborated = [{ ...uncorroborated[0], corroborated: true }];
+    const l = buildSummaryLadder({ summaryLog: log as any, highlights: corroborated as any, gameHint: "Soccer", fastRail: true });
+    expect(l.chapters[0].summary).toContain("in the net");
+    // A single goal keeps the chapter's content kind (not a goal cluster).
+    expect(l.chapters[0].title).toMatch(/^Lull/);
+  });
+
+  it("a goal-cluster title needs a corroborated goal; counted-only clusters degrade", () => {
+    const clusterLog = [
+      ladderLog(1, 0, "The blue shirt drives into the box"),
+      ladderLog(2, 30, "The white shirt clears the ball wide"),
+      ladderLog(3, 60, "The blue shirt drives into the box again"),
+    ];
+    const goals = [
+      { id: "g1", jobId: "j", clipUri: "/a.mp4", start: 10, end: 20, eventType: "GOAL", status: "accepted", corroborated: false, score: 90 },
+      { id: "g2", jobId: "j", clipUri: "/b.mp4", start: 40, end: 50, eventType: "GOAL", status: "accepted", corroborated: false, score: 90 },
+    ] as any;
+    const l = buildSummaryLadder({ summaryLog: clusterLog as any, highlights: goals, gameHint: "Soccer", fastRail: true });
+    const cluster = l.chapters.find((c) => c.goals.length >= 2);
+    expect(cluster).toBeTruthy();
+    expect(cluster!.title).not.toMatch(/goal/i);
+    expect(cluster!.goalCount).toBe(2);
+    expect(cluster!.summary).toContain("2 accepted goals (0 corroborated)");
+
+    const withOne = [{ ...goals[0], corroborated: true }, goals[1]];
+    const l2 = buildSummaryLadder({ summaryLog: clusterLog as any, highlights: withOne as any, gameHint: "Soccer", fastRail: true });
+    expect(l2.chapters.find((c) => c.goals.length >= 2)!.title).toMatch(/^Goal cluster \(2\)/);
+  });
+});
+
+describe("emission dedupe on the ladder (ADAAAA-7958 §3.6 / AC3b)", () => {
+  const repeated = [
+    ladderLog(1, 0, "Player in white moves in center circle."),
+    ladderLog(2, 5, "Player in white moves in center circle."),
+    ladderLog(3, 10, "Player in white moves in center circle."),
+    ladderLog(4, 15, "Player in blue jersey dribbles in center field"),
+  ];
+
+  it("keeps an identical window line at most twice and drops later occurrences", () => {
+    const l = buildSummaryLadder({ summaryLog: repeated as any, highlights: [], fastRail: true });
+    const emitted = l.chapters.flatMap((c) => c.entries.map((e) => e.text));
+    const repeats = emitted.filter((t) => /center circle/i.test(t));
+    expect(repeats.length).toBe(2);
+    expect(emitted).toContain("Player in blue jersey dribbles in center field");
+  });
+
+  it("VOD (fastRail false / absent) is untouched — AC8", () => {
+    const fast = buildSummaryLadder({ summaryLog: repeated as any, highlights: [], fastRail: false });
+    const legacy = buildSummaryLadder({ summaryLog: repeated as any, highlights: [] });
+    expect(fast).toEqual(legacy);
+    expect(fast.chapters.flatMap((c) => c.entries)).toHaveLength(4);
+  });
+});

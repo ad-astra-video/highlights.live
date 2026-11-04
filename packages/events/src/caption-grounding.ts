@@ -34,6 +34,25 @@ export interface CaptionGroundingContext {
   promptText?: string | null;
   /** The accepted highlight's event type, used only when no verdict exists. */
   eventType?: string | null;
+  /**
+   * ADAAAA-7958 (contract v3 §3.4, corroboration propagation): whether the
+   * pipeline CORROBORATED this window's scoring read with an independent signal
+   * (a measured scoreboard change, goal-calling audio, the two-signal frame
+   * attestation). The corroboration computation is unchanged — this flag only
+   * decides whether the surfaces may ASSERT a goal.
+   *
+   * - `false`  => the page counted this goal but never corroborated it, so no
+   *               string may assert it as scored. Fails closed even when the
+   *               stored verdict is `scoring_play`, so the banner ("N of M
+   *               accepted goals are not corroborated by frames — counted, never
+   *               asserted as scored") and every caption/title agree.
+   * - `true`   => the verdict rule alone decides (a corroborated goal keeps its
+   *               goal claim).
+   * - absent / undefined => no corroboration evidence on this surface (VOD and
+   *               legacy rows), so the verdict rule alone decides. This is what
+   *               keeps the long-form VOD path byte-identical (AC8).
+   */
+  corroborated?: boolean | null;
 }
 
 /** Human labels for pipeline enums (a caption is customer copy, never a code). */
@@ -124,6 +143,13 @@ export function stripInternalTokens(text: string): string {
 
 /** Verdicts that authorize a goal claim. */
 function goalAllowed(ctx?: CaptionGroundingContext): boolean {
+  // ADAAAA-7958 (contract v3 §3.4): corroboration propagation comes FIRST and
+  // fails closed. A window the pipeline counted but never corroborated may not
+  // assert a goal on any surface, even when its stored verdict says
+  // `scoring_play` — otherwise the page shows "N of M accepted goals are not
+  // corroborated by frames — counted, never asserted as scored" next to captions
+  // that assert exactly those goals.
+  if (ctx?.corroborated === false) return false;
   const verdict = (ctx?.verdict ?? "").trim().toLowerCase();
   if (verdict) return verdict === "scoring_play";
   // Legacy row with no stored verdict: fall back to the accepted event type.
@@ -536,4 +562,162 @@ export function groundSummaryText(text: string, ctx?: CaptionGroundingContext): 
     .split("\n")
     .map((line) => groundCaption(line, ctx))
     .join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// ADAAAA-7958 (contract v3 §3.4 + §3.6): the SURFACE pass.
+//
+// Inc 5 gated what the model WROTE. This pass makes the surfaces CONSUME the
+// corroboration the pipeline already computed, and makes distinctness a
+// property of the emitted set instead of the model's mood:
+//
+//   §3.4 corroboration propagation — a window the pipeline counted but never
+//        corroborated may not assert a goal anywhere: caption option, card title
+//        (`Goal: …`), summary item, or chapter/segment title. The banner and
+//        every string then agree, and a Lull is never titled with a scoring
+//        claim.
+//   §3.6 dedupe at emission — an identical line may appear at most twice per
+//        job; the third and later occurrence is dropped from the emitted set.
+//        The comparison is cosmetic-insensitive (case, whitespace, trailing
+//        punctuation), the same key the server log seam uses, so the two seams
+//        cannot disagree about what "the same line" means.
+//
+// Everything here is pure, CPU-only, deterministic: no model call, no network,
+// no clock, no randomness. The corroboration COMPUTATION is untouched — the
+// flag is an input, never derived here.
+// ---------------------------------------------------------------------------
+
+/** One accepted highlight, as much as corroboration propagation needs. */
+export interface CorroborationWindow {
+  /** Clip window start (seconds from stream start). */
+  start?: number | null;
+  /** Clip window end (seconds). */
+  end?: number | null;
+  /** The localized highlight instant the clip is centred on (seconds). */
+  localizedTs?: number | null;
+  /**
+   * The stored corroboration flag (ADAAAA-7162/7185/7402). `true` only when an
+   * independent signal (measured scoreboard change / goal-calling audio /
+   * two-signal frame attestation) backed the scoring read.
+   */
+  corroborated?: boolean | null;
+}
+
+/** Seconds of slack around a clip window / anchor when matching a window instant. */
+const CORROBORATION_SLACK_S = 0.5;
+/** Seconds of slack around the localized anchor (the clip is centred there). */
+const CORROBORATION_ANCHOR_S = 2;
+
+/**
+ * §3.4: is the observe window at `ts` covered by an accepted highlight that the
+ * pipeline CORROBORATED? `false` when no covering highlight is corroborated —
+ * including the case where no accepted highlight covers the window at all, in
+ * which case a goal claim there was never corroborated by definition.
+ *
+ * A window can be corroborated by several highlights (a replay + the goal); one
+ * corroborated cover is enough.
+ */
+export function windowCorroborated(
+  highlights: readonly CorroborationWindow[] | undefined,
+  ts: number
+): boolean {
+  if (!Number.isFinite(ts)) return false;
+  for (const h of highlights ?? []) {
+    const start = typeof h?.start === "number" && Number.isFinite(h.start) ? h.start : null;
+    const end = typeof h?.end === "number" && Number.isFinite(h.end) ? h.end : null;
+    const anchor = typeof h?.localizedTs === "number" && Number.isFinite(h.localizedTs) ? h.localizedTs : null;
+    const inClip =
+      start != null && end != null && ts >= start - CORROBORATION_SLACK_S && ts <= end + CORROBORATION_SLACK_S;
+    const atAnchor = anchor != null && Math.abs(ts - anchor) <= CORROBORATION_ANCHOR_S;
+    if (!inClip && !atAnchor) continue;
+    if (h.corroborated === true) return true;
+  }
+  return false;
+}
+
+/**
+ * §3.4 for a line whose window VERDICT is no longer available at read time (a
+ * stored summary item, a chapter's representative narrative): the line may
+ * assert a goal only when its window is corroborated. A corroborated window is
+ * returned BYTE-IDENTICAL (the real goal keeps its claim); an uncorroborated one
+ * gets the claim rewritten to the stored-outcome beat by the same claim gate the
+ * write seam uses — no second rule set, no second path.
+ */
+export function gateUncorroboratedGoal(text: string, corroborated: boolean): string {
+  if (!text || corroborated) return text;
+  return gateGoalClaims(text, { corroborated: false });
+}
+
+/**
+ * §3.6: the comparison key for "the same emitted line" — byte-identical after
+ * the only cosmetic differences a caption can carry (surrounding whitespace,
+ * collapsed inner whitespace, a trailing full stop, letter case). The server's
+ * `summaryLineKey` delegates here so the append seam and the surface seam agree.
+ */
+export function captionLineKey(text: string): string {
+  return (text ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[.!?;,: ]+$/, "")
+    .toLowerCase();
+}
+
+/** §3.6 / AC3b: an identical line may appear at most this many times per job. */
+export const MAX_LINE_OCCURRENCES = 2;
+
+/**
+ * §3.6: cap every identical line at `max` occurrences across one job's emitted
+ * set. Returns an array aligned with the input: the kept text, or `null` for a
+ * dropped occurrence. Callers filter nulls, so a dropped line never renders as
+ * an empty row. Purely positional/deterministic — the FIRST `max` occurrences
+ * keep their place, which is the order the story was told in.
+ */
+export function dedupeEmittedLines(
+  lines: readonly string[],
+  max: number = MAX_LINE_OCCURRENCES
+): (string | null)[] {
+  const limit = Number.isFinite(max) && max >= 1 ? Math.floor(max) : MAX_LINE_OCCURRENCES;
+  const seen = new Map<string, number>();
+  return (lines ?? []).map((line) => {
+    const key = captionLineKey(line ?? "");
+    if (!key) return line ?? "";
+    const count = (seen.get(key) ?? 0) + 1;
+    seen.set(key, count);
+    return count <= limit ? line : null;
+  });
+}
+
+/** The minimal shape of one emitted summary item. */
+export interface SummaryItemLike {
+  text: string;
+  windowTs?: number;
+}
+
+/**
+ * §3.4 + §3.6 over a job's emitted summary items (the flat Video Summary log and
+ * the ladder's window narratives): gate every item's goal claim against its
+ * window's corroboration, then cap identical items at `max` per job.
+ *
+ * FAST RAIL ONLY. VOD supplies no corroboration evidence and its long-form items
+ * are graded unchanged (AC8), so the whole pass is a no-op when `fastRail` is
+ * false — the items come back byte-identical and in order.
+ */
+export function groundSummaryItems<T extends SummaryItemLike>(
+  items: readonly T[],
+  opts: { highlights?: readonly CorroborationWindow[]; fastRail?: boolean; maxOccurrences?: number } = {}
+): T[] {
+  const list = [...(items ?? [])];
+  if (!opts.fastRail) return list;
+  const highlights = opts.highlights ?? [];
+  const gated = list.map((item) => {
+    const ts = typeof item.windowTs === "number" && Number.isFinite(item.windowTs) ? item.windowTs : null;
+    const corroborated = ts != null && windowCorroborated(highlights, ts);
+    const text = gateUncorroboratedGoal(item.text ?? "", corroborated);
+    return text === (item.text ?? "") ? item : { ...item, text };
+  });
+  const kept = dedupeEmittedLines(
+    gated.map((g) => g.text ?? ""),
+    opts.maxOccurrences
+  );
+  return gated.filter((_item, i) => kept[i] !== null);
 }

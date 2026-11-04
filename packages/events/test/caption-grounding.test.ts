@@ -12,16 +12,22 @@
 import { describe, it, expect } from "vitest";
 import {
   captionColour,
+  captionLineKey,
+  dedupeEmittedLines,
   findScoreClaims,
   gateGoalClaims,
   gateQuietWindow,
+  gateUncorroboratedGoal,
   groundCaption,
+  groundSummaryItems,
   groundSummaryText,
   groundNames,
   humanEventLabel,
+  MAX_LINE_OCCURRENCES,
   QUIET_MAX_WORDS,
   stripInternalTokens,
   trimQuietLine,
+  windowCorroborated,
 } from "../src/caption-grounding";
 
 /** Word count the way the level grader counts a caption. */
@@ -358,5 +364,146 @@ describe("rule 1b: a quiet line is blunt — 8 words (AC5, measured 72.9% on v2.
   it("never trims a loud window (near_miss keeps its full sentence)", () => {
     const line = "Player in blue and yellow kit dribbles in penalty area";
     expect(groundCaption(line, { verdict: "near_miss" })).toBe(line);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADAAAA-7958 (contract v3 §3.4 + §3.6): the SURFACE pass. The QA verdict on
+// the shipped v2 build (ADAAAA-7950, job 9fecca77) measured these exact strings
+// on the page: three seeded caption cards asserting the three goals while the
+// banner read "3 of 3 accepted goals are not corroborated by frames — counted,
+// never asserted as scored", a goal claim used as a Lull chapter title, and 69
+// summary rows producing only 29 distinct lines.
+// ---------------------------------------------------------------------------
+describe("corroboration propagation — a counted-but-uncorroborated goal is never asserted (§3.4)", () => {
+  // The measured seeded cards, verbatim (QA defect 2) and the Lull title (3).
+  const MEASURED = [
+    "No. 10 strikes the ball into the net",
+    "No. 6 shoots and scores in the box",
+    "Player strikes ball into net",
+    "Player in blue jersey shoots into the net — crowd reacts",
+  ];
+  const GOAL_CLAIM = /\b(?:goal|goals|scores?|scored|scoring|into the net|in the net)\b/i;
+
+  it("rewrites every measured surface string when the window is not corroborated", () => {
+    for (const line of MEASURED) {
+      // The verdict DOES say scoring_play: the uncorroborated flag is what forbids
+      // the claim, because the banner says the goal was never asserted as scored.
+      const out = gateGoalClaims(line, { verdict: "scoring_play", corroborated: false });
+      expect(GOAL_CLAIM.test(out)).toBe(false);
+      expect(out.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("strips the claim through the full gate too (caption option + card title seed)", () => {
+    const out = groundCaption("No. 10 strikes the ball into the net", {
+      verdict: "scoring_play",
+      corroborated: false,
+    });
+    expect(GOAL_CLAIM.test(out)).toBe(false);
+  });
+
+  it("a CORROBORATED goal verdict keeps its line byte-identical", () => {
+    const line = "No. 10 strikes the ball into the net";
+    expect(gateGoalClaims(line, { verdict: "scoring_play", corroborated: true })).toBe(line);
+    expect(groundCaption(line, { verdict: "scoring_play", corroborated: true })).toBe(line);
+  });
+
+  it("no corroboration evidence (null/absent) leaves the verdict rule in charge", () => {
+    const line = "No. 10 strikes the ball into the net";
+    expect(gateGoalClaims(line, { verdict: "scoring_play", corroborated: null })).toBe(line);
+    expect(gateGoalClaims(line, { verdict: "scoring_play" })).toBe(line);
+  });
+
+  it("gateUncorroboratedGoal is byte-identical for a corroborated window", () => {
+    const line = "Fox scores at the far post";
+    expect(gateUncorroboratedGoal(line, true)).toBe(line);
+    expect(gateUncorroboratedGoal(line, false)).not.toMatch(/scores|goal/i);
+  });
+});
+
+describe("windowCorroborated — which window instant a highlight corroborates (§3.4)", () => {
+  const goals = [
+    { start: 113, end: 128, localizedTs: 120.5, corroborated: false },
+    { start: 155, end: 170, localizedTs: 162.4, corroborated: true },
+  ];
+
+  it("matches a window inside a clip window and at its anchor", () => {
+    expect(windowCorroborated(goals, 155.2)).toBe(true);
+    expect(windowCorroborated(goals, 162)).toBe(true);
+  });
+
+  it("is false for an uncorroborated cover", () => {
+    expect(windowCorroborated(goals, 118)).toBe(false);
+  });
+
+  it("is false when no accepted highlight covers the window", () => {
+    expect(windowCorroborated(goals, 282)).toBe(false);
+    expect(windowCorroborated([], 120)).toBe(false);
+  });
+});
+
+describe("dedupe at emission — distinctness is a property of the emitted set (§3.6 / AC3b)", () => {
+  it("keeps a line twice, then drops the third and later occurrence", () => {
+    const kept = dedupeEmittedLines([
+      "Player in white moves in center circle.",
+      "player in white moves in center circle",
+      "PLAYER IN WHITE MOVES IN CENTER CIRCLE",
+      "Player in white moves in center circle!",
+      "Player in blue jersey dribbles in center field",
+    ]);
+    expect(kept[0]).not.toBeNull();
+    expect(kept[1]).not.toBeNull();
+    expect(kept[2]).toBeNull();
+    expect(kept[3]).toBeNull();
+    expect(kept[4]).toBe("Player in blue jersey dribbles in center field");
+  });
+
+  it("caps the measured 11x line on a 69-row level at 2 and never exceeds 4", () => {
+    const rows: string[] = [];
+    for (let i = 0; i < 11; i += 1) rows.push("Player in white moves in center circle.");
+    for (let i = 0; i < 58; i += 1) rows.push(`Window ${i}: the blue shirt carries the ball wide.`);
+    const kept = dedupeEmittedLines(rows).filter((l): l is string => l !== null);
+    const counts = new Map<string, number>();
+    for (const l of kept) counts.set(captionLineKey(l), (counts.get(captionLineKey(l)) ?? 0) + 1);
+    expect(Math.max(...counts.values())).toBeLessThanOrEqual(MAX_LINE_OCCURRENCES);
+    expect(kept.length).toBe(60);
+  });
+
+  it("is a no-op for empty input and deterministic across calls", () => {
+    expect(dedupeEmittedLines([])).toEqual([]);
+    const lines = ["A", "a", "A", "b"];
+    expect(dedupeEmittedLines(lines)).toEqual(dedupeEmittedLines(lines));
+  });
+});
+
+describe("groundSummaryItems — the flat Video Summary on the fast rail (§3.4 + §3.6)", () => {
+  const highlights = [
+    { start: 113, end: 128, corroborated: false },
+    { start: 155, end: 170, corroborated: true },
+  ];
+  const items = [
+    { seq: 1, windowTs: 120, text: "No. 10 strikes the ball into the net" },
+    { seq: 2, windowTs: 162, text: "No. 6 shoots and scores in the box" },
+    { seq: 3, windowTs: 200, text: "Player in white moves in center circle." },
+    { seq: 4, windowTs: 205, text: "Player in white moves in center circle." },
+    { seq: 5, windowTs: 210, text: "Player in white moves in center circle." },
+  ];
+
+  it("rewrites an uncorroborated goal item, keeps the corroborated one", () => {
+    const out = groundSummaryItems(items, { highlights, fastRail: true });
+    expect(out[0].text).not.toMatch(/into the net|goal/i);
+    expect(out[1].text).toBe("No. 6 shoots and scores in the box");
+  });
+
+  it("keeps an identical item at most twice per job", () => {
+    const out = groundSummaryItems(items, { highlights, fastRail: true });
+    const repeats = out.filter((i) => i.text === "Player in white moves in center circle.");
+    expect(repeats.length).toBe(2);
+  });
+
+  it("VOD (fastRail false) is byte-identical and in order", () => {
+    expect(groundSummaryItems(items, { highlights, fastRail: false })).toEqual(items);
+    expect(groundSummaryItems(items, { highlights })).toEqual(items);
   });
 });

@@ -11,6 +11,7 @@ import { CostTimePanel, CostTimeToggle } from "../components/CostTimePanel";
 import { SummaryLadderView } from "../components/SummaryLadder";
 import { batchManifest, captionFromTitle, clipFileName, copyExportLink, copyText, exportUrl, markExportIntent, markExportIntentBatch, momentRangeLabel, postTitles, saveBlob, suggestCaption, type BatchItem } from "../lib/highlightPost";
 import { buildZip, type ZipFile } from "../lib/zip";
+import { groundSummaryItems } from "@highlights/events";
 import { asrSummary, asrSummaryLine } from "../lib/windowAsr";
 import {
   fetchJobDetail,
@@ -687,13 +688,26 @@ export function AnalysisWindow({ section, token, jobId, selectMode, selectedSeqs
  */
 export function VideoSummary({
   entries,
+  highlights,
+  fastRail = false,
   defaultOpen = false,
 }: {
   entries?: SummaryLogEntry[];
+  /** ADAAAA-7958: the accepted highlights, so an item that asserts a goal is
+   *  checked against that window's corroboration before it is shown. */
+  highlights?: JobDetailHighlight[];
+  /** ADAAAA-7958: fast rail only (`file` = long-form VOD, graded unchanged). */
+  fastRail?: boolean;
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const log = entries ?? [];
+  // ADAAAA-7958 (contract v3 §3.4 + §3.6): the emitted items, not the stored
+  // ones — a goal claim on a window the pipeline never corroborated is rewritten
+  // to the non-goal beat, and an identical line is kept at most twice per job.
+  const log = useMemo(
+    () => groundSummaryItems(entries ?? [], { highlights, fastRail }),
+    [entries, highlights, fastRail]
+  );
   return (
     <div className="mt-4 rounded-lg border border-neon/30 bg-card" data-detail-video-summary>
       <button
@@ -2330,7 +2344,11 @@ export function JobDetail() {
             {/* ADAAAA-7466: the append-only per-pass summary time log, shown as
                 a collapsible "Video Summary" section (collapsed by default).
                 Replaces the removed running action notes. */}
-            <VideoSummary entries={detail.job.summaryLog} />
+            <VideoSummary
+              entries={detail.job.summaryLog}
+              highlights={detail.highlights}
+              fastRail={detail.job.source !== "file"}
+            />
             {detail.job.error && (
               <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red" data-detail-error>
                 {detail.job.error}

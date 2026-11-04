@@ -29,6 +29,12 @@ import type {
   SummaryLadder,
   SummaryLogEntry,
 } from "@highlights/events";
+import {
+  dedupeEmittedLines,
+  gateUncorroboratedGoal,
+  windowCorroborated,
+  type CorroborationWindow,
+} from "@highlights/events";
 
 /** Hard cap on chapters (acceptance criterion: <= 10). */
 export const MAX_CHAPTERS = 10;
@@ -264,6 +270,41 @@ function normalizeLog(log: SummaryLogEntry[]): NormalizedEntry[] {
   });
 }
 
+/**
+ * ADAAAA-7958 (contract v3 §3.4 + §3.6): the SURFACE pass over the stored
+ * window narratives.
+ *
+ * The write seam gated each caption against its window VERDICT; a stored line
+ * can still assert a goal the pipeline never corroborated (the page then
+ * contradicts its own banner), and the append-only log can still carry the same
+ * line many times (a legacy row, or two passes that re-narrated one passage).
+ * Both are properties of the EMITTED set, so they are enforced here, at read
+ * time, over what the ladder will actually render:
+ *
+ *   1. a line may assert a goal only when its window is covered by a CORROBORATED
+ *      accepted highlight (else the claim is rewritten to the non-goal beat by the
+ *      same shared claim gate the write seam uses);
+ *   2. an identical emitted line is kept at most `MAX_LINE_OCCURRENCES` times per
+ *      job; later occurrences are dropped from the ladder.
+ *
+ * FAST RAIL ONLY: the long-form VOD path carries no corroboration evidence and
+ * its items are graded unchanged (AC8), so the pass is a no-op there.
+ */
+function propagateCorroboration(
+  entries: NormalizedEntry[],
+  accepted: HighlightRecord[],
+  fastRail: boolean
+): NormalizedEntry[] {
+  if (!fastRail) return entries;
+  const windows = accepted as CorroborationWindow[];
+  const gated = entries.map((e) => {
+    const text = gateUncorroboratedGoal(e.clean, windowCorroborated(windows, e.windowTs));
+    return text === e.clean ? e : { ...e, clean: text };
+  });
+  const kept = dedupeEmittedLines(gated.map((e) => e.clean));
+  return gated.filter((_e, i) => kept[i] !== null);
+}
+
 /** Accepted GOAL highlights, in time order, with a monotonic 1-based index. */
 export function goalTimelineFrom(highlights: HighlightRecord[]): Array<SummaryChapterGoal & { highlightId: string }> {
   return (highlights ?? [])
@@ -385,8 +426,15 @@ function chapterKindOf(entries: NormalizedEntry[], goals: SummaryChapterGoal[]):
 function chapterTitle(kind: SummaryChapter["kind"], startS: number, endS: number, goals: SummaryChapterGoal[]): string {
   const clock = `${formatClock(startS)}–${formatClock(endS)}`;
   switch (kind) {
-    case "goal-cluster":
+    case "goal-cluster": {
+      // ADAAAA-7958 (§3.4): a chapter TITLE may assert a goal only when that
+      // chapter carries a corroborated one. Two counted-but-uncorroborated goals
+      // are still counted (`goalCount` / the goal chips) and still reported by the
+      // banner, but the title must not read as scored — so it degrades to the
+      // neutral content label instead of "Goal cluster (2)".
+      if (!goals.some((g) => g.verified)) return `Phase · ${clock}`;
       return `${goals.length === 1 ? "Goal" : `Goal cluster (${goals.length})`} · ${clock}`;
+    }
     case "build-up":
       return `Build-up · ${clock}`;
     case "lull":
@@ -431,7 +479,8 @@ function composeMatchSummary(
   const duration = chapters.length > 0 ? chapters[chapters.length - 1].endS : 0;
   const verified = goals.filter((g) => g.verified).length;
   const header = `${gameHint || "Video"} · ${formatClock(duration)} · ${chapters.length} chapter${chapters.length === 1 ? "" : "s"} · ${goals.length} accepted goal${goals.length === 1 ? "" : "s"} (${verified} corroborated)`;
-  const chapterBullet = (c: SummaryChapter, chars: number): string => `- ${c.title}: ${excerpt(c.summary, chars)}`;
+  const chapterBullet = (c: SummaryChapter, chars: number): string =>
+    c.summary ? `- ${c.title}: ${excerpt(c.summary, chars)}` : `- ${c.title}`;
   const goalLine =
     goals.length === 0
       ? "Goals: none accepted."
@@ -468,9 +517,16 @@ export function buildSummaryLadder(input: {
   summaryLog?: SummaryLogEntry[];
   highlights?: HighlightRecord[];
   gameHint?: string;
+  /**
+   * ADAAAA-7958: is this the FAST rail (a live observe job)? Corroboration
+   * propagation and emission dedupe run only there — the long-form VOD path
+   * carries no corroboration evidence and its items are graded unchanged (AC8).
+   */
+  fastRail?: boolean;
 }): SummaryLadder {
-  const entries = normalizeLog(input.summaryLog ?? []);
+  const rawEntries = normalizeLog(input.summaryLog ?? []);
   const accepted = (input.highlights ?? []).filter((h) => (h as any).status === "accepted");
+  const entries = propagateCorroboration(rawEntries, accepted, input.fastRail === true);
   const timeline = goalTimelineFrom(input.highlights ?? []);
 
   // Hard-gate EVERY narrative once; the audit list is what the gate removed.
