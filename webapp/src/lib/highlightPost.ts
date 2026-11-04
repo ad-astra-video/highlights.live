@@ -272,10 +272,14 @@ export const MAX_CAPTION_CHARS = 180;
  * edits this in the card; the edited value is what the batch export ships.
  */
 export function suggestCaption(
-  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType" | "outcome" | "corroborated">,
+  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType" | "outcome" | "corroborated"> &
+    Pick<Partial<JobDetailHighlight>, "caption">,
   log?: SummaryLogEntry[],
   ctx?: CaptionGroundingContext
 ): string {
+  // ADAAAA-7965 (contract v5 §3.5, R22): the stored gated caption is the
+  // customer copy — render it byte-for-byte, never re-derive it at read time.
+  if (typeof h.caption === "string" && h.caption.trim()) return h.caption;
   const selected = selectNarrative(h, log);
   // ADAAAA-7948 (Inc 3): every seeded caption crosses the grounding gate —
   // verdict-gated goal claims, sourced names, no internal tokens.
@@ -313,10 +317,18 @@ function titleLine(text: string): string {
  * card always offers 2–3 distinct one-line titles and never a cut word.
  */
 export function postTitles(
-  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType" | "outcome" | "corroborated">,
+  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType" | "outcome" | "corroborated"> &
+    Pick<Partial<JobDetailHighlight>, "cardTitles">,
   log?: SummaryLogEntry[],
   ctx?: CaptionGroundingContext
 ): string[] {
+  // ADAAAA-7965 (contract v5 §3.5, R22): the card options were an ungated
+  // derivative of the stored string — the title trim dropped the trailing period
+  // on 5/5 measured cards, `leadingClause` dropped the colour clause (page
+  // caption colour 0/15), and the 60-char cap cut a last word on one card. When
+  // the write seam stored the gated options, render THEM, verbatim.
+  const stored = (h.cardTitles ?? []).filter((t): t is string => typeof t === "string" && !!t.trim());
+  if (stored.length) return stored.slice(0, 3);
   const selected = selectNarrative(h, log);
   const grounding = ctx ?? captionGroundingFor(h, { fromLog: selected.fromLog });
   const narrative = groundCaption(scrubInternal(selected.text), grounding);

@@ -18,6 +18,7 @@ import { describe, it, expect } from "vitest";
 import {
   COLOUR_MAX_CHARS,
   captionColour,
+  colourBeatFromSignal,
   colourBeatAllowed,
   dedupeStoredLines,
   gateGoalClaims,
@@ -25,7 +26,6 @@ import {
   groundCaption,
   groundNames,
   groundSummaryItems,
-  GROUNDED_COLOUR_BEAT,
   hasGoalClaim,
   hasProperName,
   placePhraseOf,
@@ -109,50 +109,70 @@ describe("contract v4 §3.4 — the rewrite keeps actor + action + place (R15)",
   });
 });
 
-describe("contract v4 §3.5 — the grounded colour channel (R16)", () => {
-  it("keeps a grounded colour beat on a quiet window", () => {
-    const out = groundCaption("No. 3 drives into the box and scores — crowd erupts", {
-      ...quiet(),
-      colourEvidence: true,
-    });
+describe("contract v5 §3.1 — colour is DERIVED from the measured signal (R18)", () => {
+  // QA v4 measured 2 of 2 delivered colour beats contradicted by their own
+  // frames. v5 keeps the channel and changes the source: the beat is built from
+  // the per-window audio-noise delta ADAAAA-7964 selected, never from the model's
+  // clause. These cases pin that swap.
+  const SIGNAL = { signal: "audio_noise" as const, ratio: 5, sustained: 0.2, peak: 0.4, peakT: 12, frameTs: 12, frameSeq: 36 };
+  const measured = { ...quiet(), colourSignal: SIGNAL };
+
+  it("drops a forwarded model colour clause even on a measured window", () => {
+    const out = groundCaption("No. 3 drives into the box and scores — crowd erupts", measured);
     expect(hasGoalClaim(out)).toBe(false);
-    expect(captionColour(out)).toBe("crowd erupts");
+    expect(captionColour(out)).toBe("noise lifts, then settles");
   });
 
-  it("drops the colour beat when the window has no measured evidence", () => {
+  it("drops the colour beat when the window has no measured signal", () => {
     const out = groundCaption("No. 3 drives into the box and scores — crowd erupts", quiet());
     expect(captionColour(out)).toBe("");
   });
 
   it("never lets a colour beat carry a proper name, a claim, an OCR quote or >40 chars", () => {
-    const ctx = { ...quiet(), colourEvidence: true };
-    expect(colourBeatAllowed("Saez screams at the bench", ctx)).toBe(false);
-    expect(colourBeatAllowed("the net bulges", ctx)).toBe(false);
-    expect(colourBeatAllowed("the 'GOL' graphic appears", ctx)).toBe(false);
-    expect(colourBeatAllowed(`${"a".repeat(COLOUR_MAX_CHARS + 1)}`, ctx)).toBe(false);
-    expect(colourBeatAllowed("crowd erupts", ctx)).toBe(true);
-    expect(colourBeatAllowed("crowd erupts", { ...ctx, colourEvidence: false })).toBe(false);
+    expect(colourBeatAllowed("Saez screams at the bench", measured)).toBe(false);
+    expect(colourBeatAllowed("the net bulges", measured)).toBe(false);
+    expect(colourBeatAllowed("the 'GOL' graphic appears", measured)).toBe(false);
+    expect(colourBeatAllowed(`${"a".repeat(COLOUR_MAX_CHARS + 1)}`, measured)).toBe(false);
+    // A model clause is not the derived beat, even when the signal fires.
+    expect(colourBeatAllowed("crowd erupts", measured)).toBe(false);
+    expect(colourBeatAllowed("noise lifts, then settles", measured)).toBe(true);
+    expect(colourBeatAllowed("noise lifts, then settles", quiet())).toBe(false);
   });
 
-  it("a measured quiet window with no model clause carries the deterministic beat", () => {
+  it("a measured quiet window with no model clause carries the derived beat", () => {
     const out = groundCaption("Player in blue moves ball in center circle.", {
-      ...quiet(),
-      colourEvidence: true,
+      ...measured,
+      place: "in center circle",
     });
-    expect(captionColour(out)).toBe(GROUNDED_COLOUR_BEAT);
-    expect(out.length).toBeLessThanOrEqual(70);
+    expect(captionColour(out)).toBe("noise lifts, then settles");
+    // The contract's line target is <= 110 (hard max 140); the derived beat is
+    // longer than v4's 10-char template but words the measurement.
+    expect(out.length).toBeLessThanOrEqual(110);
   });
 
-  it("the deterministic beat never appears without measured evidence", () => {
+  it("the derived beat never appears without measured evidence", () => {
     const out = groundCaption("Player in blue moves ball in center circle.", quiet());
     expect(captionColour(out)).toBe("");
   });
 
-  it("the deterministic beat passes its own §3.5 rules", () => {
-    expect(COLOUR_MAX_CHARS).toBeGreaterThan(GROUNDED_COLOUR_BEAT.length);
-    expect(hasProperName(GROUNDED_COLOUR_BEAT)).toBe(false);
-    expect(hasGoalClaim(GROUNDED_COLOUR_BEAT)).toBe(false);
-    expect(colourBeatAllowed(GROUNDED_COLOUR_BEAT, { ...quiet(), colourEvidence: true })).toBe(true);
+  it("derives wording from the measured ratio, and drops a beat with no frame", () => {
+    expect(colourBeatFromSignal(SIGNAL)).toBe("noise lifts, then settles");
+    expect(colourBeatFromSignal({ ...SIGNAL, ratio: 11 })).toBe("noise spikes over the play");
+    expect(colourBeatFromSignal({ ...SIGNAL, ratio: 2.2 })).toBe("noise rises with the play");
+    // A plateau (sustained lift) is not a burst.
+    expect(colourBeatFromSignal({ ...SIGNAL, sustained: 0.6 })).toBe("");
+    // Too little energy.
+    expect(colourBeatFromSignal({ ...SIGNAL, peak: 0.1 })).toBe("");
+    // §3.1: no frame reference -> the beat cannot be confirmed -> dropped.
+    expect(colourBeatFromSignal({ ...SIGNAL, frameTs: undefined, frameSeq: undefined })).toBe("");
+  });
+
+  it("the derived beat passes its own §3.1 rules", () => {
+    const beat = colourBeatFromSignal(SIGNAL);
+    expect(COLOUR_MAX_CHARS).toBeGreaterThan(beat.length);
+    expect(hasProperName(beat)).toBe(false);
+    expect(hasGoalClaim(beat)).toBe(false);
+    expect(beat).not.toMatch(/\b(?:crowd|stand|bench|celebrat|roar|erupt)\b/i);
   });
 
   it("still refuses an OCR colour clause on a loud window (§3.5 carried from v3)", () => {
@@ -160,20 +180,20 @@ describe("contract v4 §3.5 — the grounded colour channel (R16)", () => {
     expect(captionColour(out)).toBe("");
   });
 
-  it("a corroborated goal keeps its line byte-identical (no v3 regression)", () => {
+  it("a corroborated goal keeps its LEAD byte-identical (no v3 regression)", () => {
     const line = "No. 9 scores — crowd erupts";
-    expect(groundCaption(line, goal())).toBe(line);
+    expect(groundCaption(line, goal())).toBe("No. 9 scores");
   });
 
-  it("an uncorroborated goal claim is rewritten, and its colour beat can survive", () => {
+  it("an uncorroborated goal claim is rewritten, and carries only the derived beat", () => {
     const out = groundCaption("No. 9 scores — crowd erupts", {
       verdict: "scoring_play",
       promptText: "",
       corroborated: false,
-      colourEvidence: true,
+      colourSignal: SIGNAL,
     });
     expect(hasGoalClaim(out)).toBe(false);
-    expect(captionColour(out)).toBe("crowd erupts");
+    expect(captionColour(out)).toBe("noise lifts, then settles");
   });
 });
 

@@ -4,8 +4,17 @@
 import { randomUUID, createHash } from "node:crypto";
 import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
-import type { CaptionGroundingContext } from "@highlights/events";
-import { groundCaption, windowCorroborated } from "@highlights/events";
+import type { CaptionGroundingContext, ColourSignal } from "@highlights/events";
+import {
+  captionColour,
+  captionForStoredLine,
+  cardTitlesFor,
+  groundCaption,
+  humanEventLabel,
+  placePhraseOf,
+  quietShape,
+  windowCorroborated,
+} from "@highlights/events";
 import { StageAMetrics, StageAOutcomeLedger } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
 import type { PerceiveCalibration } from "./perceive-calibration";
@@ -3632,10 +3641,29 @@ export async function acceptVideoDecision(
   const selfCorroborated =
     confirm?.corroborated === true || (confirm?.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal";
   const writeGrounding: CaptionGroundingContext | undefined = cfg.captionGrounding
-    ? captionGroundingForWindow(decision, run, candidate.timestamp, cfg, selfCorroborated)
+    ? captionGroundingForWindow(
+        decision,
+        run,
+        candidate.timestamp,
+        cfg,
+        selfCorroborated,
+        frameSignals,
+        { ballOutcome: candidate.ballOutcome ?? null, goalCrossed: candidate.goalCrossed ?? null }
+      )
     : undefined;
   if (sink && writeGrounding) sink.grounding = writeGrounding;
-  const gatedReason = writeGrounding ? groundCaption(decision.reason ?? "", writeGrounding) : decision.reason;
+  // ADAAAA-7965 (contract v5 §3.2/§3.4): a lead that cannot resolve a place does
+  // not ship in that form, and an unverified negative does not ship at all — the
+  // gate returns "" for those. The row keeps the outcome shape the quiet gate
+  // can certify (actor + verb) instead of an empty reason on a customer card.
+  const gatedReasonRaw = writeGrounding ? groundCaption(decision.reason ?? "", writeGrounding) : decision.reason;
+  let gatedReason = gatedReasonRaw;
+  if ((!gatedReason || !gatedReason.trim()) && writeGrounding) {
+    const quiet = quietShape(decision.reason ?? "");
+    const zone = (writeGrounding.place ?? "").trim();
+    gatedReason = quiet && zone && !placePhraseOf(quiet) ? `${quiet} ${zone}` : quiet || "";
+  }
+  const eventLabel = humanEventLabel(highlightEventType(decision) || "");
   const { clipId, clipUri } = await cut(loc.ts);
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -3676,6 +3704,20 @@ export async function acceptVideoDecision(
     // is stored, not when the card renders. The model's reason carries goal
     // claims and invented names in the same shapes the caption gate removes.
     reason: gatedReason,
+    // ADAAAA-7965 (contract v5 §3.1/§3.5, R22): the derived beat's signal
+    // reference rides the record whenever the beat reached the stored reason, and
+    // the page's caption + card options are stored HERE so the render is
+    // byte-identical to what the gate approved (no read-time cut, no dropped
+    // colour clause, no dropped period).
+    ...(writeGrounding?.colourSignal && captionColour(gatedReason ?? "")
+      ? { colour: writeGrounding.colourSignal }
+      : {}),
+    ...(writeGrounding && (gatedReason ?? "").trim()
+      ? {
+          caption: captionForStoredLine(gatedReason as string),
+          cardTitles: cardTitlesFor(gatedReason as string, eventLabel),
+        }
+      : {}),
     ...(writeGrounding && gatedReason !== decision.reason && (decision.reason ?? "").trim()
       ? { reason_raw: decision.reason }
       : {}),
@@ -4162,7 +4204,7 @@ export async function observeDecideOnly(
  */
 export function captionGroundingForDecision(
   decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis">,
-  extras: Pick<CaptionGroundingContext, "corroborated" | "colourEvidence" | "place"> = {}
+  extras: Pick<CaptionGroundingContext, "corroborated" | "colourSignal" | "absenceEvidence" | "place"> = {}
 ): CaptionGroundingContext {
   return {
     verdict: decision.outcome ?? null,
@@ -4173,33 +4215,117 @@ export function captionGroundingForDecision(
 }
 
 /**
- * ADAAAA-7962 (contract v4 §3.5): does this window's ALREADY-CAPTURED audio show
- * crowd/audio energy a colour beat may cite?
+ * ADAAAA-7965 (contract v5 §3.1, R18): the per-window audio-noise delta that
+ * ADAAAA-7964 measured as the only stored signal that grounds a colour beat at
+ * the 20-40% band with 0 contradicted beats — computed at the write seam from
+ * the taps the pipeline already holds, and attached to the stored frame nearest
+ * the burst.
  *
- * The audio-noise-change series the pass already holds for the window (the same
- * `(t, energy, baseline)` points the request-inspection graph renders) is the
- * evidence, so this costs no new perception pass, no new frames and no decide
- * call. The rule is a SUSTAINED lift, not a single spike: at least a quarter of
- * the window's taps must sit 0.05 RMS above their own rolling baseline. On the
- * v3 level (`dcaa93c5`, 77 windows) that selects ~30% of windows, which keeps
- * the delivered colour share inside the contract's 20-40% band instead of
- * turning every quiet window into a colour row.
+ * Returns `null` (the drop path) when the window has too few taps, no peak above
+ * the energy floor, or NO stored frame to confirm the instant. A dropped beat
+ * means the row keeps its quiet shape — the contract prefers a drop to a
+ * contradiction. 0 GPU: no model call, no new perception pass, no new frames.
  */
-export function windowColourEvidence(
+export function windowColourSignal(
   run: Pick<LiveRunShared, "seriesWindow">,
   centerTs: number,
-  cfg: Pick<AnalyzerConfig, "preWindowS" | "postWindowS">
-): boolean {
-  if (!Number.isFinite(centerTs)) return false;
+  cfg: Pick<AnalyzerConfig, "preWindowS" | "postWindowS" | "sampleFps" | "analysisFps">,
+  frames?: readonly { ts: number; seq?: number }[]
+): ColourSignal | null {
+  if (!Number.isFinite(centerTs)) return null;
   const pre = cfg.preWindowS ?? DEFAULT_PRE_WINDOW_S;
   const post = cfg.postWindowS ?? DEFAULT_POST_WINDOW_S;
   const series = run.seriesWindow(centerTs, pre, post);
-  if (!series.length) return false;
-  let lifted = 0;
-  for (const p of series) {
-    if (Number.isFinite(p.energy) && (p.energy - (p.baseline ?? 0)) >= 0.05) lifted += 1;
+  const energies = series.map((p) => p.energy).filter((e) => Number.isFinite(e));
+  if (energies.length < 4) return null;
+  const peak = Math.max(...energies);
+  // Audit §5: no real energy -> no beat.
+  if (peak < 0.15) return null;
+  const sorted = [...energies].sort((a, b) => a - b);
+  const base = sorted[Math.floor(sorted.length / 2)] ?? 0;
+  const ratio = peak / Math.max(base, 0.005);
+  const sustained = energies.filter((e) => e >= 0.5 * peak).length / energies.length;
+  const peakPoint = series.find((p) => p.energy === peak);
+  const peakT = peakPoint?.t ?? centerTs;
+  // §3.1: every delivered beat stores the frame that confirms it. No frame in
+  // the window -> the beat cannot be confirmed -> dropped.
+  let frame: { ts: number; seq?: number } | undefined;
+  let bestDiff = Infinity;
+  for (const f of frames ?? []) {
+    if (!Number.isFinite(f?.ts)) continue;
+    const d = Math.abs(f.ts - peakT);
+    if (d < bestDiff) {
+      bestDiff = d;
+      frame = f;
+    }
   }
-  return lifted / series.length >= 0.25;
+  if (!frame) return null;
+  const fps = cfg.sampleFps ?? cfg.analysisFps ?? 3;
+  const frameSeq =
+    typeof frame.seq === "number" && Number.isFinite(frame.seq) ? Math.floor(frame.seq) : Math.round(frame.ts * fps);
+  return { signal: "audio_noise", ratio, sustained, peak, peakT, frameTs: frame.ts, frameSeq };
+}
+
+/**
+ * ADAAAA-7965 (contract v5 §3.2, R19): the place a lead ships with, resolved
+ * from the window's OWN state — the tracked ball position in this window's
+ * frames first (a measurement), then the last stored possession line of the
+ * running summary. Never from a prompt change and never invented here.
+ *
+ * The mapping is deliberately coarse and frame-verifiable: a wide camera's
+ * horizontal thirds are the left / middle / right of the pitch, and a ball in
+ * the bottom fifth of the frame is at the near touchline. Saying "in the box"
+ * would need a homography, which is `not available` on every window ADAAAA-7964
+ * inspected — so the gate never claims one.
+ */
+export function windowPlace(
+  run: Pick<LiveRunShared, "ballPosition">,
+  centerTs: number,
+  cfg: Pick<AnalyzerConfig, "getRunningSummary">
+): string {
+  const pos = Number.isFinite(centerTs) ? run.ballPosition(centerTs) : undefined;
+  if (pos && Number.isFinite(pos[0]) && Number.isFinite(pos[1])) {
+    const [x, y] = pos;
+    if (y > 0.82) return "near the touchline";
+    if (x < 0.3) return "on the left";
+    if (x > 0.7) return "on the right";
+    return "in midfield";
+  }
+  const lines = ((cfg.getRunningSummary?.() ?? "") as string)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const last = lines.length ? lines[lines.length - 1] : "";
+  const phrase = placePhraseOf(last).replace(/[.!?;:]+$/, "").trim();
+  if (!phrase) return "";
+  // `into the penalty area` -> `in the penalty area`: the caption form.
+  return phrase.replace(/^into\b/i, "in");
+}
+
+/**
+ * ADAAAA-7965 (contract v5 §3.4, R21): the window's stored evidence for an
+ * absence claim. Fail-closed: a goal window never evidences an absence, and a
+ * non-goal window needs an explicit frame pair (ball NOT in the net AND not
+ * across the line) or an out-of-play attestation. Anything less => the negative
+ * does not ship.
+ */
+export function windowAbsenceEvidence(
+  attest: {
+    ballOutcome?: string | null;
+    goalCrossed?: boolean | null;
+    seeds?: readonly { signal?: PerFrameSignal }[];
+  },
+  outcome?: string | null
+): boolean {
+  if ((outcome ?? "").trim().toLowerCase() === "scoring_play") return false;
+  const outAttested = /^(?:out|off_target|wide|saved|blocked|cleared|cross)$/i.test(
+    String(attest.ballOutcome ?? "")
+  );
+  if (outAttested) return true;
+  if (attest.goalCrossed === true) return false;
+  return (attest.seeds ?? []).some(
+    (s) => s.signal?.ballInNet === false && s.signal?.goalCrossed === false
+  );
 }
 
 /**
@@ -4217,17 +4343,31 @@ export function windowColourEvidence(
  */
 export function captionGroundingForWindow(
   decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis" | "reason">,
-  run: Pick<LiveRunShared, "seriesWindow" | "highlights">,
+  run: Pick<LiveRunShared, "seriesWindow" | "ballPosition" | "highlights">,
   centerTs: number,
-  cfg: Pick<AnalyzerConfig, "preWindowS" | "postWindowS">,
+  cfg: Pick<
+    AnalyzerConfig,
+    "preWindowS" | "postWindowS" | "sampleFps" | "analysisFps" | "getRunningSummary"
+  >,
   /** This accept's OWN corroboration (confirm pass / scoreboard / audio), known
    * before the record is pushed — the window is corroborated when this accept
    * corroborated it OR an already-accepted highlight covering it did. */
-  selfCorroborated = false
+  selfCorroborated = false,
+  /** The window's own frames (seeds). Required for the §3.1 frame reference and
+   * the §3.2 place measurement. Absent => no colour beat (fail closed) and the
+   * place falls back to stored possession state. */
+  frames?: readonly { ts: number; seq?: number }[],
+  /** This decide's folded goal attestation (the candidate's own signals), for
+   * the §3.4 absence evidence. */
+  attest?: { ballOutcome?: string | null; goalCrossed?: boolean | null; seeds?: readonly PerFrameSeed[] }
 ): CaptionGroundingContext {
   return captionGroundingForDecision(decision, {
     corroborated: selfCorroborated || windowCorroborated(run.highlights as any, centerTs),
-    colourEvidence: windowColourEvidence(run, centerTs, cfg),
+    colourSignal: windowColourSignal(run, centerTs, cfg, frames),
+    absenceEvidence: windowAbsenceEvidence(attest ?? {}, decision.outcome),
+    // §3.2: ALWAYS resolved on the fast rail. `""` means "resolved to nothing",
+    // which makes a place-less play lead drop instead of shipping.
+    place: windowPlace(run, centerTs, cfg),
   });
 }
 
@@ -4300,7 +4440,20 @@ export async function observeAcceptOnly(
       // stored verdict + that window's corroboration + its audio evidence), so
       // the story line is gated with exactly what the highlight row was.
       const grounding: CaptionGroundingContext | undefined = cfg.captionGrounding
-        ? sink.grounding ?? captionGroundingForDecision(stored)
+        ? sink.grounding ??
+          // ADAAAA-7965 (§3.1/§3.2): a REJECTED window never reaches the accept
+          // seam's grounding computation (it returns at "rejected"), yet its story
+          // row is delivered copy too — so the fallback carries the same measured
+          // signal, stored place and absence evidence the accepted path would.
+          captionGroundingForWindow(
+            stored,
+            run,
+            payload.centerTs,
+            cfg,
+            false,
+            payload.seeds,
+            { ballOutcome: candidate.ballOutcome ?? null, goalCrossed: candidate.goalCrossed ?? null, seeds: payload.seeds }
+          )
         : undefined;
       cfg.onRunningSummary(pendingSummary, {
         windowTs: payload.centerTs,

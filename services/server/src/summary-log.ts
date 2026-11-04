@@ -212,6 +212,11 @@ export function appendSummaryEntry(
     // The per-window content the model added this pass; fall back to the whole
     // bounded summary so a pass is never silently dropped from the log.
     text: delivered,
+    // ADAAAA-7965 (contract v5 §3.1, R18): when the delivered row carries a
+    // colour beat, store the measurement it was derived from and the frame that
+    // confirms it. A row without `colour` carries no beat, so a grader can tell
+    // a derived beat from a forwarded one from the record alone.
+    ...(grounding?.colourSignal && captionColour(delivered) ? { colour: grounding.colourSignal } : {}),
     // ADAAAA-7962 (contract v4 §3.1): exactly one AUDIT-ONLY raw field per row,
     // set only when the gate changed what is delivered. Never a narrative.
     ...(grounding && delivered !== rawText && rawText.trim() ? { text_raw: rawText } : {}),
