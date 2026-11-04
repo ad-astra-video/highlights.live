@@ -78,6 +78,14 @@ FLIP_MARGIN = 0.20
 FLIP_MIN_SOURCES = 2
 # Kit colours need >= 2 consistent frames before they count (plan §3 Stage 3).
 KIT_MIN_FRAMES = 2
+# A kit cluster must ALSO hold a usable share of the samples this pass took, not
+# just the 2-frame floor. On job fe0e3efc the grass-tinted minority group (5 of
+# 43 usable samples, 12 %) cleared KIT_MIN_FRAMES and named "green", so the away
+# side was handed a colour no shirt on the pitch has — a wrong colour, which the
+# AC forbids outright. A minority cluster is trim, an ad board or a strip of
+# turf; publishing nothing for the side (an honest unattributed miss) is the
+# correct answer. The floor is a TIGHTENING: no existing threshold is loosened.
+KIT_MIN_CLUSTER_SHARE = 0.20
 # Bound the persisted recompute trail so a long job cannot grow the record.
 MAX_TRAIL = 12
 # Bounds on the AC2 per-channel diagnosis (ADAAAA-7889). A stored job must be
@@ -2359,6 +2367,11 @@ def cluster_kit_colors(
         keys = {(s.get("ts"), s.get("frameSeq"), s.get("frameId"), s.get("trackId")) for s, _rgb in group}
         frames = max(len(stamps), len(keys))
         if frames < min_frames:
+            continue
+        # A minority group is trim, an ad board or a strip of turf, not a kit:
+        # a cluster below KIT_MIN_CLUSTER_SHARE of the usable samples names no
+        # colour for any side (ADAAAA-7981).
+        if len(group) < max(2, int(KIT_MIN_CLUSTER_SHARE * len(usable))):
             continue
         names = [name_color(rgb) for _s, rgb in group]
         counts: dict[str, int] = {}
