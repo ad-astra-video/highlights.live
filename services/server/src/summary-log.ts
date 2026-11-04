@@ -47,6 +47,51 @@ export function nextSummarySeq(log: SummaryLogEntry[] | undefined): number {
   return (log && log.length > 0 ? log[log.length - 1].seq : 0) + 1;
 }
 
+/**
+ * ADAAAA-7956 (contract v3 rule 2): the comparison key for "already emitted".
+ * Byte-identical after the only cosmetic differences a caption can carry —
+ * surrounding whitespace, collapsed inner whitespace, a trailing full stop and
+ * letter case — so `Player in blue moves ball in center circle.` and
+ * `Player in blue moves ball in center circle` are the SAME line. The key is
+ * used only for comparison; the emitted text is never rewritten here.
+ */
+export function summaryLineKey(text: string): string {
+  return (text ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[.!?;,:\s]+$/, "")
+    .toLowerCase();
+}
+
+/**
+ * ADAAAA-7956 (contract v3 rule 2): drop the lines of this pass that the job has
+ * ALREADY emitted. The model re-narrates a scene it has covered (a replay, a
+ * second look at the same passage) and the append-only log then accumulates the
+ * same sentence over and over, so the story log stops reading as a story. Returns
+ * the surviving lines joined by newline, or "" when every line was a repeat.
+ */
+export function unduplicatedSummaryLines(
+  text: string,
+  log: SummaryLogEntry[] | undefined
+): string {
+  const seen = new Set<string>();
+  for (const entry of log ?? []) {
+    for (const line of (entry.text ?? "").split("\n")) {
+      const key = summaryLineKey(line);
+      if (key) seen.add(key);
+    }
+  }
+  const kept: string[] = [];
+  for (const line of (text ?? "").split("\n")) {
+    const trimmed = line.trim();
+    const key = summaryLineKey(trimmed);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    kept.push(trimmed);
+  }
+  return kept.join("\n");
+}
+
 /** Optional window metadata threaded from the observe tick into the log. */
 export interface SummaryAppendMeta {
   /** Video timestamp (seconds) of the observe window this entry summarizes. */
@@ -111,13 +156,23 @@ export function appendSummaryEntry(
   // `grounding`, so its items stay byte-identical (AC8).
   const rawText = delta || summary;
   const text = meta?.grounding ? groundSummaryText(rawText, meta.grounding) : rawText;
+  // ADAAAA-7956 (contract v3 rule 2): on the fast rail a line the job has
+  // already emitted is not appended again — the story log cannot accumulate
+  // duplicates (it reads as a story, not a loop). The bounded `runningSummary`
+  // still advances (it is model input for the next window), and when every line
+  // of the pass is a repeat the log simply gains no row. VOD supplies no
+  // `grounding`, so its entries stay byte-identical (AC8).
+  const deduped = meta?.grounding ? unduplicatedSummaryLines(text, log) : text;
+  if (!deduped) {
+    return store.patchJob(jobId, { runningSummary: summary }).then(() => log);
+  }
   const entry: SummaryLogEntry = {
     seq,
     ts: new Date().toISOString(),
     ...(windowTs != null ? { windowTs } : {}),
     // The per-window content the model added this pass; fall back to the whole
     // bounded summary so a pass is never silently dropped from the log.
-    text,
+    text: deduped,
   };
   const nextLog = [...log, entry];
   return store.patchJob(jobId, { runningSummary: summary, summaryLog: nextLog }).then(() => nextLog);

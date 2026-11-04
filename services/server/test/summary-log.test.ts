@@ -15,6 +15,8 @@ import {
   nextSummarySeq,
   appendSummaryEntry,
   normalizeWindowTs,
+  summaryLineKey,
+  unduplicatedSummaryLines,
 } from "../src/summary-log";
 
 describe("summaryDelta (ADAAAA-7237)", () => {
@@ -245,5 +247,126 @@ describe("appendSummaryEntry caption grounding (ADAAAA-7948)", () => {
     const j = s.getJob(job.id)!;
     expect(j.summaryLog![0].text).not.toBe(line);
     expect(j.runningSummary).toBe(line);
+  });
+});
+
+// ADAAAA-7956 (contract v3 rule 2): the append-only story log must not accumulate
+// duplicate rows. On the measured v2.5 level (job a988e52b) 22 distinct lines
+// filled 67 rows — "Player in blue moves ball in center circle." landed 5 times
+// in a row — because the model re-narrates a passage it already covered. The
+// guard is at this seam: a line the job has already emitted is not appended
+// again, while the bounded running summary keeps advancing (it is model input).
+describe("appendSummaryEntry duplicate lines (ADAAAA-7956 rule 2)", () => {
+  const GROUNDING = { verdict: "not_highlight", promptText: "Match context: RMA 1-1 BAR" };
+
+  it("does not append a byte-identical line twice", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "Player in blue moves ball in center circle.", {
+      windowTs: 0,
+      grounding: GROUNDING,
+    });
+    await appendSummaryEntry(s, job.id, "Player in blue moves ball in center circle.", {
+      windowTs: 3,
+      grounding: GROUNDING,
+    });
+    // Second pass is a repeat => no row; seq stays at 1.
+    expect(s.getJob(job.id)!.summaryLog).toHaveLength(1);
+    expect(s.getJob(job.id)!.summaryLog!.map((e) => e.seq)).toEqual([1]);
+  });
+
+  it("treats a trailing full stop / case / spacing difference as the same line", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "Player in blue moves ball in center circle.", {
+      windowTs: 0,
+      grounding: GROUNDING,
+    });
+    await appendSummaryEntry(s, job.id, "  player in blue moves ball in center circle  ", {
+      windowTs: 3,
+      grounding: GROUNDING,
+    });
+    expect(s.getJob(job.id)!.summaryLog).toHaveLength(1);
+  });
+
+  it("still advances the bounded running summary on a skipped duplicate", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "Player in blue moves ball in center circle.", {
+      windowTs: 0,
+      grounding: GROUNDING,
+    });
+    await appendSummaryEntry(s, job.id, "Player in blue moves ball in center circle.", {
+      windowTs: 3,
+      grounding: GROUNDING,
+    });
+    // The model's story-so-far is model input, never customer copy: it moves on.
+    expect(s.getJob(job.id)!.runningSummary).toBe("Player in blue moves ball in center circle.");
+  });
+
+  it("appends the new lines of a multi-line pass and skips only the repeats", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "Kickoff at center circle.\nPlayer in blue dribbles.", {
+      windowTs: 0,
+      grounding: GROUNDING,
+    });
+    await appendSummaryEntry(
+      s,
+      job.id,
+      "Kickoff at center circle.\nPlayer in blue dribbles.\nKeeper clears at the near post.",
+      { windowTs: 3, grounding: GROUNDING }
+    );
+    const log = s.getJob(job.id)!.summaryLog!;
+    expect(log.map((e) => e.text)).toEqual([
+      "Kickoff at center circle.\nPlayer in blue dribbles.",
+      "Keeper clears at the near post.",
+    ]);
+  });
+
+  it("keeps appending distinct lines (seq stays monotonic)", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    for (const [i, line] of [
+      "Player in blue dribbles in center circle.",
+      "Player in white stands in center circle.",
+      "No. 3 drives into the box.",
+    ].entries()) {
+      await appendSummaryEntry(s, job.id, line, { windowTs: i * 3, grounding: GROUNDING });
+    }
+    const log = s.getJob(job.id)!.summaryLog!;
+    expect(log).toHaveLength(3);
+    expect(log.map((e) => e.seq)).toEqual([1, 2, 3]);
+  });
+
+  it("leaves the VOD path byte-identical: no grounding => no de-dup (AC8)", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/vod.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "A long VOD line about the same passage.", { windowTs: 10 });
+    await appendSummaryEntry(s, job.id, "A long VOD line about the same passage.", { windowTs: 20 });
+    expect(s.getJob(job.id)!.summaryLog).toHaveLength(2);
+  });
+});
+
+describe("summary de-dup helpers (ADAAAA-7956)", () => {
+  it("summaryLineKey folds only cosmetic differences", () => {
+    expect(summaryLineKey("Player in blue moves ball.")).toBe(
+      summaryLineKey("  player in blue moves ball  ")
+    );
+    expect(summaryLineKey("Player in blue moves ball.")).not.toBe(
+      summaryLineKey("Player in white moves ball.")
+    );
+  });
+
+  it("unduplicatedSummaryLines drops only the lines the log already carries", () => {
+    const log = [
+      { seq: 1, ts: "t", text: "Player in blue dribbles." },
+      { seq: 2, ts: "t", text: "Keeper clears at the near post." },
+    ];
+    expect(unduplicatedSummaryLines("Player in blue dribbles.\nShot wide at the far post.", log)).toBe(
+      "Shot wide at the far post."
+    );
+    expect(unduplicatedSummaryLines("Player in blue dribbles.", log)).toBe("");
+    expect(unduplicatedSummaryLines("Brand new line.", undefined)).toBe("Brand new line.");
   });
 });

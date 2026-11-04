@@ -204,6 +204,107 @@ function rewriteNetClaims(text: string): string {
 const EVIDENCE_TAG =
   /;?\s*\b(?:scoreboard score change confirmed|score change confirmed|frame attestation confirmed|attestation confirmed)\b/gi;
 
+/**
+ * ADAAAA-7956 (contract v3, residual of ADAAAA-7949): a caption's colour /
+ * atmosphere clause ("— crowd erupts") is appended after an em or en dash. It
+ * belongs to a LOUD window (the crowd/bench channel), never to a quiet one.
+ */
+const COLOUR_CLAUSE_SPLIT = /\s+[—–]\s+/;
+
+/** The lead beat of a caption (everything before its colour clause). */
+export function captionLead(text: string): string {
+  const m = COLOUR_CLAUSE_SPLIT.exec(text ?? "");
+  return (m ? (text ?? "").slice(0, m.index) : (text ?? "")).trim();
+}
+
+/** The appended colour/atmosphere clause, or "" when the caption has none. */
+export function captionColour(text: string): string {
+  const m = COLOUR_CLAUSE_SPLIT.exec(text ?? "");
+  return m ? (text ?? "").slice(m.index).replace(/^[\s—–]+/, "").trim() : "";
+}
+
+/** Drop the appended colour clause, keeping the lead beat (never blanks). */
+export function dropColourClause(text: string): string {
+  const lead = captionLead(text);
+  return lead || text;
+}
+
+/**
+ * Does this line assert a goal? Same vocabulary `gateGoalClaims` targets, so
+ * "dropped with the claim" means the claim the rewrite table would have hit —
+ * and a legitimate `goal kick` / `shot on goal` is not a claim.
+ */
+export function hasGoalClaim(text: string): boolean {
+  if (!text) return false;
+  if (RESIDUAL_GOAL.test(text)) return true;
+  // NET_CLAIM / GOAL_REWRITES are global regexes; clone them flag-free for a
+  // pure probe (a `.test()` on a /g regex would advance its lastIndex).
+  if (new RegExp(NET_CLAIM.source, "i").test(text)) return true;
+  for (const [re] of GOAL_REWRITES) {
+    if (new RegExp(re.source, re.flags.replace("g", "")).test(text)) return true;
+  }
+  return false;
+}
+
+/** The calm-window word budget the fast contract grades (AC5). */
+export const QUIET_MAX_WORDS = 8;
+
+function wordCount(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * Ordered, honest shortenings for an over-long quiet line. Each removes detail
+ * the window does carry (a second kit colour, the word "kit", "with the ball")
+ * — none invents anything, none touches the named place, and the list is
+ * applied longest-saving-first only until the 8-word budget is met.
+ */
+const QUIET_TRIMS: [RegExp, string][] = [
+  [/\s+\bwith\s+(?:the\s+)?ball\b/gi, ""],
+  [
+    /\s+\band\s+(?:white|blue|red|black|yellow|green|purple|orange|grey|gray)\b(?=\s+(?:kit|jersey|shirt|strip)\b)/gi,
+    "",
+  ],
+  [/\s+\b(?:kit|jersey|shirt|strip)\b/gi, ""],
+];
+
+/** Blunt a quiet line down to the 8-word budget (byte-identical when it fits). */
+export function trimQuietLine(text: string): string {
+  const input = text ?? "";
+  if (!input.trim() || wordCount(input) <= QUIET_MAX_WORDS) return input;
+  let out = input;
+  for (const [re, replacement] of QUIET_TRIMS) {
+    if (wordCount(out) <= QUIET_MAX_WORDS) break;
+    out = out.replace(re, replacement);
+  }
+  if (out === input) return input;
+  return tidy(out);
+}
+
+/**
+ * ADAAAA-7956 rule 1 — the verdict guard for a non-goal window.
+ *
+ * A window whose stored verdict is not a goal may not carry a goal claim, and
+ * the colour clause that came with that claim is dropped with it (a replay or
+ * celebration window must not read as a fresh goal AND a fresh crowd roar).
+ * A `not_highlight` window is a QUIET window, so it carries no colour clause at
+ * all and is blunted to the 8-word budget — that is the shape the story log
+ * grades (AC5) and what stops the quiet rows repeating one long sentence.
+ *
+ * A real goal verdict (`scoring_play`) is returned byte-identical, so the loud
+ * window keeps its clause; a legacy row with no stored verdict is untouched.
+ */
+export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): string {
+  const verdict = (ctx?.verdict ?? "").trim().toLowerCase();
+  if (!verdict) return text;
+  if (verdict === "scoring_play") return text;
+  let out = hasGoalClaim(text) ? dropColourClause(text) : text;
+  if (verdict === "not_highlight") {
+    out = trimQuietLine(dropColourClause(out));
+  }
+  return out === text ? text : tidy(out);
+}
+
 /** Rewrite goal claims to shot/wide beats when the verdict is not a goal. */
 export function gateGoalClaims(text: string, ctx?: CaptionGroundingContext): string {
   if (goalAllowed(ctx)) return text;
@@ -403,6 +504,10 @@ export function groundCaption(text: string, ctx?: CaptionGroundingContext): stri
   const input = text ?? "";
   if (!input.trim()) return input;
   let out = stripInternalTokens(input);
+  // ADAAAA-7956 rule 1 runs BEFORE the claim rewrite: it needs to see the
+  // model's own goal claim to drop the colour clause that came with it, and a
+  // quiet window loses its colour clause even when it never claimed a goal.
+  out = gateQuietWindow(out, ctx);
   out = gateGoalClaims(out, ctx);
   const prompt = ctx?.promptText;
   if (typeof prompt === "string") {
