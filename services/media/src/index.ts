@@ -57,6 +57,9 @@ async function main() {
     // ADAAAA-7990: the funded live sampling baseline (LIVE_SAMPLE_BASE_FPS=3).
     // The control plane's per-session resolved rate overrides this.
     rtcSampleFps: cfg.rtcSampleFps,
+    // ADAAAA-7990 (delivery follow-up): the observation relay's delivery deadline
+    // is the control plane's media-rail lag budget (LIVE_OBSERVE_LAG_BUDGET_S).
+    observeDeadlineMs: cfg.observeDeadlineMs,
     // ADAAAA-6869 Phase 4 capacity/health + per-node cost attribution surface.
     nodeId: cfg.nodeId,
     maxSessions: cfg.maxSessions,
