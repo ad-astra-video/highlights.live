@@ -176,7 +176,7 @@ def test_compact_prompt_carries_colour_and_quiet_budgets():
     assert "crowd or stand reaction, players' body language or posture" in p
     assert "momentum or energy, the bench or dugout, or pitch/weather conditions" in p
     assert "must not rephrase or extend the lead" in p
-    assert "never pad to hit the ratio" in p
+    assert "never pad to hit a ratio" in p
     # quiet window: one blunt line, <= 8 words, no em-dash, no clock.
     assert "QUIET WINDOW — when YOUR OWN verdict is isHighlight=false" in p
     assert "the whole line is ONE blunt flat statement, max 8 words" in p
@@ -238,9 +238,11 @@ def test_compact_prompt_blunt_quiet_rule():
     assert "NO em-dash, NO colour beat, NO clock" in p
     assert "just who has the ball and which zone it is in" in p
     # every line must name a place, and a repeat of the first four words is a repeat
-    assert "EVERY line names a place this window's frames read" in p
+    assert "EVERY LEAD names a place this window's frames read" in p
+    # a replay/celebration window adds nothing new -> quiet shape even when loud
+    assert "adds nothing new: give it the QUIET shape" in p
     assert "if it shares its first four words with an earlier line it IS a repeat" in p
-    assert "a not_highlight window never carries one" in p
+    assert "a not_highlight window or a repeat window never carries one" in p
     assert "never reuse the sentence" in p
 
 
@@ -254,7 +256,7 @@ def test_compact_prompt_colour_is_a_different_channel():
     # 67 rows (64 %), so the ban list is explicit now.
     assert "no shot, save, block, tackle, interception, pass, miss, post, net, goal, score or keeper save" in p
     assert "write the lead alone with no em-dash" in p
-    assert "About 1 line in 4 carries a clause and NEVER more than 1 line in 3" in p
+    assert "The clause is RARE — most lines carry none: at most 1 line in 3" in p
 
 
 def test_compact_prompt_lowers_the_whole_line_cap_to_140():
@@ -310,7 +312,7 @@ def test_compact_prompt_delta_is_bounded():
     # only — the emitted line still fits the same budgets and the field set is
     # unchanged, so tokens per decide are not bought by this edit.
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 12200
+    assert len(_compact_prompt()) <= 12400
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the
