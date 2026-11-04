@@ -27,6 +27,7 @@ import {
 } from "../src/analyzer.js";
 import { attestDeferredGoalHighlight, type LiveHighlightPersistence } from "../src/api.js";
 import { Store } from "../src/store.js";
+import { LiveDeliveryTracker } from "../src/live-delivery.js";
 import { isPostableHighlight } from "../src/highlight-postable.js";
 import type { HighlightRecord } from "@highlights/events";
 
@@ -508,6 +509,67 @@ describe("attestDeferredGoalHighlight (ADAAAA-8006)", () => {
     const next = await attestDeferredGoalHighlight({ store } as unknown as LiveHighlightPersistence, up);
     expect(next!.outcome).toBe("scoring_play");
     expect(next!.deferredAttestation).toBeUndefined();
+  });
+
+  // ADAAAA-8024 (gate 3): the upgrade is a DELIVERY of a scoring-lane row, so it
+  // must feed `observeMetrics.deliveredLatency` — with the row's own trigger ts —
+  // and must NOT feed it when nothing was delivered (missing row / no reason).
+  it("reports the re-attested row to the delivered-latency metric exactly once", async () => {
+    const store = await seededStore();
+    const run = new LiveRunShared();
+    run.noteDeferredGoalAttestation(pending());
+    const [up] = run.resolveDeferredGoalAttestation({ readAt: 179, delta: GOAL2_DELTA });
+    const delivered: Array<{ triggerTs: number; atMs: number; highlightId: string }> = [];
+    const next = await attestDeferredGoalHighlight(
+      { store } as unknown as LiveHighlightPersistence,
+      up,
+      (triggerTs, atMs, highlightId) => delivered.push({ triggerTs, atMs, highlightId })
+    );
+    expect(next).not.toBeNull();
+    expect(delivered).toEqual([{ triggerTs: 159, atMs: expect.any(Number), highlightId: "hl-goal2" }]);
+
+    // Fed into the run's tracker, that ack is the row's ONE reading — even when
+    // the accept path had already reported the same row.
+    const tracker = new LiveDeliveryTracker("job-8006");
+    const firedAtMs = Date.now() - 159_000 - 700;
+    tracker.noteWindow({
+      centerTs: 159,
+      lagMs: 700,
+      firedAtMs,
+      settledAtMs: firedAtMs + 4300,
+      acceptStartMs: firedAtMs + 4420,
+      acceptDoneMs: firedAtMs + 4600,
+    });
+    for (const d of delivered) tracker.notePersisted(d.triggerTs, d.atMs, d.highlightId);
+    for (const d of delivered) tracker.notePersisted(d.triggerTs, d.atMs, d.highlightId);
+    const snap = tracker.snapshot()!;
+    expect(snap.samples).toBe(1);
+    expect(snap.rows[0].highlightId).toBe("hl-goal2");
+  });
+
+  it("reports nothing when the upgrade delivers no row", async () => {
+    const store = await seededStore();
+    const run = new LiveRunShared();
+    run.noteDeferredGoalAttestation(pending());
+    const [up] = run.resolveDeferredGoalAttestation({ readAt: 179, delta: GOAL2_DELTA });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const delivered = vi.fn();
+    expect(
+      await attestDeferredGoalHighlight(
+        { store } as unknown as LiveHighlightPersistence,
+        { ...up, highlightId: "missing" },
+        delivered
+      )
+    ).toBeNull();
+    expect(
+      await attestDeferredGoalHighlight(
+        { store } as unknown as LiveHighlightPersistence,
+        { ...up, reason: "  " },
+        delivered
+      )
+    ).toBeNull();
+    spy.mockRestore();
+    expect(delivered).not.toHaveBeenCalled();
   });
 
   it("fails closed when the row is gone or carries no scoring-lane reason", async () => {
