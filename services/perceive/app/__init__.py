@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from time import monotonic
 from typing import Optional
 
@@ -35,7 +36,15 @@ from .session import (
     sync_game_profile,
 )
 from .tracker import MAX_TRACKS, foreground_blobs
-from .florence import capability, get_detector, record_analyze, resolve_vocabulary
+from .florence import (
+    capability,
+    dual_florence_enabled,
+    get_detector,
+    get_ocr_detector,
+    record_analyze,
+    resolve_vocabulary,
+)
+from .perf import now as _perf_now, recorder as _perf_recorder
 from .sam_tracker import HybridTracker
 from .player_id import identify_player_by_number
 from .trickle import TrickleError, TrickleRail, TrickleSession
@@ -95,6 +104,21 @@ _trickle: dict[str, TrickleSession] = {}
 # Serialize detector/SAM passes: the event-loop's HTTP /analyze and the trickle
 # subscriber's worker thread share one Florence detector / SAM backend.
 _gpu_lock = threading.Lock()
+
+# ADAAAA-8004: single-worker lane for the optional second Florence copy. The
+# copy is dedicated to `<OCR>` reads, so one worker keeps its reads serialised
+# among themselves while overlapping the primary copy's <OD>/SAM work.
+_ocr_lane: "ThreadPoolExecutor | None" = None
+_ocr_lane_lock = threading.Lock()
+
+
+def _ocr_lane_executor() -> "ThreadPoolExecutor":
+    """Lazily build the one-thread OCR lane (PERCEIVE_DUAL_FLORENCE)."""
+    global _ocr_lane
+    with _ocr_lane_lock:
+        if _ocr_lane is None:
+            _ocr_lane = ThreadPoolExecutor(max_workers=1, thread_name_prefix="perceive-ocr")
+    return _ocr_lane
 
 # ADAAAA-6525: default-INFO heartbeat cadence for frame processing. The operator
 # needs to see the pipeline is alive without per-frame spam, so every Nth frame
@@ -238,7 +262,9 @@ async def _trickle_on_frame(state, seq: int, image_b64: str, timestamp: float) -
 
     def _run() -> dict:
         with _gpu_lock:
+            _t_dec = _perf_now()
             state.last_rgb = _decode_rgb(image_b64)
+            _perf_recorder().add("decode", _perf_now() - _t_dec)
             state.last_image_b64 = image_b64
             obs, _cand = process_frame(state, seq, timestamp, image_b64)
         return obs
@@ -844,6 +870,266 @@ def _single_ball_owner(
     )
 
 
+def _scoreboard_ocr_fields(
+    state, detector, image_b64: str, seq: int, timestamp: float, profile, rgb
+) -> dict:
+    """Scoreboard `<OCR>` evidence for one frame (ADAAAA-7081/7084/7086/7094).
+
+    Extracted verbatim from `process_frame` (ADAAAA-8004) so the whole pass can
+    run on the SECOND Florence copy while the primary copy holds the <OD>/SAM
+    path: OCR and detection then overlap on the same frame instead of
+    serialising. Returns the observation fields this pass owns (`ocr`, plus
+    `scoreBoardChanged` / `scoreboardDelta` when the corroboration oracle
+    fires); the defaults are `{"ocr": []}` when there is no detector or frame.
+
+    `rgb` is the frame snapshot taken by the caller, not `state.last_rgb`, so a
+    concurrent next frame can never swap the image under this pass.
+    """
+    out: dict = {"ocr": []}
+    if detector is None or rgb is None:
+        return out
+
+    # ADAAAA-7081/7084/7086/7094: scoreboard OCR scoped to a scoreboard region
+    # of interest, on the observe cadence. The scoreboard graphic is cropped to
+    # a stable region before the `<OCR>` pass so crowd / banner / jersey /
+    # shot-clock text can never be read as a score. A concrete in-ROI score delta
+    # across the window is an independent scoreboard-change corroboration for
+    # decide's confirm gate. OCR/GPU failure degrades to [] (absent evidence,
+    # never on its own a goal).
+    #
+    # ADAAAA-7086: the ROI is not a fixed per-source calibration. The vision
+    # detector's region-discovery pass predicts the scoreboard region per source
+    # (and assesses whether a scoreboard is even visible); when none is visible
+    # the pass is gated off entirely (no OCR, no ocrHits), so non-scoreboard text
+    # can never drive scoreBoardChanged / ocrHits, while a scorebug in any corner
+    # is still found (recall no longer depends on a hand-tuned ROI).
+    #
+    # ADAAAA-7084 (opt-in PERCEIVE_SCOREBOARD_LLM): a vision LLM first assesses
+    # whether a scoreboard is ACTUALLY visible and, when so, localizes it and may
+    # read the score. When visible, the crop uses the LLM's box (tracks the
+    # graphic wherever it actually sits); when not visible, the `<OCR>` pass is
+    # skipped entirely. Any LLM failure degrades to None and runs the ROI path.
+    #
+    # ADAAAA-7094: the LLM score-text fallback (used when the cropped Florence
+    # `<OCR>` is empty) is only trusted when the LLM-localized box actually
+    # overlaps the configured scoreboard ROI — a hallucinated box/score off the
+    # graphic can never forge a scoreBoardChanged delta.
+    # ADAAAA-7084 (opt-in): vision-LLM scoreboard visibility verdict.
+    verdict = vision_scoreboard(image_b64) if scoreboard_vision_enabled() else None
+    state.scoreboard_vision = verdict
+    # Crop region: prefer the vision-LLM box (when it ran and localized a
+    # usable scoreboard), else the ADAAAA-7086-aware `_scoreboard_roi`.
+    roi = _vision_box_roi(state) if verdict is not None else None
+    if roi is None:
+        roi = _scoreboard_roi(state, detector)
+    # Visibility gate: the LLM says no scoreboard (7084) or the region
+    # discovery found none (7086) -> skip the `<OCR>` pass entirely so
+    # out-of-ROI / non-scoreboard text is never even read.
+    visible = verdict.visible if verdict is not None else getattr(state, "scoreboard_visible", True)
+    _ocr_sport = sport_key(getattr(state, "game_hint", "") or "")
+    ocr_lines: list[str] = []
+    # ADAAAA-7944: before trusting one fixed/discovered region, score the
+    # candidate regions (bottom band, bottom-left/right bugs, top band) by
+    # the temporal stability of the NAMES they read. This probe is bounded to
+    # `SCOREBOARD_SELECT_MAX_FRAMES` frames and stops as soon as a region
+    # clears the stability gates; the chosen region is then cached as the
+    # session's ROI so later frames pay a single crop read as before.
+    selector = _scoreboard_selector(state, _ocr_sport) if verdict is None else None
+    if visible and selector is not None and not selector.resolved:
+        regions = selector.candidates_for_frame()
+        if regions:
+            observed: dict[str, list[str]] = {}
+            for region in regions:
+                try:
+                    observed[region.name] = detector.ocr(rgb, roi=region.roi) or []
+                except Exception as e:  # noqa: BLE001 - probe evidence only
+                    log.warning("scorebug ROI probe skipped frame %s region=%s: %s", seq, region.name, e)
+                    observed[region.name] = []
+                state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
+            selector.record_frame(observed)
+            chosen = selector.select()
+            if chosen is not None:
+                roi = chosen
+                state.scoreboard_roi = chosen
+                state.scoreboard_visible = True
+                ocr_lines = selector.lines_for(selector.resolved_name or "")
+                log.info(
+                    "scoreboard ROI selected session=%s seq=%s region=%s status=%s",
+                    state.session_id, seq, selector.resolved_name, selector.status(),
+                )
+            else:
+                # Still probing: this frame votes with everything the
+                # candidates printed (bounded), and saves the extra read the
+                # single-ROI path would otherwise do on the same frame.
+                merged: list[str] = []
+                for lines in observed.values():
+                    merged.extend(lines or [])
+                ocr_lines = _union_ocr_lines(merged, [])
+    if visible and not ocr_lines:
+        try:
+            ocr_lines = detector.ocr(rgb, roi=roi) or []
+        except Exception as e:  # noqa: BLE001
+            log.warning("scoreboard OCR skipped for frame %s: %s", seq, e)
+        # ADAAAA-7094: the LLM score text only stands in for an empty crop
+        # when its localizing box overlaps the configured scoreboard ROI.
+        if (
+            not ocr_lines
+            and verdict is not None
+            and verdict.visible
+            and verdict.score_text
+            and fallback_score_eligible(verdict.box, _scoreboard_roi(state, detector))
+        ):
+            ocr_lines = [verdict.score_text]
+    out["ocr"] = ocr_lines
+    score = parse_ocr_score(ocr_lines, roi=roi)
+    # ADAAAA-7190: the auto-discovered region-of-interest crop can miss a
+    # numeric scorebug that sits just outside the tight region (observed live
+    # on an El-Clasico-style score overlay where the ROI crop OCR read only
+    # the "EL CLASICO" branding column while whole-frame OCR read
+    # "REAL MADRID 3 - 4 FC BARCELONA"). When a scoreboard is known visible
+    # but the ROI-scoped crop produced no parseable score, fall back to a
+    # whole-frame OCR and parse the score from it, so a real score delta is
+    # still detected instead of silently dropping the corroboration. Bounded
+    # relaxation: only on frames where the visibility gate already deemed a
+    # scoreboard visible, and `parse_ocr_score` still requires a clean
+    # two-integer "N - M" line (a branding / non-score read never qualifies).
+    #
+    # ADAAAA-7909: the fallback was ALSO gated only on the score, so a crop
+    # that parsed a score out of the graphic while reading no club text
+    # ("1515K", "13.8" — the league banner + digits only) suppressed the
+    # whole-frame read that can see the club plate. Measured on the bounded
+    # basketball job: crop lines 30/30 garbage with 0 team lines while the
+    # same frames fed whole read "MB Denizli Basket 13 8 Samsunspor". The
+    # fallback now also fires when the crop produced no TEAM text, and the
+    # whole-frame lines are kept for the match-context channel in that case
+    # even when no score parses from them (team text can never forge a score:
+    # `parse_ocr_score` still owns that decision). Bounded per session by
+    # `_TEAM_FALLBACK_MAX_READS`, and only when the match-context
+    # evidence pass is enabled, so the extra read is charged only where the
+    # names are actually used.
+    _ocr_budget = getattr(state, "team_fallback_reads", 0) < _team_fallback_allowance(state)
+    _sides = (
+        scorebug_lines_sides(ocr_lines, _ocr_sport)
+        if visible and _match_context_enabled() and _ocr_sport != SPORT_UNKNOWN
+        else {"home", "away"}  # nothing to repair: the name pass is off
+    )
+    # No team text at all -> the whole-frame read may see the graphic the ROI
+    # missed (ADAAAA-7190 fallback extended in ADAAAA-7909).
+    _no_team_text = len(_sides) == 0 and _ocr_budget
+    # One side only -> the active region is clipping part of the graphic;
+    # repair the ROI before spending the whole-frame read.
+    _need_roi_repair = 0 < len(_sides) < 2 and _ocr_budget
+    _need_team_text = _no_team_text
+    # ADAAAA-7909 ROI repair: the documented fallback prior is a TOP band
+    # (`ScoreboardRoi.from_env()` -> 0,0,1,0.25), but a bottom-centre scorebug
+    # on an indoor basketball broadcast sits in the lower fifth of the frame.
+    # Measured on the bounded basketball clip: the top-band crop read only the
+    # LED ad boards ("05ASTEKISTEK…", 30/30 lines, 0 team lines) while the same
+    # frames cropped to the bottom band read both clubs on 11/11 labelled
+    # anchor frames. Discovery can also miss (its `<DENSE_REGION_CAPTION>` pass
+    # is flaky), so a wrong-but-discovered region must not be the only sliver
+    # the name channel ever sees. Retry `<OCR>` once on the bottom-centre
+    # prior; when it reads team text the region is adopted for the session so
+    # the retry is paid once, not on every anchor frame.
+    if _need_roi_repair or _no_team_text:
+        bottom = ScoreboardRoi(*_SCOREBOARD_BOTTOM_CENTRE_PRIOR)
+        # ADAAAA-7909: once the bottom-centre prior IS the session's active
+        # region, "repairing" to it reads the identical crop again — measured
+        # on the bounded job, that wasted half the read allowance (one useless
+        # repair + one whole-frame read per clipped frame). Skip it and spend
+        # the allowance on the read that actually sees more of the graphic.
+        repair_worthwhile = not (roi is not None and _same_roi(roi, bottom))
+        if not repair_worthwhile:
+            log.debug("scorebug ROI repair skipped frame %s: already the bottom prior", seq)
+        else:
+            try:
+                bottom_lines = detector.ocr(rgb, roi=bottom) or []
+                bottom_score = parse_ocr_score(bottom_lines, roi=bottom)
+                # The retry is charged as soon as it runs, success or not, so a
+                # broadcast whose bottom band never reads cannot pay it forever.
+                state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
+            except Exception as e:  # noqa: BLE001 - evidence only, never fatal
+                log.warning("scorebug bottom-centre ROI repair skipped frame %s: %s", seq, e)
+            else:
+                if score is None and bottom_score is not None:
+                    score = bottom_score
+                bottom_sides = scorebug_lines_sides(bottom_lines, _ocr_sport)
+                if len(bottom_sides) >= 2 or (not _need_roi_repair and bottom_sides):
+                    ocr_lines = bottom_lines
+                    out["ocr"] = bottom_lines
+                    _need_team_text = False
+                    _need_roi_repair = False
+                    # Adopt the repaired region when no vision verdict pinned it:
+                    # it is the region that actually carries the graphic.
+                    if verdict is None:
+                        roi = bottom
+                        state.scoreboard_roi = bottom
+                        state.scoreboard_visible = True
+                    log.info(
+                        "scorebug bottom-centre ROI repair session=%s seq=%s lines=%d adopted=%s",
+                        state.session_id, seq, len(bottom_lines), verdict is None,
+                    )
+    if _need_roi_repair and _ocr_budget:
+        # The repaired region still names only one side; the whole-frame read
+        # is the last bounded attempt at the other (same session counter).
+        _need_team_text = True
+    if visible and (score is None or _need_team_text):
+        try:
+            full_ocr = detector.ocr(rgb) or []
+            alt = parse_ocr_score(full_ocr)  # whole-frame, no ROI filter
+        except Exception as e:  # noqa: BLE001
+            log.warning("scoreboard whole-frame OCR fallback skipped frame %s: %s", seq, e)
+        else:
+            if alt is not None:
+                score = alt
+            if alt is not None or (
+                _need_team_text and scorebug_lines_have_team_text(full_ocr, _ocr_sport)
+            ):
+                # ADAAAA-7909: keep the crop's lines as well. The two reads
+                # cover different slivers of ONE graphic — the crop clips the
+                # club plate that the whole-frame read carries, and the
+                # whole-frame read drags ad-board text into the run — so the
+                # frame votes for every side either read printed instead of
+                # only the side the winning read happened to see.
+                out["ocr"] = _union_ocr_lines(ocr_lines, full_ocr)
+                if _need_team_text:
+                    state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
+                    log.info(
+                        "scorebug team-text whole-frame fallback session=%s seq=%s lines=%d",
+                        state.session_id, seq, len(full_ocr),
+                    )
+    state.scoreboard_tracker.record(timestamp, score)
+    # ADAAAA-7855: sample the home/away kit swatches off the SAME ROI crop
+    # the OCR pass just read (CPU only, no GPU). These are the Stage-3
+    # "scorebug layout" association source for the match-context resolver;
+    # bounded so a long stream never grows them.
+    if _match_context_enabled() and roi is not None and len(state.scorebug_swatches) < _MATCH_CONTEXT_MAX_SWATCHES:
+        try:
+            for sw in sample_scorebug_swatches(rgb, roi, timestamp):
+                state.scorebug_swatches.append(sw)
+        except Exception as e:  # noqa: BLE001 - evidence only, never fatal
+            log.debug("match-context scorebug swatch skipped frame %s: %s", seq, e)
+    # ADAAAA-7754: secondary confirmation now goes through the type's named
+    # corroboration-oracle seam. Soccer is the reference implementation
+    # (scoreboard OCR -> the same `ScoreboardTracker.changed` reading as
+    # before); a type with no oracle yields an explicit no-signal instead of
+    # inheriting soccer's confirmation.
+    _verdict = profile.corroborate(timestamp, state.scoreboard_tracker)
+    if _verdict.corroborated:
+        out["scoreBoardChanged"] = True
+        # ADAAAA-7844: carry the MEASURED delta (both parsed sides, sample
+        # counts, transition instant) alongside the boolean so the server can
+        # forward it to the confirm pass and the corroboration label can be
+        # tied to a legible, time-tied measurement instead of a bare flag.
+        try:
+            _delta = state.scoreboard_tracker.delta(timestamp)
+        except Exception:  # noqa: BLE001 - evidence is best-effort, never fatal
+            _delta = None
+        if _delta is not None:
+            out["scoreboardDelta"] = _delta.to_dict()
+    return out
+
+
 def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[dict, dict | None]:
     """Run one sampled frame through the shared perceive pipeline: Florence or
     background-diff detection -> tracker.step -> observation (+ candidate).
@@ -871,6 +1157,32 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     # adapter uses its own detector (base+LoRA-merged model); every other
     # session keeps the shared base detector.
     detector = get_detector(state.lora_ref or None)
+    # ADAAAA-8004: per-frame accounting. `frame` covers this whole call; the
+    # individual stages below are recorded as they run. `_rgb_snapshot` is the
+    # frame this call actually works on, so the optional OCR lane (below) can
+    # never read a later frame's image.
+    _t_frame = _perf_now()
+    _rgb_snapshot = state.last_rgb
+    _ocr_future = None
+    if detector is not None and _rgb_snapshot is not None and dual_florence_enabled():
+        # Second Florence copy: kick the scoreboard OCR pass now so it overlaps
+        # the <OD>/SAM work below instead of serialising behind it.
+        _ocr_det = get_ocr_detector()
+        if _ocr_det is not None:
+            try:
+                _ocr_future = _ocr_lane_executor().submit(
+                    _scoreboard_ocr_fields,
+                    state,
+                    _ocr_det,
+                    image_b64,
+                    seq,
+                    timestamp,
+                    profile,
+                    _rgb_snapshot,
+                )
+            except Exception as e:  # noqa: BLE001 - OCR is evidence, never fatal
+                log.warning("scoreboard OCR lane submit failed frame %s: %s", seq, e)
+                _ocr_future = None
     if detector is not None:
         # Real Florence-2: identify objects + bboxes and feed them to the tracker.
         # Scope the <OD> prompt to the session's closed vocabulary (plan roster /
@@ -974,9 +1286,17 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                     for o in (_d.detect(rgb, vocabulary=_v, roi_pass=False) if _d else [])
                     if o.get("bbox")
                 ]
-            tracks = state.tracker.step_frame(state.last_rgb, timestamp, boxes, labels=labels)
+            _t_sam = _perf_now()
+            try:
+                tracks = state.tracker.step_frame(state.last_rgb, timestamp, boxes, labels=labels)
+            finally:
+                _perf_recorder().add("sam", _perf_now() - _t_sam)
     else:
-        tracks = state.tracker.step(boxes, timestamp, labels=labels)
+        _t_sam = _perf_now()
+        try:
+            tracks = state.tracker.step(boxes, timestamp, labels=labels)
+        finally:
+            _perf_recorder().add("sam", _perf_now() - _t_sam)
     state.seq = seq
     # ADAAAA-6525: default-INFO heartbeat — one salient line every Nth frame
     # (plus the first) so an operator sees the pipeline is alive, without the
@@ -1031,6 +1351,7 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     ball_signal_fields: dict = {}
     pipe = _ensure_ball_signal(state)
     if pipe is not None:
+        _t_ball = _perf_now()
         try:
             _bf = pipe.step(objects, _player_tracks(tracks), timestamp, sam_ball_box=sam_ball_box)
             if _bf.velocity is not None:
@@ -1039,6 +1360,8 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 ball_signal_fields["ballPossession"] = _bf.possession
         except Exception as e:  # noqa: BLE001
             log.warning("ball signal skipped for frame %s: %s", seq, e)
+        finally:
+            _perf_recorder().add("ball_signal", _perf_now() - _t_ball)
 
     # Decide-leg I2 (ADAAAA-6359): goal-line / ball-outcome ground-truth signal.
     # Feed the on-pitch ball position (INC-2b homography velocity) through the
@@ -1048,6 +1371,7 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     goal_signal_fields: dict = {}
     goal_det = _ensure_goal_line_detector(state)
     if goal_det is not None:
+        _t_goal = _perf_now()
         try:
             _vel = ball_signal_fields.get("ballVelocity") or {}
             _pos = None
@@ -1059,6 +1383,8 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 goal_signal_fields["ballOutcome"] = _gl.ballOutcome
         except Exception as e:  # noqa: BLE001
             log.warning("goal-line signal skipped for frame %s: %s", seq, e)
+        finally:
+            _perf_recorder().add("goal_signal", _perf_now() - _t_goal)
 
     obs = {
         "type": "observation",
@@ -1174,245 +1500,21 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 state.session_id, seq, timestamp,
                 [f.trigger for f in stage_a_fires], profile.key,
             )
-    # ADAAAA-7081/7084/7086/7094: scoreboard OCR scoped to a scoreboard region
-    # of interest, on the observe cadence. The scoreboard graphic is cropped to
-    # a stable region before the `<OCR>` pass so crowd / banner / jersey /
-    # shot-clock text can never be read as a score. A concrete in-ROI score delta
-    # across the window is an independent scoreboard-change corroboration for
-    # decide's confirm gate. OCR/GPU failure degrades to [] (absent evidence,
-    # never on its own a goal).
-    #
-    # ADAAAA-7086: the ROI is not a fixed per-source calibration. The vision
-    # detector's region-discovery pass predicts the scoreboard region per source
-    # (and assesses whether a scoreboard is even visible); when none is visible
-    # the pass is gated off entirely (no OCR, no ocrHits), so non-scoreboard text
-    # can never drive scoreBoardChanged / ocrHits, while a scorebug in any corner
-    # is still found (recall no longer depends on a hand-tuned ROI).
-    #
-    # ADAAAA-7084 (opt-in PERCEIVE_SCOREBOARD_LLM): a vision LLM first assesses
-    # whether a scoreboard is ACTUALLY visible and, when so, localizes it and may
-    # read the score. When visible, the crop uses the LLM's box (tracks the
-    # graphic wherever it actually sits); when not visible, the `<OCR>` pass is
-    # skipped entirely. Any LLM failure degrades to None and runs the ROI path.
-    #
-    # ADAAAA-7094: the LLM score-text fallback (used when the cropped Florence
-    # `<OCR>` is empty) is only trusted when the LLM-localized box actually
-    # overlaps the configured scoreboard ROI — a hallucinated box/score off the
-    # graphic can never forge a scoreBoardChanged delta.
-    if detector is not None and state.last_rgb is not None:
-        # ADAAAA-7084 (opt-in): vision-LLM scoreboard visibility verdict.
-        verdict = vision_scoreboard(image_b64) if scoreboard_vision_enabled() else None
-        state.scoreboard_vision = verdict
-        # Crop region: prefer the vision-LLM box (when it ran and localized a
-        # usable scoreboard), else the ADAAAA-7086-aware `_scoreboard_roi`.
-        roi = _vision_box_roi(state) if verdict is not None else None
-        if roi is None:
-            roi = _scoreboard_roi(state, detector)
-        # Visibility gate: the LLM says no scoreboard (7084) or the region
-        # discovery found none (7086) -> skip the `<OCR>` pass entirely so
-        # out-of-ROI / non-scoreboard text is never even read.
-        visible = verdict.visible if verdict is not None else getattr(state, "scoreboard_visible", True)
-        _ocr_sport = sport_key(getattr(state, "game_hint", "") or "")
-        ocr_lines: list[str] = []
-        # ADAAAA-7944: before trusting one fixed/discovered region, score the
-        # candidate regions (bottom band, bottom-left/right bugs, top band) by
-        # the temporal stability of the NAMES they read. This probe is bounded to
-        # `SCOREBOARD_SELECT_MAX_FRAMES` frames and stops as soon as a region
-        # clears the stability gates; the chosen region is then cached as the
-        # session's ROI so later frames pay a single crop read as before.
-        selector = _scoreboard_selector(state, _ocr_sport) if verdict is None else None
-        if visible and selector is not None and not selector.resolved:
-            regions = selector.candidates_for_frame()
-            if regions:
-                observed: dict[str, list[str]] = {}
-                for region in regions:
-                    try:
-                        observed[region.name] = detector.ocr(state.last_rgb, roi=region.roi) or []
-                    except Exception as e:  # noqa: BLE001 - probe evidence only
-                        log.warning("scorebug ROI probe skipped frame %s region=%s: %s", seq, region.name, e)
-                        observed[region.name] = []
-                    state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
-                selector.record_frame(observed)
-                chosen = selector.select()
-                if chosen is not None:
-                    roi = chosen
-                    state.scoreboard_roi = chosen
-                    state.scoreboard_visible = True
-                    ocr_lines = selector.lines_for(selector.resolved_name or "")
-                    log.info(
-                        "scoreboard ROI selected session=%s seq=%s region=%s status=%s",
-                        state.session_id, seq, selector.resolved_name, selector.status(),
-                    )
-                else:
-                    # Still probing: this frame votes with everything the
-                    # candidates printed (bounded), and saves the extra read the
-                    # single-ROI path would otherwise do on the same frame.
-                    merged: list[str] = []
-                    for lines in observed.values():
-                        merged.extend(lines or [])
-                    ocr_lines = _union_ocr_lines(merged, [])
-        if visible and not ocr_lines:
-            try:
-                ocr_lines = detector.ocr(state.last_rgb, roi=roi) or []
-            except Exception as e:  # noqa: BLE001
-                log.warning("scoreboard OCR skipped for frame %s: %s", seq, e)
-            # ADAAAA-7094: the LLM score text only stands in for an empty crop
-            # when its localizing box overlaps the configured scoreboard ROI.
-            if (
-                not ocr_lines
-                and verdict is not None
-                and verdict.visible
-                and verdict.score_text
-                and fallback_score_eligible(verdict.box, _scoreboard_roi(state, detector))
-            ):
-                ocr_lines = [verdict.score_text]
-        obs["ocr"] = ocr_lines
-        score = parse_ocr_score(ocr_lines, roi=roi)
-        # ADAAAA-7190: the auto-discovered region-of-interest crop can miss a
-        # numeric scorebug that sits just outside the tight region (observed live
-        # on an El-Clasico-style score overlay where the ROI crop OCR read only
-        # the "EL CLASICO" branding column while whole-frame OCR read
-        # "REAL MADRID 3 - 4 FC BARCELONA"). When a scoreboard is known visible
-        # but the ROI-scoped crop produced no parseable score, fall back to a
-        # whole-frame OCR and parse the score from it, so a real score delta is
-        # still detected instead of silently dropping the corroboration. Bounded
-        # relaxation: only on frames where the visibility gate already deemed a
-        # scoreboard visible, and `parse_ocr_score` still requires a clean
-        # two-integer "N - M" line (a branding / non-score read never qualifies).
-        #
-        # ADAAAA-7909: the fallback was ALSO gated only on the score, so a crop
-        # that parsed a score out of the graphic while reading no club text
-        # ("1515K", "13.8" — the league banner + digits only) suppressed the
-        # whole-frame read that can see the club plate. Measured on the bounded
-        # basketball job: crop lines 30/30 garbage with 0 team lines while the
-        # same frames fed whole read "MB Denizli Basket 13 8 Samsunspor". The
-        # fallback now also fires when the crop produced no TEAM text, and the
-        # whole-frame lines are kept for the match-context channel in that case
-        # even when no score parses from them (team text can never forge a score:
-        # `parse_ocr_score` still owns that decision). Bounded per session by
-        # `_TEAM_FALLBACK_MAX_READS`, and only when the match-context
-        # evidence pass is enabled, so the extra read is charged only where the
-        # names are actually used.
-        _ocr_budget = getattr(state, "team_fallback_reads", 0) < _team_fallback_allowance(state)
-        _sides = (
-            scorebug_lines_sides(ocr_lines, _ocr_sport)
-            if visible and _match_context_enabled() and _ocr_sport != SPORT_UNKNOWN
-            else {"home", "away"}  # nothing to repair: the name pass is off
+    # ADAAAA-8004: the scoreboard OCR pass is delegated so it can run on the
+    # second Florence copy (PERCEIVE_DUAL_FLORENCE=1) while this frame's
+    # <OD>/SAM work holds the primary copy. Without the second copy it runs
+    # inline here, exactly as before.
+    if _ocr_future is not None:
+        try:
+            obs.update(_ocr_future.result())
+        except Exception as e:  # noqa: BLE001 - OCR evidence is never fatal
+            log.warning("scoreboard OCR lane failed frame %s: %s", seq, e)
+            obs["ocr"] = []
+    else:
+        obs.update(
+            _scoreboard_ocr_fields(state, detector, image_b64, seq, timestamp, profile, _rgb_snapshot)
         )
-        # No team text at all -> the whole-frame read may see the graphic the ROI
-        # missed (ADAAAA-7190 fallback extended in ADAAAA-7909).
-        _no_team_text = len(_sides) == 0 and _ocr_budget
-        # One side only -> the active region is clipping part of the graphic;
-        # repair the ROI before spending the whole-frame read.
-        _need_roi_repair = 0 < len(_sides) < 2 and _ocr_budget
-        _need_team_text = _no_team_text
-        # ADAAAA-7909 ROI repair: the documented fallback prior is a TOP band
-        # (`ScoreboardRoi.from_env()` -> 0,0,1,0.25), but a bottom-centre scorebug
-        # on an indoor basketball broadcast sits in the lower fifth of the frame.
-        # Measured on the bounded basketball clip: the top-band crop read only the
-        # LED ad boards ("05ASTEKISTEK…", 30/30 lines, 0 team lines) while the same
-        # frames cropped to the bottom band read both clubs on 11/11 labelled
-        # anchor frames. Discovery can also miss (its `<DENSE_REGION_CAPTION>` pass
-        # is flaky), so a wrong-but-discovered region must not be the only sliver
-        # the name channel ever sees. Retry `<OCR>` once on the bottom-centre
-        # prior; when it reads team text the region is adopted for the session so
-        # the retry is paid once, not on every anchor frame.
-        if _need_roi_repair or _no_team_text:
-            bottom = ScoreboardRoi(*_SCOREBOARD_BOTTOM_CENTRE_PRIOR)
-            # ADAAAA-7909: once the bottom-centre prior IS the session's active
-            # region, "repairing" to it reads the identical crop again — measured
-            # on the bounded job, that wasted half the read allowance (one useless
-            # repair + one whole-frame read per clipped frame). Skip it and spend
-            # the allowance on the read that actually sees more of the graphic.
-            repair_worthwhile = not (roi is not None and _same_roi(roi, bottom))
-            if not repair_worthwhile:
-                log.debug("scorebug ROI repair skipped frame %s: already the bottom prior", seq)
-            else:
-                try:
-                    bottom_lines = detector.ocr(state.last_rgb, roi=bottom) or []
-                    bottom_score = parse_ocr_score(bottom_lines, roi=bottom)
-                    # The retry is charged as soon as it runs, success or not, so a
-                    # broadcast whose bottom band never reads cannot pay it forever.
-                    state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
-                except Exception as e:  # noqa: BLE001 - evidence only, never fatal
-                    log.warning("scorebug bottom-centre ROI repair skipped frame %s: %s", seq, e)
-                else:
-                    if score is None and bottom_score is not None:
-                        score = bottom_score
-                    bottom_sides = scorebug_lines_sides(bottom_lines, _ocr_sport)
-                    if len(bottom_sides) >= 2 or (not _need_roi_repair and bottom_sides):
-                        ocr_lines = bottom_lines
-                        obs["ocr"] = bottom_lines
-                        _need_team_text = False
-                        _need_roi_repair = False
-                        # Adopt the repaired region when no vision verdict pinned it:
-                        # it is the region that actually carries the graphic.
-                        if verdict is None:
-                            roi = bottom
-                            state.scoreboard_roi = bottom
-                            state.scoreboard_visible = True
-                        log.info(
-                            "scorebug bottom-centre ROI repair session=%s seq=%s lines=%d adopted=%s",
-                            state.session_id, seq, len(bottom_lines), verdict is None,
-                        )
-        if _need_roi_repair and _ocr_budget:
-            # The repaired region still names only one side; the whole-frame read
-            # is the last bounded attempt at the other (same session counter).
-            _need_team_text = True
-        if visible and (score is None or _need_team_text):
-            try:
-                full_ocr = detector.ocr(state.last_rgb) or []
-                alt = parse_ocr_score(full_ocr)  # whole-frame, no ROI filter
-            except Exception as e:  # noqa: BLE001
-                log.warning("scoreboard whole-frame OCR fallback skipped frame %s: %s", seq, e)
-            else:
-                if alt is not None:
-                    score = alt
-                if alt is not None or (
-                    _need_team_text and scorebug_lines_have_team_text(full_ocr, _ocr_sport)
-                ):
-                    # ADAAAA-7909: keep the crop's lines as well. The two reads
-                    # cover different slivers of ONE graphic — the crop clips the
-                    # club plate that the whole-frame read carries, and the
-                    # whole-frame read drags ad-board text into the run — so the
-                    # frame votes for every side either read printed instead of
-                    # only the side the winning read happened to see.
-                    obs["ocr"] = _union_ocr_lines(ocr_lines, full_ocr)
-                    if _need_team_text:
-                        state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
-                        log.info(
-                            "scorebug team-text whole-frame fallback session=%s seq=%s lines=%d",
-                            state.session_id, seq, len(full_ocr),
-                        )
-        state.scoreboard_tracker.record(timestamp, score)
-        # ADAAAA-7855: sample the home/away kit swatches off the SAME ROI crop
-        # the OCR pass just read (CPU only, no GPU). These are the Stage-3
-        # "scorebug layout" association source for the match-context resolver;
-        # bounded so a long stream never grows them.
-        if _match_context_enabled() and roi is not None and len(state.scorebug_swatches) < _MATCH_CONTEXT_MAX_SWATCHES:
-            try:
-                for sw in sample_scorebug_swatches(state.last_rgb, roi, timestamp):
-                    state.scorebug_swatches.append(sw)
-            except Exception as e:  # noqa: BLE001 - evidence only, never fatal
-                log.debug("match-context scorebug swatch skipped frame %s: %s", seq, e)
-        # ADAAAA-7754: secondary confirmation now goes through the type's named
-        # corroboration-oracle seam. Soccer is the reference implementation
-        # (scoreboard OCR -> the same `ScoreboardTracker.changed` reading as
-        # before); a type with no oracle yields an explicit no-signal instead of
-        # inheriting soccer's confirmation.
-        _verdict = profile.corroborate(timestamp, state.scoreboard_tracker)
-        if _verdict.corroborated:
-            obs["scoreBoardChanged"] = True
-            # ADAAAA-7844: carry the MEASURED delta (both parsed sides, sample
-            # counts, transition instant) alongside the boolean so the server can
-            # forward it to the confirm pass and the corroboration label can be
-            # tied to a legible, time-tied measurement instead of a bare flag.
-            try:
-                _delta = state.scoreboard_tracker.delta(timestamp)
-            except Exception:  # noqa: BLE001 - evidence is best-effort, never fatal
-                _delta = None
-            if _delta is not None:
-                obs["scoreboardDelta"] = _delta.to_dict()
+
     # ADAAAA-7008 / ADAAAA-7012: cache this frame's derived context (the "data
     # seeder" contract) so the on-demand `/app/evidence` recall endpoint can serve
     # it WITHOUT re-running the detector. Compact seed (tracks / objects / ocr) —
@@ -1460,6 +1562,10 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         ball_signal_fields,
         goal_signal_fields,
     )
+    # ADAAAA-8004: close the frame's accounting. `frame` is the compute the
+    # observe step actually paid; the per-stage samples above say where it went.
+    _perf_recorder().add("frame", _perf_now() - _t_frame)
+    _perf_recorder().step_done()
     return obs, cand_dict
 
 
@@ -1909,6 +2015,18 @@ def create_app() -> FastAPI:
             **cap,
         }
 
+    @router.get("/perf")
+    async def perf():
+        """ADAAAA-8004: measured per-stage step cost for the live rail.
+
+        Read-only accounting: `count/mean/p50/p95/max` seconds for every stage
+        (decode, fetch_wait, detect, roi, ocr, sam, ball_signal, goal_signal,
+        publish, frame, step) over a bounded window, plus the last frame's raw
+        values. This is the measurement AC3's decomposition is quoted from and
+        it costs nothing to serve — no GPU work, no pipeline change.
+        """
+        return _perf_recorder().summary()
+
     @router.post("/analyze")
     async def analyze(
         req: AnalyzeRequest,
@@ -1973,7 +2091,9 @@ def create_app() -> FastAPI:
         # Keep the latest raw frame so control `analyze-still` and any future
         # trickle video-in can re-run the exact same step() on it.
         if req.image:
+            _t_dec = _perf_now()
             state.last_rgb = _decode_rgb(req.image)
+            _perf_recorder().add("decode", _perf_now() - _t_dec)
             state.last_image_b64 = req.image
 
         # Run the frame through the SAME off-loop, GPU-serialized path the
