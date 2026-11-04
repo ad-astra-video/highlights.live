@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { acceptVideoDecision, LiveRunShared } from "../src/analyzer";
+import { acceptVideoDecision, captionGroundingForDecision, LiveRunShared } from "../src/analyzer";
+import { groundCaption } from "@highlights/events";
 import type {
   AnalyzerConfig,
   CandidateSignal,
@@ -131,5 +132,41 @@ describe("ADAAAA-7865 dedup fires on the accept path (ADAAAA-7938 Spec B)", () =
     expect(hl.length).toBe(2);
     expect(hl[1].outcome).toBe("scoring_play");
     expect(hl[1].dedupeReason).toBeUndefined();
+  });
+});
+
+// ADAAAA-7957 (Inc 5, contract v3 §3.1): the caption gate must see the verdict the
+// board will actually read. `acceptVideoDecision` downgrades a repeat GOAL accept
+// to a celebration (`big_play`), and level 2c025e97 shipped two stored summary
+// items asserting a goal on those rows (seq 17/19) because the summary was gated
+// with the pre-accept `scoring_play`. The accept path now reports its final
+// verdict through `sink`, and the summary seam gates with it.
+describe("acceptVideoDecision reports the STORED verdict to the caption gate (ADAAAA-7957)", () => {
+  it("hands back the downgraded celebration verdict, and the gate then removes the claim", async () => {
+    const run = new LiveRunShared({ decideWindowN: 24, audioRetainS: 400 });
+    const cut = async (t: number) => ({ clipId: `clip-${t}`, clipUri: "" });
+    const client = { decide: async () => goalStage1(), confirm: async () => confirmDecision() } as any;
+    await acceptVideoDecision(client, run, cut, cfg(), undefined, { seq: 1, timestamp: 42.4 }, candidate(42.4), goalStage1());
+    const sink: { final?: DecisionResult } = {};
+    await acceptVideoDecision(
+      client,
+      run,
+      cut,
+      cfg(),
+      undefined,
+      { seq: 2, timestamp: 60 },
+      candidate(60),
+      goalStage1(),
+      undefined,
+      undefined,
+      sink
+    );
+    expect(sink.final?.outcome).toBe("big_play");
+    // The grounded context the summary seam builds from that verdict.
+    const ctx = captionGroundingForDecision({ ...sink.final!, analysis: undefined });
+    const line = "No. 9 scores — crowd energy rises";
+    const out = groundCaption(line, ctx);
+    expect(out).not.toMatch(/\bscores?\b|\bgoal\b|\bnet\b/i);
+    expect(out).not.toMatch(/[—–]/);
   });
 });
