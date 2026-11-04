@@ -5503,6 +5503,10 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     warmupSeconds: cfg.warmupSeconds,
     recheckIntervalSeconds: cfg.recheckIntervalSeconds,
     planMode: "live",
+    // ADAAAA-7948 (Inc 3): the caption grounding gate runs on the live/fast
+    // rail only. VOD's AnalyzerConfig never sets this, so its summary items are
+    // byte-identical (AC8).
+    captionGrounding: true,
     // ADAAAA-7011: wire the LIVE decide-observer into the live job path
     // (config-gated). When on, decide runs on the ~3 s cadence regardless
     // of whether perceive emitted a candidate.

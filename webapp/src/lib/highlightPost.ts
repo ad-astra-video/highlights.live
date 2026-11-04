@@ -4,6 +4,13 @@
 // the card actions + the multi-select batch export, kept out of the React
 // component so they are unit-testable without a DOM.
 import type { JobDetailHighlight, SummaryLogEntry } from "./jobDetail";
+import {
+  gateGoalClaims,
+  groundCaption,
+  humanEventLabel as sharedHumanEventLabel,
+  stripInternalTokens,
+  type CaptionGroundingContext,
+} from "@highlights/events";
 
 /**
  * Absolute, public URL for a highlight clip.
@@ -101,8 +108,32 @@ export function highlightInstant(h: Pick<JobDetailHighlight, "localizedTs" | "st
   return typeof h.localizedTs === "number" ? h.localizedTs : h.start;
 }
 
-/**
- * The narrative line for a highlight from the job's append-only summary log.
+/** The narrative the seed reads, with WHERE it came from (the summary log or
+ * the highlight's own decide `reason`). The source decides whether names can be
+ * re-checked: a summary-log line is already server-grounded (ADAAAA-7948),
+ * while a raw decide `reason` is not. */
+function selectNarrative(
+  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason">,
+  log?: SummaryLogEntry[]
+): { text: string; fromLog: boolean } {
+  const entries = (log ?? []).filter(
+    (e): e is SummaryLogEntry & { windowTs: number } => typeof e.windowTs === "number" && !!e.text?.trim()
+  );
+  if (entries.length === 0) return { text: (h.reason ?? "").trim(), fromLog: false };
+  const anchor = highlightInstant(h);
+  let best = entries[0];
+  let bestDistance = Math.abs(best.windowTs - anchor);
+  for (const e of entries.slice(1)) {
+    const distance = Math.abs(e.windowTs - anchor);
+    if (distance < bestDistance || (distance === bestDistance && e.seq > best.seq)) {
+      best = e;
+      bestDistance = distance;
+    }
+  }
+  return { text: best.text.trim(), fromLog: true };
+}
+
+/** The narrative line for a highlight from the job's append-only summary log.
  *
  * Each summary-log entry covers one observe window (`windowTs` = seconds into
  * the stream), which is what the reviewer asked to seed captions from. Pick
@@ -114,21 +145,28 @@ export function captionNarrative(
   h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason">,
   log?: SummaryLogEntry[]
 ): string {
-  const entries = (log ?? []).filter(
-    (e): e is SummaryLogEntry & { windowTs: number } => typeof e.windowTs === "number" && !!e.text?.trim()
-  );
-  if (entries.length === 0) return (h.reason ?? "").trim();
-  const anchor = highlightInstant(h);
-  let best = entries[0];
-  let bestDistance = Math.abs(best.windowTs - anchor);
-  for (const e of entries.slice(1)) {
-    const distance = Math.abs(e.windowTs - anchor);
-    if (distance < bestDistance || (distance === bestDistance && e.seq > best.seq)) {
-      best = e;
-      bestDistance = distance;
-    }
-  }
-  return best.text.trim();
+  return selectNarrative(h, log).text;
+}
+
+/**
+ * ADAAAA-7948 (Inc 3): the grounding context a seeded caption carries.
+ *
+ * The verdict is the window's STORED outcome, read off the highlight row (the
+ * same value the server gates its summary text on). A summary-log narrative has
+ * already crossed the server gate, so it is not name-checked twice; a raw decide
+ * `reason` has no corroboration on this surface, so a caller-supplied
+ * `promptText` is used when available and otherwise the reason's names are
+ * treated as unsourced (replaced by roles).
+ */
+export function captionGroundingFor(
+  h: Pick<JobDetailHighlight, "outcome" | "eventType" | "localizedTs" | "start" | "reason">,
+  opts: { fromLog: boolean; promptText?: string | null } 
+): CaptionGroundingContext {
+  return {
+    verdict: h.outcome ?? null,
+    eventType: h.eventType ?? null,
+    promptText: opts.promptText ?? (opts.fromLog ? null : ""),
+  };
 }
 
 /**
@@ -137,50 +175,29 @@ export function captionNarrative(
  * A caption / post title is customer copy, so the raw enum (`SPORTING_EVENT`,
  * `GOAL`, …) must never reach it. Known types map to plain words; an unknown
  * type degrades to its title-cased words rather than leaking the enum.
+ *
+ * ADAAAA-7948 (Inc 3): the label table lives in the shared caption gate so the
+ * server seam and this one cannot drift apart on a new enum.
  */
-const EVENT_LABELS: Record<string, string> = {
-  GOAL: "goal",
-  SPORTING_EVENT: "sporting moment",
-  NEAR_MISS: "near miss",
-  BIG_PLAY: "big play",
-  HIGHLIGHT: "highlight",
-};
-
 export function humanEventLabel(eventType?: string): string {
-  const raw = (eventType ?? "").trim();
-  if (!raw) return "highlight";
-  const known = EVENT_LABELS[raw.toUpperCase()];
-  if (known) return known;
-  return raw
-    .replace(/[_-]+/g, " ")
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+  return sharedHumanEventLabel(eventType);
 }
 
 /** A SCREAMING_SNAKE pipeline enum (`SPORTING_EVENT`, `NOT_HIGHLIGHT`, …). */
-const SCREAMING_TOKEN = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g;
 
 /**
  * Rewrite an observe-log line into customer copy: drop the internal codes
  * (`T+69s`, `outcome=near_miss`, SCREAMING_SNAKE enums, the `·` separator and
  * any leading event-code prefix) and leave the prose. Deterministic and pure —
  * no model call, no network, no randomness.
+ *
+ * ADAAAA-7948 (Inc 3): the strip itself now lives in the shared caption gate
+ * (`@highlights/events`) so the server summaryLog seam and this seeded-
+ * caption seam run the SAME rules — a bracket verdict label (`[near_miss]`) can
+ * no longer reach a user surface through either path.
  */
 function scrubInternal(text: string): string {
-  const out = text
-    .replace(/\bT\+\s*\d+(?:\.\d+)?\s*s\b/gi, " ")
-    .replace(/\boutcome\s*=\s*[A-Za-z0-9_-]+/gi, " ")
-    .replace(SCREAMING_TOKEN, (m) => humanEventLabel(m))
-    .replace(/[·•]/g, ", ");
-  return out
-    // A bare leading event enum ("GOAL — …") is an internal code, not copy.
-    .replace(/^\s*[A-Z][A-Z0-9]{1,}\b\s*[,;:—–-]*\s*/, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/^[,;:—–\-\s]+|[,;:—–\-\s]+$/g, "");
+  return stripInternalTokens(text);
 }
 
 /** The leading clause of a narrative: cut at an em/en dash or a semicolon. */
@@ -220,14 +237,23 @@ export const MAX_CAPTION_CHARS = 180;
  * edits this in the card; the edited value is what the batch export ships.
  */
 export function suggestCaption(
-  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType">,
-  log?: SummaryLogEntry[]
+  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType" | "outcome">,
+  log?: SummaryLogEntry[],
+  ctx?: CaptionGroundingContext
 ): string {
-  const narrative = scrubInternal(captionNarrative(h, log));
+  const selected = selectNarrative(h, log);
+  // ADAAAA-7948 (Inc 3): every seeded caption crosses the grounding gate —
+  // verdict-gated goal claims, sourced names, no internal tokens.
+  const narrative = groundCaption(
+    scrubInternal(selected.text),
+    ctx ?? captionGroundingFor(h, { fromLog: selected.fromLog })
+  );
   const fallback = `A ${humanEventLabel(h.eventType)} was captured in this clip`;
   if (!narrative) return sentenceCase(fallback);
   // One sentence: a multi-sentence narrative keeps its first sentence only.
-  const firstSentence = narrative.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? narrative;
+  // A period inside a jersey number ("No. 9 …") is not a sentence end.
+  const firstSentence =
+    narrative.match(/^.*?[.!?](?=\s+[A-Z"'“'(]|\s*$)/)?.[0] ?? narrative;
   let body = firstSentence;
   if (body.length > MAX_CAPTION_CHARS - 1) body = leadingClause(body);
   body = trimToWords(body, MAX_CAPTION_CHARS - 1).replace(/[\s,;:—–-]+$/, "");
@@ -252,14 +278,19 @@ function titleLine(text: string): string {
  * card always offers 2–3 distinct one-line titles and never a cut word.
  */
 export function postTitles(
-  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType">,
-  log?: SummaryLogEntry[]
+  h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType" | "outcome">,
+  log?: SummaryLogEntry[],
+  ctx?: CaptionGroundingContext
 ): string[] {
-  const narrative = scrubInternal(captionNarrative(h, log));
+  const selected = selectNarrative(h, log);
+  const grounding = ctx ?? captionGroundingFor(h, { fromLog: selected.fromLog });
+  const narrative = groundCaption(scrubInternal(selected.text), grounding);
   const lead = titleLine(leadingClause(narrative));
-  const label = humanEventLabel(h.eventType);
+  // A title carries the same event label as the caption, so the label is gated
+  // too: an unverified goal never becomes "Goal: …" (ADAAAA-7948).
+  const label = gateGoalClaims(humanEventLabel(h.eventType), grounding);
   const labelTitle = label.charAt(0).toUpperCase() + label.slice(1);
-  const reasonLead = titleLine(leadingClause(scrubInternal(h.reason ?? "")));
+  const reasonLead = titleLine(leadingClause(groundCaption(scrubInternal(h.reason ?? ""), grounding)));
 
   const out: string[] = [];
   const push = (value: string) => {

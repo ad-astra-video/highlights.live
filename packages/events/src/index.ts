@@ -1802,3 +1802,10 @@ export type JobDetail = z.infer<typeof JobDetailSchema>;
 // import specifier (`@highlights/events`); safe because ./training only uses
 // the schemas at call time, never at module-eval time (no init-cycle hazard).
 export * from "./training";
+
+// ADAAAA-7948 (Inc 3): the deterministic caption grounding gate every
+// user-visible fast caption crosses (verdict-gated goal claims, sourced names,
+// no internal tokens). Re-exported from the barrel, like ./training, so the
+// server summary seam and the webapp seeded-caption seam share ONE import
+// specifier and cannot drift (`@highlights/events`).
+export * from "./caption-grounding";
