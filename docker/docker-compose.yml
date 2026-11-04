@@ -129,9 +129,12 @@ services:
       resources:
         reservations:
           devices:
-            # Perceive (Florence-2 + SAM 3.1) pinned to GPU 0 = RTX 3090 Ti.
+            # ADAAAA-8004 (CEO placement): perceive (Florence-2 + SAM 3.1) owns
+            # the RTX 5070 Ti (GPU 1) on its own; the decide VLM owns the
+            # 24 GB RTX 3090 Ti (GPU 0). PERCEIVE_GPU_ID is the knob, so a
+            # rollback to the shared-GPU-0 layout is one env line.
             - driver: nvidia
-              device_ids: ["0"]
+              device_ids: ["${PERCEIVE_GPU_ID:-1}"]
               capabilities: [gpu]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/health')"]
@@ -149,15 +152,14 @@ services:
   # with continuous batching so up to GEMMA_MAX_CONCURRENCY simultaneous decide
   # sequences are served at once (supersedes llama.cpp `--parallel 2`).
   #
-  # VRAM gate (ADAAAA-6695 / parent ADAAAA-6693 risk #1): the INT4 weights are
-  # ~10.45 GB. At gpu_memory_utilization 0.90 on the 16 GB RTX 5070 Ti (GPU 1)
-  # that leaves ~3.9 GB for the KV cache. The live decide pass sends up to
-  # 30 frames (~280 soft tokens/image => ~8.4K KV tokens/req), so 4 TRULY-
-  # concurrent 30-frame sequences do NOT fit on this card at the default
-  # vision-token budget. GEMMA_MAX_CONCURRENCY / GEMMA_MAX_SOFT_TOKENS /
-  # GEMMA_MAX_MODEL_LEN / GEMMA_GPU_ID are the ENV knobs that size the fit
-  # without a code change; a larger GPU or reallocation is the documented
-  # fallback (compute/cost decision escalated to CEO — see the issue).
+  # VRAM gate (ADAAAA-6695 / parent ADAAAA-6693 risk #1, retuned by the CEO
+  # placement on ADAAAA-8004): the INT4 weights are ~10.45 GB. On the 24 GB
+  # RTX 3090 Ti (GPU 0) at gpu_memory_utilization 0.90 that is ~22 GB used,
+  # ~11.6 GB of KV cache — room for the default 8 concurrent 30-frame
+  # sequences (~8.4K KV tokens/req at 280 soft tokens/image) that the old
+  # 16 GB 5070 Ti could not hold past 4. GEMMA_MAX_CONCURRENCY /
+  # GEMMA_MAX_SOFT_TOKENS / GEMMA_MAX_MODEL_LEN / GEMMA_GPU_ID remain the ENV
+  # knobs that size the fit without a code change.
   #
   # The operator pre-downloads the checkpoint into ./models/ as a HF-layout
   # dir (consistent with the old bind-mounted-GGUF convention):
@@ -185,7 +187,7 @@ services:
       # (continuous-batching simultaneous sequences). Changing this ENV changes
       # effective concurrency with no code change. Default 4.
       - --max-num-seqs
-      - "${GEMMA_MAX_CONCURRENCY:-4}"
+      - "${GEMMA_MAX_CONCURRENCY:-8}"
       # Per-sequence length ceiling. Sized so a 30-frame + crops + audio +
       # 1200-token-output decide request fits; the KV budget (not this) is the
       # real concurrency constraint on this card. ENV-overridable.
@@ -233,11 +235,14 @@ services:
       resources:
         reservations:
           devices:
-            # Gemma pinned to GPU 1 (RTX 5070 Ti) by default; GEMMA_GPU_ID lets
-            # an operator relocate it (e.g. to GPU 0 / a larger card) without a
-            # compose edit once the compute decision is made.
+            # ADAAAA-8004 (CEO placement): the decide VLM is the ONLY tenant of
+            # the 24 GB RTX 3090 Ti (GPU 0). One INT4 copy at 0.90 util is
+            # ~22 GB: 10.45 GB of weights leaves ~11.6 GB for KV, enough for
+            # the default 8 concurrent 30-frame sequences at fp8 (the old
+            # 2 x 4-slot pair had ~9.4 GB of KV across two cards for the same
+            # 8 sequences). GEMMA_GPU_ID stays the relocation knob.
             - driver: nvidia
-              device_ids: ["${GEMMA_GPU_ID:-1}"]
+              device_ids: ["${GEMMA_GPU_ID:-0}"]
               capabilities: [gpu]
     networks: [hl]
 
@@ -256,6 +261,13 @@ services:
   # reject fp8, in which case GEMMA_B_KV_CACHE_DTYPE=float16 in docker/.env is
   # the documented fallback (`f16` is not a valid value on this build).
   gemma-b:
+    # ADAAAA-8004 (CEO placement): OFF by default. Two INT4 12B copies cannot
+    # share the 24 GB RTX 3090 Ti — 2 x ~10.45 GB of weights leaves ~3.6 GB for
+    # KV, less than one 30-frame decide window needs — so the consolidated
+    # posture runs ONE `gemma` on GPU 0 and keeps `decide-b` as a thin HTTP
+    # client pointed at that same server. Enabling this profile is the rollback
+    # to the two-VLM layout and requires perceive back on GPU 0.
+    profiles: ["decide-vlm-b"]
     image: ${GEMMA_IMAGE:-vllm/vllm-openai:latest}
     container_name: highlights-gemma-b
     command:
@@ -419,7 +431,11 @@ services:
     expose: ["8081"]
     environment:
       - DECIDE_MODE=${DECIDE_MODE:-gemma}
-      - GEMMA_URL=http://gemma-b:8088
+      # ADAAAA-8004 (CEO placement): the second decide worker is a thin HTTP
+      # client of the SAME single VLM on GPU 0. It still gives the server two
+      # concurrent decide request lanes (vLLM batches them), without a second
+      # 10.45 GB model copy that does not fit the 24 GB card.
+      - GEMMA_URL=${DECIDE_B_GEMMA_URL:-http://gemma:8088}
       - GEMMA_MODEL=${GEMMA_MODEL:-cyankiwi/gemma-4-12B-it-qat-AWQ-INT4}
       - ASR_URL=${ASR_URL:-http://asr:8082}
       - ASR_TASK=${ASR_TASK:-transcribe}
@@ -431,7 +447,7 @@ services:
       - DECIDE_CONFIRM_ENABLED=${DECIDE_CONFIRM_ENABLED:-1}
       - DECIDE_CONFIRM_EXTRA_WINDOW_S=${DECIDE_CONFIRM_EXTRA_WINDOW_S:-4}
     depends_on:
-      gemma-b:
+      gemma:
         condition: service_healthy
       asr:
         condition: service_healthy
