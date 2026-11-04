@@ -389,25 +389,26 @@ export async function persistLiveHighlight(
   // stronger clip that later wins the overlap then debits nothing (see
   // `quotaDeltaForInsert`). Read-time only — no decide/perceive call is added.
   const rowsBefore = deps.store.highlightsForJob(highlight.jobId);
-  const { record, created } = await deps.store.addHighlight({
-    ...highlight,
-    ownerId: user.id,
-    status: deps.cfg.autoPublishHighlights ? "accepted" : "pending",
-  });
-  // ADAAAA-8005 (gate 3): DELIVERED. `addHighlight` writes the in-memory store
-  // first (so a feed read on this tick already sees the row) and only then
-  // awaits the DB write; the returned promise is the ack. Reported for a newly
-  // created row only — a dedup hit (`created:false`) was delivered on an earlier
-  // pass and must not add a second sample.
-  if (created && onDelivered) {
-    try {
-      // A legacy row without a trigger timestamp falls through as NaN; the
-      // tracker then attaches the ack to the newest pending window.
-      onDelivered(record.trigger?.timestamp ?? NaN, Date.now());
-    } catch (e: any) {
-      console.error(`[live-deliver:${record.jobId}] ack hook failed:`, String(e?.message || e));
-    }
-  }
+  // ADAAAA-8005 (gate 3): DELIVERED is the instant the row is READABLE — the
+  // in-memory store write inside `addHighlight` (a feed read on that tick
+  // already returns it), not the DB write-through that follows. The hook fires
+  // synchronously there and only for a NEW row, so a dedup hit (delivered on an
+  // earlier pass) adds no second sample and a share-end snapshot cannot miss the
+  // final row to an in-flight insert.
+  const { record, created } = await deps.store.addHighlight(
+    {
+      ...highlight,
+      ownerId: user.id,
+      status: deps.cfg.autoPublishHighlights ? "accepted" : "pending",
+    },
+    onDelivered
+      ? (writable) => {
+          // A legacy row without a trigger timestamp falls through as NaN; the
+          // tracker then attaches it to the newest pending window.
+          onDelivered(writable.trigger?.timestamp ?? NaN, Date.now());
+        }
+      : undefined
+  );
   // ADAAAA-6874 (Phase 2): idempotency — bill/debit/funnel only on the FIRST
   // insert. A re-claimed/resumed job that re-persists the same idempotencyKey
   // returns `created: false` and must NOT re-bill, re-debit quota, or double

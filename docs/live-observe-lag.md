@@ -160,9 +160,10 @@ handful of accepted rows).
   seconds) - the same value `row.createdAt - (startedAt + trigger.timestamp)`
   subtracts, so the metric and the historical log-join arithmetic agree.
 - **Delivered** is the instant the highlight row becomes READABLE on the
-  delivered surface: the store write-through acked (`store.addHighlight`
-  resolved - the in-memory store is written before the DB await, so a feed read
-  on that tick already sees the row).
+  delivered surface: the store ACCEPTS the row (the in-memory write inside
+  `store.addHighlight`, so a feed read on that tick already returns it). The DB
+  write-through that follows is durability, not readability, so it is not part
+  of the measured instant.
 - `deliveredLatencyMs = persistAck - (contentOriginMs + triggerTs * 1000)`,
   where `contentOriginMs` is the wall epoch-ms of content t=0, derived once per
   run from the first fired window (`firedAt - lag - centerTs*1000`) so it shares
@@ -183,7 +184,8 @@ log join):
   (a window cannot be accepted before every earlier window has been).
 - `acceptMs` - the accept gate itself (localize, burst suppression, record,
   emit): O(100 ms), CPU-only.
-- `persistAckMs` - emit -> store write-through ack.
+- `persistAckMs` - emit -> the store accepting the row (readable on the
+  delivered surface).
 
 The five stages sum to `deliveredLatencyMs` (plus `(centerTs - triggerTs)` when
 localization moved the trigger inside the window), so a replay can attribute the
