@@ -174,6 +174,31 @@ describe("a legacy job's stored rows are repaired or dropped, never rendered man
   });
 });
 
+describe("a repair never re-renders a line another row already serves (AC1/AC2)", () => {
+  it("collapses the pair to one row when the repaired sentence equals the previous beat", () => {
+    const ladder = render([
+      {
+        seq: 1,
+        windowTs: 177,
+        verdict: "not_highlight",
+        text: "The keeper makes a save in the box.",
+        text_raw: "The keeper makes a save in the penalty area.",
+      },
+      {
+        seq: 2,
+        windowTs: 180,
+        verdict: "not_highlight",
+        text: "The keeper makes a save.",
+        text_raw: "The keeper makes a save in the goal area.",
+      },
+    ]);
+    const rows = rowsOf(ladder);
+    expect(rows).toHaveLength(1);
+    expect(new Set(rows.map((r) => r.text)).size).toBe(rows.length);
+    expect(rows[0].text).toBe("The keeper makes a save in the box.");
+  });
+});
+
 describe("the VOD rail keeps its stored items (AC8)", () => {
   it("returns a whole stored line unchanged on `source=file`", () => {
     const log: Row[] = [
