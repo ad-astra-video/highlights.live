@@ -43,6 +43,10 @@ describe("ObservationRelay (ADAAAA-7990 delivery)", () => {
       deadlineMs: 30_000,
       pollIntervalMs: 20,
       sampleFps: 3,
+      // This test publishes its six frames up front on purpose; the default
+      // window is deliberately small (see DEFAULT_OBSERVE_MAX_IN_FLIGHT), so ask
+      // for a window that admits them all.
+      maxInFlight: 8,
     });
 
     const started = Date.now();
@@ -156,24 +160,59 @@ describe("ObservationRelay (ADAAAA-7990 delivery)", () => {
     relay.close();
   });
 
-  it("derives the in-flight window from the deadline and the sampling cadence", async () => {
-    // Half the lag budget's worth of frames: 30 s * 3 fps * 0.5 = 45 frames.
-    const relay = new ObservationRelay({
-      read: async () => null,
-      emit: () => {},
-      deadlineMs: 30_000,
-      sampleFps: 3,
-      pollIntervalMs: 50,
-    });
+  it("keeps a SMALL in-flight window by default (paces the publisher to the runner)", async () => {
+    // A window sized from the lag budget (45 frames at 30 s x 3 fps) published 58
+    // frames into the runner on session `376fae8f` and stalled its trickle
+    // subscriber on an aged-out seq — the whole run then delivered 12. The window
+    // is a few frames so the segment never leaves go-livepeer's live buffer.
+    const relay = new ObservationRelay({ read: async () => null, emit: () => {}, deadlineMs: 30_000, pollIntervalMs: 50 });
     let accepted = 0;
-    for (let seq = 1; seq <= 60; seq++) {
+    for (let seq = 1; seq <= 10; seq++) {
       if (relay.reserve()) {
         accepted++;
         relay.commit(frame(seq));
       }
     }
-    expect(accepted).toBe(45);
-    expect(relay.stats()).toMatchObject({ published: 45, refused: 15, inFlight: 45 });
+    expect(accepted).toBe(4);
+    expect(relay.stats()).toMatchObject({ published: 4, refused: 6, inFlight: 4 });
+    relay.close();
+  });
+
+  it("cannot be stalled by a read that never settles", async () => {
+    // go-livepeer's trickle GET can hang on a seq the live edge will not serve.
+    // On session `376fae8f` that stalled the whole queue for 295 s
+    // (`obs-expired seq=13 waitedMs=295789`); a bounded read must instead time out
+    // and let the deadline abandon the frame, then deliver the next one.
+    const hung = new Set<number>([1]);
+    const delivered: number[] = [];
+    let reads = 0;
+    const relay = new ObservationRelay({
+      read: (seq) => {
+        reads++;
+        if (hung.has(seq)) return new Promise<any>(() => {}); // never settles
+        return Promise.resolve({ seq });
+      },
+      emit: (_o, f) => delivered.push(f.seq),
+      deadlineMs: 1_000,
+      pollIntervalMs: 20,
+      readTimeoutMs: 60,
+      maxInFlight: 4,
+    });
+    const t0 = Date.now();
+    relay.reserve();
+    relay.commit(frame(1));
+    relay.reserve();
+    relay.commit(frame(2));
+    const until = Date.now() + 4_000;
+    while (relay.stats().inFlight > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+    // seq 1 is abandoned (its later neighbour answering proves the hole); seq 2 is
+    // delivered. Either way the loop never blocks on the hung read.
+    expect(delivered).toEqual([2]);
+    expect(relay.stats()).toMatchObject({ published: 2, delivered: 1, skipped: 1, expired: 0 });
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    // ... and the loop advanced past it (head read, ahead probe, then seq 2)
+    // instead of blocking on the hung read.
+    expect(reads).toBeGreaterThanOrEqual(3);
     relay.close();
   });
 
@@ -191,64 +230,29 @@ describe("ObservationRelay (ADAAAA-7990 delivery)", () => {
     relay.close();
   });
 
-  it("never wedges when the broker holds a seq open (bounded read + tail probe)", async () => {
-    // go-livepeer HOLDS a subscribe request open for a seq that will never be
-    // published. The pre-fix loop awaited that read forever: on the deployed
-    // 300 s share seq 13 waited 295 s, only 12 observations were delivered, and
-    // everything behind the hole was stalled. The read is bounded per tick now,
-    // and a tail probe abandons the hole as soon as the runner proves it moved on.
-    const observed = new Set([1, 5]);
-    const delivered: number[] = [];
+  it("expires a frame whose read hangs when no later frame answers", async () => {
+    // A runner that has stopped entirely: every read hangs, nothing ahead answers.
+    // The frame must be abandoned at its deadline — counted and logged — instead of
+    // wedging the relay for the rest of the session.
+    const logs: string[] = [];
     const relay = new ObservationRelay({
-      // Mirrors orch.readObservation's abort: resolves null after the bound.
-      read: (seq, timeoutMs) =>
-        new Promise((r) => setTimeout(() => r(observed.has(seq) ? { seq } : null), timeoutMs)),
-      emit: (_o, f) => delivered.push(f.seq),
-      deadlineMs: 30_000,
+      read: () => new Promise<any>(() => {}),
+      emit: () => {
+        throw new Error("must not emit");
+      },
+      deadlineMs: 1_000,
       pollIntervalMs: 20,
-      log: () => {},
+      readTimeoutMs: 60,
+      log: (l) => logs.push(l),
     });
     const t0 = Date.now();
-    for (const seq of [1, 2, 3, 4, 5]) {
-      relay.reserve();
-      relay.commit(frame(seq));
-    }
-    const until = Date.now() + 3_000;
-    while (relay.stats().inFlight > 0 && Date.now() < until) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    expect(delivered).toEqual([1, 5]);
-    expect(relay.stats()).toMatchObject({ delivered: 2, skipped: 3, expired: 0 });
-    // One poll tick per abandoned seq, not a 30 s deadline per hole.
-    expect(Date.now() - t0).toBeLessThan(1_500);
-    relay.close();
-  });
-
-  it("collapses a whole fast-forward gap in one tick", async () => {
-    // The runner jumped from seq 1 to seq 10: seqs 2-9 will never carry an
-    // observation. Probing the queue TAIL (not just the next frame) abandons all
-    // eight in one tick instead of costing a deadline each.
-    const delivered: number[] = [];
-    const relay = new ObservationRelay({
-      read: async (seq, timeoutMs) => {
-        await new Promise((r) => setTimeout(r, Math.min(timeoutMs, 5)));
-        return seq === 1 || seq === 10 ? { seq } : null;
-      },
-      emit: (_o, f) => delivered.push(f.seq),
-      deadlineMs: 30_000,
-      pollIntervalMs: 20,
-      log: () => {},
-    });
-    for (let seq = 1; seq <= 10; seq++) {
-      relay.reserve();
-      relay.commit(frame(seq));
-    }
-    const until = Date.now() + 3_000;
-    while (relay.stats().inFlight > 0 && Date.now() < until) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    expect(delivered).toEqual([1, 10]);
-    expect(relay.stats()).toMatchObject({ delivered: 2, skipped: 8, expired: 0 });
+    relay.reserve();
+    relay.commit(frame(9));
+    const until = Date.now() + 4_000;
+    while (relay.stats().inFlight > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+    expect(relay.stats()).toMatchObject({ published: 1, delivered: 0, expired: 1, skipped: 0 });
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(logs.some((l) => l.includes("obs-expired seq=9"))).toBe(true);
     relay.close();
   });
 

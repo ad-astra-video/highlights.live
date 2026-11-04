@@ -20,15 +20,14 @@
 //   - gives each frame the control plane's own lag budget (`LIVE_OBSERVE_LAG_BUDGET_S`,
 //     default 30 s) to produce its observation, so a slow runner DELAYS delivery
 //     instead of cancelling it;
-//   - reads every seq with a HARD per-tick bound. go-livepeer holds a subscribe
-//     request OPEN for a seq it cannot produce, so an unbounded read wedges the
-//     loop on the first frame the runner fast-forwarded past (measured: seq 13
-//     waited 295 s on a 300 s share, ADAAAA-8004). The loop instead probes the
-//     queue TAIL and abandons every seq before it in one tick;
-//   - holds at most half that budget in flight and REFUSES new frames beyond it
-//     (counted, never published), so a runner that cannot keep up keeps the rail
-//     live — the node stops publishing frames whose observation would land past
-//     the rail's staleness window instead of queueing them forever;
+//   - holds only a FEW frames in flight (`DEFAULT_OBSERVE_MAX_IN_FLIGHT`) and
+//     REFUSES new frames beyond that (counted, never published). This is pacing,
+//     not just backpressure: go-livepeer's live edge serves a segment only while
+//     it is still buffered and the runner's trickle subscriber does not skip, so
+//     a publisher that outruns the runner leaves it stalled on an aged-out seq
+//     forever (measured session `376fae8f`: 858 decoded frames, 58 published into
+//     a stalled subscriber because the window was sized from the lag budget);
+//   - bounds every read, so one hanging `events-out` GET cannot stall the queue;
 //   - reports `delivered` / `expired` / `refused` / `maxLagMs` so box evidence
 //     attributes the delivered rate instead of it reading as "zero observations".
 //
@@ -54,12 +53,8 @@ export interface ObservationFrame {
 }
 
 export interface ObservationRelayOptions {
-  /** Read the observation the runner published for `seq` (null when not yet).
-   *  `timeoutMs` MUST bound the read: go-livepeer holds a subscribe request
-   *  OPEN for a seq it cannot produce, so an unbounded read wedges the relay on
-   *  the first frame the runner fast-forwarded past (measured: seq 13 waited
-   *  295 s on a 300 s share, ADAAAA-8004). */
-  read: (seq: number, timeoutMs: number) => Promise<any | null>;
+  /** Read the observation the runner published for `seq` (null when not yet). */
+  read: (seq: number) => Promise<any | null>;
   /** Deliver one observation with the frame it belongs to. */
   emit: (obs: any, frame: ObservationFrame) => void;
   /** How long (ms) a published frame may take to produce its observation before
@@ -68,10 +63,15 @@ export interface ObservationRelayOptions {
   /** Poll cadence on the relay's serial loop. */
   pollIntervalMs?: number;
   /** Max frames published-but-not-yet-delivered before new frames are refused.
-   *  Default: half the deadline's worth of frames at `sampleFps`. */
+   *  Default {@link DEFAULT_OBSERVE_MAX_IN_FLIGHT} (a few frames — see the note
+   *  there: a large window stalls the runner's live subscriber). */
   maxInFlight?: number;
-  /** Sampling cadence used to derive the default `maxInFlight`. */
+  /** Sampling cadence, reported only (no longer sizes the in-flight window). */
   sampleFps?: number;
+  /** Bound on ONE `events-out` read. A read that hangs (go-livepeer's trickle
+   *  GET can block indefinitely on a seq it will never serve) must not stall the
+   *  serial loop — it is treated as "not yet". */
+  readTimeoutMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   log?: (line: string) => void;
@@ -101,6 +101,22 @@ export const DEFAULT_OBSERVE_DEADLINE_MS = 30_000;
 /** Default poll cadence: 100 ms. Serial, so this is one GET per tick, not one
  *  GET race per in-flight frame (10 concurrent pollers at 4 Hz each). */
 export const DEFAULT_OBSERVE_POLL_MS = 100;
+/**
+ * Default in-flight window: a FEW frames, not the lag budget's worth.
+ *
+ * Measured on session `376fae8f` (300 s VP8 share, `f269355`, 858 decoded frames
+ * at 2.85 fps): with a 45-frame window the node published 58 frames into the
+ * runner, and the perceive trickle subscriber STALLED at the oldest missing seq
+ * — go-livepeer's live edge only serves a segment while it is still buffered,
+ * and the runner's `_media_loop` retries the same `want` forever rather than
+ * skipping. From then on it produced no observation at all (`delivered=12`,
+ * `refused=800`). A small window paces the publisher to what the runner actually
+ * consumes, so the segment never leaves the live buffer and nothing stalls.
+ */
+export const DEFAULT_OBSERVE_MAX_IN_FLIGHT = 4;
+/** Bound on a single `events-out` read. A GET that has not answered in 2 s is
+ *  treated as "no observation yet"; the deadline still governs abandonment. */
+export const DEFAULT_OBSERVE_READ_TIMEOUT_MS = 2_000;
 
 const noop = () => {};
 
@@ -108,14 +124,12 @@ export class ObservationRelay {
   private readonly deadlineMs: number;
   private readonly pollMs: number;
   private readonly maxInFlight: number;
+  private readonly readTimeoutMs: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly log: (line: string) => void;
   /** FIFO of published-but-undelivered frames (publish order). */
   private queue: Array<{ frame: ObservationFrame; publishedAt: number }> = [];
-  /** Observations found by a tail probe, keyed by seq, so the head can deliver
-   *  them when the queue advances past a hole without a second read. Bounded. */
-  private probeCache = new Map<number, any>();
   /** Slots reserved for frames whose publish is still in progress. */
   private reserved = 0;
   private running = false;
@@ -128,11 +142,10 @@ export class ObservationRelay {
   constructor(private readonly opts: ObservationRelayOptions) {
     this.deadlineMs = Math.max(1_000, opts.deadlineMs ?? DEFAULT_OBSERVE_DEADLINE_MS);
     this.pollMs = Math.max(10, opts.pollIntervalMs ?? DEFAULT_OBSERVE_POLL_MS);
-    const fps = opts.sampleFps && opts.sampleFps > 0 ? opts.sampleFps : 3;
-    // Hold at most HALF the deadline's worth of frames: a delivered observation
-    // then sits comfortably inside the rail's staleness window instead of right
-    // on its cutoff. Floor of 4 so a low/absent cadence still relays.
-    this.maxInFlight = Math.max(4, opts.maxInFlight ?? Math.ceil((this.deadlineMs / 1000) * fps * 0.5));
+    // A SMALL window (see DEFAULT_OBSERVE_MAX_IN_FLIGHT): pace the publisher to
+    // the runner instead of filling the live buffer, which stalls the runner.
+    this.maxInFlight = Math.max(1, opts.maxInFlight ?? DEFAULT_OBSERVE_MAX_IN_FLIGHT);
+    this.readTimeoutMs = Math.max(100, opts.readTimeoutMs ?? DEFAULT_OBSERVE_READ_TIMEOUT_MS);
     this.now = opts.now ?? (() => Date.now());
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.log = opts.log ?? noop;
@@ -218,60 +231,54 @@ export class ObservationRelay {
     });
   }
 
-  /** The delivery loop: strictly publish order, one BOUNDED GET per tick. */
+  /**
+   * One read, bounded. `read` may never settle (a trickle GET on a seq the live
+   * edge will not serve); a hang here used to stall the whole queue for the rest
+   * of the session (session `376fae8f`: `[rtc] obs-expired seq=13 waitedMs=295789`,
+   * `delivered=12`). A timeout reads as "no observation yet".
+   */
+  private async readBounded(seq: number): Promise<any | null> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        this.opts.read(seq).catch(() => null),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), this.readTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** The delivery loop: strictly publish order, one GET per tick. */
   private async loop(): Promise<void> {
     try {
       while (!this.closed && this.queue.length > 0) {
         const head = this.queue[0];
         const deadline = head.publishedAt + this.deadlineMs;
         let obs: any = null;
-        let advanced = false;
+        let skipped = false;
         while (!this.closed) {
-          obs = this.probeCache.get(head.frame.seq) ?? null;
-          if (obs) {
-            this.probeCache.delete(head.frame.seq);
-            break;
-          }
-          // Bounded read: a seq the runner never published makes the broker hold
-          // the subscribe open forever, so every read gives up after one poll
-          // tick and the loop stays able to detect a hole / hit the deadline.
-          obs = await this.opts.read(head.frame.seq, this.pollMs).catch(() => null);
+          obs = await this.readBounded(head.frame.seq);
           if (obs) break;
           // Fast-forward detection: the runner consumes video-in in seq order, but
-          // go-livepeer's live edge SKIPS a gap rather than replaying it, so a
-          // LATER published frame can already carry an observation while the head
-          // never will. Probe the QUEUE TAIL (not just the next frame) so a jump
-          // of N seqs collapses in one tick instead of costing a deadline each.
-          const tip = this.queue[this.queue.length - 1];
-          if (this.queue.length > 1 && tip.frame.seq > head.frame.seq) {
-            const tipObs =
-              this.probeCache.get(tip.frame.seq) ??
-              (await this.opts.read(tip.frame.seq, this.pollMs).catch(() => null));
-            if (tipObs) {
-              this.probeCache.set(tip.frame.seq, tipObs);
-              if (this.probeCache.size > 256) this.probeCache.clear();
-              // Everything queued BEFORE the tip's seq will never be published:
-              // count each as skipped (never silent) and abandon them in one tick.
-              while (this.queue.length > 1 && this.queue[0].frame.seq < tip.frame.seq) {
-                const gone = this.queue.shift()!;
-                this.counters.skipped++;
-                this.skipLogs++;
-                if (this.skipLogs === 1 || this.skipLogs % 10 === 0) {
-                  this.log(
-                    `[rtc] obs-skipped seq=${gone.frame.seq} skipped=${this.counters.skipped} ` +
-                      `(runner fast-forwarded)`,
-                  );
-                }
-              }
-              advanced = true;
+          // go-livepeer's live edge SKIPS a gap rather than replaying it, so the
+          // frame after the head can already carry an observation while the head
+          // never will. Waiting the full deadline on such a hole would cost 30 s
+          // per gap (and stall every frame behind it), so abandon the head as soon
+          // as a LATER published frame proves the runner moved past it.
+          const next = this.queue[1];
+          if (next && next.frame.seq > head.frame.seq) {
+            const ahead = await this.readBounded(next.frame.seq);
+            if (ahead) {
+              skipped = true;
               break;
             }
           }
           if (this.now() >= deadline) break;
           await this.sleep(this.pollMs);
         }
-        // A skip pruned the queue already — re-read the new head next round.
-        if (advanced) continue;
         this.queue.shift();
         if (obs) {
           const lagMs = Math.max(0, this.now() - head.publishedAt);
@@ -281,6 +288,15 @@ export class ObservationRelay {
             this.opts.emit(obs, head.frame);
           } catch (e: any) {
             this.log(`[media] observe-relay emit err seq=${head.frame.seq}: ${String(e?.message || e).slice(0, 120)}`);
+          }
+          continue;
+        }
+        if (skipped) {
+          // The runner fast-forwarded past this seq: no observation will ever exist.
+          this.counters.skipped++;
+          this.skipLogs++;
+          if (this.skipLogs === 1 || this.skipLogs % 10 === 0) {
+            this.log(`[rtc] obs-skipped seq=${head.frame.seq} skipped=${this.counters.skipped} (runner fast-forwarded)`);
           }
           continue;
         }

@@ -1024,7 +1024,7 @@ describe("observation delivery on a lagging runner (ADAAAA-7990)", () => {
     }
   }
 
-  it("delivers every published frame's observation even when the runner lags past the old 2.5 s poll", async () => {
+  it("delivers every frame it publishes even when the runner lags the old 2.5 s poll, and paces publishing", async () => {
     const g = new SerialOrch("sess-lag");
     const ms = new MediaServer({ orchBase: "http://orch", reconnectGraceMs: 60 }, g as any);
     const srv = await ms.build();
@@ -1043,23 +1043,33 @@ describe("observation delivery on a lagging runner (ADAAAA-7990)", () => {
         if (m?.type === "observation") seen.push(m.observation.seq);
       });
       const jpegB64 = Buffer.from("jpeg").toString("base64");
-      // 10 frames at ~50 ms (the decoder's 3 fps cadence is 333 ms; a tighter
-      // cadence only makes the backlog grow faster).
-      for (let seq = 1; seq <= 10; seq++) {
+      // 12 frames at ~60 ms against a 480 ms/frame serial runner: the backlog
+      // grows past the old 2.5 s inline poll budget within the first second, so
+      // the pre-fix path lost every frame after seq 5.
+      for (let seq = 1; seq <= 12; seq++) {
         ws.send(JSON.stringify({ seq, image: jpegB64, timestamp: seq / 3 }));
-        await new Promise((r) => setTimeout(r, 50));
+        await new Promise((r) => setTimeout(r, 60));
       }
-      const until = Date.now() + 8_000;
-      while (seen.length < 10 && Date.now() < until) await new Promise((r) => setTimeout(r, 40));
+      // Let the relay drain what it published: the runner steps at ~480 ms/frame,
+      // so every published frame's observation lands a few seconds later.
+      const drainUntil = Date.now() + 12_000;
+      while (seen.length < g.publishes.length && Date.now() < drainUntil) {
+        await new Promise((r) => setTimeout(r, 60));
+      }
 
-      // All ten frames published, all ten observations relayed, in order.
-      expect(g.publishes.map((p) => p.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-      expect(seen).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-      // seq 8's observation lands ~3.8 s after the first publish: well past the
-      // old 2.5 s inline poll budget, which is exactly the frame the old path lost.
-      expect(logged.some((l) => l.includes("[rtc] obs seq=8"))).toBe(true);
+      // Nothing published is ever lost: every published frame ends delivered,
+      // and every frame the node did NOT publish is counted as refused — the
+      // pre-fix path instead published all 12 and silently dropped 6-12.
+      expect(g.publishes.length).toBeGreaterThanOrEqual(4);
+      expect(g.publishes.length).toBeLessThanOrEqual(7);
+      // Pacing skips the excess (refused) and keeps the newest, so published seqs
+      // stay strictly increasing but need not be contiguous.
+      const publishedSeqs = g.publishes.map((p) => p.seq);
+      expect(publishedSeqs).toEqual([...publishedSeqs].sort((a, b) => a - b));
+      expect(new Set(publishedSeqs).size).toBe(publishedSeqs.length);
+      expect(seen).toEqual(publishedSeqs);
 
-      // The close log carries the ledger AC1 reads (delivered vs published).
+      // Close and read the ledger line AC1 reads.
       ws.close();
       const closeUntil = Date.now() + 2_000;
       while (!logged.some((l) => l.includes("[rtc] observe session=sess-lag")) && Date.now() < closeUntil) {
@@ -1067,10 +1077,19 @@ describe("observation delivery on a lagging runner (ADAAAA-7990)", () => {
       }
       const summary = logged.find((l) => l.includes("[rtc] observe session=sess-lag"));
       expect(summary).toBeTruthy();
-      expect(summary).toContain("published=10");
-      expect(summary).toContain("delivered=10");
-      expect(summary).toContain("expired=0");
-      expect(summary).toContain("refused=0");
+      const num = (k: string) => Number(new RegExp(`${k}=(\\d+)`).exec(summary!)![1]);
+      expect(num("published")).toBe(g.publishes.length);
+      expect(num("published")).toBe(num("delivered") + num("expired") + num("skipped") + num("inFlight"));
+      expect(num("refused")).toBe(12 - num("published"));
+      expect(num("expired")).toBe(0);
+      expect(num("skipped")).toBe(0);
+      // At least one delivered observation landed well past the old 2.5 s inline
+      // poll budget — those are exactly the frames the pre-fix path discarded.
+      const lateObs = logged.filter((l) => l.includes("[rtc] obs seq=")).filter((l) => {
+        const m = /liveMs=(-?\d+)/.exec(l);
+        return m ? Number(m[1]) > 2_500 : false;
+      });
+      expect(lateObs.length).toBeGreaterThan(0);
     } finally {
       logSpy.mockRestore();
       await srv.close();
