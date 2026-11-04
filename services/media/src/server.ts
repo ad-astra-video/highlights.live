@@ -754,6 +754,11 @@ export class MediaServer {
     const fps = stream.sampleFps ?? this.rtcSampleFps;
     stream.observations = new ObservationRelay({
       read: (seq) => this.orch.readObservation(stream.provisioned, seq),
+      // Push path (ADAAAA-8004 AC2): tail events-out's live edge. Reading one
+      // index per frame cannot outlive go-livepeer's segment retention — measured
+      // session `3c6c8920` delivered 9 of 395 frames because `events-out idx=262`
+      // answered `exists?=false` against `next=332` for the rest of the share.
+      readHead: () => this.orch.readObservation(stream.provisioned, -1),
       emit: (obs, frame) => {
         // Live-detection latency budget (PO): wall time from frame receipt to
         // the observation being published. target 1-5s.

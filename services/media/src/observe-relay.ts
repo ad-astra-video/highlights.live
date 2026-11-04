@@ -55,6 +55,13 @@ export interface ObservationFrame {
 export interface ObservationRelayOptions {
   /** Read the observation the runner published for `seq` (null when not yet). */
   read: (seq: number) => Promise<any | null>;
+  /**
+   * Read the NEWEST observation the runner has published (events-out live edge,
+   * `GET {events-out}/-1`). When set, the relay tails this instead of reading
+   * one index per queued frame — see the class note: reading by index cannot
+   * outlive go-livepeer's live-edge retention.
+   */
+  readHead?: () => Promise<any | null>;
   /** Deliver one observation with the frame it belongs to. */
   emit: (obs: any, frame: ObservationFrame) => void;
   /** How long (ms) a published frame may take to produce its observation before
@@ -257,9 +264,118 @@ export class ObservationRelay {
   private kick(): void {
     if (this.running || this.closed) return;
     this.running = true;
-    void this.loop().catch((e) => {
+    const run = this.opts.readHead ? this.loopPush() : this.loop();
+    void run.catch((e) => {
       this.log(`[media] observe-relay loop err: ${String((e as any)?.message || e)}`);
     });
+  }
+
+  /** One read of the live edge, bounded (a live-edge GET blocks until the NEXT
+   *  publish, so it never settles while the runner is idle). */
+  private async readHeadBounded(): Promise<any | null> {
+    const readHead = this.opts.readHead;
+    if (!readHead) return null;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        readHead().catch(() => null),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), this.readTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * PUSH delivery: tail the runner's events-out live edge and pair each
+   * observation with the queued frame it carries (`obs.seq`).
+   *
+   * Why this replaces reading one index per queued frame: go-livepeer's live
+   * edge retains only a short segment window, so a reader that falls more than
+   * that window behind an index can NEVER fetch it. Measured on build `b0ff88b`
+   * (job `bb36bc2d`, session `3c6c8920`, 3 fps dense publish, runner keeping up
+   * at 3 fps): the relay asked `events-out idx=262` while the broker was at
+   * `next=332` and got `exists?=false` forever, so it delivered 9 observations
+   * of 395 decoded frames and the backlog cap counted the rest `expired`. The
+   * reader has exactly the same stale-index failure as the runner, and the fix
+   * is the same shape: follow the edge, don't chase an index.
+   *
+   * The runner publishes observations in seq order on one serial loop, so the
+   * edge read is monotonic. An observation whose seq is AHEAD of the queue head
+   * proves the runner fast-forwarded past those frames (they will never get an
+   * observation): they are counted `skipped` and dropped, never silently.
+   */
+  private async loopPush(): Promise<void> {
+    try {
+      const seen = new Set<number>();
+      while (!this.closed && this.queue.length > 0) {
+        const head = this.queue[0];
+        this.headInFlight = head;
+        const obs = await this.readHeadBounded();
+        const obsSeq = obs && typeof obs.seq === "number" ? (obs.seq as number) : null;
+        if (obsSeq === null || obsSeq < head.frame.seq) {
+          // Nothing new (idle runner), or a re-read of an older observation.
+          if (this.now() >= head.publishedAt + this.deadlineMs) {
+            this.headInFlight = null;
+            const at = this.queue.indexOf(head);
+            if (at >= 0) this.queue.splice(at, 1);
+            this.counters.expired++;
+            this.expiryLogs++;
+            if (this.expiryLogs === 1 || this.expiryLogs % 10 === 0) {
+              this.log(
+                `[rtc] obs-expired seq=${head.frame.seq} waitedMs=${this.now() - head.publishedAt} ` +
+                  `expired=${this.counters.expired}`,
+              );
+            }
+            continue;
+          }
+          await this.sleep(this.pollMs);
+          continue;
+        }
+        this.headInFlight = null;
+        if (obsSeq > head.frame.seq) {
+          // The runner moved past these frames without producing an observation
+          // for them: count and drop, in publish order.
+          while (this.queue.length > 0 && this.queue[0].frame.seq < obsSeq) {
+            const gone = this.queue.shift()!;
+            this.counters.skipped++;
+            this.skipLogs++;
+            if (this.skipLogs === 1 || this.skipLogs % 10 === 0) {
+              this.log(
+                `[rtc] obs-skipped seq=${gone.frame.seq} skipped=${this.counters.skipped} (runner fast-forwarded)`,
+              );
+            }
+          }
+          if (this.queue.length === 0) break;
+        }
+        const entry = this.queue[0];
+        if (entry.frame.seq !== obsSeq) {
+          await this.sleep(this.pollMs);
+          continue;
+        }
+        if (seen.has(obsSeq)) {
+          // A live edge that re-serves the same segment (hub semantics): never
+          // deliver one observation twice.
+          await this.sleep(this.pollMs);
+          continue;
+        }
+        seen.add(obsSeq);
+        this.queue.shift();
+        const lagMs = Math.max(0, this.now() - entry.publishedAt);
+        if (lagMs > this.counters.maxLagMs) this.counters.maxLagMs = lagMs;
+        this.counters.delivered++;
+        try {
+          this.opts.emit(obs, entry.frame);
+        } catch (e: any) {
+          this.log(`[media] observe-relay emit err seq=${entry.frame.seq}: ${String(e?.message || e).slice(0, 120)}`);
+        }
+      }
+    } finally {
+      this.running = false;
+      if (!this.closed && this.queue.length > 0) this.kick();
+    }
   }
 
   /**
