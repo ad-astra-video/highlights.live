@@ -950,6 +950,17 @@ export const ResumeAttemptSchema = z.object({
     .enum(["media-session-lost", "server-restart", "user-stop", "pipeline-error", "decide-unavailable", "perceive-session-lost", "capacity-exhausted"])
     .optional(),
   error: z.string().optional(),
+  // ADAAAA-7907 (AC10): the values this attempt STARTED from, recorded at claim,
+  // plus its running counters as of the LAST checkpoint write. A hard kill
+  // (SIGKILL / OOM / a deploy recreate) cannot run the attempt's exit hook, so
+  // without these the killed attempt has no `[vod-resume]` evidence row at all
+  // and a grep can no longer count attempts. Additive optional: absent on
+  // records written before they existed.
+  resumedFromTs: z.number().min(0).optional(),
+  skippedFrames: z.number().int().min(0).optional(),
+  warmupFrames: z.number().int().min(0).optional(),
+  decideCalls: z.number().int().min(0).optional(),
+  perceiveCalls: z.number().int().min(0).optional(),
   usdSpent: z.number().min(0).optional(),
 });
 export type ResumeAttempt = z.infer<typeof ResumeAttemptSchema>;
