@@ -515,6 +515,13 @@ export interface ServerConfig {
   /** Per-user per-calendar-month clip quota during the beta (the entitlement
    * ledger's hard-stop; no billing during beta). Default 10 clips/month. */
   betaClipQuota: number;
+  /** Per-user per-calendar-month clip quota for an ACTIVE/TRIALING Pro
+   * subscriber (ADAAAA-8028). Default 100, mirroring the GA `PLANS` pro
+   * `includedHighlights` (`src/billing.ts`) so the advertised plan and the
+   * enforced hard-stop stay in lockstep. `PRO_CLIP_QUOTA` raises/lowers the
+   * enforced ceiling without touching what /pricing advertises — used to lift
+   * the ceiling for a bounded test window. */
+  proClipQuota: number;
   /** Invite/beta-gate: when true, registration + login require the account to
    * have been activated (a claimed invite code or an invited waitlist email).
    * Default ON in prod. Tests/off turn it off for the un-gated loop. */
@@ -949,6 +956,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     freeDecides: Number(env.FREE_DECIDES ?? 5),
     billingWireframe: env.BILLING_WIREFRAME === "1" || env.BILLING_WIREFRAME === "true",
     betaClipQuota: Number(env.BETA_CLIP_QUOTA ?? 10),
+    proClipQuota: Number(env.PRO_CLIP_QUOTA ?? 100),
     betaGate: env.BETA_GATE === "1" || env.BETA_GATE === "true" || !env.BETA_GATE,
     funnelRetainDays: Number(env.FUNNEL_RETAIN_DAYS ?? 7),
     autoPublishHighlights: env.AUTO_PUBLISH_HIGHLIGHTS === "0" || env.AUTO_PUBLISH_HIGHLIGHTS === "false" ? false : true,

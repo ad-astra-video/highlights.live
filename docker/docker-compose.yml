@@ -548,6 +548,14 @@ services:
       - FREE_HIGHLIGHTS=3
       - DECIDE_FEE=${DECIDE_FEE:-0.01}
       - FREE_DECIDES=${FREE_DECIDES:-5}
+      # ADAAAA-8028: the two per-user per-month clip ceilings the entitlement
+      # ledger enforces (`entitlements.limitFor`). Defaults are the GA numbers
+      # (free/starter 10, pro 100) and mirror what /billing/plans advertises;
+      # setting them in docker/.env raises ONLY the enforced hard-stop, so a
+      # bounded test window can run without a DB reset and /pricing stays GA-
+      # truthful. Cost stop: the ceiling is per user, not a global budget.
+      - BETA_CLIP_QUOTA=${BETA_CLIP_QUOTA:-10}
+      - PRO_CLIP_QUOTA=${PRO_CLIP_QUOTA:-100}
       - BILLING_WIREFRAME=1
       # Production-shaped stack: server persists to the separate Postgres
       # container. No DATABASE_URL (plain `npm run dev`, no compose) -> SQLite.
