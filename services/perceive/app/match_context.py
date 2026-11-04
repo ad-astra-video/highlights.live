@@ -1168,6 +1168,32 @@ def parse_generic_scorebug_names(
     ], status
 
 
+def scorebug_lines_sides(ocr_lines: Optional[Sequence[str]], sport: str) -> set[str]:
+    """Which sides of the score these OCR lines actually name.
+
+    ADAAAA-7909: a region that clips part of the graphic can read ONE side and
+    still count as "team text present" — measured on the bounded basketball job,
+    the crop named the away club on 27/30 frames and the home plate on only 10,
+    so the gate blocked a pair that the region was not even showing. This returns
+    the sides a read covers so the caller can repair the region when it covers
+    fewer than two.
+    """
+    sides: set[str] = set()
+    for line in ocr_lines or []:
+        text = str(line or "").strip()
+        if not text:
+            continue
+        for team in parse_ocr_teams([text], sport):
+            if team.side in ("home", "away"):
+                sides.add(team.side)
+        home, away = generic_scorebug_sides(text)
+        if home:
+            sides.add("home")
+        if away:
+            sides.add("away")
+    return sides
+
+
 def scorebug_lines_have_team_text(ocr_lines: Optional[Sequence[str]], sport: str) -> bool:
     """True when these OCR lines carry a real team name (lexicon OR printed club).
 
