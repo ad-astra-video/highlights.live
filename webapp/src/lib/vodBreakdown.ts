@@ -416,10 +416,16 @@ export function buildSankey({
 
   const detached: SankeyBand[] = detachedInputs.map((n, i) => {
     const value = (Number.isFinite(n.value) ? n.value : 0) * f;
+    // ADAAAA-7939 D2: one marker of concurrency, not three. The badge already
+    // carries a `CONCURRENT` chip and the server labels the node "Audio gate
+    // (concurrent)"; appending `· concurrent` here made the copy read
+    // "CONCURRENT Audio gate (concurrent) · 35.0s · concurrent". Strip the
+    // parenthetical and let the chip be the single marker.
+    const label = n.label.replace(/\s*\(concurrent\)$/i, "");
     return {
       key: n.key,
-      label: `${n.label} · ${bandValueLabel(unit, value)} · concurrent`,
-      title: n.label,
+      label: `${label} · ${bandValueLabel(unit, value)}`,
+      title: label,
       value,
       share: 0,
       tone: "concurrent" as SankeyTone,
@@ -491,7 +497,9 @@ export function buildTimeSankey(b: VodBreakdown, mode: VodBreakdownMode): Sankey
 
 export interface VodBreakdownOverviewItem {
   key: string;
-  /** Always ends in `/req` (except RTF, which is a ratio by definition). */
+  /** Always ends in `/req` (except RTF, which is a ratio by definition). The
+   * seconds item is `/req` rather than `s/req` because its value already
+   * carries the unit — `formatSeconds(150)` is `2m 30s`, so `2m 30s /req`. */
   label: string;
   /** Printed value, e.g. `360.0`; `—` when the server recorded nothing. */
   value: string;
@@ -510,6 +518,15 @@ function orDash(v: number | null, fmt: (n: number) => string): string {
  * per-request by definition, so the mode toggle never touches it. */
 export function overviewItems(b: VodBreakdown): VodBreakdownOverviewItem[] {
   const p = b.perRequest;
+  // ADAAAA-7939 D1: `wallClockS` averages are 0 by design when no request in
+  // the window recorded stage timings (`timed === 0`, the server's time
+  // denominator never mixes populations), so a printed `0.00s` would read as
+  // "this request took 0 s" while a real job's wall clock is minutes. Print
+  // `—` for the no-sample case, exactly like `rtf: null`. The label is `/req`
+  // (not `s/req`) because `formatSeconds` already carries its unit — the old
+  // pair rendered "0.00s s/req" / "2m 30s s/req". Neither change touches a
+  // number: the value strings stay byte-identical whenever `timed > 0`.
+  const hasSecondsSample = (b.timed || 0) > 0;
   return [
     { key: "source", label: "source min/req", value: orDash(p.sourceS, (n) => (n / 60).toFixed(1)), raw: p.sourceS },
     { key: "frames", label: "frames/req", value: p.frames.toFixed(1), raw: p.frames },
@@ -522,7 +539,12 @@ export function overviewItems(b: VodBreakdown): VodBreakdownOverviewItem[] {
     { key: "decide", label: "decide calls/req", value: p.decideCalls.toFixed(1), raw: p.decideCalls },
     { key: "clips", label: "clips/req", value: p.clips.toFixed(1), raw: p.clips },
     { key: "cost", label: "$/req", value: formatUsd(p.costUsd), raw: p.costUsd },
-    { key: "seconds", label: "s/req", value: formatSeconds(p.wallClockS), raw: p.wallClockS },
+    {
+      key: "seconds",
+      label: "/req",
+      value: hasSecondsSample ? formatSeconds(p.wallClockS) : "—",
+      raw: p.wallClockS,
+    },
     { key: "rtf", label: "RTF", value: orDash(p.rtf, (n) => n.toFixed(2)), raw: p.rtf ?? null },
   ];
 }

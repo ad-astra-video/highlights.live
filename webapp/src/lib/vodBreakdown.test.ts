@@ -220,7 +220,10 @@ describe("AC4 — CPU stages and the concurrent audio gate", () => {
     expect(g.links.some((l) => l.target === audio.key)).toBe(false);
     expect(g.nodes.reduce((s, n) => s + n.value, 0) + audio.s).toBe(505); // proof of exclusion
     const detached = g.detached.find((d) => d.key === audio.key)!;
-    expect(detached.label).toBe("Audio gate (concurrent) · 25.0s · concurrent");
+    // ADAAAA-7939 D2: the badge chip is the only concurrency marker; the
+    // parenthetical and the `· concurrent` tail are gone.
+    expect(detached.label).toBe("Audio gate · 25.0s");
+    expect(detached.title).toBe("Audio gate");
     expect(detached.share).toBe(0);
     expect(detached.tone).toBe("concurrent");
   });
@@ -261,7 +264,7 @@ describe("AC9 — overview strip is perRequest, verbatim", () => {
       "decide calls/req",
       "clips/req",
       "$/req",
-      "s/req",
+      "/req",
       "RTF",
     ]);
     expect(byKey.frames.raw).toBe(b.perRequest.frames);
@@ -279,6 +282,58 @@ describe("AC9 — overview strip is perRequest, verbatim", () => {
     expect(byKey.source.value).toBe("2.1");
     expect(byKey.rtf.value).toBe("3.75");
     for (const i of items) if (i.key !== "rtf") expect(i.label.endsWith("/req")).toBe(true);
+  });
+});
+
+describe("ADAAAA-7939 — P3 copy fixes (D1 seconds unit, D2 badge word)", () => {
+  it("AC1: `—` for seconds when nothing in the window is timed", () => {
+    const sec = overviewItems(untimedBreakdown()).find((i) => i.key === "seconds")!;
+    expect(sec.value).toBe("—");
+    expect(sec.label).toBe("/req");
+    // the number itself is untouched — only the copy changes
+    expect(sec.raw).toBe(0);
+    expect(`${sec.value} ${sec.label}`).toBe("— /req");
+    expect(`${sec.value} ${sec.label}`).not.toContain("0.00");
+  });
+
+  it("AC1: one unit and one /req when the payload has timed requests", () => {
+    const timed = overviewItems(recentBreakdown()).find((i) => i.key === "seconds")!;
+    expect(`${timed.value} ${timed.label}`).toBe("8m 0s /req");
+    const b = recentBreakdown({ perRequest: { ...recentBreakdown().perRequest, wallClockS: 150 } });
+    const sec = overviewItems(b).find((i) => i.key === "seconds")!;
+    expect(`${sec.value} ${sec.label}`).toBe("2m 30s /req");
+    // the defect the QA read caught: a unit on the value AND on the label
+    expect(`${sec.value} ${sec.label}`).not.toMatch(/s\/req$/);
+  });
+
+  it("AC3: no numeric value moved for the fixed fixture", () => {
+    const b = recentBreakdown();
+    const cost = buildCostSankey(b, "per_request");
+    const time = buildTimeSankey(b, "per_request");
+    expect(cost.top.value).toBe(0.2613);
+    expect(cost.nodes.map((n) => n.value)).toEqual([0.0013, 0.2, 0.06, 0, 0, 0, 0]);
+    expect(cost.nodes.map((n) => n.label)).toEqual([
+      "Perceive GPU session · $0.0013 · 0.5%",
+      "Decide · observe · $0.2000 · 76.5%",
+      "Decide · confirm · $0.0600 · 23.0%",
+      "Extract frames · $0.00 · CPU (not billed)",
+      "Audio gate · $0.00 · CPU (not billed)",
+      "Clip encode · $0.00 · CPU (not billed)",
+      "Finalize · $0.00 · CPU (not billed)",
+    ]);
+    expect(time.top.value).toBe(480);
+    expect(time.nodes.map((n) => n.value)).toEqual([35, 130, 160, 40, 20, 95]);
+    expect(time.nodes.map((n) => n.label)).toEqual([
+      "GPU capacity wait · 35.0s · 7.3%",
+      "Extract frames · 2m 10s · 27.1%",
+      "Analyze (perceive + decide) · 2m 40s · 33.3%",
+      "Clip encode · 40.0s · 8.3%",
+      "Preroll · 20.0s · 4.2%",
+      "Finalize · 1m 35s · 19.8%",
+    ]);
+    // the badge stays detached and out of the total
+    expect(time.detached.map((d) => d.value)).toEqual([25]);
+    expect(time.nodes.reduce((s, n) => s + n.value, 0)).toBe(480);
   });
 });
 
