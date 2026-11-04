@@ -3516,7 +3516,12 @@ export async function acceptVideoDecision(
   /** ADAAAA-7365: the goal EVENT's stable content timestamp for the confirm
    * exactly-once key. Observe-path callers pass the goal's own content time so a
    * goal re-produced across overlapping windows maps to one confirm dive. */
-  goalEventTs?: number
+  goalEventTs?: number,
+  /** ADAAAA-7957: receives the decision this call actually STORED. A repeat
+   * GOAL accept is downgraded to `big_play` here (ADAAAA-7865), so a caller that
+   * persists copy for the window must gate it with the downgraded verdict — not
+   * the pre-accept one. */
+  sink?: { final?: DecisionResult }
 ): Promise<void> {
   // ADAAAA-7255: attach the bounded (t, energy, baseline) audio-gate inspection
   // series (sliced to the decide window around the trigger) to the per-window
@@ -3551,6 +3556,7 @@ export async function acceptVideoDecision(
   // the decision-time note trail stays identical either way.
   if (!isAcceptedHighlight(decision, cfg.preferLabels)) {
     buildCandidateNote(cfg, candidate, decision, "rejected", candidateId, trigger, stageAnalysis, confirm?.analysis);
+    if (sink) sink.final = decision;
     return;
   }
   // ADAAAA-6610 temporal burst suppression: a GOAL
@@ -3574,6 +3580,7 @@ export async function acceptVideoDecision(
       candidate: { eventType: highlightEventType(decision, candidate.eventType), timestamp: candidate.timestamp },
       reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
     });
+    if (sink) sink.final = decision;
     return;
   }
   // ADAAAA-7232: center the delivered clip on the localized highlight instant,
@@ -3607,6 +3614,7 @@ export async function acceptVideoDecision(
       })
     : undefined;
   if (repeatGoal) decision = downgradeRepeatGoalCelebration(decision, repeatGoal);
+  if (sink) sink.final = decision;
   // ADAAAA-6851 note: persisted AFTER the ADAAAA-7865 downgrade so the
   // decision-time note carries the outcome the board actually receives.
   buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger, stageAnalysis, confirm?.analysis);
@@ -4147,31 +4155,12 @@ export async function observeAcceptOnly(
   payload: ObserveDecidePayload,
   decision: DecisionResult
 ): Promise<boolean> {
-  // ADAAAA-7111 (Increment D): persist the running video summary (story-so-far)
-  // the decide brain updated for this window, so the job-detail endpoint + web
-  // UI surface it growing across cadence ticks. Only writes when the summary
-  // actually changed (avoids redundant DB writes on a stable/compact summary).
-  // Best-effort: a throwing callback is caught + logged, never a pipeline failure.
-  if (cfg.onRunningSummary) {
-    const next = nextRunningSummary(cfg.getRunningSummary?.(), decision);
-    if (next !== null) {
-      try {
-        // ADAAAA-7948 (Inc 3): on the FAST rail, carry this window's own stored
-        // verdict + the exact prompt text it decided from, so the summary-log
-        // seam can gate goal claims, ground names and strip internal tokens.
-        // VOD never sets `captionGrounding`, so its entries stay byte-identical.
-        const grounding: CaptionGroundingContext | undefined = cfg.captionGrounding
-          ? captionGroundingForDecision(decision)
-          : undefined;
-        cfg.onRunningSummary(next, {
-          windowTs: payload.centerTs,
-          ...(grounding ? { grounding } : {}),
-        });
-      } catch (e: any) {
-        console.error(`[running-summary:${cfg.jobId}] persist failed:`, String(e?.message || e));
-      }
-    }
-  }
+  // ADAAAA-7111 (Increment D): the running video summary (story-so-far) this
+  // window's decide produced, persisted so the job-detail endpoint + web UI can
+  // surface it growing across cadence ticks. The VALUE is computed here (nothing
+  // about it depends on the accept path) but it is WRITTEN after the accept, so
+  // the §3 gate sees the verdict that is actually stored — see below.
+  const pendingSummary = cfg.onRunningSummary ? nextRunningSummary(cfg.getRunningSummary?.(), decision) : null;
   // ADAAAA-7021 fix: the window's goal-attestation signals (folded from the
   // in-window bias hints) ride the candidate too, so acceptVideoDecision's
   // Stage-2 confirm reconcile + deriveHighlightTrigger see the attestation
@@ -4203,8 +4192,38 @@ export async function observeAcceptOnly(
   // candidate across the overlapping windows that re-produce it — NOT the window
   // center (which slides by the cadence).
   const goalEventTs = observeGoalEventTs(payload, candidate, cfg.clipAfterS);
-  await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, decision, frameSignals, goalEventTs);
-  return isAcceptedHighlight(decision, cfg.preferLabels);
+  // ADAAAA-7957 (Inc 5): the accept path can CHANGE this window's verdict — a
+  // repeat GOAL accept is downgraded to a celebration (`big_play`, ADAAAA-7865).
+  // Gating the caption with the pre-accept verdict let a "scores" line sit on a
+  // stored `big_play` row (level 2c025e97, seq 17/19), so the summary is written
+  // with the verdict the board will actually read.
+  const sink: { final?: DecisionResult } = {};
+  let acceptError: unknown = null;
+  try {
+    await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, decision, frameSignals, goalEventTs, sink);
+  } catch (e) {
+    acceptError = e;
+  }
+  const stored = sink.final ?? decision;
+  if (pendingSummary !== null && cfg.onRunningSummary) {
+    try {
+      // ADAAAA-7948 (Inc 3): on the FAST rail, carry this window's own stored
+      // verdict + the exact prompt text it decided from, so the summary-log
+      // seam can gate goal claims, ground names and strip internal tokens.
+      // VOD never sets `captionGrounding`, so its entries stay byte-identical.
+      const grounding: CaptionGroundingContext | undefined = cfg.captionGrounding
+        ? captionGroundingForDecision(stored)
+        : undefined;
+      cfg.onRunningSummary(pendingSummary, {
+        windowTs: payload.centerTs,
+        ...(grounding ? { grounding } : {}),
+      });
+    } catch (e: any) {
+      console.error(`[running-summary:${cfg.jobId}] persist failed:`, String(e?.message || e));
+    }
+  }
+  if (acceptError) throw acceptError;
+  return isAcceptedHighlight(stored, cfg.preferLabels);
 }
 
 /**
