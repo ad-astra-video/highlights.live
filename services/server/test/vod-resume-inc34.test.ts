@@ -381,6 +381,10 @@ describe("VOD resume Inc 3+4 end to end (ADAAAA-7907 AC7, AC9, AC10)", () => {
     expect(armedJob.resume.nextAttemptAt).toBeUndefined();
     expect(armedJob.resume.totalAttempts).toBe(2);
     expect(armedJob.resume.resumedFromTs).toBe(cursorTs);
+    // The terminal attribution moves to the attempt trail: a running job must
+    // not keep the old failure chip (AC8).
+    expect(armedJob.failureReason).toBeUndefined();
+    expect(armedJob.resume.attempts[0].failureReason).toBe("decide-unavailable");
     expect(resumed.json().resumedFromTs).toBe(cursorTs);
     expect(resumed.json().attempt).toBe(2);
     // The projected resume block a non-admin owner receives is the same shape
