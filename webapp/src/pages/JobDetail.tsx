@@ -7,6 +7,7 @@ import { VideoClip } from "../components/VideoClip";
 import { JobDetailMetrics } from "../components/JobMetrics";
 import { useIsAdmin } from "../lib/auth";
 import { WindowAnalysisPanel } from "../components/WindowAnalysis";
+import { CostTimePanel, CostTimeToggle } from "../components/CostTimePanel";
 import { SummaryLadderView } from "../components/SummaryLadder";
 import { batchManifest, captionFromTitle, clipFileName, copyExportLink, copyText, exportUrl, markExportIntent, markExportIntentBatch, momentRangeLabel, postTitles, saveBlob, suggestCaption, type BatchItem } from "../lib/highlightPost";
 import { buildZip, type ZipFile } from "../lib/zip";
@@ -1578,6 +1579,9 @@ export function JobDetail() {
   // `windowInspectRef` is the session cache (one request per window, cleared
   // when the toggle goes off so a re-toggle cannot balloon memory).
   const [inspect, setInspectState] = useState<boolean>(admin);
+  // ADAAAA-7929: `Cost & time` starts CLOSED (the panel fetches on open, never
+  // on page load), and it only ever exists on the admin surface.
+  const [costTimeOpen, setCostTimeOpen] = useState(false);
   const inspectTouchedRef = useRef(false);
   const [inspections, setInspections] = useState<Record<number, WindowInspectState>>({});
   const windowInspectRef = useRef(createWindowInspectStore(id, fetchSectionInspect));
@@ -2486,6 +2490,15 @@ export function JobDetail() {
                   {frameCount} frame(s) · {visibleSections.length} window(s) shown
                 </span>
                 <div className="ml-auto flex flex-wrap items-center gap-2">
+                  {/* ADAAAA-7929: the VOD cost & time breakdown, immediately
+                      left of `See detail` and inside the `admin ?` branch only.
+                      The owner-facing toolbar never mounts it (cost / decide /
+                      perceive are admin-gated internals, ADAAAA-7727). */}
+                  <CostTimeToggle
+                    admin={admin}
+                    on={costTimeOpen}
+                    onToggle={() => setCostTimeOpen((v) => !v)}
+                  />
                   {/* ADAAAA-7838: the same owner-facing toggle on the admin
                       surface; admin defaults ON so the full panel is unchanged,
                       and OFF falls back to the plain time-range/status rows. */}
@@ -2544,6 +2557,11 @@ export function JobDetail() {
                 </div>
               </div>
             </div>
+            {/* ADAAAA-7929: the breakdown panel sits BELOW the sticky toolbar
+                (it is not part of the stuck row) and is admin-only. */}
+            {costTimeOpen && (
+              <CostTimePanel admin={admin} jobId={detail.job.id} onClose={() => setCostTimeOpen(false)} />
+            )}
             {visibleSections.length === 0 ? (
               <div className="mt-3 text-mut" data-analysis-empty>No Analysis windows match.</div>
             ) : (
