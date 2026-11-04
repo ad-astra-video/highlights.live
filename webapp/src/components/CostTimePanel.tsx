@@ -171,7 +171,7 @@ export function SankeyChart({
               data-sankey-concurrent={d.key}
             >
               <span className="rounded-full bg-purple/20 px-1 text-xs font-bold uppercase tracking-wide">
-                concurrent
+                CONCURRENT
               </span>
               {d.label}
             </span>

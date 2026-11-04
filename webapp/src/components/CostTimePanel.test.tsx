@@ -125,8 +125,10 @@ describe("AC4 — CPU zeros and the concurrent badge render", () => {
       <CostTimeView state={readyState(recentBreakdown())} onScope={() => {}} onMode={() => {}} />,
     );
     expect(html).toContain("data-sankey-concurrent=\"audio_gate\"");
-    expect(count(html, ">concurrent<")).toBe(1);
-    expect(html).toContain("Audio gate (concurrent) · 25.0s · concurrent");
+    expect(count(html, ">CONCURRENT<")).toBe(1);
+    expect(html).toContain("Audio gate · 25.0s");
+    expect(html).not.toContain("(concurrent)");
+    expect(html).not.toContain("· concurrent");
     // the detached band is not a node of the time chart
     expect(html).not.toContain("data-sankey-node=\"audio_gate\"");
   });
@@ -159,7 +161,7 @@ describe("AC9 — the overview strip", () => {
     expect(html).toContain("data-cost-overview-item=\"frames\"");
     expect(html).toContain(">360.0</span> frames/req");
     expect(html).toContain("$0.2613</span> $/req");
-    expect(html).toContain("8m 0s</span> s/req");
+    expect(html).toContain("8m 0s</span> /req");
     expect(html).toContain("3.75</span> RTF");
   });
 
@@ -247,6 +249,46 @@ describe("the panel wires scope/mode buttons to the store", () => {
     expect(html).toContain("This request");
     expect(html).toContain("Per request");
     expect(html).toContain("Total");
+  });
+});
+
+describe("ADAAAA-7939 — P3 copy fixes render", () => {
+  /** The text a reader sees inside `[data-sankey-concurrent]`: SSR tags
+   * stripped, whitespace collapsed (React separates the chip from the label
+   * with an inline-flex gap, not a text space). */
+  function badgeText(html: string): string {
+    const m = html.match(/data-sankey-concurrent="audio_gate"[^>]*>([\s\S]*?)<\/div>/);
+    return (m ? m[1] : "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  it("AC1: the strip prints `—` for seconds and never `0.00s` when nothing is timed", () => {
+    const html = norm(
+      renderToString(<CostTimeView state={readyState(untimedBreakdown())} onScope={() => {}} onMode={() => {}} />),
+    );
+    expect(html).toContain('data-cost-overview-value="seconds">—</span> /req');
+    expect(html).not.toContain("0.00s</span>");
+    expect(html).not.toContain("</span> s/req");
+  });
+
+  it("AC1: a timed payload prints one unit and one /req", () => {
+    const b = recentBreakdown({ perRequest: { ...recentBreakdown().perRequest, wallClockS: 150 } });
+    const html = norm(renderToString(<CostTimeView state={readyState(b)} onScope={() => {}} onMode={() => {}} />));
+    expect(html).toContain('data-cost-overview-value="seconds">2m 30s</span> /req');
+    expect(html).not.toContain("s s/req");
+    expect(html).not.toContain("</span> s/req");
+  });
+
+  it("AC2: the detached badge names concurrency once and keeps its distance from the total", () => {
+    const html = norm(renderToString(<CostTimeView state={readyState(recentBreakdown())} onScope={() => {}} onMode={() => {}} />));
+    const text = badgeText(html);
+    expect(text).toBe("CONCURRENT Audio gate · 25.0s");
+    expect((text.match(/concurrent/gi) || []).length).toBe(1); // one word, case-insensitive
+    expect((text.match(/CONCURRENT/g) || []).length).toBe(1); // the chip, literally
+    expect(text).not.toContain("(concurrent)");
+    expect(text).not.toContain("· concurrent");
+    // still detached from the 100% band and never in the total
+    expect(html).toContain('data-sankey-top-value="480"');
+    expect(html).not.toContain('data-sankey-node="audio_gate"');
   });
 });
 
