@@ -878,6 +878,13 @@ services:
       # node (one node today; a fleet just sets distinct MEDIA_NODE_IDs). The
       # health token gates `GET /node` (per-session detail); `/health` stays public
       # and counts-only. Must match the server's MEDIA_HEALTH_TOKEN.
+      # ADAAAA-7990: the fallback WebRTC ingest cadence for this node — the SAME
+      # knobs the control plane's live path resolves against (no separate media
+      # fps env). The control plane sends the resolved per-session rate on
+      # POST /sessions; this fallback exists so a session provisioned without
+      # one runs at the funded 3 fps baseline instead of the old 1 fps.
+      - LIVE_SAMPLE_BASE_FPS=${LIVE_SAMPLE_BASE_FPS:-3}
+      - LIVE_SAMPLE_MAX_FPS=${LIVE_SAMPLE_MAX_FPS:-10}
       - MEDIA_NODE_ID=${MEDIA_NODE_ID:-media-0}
       - MEDIA_MAX_SESSIONS=${MEDIA_MAX_SESSIONS:-1}
       - MEDIA_HEALTH_TOKEN=${MEDIA_HEALTH_TOKEN:-}

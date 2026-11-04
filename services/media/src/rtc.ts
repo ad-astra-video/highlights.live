@@ -38,10 +38,37 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { guardStream, safeEnd, safeWrite } from "./guarded-write";
 
+/** ADAAAA-7990: the FUNDED live sampling baseline (board decision 2026-11-04:
+ *  "I want the live rail to do 3 fps as well same as the VOD processing").
+ *  The control plane resolves the rate with `resolveSampleFps(...)` against
+ *  `LIVE_SAMPLE_BASE_FPS` (default 3) and passes it down per session; this
+ *  constant is only the documented fallback for a session constructed without
+ *  one. Before this the rail hard-defaulted to 1 (`sampleFps ?? 1`), so a real
+ *  browser/screen share delivered 0.91 fps while 3 fps was already funded.
+ *  Never reintroduce a silent 1 fps default here. */
+export const FUNDED_LIVE_SAMPLE_FPS = 3;
+/** Upper bound for the RTC cadence — the same `LIVE_SAMPLE_MAX_FPS` ceiling
+ *  (default 10) the live analyzer path resolves against. */
+export const RTC_SAMPLE_MAX_FPS = 10;
+/** Lowest cadence the rail will honour (a resolved rate can never be 0). */
+export const RTC_SAMPLE_MIN_FPS = 0.25;
+
+/** Clamp a requested RTC sample cadence into the funded live envelope.
+ *  Absent/invalid -> the funded baseline (3 fps), NOT 1. */
+export function normalizeRtcSampleFps(fps?: number, maxFps = RTC_SAMPLE_MAX_FPS): number {
+  const n = Number(fps);
+  const cap = Number.isFinite(maxFps) && maxFps > 0 ? maxFps : RTC_SAMPLE_MAX_FPS;
+  if (!Number.isFinite(n) || n <= 0) return Math.min(cap, FUNDED_LIVE_SAMPLE_FPS);
+  return Math.min(cap, Math.max(RTC_SAMPLE_MIN_FPS, n));
+}
+
 export interface RtcIngestOptions {
   /** ffmpeg binary path (default "ffmpeg"). */
   ffmpegBin?: string;
-  /** Target JPEG sample cadence (fps). Default 1.0 (perceive CPU target). */
+  /** Target JPEG sample cadence (fps). The control plane's resolved live rate
+   *  (ADAAAA-7990: `resolveSampleFps` / `LIVE_SAMPLE_BASE_FPS`, default 3,
+   *  capped by `LIVE_SAMPLE_MAX_FPS`). Absent -> {@link FUNDED_LIVE_SAMPLE_FPS}
+   *  (3), never the old 1 fps default. */
   sampleFps?: number;
   /** JPEG quality passed to ffmpeg -q:v (2-31; lower = higher quality). Default 5. */
   jpegQuality?: number;
@@ -211,6 +238,19 @@ export class WebRtcIngestSession extends EventEmitter {
   /** NAL header byte of the last access unit (to detect VCL / IDR). */
   private lastNalType = -1;
   private lastSampleWall = 0;
+  /** Effective JPEG sample cadence (fps), resolved ONCE at construction from
+   *  the control plane's live rate (ADAAAA-7990). Never the old implicit 1. */
+  private readonly sampleFps: number;
+  /** Single-flight guard for the decode: at 3 fps a decode that outruns the
+   *  cadence would otherwise stack one-shot ffmpeg children, each decoding the
+   *  whole since-keyframe segment. A skipped tick retries on the next access
+   *  unit (lastSampleWall is left untouched), so the cadence recovers as soon
+   *  as the decoder catches up. */
+  private sampling = false;
+  /** Cadence ticks skipped because a decode was still in flight (diagnostics;
+   *  counted once per decode, not once per access unit). */
+  private samplesSkipped = 0;
+  private skipCounted = false;
   /** Remote (browser) video SSRC — the target of a keyframe request (PLI). */
   private videoSsrc = 0;
   /** Wall-clock ms of the last keyframe request (rate limit). */
@@ -218,6 +258,11 @@ export class WebRtcIngestSession extends EventEmitter {
 
   constructor(private opts: RtcIngestOptions = {}) {
     super();
+    // ADAAAA-7990: resolve the cadence once. Absent -> the funded 3 fps
+    // baseline (the control plane always passes its resolved rate explicitly);
+    // clamped into [0.25, RTC_SAMPLE_MAX_FPS] so no config can exceed the
+    // funded `LIVE_SAMPLE_MAX_FPS` ceiling.
+    this.sampleFps = normalizeRtcSampleFps(opts.sampleFps);
   }
 
   /** Handle a browser offer, answering (best-effort ICE gathering). */
@@ -447,8 +492,9 @@ export class WebRtcIngestSession extends EventEmitter {
     if (isVCL) this.vclCount++;
     this.lastNalType = nalType;
 
-    // Sample cadence: emit a JPEG at ~sampleFps.
-    const sampleFps = this.opts.sampleFps ?? 1;
+    // Sample cadence: emit a JPEG at the resolved live rate (ADAAAA-7990).
+    // The old `this.opts.sampleFps ?? 1` pinned every browser/RTMP share to
+    // 1 fps even though 3 fps is the funded live baseline.
     const now = Date.now();
     // Bound the since-keyframe segment. Without this a VP8/VP9 screen share
     // that goes seconds without an IDR keeps every access unit (unbounded
@@ -458,10 +504,20 @@ export class WebRtcIngestSession extends EventEmitter {
     // resets. Rate-limited and best-effort.
     const maxSeg = this.opts.maxSegmentFrames ?? 90;
     if (this.seg.length >= maxSeg) this.requestKeyframe(now);
-    const due = this.lastSampleWall === 0 || now - this.lastSampleWall >= 1000 / sampleFps;
+    const due = this.lastSampleWall === 0 || now - this.lastSampleWall >= 1000 / this.sampleFps;
     if (due && isVCL) {
-      this.lastSampleWall = now;
-      void this.sampleFrame(now / 1000, rtpTs).catch((e) => this.emit("error", e));
+      // Single-flight: never stack decode children when a decode outruns the
+      // cadence. `lastSampleWall` stays untouched so the next access unit
+      // retries immediately once the in-flight decode settles.
+      if (this.sampling) {
+        if (!this.skipCounted) {
+          this.samplesSkipped++;
+          this.skipCounted = true;
+        }
+      } else {
+        this.lastSampleWall = now;
+        void this.sampleFrame(now / 1000, rtpTs).catch((e) => this.emit("error", e));
+      }
     }
   }
 
@@ -504,6 +560,19 @@ export class WebRtcIngestSession extends EventEmitter {
   /** One-shot ffmpeg decode of the current segment -> single JPEG of the newest frame. */
   private async sampleFrame(ts: number, rtpTs: number): Promise<void> {
     if (this.closed || this.vclCount < 1) return;
+    // ADAAAA-7990: single-flight marker for the cadence loop (see
+    // processAccessUnit). Released in `finally` so a failed decode never
+    // silences the rail.
+    this.sampling = true;
+    this.skipCounted = false;
+    try {
+      await this.decodeAndEmit(ts, rtpTs);
+    } finally {
+      this.sampling = false;
+    }
+  }
+
+  private async decodeAndEmit(ts: number, rtpTs: number): Promise<void> {
     const bin = this.opts.ffmpegBin ?? "ffmpeg";
     const q = this.opts.jpegQuality ?? 5;
     const maxW = this.opts.maxWidth ?? 480;
@@ -612,6 +681,11 @@ export class WebRtcIngestSession extends EventEmitter {
   /** Live diagnostics for this ingest session (packets in / frames out). */
   stats() {
     return {
+      // ADAAAA-7990: the effective sampling cadence. Published so the box
+      // evidence (`[rtc] close ... fps=`, the node detail surface) states the
+      // rate the rail actually ran, not the rate a config intended.
+      sampleFps: this.sampleFps,
+      samplesSkipped: this.samplesSkipped,
       packetsReceived: this.packetsReceived,
       framesEmitted: this.framesEmitted,
       audioPacketsReceived: this.audioPacketsReceived,
@@ -628,7 +702,7 @@ export class WebRtcIngestSession extends EventEmitter {
     // Diagnostic summary so a connected-but-silent session is distinguishable
     // from "no frames at all" (AC: packet/frame counters on the RTC path).
     // eslint-disable-next-line no-console
-    console.log(`[rtc] close codec=${this.codecMime || "?"} packets=${this.packetsReceived} frames=${this.framesEmitted} audioPackets=${this.audioPacketsReceived}`);
+    console.log(`[rtc] close codec=${this.codecMime || "?"} fps=${this.sampleFps} skipped=${this.samplesSkipped} packets=${this.packetsReceived} frames=${this.framesEmitted} audioPackets=${this.audioPacketsReceived}`);
     if (this.pc) {
       try {
         await this.pc.close();

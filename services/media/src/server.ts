@@ -19,7 +19,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
-import { WebRtcIngestSession } from "./rtc";
+import { WebRtcIngestSession, normalizeRtcSampleFps, FUNDED_LIVE_SAMPLE_FPS } from "./rtc";
 import { AudioRelay, type AudioPcmChunk } from "./audio-relay";
 import { guardStream, safeEnd, safeWrite, sendText } from "./guarded-write";
 import type { LifecycleSnapshot } from "./lifecycle";
@@ -36,6 +36,11 @@ interface ActiveStream {
   startedAt: number;
   /** Active WebRTC ingest terminus (present once a browser opens an RTC session). */
   rtc?: { pcId: string; session: WebRtcIngestSession };
+  /** ADAAAA-7990: the resolved live sampling cadence for THIS session, handed
+   *  down by the control plane on `POST /sessions { sampleFps }` (it resolves
+   *  it with `resolveSampleFps` / `LIVE_SAMPLE_BASE_FPS`). Absent -> the node
+   *  fallback (`rtcSampleFps`, funded 3 fps). */
+  sampleFps?: number;
   /** Muxed (video+audio) MediaRecorder chunks reassembled in arrival order.
    *  Lazily created on the first muxed chunk; the container's own PTS is the
    *  authoritative clock for clip cutting AND for feeding the analysis rails. */
@@ -91,7 +96,12 @@ export interface MediaServerOptions {
   provisionNoClientMs?: number;
   /** Directory where per-session muxed recordings are reassembled. Default tmpdir. */
   tmpDir?: string;
-  /** WebRTC ingest JPEG sample cadence (fps). Default 1.0. */
+  /** WebRTC ingest JPEG sample cadence (fps) — the node-wide FALLBACK used when
+   *  a `POST /sessions` caller does not send its own resolved rate. Default:
+   *  the funded live baseline, {@link FUNDED_LIVE_SAMPLE_FPS} (3 fps), bounded
+   *  by `LIVE_SAMPLE_MAX_FPS` (ADAAAA-7990). The control plane's per-session
+   *  `sampleFps` always wins; this default exists so a media-only / degraded
+   *  provision cannot silently pin the rail back to 1 fps. */
   rtcSampleFps?: number;
   /** ICE servers (STUN/TURN) for WebRTC ingest. A relay (TURN) candidate gives
    *  the browser a reachable media path when the media server's host candidates
@@ -216,7 +226,10 @@ export class MediaServer {
     audioTriggerCandidates: 0,
   };
   constructor(private opts: MediaServerOptions, orch?: MediaOrchestrator) {
-    this.rtcSampleFps = opts.rtcSampleFps ?? 1;
+    // ADAAAA-7990: never default the RTC cadence to 1 fps — 3 fps is the
+    // funded live baseline (LIVE_SAMPLE_BASE_FPS). A per-session value from
+    // `POST /sessions` overrides this.
+    this.rtcSampleFps = normalizeRtcSampleFps(opts.rtcSampleFps ?? FUNDED_LIVE_SAMPLE_FPS);
     this.nodeId = opts.nodeId ?? "media-0";
     this.maxSessions = opts.maxSessions && opts.maxSessions > 0 ? opts.maxSessions : 1;
     this.healthToken = opts.healthToken;
@@ -248,9 +261,17 @@ export class MediaServer {
 
     // Provision a perceive session for a stream. Returns the WS path the
     // browser connects to.
-    app.post<{ Body: { jobId?: string } }>("/sessions", async (_, reply) => {
+    app.post<{ Body: { jobId?: string; sampleFps?: number } }>("/sessions", async (_, reply) => {
       this.counters.provisionAttempts++;
       const requestedJobId = typeof _.body?.jobId === "string" ? _.body.jobId : "";
+      // ADAAAA-7990: the control plane resolves the live sampling rate (one
+      // resolution source: `resolveSampleFps` over `LIVE_SAMPLE_BASE_FPS`,
+      // capped by `LIVE_SAMPLE_MAX_FPS`) and hands it down per session. The
+      // media node used to ignore it entirely and sample at 1 fps, which is why
+      // a browser/screen share delivered 0.91 fps against a funded 3 fps.
+      const requestedSampleFps = normalizeRtcSampleFps(
+        typeof _.body?.sampleFps === "number" ? _.body.sampleFps : undefined
+      );
       // ADAAAA-7689 AC1 — a job owns ONE live session. The browser QA path calls
       // this twice for the same job (control plane `POST /jobs/:id/media`, then
       // the harness/browser itself); reserving twice billed a second perceive
@@ -261,6 +282,10 @@ export class MediaServer {
         const existing = [...this.active.values()].find((s) => !s.closed && s.jobId === requestedJobId);
         if (existing) {
           this.counters.provisionReuses++;
+          // A re-provision (control-plane retry, node failover) must still
+          // honour the resolved rate the caller just sent, even when the
+          // session already exists (ADAAAA-7990).
+          existing.sampleFps = requestedSampleFps;
           return this.sessionPayload(existing, true);
         }
       }
@@ -285,6 +310,7 @@ export class MediaServer {
         closed: false,
         startedAt: Date.now(),
         everAttached: false,
+        sampleFps: requestedSampleFps,
       };
       this.active.set(p.sessionId, stream);
       // Pay the orchestrator for as long as the stream is open (no-op offchain).
@@ -322,7 +348,9 @@ export class MediaServer {
         if (!req.body?.offer) return reply.code(400).send({ error: "offer required" });
         if (!stream.rtc) {
           const session = new WebRtcIngestSession({
-            sampleFps: this.rtcSampleFps,
+            // ADAAAA-7990: the per-session resolved rate (control plane) wins
+            // over the node fallback (funded 3 fps), never the old implicit 1.
+            sampleFps: stream.sampleFps ?? this.rtcSampleFps,
             iceServers: this.opts.rtcIceServers,
             iceGatherTimeoutMs: this.opts.rtcIceGatherTimeoutMs,
             // Log correlation for the guarded writes (ADAAAA-7591).
@@ -378,6 +406,9 @@ export class MediaServer {
           });
           session.on("error", (e) => console.error("[media] rtc err", e));
           stream.rtc = { pcId: randomUUID(), session };
+          // ADAAAA-7990 evidence line: the cadence this session will decode at.
+          // eslint-disable-next-line no-console
+          console.log(`[rtc] session sid=${req.params.sid} sampleFps=${session.stats().sampleFps}`);
           // A browser attached via RTC — the no-client timer no longer applies.
           stream.everAttached = true;
           this.clearNoClient(req.params.sid);
@@ -616,6 +647,9 @@ export class MediaServer {
       // candidates (ADAAAA-7304 finding 4).
       iceServers: this.opts.rtcIceServers,
       rtc: true,
+      // ADAAAA-7990: the resolved sampling cadence for this session, so the
+      // caller can record/verify it (AC1: resolved sampleFps = 3).
+      sampleFps: stream.sampleFps ?? this.rtcSampleFps,
       streamId: stream.streamId,
       jobId: stream.jobId,
       // Node identity so the control plane can attribute this job's Livepeer

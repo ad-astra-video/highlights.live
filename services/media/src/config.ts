@@ -45,6 +45,16 @@ export interface MediaConfig {
    *  RTC answer is returned (so it carries a reachable candidate). Default 2000. */
   rtcIceGatherTimeoutMs?: number;
   /**
+   * ADAAAA-7990: fallback webRTC ingest sampling cadence for this node. The
+   * control plane's per-session `sampleFps` (resolved by `resolveSampleFps`
+   * over `LIVE_SAMPLE_BASE_FPS`) is authoritative; this is what the node uses
+   * for a session provisioned without one. Deliberately the SAME env names the
+   * live analyzer path already reads — no second fps knob:
+   * `LIVE_SAMPLE_BASE_FPS` (default 3, the funded live baseline) bounded by
+   * `LIVE_SAMPLE_MAX_FPS` (default 10).
+   */
+  rtcSampleFps: number;
+  /**
    * Stable identity of THIS media node (ADAAAA-6869 Phase 4). Published on
    * `/health`, returned to the control plane by `POST /sessions`, and stored per
    * job so Livepeer GPU spend can be attributed per node. One node today; the
@@ -89,6 +99,18 @@ export interface MediaConfig {
   buildRef: string;
 }
 
+/** ADAAAA-7990: resolve the node's fallback RTC sampling cadence from the SAME
+ *  env knobs the control plane's live path uses (`LIVE_SAMPLE_BASE_FPS`,
+ *  default 3; `LIVE_SAMPLE_MAX_FPS`, default 10). A media node deliberately has
+ *  no fps knob of its own, so a deployment cannot drift the two rails apart. */
+export function rtcSampleFpsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+  const base = Number(env.LIVE_SAMPLE_BASE_FPS ?? 3);
+  const cap = Number(env.LIVE_SAMPLE_MAX_FPS ?? 10);
+  const floor = Number.isFinite(base) && base > 0 ? base : 3;
+  const ceiling = Number.isFinite(cap) && cap > 0 ? cap : 10;
+  return Math.min(ceiling, Math.max(0.25, floor));
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
   return {
     port: Number(env.PORT ?? 4070),
@@ -103,6 +125,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     provisionNoClientMs: env.MEDIA_PROVISION_NO_CLIENT_MS ? Number(env.MEDIA_PROVISION_NO_CLIENT_MS) : 60_000,
     rtcIceServers: env.MEDIA_RTC_ICE_SERVERS ? JSON.parse(env.MEDIA_RTC_ICE_SERVERS) : undefined,
     rtcIceGatherTimeoutMs: env.MEDIA_RTC_ICE_GATHER_TIMEOUT_MS ? Number(env.MEDIA_RTC_ICE_GATHER_TIMEOUT_MS) : undefined,
+    // ADAAAA-7990: the rail's fallback cadence is the funded live baseline
+    // (LIVE_SAMPLE_BASE_FPS=3), never 1 fps, and bounded by the same
+    // LIVE_SAMPLE_MAX_FPS ceiling the control plane resolves against.
+    rtcSampleFps: rtcSampleFpsFromEnv(env),
     // ADAAAA-6869 Phase 4: node identity + advertised capacity + the optional
     // bearer that unlocks the per-session detail surface.
     nodeId: env.MEDIA_NODE_ID ?? "media-0",
