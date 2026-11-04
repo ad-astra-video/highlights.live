@@ -75,8 +75,10 @@ import {
   extractionReusable,
   failedAttemptCount,
   formatResumeAttemptLine,
+  interruptedAttemptEvidence,
   mergeResumeCheckpoint,
   nextAttemptNumber,
+  recordAttemptProgress,
   resumeRetryDelayMs,
   resumeEligibleSource,
   resumeRetryDue,
@@ -1614,7 +1616,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       attempts: attemptNo,
       resume: mergeResumeCheckpoint(checkpoint, {
         phase: "extract",
-        attempts: [...(checkpoint?.attempts ?? []), { attempt: attemptNo, startedAt: attemptStartedAt }],
+        attempts: [
+          ...(checkpoint?.attempts ?? []),
+          // ADAAAA-7907 (AC10): the attempt's START values are recorded at claim
+          // (the counters follow on every checkpoint write), so an attempt a hard
+          // kill takes out still carries real evidence for boot recovery.
+          {
+            attempt: attemptNo,
+            startedAt: attemptStartedAt,
+            resumedFromTs: cursorTs,
+            skippedFrames: 0,
+            warmupFrames,
+          },
+        ],
         totalAttempts: attemptNo,
         // ADAAAA-7907: total claims the retry policy allows (1 + retries), so
         // the operator surface can render "attempt 2 of 3".
@@ -1632,8 +1646,23 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // against the same stale base and drop a cursor advance.
     let checkpointChain: Promise<unknown> = Promise.resolve();
     const writeResumeCheckpoint = (patch: ResumeCheckpointPatch): Promise<unknown> => {
+      // ADAAAA-7907 (AC10): every checkpoint write also records THIS attempt's
+      // running counters on its own trail entry. A hard kill cannot run the
+      // attempt's exit hook, so the persisted counters are the only evidence boot
+      // recovery can report for it. Skipped when the patch already carries the
+      // attempt trail (a close), which must win.
+      const progress = patch.attempts
+        ? undefined
+        : recordAttemptProgress(store.getJob(jobId)?.resume?.attempts, {
+            resumedFromTs: attemptStats.resumedFromTs,
+            skippedFrames: attemptStats.skippedFrames,
+            warmupFrames: attemptStats.warmupFrames,
+            decideCalls: attemptStats.decideCalls,
+            perceiveCalls: attemptStats.perceiveCalls,
+          });
+      const enriched: ResumeCheckpointPatch = progress ? { ...patch, attempts: progress } : patch;
       checkpointChain = checkpointChain
-        .then(() => store.saveResumeCheckpoint(jobId, patch))
+        .then(() => store.saveResumeCheckpoint(jobId, enriched))
         .catch((e: any) => console.error(`[vod-resume:${jobId}] checkpoint persist failed:`, String(e?.message || e)));
       return checkpointChain;
     };
@@ -2411,6 +2440,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const now = new Date().toISOString();
     const checkpoint = job.resume;
     const phase = checkpoint?.phase ?? "analyze";
+    // ADAAAA-7907 (AC10): an attempt still OPEN at this point was KILLED — its
+    // exit hook never ran, so it never emitted its own evidence line. Capture the
+    // last counters it persisted and emit the line it owes once the row is armed.
+    // A `failed` row's attempt is already closed, so it yields no second line.
+    const killedEvidence = interruptedAttemptEvidence(checkpoint);
     // Close the interrupted attempt (no-op when every entry is already closed).
     const attempts = closeOpenAttempt(checkpoint?.attempts, {
       now,
@@ -2450,6 +2484,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       reason === "boot-recovery" ? "boot-resume" : "resume-queued",
       `attempt=${nextAttempt} phase=${phase} resumedFromTs=${resumedFromTs} cursorTs=${resumedFromTs} via=${reason}`
     );
+    // ADAAAA-7907 (AC10): the killed attempt's one line, emitted after the row is
+    // armed so a failed arm never claims an attempt it did not close.
+    if (killedEvidence) console.log(formatResumeAttemptLine(killedEvidence));
     // Re-arm the durable worker. `sourceUrl` is the path every VOD row carries;
     // `vodJobPaths` may not survive a restart.
     const videoPath = job.sourceUrl ?? vodJobPaths.get(jobId);

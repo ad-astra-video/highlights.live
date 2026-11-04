@@ -21,7 +21,9 @@ import {
   accumulateAttemptTotals,
   closeOpenAttempt,
   formatResumeAttemptLine,
+  interruptedAttemptEvidence,
   nextAttemptNumber,
+  recordAttemptProgress,
   resumeEligibleSource,
   resumePointLabel,
 } from "../src/vod-resume";
@@ -43,6 +45,18 @@ const ENV = {
 /** The shape AC10 pins: fixed prefix, fixed key order. */
 const RESUME_LINE =
   /^\[vod-resume\] attempt=(\d+) phase=(extract|analyze|finalize) resumedFromTs=([\d.]+) skippedFrames=(\d+) warmupFrames=(\d+) decideCalls=(\d+) perceiveCalls=(\d+)$/;
+
+/** AC10 crash half: the line boot recovery synthesizes for a KILLED attempt. */
+const RESUME_RECOVERED_LINE =
+  /^\[vod-resume\] attempt=(\d+) phase=(extract|analyze|finalize) resumedFromTs=([\d.]+) skippedFrames=(\d+) warmupFrames=(\d+) decideCalls=(\d+) perceiveCalls=(\d+) recovered=true$/;
+
+/** The counters the killed attempt had PERSISTED at its last checkpoint write
+ * (AC10 crash half). Distinct values, so the synthesized line's fields are
+ * proven to come from disk rather than from a default. */
+const KILLED_SKIPPED_FRAMES = 8;
+const KILLED_WARMUP_FRAMES = 4; // resumeWarmupFrames(windowN=4, fps=2) = 4
+const KILLED_DECIDE_CALLS = 3;
+const KILLED_PERCEIVE_CALLS = 40;
 
 /** Counting fake perceive/decide adapter (same shape as vod-resume.test.ts). */
 function resumeAdapter(opts: { failDecideCall?: number; failAllDecide?: boolean } = {}) {
@@ -251,6 +265,64 @@ describe("vod-resume Inc 3+4 pure parts (ADAAAA-7907)", () => {
       "[vod-resume] attempt=2 phase=analyze resumedFromTs=12.0 skippedFrames=24 warmupFrames=4 decideCalls=7 perceiveCalls=30"
     );
     expect(line).toMatch(RESUME_LINE);
+  });
+
+  it("records the OPEN attempt's running counters so a killer's crash keeps evidence (AC10 crash half)", () => {
+    const trail = [
+      { attempt: 1, startedAt: "a", endedAt: "b", failureReason: "decide-unavailable" as const },
+      { attempt: 2, startedAt: "c" },
+    ];
+    const recorded = recordAttemptProgress(trail, {
+      resumedFromTs: 12.5,
+      skippedFrames: 24,
+      warmupFrames: 4,
+      decideCalls: 7,
+      perceiveCalls: 30,
+    })!;
+    expect(recorded).toHaveLength(2);
+    expect(recorded[1]).toMatchObject({
+      attempt: 2,
+      resumedFromTs: 12.5,
+      skippedFrames: 24,
+      warmupFrames: 4,
+      decideCalls: 7,
+      perceiveCalls: 30,
+    });
+    expect(recorded[1].endedAt).toBeUndefined(); // still open — the attempt is live
+    expect(recorded[0]).toEqual(trail[0]); // a closed attempt is never rewritten
+    // No open entry -> nothing to write, so the caller skips the DB write.
+    expect(recordAttemptProgress([{ attempt: 1, startedAt: "a", endedAt: "b" }], { decideCalls: 3 })).toBeUndefined();
+    expect(recordAttemptProgress(undefined, { decideCalls: 3 })).toBeUndefined();
+    // Garbage / negative values keep the previous value instead of corrupting it.
+    const kept = recordAttemptProgress(recorded, { decideCalls: Number.NaN, perceiveCalls: -4 })!;
+    expect(kept[1].decideCalls).toBe(7);
+    expect(kept[1].perceiveCalls).toBe(30);
+  });
+
+  it("synthesizes the killed attempt's line at recovery, marked recovered (AC10 crash half)", () => {
+    const checkpoint = {
+      version: 1 as const,
+      phase: "analyze" as const,
+      analyze: { cursorTs: 48 },
+      attempts: [
+        { attempt: 1, startedAt: "a", endedAt: "b" },
+        { attempt: 2, startedAt: "c", resumedFromTs: 12.5, skippedFrames: 24, warmupFrames: 4, decideCalls: 7, perceiveCalls: 30 },
+      ],
+      totalAttempts: 2,
+    };
+    const evidence = interruptedAttemptEvidence(checkpoint);
+    expect(evidence).toMatchObject({ attempt: 2, phase: "analyze", recovered: true, decideCalls: 7 });
+    const line = formatResumeAttemptLine(evidence!);
+    expect(line).toBe(
+      "[vod-resume] attempt=2 phase=analyze resumedFromTs=12.5 skippedFrames=24 warmupFrames=4 decideCalls=7 perceiveCalls=30 recovered=true"
+    );
+    expect(line).toMatch(RESUME_RECOVERED_LINE);
+    // Every attempt closed -> no synthesized line. A `failed` row's attempt already
+    // emitted its own line, so a manual resume must never add a second row for it.
+    expect(
+      interruptedAttemptEvidence({ ...checkpoint, attempts: [{ attempt: 1, startedAt: "a", endedAt: "b" }] })
+    ).toBeNull();
+    expect(interruptedAttemptEvidence(undefined)).toBeNull();
   });
 });
 
@@ -581,7 +653,22 @@ describe("VOD resume boot recovery (ADAAAA-7907 Increment 4)", () => {
       resume: {
         ...failedAdmin.job.resume,
         phase: "analyze" as const,
-        attempts: [...failedAdmin.job.resume.attempts, { attempt: 2, startedAt: new Date().toISOString() }],
+        attempts: [
+          ...failedAdmin.job.resume.attempts,
+          // ADAAAA-7907 (AC10): attempt 2 was CLAIMED and killed mid-analyze, so
+          // its entry carries what its last checkpoint write persisted — the start
+          // values plus the running counters. That is the evidence boot recovery
+          // has to report for an attempt that never ran its exit hook.
+          {
+            attempt: 2,
+            startedAt: new Date().toISOString(),
+            resumedFromTs: cursorTs,
+            skippedFrames: KILLED_SKIPPED_FRAMES,
+            warmupFrames: KILLED_WARMUP_FRAMES,
+            decideCalls: KILLED_DECIDE_CALLS,
+            perceiveCalls: KILLED_PERCEIVE_CALLS,
+          },
+        ],
         totalAttempts: 2,
       },
     };
@@ -635,11 +722,24 @@ describe("VOD resume boot recovery (ADAAAA-7907 Increment 4)", () => {
     expect(body.job.vodMeter.decideCalls).toBe(body.job.resume.accumulators.decideCalls);
     expect(body.job.vodMeter.wallClockS).toBeGreaterThanOrEqual(attempt1Acc.wallClockS ?? 0);
 
-    // AC10: the resumed attempt logged exactly one line, with the cursor and the
-    // skipped span it resumed past.
-    expect(lines).toHaveLength(1);
-    const m = lines[0].match(RESUME_LINE);
-    expect(m, `unexpected evidence line: ${lines[0]}`).toBeTruthy();
+    // AC10: TWO lines now — one synthesized at boot recovery for the attempt the
+    // kill took out (no exit hook ran), one measured for the resumed attempt. The
+    // crash case is the incident class this criterion exists for, so a grep has to
+    // count both.
+    expect(lines).toHaveLength(2);
+    const killedLine = lines[0].match(RESUME_RECOVERED_LINE);
+    expect(killedLine, `unexpected recovered evidence line: ${lines[0]}`).toBeTruthy();
+    expect(Number(killedLine![1])).toBe(2);
+    expect(killedLine![2]).toBe("analyze");
+    expect(Number(killedLine![3])).toBe(cursorTs);
+    expect(Number(killedLine![4])).toBe(KILLED_SKIPPED_FRAMES);
+    expect(Number(killedLine![5])).toBe(KILLED_WARMUP_FRAMES);
+    expect(Number(killedLine![6])).toBe(KILLED_DECIDE_CALLS);
+    expect(Number(killedLine![7])).toBe(KILLED_PERCEIVE_CALLS);
+    // The resumed attempt's line is still the MEASURED shape (no recovered flag).
+    const m = lines[1].match(RESUME_LINE);
+    expect(m, `unexpected evidence line: ${lines[1]}`).toBeTruthy();
+    expect(Number(m![1])).toBe(3);
     expect(Number(m![3])).toBe(cursorTs);
     expect(Number(m![4])).toBeGreaterThan(0);
     expect(Number(m![5])).toBeGreaterThan(0);

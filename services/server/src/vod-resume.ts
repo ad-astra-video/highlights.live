@@ -311,6 +311,91 @@ export function closeOpenAttempt(
 
 type AttemptEntry = NonNullable<ResumeCheckpoint["attempts"]>[number];
 
+/** Running counters the OPEN attempt persists on its own trail entry (AC10). */
+export interface AttemptProgress {
+  resumedFromTs?: number;
+  skippedFrames?: number;
+  warmupFrames?: number;
+  decideCalls?: number;
+  perceiveCalls?: number;
+}
+
+const nonNegInt = (v: unknown): number | undefined => {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return Math.round(n);
+};
+
+const nonNegNumber = (v: unknown): number | undefined => {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return n;
+};
+
+/**
+ * ADAAAA-7907 (AC10, crash half): record the OPEN attempt's running counters on
+ * its own trail entry, so an attempt that dies without running its exit hook
+ * still has evidence on disk.
+ *
+ * Returns `undefined` when no attempt is open (every entry already closed), so
+ * the caller can skip a pointless write. Values that are missing or garbage keep
+ * the entry's previous value — nothing is ever cleared, and the persisted
+ * counters never go backwards within an attempt.
+ */
+export function recordAttemptProgress(
+  attempts: ResumeCheckpoint["attempts"] | undefined,
+  progress: AttemptProgress
+): ResumeCheckpoint["attempts"] | undefined {
+  const list = [...(attempts ?? [])];
+  const openIdx = list.map((a) => !a.endedAt).lastIndexOf(true);
+  if (openIdx < 0) return undefined;
+  const cur = list[openIdx];
+  const skippedFrames = nonNegInt(progress.skippedFrames);
+  const warmupFrames = nonNegInt(progress.warmupFrames);
+  const decideCalls = nonNegInt(progress.decideCalls);
+  const perceiveCalls = nonNegInt(progress.perceiveCalls);
+  const resumedFromTs = nonNegNumber(progress.resumedFromTs);
+  list[openIdx] = {
+    ...cur,
+    ...(resumedFromTs !== undefined ? { resumedFromTs } : {}),
+    ...(skippedFrames !== undefined ? { skippedFrames } : {}),
+    ...(warmupFrames !== undefined ? { warmupFrames } : {}),
+    ...(decideCalls !== undefined ? { decideCalls } : {}),
+    ...(perceiveCalls !== undefined ? { perceiveCalls } : {}),
+  };
+  return list;
+}
+
+/**
+ * ADAAAA-7907 (AC10, crash half): the evidence line for an attempt that is
+ * still OPEN, i.e. one that was killed instead of exiting through the worker.
+ * Read BEFORE `closeOpenAttempt` rewrites the entry (the close keeps the fields).
+ *
+ * Honest limits, stated rather than papered over: the counts are the values the
+ * attempt persisted at its LAST checkpoint write (every
+ * `VOD_RESUME_CHECKPOINT_WINDOWS` decided windows, default 10 ≈ 30 s of
+ * content), so a kill inside the first interval reports the zeros it had
+ * persisted. Nothing can recover counters that were never written to disk.
+ */
+export function interruptedAttemptEvidence(
+  checkpoint: ResumeCheckpoint | undefined
+): ResumeAttemptEvidence | null {
+  const list = [...(checkpoint?.attempts ?? [])];
+  const openIdx = list.map((a) => !a.endedAt).lastIndexOf(true);
+  if (openIdx < 0) return null;
+  const e = list[openIdx];
+  return {
+    attempt: e.attempt,
+    phase: e.failedAtPhase ?? checkpoint?.phase ?? "analyze",
+    resumedFromTs: e.resumedFromTs ?? checkpoint?.analyze?.cursorTs ?? 0,
+    skippedFrames: e.skippedFrames,
+    warmupFrames: e.warmupFrames,
+    decideCalls: e.decideCalls,
+    perceiveCalls: e.perceiveCalls,
+    recovered: true,
+  };
+}
+
 /**
  * The attempt number the NEXT claim will carry. `totalAttempts` on the record
  * must equal the number of CLAIMS (AC9), so the resume entry point reserves the
@@ -342,6 +427,10 @@ export interface ResumeAttemptEvidence {
   warmupFrames?: number;
   decideCalls?: number;
   perceiveCalls?: number;
+  /** True for a line synthesized at boot recovery for an attempt that was
+   * KILLED (its own exit hook never ran). Trailing marker, so the normal
+   * one-line-per-attempt shape above is untouched. */
+  recovered?: boolean;
 }
 
 /**
@@ -360,6 +449,10 @@ export function formatResumeAttemptLine(e: ResumeAttemptEvidence): string {
     `skippedFrames=${Math.round(nonNeg(e.skippedFrames))} ` +
     `warmupFrames=${Math.round(nonNeg(e.warmupFrames))} ` +
     `decideCalls=${Math.round(nonNeg(e.decideCalls))} ` +
-    `perceiveCalls=${Math.round(nonNeg(e.perceiveCalls))}`
+    `perceiveCalls=${Math.round(nonNeg(e.perceiveCalls))}` +
+    // AC10 crash half: a boot-recovery line for an attempt whose own exit hook
+    // never ran carries a trailing marker, so an operator can tell a measured
+    // line from a synthesized one without losing the fixed key order above.
+    (e.recovered ? ` recovered=true` : "")
   );
 }
