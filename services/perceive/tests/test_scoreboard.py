@@ -566,3 +566,115 @@ def test_stale_transition_confirmed_too_late_is_not_a_fresh_delta():
     tr.record(45.0, (2, 0))            # confirmation 30 s later -> stale
     assert tr.changed(45.0) is False
     assert tr.delta(45.0) is None
+
+
+# --- ADAAAA-7944: temporal candidate-region selection ------------------------
+
+
+def _selector(pair_fn, max_frames=4):
+    from app.scoreboard import ScoreboardRoiSelector
+
+    return ScoreboardRoiSelector(pair_fn=pair_fn, max_frames=max_frames)
+
+
+def _feed(selector, frames):
+    for observed in frames:
+        selector.record_frame(observed)
+
+
+AF_BAND = "BELMONT 6 WESTFORD 6 1st0:211st & 10Commentators: Todd Bloniarz & Aram Parnagian"
+HK_BUG = "Watertown1Cohasset Middle HS1st Period"
+BB_BUG = "Watertown2 Wayland0A2nd2 Outs"
+
+
+def test_roi_selector_prefers_bottom_band_over_banner_and_field():
+    # The measured football read: the top band / play-field crop returns jersey
+    # numbers while the bottom full-width band prints both clubs on every frame.
+    from app.match_context import printed_name_pair
+
+    sel = _selector(lambda lines: printed_name_pair(lines, "american_football"))
+    _feed(
+        sel,
+        [
+            {"top_band": ["77"], "bottom_band": [AF_BAND], "bottom_left": ["BELMONT 6WESTFORD"], "bottom_right": ["6 1st 0:21"]},
+            {"top_band": ["G"], "bottom_band": [AF_BAND], "bottom_left": ["BELMONT 6WESTFORD"], "bottom_right": ["6 1st 0:21"]},
+            {"top_band": ["55"], "bottom_band": [AF_BAND], "bottom_left": ["BELMONT 6WESTFORD"], "bottom_right": ["6 1st 0:21"]},
+        ],
+    )
+    roi = sel.select()
+    assert roi is not None
+    assert sel.resolved_name == "bottom_band"
+    assert (roi.y0, roi.y1) == (0.78, 0.94)
+    assert sel.score("top_band") == 0.0
+
+
+def test_roi_selector_never_lets_a_background_board_win():
+    # Hockey: the rink banner behind the glass reads "CHAMPIONS 2014" on every
+    # frame — stable, but it is banner copy, never a score surface.
+    sel = _selector(lambda lines: ("CHAMPIONS", "COURTESY") if lines else None)
+    _feed(sel, [{"top_band": ["CHAMPIONS2014"]}] * 4)
+    assert sel.score("top_band") == 0.0
+    assert sel.select() is None
+
+
+def test_roi_selector_requires_temporal_stability_not_one_frame():
+    sel = _selector(lambda lines: ("BELMONT", "WESTFORD") if lines else None)
+    _feed(sel, [{"bottom_band": [AF_BAND]}] * 2)
+    assert sel.score("bottom_band") == 0.0
+    assert sel.select() is None
+
+
+def test_roi_selector_rejects_unstable_names():
+    sel = _selector(lambda lines: ("BELMONT", "WESTFORD") if lines and "BELMONT" in lines[0] else ("CHAMPIONS", "COURTESY") if lines else None)
+    frames = [
+        {"bottom_band": [AF_BAND]},
+        {"bottom_band": ["CHAMPIONS2014"]},
+        {"bottom_band": [AF_BAND]},
+        {"bottom_band": ["CHAMPIONS2014"]},
+    ]
+    _feed(sel, frames)
+    # Every frame printed a pair, but the sides split 2/2 between two unrelated
+    # pairs, so neither name reaches the 60 % stability bar — no region is
+    # adopted from a graphic whose text is not stable across frames.
+    assert sel.score("bottom_band") == 0.0
+
+
+def test_roi_selector_is_the_same_path_for_football_hockey_and_baseball():
+    # One sport-agnostic code path: identical candidate geometry selects the
+    # region that prints the pair, for every sport the measurement covered.
+    from app.match_context import printed_name_pair
+
+    cases = [
+        ("american_football", {"top_band": ["77"], "bottom_band": [AF_BAND]}, "bottom_band"),
+        ("ice_hockey", {"top_band": ["CHAMPIONS"], "bottom_left": [HK_BUG]}, "bottom_left"),
+        ("baseball", {"top_band": ["COURTESY"], "bottom_right": [BB_BUG]}, "bottom_right"),
+    ]
+    for sport, observed, expected in cases:
+        sel = _selector(lambda lines, s=sport: printed_name_pair(lines, s))
+        _feed(sel, [{**observed}] * 3)
+        roi = sel.select()
+        assert roi is not None, sport
+        assert sel.resolved_name == expected, sport
+        assert sel.score("top_band") == 0.0, sport
+
+
+def test_roi_selector_splits_the_esports_hud_on_the_top_band():
+    # Esports prints the HUD across the top: the stat-glued line names PSG vs V3
+    # once the HUD splitter runs, while the bottom band is the replay/PIC strip.
+    from app.match_context import printed_name_pair
+
+    hud = "PSG0 10.4K1 0.9%V312:5512:57BOSEKONGYUE"
+    sel = _selector(lambda lines: printed_name_pair(lines, "team_esports"))
+    _feed(sel, [{"top_band": [hud], "bottom_band": ["00:00 5145 00:00BOSEKONGYUE"]}] * 3)
+    assert sel.select() is not None
+    assert sel.resolved_name == "top_band"
+
+
+def test_roi_selector_probe_is_bounded():
+    sel = _selector(lambda lines: None)
+    assert len(sel.candidates_for_frame()) == 4
+    for _ in range(4):
+        sel.record_frame({c.name: ["junk"] for c in sel.candidates})
+    assert sel.candidates_for_frame() == []
+    # One-off cost: 4 frames x 4 candidates, never a per-frame bill.
+    assert sel.frames == 4

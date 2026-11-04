@@ -1037,6 +1037,12 @@ def generic_scorebug_sides(text: str) -> tuple[Optional[str], Optional[str]]:
     Samsunspor"), and a junk digit pair in that text must not hide the real
     score. The split that names both sides wins; otherwise the first split that
     names one side is reported (the pair gate decides what is publishable).
+
+    ADAAAA-7944: when the digit-run split names fewer than two sides, two
+    printed club plates sitting either side of a single score digit (a
+    full-width bottom band prints ``BELMONT 6 WESTFORD 6`` and a small corner
+    bug prints ``Watertown2 Wayland0``) or either side of the printed score
+    hyphen are read as home/away. Returned shapes are unchanged.
     """
     best: tuple[Optional[str], Optional[str]] = (None, None)
     for left, right in _generic_score_splits(text):
@@ -1050,7 +1056,229 @@ def generic_scorebug_sides(text: str) -> tuple[Optional[str], Optional[str]]:
             return home, away
         if best == (None, None) and (home is not None or away is not None):
             best = (home, away)
+    plates = printed_plate_sides(text)
+    if plates is not None:
+        return plates
     return best
+
+
+# ---------------------------------------------------------------------------
+# ADAAAA-7944 — printed club plates around a single score digit / hyphen
+# ---------------------------------------------------------------------------
+# The bottom full-width band and the small bottom-left / bottom-right bugs the
+# per-sport measurement found (ADAAAA-7914) print the two club plates with the
+# score as a GRAPHIC divider, so `<OCR>` returns one glued run:
+#
+#   football   "BELMONT 6 WESTFORD 6 1st0:21…"      (full-width bottom band)
+#   ice hockey "Watertown1Cohasset Middle HS1st…"   (bottom-left bug)
+#   baseball   "Watertown2 Wayland0A2nd2 Outs"      (bottom-right bug)
+#
+# The shipped digit-run splitter needs the two score digits ADJACENT ("13 8"),
+# which none of these produce. The plates parser reads the two printed name runs
+# that sit either side of the FIRST digit/hyphen boundary instead. It is
+# deliberately sport-agnostic: one code path names all three sports, and it is
+# only a fallback behind the shipped splitter, so every line the shipped parser
+# already handles keeps its exact behaviour.
+_PLATE_RUN_BEFORE_RE = re.compile(r"[A-Za-z][A-Za-z .'&]*$")
+_PLATE_RUN_AFTER_RE = re.compile(r"\s*([A-Za-z][A-Za-z .'&]*)")
+_PLATE_DIGIT_BOUNDARY_RE = re.compile(r"(?<=[A-Za-z])\s*(\d{1,2})\s*(?=[A-Za-z])")
+_PLATE_HYPHEN_BOUNDARY_RE = re.compile(
+    r"([A-Za-z][A-Za-z .'&]{2,30}?)\s*[-–—]\s*([A-Za-z][A-Za-z .'&]{2,30})"
+)
+# A plate run ends at the first of these words; they are broadcast copy printed
+# beside the score surface (ESPN-style commentator credits, period/inning text,
+# ad-board copy), never part of a club name.
+_PLATE_STOPWORDS = frozenset(
+    {
+        "commentators",
+        "commentator",
+        "period",
+        "inning",
+        "quarter",
+        "overtime",
+        "final",
+        "outs",
+        "courtesy",
+        "champions",
+        "champion",
+        "sponsor",
+        "sponsored",
+        "advertisement",
+        "advertising",
+        "bridge",
+        "possible",
+        "live",
+        "hd",
+        "www",
+    }
+)
+# A printed plate is 3-24 characters, at most four words, and carries no digit.
+_PLATE_MIN_CHARS = 3
+_PLATE_MAX_CHARS = 24
+_PLATE_MAX_WORDS = 4
+
+
+def _clean_plate(raw: str) -> Optional[str]:
+    """Normalize one printed plate run; ``None`` when it is not a club name.
+
+    Strips edge punctuation, collapses whitespace, cuts at the first broadcast
+    stopword and rejects digits, single-letter runs, banner words and the ad-board
+    host shape the generic channel already rejects. Glued OCR runs are split on
+    their printed camel-case seams first ("WESTFORDCommentators" ->
+    "WESTFORD" + the stopword), so the commentator credit the band prints beside
+    the plate can never ride into the away name. Never guesses.
+    """
+    text = re.sub(r"\s+", " ", str(raw or "")).strip(" .,:;!?()[]\"'-–—")
+    if not text:
+        return None
+    if any(ch.isdigit() for ch in text):
+        return None
+    if any(ch in text for ch in (".", "/", "@", "\\", "%", ":", "+")):
+        return None
+    words: list[str] = []
+    for chunk in text.split():
+        # Split a glued run into its printed parts; a stopword part ends the run.
+        stopped = False
+        for part in _GENERIC_GLUE_SPLIT_RE.split(chunk):
+            folded = _fold(part)
+            if not folded:
+                continue
+            if folded in _PLATE_STOPWORDS:
+                stopped = True
+                break
+            words.append(part)
+        if stopped:
+            break
+        if len(words) >= _PLATE_MAX_WORDS:
+            break
+    name = " ".join(words[:_PLATE_MAX_WORDS]).strip()
+    if not name or len(name) < _PLATE_MIN_CHARS or len(name) > _PLATE_MAX_CHARS:
+        return None
+    if sum(1 for ch in name if ch.isalpha()) < 2:
+        return None
+    # All-caps banners ("CHAMPIONS", "COURTESY") are the rink/ad-board copy the
+    # measurement caught in the WRONG region; a real broadcast club plate is
+    # either mixed case ("Watertown") or a 4+ character all-caps word.
+    if name.isupper() and len(name) < 4:
+        return None
+    return name
+
+
+def printed_plate_sides(text: str) -> Optional[tuple[str, str]]:
+    """``(home, away)`` from two printed club plates on a band/corner-bug line.
+
+    Two boundaries are accepted, in priority order:
+
+    * the first digit run flanked by letters (the graphic score divider), so
+      ``BELMONT 6 WESTFORD 6`` / ``Watertown1Cohasset Middle HS`` split into a
+      left and a right plate;
+    * the printed score hyphen, so ``Watertown-Cohasset Middle HS`` still names
+      both sides on frames where the OCR glued the home score away.
+
+    Returns ``None`` unless BOTH sides are readable, distinct club plates — the
+    pair gate downstream is what decides publishability.
+    """
+    if not text:
+        return None
+    for m in _PLATE_DIGIT_BOUNDARY_RE.finditer(text):
+        before = _PLATE_RUN_BEFORE_RE.search(text[: m.start()])
+        after = _PLATE_RUN_AFTER_RE.match(text[m.end() :])
+        left = _clean_plate(before.group(0)) if before else None
+        right = _clean_plate(after.group(1)) if after else None
+        if left and right and _fold(left) != _fold(right):
+            return left, right
+    for m in _PLATE_HYPHEN_BOUNDARY_RE.finditer(text):
+        left = _clean_plate(m.group(1))
+        right = _clean_plate(m.group(2))
+        if left and right and _fold(left) != _fold(right):
+            return left, right
+    return None
+
+
+# ---------------------------------------------------------------------------
+# ADAAAA-7944 — esports HUD stat-token split
+# ---------------------------------------------------------------------------
+# The LoL HUD line is read correctly but every field is glued together:
+#
+#   "PSG0 10.4K1 0.9%V312:5512:57BOSEKONGYUE"
+#        ^home  kills/gold/percent ^away ^timer  ^player/sponsor copy
+#
+# The two parsers above both need a score split; this line has none (the two
+# teams are separated by stat tokens, not a score), so the measured job read 0
+# teamLines and never named a side. This splitter reads the HOME plate at the
+# start of the line and the AWAY plate immediately before the first HUD timer /
+# stat decimal, then drops every stat/branding token (K, G, %, timer, sponsor).
+_HUD_STAT_RE = re.compile(r"\d{1,3}:\d{2}|\d+(?:\.\d+)?\s*[Kk%]|%")
+_HUD_TIMER_RE = re.compile(r"\d{0,2}:\d{2}")
+_HUD_AWAY_BEFORE_TIMER_RE = re.compile(r"([A-Za-z]{1,6}\d{0,1})(?=\d{0,2}:\d{2})")
+_HUD_AWAY_BEFORE_DECIMAL_RE = re.compile(r"([A-Za-z]{1,6}\d{0,1})(?=\d{1,3}\.\d{1,3})")
+_HUD_HOME_RE = re.compile(r"^([A-Za-z][A-Za-z.'&-]*(?:\s+[A-Za-z][A-Za-z.'&-]*)*)")
+_HUD_STAT_WORDS = frozenset({"k", "g", "f", "t", "cs", "cs2"})
+
+
+def _clean_hud_team(raw: str) -> Optional[str]:
+    text = re.sub(r"\s+", " ", str(raw or "")).strip(" .,:;!?()[]\"'-–—")
+    if not text:
+        return None
+    letters = "".join(ch for ch in text if ch.isalpha())
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if not letters or len(digits) > 2:
+        return None
+    if _fold(letters) in _PLATE_STOPWORDS or _fold(letters) in _HUD_STAT_WORDS:
+        return None
+    # A team tag is 2-16 characters ("PSG", "V3", "Fnatic", "G2 Esports"). An
+    # org tag may carry its number ("V3", "G2"), which is why digits are kept —
+    # they are what distinguishes the tag from the stat token beside it.
+    if len(text) < 2 or len(text) > 16:
+        return None
+    return text
+
+
+def esports_hud_sides(text: str) -> Optional[tuple[Optional[str], Optional[str]]]:
+    """``(home, away)`` team plates split out of ONE glued esports HUD line.
+
+    Returns ``None`` when the line is not a HUD line at all (no stat field), and
+    ``(None, name)`` / ``(name, None)`` when only one plate is present, so the
+    caller keeps the all-or-nothing pair gate. Runs only for ``team_esports``.
+    """
+    if not text or not _HUD_STAT_RE.search(text):
+        return None
+    home: Optional[str] = None
+    m = _HUD_HOME_RE.match(text.strip())
+    if m:
+        home = _clean_hud_team(m.group(1))
+    away: Optional[str] = None
+    # The away plate is the token that ends where the timer (or the gold decimal)
+    # begins. A stat marker glued onto its front ("…11.8KV3" — the K belongs to
+    # the gold field "11.8K") is stripped only when it directly follows a digit,
+    # which is what the printed HUD order implies. Candidates are tried in scan
+    # order so the leftmost valid plate of the pair wins.
+    for pattern in (_HUD_AWAY_BEFORE_TIMER_RE, _HUD_AWAY_BEFORE_DECIMAL_RE):
+        found: list[tuple[int, str]] = [(m.start(1), m.group(1)) for m in pattern.finditer(text)]
+        if not found:
+            continue
+        for start, raw in found:
+            candidate = raw
+            if (
+                len(candidate) > 2
+                and candidate[0] in "KGF T".replace(" ", "")
+                and start > 0
+                and text[start - 1].isdigit()
+            ):
+                candidate = candidate[1:]
+            cleaned = _clean_hud_team(candidate)
+            if cleaned is None:
+                continue
+            if home is not None and _fold(cleaned) == _fold(home):
+                continue
+            away = cleaned
+            break
+        if away is not None:
+            break
+    if home is None and away is None:
+        return None
+    return home, away
+
 
 
 def _generic_name_key(name: str) -> str:
@@ -1129,13 +1357,45 @@ def parse_generic_scorebug_names(
             if not text:
                 continue
             splits = _generic_score_splits(text)
-            if not splits:
-                continue
-            frame_scored = True
-            home, away = generic_scorebug_sides(text)
+            home: Optional[str] = None
+            away: Optional[str] = None
+            if sport == "team_esports":
+                # ADAAAA-7944: the HUD prints the teams either side of STAT
+                # tokens (kills / gold / timer), never a score, so the score
+                # splitter finds nothing and every frame was dropped before the
+                # vote (measured: 35 lines, 0 teamLines). A HUD split counts as
+                # the frame's score line for the share denominator. Checked
+                # BEFORE the score splitter: a HUD line can also contain a
+                # coincidental digit pair ("PSG0 10.4K…").
+                hud = esports_hud_sides(text)
+                if hud is not None and (hud[0] or hud[1]):
+                    frame_scored = True
+                    home, away = hud
+                    segments = (text, text)
+                elif splits:
+                    frame_scored = True
+                    home, away = generic_scorebug_sides(text)
+                    segments = splits[0]
+                else:
+                    continue
+            elif splits:
+                frame_scored = True
+                home, away = generic_scorebug_sides(text)
+                segments = splits[0]
+            else:
+                # ADAAAA-7944: full-width bands and corner bugs print the score
+                # as a graphic divider, so the two digits are not adjacent. Two
+                # printed plates either side of one digit/hyphen are the score
+                # line for this frame.
+                plates = printed_plate_sides(text)
+                if plates is None:
+                    continue
+                frame_scored = True
+                home, away = plates
+                segments = (text, text)
             for side, name, segment in (
-                ("home", home, splits[0][0]),
-                ("away", away, splits[0][1]),
+                ("home", home, segments[0]),
+                ("away", away, segments[1]),
             ):
                 # The first read on this frame that names the side wins; a second
                 # line describing the same frame is not extra corroboration.
@@ -1206,6 +1466,9 @@ def scorebug_lines_sides(ocr_lines: Optional[Sequence[str]], sport: str) -> set[
     so the gate blocked a pair that the region was not even showing. This returns
     the sides a read covers so the caller can repair the region when it covers
     fewer than two.
+
+    ADAAAA-7944: a glued HUD line names both sides even though it carries no
+    score split, so the esports splitter is consulted too.
     """
     sides: set[str] = set()
     for line in ocr_lines or []:
@@ -1216,6 +1479,11 @@ def scorebug_lines_sides(ocr_lines: Optional[Sequence[str]], sport: str) -> set[
             if team.side in ("home", "away"):
                 sides.add(team.side)
         home, away = generic_scorebug_sides(text)
+        if sport == "team_esports":
+            hud = esports_hud_sides(text)
+            if hud is not None:
+                home = home or hud[0]
+                away = away or hud[1]
         if home:
             sides.add("home")
         if away:
@@ -1231,6 +1499,10 @@ def scorebug_lines_have_team_text(ocr_lines: Optional[Sequence[str]], sport: str
     no club text ("1515K") suppressed the whole-frame read that could see them.
     This predicate is the missing "did the crop read any team text" test; it is
     pure CPU (regex only) and adds no GPU work by itself.
+
+    ADAAAA-7944: the full-width band / corner-bug plates and the glued esports
+    HUD split are both team text, so they count here as well — otherwise the
+    fallback the measurement needed never fires for these three sports.
     """
     for line in ocr_lines or []:
         text = str(line or "").strip()
@@ -1241,7 +1513,38 @@ def scorebug_lines_have_team_text(ocr_lines: Optional[Sequence[str]], sport: str
         home, away = generic_scorebug_sides(text)
         if home or away:
             return True
+        if sport == "team_esports":
+            hud = esports_hud_sides(text)
+            if hud is not None and (hud[0] or hud[1]):
+                return True
     return False
+
+
+def printed_name_pair(lines: Optional[Sequence[str]], sport: str) -> Optional[tuple[str, str]]:
+    """The ``(home, away)`` pair a region's OCR lines print, or ``None``.
+
+    ADAAAA-7944: the scoreboard ROI selector scores candidate regions by the
+    temporal stability of the NAMES they print, so it needs one sport-aware read
+    of "do these lines name both sides". This is that seam: lexicon pairs first,
+    then the printed-plate / HUD split. A single side is not a pair.
+    """
+    home: Optional[str] = None
+    away: Optional[str] = None
+    for line in lines or []:
+        text = str(line or "").strip()
+        if not text:
+            continue
+        if sport == "team_esports":
+            hud = esports_hud_sides(text)
+            if hud is not None:
+                home = home or hud[0]
+                away = away or hud[1]
+        ph, pa = generic_scorebug_sides(text)
+        home = home or ph
+        away = away or pa
+        if home and away and _fold(home) != _fold(away):
+            return home, away
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -38,7 +38,7 @@ import os
 import re
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Optional, Sequence, Tuple
+from typing import Deque, Mapping, Optional, Sequence, Tuple
 
 # A scoreboard line: two small integers joined by a dash score separator.
 # Matches "2 - 1", "45-42", "Q3 45‒42". Deliberately EXCLUDES colon ("90:00"
@@ -293,6 +293,214 @@ class ScoreboardLocator:
         if best is None or best_score < _SCOREBOARD_MIN_REGION_SCORE:
             return None
         return _region_to_roi(best.get("bbox"), pad=self._pad)
+
+
+# ---------------------------------------------------------------------------
+# ADAAAA-7944 — temporal candidate-region selection
+# ---------------------------------------------------------------------------
+# The per-sport name-channel measurement found three sports (American football,
+# ice hockey, baseball) whose score surface is a BOTTOM full-width band or a
+# small bottom-left / bottom-right bug, while the shipped code starts from a
+# fixed TOP-band prior and only "repairs" to one bottom band (ADAAAA-7909). The
+# ROI that won was whatever `<DENSE_REGION_CAPTION>` guessed (the play field /
+# rink banner / ad board), so the OCR read jersey numbers, "CHAMPIONS" and
+# "COURTESY" instead of the clubs.
+#
+# This selector scores a fixed, sport-agnostic candidate set by the TEMPORAL
+# STABILITY of the printed names each region produces across frames, instead of
+# guessing one fixed band. It is GPU-free: the caller supplies the OCR lines it
+# already read and a `pair_fn(lines) -> (home, away) | None` that knows how this
+# build parses a printed pair, so the scoring logic is unit-testable.
+#
+# A candidate wins only when it printed a both-side name pair on at least
+# `MIN_FRAMES` observed frames, on at least `MIN_PAIR_SHARE` of them, with both
+# names stable across `MIN_NAME_STABILITY` of those pairs. A region whose lines
+# are background-board copy (rink banner, courtesy/ad board, a domain) is never
+# eligible, even if it is stable — that is the exact failure the measurement
+# caught. Any sport can win any region: nothing here names a sport or a pixel
+# coordinate.
+@dataclass(frozen=True)
+class ScoreboardRegion:
+    """One candidate region: a stable name (for evidence) plus its normalized box."""
+
+    name: str
+    roi: ScoreboardRoi
+
+
+SCOREBOARD_REGION_PRIORS = (
+    ScoreboardRegion("bottom_band", ScoreboardRoi(0.0, 0.78, 1.0, 0.94)),
+    ScoreboardRegion("bottom_left", ScoreboardRoi(0.0, 0.78, 0.50, 0.92)),
+    ScoreboardRegion("bottom_right", ScoreboardRoi(0.50, 0.78, 1.0, 0.94)),
+    ScoreboardRegion("top_band", ScoreboardRoi(0.0, 0.0, 1.0, 0.25)),
+)
+SCOREBOARD_SELECT_MIN_FRAMES = 3
+SCOREBOARD_SELECT_MIN_PAIR_SHARE = 0.60
+SCOREBOARD_SELECT_MIN_NAME_STABILITY = 0.60
+SCOREBOARD_SELECT_MAX_FRAMES = 4
+# Lines that are background-board copy rather than a score surface: a rink
+# banner ("CHAMPIONS 2014"), a courtesy/ad board, an ad-board host/domain, a
+# sponsor strap. Matched case-insensitively on the whole line.
+_BACKGROUND_BOARD_PATTERNS = (
+    "courtesy",
+    "champions",
+    "champion",
+    "bridge to possible",
+    "sponsor",
+    "advertis",
+    "www.",
+    ".com",
+    ".org",
+    ".net",
+    "highlights.live",
+)
+
+
+def is_background_board_line(text: str) -> bool:
+    """True when an OCR line is banner / ad-board copy, not a score surface."""
+    folded = str(text or "").strip().lower()
+    if not folded:
+        return False
+    if any(pat in folded for pat in _BACKGROUND_BOARD_PATTERNS):
+        return True
+    if "://" in folded or "http" in folded:
+        return True
+    # A single all-caps word with no digit ("CHAMPIONS", "COURTESY") is banner
+    # copy; a real score surface prints a name plus a score/timer/period token.
+    tokens = [t for t in re.split(r"\s+", folded) if t]
+    if len(tokens) == 1 and tokens[0].isalpha() and str(text).strip().isupper() and not any(
+        ch.isdigit() for ch in folded
+    ):
+        return True
+    return False
+
+
+class ScoreboardRoiSelector:
+    """Pick a scoreboard region by the temporal stability of the names it reads.
+
+    ADAAAA-7944. Call :meth:`candidates_for_frame`, OCR each candidate, feed the
+    lines to :meth:`record_frame`, then :meth:`select`. Once ``resolved`` the
+    caller stops probing and uses :attr:`resolved_roi` for the session.
+
+    Bounded by construction: at most ``max_frames`` probe frames (default
+    ``SCOREBOARD_SELECT_MAX_FRAMES``) x len(candidates) extra OCR reads, so a
+    broadcast whose scorebug never prints a readable pair pays a small one-off
+    probe instead of a per-frame bill.
+    """
+
+    def __init__(
+        self,
+        candidates: Optional[Sequence["ScoreboardRegion"]] = None,
+        pair_fn=None,
+        max_frames: int = SCOREBOARD_SELECT_MAX_FRAMES,
+    ):
+        self.candidates = tuple(candidates or SCOREBOARD_REGION_PRIORS)
+        self._pair_fn = pair_fn or (lambda lines: None)
+        self.max_frames = max(1, int(max_frames))
+        self.frames = 0
+        self.resolved = False
+        self.resolved_roi: Optional[ScoreboardRoi] = None
+        self.resolved_name: Optional[str] = None
+        self._obs: dict[str, dict] = {
+            c.name: {"frames": 0, "pairs": 0, "home": {}, "away": {}, "lines": []}
+            for c in self.candidates
+        }
+        self._last_lines: dict[str, list[str]] = {}
+
+    def candidates_for_frame(self) -> list["ScoreboardRegion"]:
+        """Candidate regions to probe on this frame (``[]`` once resolved/bounded)."""
+        if self.resolved or self.frames >= self.max_frames:
+            return []
+        return list(self.candidates)
+
+    def record_frame(self, observed: Mapping[str, Sequence[str]]) -> None:
+        """Record one probe frame: ``{candidate_name: ocr_lines}``."""
+        if self.resolved:
+            return
+        self.frames += 1
+        self._last_lines = {}
+        for region in self.candidates:
+            lines = [str(line) for line in (observed.get(region.name) or []) if str(line).strip()]
+            self._last_lines[region.name] = lines
+            obs = self._obs[region.name]
+            obs["frames"] += 1
+            obs["lines"].append(lines)
+            pair = self._pair_fn(lines) if lines else None
+            if pair is None:
+                continue
+            home, away = pair
+            if not home or not away or str(home).lower() == str(away).lower():
+                continue
+            obs["pairs"] += 1
+            obs["home"][home] = obs["home"].get(home, 0) + 1
+            obs["away"][away] = obs["away"].get(away, 0) + 1
+
+    def lines_for(self, name: str) -> list[str]:
+        """The lines the named candidate read on the most recent probe frame."""
+        return list(self._last_lines.get(name) or [])
+
+    def _modal_share(self, votes: Mapping[str, int]) -> float:
+        total = sum(votes.values())
+        if total <= 0:
+            return 0.0
+        return max(votes.values()) / total
+
+    def _background_only(self, name: str) -> bool:
+        obs = self._obs[name]
+        lines = [line for frame in obs["lines"] for line in frame if line.strip()]
+        return bool(lines) and all(is_background_board_line(line) for line in lines)
+
+    def score(self, name: str) -> float:
+        """Temporal score in 0..1 for one candidate (0.0 when not eligible)."""
+        obs = self._obs[name]
+        frames = int(obs["frames"])
+        pairs = int(obs["pairs"])
+        if frames < SCOREBOARD_SELECT_MIN_FRAMES or pairs < SCOREBOARD_SELECT_MIN_FRAMES:
+            return 0.0
+        share = pairs / max(1, frames)
+        if share < SCOREBOARD_SELECT_MIN_PAIR_SHARE:
+            return 0.0
+        if self._background_only(name):
+            return 0.0
+        stability = min(self._modal_share(obs["home"]), self._modal_share(obs["away"]))
+        if stability < SCOREBOARD_SELECT_MIN_NAME_STABILITY:
+            return 0.0
+        return share * stability
+
+    def select(self) -> Optional[ScoreboardRoi]:
+        """Adopt the best-scoring candidate region once its gates are met."""
+        if self.resolved:
+            return self.resolved_roi
+        best: Optional[ScoreboardRegion] = None
+        best_score = 0.0
+        for region in self.candidates:
+            candidate_score = self.score(region.name)
+            if candidate_score > best_score:
+                best = region
+                best_score = candidate_score
+        if best is None:
+            return None
+        self.resolved = True
+        self.resolved_name = best.name
+        self.resolved_roi = best.roi
+        return best.roi
+
+    def status(self) -> dict:
+        """Inspectable account of what each candidate read (evidence/AC report)."""
+        return {
+            "frames": self.frames,
+            "resolved": self.resolved,
+            "selected": self.resolved_name,
+            "candidates": {
+                region.name: {
+                    "frames": self._obs[region.name]["frames"],
+                    "pairs": self._obs[region.name]["pairs"],
+                    "home": dict(self._obs[region.name]["home"]),
+                    "away": dict(self._obs[region.name]["away"]),
+                    "score": round(self.score(region.name), 3),
+                }
+                for region in self.candidates
+            },
+        }
 
 
 def fallback_score_eligible(

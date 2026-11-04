@@ -50,6 +50,7 @@ from .stage_a import evaluate_stage_a
 from .scoreboard import (
     ScoreboardLocator,
     ScoreboardRoi,
+    ScoreboardRoiSelector,
     ScoreboardTracker,
     explicit_scoreboard_roi,
     fallback_score_eligible,
@@ -57,6 +58,7 @@ from .scoreboard import (
 )
 from .match_context import (
     SPORT_UNKNOWN,
+    printed_name_pair,
     sample_scorebug_swatches,
     sample_track_colors,
     resolve_match_context,
@@ -550,6 +552,23 @@ def _scoreboard_locator(state, detector):
             locator = ScoreboardLocator(lambda img, task: detector.discover(img, task=task))
         state.scoreboard_locator = locator
     return locator
+
+
+def _scoreboard_selector(state, sport: str):
+    """The session's temporal scoreboard-region selector, or ``None`` (ADAAAA-7944).
+
+    Built lazily and only when the match-context evidence pass is on and the
+    sport is mapped: the selector's scoring needs the printed-name parser, which
+    is sport-aware, and it exists to feed the name channel. ``None`` keeps every
+    other path on the shipped single-ROI behaviour.
+    """
+    if not _match_context_enabled() or sport == SPORT_UNKNOWN:
+        return None
+    selector = getattr(state, "scoreboard_selector", None)
+    if selector is None and "scoreboard_selector" not in vars(state):
+        selector = ScoreboardRoiSelector(pair_fn=lambda lines: printed_name_pair(lines, sport))
+        state.scoreboard_selector = selector
+    return selector
 
 
 def _scoreboard_roi(state, detector=None) -> "ScoreboardRoi | None":
@@ -1193,8 +1212,46 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # discovery found none (7086) -> skip the `<OCR>` pass entirely so
         # out-of-ROI / non-scoreboard text is never even read.
         visible = verdict.visible if verdict is not None else getattr(state, "scoreboard_visible", True)
+        _ocr_sport = sport_key(getattr(state, "game_hint", "") or "")
         ocr_lines: list[str] = []
-        if visible:
+        # ADAAAA-7944: before trusting one fixed/discovered region, score the
+        # candidate regions (bottom band, bottom-left/right bugs, top band) by
+        # the temporal stability of the NAMES they read. This probe is bounded to
+        # `SCOREBOARD_SELECT_MAX_FRAMES` frames and stops as soon as a region
+        # clears the stability gates; the chosen region is then cached as the
+        # session's ROI so later frames pay a single crop read as before.
+        selector = _scoreboard_selector(state, _ocr_sport) if verdict is None else None
+        if visible and selector is not None and not selector.resolved:
+            regions = selector.candidates_for_frame()
+            if regions:
+                observed: dict[str, list[str]] = {}
+                for region in regions:
+                    try:
+                        observed[region.name] = detector.ocr(state.last_rgb, roi=region.roi) or []
+                    except Exception as e:  # noqa: BLE001 - probe evidence only
+                        log.warning("scorebug ROI probe skipped frame %s region=%s: %s", seq, region.name, e)
+                        observed[region.name] = []
+                    state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
+                selector.record_frame(observed)
+                chosen = selector.select()
+                if chosen is not None:
+                    roi = chosen
+                    state.scoreboard_roi = chosen
+                    state.scoreboard_visible = True
+                    ocr_lines = selector.lines_for(selector.resolved_name or "")
+                    log.info(
+                        "scoreboard ROI selected session=%s seq=%s region=%s status=%s",
+                        state.session_id, seq, selector.resolved_name, selector.status(),
+                    )
+                else:
+                    # Still probing: this frame votes with everything the
+                    # candidates printed (bounded), and saves the extra read the
+                    # single-ROI path would otherwise do on the same frame.
+                    merged: list[str] = []
+                    for lines in observed.values():
+                        merged.extend(lines or [])
+                    ocr_lines = _union_ocr_lines(merged, [])
+        if visible and not ocr_lines:
             try:
                 ocr_lines = detector.ocr(state.last_rgb, roi=roi) or []
             except Exception as e:  # noqa: BLE001
@@ -1236,7 +1293,6 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # `_TEAM_FALLBACK_MAX_READS`, and only when the match-context
         # evidence pass is enabled, so the extra read is charged only where the
         # names are actually used.
-        _ocr_sport = sport_key(getattr(state, "game_hint", "") or "")
         _ocr_budget = getattr(state, "team_fallback_reads", 0) < _team_fallback_allowance(state)
         _sides = (
             scorebug_lines_sides(ocr_lines, _ocr_sport)
