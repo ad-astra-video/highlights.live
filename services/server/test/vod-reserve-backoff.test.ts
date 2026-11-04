@@ -169,6 +169,35 @@ describe("VOD background-analyze reserve 503 no-capacity backoff (ADAAAA-6694)",
     expect(bStatus).toBe("done");
     expect(adapter.state.reserveCount).toBeGreaterThanOrEqual(2);
 
+    // ---- ADAAAA-7928 (spec §4.1 invariant 4 / finding F1) -------------------
+    // B really queued for the capacity-1 slot, so this is the deployed F1 shape:
+    // the wait is its own stage and is NOT billed as perceive session seconds.
+    const login = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: "admin@test.local", password: "adminpass" },
+    });
+    expect(login.statusCode).toBe(200);
+    const admin = { authorization: `Bearer ${login.json().token}` };
+    const bJob = (await app.inject({ method: "GET", url: `/jobs/${jobB}`, headers: admin })).json().job;
+    const timing = bJob.stageTimings as any;
+    expect(st).toBeTruthy();
+    expect(timing.version).toBe(1);
+    // The queue wait is measured (B was held for 1.5 s before A was stopped).
+    expect(timing.capacityWaitMs).toBeGreaterThanOrEqual(1000);
+    // The perceive clock IS the analyze window: the wait is outside it...
+    expect(timing.perceiveSessionMs).toBe(timing.analyzeMs);
+    expect(timing.perceiveSessionMs).toBeLessThan(timing.capacityWaitMs + timing.perceiveSessionMs);
+    // ...so the recorded session seconds exclude the wait. Pre-F1 the same run
+    // billed session + wait, which is strictly larger by the wait.
+    expect(bJob.perceiveSessionS).toBeCloseTo(timing.perceiveSessionMs / 1000, 1);
+    expect(bJob.perceiveSessionS).toBeLessThanOrEqual((timing.analyzeMs + 50) / 1000);
+    const preFixSessionS = (timing.perceiveSessionMs + timing.capacityWaitMs) / 1000;
+    expect(bJob.perceiveSessionS).toBeLessThan(preFixSessionS - 1);
+    // The partition and the meter's wall clock still close on this record.
+    expect(timing.prerollMs + timing.extractMs + timing.capacityWaitMs + timing.analyzeMs + timing.finalizeMs).toBe(timing.totalMs);
+    expect(Math.abs(timing.totalMs - bJob.vodMeter.wallClockS * 1000)).toBeLessThanOrEqual(100);
+
     await app.close();
   });
 });
