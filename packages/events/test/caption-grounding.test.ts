@@ -473,7 +473,7 @@ describe("windowCorroborated — which window instant a highlight corroborates (
 });
 
 describe("dedupe at emission — distinctness is a property of the emitted set (§3.6 / AC3b)", () => {
-  it("keeps a line twice, then drops the third and later occurrence", () => {
+  it("keeps a line ONCE, then drops every later occurrence (ADAAAA-7995 AC1)", () => {
     const kept = dedupeEmittedLines([
       "Player in white moves in center circle.",
       "player in white moves in center circle",
@@ -481,14 +481,16 @@ describe("dedupe at emission — distinctness is a property of the emitted set (
       "Player in white moves in center circle!",
       "Player in blue jersey dribbles in center field",
     ]);
+    // The v3/v4 cap of 2 was re-measured as the source of the served byte-equal
+    // pairs, so the emitted set is one row per beat now.
     expect(kept[0]).not.toBeNull();
-    expect(kept[1]).not.toBeNull();
+    expect(kept[1]).toBeNull();
     expect(kept[2]).toBeNull();
     expect(kept[3]).toBeNull();
     expect(kept[4]).toBe("Player in blue jersey dribbles in center field");
   });
 
-  it("caps the measured 11x line on a 69-row level at 2 and never exceeds 4", () => {
+  it("caps the measured 11x line on a 69-row level at 1 and never exceeds the cap", () => {
     const rows: string[] = [];
     for (let i = 0; i < 11; i += 1) rows.push("Player in white moves in center circle.");
     for (let i = 0; i < 58; i += 1) rows.push(`Window ${i}: the blue shirt carries the ball wide.`);
@@ -496,7 +498,8 @@ describe("dedupe at emission — distinctness is a property of the emitted set (
     const counts = new Map<string, number>();
     for (const l of kept) counts.set(captionLineKey(l), (counts.get(captionLineKey(l)) ?? 0) + 1);
     expect(Math.max(...counts.values())).toBeLessThanOrEqual(MAX_LINE_OCCURRENCES);
-    expect(kept.length).toBe(60);
+    // 1 of the 11 repeats + 58 unique lines (v4 kept 2 and returned 60).
+    expect(kept.length).toBe(59);
   });
 
   it("is a no-op for empty input and deterministic across calls", () => {
@@ -525,10 +528,10 @@ describe("groundSummaryItems — the flat Video Summary on the fast rail (§3.4 
     expect(out[1].text).toBe("No. 6 shoots and scores in the box");
   });
 
-  it("keeps an identical item at most twice per job", () => {
+  it("keeps an identical item at most ONCE per job (ADAAAA-7995 AC1)", () => {
     const out = groundSummaryItems(items, { highlights, fastRail: true });
     const repeats = out.filter((i) => i.text === "Player in white moves in center circle.");
-    expect(repeats.length).toBe(2);
+    expect(repeats.length).toBe(1);
   });
 
   it("VOD (fastRail false) is byte-identical and in order", () => {

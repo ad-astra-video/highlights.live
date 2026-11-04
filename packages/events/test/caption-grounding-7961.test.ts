@@ -178,7 +178,13 @@ describe("dedupeGatedLines — the display gate never introduces a repeat", () =
     expect(kept.every((l) => l.rewritten === false)).toBe(true);
   });
 
-  it("keeps untouched repeats at the contract cap and collapses rewritten twins", () => {
+  it("keeps untouched repeats at the display cap (one row per beat) and collapses rewritten twins", () => {
+    // ADAAAA-7995 (AC1): the DISPLAY set is a story — one row per beat. The v3/v4
+    // cap of 2 matched the WRITE-seam cap, and the served reading then showed
+    // byte-equal pairs (34 rows / 28 distinct on 47d8e506, 36/29, 35/29, 30/25).
+    // The write seam now stores one row per beat too (MAX_LINE_OCCURRENCES = 1);
+    // this case pins the raw `dedupeGatedLines` behaviour, which no longer keeps
+    // a second untouched occurrence.
     const kept = dedupeGatedLines([
       { text: "Player in white moves in center circle.", rewritten: false },
       { text: "Player in white moves in center circle.", rewritten: false },
@@ -186,7 +192,6 @@ describe("dedupeGatedLines — the display gate never introduces a repeat", () =
       { text: "No. 9 shoots", rewritten: true },
     ]);
     expect(kept.map((l) => l.text)).toEqual([
-      "Player in white moves in center circle.",
       "Player in white moves in center circle.",
       "No. 9 shoots",
     ]);

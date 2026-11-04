@@ -482,6 +482,24 @@ export function quietShape(text: string, verb?: string): string {
   let head = idx > 0 ? first.slice(0, idx) : "";
   head = head.replace(/[\s,;:]+$/, "").replace(/\s+\b(?:and|then)\b$/i, "").trim();
   if (/^(?:a|an|the)$/i.test(head)) head = "";
+  // ADAAAA-7995 (§2): removing a claim mid-clause leaves the verb that introduced
+  // it behind, and appending the outcome verb then produces a mangled phrase —
+  // `The ball clearly enters the net and the keeper is beaten.` shipped as
+  // `The ball clearly enters the shoots`. An open-object verb (whose object was
+  // the removed claim) is dropped with its article, then a bare adverb, so the
+  // head is the ACTOR and the outcome verb is the only verb.
+  head = head
+    .replace(
+      /\s+\b(?:enters?|entered|cross(?:es|ed)?|finds?|found|hits?|hit|go(?:es)?|went|gets?|got|puts?|put|taps?|tapped|slots?|slotted|rolls?|sends?|sent|smashes?|rifles?|blasts?|drills?|hammers?|bangs?)\b(?:\s+\b(?:the|a|an|it|ball)\b)?$/i,
+      ""
+    )
+    .replace(
+      /\s+\b(?:clearly|almost|nearly|just|straight|directly|somehow|eventually|finally|still|again)\b$/i,
+      ""
+    )
+    .replace(/[\s,;:]+$/, "")
+    .trim();
+  if (/^(?:a|an|the)$/i.test(head)) head = "";
   const place = (first.match(PLACE_TAIL)?.[0] ?? "").trim();
   const parts: string[] = [];
   if (head) parts.push(head);
@@ -893,6 +911,13 @@ export function gateOcrColour(text: string): string {
  *
  * A loud window keeps the derived beat; a legacy row with no stored verdict is
  * untouched apart from an OCR clause or a forwarded model clause.
+ *
+ * ADAAAA-7995 (AC4): a QUIET window carries no colour at all. The v5 40% share
+ * let an audio-noise beat ride a `not_highlight` row, and the served page then
+ * shipped `Player in blue kit dribbles in box — noise spikes over the play`
+ * (12-13 words, colour on a quiet row) on three rows per job. The v3/v4 bars —
+ * 0 colour on `not_highlight` and <= 8 words — are the governing ACs on that
+ * surface, so the quiet branch drops the clause and never appends the beat.
  */
 export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): string {
   let out = gateOcrColour(text);
@@ -903,12 +928,17 @@ export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): st
   // appended beat ("No. 10 carries ball in center circle. — noise lifts").
   const withBeat = (lead: string) => tidy(`${lead.replace(/[.!?;:,]+$/, "")} — ${beat}`);
   if (!isQuietVerdict(ctx?.verdict)) {
-    out = beat ? withBeat(out) : out;
+    // ADAAAA-7995: a beat never ships on its own. When the claim gate emptied the
+    // lead (`The ball enters the net — keeper beaten.` on a `big_play` window), the
+    // appended beat would be the WHOLE row (`noise spikes over the play`), which is
+    // not a caption.
+    out = out.trim() && beat ? withBeat(out) : out;
     return out === text ? text : tidy(out);
   }
   const lead = trimQuietLine(captionLead(out), ctx?.place);
-  out = beat ? withBeat(lead) : lead;
-  if (/[—–]/.test(out) && !beat) out = out.replace(/\s*[—–]\s*/g, ", ");
+  // ADAAAA-7995 (AC4): no colour on a quiet row — the derived beat is dropped
+  // with any dash that survived the trim.
+  out = lead.replace(/\s*[—–]\s*/g, ", ");
   return out === text ? text : tidy(out);
 }
 
@@ -1123,7 +1153,14 @@ export function ensureLeadPlace(text: string, ctx?: CaptionGroundingContext): st
   const place = (ctx?.place ?? "").trim();
   if (!place) return resolved ? "" : input;
   const colour = captionColour(input);
-  return tidy(`${lead} ${place}${colour ? ` — ${colour}` : ""}`);
+  // ADAAAA-7995 (§2): the injected place belongs INSIDE the sentence. Appending
+  // it after a lead that already ended one shipped `The scoreboard updates to
+  // reflect a shot. on the right` — a sentence break followed by a dangling
+  // fragment. The lead's own terminal punctuation moves to the end of the line.
+  const terminal = lead.match(/[.!?…]+$/)?.[0] ?? "";
+  const body = (terminal ? lead.slice(0, -terminal.length) : lead).trim();
+  if (!body) return input;
+  return tidy(`${body} ${place}${terminal}${colour ? ` — ${colour}` : ""}`);
 }
 
 /** An action verb a play lead carries (the actor+action half of §3.2). */
@@ -1513,8 +1550,72 @@ export function captionLineKey(text: string): string {
     .toLowerCase();
 }
 
-/** §3.6 / AC3b: an identical line may appear at most this many times per job. */
-export const MAX_LINE_OCCURRENCES = 2;
+/**
+ * §3.6 / AC3b: the WRITE-seam cap on an identical delivered line per job.
+ *
+ * ADAAAA-7995 supersedes the v4 value of 2: the served reading was re-measured
+ * on five fresh jobs and the cap-2 stored set is what produced BOTH remaining
+ * AC1 failures — byte-equal pairs in the rendered ladder (34 rows / 28 distinct,
+ * 36/29, 35/29, 30/25, 7/5) and repeated sentences in the stored `summaryLog`
+ * (6,7,6,5,2 pairs). The product AC is one beat per row: a beat the model
+ * re-narrates is the SAME row of the story, so it is stored once. This is the
+ * v3 behaviour (`unduplicatedSummaryLines`) restored, with the v4 machinery
+ * (`dedupeStoredLines`, the refusal to lose non-duplicate rows) kept.
+ */
+export const MAX_LINE_OCCURRENCES = 1;
+
+/**
+ * ADAAAA-7995 (AC1): the DISPLAY cap. The page set is a story, so it is capped
+ * at ONE row per beat on `captionLineKey` — independently of the write seam,
+ * because a stored log written before this fix (or by any pass that lands
+ * between fixes) still carries up to the old cap, and a beat the WRITE-seam gate
+ * produced (two distinct goal claims collapsed to one non-goal shape) is
+ * persisted twice with `text_raw` on both rows.
+ */
+export const MAX_DISPLAY_LINE_OCCURRENCES = 1;
+
+/**
+ * ADAAAA-7995 (AC1/AC2): cap the DISPLAY set on `captionLineKey` ACROSS gated and
+ * untouched rows.
+ *
+ * `dedupeGatedLines` only resolves collisions the READ gate creates. It cannot
+ * see collisions the WRITE seam already persisted: two distinct goal claims
+ * (`No. 7 strikes the ball into the net …`, `Yamal scores — …`) both gated to the
+ * same non-goal beat, stored twice (`text` gated, `text_raw` keeps the original),
+ * and at read time neither looks rewritten — so the old cap let both render.
+ *
+ * Rule: a beat the gate PRODUCED (any row in the set carrying `gateProduced`, set
+ * from a stored `text_raw`) is kept once, wherever it appears; every other beat
+ * is capped at `max` (1 by default). The FIRST occurrence keeps its place, which
+ * is the order the story was told in. Row order is otherwise preserved, so a
+ * dropped row never shifts a survivor.
+ */
+export function dedupeDisplayLines<T extends { text: string; gateProduced?: boolean }>(
+  lines: readonly T[],
+  max: number = MAX_DISPLAY_LINE_OCCURRENCES
+): T[] {
+  const limit = Number.isFinite(max) && max >= 1 ? Math.floor(max) : MAX_DISPLAY_LINE_OCCURRENCES;
+  const gateProducedKeys = new Set<string>();
+  for (const line of lines ?? []) {
+    if (!line.gateProduced) continue;
+    const key = captionLineKey(line.text);
+    if (key) gateProducedKeys.add(key);
+  }
+  const seen = new Map<string, number>();
+  const kept: T[] = [];
+  for (const line of lines ?? []) {
+    const key = captionLineKey(line.text);
+    if (!key) {
+      kept.push(line);
+      continue;
+    }
+    const limitForKey = gateProducedKeys.has(key) ? 1 : limit;
+    const count = (seen.get(key) ?? 0) + 1;
+    seen.set(key, count);
+    if (count <= limitForKey) kept.push(line);
+  }
+  return kept;
+}
 
 /**
  * §3.6: cap every identical line at `max` occurrences across one job's emitted

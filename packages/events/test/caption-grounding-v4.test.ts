@@ -118,9 +118,17 @@ describe("contract v5 §3.1 — colour is DERIVED from the measured signal (R18)
   const measured = { ...quiet(), colourSignal: SIGNAL };
 
   it("drops a forwarded model colour clause even on a measured window", () => {
+    // ADAAAA-7995 (AC4): a quiet window carries NO colour — the derived beat rides
+    // a loud window only (asserted below), so the measured quiet case ends clean.
     const out = groundCaption("No. 3 drives into the box and scores — crowd erupts", measured);
     expect(hasGoalClaim(out)).toBe(false);
-    expect(captionColour(out)).toBe("noise lifts, then settles");
+    expect(captionColour(out)).toBe("");
+    // The derived channel itself is unchanged on a LOUD window.
+    const loud = groundCaption("No. 3 drives into the box and scores — crowd erupts", {
+      ...measured,
+      verdict: "scoring_play",
+    });
+    expect(captionColour(loud)).toBe("noise lifts, then settles");
   });
 
   it("drops the colour beat when the window has no measured signal", () => {
@@ -139,15 +147,24 @@ describe("contract v5 §3.1 — colour is DERIVED from the measured signal (R18)
     expect(colourBeatAllowed("noise lifts, then settles", quiet())).toBe(false);
   });
 
-  it("a measured quiet window with no model clause carries the derived beat", () => {
+  it("a measured QUIET window never carries the derived beat; a LOUD one does", () => {
+    // ADAAAA-7995 (AC4): the v5 40% share let `— noise spikes over the play` ride a
+    // `not_highlight` row and pushed it to 12-13 words on the served page. The
+    // quiet surface carries no colour; the derived beat still rides loud windows.
     const out = groundCaption("Player in blue moves ball in center circle.", {
       ...measured,
       place: "in center circle",
     });
-    expect(captionColour(out)).toBe("noise lifts, then settles");
+    expect(captionColour(out)).toBe("");
+    const loud = groundCaption("Player in blue moves ball in center circle.", {
+      ...measured,
+      verdict: "scoring_play",
+      place: "in center circle",
+    });
+    expect(captionColour(loud)).toBe("noise lifts, then settles");
     // The contract's line target is <= 110 (hard max 140); the derived beat is
     // longer than v4's 10-char template but words the measurement.
-    expect(out.length).toBeLessThanOrEqual(110);
+    expect(loud.length).toBeLessThanOrEqual(110);
   });
 
   it("the derived beat never appears without measured evidence", () => {
@@ -200,13 +217,16 @@ describe("contract v5 §3.1 — colour is DERIVED from the measured signal (R18)
 describe("contract v4 §3.7 — the stored set IS the page set", () => {
   const FOURTEEN = Array.from({ length: 14 }, () => "Player in blue moves ball in center circle.");
 
-  it("caps the measured 14× repeat at 2 at the WRITE seam", () => {
+  it("caps the measured 14× repeat at ONE row at the WRITE seam (ADAAAA-7995)", () => {
+    // The v4 value was 2; the served reading re-measured on five fresh jobs showed
+    // that cap as the source of the byte-equal pairs (AC1) and of the repeated
+    // stored sentences (§4). One beat = one row.
     let stored: string[] = [];
     for (const line of FOURTEEN) {
       const kept = dedupeStoredLines(line, stored);
       stored = kept ? [...stored, kept] : stored;
     }
-    expect(stored).toHaveLength(2);
+    expect(stored).toHaveLength(1);
     expect(stored.every((l) => l === FOURTEEN[0])).toBe(true);
   });
 
