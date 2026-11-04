@@ -272,3 +272,32 @@ export function adminReadonlyRequired(auth: AuthService) {
     return reply.code(401).send({ error: "unauthorized" });
   };
 }
+
+/**
+ * Admin-only read guard that answers a valid NON-admin session with 403 instead
+ * of 401 (ADAAAA-7928, spec §4.2).
+ *
+ * The principals are identical to `adminReadonlyRequired` — a full admin or a
+ * read-only admin service token — so every measurement route keeps accepting
+ * both. The difference is only the denied answer: an authenticated user who
+ * lacks the grant is FORBIDDEN (403), not unauthenticated (401); anonymous
+ * callers still get 401. `adminReadonlyRequired` keeps its 401 for the routes
+ * that already rely on it.
+ */
+export function adminReadonlyStrictRequired(auth: AuthService) {
+  return async (req: FastifyRequest, reply: FastifyReply) => {
+    const token = (req.headers.authorization as string) || "";
+    const user = await auth.verify(token);
+    if (user && user.role === "admin") {
+      (req as any).user = user;
+      return;
+    }
+    const ro = auth.verifyReadonly(token);
+    if (ro) {
+      (req as any).user = ro;
+      return;
+    }
+    if (user) return reply.code(403).send({ error: "admin only" });
+    return reply.code(401).send({ error: "unauthorized" });
+  };
+}

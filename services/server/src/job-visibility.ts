@@ -68,6 +68,11 @@ export const INTERNAL_JOB_KEYS = [
   // The customer-facing resume point/attempt number is unaffected: it rides the
   // `resume` PROJECTION below, which drops the accumulator block instead.
   "vodMeter",
+  // ADAAAA-7928 (Inc 1 of ADAAAA-7925): the per-stage timing block carries
+  // `perceiveSessionMs` — billable GPU session seconds, the same spend class as
+  // `vodMeter` above — and it exists for the admin-only cost/time panel (spec
+  // D1). Filtered for a non-admin owner like the rest of the internal pipeline.
+  "stageTimings",
   // ADAAAA-7889 (AC2, PO scope split on ADAAAA-7890): `matchContextEvidence` is
   // deliberately NOT an internal key any more. AC2 says an `unknown` match-context
   // result must be diagnosable from `GET /jobs/:id` alone, and the graded route is
