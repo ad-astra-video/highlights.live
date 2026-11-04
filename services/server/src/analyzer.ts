@@ -38,6 +38,14 @@ import {
 } from "./observe-loop";
 import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
 import { describeInterruption } from "./job-failure";
+// ADAAAA-7988: live goal recall from a celebration/reaction window (the goal
+// instant falls between 1 fps media-node samples). Live rail only.
+import {
+  LiveWindowLedger,
+  applyLiveGoalRecall,
+  isLiveGoalRecallCandidate,
+  type LiveGoalRecall,
+} from "./live-goal-recall";
 import { liveDecideAdmission } from "./live-decide-admission";
 import type { AudioTriggerRecord, TriggerSchedulerStats } from "./audio-trigger";
 import type { TriggerFamilyLatency } from "./observe-loop";
@@ -794,6 +802,12 @@ export interface DecisionResult {
   // attestation check reads (ratified ADAAAA-7555 Option 1). Corroboration
   // INPUT only; never a server-side accept gate.
   verdict?: { criteria?: Record<string, boolean | null>; [key: string]: unknown };
+  // ADAAAA-7988: present when this live window was promoted from a
+  // celebration/reaction read to a goal candidate because it follows an
+  // attack/shot window (the goal instant fell between 1 fps samples). Carries
+  // the cited prior-window evidence so the note, the confirm request and the
+  // job-detail view all name the same instants.
+  goalRecall?: LiveGoalRecall;
 }
 /** ADAAAA-7938 (Spec A): did this window's verdict decide a SCORING play? Used
  * only to advance the prior-game state on the decide path (the accept path's
@@ -2467,6 +2481,11 @@ export class LiveRunShared {
    * of these clips is the same goal re-read and is delivered as a celebration,
    * not as a second scoring event. Bounded — a run cannot grow it unboundedly. */
   private acceptedGoalEvents: AcceptedGoalEvent[] = [];
+  /** ADAAAA-7988: the live rail's bounded ledger of decided windows (their own
+   * content instant + description class), used to cite the attack/shot window
+   * that a celebration window follows. Fed on the DECIDE path; read on the
+   * accept path. Empty on VOD, where the ledger is never fed. */
+  readonly liveGoalRecall = new LiveWindowLedger();
   /** ADAAAA-7938 (Spec A): the measured prior-game state the NEXT decide window
    * must see (story-so-far / prior ASR / scoreboard transition). Note it on the
    * DECIDE path, not the accept path: the accept chain runs a paid Stage-2
@@ -2603,6 +2622,12 @@ export class LiveRunShared {
     if (!Number.isFinite(ev.anchorTs)) return;
     this.acceptedGoalEvents.push(ev);
     if (this.acceptedGoalEvents.length > 128) this.acceptedGoalEvents.shift();
+  }
+  /** ADAAAA-7988: the anchors of GOAL accepts already delivered in this run, so
+   * the live recall promotion cannot re-open a goal that is already on the
+   * board (the ledger's own `acceptedGoalTs` check). Read-only + bounded. */
+  acceptedGoalAnchors(): number[] {
+    return this.acceptedGoalEvents.map((e) => e.anchorTs).filter((ts) => Number.isFinite(ts));
   }
   /** ADAAAA-7938 (Spec A): fold one RESOLVED decide window into the prior-game
    * state the next window inherits. Content-ordered (a re-produced older window
@@ -3953,12 +3978,14 @@ export function buildObserveDecideRequest(
         `series=${run.seriesWindow(center, preS, postS).length}`
     );
   }
-  // ADAAAA-7938 (Spec A): the compact prior-game-state block for the VOD detail
-  // pass. VOD-ONLY: the live rail never receives it (the block is a
-  // detail-first budget item, not a live throughput one). `undefined` on the
-  // first window / a run with no measured state, so the request stays
-  // byte-identical there (AC-A2).
-  const priorGameState = cfg.decideWindowN !== undefined ? run.priorGameStateFor(center) : undefined;
+  // ADAAAA-7938 (Spec A) / ADAAAA-7988: the compact prior-game-state block.
+  // Forwarded on BOTH rails now: the 13:14Z live share judged every celebration
+  // window in isolation (the live rail never received story-so-far), so a
+  // reaction could only read as "reacting to a previous event". Bounded tails
+  // (150 + 90 chars) keep the per-window cost delta inside the ADAAAA-7799
+  // ceiling, and an empty state renders nothing, so the first window's request
+  // stays byte-identical (AC-A2).
+  const priorGameState = run.priorGameStateFor(center);
   const opts: Parameters<PipelineClient["decide"]>[1] = {
     gameHint: cfg.gameHint,
     reasoningEffort: "none",
@@ -4161,19 +4188,29 @@ export async function observeDecideOnly(
       console.error(`[decide-audit:${cfg.jobId}] onDecideAudit failed:`, String(e?.message || e));
     }
   }
-  // ADAAAA-7938 (Spec A): advance the prior-game state for the NEXT window from
-  // THIS window's resolved decision — story-so-far, its ASR (where a goal call
-  // sits) and the measured scoreboard transition it carried. VOD-only, and noted
-  // here (not on accept) because the accept chain runs a paid confirm + clip cut
-  // and therefore lags the decide chain by whole windows.
-  if (cfg.decideWindowN !== undefined) {
+  // ADAAAA-7938 (Spec A) / ADAAAA-7988: advance the prior-game state for the
+  // NEXT window from THIS window's resolved decision — story-so-far, its ASR
+  // (where a goal call sits) and the measured scoreboard transition it carried.
+  // Noted here (not on accept) because the accept chain runs a paid confirm +
+  // clip cut and therefore lags the decide chain by whole windows. Live rail
+  // included since ADAAAA-7988: a live celebration window judged in isolation
+  // could only read as "reacting to a previous event".
+  // ADAAAA-7988: also record this window's own description class in the live
+  // goal-recall ledger, which the accept path reads to cite the attack/shot
+  // window a celebration follows. Live only; VOD's ledger stays empty.
+  try {
+    run.noteWindowGameState(payload.centerTs, decision, {
+      scoreBoardDelta: (payload.biasHints[0] as { scoreBoardDelta?: ScoreboardDeltaEvidence } | undefined)
+        ?.scoreBoardDelta,
+    });
+  } catch (e: any) {
+    console.error(`[prior-game-state:${cfg.jobId}] note failed:`, String(e?.message || e));
+  }
+  if (cfg.liveObserveLoop && cfg.decideWindowN === undefined) {
     try {
-      run.noteWindowGameState(payload.centerTs, decision, {
-        scoreBoardDelta: (payload.biasHints[0] as { scoreBoardDelta?: ScoreboardDeltaEvidence } | undefined)
-          ?.scoreBoardDelta,
-      });
+      run.liveGoalRecall.record(payload.centerTs, liveWindowDescription(decision));
     } catch (e: any) {
-      console.error(`[prior-game-state:${cfg.jobId}] note failed:`, String(e?.message || e));
+      console.error(`[live-goal-recall:${cfg.jobId}] ledger note failed:`, String(e?.message || e));
     }
   }
   return decision;
@@ -4380,12 +4417,33 @@ export async function observeAcceptOnly(
   payload: ObserveDecidePayload,
   decision: DecisionResult
 ): Promise<boolean> {
+  // ADAAAA-7988: LIVE goal recall. The media node samples at 1 fps, so a judged
+  // window usually misses the net-crossing instant and the decide brain rejects
+  // a celebration it described correctly ("reacting to a previous event"). When
+  // this window's own description is a celebration/reaction AND the nearest
+  // window behind it (within LIVE_GOAL_RECALL_LEAD_S) was an attack/shot, the
+  // window is a goal CANDIDATE: promote the reject to the goal-shaped,
+  // un-attested `near_miss` the Stage-2 dive already knows how to adjudicate
+  // (ADAAAA-7357 delayed-corroboration shape), citing the prior window's
+  // evidence. Corroboration still owns the final GOAL, and an already-delivered
+  // goal is never re-opened. Live rail only - VOD keeps its precision gate.
+  const recall =
+    cfg.liveObserveLoop && cfg.decideWindowN === undefined && isLiveGoalRecallCandidate(decision)
+      ? run.liveGoalRecall.recallFor(payload.centerTs, { acceptedGoalTs: run.acceptedGoalAnchors() })
+      : null;
+  const stage1: DecisionResult = recall ? applyLiveGoalRecall(decision, recall) : decision;
+  if (recall) {
+    console.error(
+      `[live-goal-recall:${cfg.jobId}] promoted window @${recall.centerTs}s ` +
+        `(celebration) citing attack window @${recall.attackTs}s (${recall.leadS}s earlier)`
+    );
+  }
   // ADAAAA-7111 (Increment D): the running video summary (story-so-far) this
   // window's decide produced, persisted so the job-detail endpoint + web UI can
   // surface it growing across cadence ticks. The VALUE is computed here (nothing
   // about it depends on the accept path) but it is WRITTEN after the accept, so
   // the §3 gate sees the verdict that is actually stored — see below.
-  const pendingSummary = cfg.onRunningSummary ? nextRunningSummary(cfg.getRunningSummary?.(), decision) : null;
+  const pendingSummary = cfg.onRunningSummary ? nextRunningSummary(cfg.getRunningSummary?.(), stage1) : null;
   // ADAAAA-7021 fix: the window's goal-attestation signals (folded from the
   // in-window bias hints) ride the candidate too, so acceptVideoDecision's
   // Stage-2 confirm reconcile + deriveHighlightTrigger see the attestation
@@ -4416,7 +4474,13 @@ export async function observeAcceptOnly(
   // localized instant) so the confirm dive fires EXACTLY ONCE per distinct goal
   // candidate across the overlapping windows that re-produce it — NOT the window
   // center (which slides by the cadence).
-  const goalEventTs = observeGoalEventTs(payload, candidate, cfg.clipAfterS);
+  // ADAAAA-7988: a promoted celebration window anchors its dive on the CITED
+  // attack window instead — the goal instant sits just past that shot, not at
+  // the celebration's own (lagging) center — so the Stage-2 keyframes can
+  // actually contain the crossing the 1 fps grid skipped.
+  const goalEventTs = recall
+    ? recall.attackTs + Math.min(3, Math.max(0, recall.leadS))
+    : observeGoalEventTs(payload, candidate, cfg.clipAfterS);
   // ADAAAA-7957 (Inc 5): the accept path can CHANGE this window's verdict — a
   // repeat GOAL accept is downgraded to a celebration (`big_play`, ADAAAA-7865).
   // Gating the caption with the pre-accept verdict let a "scores" line sit on a
@@ -4425,11 +4489,11 @@ export async function observeAcceptOnly(
   const sink: { final?: DecisionResult; grounding?: CaptionGroundingContext } = {};
   let acceptError: unknown = null;
   try {
-    await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, decision, frameSignals, goalEventTs, sink);
+    await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, stage1, frameSignals, goalEventTs, sink);
   } catch (e) {
     acceptError = e;
   }
-  const stored = sink.final ?? decision;
+  const stored = sink.final ?? stage1;
   if (pendingSummary !== null && cfg.onRunningSummary) {
     try {
       // ADAAAA-7948 (Inc 3): on the FAST rail, carry this window's own stored
@@ -4565,6 +4629,18 @@ export function isGoalShaped(d: DecisionResult): boolean {
 export function isGateRejectedBareGoal(d: DecisionResult): boolean {
   if (d.isHighlight) return false;
   return isGoalShaped(d);
+}
+
+/** ADAAAA-7988: the description text a decided window is classified on. The
+ * decide note's `reason` is where the model states what it saw ("The player is
+ * standing with arms raised; ... celebrating a previous event"); the running
+ * summary is the fallback for a verdict with no reason. Bounded downstream by
+ * {@link liveWindowQuote}. */
+export function liveWindowDescription(d: DecisionResult | null | undefined): string {
+  if (!d) return "";
+  const reason = typeof d.reason === "string" ? d.reason.trim() : "";
+  if (reason) return reason;
+  return typeof d.runningSummary === "string" ? d.runningSummary.trim() : "";
 }
 
 /** The Stage-2 trigger: an un-attested goal-type candidate whose Stage-1 read
