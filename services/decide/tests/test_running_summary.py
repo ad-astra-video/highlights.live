@@ -170,18 +170,19 @@ def test_compact_prompt_asks_for_one_play_by_play_line():
 
 def test_compact_prompt_carries_colour_and_quiet_budgets():
     p = _compact_prompt()
-    # colour beat: optional, <= 40 chars, its own channel (crowd, body language,
-    # momentum, bench, pitch conditions), never a second description of the play.
-    assert "COLOR BEAT is a SEPARATE CHANNEL: optional, max 40 chars" in p
-    assert ("crowd, body language, momentum, bench or pitch conditions") in p
-    assert "It must never restate or extend the lead's action" in p
-    assert "never describe the play a second time" in p
-    assert "never pad to hit about 1 line in 3" in p
+    # colour beat: <= 40 chars, its own channel (crowd, body language, momentum,
+    # bench, pitch conditions), never a second description of the play.
+    assert "COLOR BEAT — a SEPARATE CHANNEL, NEVER the play" in p
+    assert "crowd or stand reaction, players' body language or posture" in p
+    assert "momentum or energy, the bench or dugout, or pitch/weather conditions" in p
+    assert "must not rephrase or extend the lead" in p
+    assert "never pad to hit the ratio" in p
     # quiet window: one blunt line, <= 8 words, no em-dash, no clock.
-    assert "QUIET WINDOW (no datable event in this window): ONE blunt line, max 8 words" in p
+    assert "QUIET WINDOW — when YOUR OWN verdict is isHighlight=false" in p
+    assert "the whole line is ONE blunt flat statement, max 8 words" in p
     assert "NO em-dash, NO colour beat, NO clock" in p
-    assert "not a shortened description" in p
-    assert "count the words and cut anything over 8" in p
+    assert "NEVER describe the play on such a window" in p
+    assert "Count the words and cut anything over 8" in p
     assert "CLOCK: only on datable events ('GOAL 72s'), not every line" in p
     # The contract must not carry a copyable sample caption: the first live
     # level proved the model copies it verbatim (59 of 67 rows emitted the
@@ -228,19 +229,28 @@ def test_compact_prompt_never_folds_story_so_far_into_the_line():
 
 def test_compact_prompt_blunt_quiet_rule():
     p = _compact_prompt()
-    assert "QUIET WINDOW (no datable event in this window)" in p
-    assert "ONE blunt line, max 8 words" in p
+    # The quiet rule is keyed to the model's OWN verdict: the first v2 level
+    # measured 1 of 20 not_highlight rows at <= 8 words (p50 13) when the rule
+    # only said "no datable event", so the wording now names isHighlight=false.
+    assert "QUIET WINDOW — when YOUR OWN verdict is isHighlight=false" in p
+    assert "the whole line is ONE blunt flat statement, max 8 words" in p
     assert "NO em-dash, NO colour beat, NO clock" in p
-    assert "flat statement of which zone the ball is in and who holds it" in p
-    assert "never reuse a quiet line you already emitted this job" in p
+    assert "just who has the ball and which zone it is in" in p
+    assert "a not_highlight window never carries one" in p
+    assert "never reuse the sentence" in p
 
 
 def test_compact_prompt_colour_is_a_different_channel():
     p = _compact_prompt()
-    assert "COLOR BEAT is a SEPARATE CHANNEL" in p
-    assert "may carry ONLY crowd, body language, momentum, bench or pitch conditions" in p
-    assert "OMIT the whole clause" in p
-    assert "never pad to hit about 1 line in 3" in p
+    assert "COLOR BEAT — a SEPARATE CHANNEL, NEVER the play" in p
+    assert "may carry ONLY crowd or stand reaction" in p
+    assert "max 40 chars" in p
+    # the clause may not smuggle the play back in: v2's first level put
+    # "blocked by the keeper" / "keeper makes a save" after the dash on 43 of
+    # 67 rows (64 %), so the ban list is explicit now.
+    assert "no shot, save, block, tackle, interception, pass, miss, post, net, goal, score or keeper save" in p
+    assert "write the lead alone with no em-dash" in p
+    assert "About 1 line in 4 carries a clause and NEVER more than 1 line in 3" in p
 
 
 def test_compact_prompt_lowers_the_whole_line_cap_to_140():
@@ -289,11 +299,14 @@ def test_compact_prompt_delta_is_bounded():
     # REVERTED: it pushed p50 61 -> 105 chars with 4 rows over the 140 cap.
     # ADAAAA-7949 (contract v2) adds the window-only / no-fold rule, the blunt
     # quiet shape and the separate-colour-channel rule: 10243 -> 10634 chars
-    # (+391, ~+98 prompt tokens of prefill). It is prefill only — the emitted
-    # line is unchanged in shape and the field set is unchanged, so tokens per
-    # decide are not bought by this edit.
+    # (+391, ~+98 prompt tokens of prefill). The first bounded level then put a
+    # colour clause on 43 of 67 rows (64 %) and left 1 of 20 not_highlight rows
+    # at <= 8 words, so v2.1 keys the quiet rule to isHighlight=false and bans
+    # the play from the colour clause: 10634 -> 11111 chars (+477). Prefill
+    # only — the emitted line still fits the same budgets and the field set is
+    # unchanged, so tokens per decide are not bought by this edit.
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 10800
+    assert len(_compact_prompt()) <= 11300
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the
