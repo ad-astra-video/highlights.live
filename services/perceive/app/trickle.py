@@ -298,6 +298,25 @@ class TrickleSession:
         self._on_control = on_control
         self._tasks: list[asyncio.Task] = []
         self._closed = False
+        # Delivery accounting (ADAAAA-8004 AC1/AC2): frames actually stepped and
+        # frames the live edge had aged out before the runner could fetch them.
+        # Every index the loop fast-forwards over is counted here and logged, so
+        # "no observation for seq N" is always attributable (a stalled subscriber
+        # used to look identical to a slow publisher).
+        self._frames_processed = 0
+        self._skipped_frames = 0
+        self._ff_logs = 0
+        # Bound on ONE live-edge probe: go-livepeer holds a `-1` subscribe open
+        # until the NEXT publish, so this is the longest a recovery may block.
+        self._live_edge_timeout_s = 2.0
+
+    def stats(self) -> dict[str, int]:
+        """Consumption counters for the AC evidence lines: frames stepped and
+        frames the live edge dropped before this runner could fetch them."""
+        return {
+            "frames": self._frames_processed,
+            "skipped": self._skipped_frames,
+        }
 
     def _on_task_done(self, task: asyncio.Task) -> None:
         if task.cancelled() or self._closed:
@@ -322,14 +341,53 @@ class TrickleSession:
         # follow specific seqs in order: GET /{seq} returns 200 once that frame
         # is published (else 404/470 -> re-poll).
         want = 1
+        endpoints = self.rail.endpoints
+        if endpoints is None:  # a session always opens its channels first
+            raise TrickleError("media loop requires opened endpoints")
+        video_in = endpoints.video_in
         while not self._closed:
-            out = await self.rail.subscribe_next(self.rail.endpoints.video_in, want)
+            out = await self.rail.subscribe_next(video_in, want)
             # go-livepeer answers a live-edge subscribe with 200 + an EMPTY
             # streaming body (fast-forward to live); only a non-empty body is a
-            # real segment. Advancing on the empty one skips frames.
+            # real segment.
             if not out[1]:
-                await asyncio.sleep(0.05)
-                continue
+                # An empty indexed subscribe has TWO causes and they need
+                # opposite handling:
+                #   (a) the index is not published YET (publisher behind) — retry
+                #       the same index, which must not lose the frame;
+                #   (b) the index has AGED OUT of the live edge's buffer, where
+                #       the broker answers 404 for it FOREVER. Measured on
+                #       session `10f9887d` (fa37c98, dense 3 fps publish, 57
+                #       frames published): the runner asked `idx=4` while the
+                #       broker was at `next=57` and re-asked it ~7x/s until the
+                #       session ended, so the media rail got NO observation past
+                #       seq 3. That is the "delivery stops past seq 5" symptom
+                #       with a different cause than the publisher's poll budget:
+                #       a subscriber that can only follow indexes wedges for the
+                #       rest of the share the first time it falls behind.
+                # Distinguish the two by asking the live edge once: it yields the
+                # head segment when the publisher is ahead of us (fast-forward,
+                # counted) and nothing while the channel is idle (retry `want`).
+                head = await self.rail.subscribe_next(
+                    video_in, -1, poll_timeout=self._live_edge_timeout_s
+                )
+                if not head[1] or head[0] is None or head[0] < want:
+                    await asyncio.sleep(0.05)
+                    continue
+                skipped = head[0] - want
+                if skipped > 0:
+                    self._skipped_frames += skipped
+                    self._ff_logs += 1
+                    if self._ff_logs == 1 or self._ff_logs % 10 == 0:
+                        logging.getLogger("hl.trickle").warning(
+                            "fast-forward session=%s from=%s to=%s skipped=%s skipped_total=%s",
+                            self.rail.session_id,
+                            want,
+                            head[0],
+                            skipped,
+                            self._skipped_frames,
+                        )
+                out = head
             seq, payload, ts = out
             want = seq + 1
             image_b64 = base64.b64encode(payload).decode()
@@ -340,6 +398,7 @@ class TrickleSession:
                 # one bad frame must not kill the live rail (plan risk §9)
                 logging.getLogger("hl.trickle").warning("on_frame seq=%s failed: %r", seq, e)
                 continue
+            self._frames_processed += 1
             if obs:
                 await self.rail.publish(
                     self.rail.endpoints.events_out,
