@@ -37,6 +37,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import os
 import pathlib
 import re
@@ -1167,6 +1168,114 @@ _OUTPUT_CONTRACT_FULL = (
 )
 
 
+# ---------------------------------------------------------------------------
+# ADAAAA-7938 (Spec A): the PRIOR GAME STATE block.
+#
+# Every decide window carries ONLY its own frames and its own window-aligned
+# ASR, so a window that starts a few seconds AFTER a goal (celebration / huddle
+# / replay / retrospective stat narration) is judged blind to the goal that just
+# happened. VOD job fe0e3efc (ADAAAA-7931) read the 48 s celebration window as a
+# fresh `scoring_play` for that reason: the goal call ("...it's 1-0 Portugal")
+# sat in the 42 s window's ASR, which the 48 s window never saw.
+#
+# The server now forwards a compact, MEASURED prior-game-state object for every
+# window after the first:
+#   story        - the running story-so-far (the model's own prior summary)
+#   priorAsr     - the tail of the PREVIOUS window's ASR (where a goal call lives)
+#   score / lastScoreTs / needsNewScore - structured scoreboard-transition state
+#
+# AC-A2 (no-op guarantee): an absent / unusable block renders NOTHING, so the
+# prompt stays byte-identical (proven by the golden sha256 test, not prose).
+# AC-A3 (cost bound): the WHOLE block is capped at PRIOR_GAME_STATE_MAX_CHARS —
+# the spec's per-field suggestions (600 story / 400 ASR) do not fit that bound
+# together, so the block budget wins and the fields are sized to fit it.
+# ---------------------------------------------------------------------------
+PRIOR_GAME_STATE_MAX_CHARS = 600
+PRIOR_STORY_MAX_CHARS = 150
+PRIOR_ASR_MAX_CHARS = 90
+PRIOR_SCORE_MAX_CHARS = 24
+# Mirrors the deterministic ADAAAA-7865 `GOAL_DUPLICATE_REACH_S`: the block only
+# claims "a new goal needs its own measured change" while the last score is
+# inside that reach, so a genuinely later second goal is never talked out of a
+# scoring_play by this prompt (recall guard).
+PRIOR_REPEAT_REACH_S = 60
+
+
+def _prior_tail(text: object, cap: int) -> str:
+    """Keep the LAST `cap` chars of a single-lined string (most recent first)."""
+    if not isinstance(text, str):
+        return ""
+    flat = " ".join(text.split())
+    if not flat:
+        return ""
+    return flat if len(flat) <= cap else "…" + flat[-cap:]
+
+
+def _prior_ts(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    f = float(value)
+    return f if math.isfinite(f) else None
+
+
+def _prior_block(story: str, asr: str, score: str, last_ts: float | None, needs_new: bool) -> str:
+    """Render the block from already-bounded parts (deterministic)."""
+    lines = ["PRIOR GAME STATE (from EARLIER windows of this clip; those frames are NOT shown here):"]
+    if story:
+        lines.append("- story so far: " + story)
+    if asr:
+        lines.append('- commentary just before this window: "' + asr + '"')
+    where = f" at {last_ts:.1f}s" if last_ts is not None else ""
+    if needs_new:
+        scored = f"score {score}" if score else "a goal was already scored"
+        lines.append(
+            f"- {scored} (last score{where}); needsNewScore=true -> a NEW goal in THIS window needs its "
+            'own MEASURED score change ("scoreboard score change observed during window: yes") or an '
+            "in-window goal CALL. A celebration, huddle, replay or stat narration is NOT a new goal: "
+            "outcome=big_play, never scoring_play."
+        )
+    elif score:
+        lines.append(f"- score: {score}" + (f" (last score at {last_ts:.1f}s)" if last_ts is not None else ""))
+    return "\n".join(lines)
+
+
+def render_prior_game_state_block(prior: object) -> str:
+    """The bounded PRIOR GAME STATE block, or "" when there is nothing measured
+    to say (the AC-A2 no-op path). Loose on purpose: a shaped-but-wrong payload
+    degrades to "no block", never to an exception or a 422."""
+    if not isinstance(prior, dict):
+        return ""
+    story = _prior_tail(prior.get("story"), PRIOR_STORY_MAX_CHARS)
+    asr = _prior_tail(prior.get("priorAsr"), PRIOR_ASR_MAX_CHARS)
+    score = _prior_tail(prior.get("score"), PRIOR_SCORE_MAX_CHARS)
+    last_ts = _prior_ts(prior.get("lastScoreTs"))
+    needs_new = prior.get("needsNewScore") is True
+    since = _prior_ts(prior.get("sinceLastScoreS"))
+    # A "new score needed" claim only stands inside the deterministic reach —
+    # outside it the window is a candidate for a genuinely distinct goal.
+    if needs_new and since is not None and since > PRIOR_REPEAT_REACH_S:
+        needs_new = False
+    if not (story or asr or needs_new or score):
+        return ""
+    block = _prior_block(story, asr, score, last_ts, needs_new)
+    if len(block) <= PRIOR_GAME_STATE_MAX_CHARS:
+        return block
+    # Deterministic shrink so a long story/ASR can never inflate the block past
+    # the AC-A3 bound. The score-transition line is the decisive one and is kept.
+    for story_cap in (120, 80, 40, 0):
+        for asr_cap in (PRIOR_ASR_MAX_CHARS, 60, 30, 0):
+            shrunk = _prior_block(
+                _prior_tail(prior.get("story"), story_cap),
+                _prior_tail(prior.get("priorAsr"), asr_cap),
+                score,
+                last_ts,
+                needs_new,
+            )
+            if len(shrunk) <= PRIOR_GAME_STATE_MAX_CHARS:
+                return shrunk
+    return ""
+
+
 def build_prompt(
     event_type: str,
     evidence: dict,
@@ -1177,6 +1286,7 @@ def build_prompt(
     story_so_far: str = "",
     compact: bool = False,
     match_context: object = None,
+    prior_game_state: object = None,
 ) -> str:
     ev = event_type.upper()
     meta = [
@@ -1240,6 +1350,14 @@ def build_prompt(
     mc_block = render_match_context_block(mc_ctx)
     if mc_block:
         meta.append(mc_block)
+    # ADAAAA-7938 (Spec A): the prior-game-state block. Rendered ONLY when the
+    # server forwarded measured state, so an absent block leaves the prompt
+    # byte-identical (AC-A2). Placed after the match context and before the
+    # contract so the model reads "what already happened" before the verdict
+    # rules it must apply.
+    pg_block = render_prior_game_state_block(prior_game_state)
+    if pg_block:
+        meta.append(pg_block)
     contract = _OUTPUT_CONTRACT_COMPACT if compact else _OUTPUT_CONTRACT_FULL
     if mc_block and mc_ctx is not None:
         # ADAAAA-7856 (Stage 6): the anti-fabrication rule ALSO governs the
@@ -1397,6 +1515,7 @@ def _build_data_items(
     transcript: str = "",
     story_so_far: str = "",
     match_context: object = None,
+    prior_game_state: object = None,
 ) -> list:
     """Ordered, structured view of the context items fed to the model for a
     single-candidate window. Mirrors `build_prompt`'s rendered lines so the UI
@@ -1444,6 +1563,11 @@ def _build_data_items(
     mc_block = render_match_context_block(match_context)
     if mc_block:
         add("match_context", "Match context (inferred teams, authoritative for naming)", mc_block)
+    # ADAAAA-7938 (Spec A): the prior-game-state block as its own inspectable
+    # item, so the job-detail view shows exactly what the window inherited.
+    pg_block = render_prior_game_state_block(prior_game_state)
+    if pg_block:
+        add("prior_game_state", "Prior game state (from earlier windows)", pg_block)
     return items
 
 
@@ -1525,6 +1649,7 @@ def _window_analysis(
     images: list | None = None,
     response: dict | None = None,
     match_context: object = None,
+    prior_game_state: object = None,
 ) -> dict:
     """Assemble the opaque `analysis` block for a decided window."""
     evidence = evidence or {}
@@ -1532,7 +1657,7 @@ def _window_analysis(
         data_items = _build_data_items(
             event_type, evidence, game_hint, n_frames, n_images,
             send_audio or bool(transcript), transcript, story_so_far,
-            match_context,
+            match_context, prior_game_state,
         )
     return {
         "prompt": prompt,
@@ -1565,6 +1690,7 @@ def ask(
     story_so_far: str = "",
     compact: bool = False,
     match_context: object = None,
+    prior_game_state: object = None,
 ) -> dict | None:
     """Call the gemma multimodal completion (vLLM OpenAI-compat server). Returns
     a parsed/validated HighlightDecision dict, or None on any transport/parse
@@ -1622,6 +1748,7 @@ def ask(
         story_so_far=story_so_far,
         compact=compact,
         match_context=match_context,
+        prior_game_state=prior_game_state,
     )
     content.append({"type": "text", "text": prompt})
     # 3) audio AFTER the text (modality-order rule) — only when the raw-send gate
@@ -1720,6 +1847,7 @@ def ask(
             images=images,
             response=_response_block(result),
             match_context=match_context,
+            prior_game_state=prior_game_state,
         )
     return result
 
@@ -1739,6 +1867,7 @@ def decide_with_gemma(
     story_so_far: str = "",
     compact: bool = False,
     match_context: object = None,
+    prior_game_state: object = None,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision.
@@ -1780,6 +1909,7 @@ def decide_with_gemma(
         story_so_far=story_so_far,
         compact=compact,
         match_context=match_context,
+        prior_game_state=prior_game_state,
     )
     if g is not None:
         result = g
