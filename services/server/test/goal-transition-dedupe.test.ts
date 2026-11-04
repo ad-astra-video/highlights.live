@@ -31,9 +31,12 @@ describe("goalHasIndependentTransitionEvidence (ADAAAA-7865)", () => {
     expect(goalHasIndependentTransitionEvidence({ corroborationSource: "audio_text" })).toBe(true);
   });
 
-  it("credits the deep dive's own score-change read of the window", () => {
-    expect(goalHasIndependentTransitionEvidence({ confirmEvidenceScoreboardChanged: true })).toBe(true);
-    // false / null are explicit "no transition seen", not silence.
+  it("does NOT credit the deep dive's own score-change read (ADAAAA-7938)", () => {
+    // A celebration window that merely DISPLAYS the new score makes the dive
+    // answer true; that is model prose, not a measured transition (VOD job
+    // 4a0a149d accepted a second scoring_play off it). Only a MEASURED delta or
+    // a heard goal call opens a new event.
+    expect(goalHasIndependentTransitionEvidence({ confirmEvidenceScoreboardChanged: true })).toBe(false);
     expect(goalHasIndependentTransitionEvidence({ confirmEvidenceScoreboardChanged: false })).toBe(false);
     expect(goalHasIndependentTransitionEvidence({ confirmEvidenceScoreboardChanged: null })).toBe(false);
   });

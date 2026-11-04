@@ -664,11 +664,13 @@ export function priorTail(text: unknown, cap: number): string {
  *   goal CALL. Retrospective stat narration ("his 82nd goal ... 151st
  *   appearance") is excluded from that set by `audio_calls_goal`.
  * - a legible measured delta folded into this window's candidate hint.
- * - the Stage-2 deep dive's own `evidence.scoreboardChanged === true` read of
- *   THIS window: a score tick visible inside the window's frames. This is NOT
- *   used as corroboration (ADAAAA-7510 forbids that); it is used only to tell a
- *   transition window from a celebration window, where a model scoreboard read
- *   is the cheapest discriminator the pass already paid for.
+ *
+ * ADAAAA-7938 (guardrail): the Stage-2 dive's own `evidence.scoreboardChanged`
+ * read is NOT one of these signals. It is model prose, and a celebration window
+ * that merely DISPLAYS the new score makes the dive answer `true` — measured on
+ * VOD job 4a0a149d, where the 89.7 s celebration still accepted a second
+ * `scoring_play` off that read alone (no measured delta, no goal call). The
+ * field stays on the input for audit/reason text; it no longer decides.
  */
 export function goalHasIndependentTransitionEvidence(input: {
   corroborationSource?: "audio_text" | "scoreboard" | "frame_attestation" | null;
@@ -678,7 +680,15 @@ export function goalHasIndependentTransitionEvidence(input: {
   if (input.corroborationSource === "scoreboard") return true;
   if (input.corroborationSource === "audio_text") return true;
   if (input.scoreboardDeltaLegible === true) return true;
-  return input.confirmEvidenceScoreboardChanged === true;
+  // ADAAAA-7938: the Stage-2 dive's own `scoreboardChanged` read is NOT
+  // independent transition evidence. It is model prose, and a celebration
+  // window that merely DISPLAYS the new score ("POR 1-0 ESP" on the bug) makes
+  // the dive answer true. Measured on VOD job 4a0a149d after the Spec A prompt
+  // landed: the 89.7 s celebration accepted a SECOND scoring_play because the
+  // dive read the static 1-0 board, while the window carried no measured delta
+  // and no goal call. The transition must be MEASURED (perceive's legible
+  // delta / a credited scoreboard source) or HEARD (a goal call in the audio).
+  return false;
 }
 
 /** ADAAAA-7865: the already-accepted GOAL event this GOAL accept re-reads, or
