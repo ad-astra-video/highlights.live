@@ -166,10 +166,6 @@ def test_compact_prompt_asks_for_one_play_by_play_line():
     assert "lead with the event, not the scene" in p
     assert "open on an ACTION VERB" in p
     assert "never \"are positioned\" or \"maintain position\"" in p
-    # no bare plural subject: AC3 grades a concrete actor, so an unreadable wide
-    # shot must name the unit (winger / keeper / left back) instead.
-    assert "name the unit (the winger, the keeper, the left back)" in p
-    assert "never open with the bare plural \"Players\"" in p
 
 
 def test_compact_prompt_carries_colour_and_quiet_budgets():
@@ -239,11 +235,10 @@ def test_compact_prompt_delta_is_bounded():
     # The no-copy quiet rule + anti-repeat clause adds 244 more (9999 -> 10243,
     # ~+61 prompt tokens): the example caption it replaces was being copied
     # verbatim by the model on 59 of 67 live rows, so the clause pays for itself.
-    # Naming the unit instead of the bare plural "Players" adds 136 (10243 ->
-    # 10379, ~+34 prompt tokens): 6 of 20 sampled lines opened on "Players" and
-    # AC3 grades a concrete actor.
+    # A "name the unit, never the bare plural Players" clause was tried and
+    # REVERTED: it pushed p50 61 -> 105 chars with 4 rows over the 140 cap.
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 10400
+    assert len(_compact_prompt()) <= 10300
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the
