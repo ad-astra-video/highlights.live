@@ -3,9 +3,9 @@
 // These mirror the response shape in the spec §4.2 VERBATIM (`sampled 18 /
 // metered 18 / timed 12`, the seven cost nodes with four CPU-only, six time
 // nodes that sum to `totalS`, one detached concurrent audio band). They are the
-// only input to the panel's render tests until Inc 1 (`GET
-// /api/admin/vod-breakdown`, ADAAAA-7928) is deployed — so if the server ever
-// changes shape, these must move first and the tests will point at the drift.
+// only input to the panel's render tests; they must keep matching Inc 1's
+// response (`GET /admin/vod-breakdown`, ADAAAA-7928) — if the server ever
+// changes shape, these move first and the tests point at the drift.
 import type { VodBreakdown, VodBreakdownFlow } from "./vodBreakdown";
 
 function flowsFor(nodes: Array<{ key: string; usd?: number; s?: number }>): VodBreakdownFlow[] {

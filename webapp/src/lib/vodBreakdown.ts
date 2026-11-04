@@ -1,7 +1,7 @@
 // ADAAAA-7929 (Inc 2 of ADAAAA-7925): the CLIENT half of the VOD cost & time
 // breakdown. The spec (`/ADAAAA/issues/ADAAAA-7925#document-spec`, §4.2/§5) is
-// the binding contract: Inc 1 owns the route `GET /api/admin/vod-breakdown` and
-// the response shape below, and this module must not renegotiate it.
+// the binding contract: Inc 1 owns the route `GET /admin/vod-breakdown` and the
+// response shape below, and this module must not renegotiate it.
 //
 // Everything here is PURE except `fetchVodBreakdown` — the store, the sample /
 // partial / empty copy, the overview strip and the sankey GEOMETRY are all
@@ -125,14 +125,23 @@ export function vodBreakdownQuery(
   return `?scope=recent&limit=${limit}`;
 }
 
-/** `GET /api/admin/vod-breakdown` — admin-only on the server (403 for a
- * customer session, never a trimmed 200), so the panel only ever mounts behind
- * the `admin` gate. */
+/**
+ * The route the server actually registers (`services/server/src/api.ts`, Inc 1).
+ * It is mounted at the SERVER ROOT — `/admin/vod-breakdown` — like every other
+ * route in this app; a client path with an `/api` prefix 404s (`{"error":"not
+ * found"}`, verified live against the deployed build). Kept as one exported
+ * constant so a test can pin it to the server source.
+ */
+export const VOD_BREAKDOWN_PATH = "/admin/vod-breakdown";
+
+/** `GET /admin/vod-breakdown` — admin-only on the server (403 for a customer
+ * session, never a trimmed 200), so the panel only ever mounts behind the
+ * `admin` gate. */
 export async function fetchVodBreakdown(
   kind: VodBreakdownScopeKind,
   opts: { jobId?: string; limit?: number; days?: number } = {},
 ): Promise<VodBreakdown> {
-  return api<VodBreakdown>(`/api/admin/vod-breakdown${vodBreakdownQuery(kind, opts)}`);
+  return api<VodBreakdown>(`${VOD_BREAKDOWN_PATH}${vodBreakdownQuery(kind, opts)}`);
 }
 
 function plural(n: number, one: string, many = `${one}s`): string {

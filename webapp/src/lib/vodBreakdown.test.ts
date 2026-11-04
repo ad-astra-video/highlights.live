@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { recentBreakdown, emptyBreakdown, untimedBreakdown } from "./vodBreakdown.fixtures";
 import {
   buildCostSankey,
@@ -18,6 +20,7 @@ import {
   sampleLine,
   scopeWindowLabel,
   timeTotalFromNodes,
+  VOD_BREAKDOWN_PATH,
   vodBreakdownQuery,
   type VodBreakdown,
 } from "./vodBreakdown";
@@ -62,10 +65,22 @@ describe("vodBreakdown request shape", () => {
     try {
       const b = await fetchVodBreakdown("recent");
       expect(b.sampled).toBe(18);
-      expect(calls).toEqual(["/api/admin/vod-breakdown?scope=recent&limit=20"]);
+      expect(calls).toEqual(["/admin/vod-breakdown?scope=recent&limit=20"]);
     } finally {
       globalThis.fetch = original;
     }
+  });
+
+  it("pins the client path to the route the server actually registers", () => {
+    // This app mounts every route at the SERVER ROOT; `/api/...` is not an
+    // alias (verified live: `/api/admin/vod-breakdown` → 404, `/admin/...` → 200).
+    // A prefixed client path would have shipped a panel that always errored, so
+    // the client constant is checked against the server source.
+    const serverApi = readFileSync(resolve(__dirname, "../../../services/server/src/api.ts"), "utf8");
+    expect(VOD_BREAKDOWN_PATH).toBe("/admin/vod-breakdown");
+    expect(serverApi).toContain(`"${VOD_BREAKDOWN_PATH}"`);
+    expect(serverApi).not.toContain("/api/admin/vod-breakdown");
+    expect(VOD_BREAKDOWN_PATH.startsWith("/api/")).toBe(false);
   });
 });
 
