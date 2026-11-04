@@ -15,7 +15,7 @@
 import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import React from "react";
-import { WindowAnalysisPanel, ConfirmSubPanel } from "./WindowAnalysis";
+import { WindowAnalysisPanel, ConfirmSubPanel, AudioLevelField } from "./WindowAnalysis";
 import type { WindowAnalysis, ConfirmRecord } from "../lib/jobDetail";
 
 const analysis: WindowAnalysis = {
@@ -137,7 +137,7 @@ describe("WindowAnalysisPanel (ADAAAA-7157)", () => {
       React.createElement(WindowAnalysisPanel, { analysis: withSeries, jobId: "abc", triggerTs: 10.0 })
     );
     expect(html).toContain("data-audio-series-graph");
-    expect(html).toContain("Audio energy vs baseline");
+    expect(html).toContain("Sound levels");
     expect(html).toContain("data-audio-series-energy");
     expect(html).toContain("data-audio-series-baseline");
     expect(html).toContain("data-audio-trigger");
@@ -223,5 +223,90 @@ describe("WindowAnalysisPanel (ADAAAA-7157)", () => {
     expect(html).toContain("asr_text");
     expect(html).not.toContain("data-window-audio-player");
     expect(html).not.toContain("data-window-no-audio");
+  });
+
+  it("renders the audio_level item as a sound-levels graph by default, raw behind a toggle (ADAAAA-7932)", () => {
+    const withLevels: WindowAnalysis = {
+      ...analysis,
+      dataItems: [
+        { type: "frame_count", label: "Frames", value: 4 },
+        {
+          type: "audio_level",
+          label: "Audio-energy level curve",
+          value: "audio energy level curve (6 samples, peak=0.90, mean=0.46): [0.10,0.55,0.90,0.30,0.22,0.68]",
+        },
+      ],
+    };
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis: withLevels, jobId: "abc" })
+    );
+    // The field IS the graph: view=graph, plot + header present.
+    expect(html).toContain("data-audio-level-field");
+    expect(html).toContain('data-audio-level-view="graph"');
+    expect(html).toContain("data-audio-level-graph");
+    expect(html).toContain("data-audio-level-plot");
+    expect(html).toContain("data-audio-series-energy");
+    // Mean + peak reference lines carry their actual levels.
+    expect(html).toContain("data-audio-level-mean");
+    expect(html).toContain('data-audio-level-mean-value="0.46"');
+    expect(html).toContain("data-audio-level-peak");
+    expect(html).toContain('data-audio-level-peak-value="0.90"');
+    // Y axis is window-relative (padded min..max), not a fixed 0..1 axis.
+    expect(html).toContain("data-audio-level-axis");
+    expect(html).toContain(">0.04<"); // yLo = 0.10 - 8% of the 0.80 span
+    expect(html).toContain(">0.96<"); // yHi = 0.90 + 8% of the 0.80 span
+    expect(html).not.toContain(">0.00<"); // not the fixed 0..1 axis
+    // Graph is the default; the raw prompt text it replaced is NOT rendered.
+    expect(html).toContain('data-audio-level-toggle="graph"');
+    expect(html).toContain('data-audio-level-toggle="raw"');
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).not.toContain("data-audio-level-raw");
+    expect(html).not.toContain("0.10,0.55,0.90");
+  });
+
+  it("keeps the raw sent text behind the Raw toggle (ADAAAA-7932)", () => {
+    const raw = "audio energy level curve (6 samples, peak=0.90, mean=0.46): [0.10,0.55,0.90,0.30,0.22,0.68]";
+    const html = renderToString(
+      React.createElement(AudioLevelField, {
+        item: { type: "audio_level", label: "Audio-energy level curve", value: raw },
+        defaultView: "raw",
+      })
+    );
+    expect(html).toContain('data-audio-level-view="raw"');
+    expect(html).toContain("data-audio-level-raw");
+    expect(html).toContain(raw);
+    expect(html).not.toContain("data-audio-level-graph");
+  });
+
+  it("degrades the audio_level item to the plain text row when it holds no usable series (ADAAAA-7932)", () => {
+    const html = renderToString(
+      React.createElement(AudioLevelField, {
+        item: { type: "audio_level", label: "Audio-energy level curve", value: "n/a" },
+      })
+    );
+    expect(html).not.toContain("data-audio-level-field");
+    expect(html).toContain('data-data-item="audio_level"');
+    expect(html).toContain("n/a");
+  });
+
+  it("moves the window gate series graph up to the context-item area when no audio_level item exists (ADAAAA-7932)", () => {
+    const withSeries: WindowAnalysis = {
+      ...analysis,
+      audioSeries: [
+        { t: 8.0, energy: 0.10, baseline: 0.10 },
+        { t: 9.0, energy: 0.55, baseline: 0.11 },
+        { t: 10.0, energy: 0.90, baseline: 0.12 },
+      ],
+    };
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis: withSeries, jobId: "abc", triggerTs: 10.0 })
+    );
+    expect(html).toContain("data-audio-level-fallback");
+    const itemsAt = html.indexOf("data-analysis-dataitems");
+    const graphAt = html.indexOf("data-audio-series-graph");
+    const audioBlockAt = html.indexOf("data-audio-asr");
+    // The graph sits with the context items, above the audio/ASR block.
+    expect(graphAt).toBeGreaterThan(itemsAt);
+    expect(graphAt).toBeLessThan(audioBlockAt);
   });
 });
