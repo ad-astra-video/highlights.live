@@ -543,6 +543,156 @@ function wordCount(text: string): number {
 }
 
 /**
+ * Tokens that are not a sentence end even when followed by a period: a jersey
+ * number (`No. 9`), a title, a country code, or a single initial. Without this
+ * guard, splitting `No. 10 strikes ball into net` on `No.` produces two beats.
+ */
+const NON_TERMINAL_ABBREV = /^(?:No|Nr|Mr|Mrs|Ms|Dr|St|Jr|Sr|vs|etc)$/i;
+
+/** Split one stored line into the SENTENCES it carries (beats, in order). */
+function sentenceBeats(line: string): string[] {
+  const src = (line ?? "").trim();
+  if (!src) return [];
+  const out: string[] = [];
+  let start = 0;
+  const re = /[.!?](?=\s|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    const before = src.slice(Math.max(0, m.index - 1), m.index);
+    const after = src.charAt(m.index + 1);
+    // A decimal (`11.6`) or an abbreviation (`No. 9`) is not a sentence end.
+    if (/\d/.test(before) && /\d/.test(after)) continue;
+    const word = src.slice(0, m.index).trim().split(/\s+/).pop() ?? "";
+    if (NON_TERMINAL_ABBREV.test(word) || /^[A-Z]$/.test(word)) continue;
+    out.push(src.slice(start, m.index + 1).trim());
+    start = m.index + 1;
+  }
+  const rest = src.slice(start).trim();
+  if (rest) out.push(rest);
+  return out.filter(Boolean);
+}
+
+/**
+ * ADAAAA-7961: the BEATS a stored summary string carries, one per line and one
+ * per sentence within a line. A 15 s summary row is one beat; a stored row that
+ * carries two sentences (`Player in possession in center circle. No. 10 strikes
+ * ball into net`) is two beats, so the append seam can store one row each and a
+ * read surface can render the first without cutting through the second.
+ */
+export function captionBeats(text: string): string[] {
+  return (text ?? "")
+    .split("\n")
+    .flatMap((line) => sentenceBeats(line))
+    .map((beat) => beat.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Function words a delivered caption may never END on. A cut at a word boundary
+ * can leave `… in`, `… from 2-1 to` or `… as score becomes`, which reads as a
+ * sentence that stopped mid-phrase.
+ */
+const TRAILING_FUNCTION_WORD =
+  /\s+\b(?:in|at|on|of|to|with|and|but|as|while|when|from|by|for|into|onto|the|a|an|if|than|that|which|who|whose|over|under|near|inside|outside|around|after|before|during|through|across|its?|his|her|their|was|were|is|are|has|have|had)\b[\s,;:—–-]*$/i;
+
+/** A verb that owns an object: ending on it means the object was cut away. */
+const OPEN_OBJECT_VERB =
+  /\s+\b(?:becomes?|reads?|shows?|changes?|moves?|goes?|reaches?|levels?)\s*(?:to|at|from)?[\s,;:—–-]*$/i;
+
+/** A score frame left behind by a removed scoreline (`… from 2-1 to 2-2`). */
+function trailingScoreFrameRe(): RegExp {
+  // Built lazily: `SCORE_TOKEN_SRC` is declared with the score gate below.
+  return new RegExp(String.raw`\s+\b(?:from|to|at)\s+` + SCORE_TOKEN_SRC + String.raw`[\s,;:—–-]*$`, "gi");
+}
+const TRAILING_SCORE_NOUN =
+  /\s+\b(?:(?:as|while|when|and|with)\s+(?:the\s+)?(?:score\s*board|score|scoreline)|(?:the\s+)?(?:score\s*board|scoreline))\s*[\s,;:—–-]*$/i;
+
+/** A clause boundary inside a sentence (`… while players`, `… and shoots`). */
+const TAIL_CLAUSE_OPENER = /\s+\b(while|as|when|and|but|with|which|that|who|because|although)\b/gi;
+
+/**
+ * Tokens that make a tail CLAUSE complete. A tail with none of these is an
+ * unfinished clause (`… while players`), which is what a word-boundary cut
+ * leaves behind; a tail with one (`… and shoots`) is a whole clause and stays.
+ */
+const VERBISH =
+  /\b(?:reacts?|moves?|drives?|controls?|contests?|dribbles?|stands?|passes?|plays?|takes?|holds?|watches?|waits?|runs?|shoots?|strikes?|heads?|clears?|tackles?|blocks?|saves?|jumps?|turns?|attacks?|presses?|chases?|follows?|keeps?|sets?|scores?|scored|carries|carried|wins?|won|sends?|sent|puts?|makes?|made|finds?|found|gets?|got|comes?|came|goes?|went|rises?|rose|falls?|fell|lifts?|lofts?|rolls?|bounces?|crosses?|fires?|volleys?|tries?|tried|sees?|saw|looks?|appears?|erupts?|celebrates?|updates?|becomes?|reads?|shows?|is|are|was|were|has|have|had|does|did|can|could|will|would|may|might|must)\b/i;
+
+/**
+ * ADAAAA-7961 (§3.3/§3.4 residuals): repair a delivered string that stops
+ * mid-phrase. Additive and extractive only — it never invents words, never
+ * reorders them, and returns the input when it already ends on a complete
+ * phrase (byte-identical). It removes, in order, the four shapes the served
+ * build shipped:
+ *
+ *   `… while players`            -> the subordinated clause lost its verb
+ *   `… from 2-1 to`              -> the score span took its object with it
+ *   `… as score becomes`         -> the score frame outlived the scoreline
+ *   `… updates from`             -> the preposition outlived its object
+ *
+ * A line that repairs down to nothing (or to a single token) keeps its original
+ * text, so a caption is never blanked.
+ */
+export function repairDanglingTail(text: string): string {
+  const input = (text ?? "").trim();
+  if (!input) return input;
+  let out = input;
+  for (let i = 0; i < 4; i += 1) {
+    const before = out;
+    out = out
+      .replace(trailingScoreFrameRe(), "")
+      .replace(OPEN_OBJECT_VERB, "")
+      .replace(TRAILING_SCORE_NOUN, "")
+      .replace(TRAILING_FUNCTION_WORD, "")
+      .replace(/\s*[—–-]\s*$/, "")
+      .replace(/[\s,;:]+$/, "");
+    // An unfinished clause after a conjunction/subordinator: keep the clause
+    // before it (`A child stands in the foreground while players`).
+    let tail: RegExpExecArray | null;
+    let lastOpener: RegExpExecArray | null = null;
+    TAIL_CLAUSE_OPENER.lastIndex = 0;
+    while ((tail = TAIL_CLAUSE_OPENER.exec(out)) !== null) lastOpener = tail;
+    if (lastOpener) {
+      const rest = out.slice(lastOpener.index + lastOpener[0].length).trim();
+      // Only a SHORT verb-less tail is a cut clause. A longer tail is a real
+      // phrase (`… with the outside of the boot`) and stays.
+      if (rest && wordCount(rest) <= 3 && !VERBISH.test(rest)) out = out.slice(0, lastOpener.index).trim();
+    }
+    if (out === before) break;
+  }
+  // A conjunction that introduced the removed clause is not a sentence end.
+  out = out.replace(/\s+\b(?:as|while|when|and|but|with)\b$/i, "").trim();
+  return wordCount(out) >= 2 ? out : input;
+}
+
+/** Words that OPEN a new clause: cutting just before one leaves a whole clause. */
+const CLAUSE_OPENER =
+  /^(?:and|but|while|as|when|which|that|who|because|although|with|then|from|to|in|at|on|of|into|by|for|near|inside|outside|around|over|under)$/i;
+
+/**
+ * Cut `text` at the LAST clause boundary that fits the budget, so a blunt quiet
+ * line ends on a whole clause (`A child stands in the foreground`, never
+ * `… while players`). "" when no boundary fits, so the caller can fall back.
+ */
+function cutAtClauseBoundary(text: string, maxWords: number): string {
+  const tokens = (text ?? "").trim().split(/\s+/).filter(Boolean);
+  const limit = Math.min(maxWords, tokens.length);
+  for (let n = limit; n >= 2; n -= 1) {
+    const head = tokens.slice(0, n);
+    const last = head[n - 1];
+    const next = tokens[n];
+    const endsSentence = /[.!?]$/.test(last);
+    const endsClause = /[,;—–]$/.test(last);
+    const startsNewClause = next != null && CLAUSE_OPENER.test(next);
+    if (!(endsSentence || endsClause || startsNewClause)) continue;
+    const body = head.join(" ").replace(/[,;—–]+$/, "").trim();
+    if (!body) continue;
+    return endsSentence ? body : `${body}.`;
+  }
+  return "";
+}
+
+/**
  * Ordered, honest shortenings for an over-long quiet line. Each removes detail
  * the window does carry (a second kit colour, the word "kit", "with the ball")
  * — none invents anything, none touches the named place, and the list is
@@ -581,8 +731,13 @@ const QUIET_TRIMS: [RegExp, string][] = [
  */
 export function trimQuietLine(text: string, placeOverride?: string | null): string {
   const input = text ?? "";
-  if (!input.trim() || wordCount(input) <= QUIET_MAX_WORDS) return input;
+  if (!input.trim() || wordCount(input) <= QUIET_MAX_WORDS) return repairDanglingTail(input);
   let out = input;
+  // ADAAAA-7961: a row is ONE beat. When a pass stored two sentences on one row
+  // (`Player in possession in center circle. No. 10 strikes ball into net`), keep
+  // the first beat instead of cutting through the second (`… No. 10`).
+  const beats = captionBeats(input);
+  if (beats.length > 1 && wordCount(beats[0]) <= QUIET_MAX_WORDS) out = beats[0];
   for (const [re, replacement] of QUIET_TRIMS) {
     if (wordCount(out) <= QUIET_MAX_WORDS) break;
     out = out.replace(re, replacement);
@@ -592,15 +747,20 @@ export function trimQuietLine(text: string, placeOverride?: string | null): stri
     if (condensed && wordCount(condensed) <= QUIET_MAX_WORDS) out = condensed;
   }
   if (wordCount(out) > QUIET_MAX_WORDS) {
-    // Last resort: the bar is a word count, so cut at a word boundary and drop
-    // a dangling function word ("… in") so the line never ends mid-phrase.
-    out = out
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, QUIET_MAX_WORDS)
-      .join(" ")
-      .replace(/\s+\b(?:in|at|on|of|to|with|and|from|the|a|an)\b$/i, "");
+    // Last resort: cut at the last CLAUSE boundary that fits the budget (never
+    // inside a clause), then repair a tail that still dangles. The v4 word cut
+    // shipped `A child stands in the foreground while players` and
+    // `The ball stays out and the scoreboard updates from 2-1 to`.
+    const clause = cutAtClauseBoundary(out, QUIET_MAX_WORDS);
+    out =
+      clause ||
+      out
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, QUIET_MAX_WORDS)
+        .join(" ");
   }
+  out = repairDanglingTail(out);
   if (out === input) return input;
   return tidy(out);
 }
@@ -833,10 +993,17 @@ const SCORE_WITH_PREP = new RegExp(
 const ORPHAN_PREP = /\b(?:from|to|at|into)\s+(?=(?:from|to)\b|and\b|as\b|[,.;:!?]|$)/gi;
 /** The `from to` shape a double strip leaves behind. */
 const PREP_PAIR = /\b(?:from\s+to|to\s+from)\b/gi;
+/**
+ * ADAAAA-7961: the FRAME that introduced a scoreline. When the number goes it
+ * takes the frame's object with it, leaving `… crowd erupts as score becomes`.
+ * The frame is removed whole, including the connective that introduced it.
+ */
+const SCORE_FRAME =
+  /\b(?:as|while|when|and|with)?\s*(?:the\s+)?(?:score\s*board|score|scoreline)\s+(?:becomes?|became|reads?|is\s+now|stands?\s+at|moves?\s+to|goes?\s+to|updates?\s+to|changes?\s+to|shows?)\s*(?:to|at|from)?\s*/gi;
 
 /** Strip one uncorroborated score span (and its prepositions) from `text`. */
 function stripScoreSpan(text: string): string {
-  return tidy(
+  const stripped = tidy(
     text
       .replace(SCORE_PAIR, "")
       .replace(SCORE_LEAD, "$1")
@@ -847,6 +1014,13 @@ function stripScoreSpan(text: string): string {
       // A conjunction that lost its right-hand clause is not a sentence end.
       .replace(/\b(?:and|but|as)\s+(?=[,.;:!?]|$)/gi, "")
   );
+  // ADAAAA-7961: the frame that introduced the scoreline stays behind when the
+  // token goes (`… crowd erupts as score becomes 2-2`). Remove it whole — but
+  // only when a real line remains, so a pure scoreboard statement never
+  // degenerates to a bare article.
+  const unframed = tidy(stripped.replace(SCORE_FRAME, ""));
+  const out = wordCount(unframed) >= 2 ? unframed : stripped;
+  return repairDanglingTail(out);
 }
 
 /** Rewrite/remove score strings that the window's prompt does not corroborate
@@ -976,12 +1150,12 @@ function cutAtWord(text: string, max: number): string {
 
 /** The caption a stored gated line renders as (byte-identical when it fits). */
 export function captionForStoredLine(line: string): string {
-  return cutAtWord((line ?? "").trim(), MAX_CAPTION_CHARS);
+  return cutAtWord(repairDanglingTail((line ?? "").trim()), MAX_CAPTION_CHARS);
 }
 
 /** The card options a stored gated line renders as (each one a stored value). */
 export function cardTitlesFor(line: string, label?: string): string[] {
-  const text = (line ?? "").trim();
+  const text = repairDanglingTail((line ?? "").trim());
   const out: string[] = [];
   const push = (value: string) => {
     const v = (value ?? "").trim();
@@ -1365,6 +1539,43 @@ export function dedupeEmittedLines(
 }
 
 /**
+ * ADAAAA-7961 (§3.6): de-dup AFTER the goal gate. The gate is LOSSY — two lines
+ * that were distinct when stored degrade to the same kept beat (`Player in blue
+ * and yellow kit scores — …` -> `Player in blue and yellow kit shoots`, which
+ * another row already states). De-dup ran on the stored set, so it could not see
+ * the collision the gate itself created.
+ *
+ * Rule: a REWRITTEN line yields to a line that states that beat verbatim, and a
+ * rewritten line never repeats another rewritten line. Untouched repeats still
+ * obey the contract cap (`max`), so nothing that was legitimately stored twice
+ * is dropped here.
+ */
+export function dedupeGatedLines<T extends { text: string; rewritten: boolean }>(
+  lines: readonly T[],
+  max: number = MAX_LINE_OCCURRENCES
+): T[] {
+  const storedKeys = new Set<string>();
+  for (const line of lines ?? []) {
+    if (line.rewritten) continue;
+    const key = captionLineKey(line.text);
+    if (key) storedKeys.add(key);
+  }
+  const seenRewritten = new Set<string>();
+  const kept = (lines ?? []).filter((line) => {
+    const key = captionLineKey(line.text);
+    if (!key || !line.rewritten) return true;
+    if (storedKeys.has(key) || seenRewritten.has(key)) return false;
+    seenRewritten.add(key);
+    return true;
+  });
+  const capped = dedupeEmittedLines(
+    kept.map((line) => line.text),
+    max
+  );
+  return kept.filter((_line, i) => capped[i] !== null);
+}
+
+/**
  * ADAAAA-7962 (contract v4 §3.7): cap identical delivered lines across a job's
  * STORED log at `max` occurrences and return the surviving lines of this pass.
  *
@@ -1408,7 +1619,8 @@ export interface SummaryItemLike {
 /**
  * §3.4 + §3.6 over a job's emitted summary items (the flat Video Summary log and
  * the ladder's window narratives): gate every item's goal claim against its
- * window's corroboration, then cap identical items at `max` per job.
+ * window's corroboration, keep one whole beat per row, then cap identical items
+ * at `max` per job.
  *
  * FAST RAIL ONLY. VOD supplies no corroboration evidence and its long-form items
  * are graded unchanged (AC8), so the whole pass is a no-op when `fastRail` is
@@ -1422,14 +1634,15 @@ export function groundSummaryItems<T extends SummaryItemLike>(
   if (!opts.fastRail) return list;
   const highlights = opts.highlights ?? [];
   const gated = list.map((item) => {
+    const original = item.text ?? "";
     const ts = typeof item.windowTs === "number" && Number.isFinite(item.windowTs) ? item.windowTs : null;
     const corroborated = ts != null && windowCorroborated(highlights, ts);
-    const text = gateUncorroboratedGoal(item.text ?? "", corroborated);
-    return text === (item.text ?? "") ? item : { ...item, text };
+    const claimed = gateUncorroboratedGoal(original, corroborated);
+    // ADAAAA-7961: a row renders ONE beat and never a cut tail. A legacy row
+    // that carries two sentences keeps its first; a row whose tail dangles
+    // (`… while players`) is repaired. The stored log keeps the full text.
+    const text = repairDanglingTail(captionBeats(claimed)[0] ?? claimed);
+    return { item, text, rewritten: text !== original };
   });
-  const kept = dedupeEmittedLines(
-    gated.map((g) => g.text ?? ""),
-    opts.maxOccurrences
-  );
-  return gated.filter((_item, i) => kept[i] !== null);
+  return dedupeGatedLines(gated, opts.maxOccurrences).map((g) => (g.text === (g.item.text ?? "") ? g.item : { ...g.item, text: g.text }));
 }

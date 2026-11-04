@@ -30,8 +30,10 @@ import type {
   SummaryLogEntry,
 } from "@highlights/events";
 import {
-  dedupeEmittedLines,
+  captionBeats,
+  dedupeGatedLines,
   gateUncorroboratedGoal,
+  repairDanglingTail,
   windowCorroborated,
   type CorroborationWindow,
 } from "@highlights/events";
@@ -240,6 +242,8 @@ interface NormalizedEntry {
   text: string;
   clean: string;
   kind: "build-up" | "lull" | "phase";
+  /** ADAAAA-7961: `clean` was trimmed to one whole beat (not the stored text). */
+  trimmed?: boolean;
 }
 
 const ATTACK_WORDS =
@@ -266,7 +270,13 @@ function normalizeLog(log: SummaryLogEntry[]): NormalizedEntry[] {
     const windowTs = typeof e.windowTs === "number" && Number.isFinite(e.windowTs) ? e.windowTs : prev + DEFAULT_WINDOW_S;
     prev = windowTs;
     const text = (e.text ?? "").trim();
-    return { seq: e.seq, windowTs, text, clean: gateNarrative(text), kind: classifyEntry(text) };
+    // ADAAAA-7961: a 15 s ladder row is ONE beat and ends on a whole phrase.
+    // Legacy rows carry two sentences and rows whose tail a word cut left
+    // dangling (`A child stands in the foreground while players`); the stored
+    // log keeps its full text, the page reads the first beat of it.
+    const gated = gateNarrative(text);
+    const clean = repairDanglingTail(captionBeats(gated)[0] ?? gated);
+    return { seq: e.seq, windowTs, text, clean, kind: classifyEntry(text), trimmed: clean !== gated };
   });
 }
 
@@ -299,10 +309,16 @@ function propagateCorroboration(
   const windows = accepted as CorroborationWindow[];
   const gated = entries.map((e) => {
     const text = gateUncorroboratedGoal(e.clean, windowCorroborated(windows, e.windowTs));
-    return text === e.clean ? e : { ...e, clean: text };
+    return {
+      entry: text === e.clean ? e : { ...e, clean: text },
+      text,
+      rewritten: text !== e.clean || e.trimmed === true,
+    };
   });
-  const kept = dedupeEmittedLines(gated.map((e) => e.clean));
-  return gated.filter((_e, i) => kept[i] !== null);
+  // ADAAAA-7961 (§3.6): the gate is lossy, so the de-dup runs on the GATED set —
+  // a rewritten line yields to a row that states the same beat verbatim instead
+  // of the surface rendering two identical rows.
+  return dedupeGatedLines(gated).map((g) => g.entry);
 }
 
 /** Accepted GOAL highlights, in time order, with a monotonic 1-based index. */
@@ -574,13 +590,17 @@ export function buildSummaryLadder(input: {
       goals.length === 0
         ? ""
         : ` ${goals.length} accepted goal${goals.length === 1 ? "" : "s"} (${goals.filter((g) => g.verified).length} corroborated).`;
+    // ADAAAA-7961: the goal count is its own sentence. A lead that carries no
+    // terminal period must not run into it (`… in center field 2 accepted goals
+    // (0 corroborated).`), so the separator is added before the note.
+    const leadSentence = goalNote && !/[.!?…]$/.test(lead.trim()) ? `${lead.trim()}.` : lead;
     return {
       index,
       kind,
       title: chapterTitle(kind, startS, endS, goals),
       startS,
       endS,
-      summary: excerpt(`${lead}${goalNote}`),
+      summary: excerpt(`${leadSentence}${goalNote}`),
       goalCount: goals.length,
       goals,
       seqFrom: run.entries[0].seq,

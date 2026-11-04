@@ -10,7 +10,7 @@
 //   - template-opener share below 10 % of emitted window narratives,
 //   - zero extra decide calls (the derivation is a pure function of stored data).
 import { describe, it, expect } from "vitest";
-import { JobDetailSchema } from "@highlights/events";
+import { JobDetailSchema, captionLineKey } from "@highlights/events";
 import {
   MAX_MATCH_SUMMARY_CHARS,
   buildSummaryLadder,
@@ -357,5 +357,187 @@ describe("emission dedupe on the ladder (ADAAAA-7958 §3.6 / AC3b)", () => {
     const legacy = buildSummaryLadder({ summaryLog: repeated as any, highlights: [] });
     expect(fast).toEqual(legacy);
     expect(fast.chapters.flatMap((c) => c.entries)).toHaveLength(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADAAAA-7961: served-reading residuals after the ADAAAA-7960 QA pass.
+//
+// The QA graded the SERVED build (box deploy-master = f12a1f3) on five real fast
+// jobs and read `summaryLadder` as the page renders it. Two defects were left
+// after the v3 bars all passed:
+//
+//   1. the display gate applied per entry AFTER the stored de-dup, so it could
+//      turn two distinct stored rows into the SAME rendered line
+//      (5518518b: T+12/T+30, T+120/T+129, T+180/T+198);
+//   2. a blunt quiet line could end mid-phrase and a row could carry two
+//      sentences (`A child stands in the foreground while players`).
+//
+// The fixtures below are the REAL stored `summaryLog`s of jobs 5518518b (L4) and
+// 14067ece (the f12a1f3 QA level), captured read-only from the live box, so the
+// defects are asserted against the jobs QA measured them on.
+// ---------------------------------------------------------------------------
+describe("display gate never introduces a duplicate (ADAAAA-7961 §3.6)", () => {
+  const qaLog5518518b = [
+    { seq: 1, windowTs: 0, text: "Player in blue jersey dribbles in center field" },
+    { seq: 2, windowTs: 3, text: "Player in blue kit dribbles in penalty area" },
+    { seq: 3, windowTs: 12, text: "Player in blue and yellow kit scores — celebration in penalty area" },
+    { seq: 4, windowTs: 27, text: "No. 10 moves ball in penalty area." },
+    { seq: 5, windowTs: 30, text: "Player in blue and yellow kit shoots" },
+    { seq: 6, windowTs: 36, text: "Player in blue kit dribbles in center field." },
+    { seq: 7, windowTs: 72, text: "The No. 9 stands in the center circle." },
+    { seq: 8, windowTs: 81, text: "Lamine Yamal carries ball in center circle." },
+    { seq: 9, windowTs: 84, text: "Yamal moves into the penalty area." },
+    { seq: 10, windowTs: 90, text: "Yamal contests for ball in center circle." },
+    { seq: 11, windowTs: 93, text: "Yamal carries ball in center circle." },
+    { seq: 12, windowTs: 111, text: "Yamal controls ball in center circle." },
+    { seq: 13, windowTs: 117, text: "Yamal scores — celebration in the box" },
+    { seq: 14, windowTs: 120, text: "Yamal strikes the ball into the net" },
+    { seq: 15, windowTs: 126, text: "Players move in the penalty area." },
+    { seq: 16, windowTs: 129, text: "Yamal strikes the ball wide" },
+    { seq: 17, windowTs: 147, text: "Players stand in the penalty area." },
+    { seq: 18, windowTs: 153, text: "Player in penalty area with ball." },
+    { seq: 19, windowTs: 159, text: "No. 6 strikes the ball into the net — crowd energy rises" },
+    { seq: 20, windowTs: 162, text: "The No. 9 scores — crowd erupts" },
+    { seq: 21, windowTs: 177, text: "Saez strikes the ball into the net — crowd erupts" },
+    { seq: 22, windowTs: 180, text: "No. 8 scores — crowd erupts" },
+    { seq: 23, windowTs: 186, text: "Player in purple controls ball in center field." },
+    { seq: 24, windowTs: 195, text: "Player in white moves ball in center circle." },
+    { seq: 25, windowTs: 198, text: "No. 8 shoots" },
+    { seq: 26, windowTs: 207, text: "Player in blue dribbles in center circle." },
+    { seq: 27, windowTs: 225, text: "Player in blue moves in center circle." },
+    { seq: 28, windowTs: 234, text: "The No. 9 player stands in training" },
+    { seq: 29, windowTs: 240, text: "Player in blue moves ball in center circle." },
+    { seq: 30, windowTs: 243, text: "Youth player stands in training area." },
+    { seq: 31, windowTs: 249, text: "Player in purple jersey dribbles in center field." },
+    { seq: 32, windowTs: 258, text: "A child stands in the foreground while players" },
+    { seq: 33, windowTs: 270, text: "Real Madrid player controls ball in penalty area." },
+    { seq: 34, windowTs: 288, text: "Real Madrid player strikes ball into net" },
+    { seq: 35, windowTs: 297, text: "The No. 9 stands near goal" },
+    { seq: 36, windowTs: 297.66666666666663, text: "Player in purple moves toward ball in center." },
+  ];
+
+  const render = (log: Array<{ seq: number; windowTs: number; text: string }>) => {
+    // 0 corroborated goals, exactly the QA level: every accepted goal is counted
+    // by the banner and rewritten by the display gate.
+    const highlights = [
+      { start: 12, end: 27, eventType: "GOAL", status: "accepted", corroborated: false },
+      { start: 117, end: 132, eventType: "GOAL", status: "accepted", corroborated: false },
+      { start: 288, end: 303, eventType: "GOAL", status: "accepted", corroborated: false },
+    ];
+    const l = buildSummaryLadder({ summaryLog: log as any, highlights: highlights as any, fastRail: true });
+    return { ladder: l, rows: l.chapters.flatMap((c) => c.entries.map((e) => e.text)) };
+  };
+
+  it("renders every row distinct on the f12a1f3 QA level (job 14067ece)", () => {
+  const qaLog14067ece = [
+    { seq: 1, windowTs: 0, text: "Player in blue jersey dribbles in center field" },
+    { seq: 2, windowTs: 9, text: "Player in blue jersey dribbles in penalty area" },
+    { seq: 3, windowTs: 12, text: "No. 3 drives into the box and scores — celebration erupts" },
+    { seq: 4, windowTs: 30, text: "No. 10 moves into the penalty area." },
+    { seq: 5, windowTs: 36, text: "Player in white moves ball in center circle." },
+    { seq: 6, windowTs: 39, text: "Player in possession in center circle" },
+    { seq: 7, windowTs: 45, text: "Player in blue kit moves in center field." },
+    { seq: 8, windowTs: 66, text: "Players move in the center circle." },
+    { seq: 9, windowTs: 72, text: "The No. 9 stands in the center circle." },
+    { seq: 10, windowTs: 93, text: "No. 6 drives ball in center circle." },
+    { seq: 11, windowTs: 102, text: "No. 6 carries ball in center circle." },
+    { seq: 12, windowTs: 111, text: "The No. 9 scores — teammates celebrate in the box" },
+    { seq: 13, windowTs: 117, text: "No. 11 strikes the ball into the net — teammates celebrate in the box" },
+    { seq: 14, windowTs: 120, text: "No. 11 strikes ball into net — teammates celebrate in box" },
+    { seq: 15, windowTs: 135, text: "Player in blue controls ball in penalty area." },
+    { seq: 16, windowTs: 147, text: "Players move in center circle." },
+    { seq: 17, windowTs: 159, text: "No. 6 shoots wide" },
+    { seq: 18, windowTs: 162, text: "The No. 9 scores — crowd erupts as score becomes" },
+    { seq: 19, windowTs: 177, text: "Saez strikes the ball into the net — crowd erupts" },
+    { seq: 20, windowTs: 180, text: "No. 8 shoots into the net — crowd erupts" },
+    { seq: 21, windowTs: 231, text: "Players stand in the penalty area." },
+    { seq: 22, windowTs: 288, text: "Player in possession in center circle. No. 10 strikes ball into net" },
+    { seq: 23, windowTs: 294, text: "Defender slides in the penalty area to block the ball." },
+    { seq: 24, windowTs: 297, text: "Defender blocks ball in penalty area." },
+    { seq: 25, windowTs: 309, text: "No. 3 strikes the ball into the net — crowd energy rises." },
+    { seq: 26, windowTs: 312, text: "No. 3 strikes ball into net" },
+  ];
+
+    const { rows } = render(qaLog14067ece);
+    const keys = rows.map(captionLineKey);
+    const counts = new Map<string, number>();
+    for (const k of keys) counts.set(k, (counts.get(k) ?? 0) + 1);
+    // QA measured one duplicate group on this level: {'the no. 9 shoots': [111, 162]}.
+    expect([...counts.entries()].filter(([, n]) => n > 1)).toEqual([]);
+    expect(rows.filter((r) => captionLineKey(r) === "the no. 9 shoots")).toHaveLength(1);
+    // The two-sentence row keeps one beat; the row that already states it wins.
+    expect(rows.some((r) => r.includes("No. 10 strikes ball"))).toBe(false);
+    expect(rows.some((r) => /score becomes/i.test(r))).toBe(false);
+  });
+
+  it("renders every row distinct on job 5518518b (the three QA duplicate groups are gone)", () => {
+    const { rows } = render(qaLog5518518b);
+    const keys = rows.map(captionLineKey);
+    const counts = new Map<string, number>();
+    for (const k of keys) counts.set(k, (counts.get(k) ?? 0) + 1);
+    const duplicates = [...counts.entries()].filter(([, n]) => n > 1);
+    // QA measured: {'player in blue and yellow kit shoots': [12,30],
+    //               'yamal strikes the ball wide': [120,129],
+    //               'no. 8 shoots': [180,198]}
+    expect(duplicates).toEqual([]);
+    expect(new Set(keys.slice(0, 20)).size).toBe(20);
+    expect(new Set(keys).size).toBe(rows.length);
+  });
+
+  it("keeps the row that states the beat verbatim and drops only the rewritten twin", () => {
+    const { rows } = render(qaLog5518518b);
+    expect(rows.filter((r) => captionLineKey(r) === "player in blue and yellow kit shoots")).toHaveLength(1);
+    expect(rows.filter((r) => captionLineKey(r) === "yamal strikes the ball wide")).toHaveLength(1);
+    expect(rows.filter((r) => captionLineKey(r) === "no. 8 shoots")).toHaveLength(1);
+  });
+
+  it("never renders a row that stops mid-phrase (job 5518518b T+258)", () => {
+    const { rows } = render(qaLog5518518b);
+    expect(rows).not.toContain("A child stands in the foreground while players");
+    expect(rows).toContain("A child stands in the foreground");
+    for (const row of rows) expect(row).not.toMatch(/\b(?:while|as|and|to|from|in)\s*$/i);
+  });
+
+  it("separates the chapter digest goal count from a lead with no period", () => {
+    const { ladder } = render(qaLog5518518b);
+    const withGoals = ladder.chapters.filter((c) => c.goalCount > 0);
+    expect(withGoals.length).toBeGreaterThan(0);
+    for (const chapter of withGoals) {
+      // QA: `Phase · 0:00–2:45: Player in blue jersey dribbles in center field 2 accepted goals (0 corroborated).`
+      expect(chapter.summary).not.toMatch(/[a-z]\s+\d+ accepted goal/);
+      expect(chapter.summary).toMatch(/\.\s+\d+ accepted goal/);
+    }
+  });
+
+  it("renders ONE beat per row for a legacy two-sentence row (job 14067ece T+288)", () => {
+    const qaLog14067ece = [
+      { seq: 1, windowTs: 39, text: "Player in possession in center circle" },
+      { seq: 2, windowTs: 162, text: "The No. 9 scores — crowd erupts as score becomes" },
+      { seq: 3, windowTs: 288, text: "Player in possession in center circle. No. 10 strikes ball into net" },
+    ];
+    const { rows } = render(qaLog14067ece);
+    // The two-sentence row renders as its first beat; the shorter stored row
+    // (`Player in possession in center circle`) states that beat already, so the
+    // trimmed twin is dropped and the row appears exactly once.
+    expect(rows.filter((r) => /possession in center circle/i.test(r))).toHaveLength(1);
+    expect(rows.some((r) => /No\. 10 strikes ball/i.test(r))).toBe(false);
+    for (const row of rows) {
+      // One terminal punctuation mark at most: the row is a single beat.
+      expect((row.match(/[.!?]/g) ?? []).length).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("renders the stored row with the dangling score frame without it (14067ece T+162)", () => {
+    const { rows } = render([
+      { seq: 1, windowTs: 162, text: "The No. 9 scores — crowd erupts as score becomes" },
+    ]);
+    expect(rows[0]).toBe("The No. 9 shoots");
+  });
+
+  it("is deterministic across reads (a stored job's ladder is stable)", () => {
+    const a = render(qaLog5518518b);
+    const b = render(qaLog5518518b);
+    expect(a.ladder).toEqual(b.ladder);
   });
 });
