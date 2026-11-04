@@ -32,6 +32,7 @@ from typing import Optional
 
 import numpy as np
 
+from .perf import now as _perf_now, recorder as _perf_recorder
 from .tracking_plan import plan_vocabulary  # noqa: F401  (re-exported for the plan path)
 from .game_profile import BASKETBALL_PROFILE, GameProfile, SOCCER_PROFILE
 
@@ -691,7 +692,11 @@ class FlorenceDetector:
         # Bare <OD> prompt — the task token, nothing else (Florence-2 has no
         # <OD> input channel; appending the vocabulary here raises AssertionError).
         prompt = build_od_prompt(task, vocabulary)
+        # ADAAAA-8004: time the <OD> generation itself (model already loaded by
+        # the call above, so this stage is inference only, not boot cost).
+        _t_infer = _perf_now()
         text = self._infer(pil, prompt)
+        _perf_recorder().add("detect", _perf_now() - _t_infer)
         objs, stats = self._parse_with_stats(text, vocabulary=vocabulary)
         # Bounded zoomed-crop / ROI pass (ADAAAA-6395): the full-frame <OD> pass
         # misses small/far/occluded balls at the fixed 768 model normalize. When
@@ -705,7 +710,13 @@ class FlorenceDetector:
         # metrics (parsed/gated/emitted/void) remain defined on the <OD> pass and
         # are not inflated by per-tile duplicate boxes.
         if roi_pass and vocabulary and _roi_enabled():
-            objs = self._run_roi_pass(image, vocabulary, objs)
+            # ADAAAA-8004: the ROI pass can be up to _ROI_MAX_TILES extra <OD>
+            # generations, so it is timed separately from the full-frame pass.
+            _t_roi = _perf_now()
+            try:
+                objs = self._run_roi_pass(image, vocabulary, objs)
+            finally:
+                _perf_recorder().add("roi", _perf_now() - _t_roi)
         self.stats = stats
         return objs
 
@@ -837,6 +848,9 @@ class FlorenceDetector:
         else:
             pil = Image.fromarray(image.astype(np.uint8)).convert("RGB")
         prompt = "<OCR>"
+        # ADAAAA-8004: time the OCR inference (crop preparation above is CPU-only
+        # and is not charged to the GPU stage).
+        _t_ocr = _perf_now()
         inputs = self._processor(images=pil, text=prompt, return_tensors="pt")
 
         if self._ov_model is not None:
@@ -855,6 +869,7 @@ class FlorenceDetector:
                     **inputs, num_beams=3, max_new_tokens=512, do_sample=False
                 )
         text = self._processor.batch_decode(generated, skip_special_tokens=True)[0]
+        _perf_recorder().add("ocr", _perf_now() - _t_ocr)
         return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
     def discover(self, image: "np.ndarray", task: str = "<DETAILED_CAPTION>") -> dict:
@@ -1076,15 +1091,49 @@ _detector: Optional[FlorenceDetector] = None
 # shared base singleton below. GPU memory grows ~one model per distinct
 # adapter ref that is concurrently attached (documented cost, see plan).
 _detectors: dict[str, FlorenceDetector] = {}
+# ADAAAA-8004: second model copy reserved for scoreboard <OCR> reads so OCR can
+# overlap the <OD>/SAM path on a frame (opt-in, PERCEIVE_DUAL_FLORENCE=1).
+_ocr_detector: Optional[FlorenceDetector] = None
 
 
 def reset_detectors() -> None:
     """Drop the cached detectors (base singleton + all LoRA variants). Used by
     tests to isolate selection state; called at perceive startup after the
     boot gate so a stale/partial variant never survives into serving."""
-    global _detector, _detectors
+    global _detector, _detectors, _ocr_detector
     _detector = None
     _detectors = {}
+    _ocr_detector = None
+
+
+def dual_florence_enabled() -> bool:
+    """ADAAAA-8004: is the second Florence copy (OCR lane) enabled?
+
+    Off by default. When on, the scoreboard `<OCR>` reads of a frame can run on
+    a SECOND model copy while the primary copy holds the `<OD>`/SAM path, so
+    OCR and detection overlap on the same frame instead of serialising.
+    """
+    return os.environ.get("PERCEIVE_DUAL_FLORENCE", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def get_ocr_detector() -> Optional[FlorenceDetector]:
+    """ADAAAA-8004: the second Florence-2 copy used for `<OCR>` reads.
+
+    Returns None in stub mode or when PERCEIVE_DUAL_FLORENCE is off, so the
+    caller falls back to the single-detector path unchanged. The copy loads the
+    SAME model (FLORENCE_MODEL / base) on the same visible device unless
+    PERCEIVE_OCR_DEVICE names another one; it is a separate model instance, so
+    it does not share weights or a CUDA stream with the primary detector.
+    """
+    global _ocr_detector
+    if not dual_florence_enabled():
+        return None
+    if os.environ.get("PERCEIVE_MODE", "stub") != "florence":
+        return None
+    if _ocr_detector is None:
+        device = os.environ.get("PERCEIVE_OCR_DEVICE") or None
+        _ocr_detector = FlorenceDetector(device=device)
+    return _ocr_detector
 
 
 def get_detector(lora_ref: str | None = None) -> FlorenceDetector | None:
