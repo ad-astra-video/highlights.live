@@ -15,7 +15,7 @@
 //   AC5  store counts are unchanged by the second attempt
 //   AC6  transient retries up to the budget then terminal failed; a permanent
 //        failure lands terminal failed on the first attempt with no retry
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +24,8 @@ import { buildTestApp, waitForJob } from "./helpers";
 import {
   RESUME_BACKOFF_CAP_MS,
   extractionReusable,
+  formatResumeAttemptLine,
+  interruptedAttemptEvidence,
   mergeResumeCheckpoint,
   resumeRetryDelayMs,
   resumeStartTs,
@@ -121,6 +123,46 @@ async function register(app: any, email: string): Promise<string> {
   return r.json().token as string;
 }
 
+async function login(app: any, email: string): Promise<string> {
+  const r = await app.inject({ method: "POST", url: "/auth/login", payload: { email, password: "password123" } });
+  expect(r.statusCode).toBe(200);
+  return r.json().token as string;
+}
+
+/** The AC10b line shape: fixed prefix, fixed key order, job id and exit kind. */
+const RESUME_LINE =
+  /^\[vod-resume\] job=(\S+) attempt=(\d+) phase=(extract|analyze|finalize) cursor=([\d.]+) skippedFrames=(\d+) warmupFrames=(\d+) decideCalls=(\d+) perceiveCalls=(\d+) exitKind=(worker-exit|boot-recovered)$/;
+
+/** Collect the `[vod-resume]` lines logged while `fn` runs. */
+async function captureResumeLines<T>(fn: () => Promise<T>): Promise<{ result: T; lines: string[] }> {
+  const lines: string[] = [];
+  const spy = vi.spyOn(console, "log").mockImplementation((...args: any[]) => {
+    const line = args.map(String).join(" ");
+    if (line.startsWith("[vod-resume]")) lines.push(line);
+  });
+  try {
+    return { result: await fn(), lines };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+function parseResumeLine(line: string) {
+  const m = line.match(RESUME_LINE);
+  expect(m, `line did not match the AC10b shape: ${line}`).toBeTruthy();
+  return {
+    jobId: m![1],
+    attempt: Number(m![2]),
+    phase: m![3],
+    cursor: Number(m![4]),
+    skippedFrames: Number(m![5]),
+    warmupFrames: Number(m![6]),
+    decideCalls: Number(m![7]),
+    perceiveCalls: Number(m![8]),
+    exitKind: m![9],
+  };
+}
+
 async function getJob(app: any, jobId: string, token: string) {
   const r = await app.inject({ method: "GET", url: `/jobs/${jobId}`, headers: { authorization: `Bearer ${token}` } });
   expect(r.statusCode).toBe(200);
@@ -179,6 +221,36 @@ describe("vod-resume pure contract (ADAAAA-7906)", () => {
     const cleared = mergeResumeCheckpoint(armed, { nextAttemptAt: null });
     expect(cleared.nextAttemptAt).toBeUndefined();
     expect(cleared.phase).toBe("analyze");
+  });
+
+  it("AC10b: synthesizes the killed attempt's line from persisted state, once per OPEN attempt", () => {
+    const checkpoint = {
+      version: 1 as const,
+      phase: "analyze" as const,
+      analyze: { cursorTs: 12 },
+      attempts: [
+        { attempt: 1, startedAt: "a", endedAt: "b" },
+        { attempt: 2, startedAt: "c", resumedFromTs: 6, skippedFrames: 8, warmupFrames: 4, decideCalls: 3, perceiveCalls: 24 },
+      ],
+      totalAttempts: 2,
+    };
+    const e = interruptedAttemptEvidence("job-9", checkpoint);
+    expect(e).toMatchObject({
+      jobId: "job-9",
+      attempt: 2,
+      phase: "analyze",
+      cursorTs: 12,
+      skippedFrames: 8,
+      warmupFrames: 4,
+      decideCalls: 3,
+      perceiveCalls: 24,
+      exitKind: "boot-recovered",
+    });
+    expect(formatResumeAttemptLine(e!)).toMatch(RESUME_LINE);
+    // Exactly once: every attempt closed => nothing to report, so a second boot
+    // sweep over the same record adds no line for attempt 2.
+    expect(interruptedAttemptEvidence("job-9", { ...checkpoint, attempts: [checkpoint.attempts[0]] })).toBeNull();
+    expect(interruptedAttemptEvidence("job-9", undefined)).toBeNull();
   });
 
   it("computes the warm-up as windowN/fps capped at the 10 s observe window", () => {
@@ -432,4 +504,162 @@ describe("VOD resume end to end (ADAAAA-7906 AC1-AC6)", () => {
 
     await t.app.close();
   }, 120000);
+});
+
+
+// ADAAAA-7918 (AC10b) — the per-attempt `[vod-resume]` line must survive a HARD
+// KILL. A SIGKILL never reaches `processVodJob`'s `finally`, so an exit-time line
+// alone cannot count the attempt that died: boot recovery synthesizes that line
+// from the persisted checkpoint (`exitKind=boot-recovered`), which makes
+// `grep -c '[vod-resume]'` equal `resume.totalAttempts` after a crash.
+//
+// The kill is simulated the way a real restart leaves the record: the row is
+// interrupted mid-analyze with an OPEN attempt entry (counters as of its last
+// checkpoint write), the first app is closed, and a SECOND app (a second Store)
+// is built over the same database file and data dir — so boot recovery runs
+// exactly as it does on the box.
+describe("vod-resume AC10b: one [vod-resume] line per attempt survives a hard kill", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "hl-vod-resume-kill-"));
+  const videoPath = path.join(tmp, "match.mp4");
+  const dataDir = path.join(tmp, "data");
+  const dbPath = path.join(tmp, "kill.sqlite");
+  let priorMatchContext: string | undefined;
+
+  beforeAll(() => {
+    execFileSync("ffmpeg", [
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc=duration=24:size=320x180:rate=2",
+      "-pix_fmt",
+      "yuv420p",
+      videoPath,
+    ]);
+    priorMatchContext = process.env.MATCH_CONTEXT;
+    process.env.MATCH_CONTEXT = "0";
+  });
+
+  afterAll(() => {
+    if (priorMatchContext === undefined) delete process.env.MATCH_CONTEXT;
+    else process.env.MATCH_CONTEXT = priorMatchContext;
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("AC-A1/AC-A2/AC-A3: a killed attempt logs a boot-recovered line, so the grep count equals resume.totalAttempts", async () => {
+    const email = "ac10b-kill@test.dev";
+
+    // ---- process A: attempt 1 runs, judges a few windows, then fails --------
+    const adapterA = resumeAdapter({ failDecideCall: 4 });
+    const appA = await buildTestApp(
+      { ...ENV, DATA_DIR: dataDir, DATABASE_PATH: dbPath, VOD_RESUME_MAX_ATTEMPTS: "0" },
+      { adapter: adapterA }
+    );
+    const { result: attempt1, lines: linesA } = await captureResumeLines(async () => {
+      const owner = await register(appA.app, email);
+      const sub = await appA.app.inject({
+        method: "POST",
+        url: "/jobs",
+        headers: { authorization: `Bearer ${owner}` },
+        payload: { videoPath, gameHint: "soccer" },
+      });
+      expect(sub.statusCode).toBe(202);
+      return waitForJob(appA.app, sub.json().job.id, owner, 60000);
+    });
+    const jobId = attempt1.job.id as string;
+    expect(attempt1.job.status).toBe("failed");
+    // A GRACEFUL exit: exactly one line, `worker-exit`, for attempt 1.
+    expect(linesA).toHaveLength(1);
+    expect(parseResumeLine(linesA[0])).toMatchObject({ jobId, attempt: 1, exitKind: "worker-exit" });
+    expect(parseResumeLine(linesA[0]).perceiveCalls).toBeGreaterThan(0);
+
+    const record = appA.store.getJob(jobId)!;
+    const priorCursor = record.resume!.analyze!.cursorTs as number;
+    // Where the killed attempt got to: past the previous cursor, mid-content.
+    const killCursor = Math.min(18, Math.max(6, Math.round(priorCursor) + 3));
+    const killedSkipped = Math.ceil(resumeStartTs(killCursor, WARMUP_S) * DETAIL_FPS);
+
+    // ---- the hard kill: the row is left mid-analyze with an OPEN attempt ----
+    // This is the exact state a SIGKILL leaves — the claim appended attempt 2,
+    // the pass persisted a checkpoint (counters on its own trail entry), and no
+    // `finally` ever ran. Written straight to the DB because the in-memory store
+    // of process A dies with the process.
+    const interrupted = {
+      ...record,
+      status: "analyzing" as const,
+      stage: "analyzing",
+      failureReason: undefined,
+      attempts: 2,
+      resume: {
+        ...record.resume!,
+        phase: "analyze" as const,
+        attempts: [
+          ...record.resume!.attempts,
+          {
+            attempt: 2,
+            startedAt: new Date().toISOString(),
+            resumedFromTs: priorCursor,
+            skippedFrames: killedSkipped,
+            warmupFrames: WARMUP_FRAMES,
+            decideCalls: 3,
+            perceiveCalls: 24,
+          },
+        ],
+        totalAttempts: 2,
+        analyze: { ...record.resume!.analyze, cursorTs: killCursor },
+      },
+    };
+    await appA.db.saveJob(interrupted as any);
+    await appA.app.close();
+
+    // ---- process B: boot recovery + the resumed attempt over the SAME db ----
+    const adapterB = resumeAdapter();
+    const { result: body, lines: linesB } = await captureResumeLines(async () => {
+      const appB = await buildTestApp(
+        { ...ENV, DATA_DIR: dataDir, DATABASE_PATH: dbPath, VOD_RESUME_MAX_ATTEMPTS: "1", VOD_RESUME_BACKOFF_MS: "200" },
+        { adapter: adapterB }
+      );
+      const ownerB = await login(appB.app, email);
+      const done = await waitForJob(appB.app, jobId, ownerB, 90000);
+      return { appB, done };
+    });
+    const { appB, done } = body;
+    expect(done.job.status).toBe("done");
+    expect(done.job.attempts).toBe(3);
+    expect(done.job.resume.totalAttempts).toBe(3);
+
+    // AC-A2: ONE boot-recovered line for the killed attempt and ONE worker-exit
+    // line for the resumed attempt, each carrying every field.
+    expect(linesB).toHaveLength(2);
+    const killed = parseResumeLine(linesB[0]);
+    const resumed = parseResumeLine(linesB[1]);
+    expect(killed).toMatchObject({ jobId, attempt: 2, exitKind: "boot-recovered", phase: "analyze" });
+    // Built from what the attempt PERSISTED before it died.
+    expect(killed.cursor).toBe(killCursor);
+    expect(killed.skippedFrames).toBe(killedSkipped);
+    expect(killed.warmupFrames).toBe(WARMUP_FRAMES);
+    expect(killed.decideCalls).toBe(3);
+    expect(killed.perceiveCalls).toBe(24);
+    expect(resumed).toMatchObject({ jobId, attempt: 3, exitKind: "worker-exit" });
+
+    // AC-A1: the grep over BOTH processes counts every attempt exactly once, and
+    // that count equals `resume.totalAttempts`.
+    const all = [...linesA, ...linesB].filter((l) => l.includes(`job=${jobId}`));
+    expect(all).toHaveLength(done.job.resume.totalAttempts);
+    expect(all.map((l) => parseResumeLine(l).attempt)).toEqual([1, 2, 3]);
+
+    // AC-A3: a second boot sweep over the same record adds no line — the killed
+    // attempt is already closed and the resumed one exited through the worker.
+    await appB.app.close();
+    const { lines: linesC } = await captureResumeLines(async () => {
+      const appC = await buildTestApp(
+        { ...ENV, DATA_DIR: dataDir, DATABASE_PATH: dbPath },
+        { adapter: resumeAdapter() }
+      );
+      await sleep(250);
+      await appC.app.close();
+      return null;
+    });
+    expect(linesC).toHaveLength(0);
+  }, 240000);
 });
