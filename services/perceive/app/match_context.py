@@ -1082,6 +1082,11 @@ def generic_scorebug_sides(text: str) -> tuple[Optional[str], Optional[str]]:
 _PLATE_RUN_BEFORE_RE = re.compile(r"[A-Za-z][A-Za-z .'&]*$")
 _PLATE_RUN_AFTER_RE = re.compile(r"\s*([A-Za-z][A-Za-z .'&]*)")
 _PLATE_DIGIT_BOUNDARY_RE = re.compile(r"(?<=[A-Za-z])\s*(\d{1,2})\s*(?=[A-Za-z])")
+# ADAAAA-7944: the home score digit is often followed by the period/clock
+# ("BELMONT WESTFORD 6 1st 0:21"), not by the away plate. A plate run followed
+# by a lone score digit is still a boundary; the two all-caps words left of it
+# are then the two side plates.
+_PLATE_LONE_DIGIT_BOUNDARY_RE = re.compile(r"(?<=[A-Za-z])\s*(\d{1,2})(?=[\s.:]|$)")
 _PLATE_HYPHEN_BOUNDARY_RE = re.compile(
     r"([A-Za-z][A-Za-z .'&]{2,30}?)\s*[-–—]\s*([A-Za-z][A-Za-z .'&]{2,30})"
 )
@@ -1164,6 +1169,67 @@ def _clean_plate(raw: str) -> Optional[str]:
     return name
 
 
+# All-caps words that are league / broadcaster / competition branding, never a
+# side plate. A two-word caps run containing one of these is branding, not two
+# teams ("TURKIYEBASKETBOLIGI KETBOTURKIYEMB"), so the two-plate split declines.
+_BANNER_PLATE_FRAGMENTS = (
+    "basketbol",
+    "basketball",
+    "ligi",
+    "league",
+    "cup",
+    "trophy",
+    "champions",
+    "champion",
+    "courtesy",
+    "sponsor",
+    "euroleague",
+    "turkiye",
+    "türkiye",
+    "turkey",
+    "nba",
+    "nfl",
+    "nhl",
+    "mlb",
+    "channel",
+    "sports",
+    "sport",
+    "live",
+)
+
+
+def _is_banner_plate(word: str) -> bool:
+    folded = _fold(word)
+    return not folded or any(frag in folded for frag in _BANNER_PLATE_FRAGMENTS)
+
+
+def _two_plate_split(run: str) -> Optional[tuple[str, str]]:
+    """Split ONE all-caps plate run into the two side plates, or ``None``.
+
+    Only a two-word ALL-CAPS run ("BELMONT WESTFORD") qualifies: a multi-word
+    club printed by this build is mixed case ("Cohasset Middle HS"), so a caps
+    pair is two separate side plates rather than one club. A caps run carrying a
+    league/broadcaster fragment ("TURKIYEBASKETBOLIGI KETBOTURKIYEMB") is
+    branding and is declined. Anything else keeps the shipped single-plate
+    reading.
+    """
+    raw = str(run or "").strip()
+    if not raw or not raw.isupper():
+        return None
+    parts = raw.split()
+    if len(parts) != 2:
+        return None
+    if any(_is_banner_plate(part) for part in parts):
+        return None
+    if any(len(part) < 4 for part in parts):
+        return None
+    left = _clean_plate(parts[0])
+    right = _clean_plate(parts[1])
+    if left and right and _fold(left) != _fold(right):
+        return left, right
+    return None
+
+
 def printed_plate_sides(text: str) -> Optional[tuple[str, str]]:
     """``(home, away)`` from two printed club plates on a band/corner-bug line.
 
@@ -1180,13 +1246,25 @@ def printed_plate_sides(text: str) -> Optional[tuple[str, str]]:
     """
     if not text:
         return None
-    for m in _PLATE_DIGIT_BOUNDARY_RE.finditer(text):
-        before = _PLATE_RUN_BEFORE_RE.search(text[: m.start()])
-        after = _PLATE_RUN_AFTER_RE.match(text[m.end() :])
-        left = _clean_plate(before.group(0)) if before else None
-        right = _clean_plate(after.group(1)) if after else None
+    boundaries = [(m.start(), m.end()) for m in _PLATE_DIGIT_BOUNDARY_RE.finditer(text)]
+    boundaries += [(m.start(), m.end()) for m in _PLATE_LONE_DIGIT_BOUNDARY_RE.finditer(text)]
+    for start, end in sorted(set(boundaries)):
+        before = _PLATE_RUN_BEFORE_RE.search(text[:start])
+        after = _PLATE_RUN_AFTER_RE.match(text[end:])
+        left_raw = before.group(0) if before else ""
+        right_raw = after.group(1) if after else ""
+        left = _clean_plate(left_raw)
+        right = _clean_plate(right_raw)
         if left and right and _fold(left) != _fold(right):
             return left, right
+        # ADAAAA-7944: on most frames the OCR drops the home score digit, so the
+        # line prints ONE digit with BOTH all-caps plates on its left
+        # ("BELMONT WESTFORD 6 1st 0:21"). Two all-caps words in the plate run are
+        # the two side plates, not one two-word club (broadcast plates of a
+        # multi-word club are printed mixed case, e.g. "Cohasset Middle HS").
+        two = _two_plate_split(left_raw) or _two_plate_split(right_raw)
+        if two is not None:
+            return two
     for m in _PLATE_HYPHEN_BOUNDARY_RE.finditer(text):
         left = _clean_plate(m.group(1))
         right = _clean_plate(m.group(2))

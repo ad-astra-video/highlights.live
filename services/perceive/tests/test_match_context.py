@@ -1503,6 +1503,15 @@ def test_printed_plates_split_the_band_and_corner_bug_glue():
     assert printed_plate_sides("Watertown-Cohasset Middle HS0 1st Period") == ("Watertown", "Cohasset Middle HS")
     assert printed_plate_sides(BB_BUG) == ("Watertown", "Wayland")
     assert printed_plate_sides("Watertown2Wayland0V2nd0 Outs") == ("Watertown", "Wayland")
+    # The measured football frames drop the home score digit, leaving one digit
+    # with both all-caps plates on its left.
+    assert printed_plate_sides("BELMONT WESTFORD 6 1st0:212nd & 10Commentators: Todd Bloniarz") == (
+        "BELMONT",
+        "WESTFORD",
+    )
+    # A two-word mixed-case club is NOT split, and league branding never is.
+    assert printed_plate_sides("Cohasset Middle HS 1 1st Period") is None
+    assert printed_plate_sides("TURKIYEBASKETBOLIGI KETBOTURKIYEMB15 8Samsungpor1.C") is None
     # Broadcast copy beside the plate never rides into the away name.
     assert printed_plate_sides("BELMONT 6WESTFORDCommentators: Todd Bloniarz") == ("BELMONT", "WESTFORD")
     # A banner / ad board is not a pair.
