@@ -1512,6 +1512,10 @@ def test_printed_plates_split_the_band_and_corner_bug_glue():
     # A two-word mixed-case club is NOT split, and league branding never is.
     assert printed_plate_sides("Cohasset Middle HS 1 1st Period") is None
     assert printed_plate_sides("TURKIYEBASKETBOLIGI KETBOTURKIYEMB15 8Samsungpor1.C") is None
+    # Measured hockey frames drop BOTH the digits and the dash; the printed
+    # camel seam between the two plates is the only boundary left.
+    assert printed_plate_sides("WatertownColhasset Middle HS1st Period") == ("Watertown", "Colhasset Middle HS")
+    assert printed_plate_sides("RealMadrid") is None
     # Broadcast copy beside the plate never rides into the away name.
     assert printed_plate_sides("BELMONT 6WESTFORDCommentators: Todd Bloniarz") == ("BELMONT", "WESTFORD")
     # A banner / ad board is not a pair.
