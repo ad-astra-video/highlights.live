@@ -101,6 +101,15 @@ describe("servedShape — fallback order (whole sentence, never the trimmed cand
     expect(out.violations.length).toBeGreaterThan(0);
   });
 
+  it("uses the contract's compressed place vocabulary instead of losing the row", () => {
+    // The served job 34f9f2d1 dropped this row: the stored line was a prefix cut
+    // and the whole sentence was one word over the quiet budget.
+    const raw = "The keeper makes a save in the goal area.";
+    const out = servedShape({ candidate: "The keeper makes a save.", storedRaw: raw, quiet: true });
+    expect(out.text).toBe("The keeper makes a save in the box.");
+    expect(servedShapeViolations(out.text, [captionLead(raw)])).toEqual([]);
+  });
+
   it("passes a whole row through byte-identically", () => {
     const row = "A defender blocks a ball in the box.";
     const out = servedShape({ candidate: row, storedRaw: row, storedGated: row, quiet: true });
