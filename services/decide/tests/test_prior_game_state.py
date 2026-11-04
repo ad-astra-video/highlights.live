@@ -32,15 +32,17 @@ STORY = "Goal at 42s: Ronaldo finishes low to make it 1-0 Portugal."
 #: COMPACT (`compact=True`) pins move whenever the fast-rail runningSummary
 #: contract changes: ADAAAA-7935 rewrote that instruction into the bounded
 #: play-by-play caption (and later replaced its copyable quiet-window example
-#: with a no-repeat clause). The no-op property -- FULL prompts stay byte-identical to the
+#: with a no-repeat clause), and ADAAAA-7949 rewrote it again for contract v2
+#: (window-only caption, blunt quiet line, colour as its own channel). The
+#: no-op property -- FULL prompts stay byte-identical to the
 #: pre-change build -- is what this test guards, and it holds for both FULL rows.
 #: Captured from the PRE-CHANGE build_prompt (no prior_game_state argument
 #: existed). If any of these move, the no-op guarantee is broken.
 GOLDEN = {
     ("full", ""): (9580, "4e79233acface0c2712ee18c7859d4b0ae3df17c42ced0387d21f4a49d8a1719"),
     ("full", STORY): (9832, "39e892ef2ee234d99fb86ded0bbe29002ea14eea94ad1d6fb318a2c67f9b9bf1"),
-    ("compact", ""): (9985, "9f2d1482c354e38aa792aed1c7d835d06cb92ae934dae776f01a20de49db45bf"),
-    ("compact", STORY): (10237, "1506e5ed66e99e0e96d26a32645699846e59101e49afd54a18daf7935228d0dd"),
+    ("compact", ""): (10376, "5733dd353b1c4b45ea598e9747ebacf568aebd217476ccd906e030e1be0c9fc8"),
+    ("compact", STORY): (10628, "8bc461bfbd3f0a701f54f52a52d55b6bcda814144a2ff254b658f96c9df1f1b3"),
 }
 
 

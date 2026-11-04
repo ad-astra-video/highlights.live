@@ -170,31 +170,82 @@ def test_compact_prompt_asks_for_one_play_by_play_line():
 
 def test_compact_prompt_carries_colour_and_quiet_budgets():
     p = _compact_prompt()
-    # colour beat: optional, <= 40 chars, one grounded beat, ~1 line in 3,
-    # never a second description of the same play.
-    assert "COLOR BEAT: optional, max 40 chars" in p
-    assert "ONE grounded beat of texture" in p
-    assert "crowd, body language, momentum, bench, conditions" in p
-    assert "never a second description of the same play" in p
-    assert "about 1 line in 3, fresh not chatty" in p
-    # quiet window: one blunt line, <= 8 words; clock only on datable events.
-    assert "QUIET WINDOW (nothing above threshold): ONE blunt line, max 8 words" in p
-    assert "no colour beat, no scene-setting" in p
+    # colour beat: optional, <= 40 chars, its own channel (crowd, body language,
+    # momentum, bench, pitch conditions), never a second description of the play.
+    assert "COLOR BEAT is a SEPARATE CHANNEL: optional, max 40 chars" in p
+    assert ("crowd, body language, momentum, bench or pitch conditions") in p
+    assert "It must never restate or extend the lead's action" in p
+    assert "never describe the play a second time" in p
+    assert "never pad to hit about 1 line in 3" in p
+    # quiet window: one blunt line, <= 8 words, no em-dash, no clock.
+    assert "QUIET WINDOW (no datable event in this window): ONE blunt line, max 8 words" in p
+    assert "NO em-dash, NO colour beat, NO clock" in p
+    assert "not a shortened description" in p
     assert "count the words and cut anything over 8" in p
     assert "CLOCK: only on datable events ('GOAL 72s'), not every line" in p
     # The contract must not carry a copyable sample caption: the first live
     # level proved the model copies it verbatim (59 of 67 rows emitted the
-    # example line on 67 distinct frame sets), which fails AC3.
+    # example line on 67 distinct frame sets), which fails AC3. Same rule now
+    # covers the quiet shape — a copyable quiet sentence would make every quiet
+    # window byte-identical.
     assert "Midfield stalemate" not in p
+    assert "Nothing doing" not in p
     # ...and it must forbid re-emitting its own previous line instead.
-    assert "NEVER repeat a line you already emitted" in p
+    assert "NEVER re-emit a line you already emitted this job" in p
     assert "different concrete subject" in p
+
+
+# ---------------------------------------------------------------------------
+# ADAAAA-7949 (ADAAAA-7933 Inc 4): contract v2. v1 folded STORY SO FAR into the
+# one caption line and also forbade repeats, so the model kept a captured goal
+# by re-serving the same composite sentence (30 of 68 windows identical, 17 of
+# 20 sampled lines byte-identical on job 7b719a9f). These four tests pin the
+# three deltas separately, so a later edit cannot quietly drop one of them.
+# ---------------------------------------------------------------------------
+
+
+def test_compact_prompt_describes_this_window_only():
+    p = _compact_prompt()
+    assert "CAPTION FOR THIS WINDOW ONLY" in p
+    assert "THIS WINDOW ONLY: describe only what this window's frames and transcript show" in p
+    # a captured goal lives in the story, never restated in a later caption
+    assert "a goal already captured stays in the story" in p
+    assert "is NEVER re-said in a later caption unless THIS window is the goal window" in p
+
+
+def test_compact_prompt_never_folds_story_so_far_into_the_line():
+    p = _compact_prompt()
+    # R1 was the contract collision: v1 told the model to fold the prior story
+    # into the ONE bounded line while also forbidding repeats.
+    assert "do NOT fold it into this line" in p
+    assert "do NOT extend or compress it here" in p
+    assert "STORY SO FAR is context, never material" in p
+    assert "fold it into ONE line under the cap" not in p
+    assert "keep every event already captured and EXTEND the story" not in p
+    # the prior story is still forwarded into the prompt unchanged
+    assert COMPACT_STORY_SO_FAR in p
+
+
+def test_compact_prompt_blunt_quiet_rule():
+    p = _compact_prompt()
+    assert "QUIET WINDOW (no datable event in this window)" in p
+    assert "ONE blunt line, max 8 words" in p
+    assert "NO em-dash, NO colour beat, NO clock" in p
+    assert "flat statement of which zone the ball is in and who holds it" in p
+    assert "never reuse a quiet line you already emitted this job" in p
+
+
+def test_compact_prompt_colour_is_a_different_channel():
+    p = _compact_prompt()
+    assert "COLOR BEAT is a SEPARATE CHANNEL" in p
+    assert "may carry ONLY crowd, body language, momentum, bench or pitch conditions" in p
+    assert "OMIT the whole clause" in p
+    assert "never pad to hit about 1 line in 3" in p
 
 
 def test_compact_prompt_lowers_the_whole_line_cap_to_140():
     p = _compact_prompt()
     assert "total target max 110 chars, HARD MAX 140" in p
-    assert "never make it longer than 140 chars" in p
     # the old 220-char one-sentence ask is gone from the fast rail.
     assert "max 220 chars" not in p
     assert "ONE announcer sentence" not in p
@@ -207,15 +258,14 @@ def test_compact_prompt_lists_every_banned_opener():
         assert opener in p, opener
 
 
-def test_compact_prompt_keeps_grounding_and_forward_only_continuity():
+def test_compact_prompt_keeps_grounding_rules():
     p = _compact_prompt()
     assert "no invented names, scores, kit colours or flags" in p
     assert "Color must be attributable to this window's frames or transcript" in p
-    assert "keep every event already captured and EXTEND the story" in p
-    assert "fold it into ONE line under the cap" in p
-    assert "tighten wording only, never delete a goal or near-miss" in p
-    # the prior story is still forwarded into the prompt unchanged
-    assert COMPACT_STORY_SO_FAR in p
+    # present tense / active voice / actor+action+place survive the v2 rewrite
+    assert "present tense, active voice, max 70 chars" in p
+    assert "actor + action + place" in p
+
 
 
 def test_compact_json_field_set_is_unchanged():
@@ -237,8 +287,13 @@ def test_compact_prompt_delta_is_bounded():
     # verbatim by the model on 59 of 67 live rows, so the clause pays for itself.
     # A "name the unit, never the bare plural Players" clause was tried and
     # REVERTED: it pushed p50 61 -> 105 chars with 4 rows over the 140 cap.
+    # ADAAAA-7949 (contract v2) adds the window-only / no-fold rule, the blunt
+    # quiet shape and the separate-colour-channel rule: 10243 -> 10634 chars
+    # (+391, ~+98 prompt tokens of prefill). It is prefill only — the emitted
+    # line is unchanged in shape and the field set is unchanged, so tokens per
+    # decide are not bought by this edit.
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 10300
+    assert len(_compact_prompt()) <= 10800
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the

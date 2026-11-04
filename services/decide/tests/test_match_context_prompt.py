@@ -62,10 +62,12 @@ STORY = "0-0, Portugal dominating the left channel."
 #: the FULL (`False`) hash still matches the pre-feature value byte-for-byte.
 #: The compact pin moved once more in the same issue when the copyable quiet-window
 #: example caption was replaced by a no-repeat clause (the model copied the example
-#: verbatim on 59 of 67 live rows); FULL stayed byte-identical through both edits.
+#: verbatim on 59 of 67 live rows), then by ADAAAA-7949 contract v2 (window-only
+#: caption, blunt quiet line, colour as its own channel); FULL stayed
+#: byte-identical through all three edits and still pins e12f4d6f (AC8).
 GOLDEN_PROMPT_SHA = {
     False: "e12f4d6fe48c8b51e82a550d5b80aac46859f8fd159c116986624c76ea972fc2",
-    True: "d24d2403f06b2d135b24adca35bcc29b45be60a0c1e1ccb75b5d35e357968bfa",
+    True: "d4b94d555c3f9ecb7d68009274412341fbdc0f16b0b71d2c764add9395b79d2b",
 }
 
 PORTUGAL_SPAIN = {
