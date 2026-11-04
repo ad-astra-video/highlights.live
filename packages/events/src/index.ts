@@ -1186,6 +1186,12 @@ export const JobSchema = z.object({
   framesTotal: z.number().int().min(0).optional(),
   framesPct: z.number().min(0).max(100).optional(),
   highlightsFound: z.number().int().min(0).default(0),
+  // ADAAAA-7984: how many celebration/replay alternative clips this job
+  // delivered (attached to their owning GOAL highlight). Alternatives are NOT
+  // highlights, so `highlightsFound` above is unchanged by them; this counter is
+  // the delivered-alternative count for the job. Additive optional — absent on
+  // records that predate alternatives.
+  alternativeClipsDelivered: z.number().int().min(0).optional(),
   // ADAAAA-7854: the canonical user-facing clip count for this job, and the raw
   // audit row count it is derived from. `postableHighlights` is the DEDUPED
   // postable moment count (`buildPostableHighlights(...).highlights.length`);
@@ -1449,6 +1455,68 @@ export const HighlightRecordSchema = z.object({
   createdAt: z.string(),
 });
 export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
+
+// --- ADAAAA-7984: celebration/replay clips delivered as ALTERNATIVES ---------
+// A post-goal celebration/replay window has no independent score transition, so
+// it is never a second scoring highlight (ADAAAA-7865 dedup, ADAAAA-7938 prompt).
+// Dropping it entirely lost the goal aftermath (ADAAAA-7953 option A + board
+// decision 2026-11-04): the window is delivered as a clip ATTACHED TO the GOAL
+// highlight it follows, presented as an alternative of that highlight — never as
+// a top-level highlight and never in the notable lane. It carries its own row in
+// `highlight_alternatives`, so it cannot inflate `highlightsFound`,
+// `postableHighlights`, `notScoringHighlights` or `notableHighlights`.
+/** The one event label a celebration alternative may carry. Never "GOAL". */
+export const CELEBRATION_ALTERNATIVE_EVENT_TYPE = "celebration" as const;
+/** The explicit alternative relation a surface groups on. */
+export const HIGHLIGHT_ALTERNATIVE_RELATION = "alternative_of" as const;
+/** Hard cap per owning highlight (board decision: "2 per goal cap makes sense"). */
+export const MAX_ALTERNATIVES_PER_HIGHLIGHT = 2;
+
+export const HighlightAlternativeSchema = z.object({
+  id: z.string(),
+  ownerId: z.string().optional(),
+  jobId: z.string(),
+  /** The owning top-level highlight. Resolves to an entry in the payload's
+   * `highlights[]` (a scoring GOAL); an alternative belongs to exactly one goal. */
+  highlightId: z.string(),
+  /** Explicit alternative relation so a surface groups instead of listing. */
+  relation: z.literal(HIGHLIGHT_ALTERNATIVE_RELATION),
+  /** ADAAAA-7984 §3: `celebration` (new non-scoring value) — never `GOAL`. */
+  eventType: z.literal(CELEBRATION_ALTERNATIVE_EVENT_TYPE),
+  /** Never `scoring_play`: the alternative inherits the celebration window's
+   * non-scoring verdict class (`big_play` / `near_miss`). */
+  outcome: z.enum(["big_play", "near_miss"]),
+  /** The decide window anchor (content seconds) this alternative was cut for;
+   * half of the idempotency key (owning highlight id + window anchor). */
+  windowAnchorTs: z.number().min(0),
+  /** |windowAnchorTs - owning highlight clip end| used by the deterministic
+   * selection (nearest to the goal clip end first). */
+  distanceToGoalEndS: z.number().min(0),
+  /** The celebration window's decide confidence (selection tie-break, audit). */
+  score: z.number().min(0).max(100),
+  /** Delivered clip window + the cut media path. */
+  start: z.number(),
+  end: z.number(),
+  clipId: z.string().optional(),
+  clipUri: z.string(),
+  clipError: z.string().optional(),
+  /** Deterministic dedupe key: owning highlight id + window anchor. Re-running
+   * the same windows can never persist a second row or cut a second clip. */
+  dedupeKey: z.string(),
+  /** The celebration window's own verdict reason (audit only; the surface shows
+   * a plain "Celebration" label, never a model rationale). */
+  reason: z.string().optional(),
+  createdAt: z.string(),
+});
+export type HighlightAlternative = z.infer<typeof HighlightAlternativeSchema>;
+
+/** A top-level highlight as it is DELIVERED on the job-detail payload: the
+ * stored record plus the celebration alternatives tied to it (ADAAAA-7984). The
+ * grouped array is the surface contract — an alternative is never its own card. */
+export const HighlightWithAlternativesSchema = HighlightRecordSchema.extend({
+  alternatives: z.array(HighlightAlternativeSchema).optional(),
+});
+export type HighlightWithAlternatives = z.infer<typeof HighlightWithAlternativesSchema>;
 
 // --- job detail / per-candidate decide persistence (ADAAAA-6851) ------------
 // Every decide evaluation is persisted (accepted highlight, burst-suppressed,
@@ -1828,8 +1896,11 @@ export const JobDetailSchema = z.object({
   job: JobSchema,
   /** ADAAAA-7621: the POSTABLE list — precision-gated (rejected / non-scoring /
    * self-contradicting records excluded) and deduped, so no two windows overlap.
-   * The full audit trail of every decide evaluation stays in `sections`. */
-  highlights: z.array(HighlightRecordSchema).default([]),
+   * The full audit trail of every decide evaluation stays in `sections`.
+   * ADAAAA-7984: each entry may carry the celebration alternatives delivered for
+   * it (`alternatives`), so the surface groups them UNDER their owning highlight
+   * instead of rendering them as separate highlight cards. */
+  highlights: z.array(HighlightWithAlternativesSchema).default([]),
   /** ADAAAA-7621: "notable, not a goal" lane — non-rejected near_miss /
    * big_play clips, which are never postable as a GOAL. */
   notableHighlights: z.array(HighlightRecordSchema).default([]),

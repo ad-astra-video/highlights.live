@@ -9,7 +9,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
-import type { Dataset, Job, HighlightRecord, JobCandidate } from "@highlights/events";
+import type { Dataset, Job, HighlightRecord, HighlightAlternative, JobCandidate } from "@highlights/events";
 import type { StoredObservation } from "./store";
 import { dedupedClipTotals } from "./highlight-postable";
 
@@ -488,6 +488,17 @@ export interface Db {
   listHighlights(): Promise<HighlightRecord[]>;
   /** Permanently remove a highlight row (TTL purge of rejected clips). */
   deleteHighlight(id: string): Promise<void>;
+  // --- ADAAAA-7984: celebration/replay clips delivered as ALTERNATIVES of a
+  //     goal highlight. A separate row set on purpose: an alternative is NOT a
+  //     highlight, so nothing derived from `highlights` (highlightsFound, the
+  //     postable/notable counts) can ever count one. ---
+  /** Persist one delivered alternative (upsert by id; `dedupe_key` is unique so
+   * a re-run cannot insert a second row for the same owning goal + window). */
+  saveHighlightAlternative(a: HighlightAlternative): Promise<void>;
+  /** Alternatives for one owning highlight (payload grouping), anchor-ordered. */
+  highlightAlternativesForHighlight(highlightId: string): Promise<HighlightAlternative[]>;
+  /** Every alternative across all jobs (hydrates the Store on boot). */
+  listHighlightAlternatives(): Promise<HighlightAlternative[]>;
   /** Permanently remove a job row and cascade to its highlights + media_sessions
    * rows in one transaction (ADAAAA-6838 / DELETE /jobs/:id). */
   deleteJob(id: string): Promise<void>;
@@ -901,12 +912,37 @@ export class SqliteDb implements Db {
     this.db.prepare("DELETE FROM highlights WHERE id = ?").run(id);
   }
 
+  // ADAAAA-7984: celebration alternatives (a separate row set from highlights).
+  async saveHighlightAlternative(a: HighlightAlternative): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO highlight_alternatives (id, job_id, highlight_id, record, owner_id, dedupe_key, created_at)
+         VALUES (?,?,?,?,?,?,?)
+         ON CONFLICT(dedupe_key) DO UPDATE SET job_id=excluded.job_id, highlight_id=excluded.highlight_id,
+           record=excluded.record, owner_id=excluded.owner_id, created_at=excluded.created_at`
+      )
+      .run(a.id, a.jobId, a.highlightId, JSON.stringify(a), a.ownerId ?? null, a.dedupeKey, a.createdAt);
+  }
+
+  async highlightAlternativesForHighlight(highlightId: string): Promise<HighlightAlternative[]> {
+    const rows = this.db
+      .prepare("SELECT record FROM highlight_alternatives WHERE highlight_id = ? ORDER BY record")
+      .all(highlightId) as { record: string }[];
+    return rows.map((r) => JSON.parse(r.record) as HighlightAlternative);
+  }
+
+  async listHighlightAlternatives(): Promise<HighlightAlternative[]> {
+    const rows = this.db.prepare("SELECT record FROM highlight_alternatives").all() as { record: string }[];
+    return rows.map((r) => JSON.parse(r.record) as HighlightAlternative);
+  }
+
   async deleteJob(id: string): Promise<void> {
     // ADAAAA-6838: remove the job row and cascade to its highlights + media_sessions
     // in one transaction so a DELETE never leaves orphaned rows behind.
     this.db.exec("BEGIN");
     try {
       this.db.prepare("DELETE FROM highlights WHERE job_id = ?").run(id);
+      this.db.prepare("DELETE FROM highlight_alternatives WHERE job_id = ?").run(id);
       this.db.prepare("DELETE FROM media_sessions WHERE job_id = ?").run(id);
       this.db.prepare("DELETE FROM job_observations WHERE job_id = ?").run(id);
       this.db.prepare("DELETE FROM job_candidates WHERE job_id = ?").run(id);
@@ -1685,6 +1721,30 @@ export class PgDb implements Db {
     await this.pool.query("DELETE FROM highlights WHERE id = $1", [id]);
   }
 
+  // ADAAAA-7984: celebration alternatives (a separate row set from highlights).
+  async saveHighlightAlternative(a: HighlightAlternative): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO highlight_alternatives (id, job_id, highlight_id, record, owner_id, dedupe_key, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT(dedupe_key) DO UPDATE SET job_id=EXCLUDED.job_id, highlight_id=EXCLUDED.highlight_id,
+         record=EXCLUDED.record, owner_id=EXCLUDED.owner_id, created_at=EXCLUDED.created_at`,
+      [a.id, a.jobId, a.highlightId, JSON.stringify(a), a.ownerId ?? null, a.dedupeKey, a.createdAt]
+    );
+  }
+
+  async highlightAlternativesForHighlight(highlightId: string): Promise<HighlightAlternative[]> {
+    const r = await this.pool.query(
+      "SELECT record FROM highlight_alternatives WHERE highlight_id = $1 ORDER BY created_at",
+      [highlightId]
+    );
+    return r.rows.map((row) => JSON.parse(row.record) as HighlightAlternative);
+  }
+
+  async listHighlightAlternatives(): Promise<HighlightAlternative[]> {
+    const r = await this.pool.query("SELECT record FROM highlight_alternatives");
+    return r.rows.map((row) => JSON.parse(row.record) as HighlightAlternative);
+  }
+
   async deleteJob(id: string): Promise<void> {
     // ADAAAA-6838: remove the job row and cascade to its highlights + media_sessions
     // in one transaction so a DELETE never leaves orphaned rows behind.
@@ -1692,6 +1752,7 @@ export class PgDb implements Db {
     try {
       await client.query("BEGIN");
       await client.query("DELETE FROM highlights WHERE job_id = $1", [id]);
+      await client.query("DELETE FROM highlight_alternatives WHERE job_id = $1", [id]);
       await client.query("DELETE FROM media_sessions WHERE job_id = $1", [id]);
       await client.query("DELETE FROM job_observations WHERE job_id = $1", [id]);
       await client.query("DELETE FROM job_candidates WHERE job_id = $1", [id]);
@@ -2306,6 +2367,17 @@ const SCHEMA_SQLITE = `
     status TEXT,
     created_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS highlight_alternatives (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    highlight_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    dedupe_key TEXT UNIQUE,
+    created_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS highlight_alternatives_job ON highlight_alternatives (job_id);
+  CREATE INDEX IF NOT EXISTS highlight_alternatives_highlight ON highlight_alternatives (highlight_id);
   CREATE TABLE IF NOT EXISTS job_observations (
     job_id TEXT NOT NULL,
     seq INTEGER NOT NULL,
@@ -2518,6 +2590,17 @@ const SCHEMA_PG = `
     status TEXT,
     created_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS highlight_alternatives (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    highlight_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    owner_id TEXT,
+    dedupe_key TEXT UNIQUE,
+    created_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS highlight_alternatives_job ON highlight_alternatives (job_id);
+  CREATE INDEX IF NOT EXISTS highlight_alternatives_highlight ON highlight_alternatives (highlight_id);
   CREATE TABLE IF NOT EXISTS job_observations (
     job_id TEXT NOT NULL,
     seq INTEGER NOT NULL,
@@ -2807,6 +2890,33 @@ const MIGRATIONS: Migration[] = [
       await exec("DELETE FROM decide_audit WHERE session_id = 'job' OR id LIKE 'job::%'");
       // Job-scoped read path support (GET /jobs/:id/decide-audit).
       await exec("CREATE INDEX IF NOT EXISTS decide_audit_job_id ON decide_audit (job_id)");
+    },
+  },
+  {
+    version: 10,
+    name: "highlight-alternatives",
+    up: async (exec) => {
+      // ADAAAA-7984 / ADAAAA-7953 decision A+: a post-goal celebration/replay
+      // window is delivered as an ALTERNATIVE CLIP of the GOAL highlight it
+      // follows, never as a highlight row — so the customer-facing highlight
+      // counters (highlightsFound / postable / notScoring / notable) are exactly
+      // what the ADAAAA-7865/7938 runs reported. `dedupe_key` (owning highlight
+      // id + window anchor) is unique, so re-running the same windows can never
+      // persist a second row. The baseline CREATE covers fresh DBs; this brings
+      // pre-existing on-disk DBs up to shape (one statement serves both backends).
+      await exec(
+        `CREATE TABLE IF NOT EXISTS highlight_alternatives (
+          id TEXT PRIMARY KEY,
+          job_id TEXT NOT NULL,
+          highlight_id TEXT NOT NULL,
+          record TEXT NOT NULL,
+          owner_id TEXT,
+          dedupe_key TEXT UNIQUE,
+          created_at TEXT
+        )`
+      );
+      await exec("CREATE INDEX IF NOT EXISTS highlight_alternatives_job ON highlight_alternatives (job_id)");
+      await exec("CREATE INDEX IF NOT EXISTS highlight_alternatives_highlight ON highlight_alternatives (highlight_id)");
     },
   },
 ];
