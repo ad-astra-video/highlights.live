@@ -712,6 +712,128 @@ export function downgradeUnattestedLiveGoal(d: DecisionResult): DecisionResult {
 }
 
 // ---------------------------------------------------------------------------
+// ADAAAA-8006: deferred attestation re-emit (the score-change legibility gap).
+//
+// Regression source: live job b54366ac (file-sim of `kids300_7935.mp4`, GT goals
+// at 100 s and 159 s, posture LIVE_DECIDE_CONFIRM=0). The ADAAAA-7996 gate was
+// RIGHT — the 159 s GOAL accept carried no measured attestation inside its
+// judged window and shipped as a `big_play` celebration. The defect is TIMING:
+// `decide_audit` for the 18:04:05-18:04:18 windows reads `2-1` and never `2-2`;
+// the first window to read `2-2` is 18:04:34.6Z, 17 s after the 159 s accept.
+// The corroborating delta existed, but it landed OUTSIDE the window that could
+// credit it, so postable goal recall was 1/2.
+//
+// The scoreboard read already happened — it is a measurement the live pass has
+// already paid for — so a later window can re-attest an already-delivered row
+// RETROACTIVELY: upgrade the demoted `big_play` row back into the scoring lane
+// (`scoring_play` GOAL) with no added decide and no added GPU-second.
+//
+// This does NOT weaken the ADAAAA-7996 requirement. `liveGoalHasMeasuredEvidence`
+// stays mandatory at the accept seam; the only evidence that can re-attest a row
+// here is a MEASURED, legible scoreboard delta — model prose can never trigger an
+// upgrade. The lookahead is deliberately tight (20 s) and the read must be
+// unambiguous (a single-goal step, exactly one demoted window in reach, and no
+// delivered scoring GOAL already owning that transition), which is what keeps the
+// 159-299 s score-steady lull out of the scoring lane (0 postable GOALs, the
+// ADAAAA-7996/8002 precision bar).
+//
+// Rejected alternatives (both cost GPU-seconds per stream, so both need a CEO
+// cap decision before they can ship — see the issue): enabling the
+// corroborated-confirm pass (~$2.97/h/stream, above the $2.75 cap) and widening
+// the judged-window tail (same direction). Option 1 is the ~$0 lever.
+// ---------------------------------------------------------------------------
+
+/** ADAAAA-8006: how far past a judged window's close a later scoreboard read may
+ * still re-attest it. 17 s was the measured gap on the regression fixture; 20 s
+ * covers it with margin while staying well inside the range where a following
+ * goal would have its own accept (which then owns the transition). */
+export const LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S = 20;
+
+/** ADAAAA-8006: a LIVE goal-shaped accept that was demoted for lack of a
+ * measured attestation, kept so a later scoreboard read can still re-attest it.
+ * The delivered row (and its surface copy) already exists — `highlightId` names
+ * it, and the scoring-lane surface below is what the write-seam gate produced for
+ * the pre-downgrade verdict, so the upgrade restores gated copy rather than
+ * re-deriving it at read time. */
+export interface DeferredGoalAttestation {
+  /** The already-persisted (demoted) highlight row. */
+  highlightId: string;
+  jobId: string;
+  /** The judged content window `[lo, hi]` the demoted accept was decided over. */
+  lo: number;
+  hi: number;
+  /** The delivered (localized) instant of the demoted row. */
+  anchorTs: number;
+  /** The trigger kind of the demoted accept (audit only). */
+  triggerKind: string;
+  /** Write-seam surface for the PRE-downgrade (scoring_play) verdict. */
+  reason?: string;
+  caption?: string;
+  cardTitles?: string[];
+  colour?: ColourSignal;
+  reasonRaw?: string;
+}
+
+/** ADAAAA-8006: the re-emit handed to the caller's persist hook. */
+export interface DeferredGoalAttestationUpgrade extends DeferredGoalAttestation {
+  /** The transition instant the later read measured (first read of the new score). */
+  deltaTs: number;
+  /** The content timestamp of the window whose read resolved it. */
+  readAt: number;
+  /** The measured delta itself (pre/post + sample counts). */
+  delta: ScoreboardDeltaEvidence;
+  /** The lookahead bound that was applied (audit). */
+  lookaheadS: number;
+}
+
+/** ADAAAA-8006: is this delta a SINGLE goal step (exactly one side +1)?
+ *
+ * A jump of two goals, or a rewritten side, is ambiguous: the demoted window
+ * could belong to either transition, and crediting the wrong one would put a
+ * postable GOAL on the wrong moment. Ambiguity fails closed. */
+export function scoreboardDeltaSingleGoalStep(delta: ScoreboardDeltaEvidence | undefined | null): boolean {
+  if (!delta) return false;
+  const dh = delta.post[0] - delta.pre[0];
+  const da = delta.post[1] - delta.pre[1];
+  return (dh === 1 && da === 0) || (dh === 0 && da === 1);
+}
+
+/** ADAAAA-8006: can a scoreboard delta read by a LATER window re-attest this
+ * cancelled judged window?
+ *
+ * The predicate, in order (each one fail-closed):
+ *  1. the delta is legible (both sides parsed, two contiguous reads each side —
+ *     the same bar `scoreboardDeltaLegible` / perceive's tracker enforces);
+ *  2. it is a single goal step (unambiguous);
+ *  3. the transition was first legibly read AFTER the window closed, by at most
+ *     `maxLookaheadS` (a delta read at/inside the window is the normal
+ *     attestation path's business, never this one);
+ *  4. the resolving read really belongs to a later window (`readAt >= hi`).
+ *
+ * Known bound: a transition read within the lookahead of a demoted window is
+ * attributed to it. The bound is what keeps that honest (20 s ~ five cadence
+ * windows at the measured 3 s cadence), and a delivered scoring GOAL covering
+ * the transition additionally cancels the re-emit (see the run ledger). */
+export function scoreboardDeltaAttestsDeferredWindow(input: {
+  window: { lo: number; hi: number };
+  delta: ScoreboardDeltaEvidence | undefined | null;
+  readAt: number;
+  maxLookaheadS?: number;
+}): boolean {
+  const { window, delta, readAt } = input;
+  if (!scoreboardDeltaLegible(delta)) return false;
+  const d = delta as ScoreboardDeltaEvidence;
+  if (!Number.isFinite(window.lo) || !Number.isFinite(window.hi) || window.hi < window.lo) return false;
+  if (!scoreboardDeltaSingleGoalStep(d)) return false;
+  if (!Number.isFinite(d.deltaTs) || !Number.isFinite(readAt)) return false;
+  const maxLookaheadS = input.maxLookaheadS ?? LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S;
+  const lateBy = d.deltaTs - window.hi;
+  if (lateBy < 0) return false;
+  if (lateBy > maxLookaheadS) return false;
+  return readAt >= window.hi - 1e-9;
+}
+
+// ---------------------------------------------------------------------------
 // ADAAAA-7865: one score transition must yield one SCORING highlight.
 //
 // Job dee44c2f has exactly one score change in 300 s of footage (`POR 0-0 ESP`
@@ -1875,6 +1997,14 @@ export interface AnalyzerConfig {
    * Best-effort: a throwing callback is caught + logged, never a pipeline
    * failure. */
   onRunningSummary?: (summary: string, meta?: { windowTs?: number; grounding?: CaptionGroundingContext }) => void;
+  /** ADAAAA-8006: a LIVE goal-shaped accept the ADAAAA-7996 gate had to demote
+   * (`big_play`) has been re-attested by a later scoreboard read inside the
+   * bounded lookahead. The caller moves the already-persisted row back into the
+   * scoring lane (`scoring_play` GOAL) with the scoring-lane surface carried by
+   * the upgrade. Fired at most once per row; best-effort (a throwing hook is
+   * caught + logged, never a pipeline failure). Unset => the re-emit is audited
+   * and dropped (no persistence), which is the VOD/misconfigured-rail posture. */
+  onDeferredGoalAttested?: (upgrade: DeferredGoalAttestationUpgrade) => void;
   /**
    * ADAAAA-7948 (Inc 3): ground every FAST caption before it is persisted —
    * gate goal claims on the window's own verdict, replace names the window's
@@ -2619,6 +2749,10 @@ export class LiveRunShared {
    * of these clips is the same goal re-read and is delivered as a celebration,
    * not as a second scoring event. Bounded — a run cannot grow it unboundedly. */
   private acceptedGoalEvents: AcceptedGoalEvent[] = [];
+  /** ADAAAA-8006: LIVE goal-shaped accepts demoted for lack of a measured
+   * attestation inside their judged window, waiting for a later scoreboard read
+   * to re-attest them. Bounded (a run cannot hold unboundedly). */
+  private deferredGoalAttestations: DeferredGoalAttestation[] = [];
   /** ADAAAA-7988: the live rail's bounded ledger of decided windows (their own
    * content instant + description class), used to cite the attack/shot window
    * that a celebration window follows. Fed on the DECIDE path; read on the
@@ -2766,6 +2900,72 @@ export class LiveRunShared {
    * board (the ledger's own `acceptedGoalTs` check). Read-only + bounded. */
   acceptedGoalAnchors(): number[] {
     return this.acceptedGoalEvents.map((e) => e.anchorTs).filter((ts) => Number.isFinite(ts));
+  }
+  /** ADAAAA-8006: a LIVE goal-shaped accept that had to be demoted for lack of a
+   * measured attestation inside its judged window. Kept (bounded) so a later
+   * scoreboard read can still re-attest the delivered row; see
+   * {@link scoreboardDeltaAttestsDeferredWindow} for the attribution predicate. */
+  noteDeferredGoalAttestation(entry: DeferredGoalAttestation): void {
+    if (!Number.isFinite(entry.lo) || !Number.isFinite(entry.hi) || entry.hi < entry.lo) return;
+    if (!entry.highlightId) return;
+    this.deferredGoalAttestations.push(entry);
+    if (this.deferredGoalAttestations.length > 16) this.deferredGoalAttestations.shift();
+  }
+  /** ADAAAA-8006: the demoted rows this run still holds (read-only snapshot). */
+  pendingDeferredGoalAttestations(): readonly DeferredGoalAttestation[] {
+    return [...this.deferredGoalAttestations];
+  }
+  /** ADAAAA-8006: resolve ONE demoted row against a later window's scoreboard
+   * read. Returns the re-emit to apply, or `[]` when nothing matches.
+   *
+   * Fails closed on ambiguity: when more than one demoted window is within the
+   * lookahead of this transition, the read cannot say WHICH one it belongs to, so
+   * none is re-attested. A delivered scoring GOAL that already owns the
+   * transition (its clip window covers the transition instant, or it was
+   * anchored between the demoted window's close and the read) also cancels the
+   * re-emit — one score transition, one scoring row (the ADAAAA-7865 rule).
+   * A resolved row is CONSUMED, so a re-decided window can never re-emit twice. */
+  resolveDeferredGoalAttestation(input: {
+    readAt: number;
+    delta: ScoreboardDeltaEvidence | undefined | null;
+    maxLookaheadS?: number;
+  }): DeferredGoalAttestationUpgrade[] {
+    const delta = input.delta;
+    if (!scoreboardDeltaLegible(delta)) return [];
+    const d = delta as ScoreboardDeltaEvidence;
+    const maxLookaheadS = input.maxLookaheadS ?? LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S;
+    const matches = this.deferredGoalAttestations.filter((e) =>
+      scoreboardDeltaAttestsDeferredWindow({
+        window: { lo: e.lo, hi: e.hi },
+        delta: d,
+        readAt: input.readAt,
+        maxLookaheadS,
+      })
+    );
+    if (matches.length === 0) return [];
+    if (matches.length > 1) {
+      console.error(
+        `[live-goal-gate-upgrade:${matches[0].jobId}] ambiguous deferred attestation: the delta read at ` +
+          `${d.deltaTs}s (${d.pre.join("-")} -> ${d.post.join("-")}) is within the lookahead of ` +
+          `${matches.length} demoted windows [${matches.map((e) => `${e.lo}-${e.hi}`).join(", ")}] — no re-emit`
+      );
+      return [];
+    }
+    const entry = matches[0];
+    const ownedByDeliveredGoal = this.acceptedGoalEvents.some(
+      (ev) =>
+        (ev.start <= d.deltaTs && d.deltaTs <= ev.end) || (ev.anchorTs > entry.hi && ev.anchorTs <= d.deltaTs)
+    );
+    if (ownedByDeliveredGoal) {
+      this.deferredGoalAttestations = this.deferredGoalAttestations.filter((e) => e !== entry);
+      console.error(
+        `[live-goal-gate-upgrade:${entry.jobId}] refused: the transition read at ${d.deltaTs}s is already ` +
+          `owned by a delivered scoring GOAL (demoted window [${entry.lo}, ${entry.hi}] stays a celebration)`
+      );
+      return [];
+    }
+    this.deferredGoalAttestations = this.deferredGoalAttestations.filter((e) => e !== entry);
+    return [{ ...entry, deltaTs: d.deltaTs, readAt: input.readAt, delta: d, lookaheadS: maxLookaheadS }];
   }
   /** ADAAAA-7938 (Spec A): fold one RESOLVED decide window into the prior-game
    * state the next window inherits. Content-ordered (a re-produced older window
@@ -3671,6 +3871,42 @@ function withAudioSeries(
   return { ...analysis, audioSeries: series };
 }
 
+/** ADAAAA-7965 (contract v5 §3.1/§3.2/§3.4/§3.5) + ADAAAA-8006: the ONE
+ * write-seam derivation of a highlight's stored, customer-readable surface.
+ *
+ * The model's `reason` crosses the caption gate HERE — goal claims are gated on
+ * the verdict actually stored, names the window's prompt cannot corroborate are
+ * replaced, internal tokens are stripped, and a lead that cannot resolve a place
+ * drops to the quiet shape instead of shipping in that form. The page's caption
+ * and card options are derived from the same gated line, so the render is
+ * byte-identical to what the gate approved.
+ *
+ * Factored out of `acceptVideoDecision` (ADAAAA-8006) so the deferred-attestation
+ * re-emit can restore the surface computed for a row's SCORING-LANE verdict
+ * instead of re-deriving copy at read time; the accept seam's own output is
+ * unchanged (same gate, same order, same fields). */
+export function storedSurfaceFor(
+  decision: DecisionResult,
+  grounding: CaptionGroundingContext | undefined
+): { reason?: string; colour?: ColourSignal; caption?: string; cardTitles?: string[]; reason_raw?: string } {
+  const gatedReasonRaw = grounding ? groundCaption(decision.reason ?? "", grounding) : decision.reason;
+  let gatedReason = gatedReasonRaw;
+  if ((!gatedReason || !gatedReason.trim()) && grounding) {
+    const quiet = quietShape(decision.reason ?? "");
+    const zone = (grounding.place ?? "").trim();
+    gatedReason = quiet && zone && !placePhraseOf(quiet) ? `${quiet} ${zone}` : quiet || "";
+  }
+  const eventLabel = humanEventLabel(highlightEventType(decision) || "");
+  return {
+    reason: gatedReason,
+    ...(grounding?.colourSignal && captionColour(gatedReason ?? "") ? { colour: grounding.colourSignal } : {}),
+    ...(grounding && (gatedReason ?? "").trim()
+      ? { caption: captionForStoredLine(gatedReason as string), cardTitles: cardTitlesFor(gatedReason as string, eventLabel) }
+      : {}),
+    ...(grounding && gatedReason !== decision.reason && (decision.reason ?? "").trim() ? { reason_raw: decision.reason } : {}),
+  };
+}
+
 export async function acceptVideoDecision(
   client: PipelineClient,
   run: LiveRunShared,
@@ -3800,6 +4036,9 @@ export async function acceptVideoDecision(
   // still cut (celebration windows stay accepted), but its outcome leaves the
   // scoring lane so the board never shows a second GOAL for the same transition.
   let isGoalAccept = /^(GOAL|GOL)$/i.test(highlightEventType(decision, candidate.eventType) || "");
+  /** ADAAAA-8006: the pre-downgrade (scoring lane) verdict, set only when the
+   * ADAAAA-7996 gate below demotes this accept. */
+  let scoringLaneDecision: DecisionResult | undefined;
   // ADAAAA-7996: the LIVE scoring lane requires a MEASURED attestation. The
   // Stage-2 confirm dive is the only corroboration gate and the live rail runs it
   // OFF (LIVE_DECIDE_CONFIRM=0 in the measured posture), so a window whose whole
@@ -3824,6 +4063,11 @@ export async function acceptVideoDecision(
       `[live-goal-gate:${cfg.jobId}] downgraded unattested GOAL accept @${candidate.timestamp}s ` +
         `(trigger ${trigger.kind}) to a celebration: no measured attestation in the window`
     );
+    // ADAAAA-8006: keep the SCORING-LANE verdict before the downgrade. The row is
+    // delivered as a celebration now, but a later scoreboard read can re-attest it
+    // (see `run.noteDeferredGoalAttestation` below) — and that upgrade must restore
+    // the copy the gate produced for THIS verdict, not re-derive copy at read time.
+    scoringLaneDecision = decision;
     decision = downgradeUnattestedLiveGoal(decision);
     isGoalAccept = false;
   }
@@ -3867,14 +4111,11 @@ export async function acceptVideoDecision(
   // not ship in that form, and an unverified negative does not ship at all — the
   // gate returns "" for those. The row keeps the outcome shape the quiet gate
   // can certify (actor + verb) instead of an empty reason on a customer card.
-  const gatedReasonRaw = writeGrounding ? groundCaption(decision.reason ?? "", writeGrounding) : decision.reason;
-  let gatedReason = gatedReasonRaw;
-  if ((!gatedReason || !gatedReason.trim()) && writeGrounding) {
-    const quiet = quietShape(decision.reason ?? "");
-    const zone = (writeGrounding.place ?? "").trim();
-    gatedReason = quiet && zone && !placePhraseOf(quiet) ? `${quiet} ${zone}` : quiet || "";
-  }
-  const eventLabel = humanEventLabel(highlightEventType(decision) || "");
+  // ADAAAA-8006: `storedSurfaceFor` is that ONE derivation, factored out so the
+  // deferred re-emit can restore the surface the gate produced for the
+  // pre-downgrade verdict instead of re-deriving copy at read time.
+  const surface = storedSurfaceFor(decision, writeGrounding);
+  const gatedReason = surface.reason;
   const { clipId, clipUri } = await cut(loc.ts);
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -3920,18 +4161,9 @@ export async function acceptVideoDecision(
     // the page's caption + card options are stored HERE so the render is
     // byte-identical to what the gate approved (no read-time cut, no dropped
     // colour clause, no dropped period).
-    ...(writeGrounding?.colourSignal && captionColour(gatedReason ?? "")
-      ? { colour: writeGrounding.colourSignal }
-      : {}),
-    ...(writeGrounding && (gatedReason ?? "").trim()
-      ? {
-          caption: captionForStoredLine(gatedReason as string),
-          cardTitles: cardTitlesFor(gatedReason as string, eventLabel),
-        }
-      : {}),
-    ...(writeGrounding && gatedReason !== decision.reason && (decision.reason ?? "").trim()
-      ? { reason_raw: decision.reason }
-      : {}),
+    ...(surface.colour ? { colour: surface.colour } : {}),
+    ...(surface.caption ? { caption: surface.caption, cardTitles: surface.cardTitles } : {}),
+    ...(surface.reason_raw ? { reason_raw: surface.reason_raw } : {}),
     // Increment F / ADAAAA-6465: near-miss surface at a lower score, labeled
     // distinctly via the outcome/nearMiss flag.
     outcome: decision.outcome,
@@ -3957,6 +4189,32 @@ export async function acceptVideoDecision(
     createdAt: new Date().toISOString(),
   };
   run.highlights.push(rec);
+  // ADAAAA-8006: a demoted LIVE goal stays eligible for re-attestation. Hold the
+  // delivered row plus the write-seam surface the gate produced for its
+  // scoring-lane verdict, so a later scoreboard read can re-emit it as a GOAL
+  // without re-deriving (or degrading) the customer copy.
+  if (scoringLaneDecision && liveWindow) {
+    const scoringGrounding = cfg.captionGrounding
+      ? captionGroundingForWindow(scoringLaneDecision, run, candidate.timestamp, cfg, selfCorroborated, frameSignals, {
+          ballOutcome: candidate.ballOutcome ?? null,
+          goalCrossed: candidate.goalCrossed ?? null,
+        })
+      : undefined;
+    const scoringSurface = storedSurfaceFor(scoringLaneDecision, scoringGrounding);
+    run.noteDeferredGoalAttestation({
+      highlightId: rec.id,
+      jobId: cfg.jobId,
+      lo: liveWindow.lo,
+      hi: liveWindow.hi,
+      anchorTs: loc.ts,
+      triggerKind: trigger.kind,
+      reason: scoringSurface.reason,
+      caption: scoringSurface.caption,
+      cardTitles: scoringSurface.cardTitles,
+      colour: scoringSurface.colour,
+      reasonRaw: scoringSurface.reason_raw,
+    });
+  }
   // ADAAAA-7865: record the delivered SCORING goal's event coverage. Only a
   // scoring accept becomes an event — a downgraded celebration must never make a
   // following celebration look like a first re-read of a real goal.
@@ -4594,6 +4852,36 @@ export function captionGroundingForWindow(
   });
 }
 
+/** ADAAAA-8006: apply the deferred-attestation re-emits a later window's
+ * scoreboard read resolves, logging one audit line per re-emit (the
+ * `[live-goal-gate:<job>]` downgrade line's mirror). Returns the re-emit count.
+ *
+ * Purely a bookkeeping seam: the delta is a MEASUREMENT the live pass already
+ * paid for, so this adds no decide, no perceive call and no GPU-second — which is
+ * what keeps the $/h/stream cap untouched (AC3 on the issue).
+ */
+export function applyDeferredGoalAttestations(
+  run: Pick<LiveRunShared, "resolveDeferredGoalAttestation">,
+  cfg: Pick<AnalyzerConfig, "jobId" | "onDeferredGoalAttested">,
+  input: { readAt: number; delta?: ScoreboardDeltaEvidence | null }
+): number {
+  const upgrades = run.resolveDeferredGoalAttestation({ readAt: input.readAt, delta: input.delta ?? null });
+  for (const up of upgrades) {
+    console.error(
+      `[live-goal-gate-upgrade:${cfg.jobId}] re-attested GOAL @${up.anchorTs}s (judged window [${up.lo}, ${up.hi}], ` +
+        `trigger ${up.triggerKind}) from the scoreboard delta first legibly read at ${up.deltaTs}s — ` +
+        `${(up.deltaTs - up.hi).toFixed(1)} s after the window closed (lookahead ${up.lookaheadS} s): ` +
+        `${up.delta.pre.join("-")} -> ${up.delta.post.join("-")}`
+    );
+    try {
+      cfg.onDeferredGoalAttested?.(up);
+    } catch (e: any) {
+      console.error(`[live-goal-gate-upgrade:${cfg.jobId}] persist hook failed:`, String(e?.message || e));
+    }
+  }
+  return upgrades.length;
+}
+
 export async function observeAcceptOnly(
   client: PipelineClient,
   run: LiveRunShared,
@@ -4687,6 +4975,15 @@ export async function observeAcceptOnly(
     acceptError = e;
   }
   const stored = sink.final ?? stage1;
+  // ADAAAA-8006: a scoreboard read in THIS window can still re-attest a
+  // goal-shaped accept a previous window had to demote (the measured failure:
+  // the score changed 17 s after the judged window closed, so recall was 1/2).
+  // The delta is a measurement the pass already paid for — no decide is added.
+  // Live rail only: the VOD pass never sets `liveObserveLoop`, and its precision
+  // gate owns its own attestation path.
+  if (cfg.liveObserveLoop && cfg.decideWindowN === undefined) {
+    applyDeferredGoalAttestations(run, cfg, { readAt: payload.centerTs, delta: windowAttestation.scoreBoardDelta });
+  }
   if (pendingSummary !== null && cfg.onRunningSummary) {
     try {
       // ADAAAA-7948 (Inc 3): on the FAST rail, carry this window's own stored
@@ -5252,7 +5549,7 @@ function downgradeUncorroborated(stage1: DecisionResult): DecisionResult {
 export interface AnalyzeEvent {
   seq: number;
   timestamp: number;
-  type: "observation" | "candidate" | "highlight" | "candidateBlocked" | "lifecycle";
+  type: "observation" | "candidate" | "highlight" | "candidateBlocked" | "lifecycle" | "highlightAttested";
   observation?: { tracks: TrackObservation[] };
   candidate?: { eventType: string; timestamp: number };
   highlight?: HighlightRecord;

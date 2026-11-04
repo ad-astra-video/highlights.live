@@ -355,6 +355,35 @@ export class Store {
     return next;
   }
 
+  /** ADAAAA-8006: re-attest an already-persisted LIVE goal row that the
+   * ADAAAA-7996 gate had demoted to a celebration — the ONLY path that may move a
+   * stored verdict back into the scoring lane, and the only writer of
+   * `deferredAttestation`.
+   *
+   * Deliberately separate from `patchHighlight` (which is the clip-cutting /
+   * transcript seam and must never touch a verdict): the upgrade carries the
+   * write-seam surface for the row's scoring-lane verdict, so `caption` /
+   * `cardTitles` / `colour` must be REPLACED (or cleared) together with `reason`
+   * — a row must never pair a GOAL verdict with copy derived from the
+   * celebration verdict. Billing/quota are untouched: the row already existed and
+   * was already charged as a moment; only its lane changes. The stored
+   * `idempotencyKey` also stays as-is — it is the insert-dedup identity, derived
+   * from the event type at insert time, and rewriting it would let a re-persist
+   * create a second row for the same clip. */
+  async attestDeferredGoal(
+    id: string,
+    patch: Partial<
+      Pick<HighlightRecord, "outcome" | "eventType" | "reason" | "caption" | "cardTitles" | "colour" | "reason_raw" | "deferredAttestation">
+    >
+  ): Promise<HighlightRecord> {
+    const h = this.highlights.get(id);
+    if (!h) throw new Error(`no highlight ${id}`);
+    const next = HighlightRecordSchema.parse({ ...h, ...patch });
+    this.highlights.set(id, next);
+    if (this.db) await this.db.saveHighlight(next);
+    return next;
+  }
+
   highlightsForJob(jobId: string): HighlightRecord[] {
     return (this.byJob.get(jobId) ?? []).map((id) => this.highlights.get(id)!).filter(Boolean);
   }

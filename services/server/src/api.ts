@@ -26,6 +26,7 @@ import {
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
+  type DeferredGoalAttestationUpgrade,
   type GoalLineCalibration,
   type PipelineClient,
 } from "./analyzer";
@@ -429,6 +430,54 @@ export async function persistLiveHighlight(
     if (job) await deps.store.patchJob(record.jobId, { highlightsFound: deps.store.highlightsForJob(record.jobId).length });
   }
   return record;
+}
+
+/** ADAAAA-8006: persist the deferred-attestation re-emit of a LIVE goal the
+ * ADAAAA-7996 gate had demoted to a celebration.
+ *
+ * The row already exists (persisted + published at decision time by
+ * {@link persistLiveHighlight}), so this is a VERDICT move, not an insert: the
+ * scoring-lane surface the gate produced for the pre-downgrade verdict replaces
+ * the celebration copy, `outcome`/`eventType` re-enter the scoring lane, and the
+ * measured scoreboard delta is stamped onto `deferredAttestation` for audit.
+ *
+ * Deliberately no billing/quota/funnel work: the clip was already charged as a
+ * moment when it landed — an upgrade changes which lane the moment's row sits in,
+ * never how many moments the customer bought. Returns `null` when the row is gone
+ * (job deleted mid-share) or when there is no scoring-lane reason to store (a row
+ * with no gated reason cannot be made postable, so it stays a celebration). */
+export async function attestDeferredGoalHighlight(
+  deps: LiveHighlightPersistence,
+  upgrade: DeferredGoalAttestationUpgrade
+): Promise<HighlightRecord | null> {
+  const rec = deps.store.getHighlight(upgrade.highlightId);
+  if (!rec) return null;
+  if (rec.outcome === "scoring_play") return rec;
+  if (!upgrade.reason || !upgrade.reason.trim()) {
+    console.error(
+      `[live-goal-gate-upgrade:${upgrade.jobId}] no scoring-lane reason for ${upgrade.highlightId} — row stays a celebration`
+    );
+    return null;
+  }
+  return deps.store.attestDeferredGoal(rec.id, {
+    outcome: "scoring_play",
+    eventType: "GOAL",
+    reason: upgrade.reason,
+    // Additive optional: the celebration-derived surface must not survive on a
+    // GOAL row. Cleared here so the page re-derives copy from the restored reason.
+    caption: upgrade.caption,
+    cardTitles: upgrade.cardTitles,
+    colour: upgrade.colour,
+    reason_raw: upgrade.reasonRaw,
+    deferredAttestation: {
+      deltaTs: upgrade.deltaTs,
+      readAt: upgrade.readAt,
+      windowLo: upgrade.lo,
+      windowHi: upgrade.hi,
+      pre: upgrade.delta.pre,
+      post: upgrade.delta.post,
+    },
+  });
 }
 
 /** Remove a deleted job's on-disk artifacts (ADAAAA-6838). Best-effort: every
@@ -960,6 +1009,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         appendSummaryEntry(store, job.id, summary, meta).catch((e: any) =>
           console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))
         ),
+      // ADAAAA-8006: re-attest a demoted LIVE goal when a later scoreboard read
+      // measures the transition just past its judged window (~0 added GPU).
+      onDeferredGoalAttested: deferredGoalAttestationHook(job.id),
     });
     // Clips are cut from the browser recording at share end (finishBrowserJob
     // cuts every highlight that has no clipUri yet): the recording is still
@@ -1080,6 +1132,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   function emitJobEvent(jobId: string, ev: AnalyzeEvent) {
     for (const fn of jobEvents.get(jobId) ?? []) fn(ev);
   }
+  /** ADAAAA-8006: the live rails' deferred-attestation persist seam. A demoted
+   * LIVE goal re-attested by a later scoreboard read is moved back into the
+   * scoring lane on the ALREADY-PERSISTED row, then re-published over SSE as
+   * `highlightAttested` so an open live surface refreshes the card (a distinct
+   * event name, so the share overlay's clips counter does not count one clip
+   * twice). Fire-and-forget, like `persistLiveHighlight`: a failed upgrade logs
+   * and can never stall the live frame loop. */
+  function deferredGoalAttestationHook(jobId: string) {
+    return (upgrade: DeferredGoalAttestationUpgrade) => {
+      attestDeferredGoalHighlight({ store, cfg, billing, entitlements, db }, upgrade)
+        .then((rec) => {
+          if (rec) emitJobEvent(jobId, { seq: 0, timestamp: upgrade.anchorTs, type: "highlightAttested", highlight: rec });
+        })
+        .catch((e: any) =>
+          console.error(`[live-goal-gate-upgrade:${jobId}] persist failed:`, String(e?.message || e))
+        );
+    };
+  }
   // Shared analyze hook: fans to SSE subscribers AND persists observations so
   // the frame debugger can overlay boxes on any past frame (VOD + live).
   function jobEventHook(jobId: string) {
@@ -1195,6 +1265,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           appendSummaryEntry(store, job.id, summary, meta).catch((e: any) =>
             console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))
           ),
+        // ADAAAA-8006: re-attest a demoted LIVE goal when a later scoreboard read
+        // measures the transition just past its judged window (~0 added GPU).
+        onDeferredGoalAttested: deferredGoalAttestationHook(job.id),
       });
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
@@ -5653,10 +5726,22 @@ export interface LiveAnalyzerConfigDeps {
   getRunningSummary?: AnalyzerConfig["getRunningSummary"];
   getMatchContext?: AnalyzerConfig["getMatchContext"];
   onRunningSummary?: AnalyzerConfig["onRunningSummary"];
+  /** ADAAAA-8006: re-attest a demoted LIVE goal from a later scoreboard read. */
+  onDeferredGoalAttested?: AnalyzerConfig["onDeferredGoalAttested"];
 }
 
 export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerConfig {
-  const { cfg, job, clipWindow: cw, onDecision, onDecideAudit, getRunningSummary, getMatchContext, onRunningSummary } = deps;
+  const {
+    cfg,
+    job,
+    clipWindow: cw,
+    onDecision,
+    onDecideAudit,
+    getRunningSummary,
+    getMatchContext,
+    onRunningSummary,
+    onDeferredGoalAttested,
+  } = deps;
   return {
     jobId: job.id,
     clipBeforeS: cw.clipBeforeS,
@@ -5748,6 +5833,9 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-7856: pass the persisted match-context reader straight through.
     getMatchContext,
     onRunningSummary,
+    // ADAAAA-8006: pass the deferred-attestation persist seam straight through
+    // (the live rails re-attest a demoted goal on a later scoreboard read).
+    onDeferredGoalAttested,
     // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
     // evidence). Live uses the default analysis_fps / windows.
     analysisFps: cfg.analysisFps,

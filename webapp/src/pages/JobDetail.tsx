@@ -93,7 +93,9 @@ const FRAME_H = 90;
 const INLINE_FONT = 12; // CSS px in the enlarged view; inline draws boxes only
 const INLINE_SCALE = 2;
 /** SSE events that mean the detail payload changed and should be re-fetched. */
-const REFRESH_EVENTS = ["observation", "candidate", "candidateBlocked", "highlight", "progress"];
+// ADAAAA-8006: `highlightAttested` re-publishes an already-delivered row that a
+// later scoreboard read moved back into the scoring lane, so the card refreshes.
+const REFRESH_EVENTS = ["observation", "candidate", "candidateBlocked", "highlight", "highlightAttested", "progress"];
 /** ADAAAA-7742: floor between two incremental section fetches. The debounce
  * coalesces the per-frame SSE burst; the floor keeps a long live job at a
  * bounded request rate (~20-25 tiny fetches/min) while still surfacing a window
