@@ -29,13 +29,19 @@ from app.gemma import (
 EV = {"trackCount": 3, "maxVelocity": 0.5, "ocrHits": 16, "scoreBoardChanged": False}
 STORY = "Goal at 42s: Ronaldo finishes low to make it 1-0 Portugal."
 
-# Captured from the PRE-CHANGE build_prompt (no prior_game_state argument
-# existed). If any of these move, the no-op guarantee is broken.
+#: COMPACT (`compact=True`) pins move whenever the fast-rail runningSummary
+#: contract changes: ADAAAA-7935 rewrote that instruction into the bounded
+#: play-by-play caption (and later replaced its copyable quiet-window example
+#: with a no-repeat clause, plus named units instead of the bare plural
+#: "Players"). The no-op property -- FULL prompts stay byte-identical to the
+#: pre-change build -- is what this test guards, and it holds for both FULL rows.
+#: Captured from the PRE-CHANGE build_prompt (no prior_game_state argument
+#: existed). If any of these move, the no-op guarantee is broken.
 GOLDEN = {
     ("full", ""): (9580, "4e79233acface0c2712ee18c7859d4b0ae3df17c42ced0387d21f4a49d8a1719"),
     ("full", STORY): (9832, "39e892ef2ee234d99fb86ded0bbe29002ea14eea94ad1d6fb318a2c67f9b9bf1"),
-    ("compact", ""): (9740, "fbc37cdc1219322bb79dfdc94e80a055bd90cac4b74fc044baf9250260262ed1"),
-    ("compact", STORY): (9992, "bdb38266682228cf4322bac2604856ab9018695e048cca1bb37d9f2cde75edc2"),
+    ("compact", ""): (10121, "356f25b89a7fc8de7206cdce0d1b9c86638d5cae88c43913f403ee2044a2c086"),
+    ("compact", STORY): (10373, "a165b56701cf58179cfffc72e1db6fa2e6a003b4b52e5ae46f5863e923e7cfcf"),
 }
 
 
