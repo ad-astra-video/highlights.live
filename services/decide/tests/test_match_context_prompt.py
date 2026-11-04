@@ -60,9 +60,12 @@ STORY = "0-0, Portugal dominating the left channel."
 #: intentionally rewrote the fast-rail `runningSummary` instruction into the
 #: play-by-play caption; the no-op property this test guards is unchanged, and
 #: the FULL (`False`) hash still matches the pre-feature value byte-for-byte.
+#: The compact pin moved once more in the same issue when the copyable quiet-window
+#: example caption was replaced by a no-repeat clause (the model copied the example
+#: verbatim on 59 of 67 live rows); FULL stayed byte-identical through both edits.
 GOLDEN_PROMPT_SHA = {
     False: "e12f4d6fe48c8b51e82a550d5b80aac46859f8fd159c116986624c76ea972fc2",
-    True: "e60155706bf607c6064f1ae811608e2442aace2b9e529db44de2287bcc121b43",
+    True: "d24d2403f06b2d135b24adca35bcc29b45be60a0c1e1ccb75b5d35e357968bfa",
 }
 
 PORTUGAL_SPAIN = {

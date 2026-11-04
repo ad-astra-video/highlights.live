@@ -182,6 +182,13 @@ def test_compact_prompt_carries_colour_and_quiet_budgets():
     assert "no colour beat, no scene-setting" in p
     assert "count the words and cut anything over 8" in p
     assert "CLOCK: only on datable events ('GOAL 72s'), not every line" in p
+    # The contract must not carry a copyable sample caption: the first live
+    # level proved the model copies it verbatim (59 of 67 rows emitted the
+    # example line on 67 distinct frame sets), which fails AC3.
+    assert "Midfield stalemate" not in p
+    # ...and it must forbid re-emitting its own previous line instead.
+    assert "NEVER repeat a line you already emitted" in p
+    assert "different concrete subject" in p
 
 
 def test_compact_prompt_lowers_the_whole_line_cap_to_140():
@@ -225,8 +232,11 @@ def test_compact_prompt_delta_is_bounded():
     # ADAAAA-7935 measured on this evidence dict: 8569 -> 9999 chars
     # (+1430 chars, ~+357 prompt tokens of prefill; output tokens are the cost
     # driver on the decode-bound live rail, and the caption budget drops).
+    # The no-copy quiet rule + anti-repeat clause adds 244 more (9999 -> 10243,
+    # ~+61 prompt tokens): the example caption it replaces was being copied
+    # verbatim by the model on 59 of 67 live rows, so the clause pays for itself.
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 10050
+    assert len(_compact_prompt()) <= 10300
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the
