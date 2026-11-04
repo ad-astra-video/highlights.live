@@ -14,6 +14,28 @@ from app.gemma import (
 )
 
 
+def _wire_text(req: dict) -> str:
+    """Every prompt text the model actually saw, in wire order.
+
+    ADAAAA-7993 layout v2: the static judge preamble + output contract ride in
+    the SYSTEM turn and the user text part carries only the per-window Context
+    block. Assertions about prompt content must therefore read the whole wire,
+    not just the last message."""
+    texts: list[str] = []
+    for m in req["messages"]:
+        c = m.get("content")
+        if isinstance(c, str):
+            texts.append(c)
+        else:
+            texts.extend(p.get("text", "") for p in c if p.get("type") == "text")
+    return "\n".join(texts)
+
+
+def _user_text(req: dict) -> str:
+    """The single user-turn text part (the dynamic Context block under v2)."""
+    return next(c["text"] for c in req["messages"][-1]["content"] if c.get("type") == "text")
+
+
 # --- parse/build units ------------------------------------------------------
 
 def test_parse_decision_plain_json():
@@ -679,8 +701,9 @@ def test_decide_with_gemma_returns_i1_rationale(monkeypatch):
     assert d["verdict"]["hypothesis"] == "GOAL"
     assert d["verdict"]["contradictedBy"] == "ball went over the bar"
     assert d["evidenceAttested"] == ["ball crossed above the crossbar"]
-    # the de-anchored prompt actually reached the model request
-    prompt = [c["text"] for c in mock.requests[0]["messages"][-1]["content"] if c.get("type") == "text"][0]
+    # the de-anchored prompt actually reached the model request (v2: the rules
+    # ride in the system turn, the Context block in the user text part)
+    prompt = _wire_text(mock.requests[0])
     assert "HYPOTHESIS to test" in prompt
     assert "ballCrossedLineBetweenPosts" in prompt
 
@@ -1059,8 +1082,10 @@ def test_compact_caps_the_completion_and_sends_the_compact_prompt():
         mock.stop()
     sent = mock.requests[0]
     assert sent["max_tokens"] == 400
-    text = [c["text"] for c in sent["messages"][-1]["content"] if c.get("type") == "text"][0]
+    text = _wire_text(sent)
     assert "evidenceAttested" not in text
+    # the compact contract is the one in the SYSTEM turn (AC4, ADAAAA-7993)
+    assert "HARD MAX 140" in sent["messages"][0]["content"]
     # the compact verdict still parses into the full decision shape
     assert d["isHighlight"] is False
     assert d["outcome"] == "not_highlight"
@@ -1110,8 +1135,11 @@ def test_highlight_route_forwards_compact(monkeypatch):
     assert r.status_code == 200
     sent = mock.requests[0]
     assert sent["max_tokens"] == 400
-    text = [c["text"] for c in sent["messages"][-1]["content"] if c.get("type") == "text"][0]
+    text = _wire_text(sent)
     assert "evidenceAttested" not in text
     assert "HARD MAX 140" in text
+    # AC4: the compact contract lives in the system turn, not the user turn
+    assert "HARD MAX 140" in sent["messages"][0]["content"]
+    assert "HARD MAX 140" not in _user_text(sent)
     # the compact verdict still comes back in the full response shape
     assert r.json()["outcome"] == "not_highlight"
