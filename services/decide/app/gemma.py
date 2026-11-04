@@ -102,7 +102,12 @@ def usable_transcript(text: str) -> str:
 # Versioned system prompt so an audit record can re-create the EXACT request the
 # model saw. Additive relative to the pre-audit user-only request: the current
 # user prompt text (build_prompt / build_group_prompt) is preserved unchanged.
-SYSTEM_PROMPT_VERSION = "1"
+#
+# v2 (ADAAAA-7993): the system turn now carries SYSTEM_PROMPT + STATIC_PREAMBLE +
+# STATIC_CONTRACT so the static judge text is a reusable prefix; the user turn
+# carries only the per-window Context block behind the frames. v1 = SYSTEM_PROMPT
+# only (1.08% measured prefix-cache hit rate, ADAAAA-7979).
+SYSTEM_PROMPT_VERSION = "2"
 SYSTEM_PROMPT = (
     "You are a video highlight review agent in a sports broadcast pipeline. "
     "You will be given a candidate event and a sequence of frames (and possibly "
@@ -137,14 +142,48 @@ def _content_ref(part: dict) -> dict | None:
     }
 
 
-def _messages(mode: str, content: list, *, with_system: bool = True) -> list:
+def _messages(
+    mode: str,
+    content: list,
+    *,
+    with_system: bool = True,
+    system_content: str | None = None,
+) -> list:
     """The ordered message array actually sent to gemma: optional system slot
-    (role=system) then the single user message carrying the multimodal content."""
+    (role=system) then the single user message carrying the multimodal content.
+
+    ``system_content`` overrides the bare SYSTEM_PROMPT — the v2 single-shot
+    decide path passes SYSTEM_PROMPT + STATIC_PREAMBLE + STATIC_CONTRACT
+    (ADAAAA-7993). Group mode keeps the user-only shape (``with_system=False``)."""
     msgs: list = []
     if with_system:
-        msgs.append({"role": "system", "content": SYSTEM_PROMPT})
+        msgs.append(
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT if system_content is None else system_content,
+            }
+        )
     msgs.append({"role": "user", "content": content})
     return msgs
+
+
+def _prompt_layout(parts: dict) -> dict:
+    """ADAAAA-7993: the layout descriptor stored on a v2 audit record. It carries
+    the full system content and the field order, so replaying a record
+    (``rebuild_payload``) reproduces the exact ``messages`` the model saw and an
+    operator can tell a v2 (hoisted) request from a v1 (flat) one."""
+    return {
+        "version": "v2",
+        "system": {
+            "fields": ["systemPrompt", "staticPreamble", "staticContract"],
+            "contract": "compact" if parts.get("compact") else "full",
+            "chars": len(parts["system"]),
+            "content": parts["system"],
+        },
+        "userText": parts["context"],
+        "modalityOrder": ["images", "text", "audio"],
+        "staticPrefixChars": len(parts["preamble"]) + len(parts["contract"]),
+    }
 
 
 def _audit_record(
@@ -158,6 +197,7 @@ def _audit_record(
     fallback: bool,
     started_at: float,
     asr_latency_s: float = 0.0,
+    prompt_layout: dict | None = None,
 ) -> dict:
     """Assemble the audit record for one gemma decide call. Content images are
     represented by content refs (sha256 + data url) so the record stays compact
@@ -178,6 +218,7 @@ def _audit_record(
     return {
         "version": 1,
         "systemPromptVersion": SYSTEM_PROMPT_VERSION,
+        "promptLayout": prompt_layout,
         "mode": mode,
         "groupId": ctx.get("groupKey") or ctx.get("groupId") or None,
         "groupKey": ctx.get("groupKey") or None,
@@ -1211,6 +1252,123 @@ _OUTPUT_CONTRACT_FULL = (
         "(e.g. 'Goal: player scores at 72s')>\"}"
 )
 
+# ADAAAA-7993: the STATIC judge preamble, hoisted into the system turn so the
+# vLLM prefix cache can reuse it (see the layout note above build_prompt_parts).
+# Byte-identical to the head of the v1 flat prompt — the hoist reorders tokens,
+# it never rewrites them.
+CONTEXT_PREFIX = "Context:\n"
+STATIC_PREAMBLE = (
+    "You are a sports/esports highlight judge. You are shown a temporal "
+    "SEQUENCE of frames (extracted at 1 FPS from the moment of a detected "
+    "candidate event) plus the context images, and, when available, the "
+    "accompanying audio.\n"
+    "The candidate event type given in the context is a HYPOTHESIS to test, "
+    "NOT a fact. It was produced by an upstream detector and is often wrong "
+    "(a near-miss, an off-target shot, a warm-up or lull, or a booking gets "
+    "mislabeled as a GOAL / KILL). Your job is to verify it, not to "
+    "confirm it. NEVER assume the hypothesis is true.\n"
+    "Reason in two passes, in this exact order:\n"
+    "  PASS 1 — INDEPENDENT OBSERVATION (do this FIRST, before considering "
+    "the hypothesis): describe only what you can actually SEE and HEAR in "
+    "the frames + audio. State the player(s), the ball, where the ball is "
+    "relative to the goal line / net / posts, the scoreboard, and the "
+    "people's reaction. Do not use the candidate type to colour this pass.\n"
+    "  PASS 2 — HYPOTHESIS TEST: compare your independent observation to the "
+    "candidate type. Does the evidence actually support it, or is there a "
+    "simpler explanation?\n"
+    "When people are visible, EXPLICITLY describe their reaction and weigh it "
+    "as evidence: players with arms raised, a group pile/team huddle, "
+    "bench/dugout leaping up to celebrate, or the crowd/commentary erupting. "
+    "Reaction is corroborating evidence only - cite it, but decide on your "
+    "full read of the frames, audio, and context; never let reaction alone "
+    "override a clear read of the play.\n"
+    "For soccer (game hint contains 'soccer'), the candidate is a GOAL and "
+    "the clip is a highlight when the frames + audio show the team actually "
+    "SCORED. Judge the goal from the full visual + audio read (frames + "
+    "audio-noise trigger), NOT from the geometric goal-line corroboration "
+    "alone. Explicit goal signals - assess each against the frames/audio, "
+    "mark it true when you plainly see it, false when the frames plainly "
+    "show it did NOT happen, and null (unverifiable) when you cannot tell:\n"
+    "- ballCrossedLineBetweenPosts: you plainly see the ball cross the goal "
+    "line between the uprights;\n"
+    "- ballInNet: the ball is in the net / the net ripples / the keeper is "
+    "beaten and the ball ends in the goal;\n"
+    "- scoreboardChanged: the scoreboard / score readout changes to reflect "
+    "a goal;\n"
+    "- crowdErupted: the crowd/commentary erupts consistent with a goal.\n"
+    "A GOAL is confirmed (isHighlight=true) when the aggregate evidence "
+    "supports it: the ball ends in the net / the net ripples / the keeper is "
+    "beaten AND the crowd/commentary erupts consistent with a goal. The "
+    "goal-line / homography corroboration (ballOutcome, "
+    "ballCrossedLineBetweenPosts) is OPTIONAL corroboration, NOT a required "
+    "gate: when it is absent (no field homography configured, or the "
+    "line-crossing instant is not captured at the sampled frame) judge the "
+    "goal DIRECTLY from the frames + audio-noise trigger, and do NOT reject "
+    "just because you could not confirm the exact line crossing. Do NOT flag "
+    "a soccer clip as a highlight when it shows:\n"
+    "- a yellow card, red card, booking, foul, tackle, or any disciplinary "
+    "incident (referee showing a card, players confronting, a player sent "
+    "off);\n"
+    "- a free kick, corner, shot on target, save, miss, near-miss, off-target, "
+    "blocked shot, or any chance in which the ball does NOT enter the net;\n"
+    "- only open play, build-up, players running, warm-ups, or a celebration "
+    "with no ball in the net.\n"
+    "Goal-line corroboration that is UNVERIFIABLE (you cannot confirm the "
+    "ball crossed the line / is in the net because the instant was not "
+    "captured or no homography is configured) is NOT a rejection by itself - "
+    "decide on your full read of the frames + audio. You MUST return "
+    "isHighlight=false ONLY when the frames EXPLICITLY CONTRADICT a goal - "
+    "you plainly see the ball did NOT enter the net (it hit the post or bar, "
+    "was saved, went over or wide, or the ball stays in midfield / the clip "
+    "is warm-up or lull with no strike) - and name the contradicting evidence "
+    "in `reason` and in verdict.contradictedBy. NEVER infer a goal from the "
+    "candidate event type, or from players celebrating / crowd erupting ALONE "
+    "when the frames show the ball did NOT enter the net.\n"
+    "HARD GATE — perceived goal-line ground truth: when the context reports a "
+    "`ballOutcome` (goal-line ground-truth from perceive's homography), it is "
+    "a decisive measurement of whether the ball entered the goal. If "
+    "`ballOutcome` is present and is anything other than `goal` (i.e. "
+    "`off_target`, `blocked`, `no_shot`, or `cross`), the ball did NOT enter "
+    "the net and you MUST return isHighlight=false and state that the "
+    "measured ballOutcome contradicts the goal. Treat `ballOutcome=goal` as "
+    "strong confirmation but still verify visually. A missing/absent "
+    "`ballOutcome` is NOT a rejection signal — decide on the frames/audio as "
+    "normal.\n"
+    "Scoreboard evidence: when the context reports a scoreboard score change "
+    "observed during the candidate window, that is independent confirmation of "
+    "a goal — treat it as strong evidence for isHighlight=true (combined with "
+    "the ball crossing the line). When no scoreboard change is reported, treat "
+    "that as weak/absent evidence and NEVER let its absence alone force or block "
+    "a goal verdict.\n"
+    "OUTCOME TAXONOMY — you must ALSO classify the outcome into EXACTLY one of "
+    "the four members below and return it in the `outcome` field (increment F):\n"
+    "- scoring_play: the frames show the ball/object actually crossing / "
+    "converting (goal, touchdown, dunk, basket, kill, objective taken). A real "
+    "score.\n"
+    "- near_miss: the frames show a CLOSE CALL — a shot that hit the post/bar, a "
+    "save at the line, an interception at the boundary, a denial right at the "
+    "net / by the last defender — but the ball did NOT score. A near miss is "
+    "NOT a scoring play, even when the crowd/commentary erupts. It IS notable "
+    "and surfaces, but at a lower score.\n"
+    "- big_play: non-scoring but clearly high-value — a big save, a big hit, a "
+    "clutch denial, a game-changing stop.\n"
+    "- not_highlight: nothing notable in the window (warm-up, lull, ordinary "
+    "build-up, no close call, no score).\n"
+    "FRAMES ARE THE PRIMARY EVIDENCE; audio is cheap and fallible. A crowd/ "
+    "commentary eruption, a replay, or a wrong call must NEVER make you call a "
+    "`scoring_play` — only the frames (ball crossing the line / into the net / "
+    "objective taken) can. If the frames show the ball was saved, hit the post, "
+    "was caught, or did not cross before the line, the outcome is `near_miss` "
+    "or `big_play` — NEVER `scoring_play` — whatever the audio did (conflict "
+    "resolves toward the frames). Conversely, do NOT upgrade a real score to "
+    "`not_highlight` just because the crowd stayed quiet (audio never flips a "
+    "near_miss into a scoring play, and never cancels a real one).\n"
+    "A near miss scores below a scoring play but above not_highlight: keep "
+    "`score` in a lower band (e.g. <60) for near_miss, and set `nearMiss`/the "
+    "flag so downstream assembly can label it distinctly.\n"
+)
+
+
 
 # ---------------------------------------------------------------------------
 # ADAAAA-7938 (Spec A): the PRIOR GAME STATE block.
@@ -1320,7 +1478,7 @@ def render_prior_game_state_block(prior: object) -> str:
     return ""
 
 
-def build_prompt(
+def build_prompt_parts(
     event_type: str,
     evidence: dict,
     game_hint: str = "",
@@ -1331,7 +1489,23 @@ def build_prompt(
     compact: bool = False,
     match_context: object = None,
     prior_game_state: object = None,
-) -> str:
+) -> dict:
+    """The three prompt pieces (ADAAAA-7993 prefix-cache layout v2):
+
+    - ``preamble`` (:data:`STATIC_PREAMBLE`, constant) and ``contract``
+      (``_OUTPUT_CONTRACT_COMPACT``/``_OUTPUT_CONTRACT_FULL``) are the STATIC
+      block: identical bytes for every window of a job, so vLLM's prefix cache
+      can reuse them.
+    - ``context`` is the dynamic per-window ``Context:`` block (the meta lines).
+    - ``system`` is exactly what the system turn carries:
+      ``SYSTEM_PROMPT + preamble + contract``.
+    - ``prompt`` is the v1 flat ordering (preamble + context + contract), kept
+      byte-identical so the audit trail, the golden hashes and every downstream
+      consumer of the prompt text do not move.
+
+    v1 put the preamble and the contract AFTER the frames in the user turn, so
+    the only cacheable prefix was SYSTEM_PROMPT (63 tokens) -> 1.08% measured
+    hit rate against a 1.43% layout ceiling (ADAAAA-7979 / 7993)."""
     ev = event_type.upper()
     meta = [
         f"candidate event type: {ev}",
@@ -1411,118 +1585,51 @@ def build_prompt(
             "\nMATCH CONTEXT RULE (also governs runningSummary and every free-text "
             "field): " + match_context_rule(mc_ctx.get("sport"))
         )
-    return (
-        "You are a sports/esports highlight judge. You are shown a temporal "
-        "SEQUENCE of frames (extracted at 1 FPS from the moment of a detected "
-        "candidate event) plus the context images, and, when available, the "
-        "accompanying audio.\n"
-        "The candidate event type given in the context is a HYPOTHESIS to test, "
-        "NOT a fact. It was produced by an upstream detector and is often wrong "
-        "(a near-miss, an off-target shot, a warm-up or lull, or a booking gets "
-        "mislabeled as a GOAL / KILL). Your job is to verify it, not to "
-        "confirm it. NEVER assume the hypothesis is true.\n"
-        "Reason in two passes, in this exact order:\n"
-        "  PASS 1 — INDEPENDENT OBSERVATION (do this FIRST, before considering "
-        "the hypothesis): describe only what you can actually SEE and HEAR in "
-        "the frames + audio. State the player(s), the ball, where the ball is "
-        "relative to the goal line / net / posts, the scoreboard, and the "
-        "people's reaction. Do not use the candidate type to colour this pass.\n"
-        "  PASS 2 — HYPOTHESIS TEST: compare your independent observation to the "
-        "candidate type. Does the evidence actually support it, or is there a "
-        "simpler explanation?\n"
-        "When people are visible, EXPLICITLY describe their reaction and weigh it "
-        "as evidence: players with arms raised, a group pile/team huddle, "
-        "bench/dugout leaping up to celebrate, or the crowd/commentary erupting. "
-        "Reaction is corroborating evidence only - cite it, but decide on your "
-        "full read of the frames, audio, and context; never let reaction alone "
-        "override a clear read of the play.\n"
-        "For soccer (game hint contains 'soccer'), the candidate is a GOAL and "
-        "the clip is a highlight when the frames + audio show the team actually "
-        "SCORED. Judge the goal from the full visual + audio read (frames + "
-        "audio-noise trigger), NOT from the geometric goal-line corroboration "
-        "alone. Explicit goal signals - assess each against the frames/audio, "
-        "mark it true when you plainly see it, false when the frames plainly "
-        "show it did NOT happen, and null (unverifiable) when you cannot tell:\n"
-        "- ballCrossedLineBetweenPosts: you plainly see the ball cross the goal "
-        "line between the uprights;\n"
-        "- ballInNet: the ball is in the net / the net ripples / the keeper is "
-        "beaten and the ball ends in the goal;\n"
-        "- scoreboardChanged: the scoreboard / score readout changes to reflect "
-        "a goal;\n"
-        "- crowdErupted: the crowd/commentary erupts consistent with a goal.\n"
-        "A GOAL is confirmed (isHighlight=true) when the aggregate evidence "
-        "supports it: the ball ends in the net / the net ripples / the keeper is "
-        "beaten AND the crowd/commentary erupts consistent with a goal. The "
-        "goal-line / homography corroboration (ballOutcome, "
-        "ballCrossedLineBetweenPosts) is OPTIONAL corroboration, NOT a required "
-        "gate: when it is absent (no field homography configured, or the "
-        "line-crossing instant is not captured at the sampled frame) judge the "
-        "goal DIRECTLY from the frames + audio-noise trigger, and do NOT reject "
-        "just because you could not confirm the exact line crossing. Do NOT flag "
-        "a soccer clip as a highlight when it shows:\n"
-        "- a yellow card, red card, booking, foul, tackle, or any disciplinary "
-        "incident (referee showing a card, players confronting, a player sent "
-        "off);\n"
-        "- a free kick, corner, shot on target, save, miss, near-miss, off-target, "
-        "blocked shot, or any chance in which the ball does NOT enter the net;\n"
-        "- only open play, build-up, players running, warm-ups, or a celebration "
-        "with no ball in the net.\n"
-        "Goal-line corroboration that is UNVERIFIABLE (you cannot confirm the "
-        "ball crossed the line / is in the net because the instant was not "
-        "captured or no homography is configured) is NOT a rejection by itself - "
-        "decide on your full read of the frames + audio. You MUST return "
-        "isHighlight=false ONLY when the frames EXPLICITLY CONTRADICT a goal - "
-        "you plainly see the ball did NOT enter the net (it hit the post or bar, "
-        "was saved, went over or wide, or the ball stays in midfield / the clip "
-        "is warm-up or lull with no strike) - and name the contradicting evidence "
-        "in `reason` and in verdict.contradictedBy. NEVER infer a goal from the "
-        "candidate event type, or from players celebrating / crowd erupting ALONE "
-        "when the frames show the ball did NOT enter the net.\n"
-        "HARD GATE — perceived goal-line ground truth: when the context reports a "
-        "`ballOutcome` (goal-line ground-truth from perceive's homography), it is "
-        "a decisive measurement of whether the ball entered the goal. If "
-        "`ballOutcome` is present and is anything other than `goal` (i.e. "
-        "`off_target`, `blocked`, `no_shot`, or `cross`), the ball did NOT enter "
-        "the net and you MUST return isHighlight=false and state that the "
-        "measured ballOutcome contradicts the goal. Treat `ballOutcome=goal` as "
-        "strong confirmation but still verify visually. A missing/absent "
-        "`ballOutcome` is NOT a rejection signal — decide on the frames/audio as "
-        "normal.\n"
-        "Scoreboard evidence: when the context reports a scoreboard score change "
-        "observed during the candidate window, that is independent confirmation of "
-        "a goal — treat it as strong evidence for isHighlight=true (combined with "
-        "the ball crossing the line). When no scoreboard change is reported, treat "
-        "that as weak/absent evidence and NEVER let its absence alone force or block "
-        "a goal verdict.\n"
-        "OUTCOME TAXONOMY — you must ALSO classify the outcome into EXACTLY one of "
-        "the four members below and return it in the `outcome` field (increment F):\n"
-        "- scoring_play: the frames show the ball/object actually crossing / "
-        "converting (goal, touchdown, dunk, basket, kill, objective taken). A real "
-        "score.\n"
-        "- near_miss: the frames show a CLOSE CALL — a shot that hit the post/bar, a "
-        "save at the line, an interception at the boundary, a denial right at the "
-        "net / by the last defender — but the ball did NOT score. A near miss is "
-        "NOT a scoring play, even when the crowd/commentary erupts. It IS notable "
-        "and surfaces, but at a lower score.\n"
-        "- big_play: non-scoring but clearly high-value — a big save, a big hit, a "
-        "clutch denial, a game-changing stop.\n"
-        "- not_highlight: nothing notable in the window (warm-up, lull, ordinary "
-        "build-up, no close call, no score).\n"
-        "FRAMES ARE THE PRIMARY EVIDENCE; audio is cheap and fallible. A crowd/ "
-        "commentary eruption, a replay, or a wrong call must NEVER make you call a "
-        "`scoring_play` — only the frames (ball crossing the line / into the net / "
-        "objective taken) can. If the frames show the ball was saved, hit the post, "
-        "was caught, or did not cross before the line, the outcome is `near_miss` "
-        "or `big_play` — NEVER `scoring_play` — whatever the audio did (conflict "
-        "resolves toward the frames). Conversely, do NOT upgrade a real score to "
-        "`not_highlight` just because the crowd stayed quiet (audio never flips a "
-        "near_miss into a scoring play, and never cancels a real one).\n"
-        "A near miss scores below a scoring play but above not_highlight: keep "
-        "`score` in a lower band (e.g. <60) for near_miss, and set `nearMiss`/the "
-        "flag so downstream assembly can label it distinctly.\n"
-        "Context:\n- " + "\n- ".join(meta) + "\n\n"
-        + contract
-    )
+    context_text = CONTEXT_PREFIX + "- " + "\n- ".join(meta) + "\n\n"
+    # ADAAAA-7993: v2 wire layout. The static preamble + the output contract go in
+    # the SYSTEM turn (identical bytes for every window of a job), and the user
+    # turn carries only the per-window Context block after the frames. The tokens
+    # are reordered, never added: `prompt` below is byte-identical to the v1 flat
+    # text (0-char delta, pinned by test_prompt_layout_v2.py), so verdict quality
+    # cannot move because of a prompt edit here.
+    return {
+        "preamble": STATIC_PREAMBLE,
+        "context": context_text,
+        "contract": contract,
+        "system": SYSTEM_PROMPT + STATIC_PREAMBLE + contract,
+        "prompt": STATIC_PREAMBLE + context_text + contract,
+        "compact": bool(compact),
+    }
+
+
+def build_prompt(
+    event_type: str,
+    evidence: dict,
+    game_hint: str = "",
+    n_frames: int = 1,
+    has_audio: bool = False,
+    transcript: str = "",
+    story_so_far: str = "",
+    compact: bool = False,
+    match_context: object = None,
+    prior_game_state: object = None,
+) -> str:
+    """The v1 flat prompt text: preamble + Context block + contract, in that
+    order. Byte-identical to the pre-ADAAAA-7993 output and kept for the audit
+    trail (`analysis.prompt`) and the golden-hash contract. The request that goes
+    over the wire is assembled from `build_prompt_parts()` (v2 layout)."""
+    return build_prompt_parts(
+        event_type,
+        evidence,
+        game_hint,
+        n_frames=n_frames,
+        has_audio=has_audio,
+        transcript=transcript,
+        story_so_far=story_so_far,
+        compact=compact,
+        match_context=match_context,
+        prior_game_state=prior_game_state,
+    )["prompt"]
 
 
 # --- ADAAAA-7155 Increment A: per-window LLM analysis capture ----------------
@@ -1777,12 +1884,15 @@ def ask(
 
     # 1) frames + images (all image content) BEFORE the text prompt
     content: list = [i for i in (_img(p) for p in frames + images) if i is not None]
-    # 2) the text prompt, in the middle. has_audio reflects whether audio bytes
+    # 2) the text part, in the middle. has_audio reflects whether audio bytes
     # actually reach the model (send_audio), never whether the caller supplied
     # them — we must not tell the model "audio provided: yes" when it is not.
     # ADAAAA-7155 Incr A: the exact built prompt is captured once here and reused
     # for the request AND recorded on the returned decision as `analysis.prompt`.
-    prompt = build_prompt(
+    # ADAAAA-7993: the request is laid out v2 — the STATIC preamble + output
+    # contract live in the system turn, and the user text part carries ONLY the
+    # per-window Context block, so the static block is a reusable prefix.
+    parts = build_prompt_parts(
         event_type,
         evidence,
         game_hint,
@@ -1794,7 +1904,8 @@ def ask(
         match_context=match_context,
         prior_game_state=prior_game_state,
     )
-    content.append({"type": "text", "text": prompt})
+    prompt = parts["prompt"]
+    content.append({"type": "text", "text": parts["context"]})
     # 3) audio AFTER the text (modality-order rule) — only when the raw-send gate
     # is on. By default (Path 2) the audio context is delivered as TEXT
     # (transcript) instead, because the deployed QAT model is not audio-capable.
@@ -1820,7 +1931,7 @@ def ask(
     # vLLM channel) so strict JSON returns immediately regardless of the vLLM
     # version's default / auto-injection behaviour; it can never ENABLE thinking.
     payload = {
-        "messages": _messages("single", content),
+        "messages": _messages("single", content, system_content=parts["system"]),
         "temperature": 0.0,
         # Frontend-selectable; "none" (the default) turns OFF gemma-4 QAT thinking
         # so content comes back as the JSON immediately instead of empty until a
@@ -1866,6 +1977,7 @@ def ask(
         parsed=result,
         fallback=False,
         started_at=started_at,
+        prompt_layout=_prompt_layout(parts),
     )
     _emit_audit(_record)
     # Emit the compact audit descriptor on the decision (ADAAAA-7028 Inc 2) so
