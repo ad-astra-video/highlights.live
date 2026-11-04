@@ -187,6 +187,32 @@ export interface DatasetPurgeLogEntry {
   purgedAt: string;
 }
 
+/** One admin-only destructive action (ADAAAA-7968). Appended by the admin
+ * routes so a user deletion leaves a durable actor -> target trail even though
+ * the user row itself is gone. Stored in `admin_audit`. */
+export interface AdminAuditEntry {
+  id: string;
+  /** The admin (actor) who performed the action. */
+  actorId: string;
+  actorEmail: string;
+  /** Action key: `user.delete` today. */
+  action: string;
+  /** Target user id/email — retained after the target row is deleted. */
+  targetId: string;
+  targetEmail: string;
+  /** Structured action detail (cascade row counts, forced flag, role). */
+  detail: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+/** Outcome of `Db.deleteUser`: `deleted:false` means the user row was already
+ * gone (nothing was written, no audit row appended). */
+export interface UserDeletionResult {
+  deleted: boolean;
+  cascaded: { subscriptions: number; quotaLedger: number };
+  audit: AdminAuditEntry | null;
+}
+
 /** A single-use invite code issued by the cohort owner (invite path "a").
  * Stored as a SHA-256 hash; the plaintext code is shown to the owner once at
  * issuance and handed out of band. */
@@ -411,6 +437,23 @@ export interface Db {
   /** Mark a user's account as having passed the invite/beta-gate (activated). */
   activateUser(userId: string): Promise<void>;
   setStripeCustomer(userId: string, customerId: string): Promise<void>;
+  /** Admin-only hard delete of a user (ADAAAA-7968): removes the user row and
+   * cascades its entitlement rows (`subscriptions` + `quota_ledger`) in one
+   * transaction. Job/highlight/usage/funnel rows are deliberately retained as
+   * graded evidence + analytics. When `audit` is provided it is inserted in the
+   * SAME transaction so the trail and the deletion cannot diverge. Returns
+   * `deleted:false` (no writes at all) when the user row is already gone, so a
+   * repeated delete is a no-op rather than an error. */
+  deleteUser(
+    id: string,
+    audit?: Omit<AdminAuditEntry, "id" | "createdAt">
+  ): Promise<UserDeletionResult>;
+  /** Append one admin audit record (actor/target/action/detail). */
+  appendAdminAudit(
+    e: Omit<AdminAuditEntry, "id" | "createdAt"> & { id?: string; createdAt?: string }
+  ): Promise<AdminAuditEntry>;
+  /** Newest-first admin audit trail (bounded), for inspection / QA. */
+  listAdminAudit(limit?: number): Promise<AdminAuditEntry[]>;
   getSubscription(userId: string): Promise<Subscription>;
   setSubscription(userId: string, s: Partial<Subscription>): Promise<Subscription>;
   countUsage(userId: string, eventType?: string): Promise<number>;
@@ -672,6 +715,59 @@ export class SqliteDb implements Db {
 
   async setStripeCustomer(userId: string, customerId: string): Promise<void> {
     this.db.prepare("UPDATE users SET stripe_customer_id = ? WHERE id = ?").run(customerId, userId);
+  }
+
+  /** Admin-only hard delete (ADAAAA-7968). Cascades ONLY the entitlement rows
+   * (`quota_ledger` + `subscriptions`); jobs/highlights/usage/funnel rows keep
+   * the user id on purpose so graded level artifacts stay readable and the
+   * funnel/usage counters stay historical. There are no foreign keys, so the
+   * delete order is unconstrained. The audit row is part of the same
+   * transaction, so a committed deletion always has its trail. */
+  async deleteUser(
+    id: string,
+    audit?: Omit<AdminAuditEntry, "id" | "createdAt">
+  ): Promise<UserDeletionResult> {
+    const existing = this.db.prepare("SELECT id FROM users WHERE id = ?").get(id);
+    if (!existing) return { deleted: false, cascaded: { subscriptions: 0, quotaLedger: 0 }, audit: null };
+    let subscriptions = 0;
+    let quotaLedger = 0;
+    let entry: AdminAuditEntry | null = null;
+    this.db.exec("BEGIN");
+    try {
+      quotaLedger = Number(this.db.prepare("DELETE FROM quota_ledger WHERE user_id = ?").run(id).changes);
+      subscriptions = Number(this.db.prepare("DELETE FROM subscriptions WHERE user_id = ?").run(id).changes);
+      this.db.prepare("DELETE FROM users WHERE id = ?").run(id);
+      if (audit) entry = this.insertAdminAudit(audit);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+    return { deleted: true, cascaded: { subscriptions, quotaLedger }, audit: entry };
+  }
+
+  async appendAdminAudit(
+    e: Omit<AdminAuditEntry, "id" | "createdAt"> & { id?: string; createdAt?: string }
+  ): Promise<AdminAuditEntry> {
+    return this.insertAdminAudit(e);
+  }
+
+  private insertAdminAudit(
+    e: Omit<AdminAuditEntry, "id" | "createdAt"> & { id?: string; createdAt?: string }
+  ): AdminAuditEntry {
+    const entry = buildAdminAuditEntry(e);
+    this.db
+      .prepare(
+        `INSERT INTO admin_audit (id,actor_id,actor_email,action,target_id,target_email,detail,created_at)
+         VALUES (?,?,?,?,?,?,?,?)`
+      )
+      .run(entry.id, entry.actorId, entry.actorEmail, entry.action, entry.targetId, entry.targetEmail, entry.detail ? JSON.stringify(entry.detail) : null, entry.createdAt);
+    return entry;
+  }
+
+  async listAdminAudit(limit = 100): Promise<AdminAuditEntry[]> {
+    const rows = this.db.prepare("SELECT * FROM admin_audit ORDER BY created_at DESC, id DESC LIMIT ?").all(limit) as any[];
+    return rows.map(rowToAdminAudit);
   }
 
   async getSubscription(userId: string): Promise<Subscription> {
@@ -1411,6 +1507,50 @@ export class PgDb implements Db {
     await this.pool.query("UPDATE users SET stripe_customer_id = $2 WHERE id = $1", [userId, customerId]);
   }
 
+  /** Admin-only hard delete (ADAAAA-7968) — Postgres twin of the SQLite
+   * implementation: cascade `quota_ledger` + `subscriptions`, keep the user's
+   * job/highlight/usage/funnel rows, and write the audit row in the same
+   * transaction. A missing user row is a no-op (`deleted:false`). */
+  async deleteUser(
+    id: string,
+    audit?: Omit<AdminAuditEntry, "id" | "createdAt">
+  ): Promise<UserDeletionResult> {
+    const client = await this.pool.connect();
+    try {
+      // Existence check BEFORE BEGIN: an unknown id must not strip ledger rows
+      // that happen to share the id (an orphan account's leftovers).
+      const found = await client.query("SELECT id FROM users WHERE id = $1", [id]);
+      if (!found.rows[0]) return { deleted: false, cascaded: { subscriptions: 0, quotaLedger: 0 }, audit: null };
+      await client.query("BEGIN");
+      const q = await client.query("DELETE FROM quota_ledger WHERE user_id = $1", [id]);
+      const s = await client.query("DELETE FROM subscriptions WHERE user_id = $1", [id]);
+      await client.query("DELETE FROM users WHERE id = $1", [id]);
+      const entry = audit ? await insertAdminAuditWith(client, audit) : null;
+      await client.query("COMMIT");
+      return {
+        deleted: true,
+        cascaded: { subscriptions: s.rowCount ?? 0, quotaLedger: q.rowCount ?? 0 },
+        audit: entry,
+      };
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  async appendAdminAudit(
+    e: Omit<AdminAuditEntry, "id" | "createdAt"> & { id?: string; createdAt?: string }
+  ): Promise<AdminAuditEntry> {
+    return insertAdminAuditWith(this.pool, e);
+  }
+
+  async listAdminAudit(limit = 100): Promise<AdminAuditEntry[]> {
+    const r = await this.pool.query("SELECT * FROM admin_audit ORDER BY created_at DESC, id DESC LIMIT $1", [limit]);
+    return r.rows.map(rowToAdminAudit);
+  }
+
   async getSubscription(userId: string): Promise<Subscription> {
     const r = await this.pool.query("SELECT * FROM subscriptions WHERE user_id = $1", [userId]);
     if (r.rows[0]) return rowToSub(r.rows[0]);
@@ -2079,6 +2219,18 @@ const SCHEMA_SQLITE = `
     current_period_end TEXT,
     updated_at TEXT NOT NULL
   );
+  -- ADAAAA-7968: durable trail for destructive admin actions (actor/target/
+  -- action/detail). Baseline CREATE so every boot brings existing DBs to shape.
+  CREATE TABLE IF NOT EXISTS admin_audit (
+    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    actor_email TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    target_email TEXT NOT NULL,
+    detail TEXT,
+    created_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS usage_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL,
@@ -2278,6 +2430,18 @@ const SCHEMA_PG = `
     stripe_sub_item_id TEXT,
     current_period_end TEXT,
     updated_at TEXT NOT NULL
+  );
+  -- ADAAAA-7968: durable trail for destructive admin actions (actor/target/
+  -- action/detail). Baseline CREATE so every boot brings existing DBs to shape.
+  CREATE TABLE IF NOT EXISTS admin_audit (
+    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    actor_email TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    target_email TEXT NOT NULL,
+    detail TEXT,
+    created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS usage_events (
     id BIGSERIAL PRIMARY KEY,
@@ -2744,6 +2908,65 @@ function rowToMediaSession(r: any): MediaSession {
     status: r.status === "closed" ? "closed" : "active",
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+  };
+}
+
+/** Build a normalized `admin_audit` entry (ADAAAA-7968). */
+function buildAdminAuditEntry(
+  e: Omit<AdminAuditEntry, "id" | "createdAt"> & { id?: string; createdAt?: string }
+): AdminAuditEntry {
+  return {
+    id: e.id ?? randomUUID(),
+    actorId: e.actorId,
+    actorEmail: e.actorEmail,
+    action: e.action,
+    targetId: e.targetId,
+    targetEmail: e.targetEmail,
+    detail: e.detail ?? null,
+    createdAt: e.createdAt ?? new Date().toISOString(),
+  };
+}
+
+/** Insert one admin audit row through an open PG client/pool so a deletion can
+ * carry its trail in the same transaction. */
+async function insertAdminAuditWith(
+  client: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
+  e: Omit<AdminAuditEntry, "id" | "createdAt"> & { id?: string; createdAt?: string }
+): Promise<AdminAuditEntry> {
+  const entry = buildAdminAuditEntry(e);
+  await client.query(
+    `INSERT INTO admin_audit (id,actor_id,actor_email,action,target_id,target_email,detail,created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      entry.id,
+      entry.actorId,
+      entry.actorEmail,
+      entry.action,
+      entry.targetId,
+      entry.targetEmail,
+      entry.detail ? JSON.stringify(entry.detail) : null,
+      entry.createdAt,
+    ]
+  );
+  return entry;
+}
+
+function rowToAdminAudit(r: any): AdminAuditEntry {
+  let detail: Record<string, unknown> | null = null;
+  try {
+    detail = r.detail ? JSON.parse(r.detail) : null;
+  } catch {
+    detail = null;
+  }
+  return {
+    id: r.id,
+    actorId: r.actor_id,
+    actorEmail: r.actor_email,
+    action: r.action,
+    targetId: r.target_id,
+    targetEmail: r.target_email,
+    detail,
+    createdAt: r.created_at,
   };
 }
 

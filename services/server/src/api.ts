@@ -3137,6 +3137,55 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return gate;
   });
 
+  // --- admin user lifecycle (ADAAAA-7968) ---------------------------------
+  // Hard delete an account and its entitlement rows. Admin-only (`adminReq`),
+  // and it refuses an admin account unless `?force=1` — an admin can carry
+  // billing/ops history that should not vanish from one stray request.
+  // Idempotency contract: an unknown id (including a second delete of the same
+  // id) answers `404 {deleted:false}` and writes nothing at all; a successful
+  // delete answers `200 {deleted:true, ...}` and appends one `admin_audit` row
+  // (actor, target, cascade counts) in the same DB transaction. Job/highlight/
+  // usage/funnel rows are retained on purpose — graded level artifacts and the
+  // funnel counters are evidence, never silently dropped.
+  app.delete<{ Params: { id: string } }>(
+    "/admin/users/:id",
+    { preHandler: adminReq },
+    async (req: any, reply: any) => {
+      const id = String(req.params?.id ?? "").trim();
+      if (!id) return reply.code(400).send({ error: "user id required" });
+      const target = await db.getUserById(id);
+      if (!target) return reply.code(404).send({ deleted: false, error: "no such user" });
+      const rawForce = String(req.query?.force ?? "");
+      const force = rawForce === "1" || rawForce === "true";
+      if (target.role === "admin" && !force) {
+        return reply.code(409).send({ error: "refusing to delete an admin account without ?force=1" });
+      }
+      const result = await db.deleteUser(target.id, {
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: "user.delete",
+        targetId: target.id,
+        targetEmail: target.email,
+        detail: { role: target.role, createdAt: target.createdAt, forced: force },
+      });
+      if (!result.deleted) return reply.code(404).send({ deleted: false, error: "no such user" });
+      return {
+        deleted: true,
+        user: { id: target.id, email: target.email, role: target.role },
+        cascaded: result.cascaded,
+        auditId: result.audit?.id ?? null,
+      };
+    }
+  );
+
+  // Admin audit trail — newest first, bounded by `?limit=` (default 100, max
+  // 500). Read-only companion to the destructive admin routes.
+  app.get<{ Querystring: { limit?: string } }>("/admin/audit", { preHandler: adminReq }, async (req) => {
+    const n = Number(req.query?.limit);
+    const limit = Number.isFinite(n) ? Math.min(Math.max(Math.trunc(n), 1), 500) : 100;
+    return { entries: await db.listAdminAudit(limit) };
+  });
+
   // --- billing ---
   app.get("/billing/plans", async () => ({ plans: billing.plans() }));
 
