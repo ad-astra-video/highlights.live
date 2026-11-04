@@ -4117,6 +4117,27 @@ export async function observeDecideOnly(
  * summary is a read-modify-write), so the live observer calls this strictly in
  * CONTENT order even when decides complete out of order.
  */
+/**
+ * ADAAAA-7957 (Inc 5): the grounding context the fast-rail summary seam carries.
+ *
+ * The §3.2 name gate is PROVENANCE, so an absent decide analysis means NO
+ * evidence, not "skip the gate": this seam used to pass `null` here, which the
+ * gate reads as "already certified upstream", so the gate never ran and two
+ * invented names ("Manuel Ordoñez", "David Saez") reached a caption on level
+ * 9fecca77 (g37/g56). A missing prompt is therefore `""` — every unsourced
+ * proper name fails closed to a role. `null` stays reserved for text the webapp
+ * knows is already certified.
+ */
+export function captionGroundingForDecision(
+  decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis">
+): CaptionGroundingContext {
+  return {
+    verdict: decision.outcome ?? null,
+    promptText: decision.analysis?.prompt ?? "",
+    eventType: decision.eventType ?? null,
+  };
+}
+
 export async function observeAcceptOnly(
   client: PipelineClient,
   run: LiveRunShared,
@@ -4140,11 +4161,7 @@ export async function observeAcceptOnly(
         // seam can gate goal claims, ground names and strip internal tokens.
         // VOD never sets `captionGrounding`, so its entries stay byte-identical.
         const grounding: CaptionGroundingContext | undefined = cfg.captionGrounding
-          ? {
-              verdict: decision.outcome ?? null,
-              promptText: decision.analysis?.prompt ?? null,
-              eventType: decision.eventType ?? null,
-            }
+          ? captionGroundingForDecision(decision)
           : undefined;
         cfg.onRunningSummary(next, {
           windowTs: payload.centerTs,

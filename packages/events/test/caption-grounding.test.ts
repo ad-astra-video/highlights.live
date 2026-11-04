@@ -329,7 +329,12 @@ describe("rule 1: a quiet window carries no goal claim and no colour clause (ADA
 
   it("does not treat a goal kick / shot on goal as a claim (nothing to drop)", () => {
     const line = "Player in blue takes the goal kick in midfield";
-    expect(gateQuietWindow(line, { verdict: "not_highlight" })).toBe(line);
+    const out = gateQuietWindow(line, { verdict: "not_highlight" });
+    // ADAAAA-7957: the quiet bar is a DETERMINISTIC 8-word count, so the 9-word
+    // line is blunted even though it carries no claim — the place survives.
+    expect(out).not.toMatch(/\bscores?\b|into the net/i);
+    expect(wordCountOf(out)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+    expect(out).toContain("midfield");
   });
 });
 
@@ -505,5 +510,267 @@ describe("groundSummaryItems — the flat Video Summary on the fast rail (§3.4 
   it("VOD (fastRail false) is byte-identical and in order", () => {
     expect(groundSummaryItems(items, { highlights, fastRail: false })).toEqual(items);
     expect(groundSummaryItems(items, { highlights })).toEqual(items);
+  });
+});
+
+// ADAAAA-7957 (parent ADAAAA-7933 Inc 5) — contract v3 §3.1-§3.3 + §3.5.
+//
+// The shipped v2 build was graded FAIL on the trust bar (ADAAAA-7950, job
+// 9fecca77): 3 rows claimed a goal on a `not_highlight` window, 2 rows invented
+// a name, 45 of 53 quiet rows fit the 8-word bar (84.9%), and one "colour" beat
+// was scorebug OCR. Each block below pins one rule at the failure mode that was
+// measured, and the corpora are deliberately wider than the two measured strings
+// so the gate is proven to fail CLOSED rather than to recognise a list.
+
+/** Anything a caption may not say on a non-goal window (§3.1 vocabulary). */
+const GOAL_PROBE =
+  /\b(?:scores?|scored|scoring|go+al|goals?|gol|net|netted|equaliser|winner|taps?\s+(?:it\s+)?in|conver(?:ts|ted)|bur(?:ies|ied)|slots?|finds?\s+the)\b/i;
+
+/** A colour beat is only allowed on a loud window with a crowd/bench channel. */
+const COLOUR_OR_DASH = /[—–]|\bcrowd\b|\bbench\b|\bcelebrat|\broar\b|\berupts?\b/i;
+
+const QUIET_PROMPT =
+  "Match context: RMA 1-1 BAR | scorebug OCR: RMA 1-1 BAR | No. 3 | ASR: (empty)";
+
+/** The graded sample's quiet offenders, verbatim (ADAAAA-7950). */
+const MEASURED_QUIET_OFFENDERS = [
+  "No. 10 strikes the ball into the net — players celebrate.",
+  "No. 6 shoots and scores in the box — crowd erupts",
+  "Player in blue and yellow kit dribbles in center circle.",
+  "Player in blue and yellow kit dribbles in penalty area",
+  "Player in white jersey moves with ball in center field",
+  "Player in white moves in center area.",
+  "No. 10 in white jersey enters the penalty area.",
+];
+
+describe("§3.1 claim gate fails closed (AC4b, measured strings)", () => {
+  it.each([
+    ["No. 10 strikes the ball into the net — players celebrate."],
+    ["No. 6 shoots and scores in the box — crowd erupts"],
+  ])("the measured non-goal claim is rewritten, not enumerated: %s", (line) => {
+    const out = groundCaption(line, { verdict: "not_highlight", promptText: QUIET_PROMPT });
+    expect(out).not.toMatch(GOAL_PROBE);
+    expect(captionColour(out)).toBe("");
+    expect(wordCountOf(out)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+  });
+
+  it("keeps the actor and the shot verb instead of doubling it", () => {
+    // "shoots and scores" must not become "shoots and shoots".
+    expect(gateGoalClaims("No. 6 shoots and scores in the box", { verdict: "not_highlight" })).toBe(
+      "No. 6 shoots in the box"
+    );
+  });
+
+  // The negative corpus the AC names: >= 12 score-verb phrasings, none of them
+  // in the old rewrite table, every one on a `not_highlight` window.
+  it.each([
+    ["No. 7 rifles it into the roof of the net"],
+    ["The striker slots it home from six yards"],
+    ["No. 4 buries it at the far post"],
+    ["No. 5 taps it in at the back post"],
+    ["The midfielder converts from the spot"],
+    ["She finds the bottom corner with a curler"],
+    ["No. 11 levels it with a header"],
+    ["The ball crosses the line after a scramble"],
+    ["No. 9 puts it away from close range"],
+    ["The net bulges as the shot flies in"],
+    ["GOOOAL! No. 5 finishes the move"],
+    ["No. 8 hits the back of the net"],
+    ["The captain smashes it in off the post"],
+    ["No. 3 curls one into the top corner"],
+    ["He rolls it over the line"],
+    ["The ball is in the net before the whistle"],
+    ["That is the equaliser"],
+    ["No. 2 nets it at the near post"],
+  ])("a non-goal window never ships %s", (line) => {
+    const out = groundCaption(line, { verdict: "not_highlight", promptText: QUIET_PROMPT });
+    expect(out, line).not.toMatch(GOAL_PROBE);
+    expect(wordCountOf(out)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+  });
+
+  it.each([
+    ["near_miss"],
+    ["big_play"],
+    ["not_highlight"],
+    ["a_verdict_the_pipeline_has_never_stored"],
+  ])("fails closed for verdict %s on an unseen phrasing", (verdict) => {
+    const out = groundCaption("No. 7 squeezes a finish inside the far stick", {
+      verdict,
+      promptText: QUIET_PROMPT,
+    });
+    // Not a claim by construction: whatever shape it lands on, no goal is said.
+    expect(out).not.toMatch(/\bscores?|goal|\bnet\b/i);
+  });
+
+  it("still allows a claim on a real goal verdict (byte-identical)", () => {
+    const line = "No. 9 scores at the near post — the net ripples.";
+    expect(groundCaption(line, { verdict: "scoring_play", promptText: QUIET_PROMPT })).toBe(line);
+  });
+
+  it.each([
+    ["The keeper takes the goal kick near the goal line."],
+    ["The winger takes a shot on goal and the keeper saves it."],
+    ["The ball does not enter the net; the keeper smothers it."],
+    ["The scoreboard reads 1-1 at the interval."],
+    ["The 'GOL' graphic appears on the replay overlay."],
+  ])("does not treat a benign goal/net mention as a claim: %s", (line) => {
+    expect(gateGoalClaims(line, { verdict: "near_miss" })).toBe(line);
+  });
+});
+
+describe("§3.2 name gate is provenance, not shape (AC4 name half)", () => {
+  // The two measured invented names, verbatim.
+  it("replaces the measured g37 name with a role", () => {
+    const out = groundCaption("Manuel Ordoñez moves in the center circle.", {
+      verdict: "not_highlight",
+      promptText: QUIET_PROMPT,
+    });
+    expect(out).not.toMatch(/Manuel|Ordoñez/);
+    expect(out).toMatch(/the No\. \d|the midfielder|the striker|the side/i);
+  });
+
+  it("replaces the measured g56 name AND its goal claim", () => {
+    const out = groundCaption("David Saez scores — crowd erupts", {
+      verdict: "not_highlight",
+      promptText: QUIET_PROMPT,
+    });
+    expect(out).not.toMatch(/David|Saez/i);
+    expect(out).not.toMatch(GOAL_PROBE);
+    expect(captionColour(out)).toBe("");
+  });
+
+  // >= 6 name SHAPES, none of which an allowlist could recognise.
+  it.each([
+    ["DAVID SAEZ drives at the box"],
+    ["MBAPPÉ shoots from the edge of the area"],
+    ["Real Madrid CF press high"],
+    ["N'Golo Kanté wins the ball back"],
+    ["van der Berg clears the danger"],
+    ["Saka receives in midfield"],
+    ["Julián Álvarez-Moran holds the ball up"],
+  ])("an unsourced name shape becomes a role: %s", (line) => {
+    const out = groundNames(line, QUIET_PROMPT);
+    expect(out, line).not.toMatch(/SAEZ|MBAPPÉ|Madrid|Kanté|Berg|Saka|Álvarez/i);
+  });
+
+  it("fails closed when the seam has NO prompt (the v2 leak)", () => {
+    // The live seam passed `null` when the decide analysis was absent, so the
+    // gate never ran. An EMPTY prompt is "no evidence" and must still replace.
+    expect(groundNames("Manuel Ordoñez moves in the center circle.", "")).not.toMatch(/Manuel|Ordoñez/);
+    expect(groundNames("David Saez scores", "")).not.toMatch(/David|Saez/i);
+    // ...and an absent prompt is the same fail-closed default.
+    expect(groundNames("David Saez scores")).not.toMatch(/David|Saez/i);
+  });
+
+  it("keeps a name the window's prompt corroborates (accent-insensitive)", () => {
+    const prompt = `${QUIET_PROMPT}\nMatch context: Manuel Ordonez, Real Madrid`;
+    expect(groundNames("Manuel Ordoñez shoots for Real Madrid.", prompt)).toBe(
+      "Manuel Ordoñez shoots for Real Madrid."
+    );
+  });
+
+  it("keeps a legible jersey number and the codes the pipeline emits", () => {
+    for (const line of ["The No. 9 shoots from the box.", "The VAR check is quick."]) {
+      expect(groundNames(line, QUIET_PROMPT)).toBe(line);
+    }
+  });
+
+  it("treats `null` as upstream-certified text only (server seam contract)", () => {
+    // `null` is the documented "already certified with this window's prompt"
+    // value the webapp passes for summary-log text; `""` is no evidence.
+    expect(groundNames("Manuel Ordoñez moves in the center circle.", null)).toBe(
+      "Manuel Ordoñez moves in the center circle."
+    );
+  });
+});
+
+describe("§3.3 quiet gate is deterministic at emission (AC5)", () => {
+  it.each(MEASURED_QUIET_OFFENDERS)("blunts a measured quiet offender: %s", (line) => {
+    const out = groundCaption(line, { verdict: "not_highlight", promptText: QUIET_PROMPT });
+    expect(wordCountOf(out)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+    expect(out).not.toMatch(COLOUR_OR_DASH);
+    expect(out).not.toMatch(GOAL_PROBE);
+  });
+
+  it("treats an unrecognised verdict as quiet (fail closed)", () => {
+    const out = groundCaption("Player in white jersey moves with ball in center field", {
+      verdict: "not_highlight_v2",
+      promptText: QUIET_PROMPT,
+    });
+    expect(wordCountOf(out)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+  });
+
+  it("does not length-gate a legacy row with no stored verdict", () => {
+    const line = "Player in white jersey moves with ball in center field";
+    expect(gateQuietWindow(line, { promptText: QUIET_PROMPT })).toBe(line);
+  });
+
+  it("leaves a loud window's line and colour beat alone", () => {
+    const line = "No. 9 scores at the near post — the crowd erupts.";
+    expect(gateQuietWindow(line, { verdict: "near_miss" })).toBe(line);
+  });
+
+  it("counts words AFTER the claim and name rewrites, so a rewrite cannot re-break the bar", () => {
+    // 11 words -> claim rewritten -> name replaced -> still <= 8.
+    const out = groundCaption("Manuel Ordoñez strikes the ball into the net — players celebrate.", {
+      verdict: "not_highlight",
+      promptText: QUIET_PROMPT,
+    });
+    expect(out).not.toMatch(/Manuel|net|scores?|goal/i);
+    expect(wordCountOf(out)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+  });
+});
+
+describe("§3.5 OCR is not colour and not corroboration", () => {
+  it("drops an OCR clause used as a colour beat (measured line 19)", () => {
+    const out = groundCaption("Player strikes ball into net — GOL graphic appears", {
+      verdict: "not_highlight",
+      promptText: QUIET_PROMPT,
+    });
+    expect(out).not.toMatch(/GOL|graphic|net/i);
+    expect(captionColour(out)).toBe("");
+  });
+
+  it("drops an OCR clause on a goal window too (OCR is never a colour channel)", () => {
+    const out = groundCaption("No. 9 scores — the scorebug shows 2-1", {
+      verdict: "scoring_play",
+      promptText: "scorebug OCR: 2-1",
+    });
+    expect(captionColour(out)).toBe("");
+    expect(out).toContain("No. 9 scores");
+  });
+
+  it("does not let a GOL OCR read authorize a claim", () => {
+    const out = groundCaption("No. 9 scores at the far post", {
+      verdict: "not_highlight",
+      promptText: "scorebug OCR: GOL 2-1 | ASR: GOAL",
+    });
+    expect(out).not.toMatch(GOAL_PROBE);
+  });
+});
+
+describe("one implementation, every surface (§3)", () => {
+  const ctx = { verdict: "not_highlight", promptText: QUIET_PROMPT } as const;
+  it("a summary-log item and a seeded caption cross the same gate", () => {
+    const line = "No. 10 strikes the ball into the net — players celebrate.";
+    expect(groundSummaryText(line, ctx)).toBe(groundCaption(line, ctx));
+    expect(groundCaption(line, ctx)).not.toMatch(GOAL_PROBE);
+  });
+
+  it("is idempotent across the whole contract", () => {
+    for (const line of [
+      ...MEASURED_QUIET_OFFENDERS,
+      "Manuel Ordoñez moves in the center circle.",
+      "David Saez scores — crowd erupts",
+    ]) {
+      const once = groundCaption(line, ctx);
+      expect(groundCaption(once, ctx), line).toBe(once);
+    }
+  });
+
+  it("never lengthens a line", () => {
+    for (const line of [...MEASURED_QUIET_OFFENDERS, "David Saez scores — crowd erupts"]) {
+      expect(groundCaption(line, ctx).length).toBeLessThanOrEqual(line.length);
+    }
   });
 });

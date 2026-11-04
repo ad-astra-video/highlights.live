@@ -157,48 +157,207 @@ function goalAllowed(ctx?: CaptionGroundingContext): boolean {
   return eventType === "GOAL" || eventType === "GOL";
 }
 
+/* ------------------------------------------------------------------------- *
+ * Contract v3 §3.1 — the claim gate is SEMANTIC and FAILS CLOSED.
+ *
+ * The Inc 3 gate was an enumeration of bad phrasings ("scores a goal", "into
+ * the net", …). A measured level (ADAAAA-7950, job 9fecca77) shipped three
+ * `not_highlight` windows that still claimed a goal because the model used
+ * phrasings the table had never seen ("No. 10 strikes the ball into the net",
+ * "No. 6 shoots and scores in the box"). Adding those two strings to the table
+ * would lose again on the next phrasing.
+ *
+ * So the decision is made the other way round: a score/net/goal word is a CLAIM
+ * unless the text around it proves it is not one (a negated form, `goal kick`,
+ * `shot on goal`, a scoreboard/graphic reference). The benign list is small and
+ * explicit, so anything the mask cannot certify fails closed. The rewrite steps
+ * below are only a best-effort SHORTENING of the claim the detector found; when
+ * a rewrite cannot certify the line, `quietShape` rebuilds it as the quiet beat.
+ * ------------------------------------------------------------------------- */
+
 /**
- * Non-goal rewrites for goal claims (ADAAAA-7933 §3 item 4). Longest first, and
- * every target is the same length or SHORTER than its source — the rewrite may
- * never lengthen a caption.
+ * Spans in which a goal/net/score word provably does NOT assert a goal. Matched
+ * spans are blanked (same length, so offsets stay valid) before detection.
  */
-const GOAL_REWRITES: [RegExp, string][] = [
-  [/\bthe\s+net\s+ripples\b/gi, "shot wide"],
-  [/\bnet\s+ripples\b/gi, "shot wide"],
-  [/\binto\s+the\s+back\s+of\s+the\s+net\b/gi, "wide"],
-  [/\bfinds?\s+the\s+back\s+of\s+the\s+net\b/gi, "goes wide"],
-  [/\binto\s+the\s+net\b/gi, "wide"],
-  [/\bfinds?\s+the\s+net\b/gi, "goes wide"],
-  [/\bscores?\s+(?:a|the)\s+goal\b/gi, "shoots"],
-  [/\bscores?\b/gi, "shoots"],
-  [/\bscored\b/gi, "shot"],
-  [/\blevels\s+it\b/gi, "goes wide"],
-  [/\blevel\s+it\b/gi, "goes wide"],
-  [/\bburied\s+it\b/gi, "shot it"],
-  [/\bGOAL\s*!/g, "Shot!"],
-  // `goal` only as an isolated event word — never `goal kick` / `goal line`,
-  // and never the legitimate non-goal phrasings `shot on goal` / `towards goal`.
-  [/(?<!\bon )(?<!\btoward )(?<!\btowards )\bGOAL\b/g, "Shot"],
-  [/(?<!\bon )(?<!\btoward )(?<!\btowards )\bgoal\b(?!\s*(?:kick|line|area|mouth|frame|post|net))/gi, "shot"],
+const BENIGN_CLAIM_SPANS: RegExp[] = [
+  // `goal kick`, `goal line`, `goal area`, `goal mouth`, `goal frame`, `goal post`
+  /\bgoal\s*[- ]?(?:kick|kicks|line|lines|area|mouth|frame|post|posts)\b/gi,
+  // a shot AT goal is not a goal: `shot on goal`, `effort towards goal`
+  /\b(?:shot|shots|effort|strike|header|volley|free ?kick|penalty)\s+(?:on|at|towards?|toward)\s+(?:the\s+)?goal\b/gi,
+  /\b(?:on|towards?|toward)\s+(?:the\s+)?goal\b/gi,
+  /\bgoalward\b/gi,
+  // display/audit talk about the score, never a scoring event
+  /\bscore\s*[- ]?(?:board|bug|line|keeper|boards?|bugs?|screens?)\b/gi,
+  /\bscore\s*[- ]?(?:transition|change|update|state|card|track)\b/gi,
+  /\bscoreline\b/gi,
+  // a quoted OCR label the model is describing ("the 'GOL' graphic appears")
+  /\b(?:goal|gol|gooo+al)\b(?=['’"]?\s*(?:graphic|banner|overlay|title|card|logo)\b)/gi,
+  // a negation states the opposite: `does not score`, `no goal`, `never finds the net`
+  /\b(?:no|not|never|without|isn't|didn't|doesn't|wasn't)\b[^.;|]{0,40}?\b(?:goal|goals|gol|score[sd]?|scoring|net)\b/gi,
 ];
 
-/** Goal words that survive a rewrite table miss; their clause is dropped. */
-const RESIDUAL_GOAL =
-  /\b(?:scores?|scored|scoring|goals|net ripples|levels it)\b|(?<!\bon )(?<!\btoward )(?<!\btowards )\bgoal\b/i;
+/**
+ * Score / net / goal vocabulary. Fail closed: a word here IS a goal claim unless
+ * a benign span above certifies it. Kept deliberately broad — a phrasing the
+ * lexicon has never seen still contains one of these nouns, so it still gates.
+ */
+const CLAIM_MARKERS: RegExp[] = [
+  /\b(?:scores?|scored|scoring|scorers?)\b/i,
+  /\b(?:go+al|goals?|gol)\b/i,
+  // the net, however the model names it ("the net", "into net", "the net bulges")
+  /\bnet\b/i,
+  /\b(?:equaliser|equalizer|match[- ]?winner)\b/i,
+  /\b(?:levels?|levelled|levelling)\s+it\b/i,
+  // putting the ball in, in the many ways a model says it
+  /\b(?:taps?\s+(?:it\s+)?in|tap[- ]in|conver(?:ts|ted|t|sion)|slots?\s+(?:it\s+)?(?:in|home)|bur(?:ies|ied)|puts?\s+(?:it|the\s+ball)\s+(?:in|away)|put\s+away|cross(?:es|ed)?\s+the\s+(?:goal\s+)?line|(?:over|past)\s+the\s+(?:goal\s+)?line)\b/i,
+  /\b(?:finds?|found)\s+the\s+(?:back\s+of\s+the\s+)?net\b/i,
+  // …and the synonyms that never name the net at all
+  /\b(?:smashes?|rifles?|blasts?|drills?|hammers?|bangs?|rolls?|squeezes?|flicks?)\s+it\s+(?:in|home)\b/i,
+  /\b(?:into|in|inside|finds?|picks?\s+out)\s+the\s+(?:top|bottom|far|near)?\s*corner\b/i,
+  /\b(?:in|home)\s+off\s+the\s+(?:post|bar)\b|\boff\s+the\s+(?:post|bar)\s+and\s+in\b/i,
+];
 
-/** Clause separators a caption uses: em/en dash, semicolon, or a comma-space. */
-const CLAUSE_SPLIT = /\s+[—–]\s+|;\s+|,\s+/;
-
-/** Drop the clauses that still assert a goal; keep at least the first clause. */
-function dropGoalClauses(text: string): string {
-  const parts = text.split(CLAUSE_SPLIT);
-  if (parts.length <= 1) return text;
-  const kept = parts.filter((p) => !RESIDUAL_GOAL.test(p));
-  // Never blank the caption: if every clause asserted a goal there is nothing
-  // honest left to keep, so fall back to the neutral non-goal rewrite of the
-  // first clause rather than emitting nothing.
-  return (kept.length > 0 ? kept : [parts[0].replace(RESIDUAL_GOAL, "shot")]).join(" — ");
+/** Blank every benign span, so a claim marker inside one is not detected. */
+function maskBenign(text: string): string {
+  let out = text;
+  for (const re of BENIGN_CLAIM_SPANS) out = out.replace(re, (m) => " ".repeat(m.length));
+  return out;
 }
+
+/**
+ * Does this line assert a goal (score / net semantics)? Fail-closed probe: a
+ * score/goal/net word is a claim unless a benign span proves otherwise.
+ */
+export function hasGoalClaim(text: string): boolean {
+  if (!text) return false;
+  const masked = maskBenign(text);
+  return CLAIM_MARKERS.some((re) => re.test(masked));
+}
+
+/** Shot verbs already present in a line (so a rewrite never doubles a verb). */
+const SHOT_VERB =
+  /\b(?:shoots?|shot|strikes?|struck|fires?|fired|drills?|curls?|curled|hooks?|hooked|hammers?|smashes?|volleys?|heads?|headed|nods?|nodded|pokes?|prods?|bundles?|blasts?|flashes?|squeezes?)\b/i;
+
+/**
+ * The non-goal outcome verb a window's own line already carries (§3.1:
+ * shot / saved / blocked / cleared / wide / deflected). Falls back to "shoots"
+ * when the stored fields do not name an outcome — the generic shot beat is the
+ * narrowest claim-free substitution.
+ */
+export function outcomeVerbFor(text: string): string {
+  if (/\b(?:save[sd]?|parr(?:y|ies|ied)|tips?\s+(?:over|wide)|smothers?)\b/i.test(text)) return "is saved";
+  if (/\b(?:block(?:s|ed)?|deflect(?:s|ed)?)\b/i.test(text)) return "is blocked";
+  if (/\b(?:clear(?:s|ed)?|hoof(?:s|ed)?)\b/i.test(text)) return "is cleared";
+  if (/\b(?:wide|off\s+target|over\s+the\s+bar|past\s+the\s+post)\b/i.test(text)) return "goes wide";
+  return "shoots";
+}
+
+/**
+ * Best-effort shortening of a detected claim (ordered, longest phrase first).
+ * Every replacement keeps the actor and the place and is same-length or
+ * shorter. A phrase this table cannot certify is left to `quietShape`.
+ */
+function rewriteScoreClaims(input: string, verb: string): string {
+  // Protect benign spans first: `shot on goal` must never become `shot on shot`
+  // when the bare-goal rule runs. Restored untouched at the end.
+  const guarded: string[] = [];
+  let out = input;
+  for (const re of BENIGN_CLAIM_SPANS) {
+    out = out.replace(re, (m) => {
+      guarded.push(m);
+      return `\u0002${guarded.length - 1}\u0002`;
+    });
+  }
+  // A score phrase that names the goal word in one go.
+  out = out.replace(/\b(?:scores?|scored)\s+(?:a|the)?\s*(?:goal|winner)\b/gi, (m) => matchCase(verb, m));
+  // The ball crossing the line / going in.
+  out = out.replace(
+    /\b(?:the\s+)?ball\s+(?:enters?|is\s+in|goes?\s+into|is\s+into)\s+the\s+net\b/gi,
+    (m) => matchCase("the ball stays out", m)
+  );
+  out = out.replace(/\b(?:into|inside)\s+(?:the\s+)?net\b/gi, (m) => matchCase("wide", m));
+  out = out.replace(/\binto\s+net\b/gi, (m) => matchCase("wide", m));
+  out = out.replace(/\b(?:the\s+)?net\s+(?:ripples|bulges|swells|shakes|billows)\b/gi, (m) =>
+    matchCase("goes wide", m)
+  );
+  out = out.replace(/\b(?:finds?|found|hits?|hit)\s+(?:the\s+)?(?:back\s+of\s+the\s+)?net\b/gi, (m) =>
+    matchCase(`${verb} wide`, m)
+  );
+  out = out.replace(/\b(?:cross(?:es|ed)?|over|past)\s+the\s+(?:goal\s+)?line\b/gi, (m) =>
+    matchCase(`${verb} wide`, m)
+  );
+  // Putting it in with a foot/head.
+  out = out.replace(
+    /\b(?:taps?|tapped|slots?|slotted|buries?|buried|puts?|put)\s+(?:it\s+|the\s+ball\s+)?(?:in|home|away)\b/gi,
+    (m) => matchCase(verb, m)
+  );
+  out = out.replace(/\bconver(?:ts|ted)\b/gi, (m) => matchCase(verb, m));
+  out = out.replace(/\b(?:levels?|levelled)\s+it\b/gi, (m) => matchCase("goes wide", m));
+  // "<shot verb> and scores" -> keep the shot; otherwise "and <verb>".
+  out = out.replace(
+    /(\s*(?:,\s*)?(?:(?:and|then)\s+){1,2})(?:scores?|scored)\b/gi,
+    (m, joiner: string, offset: number, whole: string) =>
+      SHOT_VERB.test(whole.slice(0, offset)) ? "" : `${joiner}${verb}`
+  );
+  // Bare score / goal words left after the phrase rules.
+  out = out.replace(/\b(?:scores?|scored)\b/gi, (m) => matchCase(verb, m));
+  out = out.replace(/\b(?:go+al|goals?)\b/gi, (m) => matchCase("shot", m));
+  out = out.replace(/\b(?:equaliser|equalizer|match[- ]?winner)\b/gi, (m) => matchCase(verb, m));
+  out = out.replace(/\u0002(\d+)\u0002/g, (_m, i: string) => guarded[Number(i)] ?? "");
+  return out;
+}
+
+/** A place phrase at the end of a clause ("in the box", "from the edge of the area"). */
+const PLACE_TAIL = /\b(?:in|at|from|near|inside|outside|around|on)\s+(?:the\s+)?[\p{L}][\p{L}\d'’\s-]{0,30}$/u;
+
+/** Remove every detected claim marker (the last-resort, always-honest shape). */
+function stripClaimMarkers(text: string): string {
+  const masked = maskBenign(text);
+  let out = text;
+  // Delete claim markers right-to-left so earlier offsets stay valid.
+  const spans: { start: number; end: number }[] = [];
+  for (const re of CLAIM_MARKERS) {
+    const r = new RegExp(re.source, "gi");
+    let m: RegExpExecArray | null;
+    while ((m = r.exec(masked)) !== null) spans.push({ start: m.index, end: m.index + m[0].length });
+  }
+  spans.sort((a, b) => b.start - a.start);
+  for (const s of spans) out = `${out.slice(0, s.start)} ${out.slice(s.end)}`;
+  return tidy(out);
+}
+
+/**
+ * The quiet shape (§3.3): actor + outcome verb + place, with the claim removed.
+ * Deterministic — it is built from the line's own words, never from a model call
+ * — and it is the fallback for any claim phrasing the rewrite steps could not
+ * certify, which is what makes the gate fail closed.
+ */
+export function quietShape(text: string, verb?: string): string {
+  const outcome = verb ?? outcomeVerbFor(text);
+  const lead = captionLead(text);
+  const first = lead.split(/[.;!?]\s+|;\s*/)[0].trim() || lead.trim();
+  const masked = maskBenign(first);
+  let idx = -1;
+  for (const re of CLAIM_MARKERS) {
+    const m = new RegExp(re.source, "i").exec(masked);
+    if (m && (idx < 0 || m.index < idx)) idx = m.index;
+  }
+  let head = idx > 0 ? first.slice(0, idx) : "";
+  head = head.replace(/[\s,;:]+$/, "").replace(/\s+\b(?:and|then)\b$/i, "").trim();
+  if (/^(?:a|an|the)$/i.test(head)) head = "";
+  const place = (first.match(PLACE_TAIL)?.[0] ?? "").trim();
+  const parts: string[] = [];
+  if (head) parts.push(head);
+  if (!head || !SHOT_VERB.test(head)) parts.push(idx > 0 ? outcome : "shot");
+  if (place && !head.toLowerCase().includes(place.toLowerCase())) parts.push(place);
+  let out = tidy(parts.join(" "));
+  if (!out) out = stripClaimMarkers(first);
+  if (!out) out = "Shot";
+  // A shape that still carries a claim marker is never emitted.
+  if (hasGoalClaim(out)) out = stripClaimMarkers(out) || "Shot";
+  return out;
+}
+
 
 /**
  * Internal decision-reason tails that are appended to a decide `reason` for
@@ -209,22 +368,6 @@ function dropGoalClauses(text: string): string {
  */
 const INTERNAL_REASON_TAIL =
   /\s*\|\s*(?:celebration of an already-delivered|no independent|dedupe|suppressed|burst|downgraded|anchor\s)[^|]*/gi;
-/** A hyphenated technical compound is a term, not a claim (`score-transition`). */
-const HYPHEN_COMPOUND = /(?:^|\s)(\S*\b(?:score|goal)s?-\S+)/gi;
-
-/** A net-crossing claim ("the ball enters the net"). A NEGATED form
- * ("the ball does not enter the net") states the opposite and is left alone. */
-const NET_CLAIM = /\b(?:the\s+)?ball\s+(?:clearly\s+)?(?:enters?|is\s+in|goes?\s+into|is\s+into)\s+the\s+net\b/gi;
-
-/** Rewrite an un-negated net-crossing claim to a neutral non-goal beat. */
-function rewriteNetClaims(text: string): string {
-  return text.replace(NET_CLAIM, (m, offset: number) => {
-    const before = text.slice(Math.max(0, offset - 24), offset);
-    if (/\b(?:not|never|n't|without|no)\s*$/i.test(before)) return m; // negated
-    return matchCase("the ball stays out", m);
-  });
-}
-
 /** Evidence tags the pipeline appends to a decide reason ("; scoreboard score
  * change confirmed"). Not copy — removed before any other rule runs. */
 const EVIDENCE_TAG =
@@ -255,23 +398,6 @@ export function dropColourClause(text: string): string {
   return lead || text;
 }
 
-/**
- * Does this line assert a goal? Same vocabulary `gateGoalClaims` targets, so
- * "dropped with the claim" means the claim the rewrite table would have hit —
- * and a legitimate `goal kick` / `shot on goal` is not a claim.
- */
-export function hasGoalClaim(text: string): boolean {
-  if (!text) return false;
-  if (RESIDUAL_GOAL.test(text)) return true;
-  // NET_CLAIM / GOAL_REWRITES are global regexes; clone them flag-free for a
-  // pure probe (a `.test()` on a /g regex would advance its lastIndex).
-  if (new RegExp(NET_CLAIM.source, "i").test(text)) return true;
-  for (const [re] of GOAL_REWRITES) {
-    if (new RegExp(re.source, re.flags.replace("g", "")).test(text)) return true;
-  }
-  return false;
-}
-
 /** The calm-window word budget the fast contract grades (AC5). */
 export const QUIET_MAX_WORDS = 8;
 
@@ -291,13 +417,17 @@ const QUIET_TRIMS: [RegExp, string][] = [
     /\s+\band\s+(?:white|blue|red|black|yellow|green|purple|orange|grey|gray)\b(?=\s+(?:kit|jersey|shirt|strip)\b)/gi,
     "",
   ],
-  [/\s+\b(?:kit|jersey|shirt|strip)\b/gi, ""],
+  [/\s+\b(?:kit|jersey|shirt|strip|colours)\b/gi, ""],
   // "The No. 9 controls the ball in the penalty area." -> "No. 9 ..." (the
   // article before a jersey number is pure filler on a caption line).
   [/\bThe\s+(?=No\.?\s*\d+\b)/gi, ""],
   // "penalty area" -> "box": the same place in the vocabulary the contract
   // already uses, one token shorter. Never applied to "goal area".
   [/\bpenalty\s+area\b/gi, "box"],
+  // ADAAAA-7957: the actor's colour robe is the last honest detail to lose when
+  // the place is what makes the line a beat ("Player in blue takes the goal
+  // kick in midfield" -> "Player takes the goal kick in midfield").
+  [/\s+\bin\s+(?:the\s+)?(?:white|blue|red|black|yellow|green|purple|orange|grey|gray)\b/gi, ""],
 ];
 
 /** Blunt a quiet line down to the 8-word budget (byte-identical when it fits). */
@@ -309,50 +439,82 @@ export function trimQuietLine(text: string): string {
     if (wordCount(out) <= QUIET_MAX_WORDS) break;
     out = out.replace(re, replacement);
   }
+  if (wordCount(out) > QUIET_MAX_WORDS) {
+    // Last resort: the bar is a word count, so cut at a word boundary and drop
+    // a dangling function word ("… in") so the line never ends mid-phrase.
+    out = out
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, QUIET_MAX_WORDS)
+      .join(" ")
+      .replace(/\s+\b(?:in|at|on|of|to|with|and|from|the|a|an)\b$/i, "");
+  }
   if (out === input) return input;
   return tidy(out);
 }
 
+/** Verdicts that own a colour beat and the full line (AC4). */
+const LOUD_VERDICTS = new Set(["scoring_play", "near_miss", "big_play"]);
+
 /**
- * ADAAAA-7956 rule 1 — the verdict guard for a non-goal window.
+ * Is this a quiet window? §3.3: any verdict that is not goal/highlight. An
+ * unrecognised verdict is treated as quiet (fail closed); a row with NO stored
+ * verdict is a legacy row and is not length-gated.
+ */
+export function isQuietVerdict(verdict?: string | null): boolean {
+  const v = (verdict ?? "").trim().toLowerCase();
+  return v !== "" && !LOUD_VERDICTS.has(v);
+}
+
+/**
+ * §3.5: scorebug / graphic OCR text is not a colour beat. A colour clause that
+ * cites a graphic, overlay, scoreboard or OCR read is dropped — the crowd/bench
+ * channel is the only colour evidence this contract accepts.
+ */
+const OCR_CITATION =
+  /\b(?:graphic|graphics|scorebug|score ?board|ocr|overlay|on-?screen|banner|lower[- ]third|title card|telestrator)\b/i;
+
+export function gateOcrColour(text: string): string {
+  const colour = captionColour(text);
+  if (!colour || !OCR_CITATION.test(colour)) return text;
+  const out = tidy(dropColourClause(text));
+  return out === text ? text : out;
+}
+
+/**
+ * ADAAAA-7956 rule 1 + ADAAAA-7957 §3.3 — the quiet gate, enforced at EMISSION
+ * and AFTER the claim and name rewrites, so a rewrite can never push a line back
+ * over the bar. A quiet window emits ≤ 8 words with no em-dash and no colour
+ * clause; an OCR-citing colour clause is dropped on every window (§3.5).
  *
- * A window whose stored verdict is not a goal may not carry a goal claim, and
- * the colour clause that came with that claim is dropped with it (a replay or
- * celebration window must not read as a fresh goal AND a fresh crowd roar).
- * A `not_highlight` window is a QUIET window, so it carries no colour clause at
- * all and is blunted to the 8-word budget — that is the shape the story log
- * grades (AC5) and what stops the quiet rows repeating one long sentence.
- *
- * A real goal verdict (`scoring_play`) is returned byte-identical, so the loud
- * window keeps its clause; a legacy row with no stored verdict is untouched.
+ * A real goal/highlight window is returned byte-identical apart from an OCR
+ * clause, so the loud channel keeps its colour beat; a legacy row with no stored
+ * verdict is untouched.
  */
 export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): string {
-  const verdict = (ctx?.verdict ?? "").trim().toLowerCase();
-  if (!verdict) return text;
-  if (verdict === "scoring_play") return text;
-  let out = hasGoalClaim(text) ? dropColourClause(text) : text;
-  if (verdict === "not_highlight") {
-    out = trimQuietLine(dropColourClause(out));
-  }
+  let out = gateOcrColour(text);
+  if (!isQuietVerdict(ctx?.verdict)) return out === text ? text : out;
+  out = dropColourClause(out);
+  if (/[—–]/.test(out)) out = out.replace(/\s*[—–]\s*/g, ", ");
+  out = trimQuietLine(out);
   return out === text ? text : tidy(out);
 }
 
-/** Rewrite goal claims to shot/wide beats when the verdict is not a goal. */
+/*
+ * §3.1 claim gate. A goal verdict (and a corroborated one, §3.4) passes through
+ * byte-identical; every other window has its goal claim rewritten to the
+ * window's outcome verb, or to the quiet shape when the outcome is not
+ * determinable. The colour clause that came with a rewritten claim is dropped
+ * with it (a quiet beat cannot ride a claim).
+ */
 export function gateGoalClaims(text: string, ctx?: CaptionGroundingContext): string {
   if (goalAllowed(ctx)) return text;
-  // Mask hyphenated technical compounds (`score-transition`) so a word inside a
-  // term is never rewritten into nonsense; restored at the end.
-  const masked: string[] = [];
-  let out = text.replace(HYPHEN_COMPOUND, (m) => {
-    masked.push(m);
-    return `\u0001${masked.length - 1}\u0001`;
-  });
-  for (const [re, replacement] of GOAL_REWRITES) {
-    out = out.replace(re, (m) => matchCase(replacement, m));
-  }
-  out = rewriteNetClaims(out);
-  if (RESIDUAL_GOAL.test(out)) out = dropGoalClauses(out);
-  out = out.replace(/\u0001(\d+)\u0001/g, (_m, i: string) => masked[Number(i)] ?? "");
+  if (!hasGoalClaim(text)) return text;
+  let out = dropColourClause(text);
+  const verb = outcomeVerbFor(out);
+  out = rewriteScoreClaims(out, verb);
+  // Anything the rewrite steps cannot certify fails closed to the quiet shape.
+  if (hasGoalClaim(out)) out = quietShape(out, verb);
   return out === text ? text : tidy(out);
 }
 
@@ -392,8 +554,9 @@ function gateScores(text: string, promptText: string): string {
   );
 }
 
-/** Letters a proper name may contain (accented Latin, apostrophes, hyphens). */
-const NAME_WORD = /[\p{Lu}][\p{L}'’.-]*/gu;
+/** Letters a proper name may contain (accented Latin, apostrophes, hyphens).
+ * No trailing full stop: `No. 9` is a JERSEY, not the name "No." (ADAAAA-7957). */
+const NAME_WORD = /[\p{Lu}][\p{L}'’\-]*/gu;
 
 /** Function/event words that are capitalised but are not proper names. */
 const NAME_STOPWORDS = new Set(
@@ -417,6 +580,9 @@ const NAME_STOPWORDS = new Set(
     "graphic","clock","signal","whistle","moment","passage","phase","interval",
   ].map((w) => w.toLowerCase())
 );
+
+/** All-caps tokens that are codes, not names (a graphic label or a unit). */
+const CODE_TOKENS = new Set(["gol", "goal", "goals", "ocr", "var", "fc", "afc", "ht", "ft", "pk", "gk", "cb", "lb", "rb"]);
 
 /** Club-name openers that make a multi-word candidate a SIDE, not a person. */
 const CLUB_PREFIXES = new Set([
@@ -455,8 +621,15 @@ function roleFor(text: string, tokens: string[]): string {
  * with a role ("the striker", "the No. 9", "the side"). A legible jersey
  * number ("No. 9") is evidence in its own right and is left untouched.
  */
-export function groundNames(text: string, promptText: string): string {
+export function groundNames(text: string, promptText?: string | null): string {
   if (!text) return text;
+  // ADAAAA-7957: `null` means the text was certified against this window's
+  // prompt upstream (the server summary-log seam) and is not re-checked. A
+  // string — INCLUDING `""` — is evidence, and no evidence fails closed: every
+  // unsourced proper name becomes a role. The live seam used to pass `null`
+  // whenever the decide analysis was absent, so the gate never ran and two
+  // invented names ("Manuel Ordoñez", "David Saez") reached a caption.
+  if (promptText === null) return text;
   const prompt = promptText ?? "";
   let out = text;
   // Widest-name-first so "Real Madrid CF" is replaced once, not twice.
@@ -501,10 +674,11 @@ export function groundNames(text: string, promptText: string): string {
     if (meaningful.every((t) => NAME_STOPWORDS.has(stripDiacritics(t)))) continue;
     // Corroborated by the window's prompt => the name is grounded, keep it.
     if (promptHas(prompt, name) || meaningful.some((t) => promptHas(prompt, t))) continue;
-    // A bare ALL-CAPS token is an abbreviation/enum, not a person or club name
-    // ("the 'GOL' graphic"), and a quoted token is a label being talked about.
-    if (tokens.length === 1 && /^[A-Z0-9.'’]+$/.test(name)) continue;
+    // A quoted token is a label being talked about, not a person.
     if (/['"‘“]$/.test(out.slice(0, run.start))) continue;
+    // A bare ALL-CAPS token is a CODE, not a name ("GOL", "VAR", "OCR"). The list
+    // is deliberately tiny so "DAVID SAEZ" / "MBAPPÉ" still fail closed.
+    if (tokens.length === 1 && /^[A-Z0-9'’.]+$/.test(name) && CODE_TOKENS.has(stripDiacritics(name))) continue;
     out = `${out.slice(0, run.start)}${matchCase(roleFor(out, tokens), name)}${out.slice(run.end)}`;
   }
   if (out === text) return text;
@@ -536,16 +710,13 @@ export function groundCaption(text: string, ctx?: CaptionGroundingContext): stri
   const input = text ?? "";
   if (!input.trim()) return input;
   let out = stripInternalTokens(input);
-  // ADAAAA-7956 rule 1 runs BEFORE the claim rewrite: it needs to see the
-  // model's own goal claim to drop the colour clause that came with it, and a
-  // quiet window loses its colour clause even when it never claimed a goal.
-  out = gateQuietWindow(out, ctx);
+  // ADAAAA-7957: the §3.3 quiet gate runs LAST (after the claim and name
+  // rewrites), so a rewrite cannot push a line back over the 8-word bar.
   out = gateGoalClaims(out, ctx);
   const prompt = ctx?.promptText;
-  if (typeof prompt === "string") {
-    out = groundNames(out, prompt);
-    out = gateScores(out, prompt);
-  }
+  out = groundNames(out, prompt);
+  out = gateQuietWindow(out, ctx);
+  if (typeof prompt === "string") out = gateScores(out, prompt);
   if (out === input) return input;
   return neverLonger(input, out);
 }
