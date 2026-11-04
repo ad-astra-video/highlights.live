@@ -172,3 +172,78 @@ describe("appendSummaryEntry fractional windowTs (ADAAAA-7711)", () => {
   });
 });
 
+
+// ADAAAA-7948 (Inc 3): the caption grounding gate at the summary-log seam.
+// Every FAST caption crosses it before it becomes a Video Summary item; the VOD
+// path supplies no grounding context and must stay byte-identical (AC8).
+describe("appendSummaryEntry caption grounding (ADAAAA-7948)", () => {
+  const PROMPT =
+    "Match context: RMA 1-1 BAR | scorebug OCR: RMA 1-1 BAR | No. 3 | ASR: (empty)";
+
+  it("rewrites a goal claim whose window verdict is near_miss", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "Marta scores a goal from the box.", {
+      windowTs: 69,
+      grounding: { verdict: "near_miss", promptText: PROMPT },
+    });
+    const entry = s.getJob(job.id)!.summaryLog![0];
+    expect(entry.text).not.toMatch(/\bscores?\b|\bgoal\b/i);
+    expect(entry.text.length).toBeLessThanOrEqual("Marta scores a goal from the box.".length);
+  });
+
+  it("replaces a name the window's prompt_text cannot corroborate", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "Real Madrid press high through Manuel Ordoñez.", {
+      windowTs: 70,
+      grounding: { verdict: "big_play", promptText: PROMPT },
+    });
+    const text = s.getJob(job.id)!.summaryLog![0].text;
+    expect(text).not.toContain("Real Madrid");
+    expect(text).not.toContain("Ordoñez");
+  });
+
+  it("strips internal tokens from the entry (incl. the seeded-caption shape)", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4" });
+    await appendSummaryEntry(s, job.id, "[near_miss] Audio Burst", {
+      windowTs: 71,
+      grounding: { verdict: "near_miss", promptText: PROMPT },
+    });
+    const text = s.getJob(job.id)!.summaryLog![0].text;
+    expect(text).toBe("Audio Burst");
+  });
+
+  it("passes a REAL goal verdict through byte-identical", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4" });
+    const line = "No. 9 scores at the near post — the net ripples.";
+    await appendSummaryEntry(s, job.id, line, {
+      windowTs: 72,
+      grounding: { verdict: "scoring_play", promptText: PROMPT, eventType: "GOAL" },
+    });
+    expect(s.getJob(job.id)!.summaryLog![0].text).toBe(line);
+  });
+
+  it("leaves the VOD path BYTE-IDENTICAL (no grounding context supplied)", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/vod.mp4" });
+    const line = "Real Madrid scores a goal in the 88th minute.";
+    await appendSummaryEntry(s, job.id, line, { windowTs: 88 });
+    expect(s.getJob(job.id)!.summaryLog![0].text).toBe(line);
+  });
+
+  it("grounds only the persisted log text — the rolling runningSummary stays model input", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4" });
+    const line = "[near_miss] Marta scores a goal.";
+    await appendSummaryEntry(s, job.id, line, {
+      windowTs: 73,
+      grounding: { verdict: "near_miss", promptText: PROMPT },
+    });
+    const j = s.getJob(job.id)!;
+    expect(j.summaryLog![0].text).not.toBe(line);
+    expect(j.runningSummary).toBe(line);
+  });
+});

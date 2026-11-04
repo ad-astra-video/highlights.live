@@ -149,7 +149,9 @@ describe("suggested caption — one social-ready sentence (ADAAAA-7881)", () => 
   });
 
   it("caps a long narrative at 180 characters on a word boundary", () => {
-    const long = `${"Argentina keeps the ball deep in Brazil territory ".repeat(6)}and finally scores.`;
+    // Name-free copy: the grounding gate (ADAAAA-7948) replaces an unsourced
+    // proper name, so this test keeps the 180-char cap in focus.
+    const long = `${"The winger keeps the ball deep in the corner ".repeat(6)}and finally shoots.`;
     const caption = suggestCaption(hl({ reason: long }));
     assertPostCaption(caption);
     // The last character of the body is a whole word, then the period.
@@ -345,5 +347,45 @@ describe("buildZip — the batch archive (ADAAAA-7622)", () => {
   it("is deterministic — identical input yields identical bytes", () => {
     const files = [{ name: "a.txt", data: new TextEncoder().encode("hello") }];
     expect(Array.from(buildZip(files))).toEqual(Array.from(buildZip(files)));
+  });
+});
+
+// ADAAAA-7948 (Inc 3): the seeded caption crosses the same grounding gate as
+// the server summary seam — verdict-gated goal claims, sourced names, and no
+// internal tokens on a postable surface.
+describe("seeded caption grounding (ADAAAA-7948)", () => {
+  it("never offers an internal verdict label as a caption", () => {
+    const h = hl({ localizedTs: 40, reason: "[near_miss] Audio Burst", outcome: "near_miss" });
+    const caption = suggestCaption(h);
+    expect(caption).not.toMatch(/[\[\]]|near_miss/i);
+    expect(caption).toBe("Audio Burst.");
+  });
+
+  it("does not label an unverified moment 'Goal' in the titles", () => {
+    const h = hl({ localizedTs: 40, reason: "[near_miss] Audio Burst", outcome: "near_miss" });
+    const titles = postTitles(h);
+    expect(titles.join(" | ")).not.toMatch(/\[near_miss\]|near_miss/i);
+    expect(titles.join(" | ")).not.toMatch(/^Goal:|Goal: Audio/);
+  });
+
+  it("rewrites a goal claim in the summary-log narrative when the verdict is not a goal", () => {
+    const log: SummaryLogEntry[] = [entry(1, 68, "The striker scores a goal at the near post.")];
+    const h = hl({ localizedTs: 69, outcome: "near_miss" });
+    const caption = suggestCaption(h, log);
+    expect(caption).not.toMatch(/\bscores?\b|\bgoal\b/i);
+    expect(caption.length).toBeLessThanOrEqual("The striker scores a goal at the near post.".length + 1);
+  });
+
+  it("keeps a real goal caption byte-identical (byte-for-byte passthrough)", () => {
+    const log: SummaryLogEntry[] = [entry(1, 68, "No. 9 scores at the near post.")];
+    const h = hl({ localizedTs: 69, outcome: "scoring_play" });
+    expect(suggestCaption(h, log)).toBe("No. 9 scores at the near post.");
+  });
+
+  it("replaces an unsourced name when the caption falls back to the decide reason", () => {
+    const h = hl({ localizedTs: 40, reason: "Manuel Ordoñez fires a shot from the box.", outcome: "big_play" });
+    const caption = suggestCaption(h);
+    expect(caption).not.toContain("Manuel");
+    expect(caption).not.toContain("Ordoñez");
   });
 });

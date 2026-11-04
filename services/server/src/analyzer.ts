@@ -4,6 +4,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
+import type { CaptionGroundingContext } from "@highlights/events";
 import { StageAMetrics, StageAOutcomeLedger } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
 import type { PerceiveCalibration } from "./perceive-calibration";
@@ -1711,7 +1712,15 @@ export interface AnalyzerConfig {
    * a cadence decide, so the job-detail endpoint + web UI surface it growing.
    * Best-effort: a throwing callback is caught + logged, never a pipeline
    * failure. */
-  onRunningSummary?: (summary: string, meta?: { windowTs?: number }) => void;
+  onRunningSummary?: (summary: string, meta?: { windowTs?: number; grounding?: CaptionGroundingContext }) => void;
+  /**
+   * ADAAAA-7948 (Inc 3): ground every FAST caption before it is persisted —
+   * gate goal claims on the window's own verdict, replace names the window's
+   * `prompt_text` cannot corroborate, strip internal tokens. Set ONLY on the
+   * live/fast rails (`buildLiveAnalyzerConfig`), so the VOD summary path stays
+   * byte-identical (AC8). CPU-only, no inference change.
+   */
+  captionGrounding?: boolean;
 }
 
 /**
@@ -4126,7 +4135,21 @@ export async function observeAcceptOnly(
     const next = nextRunningSummary(cfg.getRunningSummary?.(), decision);
     if (next !== null) {
       try {
-        cfg.onRunningSummary(next, { windowTs: payload.centerTs });
+        // ADAAAA-7948 (Inc 3): on the FAST rail, carry this window's own stored
+        // verdict + the exact prompt text it decided from, so the summary-log
+        // seam can gate goal claims, ground names and strip internal tokens.
+        // VOD never sets `captionGrounding`, so its entries stay byte-identical.
+        const grounding: CaptionGroundingContext | undefined = cfg.captionGrounding
+          ? {
+              verdict: decision.outcome ?? null,
+              promptText: decision.analysis?.prompt ?? null,
+              eventType: decision.eventType ?? null,
+            }
+          : undefined;
+        cfg.onRunningSummary(next, {
+          windowTs: payload.centerTs,
+          ...(grounding ? { grounding } : {}),
+        });
       } catch (e: any) {
         console.error(`[running-summary:${cfg.jobId}] persist failed:`, String(e?.message || e));
       }

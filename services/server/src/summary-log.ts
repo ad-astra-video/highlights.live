@@ -14,6 +14,7 @@
 // Kept in its own module (like job-title.ts) so the append logic can be
 // unit-tested without driving the full VOD/live pipeline.
 import type { SummaryLogEntry } from "@highlights/events";
+import { groundSummaryText, type CaptionGroundingContext } from "@highlights/events";
 import type { Store } from "./store";
 
 /**
@@ -50,6 +51,13 @@ export function nextSummarySeq(log: SummaryLogEntry[] | undefined): number {
 export interface SummaryAppendMeta {
   /** Video timestamp (seconds) of the observe window this entry summarizes. */
   windowTs?: number;
+  /**
+   * ADAAAA-7948 (Inc 3): the grounding context for the window this entry
+   * covers — its stored verdict plus its decide `prompt_text`. Present ONLY on
+   * the live/fast rail; the VOD summary path never supplies it, so VOD entries
+   * stay byte-identical.
+   */
+  grounding?: CaptionGroundingContext;
 }
 
 /**
@@ -95,13 +103,21 @@ export function appendSummaryEntry(
   const delta = summaryDelta(job.runningSummary, summary);
   // ADAAAA-7711: keep the fractional window centre (see normalizeWindowTs).
   const windowTs = normalizeWindowTs(meta?.windowTs);
+  // ADAAAA-7948 (Inc 3): the grounding gate. Every FAST caption is filtered
+  // before it becomes a user-visible Video Summary item: no goal claim without
+  // the window's own verdict, no name the window's prompt cannot corroborate,
+  // no internal token. The rolling `runningSummary` is deliberately NOT gated —
+  // it is model input for the next window, not customer copy. VOD passes no
+  // `grounding`, so its items stay byte-identical (AC8).
+  const rawText = delta || summary;
+  const text = meta?.grounding ? groundSummaryText(rawText, meta.grounding) : rawText;
   const entry: SummaryLogEntry = {
     seq,
     ts: new Date().toISOString(),
     ...(windowTs != null ? { windowTs } : {}),
     // The per-window content the model added this pass; fall back to the whole
     // bounded summary so a pass is never silently dropped from the log.
-    text: delta || summary,
+    text,
   };
   const nextLog = [...log, entry];
   return store.patchJob(jobId, { runningSummary: summary, summaryLog: nextLog }).then(() => nextLog);
