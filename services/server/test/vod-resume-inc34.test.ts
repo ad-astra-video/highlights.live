@@ -528,6 +528,34 @@ describe("VOD resume Inc 3+4 end to end (ADAAAA-7907 AC7, AC9, AC10)", () => {
     expect(job.vodMeter.wallClockS - attempt1WallS).toBeGreaterThanOrEqual(attempt2ElapsedS - 0.5);
     void attempt1ElapsedS;
 
+    // ---- ADAAAA-7928 (§4.1): measured stage timings on the REAL run --------
+    // This record was produced by the real worker (ffmpeg extraction + fake
+    // perceive/decide), across two attempts, so the block is proven on the
+    // write path, not just in the builder's unit fixture.
+    const st = job.stageTimings as any;
+    expect(st).toBeTruthy();
+    expect(st.version).toBe(1);
+    expect(st.measuredAt).toBeTruthy();
+    // Invariant 1: the five stages partition the run exactly.
+    expect(st.prerollMs + st.extractMs + st.capacityWaitMs + st.analyzeMs + st.finalizeMs).toBe(st.totalMs);
+    // Invariant 2: the nested measures are subsets, never addends.
+    expect(st.clipEncodeMs).toBeLessThanOrEqual(st.analyzeMs);
+    expect(st.audioGateMs).toBeLessThanOrEqual(st.analyzeMs);
+    expect(st.sourceProbeMs).toBeLessThanOrEqual(st.finalizeMs);
+    // Invariant 3: totalMs is the job's own claim -> done span (±100 ms).
+    expect(Math.abs(st.totalMs - job.vodMeter.wallClockS * 1000)).toBeLessThanOrEqual(100);
+    // Invariant 4 (F1): the perceive clock IS the analyze window — the queue
+    // wait lives in `capacityWaitMs` and is not billed as session seconds.
+    expect(st.perceiveSessionMs).toBe(st.analyzeMs);
+    expect(st.perceiveSessionMs).toBeLessThanOrEqual(st.analyzeMs + st.capacityWaitMs);
+    // The measured stages are real, not placeholders.
+    expect(st.analyzeMs).toBeGreaterThan(0);
+    expect(st.finalizeMs).toBeGreaterThanOrEqual(0);
+    expect(st.totalMs).toBeGreaterThan(0);
+    // A resumed job folds attempt 1's wall clock into preroll, so the partition
+    // still closes on the job's full span instead of only the last attempt.
+    expect(st.prerollMs).toBeGreaterThanOrEqual(Math.round(attempt1WallS * 1000) - 100);
+
     // ---- AC7: 409 on done ------------------------------------------------
     const onDone = await t.app.inject({
       method: "POST",
@@ -544,6 +572,9 @@ describe("VOD resume Inc 3+4 end to end (ADAAAA-7907 AC7, AC9, AC10)", () => {
     expect(ownerView.job.resume.totalAttempts).toBe(2);
     expect(ownerView.job.resume.accumulators).toBeUndefined();
     expect(ownerView.job.vodMeter).toBeUndefined();
+    // ADAAAA-7928: stage timings are the admin-only panel's data (perceive
+    // session seconds are billable), so the owner read strips them too.
+    expect(ownerView.job.stageTimings).toBeUndefined();
 
     await t.app.close();
   }, 180000);
@@ -780,6 +811,9 @@ describe("VOD resume boot recovery (ADAAAA-7907 Increment 4)", () => {
     expect(ownerView.job.resume.resumedFromTs).toBe(cursorTs);
     expect(ownerView.job.resume.accumulators).toBeUndefined();
     expect(ownerView.job.vodMeter).toBeUndefined();
+    // ADAAAA-7928: stage timings are the admin-only panel's data (perceive
+    // session seconds are billable), so the owner read strips them too.
+    expect(ownerView.job.stageTimings).toBeUndefined();
 
     await appB.app.close();
   }, 240000);

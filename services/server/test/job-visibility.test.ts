@@ -58,6 +58,22 @@ const INTERNAL_FIELDS = {
     perVideoHourCostUsd: 2.8,
     rtf: 1.72,
   },
+  // ADAAAA-7928: per-stage timings ride the same gate (perceiveSessionMs is
+  // billable session time; the panel is admin-only).
+  stageTimings: {
+    version: 1,
+    prerollMs: 400,
+    extractMs: 1000,
+    capacityWaitMs: 100,
+    analyzeMs: 7500,
+    clipEncodeMs: 1500,
+    audioGateMs: 6400,
+    finalizeMs: 2000,
+    sourceProbeMs: 120,
+    perceiveSessionMs: 7500,
+    totalMs: 11000,
+    measuredAt: "2026-11-04T00:00:00.000Z",
+  },
 };
 
 describe("job-visibility projection", () => {

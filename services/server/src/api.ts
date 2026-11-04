@@ -63,6 +63,11 @@ import { buildPostableHighlights, countsFromPostable, postableCountFields, quota
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { buildVodMeter, formatVodMeterLine } from "./vod-meter";
+// ADAAAA-7928 (Inc 1 of ADAAAA-7925): pure per-stage timing builder for the
+// completed VOD record (`job.stageTimings`).
+import { buildStageTimings } from "./vod-stage-timings";
+// ADAAAA-7928: pure admin aggregate behind GET /admin/vod-breakdown.
+import { buildVodBreakdown, type VodBreakdownScopeKind } from "./vod-breakdown";
 import { jobDetailForRole, jobEventForRole, jobForRole, jobsForRole } from "./job-visibility";
 import { deriveLiveProgress, newestObservationTs } from "./live-progress";
 import { deriveLiveCapture } from "./live-capture";
@@ -101,7 +106,7 @@ import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribe
 import { reportMonitoring, RELIABILITY_FLOOR } from "./monitoring";
 import { buildMediaNodeReport } from "./media-node";
 import { attributeLiveIngest } from "./media-ingest";
-import { AuthService, BetaGateError, adminRequired, adminReadonlyRequired, authRequired, type AuthService as AuthSvc } from "./auth";
+import { AuthService, BetaGateError, adminReadonlyStrictRequired, adminRequired, adminReadonlyRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError, canRetrieveDataset } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
 import { FixedWindowLimiter, rateLimit } from "./rate-limit";
@@ -465,6 +470,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const authReq = authRequired(auth);
   const adminReq = adminRequired(auth);
   const adminReadOnlyReq = adminReadonlyRequired(auth);
+  // ADAAAA-7928: read guard that answers a non-admin SESSION with 403 (spec
+  // §4.2). The shared guard above answers 401; sibling routes keep it.
+  const adminReadOnlyStrictReq = adminReadonlyStrictRequired(auth);
   const train = createTrainService(db, adapter, cfg);
 
   // --- ADAAAA-7896: export marking helpers --------------------------------
@@ -1949,6 +1957,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       persistProgress(n).catch((e) => console.error(`[vod:${jobId}] progress`, String(e?.message || e)));
     };
     emitJobProgress(jobId, 5, reuseExtraction ? "resuming (frames preserved)" : "extracting frames");
+    // ADAAAA-7928: stage boundary — frame extraction starts here (or is skipped
+    // on a resume, leaving extractMs ~0).
+    const extractStartMs = Date.now();
     if (reuseExtraction) {
       // ADAAAA-7906 (AC2): extraction is SKIPPED — `extractFrames` is not
       // invoked and the pre-existing frame directory is left untouched.
@@ -1968,6 +1979,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         mode: preserveDir ? "resume" : "fresh",
       });
     }
+    // ADAAAA-7928: stage boundary — extraction finished (a resume's skip is
+    // measured as ~0 ms here; the preserved frames are not re-decoded).
+    const extractEndMs = Date.now();
     // ADAAAA-6625: a stop during extraction aborts the decode; unwind here
     // instead of analyzing a frame set the operator just cancelled.
     if (isVodStopped(jobId)) throw new VodCancelledError(jobId);
@@ -2019,6 +2033,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     };
 
     const clipDir = path.join(cfg.dataDir, "clips");
+    // ADAAAA-7928: cumulative ffmpeg clip-cut time for the time sankey. A
+    // SUBSET of analyzeMs (cuts run inside the analyze loop), never additive.
+    let clipEncodeMs = 0;
     const cut = async (ts: number) => {
       // ADAAAA-6625: a stop in flight wins over a clip cut — never spend ffmpeg
       // encode time (or write a clip) for a cancelled pass.
@@ -2027,7 +2044,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const clipId = randomUUID();
       const out = path.join(clipDir, `${clipId}.mp4`);
       const win = clipWindow(ts, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
+      const cutStartMs = Date.now();
       await cutClip(cfg.ffmpegPath, videoPath, out, win.start, win.end - win.start);
+      clipEncodeMs += Math.max(0, Date.now() - cutStartMs);
       return { clipId, clipUri: `/clips/${clipId}.mp4` };
     };
     // Async-VOD progress: wrap the frame iterator so analyzeJob's frame pull
@@ -2079,7 +2098,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         yield f;
       }
     })();
-    const t0 = Date.now();
+    // ADAAAA-7928 (F1 billing fix): the perceive-session clock starts when the
+    // session is ACQUIRED, not before the reserve. The old `t0` was taken here,
+    // before `reservePerceiveWithBackoff`, so a VOD queued behind another job on
+    // the capacity-1 slot billed the queue wait as perceive seconds and inflated
+    // `costUsd`. The wait is now its own measured stage (`capacityWaitMs`).
+    const reserveStartMs = Date.now();
     // Reserve ONE perceive session shared by the video /analyze leg and the
     // Stage-A audio /audio tap (same pattern as runLiveJob); analyzeJob stops
     // it (and any re-reserves) in its finally. The shared LiveRunShared is
@@ -2087,6 +2111,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // ADAAAA-6694: use the no-capacity backoff wrapper so a VOD submitted while
     // the capacity-1 perceive slot is held stays queued and eventually runs.
     const initial = await reservePerceiveWithBackoff(jobId);
+    // ADAAAA-7928: session acquired — this is where billable perceive time starts.
+    const sessionAcquiredMs = Date.now();
     // ADAAAA-6625: a stop during the capacity wait wins — release nothing and
     // unwind (no session was reserved).
     if (isVodStopped(jobId)) throw new VodCancelledError(jobId);
@@ -2134,6 +2160,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // aborts the video look. When the gate fires, route the candidate through
     // decide() on the anchored frame + detail-first frames/audio — the gate
     // itself never decides and bills no GPU.
+    // ADAAAA-7928: stage boundary — the Stage-A audio loop starts here and runs
+    // CONCURRENT with analyze (its wall clock is reported as `audioGateMs`).
+    let audioGateEndMs = 0;
+    const audioGateStartMs = Date.now();
     const audioLoop = (async () => {
       try {
         // ADAAAA-7906 (VOD resume): seek the tap to the first frame the resumed
@@ -2189,6 +2219,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       attemptStats.phase = "analyze";
       attemptStats.analyzeStartedMs = Date.now();
       await store.patchJob(jobId, { status: "analyzing", stage: "analyzing", framesTotal });
+      // ADAAAA-7928: the analyze STAGE opens at session acquisition (the reserve
+      // above), not at this call. One window for `analyzeMs` and
+      // `perceiveSessionMs` is what keeps the queue wait in `capacityWaitMs`
+      // alone (F1) and makes `perceiveSessionMs <= analyzeMs` hold by
+      // construction instead of by a clamp.
       outcome = await analyzeJob(adapter, iter, cut, anaCfg, onEvent, initial, shared, {
         onReserve: (res) => {
           slot.current = res;
@@ -2200,8 +2235,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       }, onProgress);
     } finally {
       await audioLoop;
+      audioGateEndMs = Date.now();
       livePerceiveSlots.delete(job.id);
     }
+    // ADAAAA-7928: stage boundary — analyze (and the concurrent audio drain) ended.
+    const analyzeEndMs = Date.now();
     // ADAAAA-6625: analyzeJob exits its loop when the slot is stopped, returning
     // a PARTIAL outcome. That must never be finalized as `done` — the stop
     // already owns the terminal state, so unwind as cancelled.
@@ -2212,7 +2250,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // highlight is never re-persisted or double-billed here — the final HTTP
     // response / GET /jobs/:id reads the same store the decision-time writes
     // populated, so the full set is present once processing ends.
-    const perceiveSessionS = (Date.now() - t0) / 1000;
+    // ADAAAA-7928 (F1): acquisition -> release, excluding the capacity wait.
+    const perceiveSessionMs = Math.max(0, analyzeEndMs - sessionAcquiredMs);
+    const perceiveSessionS = perceiveSessionMs / 1000;
     const stageA = shared.stageA.snapshot();
     // ADAAAA-6797: Stage-1 vs Stage-2 confirmation-pass metric (disagreement
     // rate = disagreed / totalRuns). The core value metric for the feature —
@@ -2239,28 +2279,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // the failed one) plus this attempt's deltas. Job-level fields and the meter
     // both read the totals, so `vodMeter.wallClockS/decideCalls/costUsd` on a
     // resumed job cover both attempts.
-    const totals = accumulateAttemptTotals(attemptStats.accumBase, {
-      decideCalls,
-      perceiveSessionS,
-      costUsd,
-      wallClockS: (Date.now() - runStartedMs) / 1000,
-    });
+    // ADAAAA-7928: `totals` + `vodMeter` are built at the END of finalize (after
+    // the checkpoint chain settles) so `wallClockS` is the real claim -> done
+    // span, which is what `stageTimings.totalMs` has to match.
     // The attempt's own counts for the `[vod-resume]` evidence line (AC10).
     attemptStats.decideCalls = decideCalls;
     attemptStats.perceiveCalls = outcome.perceiveCalls ?? outcome.framesAnalyzed;
     // Source runtime (D-I2.2 / ADAAAA-6838): probe the media duration so the
     // completed result card can show it. Best-effort (ms; null on probe failure).
+    // ADAAAA-7928: measured as `sourceProbeMs`, a subset of `finalizeMs`.
+    const probeStartMs = Date.now();
     const durationS = await probeDuration(cfg.ffmpegPath, videoPath).catch(() => null);
-    // ADAAAA-7821: measured cost meter for this job — wall clock, decide count,
-    // source duration, plus the $/video-hour pulled from the recorded spend so
-    // the VOD price row is read off a job record instead of re-modelled.
-    const vodMeter = buildVodMeter({
-      wallClockS: totals.wallClockS,
-      decideCalls: totals.decideCalls,
-      sourceDurationS: durationS,
-      costUsd: totals.costUsd,
-      decideFeeUsd: cfg.decideFee,
-    });
+    const sourceProbeMs = Math.max(0, Date.now() - probeStartMs);
     // ADAAAA-7855: drain the bounded resolver passes BEFORE leaving `analyzing`
     // so the persisted record carries the final matchContext (and its recompute
     // trail) for the completed job. Never starts a new pass here — the perceive
@@ -2298,6 +2328,51 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const doneOpenIdx = doneAttempts.map((a) => !a.endedAt).lastIndexOf(true);
     if (doneOpenIdx >= 0) doneAttempts[doneOpenIdx] = { ...doneAttempts[doneOpenIdx], endedAt: doneAt };
     const framesAnalyzedTotal = skippedFrames + outcome.framesAnalyzed;
+    // ADAAAA-7928: FINALIZE stage boundary. Probe, match-context drain, the
+    // `finalizing` transition and the checkpoint settle above are all finalize
+    // work; the `done` write below is the last act of the run.
+    const finalizeEndMs = Date.now();
+    // ADAAAA-7928: `totals` (and therefore `vodMeter`) are built HERE rather
+    // than at analyze end so `wallClockS` is the real claim -> done span that
+    // `stageTimings.totalMs` has to equal (§4.1 invariant 3). Prior attempts'
+    // accumulator block is folded in, so a resumed job still closes exactly.
+    const totals = accumulateAttemptTotals(attemptStats.accumBase, {
+      decideCalls,
+      perceiveSessionS,
+      costUsd,
+      wallClockS: Math.max(0, (finalizeEndMs - runStartedMs) / 1000),
+    });
+    const vodMeter = buildVodMeter({
+      wallClockS: totals.wallClockS,
+      decideCalls: totals.decideCalls,
+      sourceDurationS: durationS,
+      costUsd: totals.costUsd,
+      decideFeeUsd: cfg.decideFee,
+    });
+    // ADAAAA-7928 (spec §4.1): the measured per-stage block. ADDITIVE —
+    // `vodMeter` keeps its shape, `job-visibility` strips neither. Legacy rows
+    // have no block and are never fabricated; the aggregate counts them in
+    // `excluded.noStageTimings`.
+    const stageTimings = buildStageTimings({
+      runStartedMs,
+      extractStartMs,
+      extractEndMs,
+      reserveStartMs,
+      // The reserve resolving IS the acquisition: billable time starts here.
+      reserveEndMs: sessionAcquiredMs,
+      // One window for analyze + perceive session (see the boundary comment).
+      analyzeStartMs: sessionAcquiredMs,
+      analyzeEndMs,
+      clipEncodeMs,
+      audioGateStartMs,
+      audioGateEndMs,
+      sourceProbeMs,
+      perceiveSessionMs,
+      finalizeEndMs,
+      // Prior attempts' wall clock is folded into preroll by the builder, so
+      // invariant 3 still holds on a resumed job.
+      priorAttemptsMs: Math.round((attemptStats.accumBase?.wallClockS ?? 0) * 1000),
+    });
     await store.patchJob(jobId, {
       status: "done",
       stage: "done",
@@ -2355,6 +2430,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       progressLabel: "done",
       durationMs: durationS ? Math.round(durationS * 1000) : undefined,
       vodMeter,
+      // ADAAAA-7928 (spec §4.1): per-stage timings for this completed VOD run.
+      stageTimings,
       // ADAAAA-6870 (Increment 3 T1): persist the full decision trail on the
       // completed job record so it survives a server restart.
       candidates: [...jobTrail],
@@ -2995,6 +3072,47 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
     return report;
   });
+
+  // ADAAAA-7928 (Inc 1 of ADAAAA-7925): where a completed VOD request's dollars
+  // and seconds go, per pipeline stage (spec §4.2). Pure aggregation over stored
+  // job records — no DB writes, no GPU. Admin-only: cost, decide calls and
+  // perceive seconds are internal (ADAAAA-7727), so a non-admin gets 403 and
+  // never a trimmed 200.
+  app.get<{ Querystring: { scope?: string; limit?: string; days?: string; jobId?: string } }>(
+    "/admin/vod-breakdown",
+    { preHandler: adminReadOnlyStrictReq },
+    async (req, reply) => {
+      const q = req.query ?? {};
+      const scopeRaw = (q.scope ?? "recent").trim();
+      if (scopeRaw !== "recent" && scopeRaw !== "days" && scopeRaw !== "job") {
+        return reply.code(400).send({ error: "scope must be recent, days or job" });
+      }
+      const num = (v: string | undefined): number | undefined => {
+        if (v === undefined || v.trim() === "") return undefined;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : NaN;
+      };
+      const limit = num(q.limit);
+      const days = num(q.days);
+      if (limit !== undefined && Number.isNaN(limit)) {
+        return reply.code(400).send({ error: "limit must be a number" });
+      }
+      if (days !== undefined && Number.isNaN(days)) {
+        return reply.code(400).send({ error: "days must be a number" });
+      }
+      if (scopeRaw === "job" && !(q.jobId ?? "").trim()) {
+        return reply.code(400).send({ error: "jobId is required for scope=job" });
+      }
+      // Read the records the aggregate needs; the pure module owns every rule
+      // (sample selection, denominators, conservation) so this route has none.
+      const jobs = await db.listJobs();
+      return buildVodBreakdown(
+        jobs,
+        { scope: scopeRaw, limit, days, jobId: (q.jobId ?? "").trim() || undefined },
+        { decideFeeUsd: cfg.decideFee, perceivePerHourUsd: PERCEIVE_PER_HOUR_USD }
+      );
+    }
+  );
 
   app.get("/admin/waitlist", { preHandler: adminReq }, async () => ({
     entries: (await db.listWaitlist()).map((w) => ({

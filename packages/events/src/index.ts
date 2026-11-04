@@ -686,6 +686,49 @@ export const VodMeterSchema = z.object({
 });
 export type VodMeter = z.infer<typeof VodMeterSchema>;
 
+// ADAAAA-7928 (Inc 1 of ADAAAA-7925): per-stage timings on a completed VOD job.
+// Additive optional — absent on live jobs and on every record written before
+// this block landed (legacy rows are counted as `excluded.noStageTimings` by the
+// admin aggregate and are NEVER fabricated from `startedAt`/`finishedAt`).
+//
+// The five top-level stages partition the run (claim -> done):
+//   preroll + extract + capacityWait + analyze + finalize == totalMs
+// and the three subset measures are nested, not additive:
+//   clipEncodeMs  ⊆ analyzeMs   (cumulative ffmpeg cut time inside the loop)
+//   audioGateMs   ⊆ analyzeMs   (Stage-A audio loop, CONCURRENT with analyze)
+//   sourceProbeMs ⊆ finalizeMs  (probeDuration, inside finalize)
+// `perceiveSessionMs` is acquisition -> release (ADAAAA-7928 fixes the meter
+// clock that used to start before the capacity wait), and `totalMs` equals
+// `vodMeter.wallClockS * 1000`.
+//
+// Derived by `services/server/src/vod-stage-timings.ts` (pure) and written in
+// the same `patchJob` that marks the job `done`.
+export const StageTimingsSchema = z.object({
+  version: z.literal(1).default(1),
+  /** claim -> extract start (plus unattributed inter-stage setup, see builder). */
+  prerollMs: z.number().min(0),
+  /** frame extraction (ffmpeg decode, CPU). */
+  extractMs: z.number().min(0),
+  /** reservePerceiveWithBackoff window (GPU capacity queue). */
+  capacityWaitMs: z.number().min(0),
+  /** analyzeJob wall clock (video + audio + decide). */
+  analyzeMs: z.number().min(0),
+  /** CUMULATIVE ffmpeg cut time, a subset of analyzeMs. */
+  clipEncodeMs: z.number().min(0),
+  /** Stage-A audio loop wall clock, CONCURRENT subset of analyzeMs. */
+  audioGateMs: z.number().min(0),
+  /** probe + title + persistence -> done. */
+  finalizeMs: z.number().min(0),
+  /** probeDuration, a subset of finalizeMs. */
+  sourceProbeMs: z.number().min(0),
+  /** perceive session acquisition -> release (excludes capacity wait). */
+  perceiveSessionMs: z.number().min(0),
+  /** claim -> done. */
+  totalMs: z.number().min(0),
+  measuredAt: z.string(),
+});
+export type StageTimings = z.infer<typeof StageTimingsSchema>;
+
 // ADAAAA-7855: the once-per-job match context (who is playing, which colour
 // each team wears, and how confident the resolver was). Additive optional, the
 // same precedent as `runningSummary` / `summaryLog`: absent on every older row,
@@ -1163,6 +1206,10 @@ export const JobSchema = z.object({
   // into values recorded on the completed record, so $/video-hour is measured
   // rather than derived. Additive optional — absent on live jobs and older rows.
   vodMeter: VodMeterSchema.optional(),
+  // ADAAAA-7928 (Inc 1 of ADAAAA-7925): per-stage timings for the completed VOD
+  // run (see StageTimingsSchema). Additive optional — absent on live jobs and
+  // legacy rows; `vodMeter` keeps its shape unchanged.
+  stageTimings: StageTimingsSchema.optional(),
   // Live decision trail (ADAAAA-6870, Increment 3 T1): bounded ordered array of
   // candidate/highlight decisions appended by runVodJob via the onEvent hook
   // (throttled patchJob). Additive optional — absent on older records.
