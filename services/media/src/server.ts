@@ -21,6 +21,7 @@ import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
 import { WebRtcIngestSession, normalizeRtcSampleFps, FUNDED_LIVE_SAMPLE_FPS } from "./rtc";
 import { AudioRelay, type AudioPcmChunk } from "./audio-relay";
+import { ObservationRelay, DEFAULT_OBSERVE_DEADLINE_MS, type ObservationFrame } from "./observe-relay";
 import { guardStream, safeEnd, safeWrite, sendText } from "./guarded-write";
 import type { LifecycleSnapshot } from "./lifecycle";
 import { drainOpenSessions, forgetOpenSession, recordOpenSession } from "./sessions-ledger";
@@ -49,6 +50,14 @@ interface ActiveStream {
    *  ~100 ms mono PCM chunks for the perceive Stage-A gate. Lazily created on
    *  the first audio packet; absent when the stream carries no audio. */
   audioRelay?: AudioRelay;
+  /**
+   * ADAAAA-7990 (delivery follow-up): the ordered, bounded observation relay for
+   * this session. Lazily created on the first published frame. Replaces the
+   * per-frame "poll 10x250ms then silently drop" path, which delivered 0.10 obs/s
+   * on a 3 fps share (job `8cb6e0a5`) because the serial perceive runner falls
+   * behind the arrival cadence.
+   */
+  observations?: ObservationRelay;
   /**
    * True once ANY client attached (WS socket or RTC offer). Distinguishes a
    * session that carried a stream from an abandoned provision — the presence of
@@ -111,6 +120,15 @@ export interface MediaServerOptions {
   /** Max ms to wait for the answerer's ICE gathering to complete before the
    *  RTC answer is returned (so it carries a reachable candidate). Default 2000. */
   rtcIceGatherTimeoutMs?: number;
+  /**
+   * ADAAAA-7990 (delivery follow-up): how long (ms) a published frame may take to
+   * produce its observation before the relay abandons it. Deliberately the SAME
+   * number the control plane's media rail uses to accept a frame
+   * (`LIVE_OBSERVE_LAG_BUDGET_S`, default 30 s) — an observation the rail would
+   * reject as stale is not worth waiting for. Not a new knob: the media node
+   * reads that same env name in `config.ts`.
+   */
+  observeDeadlineMs?: number;
   /** Node identity published on `/health` + returned by `POST /sessions`
    *  (ADAAAA-6869 Phase 4). Default `media-0`. */
   nodeId?: string;
@@ -689,10 +707,19 @@ export class MediaServer {
   }
 
   /**
-   * Publish one decoded JPEG to the orchestrator video-in rail and relay the
-   * runner's observation back (over any live WS sockets + the control-plane
-   * callback). Shared by the WS frame path and the WebRTC ingest path, so both
-   * transports feed the perceive runner through the exact same front door.
+   * Publish one decoded JPEG to the orchestrator video-in rail and hand it to the
+   * session's ordered observation relay (over any live WS sockets + the
+   * control-plane callback). Shared by the WS frame path and the WebRTC ingest
+   * path, so both transports feed the perceive runner through the exact same
+   * front door.
+   *
+   * ADAAAA-7990 (delivery follow-up): this used to await the observation inline
+   * with a 10 x 250 ms poll and silently DISCARD the frame when the runner had
+   * not caught up — the reason a funded-3-fps share delivered 0.10 obs/s. The
+   * relay now (a) refuses to publish a frame when the in-flight window is full,
+   * so the node never hands the runner frames the rail would reject as stale, and
+   * (b) follows the frames it did publish in order with the rail's own lag budget,
+   * so a slow runner delays delivery instead of cancelling it.
    */
   private async publishAndObserve(
     stream: ActiveStream,
@@ -703,26 +730,56 @@ export class MediaServer {
     decodeLatencyMs?: number
   ) {
     const p = stream.provisioned;
-    await this.orch.publishFrame(p, seq, jpeg, ts);
+    const relay = this.observeRelay(stream);
+    if (!relay.reserve()) {
+      // Backpressure: the runner is still working through the frames we already
+      // published. Skipping this frame keeps the rail live (fresh frames, bounded
+      // lag) instead of queueing observations past the lag budget. Counted.
+      return;
+    }
+    try {
+      await this.orch.publishFrame(p, seq, jpeg, ts);
+    } catch (e) {
+      relay.abort();
+      throw e;
+    }
+    relay.commit({ seq, ts, jpeg, socket, decodeLatencyMs } satisfies ObservationFrame);
+  }
 
-    // Relay the runner's observation (poll briefly; the runner processes
-    // video-in asynchronously then publishes events-out at the same seq).
-    for (let i = 0; i < 10; i++) {
-      const obs = await this.orch.readObservation(p, seq).catch(() => null);
-      if (obs) {
+  /**
+   * The session's ordered observation relay (lazily created). Delivers in publish
+   * order, within the control plane's lag budget, and reports nothing silently:
+   * every frame ends up `delivered` or `expired`, and frames never published for
+   * lack of an in-flight slot are `refused`.
+   */
+  private observeRelay(stream: ActiveStream): ObservationRelay {
+    if (stream.observations) return stream.observations;
+    const deadlineMs = this.opts.observeDeadlineMs ?? DEFAULT_OBSERVE_DEADLINE_MS;
+    const fps = stream.sampleFps ?? this.rtcSampleFps;
+    stream.observations = new ObservationRelay({
+      read: (seq) => this.orch.readObservation(stream.provisioned, seq),
+      emit: (obs, frame) => {
         // Live-detection latency budget (PO): wall time from frame receipt to
         // the observation being published. target 1-5s.
         // eslint-disable-next-line no-console
-        console.log(`[rtc] obs seq=${seq} liveMs=${Math.round((Date.now() / 1000 - ts) * 1000)} decodeMs=${decodeLatencyMs ?? 0}`);
-        this.relay(stream, socket, obs);
+        console.log(
+          `[rtc] obs seq=${frame.seq} liveMs=${Math.round((Date.now() / 1000 - frame.ts) * 1000)} ` +
+            `decodeMs=${frame.decodeLatencyMs ?? 0}`
+        );
+        this.relay(stream, frame.socket, obs);
         // `ts` is the media node's own frame clock (epoch seconds). The control
         // plane's rail dates every decision off it, so it travels with the
         // observation instead of trusting whatever the runner echoed back.
-        void this.callback(stream, obs, jpeg, ts);
-        return;
-      }
-      await sleep(250);
-    }
+        void this.callback(stream, obs, frame.jpeg, frame.ts);
+      },
+      deadlineMs,
+      sampleFps: fps,
+      log: (line) => {
+        // eslint-disable-next-line no-console
+        console.log(line);
+      },
+    });
+    return stream.observations;
   }
 
   private relay(stream: ActiveStream, socket: any, obs: any) {
@@ -965,6 +1022,20 @@ export class MediaServer {
     if (stream.audioRelay) {
       void stream.audioRelay.close().catch(() => {});
       stream.audioRelay = undefined;
+    }
+    // ADAAAA-7990 (delivery follow-up): report the delivery ledger BEFORE the
+    // relay stops. `delivered` vs `published` is the AC1 delivered-rate evidence,
+    // so a rail that went quiet is attributable to the runner/relay rather than
+    // reading as "zero observations" (the pre-fix failure mode).
+    if (stream.observations) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[rtc] observe session=${stream.provisioned.sessionId} seconds=${Number(
+          Math.max(0, (Date.now() - stream.startedAt) / 1000).toFixed(1)
+        )} ${stream.observations.summary()}`
+      );
+      stream.observations.close();
+      stream.observations = undefined;
     }
     // 1) stop paying (no more ticket refresh). Idempotent.
     this.orch.stopPayment(sid);
