@@ -54,6 +54,9 @@ async function main() {
     provisionNoClientMs: cfg.provisionNoClientMs,
     rtcIceServers: cfg.rtcIceServers,
     rtcIceGatherTimeoutMs: cfg.rtcIceGatherTimeoutMs,
+    // ADAAAA-7990: the funded live sampling baseline (LIVE_SAMPLE_BASE_FPS=3).
+    // The control plane's per-session resolved rate overrides this.
+    rtcSampleFps: cfg.rtcSampleFps,
     // ADAAAA-6869 Phase 4 capacity/health + per-node cost attribution surface.
     nodeId: cfg.nodeId,
     maxSessions: cfg.maxSessions,

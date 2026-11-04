@@ -16,7 +16,14 @@ import {
   useOPUS,
 } from "werift";
 import { MediaServer } from "../src/server";
-import { isVp8Keyframe, isVp9Keyframe, WebRtcIngestSession } from "../src/rtc";
+import {
+  isVp8Keyframe,
+  isVp9Keyframe,
+  WebRtcIngestSession,
+  FUNDED_LIVE_SAMPLE_FPS,
+  RTC_SAMPLE_MAX_FPS,
+  normalizeRtcSampleFps,
+} from "../src/rtc";
 import type { ProvisionedSession } from "../src/orch";
 
 const wsConnect = (url: string) =>
@@ -883,3 +890,109 @@ describe("live VP8 rail must not go silent on a large decode segment (ADAAAA-759
     expect((session as any).vclCount).toBe(1);
   });
 });
+
+describe("RTC ingest samples at the FUNDED live baseline, not 1 fps (ADAAAA-7990)", () => {
+  // Board decision 2026-11-04: the live rail does 3 fps, same as VOD. 3 fps was
+  // already funded on the analyzer path (ADAAAA-6796, LIVE_SAMPLE_BASE_FPS=3)
+  // but the media rail hard-pinned itself to 1 fps (`sampleFps ?? 1` in
+  // services/media/src/rtc.ts), so a real browser/screen share delivered 0.91
+  // frames/s (job 6d48c786). These cases pin the wiring and the delivered rate.
+
+  it("defaults the cadence to the funded baseline (3), never 1, and honours the live cap", () => {
+    const fallback = new WebRtcIngestSession({ sessionId: "sess-7990-default" });
+    // The old default was 1 fps. A session with no explicit rate must run at the
+    // funded baseline instead.
+    expect(fallback.stats().sampleFps).toBe(FUNDED_LIVE_SAMPLE_FPS);
+    expect(FUNDED_LIVE_SAMPLE_FPS).toBe(3);
+    // An explicit rate (the control plane's resolved value) always wins.
+    expect(new WebRtcIngestSession({ sampleFps: 1 }).stats().sampleFps).toBe(1);
+    expect(new WebRtcIngestSession({ sampleFps: 2.5 }).stats().sampleFps).toBe(2.5);
+    // ... and can never exceed the funded LIVE_SAMPLE_MAX_FPS ceiling.
+    expect(new WebRtcIngestSession({ sampleFps: 20 }).stats().sampleFps).toBe(RTC_SAMPLE_MAX_FPS);
+    // A non-numeric / zero rate falls back to the funded baseline, not 1.
+    expect(new WebRtcIngestSession({ sampleFps: 0 }).stats().sampleFps).toBe(FUNDED_LIVE_SAMPLE_FPS);
+    expect(normalizeRtcSampleFps(undefined, 5)).toBe(3); // capped by a lower deployment cap
+  });
+
+  it("carries the resolved rate from POST /sessions into the session at offer time", async () => {
+    const g = new FakeOrch("sess-7990-wire");
+    const ms = new MediaServer(
+      { orchBase: "http://orch", callbackBase: "http://127.0.0.1:9888", reconnectGraceMs: 3000 },
+      g as any,
+    );
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    const sBase = `http://127.0.0.1:${(srv.server.address() as any).port}`;
+    try {
+      // The control plane's resolved live rate arrives with the provision call.
+      const prov = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-7990", sampleFps: 3 } });
+      expect(prov.statusCode).toBe(200);
+      expect(prov.json().sampleFps).toBe(3);
+      const sid = prov.json().sessionId;
+
+      const browserPc = new RTCPeerConnection({ codecs: { video: [useH264()] } } as any);
+      browserPc.addTransceiver(new MediaStreamTrack({ kind: "video" }), { direction: "sendonly" } as any);
+      const offer = await browserPc.createOffer();
+      await browserPc.setLocalDescription(offer);
+      const ans = await srv.inject({ method: "POST", url: `/sessions/${sid}/rtc/offer`, payload: { offer } });
+      expect(ans.statusCode).toBe(200);
+      // The WebRtcIngestSession that will decode this share runs at the resolved
+      // 3 fps — this is the line the old `sampleFps ?? 1` broke.
+      const session = (ms as any).active.get(sid).rtc.session as WebRtcIngestSession;
+      expect(session.stats().sampleFps).toBe(3);
+      await browserPc.close();
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("falls back to the funded baseline when a provision carries no rate", async () => {
+    const g = new FakeOrch("sess-7990-defaultwire");
+    const ms = new MediaServer({ orchBase: "http://orch", reconnectGraceMs: 3000 }, g as any);
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    try {
+      const prov = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-7990-bare" } });
+      expect(prov.statusCode).toBe(200);
+      expect(prov.json().sampleFps).toBe(3);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("decodes a real VP8 screen-share stream at >= 2.6 frames/s (AC1 measurement shape)", async () => {
+    // A real libvpx VP8 GOP played at 30 fps for ~2 s, through the SAME
+    // processAccessUnit + one-shot ffmpeg decode path the deployed rail uses.
+    const clip = path.join(tmpdir(), `hl-rtc-7990.${process.pid}.vp8.ivf`);
+    execFileSync("ffmpeg", [
+      "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", "testsrc2=size=480x270:rate=30",
+      "-t", "2", "-c:v", "libvpx", "-b:v", "600k", "-f", "ivf", clip,
+    ]);
+    const frames = ivfFrames(clip);
+    expect(frames.length).toBeGreaterThan(45);
+    const session = new WebRtcIngestSession({ sessionId: "sess-7990-rate" });
+    expect(session.stats().sampleFps).toBe(3);
+    let emitted = 0;
+    session.on("frame", () => emitted++);
+    session.on("error", () => {});
+    session.on("ffmpeg", () => {});
+    (session as any).codecMime = "video/VP8";
+    const t0 = Date.now();
+    for (let i = 0; i < frames.length; i++) {
+      (session as any).processAccessUnit(frames[i], i * 3000);
+      await new Promise((r) => setTimeout(r, 1000 / 30));
+    }
+    // Let the in-flight decode settle before measuring the delivered rate.
+    for (let i = 0; i < 50 && (session as any).sampling; i++) await new Promise((r) => setTimeout(r, 20));
+    const elapsedS = (Date.now() - t0) / 1000;
+    const deliveredFps = emitted / elapsedS;
+    // eslint-disable-next-line no-console
+    console.log(`[7990] delivered fps=${deliveredFps.toFixed(2)} frames=${emitted} elapsed=${elapsedS.toFixed(2)}s skipped=${session.stats().samplesSkipped}`);
+    // AC1: >= 2.6 frames/s over the run (baseline was 0.91 fps at the 1 fps pin).
+    expect(deliveredFps).toBeGreaterThanOrEqual(2.6);
+    expect(session.framesEmitted).toBe(emitted);
+    expect(session.stats().sampleFps).toBe(3);
+  });
+});
+
