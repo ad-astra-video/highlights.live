@@ -17,7 +17,7 @@ describe("in-flight resilience: perceive analyze 502/503/504 is re-reservable (A
   });
 
   it.each([502, 503, 504])(
-    "maps HTTP %i from the perceive analyze proxy to a SessionLostError with a typed deploy-recreate message",
+    "maps HTTP %i from the perceive analyze proxy to a typed perceive-session-lost message",
     async (code) => {
       const fetch = vi.fn(async () => jsonResponse(code, { error: "bad gateway" }));
       vi.stubGlobal("fetch", fetch);
@@ -26,9 +26,10 @@ describe("in-flight resilience: perceive analyze 502/503/504 is re-reservable (A
       await expect(adapter.analyze("sess-1", { seq: 30, timestamp: 30, imageB64: "x" })).rejects.toBeInstanceOf(
         SessionLostError
       );
-      // Typed message carries the deploy-recreate attribution (the retriable verdict).
+      // ADAAAA-7921: the text names the reason the classifier assigns, not the
+      // staged deploy that first prompted the retry.
       await expect(adapter.analyze("sess-1", { seq: 31, timestamp: 31, imageB64: "x" })).rejects.toThrow(
-        /analyze interrupted \(deploy-recreate\)/
+        /analyze interrupted \(perceive-session-lost\)/
       );
     }
   );
@@ -142,7 +143,7 @@ describe("re-reserve retry across a deploy-recreate (ADAAAA-7203)", () => {
       DeployRecreateInterruptedError
     );
     await expect(reservePerceiveWithRetry(client, { attempts: 3, baseMs: 1, maxMs: 4 })).rejects.toThrow(
-      /analyze interrupted \(deploy-recreate\)/
+      /analyze interrupted \(perceive-session-lost\)/
     );
   });
 

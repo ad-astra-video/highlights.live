@@ -19,6 +19,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MATCH_CONTEXT_ASR_SECONDS,
   MATCH_CONTEXT_USABLE_CONFIDENCE,
+  applyResumeCarryForward,
+  carryForwardTrailEntry,
   createVodMatchContextResolver,
   guardMatchContextRegression,
   isResumedAttempt,
@@ -309,6 +311,61 @@ describe("guardMatchContextRegression", () => {
   });
 });
 
+describe("applyResumeCarryForward — the trail explains the guard (ADAAAA-7921)", () => {
+  it("appends exactly one entry naming the kept team, its confidence and the rejected read", () => {
+    const published = applyResumeCarryForward(PRE_INTERRUPTION_CONTEXT, RESUMED_TAIL_CONTEXT, 0);
+    // Exactly ONE extra entry beyond the pass's own trail.
+    expect(published.trail).toHaveLength(RESUMED_TAIL_CONTEXT.trail.length + 1);
+    const entry = published.trail[published.trail.length - 1];
+    expect(entry.progressPct).toBe(0);
+    expect(entry.action).toEqual([
+      "carry-forward: kept away Spain@0.65, pass read 0.15 below floor 0.60",
+    ]);
+    // The entry's names are the PUBLISHED attribution, never the rejected read.
+    expect(entry.names).toEqual([
+      { side: "home", name: "Portugal", confidence: 0.95 },
+      { side: "away", name: "Spain", confidence: 0.65 },
+    ]);
+    // The guard's published teams still win.
+    expect(published.teams.find((t) => t.side === "away")?.confidence).toBe(0.65);
+  });
+
+  it("names a restored side when the thin pass dropped it entirely", () => {
+    const published = applyResumeCarryForward(
+      PRE_INTERRUPTION_CONTEXT,
+      { ...RESUMED_TAIL_CONTEXT, teams: RESUMED_TAIL_CONTEXT.teams.filter((t) => t.side === "home") },
+      50
+    );
+    const entry = published.trail[published.trail.length - 1];
+    expect(entry.action).toEqual(["carry-forward: restored away Spain@0.65, pass dropped the side"]);
+    expect(entry.progressPct).toBe(50);
+  });
+
+  it("writes no entry when the pass read IS the published attribution", () => {
+    // Previous record is WEAKER than the resumed pass, so the guard publishes
+    // the pass's own read (and only forces `ambiguous` for the below-floor side).
+    const weakerRecord: MatchContext = {
+      ...PRE_INTERRUPTION_CONTEXT,
+      teams: PRE_INTERRUPTION_CONTEXT.teams.map((t) => (t.side === "away" ? { ...t, confidence: 0.1 } : t)),
+    };
+    const guarded = guardMatchContextRegression(weakerRecord, RESUMED_TAIL_CONTEXT);
+    expect(guarded.teams.find((t) => t.side === "away")?.confidence).toBe(0.15);
+    expect(carryForwardTrailEntry(RESUMED_TAIL_CONTEXT, guarded, 0)).toBeNull();
+    const published = applyResumeCarryForward(weakerRecord, RESUMED_TAIL_CONTEXT, 0);
+    expect(published.trail).toHaveLength(RESUMED_TAIL_CONTEXT.trail.length);
+  });
+
+  it("bounds the trail at the resolver's cap", () => {
+    const longTrail: MatchContext = {
+      ...RESUMED_TAIL_CONTEXT,
+      trail: Array.from({ length: 12 }, () => RESUMED_TAIL_CONTEXT.trail[0]),
+    };
+    const published = applyResumeCarryForward(PRE_INTERRUPTION_CONTEXT, longTrail, 0);
+    expect(published.trail).toHaveLength(12);
+    expect(published.trail[11].action[0]).toMatch(/^carry-forward: kept away Spain@0\.65/);
+  });
+});
+
 describe("createVodMatchContextResolver — resume after a deploy recreate (ADAAAA-7912)", () => {
   it("keeps the pre-interruption confidence and channelOutcomes on the resumed record", async () => {
     const store = fakeStore({
@@ -359,6 +416,18 @@ describe("createVodMatchContextResolver — resume after a deploy recreate (ADAA
     // The context and its evidence land in the SAME patchJob (E1).
     expect(store.patches).toHaveLength(1);
     expect(store.patches[0].matchContextEvidence).toBeTruthy();
+
+    // ADAAAA-7921: the persisted trail explains the carry-forward. A record
+    // whose trail ends at the rejected 0.15 while its teams say 0.65 is now
+    // impossible to construct.
+    expect(final.matchContext.trail).toHaveLength(RESUMED_TAIL_CONTEXT.trail.length + 1);
+    const last = final.matchContext.trail[final.matchContext.trail.length - 1];
+    expect(last.action).toEqual([
+      "carry-forward: kept away Spain@0.65, pass read 0.15 below floor 0.60",
+    ]);
+    const trailAway = last.names.find((n: any) => n.side === "away");
+    expect(trailAway).toEqual({ side: "away", name: "Spain", confidence: 0.65 });
+    expect(final.matchContext.teams.find((t: any) => t.side === "away").confidence).toBe(trailAway.confidence);
   });
 
   it("keeps the persisted evidence when the resumed pass returns no status (E2 on a resume)", async () => {

@@ -92,7 +92,9 @@ describe("classifyVodFailure (ADAAAA-7906)", () => {
 
   it("classifies an exhausted perceive re-reserve / runner recreate as perceive-session-lost and resumable", () => {
     expect(classifyVodFailure(sessionLost())).toEqual({ reason: "perceive-session-lost", resumable: true });
-    const recreate = Object.assign(new Error("analyze interrupted (deploy-recreate)"), { name: "DeployRecreateInterruptedError" });
+    const recreate = Object.assign(new Error("analyze interrupted (perceive-session-lost): perceive runner unavailable"), {
+      name: "DeployRecreateInterruptedError",
+    });
     expect(classifyVodFailure(recreate)).toEqual({ reason: "perceive-session-lost", resumable: true });
   });
 

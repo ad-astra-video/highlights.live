@@ -110,6 +110,22 @@ const DECIDE_TRANSIENT = /HTTP 5\d\d|HTTP 429|timed? ?out|timeout|ECONNREFUSED|E
 const RESTART = /server restart|restarted|restart mid-pass|process exit/i;
 
 /**
+ * ADAAAA-7921: the human-facing prefix for an interruption, derived from the
+ * SAME reason `classifyVodFailure` assigns.
+ *
+ * The message used to be hard-coded as `analyze interrupted (deploy-recreate)`
+ * on every perceive path, so a deliberate `docker stop highlights-perceive`
+ * (measured: 43 s, attempt 8) published "nothing was deployed" as a deploy.
+ * The classifier already knows `server-restart` from `perceive-session-lost`;
+ * this helper makes the text follow the reason instead of the oldest caller.
+ * `server-restart` therefore keeps its own wording, and no runner outage can
+ * claim a deploy.
+ */
+export function describeInterruption(reason: JobFailureReason, detail: string): string {
+  return `analyze interrupted (${reason}): ${detail}`;
+}
+
+/**
  * Map a thrown VOD pipeline error to its `failureReason` and whether a resume
  * may retry it.
  */
