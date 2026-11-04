@@ -775,6 +775,13 @@ export interface CorroborationWindow {
    * two-signal frame attestation) backed the scoring read.
    */
   corroborated?: boolean | null;
+  /**
+   * The Stage-2 confirm verdict. A `confirmed_goal` is corroboration in its own
+   * right — it is exactly the second half of the ladder's own `verified` rule
+   * (`corroborated === true || goalConfirmed === "confirmed_goal"`), so the
+   * banner and the strings CANNOT disagree about which goals were corroborated.
+   */
+  goalConfirmed?: string | null;
 }
 
 /** Seconds of slack around a clip window / anchor when matching a window instant. */
@@ -804,10 +811,26 @@ export function windowCorroborated(
       start != null && end != null && ts >= start - CORROBORATION_SLACK_S && ts <= end + CORROBORATION_SLACK_S;
     const atAnchor = anchor != null && Math.abs(ts - anchor) <= CORROBORATION_ANCHOR_S;
     if (!inClip && !atAnchor) continue;
-    if (h.corroborated === true) return true;
+    if (isCorroboratedHighlight(h)) return true;
   }
   return false;
 }
+
+/**
+ * §3.4: the banner's OWN corroboration rule, in one place —
+ * `corroborated === true || goalConfirmed === "confirmed_goal"` (mirrors
+ * `goalTimelineFrom`'s `verified`). A highlight that carries neither (the confirm
+ * pass did not run, or it ran and did not corroborate) is NOT corroborated, which
+ * is what the page counts as "not corroborated by frames".
+ */
+export function isCorroboratedHighlight(h: CorroborationWindow | undefined): boolean {
+  if (!h) return false;
+  if (h.corroborated === true) return true;
+  return (h.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal";
+}
+
+/** A ball-in-net shape, with or without the article, on the claim's own words. */
+const NET_FORM = /\b(?:in|into|over)\s+(?:the\s+)?net\b/i;
 
 /**
  * §3.4 for a line whose window VERDICT is no longer available at read time (a
@@ -819,7 +842,15 @@ export function windowCorroborated(
  */
 export function gateUncorroboratedGoal(text: string, corroborated: boolean): string {
   if (!text || corroborated) return text;
-  return gateGoalClaims(text, { corroborated: false });
+  const gated = gateGoalClaims(text, { corroborated: false });
+  // Fail closed on the corroboration path specifically: a net-crossing shape the
+  // claim lexicon has not learned yet ("No. 8 headers ball into net" — no "the")
+  // still asserts a goal, and this surface has already been told the goal was
+  // never corroborated. Degrading to the shared quiet shape (§3.3) keeps the
+  // rewrite honest without introducing a second claim vocabulary.
+  const netFree = gated.replace(new RegExp(NET_FORM.source, "gi"), "wide");
+  if (netFree !== gated) return quietShape(netFree);
+  return gated;
 }
 
 /**

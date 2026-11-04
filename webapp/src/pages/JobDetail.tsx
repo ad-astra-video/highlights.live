@@ -9,7 +9,7 @@ import { useIsAdmin } from "../lib/auth";
 import { WindowAnalysisPanel } from "../components/WindowAnalysis";
 import { CostTimePanel, CostTimeToggle } from "../components/CostTimePanel";
 import { SummaryLadderView } from "../components/SummaryLadder";
-import { batchManifest, captionFromTitle, clipFileName, copyExportLink, copyText, exportUrl, markExportIntent, markExportIntentBatch, momentRangeLabel, postTitles, saveBlob, suggestCaption, type BatchItem } from "../lib/highlightPost";
+import { batchManifest, captionFromTitle, clipFileName, copyExportLink, copyText, exportUrl, highlightGrounding, markExportIntent, markExportIntentBatch, momentRangeLabel, postTitles, saveBlob, suggestCaption, type BatchItem } from "../lib/highlightPost";
 import { buildZip, type ZipFile } from "../lib/zip";
 import { groundSummaryItems } from "@highlights/events";
 import { asrSummary, asrSummaryLine } from "../lib/windowAsr";
@@ -978,6 +978,10 @@ export interface HighlightCardProps {
   /** ADAAAA-7881: the job's summary log, used to derive the suggested caption
    *  and the one-line post titles for this clip's window. */
   summaryLog?: SummaryLogEntry[];
+  /** ADAAAA-7958: fast rail (a live job). The seeded caption and the card titles
+   *  consume the page's own corroboration verdict there; VOD keeps the shipped
+   *  verdict-only behaviour (AC8). */
+  fastRail?: boolean;
   /** ADAAAA-7622: cards in the accepted (postable) feed can join a batch. */
   selectable?: boolean;
   selected?: boolean;
@@ -1001,6 +1005,7 @@ export function HighlightCard({
   onToggleSelect,
   admin = true,
   summaryLog,
+  fastRail = false,
 }: HighlightCardProps) {
   // ADAAAA-7622: one click must yield either a file or a clipboard URL, with
   // no DevTools in the happy path. `download` on a same-origin anchor saves
@@ -1016,8 +1021,12 @@ export function HighlightCard({
   // ADAAAA-7896: download/copy use the server-minted export URL so the fetch
   // marks the clip; playback (VideoClip) keeps the public `clipUri`.
   const url = exportUrl(h);
-  const titles = postTitles(h, summaryLog);
-  const shownCaption = localCaption ?? (caption || suggestCaption(h, summaryLog));
+  // ADAAAA-7958: the seeded caption and the titles are checked against the same
+  // corroboration verdict the ladder banner shows, so a goal the page counts as
+  // uncorroborated is never seeded as a post or titled "Goal: …".
+  const grounding = highlightGrounding(h, summaryLog, fastRail);
+  const titles = postTitles(h, summaryLog, grounding);
+  const shownCaption = localCaption ?? (caption || suggestCaption(h, summaryLog, grounding));
   const durationS = Math.max(0, Math.round(h.end - h.start));
   function setCaption(value: string) {
     setLocalCaption(value);
@@ -1998,7 +2007,13 @@ export function JobDetail() {
     [postableHighlights, selectedIds]
   );
   const captionOf = useCallback(
-    (h: JobDetailHighlight) => captions[h.id] ?? suggestCaption(h, detail?.job.summaryLog),
+    (h: JobDetailHighlight) =>
+      captions[h.id] ??
+      suggestCaption(
+        h,
+        detail?.job.summaryLog,
+        highlightGrounding(h, detail?.job.summaryLog, detail ? detail.job.source !== "file" : false)
+      ),
     [captions, detail]
   );
   // ADAAAA-7881: merged-moment groups for the Analysis window list — derived
@@ -2421,6 +2436,7 @@ export function JobDetail() {
                   caption={captionOf(h)}
                   onCaptionChange={setHighlightCaption}
                   summaryLog={detail.job.summaryLog}
+                  fastRail={detail.job.source !== "file"}
                   selectable
                   selected={selectedIds.includes(h.id)}
                   onToggleSelect={toggleSelectHighlight}
@@ -2475,6 +2491,7 @@ export function JobDetail() {
                     caption={captionOf(h)}
                     onCaptionChange={setHighlightCaption}
                     summaryLog={detail.job.summaryLog}
+                    fastRail={detail.job.source !== "file"}
                     admin={admin}
                   />
                 ))}

@@ -180,6 +180,31 @@ export function captionGroundingFor(
 }
 
 /**
+ * ADAAAA-7958 (contract v3 §3.4): the grounding context for a card's SEEDED
+ * caption + titles, carrying the corroboration verdict the page's own banner
+ * uses (`corroborated === true || goalConfirmed === "confirmed_goal"`, the same
+ * rule as `goalTimelineFrom`'s `verified`).
+ *
+ * Fast rail only: the long-form VOD path carries no corroboration evidence and
+ * its strings are graded unchanged (AC8), so `fastRail` false keeps the shipped
+ * verdict-only behaviour. When it is true, a goal the banner counts as
+ * uncorroborated is rewritten to the non-goal beat here, in the same shared gate
+ * the summary log crosses — so the card, the log, the chapter titles and the
+ * banner read as one story.
+ */
+export function highlightGrounding(
+  h: Pick<JobDetailHighlight, "outcome" | "eventType" | "localizedTs" | "start" | "reason" | "corroborated" | "goalConfirmed">,
+  log?: SummaryLogEntry[],
+  fastRail = false
+): CaptionGroundingContext {
+  const selected = selectNarrative(h, log);
+  const ctx = captionGroundingFor(h, { fromLog: selected.fromLog });
+  if (!fastRail) return ctx;
+  const verified = h.corroborated === true || (h.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal";
+  return { ...ctx, corroborated: verified };
+}
+
+/**
  * Human-readable label for a pipeline event type (ADAAAA-7881).
  *
  * A caption / post title is customer copy, so the raw enum (`SPORTING_EVENT`,
