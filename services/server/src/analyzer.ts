@@ -606,6 +606,54 @@ export interface AcceptedGoalEvent {
   end: number;
 }
 
+/** ADAAAA-7938 (Spec A): the compact prior-game-state the VOD decide pass
+ * forwards into every window after the first.
+ *
+ * The CEO-visible defect (ADAAAA-7931): the 48 s celebration/replay window of
+ * VOD job fe0e3efc was judged in ISOLATION — no story-so-far, no prior-window
+ * ASR (the goal call lived in the 42 s window) and no scoreboard-transition
+ * state — so the goal's aftermath was re-read as a fresh `scoring_play`. Every
+ * field here is MEASURED (a prior decision's own summary/ASR, a legible
+ * scoreboard delta, a scored decision's window instant) — never model prose.
+ *
+ * Bounded server-side before it reaches the prompt: `priorGameStateFor` trims
+ * the story/ASR tails and drops the block entirely when nothing is known, so
+ * the decide prompt stays byte-identical (AC-A2) and the per-window cost stays
+ * inside the AC-A3 bound. VOD-only — the live rail never receives it. */
+export interface PriorGameState {
+  /** The running story-so-far (bounded tail of the prior decision's summary). */
+  story: string;
+  /** Tail of the PRIOR window's ASR transcript (where a goal call sits). */
+  priorAsr: string;
+  /** Measured score as "home-away", when a legible delta was credited. */
+  score: string | null;
+  /** Content instant of the last scored event (delta ts or decided score). */
+  lastScoreTs: number | null;
+  /** True when the last score is inside {@link PRIOR_GAME_STATE_REACH_S}: a new
+   * goal in THIS window needs its own measured change. */
+  needsNewScore: boolean;
+  /** Seconds between the last score and this window's centre, when known. */
+  sinceLastScoreS: number | null;
+}
+
+/** ADAAAA-7938: how far (seconds) the "needsNewScore" claim reaches. Mirrors
+ * the deterministic ADAAAA-7865 `GOAL_DUPLICATE_REACH_S` so the prompt and the
+ * accept-path rule agree on what counts as a celebration re-read; outside the
+ * reach a later window is a candidate for a genuinely distinct goal (recall). */
+export const PRIOR_GAME_STATE_REACH_S = GOAL_DUPLICATE_REACH_S;
+/** ADAAAA-7938: bounded tails carried in the block (AC-A3 cost bound). */
+export const PRIOR_GAME_STATE_STORY_MAX_CHARS = 150;
+export const PRIOR_GAME_STATE_ASR_MAX_CHARS = 90;
+
+/** ADAAAA-7938: keep the LAST `cap` chars of a single-lined string. The most
+ * recent part of a summary/transcript is the part a celebration window needs. */
+export function priorTail(text: unknown, cap: number): string {
+  if (typeof text !== "string") return "";
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (!flat) return "";
+  return flat.length <= cap ? flat : "…" + flat.slice(-cap);
+}
+
 /** ADAAAA-7865: the evidence a GOAL accept must carry to open a NEW scoring
  * event when it is not covered by an already-accepted goal's clip. Each signal
  * is one that only a transition can produce, never a celebration:
@@ -725,6 +773,17 @@ export interface DecisionResult {
   // INPUT only; never a server-side accept gate.
   verdict?: { criteria?: Record<string, boolean | null>; [key: string]: unknown };
 }
+/** ADAAAA-7938 (Spec A): did this window's verdict decide a SCORING play? Used
+ * only to advance the prior-game state on the decide path (the accept path's
+ * ledger lags it), so a later window knows a score already happened. Taxonomy
+ * first; a legacy verdict with no outcome falls back to a GOAL/GOL label. */
+export function isScoringDecision(d: Pick<DecisionResult, "isHighlight" | "outcome" | "eventType">): boolean {
+  if (!d?.isHighlight) return false;
+  if (d.outcome === "scoring_play") return true;
+  if (d.outcome) return false;
+  return /^(GOAL|GOL)$/i.test(String(d.eventType ?? "").trim());
+}
+
 // ADAAAA-6855: map job-requested highlight labels (preferLabels) to the
 // outcome taxonomy members they authorize for export. A requested non-goal
 // class may be recorded as a DISTINCT highlight even though it is not a
@@ -1153,6 +1212,11 @@ export interface PipelineClient {
        * per window. Absent = no MATCH CONTEXT prompt block (byte-identical
        * request/prompt to the pre-feature path). */
       matchContext?: DecideMatchContext;
+      /** ADAAAA-7938 (Spec A): the VOD pass's compact prior-game-state block
+       * (running story-so-far / prior-window ASR tail / measured scoreboard
+       * transition). Absent = no PRIOR GAME STATE prompt block, so the request
+       * and the rendered prompt are byte-identical to today (AC-A2). */
+      priorGameState?: PriorGameState;
     }
   ): Promise<DecisionResult>;
   /**
@@ -2363,6 +2427,20 @@ export class LiveRunShared {
    * of these clips is the same goal re-read and is delivered as a celebration,
    * not as a second scoring event. Bounded — a run cannot grow it unboundedly. */
   private acceptedGoalEvents: AcceptedGoalEvent[] = [];
+  /** ADAAAA-7938 (Spec A): the measured prior-game state the NEXT decide window
+   * must see (story-so-far / prior ASR / scoreboard transition). Note it on the
+   * DECIDE path, not the accept path: the accept chain runs a paid Stage-2
+   * confirm + clip cut per window, so it lags the decide chain — a summary
+   * written on accept is invisible to the very next window's prompt (which is
+   * why VOD job fe0e3efc carried no story-so-far at all). */
+  private priorGame: {
+    story: string;
+    priorAsr: string;
+    score: string | null;
+    lastScoreTs: number | null;
+    scored: boolean;
+    lastNotedTs: number;
+  } = { story: "", priorAsr: "", score: null, lastScoreTs: null, scored: false, lastNotedTs: -Infinity };
 
   constructor(opts: { decideWindowN?: number; goalBurstWindowS?: number; audioRetainS?: number } = {}) {
     this.windowN = opts.decideWindowN ?? DECIDE_FRAME_WINDOW;
@@ -2485,6 +2563,55 @@ export class LiveRunShared {
     if (!Number.isFinite(ev.anchorTs)) return;
     this.acceptedGoalEvents.push(ev);
     if (this.acceptedGoalEvents.length > 128) this.acceptedGoalEvents.shift();
+  }
+  /** ADAAAA-7938 (Spec A): fold one RESOLVED decide window into the prior-game
+   * state the next window inherits. Content-ordered (a re-produced older window
+   * never overwrites a newer note) and MEASURED only: the prior decision's own
+   * running summary / ASR, a legible scoreboard delta, and the window instant of
+   * a decided scoring play. Never model prose that contradicts a measurement. */
+  noteWindowGameState(
+    centerTs: number,
+    decision: DecisionResult,
+    attestation?: { scoreBoardDelta?: ScoreboardDeltaEvidence }
+  ): void {
+    if (!Number.isFinite(centerTs) || centerTs <= this.priorGame.lastNotedTs) return;
+    this.priorGame.lastNotedTs = centerTs;
+    const story = typeof decision.runningSummary === "string" ? decision.runningSummary.trim() : "";
+    if (story) this.priorGame.story = story;
+    const asr = decision.analysis?.asr?.transcript;
+    if (typeof asr === "string" && asr.trim()) this.priorGame.priorAsr = asr.trim();
+    const delta = attestation?.scoreBoardDelta;
+    if (delta && scoreboardDeltaLegible(delta)) {
+      this.priorGame.score = `${delta.post[0]}-${delta.post[1]}`;
+      this.priorGame.scored = true;
+      this.priorGame.lastScoreTs = delta.deltaTs;
+    }
+    if (isScoringDecision(decision)) {
+      this.priorGame.scored = true;
+      if (this.priorGame.lastScoreTs === null || centerTs > this.priorGame.lastScoreTs) {
+        this.priorGame.lastScoreTs = centerTs;
+      }
+    }
+  }
+  /** ADAAAA-7938 (Spec A): the bounded prior-game state for a window centred at
+   * `centerTs`, or `undefined` when nothing is known yet (the first window, or a
+   * run with no story/ASR/score) so the decide request stays byte-identical. */
+  priorGameStateFor(centerTs: number): PriorGameState | undefined {
+    const last = this.priorGame.lastScoreTs;
+    const since = last === null || !Number.isFinite(centerTs) ? null : Math.max(0, centerTs - last);
+    const needsNewScore =
+      this.priorGame.scored && since !== null && since <= PRIOR_GAME_STATE_REACH_S;
+    const story = priorTail(this.priorGame.story, PRIOR_GAME_STATE_STORY_MAX_CHARS);
+    const priorAsr = priorTail(this.priorGame.priorAsr, PRIOR_GAME_STATE_ASR_MAX_CHARS);
+    if (!story && !priorAsr && !needsNewScore && !this.priorGame.score) return undefined;
+    return {
+      story,
+      priorAsr,
+      score: this.priorGame.score,
+      lastScoreTs: last,
+      needsNewScore: needsNewScore === true,
+      sinceLastScoreS: since,
+    };
   }
   /** Drop frames (and stale candidates) outside the 60 s window and enforce the
    * hard size cap. Oldest entries are removed first. */
@@ -3722,6 +3849,12 @@ export function buildObserveDecideRequest(
         `series=${run.seriesWindow(center, preS, postS).length}`
     );
   }
+  // ADAAAA-7938 (Spec A): the compact prior-game-state block for the VOD detail
+  // pass. VOD-ONLY: the live rail never receives it (the block is a
+  // detail-first budget item, not a live throughput one). `undefined` on the
+  // first window / a run with no measured state, so the request stays
+  // byte-identical there (AC-A2).
+  const priorGameState = cfg.decideWindowN !== undefined ? run.priorGameStateFor(center) : undefined;
   const opts: Parameters<PipelineClient["decide"]>[1] = {
     gameHint: cfg.gameHint,
     reasoningEffort: "none",
@@ -3740,6 +3873,9 @@ export function buildObserveDecideRequest(
     // ADAAAA-7111 (Increment D): carry the job's running video summary
     // (story-so-far) so the decide brain EXTENDS it (monotonic growth).
     storySoFar: cfg.getRunningSummary?.() ?? "",
+    // ADAAAA-7938 (Spec A): the compact prior-game-state block for the VOD
+    // detail pass. VOD-ONLY (the live rail never receives it).
+    ...(priorGameState ? { priorGameState } : {}),
     // ADAAAA-7856 (Stage 6): the job's inferred teams + kit colours, read from
     // persistence (one resolver pass per job — zero extra GPU per window). An
     // absent/unusable context omits the key entirely, so the request and the
@@ -3919,6 +4055,21 @@ export async function observeDecideOnly(
       cfg.onDecideAudit(attachTriggerFamilyToAudit((decision as any)?.audit, payload.trigger));
     } catch (e: any) {
       console.error(`[decide-audit:${cfg.jobId}] onDecideAudit failed:`, String(e?.message || e));
+    }
+  }
+  // ADAAAA-7938 (Spec A): advance the prior-game state for the NEXT window from
+  // THIS window's resolved decision — story-so-far, its ASR (where a goal call
+  // sits) and the measured scoreboard transition it carried. VOD-only, and noted
+  // here (not on accept) because the accept chain runs a paid confirm + clip cut
+  // and therefore lags the decide chain by whole windows.
+  if (cfg.decideWindowN !== undefined) {
+    try {
+      run.noteWindowGameState(payload.centerTs, decision, {
+        scoreBoardDelta: (payload.biasHints[0] as { scoreBoardDelta?: ScoreboardDeltaEvidence } | undefined)
+          ?.scoreBoardDelta,
+      });
+    } catch (e: any) {
+      console.error(`[prior-game-state:${cfg.jobId}] note failed:`, String(e?.message || e));
     }
   }
   return decision;
