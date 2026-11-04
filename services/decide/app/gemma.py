@@ -1109,32 +1109,54 @@ _OUTPUT_CONTRACT_COMPACT = (
     # from 220). The cap binds the WHOLE field, not just each appended line:
     # the stored row is the field, and AC1 (p95 <= 140, 0 over 140) plus the
     # decode-bound token budget both depend on it staying one bounded line.
-    "\"runningSummary\": \"<the RUNNING story so far, as ONE line (never append a "
+    #
+    # ADAAAA-7949 (ADAAAA-7933 Inc 4), contract v2. v1 folded STORY SO FAR into
+    # this one line AND forbade repeats, so the model preserved a captured goal
+    # by re-serving the same composite sentence: on job 7b719a9f 30 of 68
+    # windows emitted one identical sentence and the beat froze from T+21 to
+    # T+312 (17 of 20 sampled lines byte-identical). Root cause R1 was the
+    # contract collision, not a model failure. So:
+    #  - the line now describes THIS WINDOW ONLY; continuity stays in the story
+    #    the job already logs (summaryLog / story-so-far), never in this field;
+    #  - a nothing-new window is blunt (<= 8 words, no em-dash, no clock) rather
+    #    than a shortened description (v1: 0 of 68 lines <= 8 words, min 16);
+    #  - colour is its own channel (crowd / body language / momentum / bench /
+    #    pitch conditions) that may not restate the lead (v1: 1 of 20 rows had
+    #    one, and the em-dash clause read as apposition — R2).
+    # The no-copyable-example rule from c9012ad still holds: the shape is
+    # described, never exemplified with a sentence the model can paste.
+    "\"runningSummary\": \"<CAPTION FOR THIS WINDOW ONLY, as ONE line (never append a "
     "second line): total target max 110 chars, HARD MAX 140 (was 220). Shape "
-    "'<PLAY-BY-PLAY LEAD> — <optional COLOR BEAT>'. LEAD: actor + action + place, "
+    "'<PLAY-BY-PLAY LEAD> — <optional COLOR BEAT>'. THIS WINDOW ONLY: describe "
+    "only what this window's frames and transcript show. The job's story already "
+    "holds every earlier line, so STORY SO FAR is context, never material: do NOT "
+    "fold it into this line, do NOT extend or compress it here, and never restate "
+    "an event from an earlier window (a goal already captured stays in the story "
+    "and is NEVER re-said in a later caption unless THIS window is the goal "
+    "window). NEVER re-emit a line you already emitted this job: if this window "
+    "looks like the last one, name a different concrete "
+    "subject (another player, jersey number or role) and a different verb or zone, "
+    "because a repeated sentence reads as a caption engine, not an announcer. LEAD: "
+    "actor + action + place, "
     "present tense, active voice, max 70 chars — name the player/jersey when the "
     "frames read one, else the role (the winger, the keeper, the No. 9); lead with "
     "the event, not the scene, and open on an ACTION VERB (drives, carries, "
     "tackles, clears, shoots), never \"are positioned\" or \"maintain position\". "
-    "COLOR BEAT: optional, max 40 chars, ONE grounded "
-    "beat of texture (crowd, body language, momentum, bench, conditions), never a "
-    "second description of the same play; about 1 line in 3, fresh not chatty. "
-    "QUIET WINDOW (nothing above threshold): ONE blunt line, max 8 words, no colour "
-    "beat, no scene-setting — name the ball's zone and who holds it; "
-    "count the words and cut anything over 8. NEVER repeat a line you already "
-    "emitted: if this window looks like the last one, name a different concrete "
-    "subject (another player, jersey number or role) and a different verb or zone, "
-    "because a repeated sentence reads as a caption engine, not an announcer. CLOCK: "
+    "COLOR BEAT is a SEPARATE CHANNEL: optional, max 40 chars, and may carry ONLY "
+    "crowd, body language, momentum, bench or pitch conditions. It must never "
+    "restate or extend the lead's action and never describe the play a second "
+    "time; when this window's frames or transcript carry no grounded colour "
+    "observation, OMIT the whole clause — never pad to hit about 1 line in 3. "
+    "QUIET WINDOW (no datable event in this window): ONE blunt line, max 8 words, "
+    "NO em-dash, NO colour beat, NO clock, no scene-setting — a flat statement of "
+    "which zone the ball is in and who holds it, not a shortened description; "
+    "count the words and cut anything over 8, and never reuse a quiet line you "
+    "already emitted this job. CLOCK: "
     "only on datable events ('GOAL 72s'), not every line. NEVER open with 'The "
     "video shows', 'The video begins', 'The video starts with', 'In this segment', "
     "'The scene opens on', 'The broadcast cuts to', 'The sequence', 'This window "
     "shows'. Color must be attributable to this window's frames or transcript — no "
-    "invented names, scores, kit colours or flags. Forward-only: keep every event "
-    "already captured and EXTEND the story — advance the newest beat and compress "
-    "the earlier ones into the same single line (tighten wording only, never delete "
-    "a goal or near-miss); if a STORY SO FAR was given, fold it into ONE line under "
-    "the cap, never rewrite it from scratch and never make it longer than 140 "
-    "chars.>\"}"
+    "invented names, scores, kit colours or flags.>\"}"
 )
 _OUTPUT_CONTRACT_FULL = (
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "
