@@ -32,6 +32,7 @@ import type {
 import {
   captionBeats,
   captionColour,
+  captionLineKey,
   dedupeDisplayLines,
   dedupeGatedLines,
   dropColourClause,
@@ -384,6 +385,7 @@ function propagateCorroboration(
  */
 function finalizeServedShapes(entries: NormalizedEntry[]): NormalizedEntry[] {
   const out: NormalizedEntry[] = [];
+  const emitted = new Set<string>();
   for (const e of entries) {
     const served = servedShape({
       candidate: e.clean,
@@ -394,9 +396,18 @@ function finalizeServedShapes(entries: NormalizedEntry[]): NormalizedEntry[] {
     });
     if (!served.text) continue;
     if (served.text === e.clean) {
+      emitted.add(captionLineKey(e.clean));
       out.push(e);
       continue;
     }
+    // ADAAAA-8014 (AC1/AC2): a REPAIR may land on a line an earlier row already
+    // serves (two windows whose stored lines gated to the same beat, one of them
+    // a cut of the longer sentence). The display cap's rule still holds — the
+    // emitted set stays distinct — so the repair yields to the row that already
+    // states that beat.
+    const key = captionLineKey(served.text);
+    if (emitted.has(key)) continue;
+    emitted.add(key);
     out.push({ ...e, clean: served.text, trimmed: true });
   }
   return out;
