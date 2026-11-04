@@ -26,6 +26,7 @@ import {
   OBSERVE_WINDOW_S,
 } from "./observe-loop";
 import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
+import { describeInterruption } from "./job-failure";
 import { liveDecideAdmission } from "./live-decide-admission";
 import type { AudioTriggerRecord, TriggerSchedulerStats } from "./audio-trigger";
 import type { TriggerFamilyLatency } from "./observe-loop";
@@ -1758,8 +1759,9 @@ function isTransientRunnerError(err: unknown): boolean {
  * exponential backoff. A single immediate reserve during the recreate window
  * 404s ("runner not found") and would abort the whole pass; retrying lets the
  * pass ride through the recovery and resume from the last observation. Bounded
- * by `attempts`; on exhaustion a typed `analyze interrupted (deploy-recreate)`
- * verdict is thrown so the job is cheaply retriable rather than a bare 502. A
+ * by `attempts`; on exhaustion a typed `analyze interrupted
+ * (perceive-session-lost)` verdict is thrown so the job is cheaply retriable
+ * rather than a bare 502. A
  * non-transient (payment/auth) reserve error propagates immediately. */
 export async function reservePerceiveWithRetry(
   client: PipelineClient,
@@ -1776,7 +1778,10 @@ export async function reservePerceiveWithRetry(
       // Last attempt done: surface the typed retriable verdict, not a bare 502.
       if (attempt + 1 >= attempts) {
         throw new DeployRecreateInterruptedError(
-          `analyze interrupted (deploy-recreate): perceive runner unavailable after ${attempts} reserve attempts; job is retriable`
+          describeInterruption(
+            "perceive-session-lost",
+            `perceive runner unavailable after ${attempts} reserve attempts; job is retriable`
+          )
         );
       }
       await sleep(backoffDelayMs(attempt, baseMs, maxMs));
@@ -1788,9 +1793,15 @@ export async function reservePerceiveWithRetry(
  * (staged deploy) drops the session and the bounded re-reserve could not
  * re-acquire a runner in the recovery window. Distinct from the generic
  * `SessionLostError` (which the pass re-reserves against) and from a bare
- * `analyze failed: HTTP 502` (which is not signal about WHY it dropped). */
+ * `analyze failed: HTTP 502` (which is not signal about WHY it dropped).
+ *
+ * ADAAAA-7921: the class name is kept because `classifyVodFailure` and the
+ * retry table recognize it, but its MESSAGE follows the classified reason
+ * (`perceive-session-lost`), never the deploy that originally prompted the
+ * retry: the measured 43 s `docker stop highlights-perceive` published
+ * "deploy-recreate" when nothing was deployed. */
 export class DeployRecreateInterruptedError extends Error {
-  constructor(msg = "analyze interrupted (deploy-recreate)") {
+  constructor(msg = describeInterruption("perceive-session-lost", "perceive session lost")) {
     super(msg);
     this.name = "DeployRecreateInterruptedError";
   }
@@ -5213,7 +5224,7 @@ export async function analyzeJob(
             // bounded backoff, so a runner that was recreated by a staged deploy
             // (momentarily 404ing "runner not found" while it re-registers) can
             // be re-acquired and the pass resumes from the last observation. On
-            // exhaustion a typed `analyze interrupted (deploy-recreate)` verdict
+            // exhaustion a typed `analyze interrupted (perceive-session-lost)` verdict
             // is thrown so the job is retriable, not a bare 502.
             const fresh = await reservePerceiveWithRetry(client, {
               attempts: reReserveAttempts,

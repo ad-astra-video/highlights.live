@@ -317,6 +317,11 @@ export function toMatchContextEvidence(
  * is not a team the resolver considers usable. */
 export const MATCH_CONTEXT_USABLE_CONFIDENCE = 0.6;
 
+/** Bound on the persisted recompute trail (mirrors `MAX_TRAIL` in
+ * `services/perceive/app/match_context.py`), so a long job cannot grow the
+ * record. The server appends at most one entry per resumed pass. */
+export const MATCH_CONTEXT_MAX_TRAIL = 12;
+
 /** Caps mirroring the resolver's own status caps, so a record that accumulates
  * evidence across attempts cannot grow without bound. */
 const EVIDENCE_ARRAY_CAP = 50;
@@ -567,6 +572,89 @@ export function guardMatchContextRegression(
   return { ...incoming, teams, ambiguous: Boolean(incoming.ambiguous) || belowFloor };
 }
 
+/** Format a confidence the way the persisted trail already does (`0.65`). */
+function trailConfidence(value: number | undefined): string {
+  return Number(value ?? 0).toFixed(2);
+}
+
+/**
+ * ADAAAA-7921: describe the guard's decision as ONE trail entry.
+ *
+ * The ADAAAA-7912 guard keeps the stronger attribution on a resumed pass but
+ * wrote no trail entry for it, so the record ended with `trail: away
+ * Spain@0.15` beside `teams: away Spain@0.65` — the two halves of the same
+ * record disagreed and a reader could not tell the guard fired. This returns
+ * the entry to append whenever the guard published something the pass did not
+ * read (kept a stronger side, or restored a dropped one), and `null` when the
+ * pass's own read is what gets published.
+ *
+ * `names` is the PUBLISHED attribution (the guarded teams), never the rejected
+ * read, so the trailing trail entry always agrees with `teams`.
+ */
+export function carryForwardTrailEntry(
+  incoming: MatchContext,
+  guarded: MatchContext,
+  progressPct: number
+): MatchContext["trail"][number] | null {
+  const readBySide = new Map<string, MatchContextTeam>();
+  for (const team of incoming.teams) {
+    if (team.side === "home" || team.side === "away") readBySide.set(team.side, team);
+  }
+  const actions: string[] = [];
+  for (const team of guarded.teams) {
+    if (team.side !== "home" && team.side !== "away") continue;
+    const read = readBySide.get(team.side);
+    if (!read) {
+      actions.push(
+        `carry-forward: restored ${team.side} ${team.name}@${trailConfidence(team.confidence)}, pass dropped the side`
+      );
+      continue;
+    }
+    if (read.name === team.name && Number(read.confidence) >= Number(team.confidence)) continue;
+    const rejected =
+      read.name === team.name
+        ? trailConfidence(read.confidence)
+        : `${read.name}@${trailConfidence(read.confidence)}`;
+    const belowFloor =
+      Number(read.confidence) < MATCH_CONTEXT_USABLE_CONFIDENCE
+        ? ` below floor ${trailConfidence(MATCH_CONTEXT_USABLE_CONFIDENCE)}`
+        : "";
+    actions.push(
+      `carry-forward: kept ${team.side} ${team.name}@${trailConfidence(team.confidence)}, pass read ${rejected}${belowFloor}`
+    );
+  }
+  if (!actions.length) return null;
+  return {
+    at: incoming.inferredAt || new Date().toISOString(),
+    progressPct,
+    names: guarded.teams.map((team) => ({ side: team.side, name: team.name, confidence: team.confidence })),
+    action: actions,
+  };
+}
+
+/**
+ * Apply the resume carry-forward to a pass: the ADAAAA-7912 regression guard
+ * plus the ADAAAA-7921 trail entry that explains it.
+ *
+ * The pair is one function on purpose. A record whose `trail` still ends at a
+ * rejected below-floor read while `teams` carry the stronger one is the bug
+ * ADAAAA-7921 measured; composing both steps here means the resolver cannot
+ * publish the guarded teams without the entry that names the rejected read.
+ */
+export function applyResumeCarryForward(
+  previous: MatchContext | undefined,
+  incoming: MatchContext,
+  progressPct: number
+): MatchContext {
+  const guarded = guardMatchContextRegression(previous, incoming);
+  const entry = carryForwardTrailEntry(incoming, guarded, progressPct);
+  if (!entry) return guarded;
+  return {
+    ...guarded,
+    trail: [...(guarded.trail ?? []), entry].slice(-MATCH_CONTEXT_MAX_TRAIL),
+  };
+}
+
 /** True when the job record says this pass is a RESUME (attempt 2+). */
 export function isResumedAttempt(job: Job | undefined): boolean {
   const attemptNo = Number(job?.attempts ?? 0);
@@ -673,7 +761,12 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
     // keeps the persisted evidence instead of erasing it.
     const resumed = isResumedAttempt(job);
     const previousEvidence = job?.matchContextEvidence as MatchContextEvidence | undefined;
-    const guarded = guardMatchContextRegression(previous, ctx);
+    // ADAAAA-7921: on a resume the guard and its trail annotation travel
+    // together, so a record that publishes the carried-forward team always
+    // says so in its trail.
+    const guarded = resumed
+      ? applyResumeCarryForward(previous, ctx, progressPct)
+      : guardMatchContextRegression(previous, ctx);
     const evidence = toMatchContextEvidence(result?.evidenceStatus);
     let evidenceValue = evidence.value;
     if (resumed) {
@@ -682,12 +775,15 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
         : previousEvidence;
     }
     if (resumed) {
+      const trailAction = guarded.trail?.[guarded.trail.length - 1]?.action ?? [];
+      const carried = trailAction.filter((a) => a.startsWith("carry-forward:"));
       log(
         `[match-context:${deps.jobId}] resume carry-forward at ${progressPct}% (attempt ${job?.attempts ?? "?"}): ` +
           `teams ${guarded.teams.map((t) => `${t.side}=${t.name}@${Number(t.confidence).toFixed(2)}`).join(" ") || "none"}` +
           ` ambiguous=${guarded.ambiguous}` +
           ` evidence ${(evidenceValue?.sources ?? []).join(",") || "none"}` +
-          ` scorebugOcrFrames=${evidenceValue?.scorebugOcrFrames ?? "unset"}`
+          ` scorebugOcrFrames=${evidenceValue?.scorebugOcrFrames ?? "unset"}` +
+          ` trail=${carried.join("; ") || "read as published"}`
       );
     }
     if (evidence.error) {
