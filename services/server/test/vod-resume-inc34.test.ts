@@ -22,6 +22,7 @@ import {
   closeOpenAttempt,
   formatResumeAttemptLine,
   nextAttemptNumber,
+  resumeEligibleSource,
   resumePointLabel,
 } from "../src/vod-resume";
 
@@ -219,6 +220,16 @@ describe("vod-resume Inc 3+4 pure parts (ADAAAA-7907)", () => {
     expect(nextAttemptNumber(armed)).toBe(2);
     // A crash left the claim counter ahead of the closed trail: the counter wins.
     expect(nextAttemptNumber({ ...armed, totalAttempts: 3 })).toBe(4);
+  });
+
+  it("only a VOD `file` job is resume-eligible (the scope guard)", () => {
+    // A live/browser share has no source to replay, and a `queued` live row is
+    // never reclaimed by the VOD drain: arming a retry on one would strand it
+    // non-terminal forever, so the policy refuses anything but `file`.
+    expect(resumeEligibleSource("file")).toBe(true);
+    for (const source of ["browser", "rtmp", "webrtc", "screenshare", "file-sim", undefined] as const) {
+      expect(resumeEligibleSource(source)).toBe(false);
+    }
   });
 
   it("formats T+mm:ss and the one greppable evidence line per attempt (AC10)", () => {

@@ -186,6 +186,18 @@ export function failedAttemptCount(checkpoint: ResumeCheckpoint | undefined): nu
 }
 
 /**
+ * ADAAAA-7907 scope guard: ONLY a VOD `file` job can be resumed. A live or
+ * browser share cannot be replayed from a cursor — its ingest is gone — so the
+ * retry policy must never convert a live failure into a `queued` VOD row. (A
+ * live job re-armed as `queued` would never be claimed by the VOD drain — it has
+ * no local source path — and would sit non-terminal forever.) Its honest outcome
+ * stays the attributed terminal failure.
+ */
+export function resumeEligibleSource(source: "file" | "rtmp" | "webrtc" | "screenshare" | "browser" | "file-sim" | undefined): boolean {
+  return source === "file";
+}
+
+/**
  * Retry policy (plan §2.3): arm a retry when the failure is classified
  * resumable AND the retry budget (default 2 retries) is not spent. `maxRetries`
  * is the number of RETRIES, not total claims.
