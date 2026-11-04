@@ -65,7 +65,7 @@ STORY = "0-0, Portugal dominating the left channel."
 #: verbatim on 59 of 67 live rows); FULL stayed byte-identical through both edits.
 GOLDEN_PROMPT_SHA = {
     False: "e12f4d6fe48c8b51e82a550d5b80aac46859f8fd159c116986624c76ea972fc2",
-    True: "d24d2403f06b2d135b24adca35bcc29b45be60a0c1e1ccb75b5d35e357968bfa",
+    True: "fe66a68bf211ddc3d09110b3cc5d1126ce699ebd0d42069d51e13721ba48d458",
 }
 
 PORTUGAL_SPAIN = {
