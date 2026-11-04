@@ -32,7 +32,10 @@ from app.match_context import (
     is_plausible_player_box,
     name_color,
     parse_metadata_hints,
+    esports_hud_sides,
     parse_generic_scorebug_names,
+    printed_name_pair,
+    printed_plate_sides,
     parse_ocr_teams,
     resolve_match_context,
     resolve_token,
@@ -1476,3 +1479,120 @@ def test_generic_names_drop_an_ad_board_host_token():
         "Samsungspor",
     )
     assert generic_scorebug_sides("Wykes.com Denizli Basket13 8Samsunspor") == ("Denizli Basket", "Samsunspor")
+
+
+# --- ADAAAA-7944: printed plates + esports HUD stat split --------------------
+
+
+def _sport_frames(line: str, n: int = 12, ts: bool = True) -> list[dict]:
+    return [{"ts": float(i), "lines": [line]} for i in range(n)] if ts else [{"lines": [line]} for _ in range(n)]
+
+
+AF_BAND = "BELMONT 6 WESTFORD 6 1st0:211st & 10Commentators: Todd Bloniarz & Aram Parnagian"
+HK_BUG = "Watertown1Cohasset Middle HS1st Period"
+BB_BUG = "Watertown2 Wayland0A2nd2 Outs"
+ES_HUD = "PSG0 10.4K1 0.9%V312:5512:57BOSEKONGYUE"
+
+
+def test_printed_plates_split_the_band_and_corner_bug_glue():
+    # The measured reads: the score separator is a graphic divider, so each line
+    # is one glued run. Two plates either side of one digit are the two clubs.
+    assert printed_plate_sides(AF_BAND) == ("BELMONT", "WESTFORD")
+    assert printed_plate_sides("BELMONT 6 WESTFORD 6 1st 0:21") == ("BELMONT", "WESTFORD")
+    assert printed_plate_sides(HK_BUG) == ("Watertown", "Cohasset Middle HS")
+    assert printed_plate_sides("Watertown-Cohasset Middle HS0 1st Period") == ("Watertown", "Cohasset Middle HS")
+    assert printed_plate_sides(BB_BUG) == ("Watertown", "Wayland")
+    assert printed_plate_sides("Watertown2Wayland0V2nd0 Outs") == ("Watertown", "Wayland")
+    # Broadcast copy beside the plate never rides into the away name.
+    assert printed_plate_sides("BELMONT 6WESTFORDCommentators: Todd Bloniarz") == ("BELMONT", "WESTFORD")
+    # A banner / ad board is not a pair.
+    assert printed_plate_sides("CHAMPIONS2014") is None
+    assert printed_plate_sides("www.cambridgecambridge.com") is None
+    assert printed_plate_sides("COURTESY") is None
+
+
+def test_american_football_band_resolves_both_clubs():
+    out = resolve_match_context(sport_hint="american_football", ocr_frames=_sport_frames(AF_BAND))
+    ctx, status = out["matchContext"], out["evidenceStatus"]
+    assert [(t["name"], t["side"]) for t in ctx["teams"]] == [("BELMONT", "home"), ("WESTFORD", "away")]
+    assert ctx["ambiguous"] is False
+    assert all(t["confidence"] <= SINGLE_SOURCE_CAP for t in ctx["teams"])
+    assert status["genericNameCandidates"]["scoreFrames"] == 12
+
+
+def test_ice_hockey_corner_bug_resolves_both_clubs():
+    # Two of the measured frames glue the score digit away; the hyphen boundary
+    # still names both sides, so the vote has 12/12 support.
+    lines = [
+        HK_BUG,
+        "WatertownColhasset Middle HS1st Period",
+        "Watertown-Cohasset Middle HS0 1st Period",
+        "Watertown1Cohasset Middle H",
+    ]
+    frames = [{"lines": [lines[i % len(lines)]]} for i in range(12)]
+    out = resolve_match_context(sport_hint="ice_hockey", ocr_frames=frames)
+    ctx = out["matchContext"]
+    assert [(t["name"], t["side"]) for t in ctx["teams"]] == [
+        ("Watertown", "home"),
+        ("Cohasset Middle HS", "away"),
+    ]
+    assert ctx["ambiguous"] is False
+    assert all(t["confidence"] <= SINGLE_SOURCE_CAP for t in ctx["teams"])
+
+
+def test_baseball_corner_bug_resolves_both_clubs():
+    out = resolve_match_context(sport_hint="baseball", ocr_frames=_sport_frames(BB_BUG))
+    ctx = out["matchContext"]
+    assert [(t["name"], t["side"]) for t in ctx["teams"]] == [
+        ("Watertown", "home"),
+        ("Wayland", "away"),
+    ]
+    assert ctx["ambiguous"] is False
+
+
+def test_esports_hud_splits_the_stat_glued_team_tokens():
+    assert esports_hud_sides(ES_HUD) == ("PSG", "V3")
+    assert esports_hud_sides("PSG0 11.1K11.1k10.5%V312:3112:21:23") == ("PSG", "V3")
+    assert esports_hud_sides("PSG12.1K11.8KV311:47") == ("PSG", "V3")
+    assert esports_hud_sides("PSG+0 13.1k2 t0 12.1h 0V311:52-1") == ("PSG", "V3")
+    # Stat strip / replay copy carries no team plate.
+    assert esports_hud_sides("00:00 5145 00:00BOSEKONGYUE") is None
+    assert esports_hud_sides("0/0 511/0/0 36BOSE0/1 520/O/047KONGYUE") is None
+
+
+def test_team_esports_hud_resolves_home_and_away_across_frames():
+    hud = [
+        ES_HUD,
+        "PSG0 11.1K11.1k10.5%V312:3112:21:23",
+        "PSG11.5K11.0 11.0V312:02:21:21",
+        "PSG12.1K11.8KV311:47",
+        "PSG+0 13.1k2 t0 12.1h 0V311:52-1",
+    ]
+    frames = [{"ts": float(i), "lines": [hud[i % len(hud)]]} for i in range(24)]
+    out = resolve_match_context(sport_hint="team_esports", ocr_frames=frames)
+    ctx, status = out["matchContext"], out["evidenceStatus"]
+    assert [(t["name"], t["side"]) for t in ctx["teams"]] == [("PSG", "home"), ("V3", "away")]
+    assert ctx["ambiguous"] is False
+    assert all(t["confidence"] <= SINGLE_SOURCE_CAP for t in ctx["teams"])
+    assert status["genericNameCandidates"]["scoreFrames"] == 24
+
+
+def test_esports_hud_never_invents_a_team_when_one_side_is_missing():
+    # Only the home plate is readable; the pair gate keeps the job unknown
+    # instead of publishing half a match or lowering the confidence bar.
+    frames = _sport_frames("PSG0 10.4K1 0.9%")
+    teams, status = parse_generic_scorebug_names(frames, "team_esports")
+    assert teams == []
+    assert status["rejected"] == ["away:no-text"]
+    out = resolve_match_context(sport_hint="team_esports", ocr_frames=frames)
+    ctx = out["matchContext"]
+    assert [t["name"] for t in ctx["teams"]] == ["unknown", "unknown"]
+    assert ctx["ambiguous"] is True
+
+
+def test_printed_name_pair_is_the_selector_seam_for_every_sport():
+    assert printed_name_pair([AF_BAND], "american_football") == ("BELMONT", "WESTFORD")
+    assert printed_name_pair([HK_BUG], "ice_hockey") == ("Watertown", "Cohasset Middle HS")
+    assert printed_name_pair([BB_BUG], "baseball") == ("Watertown", "Wayland")
+    assert printed_name_pair([ES_HUD], "team_esports") == ("PSG", "V3")
+    assert printed_name_pair(["CHAMPIONS2014"], "ice_hockey") is None

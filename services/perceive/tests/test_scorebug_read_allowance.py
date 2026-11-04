@@ -16,7 +16,7 @@ from PIL import Image
 
 import app as _app
 from app import app, _same_roi, _team_fallback_allowance, _union_ocr_lines
-from app.scoreboard import ScoreboardRoi
+from app.scoreboard import ScoreboardRoi, SCOREBOARD_SELECT_MAX_FRAMES
 
 BOTTOM = ScoreboardRoi(0.0, 0.80, 1.0, 1.0)
 
@@ -143,11 +143,16 @@ def test_repair_read_is_skipped_when_the_bottom_prior_is_already_active(monkeypa
     det = FakeDet()
     monkeypatch.setattr(_app, "get_detector", lambda lora_ref=None: det)
     client = TestClient(app)
-    _post(client, sid, 0)
+    # ADAAAA-7944: the temporal ROI selector probes the candidate regions on the
+    # first frames (it cannot resolve on this fixture — no line names a pair).
+    # Spend that bounded probe first so the measured frame runs the shipped path.
+    for seq in range(SCOREBOARD_SELECT_MAX_FRAMES):
+        assert _post(client, sid, seq, timestamp=seq / 3.0).status_code == 200
     state = app.state.registry.get(sid)
+    assert state.scoreboard_selector.frames == SCOREBOARD_SELECT_MAX_FRAMES
     state.scoreboard_roi = BOTTOM  # as adopted from the first frame
     det.ocr_calls.clear()
-    _post(client, sid, 1, timestamp=1.0)
+    _post(client, sid, SCOREBOARD_SELECT_MAX_FRAMES, timestamp=2.0)
     # The active crop + the whole frame, and NOT a third read of the identical
     # bottom band the crop already covered.
     assert len(det.ocr_calls) == 2
