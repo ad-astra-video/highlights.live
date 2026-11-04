@@ -37,6 +37,13 @@ import {
   type ConfirmRecord,
   type WindowAnalysis,
 } from "../lib/jobDetail";
+import {
+  audioDp2,
+  audioLevelCrossStep,
+  audioLevelDomain,
+  audioLevelReadout,
+  nearestAudioLevelIndex,
+} from "../lib/audioLevel";
 import { getToken } from "../lib/api";
 
 // Small thumbnail for a lazy media ref. The decide layer may leave `uri` empty
@@ -161,27 +168,21 @@ function AudioLevelGraph({
   timeAxis: boolean;
 }) {
   const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
+  // Keyboard cross position (AC7): moved by Left/Right arrows, cleared on hover.
+  const [keyIdx, setKeyIdx] = useState<number | null>(null);
   if (points.length < 2) return null;
 
   let tMin = Infinity;
   let tMax = -Infinity;
-  let vLo = Infinity;
-  let vHi = -Infinity;
   for (const p of points) {
     tMin = Math.min(tMin, p.t);
     tMax = Math.max(tMax, p.t);
-    vLo = Math.min(vLo, p.value);
-    vHi = Math.max(vHi, p.value);
-    if (p.baseline !== undefined) {
-      vLo = Math.min(vLo, p.baseline);
-      vHi = Math.max(vHi, p.baseline);
-    }
   }
   const tSpan = Math.max(1e-6, tMax - tMin);
-  // Window-relative Y axis: pad the observed range instead of assuming 0..1.
-  const pad = Math.max(1e-3, (vHi - vLo) * 0.08);
-  const yLo = Math.max(0, vLo - pad);
-  const yHi = Math.min(1, vHi + pad);
+  // Window-relative Y axis (AC2): `[min(0, minE), maxE]` over the drawn levels,
+  // `[0, max(1e-3, peak)]` when the window is flat. A baseline that sits outside
+  // that band clamps to the axis edge — the axis describes the energy.
+  const [yLo, yHi] = audioLevelDomain(points.map((p) => p.value));
   const ySpan = Math.max(1e-6, yHi - yLo);
 
   const X = (t: number) => ((t - tMin) / tSpan) * GRAPH_W;
@@ -203,14 +204,35 @@ function AudioLevelGraph({
     if (r.width === 0 || r.height === 0) return;
     const x = Math.min(GRAPH_W, Math.max(0, ((e.clientX - r.left) / r.width) * GRAPH_W));
     const y = Math.min(GRAPH_H, Math.max(0, ((e.clientY - r.top) / r.height) * GRAPH_H));
+    setKeyIdx(null);
     setHover({ x, y });
   }
 
-  // Nearest drawn point to the cursor's x — the value the readout reports.
-  const nearest = hover
-    ? points.reduce((best, p) => (Math.abs(X(p.t) - hover.x) < Math.abs(X(best.t) - hover.x) ? p : best), points[0])
+  // Arrow keys step the white cross across the samples while the graph has
+  // focus (AC7); `audioLevelCrossStep` owns the enter-at-edge + clamp rules.
+  function onKeyDown(e: React.KeyboardEvent<SVGSVGElement>) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const dir = e.key === "ArrowLeft" ? -1 : 1;
+    setHover(null);
+    setKeyIdx(audioLevelCrossStep(keyIdx ?? crossIdx, dir, points.length));
+  }
+
+  // Nearest drawn point to the cursor's x (hover) or to the arrow-key position:
+  // the value the readout reports and the point the white cross snaps to.
+  const xs = points.map((p) => X(p.t));
+  const crossIdx = hover ? nearestAudioLevelIndex(xs, hover.x) : keyIdx;
+  const nearest = crossIdx !== null ? points[crossIdx] : null;
+  const crossX = hover ? hover.x : nearest ? X(nearest.t) : null;
+  const readout = nearest
+    ? audioLevelReadout({
+        index: crossIdx as number,
+        count: points.length,
+        t: timeAxis ? nearest.t : undefined,
+        energy: nearest.value,
+        baseline: nearest.baseline,
+      })
     : null;
-  const xText = (t: number) => (timeAxis ? `T+${t.toFixed(1)}s` : `#${Math.round(t)}`);
 
   return (
     <div className="mt-1 rounded-md border border-mut/20 bg-black/30 p-2" data-audio-level-graph data-audio-series-graph>
@@ -242,9 +264,9 @@ function AudioLevelGraph({
           </svg>
           mean
         </span>
-        {hover && nearest && (
-          <span className="ml-auto font-mono text-[10px] normal-case text-ink" data-audio-level-readout>
-            {xText(nearest.t)} · {nearest.value.toFixed(2)}
+        {readout && (
+          <span className="ml-auto font-mono text-[10px] normal-case text-ink" data-audio-level-readout={readout}>
+            {readout}
           </span>
         )}
       </div>
@@ -253,9 +275,18 @@ function AudioLevelGraph({
         className="h-24 w-full cursor-crosshair"
         preserveAspectRatio="none"
         role="img"
-        aria-label="Sound levels over the window, with mean and peak reference lines"
+        tabIndex={0}
+        aria-label={`Sound levels over the window: ${points.length} points, window-relative axis ${audioDp2(
+          yLo
+        )} to ${audioDp2(yHi)}, mean ${audioDp2(mean)}, peak ${audioDp2(peak)}${
+          readout ? `, readout ${readout}` : ""
+        }. Left/Right arrows step the cross line.`}
         onMouseMove={onMove}
-        onMouseLeave={() => setHover(null)}
+        onMouseLeave={() => {
+          setHover(null);
+          setKeyIdx(null);
+        }}
+        onKeyDown={onKeyDown}
         data-audio-level-plot
       >
         {/* Window-relative Y axis ticks: top, middle, bottom of the drawn range */}
@@ -264,8 +295,7 @@ function AudioLevelGraph({
             key={i}
             x={2}
             y={16 + i * ((GRAPH_H - 18) / 2)}
-            fontSize={8}
-            className="fill-mut"
+            className="fill-mut font-mono text-[10px]"
             data-audio-level-axis
           >
             {v.toFixed(2)}
@@ -332,25 +362,26 @@ function AudioLevelGraph({
             data-trigger-ts={triggerTs}
           />
         )}
-        {/* Hover: white cross hair (vertical at the nearest sample, horizontal at
-            the cursor) + the sample dot, so the actual values are readable. */}
-        {hover && nearest && (
+        {/* Hover/keyboard: white cross line at the nearest sample (vertical) plus
+            a horizontal marker, so the actual values are readable. */}
+        {crossX !== null && nearest && (
           <g data-audio-level-crosshair data-crosshair-value={nearest.value.toFixed(2)} data-crosshair-index={nearest.t}>
             <line
-              x1={hover.x}
+              x1={crossX}
               y1="0"
-              x2={hover.x}
+              x2={crossX}
               y2={GRAPH_H}
               className="stroke-ink"
               strokeWidth="1"
               vectorEffect="non-scaling-stroke"
+              data-audio-level-cross
               data-audio-crosshair-v
             />
             <line
               x1="0"
-              y1={hover.y}
+              y1={hover ? hover.y : Y(nearest.value)}
               x2={GRAPH_W}
-              y2={hover.y}
+              y2={hover ? hover.y : Y(nearest.value)}
               className="stroke-ink"
               strokeWidth="1"
               strokeDasharray="2 2"

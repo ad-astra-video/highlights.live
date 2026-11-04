@@ -251,11 +251,12 @@ describe("WindowAnalysisPanel (ADAAAA-7157)", () => {
     expect(html).toContain('data-audio-level-mean-value="0.46"');
     expect(html).toContain("data-audio-level-peak");
     expect(html).toContain('data-audio-level-peak-value="0.90"');
-    // Y axis is window-relative (padded min..max), not a fixed 0..1 axis.
+    // Y axis is window-relative [min(0, minE), maxE] (ADAAAA-7937 AC2), not a
+    // fixed 0..1 axis and not a padded band.
     expect(html).toContain("data-audio-level-axis");
-    expect(html).toContain(">0.04<"); // yLo = 0.10 - 8% of the 0.80 span
-    expect(html).toContain(">0.96<"); // yHi = 0.90 + 8% of the 0.80 span
-    expect(html).not.toContain(">0.00<"); // not the fixed 0..1 axis
+    expect(html).toContain(">0.00<"); // yLo = min(0, minE=0.10)
+    expect(html).toContain(">0.90<"); // yHi = maxE, the window peak
+    expect(html).toContain(">0.45<"); // midpoint of the drawn range
     // Graph is the default; the raw prompt text it replaced is NOT rendered.
     expect(html).toContain('data-audio-level-toggle="graph"');
     expect(html).toContain('data-audio-level-toggle="raw"');
@@ -308,5 +309,49 @@ describe("WindowAnalysisPanel (ADAAAA-7157)", () => {
     // The graph sits with the context items, above the audio/ASR block.
     expect(graphAt).toBeGreaterThan(itemsAt);
     expect(graphAt).toBeLessThan(audioBlockAt);
+  });
+});
+
+// ADAAAA-7937 — the sound-levels graph must be reachable and readable without a
+// pointer: role=img with a window-relative, mean/peak-naming aria-label, a
+// focusable plot whose Left/Right arrows step the white cross, and no readout
+// (or cross) in the graph's resting state. The readout *text* contract and the
+// arrow-stepping rules are unit-tested in webapp/src/lib/audioLevel.test.ts.
+describe("audio_level graph keyboard + readout contract (ADAAAA-7937 AC4, AC7)", () => {
+  const withLevels: WindowAnalysis = {
+    ...analysis,
+    dataItems: [
+      {
+        type: "audio_level",
+        label: "Audio-energy level curve",
+        value: "audio energy level curve (6 samples, peak=0.90, mean=0.46): [0.10,0.55,0.90,0.30,0.22,0.68]",
+      },
+    ],
+  };
+
+  it("is a focusable role=img whose aria-label names the window-relative axis, mean/peak and arrows", () => {
+    const html = renderToString(React.createElement(WindowAnalysisPanel, { analysis: withLevels, jobId: "abc" }));
+    expect(html).toContain('role="img"');
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain("window-relative axis 0.00 to 0.90");
+    expect(html).toContain("mean 0.46");
+    expect(html).toContain("peak 0.90");
+    expect(html).toContain("arrows step the cross line");
+  });
+
+  it("renders no cross line or readout until the pointer/keyboard activates one", () => {
+    const html = renderToString(React.createElement(WindowAnalysisPanel, { analysis: withLevels, jobId: "abc" }));
+    expect(html).not.toContain("data-audio-level-cross");
+    expect(html).not.toContain("data-audio-level-readout");
+    expect(html).not.toContain("data-audio-level-crosshair");
+  });
+
+  it("carries the 2-dp peak · mean keyline under the plot", () => {
+    const html = renderToString(React.createElement(WindowAnalysisPanel, { analysis: withLevels, jobId: "abc" }));
+    expect(html).toContain("data-audio-level-keyline");
+    expect(html).toContain("peak");
+    expect(html).toContain(">0.90<");
+    expect(html).toContain("mean");
+    expect(html).toContain(">0.46<");
   });
 });
