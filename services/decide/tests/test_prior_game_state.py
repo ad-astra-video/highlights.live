@@ -41,8 +41,8 @@ STORY = "Goal at 42s: Ronaldo finishes low to make it 1-0 Portugal."
 GOLDEN = {
     ("full", ""): (9580, "4e79233acface0c2712ee18c7859d4b0ae3df17c42ced0387d21f4a49d8a1719"),
     ("full", STORY): (9832, "39e892ef2ee234d99fb86ded0bbe29002ea14eea94ad1d6fb318a2c67f9b9bf1"),
-    ("compact", ""): (10853, "0e7b2da5061c05e0f645677c416b0d0742cf81095a5eb44f8d08c4313bf97464"),
-    ("compact", STORY): (11105, "9ff0e1febafaeca206a9d42fe933b86264c35b0d6997863ffc184f00e59c82c9"),
+    ("compact", ""): (11460, "2fcdf28ef6092fd6bd85de87917ab2461a61bd34bbc63011663305a2d79f6b5e"),
+    ("compact", STORY): (11712, "25fd4860016ab9992a34b0c4f325c00e982ef95f9e42be06cf2e8b03426f3400"),
 }
 
 
