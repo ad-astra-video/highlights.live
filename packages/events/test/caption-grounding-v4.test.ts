@@ -25,6 +25,7 @@ import {
   groundCaption,
   groundNames,
   groundSummaryItems,
+  GROUNDED_COLOUR_BEAT,
   hasGoalClaim,
   hasProperName,
   placePhraseOf,
@@ -131,6 +132,27 @@ describe("contract v4 §3.5 — the grounded colour channel (R16)", () => {
     expect(colourBeatAllowed(`${"a".repeat(COLOUR_MAX_CHARS + 1)}`, ctx)).toBe(false);
     expect(colourBeatAllowed("crowd erupts", ctx)).toBe(true);
     expect(colourBeatAllowed("crowd erupts", { ...ctx, colourEvidence: false })).toBe(false);
+  });
+
+  it("a measured quiet window with no model clause carries the deterministic beat", () => {
+    const out = groundCaption("Player in blue moves ball in center circle.", {
+      ...quiet(),
+      colourEvidence: true,
+    });
+    expect(captionColour(out)).toBe(GROUNDED_COLOUR_BEAT);
+    expect(out.length).toBeLessThanOrEqual(70);
+  });
+
+  it("the deterministic beat never appears without measured evidence", () => {
+    const out = groundCaption("Player in blue moves ball in center circle.", quiet());
+    expect(captionColour(out)).toBe("");
+  });
+
+  it("the deterministic beat passes its own §3.5 rules", () => {
+    expect(COLOUR_MAX_CHARS).toBeGreaterThan(GROUNDED_COLOUR_BEAT.length);
+    expect(hasProperName(GROUNDED_COLOUR_BEAT)).toBe(false);
+    expect(hasGoalClaim(GROUNDED_COLOUR_BEAT)).toBe(false);
+    expect(colourBeatAllowed(GROUNDED_COLOUR_BEAT, { ...quiet(), colourEvidence: true })).toBe(true);
   });
 
   it("still refuses an OCR colour clause on a loud window (§3.5 carried from v3)", () => {

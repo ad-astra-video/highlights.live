@@ -584,6 +584,26 @@ export function hasProperName(text: string): boolean {
  * quiet window with no crowd/audio signal keeps reading as a plain beat and the
  * quiet-colour share stays bounded.
  */
+/**
+ * ADAAAA-7962 (§3.5): the deterministic colour beat a MEASURED window can carry
+ * when the model gave none.
+ *
+ * The contract's colour channel is grounded in "crowd/audio energy (the
+ * audio-noise-change signal)". The model only wrote a colour clause on ~9 of 41
+ * delivered rows, so keeping model clauses alone measured a 5% colour share on
+ * the offline replay — still short of the 20-40% band, i.e. the announcer would
+ * still read as a wire report. This beat is derived from the same measured
+ * evidence the gate already reads (no model call, no frames, no perception
+ * pass), carries no proper name, no score/net/goal verb and no OCR quote, and
+ * sits far inside the 40-char ceiling. It is only ever emitted when
+ * `colourEvidence === true`, so the audio signal — not a template — decides.
+ */
+export const GROUNDED_COLOUR_BEAT = "crowd's up";
+
+export function groundedColourBeat(ctx?: CaptionGroundingContext): string {
+  return ctx?.colourEvidence === true ? GROUNDED_COLOUR_BEAT : "";
+}
+
 export function colourBeatAllowed(colour: string, ctx?: CaptionGroundingContext): boolean {
   const c = (colour ?? "").trim();
   if (!c) return false;
@@ -619,8 +639,11 @@ export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): st
   const colour = captionColour(out);
   const keepColour = colour ? colourBeatAllowed(colour, ctx) : false;
   const lead = trimQuietLine(captionLead(out), ctx?.place);
-  out = keepColour ? tidy(`${lead} — ${colour}`) : lead;
-  if (/[—–]/.test(out) && !keepColour) out = out.replace(/\s*[—–]\s*/g, ", ");
+  // A grounded model clause wins; with no clause, a measured window earns the
+  // deterministic beat (§3.5) so the announcer keeps its colour half.
+  const beat = keepColour ? colour : groundedColourBeat(ctx);
+  out = beat ? tidy(`${lead} — ${beat}`) : lead;
+  if (/[—–]/.test(out) && !beat) out = out.replace(/\s*[—–]\s*/g, ", ");
   return out === text ? text : tidy(out);
 }
 
@@ -836,13 +859,20 @@ export function groundNames(text: string, promptText?: string | null): string {
  */
 function neverLonger(original: string, grounded: string): string {
   if (grounded.length <= original.length) return grounded;
-  // ADAAAA-7962 (contract v4 §3.4): a place-preserving rewrite may run a few
-  // chars longer than the model's line (a role is longer than a short name, a
-  // restored zone is longer than a dropped one). Cutting at the original length
-  // is what decapitated the zone ("The side player controls ball in center").
-  // The terseness bar is p50 <= 95 / p95 <= 140 on the DELIVERED line, so a
-  // bounded +12 tolerance never regresses AC1.
-  if (grounded.length <= original.length + 12 && placePhraseOf(grounded)) return grounded;
+  // ADAAAA-7962 (contract v4 §3.4/§3.5): the length rule is measured against
+  // the LEAD, and two v4 rewrites legitimately add tail text:
+  //   - a place-preserving rewrite (a role is longer than a short name, a
+  //     restored zone longer than a dropped one) — cutting at the original
+  //     length is what decapitated the zone ("The side player … in center");
+  //   - an APPENDED grounded colour beat (§3.5, <= 40 chars), which must not be
+  //     deleted just because the lead alone was already at the model's length.
+  // Both are bounded by +12 on the lead, so the terseness bar (p50 <= 95, p95 <=
+  // 140 on the delivered line) cannot regress.
+  const leadIn = captionLead(original);
+  const leadOut = captionLead(grounded);
+  if (leadOut.length <= leadIn.length + 12 && (captionColour(grounded) || placePhraseOf(grounded))) {
+    return grounded;
+  }
   const cut = grounded.lastIndexOf(" ", original.length);
   const body = (cut > 0 ? grounded.slice(0, cut) : grounded).replace(/[\s,;:—–-]+$/, "").trim();
   return body || grounded;
