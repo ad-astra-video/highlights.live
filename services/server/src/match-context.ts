@@ -278,6 +278,302 @@ export function toMatchContextEvidence(
   return { value: parsed.data as MatchContextEvidence };
 }
 
+// ---------------------------------------------------------------------------
+// ADAAAA-7912: match-context evidence must survive a VOD RESUME.
+//
+// Measured on job ddf5c47f (deployed box, ADAAAA-7900 Leg A): the pre-deploy
+// attempts resolved Portugal@0.95 / Spain@0.65 from 24 scorebug OCR lines, a
+// concurrent deploy recreated highlights-server + highlights-perceive, and the
+// auto-resumed attempt re-ran the evidence pass over only the resumed tail
+// (81 s -> 90 s, `warmupFrames 24`). The fold it published had NO scorebug
+// evidence, so the same-named away team came back from the metadata channel
+// alone at 0.15 and the resolver's own evidence counters reset to 0:
+//
+//   final: channelOutcomes.scorebug_ocr {frames 0, lines 0, teamLines 0}
+//          sources ["scorebug_ocr:not_captured","asr","metadata"]
+//          fold.away {name Spain, confidence 0.15, sources ["metadata"]}
+//          ambiguous false            <- below usable 0.60, still publishable
+//   trail: 0.65 (25%) -> 0.65 (50%) -> 0.15 (resumed attempt 0%)
+//
+// The persisted record is the durable accumulator: `matchContext` and
+// `matchContextEvidence` are written by every resolver pass and are NOT touched
+// by the resume checkpoint, so a resumed attempt already reads them through
+// `getJob` (that is why the trail above carries the earlier entries). What was
+// missing is the rule that a resumed pass may never publish LESS than the
+// record already knows. Two pure helpers supply it:
+//
+// - `mergeMatchContextEvidence` folds this pass's evidence counters into the
+//   persisted ones (high-water per counter, union per provenance list, the
+//   strongest fold per side), so a resumed tail cannot erase channel evidence
+//   an earlier attempt paid for.
+// - `guardMatchContextRegression` refuses a weaker attribution for a side the
+//   record already resolved and forces `ambiguous: true` on any published
+//   attribution below the resolver's usable floor, so a below-floor name can
+//   never reach a caption while the record claims the match is unambiguous.
+// ---------------------------------------------------------------------------
+
+/** The resolver's usable floor (mirrors `USABLE_CONFIDENCE` in
+ * `services/perceive/app/match_context.py`). A published attribution below it
+ * is not a team the resolver considers usable. */
+export const MATCH_CONTEXT_USABLE_CONFIDENCE = 0.6;
+
+/** Caps mirroring the resolver's own status caps, so a record that accumulates
+ * evidence across attempts cannot grow without bound. */
+const EVIDENCE_ARRAY_CAP = 50;
+const EVIDENCE_RAW_LINES_CAP = 5;
+const EVIDENCE_TEAMS_CAP = 8;
+const EVIDENCE_MENTIONS_CAP = 12;
+
+/** Counters that describe how much of the clip a channel covered: the evidence
+ * pass is monotone within a job, so the high-water mark is the honest value
+ * (a resumed tail reports 0 frames for content the job already read). */
+const EVIDENCE_HIGH_WATER_KEYS = [
+  "scorebugOcrFrames",
+  "commentaryChars",
+  "kitSamples",
+  "kitSampleFrames",
+  "kitSampleTracks",
+  "scorebugSwatches",
+] as const;
+
+/** Provenance lists: an earlier attempt's observation is still a true statement
+ * about the job, so the merged record is the union (deduped, capped). */
+const EVIDENCE_UNION_KEYS = [
+  "suppressedCandidates",
+  "kitClusterColors",
+  "kitColorsUnattributed",
+  "kitClustersUnattributed",
+  "kitPriorUsed",
+  "kitPriorMiss",
+  "kitPriorConflict",
+] as const;
+
+function maxDefined(a: number | undefined, b: number | undefined): number | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return Math.max(a, b);
+}
+
+function unionStrings(
+  previous: string[] | undefined,
+  incoming: string[] | undefined,
+  cap = EVIDENCE_ARRAY_CAP
+): string[] | undefined {
+  const out: string[] = [];
+  for (const raw of [...(previous ?? []), ...(incoming ?? [])]) {
+    const value = String(raw);
+    if (value && !out.includes(value)) out.push(value);
+    if (out.length >= cap) break;
+  }
+  return out.length ? out : undefined;
+}
+
+function unionObjects<T>(
+  previous: T[] | undefined,
+  incoming: T[] | undefined,
+  key: (value: T) => string,
+  cap: number
+): T[] | undefined {
+  const out: T[] = [];
+  const seen = new Set<string>();
+  for (const value of [...(previous ?? []), ...(incoming ?? [])]) {
+    const k = key(value);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(value);
+    if (out.length >= cap) break;
+  }
+  return out.length ? out : undefined;
+}
+
+/**
+ * Merge the per-source availability markers of two passes.
+ *
+ * A source that was captured by ANY attempt stays captured: the resumed attempt
+ * sees only the tail, so its `scorebug_ocr:not_captured` describes that pass,
+ * not the job. This is what keeps a resumed record from reading
+ * `sources ["scorebug_ocr:not_captured","asr","metadata"]` while the job really
+ * did read 24 scorebug OCR lines.
+ */
+export function mergeEvidenceSources(
+  previous: string[] | undefined,
+  incoming: string[] | undefined
+): string[] | undefined {
+  const order: string[] = [];
+  const captured = new Map<string, boolean>();
+  const label = new Map<string, string>();
+  const add = (entry: string) => {
+    const name = entry.split(":")[0];
+    if (!name) return;
+    const isCaptured = !entry.slice(name.length).includes("not_captured");
+    if (!order.includes(name)) order.push(name);
+    captured.set(name, (captured.get(name) ?? false) || isCaptured);
+    if (isCaptured) label.set(name, name);
+    else if (!label.has(name)) label.set(name, entry);
+  };
+  for (const entry of previous ?? []) add(String(entry));
+  for (const entry of incoming ?? []) add(String(entry));
+  return order.length ? order.map((name) => label.get(name) ?? name) : undefined;
+}
+
+function mergeChannelOutcomes(
+  previous: MatchContextEvidence["channelOutcomes"],
+  incoming: MatchContextEvidence["channelOutcomes"]
+): MatchContextEvidence["channelOutcomes"] {
+  if (!previous) return incoming;
+  if (!incoming) return previous;
+  const out: Record<string, any> = { ...previous, ...incoming };
+  const ocrPrev = previous.scorebug_ocr;
+  const ocrNext = incoming.scorebug_ocr;
+  if (ocrPrev || ocrNext) {
+    out.scorebug_ocr = {
+      ...ocrPrev,
+      ...ocrNext,
+      frames: maxDefined(ocrPrev?.frames, ocrNext?.frames),
+      lines: maxDefined(ocrPrev?.lines, ocrNext?.lines),
+      teamLines: maxDefined(ocrPrev?.teamLines, ocrNext?.teamLines),
+      teams: unionObjects(ocrPrev?.teams, ocrNext?.teams, (t: any) => `${t?.name}|${t?.side}`, EVIDENCE_TEAMS_CAP),
+      rawLines: unionStrings(ocrPrev?.rawLines, ocrNext?.rawLines, EVIDENCE_RAW_LINES_CAP),
+    };
+  }
+  const asrPrev = previous.asr;
+  const asrNext = incoming.asr;
+  if (asrPrev || asrNext) {
+    out.asr = {
+      ...asrPrev,
+      ...asrNext,
+      chars: maxDefined(asrPrev?.chars, asrNext?.chars),
+      mentions: unionObjects(
+        asrPrev?.mentions,
+        asrNext?.mentions,
+        (m: any) => `${m?.name}|${m?.snippet}`,
+        EVIDENCE_MENTIONS_CAP
+      ),
+    };
+  }
+  const metaPrev = previous.metadata;
+  const metaNext = incoming.metadata;
+  if (metaPrev || metaNext) {
+    out.metadata = {
+      ...metaPrev,
+      ...metaNext,
+      candidates: unionObjects(
+        metaPrev?.candidates,
+        metaNext?.candidates,
+        (c: any) => `${c?.name}|${c?.side}|${c?.field}`,
+        EVIDENCE_TEAMS_CAP
+      ),
+    };
+  }
+  const foldPrev = previous.fold;
+  const foldNext = incoming.fold;
+  if (foldPrev || foldNext) {
+    const strongest = (a: any, b: any) => {
+      if (!a) return b ?? null;
+      if (!b) return a;
+      return Number(b.confidence ?? 0) > Number(a.confidence ?? 0) ? b : a;
+    };
+    out.fold = {
+      ...foldPrev,
+      ...foldNext,
+      // The published record's fold is the strongest fold the JOB saw, so the
+      // evidence block agrees with the guarded `matchContext` teams.
+      home: strongest(foldPrev?.home, foldNext?.home),
+      away: strongest(foldPrev?.away, foldNext?.away),
+    };
+  }
+  return out as MatchContextEvidence["channelOutcomes"];
+}
+
+/**
+ * Fold this pass's evidence into the evidence the record already carries.
+ *
+ * Used on a resumed attempt (and on any re-check after one): a pass that only
+ * covered the resumed tail must not reset the counters or the `not_captured`
+ * markers an earlier attempt established. Counters take the high-water mark,
+ * provenance lists take the union, `channelOutcomes` merges per channel, and
+ * the fold keeps the strongest claim per side. Everything else (sessionId,
+ * sport, ...) follows the CURRENT pass, because it describes the live session.
+ */
+export function mergeMatchContextEvidence(
+  previous: MatchContextEvidence | undefined,
+  incoming: MatchContextEvidence
+): MatchContextEvidence {
+  if (!previous) return incoming;
+  const out: Record<string, unknown> = { ...previous };
+  for (const key of EVIDENCE_HIGH_WATER_KEYS) {
+    const value = maxDefined(
+      previous[key] as number | undefined,
+      incoming[key] as number | undefined
+    );
+    if (value !== undefined) out[key] = value;
+  }
+  const sources = mergeEvidenceSources(previous.sources, incoming.sources);
+  if (sources) out.sources = sources;
+  for (const key of EVIDENCE_UNION_KEYS) {
+    const value = unionStrings(previous[key] as string[] | undefined, incoming[key] as string[] | undefined);
+    if (value) out[key] = value;
+  }
+  const channels = mergeChannelOutcomes(previous.channelOutcomes, incoming.channelOutcomes);
+  if (channels) out.channelOutcomes = channels;
+  // The live-session fields and the per-pass reason describe THIS pass only.
+  for (const key of ["sessionId", "sessionEvidence", "sport", "unknownReason", "genericNameCandidates"]) {
+    const value = (incoming as Record<string, unknown>)[key];
+    if (value !== undefined) out[key] = value;
+    else delete out[key];
+  }
+  return out as MatchContextEvidence;
+}
+
+/**
+ * Refuse a match-context regression, and never publish a below-floor name as
+ * an unambiguous match.
+ *
+ * - Per side (home/away), the record keeps the STRONGER of the persisted and
+ *   the incoming team: a thinner pass (the resumed tail, a late re-check on a
+ *   stretch without the score graphic) cannot lower a confidence the job
+ *   already earned. Keeping the previous team object also keeps its kit colours
+ *   and evidence, which is what made 0.65 -> 0.15 lose `scorebug_ocr`.
+ * - A side the record resolved at/above the usable floor is carried forward
+ *   when the incoming pass dropped it entirely.
+ * - Any published attribution below `MATCH_CONTEXT_USABLE_CONFIDENCE` forces
+ *   `ambiguous: true`, so a caption can never name a team the resolver itself
+ *   does not consider usable while the record claims the match is unambiguous.
+ */
+export function guardMatchContextRegression(
+  previous: MatchContext | undefined,
+  incoming: MatchContext
+): MatchContext {
+  const usable = MATCH_CONTEXT_USABLE_CONFIDENCE;
+  const prevBySide = new Map<string, MatchContextTeam>();
+  for (const team of previous?.teams ?? []) {
+    if (team.side === "home" || team.side === "away") prevBySide.set(team.side, team);
+  }
+  const teams: MatchContextTeam[] = incoming.teams.map((team) => {
+    const prev = prevBySide.get(team.side);
+    if (prev && prev.name && Number(prev.confidence) > Number(team.confidence)) {
+      return { ...prev };
+    }
+    return team;
+  });
+  for (const side of ["home", "away"] as const) {
+    if (teams.some((team) => team.side === side)) continue;
+    const prev = prevBySide.get(side);
+    if (prev && Number(prev.confidence) >= usable) teams.push({ ...prev });
+  }
+  const belowFloor = teams.some(
+    (team) => (team.side === "home" || team.side === "away") && Number(team.confidence ?? 0) < usable
+  );
+  return { ...incoming, teams, ambiguous: Boolean(incoming.ambiguous) || belowFloor };
+}
+
+/** True when the job record says this pass is a RESUME (attempt 2+). */
+export function isResumedAttempt(job: Job | undefined): boolean {
+  const attemptNo = Number(job?.attempts ?? 0);
+  const totalAttempts = Number(job?.resume?.totalAttempts ?? 0);
+  return attemptNo > 1 || totalAttempts > 1 || Boolean(job?.resume?.resumedAt);
+}
+
 /**
  * Build the once-per-job VOD match-context resolver.
  *
@@ -366,7 +662,34 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
     // what the curated prior did) without a server-log read. It is a copy of
     // what the resolver already returned — nothing is recomputed here (E4), and
     // a pass that returned no status writes no field at all (E2).
+    //
+    // ADAAAA-7912: on a RESUMED attempt the pass only covered the tail
+    // (`[vod-resume] ... cursorTs=81 warmupFrames=24`), so its evidence status
+    // counts zero scorebug frames and its fold can come back thinner than the
+    // record. Carry the persisted evidence forward (high-water counters, union
+    // provenance, strongest fold) and refuse a weaker attribution per side —
+    // the persisted record is the durable accumulator, so no resume-checkpoint
+    // field has to duplicate it. A pass that returns NO status on a resume
+    // keeps the persisted evidence instead of erasing it.
+    const resumed = isResumedAttempt(job);
+    const previousEvidence = job?.matchContextEvidence as MatchContextEvidence | undefined;
+    const guarded = guardMatchContextRegression(previous, ctx);
     const evidence = toMatchContextEvidence(result?.evidenceStatus);
+    let evidenceValue = evidence.value;
+    if (resumed) {
+      evidenceValue = evidenceValue
+        ? mergeMatchContextEvidence(previousEvidence, evidenceValue)
+        : previousEvidence;
+    }
+    if (resumed) {
+      log(
+        `[match-context:${deps.jobId}] resume carry-forward at ${progressPct}% (attempt ${job?.attempts ?? "?"}): ` +
+          `teams ${guarded.teams.map((t) => `${t.side}=${t.name}@${Number(t.confidence).toFixed(2)}`).join(" ") || "none"}` +
+          ` ambiguous=${guarded.ambiguous}` +
+          ` evidence ${(evidenceValue?.sources ?? []).join(",") || "none"}` +
+          ` scorebugOcrFrames=${evidenceValue?.scorebugOcrFrames ?? "unset"}`
+      );
+    }
     if (evidence.error) {
       log(
         `[match-context:${deps.jobId}] evidence status rejected at ${progressPct}% (${evidence.error}) — ` +
@@ -378,21 +701,21 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
       // is rejected there and the job keeps no matchContext (never a bad record).
       await deps.patchJob(
         deps.jobId,
-        evidence.value
-          ? { matchContext: ctx, matchContextEvidence: evidence.value }
-          : { matchContext: ctx }
+        evidenceValue
+          ? { matchContext: guarded, matchContextEvidence: evidenceValue }
+          : { matchContext: guarded }
       );
       const status = result?.evidenceStatus;
       log(
         `[match-context:${deps.jobId}] persisted at ${progressPct}%: ` +
-          ctx.teams.map((t) => `${t.side}=${t.name}@${t.confidence.toFixed(2)}`).join(" ") +
-          ` ambiguous=${ctx.ambiguous} sources=${((status?.sources as string[] | undefined) ?? []).join(",")}`
+          guarded.teams.map((t) => `${t.side}=${t.name}@${t.confidence.toFixed(2)}`).join(" ") +
+          ` ambiguous=${guarded.ambiguous} sources=${((evidenceValue?.sources as string[] | undefined) ?? (status?.sources as string[] | undefined) ?? []).join(",")}`
       );
     } catch (e: any) {
       // E3 failure isolation: the evidence field must never take the primary
       // matchContext contract down. Retry ONCE with the context alone — the
       // evidence is an explainability marker, not the record's purpose.
-      if (!evidence.value) {
+      if (!evidenceValue) {
         log(`[match-context:${deps.jobId}] persist failed: ${String(e?.message || e)}`);
         return;
       }
