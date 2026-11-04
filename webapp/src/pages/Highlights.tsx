@@ -133,7 +133,9 @@ export function Highlights() {
     const ac = new AbortController();
     let cancelled = false;
     readSSE(`/jobs/${vodJobId}/events`, getToken(), (name) => {
-      if (name === "highlight" && !cancelled) refreshHighlights().catch(() => {});
+      // ADAAAA-8006: a demoted GOAL re-attested by a later scoreboard read is
+      // re-published under this name, so the list refreshes to its GOAL state.
+      if ((name === "highlight" || name === "highlightAttested") && !cancelled) refreshHighlights().catch(() => {});
     }, ac.signal).catch(() => {});
     const iv = setInterval(async () => {
       try {
