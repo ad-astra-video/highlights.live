@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   HighlightRecordSchema,
+  HighlightAlternativeSchema,
   JobSchema,
   JobCandidateSchema,
+  type HighlightAlternative,
   type HighlightRecord,
   type Job,
   type JobCandidate,
@@ -70,6 +72,12 @@ export class Store {
   private byJob = new Map<string, string[]>();
   private observations = new Map<string, StoredObservation[]>();
   private candidates = new Map<string, JobCandidate[]>();
+  // ADAAAA-7984: celebration/replay clips delivered as alternatives of a goal
+  // highlight. Kept in their OWN maps (never mixed into `highlights`) so every
+  // highlight counter stays exactly what the pipeline accepted.
+  private alternatives = new Map<string, HighlightAlternative>();
+  private alternativesByJob = new Map<string, string[]>();
+  private alternativesByKey = new Map<string, HighlightAlternative>();
   private datasets = new Map<string, DatasetRecord>();
   private readonly db: Db | null;
 
@@ -81,12 +89,13 @@ export class Store {
    * re-loading (e.g. after a restart) restores full prior state. */
   async load(): Promise<void> {
     if (!this.db) return;
-    const [jobs, highlights, datasets, observations, candidates] = await Promise.all([
+    const [jobs, highlights, datasets, observations, candidates, alternatives] = await Promise.all([
       this.db.listJobs(),
       this.db.listHighlights(),
       this.db.listDatasets(),
       this.db.listObservations(),
       this.db.listJobCandidates(),
+      this.db.listHighlightAlternatives(),
     ]);
     this.jobs.clear();
     this.highlights.clear();
@@ -94,6 +103,9 @@ export class Store {
     this.byJob.clear();
     this.observations.clear();
     this.candidates.clear();
+    this.alternatives.clear();
+    this.alternativesByJob.clear();
+    this.alternativesByKey.clear();
     this.datasets.clear();
     for (const j of jobs) this.jobs.set(j.id, j);
     for (const h of highlights) {
@@ -112,6 +124,13 @@ export class Store {
       const list = this.candidates.get(c.jobId) ?? [];
       list.push(c);
       this.candidates.set(c.jobId, list);
+    }
+    for (const a of alternatives) {
+      this.alternatives.set(a.id, a);
+      this.alternativesByKey.set(a.dedupeKey, a);
+      const alist = this.alternativesByJob.get(a.jobId) ?? [];
+      if (!alist.includes(a.id)) alist.push(a.id);
+      this.alternativesByJob.set(a.jobId, alist);
     }
     for (const d of datasets) this.datasets.set(d.id, d);
   }
@@ -338,6 +357,53 @@ export class Store {
 
   highlightsForJob(jobId: string): HighlightRecord[] {
     return (this.byJob.get(jobId) ?? []).map((id) => this.highlights.get(id)!).filter(Boolean);
+  }
+
+  // -------------------------------------------------------------------------
+  // ADAAAA-7984: celebration alternatives (delivered as alternatives OF a goal
+  // highlight). Deliberately a separate working set — see the class comment on
+  // the maps above and celebration-alternatives.ts for why.
+  // -------------------------------------------------------------------------
+
+  /** Persist one delivered alternative. Idempotent on `dedupeKey` (owning
+   * highlight id + window anchor): a re-run of the same windows returns the
+   * EXISTING row with `created: false`, so no duplicate alternative is stored
+   * and the already-cut clip is reused instead of re-cut. */
+  async addAlternative(a: HighlightAlternative): Promise<{ record: HighlightAlternative; created: boolean }> {
+    const parsed = HighlightAlternativeSchema.parse(a);
+    const existing = this.alternativesByKey.get(parsed.dedupeKey);
+    if (existing) return { record: existing, created: false };
+    this.alternatives.set(parsed.id, parsed);
+    this.alternativesByKey.set(parsed.dedupeKey, parsed);
+    const list = this.alternativesByJob.get(parsed.jobId) ?? [];
+    if (!list.includes(parsed.id)) list.push(parsed.id);
+    this.alternativesByJob.set(parsed.jobId, list);
+    if (this.db) await this.db.saveHighlightAlternative(parsed);
+    return { record: parsed, created: true };
+  }
+
+  getAlternative(id: string): HighlightAlternative | undefined {
+    return this.alternatives.get(id);
+  }
+
+  /** The alternative already stored for an owning highlight + window anchor. */
+  alternativeByKey(dedupeKey: string): HighlightAlternative | undefined {
+    return this.alternativesByKey.get(dedupeKey);
+  }
+
+  /** Alternatives delivered for one job (anchor-ordered). */
+  alternativesForJob(jobId: string): HighlightAlternative[] {
+    return (this.alternativesByJob.get(jobId) ?? [])
+      .map((id) => this.alternatives.get(id)!)
+      .filter(Boolean)
+      .sort((a, b) => a.windowAnchorTs - b.windowAnchorTs);
+  }
+
+  /** Alternatives attached to one owning highlight. */
+  alternativesForHighlight(highlightId: string): HighlightAlternative[] {
+    return [...this.alternatives.values()]
+      .filter((a) => a.highlightId === highlightId)
+      .sort((a, b) => a.windowAnchorTs - b.windowAnchorTs);
   }
 
   /** All jobs currently held in memory (durable worker re-claim + drain,

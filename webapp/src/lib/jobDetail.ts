@@ -239,6 +239,35 @@ export interface JobTrace {
   selected?: boolean;
 }
 
+/**
+ * ADAAAA-7984: a celebration/replay clip delivered as an ALTERNATIVE of a goal
+ * highlight (the clip that follows the goal — replay or celebration). It is not a
+ * highlight: the payload groups it under its owning highlight
+ * (`highlightId` + `relation: "alternative_of"`) and it never enters the postable
+ * list or the notable lane. Mirrors HighlightAlternativeSchema in
+ * `@highlights/events`.
+ */
+export interface JobDetailAlternative {
+  id: string;
+  jobId: string;
+  highlightId: string;
+  relation: "alternative_of";
+  /** Always `celebration` — never `GOAL`. */
+  eventType: string;
+  /** Non-scoring verdict class (`big_play` / `near_miss`), never `scoring_play`. */
+  outcome?: string;
+  windowAnchorTs: number;
+  distanceToGoalEndS?: number;
+  score?: number;
+  start: number;
+  end: number;
+  clipId?: string;
+  clipUri: string;
+  clipError?: string;
+  dedupeKey?: string;
+  createdAt: string;
+}
+
 export interface JobDetailHighlight {
   id: string;
   jobId: string;
@@ -261,6 +290,9 @@ export interface JobDetailHighlight {
   goalConfirmed?: "confirmed_goal" | "near_miss" | "not_goal" | null;
   status: string;
   clipError?: string;
+  /** ADAAAA-7984: the celebration/replay clips delivered as alternatives OF this
+   * highlight (grouped by the payload). Absent when none were delivered. */
+  alternatives?: JobDetailAlternative[];
   // ADAAAA-7248: whether the source this highlight's clip was cut from carried
   // an audio stream. `false` => silent clip (source had no audio track); the
   // card shows an explicit "no audio captured" state. Absent when unknown.

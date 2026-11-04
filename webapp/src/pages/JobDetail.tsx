@@ -1166,6 +1166,31 @@ export function HighlightCard({
             <p className="mt-1 whitespace-pre-wrap break-words text-slate-ink">{h.asrTranscript}</p>
           </details>
         )}
+        {/* ADAAAA-7984 (ADAAAA-7953 decision A+): the goal's aftermath. The
+            celebration/replay clips delivered for this goal are ALTERNATIVES of
+            THIS highlight — grouped inside its card, never rendered as their own
+            highlight card and never in the notable lane. Each one is a real cut
+            clip (playable here) so the goal keeps its replay depth. */}
+        {!!h.alternatives?.length && (
+          <div className="mt-3 rounded-lg border border-mut/30 bg-mut/10 px-2 py-2" data-detail-alternatives>
+            <div className="text-xs uppercase tracking-wide text-mut" data-detail-alternatives-heading>
+              Also from this goal — {h.alternatives.length} alternative {h.alternatives.length === 1 ? "clip" : "clips"}
+            </div>
+            <ul className="mt-2 flex flex-col gap-2">
+              {h.alternatives.map((a) => (
+                <li key={a.id} className="min-w-0 overflow-hidden rounded-lg border border-mut/30" data-detail-alternative>
+                  <VideoClip src={a.clipUri} label={admin ? a.eventType : undefined} error={a.clipError} />
+                  <div className="flex flex-wrap items-center gap-2 px-2 py-1 text-xs text-mut">
+                    <span className="font-bold uppercase tracking-wide text-ink">Celebration</span>
+                    <span className="font-mono" data-detail-alternative-range>
+                      {momentRangeLabel(a.start, a.end)}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {/* ADAAAA-7881: operator pipeline internals — event type, score, trigger
             and outcome reason — live in ONE collapsed disclosure so the
             customer-facing hierarchy stays intact. ADAAAA-7893: the review

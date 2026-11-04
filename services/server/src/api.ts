@@ -60,6 +60,9 @@ import { exportUriFor, mintExportToken, verifyExportToken } from "./export-token
 import { stageAEvidenceLine, whistleEvidenceLine } from "./stage-a-metrics";
 import { aggregateLiveWatchMinutes, monthKeyUtc } from "./live-watch-minutes";
 import { buildPostableHighlights, countsFromPostable, postableCountFields, quotaDeltaForInsert } from "./highlight-postable";
+// ADAAAA-7984: deliver post-goal celebration/replay windows as alternative clips
+// ATTACHED to their owning GOAL highlight (never as highlights themselves).
+import { deliverCelebrationAlternatives, groupAlternativesByOwner } from "./celebration-alternatives";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { buildVodMeter, formatVodMeterLine } from "./vod-meter";
@@ -2036,14 +2039,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // ADAAAA-7928: cumulative ffmpeg clip-cut time for the time sankey. A
     // SUBSET of analyzeMs (cuts run inside the analyze loop), never additive.
     let clipEncodeMs = 0;
-    const cut = async (ts: number) => {
+    // ADAAAA-7984: `explicitWindow` lets the celebration-alternative delivery cut
+    // its own post-goal window (anchored on the decide window's start) instead of
+    // the accepted-clip rule; the accept path keeps calling `cut(ts)`.
+    const cut = async (ts: number, explicitWindow?: { start: number; end: number }) => {
       // ADAAAA-6625: a stop in flight wins over a clip cut — never spend ffmpeg
       // encode time (or write a clip) for a cancelled pass.
       if (isVodStopped(jobId)) throw new VodCancelledError(jobId);
       emitJobProgress(jobId, 90, "cutting clips");
       const clipId = randomUUID();
       const out = path.join(clipDir, `${clipId}.mp4`);
-      const win = clipWindow(ts, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
+      const win = explicitWindow ?? clipWindow(ts, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
       const cutStartMs = Date.now();
       await cutClip(cfg.ffmpegPath, videoPath, out, win.start, win.end - win.start);
       clipEncodeMs += Math.max(0, Date.now() - cutStartMs);
@@ -2311,6 +2317,27 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       resume: mergeResumeCheckpoint(store.getJob(jobId)?.resume, { phase: "finalize" }),
     });
     attemptStats.phase = "finalize";
+    // ADAAAA-7984 (ADAAAA-7953 decision A+): deliver the post-goal celebration /
+    // replay windows this pass decided as ALTERNATIVE CLIPS of their owning GOAL
+    // highlight. Derived from the STORED rows (accepted GOAL highlights + the
+    // persisted `job_candidates` verdicts), so a resumed attempt that skipped
+    // earlier frames still sees every window's verdict and a second pass re-selects
+    // the identical pair. Costs clip cut/encode/storage ONLY — the verdicts are
+    // already paid, so this adds no decide and no confirm call (AC4). Never fails
+    // the job: delivery is additive and swallows its own errors.
+    const alternativeClipsDelivered = await deliverCelebrationAlternatives({
+      store,
+      jobId,
+      ownerId: store.getJob(jobId)?.ownerId,
+      cfg: {
+        preWindowS: cfg.vodAnalysisPreWindowS,
+        clipBeforeS: cw.clipBeforeS,
+        clipAfterS: cw.clipAfterS,
+        clipWindowMinSec: cw.clipWindowMinSec,
+      },
+      cut,
+      log: (m) => console.log(m),
+    });
     // ADAAAA-7624: the user-facing candidate count is the number of distinct
     // candidates this job actually produced (the persisted highlights), not the
     // observer's per-window `accepted` tally — overlapping decide windows
@@ -2413,6 +2440,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-7118: completed record surfaces the ABSOLUTE persisted highlight
       // count from the store (source of truth), matching what addHighlight wrote.
       highlightsFound: store.highlightsForJob(jobId).length,
+      // ADAAAA-7984: celebration/replay alternatives delivered for this job.
+      // They are NOT highlights, so `highlightsFound` above is untouched by them.
+      alternativeClipsDelivered,
       // ADAAAA-7907 (AC9): the job-level spend fields are the JOB totals too —
       // `decideCalls` and `costUsd` on a resumed job cover both attempts. The
       // attempt's own counts stay in `resume.attempts` / the `[vod-resume]` line.
@@ -3865,6 +3895,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         user.role
       ),
       highlights: store.highlightsForJob(job.id),
+      // ADAAAA-7984: the delivered celebration/replay alternatives for this job,
+      // each tied to its owning highlight (`highlightId` + `relation`). Served
+      // here as well as grouped inside `/jobs/:id/detail` so the stored rows are
+      // inspectable from the plain job read.
+      alternatives: store.alternativesForJob(job.id),
       progress,
       liveProgress,
     };
@@ -3942,9 +3977,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const postable = buildPostableHighlights(store.highlightsForJob(job.id));
     // ADAAAA-7896 R1: the export URL is minted HERE, per caller — the webapp
     // never mints a token itself. Playback stays `clipUri` (public, no state).
+    // ADAAAA-7984: celebration/replay alternatives are DELIVERED grouped under
+    // their owning highlight — never as their own highlight cards, never in the
+    // notable lane. Same pass, so `job.alternativeClipsDelivered` below cannot
+    // disagree with the grouped lists.
+    const alternativesByOwner = groupAlternativesByOwner(store.alternativesForJob(job.id));
     const postableHighlights = postable.highlights.map((h) => ({
       ...h,
       exportUri: exportUriForHighlight(h, user.id),
+      ...(alternativesByOwner.get(h.id)?.length ? { alternatives: alternativesByOwner.get(h.id) } : {}),
     }));
 
     // ADAAAA-7623: the summary ladder (match summary -> chapters -> window
@@ -3969,7 +4010,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // ADAAAA-7854: the same payload carries the clip counts from the ONE
         // `buildPostableHighlights` pass above, so `job.postableHighlights`
         // always equals `highlights.length` here.
-        job: { ...job, ...counterFieldsForJob(job), ...countsFromPostable(postable) },
+        job: {
+          ...job,
+          ...counterFieldsForJob(job),
+          ...countsFromPostable(postable),
+          // ADAAAA-7984: delivered celebration alternatives for this job (NOT
+          // highlights — `highlightsFound`/`postableHighlights` are unchanged).
+          alternativeClipsDelivered: alternativesByOwner.size
+            ? [...alternativesByOwner.values()].reduce((n, list) => n + list.length, 0)
+            : 0,
+        },
         highlights: postableHighlights,
         notableHighlights: postable.notable,
         duplicateHighlights: postable.duplicates,
@@ -4177,7 +4227,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (browserJobs.has(job.id)) browserJobs.delete(job.id);
 
     // Remove on-disk artifacts (best-effort) and hard-delete the job + cascade.
-    const clipUris = store.highlightsForJob(job.id).map((h) => h.clipUri).filter(Boolean);
+    const clipUris = [
+      ...store.highlightsForJob(job.id).map((h) => h.clipUri),
+      // ADAAAA-7984: alternatives are real cut clips too — delete their media with
+      // the job so a DELETE never leaves orphaned clip files behind.
+      ...store.alternativesForJob(job.id).map((a) => a.clipUri),
+    ].filter(Boolean);
     await removeJobArtifacts(cfg.dataDir, job.id, clipUris);
     await store.deleteJob(job.id);
 
