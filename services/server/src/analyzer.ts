@@ -37,6 +37,10 @@ import {
   OBSERVE_WINDOW_S,
 } from "./observe-loop";
 import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
+// ADAAAA-8005 (gate 3): the per-row trigger -> delivered metric collector. One
+// per run, shared by the observer (fire/settle/accept clocks) and the server's
+// persist path (delivered clock).
+import { LiveDeliveryTracker, type LiveDeliveredLatencySnapshot } from "./live-delivery";
 import { describeInterruption } from "./job-failure";
 // ADAAAA-7988: live goal recall from a celebration/reaction window (the goal
 // instant falls between 1 fps media-node samples). Live rail only.
@@ -2126,6 +2130,14 @@ export interface LiveObserveMetricsSnapshot {
    *  `framesSeen` never entered perceive at all. Absent on a pass that ran no
    *  stride (the media-rail share, whose perceive runs in the media node). */
   perceive?: LivePerceiveStrideSnapshot;
+  /** ADAAAA-8005 (gate 3): the per-row trigger -> DELIVERED latency and its
+   *  stage breakdown. This is the metric the gate-3 AC is graded from: one row
+   *  per accepted-and-persisted highlight, `deliveredLatencyMs` = persistAck -
+   *  (contentOrigin + triggerTs), i.e. the trigger-to-readable-on-the-delivered-
+   *  surface number, with `fireLagMs` / `decideE2eMs` / `acceptWaitMs` /
+   *  `acceptMs` / `persistAckMs` naming where the seconds went. Additive
+   *  optional: absent when no highlight was delivered (and on older records). */
+  deliveredLatency?: LiveDeliveredLatencySnapshot;
 }
 
 /** ADAAAA-7774: the LIVE observe pass's ingest -> analysis stride evidence. */
@@ -2228,6 +2240,9 @@ export function buildLiveObserveMetrics(
   const avg = (xs: number[]): number => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
   const decideCalls = obs.decideCalls();
   const whistleDecides = obs.whistleDecideCount();
+  // ADAAAA-8005 (gate 3): the per-row delivered block (undefined until the first
+  // highlight row is persisted and acked).
+  const delivered = obs.deliveredLatencyStats();
   return {
     decideCalls,
     accepted: obs.acceptedCount(),
@@ -2282,6 +2297,10 @@ export function buildLiveObserveMetrics(
     // ADAAAA-7774: the ingest -> analysis stride evidence (absent when the pass
     // ran no stride — e.g. the media-rail share, perceived in the media node).
     ...(stride ? { perceive: { ...stride } } : {}),
+    // ADAAAA-8005 (gate 3): the per-row trigger -> delivered latency. One row
+    // per delivered highlight, so the AC is readable off the record with no
+    // `[live-lag]` + `[ingest-gap]` log join. Absent until a row is delivered.
+    ...(delivered ? { deliveredLatency: delivered } : {}),
   };
 }
 
@@ -2639,11 +2658,17 @@ export class LiveRunShared {
     lastNotedTs: number;
   } = { story: "", priorAsr: "", score: null, lastScoreTs: null, scored: false, lastNotedTs: -Infinity };
 
-  constructor(opts: { decideWindowN?: number; goalBurstWindowS?: number; audioRetainS?: number } = {}) {
+  constructor(opts: { decideWindowN?: number; goalBurstWindowS?: number; audioRetainS?: number; jobId?: string } = {}) {
     this.windowN = opts.decideWindowN ?? DECIDE_FRAME_WINDOW;
     this.goalBurstWindowS = opts.goalBurstWindowS ?? DEFAULT_GOAL_BURST_SUPPRESS_S;
     this.audioRetainS = opts.audioRetainS ?? AUDIO_CLIP_KEEP_S;
+    this.delivery = new LiveDeliveryTracker(opts.jobId ?? "");
   }
+
+  /** ADAAAA-8005 (gate 3): the per-row trigger -> delivered collector for this
+   *  run. The live observers feed it the window stage clocks; the server's
+   *  persist path completes each row when the store write-through acks. */
+  readonly delivery: LiveDeliveryTracker;
 
   /** Record a sampled frame into the rolling window. The window is
    * time-bounded (DECIDE_WINDOW_SECONDS) and hard-capped (CACHE_MAX_FRAMES),
@@ -5472,6 +5497,10 @@ export async function analyzeJob(
           // ADAAAA-7707: the whistle family gets its own verdict ledger, so a
           // judged whistle window never lands in the Stage-A FP-rate.
           stageB: run.stageBOutcomes,
+          // ADAAAA-8005 (gate 3): the per-row trigger -> delivered metric. The
+          // server's persist path completes each row off the SAME run object, so
+          // the live RTMP/file rail reports it too (not only the media rail).
+          delivery: run.delivery,
           // ADAAAA-7758: one live decide slot per box. When another live job
           // holds it this tick is skipped (counted as an admission skip) instead
           // of interleaving a second decide that would stretch BOTH streams past

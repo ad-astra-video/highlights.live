@@ -25,6 +25,10 @@ import {
   type TriggerSchedulerStats,
 } from "./audio-trigger";
 import type { StageAOutcomeLedger } from "./stage-a-metrics";
+// ADAAAA-8005 (gate 3): the trigger -> delivered metric. The observer owns the
+// fire / settle / accept clocks; the server's persist path owns the delivered
+// (write-through ack) clock and reports it back through the same tracker.
+import { LiveDeliveryTracker, type LiveDeliveredLatencySnapshot, type WindowDeliveryTimings } from "./live-delivery";
 // ADAAAA-7844: provenance type for the measured scoreboard delta carried on a
 // window bias hint (defined next to the confirm/attestation types in analyzer).
 import type { ScoreboardDeltaEvidence } from "./analyzer";
@@ -360,6 +364,15 @@ interface PendingObserveDecide {
   frameCount: number;
   /** Wall clock the decide was issued (E2E is measured from here to settle). */
   startedMs: number;
+  /** ADAAAA-8005 (gate 3): wall clock the window FIRED (the cadence decision).
+   *  Same instant as `startedMs` on the staged path; kept separate so the
+   *  delivered metric names the stage instead of aliasing it. */
+  firedAtMs: number;
+  /** ADAAAA-8005: wall clock `decide()` settled (set in its `then`). */
+  settledAtMs?: number;
+  /** ADAAAA-8005: accept gate entry / exit wall clocks (content-order drain). */
+  acceptStartMs?: number;
+  acceptDoneMs?: number;
   /** True once `decide()` resolved or rejected. */
   done: boolean;
   /** Set when `decide()` rejected; the pass rethrows it at flush. */
@@ -509,6 +522,11 @@ export class LiveObserver {
   /** ADAAAA-7707: the Stage-B (whistle) verdict ledger. Whistle windows judge
    *  here, never into `stageA`, so the published Stage-A fidelity is untouched. */
   private readonly stageB: StageAOutcomeLedger | null;
+  /** ADAAAA-8005 (gate 3): per-row trigger -> delivered latency collector. Fed
+   *  here with the fire/settle/accept clocks and completed by the server's
+   *  persist path (`noteHighlightDelivered`), so the AC's number is emitted from
+   *  the metric layer instead of joined out of two log families. */
+  private readonly delivery: LiveDeliveryTracker | null;
 
   constructor(opts: {
     cadenceS?: number;
@@ -549,6 +567,10 @@ export class LiveObserver {
     /** ADAAAA-7707: Stage-B (whistle) outcome ledger — the whistle family's own
      *  counters, so a whistle verdict never moves the Stage-A FP-rate. */
     stageB?: StageAOutcomeLedger;
+    /** ADAAAA-8005 (gate 3): per-row trigger -> delivered metric collector.
+     *  Absent (VOD / tests) leaves the observer byte-identical and emits no
+     *  delivery rows. */
+    delivery?: LiveDeliveryTracker;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
@@ -568,6 +590,8 @@ export class LiveObserver {
     this.decideKeepRatio = Number.isFinite(keepRatio) && keepRatio > 0 && keepRatio < 1 ? keepRatio : 1;
     this.stageA = opts.stageA ?? null;
     this.stageB = opts.stageB ?? null;
+    // ADAAAA-8005 (gate 3): absent = the VOD/test shape (no delivery rows).
+    this.delivery = opts.delivery ?? null;
     // ADAAAA-7723: the stale horizon is the FRAME RETENTION horizon, not the
     // bare 8 s default. A trigger whose onset is still inside the retained
     // window can be judged by that window (`coverThrough`), so expiring it
@@ -641,12 +665,14 @@ export class LiveObserver {
   /** Queue one staged decide and start its expensive half. */
   private issueStaged(
     payload: ObserveDecidePayload,
-    entry: Omit<PendingObserveDecide, "startedMs" | "done" | "staged" | "settled">
+    entry: Omit<PendingObserveDecide, "startedMs" | "firedAtMs" | "done" | "staged" | "settled">
   ): void {
     const staged = this.onDecideStaged!(payload);
+    const firedAtMs = Date.now();
     const pending: PendingObserveDecide = {
       ...entry,
-      startedMs: Date.now(),
+      startedMs: firedAtMs,
+      firedAtMs,
       done: false,
       settled: Promise.resolve(),
       staged,
@@ -659,6 +685,9 @@ export class LiveObserver {
       .then(
         () => {
           pending.done = true;
+          // ADAAAA-8005: the decide settle instant — the delivered metric's
+          // `decideE2eMs` stage ends here.
+          pending.settledAtMs = Date.now();
         },
         (err) => {
           pending.done = true;
@@ -698,8 +727,27 @@ export class LiveObserver {
 
   private async applyEntry(entry: PendingObserveDecide): Promise<void> {
     const e2eMs = Date.now() - entry.startedMs;
+    // ADAAAA-8005 (gate 3): the accept stage clocks. `acceptStartMs` minus the
+    // decide settle is the content-order head-of-line wait (a window cannot be
+    // accepted until every earlier window has been), and the accept gate itself
+    // is the localize/suppress/record/emit work.
+    const acceptStartMs = Date.now();
+    const settledAtMs = entry.settledAtMs ?? acceptStartMs;
     const accepted = await entry.staged.accept();
-    this.recordOutcome({ ...entry, accepted, e2eMs });
+    const acceptDoneMs = Date.now();
+    this.recordOutcome({
+      ...entry,
+      accepted,
+      e2eMs,
+      delivery: {
+        centerTs: entry.centerTs,
+        lagMs: entry.lagMs,
+        firedAtMs: entry.firedAtMs,
+        settledAtMs,
+        acceptStartMs,
+        acceptDoneMs,
+      },
+    });
   }
 
   /** Await every outstanding decide and apply it in content order. */
@@ -726,8 +774,15 @@ export class LiveObserver {
     frameCount: number;
     accepted: boolean;
     e2eMs: number;
+    /** ADAAAA-8005 (gate 3): the window's stage clocks, when the caller has
+     *  them (staged live path). Absent on the VOD/serial shape. */
+    delivery?: WindowDeliveryTimings;
   }): void {
     if (r.accepted) this.accepts++;
+    // ADAAAA-8005: one delivered-row candidate per ACCEPTED window. The row is
+    // completed (and the AC number produced) when the server's persist path
+    // acks the write-through via `noteHighlightDelivered`.
+    if (r.accepted && r.delivery && this.delivery) this.delivery.noteWindow(r.delivery);
     const dueTrigger = r.dueTrigger ?? null;
     // ADAAAA-7694: this decided window IS the judgement of every Stage-A
     // trigger whose onset it covers.
@@ -1050,6 +1105,7 @@ export class LiveObserver {
     if (this.onDecide) {
       const started = Date.now();
       const accepted = await this.onDecide(payload);
+      const acceptDoneMs = Date.now();
       // ADAAAA-7694/7707: the verdict is written into the counters, the
       // Stage-A/B ledgers and the latency samples by `recordOutcome`, which the
       // pipelined path calls in content order at settle time.
@@ -1062,7 +1118,18 @@ export class LiveObserver {
         dueTrigger: anchored ? dueTrigger : null,
         frameCount: payload.frames.length,
         accepted,
-        e2eMs: Date.now() - started,
+        e2eMs: acceptDoneMs - started,
+        // ADAAAA-8005: the serial `onDecide` runs decide + accept in ONE call,
+        // so there is no settle/accept boundary to report; the whole call is the
+        // decide stage and the accept waits are zero.
+        delivery: {
+          centerTs: nowTs,
+          lagMs: lag,
+          firedAtMs: started,
+          settledAtMs: started,
+          acceptStartMs: started,
+          acceptDoneMs,
+        },
       });
     }
   }
@@ -1102,6 +1169,24 @@ export class LiveObserver {
   acceptedCount(): number {
     return this.accepts;
   }
+
+  /**
+   * ADAAAA-8005 (gate 3): the highlight row reached the delivered surface — the
+   * store write-through ACKED (memory + DB write resolved). Completes the
+   * pending row for the window whose trigger timestamp this is and emits the
+   * `[live-deliver]` evidence line. Called by the server's persist path; a
+   * no-op when this observer has no delivery tracker (VOD / tests).
+   */
+  noteHighlightDelivered(triggerTs: number, persistAckAtMs: number = Date.now()): void {
+    this.delivery?.notePersisted(triggerTs, persistAckAtMs);
+  }
+
+  /** ADAAAA-8005: the per-row trigger -> delivered metric block, or undefined
+   *  before the first row is delivered. */
+  deliveredLatencyStats(): LiveDeliveredLatencySnapshot | undefined {
+    return this.delivery?.snapshot();
+  }
+
   /** Cadence ticks suppressed by the Tier-2 signal gate (ADAAAA-7145). */
   gatedSkipCount(): number {
     return this.gatedSkips;

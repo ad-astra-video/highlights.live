@@ -630,6 +630,43 @@ export const ObserveMetricsSnapshotSchema = z.object({
       })
     )
     .optional(),
+  // ADAAAA-8005 (gate 3): the per-row TRIGGER -> DELIVERED latency, the metric
+  // the live gate-3 AC ("trigger -> delivered p50 <= 5 s") is graded from.
+  // "Delivered" is pinned as the instant the highlight row is READABLE on the
+  // delivered surface (the store write-through acked), and each row carries the
+  // stage breakdown so a replay can blame fire lag / decide e2e / accept wait /
+  // accept work / persist ack instead of joining `[live-lag]` + `[ingest-gap]`
+  // log families by hand. Additive optional: absent on records written before
+  // this field existed, and on a run that delivered no highlight.
+  deliveredLatency: z
+    .object({
+      samples: z.number().int().min(0),
+      p50Ms: z.number().min(0),
+      p95Ms: z.number().min(0),
+      maxMs: z.number().min(0),
+      rows: z
+        .array(
+          z.object({
+            /** The row's own `trigger.timestamp` (content seconds) — the value
+             *  the gate-3 formula subtracts. */
+            triggerTs: z.number(),
+            /** Trigger -> delivered total (ms); the AC's number. */
+            deliveredLatencyMs: z.number().min(0),
+            /** Content ts -> cadence fire (frame arrival / relay lag). */
+            fireLagMs: z.number().min(0),
+            /** Fire -> decide settle (gemma E2E). */
+            decideE2eMs: z.number().min(0),
+            /** Decide settle -> accept gate entry (content-order head of line). */
+            acceptWaitMs: z.number().min(0),
+            /** Accept gate duration (localize + suppress + record + emit). */
+            acceptMs: z.number().min(0),
+            /** Emit -> store write-through ack. */
+            persistAckMs: z.number().min(0),
+          })
+        )
+        .max(200),
+    })
+    .optional(),
 });
 export type ObserveMetricsSnapshot = z.infer<typeof ObserveMetricsSnapshotSchema>;
 

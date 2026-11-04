@@ -142,3 +142,65 @@ Unit coverage: `services/server/test/live-observe-inflight.test.ts` (K-wide
 overlap, accept order with reversed completion, bounded backpressure, flush
 drain, fail-through, and an end-to-end `analyzeJob` comparison against the serial
 pass on a buffered realtime rail).
+
+## Trigger -> DELIVERED latency: the pinned definition (ADAAAA-8005)
+
+Gate 3 of the live media-rail replay is "trigger -> delivered p50 <= 5 s". Until
+ADAAAA-8005 that number had no metric behind it: `observeMetrics
+.triggerLatencyByFamily` measures onset -> *decided window* (stageA / judged /
+stageB), which is entirely PRE-delivery, and the only figure that matched the AC
+was a hand join of `[live-lag:<job>] decide @Ts lag` with
+`[ingest-gap:<job>] decideE2eMs`. A hand join cannot be re-graded from the job
+record, and it conflates two different populations (every decided window vs the
+handful of accepted rows).
+
+**Definition (pinned, and the one the AC is graded against).**
+
+- The **trigger** is the delivered row's own `trigger.timestamp` (content
+  seconds) - the same value `row.createdAt - (startedAt + trigger.timestamp)`
+  subtracts, so the metric and the historical log-join arithmetic agree.
+- **Delivered** is the instant the highlight row becomes READABLE on the
+  delivered surface: the store write-through acked (`store.addHighlight`
+  resolved - the in-memory store is written before the DB await, so a feed read
+  on that tick already sees the row).
+- `deliveredLatencyMs = persistAck - (contentOriginMs + triggerTs * 1000)`,
+  where `contentOriginMs` is the wall epoch-ms of content t=0, derived once per
+  run from the first fired window (`firedAt - lag - centerTs*1000`) so it shares
+  the rail's own lag clock.
+
+**Where the seconds sit** (one row per delivered highlight, so the AC needs no
+log join):
+
+```
+[live-deliver:<job>] row @108s delivered=6776ms fire=2777ms decide=3839ms acceptWait=20ms accept=160ms persistAck=12ms
+```
+
+- `fireLagMs` - content ts -> cadence fire. This is the frame-arrival/relay lag
+  (media node decode + perceive + observation relay). A relay that falls behind
+  the sampling cadence shows up HERE, not in the accept path.
+- `decideE2eMs` - fire -> decide settle (gemma E2E).
+- `acceptWaitMs` - decide settle -> accept entry: the content-order head of line
+  (a window cannot be accepted before every earlier window has been).
+- `acceptMs` - the accept gate itself (localize, burst suppression, record,
+  emit): O(100 ms), CPU-only.
+- `persistAckMs` - emit -> store write-through ack.
+
+The five stages sum to `deliveredLatencyMs` (plus `(centerTs - triggerTs)` when
+localization moved the trigger inside the window), so a replay can attribute the
+gap to one stage instead of guessing.
+
+**On the job record** (`GET /jobs/:id`, admin - it rides the internal
+`observeMetrics` block):
+
+- `observeMetrics.deliveredLatency.samples` - delivered rows measured.
+- `observeMetrics.deliveredLatency.p50Ms` / `p95Ms` / `maxMs` - the gate-3
+  number and its tail.
+- `observeMetrics.deliveredLatency.rows[]` - per-row `triggerTs`,
+  `deliveredLatencyMs` and the five stages above (bounded at 200 rows).
+
+Unit coverage: `services/server/test/live-delivery-latency.test.ts` (the
+arithmetic and its exact decomposition, a localized trigger counted against the
+row's own timestamp, negative-clock clamping, p50/p95/max, the tracker's
+pending -> ack handshake incl. a retried persist not double-counting, and the
+`LiveObserver -> observeMetrics.deliveredLatency` wiring for accepted vs rejected
+windows).

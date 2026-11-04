@@ -286,7 +286,10 @@ export class MediaRailObserver {
     this.jobId = opts.jobId;
     this.onFrame = opts.onFrame;
     this.lagBudgetMs = Math.max(0, (opts.lagBudgetS ?? LIVE_OBSERVE_LAG_BUDGET_S) * 1000);
-    this.run = run ?? new LiveRunShared({ audioRetainS: opts.audioRetainS });
+    // ADAAAA-8005 (gate 3): the run carries the per-row trigger -> delivered
+    // collector, so the rail's persisted rows report the AC's number and the
+    // media-rail job record carries it under `observeMetrics.deliveredLatency`.
+    this.run = run ?? new LiveRunShared({ audioRetainS: opts.audioRetainS, jobId: opts.jobId });
     // ADAAAA-7987: pipeline the decide pass exactly like the analyzer
     // live-observe path (ADAAAA-7771 depth + ADAAAA-7878 off-loop issue). The
     // media rail used to hand `LiveObserver` only `onDecide`, so the serial path
@@ -325,6 +328,10 @@ export class MediaRailObserver {
       // whistle-anchored decide on this rail is judged in its OWN family ledger
       // and `stageAMetrics` stays whistle-free here as well.
       stageB: this.run.stageBOutcomes,
+      // ADAAAA-8005 (gate 3): per-row trigger -> delivered metric (see
+      // `LiveDeliveryTracker`). Fed by the accept drain, completed by the
+      // server's persist path.
+      delivery: this.run.delivery,
       // ADAAAA-7758: the browser rail shares the SAME process-wide live decide
       // slot as the rtmp/file-sim rail, so a screen share can never interleave
       // decides with another live job and stretch both past the budget.
