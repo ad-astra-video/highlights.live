@@ -1057,17 +1057,14 @@ describe("observation delivery on a lagging runner (ADAAAA-7990)", () => {
         await new Promise((r) => setTimeout(r, 60));
       }
 
-      // Nothing published is ever lost: every published frame ends delivered,
-      // and every frame the node did NOT publish is counted as refused — the
-      // pre-fix path instead published all 12 and silently dropped 6-12.
-      expect(g.publishes.length).toBeGreaterThanOrEqual(4);
-      expect(g.publishes.length).toBeLessThanOrEqual(7);
-      // Pacing skips the excess (refused) and keeps the newest, so published seqs
-      // stay strictly increasing but need not be contiguous.
-      const publishedSeqs = g.publishes.map((p) => p.seq);
-      expect(publishedSeqs).toEqual([...publishedSeqs].sort((a, b) => a - b));
-      expect(new Set(publishedSeqs).size).toBe(publishedSeqs.length);
-      expect(seen).toEqual(publishedSeqs);
+      // Nothing published is ever lost AND publishing is dense: every decoded
+      // frame goes to video-in (a skipped seq leaves a permanent hole in
+      // go-livepeer's ordered trickle stream and wedges the runner's serial
+      // subscriber — measured session 0251b715, 3 observations in 300 s), and
+      // every published frame ends `delivered` because a slow runner delays
+      // delivery instead of cancelling it.
+      expect(g.publishes.map((p) => p.seq)).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
+      expect(seen).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
 
       // Close and read the ledger line AC1 reads.
       ws.close();
@@ -1078,11 +1075,12 @@ describe("observation delivery on a lagging runner (ADAAAA-7990)", () => {
       const summary = logged.find((l) => l.includes("[rtc] observe session=sess-lag"));
       expect(summary).toBeTruthy();
       const num = (k: string) => Number(new RegExp(`${k}=(\\d+)`).exec(summary!)![1]);
-      expect(num("published")).toBe(g.publishes.length);
-      expect(num("published")).toBe(num("delivered") + num("expired") + num("skipped") + num("inFlight"));
-      expect(num("refused")).toBe(12 - num("published"));
+      expect(num("published")).toBe(12);
+      expect(num("delivered")).toBe(12);
+      expect(num("refused")).toBe(0);
       expect(num("expired")).toBe(0);
       expect(num("skipped")).toBe(0);
+      expect(num("published")).toBe(num("delivered") + num("expired") + num("skipped") + num("inFlight"));
       // At least one delivered observation landed well past the old 2.5 s inline
       // poll budget — those are exactly the frames the pre-fix path discarded.
       const lateObs = logged.filter((l) => l.includes("[rtc] obs seq=")).filter((l) => {
