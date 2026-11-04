@@ -1230,6 +1230,36 @@ def _two_plate_split(run: str) -> Optional[tuple[str, str]]:
     return None
 
 
+def _camel_plate_split(run: str) -> Optional[tuple[str, str]]:
+    """Split ONE glued mixed-case plate run into its two printed plates.
+
+    ADAAAA-7944: the hockey bug prints ``Watertown 1 – Cohasset Middle HS``, but
+    on most frames `<OCR>` drops BOTH the digits and the dash and returns
+    ``WatertownColhasset Middle HS``. The only remaining boundary is the printed
+    camel-case seam. Only a seam that leaves a MULTI-WORD away plate qualifies
+    (``Colhasset Middle HS``): a two-part single-word club glued together
+    ("RealMadrid") is left alone, because that shape cannot be told apart from a
+    club name here.
+    """
+    raw = str(run or "").strip()
+    if not raw:
+        return None
+    parts = [p for p in _GENERIC_GLUE_SPLIT_RE.split(raw) if p.strip()]
+    if len(parts) != 2:
+        return None
+    left = _clean_plate(parts[0])
+    right = _clean_plate(parts[1])
+    if not left or not right:
+        return None
+    if len(left.split()) != 1 or len(right.split()) < 2:
+        return None
+    if len(left) < 4 or len(right.split()[0]) < 4:
+        return None
+    if _fold(left) == _fold(right):
+        return None
+    return left, right
+
+
 def printed_plate_sides(text: str) -> Optional[tuple[str, str]]:
     """``(home, away)`` from two printed club plates on a band/corner-bug line.
 
@@ -1263,6 +1293,8 @@ def printed_plate_sides(text: str) -> Optional[tuple[str, str]]:
         # the two side plates, not one two-word club (broadcast plates of a
         # multi-word club are printed mixed case, e.g. "Cohasset Middle HS").
         two = _two_plate_split(left_raw) or _two_plate_split(right_raw)
+        if two is None:
+            two = _camel_plate_split(left_raw) or _camel_plate_split(right_raw)
         if two is not None:
             return two
     for m in _PLATE_HYPHEN_BOUNDARY_RE.finditer(text):
