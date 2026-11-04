@@ -38,6 +38,9 @@ import {
   gateUncorroboratedGoal,
   isQuietVerdict,
   repairDanglingTail,
+  servedShape,
+  servedShapeViolations,
+  wholeFirstSentence,
   windowCorroborated,
   type CorroborationWindow,
 } from "@highlights/events";
@@ -255,6 +258,14 @@ interface NormalizedEntry {
    * the provenance to collapse them.
    */
   gateProduced?: boolean;
+  /** ADAAAA-8014 (§2): the model's stored pre-gate line, the sentence a served
+   * row must not be a prefix cut of. */
+  raw?: string;
+  /** ADAAAA-8014: a quiet (`not_highlight`) row carries the 8-word budget. */
+  quiet?: boolean;
+  /** ADAAAA-8014: the window's corroboration, so a fallback sentence is
+   * re-gated on the same terms (§3.4) before it can be served. */
+  corroborated?: boolean;
 }
 
 const ATTACK_WORDS =
@@ -297,7 +308,11 @@ function normalizeLog(log: SummaryLogEntry[]): NormalizedEntry[] {
     // ADAAAA-7995: `text_raw` is the write seam's own record that the gate
     // changed this row — the provenance the display cap needs.
     const gateProduced = typeof (e as { text_raw?: string }).text_raw === "string" && ((e as { text_raw?: string }).text_raw ?? "").trim() !== "";
-    return { seq: e.seq, windowTs, text, clean, kind: classifyEntry(text), trimmed: clean !== gated, gateProduced };
+    // ADAAAA-8014 (§2): the raw sentence and the quiet flag ride along, so the
+    // served post-condition can fall back to the WHOLE stored sentence and apply
+    // the quiet budget without re-reading the record.
+    const raw = gateProduced ? ((e as { text_raw?: string }).text_raw ?? "").trim() : "";
+    return { seq: e.seq, windowTs, text, clean, kind: classifyEntry(text), trimmed: clean !== gated, gateProduced, raw, quiet: isQuietVerdict(verdict) };
   });
 }
 
@@ -339,9 +354,10 @@ function propagateCorroboration(
   if (!fastRail) return entries;
   const windows = accepted as CorroborationWindow[];
   const gated = entries.map((e) => {
-    const text = gateUncorroboratedGoal(e.clean, windowCorroborated(windows, e.windowTs));
+    const corroborated = windowCorroborated(windows, e.windowTs);
+    const text = gateUncorroboratedGoal(e.clean, corroborated);
     return {
-      entry: text === e.clean ? e : { ...e, clean: text },
+      entry: text === e.clean ? { ...e, corroborated } : { ...e, clean: text, corroborated },
       text,
       rewritten: text !== e.clean || e.trimmed === true,
       gateProduced: e.gateProduced === true,
@@ -353,6 +369,37 @@ function propagateCorroboration(
   // ADAAAA-7995 (AC1/AC2): then the DISPLAY cap, which also collapses the pairs
   // the WRITE seam itself produced (both rows look untouched here).
   return dedupeDisplayLines(dedupeGatedLines(gated)).map((g) => g.entry);
+}
+
+/**
+ * ADAAAA-8014 (§2): the SERVED post-condition over what the ladder emits.
+ *
+ * The write gate shapes each stored line; a read surface can still emit a line
+ * that stops mid-phrase (a copula left without its predicate, a beat split off a
+ * longer sentence, a trimmed place). Every row is therefore tested as the string
+ * that will be RENDERED: a refused candidate is replaced by the whole stored
+ * sentence (re-gated for corroboration), reduced only by deleting interior
+ * adjunct phrases when the row is quiet, and dropped only when nothing honest
+ * passes — a mangled row is never rendered.
+ */
+function finalizeServedShapes(entries: NormalizedEntry[]): NormalizedEntry[] {
+  const out: NormalizedEntry[] = [];
+  for (const e of entries) {
+    const served = servedShape({
+      candidate: e.clean,
+      storedRaw: e.raw,
+      storedGated: e.text,
+      quiet: e.quiet === true,
+      regate: (sentence) => gateUncorroboratedGoal(sentence, e.corroborated === true),
+    });
+    if (!served.text) continue;
+    if (served.text === e.clean) {
+      out.push(e);
+      continue;
+    }
+    out.push({ ...e, clean: served.text, trimmed: true });
+  }
+  return out;
 }
 
 /** Accepted GOAL highlights, in time order, with a monotonic 1-based index. */
@@ -429,15 +476,6 @@ function dominantKind(entries: NormalizedEntry[]): "build-up" | "lull" | "phase"
   const tally = { "build-up": 0, lull: 0, phase: 0 } as Record<string, number>;
   for (const e of entries) tally[e.kind] += 1;
   return (Object.entries(tally).sort((a, b) => b[1] - a[1])[0][0] as "build-up" | "lull" | "phase") ?? "phase";
-}
-
-/** Trim to a sentence-ish excerpt at a word boundary. */
-function excerpt(text: string, max = CHAPTER_SUMMARY_MAX_CHARS): string {
-  const t = (text ?? "").trim();
-  if (t.length <= max) return t;
-  const cut = t.slice(0, max);
-  const space = cut.lastIndexOf(" ");
-  return `${cut.slice(0, space > max * 0.6 ? space : max).trim()}…`;
 }
 
 /** Representative narrative for a chapter: the first entry that actually
@@ -536,18 +574,23 @@ function composeMatchSummary(
   const duration = chapters.length > 0 ? chapters[chapters.length - 1].endS : 0;
   const verified = goals.filter((g) => g.verified).length;
   const header = `${gameHint || "Video"} · ${formatClock(duration)} · ${chapters.length} chapter${chapters.length === 1 ? "" : "s"} · ${goals.length} accepted goal${goals.length === 1 ? "" : "s"} (${verified} corroborated)`;
-  // ADAAAA-7995 (§2): a bullet carries the chapter's FIRST WHOLE SENTENCE plus the
-  // goal-count sentence, or no narrative at all. A character excerpt cut the
-  // chapter digest mid-phrase and truncated the goal count (`… (0…`), so the
-  // rollup never truncates narrative text now: it drops the narrative, keeping
-  // the bullet + the goal count, which is the honest form of "did not fit".
+  // ADAAAA-8014 (§2): a bullet carries the chapter's FIRST WHOLE SENTENCE plus the
+  // goal-count sentence, or no narrative at all — a character excerpt cuts the
+  // chapter digest mid-phrase and truncates the goal count (`… (0…`), so the
+  // rollup never truncates narrative text: it drops the narrative, keeping the
+  // bullet + the goal count, which is the honest form of "did not fit".
   const chapterBullet = (c: SummaryChapter, withNarrative: boolean): string => {
     if (!c.summary) return `- ${c.title}`;
     const m = c.summary.match(GOAL_NOTE_TAIL);
     const lead = (m ? c.summary.slice(0, m.index) : c.summary).trim();
     const note = m ? m[1] : "";
-    const sentence = captionBeats(lead)[0] ?? lead;
-    const body = [sentence.trim(), note].filter(Boolean).join(" ");
+    const sentence = (wholeFirstSentence(lead) || lead).trim();
+    // ADAAAA-8014 (§2): a bullet never carries a string that stops mid-phrase; the
+    // title + goal count is the honest form of "no narrative fits".
+    const body =
+      sentence && servedShapeViolations(sentence, [lead]).length === 0
+        ? [sentence, note].filter(Boolean).join(" ")
+        : note;
     if (!withNarrative || !body) return `- ${c.title}${note ? `: ${note}` : ""}`;
     return `- ${c.title}: ${body}`;
   };
@@ -602,7 +645,12 @@ export function buildSummaryLadder(input: {
 }): SummaryLadder {
   const rawEntries = normalizeLog(input.summaryLog ?? []);
   const accepted = (input.highlights ?? []).filter((h) => (h as any).status === "accepted");
-  const entries = propagateCorroboration(rawEntries, accepted, input.fastRail === true);
+  const fastRail = input.fastRail === true;
+  // ADAAAA-8014 (§2) applies to the FAST rail, the surface the §2 acceptance is
+  // graded on. The long-form VOD ladder is graded byte-identical (AC8), so its
+  // stored items are not re-shaped here.
+  const gated = propagateCorroboration(rawEntries, accepted, fastRail);
+  const entries = fastRail ? finalizeServedShapes(gated) : gated;
   const timeline = goalTimelineFrom(input.highlights ?? []);
 
   // Hard-gate EVERY narrative once; the audit list is what the gate removed.
@@ -653,18 +701,22 @@ export function buildSummaryLadder(input: {
     // ADAAAA-7961: the goal count is its own sentence. A lead that carries no
     // terminal period must not run into it (`… in center field 2 accepted goals
     // (0 corroborated).`), so the separator is added before the note.
-    const leadSentence = goalNote && !/[.!?…]$/.test(lead.trim()) ? `${lead.trim()}.` : lead;
-    // ADAAAA-7995 (§2/§3): the 200-char chapter digest excerpts the LEAD only —
-    // the goal-count sentence is appended whole, so no digest can cut inside
-    // `N accepted goals (K corroborated).`.
-    const leadDigest = excerpt(leadSentence);
+    // ADAAAA-8014 (§2): the digest carries a WHOLE sentence of the served lead —
+    // never a character excerpt that stops mid-phrase (a `…` excerpt is a prefix
+    // cut of the row it came from). A sentence too long for the 200-char digest
+    // drops the narrative and keeps the title + goal count.
+    const leadSentence = wholeFirstSentence(lead) || lead.trim();
+    const leadDigest =
+      leadSentence.length <= CHAPTER_SUMMARY_MAX_CHARS ? leadSentence : "";
+    const digest =
+      leadDigest && goalNote && !/[.!?…]$/.test(leadDigest) ? `${leadDigest}.` : leadDigest;
     return {
       index,
       kind,
       title: chapterTitle(kind, startS, endS, goals),
       startS,
       endS,
-      summary: `${leadDigest}${goalNote}`,
+      summary: digest ? `${digest}${goalNote}` : goalNote.trim(),
       goalCount: goals.length,
       goals,
       seqFrom: run.entries[0].seq,

@@ -415,6 +415,11 @@ export function placePhraseOf(text: string): string {
 const QUIET_ACTION =
   /^(?:reacts?|moves?|drives?|controls?|contests?|dribbles?|stands?|passes?|plays?|takes?|holds?|watches?|waits?|runs?|shoots?|strikes?|heads?|clears?|tackles?|blocks?|saves?|jumps?|turns?|attacks?|presses?|chases?|follows?|keeps?|sets?)$/i;
 
+/** Tokens that END an action verb's object NP (ADAAAA-8014: never a preposition,
+ * conjunction or clause opener — the object stops where the adjunct starts). */
+const OBJECT_STOP =
+  /^(?:in|at|on|with|from|near|inside|outside|around|into|onto|of|to|for|and|or|but|as|while|when|that|which|who|by|over|under|off|through|across)$/i;
+
 /**
  * ADAAAA-7962 (contract v4 §3.4): condense a quiet line to ACTOR + ACTION +
  * PLACE instead of cutting it at the 8-word boundary. The v3 trim truncated
@@ -438,8 +443,19 @@ function condenseKeepingPlace(text: string, placeOverride?: string | null): stri
   if (!body) return "";
   const words = body.split(/\s+/).filter(Boolean);
   const verbIdx = words.findIndex((w) => QUIET_ACTION.test(w));
-  // Keep the actor words up to and including its action verb; drop the rest.
-  const head = (verbIdx >= 0 ? words.slice(0, verbIdx + 1) : words)
+  // ADAAAA-8014 (§2): the action verb's OBJECT is half the beat. Cutting right
+  // after the verb shipped `A player takes in midfield` — a transitive verb left
+  // holding no object. Keep the short object NP that follows the verb (stopping at
+  // the first preposition/conjunction, at most three tokens), so the condensed
+  // line is `A player takes a shot in midfield` and the place still rides the end.
+  let keep = verbIdx >= 0 ? verbIdx + 1 : words.length;
+  for (let i = verbIdx + 1; verbIdx >= 0 && i < words.length && i < verbIdx + 4; i += 1) {
+    if (OBJECT_STOP.test(words[i])) break;
+    keep = i + 1;
+  }
+  // Keep the actor words, its action verb and that verb's object; drop the rest.
+  const head = words
+    .slice(0, keep)
     .join(" ")
     .replace(/\s+\b(?:the|a|an|to|of|in|at|on|with|and|from)\b$/i, "")
     .trim();
@@ -763,6 +779,13 @@ export function trimQuietLine(text: string, placeOverride?: string | null): stri
   if (wordCount(out) > QUIET_MAX_WORDS) {
     const condensed = condenseKeepingPlace(out, placeOverride);
     if (condensed && wordCount(condensed) <= QUIET_MAX_WORDS) out = condensed;
+  }
+  if (wordCount(out) > QUIET_MAX_WORDS) {
+    // ADAAAA-8014 (§2): before CUTTING the tail (a cut is a prefix cut of the
+    // stored sentence), try deleting an interior adjunct phrase so the line keeps
+    // its own ending and stays a complete clause.
+    const complete = completeQuietSentence(out, QUIET_MAX_WORDS);
+    if (complete) out = complete;
   }
   if (wordCount(out) > QUIET_MAX_WORDS) {
     // Last resort: cut at the last CLAUSE boundary that fits the budget (never
@@ -1205,6 +1228,303 @@ export function cardTitlesFor(line: string, label?: string): string[] {
   return out.slice(0, 3);
 }
 
+/* ------------------------------------------------------------------------- *
+ * ADAAAA-8014 (§2) — the SERVED post-condition.
+ *
+ * The gate above shapes what the model WROTE; this is the last test over what a
+ * surface actually EMITS. Measured on build `eba8e7c` (ADAAAA-8010), five served
+ * ladder rows still stopped mid-phrase:
+ *
+ *   `A player and a player are.`                     (ends on a copula)
+ *   `The side.`                                      (2-word prefix cut)
+ *   `A player takes in midfield`                     (transitive verb, no object)
+ *   `Players compete for the ball in the center.`    (prefix cut)
+ *   `The broadcast shows a replay.`                  (prefix cut)
+ *
+ * Each is a deterministic property of the emitted string, not of one helper, so
+ * the test lives here and every surface (ladder row, chapter digest, rollup
+ * bullet, card caption) calls it. A candidate is refused when ANY holds:
+ *
+ *   1. its last lexical token is a function word / copula, or a verb that needs
+ *      an object and got none;
+ *   2. it is a prefix of a stored sentence (normalized), i.e. the stored text
+ *      continues after it;
+ *   3. it ends inside a clause (no terminal punctuation while stored continues).
+ *
+ * The fallback order is fixed: the WHOLE first sentence of the stored raw line
+ * (re-gated on the same terms), that sentence reduced only by deleting interior
+ * adjunct phrases when a quiet row is over the 8-word budget, then the stored
+ * gated line WHOLE. It never falls back to a trimmed prefix of the refused
+ * candidate; when nothing passes, the caller drops the row (it is not rendered
+ * mangled). Extractive throughout: words are only ever deleted, never invented.
+ * ------------------------------------------------------------------------- */
+
+/** Function words and copulas a served line may never END on. */
+const SERVED_TAIL_WORDS = new Set([
+  "and", "or", "of", "in", "at", "on", "with", "from", "to", "for", "the", "a", "an",
+  "are", "is", "was", "were", "be", "been", "has", "have", "had", "as", "but", "while",
+  "when", "by", "into", "onto", "than", "that", "which", "who", "whose", "its", "his",
+  "her", "their", "over", "under", "near", "inside", "outside", "around", "after",
+  "before", "during", "through", "across", "not", "no", "then", "if", "so",
+]);
+
+/** Verbs that need an object: ending the clause on one means the object was cut. */
+const SERVED_OBJECT_VERB =
+  /^(?:takes?|makes?|sends?|holds?|keeps?|brings?|puts?|gets?|finds?|gives?|receives?|shows?|needs?|wants?|sees?|leaves?|adds?|opens?|passes?|crosses?|blocks?|smashes?|rifles?|blasts?|drills?|hammers?|bangs?)$/i;
+
+export type ServedShapeViolation =
+  | "empty"
+  | "function-tail"
+  | "object-missing"
+  | "prefix-cut"
+  | "open-clause"
+  | "fragment";
+
+/** Comparison form: case, punctuation and whitespace are not content. */
+function normalizeServed(text: string): string {
+  return (text ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** The last lexical token (punctuation stripped) of a string. */
+function lastLexicalToken(text: string): string {
+  const words = normalizeServed(text).split(" ").filter(Boolean);
+  return words[words.length - 1] ?? "";
+}
+
+/** A served string ends a clause when it carries terminal punctuation. */
+function hasTerminalPunctuation(text: string): boolean {
+  return /[.!?…]["'”’)\]]*$/.test((text ?? "").trim());
+}
+
+/**
+ * Why `candidate` may not be served, given the stored sentences it was derived
+ * from (the gated line and the model's raw line). Empty = it may be served.
+ */
+export function servedShapeViolations(
+  candidate: string,
+  sources: Array<string | null | undefined> = []
+): ServedShapeViolation[] {
+  const text = (candidate ?? "").trim();
+  if (!text) return ["empty"];
+  const words = normalizeServed(text).split(" ").filter(Boolean);
+  if (words.length === 0) return ["empty"];
+  const out: ServedShapeViolation[] = [];
+  const last = words[words.length - 1];
+  if (SERVED_TAIL_WORDS.has(last)) out.push("function-tail");
+  // A transitive verb whose object was cut: drop the trailing place phrase first,
+  // so `A player takes in midfield` is tested on `A player takes`.
+  const lead = text.replace(/[.!?…]+$/, "").trim();
+  const tailPlace = lead.match(PLACE_TAIL)?.[0] ?? "";
+  const body = (tailPlace ? lead.slice(0, lead.length - tailPlace.length) : lead).trim();
+  const bodyLast = lastLexicalToken(body);
+  if (bodyLast && SERVED_OBJECT_VERB.test(bodyLast)) out.push("object-missing");
+  // A two-word caption with no verb is a dropped predicate (`The side.`).
+  if (words.length <= 2 && !VERBISH.test(text)) out.push("fragment");
+  const normalized = normalizeServed(text);
+  const terminal = hasTerminalPunctuation(text);
+  // A subordinate clause left without a verb (`… while players`) is a cut clause,
+  // however it was produced.
+  const openers = [...text.matchAll(/\s+\b(?:while|as|when|and|but|with|which|that|who)\b/gi)];
+  const lastOpener = openers[openers.length - 1];
+  if (lastOpener) {
+    const rest = text.slice((lastOpener.index ?? 0) + lastOpener[0].length).trim();
+    if (rest && rest.split(/\s+/).filter(Boolean).length <= 3 && !VERBISH.test(rest)) out.push("open-clause");
+  }
+  for (const source of sources) {
+    const stored = normalizeServed(source ?? "");
+    if (!stored || stored === normalized) continue;
+    // A stored sentence that itself ends in a dangling clause is the broken one:
+    // the candidate that drops that clause is the REPAIR, not a prefix cut of it.
+    const remainder = stored.slice(normalized.length).trim();
+    const remainderIsCutClause =
+      /^(?:while|as|when|and|but|with|which|that|who)\b/i.test(remainder) && !VERBISH.test(remainder);
+    if (remainderIsCutClause) continue;
+    if (stored.startsWith(`${normalized} `)) {
+      out.push("prefix-cut");
+      if (!terminal) out.push("open-clause");
+    } else if (stored.startsWith(normalized) && !terminal) {
+      out.push("open-clause");
+    }
+  }
+  return [...new Set(out)];
+}
+
+/** The whole FIRST sentence of a stored line (never a cut of it). */
+export function wholeFirstSentence(text: string): string {
+  const lead = captionLead(text ?? "");
+  return (captionBeats(lead)[0] ?? lead).trim();
+}
+
+/** A preposition that opens an adjunct (a place/object phrase we may delete). */
+const ADJUNCT_HEAD =
+  /^(?:in|at|on|with|from|for|near|inside|outside|around|of|into|onto|by|over|under|through|across|after|before|during)$/i;
+
+/** Clause openers a served reduction may never orphan. */
+const CLAUSE_JOINER = /^(?:and|or|but|while|as|then|that|which|who|because|although)$/i;
+
+/**
+ * Reduce a WHOLE sentence to the quiet-word budget by deleting INTERIOR adjunct
+ * phrases — never by cutting its tail (§2: a tail cut is a prefix cut) and never
+ * by inventing a word. `""` when no deletion leaves a complete, in-budget clause,
+ * so the caller can try another shape or drop the row.
+ */
+export function completeQuietSentence(sentence: string, max: number = QUIET_MAX_WORDS): string {
+  const src = (sentence ?? "").trim();
+  if (!src) return "";
+  const terminal = src.match(/[.!?…]+$/)?.[0] ?? "";
+  let words = (terminal ? src.slice(0, -terminal.length) : src).trim().split(/\s+/).filter(Boolean);
+  const build = (tokens: string[]): string => {
+    const body = tokens.join(" ").trim().replace(/[,;:—–-]+$/, "").trim();
+    return body ? tidy(terminal ? `${body}${terminal}` : body) : "";
+  };
+  if (words.length <= max) return build(words);
+  let guard = 0;
+  while (words.length > max && guard < 6) {
+    guard += 1;
+    let best: { at: number; len: number } | null = null;
+    for (let i = 1; i < words.length - 2; i += 1) {
+      if (!ADJUNCT_HEAD.test(words[i])) continue;
+      let end = i + 1;
+      if (/^(?:the|a|an)$/i.test(words[end] ?? "")) end += 1;
+      while (
+        end < words.length - 1 &&
+        /^[\p{L}][\p{L}'’-]*$/u.test(words[end]) &&
+        !ADJUNCT_HEAD.test(words[end]) &&
+        !CLAUSE_JOINER.test(words[end]) &&
+        !SERVED_TAIL_WORDS.has(words[end].toLowerCase())
+      ) {
+        end += 1;
+      }
+      const len = end - i;
+      if (len < 2 || end >= words.length) continue;
+      // The phrase must leave words on BOTH sides, be followed by another adjunct
+      // or a clause joiner (so the sentence still reads), and not sit behind a
+      // preposition or copula (which would lose its predicate: `… are of field`).
+      if (!ADJUNCT_HEAD.test(words[end]) && !CLAUSE_JOINER.test(words[end])) continue;
+      const before = words[i - 1];
+      if (ADJUNCT_HEAD.test(before) || /^(?:is|are|was|were|be|has|have|had)$/i.test(before)) continue;
+      if (!best || len > best.len) best = { at: i, len };
+    }
+    if (!best) break;
+    words = words.slice(0, best.at).concat(words.slice(best.at + best.len));
+  }
+  while (words.length > 0 && SERVED_TAIL_WORDS.has(words[words.length - 1].toLowerCase())) words.pop();
+  if (words.length > max || words.length < 3) return "";
+  return build(words);
+}
+
+/**
+ * Extractive reductions of a stored sentence, cheapest deletion first, cumulative
+ * (ADAAAA-8014 §2). Each variant is still a WHOLE sentence — words are only ever
+ * deleted, never reordered or invented — and the caller re-tests every variant
+ * against the stored text, so one that lands on a prefix cut is simply skipped.
+ */
+const SERVED_REDUCTIONS: Array<[RegExp, string]> = [
+  // a kit-colour phrase is the least content a beat carries (`in blue`,
+  // `in a blue kit`, `in the white shirt`)
+  [
+    /\s+\bin\s+(?:an?\s+|the\s+)?(?:white|blue|red|black|yellow|green|purple|orange|grey|gray)\b(?:\s+(?:kit|jersey|shirt|strip|colours?))?/gi,
+    "",
+  ],
+  [/\s+\bwith\s+(?:the\s+)?ball\b/gi, ""],
+  // the contract's compressed place form ("in the center" -> "in center")
+  [/\bin\s+the\s+(center|centre)\b/gi, "in $1"],
+  // a trailing place modifier ("of the pitch", "of the field")
+  [/\s+\bof\s+the\s+(?:pitch|field|ground|box|area)\b(?=\s*[.,;]|$)/gi, ""],
+];
+
+/** Every extractive variant of a stored sentence, cheapest first. */
+function servedReductions(sentence: string): string[] {
+  const out: string[] = [];
+  let current = (sentence ?? "").trim();
+  if (!current) return out;
+  out.push(current);
+  for (const [re, replacement] of SERVED_REDUCTIONS) {
+    const next = tidy(current.replace(re, replacement));
+    if (next && next !== current) {
+      current = next;
+      out.push(current);
+    }
+  }
+  const complete = completeQuietSentence(current);
+  if (complete && !out.includes(complete)) out.push(complete);
+  return out;
+}
+
+export interface ServedShapeInput {
+  /** The string the surface was about to emit. */
+  candidate: string;
+  /** The model's stored pre-gate line (`summaryLog.text_raw`), when present. */
+  storedRaw?: string | null;
+  /** The stored gated line the candidate was derived from (`summaryLog.text`). */
+  storedGated?: string | null;
+  /** Quiet row: the 8-word budget applies. */
+  quiet?: boolean;
+  /** Re-gate a fallback sentence on the same terms (goal claim / absence). */
+  regate?: (sentence: string) => string;
+}
+
+export interface ServedShapeResult {
+  /** The string to emit; `""` means DROP the row (nothing honest to render). */
+  text: string;
+  /** Why the candidate was refused (empty when it passed unchanged). */
+  violations: ServedShapeViolation[];
+  /** True when a fallback replaced the candidate (or the row was dropped). */
+  replaced: boolean;
+}
+
+/** The served post-condition: pass, replace with a whole sentence, or drop. */
+export function servedShape(input: ServedShapeInput): ServedShapeResult {
+  const candidate = (input.candidate ?? "").trim();
+  const raw = (input.storedRaw ?? "").trim();
+  const gated = (input.storedGated ?? "").trim();
+  // The stored SENTENCE (its lead beat) is the text a served row may not be a
+  // prefix cut of. A colour clause after an em dash is a contract-level excision,
+  // not a cut of the sentence, so it is not part of the comparison.
+  const sources = [captionLead(gated), captionLead(raw)].filter(Boolean);
+  const quiet = input.quiet === true;
+  const fits = (text: string): boolean => !!text && (!quiet || wordCount(text) <= QUIET_MAX_WORDS);
+  const clean = (text: string): boolean => fits(text) && servedShapeViolations(text, sources).length === 0;
+  const refused = servedShapeViolations(candidate, sources);
+  if (refused.length === 0) {
+    if (fits(candidate)) return { text: candidate, violations: [], replaced: false };
+    // Quiet row over the word budget: reduce it extractively, never cut its tail.
+    for (const variant of servedReductions(candidate)) {
+      if (clean(variant)) return { text: variant, violations: [], replaced: variant !== candidate };
+    }
+  }
+  // A raw sentence may only be served when the write seam did not ANONYMISE a
+  // name in it: the ladder has no prompt evidence to re-ground that name, and
+  // re-introducing it would undo the §3.3 name gate. It is re-gated for the
+  // window's corroboration before it may assert a goal.
+  const rawSentence = wholeFirstSentence(raw);
+  const gatedSentence = wholeFirstSentence(gated);
+  const rawUsable = !!rawSentence && (!hasProperName(rawSentence) || hasProperName(gated));
+  // Order: the raw sentence when it is name-safe, then the stored gated line
+  // (already anonymised by the seam), then — as the LAST resort before losing the
+  // row — the raw sentence again even when the gate anonymised a name in it. A
+  // lost row is a graded regression (AC3); a role for a name the seam could not
+  // corroborate is the lesser cost, and it is still the model's own sentence.
+  const sentences = [
+    ...(rawUsable ? [rawSentence] : []),
+    gatedSentence,
+    gated,
+    ...(rawUsable ? [] : [rawSentence]),
+  ];
+  for (const sentence of sentences) {
+    if (!sentence) continue;
+    const reclaimed = input.regate ? input.regate(sentence) : sentence;
+    for (const variant of servedReductions(reclaimed)) {
+      if (clean(variant)) return { text: variant, violations: [], replaced: variant !== candidate };
+    }
+  }
+  return { text: "", violations: refused.length ? refused : ["empty"], replaced: true };
+}
+
 /** Letters a proper name may contain (accented Latin, apostrophes, hyphens).
  * No trailing full stop: `No. 9` is a JERSEY, not the name "No." (ADAAAA-7957). */
 const NAME_WORD = /[\p{Lu}][\p{L}'’\-]*/gu;
@@ -1295,6 +1615,11 @@ export function groundNames(text: string, promptText?: string | null): string {
     let j = i + 1;
     while (j < matches.length) {
       const next = matches[j];
+      // ADAAAA-8014 (§2): a capitalised FUNCTION word or CODE is not part of a
+      // name. Absorbing `No` into `Real Madrid's No` replaced the run with
+      // `The side` and left the jersey behind a period — the served row shipped
+      // as `The side. 9 shoots on the right`, a sentence break inside a caption.
+      if (NAME_STOPWORDS.has(stripDiacritics(next[0])) || CODE_TOKENS.has(stripDiacritics(next[0]))) break;
       const gap = out.slice(end, next.index);
       if (/^\s+$/.test(gap)) {
         tokens.push(next[0]);
