@@ -225,3 +225,98 @@ describe("invite / beta-gate (hard gate)", () => {
     await app.close();
   });
 });
+
+// ADAAAA-8028: the enforced ceilings are env knobs (PRO_CLIP_QUOTA /
+// BETA_CLIP_QUOTA) so a bounded test window can lift them without a DB reset,
+// while the GA plan copy (/billing/plans) keeps advertising 10 free / 100 pro.
+describe("ADAAAA-8028 tier ceiling knobs (starter 1000 / pro 10000 test posture)", () => {
+  it("free (starter) account reports the raised 1000 ceiling", async () => {
+    const { app } = await buildTestApp({ BETA_CLIP_QUOTA: "1000", PRO_CLIP_QUOTA: "10000" });
+    const r = await register(app, "ceil-free@test.dev", "password123");
+    const token = r.json().token as string;
+    const s = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } });
+    expect(s.json().tier).toBe("free");
+    expect(s.json().clipQuotaLimit).toBe(1000);
+    expect(s.json().clipQuotaUsed).toBe(0);
+    expect(s.json().clipQuotaRemaining).toBe(1000);
+    await app.close();
+  });
+
+  it("active Pro account reports the raised 10000 ceiling", async () => {
+    const { app } = await buildTestApp({ BETA_CLIP_QUOTA: "1000", PRO_CLIP_QUOTA: "10000", BILLING_WIREFRAME: "1" });
+    const r = await register(app, "ceil-pro@test.dev", "password123");
+    const token = r.json().token as string;
+    const act = await app.inject({ method: "POST", url: "/dev/billing/activate", headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect(act.statusCode).toBe(200);
+    const s = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } });
+    expect(s.json().tier).toBe("pro");
+    expect(s.json().clipQuotaLimit).toBe(10000);
+    expect(s.json().clipQuotaRemaining).toBe(10000);
+    await app.close();
+  });
+
+  // The hard-stop is `used >= limitFor(sub)`; prove both sides of the boundary
+  // by driving the ledger row directly (no real clip is generated/burned).
+  it("boundary per tier: used == limit -> 429 quota_exceeded (remaining 0), used == limit - 1 -> accepted", async () => {
+    // Small knobs so the boundary can be reached with a handful of ledger
+    // rows; the limitFor() branch under test is identical to 1000/10000.
+    const FREE_LIMIT = 3;
+    const PRO_LIMIT = 4;
+    const { app, db } = await buildTestApp({
+      BETA_CLIP_QUOTA: String(FREE_LIMIT),
+      PRO_CLIP_QUOTA: String(PRO_LIMIT),
+      BILLING_WIREFRAME: "1",
+    });
+
+    const submit = (token: string) =>
+      app.inject({
+        method: "POST",
+        url: "/jobs",
+        headers: { authorization: `Bearer ${token}` },
+        payload: { videoPath: "/does/not/matter.mp4" }, // quota check runs before the file is touched
+      });
+
+    // --- starter (free) tier ---
+    const freeReg = await register(app, "bound-free@test.dev", "password123");
+    const freeToken = freeReg.json().token as string;
+    const freeId = (await db.getUserByEmail("bound-free@test.dev"))!.id;
+    const freeStatus = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${freeToken}` } });
+    const period = freeStatus.json().clipQuotaPeriod as string;
+    expect(freeStatus.json().clipQuotaLimit).toBe(FREE_LIMIT);
+
+    for (let i = 0; i < FREE_LIMIT - 1; i++) await db.incrementQuota(freeId, period);
+    expect((await submit(freeToken)).statusCode).not.toBe(429); // used == limit - 1
+    const freeAtLimit = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${freeToken}` } });
+    expect(freeAtLimit.json().clipQuotaRemaining).toBe(1);
+
+    await db.incrementQuota(freeId, period); // used == limit
+    const freeRejected = await submit(freeToken);
+    expect(freeRejected.statusCode).toBe(429);
+    expect(freeRejected.json().code).toBe("quota_exceeded");
+    expect(freeRejected.json().clipQuotaRemaining).toBe(0);
+    expect(freeRejected.json().clipQuotaLimit).toBe(FREE_LIMIT);
+
+    // --- pro tier ---
+    const proReg = await register(app, "bound-pro@test.dev", "password123");
+    const proToken = proReg.json().token as string;
+    const proId = (await db.getUserByEmail("bound-pro@test.dev"))!.id;
+    const act = await app.inject({ method: "POST", url: "/dev/billing/activate", headers: { authorization: `Bearer ${proToken}` }, payload: {} });
+    expect(act.statusCode).toBe(200);
+    const proStatus = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${proToken}` } });
+    expect(proStatus.json().clipQuotaLimit).toBe(PRO_LIMIT);
+
+    for (let i = 0; i < PRO_LIMIT - 1; i++) await db.incrementQuota(proId, period);
+    expect((await submit(proToken)).statusCode).not.toBe(429); // used == limit - 1
+    const proAtLimit = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${proToken}` } });
+    expect(proAtLimit.json().clipQuotaRemaining).toBe(1);
+
+    await db.incrementQuota(proId, period); // used == limit
+    const proRejected = await submit(proToken);
+    expect(proRejected.statusCode).toBe(429);
+    expect(proRejected.json().code).toBe("quota_exceeded");
+    expect(proRejected.json().clipQuotaRemaining).toBe(0);
+    expect(proRejected.json().clipQuotaLimit).toBe(PRO_LIMIT);
+
+    await app.close();
+  });
+});
