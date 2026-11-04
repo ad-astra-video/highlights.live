@@ -153,7 +153,10 @@ def _compact_prompt() -> str:
 def test_compact_prompt_asks_for_one_play_by_play_line():
     p = _compact_prompt()
     assert "<PLAY-BY-PLAY LEAD> — <optional COLOR BEAT>" in p
-    assert "ONE play-by-play line per window" in p
+    # the whole field is ONE bounded line: appending a line per window would
+    # break AC1 (p95 <= 140, 0 rows over 140) and grow output tokens.
+    assert "as ONE line (never append a second line)" in p
+    assert "never append a second line" in p
     # lead = actor + action + place, present tense, active voice, <= 70 chars,
     # event first (not the scene), named player/jersey else the role.
     assert "actor + action + place" in p
@@ -179,8 +182,8 @@ def test_compact_prompt_carries_colour_and_quiet_budgets():
 
 def test_compact_prompt_lowers_the_whole_line_cap_to_140():
     p = _compact_prompt()
-    assert "target max 110 chars, HARD MAX 140" in p
-    assert "one line, never two sentences of description" in p
+    assert "total target max 110 chars, HARD MAX 140" in p
+    assert "never make it longer than 140 chars" in p
     # the old 220-char one-sentence ask is gone from the fast rail.
     assert "max 220 chars" not in p
     assert "ONE announcer sentence" not in p
@@ -197,8 +200,9 @@ def test_compact_prompt_keeps_grounding_and_forward_only_continuity():
     p = _compact_prompt()
     assert "no invented names, scores, kit colours or flags" in p
     assert "Color must be attributable to this window's frames or transcript" in p
-    assert "EXTEND it, never rewrite or delete captured events" in p
-    assert "tighten wording only" in p
+    assert "keep every event already captured and EXTEND the story" in p
+    assert "fold it into ONE line under the cap" in p
+    assert "tighten wording only, never delete a goal or near-miss" in p
     # the prior story is still forwarded into the prompt unchanged
     assert COMPACT_STORY_SO_FAR in p
 
@@ -214,11 +218,11 @@ def test_compact_json_field_set_is_unchanged():
 
 
 def test_compact_prompt_delta_is_bounded():
-    # ADAAAA-7935 measured on this evidence dict: 8569 -> 9601 chars
-    # (+1032 chars, ~+258 prompt tokens of prefill; output tokens are the cost
+    # ADAAAA-7935 measured on this evidence dict: 8569 -> 9753 chars
+    # (+1184 chars, ~+296 prompt tokens of prefill; output tokens are the cost
     # driver on the decode-bound live rail, and the caption budget drops).
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 9700
+    assert len(_compact_prompt()) <= 9800
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the
