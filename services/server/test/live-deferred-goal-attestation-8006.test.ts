@@ -120,7 +120,10 @@ describe("scoreboardDeltaAttestsDeferredWindow (ADAAAA-8006)", () => {
     ).toBe(false);
   });
 
-  it("refuses a transition read inside/at the window (the normal attestation path owns it)", () => {
+  it("refuses an in-window transition whose resolving read is not a later window", () => {
+    // ADAAAA-8006 kept this read out of the deferred path; ADAAAA-8017 attributes
+    // by containment, so what still refuses it is the READ, not the instant: a
+    // delta that did not come from a window at/after `hi` cannot consume a row.
     const inside = { ...GOAL2_DELTA, preTs: 155, postTs: 157, deltaTs: 157 };
     expect(
       scoreboardDeltaAttestsDeferredWindow({ window: GOAL2_WINDOW, delta: inside, readAt: 157 })
@@ -163,6 +166,214 @@ describe("scoreboardDeltaAttestsDeferredWindow (ADAAAA-8006)", () => {
     expect(scoreboardDeltaSingleGoalStep({ ...GOAL2_DELTA, pre: [2, 2], post: [3, 2] })).toBe(true);
     expect(scoreboardDeltaSingleGoalStep({ ...GOAL2_DELTA, pre: [2, 2], post: [2, 2] })).toBe(false);
     expect(scoreboardDeltaSingleGoalStep(null)).toBe(false);
+  });
+});
+
+// ADAAAA-8017: the judged-window BOUNDARY case.
+//
+// Regression source: QA re-grade of build `0f7ef58` on job `14e0af6e` (file-sim of
+// the same `kids300_7935.mp4`, `sampleFps 3`). Goal 1 @100 s re-attested correctly
+// (`deltaTs 110.667`, +2.7 s after the `[98,108]` close). Goal 2 @159 s did not:
+// its `2-1 -> 2-2` transition is first legible AT the 159 s window boundary — the
+// next window (windowTs 162) already reads 2-2 — so `deltaTs` lands a fraction
+// before `hi`, and the ADAAAA-8006 predicate's `lateBy = deltaTs - hi >= 0` bound
+// declined it. No `ambiguous`, no `refused` line: the row stayed `big_play` and
+// postable recall was 1/2.
+//
+// AC6 of the issue pins the four directions this block covers: (a) the transition
+// first read exactly at `hi`, (b) inside the window, (c) beyond the lookahead
+// (must stay `big_play`), (d) no scoreboard legibility at all (must stay
+// `big_play`). AC1 is pinned by the log-line + stored-row tests at the end.
+const GOAL2_BOUNDARY_DELTA: ScoreboardDeltaEvidence = {
+  pre: [2, 1],
+  post: [2, 2],
+  preTs: 158,
+  postTs: 158.667,
+  deltaTs: 158.667,
+  preSamples: 3,
+  postSamples: 2,
+};
+
+describe("boundary attribution at/inside the judged window (ADAAAA-8017)", () => {
+  const at = (deltaTs: number, sample = 0.5): ScoreboardDeltaEvidence => ({
+    ...GOAL2_BOUNDARY_DELTA,
+    preTs: Number((deltaTs - sample).toFixed(3)),
+    postTs: deltaTs,
+    deltaTs,
+  });
+
+  // (a) the transition is first legibly read EXACTLY at the window close.
+  it("re-attests a transition first legibly read exactly at hi", () => {
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({
+        window: GOAL2_WINDOW,
+        delta: at(GOAL2_WINDOW.hi),
+        readAt: 162,
+      })
+    ).toBe(true);
+    // ...and the mirrored case on goal 1's window, where the measured read was
+    // 2.7 s AFTER the close (the ADAAAA-8006 direction, still credited).
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({ window: { lo: 98, hi: 108 }, delta: at(110.667), readAt: 117 })
+    ).toBe(true);
+  });
+
+  // (b) the measured regression: a boundary read a fraction INSIDE the window.
+  it("re-attests a transition first legibly read inside the window", () => {
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({
+        window: GOAL2_WINDOW,
+        delta: GOAL2_BOUNDARY_DELTA,
+        readAt: 162,
+      })
+    ).toBe(true);
+    // Two seconds inside is still the same judged window's content.
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({ window: GOAL2_WINDOW, delta: at(157), readAt: 162 })
+    ).toBe(true);
+    // Containment, not a tolerance band: anywhere in [lo, hi] is evidence about
+    // this window...
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({ window: GOAL2_WINDOW, delta: at(149), readAt: 162 })
+    ).toBe(true);
+    // ...but an instant before `lo` belongs to the PREVIOUS window and is never
+    // credited here.
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({ window: GOAL2_WINDOW, delta: at(148.5), readAt: 162 })
+    ).toBe(false);
+  });
+
+  // (c) beyond the lookahead the read could belong to a following goal: decline.
+  it("still declines a transition beyond the lookahead", () => {
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({ window: GOAL2_WINDOW, delta: at(179), readAt: 182 })
+    ).toBe(true);
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({ window: GOAL2_WINDOW, delta: at(180), readAt: 183 })
+    ).toBe(false);
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({ window: GOAL2_WINDOW, delta: at(200), readAt: 203 })
+    ).toBe(false);
+  });
+
+  // (d) no scoreboard legibility at all: nothing to re-attest with.
+  it("declines when there is no legible scoreboard read", () => {
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({ window: GOAL2_WINDOW, delta: undefined, readAt: 162 })
+    ).toBe(false);
+    expect(scoreboardDeltaAttestsDeferredWindow({ window: GOAL2_WINDOW, delta: null, readAt: 162 })).toBe(false);
+    // One read per side is not legibility (a single-frame OCR misread).
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({
+        window: GOAL2_WINDOW,
+        delta: { ...GOAL2_BOUNDARY_DELTA, postSamples: 1 },
+        readAt: 162,
+      })
+    ).toBe(false);
+    // Two-goal jump inside the window: ambiguous, still declined.
+    expect(
+      scoreboardDeltaAttestsDeferredWindow({
+        window: GOAL2_WINDOW,
+        delta: { ...GOAL2_BOUNDARY_DELTA, pre: [1, 1], post: [3, 1] },
+        readAt: 162,
+      })
+    ).toBe(false);
+  });
+
+  it("keeps the 159-299 s lull row a celebration (the precision bar)", () => {
+    const run = new LiveRunShared();
+    run.noteDeferredGoalAttestation(pending({ highlightId: "hl-lull", lo: 275, hi: 285, anchorTs: 285 }));
+    expect(run.resolveDeferredGoalAttestation({ readAt: 162, delta: GOAL2_BOUNDARY_DELTA })).toHaveLength(0);
+    expect(run.pendingDeferredGoalAttestations()).toHaveLength(1);
+  });
+});
+
+describe("boundary re-attest end to end: ledger -> audit line -> postable row (ADAAAA-8017)", () => {
+  it("names the window, the deltaTs and pre -> post on the upgrade line", () => {
+    const run = new LiveRunShared();
+    run.noteDeferredGoalAttestation(pending({ jobId: "job-8017" }));
+    const seen: DeferredGoalAttestationUpgrade[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const count = applyDeferredGoalAttestations(
+      run,
+      { jobId: "job-8017", onDeferredGoalAttested: (up) => seen.push(up) },
+      { readAt: 162, delta: GOAL2_BOUNDARY_DELTA }
+    );
+    const line = spy.mock.calls.map((c) => String(c[0])).join("\n");
+    spy.mockRestore();
+    expect(count).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].deltaTs).toBe(158.667);
+    expect(seen[0].readAt).toBe(162);
+    expect(seen[0].lookaheadS).toBe(LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S);
+    // AC1: one greppable line naming the judged window, the instant and the delta.
+    expect(line).toContain("[live-goal-gate-upgrade:job-8017]");
+    expect(line).toContain("re-attested GOAL @159s");
+    expect(line).toContain("judged window [149, 159]");
+    expect(line).toContain("first legibly read at 158.667s");
+    expect(line).toContain('0.3 s inside the window\'s closing edge');
+    expect(line).toContain("read at 162s");
+    expect(line).toContain("2-1 -> 2-2");
+    expect(line).not.toContain("-0.3 s after the window closed");
+  });
+
+  it("moves the delivered row to a postable GOAL without touching its instant", async () => {
+    const store = new Store(null);
+    await store.addHighlight(demotedRow());
+    expect(isPostableHighlight(store.getHighlight("hl-goal2")!)).toBe(false);
+    const run = new LiveRunShared();
+    run.noteDeferredGoalAttestation(pending({ jobId: "job-8017" }));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let persisted: HighlightRecord | null = null;
+    applyDeferredGoalAttestations(
+      run,
+      {
+        jobId: "job-8017",
+        onDeferredGoalAttested: (up) => {
+          void attestDeferredGoalHighlight({ store } as unknown as LiveHighlightPersistence, up).then(
+            (r) => (persisted = r)
+          );
+        },
+      },
+      { readAt: 162, delta: GOAL2_BOUNDARY_DELTA }
+    );
+    spy.mockRestore();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(persisted).not.toBeNull();
+    const row = store.getHighlight("hl-goal2")!;
+    expect(row.outcome).toBe("scoring_play");
+    expect(row.eventType).toBe("GOAL");
+    expect(row.localizedTs).toBe(159); // localization untouched: exact vs GT 159
+    expect(row.reason).not.toContain(LIVE_UNATTESTED_GOAL_NOTE);
+    expect(row.deferredAttestation).toEqual({
+      deltaTs: 158.667,
+      readAt: 162,
+      windowLo: 149,
+      windowHi: 159,
+      pre: [2, 1],
+      post: [2, 2],
+    });
+    expect(isPostableHighlight(row)).toBe(true);
+    // Consumed: a re-decided window re-reading the same delta cannot re-emit.
+    expect(run.resolveDeferredGoalAttestation({ readAt: 165, delta: GOAL2_BOUNDARY_DELTA })).toHaveLength(0);
+  });
+
+  it("adds no decide/GPU work: the seam is a ledger read + the persist hook", () => {
+    // `applyDeferredGoalAttestations` only ever sees a run ledger, a jobId and the
+    // persist hook — there is no pipeline/decide client in reach, so an upgrade
+    // cannot spend a decide or a GPU-second (AC4). This is asserted structurally:
+    // the stub below carries ONLY the ledger method.
+    const run = new LiveRunShared();
+    run.noteDeferredGoalAttestation(pending({ jobId: "job-8017" }));
+    const ledgerOnly = { resolveDeferredGoalAttestation: run.resolveDeferredGoalAttestation.bind(run) };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const count = applyDeferredGoalAttestations(
+      ledgerOnly as Pick<LiveRunShared, "resolveDeferredGoalAttestation">,
+      { jobId: "job-8017" },
+      { readAt: 162, delta: GOAL2_BOUNDARY_DELTA }
+    );
+    spy.mockRestore();
+    expect(count).toBe(1);
   });
 });
 
