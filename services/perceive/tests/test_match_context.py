@@ -39,6 +39,7 @@ from app.match_context import (
     sample_track_colors,
     scan_commentary,
     scorebug_lines_have_team_text,
+    scorebug_lines_sides,
     sport_key,
 )
 from app.scoreboard import ScoreboardRoi, parse_ocr_score
@@ -1421,3 +1422,14 @@ def test_resolver_publishes_both_clubs_from_the_11_measured_anchor_frames():
     assert status["genericNameCandidates"]["scoreFrames"] == 11
     assert status["genericNameCandidates"]["names"]["home"]["frames"] == 11
     assert status["genericNameCandidates"]["names"]["away"]["frames"] == 11
+
+
+def test_scorebug_lines_sides_counts_what_a_read_actually_covers():
+    # ADAAAA-7909: the measured basketball job read the away club on 27/30 frames
+    # and the home plate on 10, so "team text present" was true while the region
+    # was clipping half the graphic — the repair trigger keys on this count.
+    assert scorebug_lines_sides(["TURKEYMBDentizi Basket13 8Samsungpor1.C"], "basketball") == {"home", "away"}
+    assert scorebug_lines_sides(["TURKEYMB13 8Samsungpor1.C"], "basketball") == {"away"}
+    assert scorebug_lines_sides(BB_CROP_GARBAGE, "basketball") == set()
+    assert scorebug_lines_sides(["POR 1 - 0 ESP"], "soccer") == {"home", "away"}
+    assert scorebug_lines_sides([], "basketball") == set()

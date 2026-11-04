@@ -61,6 +61,7 @@ from .match_context import (
     sample_track_colors,
     resolve_match_context,
     scorebug_lines_have_team_text,
+    scorebug_lines_sides,
     sport_key,
 )
 from .scoreboard_vision import (
@@ -1165,13 +1166,19 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # evidence pass is enabled, so the extra read is charged only where the
         # names are actually used.
         _ocr_sport = sport_key(getattr(state, "game_hint", "") or "")
-        _need_team_text = (
-            visible
-            and _match_context_enabled()
-            and _ocr_sport != SPORT_UNKNOWN
-            and getattr(state, "team_fallback_reads", 0) < _MATCH_CONTEXT_TEAM_FALLBACK_MAX
-            and not scorebug_lines_have_team_text(ocr_lines, _ocr_sport)
+        _ocr_budget = getattr(state, "team_fallback_reads", 0) < _MATCH_CONTEXT_TEAM_FALLBACK_MAX
+        _sides = (
+            scorebug_lines_sides(ocr_lines, _ocr_sport)
+            if visible and _match_context_enabled() and _ocr_sport != SPORT_UNKNOWN
+            else {"home", "away"}  # nothing to repair: the name pass is off
         )
+        # No team text at all -> the whole-frame read may see the graphic the ROI
+        # missed (ADAAAA-7190 fallback extended in ADAAAA-7909).
+        _no_team_text = len(_sides) == 0 and _ocr_budget
+        # One side only -> the active region is clipping part of the graphic;
+        # repair the ROI before spending the whole-frame read.
+        _need_roi_repair = 0 < len(_sides) < 2 and _ocr_budget
+        _need_team_text = _no_team_text
         # ADAAAA-7909 ROI repair: the documented fallback prior is a TOP band
         # (`ScoreboardRoi.from_env()` -> 0,0,1,0.25), but a bottom-centre scorebug
         # on an indoor basketball broadcast sits in the lower fifth of the frame.
@@ -1183,21 +1190,25 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # the name channel ever sees. Retry `<OCR>` once on the bottom-centre
         # prior; when it reads team text the region is adopted for the session so
         # the retry is paid once, not on every anchor frame.
-        if _need_team_text:
+        if _need_roi_repair or _no_team_text:
             bottom = ScoreboardRoi(*_SCOREBOARD_BOTTOM_CENTRE_PRIOR)
             try:
                 bottom_lines = detector.ocr(state.last_rgb, roi=bottom) or []
                 bottom_score = parse_ocr_score(bottom_lines, roi=bottom)
+                # The retry is charged as soon as it runs, success or not, so a
+                # broadcast whose bottom band never reads cannot pay it forever.
+                state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
             except Exception as e:  # noqa: BLE001 - evidence only, never fatal
                 log.warning("scorebug bottom-centre ROI repair skipped frame %s: %s", seq, e)
             else:
                 if score is None and bottom_score is not None:
                     score = bottom_score
-                if scorebug_lines_have_team_text(bottom_lines, _ocr_sport):
+                bottom_sides = scorebug_lines_sides(bottom_lines, _ocr_sport)
+                if len(bottom_sides) >= 2 or (not _need_roi_repair and bottom_sides):
                     ocr_lines = bottom_lines
                     obs["ocr"] = bottom_lines
                     _need_team_text = False
-                    state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
+                    _need_roi_repair = False
                     # Adopt the repaired region when no vision verdict pinned it:
                     # it is the region that actually carries the graphic.
                     if verdict is None:
@@ -1208,6 +1219,10 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                         "scorebug bottom-centre ROI repair session=%s seq=%s lines=%d adopted=%s",
                         state.session_id, seq, len(bottom_lines), verdict is None,
                     )
+        if _need_roi_repair and _ocr_budget:
+            # The repaired region still names only one side; the whole-frame read
+            # is the last bounded attempt at the other (same session counter).
+            _need_team_text = True
         if visible and (score is None or _need_team_text):
             try:
                 full_ocr = detector.ocr(state.last_rgb) or []
