@@ -581,6 +581,15 @@ export class OrchestratorAdapter implements PipelineClient {
        * read from storage by the analyzer. Absent => no MATCH CONTEXT prompt
        * block and a byte-identical payload to the pre-feature request. */
       matchContext?: DecideMatchContext;
+      /** ADAAAA-7111: the job's running story-so-far. This is the client the VOD
+       * and live passes ACTUALLY use (go-livepeer orchestrator decide), and it
+       * never carried the summary — only the plain HTTP client did, so every
+       * VOD window was decided with no story (0 of 30 prompts on job fe0e3efc,
+       * ADAAAA-7931). Absent/empty adds no key, keeping the payload identical. */
+      storySoFar?: string;
+      /** ADAAAA-7938 (Spec A): the VOD pass's compact prior-game-state block.
+       * Absent adds no key (byte-identical payload). */
+      priorGameState?: PriorGameState;
     }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -613,6 +622,10 @@ export class OrchestratorAdapter implements PipelineClient {
       // window prompt names the real teams. Spread so an absent context leaves
       // the payload byte-identical (no null key).
       ...(opts?.matchContext ? { matchContext: opts.matchContext } : {}),
+      // ADAAAA-7111/ADAAAA-7938: the running story-so-far + the VOD prior-game
+      // state. Both spread so an absent/empty value adds NO key.
+      ...(opts?.storySoFar ? { storySoFar: opts.storySoFar } : {}),
+      ...(opts?.priorGameState ? { priorGameState: opts.priorGameState } : {}),
     };
     // The decide runner is a fixed-price single-shot live runner; the first
     // unpaid call 402s with a payment challenge. On-chain (signer + payer
