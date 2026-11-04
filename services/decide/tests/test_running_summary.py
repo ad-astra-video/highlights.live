@@ -182,7 +182,8 @@ def test_compact_prompt_carries_colour_and_quiet_budgets():
     assert "the whole line is ONE blunt flat statement, max 8 words" in p
     assert "NO em-dash, NO colour beat, NO clock" in p
     assert "NEVER describe the play on such a window" in p
-    assert "Count the words and cut anything over 8" in p
+    assert "max 8 words counted INCLUDING articles" in p
+    assert "If your draft is 9 words or longer it is WRONG: rewrite it shorter" in p
     assert "CLOCK: only on datable events ('GOAL 72s'), not every line" in p
     # The contract must not carry a copyable sample caption: the first live
     # level proved the model copies it verbatim (59 of 67 rows emitted the
@@ -236,6 +237,9 @@ def test_compact_prompt_blunt_quiet_rule():
     assert "the whole line is ONE blunt flat statement, max 8 words" in p
     assert "NO em-dash, NO colour beat, NO clock" in p
     assert "just who has the ball and which zone it is in" in p
+    # every line must name a place, and a repeat of the first four words is a repeat
+    assert "EVERY line names a place this window's frames read" in p
+    assert "if it shares its first four words with an earlier line it IS a repeat" in p
     assert "a not_highlight window never carries one" in p
     assert "never reuse the sentence" in p
 
@@ -306,7 +310,7 @@ def test_compact_prompt_delta_is_bounded():
     # only — the emitted line still fits the same budgets and the field set is
     # unchanged, so tokens per decide are not bought by this edit.
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 11300
+    assert len(_compact_prompt()) <= 12200
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the
