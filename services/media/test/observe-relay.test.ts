@@ -101,6 +101,37 @@ describe("ObservationRelay (ADAAAA-7990 delivery)", () => {
     relay.close();
   });
 
+  it("abandons a fast-forwarded seq in one tick instead of waiting out the deadline", async () => {
+    // go-livepeer's live edge SKIPS a gap: the runner never produces seq 2's
+    // observation, but seq 3's exists. A relay that waited the full deadline on
+    // the hole would cost 30 s per gap and stall everything behind it.
+    const seenAt = new Map<number, number>([[1, Date.now()], [3, Date.now()]]);
+    const delivered: number[] = [];
+    const logs: string[] = [];
+    const relay = new ObservationRelay({
+      read: async (seq) => (seenAt.has(seq) ? { seq } : null),
+      emit: (_o, f) => delivered.push(f.seq),
+      deadlineMs: 30_000,
+      pollIntervalMs: 20,
+      log: (l) => logs.push(l),
+    });
+    const t0 = Date.now();
+    for (const seq of [1, 2, 3]) {
+      relay.reserve();
+      relay.commit(frame(seq));
+    }
+    const until = Date.now() + 3_000;
+    while (relay.stats().inFlight > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 15));
+    expect(delivered).toEqual([1, 3]);
+    const s = relay.stats();
+    expect(s.skipped).toBe(1);
+    expect(s.expired).toBe(0);
+    // The hole costs one poll tick, not the 30 s deadline.
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    expect(logs.some((l) => l.includes("obs-skipped seq=2"))).toBe(true);
+    relay.close();
+  });
+
   it("refuses to publish past the in-flight window (bounded lag, no unbounded queue)", async () => {
     // maxInFlight floor is 4; nothing is ever delivered, so the window fills and
     // further frames are refused rather than published and queued forever.

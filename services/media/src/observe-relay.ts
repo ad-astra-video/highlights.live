@@ -75,6 +75,10 @@ export interface ObservationRelayStats {
   delivered: number;
   /** Frames whose observation never arrived inside the deadline. */
   expired: number;
+  /** Frames the runner never produced at all because it fast-forwarded past them
+   *  (go-livepeer's live edge skips a gap); abandoned as soon as the NEXT frame's
+   *  observation proves the runner moved on, not after the full deadline. */
+  skipped: number;
   /** Frames NOT published because the in-flight window was full. */
   refused: number;
   /** Frames published, not yet delivered. */
@@ -104,9 +108,10 @@ export class ObservationRelay {
   private reserved = 0;
   private running = false;
   private closed = false;
-  private counters = { published: 0, delivered: 0, expired: 0, refused: 0, maxLagMs: 0 };
-  /** Rate-limited logging for repeated expiries (first + every 10th). */
+  private counters = { published: 0, delivered: 0, expired: 0, skipped: 0, refused: 0, maxLagMs: 0 };
+  /** Rate-limited logging for repeated expiries/skips (first + every 10th). */
   private expiryLogs = 0;
+  private skipLogs = 0;
 
   constructor(private readonly opts: ObservationRelayOptions) {
     this.deadlineMs = Math.max(1_000, opts.deadlineMs ?? DEFAULT_OBSERVE_DEADLINE_MS);
@@ -156,6 +161,7 @@ export class ObservationRelay {
       published: this.counters.published,
       delivered: this.counters.delivered,
       expired: this.counters.expired,
+      skipped: this.counters.skipped,
       refused: this.counters.refused,
       inFlight: this.queue.length,
       maxLagMs: this.counters.maxLagMs,
@@ -172,7 +178,7 @@ export class ObservationRelay {
     const s = this.stats();
     return (
       `published=${s.published} delivered=${s.delivered} expired=${s.expired} ` +
-      `refused=${s.refused} inFlight=${s.inFlight} maxLagMs=${s.maxLagMs}`
+      `skipped=${s.skipped} refused=${s.refused} inFlight=${s.inFlight} maxLagMs=${s.maxLagMs}`
     );
   }
 
@@ -207,9 +213,24 @@ export class ObservationRelay {
         const head = this.queue[0];
         const deadline = head.publishedAt + this.deadlineMs;
         let obs: any = null;
+        let skipped = false;
         while (!this.closed) {
           obs = await this.opts.read(head.frame.seq).catch(() => null);
           if (obs) break;
+          // Fast-forward detection: the runner consumes video-in in seq order, but
+          // go-livepeer's live edge SKIPS a gap rather than replaying it, so the
+          // frame after the head can already carry an observation while the head
+          // never will. Waiting the full deadline on such a hole would cost 30 s
+          // per gap (and stall every frame behind it), so abandon the head as soon
+          // as a LATER published frame proves the runner moved past it.
+          const next = this.queue[1];
+          if (next && next.frame.seq > head.frame.seq) {
+            const ahead = await this.opts.read(next.frame.seq).catch(() => null);
+            if (ahead) {
+              skipped = true;
+              break;
+            }
+          }
           if (this.now() >= deadline) break;
           await this.sleep(this.pollMs);
         }
@@ -222,6 +243,15 @@ export class ObservationRelay {
             this.opts.emit(obs, head.frame);
           } catch (e: any) {
             this.log(`[media] observe-relay emit err seq=${head.frame.seq}: ${String(e?.message || e).slice(0, 120)}`);
+          }
+          continue;
+        }
+        if (skipped) {
+          // The runner fast-forwarded past this seq: no observation will ever exist.
+          this.counters.skipped++;
+          this.skipLogs++;
+          if (this.skipLogs === 1 || this.skipLogs % 10 === 0) {
+            this.log(`[rtc] obs-skipped seq=${head.frame.seq} skipped=${this.counters.skipped} (runner fast-forwarded)`);
           }
           continue;
         }
