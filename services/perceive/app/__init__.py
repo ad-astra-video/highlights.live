@@ -135,11 +135,32 @@ _SCOREBOARD_DETECT_BACKOFF = 5
 # then answers with unknown teams, AC6).
 _MATCH_CONTEXT_MAX_KIT_SAMPLES = 480
 _MATCH_CONTEXT_MAX_SWATCHES = 60
-# ADAAAA-7909: budget for the extra whole-frame `<OCR>` reads that recover the
-# scorebug's club text when the ROI crop read only garbage ("1515K"). Bounded per
-# session so a broadcast whose scorebug never prints a readable name cannot pay
-# a second OCR inference on every anchor frame for the whole stream.
-_MATCH_CONTEXT_TEAM_FALLBACK_MAX = 40
+# ADAAAA-7909: allowance for the extra `<OCR>` reads that recover the scorebug's
+# club text when the ROI crop read only garbage ("1515K") or clipped one club
+# plate off the graphic. It must stay bounded so a broadcast whose scorebug never
+# prints a readable name cannot pay a second OCR inference on every frame of the
+# whole stream — but a FLAT per-session cap starves a bounded job: measured on job
+# 2f491873 (90 s, 3 fps, 270 frames) the 40-read budget was spent at seq 55, i.e.
+# 18 % of the clip, so every later frame whose crop clipped the home plate went
+# unrepaired and the name vote collapsed to 10/30 — below the 60 % stability gate
+# even though the clip reads both clubs on 82 % of its frames. The bound is now a
+# RATE against the frames the session actually analysed (one read per
+# `_TEAM_FALLBACK_FRAMES_PER_READ` frames) plus an absolute session ceiling, so
+# the allowance covers a whole clip instead of only its first seconds. Measured on
+# the replay of that job, ~30-40 % of frames clip the home plate, so one read per
+# two frames covers every clipped frame while a broadcast that never prints a name
+# still pays at most 50 % more `<OCR>` calls, hard-capped per session.
+_TEAM_FALLBACK_FRAMES_PER_READ = 2
+# The allowance must LEAD the spend: a clipped frame charges one read, so a head-
+# room equal to the clip rate would land exactly on the boundary and alternate
+# repair/no-repair frame by frame (measured in the fixture).
+_TEAM_FALLBACK_HEADROOM = 8
+_TEAM_FALLBACK_MAX_READS = 400
+# At most this many OCR lines are kept for one frame. The crop / repaired-crop /
+# whole-frame reads all describe the SAME graphic, so their lines are merged for
+# the name channel (a frame votes for every side either read printed) and capped
+# so a frame can never grow the evidence without bound.
+_OCR_LINES_PER_FRAME_CAP = 4
 # ADAAAA-7909: the documented scoreboard fallback prior is a TOP band
 # (`ScoreboardRoi.from_env()` -> 0,0,1,0.25). A bottom-centre bug on an indoor
 # basketball broadcast sits in the lower fifth, so the ROI-repair retry crops
@@ -150,6 +171,56 @@ _SCOREBOARD_BOTTOM_CENTRE_PRIOR = (0.0, 0.80, 1.0, 1.0)
 
 def _match_context_enabled() -> bool:
     return os.environ.get("PERCEIVE_MATCH_CONTEXT", "1").lower() not in ("0", "false", "off")
+
+
+def _team_fallback_allowance(state) -> int:
+    """How many extra scorebug `<OCR>` reads this session may still spend.
+
+    ADAAAA-7909: grows with the frames the session has already analysed (one read
+    per ``_TEAM_FALLBACK_FRAMES_PER_READ`` frames) and is capped per session, so the
+    allowance keeps up with a whole clip — a flat cap ran out 18 % into a 90 s job —
+    while a scorebug that never prints a readable name still pays a bounded number
+    of extra inferences instead of a second OCR on every frame.
+    """
+    analyzed = int(getattr(state, "frames_processed", 0) or 0)
+    return min(
+        _TEAM_FALLBACK_MAX_READS,
+        _TEAM_FALLBACK_HEADROOM + analyzed // _TEAM_FALLBACK_FRAMES_PER_READ,
+    )
+
+
+def _same_roi(a, b, tol: float = 1e-6) -> bool:
+    """True when two scoreboard regions cover the same normalized box (ADAAAA-7909)."""
+    try:
+        return all(
+            abs(float(getattr(a, k)) - float(getattr(b, k))) <= tol
+            for k in ("x0", "y0", "x1", "y1")
+        )
+    except Exception:  # noqa: BLE001 - an odd region object is never fatal
+        return False
+
+
+def _union_ocr_lines(primary, extra, cap: int = _OCR_LINES_PER_FRAME_CAP) -> list[str]:
+    """Merge two reads of the SAME frame into one deduped line list (ADAAAA-7909).
+
+    The ROI crop and the whole-frame read cover different slivers of one graphic:
+    the crop can clip the club plate that the whole-frame read carries, and the
+    whole-frame read can pick up ad-board text that pollutes the run. Keeping both
+    lets the frame vote for EVERY side that was actually printed on it instead of
+    discarding the side the winning read happened to miss. Deduped and capped so a
+    single frame can never grow the evidence without bound.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in list(primary or []) + list(extra or []):
+        text = str(line or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+        if len(out) >= cap:
+            break
+    return out
 
 
 
@@ -1162,11 +1233,11 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # whole-frame lines are kept for the match-context channel in that case
         # even when no score parses from them (team text can never forge a score:
         # `parse_ocr_score` still owns that decision). Bounded per session by
-        # `_MATCH_CONTEXT_TEAM_FALLBACK_MAX`, and only when the match-context
+        # `_TEAM_FALLBACK_MAX_READS`, and only when the match-context
         # evidence pass is enabled, so the extra read is charged only where the
         # names are actually used.
         _ocr_sport = sport_key(getattr(state, "game_hint", "") or "")
-        _ocr_budget = getattr(state, "team_fallback_reads", 0) < _MATCH_CONTEXT_TEAM_FALLBACK_MAX
+        _ocr_budget = getattr(state, "team_fallback_reads", 0) < _team_fallback_allowance(state)
         _sides = (
             scorebug_lines_sides(ocr_lines, _ocr_sport)
             if visible and _match_context_enabled() and _ocr_sport != SPORT_UNKNOWN
@@ -1192,33 +1263,42 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # the retry is paid once, not on every anchor frame.
         if _need_roi_repair or _no_team_text:
             bottom = ScoreboardRoi(*_SCOREBOARD_BOTTOM_CENTRE_PRIOR)
-            try:
-                bottom_lines = detector.ocr(state.last_rgb, roi=bottom) or []
-                bottom_score = parse_ocr_score(bottom_lines, roi=bottom)
-                # The retry is charged as soon as it runs, success or not, so a
-                # broadcast whose bottom band never reads cannot pay it forever.
-                state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
-            except Exception as e:  # noqa: BLE001 - evidence only, never fatal
-                log.warning("scorebug bottom-centre ROI repair skipped frame %s: %s", seq, e)
+            # ADAAAA-7909: once the bottom-centre prior IS the session's active
+            # region, "repairing" to it reads the identical crop again — measured
+            # on the bounded job, that wasted half the read allowance (one useless
+            # repair + one whole-frame read per clipped frame). Skip it and spend
+            # the allowance on the read that actually sees more of the graphic.
+            repair_worthwhile = not (roi is not None and _same_roi(roi, bottom))
+            if not repair_worthwhile:
+                log.debug("scorebug ROI repair skipped frame %s: already the bottom prior", seq)
             else:
-                if score is None and bottom_score is not None:
-                    score = bottom_score
-                bottom_sides = scorebug_lines_sides(bottom_lines, _ocr_sport)
-                if len(bottom_sides) >= 2 or (not _need_roi_repair and bottom_sides):
-                    ocr_lines = bottom_lines
-                    obs["ocr"] = bottom_lines
-                    _need_team_text = False
-                    _need_roi_repair = False
-                    # Adopt the repaired region when no vision verdict pinned it:
-                    # it is the region that actually carries the graphic.
-                    if verdict is None:
-                        roi = bottom
-                        state.scoreboard_roi = bottom
-                        state.scoreboard_visible = True
-                    log.info(
-                        "scorebug bottom-centre ROI repair session=%s seq=%s lines=%d adopted=%s",
-                        state.session_id, seq, len(bottom_lines), verdict is None,
-                    )
+                try:
+                    bottom_lines = detector.ocr(state.last_rgb, roi=bottom) or []
+                    bottom_score = parse_ocr_score(bottom_lines, roi=bottom)
+                    # The retry is charged as soon as it runs, success or not, so a
+                    # broadcast whose bottom band never reads cannot pay it forever.
+                    state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
+                except Exception as e:  # noqa: BLE001 - evidence only, never fatal
+                    log.warning("scorebug bottom-centre ROI repair skipped frame %s: %s", seq, e)
+                else:
+                    if score is None and bottom_score is not None:
+                        score = bottom_score
+                    bottom_sides = scorebug_lines_sides(bottom_lines, _ocr_sport)
+                    if len(bottom_sides) >= 2 or (not _need_roi_repair and bottom_sides):
+                        ocr_lines = bottom_lines
+                        obs["ocr"] = bottom_lines
+                        _need_team_text = False
+                        _need_roi_repair = False
+                        # Adopt the repaired region when no vision verdict pinned it:
+                        # it is the region that actually carries the graphic.
+                        if verdict is None:
+                            roi = bottom
+                            state.scoreboard_roi = bottom
+                            state.scoreboard_visible = True
+                        log.info(
+                            "scorebug bottom-centre ROI repair session=%s seq=%s lines=%d adopted=%s",
+                            state.session_id, seq, len(bottom_lines), verdict is None,
+                        )
         if _need_roi_repair and _ocr_budget:
             # The repaired region still names only one side; the whole-frame read
             # is the last bounded attempt at the other (same session counter).
@@ -1235,7 +1315,13 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 if alt is not None or (
                     _need_team_text and scorebug_lines_have_team_text(full_ocr, _ocr_sport)
                 ):
-                    obs["ocr"] = full_ocr
+                    # ADAAAA-7909: keep the crop's lines as well. The two reads
+                    # cover different slivers of ONE graphic — the crop clips the
+                    # club plate that the whole-frame read carries, and the
+                    # whole-frame read drags ad-board text into the run — so the
+                    # frame votes for every side either read printed instead of
+                    # only the side the winning read happened to see.
+                    obs["ocr"] = _union_ocr_lines(ocr_lines, full_ocr)
                     if _need_team_text:
                         state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
                         log.info(
