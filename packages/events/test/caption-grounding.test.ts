@@ -234,3 +234,22 @@ describe("internal decision-reason tails and technical terms (ADAAAA-7948, level
     expect(out).toBe(line);
   });
 });
+
+describe("score/evidence cleanup leaves readable copy (ADAAAA-7948, level evidence)", () => {
+  it("drops a dangling preposition when an uncorroborated score is removed", () => {
+    const out = groundCaption("The ball enters the net and the scoreboard updates to 2-1.; scoreboard score change confirmed", {
+      verdict: "scoring_play",
+      promptText: PROMPT,
+    });
+    expect(out).not.toContain("2-1");
+    expect(out).not.toContain("score change confirmed");
+    expect(out).not.toMatch(/\bupdates to\b/);
+    expect(out).toContain("scoreboard updates");
+  });
+
+  it("strips a standalone evidence tag from a reason", () => {
+    expect(stripInternalTokens("The shot is saved.; scoreboard score change confirmed")).toBe(
+      "The shot is saved."
+    );
+  });
+});

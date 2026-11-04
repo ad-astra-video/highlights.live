@@ -111,6 +111,7 @@ export function stripInternalTokens(text: string): string {
   out = out.replace(BRACKET_TOKEN, " ");
   out = out.replace(PAREN_VERDICT, " ");
   out = out.replace(INTERNAL_REASON_TAIL, "");
+  out = out.replace(EVIDENCE_TAG, "");
   out = out.replace(KEY_VALUE_TOKEN, " ");
   out = out.replace(CLOCK_TOKEN, " ");
   out = out.replace(SCREAMING_TOKEN, (m) => humanEventLabel(m));
@@ -198,6 +199,11 @@ function rewriteNetClaims(text: string): string {
   });
 }
 
+/** Evidence tags the pipeline appends to a decide reason ("; scoreboard score
+ * change confirmed"). Not copy — removed before any other rule runs. */
+const EVIDENCE_TAG =
+  /;?\s*\b(?:scoreboard score change confirmed|score change confirmed|frame attestation confirmed|attestation confirmed)\b/gi;
+
 /** Rewrite goal claims to shot/wide beats when the verdict is not a goal. */
 export function gateGoalClaims(text: string, ctx?: CaptionGroundingContext): string {
   if (goalAllowed(ctx)) return text;
@@ -217,8 +223,9 @@ export function gateGoalClaims(text: string, ctx?: CaptionGroundingContext): str
   return out === text ? text : tidy(out);
 }
 
-/** Score-shaped token (`2-2`, `0 – 1`) that is not an `M:SS` clock. */
-const SCORE_TOKEN_SRC = String.raw`(?<![\w:.])\d{1,2}\s*[-–—]\s*\d{1,2}(?![\w:.])`;
+/** Score-shaped token (`2-2`, `0 – 1`) that is not an `M:SS` clock. A trailing
+ * sentence period is allowed (`updates to 2-1.`), a decimal is not. */
+const SCORE_TOKEN_SRC = String.raw`(?<![\w:.])\d{1,2}\s*[-–—]\s*\d{1,2}(?![\w:]|\.\d)`;
 const CLOCK_SRC = String.raw`\b\d{1,3}:\d{2}\b`;
 
 /** Every score-shaped string in `text` (normalised, no spaces). */
@@ -246,6 +253,7 @@ function gateScores(text: string, promptText: string): string {
   return tidy(
     out
       .replace(/\b(?:at|to|the)\s+(?=[,.;:!?]|$)/gi, "")
+      .replace(/\b(?:updates?|moves?|changes?|reflects?)\s+(?:to|a)\s+(?=and\b|as\b|[,.;:!?]|$)/gi, "$1")
       .replace(/\bleads?\s+by\s*(?=[,.;:!?]|$)/gi, "leads")
       .replace(/\btrails?\s+by\s*(?=[,.;:!?]|$)/gi, "trails")
   );
