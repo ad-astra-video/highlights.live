@@ -261,7 +261,15 @@ export class Store {
     }
   }
 
-  async addHighlight(rec: HighlightRecord): Promise<{ record: HighlightRecord; created: boolean }> {
+  async addHighlight(
+    rec: HighlightRecord,
+    /** ADAAAA-8005 (gate 3): invoked SYNCHRONOUSLY once the row is readable (the
+     *  in-memory write below completed, before the DB await). This is the
+     *  pinned "delivered" instant of the trigger->delivered AC: a feed read on
+     *  this tick already returns the row. Called only for a NEW row (a dedup hit
+     *  was delivered on an earlier pass). */
+    onWritable?: (record: HighlightRecord) => void
+  ): Promise<{ record: HighlightRecord; created: boolean }> {
     const parsed = HighlightRecordSchema.parse(rec);
     // ADAAAA-6874 (Phase 2): idempotency guard. If a highlight carrying this
     // idempotencyKey was already persisted (a re-claimed/resumed job re-deciding
@@ -278,6 +286,17 @@ export class Store {
     // that re-persists the exact same id) so byJob never grows duplicate entries.
     if (!list.includes(parsed.id)) list.push(parsed.id);
     this.byJob.set(parsed.jobId, list);
+    // ADAAAA-8005 (gate 3): the row is READABLE from here on — fire the
+    // delivered hook BEFORE the DB await so the metric measures readability, not
+    // durability (a share-end snapshot taken right after the last accept cannot
+    // miss the final row to an in-flight insert).
+    if (onWritable) {
+      try {
+        onWritable(parsed);
+      } catch {
+        /* a metric hook must never fail the write-through */
+      }
+    }
     if (this.db) await this.db.saveHighlight(parsed);
     return { record: parsed, created: true };
   }

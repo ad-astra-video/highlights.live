@@ -13,9 +13,10 @@
 // metric layer:
 //
 //   delivered  = the wall instant the highlight row becomes READABLE on the
-//                delivered surface, i.e. the store write-through acknowledged
-//                (`store.addHighlight` resolved: memory written before the DB
-//                await, so the feed read sees it that tick).
+//                delivered surface: the store accepts it (in-memory write), so
+//                a feed read on that tick already returns it. The DB
+//                write-through that follows is durability, not readability, and
+//                is therefore NOT part of the measured instant.
 //   trigger    = the row's own `trigger.timestamp` (content seconds), the same
 //                value `row.createdAt - (startedAt + trigger.timestamp)` uses.
 //
@@ -43,8 +44,9 @@
 /** The one-sentence definition the AC is graded against (also in
  *  `docs/live-observe-lag.md`). Kept here so a metric consumer can quote it. */
 export const DELIVERED_LATENCY_DEFINITION =
-  "delivered = the highlight row is readable on the delivered surface (store " +
-  "write-through acked); trigger->delivered = persistAck - (contentOrigin + triggerTs)";
+  "delivered = the highlight row is readable on the delivered surface (the store " +
+  "accepts the row, so a feed read returns it that tick); " +
+  "trigger->delivered = persistAck - (contentOrigin + triggerTs)";
 
 /** One emitted, delivered row (the AC's per-row reading). */
 export interface LiveDeliveredLatencyRow {
