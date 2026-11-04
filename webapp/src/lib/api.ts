@@ -1,5 +1,6 @@
 // Thin fetch client. Base is relative -> same origin (dev: vite proxies to :3000).
 import { chunkRanges, VOD_SINGLE_SHOT_MAX } from "./vodUpload";
+import type { ResumeView } from "./resume";
 
 const TOKEN_KEY = "hl_token";
 
@@ -474,6 +475,12 @@ export interface Job {
   // Async-VOD progress (0-100) + human label, updated at stage boundaries.
   progress?: number;
   progressLabel?: string;
+  // ADAAAA-7700: machine-readable failure attribution, rendered as its own chip.
+  failureReason?: string;
+  // ADAAAA-7907 (VOD resume): the durable checkpoint, projected for the caller.
+  // The processing tile renders "resumed from T+12:30 · attempt 2 of 3" while the
+  // resumed pass is in flight, so a retried job never looks like a fresh one.
+  resume?: ResumeView;
   // Live decision trail (ADAAAA-6870, Increment 3 T1): bounded ordered array of
   // candidate/highlight decisions appended by runVodJob. Additive optional —
   // absent on older records and live jobs.

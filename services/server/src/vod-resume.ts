@@ -13,7 +13,7 @@
 // The checkpoint itself is contract-defined in `@highlights/events`
 // (`ResumeCheckpointSchema`, additive optional `job.resume`).
 
-import type { ResumeCheckpoint, ResumePhase } from "@highlights/events";
+import type { ResumeAccumulators, ResumeCheckpoint, ResumePhase } from "@highlights/events";
 
 /** A merge patch for `Store.saveResumeCheckpoint`. Nested blocks merge field by
  * field; `null` on an optional scalar CLEARS it (e.g. `nextAttemptAt` after a
@@ -29,6 +29,7 @@ export interface ResumeCheckpointPatch {
   nextAttemptAt?: string | null;
   resumedAt?: string | null;
   resumedFromTs?: number | null;
+  maxAttempts?: number;
 }
 
 /** Hard cap on the warm-up window (plan §2.2: "capped at the 10 s observe
@@ -100,6 +101,11 @@ export function mergeResumeCheckpoint(
       decideCalls: p.decideCalls ?? a.decideCalls ?? 0,
       perceiveSessionS: p.perceiveSessionS ?? a.perceiveSessionS ?? 0,
       costUsd: p.costUsd ?? a.costUsd ?? 0,
+      // ADAAAA-7907: wall clock is a running TOTAL across attempts; a patch
+      // that omits it keeps the persisted value.
+      ...(p.wallClockS !== undefined || a.wallClockS !== undefined
+        ? { wallClockS: p.wallClockS ?? a.wallClockS }
+        : {}),
       ...(p.stageAMetrics ?? a.stageAMetrics ? { stageAMetrics: p.stageAMetrics ?? a.stageAMetrics } : {}),
       ...(p.confirmMetrics ?? a.confirmMetrics ? { confirmMetrics: p.confirmMetrics ?? a.confirmMetrics } : {}),
       ...(p.vodObserveMetrics ?? a.vodObserveMetrics
@@ -108,7 +114,7 @@ export function mergeResumeCheckpoint(
     };
   }
   // Optional scalars: patch wins, `null` clears, absent keeps the previous value.
-  for (const key of ["nextAttemptAt", "resumedAt", "resumedFromTs"] as const) {
+  for (const key of ["nextAttemptAt", "resumedAt", "resumedFromTs", "maxAttempts"] as const) {
     const v = patch[key];
     if (v === null) continue; // cleared
     if (v !== undefined) (next as any)[key] = v;
@@ -214,4 +220,134 @@ export function resumeRetryDue(nextAttemptAt: string | undefined, nowMs = Date.n
   const at = Date.parse(nextAttemptAt);
   if (!Number.isFinite(at)) return true;
   return at <= nowMs;
+}
+
+// ---------------------------------------------------------------------------
+// ADAAAA-7907 (VOD resume, Increments 3+4): attempt accounting + the one
+// resume entry point's pure parts.
+//
+// A resumed job's cost/attempt numbers are assembled from TWO sources: the
+// cross-attempt `resume.accumulators` (every attempt that ENDED, including the
+// ones that failed) plus the deltas of the attempt that is finishing now. These
+// helpers are pure so the arithmetic is unit-tested without a GPU.
+// ---------------------------------------------------------------------------
+
+/** One attempt's spend deltas. */
+export interface AttemptDelta {
+  decideCalls?: number;
+  perceiveSessionS?: number;
+  costUsd?: number;
+  wallClockS?: number;
+}
+
+/** The number fields of `resume.accumulators` that are summed. */
+export interface AttemptTotals {
+  decideCalls: number;
+  perceiveSessionS: number;
+  costUsd: number;
+  wallClockS: number;
+}
+
+function nonNeg(v: number | undefined): number {
+  const n = Number(v ?? 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Sum a finished attempt's deltas onto the cross-attempt accumulators.
+ *
+ * `prev` is the checkpoint's accumulator block READ AT CLAIM, i.e. the total of
+ * every attempt that already ended. That is what makes AC9 hold: the completed
+ * record carries both attempts, not only the last one. */
+export function accumulateAttemptTotals(
+  prev: ResumeAccumulators | undefined,
+  delta: AttemptDelta
+): AttemptTotals {
+  return {
+    decideCalls: Math.round(nonNeg(prev?.decideCalls) + nonNeg(delta.decideCalls)),
+    perceiveSessionS: Number((nonNeg(prev?.perceiveSessionS) + nonNeg(delta.perceiveSessionS)).toFixed(1)),
+    costUsd: Number((nonNeg(prev?.costUsd) + nonNeg(delta.costUsd)).toFixed(4)),
+    wallClockS: Number((nonNeg(prev?.wallClockS) + nonNeg(delta.wallClockS)).toFixed(1)),
+  };
+}
+
+/**
+ * Close the OPEN attempt entry (the one the claim appended) with an
+ * attribution. Idempotent: when every entry is already closed the list is
+ * returned unchanged, so a boot sweep over an already-attributed attempt cannot
+ * rewrite it.
+ *
+ * Boot recovery relies on this: the interrupted attempt is recorded as
+ * `server-restart` at the phase it was running, so the resumed claim appends
+ * attempt N+1 to a clean trail.
+ */
+export function closeOpenAttempt(
+  attempts: ResumeCheckpoint["attempts"] | undefined,
+  patch: { now: string; phase: ResumePhase; reason: NonNullable<AttemptEntry["failureReason"]>; error?: string }
+): ResumeCheckpoint["attempts"] {
+  const list = [...(attempts ?? [])];
+  const openIdx = list.map((a) => !a.endedAt).lastIndexOf(true);
+  if (openIdx < 0) return list;
+  list[openIdx] = {
+    ...list[openIdx],
+    endedAt: patch.now,
+    failedAtPhase: patch.phase,
+    failureReason: patch.reason,
+    ...(patch.error ? { error: patch.error } : {}),
+  };
+  return list;
+}
+
+type AttemptEntry = NonNullable<ResumeCheckpoint["attempts"]>[number];
+
+/**
+ * The attempt number the NEXT claim will carry. `totalAttempts` on the record
+ * must equal the number of CLAIMS (AC9), so the resume entry point reserves the
+ * next claim's number here and the claim itself writes the same value — never
+ * `+1` twice for one attempt.
+ */
+export function nextAttemptNumber(checkpoint: ResumeCheckpoint | undefined): number {
+  return Math.max(nonNeg(checkpoint?.totalAttempts), checkpoint?.attempts?.length ?? 0) + 1;
+}
+
+/** Human-facing resume point: `T+12:30` for a content timestamp in seconds. */
+export function resumePointLabel(resumedFromTs: number | undefined): string | null {
+  const ts = Number(resumedFromTs ?? 0);
+  if (!Number.isFinite(ts) || ts <= 0) return null;
+  const total = Math.floor(ts);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mmss = `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `T+${h > 0 ? `${h}:${mmss}` : mmss}`;
+}
+
+/** Inputs of the ONE per-attempt evidence line (AC10). */
+export interface ResumeAttemptEvidence {
+  attempt: number;
+  phase: ResumePhase;
+  resumedFromTs?: number;
+  skippedFrames?: number;
+  warmupFrames?: number;
+  decideCalls?: number;
+  perceiveCalls?: number;
+}
+
+/**
+ * The single greppable evidence line, one per attempt:
+ *
+ *   [vod-resume] attempt=2 phase=analyze resumedFromTs=12.0 skippedFrames=24
+ *                warmupFrames=4 decideCalls=7 perceiveCalls=30
+ *
+ * Fixed prefix + fixed key order, so `docker logs highlights-server | grep
+ * '\[vod-resume\]'` yields exactly one row per attempt.
+ */
+export function formatResumeAttemptLine(e: ResumeAttemptEvidence): string {
+  return (
+    `[vod-resume] attempt=${e.attempt} phase=${e.phase} ` +
+    `resumedFromTs=${Number(e.resumedFromTs ?? 0).toFixed(1)} ` +
+    `skippedFrames=${Math.round(nonNeg(e.skippedFrames))} ` +
+    `warmupFrames=${Math.round(nonNeg(e.warmupFrames))} ` +
+    `decideCalls=${Math.round(nonNeg(e.decideCalls))} ` +
+    `perceiveCalls=${Math.round(nonNeg(e.perceiveCalls))}`
+  );
 }

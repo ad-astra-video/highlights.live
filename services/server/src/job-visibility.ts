@@ -61,6 +61,13 @@ export const INTERNAL_JOB_KEYS = [
   "observeMetrics",
   "vodObserveMetrics",
   "confirmMetrics",
+  // ADAAAA-7907 (VOD resume Inc 4): the per-job cost meter. `vodMeter` carries
+  // `costUsd`, `decideCalls` and the $/video-hour price row — the same spend
+  // diagnostics the keys above hide — and it landed (ADAAAA-7821) after this
+  // gate was written, so it is filtered here rather than left as a bleed path.
+  // The customer-facing resume point/attempt number is unaffected: it rides the
+  // `resume` PROJECTION below, which drops the accumulator block instead.
+  "vodMeter",
   // ADAAAA-7889 (AC2, PO scope split on ADAAAA-7890): `matchContextEvidence` is
   // deliberately NOT an internal key any more. AC2 says an `unknown` match-context
   // result must be diagnosable from `GET /jobs/:id` alone, and the graded route is
@@ -93,6 +100,38 @@ type AnyRecord = Record<string, any>;
 const INTERNAL_EVIDENCE_KEYS = ["sessionId"] as const;
 
 /**
+ * ADAAAA-7907 (VOD resume, Increments 3+4): project `job.resume` for a
+ * non-admin caller.
+ *
+ * The customer-facing half of the checkpoint is the operability trail — the
+ * phase the pass stopped in, the content timestamp it resumed from, the attempt
+ * number and the per-attempt attribution. That is what makes "resumed from
+ * T+12:30, attempt 2 of 3" renderable on the owner's page (AC8).
+ *
+ * The other half is spend and pipeline accounting (`accumulators.costUsd` /
+ * `decideCalls` / `perceiveSessionS`, plus `usdSpent` per attempt) and stays
+ * behind the ADAAAA-7727 role gate exactly like `job.costUsd`. So a non-admin
+ * gets the same block with those keys removed; the stored record is untouched.
+ */
+const INTERNAL_RESUME_KEYS = ["accumulators"] as const;
+
+/** {@link INTERNAL_RESUME_KEYS} as a projection over the resume checkpoint. */
+export function publicResumeCheckpoint<T>(resume: T): T | undefined {
+  if (!resume || typeof resume !== "object") return undefined;
+  const copy: AnyRecord = { ...(resume as AnyRecord) };
+  for (const key of INTERNAL_RESUME_KEYS) delete copy[key];
+  if (Array.isArray(copy.attempts)) {
+    copy.attempts = copy.attempts.map((a: AnyRecord) => {
+      if (!a || typeof a !== "object") return a;
+      const attempt = { ...a };
+      delete attempt.usdSpent;
+      return attempt;
+    });
+  }
+  return copy as T;
+}
+
+/**
  * Project `matchContextEvidence` for a non-admin caller (ADAAAA-7889 AC2).
  *
  * Returns a shallow copy with the transport-handle keys removed, or `undefined`
@@ -123,6 +162,13 @@ export function jobForRole<T>(job: T, role?: string | null): T {
     const projected = publicMatchContextEvidence(copy.matchContextEvidence);
     if (projected === undefined) delete copy.matchContextEvidence;
     else copy.matchContextEvidence = projected;
+  }
+  // ADAAAA-7907 (AC8): the resume point + attempt number survive for the owning
+  // user; the spend accumulators inside them do not (see publicResumeCheckpoint).
+  if ("resume" in copy) {
+    const projected = publicResumeCheckpoint(copy.resume);
+    if (projected === undefined) delete copy.resume;
+    else copy.resume = projected;
   }
   return copy as T;
 }

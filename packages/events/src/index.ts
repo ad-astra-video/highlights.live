@@ -929,6 +929,11 @@ export const ResumeAccumulatorsSchema = z.object({
   decideCalls: z.number().int().min(0).default(0),
   perceiveSessionS: z.number().min(0).default(0),
   costUsd: z.number().min(0).default(0),
+  /** ADAAAA-7907 (Inc 4): processing wall clock (seconds) summed over every
+   * attempt. `vodMeter.wallClockS` on a resumed job reports the total, so a
+   * retried pass does not read as a shorter job than the work it did. Additive
+   * optional — absent on records that predate it (read as 0). */
+  wallClockS: z.number().min(0).optional(),
   stageAMetrics: StageAMetricsSnapshotSchema.optional(),
   confirmMetrics: ConfirmMetricsSnapshotSchema.optional(),
   vodObserveMetrics: VodObserveMetricsSnapshotSchema.optional(),
@@ -969,6 +974,11 @@ export const ResumeCheckpointSchema = z.object({
   resumedAt: z.string().optional(),
   /** What the user sees: "resumed from T+mm:ss". */
   resumedFromTs: z.number().min(0).optional(),
+  /** ADAAAA-7907: total CLAIMS this job's retry policy allows (initial attempt +
+   * `VOD_RESUME_MAX_ATTEMPTS`). Lets the operator surface render "attempt 2 of
+   * 3" without duplicating the server's config. Additive optional — absent on
+   * records written before it existed. */
+  maxAttempts: z.number().int().min(1).optional(),
 });
 export type ResumeCheckpoint = z.infer<typeof ResumeCheckpointSchema>;
 

@@ -45,6 +45,7 @@ import {
 } from "../lib/jobDetail";
 import { createWindowInspectStore } from "../lib/windowInspect";
 import { LiveProgressChip } from "../components/LiveProgressChip";
+import { ResumeAction, ResumeTrail, type ResumeActionState } from "../components/ResumeTrail";
 import { CaptureNotice } from "../components/CaptureNotice";
 import {
   LIVE_READ_HEALTH_FRESH,
@@ -1688,6 +1689,31 @@ export function JobDetail() {
   // from every light-read outcome; the banner below appears once the failure is
   // persistent (3 consecutive misses = 15 s).
   const [lightHealth, setLightHealth] = useState<LiveReadHealth>(LIVE_READ_HEALTH_FRESH);
+  // ADAAAA-7907 (Inc 3): the Resume action on the FAILED state. The POST only
+  // re-arms the durable worker (202 / 200 alreadyQueued), so the page reports
+  // "queued" and re-reads the job — the pass then resumes server-side.
+  const [resumeState, setResumeState] = useState<ResumeActionState>({ kind: "idle" });
+  const resumeJob = useCallback(async () => {
+    if (!id) return;
+    setResumeState({ kind: "working" });
+    try {
+      const r = await api<{ alreadyQueued?: boolean }>(`/jobs/${id}/resume`, { method: "POST" });
+      // Idempotent answer: a retry was already armed, so nothing changed — show
+      // the button in its resting state rather than a second "queued" note.
+      setResumeState(r?.alreadyQueued ? { kind: "idle" } : { kind: "queued" });
+      // The row is non-terminal again: keep the poll/SSE channel alive.
+      setTerminal(false);
+      await load(false);
+    } catch (e: any) {
+      const message =
+        e?.status === 403
+          ? "You do not have access to resume this job."
+          : e?.status === 409
+            ? e?.message || "This job cannot be resumed."
+            : e?.message || String(e);
+      setResumeState({ kind: "error", message });
+    }
+  }, [id, load]);
   useEffect(() => {
     const lp = detail?.liveProgress;
     if (!lp) return;
@@ -2226,6 +2252,12 @@ export function JobDetail() {
               )}
               {/* ADAAAA-7700: WHY the job failed, as its own attributed chip. */}
               <FailureReasonChip reason={detail.job.failureReason} />
+              {/* ADAAAA-7907 (AC8): "resumed from T+12:30 · attempt 2 of 3" on a
+                  retried pass, and the Resume action on the failed state. The
+                  action is only offered where the route accepts it (VOD file
+                  job, failed, checkpoint present). */}
+              <ResumeTrail resume={detail.job.resume} />
+              <ResumeAction job={detail.job} state={resumeState} onResume={resumeJob} />
             </div>
             {/* ADAAAA-7759: once the light lag read has failed 3 consecutive
                 times (15 s) the failure is stated on the same banner pattern as
