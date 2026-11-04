@@ -809,15 +809,21 @@ export function scoreboardDeltaSingleGoalStep(delta: ScoreboardDeltaEvidence | u
  *  1. the delta is legible (both sides parsed, two contiguous reads each side —
  *     the same bar `scoreboardDeltaLegible` / perceive's tracker enforces);
  *  2. it is a single goal step (unambiguous);
- *  3. the transition was first legibly read AFTER the window closed, by at most
- *     `maxLookaheadS` (a delta read at/inside the window is the normal
- *     attestation path's business, never this one);
+ *  3. the transition instant lies INSIDE the judged window `[lo, hi]`, or up to
+ *     `maxLookaheadS` after its close (ADAAAA-8017: `deltaTs` is a content
+ *     timestamp, so a boundary transition is first legible just before `hi`
+ *     while the read lands with a later window; the 8006 version declined that
+ *     case and left a true goal demoted). A transition before `lo` belongs to an
+ *     earlier window and is never credited;
  *  4. the resolving read really belongs to a later window (`readAt >= hi`).
  *
  * Known bound: a transition read within the lookahead of a demoted window is
  * attributed to it. The bound is what keeps that honest (20 s ~ five cadence
  * windows at the measured 3 s cadence), and a delivered scoring GOAL covering
- * the transition additionally cancels the re-emit (see the run ledger). */
+ * the transition additionally cancels the re-emit (see the run ledger). A
+ * transition CONTAINED in a demoted window is attributed to it too (ADAAAA-8017);
+ * if it is contained in more than one demoted window the resolver fails closed as
+ * ambiguous rather than guessing. */
 export function scoreboardDeltaAttestsDeferredWindow(input: {
   window: { lo: number; hi: number };
   delta: ScoreboardDeltaEvidence | undefined | null;
@@ -831,9 +837,28 @@ export function scoreboardDeltaAttestsDeferredWindow(input: {
   if (!scoreboardDeltaSingleGoalStep(d)) return false;
   if (!Number.isFinite(d.deltaTs) || !Number.isFinite(readAt)) return false;
   const maxLookaheadS = input.maxLookaheadS ?? LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S;
-  const lateBy = d.deltaTs - window.hi;
-  if (lateBy < 0) return false;
-  if (lateBy > maxLookaheadS) return false;
+  // ADAAAA-8017: `deltaTs` is a CONTENT timestamp — the first frame that reads
+  // the new score — so it routinely lands a fraction of a second BEFORE `hi`
+  // while the read itself only reaches the server with a later window (the
+  // judged window's payload is assembled behind live). The ADAAAA-8006 bound
+  // (`lateBy = deltaTs - hi >= 0`) declined exactly that case, on the reasoning
+  // that an in-window delta "is the normal attestation path's business". But this
+  // resolver only ever holds rows the normal path FAILED to attest, so declining
+  // there leaves a true goal demoted: goal 2 @159 s on `kids300_7935` (build
+  // 0f7ef58) is first legible at the 159 s boundary (`2-1` -> `2-2`), the judged
+  // window `[149, 159]` carried no attestation, and the row shipped `big_play`
+  // with postable recall 1/2.
+  // Attribution is therefore by CONTAINMENT plus lookahead: a transition whose
+  // instant lies inside the judged window `[lo, hi]` is evidence ABOUT that
+  // window's content; one up to `maxLookaheadS` after its close is still
+  // attributable (ADAAAA-8006). A transition before `lo` belongs to an earlier
+  // window and is never credited here. `readAt >= hi` keeps the resolving read
+  // genuinely late — only a window at/after the close may consume a pending row —
+  // and `deltaTs` still has to be a legible single goal step, so this cannot
+  // widen the ADAAAA-7996 unattested-GOAL gate (it moves a demoted row's verdict,
+  // it never accepts anything new).
+  if (d.deltaTs < window.lo - 1e-9) return false;
+  if (d.deltaTs - window.hi > maxLookaheadS) return false;
   return readAt >= window.hi - 1e-9;
 }
 
@@ -4892,10 +4917,19 @@ export function applyDeferredGoalAttestations(
 ): number {
   const upgrades = run.resolveDeferredGoalAttestation({ readAt: input.readAt, delta: input.delta ?? null });
   for (const up of upgrades) {
+    // ADAAAA-8017: `deltaTs` may sit on/inside the judged window's close (a
+    // boundary transition is first legible just before `hi` while the read lands
+    // with a later window), so the audit phrase reports the sign honestly instead
+    // of printing a negative "after the window closed".
+    const lateBy = up.deltaTs - up.hi;
+    const timing =
+      lateBy >= -1e-9
+        ? `${lateBy.toFixed(1)} s after the window closed`
+        : `${(-lateBy).toFixed(1)} s inside the window's closing edge`;
     console.error(
       `[live-goal-gate-upgrade:${cfg.jobId}] re-attested GOAL @${up.anchorTs}s (judged window [${up.lo}, ${up.hi}], ` +
         `trigger ${up.triggerKind}) from the scoreboard delta first legibly read at ${up.deltaTs}s — ` +
-        `${(up.deltaTs - up.hi).toFixed(1)} s after the window closed (lookahead ${up.lookaheadS} s): ` +
+        `${timing} (carried by the later window read at ${up.readAt}s, lookahead ${up.lookaheadS} s): ` +
         `${up.delta.pre.join("-")} -> ${up.delta.post.join("-")}`
     );
     try {
