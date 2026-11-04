@@ -9,7 +9,6 @@
 // failed generations and in-submission retries never debit).
 import type { Db, Subscription, User } from "./db";
 import type { ServerConfig } from "./config";
-import { PLANS } from "./billing";
 
 /** Thrown when the current month's clip quota is exhausted. Maps to HTTP 429
  * (assertable) with the remaining (0) so the client can surface it. */
@@ -46,13 +45,15 @@ export class EntitlementsService {
 
   /**
    * Monthly clip quota for a subscription: an active Paying (Pro) subscriber
-   * gets the Pro plan's included-highlights allowance (100/mo per PLANS);
-   * everyone else (free, canceled/past_due) stays on the free tier's monthly
-   * cap (10/mo per PLANS, aligned with the ledger's betaClipQuota default).
+   * gets the Pro ceiling (`cfg.proClipQuota`, 100/mo by default — it mirrors
+   * the Pro plan's GA `includedHighlights` in `src/billing.ts` but can be
+   * raised for a bounded test window via `PRO_CLIP_QUOTA`); everyone else
+   * (free, canceled/past_due) stays on the free tier's monthly cap
+   * (`betaClipQuota`, 10/mo by default, aligned with PLANS' free tier).
    */
   limitFor(sub: Subscription | null | undefined): number {
     const pro = sub && sub.tier === "pro" && (sub.status === "active" || sub.status === "trialing");
-    if (pro) return PLANS.find((p) => p.id === "pro")?.includedHighlights ?? this.cfg.betaClipQuota;
+    if (pro) return this.cfg.proClipQuota;
     return this.cfg.betaClipQuota;
   }
 
