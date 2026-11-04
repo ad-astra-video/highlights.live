@@ -21,6 +21,7 @@ import {
   fetchSectionInspect,
   fetchSectionsDelta,
   mergeSections,
+  deltaRequestAfter,
   SECTION_WINDOW_S,
   focusAnalysisWindow,
   isJobInFlight,
@@ -1676,6 +1677,11 @@ export function JobDetail() {
   const deltaInFlightRef = useRef(false);
   const lastDeltaAtRef = useRef(0);
   const lastEventAtRef = useRef(0);
+  // ADAAAA-7997: whether the first composite load has landed. The delta path
+  // must not run before it — `mergeDelta` has no `detail` to merge into, and
+  // advancing the bucket baseline from that dropped response would make the
+  // page ask only for buckets after a baseline it never rendered.
+  const detailReadyRef = useRef(false);
   const token = getToken();
 
   // ADAAAA-7838: an admin session keeps today's full Analysis panel, so the
@@ -1726,12 +1732,20 @@ export function JobDetail() {
         const d = await fetchJobDetail(id, { inspect });
         if (!aliveRef.current) return;
         setDetail(d);
+        // ADAAAA-7997: the delta path may run from now on; before this it has
+        // nothing to merge into.
+        detailReadyRef.current = true;
         // ADAAAA-7915: the hidden clip strip reads the raw audit rows, not the
         // postable projection, so a rejected clip survives a reload.
         loadRawHighlights();
         // ADAAAA-7742: record how far the composite payload reaches so the live
-        // delta path knows which bucket to continue after.
-        lastSectionIndexRef.current = d.sections.length ? d.sections[d.sections.length - 1].index : -1;
+        // delta path knows which bucket to continue after. ADAAAA-7997: never
+        // move the baseline BACKWARDS — a delta that landed while this slower
+        // composite fetch was in flight may already hold newer buckets.
+        lastSectionIndexRef.current = Math.max(
+          lastSectionIndexRef.current,
+          d.sections.length ? d.sections[d.sections.length - 1].index : -1,
+        );
         setError(null);
         // Refresh the durable decide-audit rows alongside the detail payload.
         // ADAAAA-7727: the audit rows are admin-only, so a customer session
@@ -1861,15 +1875,18 @@ export function JobDetail() {
   // (a note whose trigger trails the newest bucket) widens that further.
   const loadDelta = useCallback(async () => {
     if (deltaInFlightRef.current) return;
+    // ADAAAA-7997: nothing to merge into until the first composite load lands.
+    if (!detailReadyRef.current) return;
     // Respect the floor even when the call comes from the idle trigger (the
     // debounced path already waits it out); the queued afterIndex survives so the
     // next tick still fetches from the right bucket.
     if (Date.now() - lastDeltaAtRef.current < DELTA_MIN_INTERVAL_MS) return;
-    const last = lastSectionIndexRef.current;
-    if (last < 0) return; // no baseline yet — the initial full load owns it
-    const tail = Math.max(-1, last - 1);
-    const queued = deltaAfterRef.current;
-    const after = queued === null ? tail : Math.min(tail, queued);
+    // ADAAAA-7997: a page opened on a fresh live job holds NO bucket baseline
+    // (the composite mount fetch carried zero windows), so `deltaRequestAfter`
+    // asks from the top instead of standing down. That is the only path that
+    // can deliver the first highlight card + summary-log line: the composite
+    // recovery poll is muted while the SSE channel is live.
+    const after = deltaRequestAfter(lastSectionIndexRef.current, deltaAfterRef.current);
     deltaAfterRef.current = null;
     deltaInFlightRef.current = true;
     lastDeltaAtRef.current = Date.now();
@@ -1916,6 +1933,15 @@ export function JobDetail() {
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
     };
   }, [load]);
+
+  // ADAAAA-7997: a page hop to a different job starts with no bucket baseline
+  // and no drag on the delta gate. Without this reset the next job would ask
+  // only for buckets beyond a baseline that belongs to the previous job.
+  useEffect(() => {
+    lastSectionIndexRef.current = -1;
+    deltaAfterRef.current = null;
+    detailReadyRef.current = false;
+  }, [id]);
 
   // Live updates (Inc 5): subscribe to /jobs/:id/events and stream the new
   // analysis windows in (ADAAAA-7742), then tear the subscription down once the

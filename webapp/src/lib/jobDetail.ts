@@ -639,6 +639,28 @@ export async function fetchSectionInspect(id: string, index: number): Promise<Se
 }
 
 /**
+ * ADAAAA-7997: the bucket index an incremental refresh asks from, given how far
+ * the page has already rendered (`lastSectionIndex`) and the lowest index a
+ * queued SSE event asked for (`queued`).
+ *
+ * A page that mounted before the job produced its FIRST window (the live case —
+ * the page opens on the POST /jobs 202) holds no baseline: the composite load
+ * carried zero sections, so `lastSectionIndex` is -1. The composite recovery
+ * poll is muted while the SSE channel is live, so the delta path is the only
+ * way the first highlight card and the first summary-log line can reach that
+ * page. It therefore asks from the top (-1) instead of standing down, and
+ * `mergeDelta` establishes the baseline from the response.
+ *
+ * Otherwise the newest known bucket is always re-requested (`last - 1`) so a
+ * decide note persisted into it is picked up, and a queued event naming an
+ * earlier bucket (a note whose trigger trails the newest bucket) widens that.
+ */
+export function deltaRequestAfter(lastSectionIndex: number, queued: number | null): number {
+  const tail = lastSectionIndex < 0 ? -1 : Math.max(-1, lastSectionIndex - 1);
+  return queued === null ? tail : Math.min(tail, queued);
+}
+
+/**
  * Merge a sections-delta into the sections already rendered. Buckets keep their
  * 3 s order, an incoming bucket REPLACES the stale copy with the same index (the
  * server re-sends the tail bucket so a decide note that landed into it still

@@ -20,6 +20,7 @@ import {
   sectionMatchesSearch,
   sectionMatches,
   mergeSections,
+  deltaRequestAfter,
   SECTION_WINDOW_S,
 } from "./jobDetail";
 
@@ -334,5 +335,26 @@ describe("mergeSections + SECTION_WINDOW_S (ADAAAA-7742)", () => {
     // client-side drift here would make the page ask for the wrong bucket.
     expect(SECTION_WINDOW_S).toBe(3);
     expect(Math.floor(9.4 / SECTION_WINDOW_S)).toBe(3);
+  });
+});
+
+describe("deltaRequestAfter (ADAAAA-7997 live page with no bucket baseline)", () => {
+  it("asks from the top when the page mounted before the job produced its first window", () => {
+    // The live page opens on the POST /jobs 202; the composite mount fetch
+    // carries zero sections, so the baseline is -1. Standing down here froze
+    // the page at the empty state while SSE highlights arrived (QA 7992/7997).
+    expect(deltaRequestAfter(-1, null)).toBe(-1);
+    expect(deltaRequestAfter(-1, 3)).toBe(-1);
+  });
+
+  it("re-requests the newest known bucket so a decide note persisted into it shows", () => {
+    expect(deltaRequestAfter(40, null)).toBe(39);
+    expect(deltaRequestAfter(0, null)).toBe(-1);
+  });
+
+  it("widens to the earlier bucket an SSE event named", () => {
+    expect(deltaRequestAfter(40, 12)).toBe(12);
+    expect(deltaRequestAfter(40, 39)).toBe(39);
+    expect(deltaRequestAfter(40, 99)).toBe(39);
   });
 });
