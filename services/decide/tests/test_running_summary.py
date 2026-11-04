@@ -241,6 +241,7 @@ def test_compact_prompt_blunt_quiet_rule():
     assert "EVERY LEAD names a place this window's frames read" in p
     # a replay/celebration window adds nothing new -> quiet shape even when loud
     assert "adds nothing new: give it the QUIET shape" in p
+    assert "A celebration or replay window NEVER states the goal again" in p
     assert "if it shares its first four words with an earlier line it IS a repeat" in p
     assert "a not_highlight window or a repeat window never carries one" in p
     assert "never reuse the sentence" in p
@@ -312,7 +313,7 @@ def test_compact_prompt_delta_is_bounded():
     # only — the emitted line still fits the same budgets and the field set is
     # unchanged, so tokens per decide are not bought by this edit.
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 12400
+    assert len(_compact_prompt()) <= 12600
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the
