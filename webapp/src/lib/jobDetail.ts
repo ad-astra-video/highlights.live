@@ -250,6 +250,12 @@ export interface JobDetailHighlight {
   reason?: string;
   outcome?: string;
   nearMiss?: boolean;
+  // ADAAAA-7958 (contract v3 §3.4): the stored corroboration flag — `true` only
+  // when an independent signal backed the scoring read. `false` means the page
+  // counts this goal but never asserts it as scored, so the seeded caption and
+  // card titles must not claim it either. Absent on legacy rows and on jobs whose
+  // confirm pass did not run (no evidence either way => the verdict rule decides).
+  corroborated?: boolean;
   status: string;
   clipError?: string;
   // ADAAAA-7248: whether the source this highlight's clip was cut from carried

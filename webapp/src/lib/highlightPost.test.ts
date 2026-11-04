@@ -389,3 +389,50 @@ describe("seeded caption grounding (ADAAAA-7948)", () => {
     expect(caption).not.toContain("Ordoñez");
   });
 });
+
+// ---------------------------------------------------------------------------
+// ADAAAA-7958 (contract v3 §3.4): the seeded caption option and the card titles
+// consume the highlight's stored corroboration flag. QA measured (job 9fecca77)
+// three seeded cards asserting exactly the goals the page called
+// "(0 corroborated) ... counted, never asserted as scored".
+// ---------------------------------------------------------------------------
+describe("seeded caption + card titles consume corroboration (ADAAAA-7958 §3.4)", () => {
+  const GOAL_CLAIM = /\b(?:goal|goals|scores?|scored|scoring|in the net|into the net)\b/i;
+  const measured = hl({
+    outcome: "scoring_play",
+    eventType: "GOAL",
+    reason: "No. 10 strikes the ball into the net",
+  });
+
+  it("an uncorroborated goal seeds no goal claim and no 'Goal:' title", () => {
+    const h = { ...measured, corroborated: false };
+    const titles = postTitles(h);
+    expect(titles.length).toBeGreaterThan(0);
+    for (const t of titles) {
+      expect(t).not.toMatch(GOAL_CLAIM);
+      expect(t.startsWith("Goal")).toBe(false);
+    }
+    expect(suggestCaption(h)).not.toMatch(GOAL_CLAIM);
+  });
+
+  it("a corroborated goal keeps its claim and its 'Goal:' title", () => {
+    const h = { ...measured, corroborated: true };
+    expect(postTitles(h).some((t) => t.startsWith("Goal:"))).toBe(true);
+    const log: SummaryLogEntry[] = [entry(1, 120, "The ball is in the net at the far post")];
+    const withLog = { ...h, localizedTs: 120, start: 113, end: 128 };
+    expect(suggestCaption(withLog, log)).toMatch(/in the net/i);
+    expect(postTitles(withLog, log).some((t) => t.startsWith("Goal:"))).toBe(true);
+  });
+
+  it("no corroboration evidence (legacy / VOD) keeps the shipped verdict behaviour", () => {
+    const h = { ...measured };
+    expect(postTitles(h).some((t) => t.startsWith("Goal:"))).toBe(true);
+  });
+
+  it("the banner-string class never reaches the caption even with a summary-log line", () => {
+    const log: SummaryLogEntry[] = [entry(1, 120, "No. 6 shoots and scores in the box")];
+    const h = hl({ outcome: "scoring_play", eventType: "GOAL", corroborated: false, localizedTs: 120, start: 113, end: 128 });
+    expect(suggestCaption(h, log)).not.toMatch(GOAL_CLAIM);
+    for (const t of postTitles(h, log)) expect(t).not.toMatch(GOAL_CLAIM);
+  });
+});

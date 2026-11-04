@@ -3905,6 +3905,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       summaryLog: job.summaryLog,
       highlights: postable.highlights,
       gameHint: job.gameHint,
+      // ADAAAA-7958: corroboration propagation + emission dedupe are FAST-rail
+      // only (`file` is the long-form VOD path, graded byte-identical, AC8).
+      fastRail: job.source !== "file",
     });
 
     // ADAAAA-7727: the embedded job record is filtered for a non-admin caller
@@ -4001,6 +4004,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         summaryLog: job.summaryLog,
         highlights: postable.highlights,
         gameHint: job.gameHint,
+        // ADAAAA-7958: corroboration propagation + emission dedupe, fast rail only.
+        fastRail: job.source !== "file",
       });
 
       return {

@@ -107,3 +107,42 @@ describe("summaryEntryTimestamp (ADAAAA-7466)", () => {
     expect(summaryEntryTimestamp({ seq: 1, ts: "2026-10-26T10:00:00Z", text: "x" })).toMatch(/\d{2}:\d{2}:\d{2}/);
   });
 });
+
+// ADAAAA-7958 (contract v3 §3.4 + §3.6): the flat Video Summary is a user
+// surface, so an item that asserts a goal the page never corroborated must not
+// render, and a line may not appear more than twice per job.
+describe("Video Summary consumes corroboration + emission dedupe (ADAAAA-7958)", () => {
+  const highlights = [
+    { id: "h1", jobId: "j", clipUri: "/a.mp4", start: 113, end: 128, score: 90, status: "accepted", corroborated: false, createdAt: "2026-11-04T00:00:00Z" },
+  ] as any;
+
+  it("rewrites an uncorroborated goal item and caps a repeated line at two", () => {
+    const html = renderToString(
+      React.createElement(VideoSummary, {
+        entries: [
+          { seq: 1, ts: "t", windowTs: 120, text: "No. 10 strikes the ball into the net" },
+          { seq: 2, ts: "t", windowTs: 200, text: "Player in white moves in center circle." },
+          { seq: 3, ts: "t", windowTs: 205, text: "Player in white moves in center circle." },
+          { seq: 4, ts: "t", windowTs: 210, text: "Player in white moves in center circle." },
+        ],
+        highlights,
+        fastRail: true,
+        defaultOpen: true,
+      })
+    );
+    expect(html).not.toMatch(/into the net/i);
+    expect(html.match(/center circle/g) ?? []).toHaveLength(2);
+  });
+
+  it("VOD / legacy render is unchanged (no corroboration evidence, no dedupe)", () => {
+    const entries = [
+      { seq: 1, ts: "t", windowTs: 120, text: "No. 10 strikes the ball into the net" },
+      { seq: 2, ts: "t", windowTs: 200, text: "Player in white moves in center circle." },
+      { seq: 3, ts: "t", windowTs: 205, text: "Player in white moves in center circle." },
+      { seq: 4, ts: "t", windowTs: 210, text: "Player in white moves in center circle." },
+    ];
+    const html = renderToString(React.createElement(VideoSummary, { entries, highlights, defaultOpen: true }));
+    expect(html).toMatch(/into the net/i);
+    expect(html.match(/center circle/g) ?? []).toHaveLength(3);
+  });
+});
