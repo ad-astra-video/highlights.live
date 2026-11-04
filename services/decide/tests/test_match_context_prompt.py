@@ -67,7 +67,7 @@ STORY = "0-0, Portugal dominating the left channel."
 #: byte-identical through all three edits and still pins e12f4d6f (AC8).
 GOLDEN_PROMPT_SHA = {
     False: "e12f4d6fe48c8b51e82a550d5b80aac46859f8fd159c116986624c76ea972fc2",
-    True: "24dcd5babbe01eab2afe39a36cc1ddf1050a928095a80ae6533bc1d62280baa1",
+    True: "c42e41cc67e6ef461b296745a8f47cd346cbdcbe3da04849bd75ee7086de3ecf",
 }
 
 PORTUGAL_SPAIN = {

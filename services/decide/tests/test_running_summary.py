@@ -256,7 +256,7 @@ def test_compact_prompt_colour_is_a_different_channel():
     # 67 rows (64 %), so the ban list is explicit now.
     assert "no shot, save, block, tackle, interception, pass, miss, post, net, goal, score or keeper save" in p
     assert "write the lead alone with no em-dash" in p
-    assert "The clause is RARE — most lines carry none: at most 1 line in 3" in p
+    assert "About 1 line in 4 carries a clause and NEVER more than 1 line in 3" in p
 
 
 def test_compact_prompt_lowers_the_whole_line_cap_to_140():
