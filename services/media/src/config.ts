@@ -55,6 +55,14 @@ export interface MediaConfig {
    */
   rtcSampleFps: number;
   /**
+   * ADAAAA-7990 (delivery follow-up): how long (ms) a published frame may take to
+   * produce its observation before the relay abandons it. The media node reads
+   * the SAME env name the control plane's media rail uses for its staleness
+   * window (`LIVE_OBSERVE_LAG_BUDGET_S`, default 30 s) so the two rails cannot
+   * drift apart — this is not a second knob, it is the same one.
+   */
+  observeDeadlineMs: number;
+  /**
    * Stable identity of THIS media node (ADAAAA-6869 Phase 4). Published on
    * `/health`, returned to the control plane by `POST /sessions`, and stored per
    * job so Livepeer GPU spend can be attributed per node. One node today; the
@@ -111,6 +119,18 @@ export function rtcSampleFpsFromEnv(env: NodeJS.ProcessEnv = process.env): numbe
   return Math.min(ceiling, Math.max(0.25, floor));
 }
 
+/** ADAAAA-7990 (delivery follow-up): the media node's observation-delivery
+ *  deadline comes from the SAME env name the control plane's media rail uses for
+ *  its staleness window (`LIVE_OBSERVE_LAG_BUDGET_S`, default 30 s; see
+ *  `services/server/src/observe-loop.ts`). Wiring `<= 0` keeps the documented
+ *  "no budget" meaning on the rail side, but the node still needs a deadline to
+ *  bound memory, so it falls back to the 30 s default. */
+export function observeDeadlineMsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+  const sec = Number(env.LIVE_OBSERVE_LAG_BUDGET_S ?? 30);
+  const bounded = Number.isFinite(sec) && sec > 0 ? sec : 30;
+  return Math.round(bounded * 1000);
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
   return {
     port: Number(env.PORT ?? 4070),
@@ -129,6 +149,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     // (LIVE_SAMPLE_BASE_FPS=3), never 1 fps, and bounded by the same
     // LIVE_SAMPLE_MAX_FPS ceiling the control plane resolves against.
     rtcSampleFps: rtcSampleFpsFromEnv(env),
+    // ADAAAA-7990 (delivery follow-up): the relay's delivery deadline is the SAME
+    // lag budget the control plane's media rail uses to accept a frame. One env
+    // name on both sides, so a node cannot out-wait the rail's staleness window.
+    observeDeadlineMs: observeDeadlineMsFromEnv(env),
     // ADAAAA-6869 Phase 4: node identity + advertised capacity + the optional
     // bearer that unlocks the per-session detail surface.
     nodeId: env.MEDIA_NODE_ID ?? "media-0",
