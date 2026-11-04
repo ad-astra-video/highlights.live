@@ -56,9 +56,13 @@ STORY = "0-0, Portugal dominating the left channel."
 
 #: sha256 of build_prompt(...) computed from the code BEFORE this change
 #: (branch feat/adaaa-7855-match-context @ 02e8e93). Any drift is a regression.
+#: `True` (the compact live contract) was re-pinned for ADAAAA-7935, which
+#: intentionally rewrote the fast-rail `runningSummary` instruction into the
+#: play-by-play caption; the no-op property this test guards is unchanged, and
+#: the FULL (`False`) hash still matches the pre-feature value byte-for-byte.
 GOLDEN_PROMPT_SHA = {
     False: "e12f4d6fe48c8b51e82a550d5b80aac46859f8fd159c116986624c76ea972fc2",
-    True: "5a24e83adcdc41c4cd331c33ecdcc51d4763b8c35c71d26b12ecaf4fc394b3a3",
+    True: "d0d2fddecc8d5c937f79d75f7439942898c643c8051829c1c9af43ea882ebfff",
 }
 
 PORTUGAL_SPAIN = {

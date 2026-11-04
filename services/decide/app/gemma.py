@@ -1101,9 +1101,25 @@ _OUTPUT_CONTRACT_COMPACT = (
     "\"ballInNet\": true|false|null, \"scoreboardChanged\": true|false|null, "
     "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<max 12 words, or "
     "null when the hypothesis is not contradicted>\"}, "
-    "\"runningSummary\": \"<the RUNNING story so far, EXTENDED, max 220 chars: ONE "
-    "announcer sentence with the concrete action (MVPNetPlayer scores at 72s), no "
-    "boilerplate opener like 'The video shows'>\"}"
+    # ADAAAA-7935: the fast rail emits ONE play-by-play line per window with an
+    # optional colour beat, not one unbounded announcer sentence. The budgets are
+    # inlined so the model cannot float back to a scene-setting first clause:
+    # lead <= 70, colour <= 40, target <= 110 / HARD MAX 140 (down from 220).
+    "\"runningSummary\": \"<the RUNNING story so far, EXTENDED: ONE play-by-play line per "
+    "window, shape '<PLAY-BY-PLAY LEAD> — <optional COLOR BEAT>'. LEAD: actor + action + "
+    "place, present tense, active voice, max 70 chars — name the player/jersey when the "
+    "frames read one, else the role (the winger, the keeper, the No. 9); lead with the "
+    "event, not the scene. COLOR BEAT: optional, max 40 chars, ONE grounded beat of "
+    "texture (crowd, body language, momentum, bench, conditions), never a second "
+    "description of the same play; about 1 line in 3, fresh not chatty. WHOLE LINE: one "
+    "line, never two sentences of description, target max 110 chars, HARD MAX 140. QUIET "
+    "WINDOW (nothing above threshold): one blunt line, max 8 words. CLOCK: only on "
+    "datable events ('GOAL 72s'), not every line. NEVER open with 'The video shows', 'The "
+    "video begins', 'The video starts with', 'In this segment', 'The scene opens on', 'The "
+    "broadcast cuts to', 'The sequence', 'This window shows'. Color must be attributable "
+    "to this window's frames or transcript — no invented names, scores, kit colours or "
+    "flags. Forward-only: if a STORY SO FAR was given, EXTEND it, never rewrite or delete "
+    "captured events, tighten wording only; if none was given start it fresh.>\"}"
 )
 _OUTPUT_CONTRACT_FULL = (
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "
