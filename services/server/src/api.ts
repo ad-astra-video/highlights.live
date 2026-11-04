@@ -78,6 +78,7 @@ import {
   mergeResumeCheckpoint,
   nextAttemptNumber,
   resumeRetryDelayMs,
+  resumeEligibleSource,
   resumeRetryDue,
   resumeStartTs,
   resumeWarmupFrames,
@@ -1410,7 +1411,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // a throttled checkpoint write may not have landed the newest window.
         analyze: { cursorTs: Math.max(vodResumeCursors.get(jobId) ?? 0, cur?.resume?.analyze?.cursorTs ?? 0) },
       };
-      if (cls.resumable && shouldArmResumeRetry(true, cur?.resume, cfg.vodResumeMaxAttempts)) {
+      // ADAAAA-7907: only a VOD `file` job may be re-armed. A live/browser
+      // share cannot resume (no source to replay) and a `queued` live row would
+      // never be reclaimed by the VOD drain, so it stays terminal with its
+      // attribution instead of being stranded non-terminal.
+      if (
+        cls.resumable &&
+        resumeEligibleSource(cur?.source) &&
+        shouldArmResumeRetry(true, cur?.resume, cfg.vodResumeMaxAttempts)
+      ) {
         const delayMs = resumeRetryDelayMs(retriesUsed, cfg.vodResumeBackoffMs);
         const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
         const resume = mergeResumeCheckpoint(cur?.resume, { ...attemptPatch, nextAttemptAt });
