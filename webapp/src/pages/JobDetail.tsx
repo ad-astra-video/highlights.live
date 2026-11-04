@@ -95,7 +95,17 @@ const INLINE_SCALE = 2;
 /** SSE events that mean the detail payload changed and should be re-fetched. */
 // ADAAAA-8006: `highlightAttested` re-publishes an already-delivered row that a
 // later scoreboard read moved back into the scoring lane, so the card refreshes.
-const REFRESH_EVENTS = ["observation", "candidate", "candidateBlocked", "highlight", "highlightAttested", "progress"];
+// ADAAAA-8032: `clip` is emitted the moment a share's highlight clip lands (mid-
+// session, not only at stop), so the card's player appears without a reload.
+const REFRESH_EVENTS = [
+  "observation",
+  "candidate",
+  "candidateBlocked",
+  "highlight",
+  "highlightAttested",
+  "clip",
+  "progress",
+];
 /** ADAAAA-7742: floor between two incremental section fetches. The debounce
  * coalesces the per-frame SSE burst; the floor keeps a long live job at a
  * bounded request rate (~20-25 tiny fetches/min) while still surfacing a window
@@ -1053,7 +1063,15 @@ export function HighlightCard({
   }
   return (
     <div className="card card-hover min-w-0 overflow-hidden" data-detail-highlight>
-      <VideoClip src={h.clipUri} label={admin ? h.eventType : undefined} error={h.clipError} />
+      <VideoClip
+        src={h.clipUri}
+        label={admin ? h.eventType : undefined}
+        error={h.clipError}
+        // ADAAAA-8032: the wait state counts from the moment the highlight was
+        // accepted, so a live card says "cutting clip… 8s" instead of an
+        // indefinite "clip processing…" for the whole share.
+        waitingSinceMs={h.createdAt ? Date.parse(h.createdAt) : undefined}
+      />
       {/* ADAAAA-7881: the audio state describes the CLIP, so it sits with the
           clip — once, quiet, and never duplicated below the metadata. */}
       {h.hasAudio === false && (
