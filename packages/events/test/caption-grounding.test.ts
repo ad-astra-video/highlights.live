@@ -200,3 +200,37 @@ describe("legitimate non-goal phrasings survive (ADAAAA-7948 follow-up)", () => 
     expect(out).toContain("shot on goal");
   });
 });
+
+describe("internal decision-reason tails and technical terms (ADAAAA-7948, level evidence)", () => {
+  const TAIL =
+    " | celebration of an already-delivered goal (anchor 120.0s, highlight abc): no independent score-transition evidence in this window";
+
+  it("strips the internal audit tail instead of rewriting its words", () => {
+    const out = groundCaption(`The player shoots and the ball enters the net.${TAIL}`, { verdict: "big_play", promptText: PROMPT });
+    expect(out).not.toContain("celebration");
+    expect(out).not.toContain("score-transition");
+    expect(out).not.toContain("shoots-transition");
+    expect(out).toBe("The player shoots and the ball stays out.");
+  });
+
+  it("leaves a hyphenated technical term intact when it survives (no 'shoots-transition')", () => {
+    expect(gateGoalClaims("no independent score-transition evidence", { verdict: "near_miss" })).toBe(
+      "no independent score-transition evidence"
+    );
+  });
+
+  it("rewrites an un-negated net-crossing claim on a non-goal verdict", () => {
+    expect(gateGoalClaims("The ball enters the net.", { verdict: "near_miss" })).toBe("The ball stays out.");
+  });
+
+  it("keeps the NEGATED form — it states the opposite, not a claim", () => {
+    const line = "The ball does not enter the net; the keeper smothers it.";
+    expect(gateGoalClaims(line, { verdict: "near_miss" })).toBe(line);
+  });
+
+  it("does not treat a quoted ALL-CAPS label as a player name", () => {
+    const line = "The ball enters the net and the 'GOL' graphic appears.";
+    const out = groundNames(line, PROMPT);
+    expect(out).toBe(line);
+  });
+});
