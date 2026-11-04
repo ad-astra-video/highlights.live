@@ -395,6 +395,24 @@ def test_cluster_kit_colors_filters_pitch_green():
     assert {c.primary for c in clusters} == {"red"}
 
 
+def test_cluster_kit_colors_minority_junk_cluster_is_not_a_kit():
+    # fe0e3efc pattern (ADAAAA-7981): 43 usable player-crop samples, 38 on
+    # Portugal's red shirt and 5 grass-tinted minority crops. The minority group
+    # cleared the 2-frame floor and was published as the AWAY kit — a colour no
+    # shirt on the pitch has. A cluster below KIT_MIN_CLUSTER_SHARE of the usable
+    # samples must name no colour at all, so the side stays honestly unattributed
+    # instead of carrying a wrong colour.
+    samples = [
+        {"rgb": list(RED), "ts": 10.0 + i % 10, "trackId": f"t{i}", "frameSeq": i}
+        for i in range(38)
+    ] + [
+        {"rgb": [140.0, 161.0, 97.0], "ts": 30.0 + i, "trackId": f"grass{i}", "frameSeq": 100 + i}
+        for i in range(5)
+    ]
+    clusters = cluster_kit_colors(samples)
+    assert [c.primary for c in clusters] == ["red"]
+
+
 def test_cluster_kit_colors_names_the_centroid_not_the_noisiest_crop():
     # Measured on the cited job: distant crops inside one kit cluster read
     # "orange" (skin/warm shading) 94 times against "red" 46, so a majority vote
