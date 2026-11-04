@@ -99,7 +99,14 @@ describe("ADAAAA-7938 prior game state — carried state", () => {
   it("bounds both tails (AC-A3 cost bound)", () => {
     const run = new LiveRunShared({ decideWindowN: 24 });
     const long = "word ".repeat(400).trim();
-    run.noteWindowGameState(10, goalDecision({ runningSummary: long }), {});
+    run.noteWindowGameState(
+      10,
+      goalDecision({
+        runningSummary: long,
+        analysis: { prompt: "p", dataItems: [], frames: [], images: [], asr: { transcript: long } },
+      }),
+      {}
+    );
     const pg = run.priorGameStateFor(20)!;
     expect(pg.story.length).toBeLessThanOrEqual(PRIOR_GAME_STATE_STORY_MAX_CHARS + 1);
     expect(pg.priorAsr.length).toBeLessThanOrEqual(PRIOR_GAME_STATE_ASR_MAX_CHARS + 1);
@@ -110,7 +117,9 @@ describe("ADAAAA-7938 prior game state — carried state", () => {
   it("drops the needsNewScore claim outside the 7865 reach (recall guard)", () => {
     const run = new LiveRunShared({ decideWindowN: 24 });
     run.noteWindowGameState(42.4, goalDecision(), { scoreBoardDelta: LEGIBLE_DELTA });
-    const near = run.priorGameStateFor(42.4 + PRIOR_GAME_STATE_REACH_S);
+    // Stay just inside/outside the reach: `42.4 + 60 - 42.4` is not exactly 60
+    // in binary floating point, and the deterministic rule compares the same way.
+    const near = run.priorGameStateFor(42.4 + PRIOR_GAME_STATE_REACH_S - 0.1);
     expect(near!.needsNewScore).toBe(true);
     const far = run.priorGameStateFor(42.4 + PRIOR_GAME_STATE_REACH_S + 1);
     expect(far!.needsNewScore).toBe(false);
