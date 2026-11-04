@@ -62,10 +62,12 @@ export interface ObservationRelayOptions {
   deadlineMs?: number;
   /** Poll cadence on the relay's serial loop. */
   pollIntervalMs?: number;
-  /** Max frames published-but-not-yet-delivered before new frames are refused.
-   *  Default {@link DEFAULT_OBSERVE_MAX_IN_FLIGHT} (a few frames — see the note
-   *  there: a large window stalls the runner's live subscriber). */
+  /** Max frames published-but-not-yet-delivered before the OLDEST are abandoned.
+   *  Bounds the relay's memory; it is NOT a publish gate (see
+   *  {@link DEFAULT_OBSERVE_MAX_QUEUED}). */
   maxInFlight?: number;
+  /** Alias of `maxInFlight` with the honest name (a queue cap). */
+  maxQueued?: number;
   /** Sampling cadence, reported only (no longer sizes the in-flight window). */
   sampleFps?: number;
   /** Bound on ONE `events-out` read. A read that hangs (go-livepeer's trickle
@@ -102,18 +104,26 @@ export const DEFAULT_OBSERVE_DEADLINE_MS = 30_000;
  *  GET race per in-flight frame (10 concurrent pollers at 4 Hz each). */
 export const DEFAULT_OBSERVE_POLL_MS = 100;
 /**
- * Default in-flight window: a FEW frames, not the lag budget's worth.
+ * Default bound on frames published-but-not-yet-delivered: a QUEUE cap, NOT a
+ * publish gate.
  *
- * Measured on session `376fae8f` (300 s VP8 share, `f269355`, 858 decoded frames
- * at 2.85 fps): with a 45-frame window the node published 58 frames into the
- * runner, and the perceive trickle subscriber STALLED at the oldest missing seq
- * — go-livepeer's live edge only serves a segment while it is still buffered,
- * and the runner's `_media_loop` retries the same `want` forever rather than
- * skipping. From then on it produced no observation at all (`delivered=12`,
- * `refused=800`). A small window paces the publisher to what the runner actually
- * consumes, so the segment never leaves the live buffer and nothing stalls.
+ * Publishing must stay DENSE. go-livepeer's video-in trickle is a STRICTLY
+ * ordered stream: a frame the node does not publish leaves a permanent hole, and
+ * the runner's serial subscriber re-requests that seq forever instead of skipping
+ * it. Measured on session `0251b715` (300 s VP8 share, `ee41080`, 858 decoded
+ * frames): the paced publisher never posted video-in idx 4/5, the broker read
+ * `next=4`, the runner answered `GET segment idx=4 exists?=false` for the rest of
+ * the share, and the whole run delivered **3** observations. An earlier 45-frame
+ * gate on session `376fae8f` posted 58 frames and then stalled the same way.
+ *
+ * So the backlog is bounded here instead: past this many queued frames the OLDEST
+ * undelivered ones are abandoned (`expired`, rate-limit logged with
+ * `obs-dropped`), while every decoded frame still goes to the runner.
  */
-export const DEFAULT_OBSERVE_MAX_IN_FLIGHT = 4;
+export const DEFAULT_OBSERVE_MAX_QUEUED = 45;
+/** @deprecated Use {@link DEFAULT_OBSERVE_MAX_QUEUED}: this is a queue cap now,
+ *  not a publish gate (see the constant's note for the measured reason). */
+export const DEFAULT_OBSERVE_MAX_IN_FLIGHT = DEFAULT_OBSERVE_MAX_QUEUED;
 /** Bound on a single `events-out` read. A GET that has not answered in 2 s is
  *  treated as "no observation yet"; the deadline still governs abandonment. */
 export const DEFAULT_OBSERVE_READ_TIMEOUT_MS = 2_000;
@@ -123,13 +133,16 @@ const noop = () => {};
 export class ObservationRelay {
   private readonly deadlineMs: number;
   private readonly pollMs: number;
-  private readonly maxInFlight: number;
+  private readonly maxQueued: number;
   private readonly readTimeoutMs: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly log: (line: string) => void;
   /** FIFO of published-but-undelivered frames (publish order). */
   private queue: Array<{ frame: ObservationFrame; publishedAt: number }> = [];
+  /** The entry the delivery loop is currently reading (never evicted by the cap
+   *  while in flight; the loop counts its own expiry). */
+  private headInFlight: { frame: ObservationFrame; publishedAt: number } | null = null;
   /** Slots reserved for frames whose publish is still in progress. */
   private reserved = 0;
   private running = false;
@@ -142,9 +155,12 @@ export class ObservationRelay {
   constructor(private readonly opts: ObservationRelayOptions) {
     this.deadlineMs = Math.max(1_000, opts.deadlineMs ?? DEFAULT_OBSERVE_DEADLINE_MS);
     this.pollMs = Math.max(10, opts.pollIntervalMs ?? DEFAULT_OBSERVE_POLL_MS);
-    // A SMALL window (see DEFAULT_OBSERVE_MAX_IN_FLIGHT): pace the publisher to
-    // the runner instead of filling the live buffer, which stalls the runner.
-    this.maxInFlight = Math.max(1, opts.maxInFlight ?? DEFAULT_OBSERVE_MAX_IN_FLIGHT);
+    // A QUEUE cap (see DEFAULT_OBSERVE_MAX_QUEUED): publishing stays dense, and
+    // only frames whose observation never arrived are abandoned.
+    this.maxQueued = Math.max(
+      2,
+      opts.maxQueued ?? opts.maxInFlight ?? DEFAULT_OBSERVE_MAX_QUEUED,
+    );
     this.readTimeoutMs = Math.max(100, opts.readTimeoutMs ?? DEFAULT_OBSERVE_READ_TIMEOUT_MS);
     this.now = opts.now ?? (() => Date.now());
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -152,19 +168,18 @@ export class ObservationRelay {
   }
 
   /**
-   * Reserve a slot BEFORE the frame is published. Returns false when the
-   * in-flight window is full — the caller must then NOT publish the frame (that
-   * is the whole point: never hand the runner frames whose observation the rail
-   * would drop as stale). Counted as `refused`.
+   * Admit a frame for publishing. ALWAYS true (except after close).
+   *
+   * This used to gate publishing on the in-flight window, which paced the node to
+   * the runner — and left HOLES in video-in that a strictly-ordered trickle
+   * stream can never fill, so the runner's serial subscriber blocked on the hole
+   * for the rest of the session (session `0251b715`: video-in idx 4/5 never
+   * posted, broker `next=4`, runner `exists?=false` forever, 3 observations in
+   * 300 s). The queue is bounded in {@link commit} instead, where abandoning a
+   * frame cannot change which seqs the runner sees.
    */
   reserve(): boolean {
-    if (this.closed) return false;
-    if (this.reserved + this.queue.length >= this.maxInFlight) {
-      this.counters.refused++;
-      return false;
-    }
-    this.reserved++;
-    return true;
+    return !this.closed;
   }
 
   /** Release a reservation whose publish failed (nothing to observe). */
@@ -178,6 +193,22 @@ export class ObservationRelay {
     if (this.closed) return;
     this.counters.published++;
     this.queue.push({ frame, publishedAt: this.now() });
+    // Bound the queue by abandoning the OLDEST undelivered frames — never by
+    // skipping a publish (that is what wedges the runner). The head currently
+    // being read is kept: the loop finishes it and counts it itself.
+    while (this.queue.length > this.maxQueued) {
+      const at = this.queue.findIndex((e) => e !== this.headInFlight);
+      if (at < 0) break;
+      const gone = this.queue.splice(at, 1)[0];
+      this.counters.expired++;
+      this.expiryLogs++;
+      if (this.expiryLogs === 1 || this.expiryLogs % 10 === 0) {
+        this.log(
+          `[rtc] obs-dropped seq=${gone.frame.seq} queued=${this.queue.length} ` +
+            `expired=${this.counters.expired} (backlog cap ${this.maxQueued})`,
+        );
+      }
+    }
     this.kick();
   }
 
@@ -256,10 +287,15 @@ export class ObservationRelay {
     try {
       while (!this.closed && this.queue.length > 0) {
         const head = this.queue[0];
+        this.headInFlight = head;
         const deadline = head.publishedAt + this.deadlineMs;
         let obs: any = null;
         let skipped = false;
         while (!this.closed) {
+          // The backlog cap may have abandoned the head while we were waiting (it
+          // never evicts the in-flight head, but a teardown/re-kick can leave a
+          // stale reference): stop working on an entry that is no longer queued.
+          if (!this.queue.includes(head)) break;
           obs = await this.readBounded(head.frame.seq);
           if (obs) break;
           // Fast-forward detection: the runner consumes video-in in seq order, but
@@ -279,7 +315,10 @@ export class ObservationRelay {
           if (this.now() >= deadline) break;
           await this.sleep(this.pollMs);
         }
-        this.queue.shift();
+        this.headInFlight = null;
+        const at = this.queue.indexOf(head);
+        if (at < 0) continue; // abandoned by the backlog cap (counted there)
+        this.queue.splice(at, 1);
         if (obs) {
           const lagMs = Math.max(0, this.now() - head.publishedAt);
           if (lagMs > this.counters.maxLagMs) this.counters.maxLagMs = lagMs;

@@ -731,18 +731,14 @@ export class MediaServer {
   ) {
     const p = stream.provisioned;
     const relay = this.observeRelay(stream);
-    if (!relay.reserve()) {
-      // Backpressure: the runner is still working through the frames we already
-      // published. Skipping this frame keeps the rail live (fresh frames, bounded
-      // lag) instead of queueing observations past the lag budget. Counted.
-      return;
-    }
-    try {
-      await this.orch.publishFrame(p, seq, jpeg, ts);
-    } catch (e) {
-      relay.abort();
-      throw e;
-    }
+    // Publish EVERY decoded frame. go-livepeer's video-in trickle is a strictly
+    // ordered stream: a frame we do not publish leaves a permanent HOLE, and the
+    // perceive runner's serial subscriber re-requests that seq forever instead of
+    // skipping it (measured session `0251b715`: paced publishing never posted
+    // idx 4/5, broker `next=4`, runner `GET idx=4 exists?=false` for the rest of
+    // the share, 3 observations in 300 s). The backlog is bounded in the relay
+    // (oldest undelivered frames expire, counted) instead of at the publish site.
+    await this.orch.publishFrame(p, seq, jpeg, ts);
     relay.commit({ seq, ts, jpeg, socket, decodeLatencyMs } satisfies ObservationFrame);
   }
 
