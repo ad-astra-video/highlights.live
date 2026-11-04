@@ -171,56 +171,71 @@ export function appendSummaryEntry(
   // `grounding`, so its items stay byte-identical (AC8).
   const rawText = delta || summary;
   const grounding = meta?.grounding;
-  let text = grounding ? groundSummaryText(rawText, grounding) : rawText;
-  // ADAAAA-7956 (contract v3 rule 2): on the fast rail a line the job has
-  // already emitted is not appended again — the story log cannot accumulate
-  // duplicates (it reads as a story, not a loop). The bounded `runningSummary`
-  // still advances (it is model input for the next window), and when every line
-  // of the pass is a repeat the log simply gains no row. VOD supplies no
-  // `grounding`, so its entries stay byte-identical (AC8).
-  // ADAAAA-7962 (contract v4 §3.7): dedupe at the SAME seam, capped at the
-  // contract's max (2 identical delivered lines per job) — not "drop every
-  // repeat". The stored set is then exactly the set the page renders, so the
-  // API cannot ship a row the page would never show (v3 stored 27, page 26).
-  const deduped = grounding
-    ? dedupeStoredLines(text, log.map((e) => e.text), MAX_LINE_OCCURRENCES)
-    : text;
-  if (!deduped) {
+  const verdict = grounding ? ((grounding.verdict ?? null) as SummaryLogEntry["verdict"]) : undefined;
+  // ADAAAA-7961: a 15 s summary row holds ONE line. A pass that adds several
+  // lines used to store them as a single newline-joined row, so the page showed
+  // two sentences in one row (`Player in possession in center circle.` /
+  // `No. 10 strikes ball into net`). Each added line is its own row now. VOD
+  // passes no `grounding`, so its entry stays byte-identical (AC8).
+  const rawRows = grounding ? rawText.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+  const rows = rawRows.length > 0 ? rawRows : [rawText];
+  const storedTexts = log.map((e) => e.text);
+  const quietRows = log.filter((e) => isQuietVerdict((e as { verdict?: string | null }).verdict));
+  let quietSeen = quietRows.length;
+  let quietColourSeen = quietRows.filter((e) => captionColour(e.text ?? "")).length;
+  const keptRows: SummaryLogEntry[] = [];
+  for (const raw of rows) {
+    // ADAAAA-7948 (Inc 3): the grounding gate. Every FAST caption is filtered
+    // before it becomes a user-visible Video Summary item: no goal claim without
+    // the window's own verdict, no name the window's prompt cannot corroborate,
+    // no internal token. The rolling `runningSummary` is deliberately NOT gated —
+    // it is model input for the next window, not customer copy.
+    const grounded = grounding ? groundSummaryText(raw, grounding) : raw;
+    // ADAAAA-7956 (contract v3 rule 2) + ADAAAA-7962 (v4 §3.7): a line the job
+    // has already emitted is not appended again, capped at the contract's max (2
+    // identical delivered lines per job) — not "drop every repeat". De-dup reads
+    // the STORED log plus the rows this same pass already kept, so a pass cannot
+    // duplicate itself.
+    const priorKept = keptRows.map((r) => r.text);
+    const deduped = grounding
+      ? dedupeStoredLines(grounded, [...storedTexts, ...priorKept], MAX_LINE_OCCURRENCES)
+      : grounded;
+    if (!deduped) continue;
+    // ADAAAA-7962 (contract v4 §3.5): quiet rows may carry colour on at most 40%
+    // of quiet rows. The budget is computed from the STORED log, so it holds for
+    // the delivered set without a second build at read time.
+    let delivered = deduped;
+    const quiet = grounding && isQuietVerdict(verdict);
+    if (quiet && captionColour(delivered)) {
+      if (quietColourSeen + 1 > Math.ceil(MAX_QUIET_COLOUR_SHARE * (quietSeen + 1))) {
+        delivered =
+          dedupeStoredLines(dropColourClause(delivered), [...storedTexts, ...priorKept], MAX_LINE_OCCURRENCES) || deduped;
+      }
+    }
+    if (quiet) {
+      quietSeen += 1;
+      if (captionColour(delivered)) quietColourSeen += 1;
+    }
+    keptRows.push({
+      seq: seq + keptRows.length,
+      ts: new Date().toISOString(),
+      ...(windowTs != null ? { windowTs } : {}),
+      ...(verdict ? { verdict } : {}),
+      // The per-window content the model added this pass; fall back to the whole
+      // bounded summary so a pass is never silently dropped from the log.
+      text: delivered,
+      // ADAAAA-7965 (contract v5 §3.1, R18): when the delivered row carries a
+      // colour beat, store the measurement it was derived from and the frame that
+      // confirms it. A row without `colour` carries no beat.
+      ...(grounding?.colourSignal && captionColour(delivered) ? { colour: grounding.colourSignal } : {}),
+      // ADAAAA-7962 (contract v4 §3.1): exactly one AUDIT-ONLY raw field per row,
+      // set only when the gate changed what is delivered. Never a narrative.
+      ...(grounding && delivered !== raw && raw.trim() ? { text_raw: raw } : {}),
+    });
+  }
+  if (keptRows.length === 0) {
     return store.patchJob(jobId, { runningSummary: summary }).then(() => log);
   }
-  // ADAAAA-7962 (contract v4 §3.5): quiet rows may carry colour on at most 40%
-  // of quiet rows. The budget is computed from the STORED log, so it holds for
-  // the delivered set without a second build at read time.
-  const verdict = grounding ? ((grounding.verdict ?? null) as SummaryLogEntry["verdict"]) : undefined;
-  let delivered = deduped;
-  if (grounding && isQuietVerdict(verdict) && captionColour(delivered)) {
-    const quiet = log.filter((e) => isQuietVerdict((e as { verdict?: string | null }).verdict));
-    const quietColour = quiet.filter((e) => captionColour(e.text ?? "")).length;
-    if (quietColour + 1 > Math.ceil(MAX_QUIET_COLOUR_SHARE * (quiet.length + 1))) {
-      delivered = dedupeStoredLines(
-        dropColourClause(delivered),
-        log.map((e) => e.text),
-        MAX_LINE_OCCURRENCES
-      ) || deduped;
-    }
-  }
-  const entry: SummaryLogEntry = {
-    seq,
-    ts: new Date().toISOString(),
-    ...(windowTs != null ? { windowTs } : {}),
-    ...(verdict ? { verdict } : {}),
-    // The per-window content the model added this pass; fall back to the whole
-    // bounded summary so a pass is never silently dropped from the log.
-    text: delivered,
-    // ADAAAA-7965 (contract v5 §3.1, R18): when the delivered row carries a
-    // colour beat, store the measurement it was derived from and the frame that
-    // confirms it. A row without `colour` carries no beat, so a grader can tell
-    // a derived beat from a forwarded one from the record alone.
-    ...(grounding?.colourSignal && captionColour(delivered) ? { colour: grounding.colourSignal } : {}),
-    // ADAAAA-7962 (contract v4 §3.1): exactly one AUDIT-ONLY raw field per row,
-    // set only when the gate changed what is delivered. Never a narrative.
-    ...(grounding && delivered !== rawText && rawText.trim() ? { text_raw: rawText } : {}),
-  };
-  const nextLog = [...log, entry];
+  const nextLog = [...log, ...keptRows];
   return store.patchJob(jobId, { runningSummary: summary, summaryLog: nextLog }).then(() => nextLog);
 }

@@ -314,7 +314,7 @@ describe("appendSummaryEntry duplicate lines (ADAAAA-7956 rule 2)", () => {
     expect(s.getJob(job.id)!.runningSummary).toBe("Player in blue moves ball in center circle.");
   });
 
-  it("appends the new lines of a multi-line pass and skips only the repeats", async () => {
+  it("appends one row per new line of a multi-line pass and skips only the repeats", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
     await appendSummaryEntry(s, job.id, "Kickoff at center circle.\nPlayer in blue dribbles.", {
@@ -328,10 +328,15 @@ describe("appendSummaryEntry duplicate lines (ADAAAA-7956 rule 2)", () => {
       { windowTs: 3, grounding: GROUNDING }
     );
     const log = s.getJob(job.id)!.summaryLog!;
+    // ADAAAA-7961: a Video Summary row renders ONE line. The pass's new lines are
+    // separate rows (v1-v5 joined them into one entry, so the page showed two
+    // sentences inside a single 15 s row), and only the repeat is skipped.
     expect(log.map((e) => e.text)).toEqual([
-      "Kickoff at center circle.\nPlayer in blue dribbles.",
+      "Kickoff at center circle.",
+      "Player in blue dribbles.",
       "Keeper clears at the near post.",
     ]);
+    expect(log.map((e) => e.seq)).toEqual([1, 2, 3]);
   });
 
   it("keeps appending distinct lines (seq stays monotonic)", async () => {
