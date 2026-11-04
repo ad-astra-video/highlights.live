@@ -201,6 +201,20 @@ export function timeTotalFromNodes(b: Pick<VodBreakdown, "time">): number {
   return (b.time.nodes || []).reduce((sum, n) => sum + (n.s || 0), 0);
 }
 
+/**
+ * True when the time lens has something to draw.
+ *
+ * The server ALWAYS returns its six time nodes — zeroed when `timed === 0` — so
+ * `nodes.length > 0` is not a usable test: it drew a "Per request · 0.00s ·
+ * 100%" sankey of six zero-height bands on the live build (verified on
+ * `index-BuK6lY6o.js`, 20 sampled / 0 timed). A chart of zeros is a lie about
+ * where the time went, so the sample itself decides.
+ */
+export function hasTimeSample(b: Pick<VodBreakdown, "timed" | "time">): boolean {
+  if (!(b.timed > 0)) return false;
+  return (b.time.totalS || 0) > 0 || timeTotalFromNodes(b) > 0;
+}
+
 /** Per-request → total multiplier. `Per request` is the default because the ask
  * is phrased in averages; `Total` is what an operator reconciles against the
  * month. Cost scales by the metered sample, time by the timed sample — the

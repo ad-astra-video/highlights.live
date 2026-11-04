@@ -6,6 +6,8 @@ import {
   createVodBreakdownStore,
   emptyStateLine,
   fetchVodBreakdown,
+  formatUsd,
+  hasTimeSample,
   isEmptyBreakdown,
   MODE_LABELS,
   overviewItems,
@@ -315,11 +317,12 @@ export function CostTimeView({
           </div>
           <div className="mt-3 flex flex-col gap-3">
             <SankeyChart kind="cost" geometry={buildCostSankey(data, state.mode)} title="Cost" />
-            {data.time.nodes && data.time.nodes.length > 0 ? (
+            {hasTimeSample(data) ? (
               <SankeyChart kind="time" geometry={buildTimeSankey(data, state.mode)} title="Time" />
             ) : (
-              // Every request in the window predates stage timing — say so
-              // instead of drawing an empty frame.
+              // Every request in the window predates stage timing — the server
+              // still returns six ZEROED nodes, so the sample decides, not the
+              // node count; say so instead of drawing a chart of zeros.
               <div className="text-xs text-mut" data-cost-time-no-time>
                 No stage timings recorded in {scopeWindowLabel(data)} — the time view needs instrumented
                 requests.
@@ -328,8 +331,8 @@ export function CostTimeView({
           </div>
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-mut" data-cost-time-footnote>
             <span data-cost-time-basis>
-              basis: list meter (decide $ {data.rates.decideFeeUsd.toFixed(2)}/call · perceive $
-              {data.rates.perceivePerHourUsd.toFixed(2)}/hr) — not COGS
+              basis: list meter (decide {formatUsd(data.rates.decideFeeUsd)}/call · perceive{" "}
+              {formatUsd(data.rates.perceivePerHourUsd)}/hr) — not COGS
             </span>
             <span data-cost-time-denominators>
               cost n={data.metered} · time n={data.timed}
