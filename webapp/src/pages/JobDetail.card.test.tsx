@@ -162,10 +162,9 @@ describe("AC2 — no internal badge, no raw status enum (ADAAAA-7881)", () => {
         })
       );
       expect(count(html, "data-detail-rejected")).toBe(1);
-      // The note names the control that is actually on the card.
-      expect(html).toContain(
-        "Rejected — hidden from the public feed. Undo reject restores it within the recover window."
-      );
+      // ADAAAA-7915: plain recovery copy that names the control on the card.
+      // No bare status token, so a customer session renders it unchanged.
+      expect(html).toContain("Undo reject restores this clip within its recover window.");
       // Recovery guidance, not a badge: no bare status label anywhere.
       expect(html).not.toContain(">rejected<");
       expect(html).not.toContain(">accepted<");

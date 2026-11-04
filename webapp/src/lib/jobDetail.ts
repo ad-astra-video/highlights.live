@@ -471,6 +471,53 @@ export async function fetchJobDetail(id: string, opts: { inspect?: boolean } = {
 }
 
 /**
+ * ADAAAA-7915 (increment 3): the RAW highlight audit rows for one job.
+ *
+ * `fetchJobDetail` cannot answer "which clips did I reject?" — its `highlights`
+ * is the POSTABLE projection (`buildPostableHighlights` drops every
+ * `status === "rejected"` row). `GET /jobs/:id` returns
+ * `store.highlightsForJob(job.id)` owner-or-admin scoped, so the page reads the
+ * same rows the review endpoint writes and a rejected clip stays reachable
+ * after a reload. Read-only: no new server route, no GPU.
+ */
+export async function fetchJobHighlights(id: string): Promise<JobDetailHighlight[]> {
+  const r = await api<{ highlights?: JobDetailHighlight[] }>(`/jobs/${id}`);
+  return r?.highlights ?? [];
+}
+
+/**
+ * ADAAAA-7915: the rows the hidden-clip strip renders — the caller's own
+ * rejected rows, minus anything the accepted feed already shows (a stale raw
+ * read must never double-render one clip). Pure so the reject -> strip and
+ * undo -> back-in-feed transitions are unit-testable without a DOM.
+ */
+export function rejectedStripRows(
+  raw: JobDetailHighlight[] | null | undefined,
+  acceptedFeed: JobDetailHighlight[] | null | undefined,
+): JobDetailHighlight[] {
+  const inFeed = new Set((acceptedFeed ?? []).map((h) => h.id));
+  return (raw ?? []).filter((h) => h.status === "rejected" && !inFeed.has(h.id));
+}
+
+/**
+ * ADAAAA-7915: apply a just-submitted review to the raw rows so the strip moves
+ * on the same tick as the click (the authoritative re-read reconciles after).
+ * A restore flips the row to `accepted` and the strip filter drops it; a reject
+ * inserts the row when the raw cache predates it.
+ */
+export function applyReviewToRawRows(
+  raw: JobDetailHighlight[] | null | undefined,
+  reviewed: JobDetailHighlight,
+  status: "accepted" | "rejected",
+): JobDetailHighlight[] {
+  const rows = raw ?? [];
+  const hit = rows.some((h) => h.id === reviewed.id);
+  return hit
+    ? rows.map((h) => (h.id === reviewed.id ? { ...h, status } : h))
+    : [...rows, { ...reviewed, status }];
+}
+
+/**
  * ADAAAA-7742: the fixed bucket width the server partitions frames into
  * (`SECTION_WINDOW` in services/server/src/job-detail.ts). Section index =
  * floor(timestamp / SECTION_WINDOW_S), so the index is stable and monotonic and
