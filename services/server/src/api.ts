@@ -201,6 +201,26 @@ export async function resolveSampleFps(
   return Math.min(maxFps, Math.max(baseFps, sampleFps));
 }
 
+/** ADAAAA-7990: ONE resolution source for the live sampling cadence.
+ *
+ * Both live rails resolve their rate here: the RTMP/screen `LiveIngest` pull
+ * path and the browser/media-node (`MediaRailObserver` + `WebRtcIngestSession`)
+ * path, which used to sample at a hard-coded 1 fps (`sampleFps ?? 1` in
+ * `services/media/src/rtc.ts`) while ADAAAA-6796 had already funded 3 fps
+ * (`LIVE_SAMPLE_BASE_FPS`) on the analyzer path. Measured delivery on job
+ * `6d48c786` was 0.91 fps against that funded 3 fps baseline.
+ *
+ * Do not add a second knob: the base/cap/headroom all come from the existing
+ * live config, and the media node reads the same env names only as a fallback.
+ */
+export async function resolveLiveSampleFps(cfg: ServerConfig): Promise<number> {
+  return resolveSampleFps(cfg, {
+    defaultFps: cfg.liveSampleBaseFps,
+    maxFps: cfg.liveSampleMaxFps,
+    headroom: cfg.liveSampleHeadroom,
+  });
+}
+
 /** Perceive control types the server forwards to a session (INC-6 find-and-track
  * plus calibration configure). Best-effort: the console acks the recorded intent
  * and a dropped forward is logged, never surfaced.
@@ -654,10 +674,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // browser reconfigures its peer with the relay on every offer.
       return { wsUrl: existing.wsUrl, mediaSessionId: existing.sessionId, mediaOrigin: browserOrigin, iceServers: browserJobs.get(jobId)?.mediaIceServers };
     }
+    // ADAAAA-7990: resolve the live sampling rate HERE (one resolution source,
+    // `resolveLiveSampleFps` = `resolveSampleFps` over `LIVE_SAMPLE_BASE_FPS` /
+    // `LIVE_SAMPLE_MAX_FPS`) and hand it to the media node with the session.
+    // The media node used to ignore the rate entirely (`sampleFps ?? 1` in
+    // `services/media/src/rtc.ts`), so a browser/screen share delivered 0.91
+    // fps measured on job `6d48c786` while 3 fps was already funded.
+    const existingJob = store.getJob(jobId);
+    const sampleFps = existingJob?.sampleFps ?? (await resolveLiveSampleFps(cfg));
+    // Record the resolved rate on the job: AC1 reads it from the job record, and
+    // the media rail's decide window uses the same cadence grid.
+    if (!existingJob?.sampleFps) await store.patchJob(jobId, { sampleFps });
     const r = await fetch(`${internalOrigin}/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId }),
+      body: JSON.stringify({ jobId, sampleFps }),
     });
     if (r.status !== 200) throw new Error(`media provision failed: HTTP ${r.status} ${await r.text()}`);
     const body: any = await r.json();
@@ -957,9 +988,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         );
       }
     };
+    // ADAAAA-7990: the decide window resolves frames onto the SAME cadence the
+    // rail is sampled at (the control plane's resolved live rate), so denser
+    // sampling means MORE frames inside the unchanged ~10 s window / <=30-frame
+    // cap — never a longer window. Before this the rail's grid sat at the
+    // default 2 fps regardless of the resolved rate.
+    const railFps = store.getJob(job.id)?.sampleFps ?? cfg.liveSampleBaseFps;
     const rail = new MediaRailObserver(
       {
         jobId: job.id,
+        fps: railFps,
         stageA: shared.stageAOutcomes,
         signalGate: cfg.observeSignalGate,
         signalGateOpts: buildObserveSignalGateOpts(cfg),
@@ -3525,11 +3563,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // 3 fps (liveSampleBaseFps) so the decide read samples the dense
         // crossing/conversion window for every live job; the capability cap
         // (liveSampleMaxFps) bounds cost per deployment.
-        const sampleFps = await resolveSampleFps(cfg, {
-          defaultFps: cfg.liveSampleBaseFps,
-          maxFps: cfg.liveSampleMaxFps,
-          headroom: cfg.liveSampleHeadroom,
-        });
+        // ADAAAA-7990: shared resolution with the media (browser/RTMP) rail.
+        const sampleFps = await resolveLiveSampleFps(cfg);
         await store.patchJob(job.id, { sampleFps });
         // ADAAAA-7741: anchor the content clock at the live tap's start so the
         // read-time liveProgress can measure wall-vs-content lag exactly.
@@ -4625,7 +4660,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // posting sampled frames over the WS. wsUrl is kept for the WS fallback.
       // iceServers lets the browser configure TURN so its peer allocates a
       // relay candidate the media server can reach (ADAAAA-7353).
-      return { wsUrl, mediaSessionId, mediaOrigin, rtc: true, iceServers };
+      // ADAAAA-7990: hand the resolved live sampling cadence to the client so a
+      // capture UI/QA run can state the rate the rail is decoding at (the media
+      // node also returns it on its own POST /sessions response).
+      const sampleFps = store.getJob(req.params.id)?.sampleFps ?? cfg.liveSampleBaseFps;
+      return { wsUrl, mediaSessionId, mediaOrigin, rtc: true, iceServers, sampleFps };
     } catch (e: any) {
       // ADAAAA-7325: perceive capacity exhaustion surfaces through provisionMedia
       // as "no capacity available for runner" — return 503 (not the catch-all
