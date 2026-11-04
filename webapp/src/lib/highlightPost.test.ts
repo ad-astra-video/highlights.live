@@ -5,6 +5,7 @@ import {
   captionNarrative,
   clipFileName,
   clipUrl,
+  highlightGrounding,
   highlightInstant,
   humanEventLabel,
   MAX_CAPTION_CHARS,
@@ -472,5 +473,40 @@ describe("seeded caption options carry the v3 gate (ADAAAA-7957)", () => {
   it("a raw decide reason on the card is name-gated (no upstream certification)", () => {
     const h = hl({ localizedTs: 40, reason: "David Saez shoots from the edge", outcome: "not_highlight" });
     expect(suggestCaption(h)).not.toMatch(/David|Saez/i);
+  });
+});
+
+// ADAAAA-7958: the card's seeded strings must agree with the ladder banner's OWN
+// corroboration rule (`corroborated === true || goalConfirmed === "confirmed_goal"`).
+// The measured job 9fecca77 carried NEITHER flag on its three accepted goals, so
+// the banner read "3 of 3 ... never asserted as scored" while the cards offered
+// "Goal: …" — the exact contradiction AC7 fails on.
+describe("seeded card strings agree with the ladder banner (ADAAAA-7958 §3.4)", () => {
+  const GOAL_CLAIM = /\b(?:goal|goals|scores?|scored|scoring)\b/i;
+  const bare = hl({ outcome: "scoring_play", eventType: "GOAL", localizedTs: 120, start: 113, end: 128, reason: "No. 3 drives into the box and scores" });
+  const log: SummaryLogEntry[] = [entry(1, 120, "No. 3 drives into the box and scores")];
+
+  it("fast rail, no corroboration evidence: no 'Goal:' title, no goal claim", () => {
+    for (const h of [bare, { ...bare, corroborated: false }]) {
+      const titles = postTitles(h, log, highlightGrounding(h, log, true));
+      expect(titles.some((t) => t.startsWith("Goal"))).toBe(false);
+      for (const t of titles) expect(t).not.toMatch(GOAL_CLAIM);
+      expect(suggestCaption(h, log, highlightGrounding(h, log, true))).not.toMatch(GOAL_CLAIM);
+    }
+  });
+
+  it("fast rail, confirmed_goal: the claim and the 'Goal:' title survive", () => {
+    const h = { ...bare, goalConfirmed: "confirmed_goal" as const };
+    expect(postTitles(h, log, highlightGrounding(h, log, true)).some((t) => t.startsWith("Goal:"))).toBe(true);
+  });
+
+  it("fast rail, corroborated flag: the claim survives", () => {
+    const h = { ...bare, corroborated: true };
+    expect(postTitles(h, log, highlightGrounding(h, log, true)).some((t) => t.startsWith("Goal:"))).toBe(true);
+  });
+
+  it("VOD (fastRail false) keeps the shipped verdict-only behaviour — AC8", () => {
+    expect(postTitles(bare, log, highlightGrounding(bare, log, false)).some((t) => t.startsWith("Goal:"))).toBe(true);
+    expect(postTitles(bare, log)).toEqual(postTitles(bare, log, highlightGrounding(bare, log)));
   });
 });

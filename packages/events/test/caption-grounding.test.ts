@@ -23,6 +23,7 @@ import {
   groundSummaryText,
   groundNames,
   humanEventLabel,
+  isCorroboratedHighlight,
   MAX_LINE_OCCURRENCES,
   QUIET_MAX_WORDS,
   stripInternalTokens,
@@ -781,5 +782,40 @@ describe("one implementation, every surface (§3)", () => {
     for (const line of [...MEASURED_QUIET_OFFENDERS, "David Saez scores — crowd erupts"]) {
       expect(groundCaption(line, ctx).length).toBeLessThanOrEqual(line.length);
     }
+  });
+});
+
+describe("corroboration uses the banner's own rule (§3.4)", () => {
+  // `goalTimelineFrom` counts a goal as corroborated when `corroborated === true`
+  // OR the Stage-2 confirm said `confirmed_goal`. The propagation must agree with
+  // that exactly, or the banner and the strings disagree on the same page.
+  const win = (over: Record<string, unknown>) => ({ start: 100, end: 115, ...over });
+
+  it("a confirmed_goal corroborates even when the flag is absent", () => {
+    expect(isCorroboratedHighlight(win({ goalConfirmed: "confirmed_goal" }))).toBe(true);
+    expect(windowCorroborated([win({ goalConfirmed: "confirmed_goal" })], 108)).toBe(true);
+  });
+
+  it("absent evidence is NOT corroborated (the banner counts it as uncorroborated)", () => {
+    expect(isCorroboratedHighlight(win({}))).toBe(false);
+    expect(windowCorroborated([win({})], 108)).toBe(false);
+    expect(windowCorroborated([win({ goalConfirmed: "near_miss" })], 108)).toBe(false);
+  });
+
+  it("fails closed on a net-crossing shape the claim lexicon has not learned", () => {
+    // The measured chapter lead: "No. 8 headers ball into net — crowd erupts".
+    const out = gateUncorroboratedGoal("No. 8 headers ball into net — crowd erupts", false);
+    expect(out).not.toMatch(/\b(?:in|into)\s+(?:the\s+)?net\b/i);
+    expect(out).toContain("headers ball wide");
+    expect(out.length).toBeLessThanOrEqual("No. 8 headers ball into net — crowd erupts".length);
+  });
+
+  it("an explicit non-goal read keeps asserting no goal", () => {
+    // The claim lexicon's own cosmetics on negatives belong to the Inc 5 gate;
+    // the corroboration rule only has to guarantee no goal is ASSERTED, so the
+    // net-crossing form is what must be gone.
+    const out = gateUncorroboratedGoal("The ball is in the middle of the field and no goal is scored.", false);
+    expect(out).not.toMatch(/\b(?:in|into)\s+(?:the\s+)?net\b/i);
+    expect(out).toMatch(/\bno\b/i);
   });
 });

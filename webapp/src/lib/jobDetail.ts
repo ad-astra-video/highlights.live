@@ -251,11 +251,14 @@ export interface JobDetailHighlight {
   outcome?: string;
   nearMiss?: boolean;
   // ADAAAA-7958 (contract v3 §3.4): the stored corroboration flag — `true` only
-  // when an independent signal backed the scoring read. `false` means the page
-  // counts this goal but never asserts it as scored, so the seeded caption and
-  // card titles must not claim it either. Absent on legacy rows and on jobs whose
-  // confirm pass did not run (no evidence either way => the verdict rule decides).
+  // when an independent signal backed the scoring read — plus the Stage-2 confirm
+  // verdict, which corroborates a goal in its own right. Together they are the
+  // ladder banner's OWN `verified` rule, so a page that says "N accepted goals are
+  // not corroborated ... counted, never asserted as scored" can never seed a
+  // caption or title asserting one. Absent on legacy rows and on a job whose
+  // confirm pass did not run.
   corroborated?: boolean;
+  goalConfirmed?: "confirmed_goal" | "near_miss" | "not_goal" | null;
   status: string;
   clipError?: string;
   // ADAAAA-7248: whether the source this highlight's clip was cut from carried
