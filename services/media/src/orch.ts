@@ -129,14 +129,37 @@ export class MediaOrchestrator {
   private async _req(
     method: string,
     url: string,
-    init: { headers?: Record<string, string>; body?: any } = {},
+    init: { headers?: Record<string, string>; body?: any; timeoutMs?: number } = {},
     base: string = this.orchBase
   ) {
-    const res = await fetch(new URL(url, base).toString(), {
-      method,
-      headers: init.headers as Record<string, string>,
-      body: init.body,
-    });
+    let res: Response;
+    try {
+      res = await fetch(new URL(url, base).toString(), {
+        method,
+        headers: init.headers as Record<string, string>,
+        body: init.body,
+        // Only bounded calls get a signal; a caller that omits `timeoutMs` keeps
+        // the previous unbounded behaviour (provision / payment / stop).
+        ...(init.timeoutMs && init.timeoutMs > 0
+          ? { signal: AbortSignal.timeout(init.timeoutMs) }
+          : {}),
+      });
+    } catch (e) {
+      // A BOUNDED read that aborts means "nothing at that seq yet", not a
+      // transport failure: go-livepeer HOLDS a subscribe request open for a seq
+      // that does not exist, so the only way to stay responsive is to give up on
+      // the tick. Unbounded callers still see the throw.
+      if (!init.timeoutMs) throw e;
+      return {
+        status: 0,
+        async json() {
+          return null;
+        },
+        async text() {
+          return "";
+        },
+      };
+    }
     return {
       status: res.status,
       async json() { try { return await res.json(); } catch { return null; } },
@@ -319,8 +342,8 @@ export class MediaOrchestrator {
 
   /** Read the observation the runner published to events-out at `seq`.
    * Returns parsed JSON or null when no data at that seq yet. */
-  async readObservation(p: ProvisionedSession, seq: number): Promise<any | null> {
-    const r = await this._req("GET", `${p.eventsOut.replace(/\/$/, "")}/${seq}`, {});
+  async readObservation(p: ProvisionedSession, seq: number, timeoutMs?: number): Promise<any | null> {
+    const r = await this._req("GET", `${p.eventsOut.replace(/\/$/, "")}/${seq}`, { timeoutMs });
     if (r.status !== 200) return null;
     return r.json();
   }

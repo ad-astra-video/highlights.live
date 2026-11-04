@@ -191,6 +191,67 @@ describe("ObservationRelay (ADAAAA-7990 delivery)", () => {
     relay.close();
   });
 
+  it("never wedges when the broker holds a seq open (bounded read + tail probe)", async () => {
+    // go-livepeer HOLDS a subscribe request open for a seq that will never be
+    // published. The pre-fix loop awaited that read forever: on the deployed
+    // 300 s share seq 13 waited 295 s, only 12 observations were delivered, and
+    // everything behind the hole was stalled. The read is bounded per tick now,
+    // and a tail probe abandons the hole as soon as the runner proves it moved on.
+    const observed = new Set([1, 5]);
+    const delivered: number[] = [];
+    const relay = new ObservationRelay({
+      // Mirrors orch.readObservation's abort: resolves null after the bound.
+      read: (seq, timeoutMs) =>
+        new Promise((r) => setTimeout(() => r(observed.has(seq) ? { seq } : null), timeoutMs)),
+      emit: (_o, f) => delivered.push(f.seq),
+      deadlineMs: 30_000,
+      pollIntervalMs: 20,
+      log: () => {},
+    });
+    const t0 = Date.now();
+    for (const seq of [1, 2, 3, 4, 5]) {
+      relay.reserve();
+      relay.commit(frame(seq));
+    }
+    const until = Date.now() + 3_000;
+    while (relay.stats().inFlight > 0 && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(delivered).toEqual([1, 5]);
+    expect(relay.stats()).toMatchObject({ delivered: 2, skipped: 3, expired: 0 });
+    // One poll tick per abandoned seq, not a 30 s deadline per hole.
+    expect(Date.now() - t0).toBeLessThan(1_500);
+    relay.close();
+  });
+
+  it("collapses a whole fast-forward gap in one tick", async () => {
+    // The runner jumped from seq 1 to seq 10: seqs 2-9 will never carry an
+    // observation. Probing the queue TAIL (not just the next frame) abandons all
+    // eight in one tick instead of costing a deadline each.
+    const delivered: number[] = [];
+    const relay = new ObservationRelay({
+      read: async (seq, timeoutMs) => {
+        await new Promise((r) => setTimeout(r, Math.min(timeoutMs, 5)));
+        return seq === 1 || seq === 10 ? { seq } : null;
+      },
+      emit: (_o, f) => delivered.push(f.seq),
+      deadlineMs: 30_000,
+      pollIntervalMs: 20,
+      log: () => {},
+    });
+    for (let seq = 1; seq <= 10; seq++) {
+      relay.reserve();
+      relay.commit(frame(seq));
+    }
+    const until = Date.now() + 3_000;
+    while (relay.stats().inFlight > 0 && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(delivered).toEqual([1, 10]);
+    expect(relay.stats()).toMatchObject({ delivered: 2, skipped: 8, expired: 0 });
+    relay.close();
+  });
+
   it("flush() drains a queued backlog (teardown relay of the tail)", async () => {
     const runner = slowRunner(30);
     const delivered: number[] = [];
