@@ -378,6 +378,7 @@ export function recordAttemptProgress(
  * persisted. Nothing can recover counters that were never written to disk.
  */
 export function interruptedAttemptEvidence(
+  jobId: string,
   checkpoint: ResumeCheckpoint | undefined
 ): ResumeAttemptEvidence | null {
   const list = [...(checkpoint?.attempts ?? [])];
@@ -385,14 +386,17 @@ export function interruptedAttemptEvidence(
   if (openIdx < 0) return null;
   const e = list[openIdx];
   return {
+    jobId,
     attempt: e.attempt,
     phase: e.failedAtPhase ?? checkpoint?.phase ?? "analyze",
-    resumedFromTs: e.resumedFromTs ?? checkpoint?.analyze?.cursorTs ?? 0,
+    // The cursor the killed attempt had PERSISTED — the same quantity a
+    // worker-exit line reports (how far analysis got), never the start point.
+    cursorTs: checkpoint?.analyze?.cursorTs ?? e.resumedFromTs ?? 0,
     skippedFrames: e.skippedFrames,
     warmupFrames: e.warmupFrames,
     decideCalls: e.decideCalls,
     perceiveCalls: e.perceiveCalls,
-    recovered: true,
+    exitKind: "boot-recovered",
   };
 }
 
@@ -418,41 +422,56 @@ export function resumePointLabel(resumedFromTs: number | undefined): string | nu
   return `T+${h > 0 ? `${h}:${mmss}` : mmss}`;
 }
 
+/**
+ * How the attempt ENDED, as reported by its one evidence line:
+ *
+ * - `worker-exit`    the attempt left through `processVodJob` (success, failure
+ *                    or operator stop), so the line is written in its `finally`.
+ * - `boot-recovered` the attempt was ended by a hard kill (SIGKILL / OOM / a
+ *                    deploy recreate) and closed by `recoverStaleVodJobs` on the
+ *                    next boot. A killed process never reaches a `finally`, so
+ *                    this line is synthesized from the PERSISTED checkpoint —
+ *                    that is what makes attempt counting work after a crash.
+ */
+export type ResumeExitKind = "worker-exit" | "boot-recovered";
+
 /** Inputs of the ONE per-attempt evidence line (AC10). */
 export interface ResumeAttemptEvidence {
+  /** The job the line belongs to, so one grep can count one job's attempts. */
+  jobId: string;
   attempt: number;
   phase: ResumePhase;
-  resumedFromTs?: number;
+  /** Content seconds this attempt REACHED (its last applied decide window, as
+   * persisted). The point it resumed FROM lives on the record
+   * (`resume.resumedFromTs` / the attempt entry), never in this field. */
+  cursorTs?: number;
   skippedFrames?: number;
   warmupFrames?: number;
   decideCalls?: number;
   perceiveCalls?: number;
-  /** True for a line synthesized at boot recovery for an attempt that was
-   * KILLED (its own exit hook never ran). Trailing marker, so the normal
-   * one-line-per-attempt shape above is untouched. */
-  recovered?: boolean;
+  exitKind: ResumeExitKind;
 }
 
 /**
  * The single greppable evidence line, one per attempt:
  *
- *   [vod-resume] attempt=2 phase=analyze resumedFromTs=12.0 skippedFrames=24
- *                warmupFrames=4 decideCalls=7 perceiveCalls=30
+ *   [vod-resume] job=2445a379… attempt=2 phase=analyze cursor=48.0
+ *                skippedFrames=120 warmupFrames=24 decideCalls=8 perceiveCalls=90
+ *                exitKind=worker-exit
  *
  * Fixed prefix + fixed key order, so `docker logs highlights-server | grep
- * '\[vod-resume\]'` yields exactly one row per attempt.
+ * '\[vod-resume\]' | grep <jobId>` yields exactly one row per attempt — and
+ * `exitKind` says whether the attempt left through the worker or was cut off by
+ * a kill and recovered at boot.
  */
 export function formatResumeAttemptLine(e: ResumeAttemptEvidence): string {
   return (
-    `[vod-resume] attempt=${e.attempt} phase=${e.phase} ` +
-    `resumedFromTs=${Number(e.resumedFromTs ?? 0).toFixed(1)} ` +
+    `[vod-resume] job=${e.jobId} attempt=${e.attempt} phase=${e.phase} ` +
+    `cursor=${Number(e.cursorTs ?? 0).toFixed(1)} ` +
     `skippedFrames=${Math.round(nonNeg(e.skippedFrames))} ` +
     `warmupFrames=${Math.round(nonNeg(e.warmupFrames))} ` +
     `decideCalls=${Math.round(nonNeg(e.decideCalls))} ` +
-    `perceiveCalls=${Math.round(nonNeg(e.perceiveCalls))}` +
-    // AC10 crash half: a boot-recovery line for an attempt whose own exit hook
-    // never ran carries a trailing marker, so an operator can tell a measured
-    // line from a synthesized one without losing the fixed key order above.
-    (e.recovered ? ` recovered=true` : "")
+    `perceiveCalls=${Math.round(nonNeg(e.perceiveCalls))} ` +
+    `exitKind=${e.exitKind}`
   );
 }

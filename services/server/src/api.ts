@@ -68,7 +68,7 @@ import { deriveLiveProgress, newestObservationTs } from "./live-progress";
 import { deriveLiveCapture } from "./live-capture";
 import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
-import { outcomeForMediaCloseReason, outcomeForStrandedJob, classifyVodFailure, type JobFailureReason, type JobOutcome } from "./job-failure";
+import { outcomeForMediaCloseReason, outcomeForStrandedJob, classifyVodFailure, failureReasonFor, type JobFailureReason, type JobOutcome } from "./job-failure";
 import {
   accumulateAttemptTotals,
   closeOpenAttempt,
@@ -1364,6 +1364,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-7700/7906: a thrown pipeline error is attributable too — never
       // leave a bare `failed` that reads the same as "the pipeline never ran".
       const cls = classifyVodFailure(e);
+      // ADAAAA-7918: `classifyVodFailure` is the VOD-RESUME table — it answers
+      // "may this pass be retried, and why did it die". Its vocabulary is
+      // VOD-specific and `failureReason` is USER-VISIBLE, so a live/browser
+      // failure keeps the attribution it had before that table existed
+      // (`pipeline-error`) instead of inheriting resume classes
+      // (`decide-unavailable`, `perceive-session-lost`, `capacity-exhausted`)
+      // that nothing on the live path can act on. Reusing the classifier here was
+      // a side effect of sharing this function, not a decision about live rows.
+      const reason: JobFailureReason = failureReasonFor(cur?.source, cls);
       const now = new Date().toISOString();
       const message = jobErrorMessage(e);
       // `resume.phase` is the last phase STARTED (written at every boundary), so
@@ -1377,7 +1386,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           ...attempts[openIdx],
           endedAt: now,
           failedAtPhase: phase,
-          failureReason: cls.reason,
+          failureReason: reason,
           error: message,
         };
       }
@@ -1408,7 +1417,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         attempts,
         totalAttempts: cur?.attempts ?? cur?.resume?.totalAttempts ?? 0,
         accumulators: totals,
-        lastError: { reason: cls.reason, message, at: now },
+        lastError: { reason, message, at: now },
         // The in-memory cursor is authoritative for the attempt that just died:
         // a throttled checkpoint write may not have landed the newest window.
         analyze: { cursorTs: Math.max(vodResumeCursors.get(jobId) ?? 0, cur?.resume?.analyze?.cursorTs ?? 0) },
@@ -1435,7 +1444,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         await recordJobLifecycle(
           jobId,
           "retry-scheduled",
-          `failureReason=${cls.reason} nextAttemptAt=${nextAttemptAt} retry=${retriesUsed + 1}/${cfg.vodResumeMaxAttempts} error=${message}`
+          `failureReason=${reason} nextAttemptAt=${nextAttemptAt} retry=${retriesUsed + 1}/${cfg.vodResumeMaxAttempts} error=${message}`
         );
         // The per-attempt `[vod-resume]` line is emitted ONCE by processVodJob
         // when the attempt exits (AC10), so no line is logged here.
@@ -1447,7 +1456,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         status: "failed",
         stage: "failed",
         progressLabel: "failed",
-        failureReason: cls.reason,
+        failureReason: reason,
         error: message,
         finishedAt: now,
         resume,
@@ -1455,7 +1464,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       await recordJobLifecycle(
         jobId,
         "failed",
-        `failureReason=${cls.reason} resumable=${cls.resumable} retriesUsed=${retriesUsed}/${cfg.vodResumeMaxAttempts} error=${message}`
+        `failureReason=${reason} resumable=${cls.resumable} retriesUsed=${retriesUsed}/${cfg.vodResumeMaxAttempts} error=${message}`
       );
     } catch {
       /* ignore — job record gone */
@@ -2444,7 +2453,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // exit hook never ran, so it never emitted its own evidence line. Capture the
     // last counters it persisted and emit the line it owes once the row is armed.
     // A `failed` row's attempt is already closed, so it yields no second line.
-    const killedEvidence = interruptedAttemptEvidence(checkpoint);
+    const killedEvidence = interruptedAttemptEvidence(jobId, checkpoint);
     // Close the interrupted attempt (no-op when every entry is already closed).
     const attempts = closeOpenAttempt(checkpoint?.attempts, {
       now,
@@ -2561,21 +2570,27 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     } finally {
       vodStopControllers.delete(jobId);
       vodResumeCursors.delete(jobId); // ADAAAA-7906: persisted checkpoint owns the cursor from here
-      // ADAAAA-7907 (AC10): EXACTLY ONE `[vod-resume]` line per attempt, emitted
-      // when the attempt exits — success, failure or stop. Everything the line
-      // reports (cursor, skipped/warm-up frames, decide and perceive counts) is
-      // only complete at that point; the mid-pass log lines this replaced fired
-      // on some paths and not others, so a grep could not count attempts.
+      // ADAAAA-7907 (AC10) + ADAAAA-7918 (AC10b): EXACTLY ONE `[vod-resume]` line
+      // per attempt. THIS line covers an attempt that leaves through the worker
+      // (success, failure or stop) and says so: `exitKind=worker-exit`. An attempt
+      // a hard kill takes out never reaches this `finally`; its line is the
+      // `exitKind=boot-recovered` one `armVodResume` synthesizes on the next boot,
+      // so a grep still counts it and the two kinds are distinguishable.
       const attempt = vodAttemptStats.get(jobId);
       if (attempt) {
         const evidence: ResumeAttemptEvidence = {
+          jobId,
           attempt: attempt.attempt,
           phase: attempt.phase,
-          resumedFromTs: attempt.resumedFromTs,
+          // How far the attempt got — the same quantity the boot-recovered line
+          // reports, so the two lines read together. The point it resumed FROM is
+          // on the record (`resume.resumedFromTs`).
+          cursorTs: store.getJob(jobId)?.resume?.analyze?.cursorTs ?? attempt.resumedFromTs,
           skippedFrames: attempt.skippedFrames,
           warmupFrames: attempt.warmupFrames,
           decideCalls: attempt.decideCalls,
           perceiveCalls: attempt.perceiveCalls,
+          exitKind: "worker-exit",
         };
         console.log(formatResumeAttemptLine(evidence));
       }

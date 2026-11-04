@@ -9,6 +9,7 @@ import {
   MEDIA_SESSION_LOST_MESSAGE,
   SERVER_RESTART_MESSAGE,
   classifyVodFailure,
+  failureReasonFor,
   outcomeForMediaCloseReason,
   outcomeForStrandedJob,
 } from "../src/job-failure";
@@ -134,5 +135,28 @@ describe("classifyVodFailure (ADAAAA-7906)", () => {
       reason: "pipeline-error",
       resumable: false,
     });
+  });
+});
+
+// ADAAAA-7918: the resume classifier is shared by the VOD and live paths, but its
+// vocabulary is VOD-resume specific. `failureReason` is user-visible, so a
+// live/browser failure keeps the attribution it had before the resume table
+// existed instead of inheriting a resume class it can never act on.
+describe("failureReasonFor (ADAAAA-7918 live attribution)", () => {
+  it("keeps the pre-resume attribution on a live/browser row", () => {
+    const decideDown = classifyVodFailure(new Error("decide failed: HTTP 503"));
+    expect(decideDown.reason).toBe("decide-unavailable");
+    expect(failureReasonFor("browser", decideDown)).toBe("pipeline-error");
+    expect(failureReasonFor("rtmp", decideDown)).toBe("pipeline-error");
+    expect(failureReasonFor("webrtc", decideDown)).toBe("pipeline-error");
+    expect(failureReasonFor(undefined, decideDown)).toBe("pipeline-error");
+  });
+
+  it("uses the classified reason on an eligible VOD `file` job", () => {
+    expect(failureReasonFor("file", classifyVodFailure(new Error("decide failed: HTTP 503")))).toBe("decide-unavailable");
+    expect(
+      failureReasonFor("file", classifyVodFailure(Object.assign(new Error("x"), { name: "SessionLostError" })))
+    ).toBe("perceive-session-lost");
+    expect(failureReasonFor("file", classifyVodFailure(new Error("ffmpeg exited with code 1")))).toBe("pipeline-error");
   });
 });

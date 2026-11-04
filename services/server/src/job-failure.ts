@@ -15,6 +15,7 @@
 // ("click Start to share again"), never just "failed".
 
 import type { Job } from "@highlights/events";
+import { resumeEligibleSource } from "./vod-resume";
 
 /** Machine-readable reasons carried on `job.failureReason`. */
 export type JobFailureReason = NonNullable<Job["failureReason"]>;
@@ -144,4 +145,22 @@ export function classifyVodFailure(e: unknown): VodFailureClassification {
   // Unknown: the historical attribution, and NOT resumable. Retrying an
   // unexplained failure risks a loop that masks a real defect.
   return { reason: "pipeline-error", resumable: false };
+}
+
+/**
+ * ADAAAA-7918: the USER-VISIBLE `failureReason` a thrown error earns on a job of
+ * `source`.
+ *
+ * `classifyVodFailure` is the VOD-RESUME table: its classes (`decide-unavailable`,
+ * `perceive-session-lost`, `capacity-exhausted`) tell the retry policy what to do,
+ * and nothing on the live path can act on them. `markJobFailed` is shared by both
+ * paths, so the classified reason must not leak onto a live/browser row — those
+ * keep the attribution they had before the resume table existed. Only an eligible
+ * VOD source (`file`) gets the classified reason.
+ */
+export function failureReasonFor(
+  source: Job["source"] | undefined,
+  cls: VodFailureClassification
+): JobFailureReason {
+  return resumeEligibleSource(source) ? cls.reason : "pipeline-error";
 }

@@ -42,13 +42,14 @@ const ENV = {
   VOD_MAX_FRAMES_PER_ANALYSIS: "8",
 };
 
-/** The shape AC10 pins: fixed prefix, fixed key order. */
+/** The shape AC10/AC10b pins: fixed prefix, fixed key order, the job id and the
+ * exit kind (so a reader can tell a worker exit from a boot recovery). */
 const RESUME_LINE =
-  /^\[vod-resume\] attempt=(\d+) phase=(extract|analyze|finalize) resumedFromTs=([\d.]+) skippedFrames=(\d+) warmupFrames=(\d+) decideCalls=(\d+) perceiveCalls=(\d+)$/;
+  /^\[vod-resume\] job=(\S+) attempt=(\d+) phase=(extract|analyze|finalize) cursor=([\d.]+) skippedFrames=(\d+) warmupFrames=(\d+) decideCalls=(\d+) perceiveCalls=(\d+) exitKind=(worker-exit|boot-recovered)$/;
 
 /** AC10 crash half: the line boot recovery synthesizes for a KILLED attempt. */
 const RESUME_RECOVERED_LINE =
-  /^\[vod-resume\] attempt=(\d+) phase=(extract|analyze|finalize) resumedFromTs=([\d.]+) skippedFrames=(\d+) warmupFrames=(\d+) decideCalls=(\d+) perceiveCalls=(\d+) recovered=true$/;
+  /^\[vod-resume\] job=(\S+) attempt=(\d+) phase=(extract|analyze|finalize) cursor=([\d.]+) skippedFrames=(\d+) warmupFrames=(\d+) decideCalls=(\d+) perceiveCalls=(\d+) exitKind=boot-recovered$/;
 
 /** The counters the killed attempt had PERSISTED at its last checkpoint write
  * (AC10 crash half). Distinct values, so the synthesized line's fields are
@@ -253,16 +254,18 @@ describe("vod-resume Inc 3+4 pure parts (ADAAAA-7907)", () => {
     expect(resumePointLabel(750)).toBe("T+12:30");
     expect(resumePointLabel(3930)).toBe("T+1:05:30");
     const line = formatResumeAttemptLine({
+      jobId: "job-1",
       attempt: 2,
       phase: "analyze",
-      resumedFromTs: 12,
+      cursorTs: 12,
       skippedFrames: 24,
       warmupFrames: 4,
       decideCalls: 7,
       perceiveCalls: 30,
+      exitKind: "worker-exit",
     });
     expect(line).toBe(
-      "[vod-resume] attempt=2 phase=analyze resumedFromTs=12.0 skippedFrames=24 warmupFrames=4 decideCalls=7 perceiveCalls=30"
+      "[vod-resume] job=job-1 attempt=2 phase=analyze cursor=12.0 skippedFrames=24 warmupFrames=4 decideCalls=7 perceiveCalls=30 exitKind=worker-exit"
     );
     expect(line).toMatch(RESUME_LINE);
   });
@@ -310,19 +313,28 @@ describe("vod-resume Inc 3+4 pure parts (ADAAAA-7907)", () => {
       ],
       totalAttempts: 2,
     };
-    const evidence = interruptedAttemptEvidence(checkpoint);
-    expect(evidence).toMatchObject({ attempt: 2, phase: "analyze", recovered: true, decideCalls: 7 });
+    const evidence = interruptedAttemptEvidence("job-9", checkpoint);
+    expect(evidence).toMatchObject({
+      jobId: "job-9",
+      attempt: 2,
+      phase: "analyze",
+      exitKind: "boot-recovered",
+      decideCalls: 7,
+    });
+    // The line reports the cursor the killed attempt had PERSISTED (checkpoint),
+    // the same quantity a worker-exit line reports.
+    expect(evidence!.cursorTs).toBe(48);
     const line = formatResumeAttemptLine(evidence!);
     expect(line).toBe(
-      "[vod-resume] attempt=2 phase=analyze resumedFromTs=12.5 skippedFrames=24 warmupFrames=4 decideCalls=7 perceiveCalls=30 recovered=true"
+      "[vod-resume] job=job-9 attempt=2 phase=analyze cursor=48.0 skippedFrames=24 warmupFrames=4 decideCalls=7 perceiveCalls=30 exitKind=boot-recovered"
     );
     expect(line).toMatch(RESUME_RECOVERED_LINE);
     // Every attempt closed -> no synthesized line. A `failed` row's attempt already
     // emitted its own line, so a manual resume must never add a second row for it.
     expect(
-      interruptedAttemptEvidence({ ...checkpoint, attempts: [{ attempt: 1, startedAt: "a", endedAt: "b" }] })
+      interruptedAttemptEvidence("job-9", { ...checkpoint, attempts: [{ attempt: 1, startedAt: "a", endedAt: "b" }] })
     ).toBeNull();
-    expect(interruptedAttemptEvidence(undefined)).toBeNull();
+    expect(interruptedAttemptEvidence("job-9", undefined)).toBeNull();
   });
 });
 
@@ -559,25 +571,31 @@ describe("VOD resume Inc 3+4 end to end (ADAAAA-7907 AC7, AC9, AC10)", () => {
       const m = l.match(RESUME_LINE);
       expect(m, `line did not match the AC10 shape: ${l}`).toBeTruthy();
       return {
-        attempt: Number(m![1]),
-        phase: m![2],
-        resumedFromTs: Number(m![3]),
-        skippedFrames: Number(m![4]),
-        warmupFrames: Number(m![5]),
-        decideCalls: Number(m![6]),
-        perceiveCalls: Number(m![7]),
+        jobId: m![1],
+        attempt: Number(m![2]),
+        phase: m![3],
+        cursor: Number(m![4]),
+        skippedFrames: Number(m![5]),
+        warmupFrames: Number(m![6]),
+        decideCalls: Number(m![7]),
+        perceiveCalls: Number(m![8]),
+        exitKind: m![9],
       };
     });
-    // One line per attempt, in claim order, attempt numbers unique.
+    // One line per attempt, in claim order, attempt numbers unique; neither
+    // attempt was killed, so both are `worker-exit` (a graceful exit must never
+    // produce a boot-recovered duplicate for the same attempt number).
     expect(parsed.map((p) => p.attempt)).toEqual([1, 2]);
-    // Attempt 1 started at zero and perceived/counted real work.
-    expect(parsed[0].resumedFromTs).toBe(0);
+    expect(parsed.map((p) => p.exitKind)).toEqual(["worker-exit", "worker-exit"]);
+    expect(new Set(parsed.map((p) => p.jobId))).toEqual(new Set([done.job.id]));
+    // Attempt 1 perceived/counted real work and reports how far it got.
+    expect(parsed[0].cursor).toBeGreaterThan(0);
     expect(parsed[0].skippedFrames).toBe(0);
     expect(parsed[0].decideCalls).toBeGreaterThan(0);
     expect(parsed[0].perceiveCalls).toBeGreaterThan(0);
     // Attempt 2 resumed at the cursor, skipped the already-judged span, and
     // re-perceived only the bounded warm-up plus the tail.
-    expect(parsed[1].resumedFromTs).toBeGreaterThan(0);
+    expect(parsed[1].cursor).toBeGreaterThan(parsed[0].cursor);
     expect(parsed[1].skippedFrames).toBeGreaterThan(parsed[1].warmupFrames);
     expect(parsed[1].perceiveCalls).toBeLessThan(FRAME_COUNT);
 
@@ -738,20 +756,23 @@ describe("VOD resume boot recovery (ADAAAA-7907 Increment 4)", () => {
     expect(lines).toHaveLength(2);
     const killedLine = lines[0].match(RESUME_RECOVERED_LINE);
     expect(killedLine, `unexpected recovered evidence line: ${lines[0]}`).toBeTruthy();
-    expect(Number(killedLine![1])).toBe(2);
-    expect(killedLine![2]).toBe("analyze");
-    expect(Number(killedLine![3])).toBe(cursorTs);
-    expect(Number(killedLine![4])).toBe(KILLED_SKIPPED_FRAMES);
-    expect(Number(killedLine![5])).toBe(KILLED_WARMUP_FRAMES);
-    expect(Number(killedLine![6])).toBe(KILLED_DECIDE_CALLS);
-    expect(Number(killedLine![7])).toBe(KILLED_PERCEIVE_CALLS);
-    // The resumed attempt's line is still the MEASURED shape (no recovered flag).
+    expect(killedLine![1]).toBe(jobId); // the line names its job
+    expect(Number(killedLine![2])).toBe(2);
+    expect(killedLine![3]).toBe("analyze");
+    expect(Number(killedLine![4])).toBe(cursorTs);
+    expect(Number(killedLine![5])).toBe(KILLED_SKIPPED_FRAMES);
+    expect(Number(killedLine![6])).toBe(KILLED_WARMUP_FRAMES);
+    expect(Number(killedLine![7])).toBe(KILLED_DECIDE_CALLS);
+    expect(Number(killedLine![8])).toBe(KILLED_PERCEIVE_CALLS);
+    // The resumed attempt's line is the MEASURED shape: `worker-exit`.
     const m = lines[1].match(RESUME_LINE);
     expect(m, `unexpected evidence line: ${lines[1]}`).toBeTruthy();
-    expect(Number(m![1])).toBe(3);
-    expect(Number(m![3])).toBe(cursorTs);
-    expect(Number(m![4])).toBeGreaterThan(0);
+    expect(m![1]).toBe(jobId);
+    expect(Number(m![2])).toBe(3);
+    expect(m![9]).toBe("worker-exit");
+    expect(Number(m![4])).toBeGreaterThanOrEqual(cursorTs);
     expect(Number(m![5])).toBeGreaterThan(0);
+    expect(Number(m![6])).toBeGreaterThan(0);
 
     // Reading the resumed job through the owner's route keeps the trail but not
     // the spend accumulators (AC8's payload).
