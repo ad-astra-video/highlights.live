@@ -257,6 +257,13 @@ class HighlightRequest(BaseModel):
     # carried from the previous cadence observe tick so the model EXTENDS it
     # (not rewrite from scratch). Empty/absent on the first tick. Additive.
     storySoFar: Optional[str] = None
+    # ADAAAA-7938 (Spec A): the compact prior-game-state block the VOD decide
+    # pass forwards for every window after the first — running story-so-far,
+    # the PREVIOUS window's ASR tail (where a goal call sits) and the structured
+    # scoreboard-transition state. `Any` on purpose: a shaped-but-wrong payload
+    # must degrade to "no block" (byte-identical prompt), never to a 422 that
+    # drops the window.
+    priorGameState: Any = None
     # ADAAAA-7781: ask for the COMPACT verdict contract (shorter prose fields, no
     # evidenceAttested list) and a 400-token completion cap. The live rail sets
     # it because its decide throughput is decode-bound and the cadence demand
@@ -663,6 +670,8 @@ def create_app() -> FastAPI:
                 # ADAAAA-7856: render the job's inferred teams + kit colours into
                 # the window prompt (absent == byte-identical prompt to today).
                 match_context=req.matchContext,
+                # ADAAAA-7938 (Spec A): prior game state (absent == no block).
+                prior_game_state=req.priorGameState,
             )
             # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
             # goal-line ground-truth signal. A non-"goal" ballOutcome forces

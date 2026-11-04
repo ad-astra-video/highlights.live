@@ -51,7 +51,7 @@ import type {
   TrainRunRequest,
 } from "./analyzer";
 import type { PerFrameSeed } from "./observe-loop";
-import { SessionLostError } from "./analyzer";
+import { SessionLostError, type PriorGameState } from "./analyzer";
 
 export function buildAnalyzeFrames(frameDir: string, sampleFps = 1) {
   // Frames are extracted by extractFrames() at `sampleFps`. This iterates them
@@ -1054,6 +1054,10 @@ export class DirectAdapter implements PipelineClient {
       /** ADAAAA-7856: the job's persisted match context, forwarded so the decide
        * prompt names the real teams. Absent = byte-identical request to today. */
       matchContext?: DecideMatchContext;
+      /** ADAAAA-7938 (Spec A): the VOD pass's compact prior-game-state block
+       * (story-so-far / prior ASR / scoreboard transition). Absent = the request
+       * is byte-identical to today, and the prompt carries no block. */
+      priorGameState?: PriorGameState;
     }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
@@ -1072,6 +1076,9 @@ export class DirectAdapter implements PipelineClient {
         // ADAAAA-7111 (Increment D): forward the running video summary so the
         // decide brain extends it (monotonic growth). Empty on the first tick.
         storySoFar: opts?.storySoFar ?? "",
+        // ADAAAA-7938 (Spec A): prior game state (absent adds NO key, so the
+        // request stays byte-identical when the pass has nothing measured).
+        ...(opts?.priorGameState ? { priorGameState: opts.priorGameState } : {}),
         // ADAAAA-7781: compact verdict contract (live rail). false/absent sends
         // the byte-identical full-contract request.
         compact: opts?.compact === true,
