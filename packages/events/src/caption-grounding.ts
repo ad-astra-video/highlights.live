@@ -53,6 +53,22 @@ export interface CaptionGroundingContext {
    *               keeps the long-form VOD path byte-identical (AC8).
    */
   corroborated?: boolean | null;
+  /**
+   * ADAAAA-7962 (contract v4 §3.5): the window carries measured evidence that a
+   * colour beat may cite — crowd/audio energy from the audio-noise-change series
+   * already captured for this window (or a frame reaction). Absent / false =>
+   * NO colour (fails closed), which is what keeps VOD and the webapp's
+   * log-free paths byte-identical.
+   */
+  colourEvidence?: boolean | null;
+  /**
+   * ADAAAA-7962 (contract v4 §3.4): the window's stored zone/place, used only
+   * when a rewrite would otherwise drop the place. The pipeline stores no zone
+   * column, so this is normally absent and the place comes from the model line
+   * itself; the field exists so a caller that DOES know the zone can supply it
+   * and the rewrite still keeps actor + action + place.
+   */
+  place?: string | null;
 }
 
 /** Human labels for pipeline enums (a caption is customer copy, never a code). */
@@ -310,6 +326,55 @@ function rewriteScoreClaims(input: string, verb: string): string {
 /** A place phrase at the end of a clause ("in the box", "from the edge of the area"). */
 const PLACE_TAIL = /\b(?:in|at|from|near|inside|outside|around|on)\s+(?:the\s+)?[\p{L}][\p{L}\d'’\s-]{0,30}$/u;
 
+/**
+ * ADAAAA-7962 (contract v4 §3.4): the place phrase a line already carries, so a
+ * rewrite or a quiet trim can KEEP it instead of cutting through it. "" when the
+ * line names no place (then a caller-supplied `ctx.place` is the only zone).
+ */
+export function placePhraseOf(text: string): string {
+  // Trailing sentence punctuation is not part of the place: the measured lines
+  // end "… in the penalty area." and an unnormalised tail never matched.
+  const lead = captionLead(text).replace(/[.!?;:,]+$/, "").trim();
+  const m = lead.match(PLACE_TAIL);
+  return (m?.[0] ?? "").trim();
+}
+
+/** Action verbs a quiet line can keep without inventing anything. */
+const QUIET_ACTION =
+  /^(?:reacts?|moves?|drives?|controls?|contests?|dribbles?|stands?|passes?|plays?|takes?|holds?|watches?|waits?|runs?|shoots?|strikes?|heads?|clears?|tackles?|blocks?|saves?|jumps?|turns?|attacks?|presses?|chases?|follows?|keeps?|sets?)$/i;
+
+/**
+ * ADAAAA-7962 (contract v4 §3.4): condense a quiet line to ACTOR + ACTION +
+ * PLACE instead of cutting it at the 8-word boundary. The v3 trim truncated
+ * "No. 9 reacts to a play in the penalty area" to "No. 9 reacts to a play in" —
+ * the claim was already gone, but so was the zone, and the place is the half of
+ * the beat that makes the line play-by-play (measured page place density 11/20,
+ * level dcaa93c5).
+ *
+ * Deterministic and extractive: it keeps the line's own actor words and its own
+ * action verb, then re-attaches the line's own place phrase (or the caller's
+ * stored zone). It invents nothing and returns "" when the line has no place at
+ * all, so the caller can fall back to the old truncation.
+ */
+function condenseKeepingPlace(text: string, placeOverride?: string | null): string {
+  const lead = captionLead(text);
+  const tail = placePhraseOf(lead);
+  const place = tail || (placeOverride ?? "").trim();
+  if (!place) return "";
+  const cut = lead.toLowerCase().lastIndexOf(place.toLowerCase());
+  const body = (cut > 0 ? lead.slice(0, cut) : lead).replace(/[\s,;:—–-]+$/, "").trim();
+  if (!body) return "";
+  const words = body.split(/\s+/).filter(Boolean);
+  const verbIdx = words.findIndex((w) => QUIET_ACTION.test(w));
+  // Keep the actor words up to and including its action verb; drop the rest.
+  const head = (verbIdx >= 0 ? words.slice(0, verbIdx + 1) : words)
+    .join(" ")
+    .replace(/\s+\b(?:the|a|an|to|of|in|at|on|with|and|from)\b$/i, "")
+    .trim();
+  if (!head) return "";
+  return tidy(`${head} ${place}`);
+}
+
 /** Remove every detected claim marker (the last-resort, always-honest shape). */
 function stripClaimMarkers(text: string): string {
   const masked = maskBenign(text);
@@ -433,14 +498,24 @@ const QUIET_TRIMS: [RegExp, string][] = [
   [/\s+\bin\s+(?:the\s+)?(?:white|blue|red|black|yellow|green|purple|orange|grey|gray)\b/gi, ""],
 ];
 
-/** Blunt a quiet line down to the 8-word budget (byte-identical when it fits). */
-export function trimQuietLine(text: string): string {
+/**
+ * Blunt a quiet line down to the 8-word budget (byte-identical when it fits).
+ *
+ * ADAAAA-7962 (contract v4 §3.4): a line that still carries a place phrase after
+ * the trims is condensed to ACTOR + ACTION + PLACE rather than cut at the word
+ * boundary, so the trim can never leave a dangling preposition or drop the zone.
+ */
+export function trimQuietLine(text: string, placeOverride?: string | null): string {
   const input = text ?? "";
   if (!input.trim() || wordCount(input) <= QUIET_MAX_WORDS) return input;
   let out = input;
   for (const [re, replacement] of QUIET_TRIMS) {
     if (wordCount(out) <= QUIET_MAX_WORDS) break;
     out = out.replace(re, replacement);
+  }
+  if (wordCount(out) > QUIET_MAX_WORDS) {
+    const condensed = condenseKeepingPlace(out, placeOverride);
+    if (condensed && wordCount(condensed) <= QUIET_MAX_WORDS) out = condensed;
   }
   if (wordCount(out) > QUIET_MAX_WORDS) {
     // Last resort: the bar is a word count, so cut at a word boundary and drop
@@ -477,6 +552,48 @@ export function isQuietVerdict(verdict?: string | null): boolean {
 const OCR_CITATION =
   /\b(?:graphic|graphics|scorebug|score ?board|ocr|overlay|on-?screen|banner|lower[- ]third|title card|telestrator)\b/i;
 
+/** v4 §3.5: the char ceiling on a delivered colour beat. */
+export const COLOUR_MAX_CHARS = 40;
+
+/**
+ * ADAAAA-7962 (contract v4 §3.5): does `text` carry a proper name? A colour beat
+ * may never name a person or a club — an invented name in a colour clause is
+ * exactly the invented-name failure AC4 grades ("Real Madrid player …").
+ */
+export function hasProperName(text: string): boolean {
+  const matches = [...(text ?? "").matchAll(NAME_WORD)];
+  for (const m of matches) {
+    const word = stripDiacritics(m[0]);
+    if (NAME_STOPWORDS.has(word)) continue;
+    if (CODE_TOKENS.has(word)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * ADAAAA-7962 (contract v4 §3.5): is this colour clause an acceptable beat on
+ * THIS window?
+ *
+ * v3 forbade colour on every quiet window, which is why the delivered page had
+ * 0/26 colour while the model produced 42 colour clauses (R16) — the announcer
+ * lost its colour half. v4 allows a colour beat on any window, quiet included,
+ * when it is GROUNDED in that window's own evidence and stays inside four
+ * content rules: ≤ 40 chars, no proper name, no score/net/goal verb, no OCR
+ * quote. No measured evidence (`colourEvidence !== true`) => no colour, so a
+ * quiet window with no crowd/audio signal keeps reading as a plain beat and the
+ * quiet-colour share stays bounded.
+ */
+export function colourBeatAllowed(colour: string, ctx?: CaptionGroundingContext): boolean {
+  const c = (colour ?? "").trim();
+  if (!c) return false;
+  if (c.length > COLOUR_MAX_CHARS) return false;
+  if (OCR_CITATION.test(c)) return false;
+  if (hasGoalClaim(c)) return false;
+  if (hasProperName(c)) return false;
+  return ctx?.colourEvidence === true;
+}
+
 export function gateOcrColour(text: string): string {
   const colour = captionColour(text);
   if (!colour || !OCR_CITATION.test(colour)) return text;
@@ -497,9 +614,13 @@ export function gateOcrColour(text: string): string {
 export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): string {
   let out = gateOcrColour(text);
   if (!isQuietVerdict(ctx?.verdict)) return out === text ? text : out;
-  out = dropColourClause(out);
-  if (/[—–]/.test(out)) out = out.replace(/\s*[—–]\s*/g, ", ");
-  out = trimQuietLine(out);
+  // v4 §3.5: a quiet window keeps a GROUNDED colour beat (crowd/audio energy,
+  // a frame reaction) and drops an ungrounded one. v3 dropped every clause.
+  const colour = captionColour(out);
+  const keepColour = colour ? colourBeatAllowed(colour, ctx) : false;
+  const lead = trimQuietLine(captionLead(out), ctx?.place);
+  out = keepColour ? tidy(`${lead} — ${colour}`) : lead;
+  if (/[—–]/.test(out) && !keepColour) out = out.replace(/\s*[—–]\s*/g, ", ");
   return out === text ? text : tidy(out);
 }
 
@@ -513,11 +634,24 @@ export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): st
 export function gateGoalClaims(text: string, ctx?: CaptionGroundingContext): string {
   if (goalAllowed(ctx)) return text;
   if (!hasGoalClaim(text)) return text;
+  // v4 §3.4/§3.5: the claim goes, the place stays, and a GROUNDED colour beat
+  // survives the rewrite (v3 dropped it with the claim, which is what emptied
+  // the delivered colour channel).
+  const colour = captionColour(text);
   let out = dropColourClause(text);
+  const place = placePhraseOf(out) || (ctx?.place ?? "").trim();
   const verb = outcomeVerbFor(out);
   out = rewriteScoreClaims(out, verb);
   // Anything the rewrite steps cannot certify fails closed to the quiet shape.
   if (hasGoalClaim(out)) out = quietShape(out, verb);
+  // A rewrite keeps actor + action + PLACE. When the rewrite dropped the zone
+  // ("Saez strikes the ball wide" from a line that named one) re-attach it —
+  // but never turn a rewrite that had no place into a claim of one.
+  if (place && !placePhraseOf(out) && !out.toLowerCase().includes(place.toLowerCase())) {
+    const withPlace = tidy(`${out} ${place}`);
+    if (wordCount(withPlace) <= QUIET_MAX_WORDS + 2) out = withPlace;
+  }
+  if (colour && colourBeatAllowed(colour, ctx)) out = tidy(`${out} — ${colour}`);
   return out === text ? text : tidy(out);
 }
 
@@ -675,8 +809,15 @@ export function groundNames(text: string, promptText?: string | null): string {
     // except known connectors.
     const meaningful = tokens.filter((t) => !["de", "van", "der", "dos", "da", "di", "del"].includes(stripDiacritics(t)));
     if (meaningful.every((t) => NAME_STOPWORDS.has(stripDiacritics(t)))) continue;
-    // Corroborated by the window's prompt => the name is grounded, keep it.
-    if (promptHas(prompt, name) || meaningful.some((t) => promptHas(prompt, t))) continue;
+    // ADAAAA-7962 (contract v4 §3.3): PROVENANCE IS THE WHOLE PHRASE.
+    // v3 accepted any single token of a multi-token name, so "Real Madrid" was
+    // grounded by the common word "real" on a window whose prompt never named
+    // Madrid (level dcaa93c5, g90) and the invented club reached the page. A
+    // person or club name may appear only when the name PHRASE occurs in this
+    // window's own prompt (match context / ASR / scorebug OCR), diacritics- and
+    // case-insensitively. Jersey numbers are evidence in their own right and
+    // never reach this branch ("No. 9" is not a NAME_WORD run).
+    if (promptHas(prompt, name)) continue;
     // A quoted token is a label being talked about, not a person.
     if (/['"‘“]$/.test(out.slice(0, run.start))) continue;
     // A bare ALL-CAPS token is a CODE, not a name ("GOL", "VAR", "OCR"). The list
@@ -695,6 +836,13 @@ export function groundNames(text: string, promptText?: string | null): string {
  */
 function neverLonger(original: string, grounded: string): string {
   if (grounded.length <= original.length) return grounded;
+  // ADAAAA-7962 (contract v4 §3.4): a place-preserving rewrite may run a few
+  // chars longer than the model's line (a role is longer than a short name, a
+  // restored zone is longer than a dropped one). Cutting at the original length
+  // is what decapitated the zone ("The side player controls ball in center").
+  // The terseness bar is p50 <= 95 / p95 <= 140 on the DELIVERED line, so a
+  // bounded +12 tolerance never regresses AC1.
+  if (grounded.length <= original.length + 12 && placePhraseOf(grounded)) return grounded;
   const cut = grounded.lastIndexOf(" ", original.length);
   const body = (cut > 0 ? grounded.slice(0, cut) : grounded).replace(/[\s,;:—–-]+$/, "").trim();
   return body || grounded;
@@ -890,6 +1038,41 @@ export function dedupeEmittedLines(
     seen.set(key, count);
     return count <= limit ? line : null;
   });
+}
+
+/**
+ * ADAAAA-7962 (contract v4 §3.7): cap identical delivered lines across a job's
+ * STORED log at `max` occurrences and return the surviving lines of this pass.
+ *
+ * This is the WRITE-seam sibling of `dedupeEmittedLines`: the append path reads
+ * the job's already-stored lines, so the third identical line is never persisted
+ * and the stored set is the page set (same count, same strings) — v3 applied the
+ * cap only when the page was built, so the API shipped 27 rows while the page
+ * showed 26 (R13/R17).
+ */
+export function dedupeStoredLines(
+  text: string,
+  stored: readonly string[] | undefined,
+  max: number = MAX_LINE_OCCURRENCES
+): string {
+  const limit = Number.isFinite(max) && max >= 1 ? Math.floor(max) : MAX_LINE_OCCURRENCES;
+  const counts = new Map<string, number>();
+  for (const line of stored ?? []) {
+    const key = captionLineKey(line ?? "");
+    if (!key) continue;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const kept: string[] = [];
+  for (const line of (text ?? "").split("\n")) {
+    const trimmed = line.trim();
+    const key = captionLineKey(trimmed);
+    if (!key) continue;
+    const count = counts.get(key) ?? 0;
+    if (count >= limit) continue;
+    counts.set(key, count + 1);
+    kept.push(trimmed);
+  }
+  return kept.join("\n");
 }
 
 /** The minimal shape of one emitted summary item. */

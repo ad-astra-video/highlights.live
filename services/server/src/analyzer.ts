@@ -5,6 +5,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
 import type { CaptionGroundingContext } from "@highlights/events";
+import { groundCaption, windowCorroborated } from "@highlights/events";
 import { StageAMetrics, StageAOutcomeLedger } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
 import type { PerceiveCalibration } from "./perceive-calibration";
@@ -3521,7 +3522,12 @@ export async function acceptVideoDecision(
    * GOAL accept is downgraded to `big_play` here (ADAAAA-7865), so a caller that
    * persists copy for the window must gate it with the downgraded verdict — not
    * the pre-accept one. */
-  sink?: { final?: DecisionResult }
+  sink?: {
+    final?: DecisionResult;
+    /** ADAAAA-7962: the ONE grounding context for this window's user-readable
+     * fields, computed where the accepted highlight's corroboration is known. */
+    grounding?: CaptionGroundingContext;
+  }
 ): Promise<void> {
   // ADAAAA-7255: attach the bounded (t, energy, baseline) audio-gate inspection
   // series (sliced to the decide window around the trigger) to the per-window
@@ -3618,6 +3624,18 @@ export async function acceptVideoDecision(
   // ADAAAA-6851 note: persisted AFTER the ADAAAA-7865 downgrade so the
   // decision-time note carries the outcome the board actually receives.
   buildCandidateNote(cfg, candidate, decision, "accepted", candidateId, trigger, stageAnalysis, confirm?.analysis);
+  // ADAAAA-7962 (contract v4 §3.1): the write seam's ONE grounding context.
+  // Computed here because THIS is where the accepted highlight's corroboration is
+  // final (sink.final already carries the downgraded verdict), and the same
+  // context then gates the story-log line in `observeAcceptOnly` — one gate, one
+  // evidence set, so the stored set and the page can never disagree.
+  const selfCorroborated =
+    confirm?.corroborated === true || (confirm?.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal";
+  const writeGrounding: CaptionGroundingContext | undefined = cfg.captionGrounding
+    ? captionGroundingForWindow(decision, run, candidate.timestamp, cfg, selfCorroborated)
+    : undefined;
+  if (sink && writeGrounding) sink.grounding = writeGrounding;
+  const gatedReason = writeGrounding ? groundCaption(decision.reason ?? "", writeGrounding) : decision.reason;
   const { clipId, clipUri } = await cut(loc.ts);
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -3654,7 +3672,13 @@ export async function acceptVideoDecision(
     end: win.end,
     eventType: highlightEventType(decision),
     score: decision.score,
-    reason: decision.reason,
+    // ADAAAA-7962 (contract v4 §3.1): a user-readable field is gated BEFORE it
+    // is stored, not when the card renders. The model's reason carries goal
+    // claims and invented names in the same shapes the caption gate removes.
+    reason: gatedReason,
+    ...(writeGrounding && gatedReason !== decision.reason && (decision.reason ?? "").trim()
+      ? { reason_raw: decision.reason }
+      : {}),
     // Increment F / ADAAAA-6465: near-miss surface at a lower score, labeled
     // distinctly via the outcome/nearMiss flag.
     outcome: decision.outcome,
@@ -4137,13 +4161,74 @@ export async function observeDecideOnly(
  * knows is already certified.
  */
 export function captionGroundingForDecision(
-  decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis">
+  decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis">,
+  extras: Pick<CaptionGroundingContext, "corroborated" | "colourEvidence" | "place"> = {}
 ): CaptionGroundingContext {
   return {
     verdict: decision.outcome ?? null,
     promptText: decision.analysis?.prompt ?? "",
     eventType: decision.eventType ?? null,
+    ...extras,
   };
+}
+
+/**
+ * ADAAAA-7962 (contract v4 §3.5): does this window's ALREADY-CAPTURED audio show
+ * crowd/audio energy a colour beat may cite?
+ *
+ * The audio-noise-change series the pass already holds for the window (the same
+ * `(t, energy, baseline)` points the request-inspection graph renders) is the
+ * evidence, so this costs no new perception pass, no new frames and no decide
+ * call. The rule is a SUSTAINED lift, not a single spike: at least a quarter of
+ * the window's taps must sit 0.05 RMS above their own rolling baseline. On the
+ * v3 level (`dcaa93c5`, 77 windows) that selects ~30% of windows, which keeps
+ * the delivered colour share inside the contract's 20-40% band instead of
+ * turning every quiet window into a colour row.
+ */
+export function windowColourEvidence(
+  run: Pick<LiveRunShared, "seriesWindow">,
+  centerTs: number,
+  cfg: Pick<AnalyzerConfig, "preWindowS" | "postWindowS">
+): boolean {
+  if (!Number.isFinite(centerTs)) return false;
+  const pre = cfg.preWindowS ?? DEFAULT_PRE_WINDOW_S;
+  const post = cfg.postWindowS ?? DEFAULT_POST_WINDOW_S;
+  const series = run.seriesWindow(centerTs, pre, post);
+  if (!series.length) return false;
+  let lifted = 0;
+  for (const p of series) {
+    if (Number.isFinite(p.energy) && (p.energy - (p.baseline ?? 0)) >= 0.05) lifted += 1;
+  }
+  return lifted / series.length >= 0.25;
+}
+
+/**
+ * ADAAAA-7962 (contract v4 §3.1): the ONE grounding context the write seam uses
+ * for every user-readable field of this window — the story-log line AND the
+ * highlight's delivered `reason`. It carries the three facts the gates need and
+ * that v3's seam could not see:
+ *
+ *   - `corroborated`: the same rule the page's banner uses (`windowCorroborated`
+ *     over the accepted highlights), so a goal the banner calls uncorroborated
+ *     is never STORED as an asserted goal (R13: 27 stored rows, 10 claims, page 0);
+ *   - `colourEvidence`: the window's own audio energy series (§3.5);
+ *   - `place`: the zone the model line named, so a rewrite keeps actor + action
+ *     + place even when the claim clause is dropped (§3.4).
+ */
+export function captionGroundingForWindow(
+  decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis" | "reason">,
+  run: Pick<LiveRunShared, "seriesWindow" | "highlights">,
+  centerTs: number,
+  cfg: Pick<AnalyzerConfig, "preWindowS" | "postWindowS">,
+  /** This accept's OWN corroboration (confirm pass / scoreboard / audio), known
+   * before the record is pushed — the window is corroborated when this accept
+   * corroborated it OR an already-accepted highlight covering it did. */
+  selfCorroborated = false
+): CaptionGroundingContext {
+  return captionGroundingForDecision(decision, {
+    corroborated: selfCorroborated || windowCorroborated(run.highlights as any, centerTs),
+    colourEvidence: windowColourEvidence(run, centerTs, cfg),
+  });
 }
 
 export async function observeAcceptOnly(
@@ -4197,7 +4282,7 @@ export async function observeAcceptOnly(
   // Gating the caption with the pre-accept verdict let a "scores" line sit on a
   // stored `big_play` row (level 2c025e97, seq 17/19), so the summary is written
   // with the verdict the board will actually read.
-  const sink: { final?: DecisionResult } = {};
+  const sink: { final?: DecisionResult; grounding?: CaptionGroundingContext } = {};
   let acceptError: unknown = null;
   try {
     await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, decision, frameSignals, goalEventTs, sink);
@@ -4211,8 +4296,11 @@ export async function observeAcceptOnly(
       // verdict + the exact prompt text it decided from, so the summary-log
       // seam can gate goal claims, ground names and strip internal tokens.
       // VOD never sets `captionGrounding`, so its entries stay byte-identical.
+      // ADAAAA-7962: reuse the context the accept path already computed (the
+      // stored verdict + that window's corroboration + its audio evidence), so
+      // the story line is gated with exactly what the highlight row was.
       const grounding: CaptionGroundingContext | undefined = cfg.captionGrounding
-        ? captionGroundingForDecision(stored)
+        ? sink.grounding ?? captionGroundingForDecision(stored)
         : undefined;
       cfg.onRunningSummary(pendingSummary, {
         windowTs: payload.centerTs,
