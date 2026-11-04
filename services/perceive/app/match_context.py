@@ -931,6 +931,12 @@ def _generic_fragments(token: str) -> list[str]:
         # printed as a block ("MB", "TBF", "TOC"), never part of a club name.
         if part.isupper() and len(part) >= 3:
             continue
+        # ADAAAA-7909: an ad-board host / social handle ("Wykes.com",
+        # "highlights.live", "@KanalS") is branding printed beside the graphic, not
+        # a club — measured on the bounded basketball clip, one frame's home run
+        # opened with "Wykes.com" and voted a name no other frame shared.
+        if any(ch in part for ch in (".", "/", "@", "\\")) or core.startswith("www"):
+            continue
         if len(core) < GENERIC_NAME_MIN_CHARS:
             continue
         out.append(part)
@@ -1062,12 +1068,30 @@ def _generic_name_key(name: str) -> str:
     return _fold(" ".join(toks))
 
 
-def _generic_vote_group(key: str, known: Sequence[str]) -> Optional[str]:
-    """The existing vote group ``key`` belongs to, within one edit (OCR slips)."""
-    for other in known:
-        if _levenshtein_le(key, other, GENERIC_NAME_CLUSTER_EDITS):
-            return other
-    return None
+def _generic_vote_cluster(votes: Mapping[str, Mapping[str, int]]) -> tuple[str, list[str], int]:
+    """The best-supported printed variant and every variant within one edit of it.
+
+    ADAAAA-7909: the same one-edit tolerance the lexicon pass uses, applied
+    uniformly instead of first-seen-first-grouped. A greedy pass against the
+    existing GROUP KEYS is order-dependent: measured on the bounded basketball
+    clip, ONE club printed three ways ("Dentizi" 5, "Denizi" 9, "Denizli" 7) split
+    into 14 + 7 because "Dentizi" was seen first and "Denizli" is two edits from
+    it, so the side was rejected as unstable at 14/30 while 21 frames actually
+    named it. Choosing the variant the most frames agree with — and summing every
+    variant within one edit of THAT — is order-independent, and it does not widen
+    the tolerance: it is still one edit, still >= 3 frames, still >= 60 %.
+    """
+    totals = {key: sum(v.values()) for key, v in votes.items()}
+    best_key = ""
+    best_score = -1
+    best_members: list[str] = []
+    for key in sorted(totals):
+        members = [o for o in totals if _levenshtein_le(key, o, GENERIC_NAME_CLUSTER_EDITS)]
+        score = sum(totals[o] for o in members)
+        # Tie -> the variant read on more frames, then the sorted key (stable).
+        if score > best_score or (score == best_score and totals[key] > totals.get(best_key, 0)):
+            best_key, best_score, best_members = key, score, members
+    return best_key, best_members, best_score
 
 
 def parse_generic_scorebug_names(
@@ -1088,7 +1112,9 @@ def parse_generic_scorebug_names(
     status: dict[str, Any] = {"scoreFrames": 0, "rejected": []}
     if not ocr_frames or sport == SPORT_UNKNOWN:
         return [], status
-    # side -> vote group -> {printed form: frames}
+    # side -> printed variant key -> {printed form: frames}; ONE vote per frame per
+    # side (ADAAAA-7909), which is what makes the cluster share comparable to the
+    # frames that carried a score line.
     votes: dict[str, dict[str, dict[str, int]]] = {"home": {}, "away": {}}
     snippets: dict[str, dict[str, str]] = {"home": {}, "away": {}}
     score_frames = 0
@@ -1096,8 +1122,8 @@ def parse_generic_scorebug_names(
         lines = frame.get("lines") or frame.get("ocr") or []
         if not lines:
             continue
-        seen: dict[str, dict[str, str]] = {"home": {}, "away": {}}
         frame_scored = False
+        picked: dict[str, Optional[tuple[str, str]]] = {"home": None, "away": None}
         for line in lines:
             text = str(line or "").strip()
             if not text:
@@ -1111,26 +1137,25 @@ def parse_generic_scorebug_names(
                 ("home", home, splits[0][0]),
                 ("away", away, splits[0][1]),
             ):
-                if not name:
+                # The first read on this frame that names the side wins; a second
+                # line describing the same frame is not extra corroboration.
+                if not name or picked[side] is not None:
                     continue
                 # A side the lexicon already names is never re-read here.
                 if _resolve_side_tokens(segment, sport):
                     continue
-                key = _generic_name_key(name)
-                group = _generic_vote_group(key, list(votes[side]))
-                if group is None:
-                    votes[side][key] = {}
-                    group = key
-                # One vote per frame per group: a line printed twice on the same
-                # frame is not extra corroboration.
-                seen[side].setdefault(group, name)
-                snippets[side].setdefault(group, text[:200])
+                picked[side] = (name, text[:200])
         if frame_scored:
             score_frames += 1
         for side in ("home", "away"):
-            for group, name in seen[side].items():
-                printed = votes[side][group]
-                printed[name] = printed.get(name, 0) + 1
+            entry = picked[side]
+            if entry is None:
+                continue
+            name, snippet = entry
+            key = _generic_name_key(name)
+            votes[side].setdefault(key, {})
+            votes[side][key][name] = votes[side][key].get(name, 0) + 1
+            snippets[side].setdefault(key, snippet)
     status["scoreFrames"] = score_frames
     if not score_frames:
         status["rejected"].append("no-score-line")
@@ -1140,15 +1165,19 @@ def parse_generic_scorebug_names(
         if not votes[side]:
             status["rejected"].append(f"{side}:no-text")
             continue
-        group = max(votes[side], key=lambda k: sum(votes[side][k].values()))
-        printed = votes[side][group]
-        n = sum(printed.values())
+        group, members, n = _generic_vote_cluster(votes[side])
+        printed: dict[str, int] = {}
+        for member in members:
+            for name, count in votes[side][member].items():
+                printed[name] = printed.get(name, 0) + count
         share = n / score_frames
         if n < GENERIC_NAME_MIN_FRAMES or share < GENERIC_NAME_MIN_SHARE:
             status["rejected"].append(f"{side}:unstable({n}/{score_frames})")
             continue
-        # Publish the spelling the model printed most often inside the group.
-        name = max(printed, key=lambda k: printed[k])
+        # Publish the spelling the model printed most often inside the cluster;
+        # ties break on the printed form so the published spelling never depends
+        # on the order the frames arrived in (ADAAAA-7909).
+        name = max(sorted(printed), key=lambda k: (printed[k], k))
         picks[side] = (name, snippets[side].get(group, ""), n)
         status.setdefault("names", {})[side] = {
             "name": name,

@@ -1361,7 +1361,12 @@ def test_generic_names_fold_ocr_spellings_into_one_vote():
         {"lines": ["TURKIYEBASKETBOLMBDentizi Basket13 8%s1.C" % spellings[i % 3]]} for i in range(30)
     ]
     teams, status = parse_generic_scorebug_names(frames, "basketball")
-    assert [(t.name, t.side) for t in teams] == [("Dentizi Basket", "home"), ("Samsungpor", "away")]
+    # A three-way tie publishes one of the printed spellings (the tie breaks on
+    # the printed form so the choice never depends on frame order); all three are
+    # one OCR edit of the labelled club.
+    assert [(t.side) for t in teams] == ["home", "away"]
+    assert teams[0].name == "Dentizi Basket"
+    assert teams[1].name in set(spellings)
     assert status["names"]["away"]["frames"] == 30
     assert set(status["names"]["away"]["variants"]) == {"Samsungpor", "Samsungspor", "Samsunspor"}
     # No confidence gate moved: the published pair still sits at the scorebug
@@ -1433,3 +1438,41 @@ def test_scorebug_lines_sides_counts_what_a_read_actually_covers():
     assert scorebug_lines_sides(BB_CROP_GARBAGE, "basketball") == set()
     assert scorebug_lines_sides(["POR 1 - 0 ESP"], "soccer") == {"home", "away"}
     assert scorebug_lines_sides([], "basketball") == set()
+
+
+def test_generic_names_vote_does_not_depend_on_frame_order():
+    # ADAAAA-7909 measured this split: ONE home club printed three ways
+    # ("Dentizi" 5, "Denizi" 9, "Denizli" 7) over the job's 50 % fold. A greedy
+    # first-seen grouping put "Dentizi" and "Denizi" in one group (14) and
+    # "Denizli" — two edits from "Dentizi" — in another (7), so the side read as
+    # unstable(14/30) while 21 frames actually named it. The same one-edit
+    # tolerance applied to every variant against the best-supported one is
+    # order-independent and still rejects two genuinely different clubs.
+    spellings = ["Dentizi Basket"] * 5 + ["Denizi Basketball"] * 9 + ["Denizli Basket"] * 7
+    frames = [{"lines": ["TURKEYMB13 8Samsungpor1.C%s" % s]} for s in spellings]
+    # 9 further score frames whose crop clipped the home plate away entirely.
+    frames += [{"lines": ["TURKEYMB13 8Samsungpor1.C"]} for _ in range(9)]
+    teams, status = parse_generic_scorebug_names(frames, "basketball")
+    assert [t.side for t in teams] == ["home", "away"]
+    # Published spelling is the best-supported printed variant; the SUPPORT is
+    # what the gate reads, and it no longer depends on which one was seen first.
+    assert _levenshtein_le(_generic_name_key(teams[0].name), "denizli basket", 1)
+    assert teams[1].name == "Samsungpor"
+    assert status["names"]["home"]["frames"] == 21
+    assert status["names"]["home"]["share"] == 0.7
+    # Same frames, shuffled: the published pair and its support must not change.
+    for order in (frames[::-1], frames[::2] + frames[1::2]):
+        teams2, status2 = parse_generic_scorebug_names(order, "basketball")
+        assert [(t.side, t.name) for t in teams2] == [(t.side, t.name) for t in teams]
+        assert status2["names"]["home"]["frames"] == status["names"]["home"]["frames"]
+
+
+def test_generic_names_drop_an_ad_board_host_token():
+    # "Wykes.com Denizil Basketball" was read off one frame of the bounded job:
+    # the ad-board host rides into the home run and votes a name nothing else
+    # shares. A token carrying a dot/slash/handle is branding, never a club.
+    assert generic_scorebug_sides("WIKYSTELISHEANOMBTURYTEBASKETOBENZI BASKETty.com Denizil Basketball13 8Samsungspor1.g") == (
+        "Denizil Basketball",
+        "Samsungspor",
+    )
+    assert generic_scorebug_sides("Wykes.com Denizli Basket13 8Samsunspor") == ("Denizli Basket", "Samsunspor")
