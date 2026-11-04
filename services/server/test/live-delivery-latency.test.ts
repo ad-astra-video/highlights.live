@@ -10,7 +10,7 @@
 //       accept work / persist ack, so a replay can blame the right stage,
 //   (c) the observer only emits a row for an ACCEPTED window, and the snapshot
 //       reaches `observeMetrics.deliveredLatency` with p50/p95/max.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   LiveDeliveryTracker,
   deliveredLatencyRow,
@@ -230,5 +230,145 @@ describe("LiveObserver -> observeMetrics.deliveredLatency (ADAAAA-8005)", () => 
     await observer.maybeFire(0, false, 500);
     await observer.flush();
     expect(buildLiveObserveMetrics(observer).deliveredLatency).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADAAAA-8024: the re-attestation (upgrade) delivery path.
+//
+// Measured gap: on job `228462b5` (build `d6c9a9f`) three highlights were
+// delivered at 108.8 / 159 / 285 s but `deliveredLatency.samples` read 2 —
+// the @108.8 GOAL was demoted by the ADAAAA-7996 gate, re-attested by the
+// ADAAAA-8017 upgrade path, and delivered from that path, which never reported
+// a delivery. Two things were missing:
+//   (1) the observer only registered a window when `accepted` was true, so a
+//       demoted window's fire/settle/accept clocks were thrown away, and
+//   (2) the upgrade's write-through ack never reached `notePersisted`.
+// These tests pin the fix: one reading per delivered highlight ROW, whichever
+// path delivered it, with a breakdown that reconstructs the total exactly.
+// ---------------------------------------------------------------------------
+describe("delivered-latency: re-attested (upgrade-path) deliveries (ADAAAA-8024)", () => {
+  const centerTs = 159;
+  const lagMs = 700;
+  const firedAtMs = ORIGIN + centerTs * 1000 + lagMs;
+  const window = {
+    centerTs,
+    lagMs,
+    firedAtMs,
+    settledAtMs: firedAtMs + 4300,
+    acceptStartMs: firedAtMs + 4420,
+    acceptDoneMs: firedAtMs + 4600,
+  };
+
+  it("records a delivery produced ONLY by the upgrade path (samples = 1, exact breakdown)", () => {
+    const tracker = new LiveDeliveryTracker("job-2284");
+    // The window was decided and its row shipped as a celebration (the gate
+    // demoted it), so the observer registers it even though accepted=false.
+    tracker.noteWindow(window);
+    expect(tracker.snapshot()).toBeUndefined(); // registered ≠ delivered
+
+    // ~9 s later the later scoreboard read re-attests the row.
+    const upgradeAckAtMs = firedAtMs + 4600 + 9000;
+    tracker.notePersisted(centerTs, upgradeAckAtMs, "hl-goal2");
+
+    const snap = tracker.snapshot()!;
+    expect(snap.samples).toBe(1);
+    const row = snap.rows[0];
+    expect(row).toMatchObject({
+      triggerTs: 159,
+      fireLagMs: 700,
+      decideE2eMs: 4300,
+      acceptWaitMs: 120,
+      acceptMs: 180,
+      persistAckMs: 9000,
+      localizeOffsetMs: 0,
+      highlightId: "hl-goal2",
+    });
+    // The AC's number, and the breakdown reconstructs it EXACTLY.
+    expect(row.deliveredLatencyMs).toBe(700 + 4300 + 120 + 180 + 9000);
+    expect(deliveredStageSum(row)).toBe(row.deliveredLatencyMs);
+  });
+
+  it("prints the matching [live-deliver:<job>] line for an upgrade delivery", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const tracker = new LiveDeliveryTracker("job-2284");
+    tracker.noteWindow(window);
+    tracker.notePersisted(centerTs, firedAtMs + 4600 + 9000, "hl-goal2");
+    const line = log.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith("[live-deliver:job-2284]"));
+    log.mockRestore();
+    expect(line).toBeDefined();
+    expect(line).toContain("delivered=14300ms");
+    expect(line).toContain("highlight=hl-goal2");
+  });
+
+  it("counts the row ONCE when the accept path and the upgrade both fire", () => {
+    const tracker = new LiveDeliveryTracker("job-both");
+    tracker.noteWindow(window);
+    // Accept-time persist (the celebration row became readable then)...
+    tracker.notePersisted(centerTs, firedAtMs + 4608, "hl-goal2");
+    // ...then the re-attestation upgrade reports the SAME row.
+    tracker.notePersisted(centerTs, firedAtMs + 4600 + 9000, "hl-goal2");
+    const snap = tracker.snapshot()!;
+    expect(snap.samples).toBe(1);
+    // First delivery wins: the row keeps the accept-time reading.
+    expect(snap.rows[0].deliveredLatencyMs).toBe(700 + 4300 + 120 + 180 + 8);
+  });
+
+  it("samples equals the number of DISTINCT delivered rows", () => {
+    const tracker = new LiveDeliveryTracker();
+    tracker.noteWindow(window);
+    tracker.noteWindow({ ...window, centerTs: 285, lagMs: 1100, firedAtMs: ORIGIN + 285_000 + 1100 });
+    tracker.notePersisted(159, firedAtMs + 4600 + 500, "hl-a");
+    tracker.notePersisted(285, ORIGIN + 285_000 + 1100 + 4600 + 500, "hl-b");
+    // Every path may re-report a row; none may add a second reading.
+    tracker.notePersisted(285, ORIGIN + 285_000 + 1100 + 4600 + 500, "hl-b");
+    tracker.notePersisted(159, firedAtMs + 4600 + 9000, "hl-a");
+    const snap = tracker.snapshot()!;
+    expect(snap.samples).toBe(2);
+    expect(new Set(snap.rows.map((r) => r.highlightId)).size).toBe(snap.samples);
+  });
+
+  it("keeps a LOCALIZED re-attested trigger exact via its own localize term", () => {
+    const tracker = new LiveDeliveryTracker();
+    tracker.noteWindow(window);
+    // ADAAAA-8017's boundary read swings the anchor inside the window.
+    tracker.notePersisted(158.667, firedAtMs + 4600 + 9000, "hl-goal2");
+    const row = tracker.snapshot()!.rows[0];
+    expect(row.localizeOffsetMs).toBe(333);
+    expect(row.deliveredLatencyMs).toBe(700 + 4300 + 120 + 180 + 9000 + 333);
+    expect(deliveredStageSum(row)).toBe(row.deliveredLatencyMs);
+  });
+});
+
+describe("LiveObserver registers a DEMOTED window so the upgrade delivery is measurable (ADAAAA-8024)", () => {
+  it("keeps the clocks of an accepted=false window and emits the row when the upgrade acks", async () => {
+    const tracker = new LiveDeliveryTracker("job-demoted");
+    const observer = new LiveObserver({
+      cadenceS: 3,
+      windowS: 10,
+      fps: 2,
+      delivery: tracker,
+      onDecideStaged: () => ({
+        decide: async () => {},
+        // ADAAAA-7996: the goal gate demotes the accept to a celebration row.
+        accept: async () => false,
+      }),
+      maxInFlight: 2,
+      observeDecideOffLoop: true,
+    } as any);
+    observer.record(0, "f0", { ts: 0, tracks: [], objects: [], ocr: [] });
+    await observer.maybeFire(0, false, 4500);
+    await observer.flush();
+    // The demoted window contributes NO sample by itself (accepted=false)...
+    expect(buildLiveObserveMetrics(observer).deliveredLatency).toBeUndefined();
+    // ...but its clocks are retained, so the re-attestation's ack completes it.
+    const centerTs = observer.lastSample()!.centerTs;
+    const ackAtMs = Date.now() + 9000;
+    observer.noteHighlightDelivered(centerTs, ackAtMs, "hl-demoted");
+    const snap = buildLiveObserveMetrics(observer).deliveredLatency!;
+    expect(snap.samples).toBe(1);
+    expect(snap.rows[0].fireLagMs).toBe(4500);
+    expect(snap.rows[0].highlightId).toBe("hl-demoted");
+    expect(deliveredStageSum(snap.rows[0])).toBe(snap.rows[0].deliveredLatencyMs);
   });
 });
