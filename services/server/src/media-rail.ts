@@ -47,6 +47,7 @@ import {
   type PerFrameSeed,
   type PerFrameSignal,
   type SignalGateOptions,
+  type StagedObserveDecide,
   type TriggerFamilyLatency,
 } from "./observe-loop";
 import {
@@ -94,8 +95,10 @@ export interface MediaRailObservation {
 export interface MediaRailObserverOptions {
   jobId: string;
   /** The caller's decide + accept wiring. Returns whether the moment became an
-   *  accepted highlight (the observer records it for the cost report). */
-  onDecide: (payload: ObserveDecidePayload) => Promise<boolean>;
+   *  accepted highlight (the observer records it for the cost report). Required
+   *  on the serial path; with {@link onDecideStaged} the two-phase fork owns both
+   *  halves instead (ADAAAA-7987). */
+  onDecide?: (payload: ObserveDecidePayload) => Promise<boolean>;
   cadenceS?: number;
   windowS?: number;
   maxFrames?: number;
@@ -124,6 +127,26 @@ export interface MediaRailObserverOptions {
     frameB64: string;
     observation: MediaRailObservation;
   }) => void;
+  /** ADAAAA-7987: how many decide windows may be IN FLIGHT at once on this
+   *  rail — wired from `LIVE_OBSERVE_IN_FLIGHT` (default 4 on the box, 1 =
+   *  serial). Before this the media rail constructed its `LiveObserver` with
+   *  only `onDecide`, so every browser/RTMP share decided strictly one window at
+   *  a time (`observeMetrics.maxDecideInFlight = 0`) while 4 decide slots sat
+   *  idle: a ~4 s decide against a ~3.9 s cadence can never cover the cadence,
+   *  so the delivery lag sat at a constant 15-17 s. */
+  maxInFlight?: number;
+  /** ADAAAA-7987: the box's decide admission width (`DECIDE_CONCURRENCY`). The
+   *  depth above is a SHARED budget: each live stream gets
+   *  `floor(admission / activeLiveStreams)`, clamped to `maxInFlight`, so two
+   *  concurrent shares split the slots instead of oversubscribing them. */
+  decideAdmission?: number;
+  /** ADAAAA-7987: the two-phase decide fork (`decide()` may run K-wide,
+   *  `accept()` always in CONTENT order), so the media rail pipelines exactly
+   *  like the analyzer live-observe path (ADAAAA-7771/7878). */
+  onDecideStaged?: (payload: ObserveDecidePayload) => StagedObserveDecide;
+  /** ADAAAA-7987: `OBSERVE_DECIDE_OFFLOOP=0` keeps the serial in-chain decide at
+   *  depth 1 — byte-identical to the pre-7987 media rail. Default ON. */
+  observeDecideOffLoop?: boolean;
 }
 
 /** Build the per-frame seed context handed to the decide window from one
@@ -256,12 +279,29 @@ export class MediaRailObserver {
   private clockRejected = 0;
   private closed = false;
   private flushing = false;
+  /** ADAAAA-7987: whether this rail runs the pipelined (staged) decide fork. */
+  private readonly pipelined: boolean;
 
   constructor(opts: MediaRailObserverOptions, run?: LiveRunShared) {
     this.jobId = opts.jobId;
     this.onFrame = opts.onFrame;
     this.lagBudgetMs = Math.max(0, (opts.lagBudgetS ?? LIVE_OBSERVE_LAG_BUDGET_S) * 1000);
     this.run = run ?? new LiveRunShared({ audioRetainS: opts.audioRetainS });
+    // ADAAAA-7987: pipeline the decide pass exactly like the analyzer
+    // live-observe path (ADAAAA-7771 depth + ADAAAA-7878 off-loop issue). The
+    // media rail used to hand `LiveObserver` only `onDecide`, so the serial path
+    // ran one decide at a time (`maxDecideInFlight = 0`) and the cadence could
+    // never be held once a decide cost more than a cadence period. Depth is the
+    // SHARED budget (`floor(admission / activeLiveStreams)`), so a second share
+    // halves it instead of oversubscribing the decide gate.
+    const inFlight = Math.max(1, Math.floor(opts.maxInFlight ?? 1));
+    const admission = Math.max(1, Math.floor(opts.decideAdmission ?? 2));
+    const staged =
+      opts.onDecideStaged && ((opts.observeDecideOffLoop ?? true) || inFlight > 1) ? opts.onDecideStaged : null;
+    this.pipelined = !!staged;
+    // Only a pipelined rail takes part in the cross-stream depth sharing (a
+    // serial rail holds no extra slot, so counting it would starve the others).
+    if (staged && inFlight > 1) liveDecideAdmission.registerLiveJob(this.jobId);
     this.live = new LiveObserver({
       cadenceS: opts.cadenceS ?? OBSERVE_CADENCE_S,
       windowS: opts.windowS ?? LIVE_OBSERVE_WINDOW_S,
@@ -271,6 +311,15 @@ export class MediaRailObserver {
       signalGateOpts: opts.signalGateOpts,
       decideKeepRatio: opts.decideKeepRatio,
       onDecide: opts.onDecide,
+      ...(staged
+        ? {
+            maxInFlight: inFlight,
+            ...(inFlight > 1
+              ? { depthBudget: () => liveDecideAdmission.depthFor(this.jobId, inFlight, admission) }
+              : {}),
+            onDecideStaged: staged,
+          }
+        : {}),
       stageA: opts.stageA,
       // ADAAAA-7722: give the media rail the Stage-B (whistle) ledger too, so a
       // whistle-anchored decide on this rail is judged in its OWN family ledger
@@ -281,6 +330,29 @@ export class MediaRailObserver {
       // decides with another live job and stretch both past the budget.
       canDecide: () => liveDecideAdmission.admit(this.jobId),
     });
+  }
+
+  /** ADAAAA-7987: give back the shared depth registration WITHOUT spending a
+   *  tail decide — for a share that ended as a failure (its media session is
+   *  gone, so there is nothing left to decide on). A leaked registration would
+   *  shrink every later live stream's depth (`floor(admission / activeJobs)`). */
+  release(): void {
+    if (this.closed) return;
+    this.closed = true;
+    liveDecideAdmission.releaseLiveJob(this.jobId);
+  }
+
+  /** ADAAAA-7987: whether this rail runs the pipelined (staged) decide fork —
+   *  the wiring the box's `observeMetrics.maxDecideInFlight` reads (a serial
+   *  rail can never show depth > 0). */
+  isPipelined(): boolean {
+    return this.pipelined;
+  }
+
+  /** ADAAAA-7987: the in-flight decide depth this rail may use right now (the
+   *  shared decide budget clamped to `maxInFlight`; 1 = serial). */
+  currentDepthBudget(): number {
+    return this.live.currentDepthBudget();
   }
 
   /** Rebase one wall-clock timestamp onto this share's content clock. */
@@ -442,6 +514,9 @@ export class MediaRailObserver {
     // ADAAAA-7758: the share is over — give the live decide slot back (the tail
     // decide above already ran while the share still held it).
     liveDecideAdmission.release(this.jobId);
+    // ADAAAA-7987: ...and drop out of the cross-stream depth sharing, so this
+    // finished share cannot keep shrinking another live stream's depth.
+    liveDecideAdmission.releaseLiveJob(this.jobId);
     // Per-share evidence line: the deployment proof (AC-1/AC-2/AC-3) reads this
     // from `docker logs highlights-server` alongside the job's persisted
     // counters. ADAAAA-7723 adds the trigger LEDGER and the per-family latency,
@@ -455,6 +530,9 @@ export class MediaRailObserver {
         `stageA=${s.stageATriggers} stageB=${s.stageBTriggers} ` +
         `decideCalls=${s.decideCalls} triggerFires=${s.triggerFires} cadenceFires=${s.cadenceFires} ` +
         `accepted=${s.accepted} clockRejected=${s.clockRejected} ` +
+        // ADAAAA-7987: the pipelining proof on the per-share evidence line —
+        // `maxInFlight=1` would mean this share still decided serially.
+        `maxDecideInFlight=${this.live.maxInFlightDepth()} depthBudget=${this.live.currentDepthBudget()} ` +
         `triggerWindows accepted=${tw.accepted} coalesced=${tw.coalesced} covered=${tw.covered} ` +
         `expired=${tw.expired ?? 0} fired=${tw.fired} pending=${tw.pending ?? 0} invalid=${tw.invalid} ` +
         `reconciled=${s.triggersReconciled} ` +

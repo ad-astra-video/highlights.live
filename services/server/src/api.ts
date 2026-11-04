@@ -21,6 +21,8 @@ import {
   highlightIdempotencyKey,
   highlightDedupKey,
   observeOnDecide,
+  observeDecideOnly,
+  observeAcceptOnly,
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
@@ -769,6 +771,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             costUsd: Number((cfg.decideFee * railMetrics.decideCalls + (railStats.sessionSeconds / 3600) * PERCEIVE_PER_HOUR_USD).toFixed(4)),
           })
           .catch((e: any) => console.error(`[media-rail:${jobId}] metrics persist failed:`, e?.message || e));
+      } else if (bj.rail) {
+        // ADAAAA-7987: a share that ended as a FAILURE gets no tail decide (its
+        // session is gone), but it must still give back the shared in-flight
+        // depth registration — a leaked one would shrink every later live
+        // stream's depth to `floor(admission / activeJobs)`.
+        bj.rail.release();
       }
       if (bj.sessionId) await adapter.stopPerceive(bj.sessionId).catch(() => {});
       // Media-path session: tell the media server to stop paying + release the
@@ -972,6 +980,36 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           await billing.onDecideCompleted(user, sub, { streaming: true });
           return accepted;
         },
+        // ADAAAA-7987: the SAME two-phase fork the analyzer live-observe path
+        // uses (ADAAAA-7771). Before this the rail handed only `onDecide`, so a
+        // browser/RTMP share decided strictly one window at a time
+        // (`observeMetrics.maxDecideInFlight = 0`) while 4 decide slots sat idle:
+        // a ~4 s decide against a ~3.9 s cadence can never hold the cadence, so
+        // delivery lag sat at a constant 15-17 s. The decide half runs K-wide;
+        // acceptance stays serial in CONTENT order (highlights persist at
+        // decision time, in content order, exactly once per window).
+        onDecideStaged: (payload) => {
+          let verdict: Awaited<ReturnType<typeof observeDecideOnly>> = null;
+          return {
+            decide: async () => {
+              // Streaming waiver + metering stay on the DECIDE half: one decide
+              // call, one metered decide (the count the cost report reads).
+              await billing.canDecide(user, sub, { streaming: true });
+              try {
+                verdict = await observeDecideOnly(adapter, shared, anaCfg, bj.mediaSessionId ?? "", payload);
+              } finally {
+                await billing.onDecideCompleted(user, sub, { streaming: true });
+              }
+            },
+            accept: async () => {
+              if (!verdict) return false;
+              return observeAcceptOnly(adapter, shared, deferredCut, anaCfg, onEvent, payload, verdict);
+            },
+          };
+        },
+        maxInFlight: cfg.liveObserveInFlight,
+        decideAdmission: anaCfg.liveDecideAdmission,
+        observeDecideOffLoop: cfg.observeDecideOffLoop,
       },
       shared
     );
