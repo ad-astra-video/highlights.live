@@ -993,8 +993,17 @@ export function gateGoalClaims(text: string, ctx?: CaptionGroundingContext): str
   // zone is not glued onto a half-clause.
   out = tidy(out.replace(/\b(?:and|but|as|then)\s*(?=[,.;:!?]|$)/gi, "")).replace(/^\s*(?:and|but|as|then)\s+/i, "");
   if (PLAY_VERB.test(out) && place && !placePhraseOf(out) && !out.toLowerCase().includes(place.toLowerCase())) {
-    const withPlace = tidy(`${out} ${place}`);
-    if (wordCount(withPlace) <= QUIET_MAX_WORDS + 2) out = withPlace;
+    // ADAAAA-8027 (§2): the zone belongs INSIDE the sentence. Attaching it after
+    // a lead that already ended one shipped `… to reflect a shot. on the left` —
+    // a sentence break followed by a dangling fragment (the claim rewrite lands
+    // on `shot`, which `PLAY_VERB` takes as its noun alternative). The lead's own
+    // terminal punctuation moves to the end of the line first, the same shape
+    // `ensureLeadPlace` uses, so no lowercase continuation can follow a sentence
+    // end in the emitted string.
+    const terminal = out.match(/[.!?…]+$/)?.[0] ?? "";
+    const body = (terminal ? out.slice(0, -terminal.length) : out).trim();
+    const withPlace = body ? tidy(`${body} ${place}${terminal}`) : "";
+    if (withPlace && wordCount(withPlace) <= QUIET_MAX_WORDS + 2) out = withPlace;
   }
   out = repairLeadingCase(text, out);
   return out === text ? text : tidy(out);
@@ -1208,6 +1217,24 @@ function cutAtWord(text: string, max: number): string {
   return cut > 0 ? text.slice(0, cut).trim() : text.slice(0, max).trim();
 }
 
+/**
+ * ADAAAA-8027 (§2): cut at a SENTENCE boundary that fits `max`, so a capped card
+ * option is a whole sentence and never a prefix cut of the stored line. `""` when
+ * no complete sentence fits, so the caller serves the label alone.
+ */
+function cutAtSentence(text: string, max: number): string {
+  const src = (text ?? "").trim();
+  if (!src) return "";
+  if (src.length <= max) return src;
+  let out = "";
+  for (const beat of captionBeats(src)) {
+    const next = out ? `${out} ${beat}` : beat;
+    if (next.length > max) break;
+    out = next;
+  }
+  return out;
+}
+
 /** The caption a stored gated line renders as (byte-identical when it fits). */
 export function captionForStoredLine(line: string): string {
   return cutAtWord(repairDanglingTail((line ?? "").trim()), MAX_CAPTION_CHARS);
@@ -1221,9 +1248,12 @@ export function cardTitlesFor(line: string, label?: string): string[] {
     const v = (value ?? "").trim();
     if (v && !out.includes(v)) out.push(v);
   };
-  if (text) push(cutAtWord(text, CARD_TITLE_MAX_CHARS));
+  // ADAAAA-8027 (§2): the option is the ACCEPTED caption string (whole), cut at
+  // a sentence boundary only when it overruns the card ceiling — an independent
+  // `cutAtWord` at 140 minted a prefix cut on a long line.
+  if (text) push(cutAtSentence(text, CARD_TITLE_MAX_CHARS));
   const lbl = (label ?? "").trim();
-  if (lbl && text) push(cutAtWord(`${lbl}: ${text}`, CARD_TITLE_MAX_CHARS));
+  if (lbl && text) push(cutAtSentence(`${lbl}: ${text}`, CARD_TITLE_MAX_CHARS));
   if (lbl) push(lbl);
   return out.slice(0, 3);
 }
@@ -1280,6 +1310,7 @@ export type ServedShapeViolation =
   | "function-tail"
   | "object-missing"
   | "prefix-cut"
+  | "internal-break"
   | "open-clause"
   | "fragment"
   | "verbless";
@@ -1317,6 +1348,11 @@ export function servedShapeViolations(
   const words = normalizeServed(text).split(" ").filter(Boolean);
   if (words.length === 0) return ["empty"];
   const out: ServedShapeViolation[] = [];
+  // ADAAAA-8027 (§2): terminal punctuation followed by a lowercase word is a
+  // sentence break INSIDE the line (`The scoreboard updates to reflect a shot. on
+  // the left`) — the shape that had no rule before, so a card could carry it.
+  // A jersey (`No. 9`) or a decimal (`11.6`) is not a sentence end either way.
+  if (/[.!?…]["'”’)\]]*\s+\p{Ll}/u.test(text)) out.push("internal-break");
   const last = words[words.length - 1];
   if (SERVED_TAIL_WORDS.has(last)) out.push("function-tail");
   // A transitive verb whose object was cut: drop the trailing place phrase first,
@@ -1508,7 +1544,14 @@ export function servedShape(input: ServedShapeInput): ServedShapeResult {
   const sources = [captionLead(gated), captionLead(raw)].filter(Boolean);
   const quiet = input.quiet === true;
   const fits = (text: string): boolean => !!text && (!quiet || wordCount(text) <= QUIET_MAX_WORDS);
-  const clean = (text: string): boolean => fits(text) && servedShapeViolations(text, sources).length === 0;
+  // ADAAAA-7995 AC4: a quiet row carries no colour, so a fallback variant that
+  // still names one is skipped (the reduction list removes it).
+  const QUIET_COLOUR_PHRASE =
+    /\bin\s+(?:an?\s+|the\s+)?(?:white|blue|red|black|yellow|green|purple|orange|grey|gray)\b/i;
+  const clean = (text: string): boolean =>
+    fits(text) &&
+    (!quiet || !QUIET_COLOUR_PHRASE.test(text)) &&
+    servedShapeViolations(text, sources).length === 0;
   const refused = servedShapeViolations(candidate, sources);
   if (refused.length === 0) {
     if (fits(candidate)) return { text: candidate, violations: [], replaced: false };
@@ -1543,6 +1586,95 @@ export function servedShape(input: ServedShapeInput): ServedShapeResult {
     }
   }
   return { text: "", violations: refused.length ? refused : ["empty"], replaced: true };
+}
+
+/* ------------------------------------------------------------------------- *
+ * ADAAAA-8027 (§2, card clause) — the STORE-TIME post-condition.
+ *
+ * `servedShape` above guards the LADDER. A caption card never crossed it: the
+ * write seam stored `captionForStoredLine(gatedReason)` for any non-empty gated
+ * line, so a card could carry an internal sentence break (the `gateGoalClaims`
+ * seam), a prefix cut (`cutAtWord` at 140/180) or no predicate at all while the
+ * stored raw sentence carried one (`Shot in midfield` for `… the keeper is
+ * beaten …`). This helper is the ONE gate a stored card crosses, before any
+ * caption/title is derived:
+ *
+ *   1. the caption (the gated line, capped) is tested against the §2 rules with
+ *      the stored raw sentence as its source;
+ *   2. refused -> the WHOLE first sentence of `decision.reason` (the stored
+ *      raw), re-gated on the same terms (goal-claim / absence / name) so the
+ *      fallback cannot assert an uncorroborated goal — §3.4 forbids that on a
+ *      caption exactly as it does on a ladder row;
+ *   3. still refused -> the row stores NO card. A violating string is
+ *      unstoreable by construction.
+ *
+ * Card options are derived from the ACCEPTED caption string, never from an
+ * independent word cut.
+ * ------------------------------------------------------------------------- */
+export interface StoredCardSurfaceInput {
+  /** The gated line the row stores as its `reason`. */
+  gated: string;
+  /** The model's stored raw line (`decision.reason`), the §2 source. */
+  raw?: string | null;
+  /** The card option label (`shot`, `big play`, …). */
+  label?: string;
+  /** Quiet row: the 8-word budget applies to the card (the verdict's own rule). */
+  quiet?: boolean;
+  /** Re-gate a fallback sentence on the same terms (goal claim / absence). */
+  regate?: (sentence: string) => string;
+}
+
+export interface StoredCardSurface {
+  /** The accepted caption, `""` when the row must carry NO card. */
+  caption: string;
+  /** Options derived from the accepted caption (empty when the card is dropped). */
+  cardTitles: string[];
+  /** Why the gated caption was refused (`[]` when it passed unchanged). */
+  violations: ServedShapeViolation[];
+}
+
+/** The whole first sentence, capped at a sentence boundary (never a prefix cut). */
+function captionForWholeSentence(sentence: string): string {
+  const text = repairDanglingTail((sentence ?? "").trim());
+  if (!text) return "";
+  return cutAtSentence(text, MAX_CAPTION_CHARS);
+}
+
+export function storedCardSurface(input: StoredCardSurfaceInput): StoredCardSurface {
+  const gated = (input.gated ?? "").trim();
+  const raw = (input.raw ?? "").trim();
+  if (!gated) return { caption: "", cardTitles: [], violations: ["empty"] };
+  const rawSentence = wholeFirstSentence(raw);
+  const sources = [captionLead(wholeFirstSentence(gated)), captionLead(rawSentence)].filter(Boolean);
+  const quiet = input.quiet === true;
+  // Quiet rows keep the 8-word budget; loud rows do not have one.
+  const fits = (text: string): boolean => !!text && (!quiet || wordCount(text) <= QUIET_MAX_WORDS);
+  // ADAAAA-7995 AC4: a quiet row carries no colour, so a fallback variant that
+  // still names one is skipped (the reduction list removes it).
+  const QUIET_COLOUR_PHRASE =
+    /\bin\s+(?:an?\s+|the\s+)?(?:white|blue|red|black|yellow|green|purple|orange|grey|gray)\b/i;
+  const clean = (text: string): boolean =>
+    fits(text) &&
+    (!quiet || !QUIET_COLOUR_PHRASE.test(text)) &&
+    servedShapeViolations(text, sources).length === 0;
+  const candidate = captionForStoredLine(gated);
+  const violations = servedShapeViolations(candidate, sources);
+  if (clean(candidate)) {
+    return { caption: candidate, cardTitles: cardTitlesFor(candidate, input.label), violations: [] };
+  }
+  // Fallback (a): the WHOLE first sentence of the stored raw, re-gated on the same
+  // terms, then reduced ONLY extractively (the ladder's `servedReductions`) so a
+  // quiet row that lost its predicate at the quiet trim (`A player in the
+  // midfield.` for `… dribbles …`) is re-served WITH the verb, at the budget.
+  const reclaimed = input.regate ? input.regate(rawSentence) : rawSentence;
+  for (const variant of servedReductions(reclaimed)) {
+    const whole = captionForWholeSentence(variant);
+    if (clean(whole)) {
+      return { caption: whole, cardTitles: cardTitlesFor(whole, input.label), violations: [] };
+    }
+  }
+  // Fallback (b): no honest string -> no card. Never store a violating string.
+  return { caption: "", cardTitles: [], violations };
 }
 
 /** Letters a proper name may contain (accented Latin, apostrophes, hyphens).
@@ -1750,6 +1882,24 @@ export function groundCaption(text: string, ctx?: CaptionGroundingContext): stri
   if (!(out ?? "").trim()) return "";
   if (out === input) return input;
   return neverLonger(input, out);
+}
+
+/**
+ * ADAAAA-8027: re-gate a FALLBACK sentence for the §2 post-condition — the
+ * claim, absence, name and score gates only. The quiet trim is NOT re-applied:
+ * it is what dropped the predicate in the first place (`A player in the
+ * midfield.` for `… dribbles …`), and the caller re-serves the verb from the
+ * stored raw sentence, extractively, inside the card's budget.
+ */
+export function regateServedSentence(text: string, ctx?: CaptionGroundingContext): string {
+  const input = text ?? "";
+  if (!input.trim()) return input;
+  let out = stripInternalTokens(input);
+  out = gateGoalClaims(out, ctx);
+  out = gateAbsenceClaims(out, ctx);
+  out = groundNames(out, ctx?.promptText);
+  if (typeof ctx?.promptText === "string") out = gateScores(out, ctx.promptText);
+  return out;
 }
 
 /**
