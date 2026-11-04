@@ -757,7 +757,7 @@ export class MediaServer {
     const deadlineMs = this.opts.observeDeadlineMs ?? DEFAULT_OBSERVE_DEADLINE_MS;
     const fps = stream.sampleFps ?? this.rtcSampleFps;
     stream.observations = new ObservationRelay({
-      read: (seq, timeoutMs) => this.orch.readObservation(stream.provisioned, seq, timeoutMs),
+      read: (seq) => this.orch.readObservation(stream.provisioned, seq),
       emit: (obs, frame) => {
         // Live-detection latency budget (PO): wall time from frame receipt to
         // the observation being published. target 1-5s.
