@@ -376,7 +376,12 @@ export async function persistLiveHighlight(
   deps: LiveHighlightPersistence,
   user: User,
   sub: Subscription,
-  highlight: HighlightRecord
+  highlight: HighlightRecord,
+  /** ADAAAA-8005 (gate 3): called when the row is READABLE on the delivered
+   *  surface — i.e. the store write-through (memory, then DB) resolved. This is
+   *  the pinned "delivered" instant the trigger->delivered AC measures, so it is
+   *  reported from HERE (one definition) rather than re-derived per caller. */
+  onDelivered?: (triggerTs: number, deliveredAtMs: number) => void
 ): Promise<HighlightRecord> {
   // ADAAAA-7854: the quota is debited per POSTABLE MOMENT, not per persisted row.
   // Snapshot the job's rows BEFORE the insert so the decision below is
@@ -389,6 +394,20 @@ export async function persistLiveHighlight(
     ownerId: user.id,
     status: deps.cfg.autoPublishHighlights ? "accepted" : "pending",
   });
+  // ADAAAA-8005 (gate 3): DELIVERED. `addHighlight` writes the in-memory store
+  // first (so a feed read on this tick already sees the row) and only then
+  // awaits the DB write; the returned promise is the ack. Reported for a newly
+  // created row only — a dedup hit (`created:false`) was delivered on an earlier
+  // pass and must not add a second sample.
+  if (created && onDelivered) {
+    try {
+      // A legacy row without a trigger timestamp falls through as NaN; the
+      // tracker then attaches the ack to the newest pending window.
+      onDelivered(record.trigger?.timestamp ?? NaN, Date.now());
+    } catch (e: any) {
+      console.error(`[live-deliver:${record.jobId}] ack hook failed:`, String(e?.message || e));
+    }
+  }
   // ADAAAA-6874 (Phase 2): idempotency — bill/debit/funnel only on the FIRST
   // insert. A re-claimed/resumed job that re-persists the same idempotencyKey
   // returns `created: false` and must NOT re-bill, re-debit quota, or double
@@ -942,7 +961,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!user) return null;
     const sub = await db.getSubscription(user.id);
     const cw = await resolveClipWindow();
-    const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S });
+    // ADAAAA-8005 (gate 3): carry the job id so the delivery metric's per-row
+    // evidence line names the share it belongs to.
+    const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S, jobId: job.id });
     const anaCfg: AnalyzerConfig = buildLiveAnalyzerConfig({
       cfg,
       job,
@@ -983,7 +1004,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const onEvent = (ev: AnalyzeEvent) => {
       emitJobEvent(job.id, ev);
       if (ev.type === "highlight" && ev.highlight) {
-        persistLiveHighlight({ store, cfg, billing, entitlements, db }, user, sub, ev.highlight).catch((e) =>
+        // ADAAAA-8005 (gate 3): the delivered ack feeds the media rail's
+        // per-row trigger->delivered metric (observeMetrics.deliveredLatency).
+        persistLiveHighlight(
+          { store, cfg, billing, entitlements, db },
+          user,
+          sub,
+          ev.highlight,
+          (triggerTs, atMs) => shared.delivery.notePersisted(triggerTs, atMs)
+        ).catch((e) =>
           console.error(`[media-rail:${job.id}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
         );
       }
@@ -1206,7 +1235,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const onEvent = (ev: AnalyzeEvent) => {
         jobEventHook(job.id)(ev);
         if (ev.type === "highlight" && ev.highlight) {
-          persistLiveHighlight({ store, cfg, billing, entitlements, db }, user, sub, ev.highlight).catch((e) =>
+          // ADAAAA-8005 (gate 3): the delivered ack feeds the live rail's
+          // per-row trigger->delivered metric (same tracker the observer feeds).
+          persistLiveHighlight(
+            { store, cfg, billing, entitlements, db },
+            user,
+            sub,
+            ev.highlight,
+            (triggerTs, atMs) => shared.delivery.notePersisted(triggerTs, atMs)
+          ).catch((e) =>
             console.error(`[live:${job.id}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
           );
         }
@@ -1218,7 +1255,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-7671: retain LIVE_AUDIO_RETAIN_S of tapped audio (20 s) so a
       // window's whole 10 s span + margins survives even when the decide loop
       // lags the real-time tap.
-      const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S });
+      const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S, jobId: job.id });
       // Drive the audio tap (a second ffmpeg decoding 0:a:0 -> mono pcm_s16le)
       // in parallel with the video pass at ~10 Hz. Best-effort: a dropped
       // chunk or a stopped tap never aborts the video look. When the gate
