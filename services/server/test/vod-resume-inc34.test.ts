@@ -581,6 +581,15 @@ describe("VOD resume Inc 3+4 end to end (ADAAAA-7907 AC7, AC9, AC10)", () => {
     expect(parsed[1].skippedFrames).toBeGreaterThan(parsed[1].warmupFrames);
     expect(parsed[1].perceiveCalls).toBeLessThan(FRAME_COUNT);
 
+    // AC10 crash half (WRITE path): every checkpoint write records this attempt's
+    // running counters on its own trail entry, which is what lets boot recovery
+    // report a killed attempt. Proven on the finished record: the last attempt's
+    // entry still carries the counters its checkpoints wrote.
+    const trail = done.job.resume.attempts as any[];
+    const lastAttempt = trail[trail.length - 1];
+    expect(lastAttempt.decideCalls).toBeGreaterThan(0);
+    expect(lastAttempt.perceiveCalls).toBeGreaterThan(0);
+
     await t.app.close();
   }, 180000);
 });
