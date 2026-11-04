@@ -1431,6 +1431,10 @@ const SERVED_REDUCTIONS: Array<[RegExp, string]> = [
     "",
   ],
   [/\s+\bwith\s+(?:the\s+)?ball\b/gi, ""],
+  // the contract's own compressed place vocabulary (§3.2): `penalty area` /
+  // `goal area` -> `box` (one token shorter, same zone, never a prefix cut)
+  [/\bpenalty\s+area\b/gi, "box"],
+  [/\bgoal\s+area\b/gi, "box"],
   // the contract's compressed place form ("in the center" -> "in center")
   [/\bin\s+the\s+(center|centre)\b/gi, "in $1"],
   // a trailing place modifier ("of the pitch", "of the field")
