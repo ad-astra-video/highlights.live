@@ -69,9 +69,14 @@ describe("goal claims are gated by the window verdict (AC4b)", () => {
     expect(out).not.toMatch(/\bscores?\b|\bgoal\b/i);
   });
 
-  it("passes a REAL goal verdict through BYTE-IDENTICAL", () => {
+  it("passes a REAL goal verdict's lead through BYTE-IDENTICAL", () => {
+    // ADAAAA-7965 (contract v5 §3.1, R18): the claim survives byte-for-byte;
+    // the model's colour clause does not — a forwarded clause is what v4
+    // measured as contradicted by its own frames.
     const line = "No. 9 scores at the near post — the net ripples.";
-    expect(groundCaption(line, { verdict: "scoring_play", promptText: PROMPT, eventType: "GOAL" })).toBe(line);
+    expect(groundCaption(line, { verdict: "scoring_play", promptText: PROMPT, eventType: "GOAL" })).toBe(
+      "No. 9 scores at the near post"
+    );
   });
 
   it("passes a legacy GOAL row (no stored verdict) through unchanged", () => {
@@ -224,7 +229,11 @@ describe("internal decision-reason tails and technical terms (ADAAAA-7948, level
     expect(out).not.toContain("celebration");
     expect(out).not.toContain("score-transition");
     expect(out).not.toContain("shoots-transition");
-    expect(out).toBe("The player shoots and the ball stays out.");
+    // ADAAAA-7965 (contract v5 §3.4, R21): v3 replaced the goal claim with the
+    // ABSENCE claim "the ball stays out" that no stored evidence backed. The
+    // claim clause is now removed outright, so the shot beat remains and no
+    // negative is invented.
+    expect(out).toBe("The player shoots.");
   });
 
   it("leaves a hyphenated technical term intact when it survives (no 'shoots-transition')", () => {
@@ -234,7 +243,8 @@ describe("internal decision-reason tails and technical terms (ADAAAA-7948, level
   });
 
   it("rewrites an un-negated net-crossing claim on a non-goal verdict", () => {
-    expect(gateGoalClaims("The ball enters the net.", { verdict: "near_miss" })).toBe("The ball stays out.");
+    // R21: no absence assertion is invented in its place — the clause is removed.
+    expect(gateGoalClaims("The ball enters the net.", { verdict: "near_miss" })).toBe("");
   });
 
   it("keeps the NEGATED form — it states the opposite, not a claim", () => {
@@ -299,11 +309,12 @@ describe("rule 1: a quiet window carries no goal claim and no colour clause (ADA
     expect(captionColour(out)).toBe("");
   });
 
-  it("keeps the colour clause on a real goal window (the loud channel survives)", () => {
+  it("keeps a real goal window's lead and drops its forwarded colour clause", () => {
+    // ADAAAA-7965 (contract v5 §3.1, R18).
     const line = "No. 9 scores at the near post — the crowd erupts.";
     const out = groundCaption(line, { verdict: "scoring_play", promptText: QUIET_PROMPT });
-    expect(out).toBe(line);
-    expect(captionColour(out)).toBe("the crowd erupts.");
+    expect(out).toBe("No. 9 scores at the near post");
+    expect(captionColour(out)).toBe("");
   });
 
   it("drops a colour clause on a quiet window even when it never claimed a goal", () => {
@@ -343,8 +354,11 @@ describe("rule 1b: a quiet line is blunt — 8 words (AC5, measured 72.9% on v2.
   it("trims the 10-word kit shape the level shipped to the 8-word budget", () => {
     const out = trimQuietLine("Player in blue and yellow kit dribbles in penalty area");
     expect(wordCountOf(out)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
-    expect(out).toContain("penalty area");
-    expect(out).toBe("Player in blue kit dribbles in penalty area");
+    // ADAAAA-7965: the place compresses ("penalty area" -> "box") BEFORE an
+    // actor word is dropped, so the zone always survives the trim and the actor
+    // keeps its kit word. v4 dropped "kit" and left "the striker player".
+    expect(out).toContain("box");
+    expect(out).toBe("Player in blue kit dribbles in box");
   });
 
   it("trims the 9-word 'with ball' shape", () => {
@@ -612,9 +626,14 @@ describe("§3.1 claim gate fails closed (AC4b, measured strings)", () => {
     expect(out).not.toMatch(/\bscores?|goal|\bnet\b/i);
   });
 
-  it("still allows a claim on a real goal verdict (byte-identical)", () => {
+  it("still allows a claim on a real goal verdict (the lead is byte-identical)", () => {
+    // ADAAAA-7965 (contract v5 §3.1, R18): the LEAD of a real goal passes
+    // byte-identical; the model's colour clause no longer does, because a
+    // forwarded clause is exactly what QA v4 measured as contradicted by its own
+    // frames. Colour now rides only when the window's signal derives it.
     const line = "No. 9 scores at the near post — the net ripples.";
-    expect(groundCaption(line, { verdict: "scoring_play", promptText: QUIET_PROMPT })).toBe(line);
+    const out = groundCaption(line, { verdict: "scoring_play", promptText: QUIET_PROMPT });
+    expect(out).toBe("No. 9 scores at the near post");
   });
 
   it.each([
@@ -715,9 +734,12 @@ describe("§3.3 quiet gate is deterministic at emission (AC5)", () => {
     expect(gateQuietWindow(line, { promptText: QUIET_PROMPT })).toBe(line);
   });
 
-  it("leaves a loud window's line and colour beat alone", () => {
+  it("leaves a loud window's lead alone and drops a forwarded colour clause", () => {
+    // ADAAAA-7965 (contract v5 §3.1, R18): the colour half of the line is no
+    // longer forwarded from the model. A loud window keeps its lead and earns a
+    // beat only from its own measured signal.
     const line = "No. 9 scores at the near post — the crowd erupts.";
-    expect(gateQuietWindow(line, { verdict: "near_miss" })).toBe(line);
+    expect(gateQuietWindow(line, { verdict: "near_miss" })).toBe("No. 9 scores at the near post");
   });
 
   it("counts words AFTER the claim and name rewrites, so a rewrite cannot re-break the bar", () => {

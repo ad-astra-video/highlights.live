@@ -72,9 +72,9 @@ describe("caption seeding from the summary-log window (ADAAAA-7622)", () => {
   });
 
   it("suggests a post caption from that narrative, with no internal prefix (ADAAAA-7881)", () => {
-    expect(suggestCaption(hl({ localizedTs: 69.4 }), log)).toBe(
-      "Argentina breaks the deadlock — the ball is in the net."
-    );
+    // ADAAAA-7965 (contract v5 §3.4, R21): the model's net-clause is a claim the
+    // gate removes; it is not replaced by an absence assertion ("stays out").
+    expect(suggestCaption(hl({ localizedTs: 69.4 }), log)).toBe("Argentina breaks the deadlock.");
   });
 
   it("falls back to the clip start when no localization instant exists", () => {
@@ -508,5 +508,33 @@ describe("seeded card strings agree with the ladder banner (ADAAAA-7958 §3.4)",
   it("VOD (fastRail false) keeps the shipped verdict-only behaviour — AC8", () => {
     expect(postTitles(bare, log, highlightGrounding(bare, log, false)).some((t) => t.startsWith("Goal:"))).toBe(true);
     expect(postTitles(bare, log)).toEqual(postTitles(bare, log, highlightGrounding(bare, log)));
+  });
+});
+
+describe("render parity — the card renders the STORED gated string (ADAAAA-7965, R22)", () => {
+  // QA v4 measured the card options as an ungated derivative of the stored
+  // reason: the period dropped 5/5, the colour clause dropped, one last word cut.
+  const STORED = "No. 3 shoots in midfield. noise lifts, then settles";
+  const log: SummaryLogEntry[] = [entry(1, 0, "Kick-off."), entry(2, 12, STORED)];
+  const storedH = () =>
+    hl({
+      reason: "No. 3 shoots in midfield. noise lifts, then settles",
+      caption: STORED,
+      cardTitles: [STORED, `Shot: ${STORED}`, "Shot"],
+    });
+
+  it("returns the stored card options byte-for-byte", () => {
+    expect(postTitles(storedH(), log)).toEqual([STORED, `Shot: ${STORED}`, "Shot"]);
+  });
+
+  it("returns the stored caption byte-for-byte (period and colour kept)", () => {
+    expect(suggestCaption(storedH(), log)).toBe(STORED);
+  });
+
+  it("falls back to the derived path for a row with no stored strings", () => {
+    const legacy = hl({ reason: "No. 3 shoots in the box." });
+    expect(postTitles(legacy, log).length).toBeGreaterThan(0);
+    expect(postTitles(legacy, log)).not.toEqual([STORED]);
+    expect(suggestCaption(legacy, log)).toMatch(/[.!?]$/);
   });
 });

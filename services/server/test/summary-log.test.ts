@@ -217,7 +217,7 @@ describe("appendSummaryEntry caption grounding (ADAAAA-7948)", () => {
     expect(text).toBe("Audio Burst");
   });
 
-  it("passes a REAL goal verdict through byte-identical", async () => {
+  it("passes a REAL goal verdict's lead through byte-identical", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4" });
     const line = "No. 9 scores at the near post — the net ripples.";
@@ -225,7 +225,10 @@ describe("appendSummaryEntry caption grounding (ADAAAA-7948)", () => {
       windowTs: 72,
       grounding: { verdict: "scoring_play", promptText: PROMPT, eventType: "GOAL" },
     });
-    expect(s.getJob(job.id)!.summaryLog![0].text).toBe(line);
+    // ADAAAA-7965 (contract v5 §3.1, R18): the LEAD passes byte-identical; the
+    // model's appended clause does not, because a forwarded clause is what QA v4
+    // measured as contradicted by its own frames.
+    expect(s.getJob(job.id)!.summaryLog![0].text).toBe("No. 9 scores at the near post");
   });
 
   it("leaves the VOD path BYTE-IDENTICAL (no grounding context supplied)", async () => {
@@ -405,7 +408,8 @@ describe("write-seam parity (ADAAAA-7962, contract v4)", () => {
       windowTs: 117,
       grounding: { verdict: "scoring_play", promptText: PROMPT, corroborated: true },
     });
-    expect(s.getJob(job.id)!.summaryLog![0].text).toBe(line);
+    // R18: the claim survives byte-identical; an appended tag is not a beat.
+    expect(s.getJob(job.id)!.summaryLog![0].text).toBe("No. 10 strikes the ball into the net");
   });
 
   it("records the model's ungated line in exactly one audit-only field", async () => {
@@ -435,32 +439,45 @@ describe("write-seam parity (ADAAAA-7962, contract v4)", () => {
     expect(entry.text).toBe("Player in blue dribbles in midfield.");
   });
 
-  it("keeps colour on a quiet row only while the quiet colour share stays <= 40%", async () => {
+  it("keeps derived colour on a quiet row only while the quiet colour share stays <= 40%", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
-    const grounding = { verdict: "not_highlight" as const, promptText: PROMPT, colourEvidence: true };
-    // Eight quiet rows with a grounded colour beat: the budget allows the first
+    // ADAAAA-7965 (contract v5 §3.1, R18): the beat is DERIVED from the measured
+    // audio-noise signal, so the fixture is a signal, not a model clause.
+    const grounding = {
+      verdict: "not_highlight" as const,
+      promptText: PROMPT,
+      place: "in center circle",
+      colourSignal: { signal: "audio_noise" as const, ratio: 5, sustained: 0.2, peak: 0.4, peakT: 12, frameTs: 12, frameSeq: 36 },
+    };
+    // Eight quiet rows with a measurable beat: the budget allows the first
     // ceil(0.4 * n) of them, so a quiet-heavy job loses the clause on later rows
     // instead of breaking the 40% rule silently.
-    const lines = Array.from({ length: 8 }, (_v, i) => `Player ${i} moves ball in center circle. — crowd erupts`);
+    const lines = Array.from({ length: 8 }, (_v, i) => `Player ${i} moves ball in center circle.`);
     for (const [i, line] of lines.entries()) {
       await appendSummaryEntry(s, job.id, line, { windowTs: i * 3, grounding });
     }
     const log = s.getJob(job.id)!.summaryLog!;
-    const withColour = log.filter((e) => (e.text ?? "").includes("crowd erupts")).length;
+    const withColour = log.filter((e) => (e.text ?? "").includes("noise lifts, then settles"));
     expect(log).toHaveLength(8);
-    expect(withColour).toBeGreaterThan(0);
-    expect(withColour).toBeLessThanOrEqual(Math.ceil(0.4 * log.length));
+    expect(withColour.length).toBeGreaterThan(0);
+    expect(withColour.length).toBeLessThanOrEqual(Math.ceil(0.4 * log.length));
+    // Every coloured row stores the signal reference it was derived from.
+    for (const e of withColour) {
+      expect(e.colour?.signal).toBe("audio_noise");
+      expect(typeof e.colour?.frameTs).toBe("number");
+    }
   });
 
-  it("drops a colour beat with no measured evidence on the row's window", async () => {
+  it("drops a colour beat with no measured signal on the row's window", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
     await appendSummaryEntry(s, job.id, "No. 6 shoots — crowd energy rises", {
       windowTs: 159,
-      grounding: { verdict: "not_highlight", promptText: PROMPT, colourEvidence: false },
+      grounding: { verdict: "not_highlight", promptText: PROMPT, place: "in midfield" },
     });
-    const text = s.getJob(job.id)!.summaryLog![0].text;
-    expect(text).not.toContain("crowd energy rises");
+    const entry = s.getJob(job.id)!.summaryLog![0];
+    expect(entry.text).not.toContain("crowd energy rises");
+    expect(entry.colour).toBeUndefined();
   });
 });

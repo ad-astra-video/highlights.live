@@ -54,21 +54,59 @@ export interface CaptionGroundingContext {
    */
   corroborated?: boolean | null;
   /**
-   * ADAAAA-7962 (contract v4 §3.5): the window carries measured evidence that a
-   * colour beat may cite — crowd/audio energy from the audio-noise-change series
-   * already captured for this window (or a frame reaction). Absent / false =>
-   * NO colour (fails closed), which is what keeps VOD and the webapp's
-   * log-free paths byte-identical.
+   * ADAAAA-7965 (contract v5 §3.1, R18): the per-window MEASURED signal the
+   * colour beat is DERIVED from — the audio-noise delta
+   * (`analysis.audioSeries`) that ADAAAA-7964 selected, with the frame that
+   * confirms it. The model's colour clause is never forwarded, and a beat that
+   * carries no signal reference is not a beat.
+   *
+   * Absent / null => NO colour (fails closed), which is what keeps VOD and the
+   * webapp's log-free paths byte-identical.
    */
-  colourEvidence?: boolean | null;
+  colourSignal?: ColourSignal | null;
   /**
-   * ADAAAA-7962 (contract v4 §3.4): the window's stored zone/place, used only
-   * when a rewrite would otherwise drop the place. The pipeline stores no zone
-   * column, so this is normally absent and the place comes from the model line
-   * itself; the field exists so a caller that DOES know the zone can supply it
-   * and the rewrite still keeps actor + action + place.
+   * ADAAAA-7965 (contract v5 §3.4, R21): the window's stored evidence that a
+   * negative / absence claim (`the ball stays out`, `no goal`, `never crossed`)
+   * is true — the stored verdict plus the frame attestation for this window.
+   * Absent / false => no absence claim survives (the quiet shape ships).
+   */
+  absenceEvidence?: boolean | null;
+  /**
+   * ADAAAA-7962 (contract v4 §3.4, extended by v5 §3.2): the window's stored
+   * zone/place, used when the model's line names none (§3.2 place injection) and
+   * when a rewrite would otherwise drop the place. Resolved at the write seam
+   * from the window's own state (tracked ball position / stored possession
+   * line), never invented.
    */
   place?: string | null;
+}
+
+/**
+ * ADAAAA-7965 (contract v5 §3.1, R18): the measured per-window signal a colour
+ * beat is derived from, and the frame reference that confirms it.
+ *
+ * Parameters are exactly the block ADAAAA-7964 measured as the only stored
+ * signal that reaches the 20-40% band with 0 contradicted beats:
+ *
+ *   peak      = max(energy)                     (audioSeries taps in-window)
+ *   base      = median(energy)
+ *   ratio     = peak / max(base, 0.005)
+ *   sustained = count(energy >= 0.5*peak) / len(taps)
+ *   peakT     = t of the peak tap (stream seconds)
+ *   frameTs   = timestamp of the stored frame nearest peakT
+ *   frameSeq  = that frame's index in the stored frame set (t * sampleFps)
+ *
+ * `signal` is fixed to `audio_noise` today; the field exists so a second signal
+ * cannot be smuggled in without naming itself.
+ */
+export interface ColourSignal {
+  signal: "audio_noise";
+  ratio: number;
+  sustained: number;
+  peak: number;
+  peakT: number;
+  frameTs?: number;
+  frameSeq?: number;
 }
 
 /** Human labels for pipeline enums (a caption is customer copy, never a code). */
@@ -286,10 +324,16 @@ function rewriteScoreClaims(input: string, verb: string): string {
   }
   // A score phrase that names the goal word in one go.
   out = out.replace(/\b(?:scores?|scored)\s+(?:a|the)?\s*(?:goal|winner)\b/gi, (m) => matchCase(verb, m));
-  // The ball crossing the line / going in.
+  // ADAAAA-7965 (contract v5 §3.4, R21): the ball crossing the line is a claim,
+  // and the v4 rewrite replaced it with an ABSENCE claim ("the ball stays out")
+  // that no stored evidence backed — all 5 accepted reasons on `fd9c0259`
+  // asserted the ball stayed out while their own `reason_raw` said it entered
+  // the net and the T+12 frame showed a `GOL` overlay. An absence assertion
+  // needs evidence on the same terms as a positive one (§3.4), so the rewrite
+  // REMOVES the clause instead of inventing the opposite claim.
   out = out.replace(
-    /\b(?:the\s+)?ball\s+(?:enters?|is\s+in|goes?\s+into|is\s+into)\s+the\s+net\b/gi,
-    (m) => matchCase("the ball stays out", m)
+    /\b(?:and\s+)?(?:the\s+)?ball\s+(?:enters?|is\s+in|goes?\s+into|is\s+into|is\s+in)\s+the\s+net\b/gi,
+    ""
   );
   out = out.replace(/\b(?:into|inside)\s+(?:the\s+)?net\b/gi, (m) => matchCase("wide", m));
   out = out.replace(/\binto\s+net\b/gi, (m) => matchCase("wide", m));
@@ -323,8 +367,36 @@ function rewriteScoreClaims(input: string, verb: string): string {
   return out;
 }
 
-/** A place phrase at the end of a clause ("in the box", "from the edge of the area"). */
-const PLACE_TAIL = /\b(?:in|at|from|near|inside|outside|around|on)\s+(?:the\s+)?[\p{L}][\p{L}\d'’\s-]{0,30}$/u;
+/**
+ * A place phrase at the end of a clause ("in the box", "from the edge of the
+ * area"). ADAAAA-7965 widens this from "any words after a preposition" — which
+ * matched a claim clause ("in the net before the whistle") and let it be
+ * re-attached as if it were a zone — to an explicit PLACE vocabulary. A phrase
+ * outside the vocabulary is not a place, so the §3.2 stored-zone injection
+ * decides instead of a mis-parsed clause.
+ */
+/** The place nouns this gate recognises (measured place forms + the contract's). */
+const PLACE_NOUN_SRC = String.raw`(?:penalty\s+area|box|goal\s+area|six[- ]yard\s+box|` +
+  String.raw`cent(?:er|re)(?:\s+(?:circle|field|area))?|midfield|middle\s+third|final\s+third|` +
+  String.raw`attacking\s+third|defensive\s+third|near\s+post|far\s+post|close\s+range|` +
+  String.raw`touchline|wing|halves?|half|edge\s+of\s+the\s+(?:box|area)|` +
+  String.raw`left|right)`;
+
+const PLACE_TAIL = new RegExp(
+  String.raw`\b(?:in|at|from|near|inside|outside|around|on|into)\s+(?:the\s+)?` + PLACE_NOUN_SRC + String.raw`\b\.?$`,
+  "iu"
+);
+
+/** Any place phrase anywhere in a line (not just the tail). */
+const PLACE_ANYWHERE = new RegExp(
+  String.raw`\b(?:in|at|from|near|inside|outside|around|on|into)\s+(?:the\s+)?` + PLACE_NOUN_SRC + String.raw`\b`,
+  "iu"
+);
+
+/** Does the line name a place at all? (§3.2: a lead must.) */
+export function hasPlacePhrase(text: string): boolean {
+  return PLACE_ANYWHERE.test(text ?? "");
+}
 
 /**
  * ADAAAA-7962 (contract v4 §3.4): the place phrase a line already carries, so a
@@ -477,6 +549,11 @@ function wordCount(text: string): number {
  * applied longest-saving-first only until the 8-word budget is met.
  */
 const QUIET_TRIMS: [RegExp, string][] = [
+  // "penalty area" -> "box": the same place in the vocabulary the contract
+  // already uses, four tokens shorter. ADAAAA-7965 puts it FIRST so an over-long
+  // quiet line compresses the place instead of dropping an actor word (the v4
+  // order produced "The striker player shoots in the penalty area").
+  [/\bpenalty\s+area\b/gi, "box"],
   [/\s+\bwith\s+(?:the\s+)?ball\b/gi, ""],
   [
     /\s+\band\s+(?:white|blue|red|black|yellow|green|purple|orange|grey|gray)\b(?=\s+(?:kit|jersey|shirt|strip)\b)/gi,
@@ -486,9 +563,6 @@ const QUIET_TRIMS: [RegExp, string][] = [
   // "The No. 9 controls the ball in the penalty area." -> "No. 9 ..." (the
   // article before a jersey number is pure filler on a caption line).
   [/\bThe\s+(?=No\.?\s*\d+\b)/gi, ""],
-  // "penalty area" -> "box": the same place in the vocabulary the contract
-  // already uses, one token shorter. Never applied to "goal area".
-  [/\bpenalty\s+area\b/gi, "box"],
   // ADAAAA-7956 (level 3, job 8c045146): "in the center circle" -> "in center
   // circle" — the contract's own compressed place form, one token shorter.
   [/\bin\s+the\s+(center|centre)\s+circle\b/gi, "in $1 circle"],
@@ -556,6 +630,74 @@ const OCR_CITATION =
 export const COLOUR_MAX_CHARS = 40;
 
 /**
+ * ADAAAA-7965 (contract v5 §3.1, R18): nouns a DERIVED level beat may never
+ * name. The audit measured the source audio as a voice-like bed (88.6-89.9% of
+ * energy in 300-3400 Hz, spectral flatness 0.0067-0.0097), so every reaction
+ * word the v4 channel forwarded ("crowd erupts", "players celebrate") named
+ * something the signal does not measure — and 14 of 14 such beats were
+ * contradicted by their own frames. A beat words the LEVEL, never a reaction.
+ */
+const COLOUR_REACTION_NOUN =
+  /\b(?:crowd|stand|stands|bench|dugout|celebrat\w*|roar\w*|erupt\w*|momentum|stadium|fans?|scenes?)\b/i;
+
+/**
+ * ADAAAA-7965 (contract v5 §3.1, R18): derive the colour beat from the measured
+ * per-window audio-noise delta — the signal ADAAAA-7964 selected — instead of
+ * forwarding the model's colour clause.
+ *
+ * The rule is the audit's §5 parameter block, verbatim: emit only when the
+ * window carries a SHORT burst (`ratio >= 2.0`), not a plateau
+ * (`sustained <= 0.35`), with real energy (`peak >= 0.15`), and only when a
+ * stored frame confirms the instant the burst happened (frameTs / frameSeq).
+ * Wording is a function of the measured ratio, so the same signal always yields
+ * the same sentence and no sentence can outrun its evidence.
+ *
+ * Returns "" (the drop path) whenever the signal does not fire, is malformed, or
+ * the drafted beat is outside the content rules. A dropped beat means the row
+ * keeps its quiet shape — never a contradiction.
+ */
+export function colourBeatFromSignal(signal?: ColourSignal | null): string {
+  if (!signal || signal.signal !== "audio_noise") return "";
+  const { ratio, sustained, peak } = signal;
+  if (![ratio, sustained, peak].every((n) => typeof n === "number" && Number.isFinite(n))) return "";
+  if (ratio < 2 || sustained > 0.35 || peak < 0.15) return "";
+  // §3.1: every delivered beat carries the frame/timestamp that confirms it.
+  const hasFrame =
+    (typeof signal.frameTs === "number" && Number.isFinite(signal.frameTs)) ||
+    (typeof signal.frameSeq === "number" && Number.isFinite(signal.frameSeq));
+  if (!hasFrame) return "";
+  const beat =
+    ratio >= 10
+      ? "noise spikes over the play"
+      : ratio >= 4
+        ? "noise lifts, then settles"
+        : "noise rises with the play";
+  if (beat.length > COLOUR_MAX_CHARS) return "";
+  if (COLOUR_GUARD(beat)) return "";
+  return beat;
+}
+
+/** The content rules a derived beat must satisfy (§3.1 + v4 §3.5). */
+function COLOUR_GUARD(beat: string): boolean {
+  return (
+    COLOUR_REACTION_NOUN.test(beat) ||
+    OCR_CITATION.test(beat) ||
+    hasGoalClaim(beat) ||
+    hasProperName(beat)
+  );
+}
+
+export function colourBeatAllowed(colour: string, ctx?: CaptionGroundingContext): boolean {
+  const c = (colour ?? "").trim();
+  if (!c) return false;
+  if (c.length > COLOUR_MAX_CHARS) return false;
+  if (COLOUR_GUARD(c)) return false;
+  // §3.1: a beat is only allowed when it IS the beat this window's own signal
+  // derives. A model clause (or any other sentence) fails closed.
+  return colourBeatFromSignal(ctx?.colourSignal) === c;
+}
+
+/**
  * ADAAAA-7962 (contract v4 §3.5): does `text` carry a proper name? A colour beat
  * may never name a person or a club — an invented name in a colour clause is
  * exactly the invented-name failure AC4 grades ("Real Madrid player …").
@@ -571,49 +713,6 @@ export function hasProperName(text: string): boolean {
   return false;
 }
 
-/**
- * ADAAAA-7962 (contract v4 §3.5): is this colour clause an acceptable beat on
- * THIS window?
- *
- * v3 forbade colour on every quiet window, which is why the delivered page had
- * 0/26 colour while the model produced 42 colour clauses (R16) — the announcer
- * lost its colour half. v4 allows a colour beat on any window, quiet included,
- * when it is GROUNDED in that window's own evidence and stays inside four
- * content rules: ≤ 40 chars, no proper name, no score/net/goal verb, no OCR
- * quote. No measured evidence (`colourEvidence !== true`) => no colour, so a
- * quiet window with no crowd/audio signal keeps reading as a plain beat and the
- * quiet-colour share stays bounded.
- */
-/**
- * ADAAAA-7962 (§3.5): the deterministic colour beat a MEASURED window can carry
- * when the model gave none.
- *
- * The contract's colour channel is grounded in "crowd/audio energy (the
- * audio-noise-change signal)". The model only wrote a colour clause on ~9 of 41
- * delivered rows, so keeping model clauses alone measured a 5% colour share on
- * the offline replay — still short of the 20-40% band, i.e. the announcer would
- * still read as a wire report. This beat is derived from the same measured
- * evidence the gate already reads (no model call, no frames, no perception
- * pass), carries no proper name, no score/net/goal verb and no OCR quote, and
- * sits far inside the 40-char ceiling. It is only ever emitted when
- * `colourEvidence === true`, so the audio signal — not a template — decides.
- */
-export const GROUNDED_COLOUR_BEAT = "crowd's up";
-
-export function groundedColourBeat(ctx?: CaptionGroundingContext): string {
-  return ctx?.colourEvidence === true ? GROUNDED_COLOUR_BEAT : "";
-}
-
-export function colourBeatAllowed(colour: string, ctx?: CaptionGroundingContext): boolean {
-  const c = (colour ?? "").trim();
-  if (!c) return false;
-  if (c.length > COLOUR_MAX_CHARS) return false;
-  if (OCR_CITATION.test(c)) return false;
-  if (hasGoalClaim(c)) return false;
-  if (hasProperName(c)) return false;
-  return ctx?.colourEvidence === true;
-}
-
 export function gateOcrColour(text: string): string {
   const colour = captionColour(text);
   if (!colour || !OCR_CITATION.test(colour)) return text;
@@ -624,24 +723,27 @@ export function gateOcrColour(text: string): string {
 /**
  * ADAAAA-7956 rule 1 + ADAAAA-7957 §3.3 — the quiet gate, enforced at EMISSION
  * and AFTER the claim and name rewrites, so a rewrite can never push a line back
- * over the bar. A quiet window emits ≤ 8 words with no em-dash and no colour
- * clause; an OCR-citing colour clause is dropped on every window (§3.5).
+ * over the bar. A quiet window emits ≤ 8 words and carries no unmeasured colour.
  *
- * A real goal/highlight window is returned byte-identical apart from an OCR
- * clause, so the loud channel keeps its colour beat; a legacy row with no stored
- * verdict is untouched.
+ * ADAAAA-7965 (contract v5 §3.1, R18): the colour clause the MODEL wrote is
+ * dropped on every window — it is not derived from anything and both v4 beats
+ * measured were contradicted by their own frames. What rides instead is the beat
+ * DERIVED from this window's audio-noise signal (§3.1), and only when that
+ * signal fires. Quiet rows still cap at the 40% share at the write seam.
+ *
+ * A loud window keeps the derived beat; a legacy row with no stored verdict is
+ * untouched apart from an OCR clause or a forwarded model clause.
  */
 export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): string {
   let out = gateOcrColour(text);
-  if (!isQuietVerdict(ctx?.verdict)) return out === text ? text : out;
-  // v4 §3.5: a quiet window keeps a GROUNDED colour beat (crowd/audio energy,
-  // a frame reaction) and drops an ungrounded one. v3 dropped every clause.
-  const colour = captionColour(out);
-  const keepColour = colour ? colourBeatAllowed(colour, ctx) : false;
+  // R18: a forwarded model colour clause is never customer copy.
+  if (captionColour(out)) out = tidy(dropColourClause(out));
+  const beat = colourBeatFromSignal(ctx?.colourSignal);
+  if (!isQuietVerdict(ctx?.verdict)) {
+    out = beat ? tidy(`${out} — ${beat}`) : out;
+    return out === text ? text : tidy(out);
+  }
   const lead = trimQuietLine(captionLead(out), ctx?.place);
-  // A grounded model clause wins; with no clause, a measured window earns the
-  // deterministic beat (§3.5) so the announcer keeps its colour half.
-  const beat = keepColour ? colour : groundedColourBeat(ctx);
   out = beat ? tidy(`${lead} — ${beat}`) : lead;
   if (/[—–]/.test(out) && !beat) out = out.replace(/\s*[—–]\s*/g, ", ");
   return out === text ? text : tidy(out);
@@ -652,15 +754,14 @@ export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): st
  * byte-identical; every other window has its goal claim rewritten to the
  * window's outcome verb, or to the quiet shape when the outcome is not
  * determinable. The colour clause that came with a rewritten claim is dropped
- * with it (a quiet beat cannot ride a claim).
+ * with it (a quiet beat cannot ride a claim) — R18: the ONLY colour a rewritten
+ * line can carry is the beat derived from this window's signal, which the quiet
+ * gate appends after this pass.
  */
 export function gateGoalClaims(text: string, ctx?: CaptionGroundingContext): string {
   if (goalAllowed(ctx)) return text;
   if (!hasGoalClaim(text)) return text;
-  // v4 §3.4/§3.5: the claim goes, the place stays, and a GROUNDED colour beat
-  // survives the rewrite (v3 dropped it with the claim, which is what emptied
-  // the delivered colour channel).
-  const colour = captionColour(text);
+  // v4 §3.4: the claim goes, the place stays.
   let out = dropColourClause(text);
   const place = placePhraseOf(out) || (ctx?.place ?? "").trim();
   const verb = outcomeVerbFor(out);
@@ -670,11 +771,16 @@ export function gateGoalClaims(text: string, ctx?: CaptionGroundingContext): str
   // A rewrite keeps actor + action + PLACE. When the rewrite dropped the zone
   // ("Saez strikes the ball wide" from a line that named one) re-attach it —
   // but never turn a rewrite that had no place into a claim of one.
-  if (place && !placePhraseOf(out) && !out.toLowerCase().includes(place.toLowerCase())) {
+  if (!/[A-Za-z]/.test(out)) return "";
+  // A clause removed with the claim can leave a conjunction dangling at a
+  // sentence edge ("… as."): drop it BEFORE any place is re-attached, so the
+  // zone is not glued onto a half-clause.
+  out = tidy(out.replace(/\b(?:and|but|as|then)\s*(?=[,.;:!?]|$)/gi, "")).replace(/^\s*(?:and|but|as|then)\s+/i, "");
+  if (PLAY_VERB.test(out) && place && !placePhraseOf(out) && !out.toLowerCase().includes(place.toLowerCase())) {
     const withPlace = tidy(`${out} ${place}`);
     if (wordCount(withPlace) <= QUIET_MAX_WORDS + 2) out = withPlace;
   }
-  if (colour && colourBeatAllowed(colour, ctx)) out = tidy(`${out} — ${colour}`);
+  out = repairLeadingCase(text, out);
   return out === text ? text : tidy(out);
 }
 
@@ -693,25 +799,196 @@ export function findScoreClaims(text: string): string[] {
   return out;
 }
 
+/**
+ * ADAAAA-7965 (contract v5 §3.3, R20): removing a score span removes the
+ * prepositions that introduced it. The v4 strip dropped only the `1-1` tokens,
+ * so 4 of 5 accepted highlight reasons shipped ungrammatical copy:
+ *
+ *   `The scoreboard updates from to as the ball stays out.`
+ *   `The ball stays out and the scoreboard updates from.`   (x2)
+ *
+ * Each of those strings is pinned in `caption-grounding-v5.test.ts` and must not
+ * be producible. The order below is fixed: the `from X to Y` pair first (both
+ * prepositions belong to the pair), then a single prepositioned span, then a
+ * `leads/trails by` span (keeping its verb), then any bare token, then orphaned
+ * prepositions and coordinate conjunctions left at a clause edge.
+ */
+const SCORE_OPT = String.raw`(?:the\s+)?(?:score\s*(?:of|is)?\s*)?`;
+const SCORE_PAIR = new RegExp(
+  String.raw`\bfrom\s+` + SCORE_OPT + SCORE_TOKEN_SRC + String.raw`\s+to\s+` + SCORE_OPT + SCORE_TOKEN_SRC,
+  "gi"
+);
+const SCORE_LEAD = new RegExp(
+  String.raw`\b(leads?|trails?)\s+by\s+` + SCORE_OPT + SCORE_TOKEN_SRC,
+  "gi"
+);
+const SCORE_WITH_PREP = new RegExp(
+  String.raw`\b(?:from|to|at|into|level\s+at)\s+` + SCORE_OPT + SCORE_TOKEN_SRC,
+  "gi"
+);
+/** A preposition whose object was a score that has already been removed. */
+const ORPHAN_PREP = /\b(?:from|to|at|into)\s+(?=(?:from|to)\b|and\b|as\b|[,.;:!?]|$)/gi;
+/** The `from to` shape a double strip leaves behind. */
+const PREP_PAIR = /\b(?:from\s+to|to\s+from)\b/gi;
+
+/** Strip one uncorroborated score span (and its prepositions) from `text`. */
+function stripScoreSpan(text: string): string {
+  return tidy(
+    text
+      .replace(SCORE_PAIR, "")
+      .replace(SCORE_LEAD, "$1")
+      .replace(SCORE_WITH_PREP, "")
+      .replace(new RegExp(SCORE_TOKEN_SRC, "gi"), "")
+      .replace(PREP_PAIR, "")
+      .replace(ORPHAN_PREP, "")
+      // A conjunction that lost its right-hand clause is not a sentence end.
+      .replace(/\b(?:and|but|as)\s+(?=[,.;:!?]|$)/gi, "")
+  );
+}
+
 /** Rewrite/remove score strings that the window's prompt does not corroborate
  * (same shape as the summary ladder's fact gate, ADAAAA-7623). */
 function gateScores(text: string, promptText: string): string {
   let out = text;
-  for (const claim of findScoreClaims(out)) {
-    if (promptHas(promptText, claim)) continue;
-    if (!new RegExp(SCORE_TOKEN_SRC).test(out)) break;
-    // Drop the score token in place; contextual forms already degrade cleanly
-    // because a caption is a single beat ("level at 1-1" -> "level at").
-    out = out.replace(new RegExp(SCORE_TOKEN_SRC), "");
+  while (findScoreClaims(out).some((claim) => !promptHas(promptText, claim))) {
+    const before = out;
+    out = stripScoreSpan(out);
+    if (out === before) break;
   }
   if (out === text) return text;
-  return tidy(
-    out
-      .replace(/\b(?:at|to|the)\s+(?=[,.;:!?]|$)/gi, "")
-      .replace(/\b(?:updates?|moves?|changes?|reflects?)\s+(?:to|a)\s+(?=and\b|as\b|[,.;:!?]|$)/gi, "$1")
-      .replace(/\bleads?\s+by\s*(?=[,.;:!?]|$)/gi, "leads")
-      .replace(/\btrails?\s+by\s*(?=[,.;:!?]|$)/gi, "trails")
-  );
+  return out;
+}
+
+/**
+ * ADAAAA-7965 (contract v5 §3.4, R21): the absence / no-goal assertions a gate
+ * line can carry, with the connective that introduced them so removing one
+ * leaves a sentence.
+ *
+ * A claim that something did NOT happen (`the ball stays out`, `no goal`,
+ * `never crossed`) needs evidence on the same terms as a positive claim — the
+ * window's stored verdict AND its frames. v4's fail-closed rewrite swapped one
+ * ungrounded claim for another: all 5 accepted reasons on `fd9c0259` asserted
+ * `The ball stays out` while their own `reason_raw` said the ball entered the
+ * net and the T+12 frame showed a `GOL` overlay.
+ */
+const ABSENCE_CLAUSES: RegExp[] = [
+  /\b(?:and|but|as|while)?\s*(?:the\s+)?ball\s+(?:stays?|stayed|is|was)\s+out\b/gi,
+  /\b(?:and|but|as|while)?\s*(?:the\s+)?ball\s+(?:is|was)\s+out\s+of\s+play\b/gi,
+  /\b(?:with\s+)?(?:no|not\s+a|never\s+a|without\s+a)\s+goal\b/gi,
+  /\b(?:never|didn'?t|did\s+not|hasn'?t|has\s+not|wasn'?t|was\s+not)\s+(?:cross(?:ed|es)?|go(?:ne|es)?\s+in|entered|found\s+the\s+(?:back\s+of\s+the\s+)?net)\b/gi,
+  /\b(?:wide\s+of|off)\s+the\s+(?:goal|target)\b(?=[^.;]*\b(?:no|never|not)\b)/gi,
+];
+
+/** Does this line assert an absence / no-goal? */
+export function hasAbsenceClaim(text: string): boolean {
+  if (!text) return false;
+  return ABSENCE_CLAUSES.some((re) => {
+    re.lastIndex = 0;
+    return re.test(text);
+  });
+}
+
+/**
+ * §3.4: an absence claim survives only when the window's own stored verdict and
+ * frames back it. Otherwise the clause is removed and — when nothing else is
+ * left — the row does not ship (the quiet shape is the only honest form, and a
+ * line with no actor has none).
+ */
+export function gateAbsenceClaims(text: string, ctx?: CaptionGroundingContext): string {
+  const input = text ?? "";
+  if (!input.trim() || !hasAbsenceClaim(input)) return input;
+  if (ctx?.absenceEvidence === true) return input;
+  let out = input;
+  for (const re of ABSENCE_CLAUSES) out = out.replace(re, " ");
+  out = tidy(out)
+    // A removal at the start of the line leaves its conjunction behind.
+    .replace(/^\s*(?:and|but|as|while)\s+/i, "")
+    .replace(/\b(?:and|but|as|while)\s*(?=[,.;:!?]|$)/gi, "");
+  out = tidy(out);
+  if (!out || !/[A-Za-z]/.test(out)) return "";
+  return out === input ? input : repairLeadingCase(input, out);
+}
+
+/** Restore the capital a removed leading clause took with it. */
+function repairLeadingCase(original: string, out: string): string {
+  const first = original.trim().charAt(0);
+  if (first && first === first.toUpperCase() && /[a-z]/.test(out.charAt(0))) {
+    return out.charAt(0).toUpperCase() + out.slice(1);
+  }
+  return out;
+}
+
+/**
+ * ADAAAA-7965 (contract v5 §3.2, R19): every lead names actor + action + place.
+ * When the model's line names no zone, the write seam injects the stored one —
+ * resolved from the window's own state (tracked ball position / stored
+ * possession line), never from a prompt change and never invented here.
+ *
+ * A lead that cannot resolve a place does not ship in that form: the shot-only
+ * leads QA measured (`Yamal shoots`, the repeat, `The striker shoots`) were the
+ * three place misses in the v4 sample, and a place-less shot lead is exactly
+ * what this drops. A line with no action verb (a scoreboard/colour statement) is
+ * left alone — there is nothing to place.
+ */
+export function ensureLeadPlace(text: string, ctx?: CaptionGroundingContext): string {
+  const input = text ?? "";
+  if (!input.trim()) return input;
+  const lead = captionLead(input);
+  // The lead's place can sit mid-clause ("drives into the box and shoots"), not
+  // only at the tail, so look across the whole lead.
+  if (hasPlacePhrase(lead)) return input;
+  // Only a play lead needs a place; a statement has no actor to place.
+  if (!PLAY_VERB.test(lead)) return input;
+  // `place: null` means "the fast rail looked and resolved nothing" -> drop the
+  // form. An ABSENT key means this surface is not the fast rail (VOD, legacy,
+  // the webapp's pre-v5 rows) -> leave the line exactly as it was (AC8).
+  const resolved = ctx && Object.prototype.hasOwnProperty.call(ctx, "place");
+  const place = (ctx?.place ?? "").trim();
+  if (!place) return resolved ? "" : input;
+  const colour = captionColour(input);
+  return tidy(`${lead} ${place}${colour ? ` — ${colour}` : ""}`);
+}
+
+/** An action verb a play lead carries (the actor+action half of §3.2). */
+const PLAY_VERB =
+  /\b(?:shoots?|shot|strikes?|fires?|heads?|volleys?|drives?|dribbles?|carries?|moves?|controls?|passes?|tackles?|clears?|saves?|runs?|attacks?|presses?|chases?|reacts?|turns?|holds?|keeps?|jumps?|crosses?)\b/i;
+
+/**
+ * ADAAAA-7965 (contract v5 §3.5, R22): the stored surface strings one gated line
+ * renders as. The card caption and every card option is one of these values,
+ * byte-for-byte; a cap is resolved HERE (at the seam) and the cut value is what
+ * is stored, so the page can never truncate, drop a colour clause or drop a
+ * period on its own.
+ */
+export const MAX_CAPTION_CHARS = 180;
+/** The card option ceiling — the contract's own hard max for a delivered line. */
+export const CARD_TITLE_MAX_CHARS = 140;
+
+/** Cut at a word boundary, never mid-word, and never past `max`. */
+function cutAtWord(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.lastIndexOf(" ", max);
+  return cut > 0 ? text.slice(0, cut).trim() : text.slice(0, max).trim();
+}
+
+/** The caption a stored gated line renders as (byte-identical when it fits). */
+export function captionForStoredLine(line: string): string {
+  return cutAtWord((line ?? "").trim(), MAX_CAPTION_CHARS);
+}
+
+/** The card options a stored gated line renders as (each one a stored value). */
+export function cardTitlesFor(line: string, label?: string): string[] {
+  const text = (line ?? "").trim();
+  const out: string[] = [];
+  const push = (value: string) => {
+    const v = (value ?? "").trim();
+    if (v && !out.includes(v)) out.push(v);
+  };
+  if (text) push(cutAtWord(text, CARD_TITLE_MAX_CHARS));
+  const lbl = (label ?? "").trim();
+  if (lbl && text) push(cutAtWord(`${lbl}: ${text}`, CARD_TITLE_MAX_CHARS));
+  if (lbl) push(lbl);
+  return out.slice(0, 3);
 }
 
 /** Letters a proper name may contain (accented Latin, apostrophes, hyphens).
@@ -870,7 +1147,14 @@ function neverLonger(original: string, grounded: string): string {
   // 140 on the delivered line) cannot regress.
   const leadIn = captionLead(original);
   const leadOut = captionLead(grounded);
-  if (leadOut.length <= leadIn.length + 12 && (captionColour(grounded) || placePhraseOf(grounded))) {
+  // ADAAAA-7965 (§3.2): a lead that earned a place grew by up to a place phrase
+  // ("Yamal shoots" -> "The striker shoots in midfield"), and a derived colour
+  // beat adds up to 40 chars + separator. Both are bounded, and both are the
+  // contract's own deliverable, so they are allowed instead of being cut back to
+  // the model's length (which is what decapitated the zone in v4).
+  const placeGrowth = placePhraseOf(leadOut) && !placePhraseOf(leadIn) ? 24 : 0;
+  const colourGrowth = captionColour(grounded) ? COLOUR_MAX_CHARS + 3 : 0;
+  if (leadOut.length <= leadIn.length + 12 + placeGrowth + colourGrowth) {
     return grounded;
   }
   const cut = grounded.lastIndexOf(" ", original.length);
@@ -894,10 +1178,17 @@ export function groundCaption(text: string, ctx?: CaptionGroundingContext): stri
   // ADAAAA-7957: the §3.3 quiet gate runs LAST (after the claim and name
   // rewrites), so a rewrite cannot push a line back over the 8-word bar.
   out = gateGoalClaims(out, ctx);
+  // ADAAAA-7965 (contract v5 §3.4, R21): an absence claim needs the window's own
+  // verdict + frames; without them it does not ship.
+  out = gateAbsenceClaims(out, ctx);
   const prompt = ctx?.promptText;
   out = groundNames(out, prompt);
+  // ADAAAA-7965 (contract v5 §3.2, R19): the place comes from stored window
+  // state when the model line names none. A place-less play lead -> "".
+  out = ensureLeadPlace(out, ctx);
   out = gateQuietWindow(out, ctx);
   if (typeof prompt === "string") out = gateScores(out, prompt);
+  if (!(out ?? "").trim()) return "";
   if (out === input) return input;
   return neverLonger(input, out);
 }

@@ -267,6 +267,13 @@ export interface JobDetailHighlight {
   hasAudio?: boolean;
   // ADAAAA-7248: ASR transcript surfaced on the card for corroboration.
   asrTranscript?: string;
+  // ADAAAA-7965 (contract v5 §3.5, R22): the STORED caption and card options for
+  // this highlight, written by the gate at the write seam. The card renders them
+  // byte-for-byte, so a read can never truncate, drop a colour clause or drop a
+  // period on a string the gate approved. Absent on legacy/VOD rows, which keep
+  // the derived render path.
+  caption?: string;
+  cardTitles?: string[];
   createdAt: string;
   // ADAAAA-7622: the deterministic localized highlight instant (seconds from
   // stream start) the delivered clip is centered on, plus the signal that

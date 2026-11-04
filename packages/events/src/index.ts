@@ -654,6 +654,24 @@ export type VodObserveMetricsSnapshot = z.infer<typeof VodObserveMetricsSnapshot
 // tick it maps to; `text` is the summary content the model concluded for that
 // window (the incremental detail, distinct from the bounded rolling in-model
 // story-so-far). Additive optional on Job — absent on jobs that predate it.
+/**
+ * ADAAAA-7965 (contract v5 §3.1, R18): the signal reference a delivered colour
+ * beat carries. ADAAAA-7964 measured the per-window audio-noise delta as the
+ * ONLY stored signal that grounds a beat at the 20-40% band with 0 contradicted
+ * beats, so a beat stores the measurement it was derived from and the frame that
+ * confirms it. Additive optional.
+ */
+export const ColourSignalSchema = z.object({
+  signal: z.literal("audio_noise"),
+  ratio: z.number().finite(),
+  sustained: z.number().min(0).max(1),
+  peak: z.number().min(0),
+  peakT: z.number().finite(),
+  frameTs: z.number().min(0).optional(),
+  frameSeq: z.number().int().min(0).optional(),
+});
+export type ColourSignalRecord = z.infer<typeof ColourSignalSchema>;
+
 export const SummaryLogEntrySchema = z.object({
   seq: z.number().int().min(1),
   ts: z.string(),
@@ -682,6 +700,12 @@ export const SummaryLogEntrySchema = z.object({
    * serve `text_raw` as a narrative, and the delivered text is `text`.
    */
   text_raw: z.string().optional(),
+  /**
+   * ADAAAA-7965 (contract v5 §3.1): the signal reference for the colour beat
+   * this row carries (only set when the beat was derived from a firing
+   * audio-noise signal). A row with no `colour` carries no beat.
+   */
+  colour: ColourSignalSchema.optional(),
 });
 export type SummaryLogEntry = z.infer<typeof SummaryLogEntrySchema>;
 
@@ -1412,6 +1436,16 @@ export const HighlightRecordSchema = z.object({
   // Minted per caller by GET /jobs/:id/detail and never persisted by the store,
   // so the webapp never has to mint a token itself.
   exportUri: z.string().optional(),
+  // ADAAAA-7965 (contract v5 §3.5, R22): the surface strings the page renders
+  // for this highlight — stored at the write seam so the caption and every card
+  // option is byte-identical to a gated value (no read-time truncation, no
+  // dropped colour clause, no dropped punctuation). Additive optional; absent on
+  // legacy rows and on the VOD rail, which keep their own render path (AC8).
+  caption: z.string().optional(),
+  cardTitles: z.array(z.string()).optional(),
+  // ADAAAA-7965 (contract v5 §3.1, R18): the measured signal the colour beat in
+  // `reason` was derived from, with the frame that confirms it.
+  colour: ColourSignalSchema.optional(),
   createdAt: z.string(),
 });
 export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
