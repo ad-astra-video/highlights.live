@@ -2418,6 +2418,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         reason === "boot-recovery"
           ? `resuming after restart from T+${Math.round(resumedFromTs)}s`
           : "resume queued",
+      // ADAAAA-7907 (AC8): a resumed job is RUNNING again, so the terminal
+      // attribution moves to `resume.attempts[]`/`resume.lastError` and the
+      // job-level chip is cleared. Otherwise the owner's page shows an old
+      // "pipeline error / reason" chip next to a progressing pass.
+      failureReason: undefined,
+      error: undefined,
       resume: mergeResumeCheckpoint(checkpoint, {
         phase,
         attempts,
