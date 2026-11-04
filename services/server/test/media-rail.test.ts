@@ -100,6 +100,56 @@ describe("MediaRailObserver decide cadence (ADAAAA-7699)", () => {
     expect(rail.stats().decideCalls).toBe(calls.length);
   });
 
+describe("media rail decide-window density follows the resolved live cadence (ADAAAA-7990)", () => {
+  // The media node now samples the browser/RTMP share at the control plane's
+  // resolved live rate (3 fps). Denser sampling must mean MORE frames inside the
+  // UNCHANGED ~10 s rolling window and the UNCHANGED <=30-frame cap — never a
+  // longer window and never an unbounded payload.
+  it("carries up to 30 frames at 3 fps inside the same ~10 s window", async () => {
+    const calls: any[] = [];
+    const rail = new MediaRailObserver({
+      jobId: "j-7990-3fps",
+      fps: 3,
+      cadenceS: 3600, // only the finish-tail decide, so the window is the whole share
+      onDecide: async (p) => (calls.push(p), false),
+    });
+    const base = T0 - 10; // 10 s of content ending now
+    for (let i = 0; i < 30; i++) rail.onObservation({ seq: i, timestamp: base + i / 3, tracks: [] }, jpeg(i));
+    await rail.finish();
+
+    // The cadence-first tick decides the first frame; the finish tail decides the
+    // whole share (that tail is the window this ticket is about).
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    const win = calls[calls.length - 1].frames;
+    expect(win.length).toBe(30);
+    expect(win.length).toBeLessThanOrEqual(30); // LIVE_OBSERVE_MAX_FRAMES unchanged
+    const span = win[win.length - 1].ts - win[0].ts;
+    expect(span).toBeLessThanOrEqual(10); // window span unchanged (~10 s)
+  });
+
+  it("thins the same stream to the 2 fps content default when no rate is passed", async () => {
+    const calls: any[] = [];
+    const rail = new MediaRailObserver({
+      jobId: "j-7990-2fps-default",
+      cadenceS: 3600,
+      onDecide: async (p) => (calls.push(p), false),
+    });
+    const base = T0 - 10;
+    for (let i = 0; i < 30; i++) rail.onObservation({ seq: i, timestamp: base + i / 3, tracks: [] }, jpeg(i));
+    await rail.finish();
+
+    // 20 distinct frames on the 2 fps grid (the pre-7990 behaviour), versus 30
+    // once the rail is handed the resolved 3 fps rate.
+    const win = calls[calls.length - 1].frames;
+    // 21 frames on a 2 fps grid across 9.67 s of content (versus the 30-frame cap
+    // the resolved 3 fps rate fills).
+    expect(win.length).toBeLessThanOrEqual(21);
+    expect(win.length).toBeLessThan(30);
+    expect(win[win.length - 1].ts - win[0].ts).toBeLessThanOrEqual(10);
+  });
+});
+
+
   it("never decides without pixels (the anchor frame is required)", async () => {
     const calls: any[] = [];
     const rail = new MediaRailObserver({ jobId: "j-noframe", onDecide: async (p) => (calls.push(p), false) });

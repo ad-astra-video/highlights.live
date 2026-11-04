@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { resolveSampleFps } from "../src/api";
+import { resolveLiveSampleFps, resolveSampleFps } from "../src/api";
 import { testCfg } from "./helpers";
 
 // ADAAAA-3726: VOD sampling must honor the perceive runner's sustainable
@@ -122,3 +122,51 @@ describe("resolveSampleFps (live sampling, ADAAAA-5342 / ADAAAA-6796)", () => {
     expect(await resolveSampleFps(cfg, liveOpts(cfg))).toBeCloseTo(3.0);
   });
 });
+
+describe("resolveLiveSampleFps — ONE resolution source for both live rails (ADAAAA-7990)", () => {
+  // The media (browser/RTMP) rail used to sample at a hard-coded 1 fps
+  // (`sampleFps ?? 1` in services/media/src/rtc.ts) while ADAAAA-6796 had
+  // already funded 3 fps on the analyzer path. Both rails now resolve here.
+  it("defaults to the funded 3 fps baseline when perceive is unreachable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    const cfg = testCfg({});
+    expect(cfg.liveSampleBaseFps).toBe(3);
+    await expect(resolveLiveSampleFps(cfg)).resolves.toBeCloseTo(3.0);
+  });
+
+  it("honours LIVE_SAMPLE_BASE_FPS and the LIVE_SAMPLE_MAX_FPS cap", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    // A deployment that raises the base gets it (5), and a lower cap wins over
+    // a higher base so the funded ceiling can never be exceeded.
+    await expect(resolveLiveSampleFps(testCfg({ LIVE_SAMPLE_BASE_FPS: "5" }))).resolves.toBeCloseTo(5.0);
+    await expect(
+      resolveLiveSampleFps(testCfg({ LIVE_SAMPLE_BASE_FPS: "5", LIVE_SAMPLE_MAX_FPS: "4" }))
+    ).resolves.toBeCloseTo(4.0);
+  });
+
+  it("applies the live headroom to a capable GPU and still floors at the baseline", async () => {
+    const cfg = testCfg({ PERCEIVE_URL: "http://perceive", LIVE_SAMPLE_MAX_FPS: "10", LIVE_SAMPLE_HEADROOM: "0.9" });
+    stubHealth(0.2); // runner sustains 5 fps -> 5 * 0.9 = 4.5
+    await expect(resolveLiveSampleFps(cfg)).resolves.toBeCloseTo(4.5);
+    stubHealth(1.0); // CPU runner: 1 * 0.9 = 0.9 -> floored to 3
+    await expect(resolveLiveSampleFps(cfg)).resolves.toBeCloseTo(3.0);
+  });
+
+  it("leaves the VOD resolution untouched (AC5)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    const cfg = testCfg({});
+    // VOD keeps its own default (5) and its own cap (8): sharing the live
+    // resolver never re-points the VOD path at the live baseline.
+    expect(cfg.vodSampleFpsDefault).toBe(5);
+    expect(cfg.vodSampleMaxFps).toBe(8);
+    await expect(
+      resolveSampleFps(cfg, { defaultFps: cfg.vodSampleFpsDefault, maxFps: cfg.vodSampleMaxFps })
+    ).resolves.toBeCloseTo(5.0);
+    await expect(
+      resolveSampleFps(cfg, { defaultFps: 20, maxFps: cfg.vodSampleMaxFps })
+    ).resolves.toBe(8);
+    // ... and the live resolver is the live baseline, not the VOD default.
+    await expect(resolveLiveSampleFps(cfg)).resolves.toBeCloseTo(3.0);
+  });
+});
+

@@ -969,6 +969,108 @@ describe("media session reroute (DB-tracked)", () => {
   });
 });
 
+
+describe("media rail sampling-rate wiring (ADAAAA-7990)", () => {
+  // The browser/RTMP media rail never received the funded 3 fps: the control
+  // plane resolved nothing for a browser job and the media node's
+  // `WebRtcIngestSession` sampled at `sampleFps ?? 1`, so a real share delivered
+  // 0.91 fps (job 6d48c786). These cases pin the control-plane half of the
+  // wiring: resolve -> send with the session -> record on the job.
+  function fakeMediaNode(captured: any[]) {
+    return createServer((req, res) => {
+      const url = (req.url || "").split("?")[0];
+      if (url === "/health") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"status":"ok"}');
+        return;
+      }
+      if (url === "/sessions" && req.method === "POST") {
+        let raw = "";
+        req.on("data", (c) => (raw += c));
+        req.on("end", () => {
+          try {
+            captured.push(JSON.parse(raw));
+          } catch {
+            captured.push(raw);
+          }
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ sessionId: "sess-7990", wsPath: "/stream/sess-7990", streamId: "st-7990" }));
+        });
+        return;
+      }
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end('{"error":"nf"}');
+    });
+  }
+
+  it("resolves the funded 3 fps, sends it with the session and records it on the job", async () => {
+    const captured: any[] = [];
+    const srv = fakeMediaNode(captured);
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as any).port;
+    const { app } = await buildTestApp({ MEDIA_SERVER_URL: `http://127.0.0.1:${port}` });
+    const token = await register(app, "fps7990@test.dev", "password123");
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser", gameHint: "x" },
+    });
+    const jobId = jr.json().job.id;
+
+    const m1 = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/media`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {},
+    });
+    expect(m1.statusCode).toBe(200);
+    // AC1 (unit form): the JOB RECORD carries the resolved sampleFps = 3 ...
+    const job = await app.inject({ method: "GET", url: `/jobs/${jobId}`, headers: { authorization: `Bearer ${token}` } });
+    expect(job.json().job.sampleFps).toBe(3);
+    // ... the route answers the rate it applied ...
+    expect(m1.json().sampleFps).toBe(3);
+    // ... and the media node is told to decode at that rate (it used to run 1).
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ jobId, sampleFps: 3 });
+
+    await app.close();
+    await new Promise<void>((r) => srv.close(() => r()));
+  });
+
+  it("follows LIVE_SAMPLE_BASE_FPS and the LIVE_SAMPLE_MAX_FPS cap rather than a hard-coded 3", async () => {
+    const captured: any[] = [];
+    const srv = fakeMediaNode(captured);
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as any).port;
+    const { app } = await buildTestApp({
+      MEDIA_SERVER_URL: `http://127.0.0.1:${port}`,
+      LIVE_SAMPLE_BASE_FPS: "5",
+      LIVE_SAMPLE_MAX_FPS: "4",
+    });
+    const token = await register(app, "fps7990cap@test.dev", "password123");
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser", gameHint: "x" },
+    });
+    const jobId = jr.json().job.id;
+    const m1 = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/media`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {},
+    });
+    expect(m1.statusCode).toBe(200);
+    // base 5 is bounded by the deployment's cap 4 — one resolution source.
+    expect(captured[0].sampleFps).toBe(4);
+
+    await app.close();
+    await new Promise<void>((r) => srv.close(() => r()));
+  });
+});
+
 describe("VOD browser upload (multipart POST /jobs/upload)", () => {
   async function multipart(opts: {
     fields?: Record<string, string>;
