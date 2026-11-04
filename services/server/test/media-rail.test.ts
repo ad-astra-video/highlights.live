@@ -199,6 +199,116 @@ describe("MediaRailObserver decide cadence (ADAAAA-7699)", () => {
   });
 });
 
+describe("MediaRailObserver pipelined decide depth (ADAAAA-7987)", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("keeps >= 2 decide windows in flight and still accepts in CONTENT order", async () => {
+    // The deployed defect: the rail handed its LiveObserver only `onDecide`, so a
+    // browser/RTMP share decided strictly one window at a time
+    // (`observeMetrics.maxDecideInFlight = 0`) while 4 decide slots sat idle —
+    // a ~4 s decide against the ~3.9 s cadence can never hold the cadence, which
+    // is the constant 15-17 s delivery lag the CEO saw.
+    let active = 0;
+    let maxActive = 0;
+    const decided: number[] = [];
+    const accepted: number[] = [];
+    const rail = new MediaRailObserver({
+      jobId: "j-7987-depth",
+      cadenceS: 0.5,
+      windowS: 2,
+      fps: 2,
+      maxInFlight: 4,
+      decideAdmission: 8,
+      onDecideStaged: (payload) => {
+        decided.push(payload.centerTs);
+        return {
+          decide: async () => {
+            active++;
+            maxActive = Math.max(maxActive, active);
+            // The FIRST window is the SLOWEST, so completion order is reversed
+            // against content order — acceptance must not follow it.
+            await sleep(payload.centerTs === 0 ? 300 : 120);
+            active--;
+          },
+          accept: async () => {
+            accepted.push(payload.centerTs);
+            return true;
+          },
+        };
+      },
+    });
+    // 6.5 s of content at a 0.5 s cadence (~13 windows), relayed on a ~30 ms
+    // wall clock (like the media node's observe POSTs) so the decides overlap
+    // instead of all arriving in one synchronous burst.
+    for (let i = 0; i <= 12; i++) {
+      rail.onObservation({ seq: i, timestamp: T0 + i * 0.5, tracks: [] }, jpeg(i));
+      await sleep(30);
+    }
+    await waitFor(() => decided.length >= 8);
+    await rail.finish();
+
+    const m = rail.observeMetrics();
+    expect(rail.isPipelined()).toBe(true);
+    // AC-1: several windows really were outstanding at once...
+    expect(m.maxDecideInFlight).toBeGreaterThanOrEqual(2);
+    expect(m.maxDecideInFlight).toBeLessThanOrEqual(4);
+    expect(maxActive).toBeGreaterThanOrEqual(2);
+    // ...AC-5: acceptance still applies in content order, and one decide is one
+    // window (the billing invariant — the only repeat is the end-of-stream tail,
+    // which re-observes the newest window, the pre-existing flush behaviour).
+    expect(accepted).toEqual([...accepted].sort((a, b) => a - b));
+    expect(accepted[0]).toBe(0); // the slow first window is applied FIRST
+    const distinct = new Set(decided);
+    expect(distinct.size).toBeGreaterThanOrEqual(decided.length - 1);
+    expect(m.decideCalls).toBe(decided.length);
+  });
+
+  it("shares the in-flight depth across concurrent live streams (never above LIVE_OBSERVE_IN_FLIGHT)", async () => {
+    // AC-4: one stream gets >= 2, never more than the configured depth; two
+    // concurrent streams split the decide admission and neither is starved.
+    const opts = (jobId: string, admission: number) => ({
+      jobId,
+      cadenceS: 3,
+      maxInFlight: 4,
+      decideAdmission: admission,
+      onDecideStaged: () => ({ decide: async () => {}, accept: async () => false }),
+    });
+    const lone = new MediaRailObserver(opts("j-7987-lone", 8));
+    expect(lone.currentDepthBudget()).toBe(4); // >= 2, <= LIVE_OBSERVE_IN_FLIGHT
+    lone.release();
+    const a = new MediaRailObserver(opts("j-7987-share-a", 8));
+    const b = new MediaRailObserver(opts("j-7987-share-b", 8));
+    expect(a.currentDepthBudget()).toBe(4); // 8 / 2 streams = 4 each
+    expect(b.currentDepthBudget()).toBe(4);
+    // A 2-wide decide gate cannot give two streams depth: each falls back to the
+    // serial pass instead of queueing a decide that would land late.
+    a.release();
+    b.release();
+    const narrowA = new MediaRailObserver(opts("j-7987-narrow-a", 2));
+    const narrowB = new MediaRailObserver(opts("j-7987-narrow-b", 2));
+    expect(narrowA.currentDepthBudget()).toBe(1);
+    expect(narrowB.currentDepthBudget()).toBe(1);
+    narrowA.release();
+    narrowB.release();
+  });
+
+  it("keeps the serial path byte-identical when the off-loop flag is off", () => {
+    const rail = new MediaRailObserver({
+      jobId: "j-7987-serial",
+      onDecide: async () => false,
+      maxInFlight: 1,
+      decideAdmission: 8,
+      observeDecideOffLoop: false,
+      onDecideStaged: () => ({ decide: async () => {}, accept: async () => false }),
+    });
+    // Depth 1 + flag off => the pre-7987 in-chain serial decide (no staged fork,
+    // no registration in the shared depth budget).
+    expect(rail.isPipelined()).toBe(false);
+    expect(rail.currentDepthBudget()).toBe(1);
+    rail.release();
+  });
+});
+
 describe("POST /jobs/:id/observe + /jobs/:id/audio decide on the media rail (ADAAAA-7699)", () => {
   async function register(app: any, email: string): Promise<string> {
     const r = await app.inject({ method: "POST", url: "/auth/register", payload: { email, password: "password123" } });
