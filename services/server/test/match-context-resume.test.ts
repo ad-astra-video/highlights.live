@@ -21,6 +21,7 @@ import {
   MATCH_CONTEXT_USABLE_CONFIDENCE,
   applyResumeCarryForward,
   carryForwardTrailEntry,
+  collapseDuplicateKitColors,
   createVodMatchContextResolver,
   guardMatchContextRegression,
   isResumedAttempt,
@@ -481,5 +482,92 @@ describe("createVodMatchContextResolver — resume after a deploy recreate (ADAA
     expect(final.matchContext).toEqual(PRE_INTERRUPTION_CONTEXT);
     expect(final.matchContextEvidence.scorebugOcrFrames).toBe(24);
     expect(final.matchContextEvidence.channelOutcomes.metadata.candidates).toHaveLength(1);
+  });
+});
+
+// ADAAAA-7981: a kit colour is published only for a side THIS pass attributed
+// one to (measured on job fe0e3efc, where "orange" reached BOTH sides).
+describe("guardMatchContextRegression — kit colours never resurrect (ADAAAA-7981)", () => {
+  it("drops a carried colour when the pass observed clusters but attributed none to that side", () => {
+    // Previous record: away Spain@0.65 in white. This pass: Spain@0.15 with NO
+    // kit colour, but it DID observe two clusters. The carried identity keeps
+    // 0.65; the colour it never re-attributed is dropped.
+    const guarded = guardMatchContextRegression(PRE_INTERRUPTION_CONTEXT, RESUMED_TAIL_CONTEXT, ["orange", "red"]);
+    const away = guarded.teams.find((t) => t.side === "away");
+    expect(away?.name).toBe("Spain");
+    expect(away?.confidence).toBe(0.65);
+    expect(away?.kitColors).toEqual([]);
+  });
+
+  it("keeps the stored colour when the pass observed no clusters at all", () => {
+    // A resumed tail with no player crops has nothing to say about kit colour.
+    const guarded = guardMatchContextRegression(PRE_INTERRUPTION_CONTEXT, RESUMED_TAIL_CONTEXT, []);
+    expect(guarded.teams.find((t) => t.side === "away")?.kitColors).toEqual([{ primary: "white" }]);
+  });
+
+  it("keeps the pass's own attribution when it did attribute a colour", () => {
+    const guarded = guardMatchContextRegression(
+      PRE_INTERRUPTION_CONTEXT,
+      {
+        ...RESUMED_TAIL_CONTEXT,
+        teams: RESUMED_TAIL_CONTEXT.teams.map((t) => (t.side === "away" ? { ...t, kitColors: [{ primary: "red" }] } : t)),
+      },
+      ["red"]
+    );
+    const away = guarded.teams.find((t) => t.side === "away");
+    expect(away?.confidence).toBe(0.65);
+    expect(away?.kitColors).toEqual([{ primary: "red" }]);
+  });
+
+  it("restores a dropped side's identity with no colour when the pass saw clusters", () => {
+    const guarded = guardMatchContextRegression(
+      PRE_INTERRUPTION_CONTEXT,
+      { ...RESUMED_TAIL_CONTEXT, teams: RESUMED_TAIL_CONTEXT.teams.filter((t) => t.side === "home") },
+      ["orange", "red"]
+    );
+    const away = guarded.teams.find((t) => t.side === "away");
+    expect(away?.name).toBe("Spain");
+    expect(away?.kitColors).toEqual([]);
+  });
+});
+
+describe("collapseDuplicateKitColors — AC-A2, one colour never describes both sides", () => {
+  const BOTH_ORANGE: MatchContext = {
+    sport: "soccer",
+    teams: [
+      { name: "Portugal", side: "home", kitColors: [{ primary: "orange" }], confidence: 0.95, evidence: [] },
+      { name: "Spain", side: "away", kitColors: [{ primary: "Orange" }], confidence: 0.65, evidence: [] },
+    ],
+    inferredAt: "2026-11-04T01:13:10.396Z",
+    resolverVersion: 1,
+    ambiguous: false,
+    trail: [
+      { at: "2026-11-04T01:13:10.396Z", progressPct: 50, names: [], action: ["no change"] },
+    ],
+  };
+
+  it("drops the identical primary from BOTH sides and marks the match ambiguous", () => {
+    const out = collapseDuplicateKitColors(BOTH_ORANGE, 50);
+    expect(out.teams.map((t) => t.kitColors)).toEqual([[], []]);
+    expect(out.ambiguous).toBe(true);
+    expect(out.trail[out.trail.length - 1].action).toEqual([
+      "collapsed: dropped identical kit colour orange published for both sides",
+    ]);
+  });
+
+  it("is a no-op when the two sides name different colours", () => {
+    const ctx: MatchContext = {
+      ...BOTH_ORANGE,
+      teams: BOTH_ORANGE.teams.map((t) => (t.side === "away" ? { ...t, kitColors: [{ primary: "white" }] } : t)),
+    };
+    expect(collapseDuplicateKitColors(ctx, 50)).toBe(ctx);
+  });
+
+  it("is a no-op when only one side publishes a colour", () => {
+    const ctx: MatchContext = {
+      ...BOTH_ORANGE,
+      teams: BOTH_ORANGE.teams.map((t) => (t.side === "away" ? { ...t, kitColors: [] } : t)),
+    };
+    expect(collapseDuplicateKitColors(ctx, 50)).toBe(ctx);
   });
 });

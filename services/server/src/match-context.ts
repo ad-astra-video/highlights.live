@@ -537,8 +537,14 @@ export function mergeMatchContextEvidence(
  * - Per side (home/away), the record keeps the STRONGER of the persisted and
  *   the incoming team: a thinner pass (the resumed tail, a late re-check on a
  *   stretch without the score graphic) cannot lower a confidence the job
- *   already earned. Keeping the previous team object also keeps its kit colours
- *   and evidence, which is what made 0.65 -> 0.15 lose `scorebug_ocr`.
+ *   already earned. Keeping the previous team object also keeps its evidence,
+ *   which is what made 0.65 -> 0.15 lose `scorebug_ocr`.
+ * - ADAAAA-7981: the carried identity does NOT carry the previous KIT COLOURS
+ *   when the incoming pass observed kit clusters of its own. A colour this pass
+ *   did not attribute to the side is unverifiable now, and re-publishing it was
+ *   the measured fe0e3efc defect (away Spain@0.65 "orange" resurrected onto a
+ *   pass that reported `kitColorsUnattributed: ["away"]`). With NO observed
+ *   cluster (resume tail / no player crops) the stored colours still survive.
  * - A side the record resolved at/above the usable floor is carried forward
  *   when the incoming pass dropped it entirely.
  * - Any published attribution below `MATCH_CONTEXT_USABLE_CONFIDENCE` forces
@@ -547,7 +553,8 @@ export function mergeMatchContextEvidence(
  */
 export function guardMatchContextRegression(
   previous: MatchContext | undefined,
-  incoming: MatchContext
+  incoming: MatchContext,
+  observedClusters: string[] = []
 ): MatchContext {
   const usable = MATCH_CONTEXT_USABLE_CONFIDENCE;
   const prevBySide = new Map<string, MatchContextTeam>();
@@ -557,14 +564,22 @@ export function guardMatchContextRegression(
   const teams: MatchContextTeam[] = incoming.teams.map((team) => {
     const prev = prevBySide.get(team.side);
     if (prev && prev.name && Number(prev.confidence) > Number(team.confidence)) {
-      return { ...prev };
+      const kitColors =
+        observedClusters.length > 0
+          ? team.kitColors ?? []
+          : (team.kitColors?.length ? team.kitColors : prev.kitColors);
+      return { ...prev, confidence: Number(prev.confidence), kitColors };
     }
     return team;
   });
   for (const side of ["home", "away"] as const) {
     if (teams.some((team) => team.side === side)) continue;
     const prev = prevBySide.get(side);
-    if (prev && Number(prev.confidence) >= usable) teams.push({ ...prev });
+    if (prev && Number(prev.confidence) >= usable) {
+      // The pass dropped the side entirely; restore the identity. Its colours
+      // are only restored when the pass saw no kit clusters at all (ADAAAA-7981).
+      teams.push(observedClusters.length > 0 ? { ...prev, kitColors: [] } : { ...prev });
+    }
   }
   const belowFloor = teams.some(
     (team) => (team.side === "home" || team.side === "away") && Number(team.confidence ?? 0) < usable
@@ -644,14 +659,53 @@ export function carryForwardTrailEntry(
 export function applyResumeCarryForward(
   previous: MatchContext | undefined,
   incoming: MatchContext,
-  progressPct: number
+  progressPct: number,
+  observedClusters: string[] = []
 ): MatchContext {
-  const guarded = guardMatchContextRegression(previous, incoming);
+  const guarded = guardMatchContextRegression(previous, incoming, observedClusters);
   const entry = carryForwardTrailEntry(incoming, guarded, progressPct);
   if (!entry) return guarded;
   return {
     ...guarded,
     trail: [...(guarded.trail ?? []), entry].slice(-MATCH_CONTEXT_MAX_TRAIL),
+  };
+}
+
+/**
+ * AC-A2 (ADAAAA-7981): one kit colour can never describe BOTH named sides.
+ *
+ * Two sides publishing the SAME primary is a guaranteed-wrong colour for at
+ * least one of them, and the resolver has no evidence saying which. Measured on
+ * job fe0e3efc: `kitColors: [{primary:"orange"}]` on Portugal AND Spain at
+ * confidence 0.95/0.65 with `ambiguous: false`, on a pitch with no orange shirt.
+ * The record therefore publishes NO colour for either side, says the match is
+ * ambiguous, and appends one trail entry naming the collapsed colour — an honest
+ * miss instead of a wrong colour.
+ */
+export function collapseDuplicateKitColors(ctx: MatchContext, progressPct = 0): MatchContext {
+  const home = ctx.teams.find((team) => team.side === "home");
+  const away = ctx.teams.find((team) => team.side === "away");
+  const primaryOf = (team: MatchContextTeam | undefined) =>
+    String(team?.kitColors?.[0]?.primary ?? "").trim().toLowerCase();
+  const homePrimary = primaryOf(home);
+  const awayPrimary = primaryOf(away);
+  if (!homePrimary || !awayPrimary || homePrimary !== awayPrimary) return ctx;
+  const teams = ctx.teams.map((team) =>
+    team.side === "home" || team.side === "away" ? { ...team, kitColors: [] } : team
+  );
+  return {
+    ...ctx,
+    teams,
+    ambiguous: true,
+    trail: [
+      ...(ctx.trail ?? []),
+      {
+        at: ctx.inferredAt || new Date().toISOString(),
+        progressPct,
+        names: teams.map((team) => ({ side: team.side, name: team.name, confidence: team.confidence })),
+        action: [`collapsed: dropped identical kit colour ${homePrimary} published for both sides`],
+      },
+    ].slice(-MATCH_CONTEXT_MAX_TRAIL),
   };
 }
 
@@ -761,13 +815,21 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
     // keeps the persisted evidence instead of erasing it.
     const resumed = isResumedAttempt(job);
     const previousEvidence = job?.matchContextEvidence as MatchContextEvidence | undefined;
+    // ADAAAA-7981: the kit clusters THIS pass observed decide whether a stored
+    // kit colour may be carried onto a side the pass attributed none to. Parsed
+    // BEFORE the guard because the guard needs the pass's own observation; the
+    // persisted (merged) evidence is still what gets written.
+    const evidence = toMatchContextEvidence(result?.evidenceStatus);
+    const observedClusters = ((evidence.value as MatchContextEvidence | undefined)?.kitClusterColors ?? []) as string[];
     // ADAAAA-7921: on a resume the guard and its trail annotation travel
     // together, so a record that publishes the carried-forward team always
     // says so in its trail.
     const guarded = resumed
-      ? applyResumeCarryForward(previous, ctx, progressPct)
-      : guardMatchContextRegression(previous, ctx);
-    const evidence = toMatchContextEvidence(result?.evidenceStatus);
+      ? applyResumeCarryForward(previous, ctx, progressPct, observedClusters)
+      : guardMatchContextRegression(previous, ctx, observedClusters);
+    // AC-A2: one kit colour can never describe both named sides — the last gate
+    // before the record, so no carry-forward can publish the collapse.
+    const published = collapseDuplicateKitColors(guarded, progressPct);
     let evidenceValue = evidence.value;
     if (resumed) {
       evidenceValue = evidenceValue
@@ -775,12 +837,12 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
         : previousEvidence;
     }
     if (resumed) {
-      const trailAction = guarded.trail?.[guarded.trail.length - 1]?.action ?? [];
+      const trailAction = published.trail?.[published.trail.length - 1]?.action ?? [];
       const carried = trailAction.filter((a) => a.startsWith("carry-forward:"));
       log(
         `[match-context:${deps.jobId}] resume carry-forward at ${progressPct}% (attempt ${job?.attempts ?? "?"}): ` +
-          `teams ${guarded.teams.map((t) => `${t.side}=${t.name}@${Number(t.confidence).toFixed(2)}`).join(" ") || "none"}` +
-          ` ambiguous=${guarded.ambiguous}` +
+          `teams ${published.teams.map((t) => `${t.side}=${t.name}@${Number(t.confidence).toFixed(2)}`).join(" ") || "none"}` +
+          ` ambiguous=${published.ambiguous}` +
           ` evidence ${(evidenceValue?.sources ?? []).join(",") || "none"}` +
           ` scorebugOcrFrames=${evidenceValue?.scorebugOcrFrames ?? "unset"}` +
           ` trail=${carried.join("; ") || "read as published"}`
@@ -798,14 +860,14 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
       await deps.patchJob(
         deps.jobId,
         evidenceValue
-          ? { matchContext: guarded, matchContextEvidence: evidenceValue }
-          : { matchContext: guarded }
+          ? { matchContext: published, matchContextEvidence: evidenceValue }
+          : { matchContext: published }
       );
       const status = result?.evidenceStatus;
       log(
         `[match-context:${deps.jobId}] persisted at ${progressPct}%: ` +
-          guarded.teams.map((t) => `${t.side}=${t.name}@${t.confidence.toFixed(2)}`).join(" ") +
-          ` ambiguous=${guarded.ambiguous} sources=${((evidenceValue?.sources as string[] | undefined) ?? (status?.sources as string[] | undefined) ?? []).join(",")}`
+          published.teams.map((t) => `${t.side}=${t.name}@${t.confidence.toFixed(2)}`).join(" ") +
+          ` ambiguous=${published.ambiguous} sources=${((evidenceValue?.sources as string[] | undefined) ?? (status?.sources as string[] | undefined) ?? []).join(",")}`
       );
     } catch (e: any) {
       // E3 failure isolation: the evidence field must never take the primary
@@ -820,7 +882,7 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
           `retrying with matchContext only`
       );
       try {
-        await deps.patchJob(deps.jobId, { matchContext: ctx });
+        await deps.patchJob(deps.jobId, { matchContext: published });
       } catch (e2: any) {
         log(`[match-context:${deps.jobId}] persist failed: ${String(e2?.message || e2)}`);
       }
