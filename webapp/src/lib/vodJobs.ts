@@ -232,10 +232,18 @@ export interface ProcessingJobsState {
  * The returned `jobs` list is merged (deduped, newest-first) and live-updated
  * from both the poll backstop and the SSE progress events.
  */
-export function useProcessingJobs(): ProcessingJobsState {
+export function useProcessingJobs(opts?: {
+  /** ADAAAA-8032: every SSE event of an in-flight job (name + payload), so a
+   *  surface that lists clips (the highlights feed) can refresh when a share's
+   *  highlight (`highlight`) or its clip (`clip`) lands — in a second tab too,
+   *  with no reload. Kept in a ref, so an inline callback never re-subscribes. */
+  onEvent?: (jobId: string, name: string) => void;
+}): ProcessingJobsState {
   const [jobs, setJobs] = useState<Job[]>([]);
   const jobsRef = useRef<Job[]>([]);
   const subsRef = useRef<Map<string, AbortController>>(new Map());
+  const onEventRef = useRef(opts?.onEvent);
+  onEventRef.current = opts?.onEvent;
 
   const refresh = useCallback(async (): Promise<Job[]> => {
     try {
@@ -322,6 +330,8 @@ export function useProcessingJobs(): ProcessingJobsState {
           if (name === "progress" && data && typeof data.progress === "number") {
             patchJob(j.id, { progress: data.progress, progressLabel: data.progressLabel });
           }
+          // ADAAAA-8032: `clip`/`highlight` mean the job's clip list changed.
+          onEventRef.current?.(j.id, name);
         },
         ac.signal
       ).catch(() => {

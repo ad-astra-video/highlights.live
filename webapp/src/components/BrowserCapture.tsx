@@ -60,8 +60,8 @@ export function BrowserCapture({ gameHint }: { gameHint: string }) {
           )}
           {cap.sharing && (
             <p className="text-xs text-mut">
-              Capturing live. The video, status and Stop button are on the job detail page; highlight clips are cut from the
-              recording when you stop.
+              Capturing live. The video, status and Stop button are on the job detail page; each highlight's clip is cut
+              from the recording as soon as its window lands, so it plays during the share.
             </p>
           )}
         </div>
