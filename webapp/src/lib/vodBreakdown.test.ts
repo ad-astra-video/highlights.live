@@ -12,6 +12,7 @@ import {
   formatSeconds,
   formatShare,
   formatUsd,
+  hasTimeSample,
   isEmptyBreakdown,
   modeFactor,
   modeFactorForTime,
@@ -112,9 +113,21 @@ describe("AC6 — legacy jobs are excluded from time, not fabricated", () => {
   it("keeps cost intact while time is empty", () => {
     const b = untimedBreakdown();
     expect(costBilledTotal(b)).toBeCloseTo(0.2613, 6);
-    expect(b.time.nodes).toHaveLength(0);
     expect(b.timed).toBe(0);
     expect(partialNote(b)).toBe("18 of 18 requests predate stage timing — time view covers 0");
+  });
+
+  it("does not draw a time chart from the server's zeroed nodes", () => {
+    // The live build (20 sampled / 0 timed) returned six time nodes at 0 s each
+    // and the panel drew "Per request · 0.00s · 100%" — hasTimeSample must say
+    // no for that shape, and yes for a real sample.
+    const untimed = untimedBreakdown();
+    expect(untimed.time.nodes).toHaveLength(6); // the server always sends them
+    expect(untimed.time.nodes.every((n) => n.s === 0)).toBe(true);
+    expect(hasTimeSample(untimed)).toBe(false);
+    expect(hasTimeSample(recentBreakdown())).toBe(true);
+    // a timed sample whose nodes are all zero is still not a chart
+    expect(hasTimeSample({ timed: 3, time: { totalS: 0, nodes: [], flows: [] } })).toBe(false);
   });
 });
 

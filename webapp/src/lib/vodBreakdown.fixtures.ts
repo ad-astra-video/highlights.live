@@ -68,12 +68,27 @@ export function recentBreakdown(over: Partial<VodBreakdown> = {}): VodBreakdown 
   };
 }
 
-/** Every job in the window predates `stageTimings` — cost works, time has no
- * sample at all (AC6 taken to its limit). */
+/**
+ * Every job in the window predates `stageTimings` — cost works, time has no
+ * sample at all (AC6 taken to its limit).
+ *
+ * Faithful to the server: it ALWAYS returns its six time nodes, zeroed when
+ * nothing is timed (`buildVodBreakdown` in `services/server/src/vod-breakdown.ts`).
+ * This is the shape the deployed build served (20 sampled / 0 timed) and it drew
+ * a "Per request · 0.00s · 100%" sankey until `hasTimeSample` gated it — so the
+ * fixture keeps the zeros instead of an empty array, or the regression would not
+ * reproduce.
+ */
 export function untimedBreakdown(): VodBreakdown {
   return recentBreakdown({
     timed: 0,
-    time: { totalS: 0, nodes: [], concurrent: [], flows: [] },
+    time: {
+      totalS: 0,
+      nodes: TIME_NODES.map((n) => ({ ...n, s: 0, share: 0 })),
+      concurrent: [],
+      flows: [],
+    },
+    perRequest: { ...recentBreakdown().perRequest, wallClockS: 0, rtf: null },
     excluded: { noCost: 2, noStageTimings: 18, live: 31 },
   });
 }

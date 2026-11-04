@@ -184,6 +184,16 @@ describe("AC9 — the overview strip", () => {
   });
 });
 
+describe("footnote", () => {
+  it("prints the effective rates instead of rounding a sub-cent fee to 0.00", () => {
+    // The live meter charges $0.0033/decide; a 2-dp print showed "decide $ 0.00/call".
+    const b = recentBreakdown({ rates: { decideFeeUsd: 0.0033, perceivePerHourUsd: 0.01 } });
+    const html = norm(renderToString(<CostTimeView state={readyState(b)} onScope={() => {}} onMode={() => {}} />));
+    expect(html).toContain("decide $0.0033/call");
+    expect(html).not.toContain("decide $ 0.00/call");
+  });
+});
+
 describe("AC11 — payload budget and no new dependency", () => {
   it("the default-scope response stays under 64 KB", () => {
     // The server caps the sample at 50 requests but answers with ONE aggregate
