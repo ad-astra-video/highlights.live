@@ -62,7 +62,7 @@ STORY = "0-0, Portugal dominating the left channel."
 #: the FULL (`False`) hash still matches the pre-feature value byte-for-byte.
 GOLDEN_PROMPT_SHA = {
     False: "e12f4d6fe48c8b51e82a550d5b80aac46859f8fd159c116986624c76ea972fc2",
-    True: "d0d2fddecc8d5c937f79d75f7439942898c643c8051829c1c9af43ea882ebfff",
+    True: "240e843d1953f36ee16d507fdf0d0dcfda23194490ee6b87ecfbd044ead5be22",
 }
 
 PORTUGAL_SPAIN = {

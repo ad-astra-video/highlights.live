@@ -1104,22 +1104,29 @@ _OUTPUT_CONTRACT_COMPACT = (
     # ADAAAA-7935: the fast rail emits ONE play-by-play line per window with an
     # optional colour beat, not one unbounded announcer sentence. The budgets are
     # inlined so the model cannot float back to a scene-setting first clause:
-    # lead <= 70, colour <= 40, target <= 110 / HARD MAX 140 (down from 220).
-    "\"runningSummary\": \"<the RUNNING story so far, EXTENDED: ONE play-by-play line per "
-    "window, shape '<PLAY-BY-PLAY LEAD> — <optional COLOR BEAT>'. LEAD: actor + action + "
-    "place, present tense, active voice, max 70 chars — name the player/jersey when the "
-    "frames read one, else the role (the winger, the keeper, the No. 9); lead with the "
-    "event, not the scene. COLOR BEAT: optional, max 40 chars, ONE grounded beat of "
-    "texture (crowd, body language, momentum, bench, conditions), never a second "
-    "description of the same play; about 1 line in 3, fresh not chatty. WHOLE LINE: one "
-    "line, never two sentences of description, target max 110 chars, HARD MAX 140. QUIET "
-    "WINDOW (nothing above threshold): one blunt line, max 8 words. CLOCK: only on "
-    "datable events ('GOAL 72s'), not every line. NEVER open with 'The video shows', 'The "
-    "video begins', 'The video starts with', 'In this segment', 'The scene opens on', 'The "
-    "broadcast cuts to', 'The sequence', 'This window shows'. Color must be attributable "
-    "to this window's frames or transcript — no invented names, scores, kit colours or "
-    "flags. Forward-only: if a STORY SO FAR was given, EXTEND it, never rewrite or delete "
-    "captured events, tighten wording only; if none was given start it fresh.>\"}"
+    # lead <= 70, colour <= 40, whole field target <= 110 / HARD MAX 140 (down
+    # from 220). The cap binds the WHOLE field, not just each appended line:
+    # the stored row is the field, and AC1 (p95 <= 140, 0 over 140) plus the
+    # decode-bound token budget both depend on it staying one bounded line.
+    "\"runningSummary\": \"<the RUNNING story so far, as ONE line (never append a "
+    "second line): total target max 110 chars, HARD MAX 140 (was 220). Shape "
+    "'<PLAY-BY-PLAY LEAD> — <optional COLOR BEAT>'. LEAD: actor + action + place, "
+    "present tense, active voice, max 70 chars — name the player/jersey when the "
+    "frames read one, else the role (the winger, the keeper, the No. 9); lead with "
+    "the event, not the scene. COLOR BEAT: optional, max 40 chars, ONE grounded "
+    "beat of texture (crowd, body language, momentum, bench, conditions), never a "
+    "second description of the same play; about 1 line in 3, fresh not chatty. "
+    "QUIET WINDOW (nothing above threshold): one blunt line, max 8 words. CLOCK: "
+    "only on datable events ('GOAL 72s'), not every line. NEVER open with 'The "
+    "video shows', 'The video begins', 'The video starts with', 'In this segment', "
+    "'The scene opens on', 'The broadcast cuts to', 'The sequence', 'This window "
+    "shows'. Color must be attributable to this window's frames or transcript — no "
+    "invented names, scores, kit colours or flags. Forward-only: keep every event "
+    "already captured and EXTEND the story — advance the newest beat and compress "
+    "the earlier ones into the same single line (tighten wording only, never delete "
+    "a goal or near-miss); if a STORY SO FAR was given, fold it into ONE line under "
+    "the cap, never rewrite it from scratch and never make it longer than 140 "
+    "chars.>\"}"
 )
 _OUTPUT_CONTRACT_FULL = (
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "
