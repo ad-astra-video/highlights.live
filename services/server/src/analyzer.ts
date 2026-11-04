@@ -7,12 +7,13 @@ import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation,
 import type { CaptionGroundingContext, ColourSignal } from "@highlights/events";
 import {
   captionColour,
-  captionForStoredLine,
-  cardTitlesFor,
   groundCaption,
   humanEventLabel,
+  isQuietVerdict,
+  regateServedSentence,
   placePhraseOf,
   quietShape,
+  storedCardSurface,
   windowCorroborated,
 } from "@highlights/events";
 import { StageAMetrics, StageAOutcomeLedger } from "./stage-a-metrics";
@@ -3947,12 +3948,27 @@ export function storedSurfaceFor(
     gatedReason = quiet && zone && !placePhraseOf(quiet) ? `${quiet} ${zone}` : quiet || "";
   }
   const eventLabel = humanEventLabel(highlightEventType(decision) || "");
+  // ADAAAA-8027 (§2, card clause): the card is derived through the store-time
+  // post-condition — the gated line as candidate, the stored raw sentence as its
+  // source, and card options from the ACCEPTED caption string. Refused -> the
+  // whole re-gated first sentence of `decision.reason`; still refused -> the row
+  // stores NO card, so a violating string cannot reach the customer.
+  const card =
+    grounding && (gatedReason ?? "").trim()
+      ? storedCardSurface({
+          gated: gatedReason as string,
+          raw: decision.reason ?? "",
+          label: eventLabel,
+          // The card's budget is the verdict's own rule, the same one the quiet
+          // gate applied to the line it stores.
+          quiet: isQuietVerdict(grounding?.verdict),
+          regate: (sentence: string) => regateServedSentence(sentence, grounding),
+        })
+      : { caption: "", cardTitles: [] as string[] };
   return {
     reason: gatedReason,
     ...(grounding?.colourSignal && captionColour(gatedReason ?? "") ? { colour: grounding.colourSignal } : {}),
-    ...(grounding && (gatedReason ?? "").trim()
-      ? { caption: captionForStoredLine(gatedReason as string), cardTitles: cardTitlesFor(gatedReason as string, eventLabel) }
-      : {}),
+    ...(card.caption ? { caption: card.caption, cardTitles: card.cardTitles } : {}),
     ...(grounding && gatedReason !== decision.reason && (decision.reason ?? "").trim() ? { reason_raw: decision.reason } : {}),
   };
 }
