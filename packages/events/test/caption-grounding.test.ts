@@ -11,14 +11,21 @@
 //   - grounding is idempotent and never lengthens a line.
 import { describe, it, expect } from "vitest";
 import {
+  captionColour,
   findScoreClaims,
   gateGoalClaims,
+  gateQuietWindow,
   groundCaption,
   groundSummaryText,
   groundNames,
   humanEventLabel,
+  QUIET_MAX_WORDS,
   stripInternalTokens,
+  trimQuietLine,
 } from "../src/caption-grounding";
+
+/** Word count the way the level grader counts a caption. */
+const wordCountOf = (text: string): number => text.split(/\s+/).filter(Boolean).length;
 
 const PROMPT =
   "Match context: RMA 1-1 BAR | scorebug OCR: RMA 1-1 BAR | No. 3 | ASR: (empty)\n" +
@@ -251,5 +258,96 @@ describe("score/evidence cleanup leaves readable copy (ADAAAA-7948, level eviden
     expect(stripInternalTokens("The shot is saved.; scoreboard score change confirmed")).toBe(
       "The shot is saved."
     );
+  });
+});
+
+// ADAAAA-7956 (residual of ADAAAA-7949, contract v3): a not_highlight window is
+// a QUIET window. The measured v2.5 level (job a988e52b) shipped replay /
+// celebration windows that still read as fresh goals — "No. 3 drives into the
+// box and scores — crowd erupts" on a row whose stored verdict was
+// `not_highlight` — and that one class supplied the 6 quiet-row colour clauses
+// (AC4/AC5) and the repeated lines (AC3). These pins are the CPU guard the
+// prompt could not reach: the claim goes, and the crowd clause goes with it.
+describe("rule 1: a quiet window carries no goal claim and no colour clause (ADAAAA-7956)", () => {
+  const QUIET_PROMPT =
+    "Match context: RMA 1-1 BAR | scorebug OCR: RMA 1-1 BAR | No. 3 | ASR: (empty)";
+
+  it("rewrites the goal claim AND drops the colour clause on a not_highlight window", () => {
+    const out = groundCaption("No. 3 drives into the box and scores — crowd erupts", {
+      verdict: "not_highlight",
+      promptText: QUIET_PROMPT,
+    });
+    expect(out).not.toMatch(/\bscores?\b|\bscored\b|\bgoal\b/i);
+    expect(captionColour(out)).toBe("");
+    expect(out).not.toContain("—");
+    expect(out).toBe("No. 3 drives into the box and shoots");
+  });
+
+  it("drops the colour clause a rewritten claim brought with it on a near_miss window", () => {
+    const out = groundCaption("No. 3 scores into the net — the crowd erupts.", {
+      verdict: "near_miss",
+      promptText: QUIET_PROMPT,
+    });
+    expect(out).not.toMatch(/\bscores?\b|\bscored\b|\bgoal\b|into the net/i);
+    expect(captionColour(out)).toBe("");
+  });
+
+  it("keeps the colour clause on a real goal window (the loud channel survives)", () => {
+    const line = "No. 9 scores at the near post — the crowd erupts.";
+    const out = groundCaption(line, { verdict: "scoring_play", promptText: QUIET_PROMPT });
+    expect(out).toBe(line);
+    expect(captionColour(out)).toBe("the crowd erupts.");
+  });
+
+  it("drops a colour clause on a quiet window even when it never claimed a goal", () => {
+    const out = groundCaption("Player in blue carries the ball in midfield — the bench is up.", {
+      verdict: "not_highlight",
+      promptText: QUIET_PROMPT,
+    });
+    expect(captionColour(out)).toBe("");
+    expect(out).toContain("midfield");
+  });
+
+  it("leaves a legacy row with no stored verdict untouched", () => {
+    const line = "Player in blue moves ball in center circle.";
+    expect(groundCaption(line, { promptText: QUIET_PROMPT })).toBe(line);
+  });
+
+  it("is idempotent: a gated quiet line grounds to itself", () => {
+    const once = groundCaption("No. 3 drives into the box and scores — crowd erupts", {
+      verdict: "not_highlight",
+      promptText: QUIET_PROMPT,
+    });
+    expect(groundCaption(once, { verdict: "not_highlight", promptText: QUIET_PROMPT })).toBe(once);
+  });
+
+  it("does not treat a goal kick / shot on goal as a claim (nothing to drop)", () => {
+    const line = "Player in blue takes the goal kick in midfield";
+    expect(gateQuietWindow(line, { verdict: "not_highlight" })).toBe(line);
+  });
+});
+
+describe("rule 1b: a quiet line is blunt — 8 words (AC5, measured 72.9% on v2.5)", () => {
+  it("trims the 10-word kit shape the level shipped to the 8-word budget", () => {
+    const out = trimQuietLine("Player in blue and yellow kit dribbles in penalty area");
+    expect(wordCountOf(out)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+    expect(out).toContain("penalty area");
+    expect(out).toBe("Player in blue kit dribbles in penalty area");
+  });
+
+  it("trims the 9-word 'with ball' shape", () => {
+    const out = trimQuietLine("Player in white moves with ball in center circle.");
+    expect(wordCountOf(out)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+    expect(out).toBe("Player in white moves in center circle.");
+  });
+
+  it("is byte-identical when the line already fits the budget", () => {
+    const line = "Player in blue dribbles in center circle.";
+    expect(trimQuietLine(line)).toBe(line);
+  });
+
+  it("never trims a loud window (near_miss keeps its full sentence)", () => {
+    const line = "Player in blue and yellow kit dribbles in penalty area";
+    expect(groundCaption(line, { verdict: "near_miss" })).toBe(line);
   });
 });
