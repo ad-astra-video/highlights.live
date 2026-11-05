@@ -7,6 +7,7 @@ import type { JobDetailHighlight, SummaryLogEntry } from "./jobDetail";
 import {
   gateGoalClaims,
   groundCaption,
+  hasTerminalPunctuation,
   humanEventLabel as sharedHumanEventLabel,
   stripInternalTokens,
   type CaptionGroundingContext,
@@ -287,6 +288,14 @@ export function suggestCaption(
     scrubInternal(selected.text),
     ctx ?? captionGroundingFor(h, { fromLog: selected.fromLog })
   );
+  // ADAAAA-8043 (contract v7 §3.5): a summary-log narrative is a STORED, gated,
+  // write-closed sentence. The fast rail therefore renders it byte-for-byte —
+  // no re-casing, no period added at read. (The write seam stores a caption for
+  // every fast row, so this is the legacy-row path that remains.)
+  // A WRITE-CLOSED stored sentence (the fast rail closes every row at the seam)
+  // is rendered byte-for-byte. A legacy row with no sentence end still takes the
+  // shaping below, so nothing regresses on the VOD/pre-v7 surface.
+  if (selected.fromLog && narrative.trim() && hasTerminalPunctuation(narrative)) return narrative.trim();
   const fallback = `A ${humanEventLabel(h.eventType)} was captured in this clip`;
   if (!narrative) return sentenceCase(fallback);
   // One sentence: a multi-sentence narrative keeps its first sentence only.
