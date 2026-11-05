@@ -14,6 +14,7 @@
 // (`ResumeCheckpointSchema`, additive optional `job.resume`).
 
 import type { ResumeAccumulators, ResumeCheckpoint, ResumePhase } from "@highlights/events";
+import { PERCEIVE_PER_HOUR_USD, computeCostUsd } from "./job-settlement";
 
 /** A merge patch for `Store.saveResumeCheckpoint`. Nested blocks merge field by
  * field; `null` on an optional scalar CLEARS it (e.g. `nextAttemptAt` after a
@@ -260,6 +261,28 @@ export interface AttemptTotals {
   wallClockS: number;
 }
 
+/** The money rates a settle path prices a counter block with. Only the decide
+ * fee is configurable; the perceive rate is the shared list price
+ * (`job-settlement.PERCEIVE_PER_HOUR_USD`), so a completed record and a
+ * checkpoint can never disagree about what a second of perceive costs. */
+export interface AttemptPricing {
+  decideFee: number;
+}
+
+/** USD a counter block already OWES: every decided window costs its fee and
+ * every billed perceive second costs its share of the hourly rate.
+ *
+ * ADAAAA-8089: this is the floor a folded cost may never fall below. The calls
+ * were made and billed, so a total that reports less than this is under-reported
+ * by construction — which is exactly what a checkpoint that carried
+ * `decideCalls` without the fees used to produce. */
+export function impliedCostUsd(
+  totals: { decideCalls?: number; perceiveSessionS?: number },
+  pricing: AttemptPricing
+): number {
+  return computeCostUsd(nonNeg(totals.decideCalls), nonNeg(totals.perceiveSessionS), nonNeg(pricing.decideFee));
+}
+
 function nonNeg(v: number | undefined): number {
   const n = Number(v ?? 0);
   return Number.isFinite(n) && n > 0 ? n : 0;
@@ -269,17 +292,66 @@ function nonNeg(v: number | undefined): number {
  *
  * `prev` is the checkpoint's accumulator block READ AT CLAIM, i.e. the total of
  * every attempt that already ended. That is what makes AC9 hold: the completed
- * record carries both attempts, not only the last one. */
+ * record carries both attempts, not only the last one.
+ *
+ * ADAAAA-8089: when `pricing` is supplied the folded cost is floored at the cost
+ * its counters imply (`impliedCostUsd`). Without the floor, a base written by a
+ * build that persisted `decideCalls` but not the fees (every mid-attempt
+ * checkpoint before this fix) makes a resumed job close at the LAST attempt's
+ * spend only — the record then reports 31 decides at the price of 10. With it, a
+ * resumed job always closes `costUsd >= decideFee * decideCalls`, including a
+ * job whose attempt 1 ran the old image and attempt 2 ran this one. */
 export function accumulateAttemptTotals(
   prev: ResumeAccumulators | undefined,
-  delta: AttemptDelta
+  delta: AttemptDelta,
+  pricing?: AttemptPricing
 ): AttemptTotals {
+  const decideCalls = Math.round(nonNeg(prev?.decideCalls) + nonNeg(delta.decideCalls));
+  const perceiveSessionS = Number((nonNeg(prev?.perceiveSessionS) + nonNeg(delta.perceiveSessionS)).toFixed(1));
+  const summedCostUsd = nonNeg(prev?.costUsd) + nonNeg(delta.costUsd);
+  const floorCostUsd = pricing ? impliedCostUsd({ decideCalls, perceiveSessionS }, pricing) : 0;
   return {
-    decideCalls: Math.round(nonNeg(prev?.decideCalls) + nonNeg(delta.decideCalls)),
-    perceiveSessionS: Number((nonNeg(prev?.perceiveSessionS) + nonNeg(delta.perceiveSessionS)).toFixed(1)),
-    costUsd: Number((nonNeg(prev?.costUsd) + nonNeg(delta.costUsd)).toFixed(4)),
+    decideCalls,
+    perceiveSessionS,
+    costUsd: Number(Math.max(summedCostUsd, floorCostUsd).toFixed(4)),
     wallClockS: Number((nonNeg(prev?.wallClockS) + nonNeg(delta.wallClockS)).toFixed(1)),
   };
+}
+
+/**
+ * ADAAAA-8089 (root cause): the accumulator block for an attempt that is STILL
+ * RUNNING.
+ *
+ * A mid-attempt checkpoint used to persist only `decideCalls`, so a process that
+ * was then killed (deploy recreate, OOM, SIGKILL) left `costUsd: 0` behind for
+ * every window attempt 1 had already billed; the resumed attempt started a fresh
+ * meter on top of a zero base. This folds the running attempt's decide count and
+ * billed perceive seconds onto the claim-time base exactly as the exit hooks do,
+ * so the values boot recovery finds on disk are the spend that actually happened.
+ *
+ * `attempt` carries THIS attempt's counters so far (never the cross-attempt
+ * totals): the base is `prev`, read at claim, so repeated checkpoint writes
+ * overwrite with a running total instead of accumulating.
+ */
+export function runningAttemptAccumulators(
+  prev: ResumeAccumulators | undefined,
+  attempt: { decideCalls?: number; perceiveSessionS?: number; wallClockS?: number },
+  pricing: AttemptPricing
+): AttemptTotals {
+  const decideCalls = nonNeg(attempt.decideCalls);
+  const perceiveSessionS = nonNeg(attempt.perceiveSessionS);
+  return accumulateAttemptTotals(
+    prev,
+    {
+      decideCalls,
+      perceiveSessionS,
+      // The fees these counters have already incurred: the same quantity the
+      // completion/failure paths compute from their own attempt deltas.
+      costUsd: impliedCostUsd({ decideCalls, perceiveSessionS }, pricing),
+      wallClockS: nonNeg(attempt.wallClockS),
+    },
+    pricing
+  );
 }
 
 /**
