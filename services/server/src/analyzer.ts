@@ -4404,6 +4404,10 @@ export interface PerceiveWindowLedger {
   seeds: number;
   records: number;
   withFindings: number;
+  /** The window center (content seconds). The decide service renders each
+   * timeline record's `t` relative to it, so "when in the window" is readable
+   * without the model doing clock arithmetic. */
+  centerTs?: number;
 }
 
 /** ADAAAA-8056 (AC-E2): where this window's audio actually came from. `clipBytes`
@@ -4832,6 +4836,7 @@ export function buildObserveDecideRequest(
             seeds: timelineSeeds,
             records: perceiveTimeline.length,
             withFindings: timelineWithFindings,
+            centerTs: center,
           },
           audioPresence: {
             tapChunks: audioTapChunks,
