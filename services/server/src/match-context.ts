@@ -69,13 +69,31 @@ export interface MatchContextResolveResult {
   evidenceStatus?: MatchContextEvidenceStatus;
 }
 
-/** Progress points at which the resolver re-reads the evidence (bounded). */
-export const MATCH_CONTEXT_RECHECKS: readonly number[] = [0, 25, 50];
+/**
+ * Progress points at which the resolver re-reads the evidence (bounded).
+ *
+ * ADAAAA-8076: a late checkpoint is required, not cosmetic. The perceive kit
+ * sampler only yields a usable crop when a player box passes the single-player
+ * contract, and on a wide first half that box rarely qualifies (measured on
+ * `757d3422`, the same 90 s Portugal v Spain source as e58bcef7): the fold at
+ * 50 % held 29 crops — white 24, cyan 3, orange 1, red 1 — so the home cluster
+ * was named by a junk cyan/orange seed and the served record published
+ * `home cyan`. The red shirts are sampled at seq 132-144 and 213-216 (the
+ * celebration close-ups); the 90 % fold holds 41 crops (red 5, white 28) and
+ * publishes `home red / away white`. Stopping at 50 % therefore published an
+ * artefact of the fold window, not an observation about the kit.
+ *
+ * 90 and not 75: at 75 % the junk cluster is still named `black` (8 crops,
+ * red 3) and home stays unresolved. The late checkpoint still runs inside the
+ * frame loop, so the perceive session is alive (see `finish()`), and the
+ * resolve is CPU-only — no GPU work, no decide call.
+ */
+export const MATCH_CONTEXT_RECHECKS: readonly number[] = [0, 25, 50, 90];
 /** Default commentary probe length (plan §3 Stage 2: "first 90 s"). */
 export const DEFAULT_MATCH_CONTEXT_ASR_SECONDS = 90;
 /** Hard cap on the wav bytes we are willing to base64 + POST (≈ 8 MB ≈ 4 min). */
 export const DEFAULT_MATCH_CONTEXT_ASR_MAX_BYTES = 8 * 1024 * 1024;
-/** Concurrent resolves allowed in flight (the checkpoints are 3, but a long
+/** Concurrent resolves allowed in flight (the checkpoints are 4, but a long
  * job can fire them close together when frames land fast). */
 const MAX_INFLIGHT_RESOLVES = 1;
 
