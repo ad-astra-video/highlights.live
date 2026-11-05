@@ -184,4 +184,32 @@ describe("media node restart-loop visibility (ADAAAA-7656)", () => {
     expect(h.restarts).toBeUndefined();
     await app.close();
   });
+
+  // ADAAAA-8048: a recreate that bypassed docker/deploy.sh leaves `buildRef`
+  // at the Dockerfile default. The served source digest is computed from the
+  // files the container runs, so the revision is still provable from `/health`.
+  it("publishes the served-source digest beside buildRef, even on an unstamped boot", async () => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    const unstamped = () => ({
+      boots: 1,
+      bootId: "boot-unstamped",
+      buildRef: "unknown",
+      sourceDigest: digest,
+      sourceFiles: 11,
+      restartCause: "deploy" as const,
+      previousBoot: { at: 1, atIso: "2026-11-04T23:48:07.000Z", bootId: "boot-prev", buildRef: "52364c9", sourceDigest: digest, sourceFiles: 11, exit: null },
+      lastStartAt: "2026-11-05T09:00:00.000Z",
+      lastExit: null,
+      windowS: 600,
+      threshold: 3,
+      bootsInWindow: 0,
+      degraded: false,
+    });
+    const app = await build({ nodeId: "media-0", lifecycle: unstamped });
+    const h = (await app.inject({ method: "GET", url: "/health" })).json();
+    expect(h.restarts).toMatchObject({ buildRef: "unknown", sourceDigest: digest, sourceFiles: 11 });
+    // the digest is provenance, not an identifier — /health stays public-safe
+    expect(JSON.stringify(h)).not.toContain("sess-");
+    await app.close();
+  });
 });
