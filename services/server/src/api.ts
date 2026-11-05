@@ -37,7 +37,7 @@ import { LiveFrameWriter, parseLiveFrameSeq } from "./live-frames";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
-import { cutClip, extractAudioWindow, extractBurstFrames, extractFrames, probeHasAudio } from "./ffmpeg";
+import { cutClip, extractAudioWindow, extractBurstFrames, extractFrames, probeFlushedDuration, probeHasAudio } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
 import { anchorSourceCandidates, samplePlayerAnchor, vodAnchorAtSec } from "./player-anchor";
@@ -908,6 +908,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const LIVE_CLIP_FLUSH_SEC = 1.5; // wait this far past the window end
   const LIVE_CLIP_MAX_WAIT_MS = 45_000; // give up; the stop path cuts it
   const LIVE_CLIP_RETRY_MS = 1_200;
+  // ADAAAA-8113: how often the wait re-measures the recording FILE while the
+  // rail says the window has passed. A demux scan of the growing recording is
+  // cheap but not free, so it is only run once the (faster) content clock is
+  // satisfied, and at most this often.
+  const LIVE_CLIP_FILE_PROBE_MS = 1_000;
   // `${jobId}:${highlightId}` — one live cut attempt per highlight.
   const liveClipScheduled = new Set<string>();
   // Per-job serial chain: cuts for one share never run concurrently (one
@@ -942,10 +947,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const name = `${jobId}-${Math.round(h.start * 10)}`;
     const out = path.join(outDir, `${name}.mp4`);
     const { start, dur } = browserClipSpan(h, cw);
-    // The recording's own length: a clip can never be longer than the footage
-    // that exists, so the completeness check below is bounded by it (a short
-    // 2 s test/share recording is legitimately shorter than the 15 s window).
-    const srcDur = await probeDuration(cfg.ffmpegPath, recPath);
+    // The recording's own length — the FOOTAGE THAT HAS BEEN FLUSHED to disk,
+    // not the container's declared duration (a growing webm declares none, so
+    // `probeDuration` reads null for the whole share; ADAAAA-8113). A clip can
+    // never be longer than the footage that exists, so the completeness check
+    // below is bounded by it (a short 2 s test/share recording is legitimately
+    // shorter than the 15 s window).
+    const srcDur = await probeFlushedDuration(cfg.ffmpegPath, recPath);
     const t0 = Date.now();
     // ADAAAA-7724: cutClip picks stream-copy when the recording's codecs fit the
     // mp4 container and re-encodes when they do not (a VP8/VP9+opus webm
@@ -994,18 +1002,51 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   }
 
   /** Wait until the recording on disk covers `contentEndS` of the share
-   * timeline. The rail's newest analysed frame timestamp is the best available
-   * estimate of what has been appended (chunks land ~1/s), so poll it; a hard
-   * timeout and a finalizing/stopped job both bail (the stop path then owns the
-   * tail, after waiting for the client's final chunk). */
-  async function waitForRecordingFlush(jobId: string, contentEndS: number): Promise<"flushed" | "ended" | "timeout"> {
+   * timeline. TWO clocks must agree (ADAAAA-8113): the rail's newest analysed
+   * frame timestamp (`contentTs`) is an upper bound — the rail analyses frames
+   * the uploader has not landed yet, so at the live edge it runs seconds ahead
+   * of the bytes — and the recording FILE's own flushed coverage is the lower
+   * bound that actually matters, because the cut can only deliver footage that
+   * exists. Waiting on the rail alone cut a 10.89 s clip for a 15 s window and
+   * published it; a live share lands the rest a second later.
+   *
+   * A file that cannot be measured yet (header-only capture, nothing uploaded)
+   * falls back to the rail clock, which is exactly the pre-8113 behaviour. The
+   * share ending and the 45 s budget still bail to the stop path.
+   */
+  async function waitForRecordingFlush(
+    jobId: string,
+    contentEndS: number,
+    recPath: string
+  ): Promise<"flushed" | "ended" | "timeout"> {
     const deadline = Date.now() + LIVE_CLIP_MAX_WAIT_MS;
+    // Enough flushed footage for the window, allowing the same 1.5 s slack the
+    // rail gate uses (a chunk boundary can land a frame short of the window).
+    const needFileSec = contentEndS - LIVE_CLIP_FLUSH_SEC;
+    let lastProbeAt = 0;
+    let notedGap = false;
     for (;;) {
       const job = store.getJob(jobId);
       // Ended, finalizing, or torn down: stop path cuts this one.
       if (!job || job.status !== "active" || !browserJobs.has(jobId) || browserFinalizing.has(jobId)) return "ended";
       const bj = browserJobs.get(jobId)!;
-      if ((bj.contentTs ?? -1) >= contentEndS + LIVE_CLIP_FLUSH_SEC) return "flushed";
+      if ((bj.contentTs ?? -1) >= contentEndS + LIVE_CLIP_FLUSH_SEC) {
+        if (Date.now() - lastProbeAt >= LIVE_CLIP_FILE_PROBE_MS) {
+          lastProbeAt = Date.now();
+          const fileDur = await probeFlushedDuration(cfg.ffmpegPath, recPath);
+          // Unmeasurable -> the rail clock is all we have (header-only capture,
+          // a file ffprobe cannot demux): keep the historical behaviour.
+          if (fileDur == null || fileDur >= needFileSec) return "flushed";
+          if (!notedGap) {
+            notedGap = true;
+            console.log(
+              `[browser:${jobId}] live cut waiting for the recording file ` +
+                `(rail at ${Number(bj.contentTs).toFixed(1)}s, file holds ${fileDur.toFixed(1)}s, ` +
+                `need ${needFileSec.toFixed(1)}s for the window)`
+            );
+          }
+        }
+      }
       if (Date.now() >= deadline) return "timeout";
       await new Promise((r) => setTimeout(r, 250));
     }
@@ -1028,11 +1069,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // path reads), then wait for the bytes.
       const cw = await resolveClipWindow();
       const { start, dur } = browserClipSpan(h, cw);
-      const flush = await waitForRecordingFlush(jobId, start + dur);
+      // The recording path is fixed for the job, so resolve it once and let the
+      // wait measure it (ADAAAA-8113).
+      const recPath = browserRecordingPath(jobId);
+      const flush = await waitForRecordingFlush(jobId, start + dur, recPath);
       // Re-read: the stop path may have cut it while we waited.
       const cur = store.getHighlight(highlightId);
       if (!cur || cur.clipUri) return;
-      const recPath = browserRecordingPath(jobId);
       // A header-only capture is not a recording (ADAAAA-8055): leave it to the
       // stop path, which reports the honest "no recording" reason per highlight.
       if (!recordingIsUsable(jobId, recPath)) return;

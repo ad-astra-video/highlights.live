@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, readdirSync, rmSync, existsSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildTestApp } from "./helpers";
-import { probeDuration } from "../src/ffmpeg";
+import { probeDuration, probeFlushedDuration } from "../src/ffmpeg";
 
 // ADAAAA-8032: the browser (screen-share) rail used to persist every highlight
 // with `clipUri: ""` and cut ALL clips at `POST /jobs/:id/stop`, so every card
@@ -15,6 +15,12 @@ import { probeDuration } from "../src/ffmpeg";
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-live-clip-"));
 // 20 s of real footage: long enough that a >=15 s window is fully covered.
 const videoPath = path.join(tmp, "rec-20s.mp4");
+// ADAAAA-8113 fixture: the SAME 20 s of footage as a STREAMABLE webm (vp9, the
+// codec a browser MediaRecorder produces). Written to stdout, so — like a live
+// capture — its header carries no duration and `probeDuration` reads null for
+// the whole file. That is the condition under which the old live-cut guard was
+// blind: `expected` collapsed to whatever bytes existed.
+let liveWebm: Buffer;
 
 beforeAll(() => {
   execFileSync("ffmpeg", [
@@ -27,6 +33,17 @@ beforeAll(() => {
     "yuv420p",
     videoPath,
   ]);
+  liveWebm = execFileSync(
+    "ffmpeg",
+    [
+      "-y", "-v", "error",
+      "-f", "lavfi",
+      "-i", "testsrc=duration=20:size=320x180:rate=10",
+      "-c:v", "libvpx-vp9", "-b:v", "200k", "-deadline", "realtime", "-cpu-used", "8",
+      "-f", "webm", "-",
+    ],
+    { maxBuffer: 64 * 1024 * 1024 }
+  );
 });
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -69,6 +86,18 @@ async function ingest(app: any, token: string, jobId: string, seq: number, times
   });
   expect(r.statusCode).toBe(200);
   return r.json();
+}
+
+/** Append a raw recording chunk (base64) — the same call the browser recorder
+ * makes ~1/s during a share, so a test can hold part of the footage back. */
+async function postRecordingChunk(app: any, token: string, jobId: string, bytes: Buffer, mime: string) {
+  const r = await app.inject({
+    method: "POST",
+    url: `/jobs/${jobId}/recording`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: { base64: bytes.toString("base64"), mime },
+  });
+  expect(r.statusCode).toBe(200);
 }
 
 async function clipUriFor(app: any, token: string, jobId: string): Promise<string> {
@@ -337,4 +366,85 @@ describe("browser rail: the clip is cut DURING the share (ADAAAA-8032)", () => {
     expect(clipped).toEqual([]);
     await app.close();
   }, 30_000);
+
+  it("a highlight accepted at the live edge waits for the recording FILE, never publishing a sub-floor clip (ADAAAA-8113)", async () => {
+    const { app, cfg } = await buildTestApp();
+    const token = await register(app, "lc6@test.dev", "password123");
+    const jobId = await startBrowserJob(app, token);
+    const mime = "video/webm;codecs=vp9";
+    const recPath = path.join(cfg.dataDir, "live", jobId, "capture.webm");
+
+    // The fixture is a LIVE-style webm: written to a pipe, so its header carries
+    // no duration and probeDuration reads null for the whole share. On the box
+    // that is exactly why `expected` in the cut collapsed to the bytes that
+    // existed (10.89 s published for a 15 s window).
+    const fixturePath = path.join(tmp, "rec-20s-live.webm");
+    writeFileSync(fixturePath, liveWebm);
+    expect(await probeDuration(cfg.ffmpegPath, fixturePath)).toBeNull();
+
+    // Only the first ~45% of the share's bytes have landed: ~8-9 s of footage.
+    const cutAt = Math.floor(liveWebm.length * 0.45);
+    await postRecordingChunk(app, token, jobId, liveWebm.subarray(0, cutAt), mime);
+    expect(await ingest(app, token, jobId, 0, 0)).toHaveProperty("highlight.id");
+
+    // The rail's content clock then runs AHEAD of the upload: it analyses a
+    // frame at 40 s while the file still ends at ~9 s. The old gate trusted
+    // this clock alone and cut immediately.
+    await ingest(app, token, jobId, 1, 40);
+    const flushed = await probeFlushedDuration(cfg.ffmpegPath, recPath);
+    expect(flushed).not.toBeNull();
+    expect(flushed as number).toBeLessThan(13.5);
+
+    // RED on the rail-only gate: a sub-floor clip (~9 s) was published here.
+    await new Promise((r) => setTimeout(r, 2_000));
+    expect(await clipUriFor(app, token, jobId)).toBe("");
+
+    // A live share lands the rest of the footage a second later.
+    await postRecordingChunk(app, token, jobId, liveWebm.subarray(cutAt), mime);
+
+    let uri = "";
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20_000 && !uri) {
+      uri = await clipUriFor(app, token, jobId);
+      if (!uri) await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(uri).toMatch(/^\/clips\/.+\.mp4$/);
+
+    const clipFile = path.join(cfg.dataDir, "clips", path.basename(uri));
+    const liveDur = await probeDuration(cfg.ffmpegPath, clipFile);
+    expect(liveDur).not.toBeNull();
+    // The delivered clip covers the whole 15 s window — not the 9 s that had
+    // been uploaded when the highlight was accepted.
+    expect(liveDur as number).toBeGreaterThanOrEqual(14);
+    expect(liveDur as number).toBeLessThanOrEqual(16.5);
+    const row = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } }))
+      .json()
+      .highlights.find((h: any) => h.jobId === jobId);
+    expect(row.clipError).toBeUndefined();
+
+    // ADAAAA-8032 AC4: the stop path leaves the live cut byte-identical, and a
+    // stop-only cut of the same footage delivers the same window.
+    const before = readFileSync(clipFile);
+    await app.inject({ method: "POST", url: `/jobs/${jobId}/stop`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+    const afterStop = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } }))
+      .json()
+      .highlights.find((h: any) => h.jobId === jobId);
+    expect(afterStop.clipUri).toBe(uri);
+    expect(readFileSync(clipFile).equals(before)).toBe(true);
+
+    const stopOnly = await buildTestApp();
+    const stopToken = await register(stopOnly.app, "lc6b@test.dev", "password123");
+    const stopJob = await startBrowserJob(stopOnly.app, stopToken);
+    await postRecordingChunk(stopOnly.app, stopToken, stopJob, liveWebm, mime);
+    await ingest(stopOnly.app, stopToken, stopJob, 0, 0);
+    await stopOnly.app.inject({ method: "POST", url: `/jobs/${stopJob}/stop`, headers: { authorization: `Bearer ${stopToken}` }, payload: {} });
+    const stopUri = await clipUriFor(stopOnly.app, stopToken, stopJob);
+    expect(stopUri).toMatch(/^\/clips\/.+\.mp4$/);
+    const stopDur = await probeDuration(stopOnly.cfg.ffmpegPath, path.join(stopOnly.cfg.dataDir, "clips", path.basename(stopUri)));
+    expect(stopDur).not.toBeNull();
+    expect(Math.abs((stopDur as number) - (liveDur as number))).toBeLessThan(0.3);
+
+    await app.close();
+    await stopOnly.app.close();
+  }, 60_000);
 });

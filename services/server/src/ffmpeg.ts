@@ -26,6 +26,59 @@ export async function probeDuration(ffmpegPath: string, source: string): Promise
   }
 }
 
+/** The newest timestamp (seconds) the recording FILE on disk actually carries —
+ * i.e. how much footage has been flushed to disk, as opposed to how far the
+ * live rail has ANALYSED (ADAAAA-8113). A live recording is appended in ~1 s
+ * chunks and a streamable webm/mp4 only writes its duration when it is
+ * finalised, so `format=duration` reads N/A for the whole share and
+ * `probeDuration` returns null — which left the live cut's completeness guard
+ * blind and published a sub-floor clip. Demux the file (no decode) and report
+ * the last packet's pts plus its own duration instead.
+ *
+ * Returns null when the file holds no readable packet yet (header-only capture,
+ * a missing/empty file), so callers keep their previous, honest behaviour
+ * instead of inventing footage. */
+
+export async function probeFlushedDuration(ffmpegPath: string, source: string): Promise<number | null> {
+  const ffprobe = ffmpegPath.replace(/ffmpeg([^/]*)$/, "ffprobe$1") || "ffprobe";
+  const newestOf = async (select: string[]): Promise<number | null> => {
+    let stdout = "";
+    try {
+      ({ stdout } = await exec(
+        ffprobe,
+        [
+          "-v", "error",
+          ...select,
+          "-show_entries", "packet=pts_time,duration_time",
+          "-of", "csv=p=0",
+          source,
+        ],
+        { maxBuffer: 32 * 1024 * 1024 }
+      ));
+    } catch (e: any) {
+      // A chunk still being appended ends mid-cluster: ffprobe exits non-zero
+      // after printing every packet it could read. Keep what it read — that is
+      // exactly the flushed coverage this helper measures.
+      stdout = String(e?.stdout ?? "");
+    }
+    let newest = -1;
+    let ownDur = 0;
+    for (const line of stdout.split("\n")) {
+      const [ptsS, durS] = line.trim().split(",");
+      const pts = parseFloat(ptsS);
+      if (!Number.isFinite(pts)) continue;
+      if (pts > newest) {
+        newest = pts;
+        ownDur = parseFloat(durS) || 0;
+      }
+    }
+    return newest >= 0 ? newest + Math.max(0, ownDur) : null;
+  };
+  // Video first (a browser share always carries one); fall back to every stream
+  // so an audio-only recording still measures instead of reading as empty.
+  return (await newestOf(["-select_streams", "v:0"])) ?? (await newestOf([]));
+}
+
 /** Time window (seconds) to restrict a frame extraction to a sub-range of the
  * source. Omitted bounds mean "from the start" / "to the end". */
 export interface FrameWindow {
