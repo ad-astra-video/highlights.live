@@ -2832,6 +2832,14 @@ export interface LivePerceiveStrideSnapshot {
    *  stride steps by this, so a value above `1000 / analysisFps` is the box's
    *  shared-GPU perceive limit rather than the ingest rate. */
   perceiveMeanCostMs?: number;
+  /** ADAAAA-8102: WHICH rail perceived the consumed frames. `server` (absent,
+   *  the shipped analyzer live pass) runs `client.analyze` in this process and
+   *  the cost counters above are measured here; `media_node` is the media/RTC
+   *  rail, where the media node perceives every relayed frame and this process
+   *  only CONSUMES at `analysisFps` — so `perceiveCalls == framesSeen` there and
+   *  `framesStrided` is decide work not spent, not GPU saved. Stated rather than
+   *  implied, because the same block grades both rails. */
+  perceiveSource?: "server" | "media_node";
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
@@ -5087,6 +5095,12 @@ export interface PerceiveWindowLedger {
    * (`LIVE_OBSERVE_CADENCE_S`, resolved to 3 s when unset). AC-SPAN-1 requires it
    * on 100 % of rows. */
   cadenceMs?: number;
+  /** ADAAAA-8102: the CONFIGURED live content consume rate in frames per content
+   *  second (`LIVE_OBSERVE_CONTENT_FPS`, resolved to 2 when unset). AC-8101-1
+   *  grades `contentFps == 1` on 100 % of payloads and audit rows, so the rate is
+   *  stamped here (payload) and passed through to `decide_audit.timings` rather
+   *  than read from `printenv`. */
+  contentFps?: number;
   /** ADAAAA-8064: where the timeline was sourced from — `observations` on the
    * live rail, `seeds` on the VOD symmetric window / a legacy payload. */
   timelineSource?: "observations" | "seeds";
@@ -5619,6 +5633,11 @@ export function buildObserveDecideRequest(
             // `printenv` — the 8074 lesson applied to the two knobs rev 7 adds.
             spanSec: cfg.liveObserveWindowS ?? cfg.observeWindowS ?? LIVE_OBSERVE_WINDOW_S,
             cadenceMs: Math.round((cfg.liveObserveCadenceS ?? cfg.observeCadenceS ?? OBSERVE_CADENCE_S) * 1000),
+            // ADAAAA-8102: the CONFIGURED content consume rate, stamped next to
+            // span/cadence for the same reason — AC-8101-1 grades the RATE off the
+            // payload/audit row instead of `printenv`. Both live rails build their
+            // payload through this function, so the media rail carries it too.
+            contentFps: Number(cfg.liveObserveContentFps ?? OBSERVE_CONTENT_FPS),
             timelineSource,
           },
           audioPresence: {

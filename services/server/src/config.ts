@@ -656,6 +656,26 @@ function positiveNumberOrUndefined(raw: string | undefined): number | undefined 
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+/**
+ * ADAAAA-8102: the same empty-means-unset guard for a knob whose `<= 0` value is
+ * a DOCUMENTED disable rather than a nonsense rate.
+ *
+ * `LIVE_OBSERVE_CONTENT_FPS` is that knob: 0 (or negative) is the documented
+ * opt-out of the ingest -> consumption stride ("perceive/consume every frame"),
+ * so it must survive parsing. What must NOT survive is compose's `${X:-}` empty
+ * string: `Number("")` is 0, so an unset knob would silently read as "stride
+ * disabled" instead of "the default 2 fps", and a zero-rate stride starves every
+ * decide window. Unset, empty and unparseable all mean "unset" — only a real
+ * number (including the documented 0) is returned.
+ */
+function finiteNumberOrUndefined(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === "") return undefined;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function parseGoalLineCalibrations(raw: string | undefined): Record<string, GoalLineCalibration> | undefined {
   if (!raw) return undefined;
   try {
@@ -944,7 +964,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // exactly when OBSERVE_LOOP + OBSERVE_SIGNAL_GATE are both on (the gated VOD
     // detail-first pass the gap targets). The cool-region stride and the
     // full-perceive hot window after an escalation are separately tunable.
-    liveObserveContentFps: env.LIVE_OBSERVE_CONTENT_FPS !== undefined ? Number(env.LIVE_OBSERVE_CONTENT_FPS) : undefined,
+    // ADAAAA-7774 frame-consumption rate (content fps); ADAAAA-8102 routes it
+    // through the empty-means-unset guard so compose's `${X:-}` cannot read as
+    // "stride disabled" (`Number("")` is 0) while an explicit 0 still keeps its
+    // documented opt-out meaning.
+    liveObserveContentFps: finiteNumberOrUndefined(env.LIVE_OBSERVE_CONTENT_FPS),
     livePerceiveUtilization: env.LIVE_PERCEIVE_UTILIZATION !== undefined ? Number(env.LIVE_PERCEIVE_UTILIZATION) : undefined,
     perceiveCadence: env.PERCEIVE_CADENCE === "1" ? true : env.PERCEIVE_CADENCE === "0" ? false : undefined,
     perceiveQuietStride: env.PERCEIVE_QUIET_STRIDE !== undefined ? Number(env.PERCEIVE_QUIET_STRIDE) : undefined,

@@ -1624,6 +1624,11 @@ def render_perceive_timeline(
         # trusting `printenv` (the ADAAAA-8074 lesson).
         "spanSec": ("spanSec", float),
         "cadenceMs": ("cadenceMs", int),
+        # ADAAAA-8102: the CONFIGURED live content consume rate (frames per
+        # content second). Stamped by the server on every live payload next to
+        # span/cadence, so AC-8101-1 grades `contentFps == 1` off the audit row
+        # rather than `printenv` — the same ADAAAA-8074 lesson applied to the rate.
+        "contentFps": ("contentFps", float),
     }
     extra: dict = {}
     source = None
