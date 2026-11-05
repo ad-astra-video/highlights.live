@@ -2407,6 +2407,157 @@ export function storedCardSurface(input: StoredCardSurfaceInput): StoredCardSurf
   return { caption: "", cardTitles: [], violations };
 }
 
+/**
+ * ADAAAA-8125 (ADAAAA-8124 product ruling, clause 1): the QUIET copy derived from
+ * this row's own window.
+ *
+ * The gap this closes: the write seam stored `card.caption || (reasonClean ?
+ * gatedLine : "")`, so a REFUSED goal-claim card on a NON-EMPTY but shape-unclean
+ * gated line stored neither a `reason` nor a `caption` — 22 of 61 accepted rows
+ * (36%) on the ADAAAA-8124 post-deploy sweep. Copy is owed by the row; a claim
+ * card is earned by corroboration (§3.4).
+ *
+ * The copy is derived from THIS row's own sentence (`raw` = the model's stored
+ * line for this decision, the same string the card gate refused — never a
+ * neighbouring ladder entry, never a model call) and is purely extractive:
+ *
+ *   1. `quietShape` keeps the row's own actor words + the window's own outcome
+ *      verb (and its own place), so no word is invented;
+ *   2. the SAME gate order the stored line and the card cross is applied
+ *      (claim -> absence -> names -> place -> quiet window -> score facts), so
+ *      the copy cannot say more than either surface may;
+ *   3. the lead is trimmed to the quiet budget (<= 8 words, never longer than the
+ *      row's own sentence) and closed with `restoreTerminalPunctuation`;
+ *   4. the result must be a FIXED POINT of the gate order (`gateGoalClaims` then
+ *      `gateQuietWindow`), carry 0 `servedShapeViolations` against its own
+ *      `wholeStoredSentence(raw)`, and carry no internal token, claim, absence
+ *      claim or uncorroborated score/name.
+ *
+ * `""` means this window has no honest sentence: the caller stores NO `reason`
+ * (clause 3) and keeps the row — never a placeholder, never an invented word,
+ * never a card surface (a card title is still earned only by corroboration).
+ */
+export function quietStoredCopy(raw: string | null | undefined, ctx?: CaptionGroundingContext): string {
+  const src = stripInternalTokens(raw ?? "").trim();
+  if (!src) return "";
+  const storedSentence = wholeStoredSentence(src);
+  // The quiet shape is `quietShape`'s claim removal when this row's own sentence
+  // carries a goal claim (it keeps the row's actor words + the window's own
+  // outcome verb); a row that carries NO claim already IS the quiet shape — its
+  // own first sentence, which `quietShape` would reduce to a bare "shot" because
+  // it has no claim to cut at.
+  const claimBearing = hasGoalClaim(storedSentence);
+  const quiet = claimBearing ? quietShape(src) : storedSentence;
+  if (!quiet) return "";
+  // Candidate order: the row's own quiet shape, then — when that still carries
+  // the event frame (`The scoreboard updates from 1-1 to 2-1 as …`) — the row's
+  // own BEAT clause, the clause carrying the window's outcome verb. Both are
+  // extractive; whichever passes the gate order is the row's honest copy.
+  const candidates = [quiet, claimBearing ? quietBeatClause(quiet, src) : ""];
+  for (const candidate of candidates) {
+    const served = serveQuietCandidate(candidate, storedSentence, ctx);
+    if (served) return served;
+  }
+  return "";
+}
+
+/**
+ * ADAAAA-8125: the row's own BEAT clause — the clause that carries the window's
+ * outcome verb (`as the player in white shoots` in
+ * `The scoreboard updates from 1-1 to 2-1 as the player in white scores.`).
+ *
+ * The clause before it is the event FRAME (the ledger line the model read), not
+ * the beat: serving the frame alone is a prefix of the row's own sentence, which
+ * §2 refuses. Extractive only — the words are the row's own, the verb is the one
+ * `quietShape` already substituted, and the capitalisation is the sentence start.
+ */
+function quietBeatClause(quiet: string, src: string): string {
+  const verb = outcomeVerbFor(src);
+  if (!verb) return "";
+  const clauses = (quiet ?? "")
+    .split(/\s*[—–]\s*|\s+(?:as|while|when|and|but)\s+/i)
+    .map((c) => c.trim())
+    .filter(Boolean);
+  if (clauses.length < 2) return "";
+  const verbRe = new RegExp(`\\b${verb.replace(/\s+/g, "\\s+")}\\b`, "i");
+  for (let i = clauses.length - 1; i >= 1; i -= 1) {
+    if (!verbRe.test(clauses[i])) continue;
+    // `quietShape` appends the outcome verb after the determiner a claim noun
+    // left behind (`players celebrate a shoots`). Dropping that substituted tail
+    // keeps the clause's OWN verb, which is the honest beat
+    // (`Players celebrate in the penalty area.`).
+    const repaired = clauses[i].replace(
+      /\s+(?:a|an|the)\s+(?:shoots|is\s+saved|is\s+blocked|is\s+cleared|goes\s+wide)$/i,
+      ""
+    );
+    const source = MANGLED_QUIET_SUBSTITUTE.test(clauses[i]) ? repaired : clauses[i];
+    const clause = source.trim().replace(/^[a-z]/, (m) => m.toUpperCase());
+    // A beat clause is the actor + a verb; a bare phrase is not.
+    if (wordCount(clause) >= 2 && VERBISH.test(clause)) return clause;
+  }
+  return "";
+}
+
+/** The gate order + post-conditions ONE quiet candidate must pass (AC1/AC2). */
+function serveQuietCandidate(
+  candidate: string,
+  storedSentence: string,
+  ctx?: CaptionGroundingContext
+): string {
+  const sources = storedSentence ? [storedSentence] : [];
+  let out = restoreTerminalPunctuation((candidate ?? "").trim());
+  if (!out) return "";
+  out = gateGoalClaims(out, ctx);
+  out = gateAbsenceClaims(out, ctx);
+  out = groundNames(out, ctx?.promptText);
+  out = ensureLeadPlace(out, ctx);
+  // §3.3 budget: the quiet LEAD is <= 8 words. Applied before the colour beat so
+  // the trim can never cut through an appended clause.
+  const lead = captionLead(out);
+  const budgeted = wordCount(lead) > QUIET_MAX_WORDS ? trimQuietLine(lead, ctx?.place) : lead;
+  out = restoreTerminalPunctuation((budgeted ?? "").trim());
+  out = gateQuietWindow(out, ctx);
+  if (typeof ctx?.promptText === "string") out = gateScores(out, ctx.promptText);
+  out = restoreTerminalPunctuation((out ?? "").trim());
+  if (!out) return "";
+  // The post-condition the gated line already crosses (`reasonClean`): 0
+  // served-shape violations against THIS row's own stored sentence.
+  if (servedShapeViolations(out, sources).length > 0) return "";
+  // … and the copy gates it must be a FIXED POINT of (AC2): re-running the gate
+  // order returns the same string, so no read or re-emit can derive another.
+  const claimed = gateGoalClaims(out, ctx);
+  if (claimed !== out) return "";
+  if (gateQuietWindow(claimed, ctx) !== out) return "";
+  if (gateAbsenceClaims(out, ctx) !== out || hasAbsenceClaim(out)) return "";
+  if (hasGoalClaim(out)) return "";
+  if (stripInternalTokens(out) !== out) return "";
+  // A scoreline is a CLAIM too: it ships only when this window's own prompt
+  // corroborates it (`gateScores`), never on a pure quiet fallback.
+  const scores = findScoreClaims(out);
+  if (scores.length > 0 && scores.some((claim) => typeof ctx?.promptText !== "string" || !promptHas(ctx.promptText, claim))) {
+    return "";
+  }
+  // Quiet budget + never longer than the row's own sentence.
+  if (wordCount(captionLead(out)) > QUIET_MAX_WORDS) return "";
+  if (storedSentence && wordCount(out) > wordCount(storedSentence)) return "";
+  // A claim-substituted tail (`… celebrate a shoots`) is malformed copy: the
+  // outcome verb cannot follow a determiner the row left behind.
+  if (MANGLED_QUIET_SUBSTITUTE.test(out)) return "";
+  // A capitalised determiner mid-sentence is a mangled substitution too
+  // (`The commentator announces The striker shoots`): the clause extraction or
+  // the name gate left a second sentence inside the line.
+  if (/\p{Ll}\s+(?:The|A|An)\b/u.test(out)) return "";
+  // A quote is an OCR label the model quoted, never copy
+  // (`… the stadium displays 'GOAL' …` reduced to `displays '`).
+  if (/['"‘’“”]/.test(out)) return "";
+  return out;
+}
+
+/** The outcome verbs `quietShape` substitutes, and the determiners a mangled
+ * substitution leaves in front of them (`players celebrate a shoots`). */
+const MANGLED_QUIET_SUBSTITUTE =
+  /(?:^|\s)(?:a|an|the|of|to|as|and|but|while)\s+(?:shoots|is\s+saved|is\s+blocked|is\s+cleared|goes\s+wide)\b/i;
+
 /** Letters a proper name may contain (accented Latin, apostrophes, hyphens).
  * No trailing full stop: `No. 9` is a JERSEY, not the name "No." (ADAAAA-7957). */
 const NAME_WORD = /[\p{Lu}][\p{L}'’\-]*/gu;
