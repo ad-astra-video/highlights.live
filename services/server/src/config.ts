@@ -210,6 +210,12 @@ export interface ServerConfig {
   /** ADAAAA-7906: retry backoff BASE in ms (default 30 s, exponential on the
    * retry number, capped at 10 min). `VOD_RESUME_BACKOFF_MS`. */
   vodResumeBackoffMs: number;
+  /** ADAAAA-8061: bounded grace window (ms) POST /jobs/:id/stop gives a live
+   * pass to unwind AND settle its own accounting before the stop path releases
+   * the perceive runner and settles the record itself. Without the drain the
+   * stop killed the decide runner under the pass, so the job ended `failed`
+   * with no `costUsd`/`decideCalls`. `JOB_STOP_DRAIN_MS` (default 10000). */
+  jobStopDrainMs: number;
   /** ADAAAA-7906: persist the resume checkpoint every N decided windows
    * (default 10 ≈ 30 s of content at the 3 s observe cadence).
    * `VOD_RESUME_CHECKPOINT_WINDOWS`. */
@@ -794,6 +800,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // ADAAAA-7906 (VOD resume): auto-retry budget + backoff + checkpoint cadence.
     vodResumeMaxAttempts: Number(env.VOD_RESUME_MAX_ATTEMPTS ?? 2),
     vodResumeBackoffMs: Number(env.VOD_RESUME_BACKOFF_MS ?? 30_000),
+    // ADAAAA-8061: bounded drain window for a stop on a live/file-sim pass.
+    jobStopDrainMs: Math.max(0, Number(env.JOB_STOP_DRAIN_MS ?? 10_000)),
     vodResumeCheckpointWindows: Math.max(1, Number(env.VOD_RESUME_CHECKPOINT_WINDOWS ?? 10)),
     vodDecideWindowN: Number(env.VOD_DECIDE_WINDOW_N ?? 24),
     vodAudioRetainS: Number(env.VOD_AUDIO_RETAIN_S ?? 1800),

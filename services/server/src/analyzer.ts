@@ -6389,6 +6389,15 @@ export async function analyzeJob(
   let perceiveCalls = 0;
   try {
     for await (const frame of iterFrames) {
+      // ADAAAA-8061: a graceful stop must unwind the pass WITHOUT burning more
+      // GPU or losing the decide runner. Break between frames (before the next
+      // /analyze reserve and before the next cadence decide), let the observers
+      // flush, and return the partial outcome — the caller then settles the
+      // record (`cancelled` + cost) from the metrics this pass produced. The
+      // old flow released the perceive session under the in-flight decide,
+      // which made the runner 404 five times and failed the job with no
+      // accounting at all.
+      if (slotRef?.isStopped?.()) break;
       framesSeen++;
       // ADAAAA-7676: drop stale content instead of deciding it late. Measured
       // against the wall clock since the stream's first frame, minus one decide
