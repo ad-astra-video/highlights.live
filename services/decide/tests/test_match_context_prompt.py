@@ -65,9 +65,12 @@ STORY = "0-0, Portugal dominating the left channel."
 #: verbatim on 59 of 67 live rows), then by ADAAAA-7949 contract v2 (window-only
 #: caption, blunt quiet line, colour as its own channel); FULL stayed
 #: byte-identical through all three edits and still pins e12f4d6f (AC8).
+# ADAAAA-8103 (v3 emphasis) re-pinned these: the static preamble moved by
+# +2385 chars, the absent-match-context invariant itself is unchanged (the
+# block still renders nothing — see test_absent_match_context_adds_no_tokens).
 GOLDEN_PROMPT_SHA = {
-    False: "e12f4d6fe48c8b51e82a550d5b80aac46859f8fd159c116986624c76ea972fc2",
-    True: "4cea3bff17efd0c24efe87b4d794f6fa5824a1f693978c8b269f2d6208ca0838",
+    False: "677dd76bf678f2a801f9ff81b85397c5a93b0843c797a5fa4120962a1393bbd8",
+    True: "b91668b419efbe3be4fde08523314686fb411b3b1c97c90a64c19c2b89d88e84",
 }
 
 PORTUGAL_SPAIN = {

@@ -302,7 +302,11 @@ def test_build_prompt_reflects_frames_and_audio():
     p = build_prompt("GOAL", {"trackCount": 1, "maxVelocity": 0.2, "ocrHits": 0}, "fa cup", n_frames=6, has_audio=True)
     assert "frames shown (1 FPS temporal window): 6" in p
     assert "audio provided (commentary/crowd): yes" in p
-    assert "SEQUENCE of frames" in p
+    # ADAAAA-8103: the window is a DOSSIER — few frames plus the measured
+    # evidence — and the frames are the confirmation channel.
+    assert "Each window is a DOSSIER" in p
+    assert "a few frames" in p
+    assert "CONFIRMATION CHANNEL" in p
 
 
 def test_decide_with_gemma_reports_input_audio_path(monkeypatch):
@@ -515,14 +519,17 @@ def test_build_prompt_deanchored_hypothesis_not_fact():
     assert "CANDIDATE label, not proof" not in p
 
 
-def test_build_prompt_requires_two_pass_reasoning():
+def test_build_prompt_requires_pass_ordered_reasoning():
     p = build_prompt("GOAL", {}, "soccer")
-    # independent observation happens FIRST, before the hypothesis is considered
+    # ADAAAA-8103: PASS 1 reads the dossier, PASS 1b confirms with the frames,
+    # PASS 2 tests the hypothesis — the order is part of the contract.
     assert "PASS 1" in p
     assert "PASS 2" in p
-    assert "INDEPENDENT OBSERVATION" in p
+    assert "READ THE DOSSIER" in p
+    assert "CONFIRM WITH THE FRAMES" in p
     assert "HYPOTHESIS TEST" in p
     assert "FIRST, before considering the hypothesis" in p
+    assert p.index("PASS 1 ") < p.index("PASS 1b") < p.index("PASS 2 ")
 
 
 def test_build_prompt_names_explicit_goal_criteria():
@@ -550,7 +557,8 @@ def test_build_prompt_goal_line_corroboration_not_a_gate():
     p = build_prompt("GOAL", {"trackCount": 2, "maxVelocity": 0.4, "ocrHits": 0}, "soccer")
     assert "OPTIONAL corroboration" in p
     assert "NOT a required gate" in p
-    assert "goal DIRECTLY from the frames + audio-noise trigger" in p
+    assert "goal DIRECTLY from the timeline + frames + audio-noise trigger" in p
+    assert "NOT from the geometric goal-line corroboration alone" in p
     # the old conservative formulation (both ball criteria MUST be true) is gone
     assert "only when the required ball criteria" not in p
     assert "ballCrossedLineBetweenPosts AND ballInNet) are true" not in p
@@ -939,9 +947,11 @@ def test_build_prompt_names_outcome_taxonomy():
     p = build_prompt("GOAL", {"trackCount": 2, "maxVelocity": 0.4}, "soccer")
     for member in ("scoring_play", "near_miss", "big_play", "not_highlight"):
         assert member in p
-    # Frames are the primary evidence; audio is fallible (crowd-alone rule).
-    assert "FRAMES ARE THE PRIMARY EVIDENCE" in p
-    assert "audio is cheap and fallible" in p
+    # ADAAAA-8103: the frames still arbitrate (crowd-alone rule) but they are
+    # no longer described as the only primary evidence.
+    assert "THE FRAMES ARE THE FINAL ARBITER" in p
+    assert "FRAMES ARE THE PRIMARY EVIDENCE" not in p
+    assert "conflict resolves toward the frames" in p
     assert '"outcome"' in p
 
 

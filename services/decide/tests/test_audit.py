@@ -66,7 +66,9 @@ def test_messages_has_versioned_system_prompt():
 def test_system_prompt_versioned():
     # ADAAAA-7993: v2 = static preamble + output contract hoisted into the system
     # turn so the vLLM prefix cache can reuse it.
-    assert SYSTEM_PROMPT_VERSION == "2"
+    # ADAAAA-8103: v3 = the same layout, with the emphasis rewritten so the
+    # window's measured evidence carries the read and the frames confirm it.
+    assert SYSTEM_PROMPT_VERSION == "3"
 
 
 def test_audit_sha256_and_content_ref():
@@ -89,7 +91,7 @@ def test_audit_record_shape():
         fallback=False,
         started_at=time.time() - 0.5,
     )
-    assert rec["systemPromptVersion"] == "2"
+    assert rec["systemPromptVersion"] == "3"
     assert rec["sessionId"] == "job"
     assert rec["groupKey"] == "g1"
     assert rec["frameCount"] == 3
