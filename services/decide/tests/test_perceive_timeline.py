@@ -391,6 +391,40 @@ def test_emitted_audit_record_carries_the_audio_coverage(llama, monkeypatch, tmp
     assert d["noAudioReason"] == t["noAudioReason"]
 
 
+def test_emitted_audit_record_names_a_no_audio_window(llama, monkeypatch, tmp_path):
+    """AC-E2 wording: a window that carried NO audio must stay distinguishable
+    from one that was transcribed to empty, and that has to be true of the
+    on-disk RECORD too — not just of the descriptor the server indexes. The
+    record carries `windowAudioPresent=false` plus a named `noAudioReason`."""
+    monkeypatch.setenv("DECIDE_AUDIT_DIR", str(tmp_path))
+    monkeypatch.setenv("AUDIO_CONTEXT", "1")
+    monkeypatch.setenv("GEMMA_SEND_AUDIO", "0")
+    monkeypatch.delenv("ASR_URL", raising=False)
+    monkeypatch.setattr(G, "_asr_url", lambda: None)
+    res = decide_with_gemma(
+        "GOAL",
+        Evidence(trackCount=1).model_dump(),
+        game_hint="soccer",
+        frames=[],
+        audio_b64="",
+        url=llama.url,
+        audit_ctx={"sessionId": "s1", "jobId": "j1", "groupKey": "gNOAUD", "frameCount": 1},
+        audio_presence={"tapChunks": 0, "clipBytes": 0, "levels": 0, "series": 0},
+    )
+    lines = (tmp_path / "decide-audit.jsonl").read_text().splitlines()
+    rec = json.loads(lines[-1])
+    assert rec["groupKey"] == "gNOAUD"
+    t = rec["timings"]
+    assert t["audioPath"] == "none" and t["asrRan"] is False
+    assert t["windowAudioPresent"] is False
+    assert t["noAudioReason"] == "no_audio_clip"
+    assert t["audioTapChunks"] == 0 and t["audioClipBytes"] == 0
+    # File record and the descriptor the server persists agree field for field.
+    d = res["audit"]["timings"]
+    assert d["windowAudioPresent"] is False and d["noAudioReason"] == "no_audio_clip"
+    assert d["audioPath"] == t["audioPath"]
+
+
 def test_enriched_request_never_422s_the_live_loop():
     """AC-E4: a 29-seed window with the timeline rides the real /highlight route
     (whose response is validated), and an oversized timeline is a clean 422 the
