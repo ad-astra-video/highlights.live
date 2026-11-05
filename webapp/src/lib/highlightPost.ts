@@ -5,10 +5,10 @@
 // component so they are unit-testable without a DOM.
 import type { JobDetailHighlight, SummaryLogEntry } from "./jobDetail";
 import {
-  gateGoalClaims,
   groundCaption,
   hasTerminalPunctuation,
   humanEventLabel as sharedHumanEventLabel,
+  isServableCardOption,
   stripInternalTokens,
   type CaptionGroundingContext,
 } from "@highlights/events";
@@ -308,22 +308,20 @@ export function suggestCaption(
   return sentenceCase(body) || sentenceCase(fallback);
 }
 
-/** Longest post title the card will suggest. */
-const MAX_TITLE_CHARS = 60;
-
-/** A title line: trimmed at a word boundary, no trailing punctuation. */
-function titleLine(text: string): string {
-  const body = trimToWords(text.trim(), MAX_TITLE_CHARS).replace(/[\s,;:.!?—–-]+$/, "");
-  return body;
-}
+/** Longest post title the card will suggest. Retained for `captionFromTitle`
+ * callers; card OPTIONS are now whole gated sentences (v8 §3b.1) capped at the
+ * stored card-option ceiling so a served option is the stored string itself. */
+const MAX_CARD_OPTION_CHARS = 140;
 
 /**
  * One-line post titles for a highlight (ADAAAA-7881), extractive and pure.
  *
- * (a) the narrative's leading clause, (b) the human event label joined to that
- * clause when the join still fits, (c) the decide `reason`'s leading clause when
- * it differs. Empties/duplicates are dropped and the list is capped at 3, so the
- * card always offers 2–3 distinct one-line titles and never a cut word.
+ * ADAAAA-8053 (contract v8 §3b.1): every option is a GATED SENTENCE that is
+ * byte-identical to a stored string. The card options QA v7 measured
+ * (`["…", "big play: …", "big play"]`) came from this function's label variants
+ * on the legacy fallback path, so the label title and its `<label>: lead` join
+ * are gone: a type token is never an option. The fallback now offers the gated
+ * caption first and a second stored gated line (the reason, when it differs).
  */
 export function postTitles(
   h: Pick<JobDetailHighlight, "localizedTs" | "start" | "reason" | "eventType" | "outcome" | "corroborated"> &
@@ -335,35 +333,31 @@ export function postTitles(
   // derivative of the stored string — the title trim dropped the trailing period
   // on 5/5 measured cards, `leadingClause` dropped the colour clause (page
   // caption colour 0/15), and the 60-char cap cut a last word on one card. When
-  // the write seam stored the gated options, render THEM, verbatim.
-  const stored = (h.cardTitles ?? []).filter((t): t is string => typeof t === "string" && !!t.trim());
+  // the write seam stored the gated options, render THEM, verbatim — but a legacy
+  // row can still carry a token option from before v8, and a token is never
+  // served: it is filtered here (a refused option is not a rewrite).
+  const stored = (h.cardTitles ?? [])
+    .filter((t): t is string => typeof t === "string" && !!t.trim())
+    .filter((t) => isServableCardOption(t));
   if (stored.length) return stored.slice(0, 3);
   const selected = selectNarrative(h, log);
   const grounding = ctx ?? captionGroundingFor(h, { fromLog: selected.fromLog });
   const narrative = groundCaption(scrubInternal(selected.text), grounding);
-  const lead = titleLine(leadingClause(narrative));
-  // A title carries the same event label as the caption, so the label is gated
-  // too: an unverified goal never becomes "Goal: …" (ADAAAA-7948).
-  const label = gateGoalClaims(humanEventLabel(h.eventType), grounding);
-  const labelTitle = label.charAt(0).toUpperCase() + label.slice(1);
-  const reasonLead = titleLine(leadingClause(groundCaption(scrubInternal(h.reason ?? ""), grounding)));
+  const reasonLine = groundCaption(scrubInternal(h.reason ?? ""), grounding);
 
+  // Serve the gated sentences EXACTLY: no title trim (it dropped the period and
+  // failed byte-identity), no leading-clause cut (a cut is a prefix), no casing
+  // transform. A string that is not a servable option is simply not offered.
   const out: string[] = [];
   const push = (value: string) => {
-    const title = titleLine(value);
-    if (title.length >= 1 && title.length <= MAX_TITLE_CHARS && !out.includes(title)) out.push(title);
+    const title = (value ?? "").trim();
+    if (!title || title.length > MAX_CARD_OPTION_CHARS) return;
+    if (!isServableCardOption(title)) return;
+    if (!out.includes(title)) out.push(title);
   };
-  push(sentenceCaseLead(lead));
-  if (lead) push(`${labelTitle}: ${lead}`);
-  if (reasonLead && reasonLead !== lead) push(sentenceCaseLead(reasonLead));
-  push(labelTitle);
-  push(`${labelTitle} moment`);
-  return out.slice(0, 3).map((t) => t.charAt(0).toUpperCase() + t.slice(1));
-}
-
-/** Title casing helper that never appends punctuation (titles carry none). */
-function sentenceCaseLead(text: string): string {
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+  push(narrative);
+  if (reasonLine && reasonLine !== narrative) push(reasonLine);
+  return out.slice(0, 3);
 }
 
 /**

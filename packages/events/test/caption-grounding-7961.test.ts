@@ -72,13 +72,11 @@ describe("repairDanglingTail — a delivered line never stops mid-phrase", () =>
 
   it("is applied to the caption and card a stored line renders as", () => {
     // Legacy rows keep the broken string in the log; the READ surface repairs it.
+    // ADAAAA-8053 (contract v8 §3b.1): the card offers the gated caption ONLY —
+    // a label option (`Shot`) and a `Shot: …` prefix are no longer served.
     const stored = "A child stands in the foreground while players";
     expect(captionForStoredLine(stored)).toBe("A child stands in the foreground");
-    expect(cardTitlesFor(stored, "Shot")).toEqual([
-      "A child stands in the foreground",
-      "Shot: A child stands in the foreground",
-      "Shot",
-    ]);
+    expect(cardTitlesFor(stored)).toEqual(["A child stands in the foreground"]);
   });
 });
 
