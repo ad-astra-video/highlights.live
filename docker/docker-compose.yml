@@ -726,6 +726,18 @@ services:
       # pre-8064 image projection, kept ONLY so the ON/OFF latency pairing is
       # measured on one build with alternating order. Instrumentation only.
       - LIVE_PERCEIVE_TIMELINE_SOURCE=${LIVE_PERCEIVE_TIMELINE_SOURCE:-observations}
+      # ADAAAA-8108 (AC-E3): the ON/OFF arm of the live decide ENRICHMENT (the
+      # per-window `perceiveTimeline` text block). Empty/unset = `on`, the shipped
+      # posture, so a recreated box without this knob moves nothing. `off` omits
+      # the timeline from every live window; `alternate` alternates it per DECIDED
+      # window in content order (OFF first, so the ON arm is never read through a
+      # cold/warm image prefix). HALF of the point of this flag is that it does NOT
+      # touch span, cadence, image budget, in-flight depth or keep ratio: the ON/OFF
+      # pair is a same-cell measurement of the enrichment alone. Instrumentation
+      # only — leave it empty in production; the resolved arm is stamped on every
+      # decide_audit row (`perceiveTimeline.enrichmentArm`), so a leg is graded off
+      # the payload rather than `printenv`.
+      - LIVE_DECIDE_ENRICH=${LIVE_DECIDE_ENRICH:-}
       # ADAAAA-7773: how many decide app-calls the orchestrated decide CLIENT
       # admits at once (`LivepeerClient` decideConcurrency). ADAAAA-7771 kept 4
       # windows in flight per stream but the client gate was still 2 (the compose

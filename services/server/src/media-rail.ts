@@ -128,6 +128,11 @@ export interface MediaRailObserverOptions {
   /** ADAAAA-7799 (lever C): decide-rate cap for this rail — keep only a
    *  fraction (0 < r < 1) of the decide opportunities. Undefined = off. */
   decideKeepRatio?: number;
+  /** ADAAAA-8108 (AC-E3): the enrichment arm for this rail — `on` (default) sends
+   *  the per-window `perceiveTimeline`, `off` omits it, `alternate` alternates per
+   *  DECIDED window in content order starting OFF. Undefined = the shipped `on`,
+   *  so an unset knob leaves the rail byte-identical. */
+  enrichment?: "on" | "off" | "alternate";
   /** Content-vs-wall lag above which a queued frame is dropped instead of
    *  decided late (ADAAAA-7676 rule, applied to the media rail). Default
    *  LIVE_OBSERVE_LAG_BUDGET_S (30 s). */
@@ -379,6 +384,9 @@ export class MediaRailObserver {
       signalGate: opts.signalGate ?? false,
       signalGateOpts: opts.signalGateOpts,
       decideKeepRatio: opts.decideKeepRatio,
+      // ADAAAA-8108 (AC-E3): the enrichment arm, so the OFF arm is reachable on
+      // the media rail the 7 s / 5 s cell is graded on. Undefined = shipped `on`.
+      enrichment: opts.enrichment,
       onDecide: opts.onDecide,
       ...(staged
         ? {
