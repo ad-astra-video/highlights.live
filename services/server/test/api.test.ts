@@ -1069,6 +1069,48 @@ describe("media rail sampling-rate wiring (ADAAAA-7990)", () => {
     await app.close();
     await new Promise<void>((r) => srv.close(() => r()));
   });
+
+  // AC1 literally reads "a fresh media-rail job records resolved sampleFps = 3".
+  // The cases above only get there through `POST /jobs/:id/media`; when the media
+  // session is opened straight on the node (`POST :4070/sessions`, the replay
+  // recipe QA uses) no provision runs, so the record used to carry no rate at
+  // all. Pin the creation-time write.
+  it("records the resolved rate at job creation when the media session opens directly on the node", async () => {
+    const { app, db } = await buildTestApp({ LIVE_SAMPLE_BASE_FPS: "3" });
+    const token = await register(app, "fps7990direct@test.dev", "password123");
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser", gameHint: "soccer" },
+    });
+    expect(jr.statusCode).toBe(200);
+    const jobId = jr.json().job.id;
+
+    // No `/jobs/:id/media` call: the QA replay driver talks to the media node.
+    const job = await app.inject({ method: "GET", url: `/jobs/${jobId}`, headers: { authorization: `Bearer ${token}` } });
+    expect(job.json().job.sampleFps).toBe(3);
+    // and the DURABLE record carries it, not just the response projection.
+    expect((await db.getJob(jobId))?.sampleFps).toBe(3);
+
+    await app.close();
+  });
+
+  it("creation-time record follows LIVE_SAMPLE_BASE_FPS / LIVE_SAMPLE_MAX_FPS, not a hard-coded 3", async () => {
+    const { app } = await buildTestApp({ LIVE_SAMPLE_BASE_FPS: "5", LIVE_SAMPLE_MAX_FPS: "4" });
+    const token = await register(app, "fps7990directcap@test.dev", "password123");
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser", gameHint: "soccer" },
+    });
+    const jobId = jr.json().job.id;
+    const job = await app.inject({ method: "GET", url: `/jobs/${jobId}`, headers: { authorization: `Bearer ${token}` } });
+    expect(job.json().job.sampleFps).toBe(4);
+
+    await app.close();
+  });
 });
 
 describe("VOD browser upload (multipart POST /jobs/upload)", () => {
