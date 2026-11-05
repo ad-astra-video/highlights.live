@@ -152,9 +152,11 @@ describe("customer job detail carries no pipeline internals (ADAAAA-7737 AC-A/AC
     expect(customerHtml).toContain("Analysis");
     expect(customerHtml).toContain("T+0s – T+3s");
     expect(customerHtml).toContain("T+3s – T+6s");
-    // Window status is plain copy; the near-miss window is a "highlight" for the
-    // customer and the rejected not-highlight window reads as checked.
-    expect(customerHtml).toContain("Highlight detected");
+    // Window status is plain copy; ADAAAA-8135: a NEAR_MISS row is a detected
+    // NON-GOAL play, so the customer reads "Notable play detected" (it used to
+    // say "Highlight detected", which made a demoted celebration look like a
+    // confirmed goal), and the rejected not-highlight window reads as checked.
+    expect(customerHtml).toContain("Notable play detected");
     expect(customerHtml).toContain("Checked — no highlight");
     // No filmstrip, no decide banners, no filter chips.
     expect(customerHtml).not.toContain("data-detail-frame");
