@@ -1401,6 +1401,129 @@ export function downgradeRepeatGoalCelebration(d: DecisionResult, repeat: Accept
   };
 }
 
+// ---------------------------------------------------------------------------
+// ADAAAA-8087: a celebration accept must not become a SECOND board row for a
+// moment the board already carries.
+//
+// The ADAAAA-7865 rule above dedupes GOAL-class accepts only (`isGoal`). The
+// live leg of ADAAAA-8079 (job 00edb27a, 300 s kids fixture at the shipped cell)
+// shipped 6 rows against a pre-change 3, and the surplus was celebration-lane:
+//
+//   * a BIG_PLAY at 161.586 s whose clip sits inside the delivered GOAL at
+//     156.325 s — the same score change read twice (R4-inside-R3);
+//   * two `motion`/AUDIO_BURST accepts 3.2 s apart (184.290 / 187.490 s) with
+//     the literal same reason text — one celebration accepted twice (R5/R6).
+//
+// Neither is supply-dependent, and neither consults the accepted-event ledger.
+// The fix is emission-only: a celebration accept that duplicates a delivered row
+// is dropped here, before cut/persist. No extra model call, no change to the
+// accept policy, the type taxonomy, or the score-change trigger.
+// ---------------------------------------------------------------------------
+
+/** ADAAAA-8087: how close (seconds) two celebration accepts must sit, carrying
+ * the same reason text, to be the same moment read twice. Measured on the
+ * ADAAAA-8079 live leg (3.2 s apart); kept tight so two genuinely distinct
+ * reactions still both land. */
+export const CELEBRATION_DUPLICATE_GAP_S = 5;
+
+/** ADAAAA-8087: one delivered celebration (non-GOAL) row: the instant its clip
+ * is anchored on, the clip window it covers, and its reason text normalised for
+ * equality comparison. */
+export interface AcceptedCelebrationEvent {
+  /** The accepted highlight's id (audit trail for the dropped sibling). */
+  highlightId: string;
+  /** `localizedTs` of the delivered celebration. */
+  anchorTs: number;
+  /** Delivered clip window start (seconds from stream start). */
+  start: number;
+  /** Delivered clip window end. */
+  end: number;
+  /** {@link celebrationReasonKey} of the accept's reason text. */
+  reasonKey: string;
+}
+
+/** ADAAAA-8087: normalise decision copy for "same reason text" equality:
+ * whitespace-collapsed, trimmed, lower-cased. Punctuation is kept — two rows
+ * that differ in wording are NOT the same read. */
+export function celebrationReasonKey(reason?: string | null): string {
+  return String(reason ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** ADAAAA-8087: why a celebration accept must not become its own row. */
+export type CelebrationDuplicate =
+  | { kind: "goal_clip"; goal: AcceptedGoalEvent }
+  | { kind: "celebration_pair"; celebration: AcceptedCelebrationEvent };
+
+/**
+ * ADAAAA-8087: the row a celebration accept collapses into, or `undefined` when
+ * the accept is a distinct moment. Two duplicate structures are recognised:
+ *
+ * 1. the accept's delivered clip OVERLAPS an already-delivered GOAL's clip and
+ *    its anchor sits within {@link GOAL_DUPLICATE_REACH_S} of that goal: the
+ *    goal row's own clip already shows this footage (R4 inside R3's clip);
+ * 2. the accept carries the SAME reason text as a celebration delivered at most
+ *    {@link CELEBRATION_DUPLICATE_GAP_S} earlier: one moment, two motion accepts
+ *    (R5/R6 on the same leg).
+ *
+ * Pure — the caller owns the ledgers. An empty reason can never match another
+ * empty reason: "no text" is not evidence of sameness.
+ */
+export function findCelebrationDuplicate(
+  goals: readonly AcceptedGoalEvent[],
+  celebrations: readonly AcceptedCelebrationEvent[],
+  input: {
+    /** Where the delivered clip would be anchored (localizedTs). */
+    anchorTs: number;
+    /** The delivered clip window the accept would cover. */
+    start: number;
+    end: number;
+    /** The accept's reason text (model copy, pre-gate). */
+    reason?: string | null;
+    /** Only celebration-class accepts are deduped; GOALs use ADAAAA-7865. */
+    isCelebration: boolean;
+    /** Override for tests; defaults to {@link GOAL_DUPLICATE_REACH_S}. */
+    reachS?: number;
+    /** Override for tests; defaults to {@link CELEBRATION_DUPLICATE_GAP_S}. */
+    pairGapS?: number;
+  }
+): CelebrationDuplicate | undefined {
+  if (!input.isCelebration) return undefined;
+  const anchor = input.anchorTs;
+  if (!Number.isFinite(anchor)) return undefined;
+  // 1) the footage of an already-delivered GOAL: same event, already on the board.
+  const reach = input.reachS ?? GOAL_DUPLICATE_REACH_S;
+  let nearest: AcceptedGoalEvent | undefined;
+  let nearestDiff = Infinity;
+  for (const g of goals) {
+    const overlaps = input.start < g.end && g.start < input.end;
+    if (!overlaps) continue;
+    const diff = Math.abs(anchor - g.anchorTs);
+    if (diff <= reach && diff < nearestDiff) {
+      nearestDiff = diff;
+      nearest = g;
+    }
+  }
+  if (nearest) return { kind: "goal_clip", goal: nearest };
+  // 2) the same reason text, accept a moment apart: one celebration, two accepts.
+  const key = celebrationReasonKey(input.reason);
+  if (!key) return undefined;
+  const gap = input.pairGapS ?? CELEBRATION_DUPLICATE_GAP_S;
+  let pair: AcceptedCelebrationEvent | undefined;
+  let pairDiff = Infinity;
+  for (const c of celebrations) {
+    if (c.reasonKey !== key || !Number.isFinite(c.anchorTs)) continue;
+    const diff = Math.abs(anchor - c.anchorTs);
+    if (diff <= gap && diff < pairDiff) {
+      pairDiff = diff;
+      pair = c;
+    }
+  }
+  return pair ? { kind: "celebration_pair", celebration: pair } : undefined;
+}
+
 export interface DecisionResult {
   isHighlight: boolean;
   score: number;
@@ -3170,6 +3293,12 @@ export class LiveRunShared {
    * of these clips is the same goal re-read and is delivered as a celebration,
    * not as a second scoring event. Bounded — a run cannot grow it unboundedly. */
   private acceptedGoalEvents: AcceptedGoalEvent[] = [];
+  /** ADAAAA-8087: delivered celebration (BIG_PLAY) rows in this run, in accept
+   * order (anchor + clip + normalised reason). A later celebration whose clip
+   * overlaps an accepted GOAL's clip, or whose reason text repeats one delivered
+   * within {@link CELEBRATION_DUPLICATE_GAP_S}, collapses into that row instead
+   * of shipping a second one. Bounded — a run cannot grow it unboundedly. */
+  private acceptedCelebrationEvents: AcceptedCelebrationEvent[] = [];
   /** ADAAAA-8078: score transitions this run has already CREDITED, keyed by
    * {@link scoreTransitionKey}. A decide window now attests any post side of
    * `>= minSamples` contiguous readings, so every overlapping window covering the
@@ -3326,6 +3455,28 @@ export class LiveRunShared {
     if (!Number.isFinite(ev.anchorTs)) return;
     this.acceptedGoalEvents.push(ev);
     if (this.acceptedGoalEvents.length > 128) this.acceptedGoalEvents.shift();
+  }
+  /** ADAAAA-8087: which already-delivered row does this celebration accept
+   * duplicate? Returns the GOAL it re-shows or the celebration it re-reads, or
+   * `undefined` for a distinct moment. Pure w.r.t. the ledgers — recording
+   * happens in {@link noteAcceptedCelebrationEvent} only for delivered
+   * celebrations, so a dropped accept never becomes a row that can suppress a
+   * later genuine moment. */
+  celebrationDuplicateEvent(input: {
+    anchorTs: number;
+    start: number;
+    end: number;
+    reason?: string | null;
+    isCelebration: boolean;
+  }): CelebrationDuplicate | undefined {
+    return findCelebrationDuplicate(this.acceptedGoalEvents, this.acceptedCelebrationEvents, input);
+  }
+  /** ADAAAA-8087: remember a delivered celebration row so the next accept of the
+   * same moment collapses into it instead of shipping a second row. Bounded. */
+  noteAcceptedCelebrationEvent(ev: AcceptedCelebrationEvent): void {
+    if (!Number.isFinite(ev.anchorTs)) return;
+    this.acceptedCelebrationEvents.push(ev);
+    if (this.acceptedCelebrationEvents.length > 128) this.acceptedCelebrationEvents.shift();
   }
   /** ADAAAA-7988: the anchors of GOAL accepts already delivered in this run, so
    * the live recall promotion cannot re-open a goal that is already on the
@@ -4590,6 +4741,49 @@ export async function acceptVideoDecision(
       })
     : undefined;
   if (repeatGoal) decision = downgradeRepeatGoalCelebration(decision, repeatGoal);
+  // ADAAAA-8087: a celebration accept that re-shows an already-delivered GOAL's
+  // clip, or repeats a celebration delivered moments earlier, is the SAME moment
+  // the board already carries — it collapses into that row instead of shipping a
+  // second one. Dropped before cut/persist (no extra model call, no second clip).
+  // Skipped for the two rows ADAAAA-7865 / ADAAAA-8006 deliberately keep: a
+  // downgraded repeat GOAL (its clip is still a real celebration) and a demoted
+  // unattested GOAL (it waits for a later scoreboard re-attestation).
+  const isCelebrationAccept =
+    !isGoalAccept &&
+    !repeatGoal &&
+    !scoringLaneDecision &&
+    (decision.outcome === "big_play" ||
+      (decision.outcome === undefined &&
+        /^BIG_PLAY$/i.test(highlightEventType(decision, candidate.eventType) || "")));
+  const celebrationDup = isCelebrationAccept
+    ? run.celebrationDuplicateEvent({
+        anchorTs: loc.ts,
+        start: win.start,
+        end: win.end,
+        reason: decision.reason,
+        isCelebration: true,
+      })
+    : undefined;
+  if (celebrationDup) {
+    const dupeWhy =
+      celebrationDup.kind === "goal_clip"
+        ? `celebration row collapsed into the delivered GOAL ${celebrationDup.goal.highlightId} ` +
+          `(anchor ${celebrationDup.goal.anchorTs.toFixed(1)}s): its clip already shows that goal`
+        : `celebration row collapsed into ${celebrationDup.celebration.highlightId} ` +
+          `(anchor ${celebrationDup.celebration.anchorTs.toFixed(1)}s): same reason within ` +
+          `${CELEBRATION_DUPLICATE_GAP_S}s`;
+    console.error(`[celebration-row-dedupe:${cfg.jobId}] ${dupeWhy} — dropped accept @${loc.ts.toFixed(3)}s`);
+    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis);
+    onEvent?.({
+      seq: emit.seq,
+      timestamp: emit.timestamp,
+      type: "candidateBlocked",
+      candidate: { eventType: highlightEventType(decision, candidate.eventType), timestamp: candidate.timestamp },
+      reason: dupeWhy,
+    });
+    if (sink) sink.final = decision;
+    return;
+  }
   if (sink) sink.final = decision;
   // ADAAAA-6851 note: persisted AFTER the ADAAAA-7865 downgrade so the
   // decision-time note carries the outcome the board actually receives.
@@ -4732,6 +4926,18 @@ export async function acceptVideoDecision(
   // following celebration look like a first re-read of a real goal.
   if (rec.outcome === "scoring_play") {
     run.noteAcceptedGoalEvent({ highlightId: rec.id, anchorTs: loc.ts, start: win.start, end: win.end });
+  }
+  // ADAAAA-8087: remember a delivered celebration row so the next accept of the
+  // same moment (overlapping celebration clip / same reason a moment later)
+  // collapses into it instead of shipping a second row.
+  if (isCelebrationAccept) {
+    run.noteAcceptedCelebrationEvent({
+      highlightId: rec.id,
+      anchorTs: loc.ts,
+      start: win.start,
+      end: win.end,
+      reasonKey: celebrationReasonKey(decision.reason),
+    });
   }
   onEvent?.({ seq: emit.seq, timestamp: emit.timestamp, type: "highlight", highlight: rec });
 }
