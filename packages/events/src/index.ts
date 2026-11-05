@@ -1503,6 +1503,21 @@ export const HighlightRecordSchema = z.object({
    * window it was attributed to, pre -> post score) so the re-emit is auditable
    * from the row alone. Additive optional — absent on every row the gate did not
    * have to demote. */
+  /** ADAAAA-8071: on a LIVE goal accept the ADAAAA-7996 scoring gate DEMOTED to
+   * a celebration, the attestation fields the gate actually read (scoreboard
+   * change / goal-line / net outcome / corroborated confirm). Persisted so the
+   * demotion names which attestation was missing — and the row is auditable
+   * without replaying the decide — instead of surfacing as a silent
+   * "celebration". Additive optional: absent on every scoring highlight. */
+  attestationUsed: z
+    .object({
+      scoreBoardChanged: z.boolean(),
+      goalCrossed: z.boolean(),
+      ballOutcome: z.string().nullable(),
+      corroborated: z.boolean(),
+      goalConfirmed: z.string().nullable(),
+    })
+    .optional(),
   deferredAttestation: z
     .object({
       /** First legible read of the new score (the transition instant). */

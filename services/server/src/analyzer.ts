@@ -687,7 +687,7 @@ export function localizeLiveWindowInstant(
 export function liveGoalHasMeasuredEvidence(input: {
   scoreBoardChanged?: boolean;
   goalCrossed?: boolean;
-  ballOutcome?: string;
+  ballOutcome?: string | null;
   corroborated?: boolean;
   goalConfirmed?: string | null;
 }): boolean {
@@ -703,19 +703,45 @@ export function liveGoalHasMeasuredEvidence(input: {
 export const LIVE_UNATTESTED_GOAL_NOTE =
   "live scoring lane: no measured attestation in this window (no scoreboard change, no goal-line / net signal, no corroborated confirm) — delivered as a celebration, not a GOAL";
 
+/** ADAAAA-8071: the demotion note NAMES the attestations the gate actually read
+ * (and why the audio/motion evidence could not carry the goal), so a demoted
+ * goal is auditable from the row alone instead of reading as a silent
+ * "celebration" demotion. Falls back to {@link LIVE_UNATTESTED_GOAL_NOTE} when
+ * the caller has no field values (legacy shape). */
+export function liveUnattestedGoalNote(used?: LiveGoalAttestationUsed): string {
+  if (!used) return LIVE_UNATTESTED_GOAL_NOTE;
+  const yes = (v: boolean) => (v ? "true" : "false");
+  const fields = [
+    `scoreBoardChanged=${yes(used.scoreBoardChanged)}`,
+    `goalCrossed=${yes(used.goalCrossed)}`,
+    `ballOutcome=${used.ballOutcome ?? "none"}`,
+    `corroborated=${yes(used.corroborated)}`,
+    `goalConfirmed=${used.goalConfirmed ?? "none"}`,
+  ].join(" ");
+  return (
+    `live scoring lane: no measured attestation in this window (${fields}); ` +
+    "audio/motion reaction is corroborating evidence only and cannot attest a score — " +
+    "delivered as a celebration, not a GOAL"
+  );
+}
+
 /**
  * ADAAAA-7996: downgrade a live GOAL accept with no measured attestation to a
  * non-scoring celebration. Same shape as the ADAAAA-7865 repeat-goal downgrade:
  * the clip is still cut and delivered (a legitimate moment stays on the board),
  * but its outcome leaves the scoring lane, so it can never be postable as a
  * GOAL (`isPostableHighlight` requires `scoring_play`).
+ *
+ * ADAAAA-8071: the optional `used` argument names the attestation fields the gate
+ * read (and why audio/motion cannot carry the goal) on the demoted row.
  */
-export function downgradeUnattestedLiveGoal(d: DecisionResult): DecisionResult {
+export function downgradeUnattestedLiveGoal(d: DecisionResult, used?: LiveGoalAttestationUsed): DecisionResult {
+  const note = liveUnattestedGoalNote(used);
   return {
     ...d,
     outcome: "big_play",
     eventType: "BIG_PLAY",
-    reason: d.reason ? `${d.reason} | ${LIVE_UNATTESTED_GOAL_NOTE}` : LIVE_UNATTESTED_GOAL_NOTE,
+    reason: d.reason ? `${d.reason} | ${note}` : note,
   };
 }
 
@@ -864,6 +890,247 @@ export function scoreboardDeltaAttestsDeferredWindow(input: {
   if (d.deltaTs < window.lo - 1e-9) return false;
   if (d.deltaTs - window.hi > maxLookaheadS) return false;
   return readAt >= window.hi - 1e-9;
+}
+
+// ---------------------------------------------------------------------------
+// ADAAAA-8071: the score transition the window's OWN perceive timeline displays.
+//
+// Regression source: pass 1 of ADAAAA-8052 on the 4-image media-rail leg (job
+// `8024a341`, build `458e301`). The 100 s GT goal was delivered as BIG_PLAY
+// because the ADAAAA-7996 live scoring lane found no measured attestation: no
+// `score_change` hint landed in the judged window, so `downgradeUnattestedLiveGoal`
+// fired even though the decide prompt displayed the transition itself:
+//
+//   -10.0s ocr="18:01 RMA 1-1 BAR"
+//   -6.8s  ocr="18.05 RMA 1-1 BARVITALDE"
+//   -3.5s  ocr="18.05 RMA 1-1 BARVITALDE"
+//   -3.2s  ocr="18:13 |RMA2-1 BAR"
+//   -0.0s  ocr="18:13 |RMA2-1 BAR"
+//
+// Those records ARE the perceive scoreboard measurement (two contiguous reads
+// each side of a single goal step). The lane only credited the measurement when
+// perceive's own `ScoreboardTracker` oracle happened to fire on a frame that
+// landed inside the window as a `scoreBoardChanged` bias hint; when the oracle
+// fired on a frame the window did not carry (or the hint was folded away), a
+// window whose prompt literally shows `1-1 -> 2-1` looked unattested.
+//
+// The fix re-reads the already-paid-for OCR lines the window ships to decide and
+// applies the SAME legibility bar perceive's tracker enforces (both sides parsed,
+// >= 2 contiguous readings each side, one single-goal step, time-tied within the
+// confirm gap, transition instant inside the judged window). No model prose, no
+// second VLM call, no extra GPU-second: this is evidence folding of a measurement
+// the rail already made (AC-3 / cost unchanged).
+// ---------------------------------------------------------------------------
+
+/** Mirrors `SCOREBOARD_MIN_CONSISTENT_SAMPLES` in services/perceive/app/scoreboard.py. */
+export const SCOREBOARD_MIN_CONSISTENT_READS = 2;
+/** Mirrors `SCOREBOARD_MAX_CONFIRM_GAP_S` in services/perceive/app/scoreboard.py. */
+export const SCOREBOARD_MAX_CONFIRM_GAP_S = 10;
+
+/** One parsed score reading from the window's perceive timeline. */
+export interface TimelineScoreReading {
+  ts: number;
+  score: [number, number];
+}
+
+/**
+ * ADAAAA-8071: parse the FIRST clean two-integer score line out of one timeline
+ * record's OCR lines, or `null`. Mirrors perceive's `_SCORE_LINE_RE`
+ * (`(\d{1,3})\s*[-–—]\s*(\d{1,3})`, ints <= 99) so a clock ("18:13") can never
+ * become a score and the two layers agree on what a scoreboard line is.
+ */
+export function parseOcrScoreLine(lines: ReadonlyArray<string> | undefined): [number, number] | null {
+  for (const raw of lines ?? []) {
+    const text = typeof raw === "string" ? raw.trim() : "";
+    if (!text) continue;
+    const m = /(\d{1,3})\s*[-–—]\s*(\d{1,3})/.exec(text);
+    if (!m) continue;
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    if (Number.isInteger(a) && Number.isInteger(b) && a <= 99 && b <= 99) return [a, b];
+  }
+  return null;
+}
+
+/** ADAAAA-8071: every parseable score reading in a window's perceive timeline,
+ * ordered by content ts. Records without a score line contribute nothing (an
+ * unreadable scorebug is absent evidence, never a fabricated reading). */
+export function scoreReadingsFromTimeline(
+  records: ReadonlyArray<{ ts: number; ocr?: string[] }> | undefined
+): TimelineScoreReading[] {
+  const out: TimelineScoreReading[] = [];
+  for (const r of records ?? []) {
+    if (!Number.isFinite(r?.ts)) continue;
+    const score = parseOcrScoreLine(r.ocr);
+    if (score) out.push({ ts: r.ts, score });
+  }
+  return out.sort((a, b) => a.ts - b.ts);
+}
+
+/**
+ * ADAAAA-8071: the measured, legible score transition carried by a window's OWN
+ * readings, using perceive's tracker semantics:
+ *
+ *  1. the transition is the most recent boundary between two consecutive
+ *     readings that differ;
+ *  2. each side must be supported by >= `minSamples` contiguous readings (a
+ *     single-frame misread can never attest a goal);
+ *  3. the POST side must be exactly `minSamples` long at this window — the same
+ *     fire-once rule perceive's `delta()` applies, so one transition is credited
+ *     by the window that completes it, not by every later window that re-reads
+ *     the stable new score;
+ *  4. the transition instant must be inside `[lo, hi]` and within the confirm gap
+ *     of the previous reading.
+ *
+ * Returns `undefined` (never a guess) when any clause fails. Pure + deterministic.
+ */
+export function scoreboardDeltaFromReadings(
+  readings: ReadonlyArray<TimelineScoreReading>,
+  window: { lo: number; hi: number },
+  opts: { minSamples?: number; maxConfirmGapS?: number } = {}
+): ScoreboardDeltaEvidence | undefined {
+  const need = Math.max(1, Math.floor(opts.minSamples ?? SCOREBOARD_MIN_CONSISTENT_READS));
+  const maxGap = opts.maxConfirmGapS ?? SCOREBOARD_MAX_CONFIRM_GAP_S;
+  const lo = Number.isFinite(window?.lo) ? window.lo : Number.NEGATIVE_INFINITY;
+  const hi = Number.isFinite(window?.hi) ? window.hi : Number.POSITIVE_INFINITY;
+  const inWin = readings.filter((r) => Number.isFinite(r?.ts) && r.ts >= lo - 1e-9 && r.ts <= hi + 1e-9);
+  if (inWin.length < 2 * need) return undefined;
+  let idx = -1;
+  for (let i = inWin.length - 1; i > 0; i--) {
+    if (inWin[i - 1].score[0] !== inWin[i].score[0] || inWin[i - 1].score[1] !== inWin[i].score[1]) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx < 0) return undefined;
+  const pre = inWin[idx - 1].score;
+  const post = inWin[idx].score;
+  let postSamples = 0;
+  for (let j = inWin.length - 1; j >= idx; j--) {
+    if (inWin[j].score[0] !== post[0] || inWin[j].score[1] !== post[1]) break;
+    postSamples++;
+  }
+  let preSamples = 0;
+  for (let j = idx - 1; j >= 0; j--) {
+    if (inWin[j].score[0] !== pre[0] || inWin[j].score[1] !== pre[1]) break;
+    preSamples++;
+  }
+  if (preSamples < need || postSamples !== need) return undefined;
+  const preTs = inWin[idx - 1].ts;
+  const deltaTs = inWin[idx].ts;
+  if (deltaTs < lo - 1e-9 || deltaTs > hi + 1e-9) return undefined;
+  if (deltaTs - preTs > maxGap) return undefined;
+  const delta: ScoreboardDeltaEvidence = {
+    pre,
+    post,
+    preTs,
+    postTs: deltaTs,
+    deltaTs,
+    preSamples,
+    postSamples,
+  };
+  if (!scoreboardDeltaSingleGoalStep(delta)) return undefined;
+  return scoreboardDeltaLegible(delta) ? delta : undefined;
+}
+
+/** ADAAAA-8071: the judged span a payload covers — the delivered frames' content
+ * timestamps (the images decide actually judges). Falls back to the observation
+ * set, then to the centre instant, so a stub payload never throws. */
+function livePayloadWindow(payload: {
+  centerTs: number;
+  frames: ReadonlyArray<{ ts: number }>;
+  observations?: ReadonlyArray<{ ts: number }>;
+}): { lo: number; hi: number } {
+  const frameTs = (payload.frames ?? []).map((f) => f.ts).filter((t) => Number.isFinite(t));
+  if (frameTs.length) return { lo: Math.min(...frameTs), hi: Math.max(...frameTs) };
+  const obsTs = (payload.observations ?? []).map((o) => o.ts).filter((t) => Number.isFinite(t));
+  if (obsTs.length) return { lo: Math.min(...obsTs), hi: Math.max(...obsTs) };
+  const c = Number.isFinite(payload.centerTs) ? payload.centerTs : 0;
+  return { lo: c, hi: c };
+}
+
+/** ADAAAA-8071: where a window's score attestation came from (audit only). */
+export type ScoreAttestationSource = "perceive_hint" | "perceive_timeline";
+
+/** ADAAAA-8071: a window's measured goal attestation. */
+export interface WindowAttestation {
+  goalCrossed?: boolean;
+  ballOutcome?: string;
+  scoreBoardChanged?: boolean;
+  scoreBoardDelta?: ScoreboardDeltaEvidence;
+  /** Set only when the score attestation was credited (audit trail). */
+  scoreAttestationSource?: ScoreAttestationSource;
+}
+
+/**
+ * ADAAAA-8071: fold the window's measured attestation — the perceive hints FIRST
+ * (unchanged ADAAAA-7021 behaviour), then the score transition the window's own
+ * perceive timeline already displays (live payloads only; a VOD symmetric window
+ * carries no `observations` and stays byte-identical). The derived delta is a
+ * MEASUREMENT, so it can attest a `scoring_play` exactly like a hint-carried
+ * delta; model prose still cannot (ADAAAA-7938).
+ */
+export function deriveWindowAttestation(
+  payload: {
+    centerTs: number;
+    frames: ReadonlyArray<{ ts: number }>;
+    seeds?: ReadonlyArray<{ ts: number; ocr?: string[] }>;
+    observations?: ReadonlyArray<{ ts: number; ocr?: string[] }>;
+    biasHints: ReadonlyArray<ObserveBiasHint>;
+  },
+  opts: { minSamples?: number } = {}
+): WindowAttestation {
+  const out: WindowAttestation = { ...foldWindowAttestation(payload.biasHints as ReadonlyArray<ObserveBiasHint>) };
+  if (payload.biasHints.some((h) => h.scoreBoardChanged === true)) out.scoreAttestationSource = "perceive_hint";
+  // Live payload only: `observations` is the pre-image-cap perceive frame set,
+  // exactly what the decide timeline renders. A payload without it (VOD symmetric
+  // window / stub) keeps the pre-8071 fold byte-identical.
+  if (payload.observations?.length && !scoreboardDeltaLegible(out.scoreBoardDelta)) {
+    const derived = scoreboardDeltaFromReadings(
+      scoreReadingsFromTimeline(payload.observations),
+      livePayloadWindow({
+        centerTs: payload.centerTs,
+        frames: payload.frames,
+        observations: payload.observations,
+      }),
+      { minSamples: opts.minSamples }
+    );
+    if (derived) {
+      out.scoreBoardChanged = true;
+      out.scoreBoardDelta = derived;
+      out.scoreAttestationSource = out.scoreAttestationSource ?? "perceive_timeline";
+    }
+  }
+  return out;
+}
+
+/** ADAAAA-8071: the attestation fields the live scoring gate actually read, so a
+ * demotion can NAME them on the record instead of narrating "no attestation". */
+export interface LiveGoalAttestationUsed {
+  scoreBoardChanged: boolean;
+  goalCrossed: boolean;
+  ballOutcome: string | null;
+  corroborated: boolean;
+  goalConfirmed: string | null;
+}
+
+/**
+ * ADAAAA-8071: build the measured attestation the gate will evaluate, from the
+ * window's folded attestation + the Stage-2 confirm verdict. Kept in one place so
+ * the gate, the demotion note and the record can never disagree.
+ */
+export function liveGoalAttestationUsed(input: {
+  attribution: WindowAttestation;
+  corroborated?: boolean;
+  goalConfirmed?: string | null;
+}): LiveGoalAttestationUsed {
+  return {
+    scoreBoardChanged: input.attribution.scoreBoardChanged === true,
+    goalCrossed: input.attribution.goalCrossed === true,
+    ballOutcome: input.attribution.ballOutcome ?? null,
+    corroborated: input.corroborated === true,
+    goalConfirmed: input.goalConfirmed ?? null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -4150,6 +4417,9 @@ export async function acceptVideoDecision(
   /** ADAAAA-8006: the pre-downgrade (scoring lane) verdict, set only when the
    * ADAAAA-7996 gate below demotes this accept. */
   let scoringLaneDecision: DecisionResult | undefined;
+  /** ADAAAA-8071: the attestation fields the gate read when it demoted, stored
+   * on the delivered row so the demotion names its missing attestations. */
+  let liveAttestationUsed: LiveGoalAttestationUsed | undefined;
   // ADAAAA-7996: the LIVE scoring lane requires a MEASURED attestation. The
   // Stage-2 confirm dive is the only corroboration gate and the live rail runs it
   // OFF (LIVE_DECIDE_CONFIRM=0 in the measured posture), so a window whose whole
@@ -4158,28 +4428,34 @@ export async function acceptVideoDecision(
   // graphic appears"; no score change, no goal-line signal). Downgrade here (the
   // same seam and shape as the 7865 repeat-goal downgrade): the clip is still cut
   // and delivered as a celebration, but it can never be postable as a GOAL.
+  const attestationUsed = liveGoalAttestationUsed({
+    attribution: {
+      scoreBoardChanged: candidate.scoreBoardChanged,
+      goalCrossed: candidate.goalCrossed,
+      ballOutcome: candidate.ballOutcome,
+      scoreBoardDelta: candidate.scoreBoardDelta,
+    },
+    corroborated: confirm?.corroborated === true,
+    goalConfirmed: confirm?.goalConfirmed ?? null,
+  });
   if (
     isGoalAccept &&
     cfg.liveObserveLoop &&
     cfg.decideWindowN === undefined &&
-    !liveGoalHasMeasuredEvidence({
-      scoreBoardChanged: candidate.scoreBoardChanged,
-      goalCrossed: candidate.goalCrossed,
-      ballOutcome: candidate.ballOutcome,
-      corroborated: confirm?.corroborated === true,
-      goalConfirmed: confirm?.goalConfirmed ?? null,
-    })
+    !liveGoalHasMeasuredEvidence(attestationUsed)
   ) {
     console.error(
       `[live-goal-gate:${cfg.jobId}] downgraded unattested GOAL accept @${candidate.timestamp}s ` +
-        `(trigger ${trigger.kind}) to a celebration: no measured attestation in the window`
+        `(trigger ${trigger.kind}) to a celebration: no measured attestation in the window ` +
+        `(${JSON.stringify(attestationUsed)})`
     );
     // ADAAAA-8006: keep the SCORING-LANE verdict before the downgrade. The row is
     // delivered as a celebration now, but a later scoreboard read can re-attest it
     // (see `run.noteDeferredGoalAttestation` below) — and that upgrade must restore
     // the copy the gate produced for THIS verdict, not re-derive copy at read time.
     scoringLaneDecision = decision;
-    decision = downgradeUnattestedLiveGoal(decision);
+    liveAttestationUsed = attestationUsed;
+    decision = downgradeUnattestedLiveGoal(decision, attestationUsed);
     isGoalAccept = false;
   }
   const repeatGoal = isGoalAccept
@@ -4247,6 +4523,12 @@ export async function acceptVideoDecision(
     dedupeReason: repeatGoal
       ? `goal_celebration_duplicate:${repeatGoal.highlightId}`
       : undefined,
+    // ADAAAA-8071: on a LIVE goal accept the ADAAAA-7996 gate demoted, the exact
+    // attestation fields the gate read (scoreboard change / goal-line / net
+    // outcome / corroborated confirm). Stored so the demotion names which
+    // attestation was missing and why the audio/motion reaction could not carry
+    // the goal, instead of reading as a silent "celebration".
+    attestationUsed: liveAttestationUsed,
     // ADAAAA-7247 (ACC-7): record the per-company clip-window setting that
     // produced this clip plus the delivered window length so the delivered clip
     // window is auditable (Acc-3). Values come from the resolved (webui > env)
@@ -4732,7 +5014,11 @@ export function buildObserveDecideRequest(
   // the strongest signal (goal attests over near-miss) wins. Absent everywhere =
   // no attestation (provenance only). This keeps the goal-attestation gate able
   // to independently confirm a scoring_play instead of rejecting every goal.
-  const windowAttestation = foldWindowAttestation(payload.biasHints);
+  // ADAAAA-8071: the fold also credits a legible score transition the window's
+  // own perceive timeline displays (live payloads), so a window whose OCR plainly
+  // shows `1-1 -> 2-1` is not treated as unattested when the perceive oracle's
+  // hint landed on a frame the window did not carry.
+  const windowAttestation = deriveWindowAttestation(payload);
   // ADAAAA-7399: window-ALIGNED audio around the window center. The VOD tap
   // decodes the whole file faster than the GPU video pass, so the plain rolling
   // `audioClipB64()` is FILE-END audio, not the current video-window center —
@@ -5425,7 +5711,7 @@ export async function observeAcceptOnly(
   // Stage-2 confirm reconcile + deriveHighlightTrigger see the attestation
   // (hasIndependentAttestation excludes an attested goal from the un-attested
   // confirm dive) rather than treating the goal as un-attested.
-  const windowAttestation = { ...foldWindowAttestation(payload.biasHints) };
+  const windowAttestation = deriveWindowAttestation(payload);
   const candidate: CandidateSignal = {
     eventType: payload.biasHints[0]?.eventType ?? observeDefaultEventType(payload),
     timestamp: payload.centerTs,
