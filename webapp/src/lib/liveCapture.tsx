@@ -11,8 +11,9 @@ import {
   RECORDING_HEALTH_POLL_MS,
   RECORDING_STALL_NOTICE,
   chooseRecordingMime,
+  recordingProbeCandidates,
+  recordingCommitPlan,
   recordingHealth,
-  supportedRecordingMimes,
   type RecordingHealth,
 } from "./recordingCodec";
 import { useStreamHealth } from "./useStreamHealth";
@@ -387,6 +388,9 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
     rec: MediaRecorder;
     bytes: number;
     held: Blob[];
+    /** When this arm started, so health measures from the recorder's real
+     *  start (a walk that tried two arms first is older than one window). */
+    startedAt: number;
   }
 
   /** Start `mime` and watch it for `ENCODER_PROBE_MS`. Resolves as soon as the
@@ -402,7 +406,7 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
     } catch {
       return Promise.resolve(null); // constructor rejects this mime outright
     }
-    const arm: ProbeArm = { mime, rec, bytes: 0, held: [] };
+    const arm: ProbeArm = { mime, rec, bytes: 0, held: [], startedAt: Date.now() };
     return new Promise<ProbeArm>((resolve) => {
       let settled = false;
       const finish = () => {
@@ -442,40 +446,58 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
    *  failing arm costs timeline (~1.5 s lost mid-window, well inside the 7 s
    *  clip pad), and that arm produced nothing to begin with. */
   async function commitRecordingArm(capture: MediaStream): Promise<MediaRecorder | null> {
-    const candidates = supportedRecordingMimes((m) => MediaRecorder.isTypeSupported(m));
+    // Probe the WHOLE ladder, with the claimed containers first. Filtering by
+    // `isTypeSupported` first was the ADAAAA-8107 AC2 bug: a browser that
+    // claims only avc1 left a one-arm ladder, that arm failed its own probe,
+    // and the caller committed it anyway (0 chunks, no recording at all).
+    const candidates = recordingProbeCandidates((m) => MediaRecorder.isTypeSupported(m));
     const arms = new Map<string, ProbeArm>();
     let committed: ProbeArm | null = null;
 
     const commit = await chooseRecordingMime(candidates, async (mime) => {
       const arm = await probeRecorderArm(capture, mime, (a, blob) => {
-        if (a === committed) queueRecordingChunk(blob, a.mime);
-        else a.held.push(blob);
+        if (a === committed) {
+          // Keep the live health counter on the SAME object the probe filled
+          // (ADAAAA-8110 finding 2): it used to be frozen at the probe
+          // snapshot, so a healthy mp4 share whose first frames flushed after
+          // the window read 0 bytes and showed a false "nothing is recorded".
+          recStatsRef.current.bytes += blob.size;
+          queueRecordingChunk(blob, a.mime);
+        } else a.held.push(blob);
       });
       if (!arm) return 0;
       arms.set(mime, arm);
       return arm.bytes;
     });
 
-    // Stop every arm that lost the walk, so no second recorder keeps encoding.
+    // What to do with the walk (ADAAAA-8110 finding 1): commit a proven arm,
+    // keep a header-only arm running, or drop a ladder that was entirely
+    // silent and let the browser pick its own container.
+    const plan = recordingCommitPlan(commit);
+
+    // Stop every arm that is not the one being committed, so no second
+    // recorder keeps encoding (and no probe arm keeps a claim on the stream).
     for (const [mime, arm] of arms) {
-      if (mime === commit.mime) continue;
+      if (plan.mode !== "default" && mime === plan.mime) continue;
       stopRecorderQuietly(arm.rec);
     }
 
-    const kept = arms.get(commit.mime) ?? null;
+    const kept = plan.mode === "default" ? null : arms.get(plan.mime) ?? null;
     if (kept) {
-      committed = kept;
-      recStatsRef.current = { bytes: kept.bytes, startedAt: Date.now() - ENCODER_PROBE_MS };
+      recStatsRef.current = { bytes: kept.bytes, startedAt: kept.startedAt };
       recRef.current = kept.rec;
       // Flush the chunks the probe held, in order, ahead of the chunks that
-      // follow (the chain guarantees the order).
+      // follow (the chain guarantees the order). Do it BEFORE flipping
+      // `committed`, so a chunk that lands mid-flush cannot overtake them.
       for (const blob of kept.held) queueRecordingChunk(blob, kept.mime);
       kept.held.length = 0;
+      committed = kept;
       return kept.rec;
     }
 
-    // No candidate arm could even be constructed (or the ladder was empty): fall
-    // back to the browser's own default container rather than recording nothing.
+    // Every arm was silent (the measured AC2 shape: the only claimed arm
+    // committed nothing at all): fall back to the browser's own default
+    // container rather than committing a recorder that uploads zero bytes.
     let rec: MediaRecorder;
     try {
       rec = new MediaRecorder(capture);
