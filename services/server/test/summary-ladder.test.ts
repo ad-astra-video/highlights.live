@@ -10,7 +10,7 @@
 //   - template-opener share below 10 % of emitted window narratives,
 //   - zero extra decide calls (the derivation is a pure function of stored data).
 import { describe, it, expect } from "vitest";
-import { JobDetailSchema, captionLineKey } from "@highlights/events";
+import { JobDetailSchema, captionBeats, captionLineKey } from "@highlights/events";
 import {
   MAX_MATCH_SUMMARY_CHARS,
   buildSummaryLadder,
@@ -351,7 +351,7 @@ describe("emission dedupe on the ladder (ADAAAA-7958 §3.6 / AC3b)", () => {
     const emitted = l.chapters.flatMap((c) => c.entries.map((e) => e.text));
     const repeats = emitted.filter((t) => /center circle/i.test(t));
     expect(repeats.length).toBe(1);
-    expect(emitted).toContain("Player in blue jersey dribbles in center field");
+    expect(emitted).toContain("Player in blue jersey dribbles in center field.");
   });
 
   it("VOD (fastRail false / absent) is untouched — AC8", () => {
@@ -497,7 +497,7 @@ describe("display gate never introduces a duplicate (ADAAAA-7961 §3.6)", () => 
   it("never renders a row that stops mid-phrase (job 5518518b T+258)", () => {
     const { rows } = render(qaLog5518518b);
     expect(rows).not.toContain("A child stands in the foreground while players");
-    expect(rows).toContain("A child stands in the foreground");
+    expect(rows).toContain("A child stands in the foreground.");
     for (const row of rows) expect(row).not.toMatch(/\b(?:while|as|and|to|from|in)\s*$/i);
   });
 
@@ -525,8 +525,10 @@ describe("display gate never introduces a duplicate (ADAAAA-7961 §3.6)", () => 
     expect(rows.filter((r) => /possession in center circle/i.test(r))).toHaveLength(1);
     expect(rows.some((r) => /No\. 10 strikes ball/i.test(r))).toBe(false);
     for (const row of rows) {
-      // One terminal punctuation mark at most: the row is a single beat.
-      expect((row.match(/[.!?]/g) ?? []).length).toBeLessThanOrEqual(1);
+      // One SENTENCE per row (the row is a single beat). Counted with the
+      // caption beat splitter, not by scanning for `.` — a jersey (`No. 9`) is
+      // not a sentence end, and ADAAAA-8040 closes every row with one.
+      expect(captionBeats(row).length).toBeLessThanOrEqual(1);
     }
   });
 
@@ -534,7 +536,7 @@ describe("display gate never introduces a duplicate (ADAAAA-7961 §3.6)", () => 
     const { rows } = render([
       { seq: 1, windowTs: 162, text: "The No. 9 scores — crowd erupts as score becomes" },
     ]);
-    expect(rows[0]).toBe("The No. 9 shoots");
+    expect(rows[0]).toBe("The No. 9 shoots.");
   });
 
   it("is deterministic across reads (a stored job's ladder is stable)", () => {
