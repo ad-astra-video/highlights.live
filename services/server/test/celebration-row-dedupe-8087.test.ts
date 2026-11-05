@@ -63,13 +63,10 @@ describe("findCelebrationDuplicate — R4 inside R3's GOAL clip (ADAAAA-8087)", 
     });
   });
 
-  it("collapses R2 too: its clip still overlaps R1's delivered clip", () => {
-    // 13.2 s after the goal but the 15 s clips share 1.8 s of footage, so the
-    // goal row is already on the board showing that moment.
-    expect(findCelebrationDuplicate([GOAL_R1], [], celebration(114.025))).toEqual({
-      kind: "goal_clip",
-      goal: GOAL_R1,
-    });
+  it("keeps R2: 13.2 s past R1 it is outside the goal's clip (distinct trigger)", () => {
+    // QA called R2 out as NOT part of the defect: its anchor sits past the
+    // goal's ±10 s clip even though the 15 s clip windows share an edge.
+    expect(findCelebrationDuplicate([GOAL_R1], [], celebration(114.025))).toBeUndefined();
   });
 
   it("keeps a celebration whose clip does not overlap any delivered GOAL", () => {
@@ -139,11 +136,8 @@ describe("LiveRunShared celebration ledger (ADAAAA-8087)", () => {
     const run = new LiveRunShared();
     // R1 GOAL delivered.
     run.noteAcceptedGoalEvent(GOAL_R1);
-    // R2 celebration 13.2 s later: its clip overlaps R1 -> collapses (dropped).
-    expect(run.celebrationDuplicateEvent({ ...celebration(114.025), isCelebration: true })).toEqual({
-      kind: "goal_clip",
-      goal: GOAL_R1,
-    });
+    // R2 celebration 13.2 s later anchors OUTSIDE R1's clip -> distinct, kept.
+    expect(run.celebrationDuplicateEvent({ ...celebration(114.025), isCelebration: true })).toBeUndefined();
     // R3 GOAL delivered (distinct transition).
     run.noteAcceptedGoalEvent(GOAL_R3);
     // R4 celebration inside R3's clip -> collapses.
@@ -168,7 +162,10 @@ describe("LiveRunShared celebration ledger (ADAAAA-8087)", () => {
     const run = new LiveRunShared();
     run.noteAcceptedGoalEvent(GOAL_R1);
     // A collapse returns a duplicate but records nothing...
-    expect(run.celebrationDuplicateEvent({ ...celebration(150.0), isCelebration: true })).toBeUndefined();
+    expect(run.celebrationDuplicateEvent({ ...celebration(105.0), isCelebration: true })).toEqual({
+      kind: "goal_clip",
+      goal: GOAL_R1,
+    });
     // ...so an unrelated celebration at 210 s is still judged on its own merits.
     expect(run.celebrationDuplicateEvent({ ...celebration(210.0), isCelebration: true })).toBeUndefined();
   });
