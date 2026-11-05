@@ -51,6 +51,11 @@ export function isAdminRole(role?: string | null): boolean {
  */
 export const INTERNAL_JOB_KEYS = [
   "costUsd",
+  // ADAAAA-8061: the partial (perceive-leg-only) cost written when the decide
+  // count could not be measured. Same spend class as `costUsd`, so it is gated
+  // the same way; `costUnavailable` (the named REASON, no money) stays visible
+  // so an owner can still tell "not measured" from a genuine zero.
+  "partialCostUsd",
   "decideCalls",
   "perceiveSessionS",
   "observeCalls",
