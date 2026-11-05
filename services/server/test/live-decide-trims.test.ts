@@ -6,7 +6,8 @@
 // Each trim is a separate env knob so the ladder can measure ONE variable at a
 // time and the shipped defaults stay byte-identical to the pre-trim behaviour:
 //
-//   trim 1  LIVE_OBSERVE_MAX_FRAMES  live window frame budget (default 30)
+//   trim 1  LIVE_OBSERVE_MAX_FRAMES  live window frame budget (default 4 since
+//           ADAAAA-8074 — the ruled AC-3 cell; it was 30 = the historic shared cap)
 //   trim 2  LIVE_DECIDE_AUDIO_CLIP   1 = window audio clip + ASR rides the payload
 //   trim 3  LIVE_DECIDE_CONFIRM      1 = Stage-2 /confirm dive runs on live
 //
@@ -18,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { buildObserveDecideRequest, LiveRunShared } from "../src/analyzer";
 import { buildLiveAnalyzerConfig } from "../src/api";
 import { loadConfig } from "../src/config";
-import { LIVE_OBSERVE_MAX_FRAMES } from "../src/observe-loop";
+import { LIVE_DECIDE_IMAGE_BUDGET, LIVE_OBSERVE_MAX_FRAMES } from "../src/observe-loop";
 import type { ObserveDecidePayload } from "../src/observe-loop";
 
 const repoFile = (rel: string) => fileURLToPath(new URL(`../../../${rel}`, import.meta.url));
@@ -66,12 +67,15 @@ function pcmChunkB64(): string {
 }
 
 describe("live decide trim knobs (ADAAAA-7777)", () => {
-  it("defaults are the pre-trim behaviour (30 frames, clip on, confirm on)", () => {
+  it("defaults are the pre-trim behaviour (clip on, confirm on) and the 4-image budget", () => {
     const { cfg, analyzer } = liveConfig();
-    expect(cfg.liveObserveMaxFrames).toBe(LIVE_OBSERVE_MAX_FRAMES);
+    // ADAAAA-8074: the image budget's default is now the ruled AC-3 cell (4),
+    // not the historic shared cap (30). It is still the ONE knob both live rails
+    // read (media rail + analyzer live pass).
+    expect(cfg.liveObserveMaxFrames).toBe(LIVE_DECIDE_IMAGE_BUDGET);
     expect(cfg.liveDecideAudioClip).toBe(true);
     expect(cfg.liveDecideConfirm).toBe(true);
-    expect(analyzer.observeMaxFrames).toBe(LIVE_OBSERVE_MAX_FRAMES);
+    expect(analyzer.observeMaxFrames).toBe(LIVE_DECIDE_IMAGE_BUDGET);
     expect(analyzer.decideAudioClip).toBe(true);
     expect(analyzer.confirmEnabled).toBe(true);
   });
@@ -115,7 +119,7 @@ describe("live decide trim knobs (ADAAAA-7777)", () => {
     expect((opts!.audioB64 as string).length).toBeGreaterThan(0);
   });
 
-  it("compose passes all three knobs through with pre-trim defaults", () => {
+  it("compose passes all three knobs through (4-image budget, clip on, confirm on)", () => {
     const lines = compose.split("\n");
     const start = lines.findIndex((l) => l === "  server:");
     expect(start).toBeGreaterThanOrEqual(0);
@@ -128,7 +132,8 @@ describe("live decide trim knobs (ADAAAA-7777)", () => {
     }
     const server = lines.slice(start, end).join("\n");
     for (const decl of [
-      "LIVE_OBSERVE_MAX_FRAMES=${LIVE_OBSERVE_MAX_FRAMES:-30}",
+      // ADAAAA-8074: the shipped default is the ruled 4-image cell.
+      "LIVE_OBSERVE_MAX_FRAMES=${LIVE_OBSERVE_MAX_FRAMES:-4}",
       "LIVE_DECIDE_AUDIO_CLIP=${LIVE_DECIDE_AUDIO_CLIP:-1}",
       "LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}",
     ]) {

@@ -101,6 +101,104 @@ export function subsampleToCap<T>(ordered: T[], max: number): { items: T[]; capp
   return { items: out, capped: true };
 }
 
+/**
+ * ADAAAA-8074: THE live decide image budget — the ONE config consulted where
+ * the decide image set is SELECTED (`assembleLiveWindow` -> the payload's
+ * `frames`), on both live rails. 4 is the ruled cell: the enhanced ladder read
+ * 4 374 ms p50 at 4 images and >6 s at 8, so AC-3 (p50 <= 5 500 / max <= 8 000)
+ * clears only at 4 (ADAAAA-8049/8065). Env override: `LIVE_OBSERVE_MAX_FRAMES`
+ * ("trim 1"). It never exceeds the {@link OBSERVE_MAX_FRAMES} ceiling (30).
+ *
+ * Before this a live leg booted `LIVE_OBSERVE_MAX_FRAMES=4` and still shipped
+ * 27.4 images/decide (job f757a56b, 31/32 windows over the cap): the budget was
+ * a value the analyzer's live pass read while the rail that actually built the
+ * payload never consulted it. Every payload now records `imagesPerDecide` +
+ * `imageBudgetApplied` on its decide_audit row, so a leg grades the payload
+ * instead of `printenv`.
+ */
+export const LIVE_DECIDE_IMAGE_BUDGET = 4;
+
+/** Hard ceiling on one decide payload's image set — unchanged contract. */
+export const LIVE_DECIDE_IMAGE_CEILING = OBSERVE_MAX_FRAMES;
+
+/**
+ * Clamp a configured live decide image budget into [1, ceiling]. A non-finite,
+ * absent or non-positive value falls back to {@link LIVE_DECIDE_IMAGE_BUDGET},
+ * so a typo can never turn the cap off (and can never raise it past the ceiling
+ * on its own authority).
+ */
+export function resolveDecideImageBudget(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return LIVE_DECIDE_IMAGE_BUDGET;
+  return Math.min(LIVE_DECIDE_IMAGE_CEILING, Math.max(1, Math.floor(n)));
+}
+
+/** Index of the element whose `ts` is nearest `target` (deterministic: ties
+ *  resolve to the earlier element). */
+function nearestIndexByTs<T extends { ts: number }>(ordered: T[], target: number): number {
+  let best = 0;
+  let bestDiff = Infinity;
+  for (let i = 0; i < ordered.length; i++) {
+    const d = Math.abs(ordered[i].ts - target);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/**
+ * ADAAAA-8074: deterministic, trigger-anchored subsample of an ordered window.
+ *
+ * Always keeps the frame NEAREST `anchorTs` (the trigger onset — the witness the
+ * decide call exists for), then fills the remaining slots with frames spaced
+ * evenly across the window SPAN (oldest and newest included). Selection is
+ * index-based over the ordered input, so the same window always yields the same
+ * images and the witness gap stays ~span/N instead of collapsing onto the
+ * newest frames (no first-N, no last-N truncation).
+ *
+ * The anchor takes the slot of the evenly spaced target closest to it, so the
+ * payload still carries exactly `max` images and no span witness is lost.
+ */
+export function subsampleAroundAnchor<T extends { ts: number }>(
+  ordered: T[],
+  max: number,
+  anchorTs?: number
+): { items: T[]; capped: boolean } {
+  if (max <= 0) return { items: [], capped: ordered.length > 0 };
+  if (ordered.length <= max) return { items: ordered, capped: false };
+  const n = ordered.length;
+  const anchor = typeof anchorTs === "number" && Number.isFinite(anchorTs) ? anchorTs : ordered[n - 1].ts;
+  if (max === 1) return { items: [ordered[nearestIndexByTs(ordered, anchor)]], capped: true };
+  const start = ordered[0].ts;
+  const span = ordered[n - 1].ts - start;
+  const slots: number[] = [];
+  for (let i = 0; i < max; i++) {
+    slots.push(nearestIndexByTs(ordered, start + (span * i) / (max - 1)));
+  }
+  const anchorIdx = nearestIndexByTs(ordered, anchor);
+  if (!slots.includes(anchorIdx)) {
+    // Replace the evenly spaced slot nearest the anchor: the anchor is always
+    // carried and the payload keeps `max` images.
+    let replaceAt = 0;
+    let replaceDiff = Infinity;
+    for (let i = 0; i < slots.length; i++) {
+      const d = Math.abs(ordered[slots[i]].ts - anchor);
+      if (d < replaceDiff) {
+        replaceDiff = d;
+        replaceAt = i;
+      }
+    }
+    slots[replaceAt] = anchorIdx;
+  }
+  const kept = [...new Set(slots)].sort((a, b) => a - b).slice(0, max);
+  const items = kept.map((i) => ordered[i]);
+  // Defensive: the hard cap is never breached.
+  while (items.length > max) items.pop();
+  return { items, capped: true };
+}
+
 /** One assembled decide window: the ordered frame set + provenance. */
 export interface ObserveWindow {
   /** The content moment the window is centered on (the decide "current moment"). */
@@ -123,6 +221,18 @@ export interface ObserveWindow {
    * is sourced from this set, so its density never shrinks with the image
    * budget (the B+e′ construction fix). */
   observedFrames?: { ts: number }[];
+  /** ADAAAA-8074: the image budget this window's selection step consulted (the
+   *  configured live decide image budget), and whether it was applied. A live
+   *  window always sets both; a symmetric VOD window leaves them absent, so a
+   *  `decide_audit` row can tell "the budget was consulted" from "this payload
+   *  came from a path that has no budget" — the clause that would have caught
+   *  the 27.4-images/decide defect on pass 1. */
+  imageBudget?: number;
+  imageBudgetApplied?: boolean;
+  /** ADAAAA-8074: the content moment the image selection was anchored on (the
+   *  trigger onset on a trigger-anchored window, else the window's newest
+   *  frame). The frame nearest this moment is always carried. */
+  anchorTs?: number;
 }
 
 /**
@@ -260,11 +370,18 @@ function uniqueSortedTs(ts: number[]): number[] {
 export function assembleLiveWindow(
   frames: { ts: number; imageB64: string; seq?: number }[],
   nowTs: number,
-  opts: { windowS?: number; maxFrames?: number; fps?: number; observedTs?: number[] } = {}
+  opts: { windowS?: number; maxFrames?: number; fps?: number; observedTs?: number[]; anchorTs?: number } = {}
 ): ObserveWindow {
   const windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
-  const maxFrames = opts.maxFrames ?? LIVE_OBSERVE_MAX_FRAMES;
+  // ADAAAA-8074: the image budget is consulted HERE, in the selection step every
+  // live payload is built through — not left to whichever rail remembered to
+  // pass it. `maxFrames` IS the budget; `imageBudgetApplied` states that this
+  // window's images passed through the cap.
+  const imageBudget = resolveDecideImageBudget(opts.maxFrames ?? LIVE_OBSERVE_MAX_FRAMES);
+  const maxFrames = imageBudget;
   const fps = opts.fps ?? OBSERVE_CONTENT_FPS;
+  const anchorTs =
+    typeof opts.anchorTs === "number" && Number.isFinite(opts.anchorTs) ? opts.anchorTs : nowTs;
   const lo = nowTs - windowS;
   const inWindow = frames
     .filter((f) => f.imageB64 && f.ts >= lo && f.ts <= nowTs + 1e-9)
@@ -283,6 +400,9 @@ export function assembleLiveWindow(
       capped: false,
       droppedCount: 0,
       observedFrames: uniqueSortedTs(ticksInWindow).map((ts) => ({ ts })),
+      imageBudget,
+      imageBudgetApplied: true,
+      anchorTs,
     };
   }
 
@@ -315,7 +435,11 @@ export function assembleLiveWindow(
   if (!seenTs.has(first.ts)) grid.unshift(first);
   if (!seenTs.has(last.ts)) grid.push(last);
 
-  const { items, capped } = subsampleToCap(grid, maxFrames);
+  // ADAAAA-8074: trigger-anchored, deterministic selection. The frame nearest
+  // the anchor (the trigger onset on an anchored tick) is always carried and the
+  // remaining images are spread evenly across the span, so the witness gap stays
+  // ~span/budget instead of collapsing onto the newest frames.
+  const { items, capped } = subsampleAroundAnchor(grid, maxFrames, anchorTs);
   const droppedCount = grid.length - items.length;
   // ADAAAA-8064: keep the PRE-CAP in-window frame list (timestamps only — the
   // images stay in `frames`, so this costs no bytes on the payload). This is
@@ -327,7 +451,16 @@ export function assembleLiveWindow(
   // of what the media node published — sourcing the observation set from them
   // alone collapsed `timelineRecords` back onto `imageCount`.
   const observedFrames = uniqueSortedTs([...inWindow.map((f) => f.ts), ...ticksInWindow]).map((ts) => ({ ts }));
-  return { centerTs: nowTs, frames: items, capped, droppedCount, observedFrames };
+  return {
+    centerTs: nowTs,
+    frames: items,
+    capped,
+    droppedCount,
+    observedFrames,
+    imageBudget,
+    imageBudgetApplied: true,
+    anchorTs,
+  };
 }
 
 /** ADAAAA-7676: the live observe lag budget (wall-clock seconds). A live window
@@ -1084,6 +1217,10 @@ export class LiveObserver {
       fps: this.fps,
       // ADAAAA-8069: the RTC arm's published-frame clock joins the observation set.
       observedTs: this.observationTs,
+      // ADAAAA-8074: anchor the image selection on the trigger this window is
+      // deciding (else the newest frame), so a 4-image payload always carries the
+      // moment the trigger fired at.
+      anchorTs: dueTrigger?.onsetTs ?? nowTs,
     });
     if (win.frames.length === 0) return;
     const lo = nowTs - this.windowS;
@@ -1572,6 +1709,14 @@ export interface ObserveDecidePayload {
   biasHints: ObserveBiasHint[];
   capped: boolean;
   droppedCount: number;
+  /** ADAAAA-8074: images this payload carries (== `frames.length`) and the
+   *  budget that selected them. Recorded on the decide_audit row so a leg grades
+   *  the payload instead of `printenv`. */
+  imagesPerDecide?: number;
+  imageBudget?: number;
+  imageBudgetApplied?: boolean;
+  /** ADAAAA-8074: content moment the image selection was anchored on. */
+  anchorTs?: number;
   /** ADAAAA-7658: the audio trigger this window is anchored to, when this
    *  decide was scheduled by a fired audio-noise trigger rather than the blind
    *  cadence. Absent on a cadence tick (the pre-trigger behaviour). */
@@ -1660,6 +1805,16 @@ export function buildObservePayload(
     biasHints: [...biasHints].sort((a, b) => a.ts - b.ts),
     capped: win.capped,
     droppedCount: win.droppedCount,
+    // ADAAAA-8074: what the payload actually carried and which budget selected
+    // it. A live window states both; a VOD window leaves them absent.
+    ...(win.imageBudgetApplied !== undefined
+      ? {
+          imagesPerDecide: win.frames.length,
+          imageBudget: win.imageBudget,
+          imageBudgetApplied: win.imageBudgetApplied,
+          ...(win.anchorTs !== undefined ? { anchorTs: win.anchorTs } : {}),
+        }
+      : {}),
     ...(trigger ? { trigger } : {}),
   };
 }

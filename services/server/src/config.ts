@@ -2,7 +2,7 @@ import path from "node:path";
 import type { GoalLineCalibration } from "./analyzer";
 import { parsePerceiveCalibration, type PerceiveCalibrationMap } from "./perceive-calibration";
 import { resolveExportTokenSecret } from "./export-token";
-import { LIVE_OBSERVE_LAG_BUDGET_S, LIVE_OBSERVE_MAX_FRAMES } from "./observe-loop";
+import { LIVE_OBSERVE_LAG_BUDGET_S, resolveDecideImageBudget } from "./observe-loop";
 
 export interface ServerConfig {
   port: number;
@@ -293,8 +293,11 @@ export interface ServerConfig {
    * historic cap was the shared 30. Measured on the box (ADAAAA-7777): a decide
    * call's wall time is dominated by the verdict DECODE (~8 s fixed for the
    * ~1.3 KB JSON reply) with a smaller per-frame multimodal prefill term, so the
-   * live rail caps at a narrower budget than VOD. Default 30 keeps the pre-trim
-   * behaviour byte-identical; the trim ladder sets it per level.
+   * live rail caps at a narrower budget than VOD. ADAAAA-8074: the default is
+   * now {@link LIVE_DECIDE_IMAGE_BUDGET} (4 — the ruled AC-3 cell), clamped to
+   * the {@link LIVE_DECIDE_IMAGE_CEILING} (30) hard ceiling. Both live rails
+   * (analyzer live pass + media/RTC rail) read THIS value into the window's
+   * selection step, and every decide payload records it on its audit row.
    * `LIVE_OBSERVE_MAX_FRAMES`. */
   liveObserveMaxFrames: number;
   /** ADAAAA-7777 (lever B, trim 2): forward the window AUDIO CLIP (`opts
@@ -853,9 +856,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // through the "empty means unset" guard — `Number("")` is 0, which pinned the
     // cadence to zero and fired on every consumed frame.
     liveObserveCadenceS: positiveNumberOrUndefined(env.LIVE_OBSERVE_CADENCE_S),
-    // ADAAAA-7777 (lever B, trim 1): the live window's frame budget. Defaults to
-    // the historic shared cap (30) so an unset env is byte-identical.
-    liveObserveMaxFrames: Number(env.LIVE_OBSERVE_MAX_FRAMES ?? LIVE_OBSERVE_MAX_FRAMES),
+    // ADAAAA-7777 (lever B, trim 1): the live window's frame budget.
+    // ADAAAA-8074: THE single decide image budget. Default 4 (the ruled AC-3
+    // cell); a value is clamped to [1, 30], and an unparseable/empty env falls
+    // back to 4 rather than 30 (an empty string used to parse as 0 = off).
+    liveObserveMaxFrames: resolveDecideImageBudget(env.LIVE_OBSERVE_MAX_FRAMES),
     // ADAAAA-7777 (lever B, trim 2): the window audio CLIP on the live decide
     // payload. The audio-energy level curve (noise-change trigger contract) is
     // still computed from `audioContext`; only the raw clip is gated here.

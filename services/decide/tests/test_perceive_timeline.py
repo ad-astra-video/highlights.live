@@ -127,6 +127,32 @@ def test_evidence_accepts_a_full_live_window_and_clamps_its_fields():
     assert PerceiveTimelineRecord(**{"ts": 1.0, "tracks": 2, "futureField": 1}).tracks == 2
 
 
+def test_ledger_carries_the_decide_image_budget():
+    """ADAAAA-8074 (AC-CAP-1): the decide_audit row states what the payload
+    carried and which image budget selected it, so a leg grades the payload
+    instead of `printenv`. An absent budget leaves the key OFF the row (it must
+    not claim `applied`), and a JSON-ish `False` must not read as True."""
+    _block, ledger = render_perceive_timeline(
+        {"perceiveTimeline": timeline(29)},
+        {"seeds": 4, "withFindings": 4, "imageCount": 4, "imagesPerDecide": 4,
+         "imageBudget": 4, "imageBudgetApplied": True},
+    )
+    assert ledger["imagesPerDecide"] == 4
+    assert ledger["imageBudget"] == 4
+    assert ledger["imageBudgetApplied"] is True
+
+    # A row from a path that consulted no budget: no claim either way.
+    _block, bare = render_perceive_timeline({"perceiveTimeline": timeline(29)}, {"seeds": 29})
+    assert "imageBudgetApplied" not in bare
+    assert "imagesPerDecide" not in bare
+
+    # A false budget must survive as False, not be truthy-coerced.
+    _block, off = render_perceive_timeline(
+        {"perceiveTimeline": timeline(29)}, {"imageBudgetApplied": 0}
+    )
+    assert off["imageBudgetApplied"] is False
+
+
 def test_render_is_ordered_and_dense_with_a_ledger():
     block, ledger = render_perceive_timeline(
         {"perceiveTimeline": timeline(29)}, {"seeds": 29, "withFindings": 29, "centerTs": 10.0}
