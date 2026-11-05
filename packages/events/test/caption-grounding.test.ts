@@ -297,7 +297,9 @@ describe("rule 1: a quiet window carries no goal claim and no colour clause (ADA
     expect(out).not.toMatch(/\bscores?\b|\bscored\b|\bgoal\b/i);
     expect(captionColour(out)).toBe("");
     expect(out).not.toContain("—");
-    expect(out).toBe("No. 3 drives into the box and shoots");
+    // ADAAAA-8040 (§2 residual): the rewritten line is a SENTENCE, so it keeps
+    // the source's own full stop instead of stopping mid-sentence.
+    expect(out).toBe("No. 3 drives into the box and shoots.");
   });
 
   it("drops the colour clause a rewritten claim brought with it on a near_miss window", () => {
@@ -583,8 +585,9 @@ describe("§3.1 claim gate fails closed (AC4b, measured strings)", () => {
 
   it("keeps the actor and the shot verb instead of doubling it", () => {
     // "shoots and scores" must not become "shoots and shoots".
+    // ADAAAA-8040: a claim-suppressed line is served closed (`… in the box.`).
     expect(gateGoalClaims("No. 6 shoots and scores in the box", { verdict: "not_highlight" })).toBe(
-      "No. 6 shoots in the box"
+      "No. 6 shoots in the box."
     );
   });
 

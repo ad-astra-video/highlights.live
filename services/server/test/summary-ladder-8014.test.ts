@@ -136,9 +136,12 @@ describe("a fresh job's served rows never stop mid-phrase (ADAAAA-8014 §2)", ()
 
   it("leaves rows that were already whole byte-identical", () => {
     const texts = rowsOf(ladder).map((r) => r.text);
-    expect(texts).toContain("Player in purple dribbles in the center circle");
+    // ADAAAA-8040 (§2 residual): every served row is a SENTENCE, so a row the
+    // model wrote without a full stop is served closed (`… circle.`) and is
+    // otherwise byte-identical — no word is added, dropped or reordered.
+    expect(texts).toContain("Player in purple dribbles in the center circle.");
     expect(texts).toContain("Player controls the ball in the box.");
-    expect(texts).toContain("Player in white is tackled in center circle");
+    expect(texts).toContain("Player in white is tackled in center circle.");
   });
 
   it("is deterministic across reads", () => {
