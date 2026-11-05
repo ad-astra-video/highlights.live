@@ -302,6 +302,21 @@ def test_no_audio_window_is_named_not_silently_transcribed(llama, monkeypatch):
     )
     assert res2["audioContext"]["noAudioReason"] == "retention_gap"
 
+    # The lever-B trim (LIVE_DECIDE_AUDIO_CLIP=0) gates the clip off the payload
+    # while the tap is fed: a NAMED posture, never reported as retention.
+    res3 = decide_with_gemma(
+        "GOAL",
+        Evidence(trackCount=1).model_dump(),
+        game_hint="soccer",
+        frames=[],
+        audio_b64="",
+        url=llama.url,
+        audit_ctx={"sessionId": "s1", "jobId": "j1", "groupKey": "g3", "frameCount": 1},
+        audio_presence={"tapChunks": 211, "clipBytes": 0, "levels": 48, "series": 132, "clipEnabled": False},
+    )
+    assert res3["audioContext"]["noAudioReason"] == "audio_clip_disabled"
+    assert res3["audit"]["timings"]["noAudioReason"] == "audio_clip_disabled"
+
 
 def test_enriched_request_never_422s_the_live_loop():
     """AC-E4: a 29-seed window with the timeline rides the real /highlight route

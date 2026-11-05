@@ -4417,6 +4417,12 @@ export interface DecideAudioPresence {
   spanTo: number | null;
   pos: number | null;
   series: number;
+  /** Whether the window AUDIO CLIP was allowed onto the live decide payload at
+   * all (`LIVE_DECIDE_AUDIO_CLIP`, ADAAAA-7777 trim 2). `false` with a fed tap is
+   * a deliberate gate, NOT a retention gap — the decide service names it
+   * `audio_clip_disabled` so AC-E2 counts gated windows apart from transcribed
+   * ones instead of blaming retention. */
+  clipEnabled?: boolean;
 }
 
 /** ADAAAA-8056: one compact per-seed record in a decide window's perceive timeline.
@@ -4835,6 +4841,7 @@ export function buildObserveDecideRequest(
             spanTo: audioSpan.to,
             pos: audioSpan.pos,
             series: audioSeries,
+            clipEnabled: cfg.decideAudioClip !== false,
           },
         }
       : {}),
