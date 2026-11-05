@@ -100,6 +100,15 @@ services:
       # handoff sets PERCEIVE_ROI_ENABLED=1 (e.g. via docker/.env on the box).
       - PERCEIVE_ROI_ENABLED=${PERCEIVE_ROI_ENABLED:-0}
       - PERCEIVE_ROI_GRID=${PERCEIVE_ROI_GRID:-3x4}
+      # ADAAAA-8004: SECOND Florence-2 copy reserved for scoreboard <OCR> reads,
+      # so OCR overlaps the <OD>/SAM path on the same frame instead of
+      # serialising behind it. Opt-in (default off) because it is a second model
+      # instance: ~+1.2 GB resident VRAM for base Florence-2, and it only pays
+      # off when the scoreboard read is on the critical path. Set it in
+      # docker/.env on the box. PERCEIVE_OCR_DEVICE optionally pins that copy to
+      # another visible device (default = the primary detector's device).
+      - PERCEIVE_DUAL_FLORENCE=${PERCEIVE_DUAL_FLORENCE:-0}
+      - PERCEIVE_OCR_DEVICE=${PERCEIVE_OCR_DEVICE:-}
       # HF token required to pull the gated facebook/sam3.1 weights on a COLD HF
       # cache. Comes from docker/.env / shell at deploy time, never committed. A
       # warm HF cache (see HF_CACHE_DIR mount below) boots without it.
