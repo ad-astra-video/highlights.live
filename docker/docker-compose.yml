@@ -695,6 +695,14 @@ services:
       #     rail only; DECIDE_CONFIRM_ENABLED stays the master gate for both rails.
       - LIVE_OBSERVE_MAX_FRAMES=${LIVE_OBSERVE_MAX_FRAMES:-4}
       - LIVE_DECIDE_AUDIO_CLIP=${LIVE_DECIDE_AUDIO_CLIP:-1}
+      # ADAAAA-8081: transcribe the live window's clip in the server's fire-time
+      # side lane instead of serially inside the decide call, so ASR runs while
+      # the previous window's decide is still in flight and the decide slot holds
+      # gemma only. 1 = on (default); 0 = the pre-8081 inline-ASR request. A
+      # failed/timed-out prefetch always falls back to inline ASR, so per-window
+      # `asrRan`/`asrLatencyS` coverage never falls.
+      - LIVE_DECIDE_ASR_PREFETCH=${LIVE_DECIDE_ASR_PREFETCH:-1}
+      - LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS=${LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS:-6000}
       - LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}
       # ADAAAA-7781: COMPACT verdict contract on the live decide rail. The live
       # pass is decode-bound (measured: p50 9.4 s for a ~1340-char verdict; the

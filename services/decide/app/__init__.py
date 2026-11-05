@@ -315,6 +315,15 @@ class HighlightRequest(BaseModel):
     # degrade to "no ledger", never to a 422 that drops the window.
     perceiveWindow: Any = None
     audioPresence: Any = None
+    # ADAAAA-8081: the server's fire-time ASR side lane already transcribed this
+    # window's audio clip. `asrPrefetched` + `asrTranscript` + `asrLatencyS` are
+    # spread onto the request ONLY when ASR actually ran there (a failed timed-out
+    # prefetch sends none of them), so an absent block means "transcribe inline
+    # here", byte-identical to the pre-8081 request. `Any` for the same reason as
+    # the ledgers above: a malformed block degrades to inline ASR, never a 422.
+    asrPrefetched: Any = None
+    asrTranscript: Any = None
+    asrLatencyS: Any = None
 
 
 # --- Response contract ------------------------------------------------------
@@ -357,6 +366,10 @@ class AudioContext(BaseModel):
     transcribed: bool = False
     asrRan: bool = False
     asrLatencyS: float = 0.0
+    # ADAAAA-8081: `prefetch` when the server's fire-time side lane produced the
+    # transcript (ASR ran OUTSIDE this decide call) or `inline` when this call
+    # ran ASR itself. Additive; a rule-path verdict leaves it at "none".
+    asrSource: str = "none"  # "prefetch" | "inline" | "none"
     # ADAAAA-8056 (AC-E2): whether this window carried ANY audio at all, and the
     # named reason when it did not. Without these a no-audio window is
     # indistinguishable from a transcribed one, which is exactly the inference
@@ -418,6 +431,16 @@ class HighlightDecision(BaseModel):
 
 def _is_gemma_mode() -> bool:
     return os.environ.get("DECIDE_MODE", "rule") == "gemma"
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    """ADAAAA-8081: coerce a wire value to float; anything non-numeric (a shaped
+    but wrong prefetch block) degrades to `default` instead of raising."""
+    try:
+        out = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return out if out == out and abs(out) != float("inf") else default  # reject NaN/inf
 
 
 def _is_corroborated(ev: "Evidence") -> bool:
@@ -727,6 +750,12 @@ def create_app() -> FastAPI:
                 # coverage inputs. Absent on the VOD rail == unchanged payload.
                 perceive_window=req.perceiveWindow,
                 audio_presence=req.audioPresence,
+                # ADAAAA-8081: the server's side-lane transcription of this
+                # window's clip. Present => no inline ASR (the decide call is
+                # gemma only); absent => inline ASR, exactly as before.
+                asr_prefetched=bool(req.asrPrefetched),
+                asr_transcript=(req.asrTranscript or "") if isinstance(req.asrTranscript, str) else "",
+                asr_latency_s=_safe_float(req.asrLatencyS),
             )
             # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
             # goal-line ground-truth signal. A non-"goal" ballOutcome forces

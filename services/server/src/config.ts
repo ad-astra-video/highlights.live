@@ -308,6 +308,16 @@ export interface ServerConfig {
    * Default true (pre-trim behaviour); `LIVE_DECIDE_AUDIO_CLIP=0` drops the clip
    * while keeping the level curve. */
   liveDecideAudioClip: boolean;
+  /** ADAAAA-8081: route the LIVE window's ASR through the server's fire-time
+   * side lane so the transcription overlaps the decide already in flight instead
+   * of serialising ahead of gemma inside the call. Default ON;
+   * `LIVE_DECIDE_ASR_PREFETCH=0` restores the exact pre-8081 request (no `asr`
+   * key => the decide service transcribes inline, which is also the automatic
+   * fallback whenever a prefetch fails or times out). */
+  liveDecideAsrPrefetch: boolean;
+  /** ADAAAA-8081: `LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS`, default 6 000. A hung
+   * ASR must degrade to inline ASR, never stall the live pass. */
+  liveDecideAsrPrefetchTimeoutMs: number;
   /** ADAAAA-7777 (lever B, trim 3): run the Stage-2 `/confirm` dive on the LIVE
    * pass. `DECIDE_CONFIRM_ENABLED` stays the master gate; this is the live-rail
    * opt-out, so VOD keeps its confirmation pass when the live rail skips it.
@@ -865,6 +875,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // payload. The audio-energy level curve (noise-change trigger contract) is
     // still computed from `audioContext`; only the raw clip is gated here.
     liveDecideAudioClip: env.LIVE_DECIDE_AUDIO_CLIP !== "0",
+    // ADAAAA-8081: the live ASR side lane (see asr-prefetch.ts). Default ON —
+    // the transcription leaves the decide call and the decide slot; `=0` is the
+    // config-only rollback to the pre-8081 inline-ASR request.
+    liveDecideAsrPrefetch: env.LIVE_DECIDE_ASR_PREFETCH !== "0",
+    liveDecideAsrPrefetchTimeoutMs: positiveNumberOrUndefined(env.LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS) ?? 6000,
     // ADAAAA-7777 (lever B, trim 3): the Stage-2 /confirm dive on the live rail.
     // `DECIDE_CONFIRM_ENABLED` remains the master gate.
     liveDecideConfirm: env.LIVE_DECIDE_CONFIRM !== "0",
