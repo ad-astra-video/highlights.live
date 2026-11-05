@@ -6209,6 +6209,9 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // pass is decode-bound, so the per-call output-token count IS its throughput
     // ceiling; VOD keeps the full long-form contract.
     liveDecideCompact: cfg.liveDecideCompact,
+    // ADAAAA-8064 (AC-C4): timeline source (observations by default; `seeds` is
+    // the pre-fix construction, kept only for the paired latency measurement).
+    perceiveTimelineSource: cfg.livePerceiveTimelineSource,
     // ADAAAA-7777 (lever B, trim 1): the live window's frame budget (default 30,
     // the historic shared cap). A live decide call's wall time is decode-bound,
     // so this trims the smaller per-frame prefill term without touching VOD.

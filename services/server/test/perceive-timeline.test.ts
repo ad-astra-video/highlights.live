@@ -225,6 +225,30 @@ describe("buildObserveDecideRequest enrichment envelope (ADAAAA-8056 AC-E1/E4/E5
     expect((opts as any).perceiveWindow.observationsInSpan).toBe(4);
   });
 
+  it("reproduces the pre-8064 construction when the A/B lever says seeds (AC-C4)", () => {
+    const cfg = { gameHint: "soccer", perceiveTimelineSource: "seeds" } as Parameters<
+      typeof buildObserveDecideRequest
+    >[0];
+    const observations = liveSeeds(28, 10).map((s, i) => ({ ...s, ts: Number((i * (10 / 27)).toFixed(2)) }));
+    const images = [0, 9, 18, 27].map((i) => ({ ts: observations[i].ts, imageB64: `img${i}` }));
+    const p: ObserveDecidePayload = {
+      centerTs: 10,
+      frames: images,
+      seeds: images.map((f) => observations.find((o) => o.ts === f.ts)!),
+      observations,
+      biasHints: [],
+      capped: true,
+      droppedCount: 16,
+    };
+    const { evidence, opts } = buildObserveDecideRequest(cfg, new LiveRunShared(), p);
+    // The OFF side of the pairing is the image projection: 4 records, and the
+    // ledger says so instead of pretending the window carried 28.
+    expect(evidence.perceiveTimeline?.length).toBe(4);
+    expect((opts as any).perceiveWindow.timelineRecords).toBe(4);
+    expect((opts as any).perceiveWindow.imageCount).toBe(4);
+    expect((opts as any).perceiveWindow.timelineSource).toBe("seeds");
+  });
+
   it("leaves the VOD payload byte-identical (AC-E5)", () => {
     const vodCfg = {
       gameHint: "soccer",
