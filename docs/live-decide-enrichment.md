@@ -77,10 +77,14 @@ Every decide reports:
 | `audioContext.asrLatencyS` | its wall time |
 | `audioContext.transcribed` | it produced text |
 | `audioContext.windowAudioPresent` | the window carried ANY audio |
-| `audioContext.noAudioReason` | `""` \| `no_audio_clip` \| `retention_gap` \| `asr_unavailable` \| `audio_context_off` |
+| `audioContext.noAudioReason` | `""` \| `no_audio_clip` \| `retention_gap` \| `audio_clip_disabled` \| `asr_unavailable` \| `audio_context_off` |
 
 `retention_gap` means the tap had banked chunks but this window's clip fell
-outside the retained span — not a silent stream. Degradation is unchanged: an ASR
+outside the retained span — not a silent stream. `audio_clip_disabled` means the
+window clip was gated off the live payload (`LIVE_DECIDE_AUDIO_CLIP=0`, the
+ADAAAA-7777 trim 2): the tap is fed and the level curve is computed, but no clip
+reaches decide, so ASR cannot run. AC-E2 counts gated windows apart from
+transcribed ones instead of blaming retention. Degradation is unchanged: an ASR
 failure returns empty text and the decide runs text-only, never a 5xx.
 
 The same coverage is stamped on the audit descriptor's `timings`, which the server

@@ -2317,12 +2317,21 @@ def decide_with_gemma(
         presence_tap_chunks = int(presence.get("tapChunks") or 0)
     except (TypeError, ValueError):
         presence_tap_chunks = 0
+    # ADAAAA-8056: the server states whether the window clip was ALLOWED onto the
+    # live payload (LIVE_DECIDE_AUDIO_CLIP, the ADAAAA-7777 trim). A gated window
+    # is a named posture, not a retention gap and not a silent stream.
+    clip_enabled = presence.get("clipEnabled") is not False
     window_audio_present = bool(audio_b64)
     no_audio_reason = ""
     if not window_audio_present:
-        # `clipBytes` 0 with chunks banked == the window fell outside the tap's
-        # retained span (retention gap), not a silent stream.
-        no_audio_reason = "retention_gap" if presence_tap_chunks > 0 else "no_audio_clip"
+        if not clip_enabled:
+            no_audio_reason = "audio_clip_disabled"
+        elif presence_tap_chunks > 0:
+            # The tap banked chunks but this window's clip is empty: the window
+            # fell outside the retained span (retention gap), not a silent stream.
+            no_audio_reason = "retention_gap"
+        else:
+            no_audio_reason = "no_audio_clip"
     elif not asr_ran and not send_audio_active:
         no_audio_reason = "asr_unavailable" if not _asr_url() else "audio_context_off"
     result["audioContext"] = {
