@@ -46,10 +46,11 @@ describe("goal claims are gated by the window verdict (AC4b)", () => {
     expect(out).toBe("The striker shoots at the far post.");
   });
 
-  it("rewrites 'GOAL' and 'into the net' on a not_highlight window", () => {
-    expect(gateGoalClaims("GOAL! Into the net.", { verdict: "not_highlight" })).toBe(
-      "Shot! Wide."
-    );
+  it("rewrites 'GOAL' and 'into the net' on a not_highlight window — never to a miss", () => {
+    // ADAAAA-8043 (contract v7 §3.3, AC9): the net-crossing outcome is DELETED,
+    // not inverted. The v6 rewrite answered `Shot! Wide.` — a fabricated miss.
+    const out = gateGoalClaims("GOAL! Into the net.", { verdict: "not_highlight" });
+    expect(out).not.toMatch(/\bwide\b|\bnet\b|\bgoal/i);
   });
 
   it("rewrites 'net ripples' and 'levels it' without lengthening", () => {
@@ -834,7 +835,10 @@ describe("corroboration uses the banner's own rule (§3.4)", () => {
     // The measured chapter lead: "No. 8 headers ball into net — crowd erupts".
     const out = gateUncorroboratedGoal("No. 8 headers ball into net — crowd erupts", false);
     expect(out).not.toMatch(/\b(?:in|into)\s+(?:the\s+)?net\b/i);
-    expect(out).toContain("headers ball wide");
+    // ADAAAA-8043 (v7 §3.3): the ungrounded outcome is dropped, never replaced by
+    // a miss (`No. 8 headers ball wide` was the v6 inversion).
+    expect(out).not.toMatch(/\bwide\b/i);
+    expect(out).not.toMatch(/\b(?:goal|scores?|scored)\b/i);
     expect(out.length).toBeLessThanOrEqual("No. 8 headers ball into net — crowd erupts".length);
   });
 
