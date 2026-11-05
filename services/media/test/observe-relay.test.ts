@@ -329,3 +329,48 @@ describe("ObservationRelay push path (ADAAAA-8004 edge retention)", () => {
     relay.close();
   });
 });
+describe("ObservationRelay publish clock (ADAAAA-8069)", () => {
+  it("reports EVERY published frame, including one the runner fast-forwards past", async () => {
+    // go-livepeer's live edge skips a gap, so seq 2 never gets an observation —
+    // but it WAS published, and the decide window's perceive timeline needs the
+    // rail's clock even for frames perceive never looked at.
+    const seenAt = new Map<number, number>([[1, Date.now()], [3, Date.now()]]);
+    const published: number[] = [];
+    const delivered: number[] = [];
+    const relay = new ObservationRelay({
+      read: async (seq) => (seenAt.has(seq) ? { seq } : null),
+      emit: (_o, f) => delivered.push(f.seq),
+      onPublished: (f) => published.push(f.seq),
+      deadlineMs: 30_000,
+      pollIntervalMs: 20,
+    });
+    for (const seq of [1, 2, 3]) {
+      relay.reserve();
+      relay.commit(frame(seq));
+    }
+    const until = Date.now() + 3_000;
+    while (relay.stats().inFlight > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 15));
+    expect(published).toEqual([1, 2, 3]);
+    expect(delivered).toEqual([1, 3]);
+    expect(relay.stats().skipped).toBe(1);
+    relay.close();
+  });
+
+  it("never lets a throwing publish-clock callback fail the publish path", async () => {
+    const relay = new ObservationRelay({
+      read: async () => null,
+      emit: () => {},
+      onPublished: () => {
+        throw new Error("reporting is not the publish");
+      },
+      deadlineMs: 60_000,
+      pollIntervalMs: 50,
+    });
+    for (let seq = 1; seq <= 3; seq++) {
+      expect(relay.reserve()).toBe(true);
+      relay.commit(frame(seq));
+    }
+    expect(relay.stats().published).toBe(3);
+    relay.close();
+  });
+});

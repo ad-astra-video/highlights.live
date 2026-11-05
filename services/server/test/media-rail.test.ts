@@ -491,3 +491,118 @@ describe("POST /jobs/:id/observe + /jobs/:id/audio decide on the media rail (ADA
     expect(decides.some((d) => /^AUDIO_/.test(d.evidence.eventType))).toBe(true);
   });
 });
+
+// ADAAAA-8069: the RTC arm's decide window takes its observation set from the
+// rail's PUBLISHED-frame clock, not from the frames that survived to a decide.
+// Measured on job 8024a341: 848 frames published, 93 observations delivered,
+// 697 skipped by the runner's fast-forward — so `timelineRecords == imageCount`
+// on 39/39 windows at 0.22-1.30 records/s.
+describe("media rail published-frame clock (ADAAAA-8069)", () => {
+  it("records ticks without deciding and without becoming decide frames", async () => {
+    const calls: any[] = [];
+    const rail = new MediaRailObserver({ jobId: "j-ticks", onDecide: async (p) => (calls.push(p), false) });
+    // Ten published frames over the 10 s window, NO relayed observation/image.
+    for (let i = 0; i < 10; i++) rail.onFrameTick(T0 + i / 3);
+    await rail.finish();
+    expect(calls).toHaveLength(0);
+    expect(rail.stats().frameTicks).toBe(10);
+    // A tick carries no pixels, so it can never become a decide frame.
+    expect(rail.stats().frames).toBe(0);
+  });
+
+  it("a window fired on one delivered observation carries the published clock as its observation set", async () => {
+    const calls: any[] = [];
+    const rail = new MediaRailObserver({ jobId: "j-ticks2", onDecide: async (p) => (calls.push(p), false) });
+    // 3 fps publish clock, then the ONE frame the runner actually observed.
+    for (let i = 0; i < 10; i++) rail.onFrameTick(T0 + i / 3);
+    rail.onObservation({ seq: 0, timestamp: T0 + 3, tracks: [] }, jpeg(0));
+    await waitFor(() => calls.length >= 1);
+    const p = calls[0];
+    // The image set is the delivered frame; the observation set is the rail.
+    expect(p.frames.length).toBe(1);
+    expect(p.observations?.length).toBe(10);
+    // The delivered frame is also a publish tick: it is counted ONCE.
+    const ts = (p.observations ?? []).map((o: any) => Math.round(o.ts * 1000));
+    expect(new Set(ts).size).toBe(ts.length);
+  });
+
+  it("an evidence-only observation (no pixels) still joins the observation set", async () => {
+    const calls: any[] = [];
+    const rail = new MediaRailObserver({ jobId: "j-evidence", onDecide: async (p) => (calls.push(p), false) });
+    rail.onObservation({ seq: 0, timestamp: T0, tracks: [] }, jpeg(0));
+    // A relayed observation whose anchor JPEG was over the size cap / missing.
+    // It must join the observation set but never the image set or the cadence.
+    rail.onObservation({ seq: 1, timestamp: T0 + 3, tracks: [{ trackId: "t1" }] }, undefined);
+    // The next delivered frame closes the cadence window over both.
+    rail.onObservation({ seq: 2, timestamp: T0 + 6, tracks: [] }, jpeg(2));
+    await waitFor(() => calls.length >= 2);
+    const p = calls[calls.length - 1];
+    expect(p.frames.length).toBe(2); // only the two frames with pixels
+    expect(p.observations?.length).toBe(3); // ...plus the evidence-only clock
+    expect(p.observations?.filter((o: any) => (o.tracks?.length ?? 0) > 0).length).toBe(1);
+    expect(rail.stats().frames).toBe(2);
+  });
+});
+describe("POST /jobs/:id/media/frames feeds the window observation set (ADAAAA-8069)", () => {
+  async function register(app: any, email: string): Promise<string> {
+    const r = await app.inject({ method: "POST", url: "/auth/register", payload: { email, password: "password123" } });
+    expect(r.statusCode).toBe(200);
+    return r.json().token as string;
+  }
+
+  it("a decide window carries the rail's publish clock, not only the shipped images", async () => {
+    const decides: any[] = [];
+    const base = (await import("./helpers")).fakePipeline();
+    const adapter = {
+      ...base,
+      async decide(evidence: any, opts: any) {
+        decides.push({ evidence, opts });
+        return { isHighlight: false, score: 5, eventType: "SPORTING_EVENT", reason: "no goal" };
+      },
+    };
+    const { app } = await buildTestApp({ LIVE_OBSERVE_LOOP: "1" }, { adapter });
+    const token = await register(app, "mediaticks@test.dev");
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser" },
+    });
+    expect([200, 202]).toContain(jr.statusCode);
+    const jobId = jr.json().job.id as string;
+    const now = Date.now() / 1000;
+
+    // 3 s of the media node's publish clock at 3 fps — the runner produced NO
+    // observation for these (its fast-forward path), so they arrive as clocks.
+    const frames = Array.from({ length: 9 }, (_, i) => ({ seq: i, timestamp: now + i / 3 }));
+    const tick = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/media/frames`,
+      payload: { sessionId: "media-sess", frames },
+    });
+    expect(tick.statusCode).toBe(200);
+    expect(tick.json().recorded).toBe(9);
+
+    // ONE relayed observation with pixels closes the cadence window.
+    const obs = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/observe`,
+      payload: { seq: 9, timestamp: now + 3, tracks: [], frameB64: jpeg(0) },
+    });
+    expect(obs.statusCode).toBe(200);
+    await waitFor(() => decides.length >= 1);
+
+    const d = decides[0];
+    // The image set is one delivered frame; the observe timeline is the rail.
+    expect(d.opts.frames.length).toBe(1);
+    expect(d.evidence.perceiveTimeline.length).toBeGreaterThan(d.opts.frames.length);
+    expect(d.evidence.perceiveTimeline.length).toBe(10);
+  });
+
+  it("ignores malformed / non-browser callbacks instead of failing the node", async () => {
+    const { app } = await buildTestApp({ LIVE_OBSERVE_LOOP: "1" }, {});
+    const missing = await app.inject({ method: "POST", url: "/jobs/does-not-exist/media/frames", payload: { frames: [] } });
+    expect(missing.statusCode).toBe(200);
+    expect(missing.json().ignored).toBeTruthy();
+  });
+});

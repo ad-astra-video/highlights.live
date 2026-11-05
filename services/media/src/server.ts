@@ -58,6 +58,10 @@ interface ActiveStream {
    * behind the arrival cadence.
    */
   observations?: ObservationRelay;
+  /** ADAAAA-8069: published-frame clocks waiting for the ~1 s batch POST. */
+  pendingFrameTicks?: { seq: number; timestamp: number }[];
+  /** ADAAAA-8069: the pending batch timer (one per session, unref'd). */
+  frameTickTimer?: NodeJS.Timeout;
   /**
    * True once ANY client attached (WS socket or RTC offer). Distinguishes a
    * session that carried a stream from an abandoned provision — the presence of
@@ -205,6 +209,15 @@ const MAX_CALLBACK_FRAME_BYTES = 2 * 1024 * 1024;
 /** Bound on concurrent audio-chunk POSTs per session (ADAAAA-7658). A slow
  *  control plane must drop audio evidence, never grow a media-node backlog. */
 const MAX_AUDIO_POSTS_IN_FLIGHT = 8;
+/** ADAAAA-8069: cadence at which published-frame clocks are batched to the
+ *  control plane. ~1 s keeps a 5-min share to ~300 small POSTs while still
+ *  giving the decide window a per-second observation clock (the funded cadence
+ *  is 3 fps, so this is 2-3 frames per batch). */
+const FRAME_TICK_BATCH_MS = 1000;
+/** Bound on the per-session pending tick buffer. A stalled control plane drops
+ *  old clocks (they are outside any live window by then) instead of growing the
+ *  media node's memory. */
+const MAX_PENDING_FRAME_TICKS = 256;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -790,6 +803,12 @@ export class MediaServer {
         // observation instead of trusting whatever the runner echoed back.
         void this.callback(stream, obs, frame.jpeg, frame.ts);
       },
+      // ADAAAA-8069: report the publish clock of EVERY frame, not only the ones
+      // an observation was paired with. The perceive runner fast-forwards, so
+      // the delivered observations are a ~10x subsample of what this node put on
+      // the rail — and the control plane's decide window builds its perceive
+      // timeline from the rail, not from the images it ships.
+      onPublished: (frame) => this.queueFrameTick(stream, frame),
       deadlineMs,
       sampleFps: fps,
       log: (line) => {
@@ -798,6 +817,44 @@ export class MediaServer {
       },
     });
     return stream.observations;
+  }
+
+  /**
+   * ADAAAA-8069: queue one PUBLISHED frame clock for the batched report to the
+   * control plane, and arm the ~1 s flush. Cheap (a push + one timer) because it
+   * runs on the publish path for every decoded frame.
+   */
+  private queueFrameTick(stream: ActiveStream, frame: ObservationFrame): void {
+    if (!this.opts.callbackBase || !stream.jobId || stream.closed) return;
+    const pending = (stream.pendingFrameTicks ??= []);
+    pending.push({ seq: frame.seq, timestamp: frame.ts });
+    // A stalled control plane must not grow media-node memory: the oldest clocks
+    // are outside any live decide window by the time the buffer overflows.
+    if (pending.length > MAX_PENDING_FRAME_TICKS) {
+      pending.splice(0, pending.length - MAX_PENDING_FRAME_TICKS);
+    }
+    if (stream.frameTickTimer) return;
+    stream.frameTickTimer = setTimeout(() => this.flushFrameTicks(stream), FRAME_TICK_BATCH_MS);
+    // Reporting must never hold the media node's process open.
+    stream.frameTickTimer.unref?.();
+  }
+
+  /** Best-effort `POST {callbackBase}/jobs/{jobId}/media/frames` (fire-and-forget). */
+  private flushFrameTicks(stream: ActiveStream): void {
+    stream.frameTickTimer = undefined;
+    const pending = stream.pendingFrameTicks ?? [];
+    if (!pending.length) return;
+    stream.pendingFrameTicks = [];
+    if (!this.opts.callbackBase || !stream.jobId) return;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.healthToken) headers.authorization = `Bearer ${this.healthToken}`;
+    void fetch(`${this.opts.callbackBase}/jobs/${stream.jobId}/media/frames`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ sessionId: stream.provisioned.sessionId, frames: pending }),
+    }).catch(() => {
+      /* best-effort: a lost batch only loses timeline ticks, never a decide */
+    });
   }
 
   private relay(stream: ActiveStream, socket: any, obs: any) {
@@ -1041,6 +1098,13 @@ export class MediaServer {
       void stream.audioRelay.close().catch(() => {});
       stream.audioRelay = undefined;
     }
+    // ADAAAA-8069: flush the tail publish clocks before teardown so the share's
+    // last ~1 s of frames still reach the decide window's observation set.
+    if (stream.frameTickTimer) {
+      clearTimeout(stream.frameTickTimer);
+      stream.frameTickTimer = undefined;
+    }
+    this.flushFrameTicks(stream);
     // ADAAAA-7990 (delivery follow-up): report the delivery ledger BEFORE the
     // relay stops. `delivered` vs `published` is the AC1 delivered-rate evidence,
     // so a rail that went quiet is attributable to the runner/relay rather than
